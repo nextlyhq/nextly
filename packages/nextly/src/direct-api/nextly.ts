@@ -103,6 +103,7 @@ import {
   createJobsNamespace,
   createNoticesNamespace,
   createVersionsNamespace,
+  createWorkflowsNamespace,
   createReleasesNamespace,
   createFieldGroupsNamespace,
   createEmailDeliveriesNamespace,
@@ -121,6 +122,7 @@ import {
   type JobsNamespace,
   type NoticesNamespace,
   type VersionsNamespace,
+  type WorkflowsNamespace,
   type ReleasesNamespace,
   type FieldGroupsNamespace,
   type EmailDeliveriesNamespace,
@@ -221,6 +223,8 @@ import type {
   FindMediaArgs,
   FindMediaByIDArgs,
   FindMediaByIDsArgs,
+  MediaCopyArgs,
+  MediaCopiesArgs,
   FindOneUserArgs,
   FindPermissionByIDArgs,
   FindPermissionsArgs,
@@ -316,6 +320,8 @@ export class Nextly implements NextlyContext {
   public readonly versions: VersionsNamespace;
   /** A subject's content events: a document's or a release's. */
   public readonly contentEvents: ContentEventsNamespace;
+  /** @experimental Review state under a workflow: read it, take steps, assign, what waits. */
+  public readonly workflows: WorkflowsNamespace;
   /** @experimental Recognising a plugin's kind of signed-in person. */
   public readonly principals: NextlyPrincipals;
 
@@ -361,6 +367,7 @@ export class Nextly implements NextlyContext {
     this.contentEvents = withLanguagesPinned(
       createContentEventsNamespace(this)
     );
+    this.workflows = withLanguagesPinned(createWorkflowsNamespace(this));
     this.principals = createNextlyPrincipals();
 
     // The instance its callers reach: only the collection and Single
@@ -1214,6 +1221,28 @@ export const nextly = {
       (await requireNextlyOnceStarted()).releases.delete(args),
   } satisfies ReleasesNamespace,
 
+  workflows: {
+    reviewState: async args =>
+      (await requireNextlyOnceStarted()).workflows.reviewState(args),
+    takeStep: async args =>
+      (await requireNextlyOnceStarted()).workflows.takeStep(args),
+    assign: async args =>
+      (await requireNextlyOnceStarted()).workflows.assign(args),
+    stepMany: async args =>
+      (await requireNextlyOnceStarted()).workflows.stepMany(args),
+    assignMany: async args =>
+      (await requireNextlyOnceStarted()).workflows.assignMany(args),
+    waiting: async args =>
+      (await requireNextlyOnceStarted()).workflows.waiting(args),
+    list: async args => (await requireNextlyOnceStarted()).workflows.list(args),
+    settings: {
+      read: async args =>
+        (await requireNextlyOnceStarted()).workflows.settings.read(args),
+      update: async args =>
+        (await requireNextlyOnceStarted()).workflows.settings.update(args),
+    },
+  } satisfies WorkflowsNamespace,
+
   users: {
     find: async (args?: FindUsersArgs) =>
       (await requireNextlyOnceStarted()).users.find(args),
@@ -1238,6 +1267,22 @@ export const nextly = {
       (await requireNextlyOnceStarted()).media.findByID(args),
     findByIDs: async (args: FindMediaByIDsArgs) =>
       (await requireNextlyOnceStarted()).media.findByIDs(args),
+    /**
+     * A resized copy of an image, or `null` where the image is used as it is,
+     * as the instance's `media.copyOf` answers it.
+     *
+     * @experimental
+     */
+    copyOf: async (args: MediaCopyArgs) =>
+      (await requireNextlyOnceStarted()).media.copyOf(args),
+    /**
+     * Every resized copy of an image up to a width, or `[]`, as the
+     * instance's `media.copiesOf` answers it.
+     *
+     * @experimental
+     */
+    copiesOf: async (args: MediaCopiesArgs) =>
+      (await requireNextlyOnceStarted()).media.copiesOf(args),
     update: async (args: UpdateMediaArgs) =>
       (await requireNextlyOnceStarted()).media.update(args),
     delete: async (args: DeleteMediaArgs) =>

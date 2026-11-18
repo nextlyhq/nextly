@@ -29,7 +29,12 @@ import {
   type ForwardRefExoticComponent,
 } from "react";
 
-import { Pencil, Trash2 } from "@admin/components/icons";
+import {
+  FileText,
+  PanelsTopLeft,
+  Pencil,
+  Trash2,
+} from "@admin/components/icons";
 import { useHoldForDecidingColumns } from "@admin/components/shared/loading-frame/delayed-reveal";
 import { RangeField } from "@admin/components/shared/range-field";
 import type {
@@ -46,8 +51,9 @@ import {
   ListView,
   type ListColumnsControl,
 } from "@admin/components/ui/table/list-view";
-import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { useLocalization } from "@admin/hooks/useLocalization";
+import { navigateTo } from "@admin/lib/navigation";
+import type { WayIn } from "@admin/lib/navigation/document-address";
 
 import { BulkActionBar } from "./BulkActionBar";
 import type { TranslationListFilter } from "./entryFilters";
@@ -116,6 +122,17 @@ export interface EntryTableProps {
   /** Callback when edit action is triggered */
   /** Open a row. `locale` opens it in that content language. */
   onEdit: (entryId: string, locale?: string) => void;
+  /**
+   * Where a row opens, by the admin's one rule for opening a document, so a
+   * row is a real link: a middle or modified click opens the same place.
+   */
+  entryHref: (entryId: string) => string;
+  /**
+   * The other ways into an entry its row's menu offers after Edit: "Edit
+   * details" where the entries open in a view, else the views an entry may
+   * be opened in. None when not given.
+   */
+  rowWaysIn?: (entryId: string) => readonly WayIn[];
   /** Callback when delete action is triggered */
   onDelete: (entryId: string) => void;
   /** Callback for bulk delete operation */
@@ -301,6 +318,8 @@ export const EntryTable: ForwardRefExoticComponent<
     onSortChange,
     onSearchChange,
     onEdit,
+    entryHref,
+    rowWaysIn,
     onDelete,
     onBulkDelete,
     onBulkUpdate,
@@ -434,6 +453,19 @@ export const EntryTable: ForwardRefExoticComponent<
             icon: <Pencil className="h-4 w-4" />,
             onSelect: () => onEdit(id),
           },
+          // Each other way in goes where the shared rule says, as the row's
+          // own link does: the form, or a view.
+          ...(rowWaysIn?.(id) ?? []).map((way, index) => ({
+            id: `way-in-${index}`,
+            label: way.label,
+            icon:
+              way.opens === "form" ? (
+                <FileText className="h-4 w-4" />
+              ) : (
+                <PanelsTopLeft className="h-4 w-4" />
+              ),
+            onSelect: () => navigateTo(way.address),
+          })),
           ...(offered.delete
             ? [
                 {
@@ -448,7 +480,7 @@ export const EntryTable: ForwardRefExoticComponent<
           ...(declaredRowActions ?? []),
         ];
       },
-    [onEdit, onDelete, offered.delete, declaredRowActions]
+    [onEdit, rowWaysIn, onDelete, offered.delete, declaredRowActions]
   );
 
   // -------------------------------------------------------------------------
@@ -700,12 +732,7 @@ export const EntryTable: ForwardRefExoticComponent<
         rowActions={rowActions}
         sort={sort}
         onSortChange={onSortChange}
-        rowHref={row =>
-          buildRoute(ROUTES.COLLECTION_ENTRY_EDIT, {
-            slug: collection.slug,
-            id: rowId(row),
-          })
-        }
+        rowHref={row => entryHref(rowId(row))}
         primaryColumn={titleField}
         registryKey={collection.slug}
         ariaLabel="Entries table"

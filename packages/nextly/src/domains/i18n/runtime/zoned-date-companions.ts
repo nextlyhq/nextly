@@ -3,12 +3,12 @@
  * (`zonedDateColumns`), in the translations table of every translated entity the registry holds:
  * collections, Singles and field groups, made in the Schema Builder or declared in config alike.
  *
- * `nextly upgrade` converts them, once the release serves every instance: an instance of an earlier
+ * `nextly i18n:convert-zoned-dates` converts them, once the release serves every instance: an instance of an earlier
  * release still running writes a date in a non-default language as its own local time, which a
  * converted column keeps as given. The development sync and `next dev`'s reload, where no earlier
  * instance runs, convert them too, each once its own translations pass refused nothing. `nextly
  * migrate` and a production start change no column's type; they name each such column once, and
- * `nextly upgrade`.
+ * that command.
  *
  * Each column is found from its field's definition, never from its type alone, so a column given a
  * time zone by hand that no translated date field describes is left as it is.
@@ -27,8 +27,6 @@ import { quoteIdent } from "../../schema/pipeline/sql-templates/identifier-quoti
 import { isFieldLocalized } from "../classify-fields";
 import { zonedDateColumns } from "../migration/companion-column-holds";
 import type { CompanionFieldLike } from "../migration/reconcile-companion";
-
-import { liveCompanionColumns } from "./companion-io";
 
 /** A registry reader that reports nothing of its own: this pass names what it finds itself. */
 const QUIET: Logger = {
@@ -80,7 +78,7 @@ type StoredEntity = RegisteredCollectionRow & {
  * `records` of one kind, each with its translatable fields. Every entity is taken, whatever its
  * own `localized` says: under per-language storage one not marked translated keeps its
  * translatable values in a translations table too, and a command that reads no config (`nextly
- * upgrade`) cannot know that setting. The translations table being there is what decides
+ * i18n:convert-zoned-dates`) cannot know that setting. The translations table being there is what decides
  * (`findZonedDateColumns`).
  */
 function entitiesOf(
@@ -104,16 +102,37 @@ export interface ZonedDateColumn {
   type: string;
 }
 
-/** Every translated date column an earlier release made with a time zone, read only. */
+/**
+ * Every translated date column an earlier release made with a time zone, read only.
+ *
+ * Every translations table is read in one catalog query (`introspectLiveColumns`), after the three
+ * registry reads, so the statements this runs stay the same however many entities the registry
+ * holds: a production start runs it every time, with a fixed budget of statements and waits. A
+ * table not there yet is simply absent from what the query returns.
+ */
 export async function findZonedDateColumns(
   adapter: DrizzleAdapter
 ): Promise<ZonedDateColumn[]> {
   if (adapter.getCapabilities().dialect !== "postgresql") return [];
+  // Only an entity with a translatable field has a translations column to find.
+  const entities = (await translatedEntities(adapter)).filter(
+    entity => entity.fields.length > 0
+  );
+  if (entities.length === 0) return [];
+  const { introspectLiveColumns } = await import(
+    "../../schema/pipeline/diff/introspect-live"
+  );
+  const { tables } = await introspectLiveColumns(
+    adapter.getDrizzle(),
+    "postgresql",
+    entities.map(entity => `${entity.tableName}_locales`)
+  );
+  const liveOf = new Map(tables.map(table => [table.name, table.columns]));
   const found: ZonedDateColumn[] = [];
-  for (const entity of await translatedEntities(adapter)) {
-    const live = await liveCompanionColumns(adapter, entity.tableName);
-    if (live.length === 0) continue;
+  for (const entity of entities) {
     const table = `${entity.tableName}_locales`;
+    const live = liveOf.get(table);
+    if (!live || live.length === 0) continue;
     for (const { column, type } of zonedDateColumns({
       fields: entity.fields,
       live,
@@ -160,7 +179,7 @@ export async function convertZonedDateColumns(
 /**
  * Converts, or names once, each translated date column an earlier release made with a time zone:
  * converted where no instance of an earlier release can be writing (`convert`), named with `nextly
- * upgrade` where one may be.
+ * i18n:convert-zoned-dates` where one may be.
  */
 export async function convertZonedDateCompanions(
   adapter: DrizzleAdapter,
@@ -199,8 +218,8 @@ function warnOnce(
     onWarning?.(
       `${name} is a date column with a time zone, as an earlier release made it: on a server ` +
         `whose time zone is not UTC its dates are stored shifted by that zone. Run \`nextly ` +
-        `upgrade\` once this release serves every instance, in the time zone the app runs in, ` +
-        `to convert it.`
+        `i18n:convert-zoned-dates\` once this release serves every instance, in the time zone ` +
+        `the app runs in, to convert it.`
     );
   }
 }

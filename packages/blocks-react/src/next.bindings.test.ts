@@ -1076,6 +1076,119 @@ describe("a routed page's bindings", () => {
     expect(other.tags).toEqual(nextlySingleTags("campaign-style"));
   });
 
+  it("tells a page's sizing when the site's classes size blocks", async () => {
+    // A named class drawing blocks at a minimum width: no block's own width
+    // may narrow its images' slot. Observed on the context the route builds.
+    const page: BlockDocument = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [
+        {
+          id: "box",
+          type: "core/section",
+          version: 1,
+          props: {},
+          slots: { children: [] },
+        },
+      ],
+    };
+    const breakpoints = {
+      viewport: [{ id: "base", label: "Desktop" }],
+      container: [],
+    };
+    const slotOf = async (classes: unknown[]) => {
+      const { element } = await renderedPage(
+        createPublicBlocksPage,
+        {
+          collections: ["pages"],
+          field: "content",
+          blocks,
+          imageCopies: async () => [],
+          styleContext: { breakpoints },
+          siteStyles: { classes } as never,
+        },
+        instance(page)
+      );
+      return element.props.context?.imageSlot;
+    };
+    expect(
+      (
+        await slotOf([
+          {
+            id: "wide",
+            name: "Wide",
+            styles: { base: { base: { minWidth: "1000px" } } },
+          },
+        ])
+      )?.siteSizesBlocks
+    ).toBe(true);
+    expect((await slotOf([]))?.siteSizesBlocks).toBeUndefined();
+  });
+
+  it("keeps a public route's image copies under its cache scope, on their own allowance", async () => {
+    const page: BlockDocument = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [
+        {
+          // A first section's background: looked up by its address.
+          id: "hero",
+          type: "core/section",
+          version: 1,
+          props: {},
+          styles: {
+            base: {
+              base: { background: { url: "/media/a.jpg", size: "cover" } },
+            },
+          },
+          slots: { children: [] },
+        },
+      ],
+    };
+    const asked: { upTo: number; reads: unknown }[] = [];
+    const imageCopies = vi.fn(
+      async (_source: unknown, upTo: number, reads?: unknown) => {
+        asked.push({ upTo, reads });
+        return [];
+      }
+    );
+    const keyOf = async (cacheScope: string) => {
+      runtime.reads = [];
+      await renderedPage(
+        createPublicBlocksPage,
+        {
+          collections: ["pages"],
+          field: "content",
+          blocks,
+          cacheScope,
+          imageCopies,
+        },
+        instance(page)
+      );
+      const read = runtime.reads.find(
+        entry => entry.keyParts[0] === "page-builder-image-copies"
+      );
+      if (read === undefined) throw new Error("no cached image-copy read");
+      return read.keyParts;
+    };
+    const first = await keyOf("site-a");
+    const again = await keyOf("site-a");
+    const other = await keyOf("site-b");
+    // The same route names one entry; another site's never shares it.
+    expect(again).toEqual(first);
+    expect(other).not.toEqual(first);
+    expect(first).toContain("site-a");
+    // Each lookup is handed an allowance of its own to claim from, not the
+    // page's reads, which the editor counts a published render against.
+    expect(asked.length).toBeGreaterThan(0);
+    for (const { reads } of asked) {
+      expect(typeof (reads as { take?: unknown } | undefined)?.take).toBe(
+        "function"
+      );
+      expect(reads).not.toHaveProperty("report");
+    }
+  });
+
   it("prepares each document once per render, and the renderer reuses that preparation", async () => {
     const element = await throughBoundary<PageRendererProps>(
       createBlocksPage({
@@ -1345,11 +1458,16 @@ describe("a page's site settings, in a process serving several sites", () => {
 
   /** The site settings reads made, by their cache keys. */
   function siteReadKeys(): string[][] {
-    return runtime.reads
-      .filter(read =>
-        nextlySiteSettingsTags().every(tag => read.tags.includes(tag))
-      )
-      .map(read => read.keyParts);
+    return (
+      runtime.reads
+        .filter(read =>
+          nextlySiteSettingsTags().every(tag => read.tags.includes(tag))
+        )
+        // The current year is tagged with the settings too, since it is
+        // worked out in their time zone, but it reads no site's settings.
+        .filter(read => read.keyParts[0] !== "nextly-site-current-year")
+        .map(read => read.keyParts)
+    );
   }
 
   beforeEach(() => {
@@ -1601,6 +1719,31 @@ describe("a page's blocks shown by their visibility conditions", () => {
     const { html } = await renderedPage(createBlocksPage, base, nextly);
     expect(html).toContain("Shown to everyone");
     expect(html).not.toContain("Never shown");
+  });
+
+  it("finds the first section the page draws, past a first block it hides", async () => {
+    // The stored first block is left out for this entry, so the section
+    // after it is the first a visitor sees, and its images load first.
+    const imageCopies = vi.fn(async () => []);
+    const { element } = await renderedPage(
+      createBlocksPage,
+      { ...base, imageCopies },
+      instance(
+        page(
+          shownWhen("hidden", "Never shown", [
+            [{ field: "title", op: "equals", value: "Elsewhere" }],
+          ]),
+          {
+            id: "hero",
+            type: "core/section",
+            version: 1,
+            props: {},
+            slots: { children: [] },
+          }
+        )
+      )
+    );
+    expect(element.props.context?.firstBlockId).toBe("hero");
   });
 
   it("decides by the entry as the public reads it, never the route's own read", async () => {

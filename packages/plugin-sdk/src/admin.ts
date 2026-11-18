@@ -72,6 +72,14 @@ export type { DocumentLockGates } from "@nextlyhq/admin/kit/document";
 export type { DocumentViewProps } from "@nextlyhq/admin/kit/core";
 
 /**
+ * What a document view's create dialog receives (@experimental): the
+ * collection "+ New" was pressed on and `close(createdId?)`, which opens the
+ * new entry where its collection opens entries, or leaves the list as it was.
+ * Republished rather than restated, as the view's props are.
+ */
+export type { DocumentCreateDialogProps } from "@nextlyhq/admin/kit/core";
+
+/**
  * What the components a plugin puts on a collection's document screen
  * receive (@experimental), declared under `contributes.admin.views[slug]`
  * (see `PluginDocumentActionOverride` and `PluginPanelSection`):
@@ -173,6 +181,9 @@ export {
  * For a field that shows the page it holds — the page builder's entry view —
  * and offers to open it whole. `open` is the editor's own Preview handler, so
  * the field opens the page the header would, in the language being edited.
+ * `openBeside` opens the preview beside the form, as the header's Preview
+ * press does, folding the document panel; it is absent where the editor has
+ * no such pane, and a control then opens the preview with `open`.
  *
  * `null` wherever the editor offers no Preview action: no preview configured,
  * an entry never saved, a reader, and outside a form. A field shows no such
@@ -251,6 +262,19 @@ export {
 export { useReportUnsavedWork } from "@nextlyhq/admin/kit/document";
 
 /**
+ * Let the next move leave the document without the unsaved-changes guard
+ * asking (@experimental).
+ *
+ * For a surface that has just asked the author itself, such as "Save changes
+ * to this page first?" answered with Discard: being asked the same thing again
+ * reads as a warning, not as the answer they gave. Call it immediately before
+ * the move; it lapses on its own within a moment, so it can never let a later
+ * leave the author didn't choose go unasked. It does nothing outside a
+ * document's editor.
+ */
+export { useLeaveWithoutWarning } from "@nextlyhq/admin/kit/document";
+
+/**
  * The document's actions, from inside its editor (@experimental).
  *
  * For a document view, which replaces the form body and the header with it:
@@ -299,6 +323,34 @@ export {
   type BeforeDocumentAction,
   type StoreReadiness,
   type SubmitRefusal,
+} from "@nextlyhq/admin/kit/document";
+
+/**
+ * Where the document being edited opens, and its list, for a document view
+ * that words its way out by them (@experimental).
+ *
+ * - `useDocumentOpensIn()` answers, for the collection entry or Single being
+ *   edited, `opensIn`: `"form"` or the path of the view a click on the
+ *   document opens, by the same rule every list row, sidebar link and
+ *   dashboard row follows; and `list`, where it is opened from: a collection's
+ *   list, its label as the list's own heading reads, or for a Single the
+ *   Content screen, labelled `"content"`, with its address. A view the
+ *   document opens in has no form to go back to, so its way out is that place
+ *   ("Back to Pages", "Back to content"); any other view's is the form. Null
+ *   outside a document's editor, on a new entry and while the collection or
+ *   Single is not known yet.
+ * - `PIN_TO_DASHBOARD_ACTION` is the id of the editor's own "Pin to
+ *   dashboard" / "Unpin from dashboard" among `useDocumentActions().actions`.
+ *   A view that replaces the header offers that action, its words and its
+ *   reason it can't run, and runs it with `run(id)`, so the pin, its toast and
+ *   its Undo are the editor's own.
+ *
+ * Experimental while the first view that uses them settles.
+ */
+export {
+  useDocumentOpensIn,
+  type DocumentOpensIn,
+  PIN_TO_DASHBOARD_ACTION,
 } from "@nextlyhq/admin/kit/document";
 
 /**
@@ -409,8 +461,63 @@ export {
  * It is built from the FORM'S OWN control, so what the surface draws and what
  * the form submits are one thing. Constructing a second form would fork the
  * state and lose the edit made in whichever copy did not save.
+ *
+ * The second argument (`EntryFieldsOptions`, @experimental) asks for part of
+ * them: `presentation: "dialog"` draws them flat for a dialog that frames
+ * them; `group: "page"` draws the document's identity alone (its title, and
+ * in the dialog its slug as the full address, with copy and edit, as the
+ * entry header draws it), `group: "content"` everything else; and
+ * `leaveOut` names top-level fields the surface draws its own way, such as
+ * another editor of its kind. A left-out field keeps its value in the form.
+ * `null` answers the same question for what is asked: nothing left to draw.
+ *
+ * ```tsx
+ * const general = useEntryFieldsPanel(name, {
+ *   presentation: "dialog",
+ *   group: "page",
+ * });
+ * const fields = useEntryFieldsPanel(name, {
+ *   presentation: "dialog",
+ *   group: "content",
+ *   leaveOut: ["sidebar"],
+ * });
+ * ```
  */
 export { useEntryFieldsPanel } from "@nextlyhq/admin/kit/document";
+export type {
+  EntryFieldsGroup,
+  EntryFieldsOptions,
+  EntryFieldsPresentation,
+} from "@nextlyhq/admin/kit/document";
+
+/**
+ * Where the entry page draws each of the document's fields (@experimental),
+ * for the surface covering it: `tabOf(path)` answers the document's identity
+ * (`{ kind: "page" }`, the title and slug), its own content
+ * (`{ kind: "content" }`), a plugin's tab that takes the field
+ * (`{ kind: "tab", id }`, the contribution's id), or `null` where the page
+ * draws it nowhere (hidden, kept off the type). `contentFields` lists the
+ * top-level fields the content draws, by name, type and label, so a surface
+ * finds the ones it draws its own way. `null` outside a form a surface
+ * covers, as for `useEntryFieldsPanel`.
+ */
+export { useEntryFieldsLayout } from "@nextlyhq/admin/kit/document";
+export type {
+  EntryContentField,
+  EntryFieldsLayout,
+  EntryFieldTab,
+} from "@nextlyhq/admin/kit/document";
+
+/**
+ * Show a field a refused save names (@experimental), for a document view
+ * that draws some of the document's fields out of sight, in a dialog or a
+ * closed tab. Pass `(path) => show | null`: a function that opens what holds
+ * the field at that form path and focuses it, or `null` where the view
+ * cannot show it. The refusal's message then names each field the view can
+ * show with "Show me", which runs it. The latest function is used while the
+ * caller is mounted; outside a document view nothing asks.
+ */
+export { useRevealField, type FieldReveal } from "@nextlyhq/admin/kit/document";
 
 /**
  * Edit this site's rich text from your own surface (@experimental).
@@ -536,6 +643,32 @@ export {
   type UseDocumentCheckpointOptions,
   type UseDocumentCheckpointResult,
   type AutosaveStatus,
+} from "@nextlyhq/admin/kit/document";
+
+/**
+ * Work on a second document from inside the view of another
+ * (@experimental).
+ *
+ * For a document view that edits another document in place, such as a site
+ * header edited from the page it sits on, while the view's own document
+ * stays open. `useDocumentSession(target)` reads the target's latest
+ * version (its working draft where one is held), holds its lock, saves it as
+ * a draft or publishes it, and records a recovery point for it; naming no
+ * target, or unmounting, lets the lock go. Each is the admin's own lock, read,
+ * update and recording, so the server judges every write as the signed-in
+ * person, and a save sends the version the copy started from.
+ *
+ * A deliberate widening for a second document. Experimental until editing in
+ * place settles; the intent is to keep its name and these operations.
+ */
+export {
+  useDocumentSession,
+  type DocumentSession,
+  type DocumentSessionLock,
+  type DocumentSessionOpen,
+  type DocumentSessionOutcome,
+  type DocumentSessionRefusal,
+  type DocumentSessionTarget,
 } from "@nextlyhq/admin/kit/document";
 
 /**
@@ -918,7 +1051,13 @@ export type { DocumentField } from "@nextlyhq/admin/kit/document";
  * A contributed tab receives `PlaceTabProps`: the place's `context` and
  * `entry`, and `setBadge`, which shows a count beside the tab's label
  * (`PlaceTabBadge`) or none with `null`. A tab stays mounted while another is
- * open, so its count stays current and what it holds is kept.
+ * open, so its count stays current and what it holds is kept. A tab that
+ * applies to some of the place's documents only calls `setLeftOut(true)` to
+ * leave the row, and `setLeftOut(false)` to come back.
+ *
+ * A plugin's place has no built-in parts, so `TargetSlot` takes a `fallback`,
+ * drawn while nothing contributed is drawn there, and `blockProps`, handed to
+ * every block beside the place's `context`.
  */
 export { PlaceTabs, TargetSlot } from "@nextlyhq/admin/kit/plugin-parts";
 export type {
@@ -929,6 +1068,45 @@ export type {
   PlaceTabsProps,
   TargetSlotProps,
 } from "@nextlyhq/admin/kit/plugin-parts";
+
+/**
+ * A place's tabs as data (@experimental), for a page that draws them in a
+ * row of its own beside tabs of its own, rather than under the strip
+ * `PlaceTabs` draws: the same tabs, filtered and handed the same props, each
+ * with its `trigger` (label and count), its `accessibleName` where it shows a
+ * count, and its `panel`. Keep every panel mounted while another tab is
+ * shown, only hidden, as `PlaceTabs` does, so its count and what it holds are
+ * kept. None while the page's `context` is `null`.
+ */
+export { usePlaceTabs } from "@nextlyhq/admin/kit/plugin-parts";
+export type {
+  PlaceTabEntry,
+  UsePlaceTabsOptions,
+} from "@nextlyhq/admin/kit/plugin-parts";
+
+/**
+ * Whether the admin would draw a contribution at a place for a document
+ * (@experimental): `useContributionApplies(place, id, document)`, `true`
+ * exactly where the place's own page draws it, for this reader, now. For a
+ * plugin that draws the same thing somewhere else, such as a tab its edit
+ * page shows that it also offers in another editor, so the two never
+ * disagree and the plugin keeps no copy of the rule.
+ *
+ * The `document` is a collection's entry or a Single, by the slug the admin
+ * serves it under (`ContributionDocument`). A tab that edits fields of the
+ * document is judged against the document's top-level fields: those of the
+ * document form around the caller where it edits the same document, or the
+ * `fieldNames` passed.
+ *
+ * ```tsx
+ * const edits = useContributionApplies("collection.edit", "acme-seo.tab", {
+ *   kind: "collection",
+ *   slug: "pages",
+ * });
+ * ```
+ */
+export { useContributionApplies } from "@nextlyhq/admin/kit/plugin-parts";
+export type { ContributionDocument } from "@nextlyhq/admin/kit/plugin-parts";
 
 /**
  * Templates for a new collection, Single or field group, offered in the Schema
@@ -1252,6 +1430,20 @@ export type {
   FieldSettingsTab,
   FieldTypeSettings,
   FixedFieldSetting,
+} from "@nextlyhq/admin/kit/field-ui";
+/**
+ * Whether a numeric validation bound can be kept as it stands — the rule the
+ * field settings panel says under each bound. A surface that saves what the
+ * panel edited asks this of every bound before it persists, so a bound the
+ * panel flags is never stored and read downstream as its own meaning (a max
+ * length of 0 as "no limit", a schema `.max(0)` refusing every value).
+ *
+ * @experimental
+ */
+export {
+  boundProblem,
+  NUMERIC_BOUND_RULES,
+  type NumericRule,
 } from "@nextlyhq/admin/kit/field-ui";
 
 /**

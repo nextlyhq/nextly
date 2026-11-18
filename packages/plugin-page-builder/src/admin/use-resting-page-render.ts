@@ -36,6 +36,7 @@ import {
   useComponentLibrary,
   type ComponentLibraryState,
 } from "./component-library-client";
+import { usePictureContext } from "./editor/canvas-page-context";
 import {
   pageRenderInputs,
   readDocumentLimits,
@@ -142,9 +143,19 @@ export function useRestingPageRender(
   });
   const { definitions } = library;
 
+  /*
+   * Images and icons resolved as the canvas resolves them, through the
+   * admin's media read. Without it the renderer's stand-in answers nothing
+   * for a media id, and every image on the page, the header's logo among
+   * them, is missing from the picture while the canvas and the published page
+   * show it. The pictures' own context: read-only, listing and querying
+   * nothing, since the entry screen shows the page and never its data.
+   */
+  const context = usePictureContext();
+
   const render = useMemo(
-    () =>
-      pageRenderInputs({
+    () => ({
+      ...pageRenderInputs({
         siteStyle,
         clientConfig,
         previewContainer,
@@ -154,7 +165,9 @@ export function useRestingPageRender(
         limits,
         definitions,
       }),
-    [siteStyle, clientConfig, previewContainer, limits, definitions]
+      context,
+    }),
+    [siteStyle, clientConfig, previewContainer, limits, definitions, context]
   );
 
   return {

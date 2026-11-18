@@ -64,6 +64,11 @@ let savedFrom: unknown;
  * editor hosting it registers it. Called here the way that host calls it.
  */
 let beforeAction: ((action: string) => void | Promise<void>) | undefined;
+/**
+ * Every mounted caller's handler, as the admin keeps them: each runs before
+ * an action, in turn, not only the one that registered last.
+ */
+const actionHandlers = new Set<(action: string) => void | Promise<void>>();
 
 /** The save-as-pattern verb the editor published, so a test can run it. */
 let offeredSaveVerb: (() => void) | undefined;
@@ -224,6 +229,9 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
 vi.mock("./publish-offer", () => ({
   usePublishOffer: () => null,
   useFormPublishOffer: () => null,
+  // Page checks asks which parts aren't published; answered as unknown, so
+  // it lists none and these tests stay on what they test.
+  askReadiness: async () => null,
 }));
 vi.mock("./removal-hold-client", () => ({
   useRemovalHold: () => null,
@@ -243,6 +251,10 @@ vi.mock("./site-style-read", () => ({
 }));
 
 vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
+  // Where the page opens and the pin's id, which the top bar reads; no
+  // collection is named here, so the exit goes to the form.
+  useDocumentOpensIn: () => null,
+  PIN_TO_DASHBOARD_ACTION: "pin-to-dashboard",
   // The canvas's media read, answering nothing: these cases draw no image.
   // One function for every call, as the admin's own hook keeps it.
   useMediaResolver: (
@@ -259,6 +271,9 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   WEB_FONT_FORMATS: (await import("nextly/config")).WEB_FONT_FORMATS,
   // The media library, drawn as nothing: these cases never open it.
   MediaPickerDialog: () => null,
+  // The media library's upload, which an Image's empty state offers: these
+  // cases upload nothing.
+  useUploadMedia: () => ({ mutateAsync: () => new Promise<never>(() => {}) }),
   loadInlineRichTextEditor: () => new Promise<never>(() => {}),
   usePluginClientConfig: () => undefined,
   // No document around the field: the state every case here was written
@@ -306,8 +321,23 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   useReportUnsavedWork: () => {},
   // The form's storing gate, which site style writes are tracked with.
   useTrackedWrite: () => () => {},
-  useBeforeDocumentAction: (handler: (action: string) => void) => {
-    beforeAction = handler;
+  useBeforeDocumentAction: (
+    handler: (action: string) => void | Promise<void>
+  ) => {
+    const latest = React.useRef(handler);
+    React.useEffect(() => {
+      latest.current = handler;
+    });
+    React.useEffect(() => {
+      const run = (action: string) => latest.current(action);
+      actionHandlers.add(run);
+      return () => {
+        actionHandlers.delete(run);
+      };
+    }, []);
+    beforeAction = async action => {
+      for (const run of actionHandlers) await run(action);
+    };
   },
   // The header's controls the bar places; drawn by the admin, not here.
   DocumentSaveAndPublish: () => null,

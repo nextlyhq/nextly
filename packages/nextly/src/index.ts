@@ -185,6 +185,12 @@ export {
 // migration writer uses.
 export { slugify } from "./hooks/prebuilt";
 
+// A slug as a collection stores it: one part, or a path where the collection
+// sets `db.slugPaths`. Core's writes store by it, so a plugin that says where
+// an entry will land before it writes says what core will store.
+// @experimental
+export { slugAsStored } from "./domains/collections/services/slug-as-stored";
+
 // Direct API types - type-safe slug resolution (for generated types integration)
 export type {
   GeneratedTypes,
@@ -280,6 +286,7 @@ export type {
   FindMediaByIDArgs,
   FindMediaByIDsArgs,
   MediaCopyArgs,
+  MediaCopiesArgs,
   UpdateMediaArgs,
   DeleteMediaArgs,
   BulkDeleteMediaArgs,
@@ -639,8 +646,10 @@ export {
   type PluginFieldType,
   type PluginFieldValidateArgs,
   type PluginFieldWrite,
+  type PluginFieldWriteCaller,
   type PluginStoredValue,
   type PluginStoredValueTarget,
+  type PluginStoredValuesTarget,
   type PluginFieldInstance,
   type PluginFieldIssue,
   type PluginFieldValidationResult,
@@ -1187,7 +1196,23 @@ export {
   type VersionPinHolderDefinition,
   type VersionPinSlot,
 } from "./domains/versions/version-pins";
-export type { VersionRef } from "./domains/versions/versions-repository";
+export type {
+  VersionRef,
+  // What `ctx.services.versions` takes and returns: a plugin names these from
+  // the SDK, which forwards them, rather than reaching into core's files.
+  AutosaveSupersession,
+  AutosaveWriteResult,
+  PendingEditCursor,
+  PendingEditOrder,
+  VersionMeta,
+  VersionRow,
+} from "./domains/versions/versions-repository";
+export type { VersionListOptions } from "./domains/versions/versions-service";
+export type { RestoreVersionResult } from "./domains/versions/restore-version";
+export type { VersionStatus } from "./schemas/versions/types";
+export type { ContentEventSubject } from "./domains/content-events/record";
+export type { ContentEventRecord } from "./domains/content-events/repository";
+export type { SubjectEventsQuery } from "./api/subject-events";
 
 // Which fields a level addresses, with presentational groups flattened.
 // Exported because a plugin that walks a collection's fields was otherwise

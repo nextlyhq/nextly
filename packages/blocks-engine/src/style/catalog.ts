@@ -13,6 +13,17 @@
  * Adding a property here is backwards-compatible; removing one, or changing an
  * existing one's meaning or value shape, is a document-format migration.
  */
+import {
+  APPEAR_DELAY_PROPERTY,
+  APPEAR_DURATION_PROPERTY,
+  APPEAR_EFFECT_EXPANSIONS,
+  APPEAR_EFFECT_PROPERTY,
+  APPEAR_EFFECTS,
+  APPEAR_MAX_MILLISECONDS,
+  APPEAR_START_EXPANSIONS,
+  APPEAR_START_PROPERTY,
+  APPEAR_STARTS,
+} from "./appear";
 import type {
   ColorLeaf,
   CssValueLeaf,
@@ -1004,6 +1015,40 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
     summary:
       "Corner rounding: one radius for all corners, or per logical corner.",
   },
+  {
+    property: "outline",
+    group: "border",
+    appliesWhen: ["always"],
+    flag: "outline",
+    // Drawn outside the border and taking no space, so setting one never
+    // moves the layout: what a focus ring needs. The offset moves it out, or
+    // in over the box's edge when negative.
+    shape: {
+      kind: "object",
+      fields: {
+        width: dimension("outline-width", {
+          keywords: ["thin", "medium", "thick"],
+        }),
+        style: keyword("outline-style", [
+          // The browser's own focus ring, in its colour and shape.
+          "auto",
+          "none",
+          "solid",
+          "dashed",
+          "dotted",
+          "double",
+          "groove",
+          "ridge",
+          "inset",
+          "outset",
+        ]),
+        color: color("outline-color"),
+        offset: dimension("outline-offset", { allowNegative: true }),
+      },
+    },
+    summary:
+      "A line drawn outside the border that takes no space, such as a focus ring.",
+  },
 
   // --- shadow
   {
@@ -1068,6 +1113,38 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
     appliesWhen: ["always"],
     shape: cssValue("transition", ["custom", "duration"]),
     summary: "Explicit transitions. Nothing is smoothed automatically.",
+  },
+  {
+    property: "appear",
+    group: "effects",
+    appliesWhen: ["always"],
+    // Four parts, each its own custom property, so each is set per device on
+    // its own: see `appear.ts`. The two times are whole milliseconds.
+    shape: {
+      kind: "object",
+      fields: {
+        effect: {
+          ...keyword(APPEAR_EFFECT_PROPERTY, APPEAR_EFFECTS),
+          expands: APPEAR_EFFECT_EXPANSIONS,
+        },
+        duration: numberValue(
+          APPEAR_DURATION_PROPERTY,
+          { min: 0, max: APPEAR_MAX_MILLISECONDS, integer: true },
+          []
+        ),
+        delay: numberValue(
+          APPEAR_DELAY_PROPERTY,
+          { min: 0, max: APPEAR_MAX_MILLISECONDS, integer: true },
+          []
+        ),
+        start: {
+          ...keyword(APPEAR_START_PROPERTY, APPEAR_STARTS),
+          expands: APPEAR_START_EXPANSIONS,
+        },
+      },
+    },
+    summary:
+      "An animation as the block scrolls into view or the page loads, moving only its opacity and transform.",
   },
 
   // --- position

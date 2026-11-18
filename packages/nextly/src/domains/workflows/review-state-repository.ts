@@ -79,7 +79,12 @@ export type ReviewStateChange = Partial<
 export interface ReviewStatesDb {
   select<T = unknown>(
     table: string,
-    options?: { where?: WhereClause; limit?: number }
+    options?: {
+      where?: WhereClause;
+      limit?: number;
+      offset?: number;
+      orderBy?: { column: string; direction?: "asc" | "desc" }[];
+    }
   ): Promise<T[]>;
   insert<T = unknown>(
     table: string,
@@ -173,6 +178,91 @@ export async function readDocumentReviewStates(
     where: documentWhere(document),
   });
   return rows.map(fromRow);
+}
+
+/** A stage of one collection or Single, as a filter on review states names it. */
+export interface ScopedStageFilter {
+  kind: ReviewScopeKind;
+  slug: string;
+  stage: string;
+}
+
+/**
+ * The filter "assigned to any of `holders`, in any of the stages `within` names", or null where
+ * it can match nothing. One filter for the page and its count, so the two cannot disagree.
+ */
+function assignedWhere(
+  holders: readonly ReviewAssignee[],
+  within: readonly ScopedStageFilter[]
+): WhereClause | null {
+  if (holders.length === 0 || within.length === 0) return null;
+  const byKind = (kind: ReviewAssigneeKind) =>
+    holders.filter(holder => holder.kind === kind).map(holder => holder.id);
+  const assigned: WhereClause[] = (["user", "role"] as const)
+    .map(kind => ({ kind, ids: byKind(kind) }))
+    .filter(({ ids }) => ids.length > 0)
+    .map(({ kind, ids }) => ({
+      and: [
+        { column: "assigneeKind", op: "=", value: kind },
+        { column: "assigneeId", op: "IN", value: ids },
+      ],
+    }));
+  const stages: WhereClause = {
+    or: within.map(
+      (scoped): WhereClause => ({
+        and: [
+          { column: "scopeKind", op: "=", value: scoped.kind },
+          { column: "scopeSlug", op: "=", value: scoped.slug },
+          { column: "stage", op: "=", value: scoped.stage },
+        ],
+      })
+    ),
+  };
+  return { and: [{ or: assigned }, stages] };
+}
+
+/**
+ * The review states assigned to any of `holders` (a person, or roles) in any of the stages
+ * `within` names, a page at a time, oldest entry into their stage first: what waits for them.
+ * Filtered and paginated in the database, on the assignee index.
+ *
+ * @experimental
+ */
+export async function readAssignedReviewStates(
+  db: ReviewStatesDb,
+  holders: readonly ReviewAssignee[],
+  page: { limit: number; offset: number },
+  within: readonly ScopedStageFilter[]
+): Promise<ReviewState[]> {
+  const where = assignedWhere(holders, within);
+  if (where === null) return [];
+  const rows = await db.select<ReviewStateRow>(REVIEW_STATES_TABLE, {
+    where,
+    // Stable across pages: entry into the stage, then the row's own key.
+    orderBy: [
+      { column: "enteredAt", direction: "asc" },
+      { column: "partKey", direction: "asc" },
+    ],
+    limit: page.limit,
+    offset: page.offset,
+  });
+  return rows.map(fromRow);
+}
+
+/**
+ * How many review states {@link readAssignedReviewStates} would list over every page.
+ *
+ * @experimental
+ */
+export async function countAssignedReviewStates(
+  db: {
+    count(table: string, options?: { where?: WhereClause }): Promise<number>;
+  },
+  holders: readonly ReviewAssignee[],
+  within: readonly ScopedStageFilter[]
+): Promise<number> {
+  const where = assignedWhere(holders, within);
+  return where === null ? 0 : db.count(REVIEW_STATES_TABLE, { where });
 }
 
 /**
@@ -346,6 +436,24 @@ export function deletePartReviewState(
   return db.delete(REVIEW_STATES_TABLE, {
     and: [{ column: "partKey", op: "=", value: reviewStateKey(part) }],
   });
+}
+
+/**
+ * Removes one part's review state if its revision is still `expectedRevision`. False, removing
+ * nothing, when someone wrote the row since or it is gone.
+ */
+export async function deletePartReviewStateAt(
+  db: ReviewStatesDb,
+  part: ReviewPart,
+  expectedRevision: number
+): Promise<boolean> {
+  const removed = await db.delete(REVIEW_STATES_TABLE, {
+    and: [
+      { column: "partKey", op: "=", value: reviewStateKey(part) },
+      { column: "revision", op: "=", value: expectedRevision },
+    ],
+  });
+  return removed > 0;
 }
 
 /** Removes the review state of every part of a document. */

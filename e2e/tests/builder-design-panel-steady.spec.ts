@@ -81,10 +81,10 @@ async function openDesign(page: Page): Promise<void> {
 
 /** The first variable row's name and value columns, in the window. */
 async function firstRowColumns(page: Page) {
-  const row = page.locator(".nx-vars__row").first();
+  const row = page.locator(".nx-vars__line > .nx-vars__row").first();
   await expect(row).toBeVisible();
-  // Each column found by what it is, so a count arriving after the first
-  // measure is measured as the count rather than taken for the values.
+  // Each column found by what it is, so the row is measured the same way
+  // before and after its usage arrives.
   return row.evaluate(element => {
     const at = (box: Element | null) => {
       const rect = box?.getBoundingClientRect();
@@ -95,7 +95,9 @@ async function firstRowColumns(page: Page) {
     return {
       row: at(element),
       name: at(element.querySelector(".nx-vars__name")),
-      values: at(element.querySelector(".nx-vars__pair")),
+      swatch: at(element.querySelector(".nx-vars__swatch")),
+      // The ⋯ beside the row, on the same line.
+      more: at(element.parentElement?.querySelector(".nx-vars__more") ?? null),
     };
   });
 }
@@ -126,17 +128,22 @@ test("switching Design tabs leaves the rows' columns where they were", async ({
     // one whose list does not: a scrollbar taking room only in the first
     // narrows every row there.
     const room = () =>
-      page.locator(".nx-vars__body").evaluate(body => body.clientWidth);
+      page
+        .locator(".nx-vars__body")
+        .first()
+        .evaluate(body => body.clientWidth);
     const scrolling = await room();
-    await switchTo(page, "Fonts");
+    await switchTo(page, "Type");
     expect(await room()).toBe(scrolling);
-    for (const tab of ["Shared styles", "Variables", "Fonts", "Variables"]) {
+    for (const tab of ["Styles", "Colours", "Type", "Spacing", "Colours"]) {
       await switchTo(page, tab);
     }
-    // And once the counts are in.
-    await expect(page.locator(".nx-vars__count").first()).toBeVisible({
-      timeout: 30_000,
-    });
+    // And once the counts are in, which each row says in its name.
+    await expect(page.locator(".nx-vars__row").first()).toHaveAttribute(
+      "aria-label",
+      /(Used in|Not used|Not counted yet)/,
+      { timeout: 30_000 }
+    );
     const settled = await firstRowColumns(page);
     expect(settled).toEqual(first);
   } finally {

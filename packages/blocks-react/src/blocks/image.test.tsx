@@ -211,9 +211,10 @@ describe("core/image as content", () => {
 });
 
 describe("core/image's picture inside a wrapper", () => {
-  it("takes its corners, proportion, fit and focal point from the root", () => {
-    // Declared on the part the compiler routes them to, from a figure or a
-    // link: the structure `image-routing.test.tsx` renders and matches.
+  it("takes its corners, proportion, fit, focal point and shadow from the root", () => {
+    // Declared on the part the compiler routes them to, from a figure, a
+    // link or the button that enlarges it: the structure
+    // `image-routing.test.tsx` renders and matches.
     const picture = (
       image.parts as Record<string, { takesFromRoot?: unknown }> | undefined
     )?.picture;
@@ -223,8 +224,9 @@ describe("core/image's picture inside a wrapper", () => {
         "aspectRatio",
         "objectFit",
         "objectPosition",
+        "boxShadow",
       ],
-      whenRootIs: ["frame", "link"],
+      whenRootIs: ["frame", "link", "enlarge"],
     });
   });
 

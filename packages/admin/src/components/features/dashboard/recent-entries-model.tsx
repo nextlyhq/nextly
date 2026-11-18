@@ -5,9 +5,9 @@
  * Kept apart from the component so the reading is tested without rendering.
  */
 
-import { buildRoute, ROUTES } from "@admin/constants/routes";
 import { formatRelativeTime } from "@admin/lib/dashboard";
 import { fieldLabel } from "@admin/lib/field-label";
+import type { DocumentAddressOf } from "@admin/lib/navigation/useDocumentAddress";
 import type { WidgetResultField } from "@admin/types/dashboard/widgets";
 
 import { asPresentedText } from "../widgets/archetypes/cell-text";
@@ -16,17 +16,19 @@ import type { ListField, ListModel } from "../widgets/frame/list-card";
 import { StatusChip } from "../widgets/frame/row-parts";
 
 /**
- * Where a row links: its entry's edit page in the collection the card reads. `undefined` for a
- * row with no id, or a card set to no collection.
+ * Where a row links: its entry, where the admin's one rule for opening a document opens it in
+ * the collection the card reads. `undefined` for a row with no id, or a card set to no
+ * collection.
  */
 function entryHref(
   slug: string | undefined,
-  item: Record<string, unknown>
+  item: Record<string, unknown>,
+  addressOf: DocumentAddressOf
 ): string | undefined {
   const id = item.id;
   if (slug === undefined) return undefined;
   if (typeof id !== "string" && typeof id !== "number") return undefined;
-  return buildRoute(ROUTES.COLLECTION_ENTRY_EDIT, { slug, id: String(id) });
+  return addressOf({ kind: "collection", slug, id: String(id) });
 }
 
 /**
@@ -49,13 +51,15 @@ export function recentEntriesModel(
   columns: readonly WidgetResultField[],
   now: number,
   /** Whether the collection has a draft and published lifecycle, as its source says. */
-  lifecycle: boolean
+  lifecycle: boolean,
+  /** Where a link to a document opens, by the admin's one rule. */
+  addressOf: DocumentAddressOf
 ): ListModel<Record<string, unknown>> {
   const title = columns.find(column => column.name === label);
   return {
     titleLabel: fieldLabel({ name: label, label: title?.label }),
     titleOf: item => asPresentedText(item[label], title) ?? "—",
-    hrefOf: item => entryHref(slug, item),
+    hrefOf: item => entryHref(slug, item, addressOf),
     fields: columns
       .filter(column => column.name !== label)
       .map(

@@ -34,7 +34,6 @@ import {
   useDocumentActions,
   useDocumentIdentity,
   useDocumentStatus,
-  usePluginRoute,
   writePluginRoute,
   type DocumentActions,
 } from "@nextlyhq/plugin-sdk/admin";
@@ -63,6 +62,7 @@ import type {
 import { DEFAULT_LAYOUT_REFUSAL, PAGES_USE_IT } from "../layout-removal/words";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 
+import { useBuilderRoute } from "./builder-route-read";
 import { MovePagesDialog } from "./RemoveLayoutMove";
 
 /** Which Layout the action removes, and how it stands. */
@@ -147,7 +147,7 @@ export function RemoveLayoutToolbarSlot(_props: {
   const status = useDocumentStatus();
   const actions = useDocumentActions();
   const collection = identity?.kind === "collection";
-  const resolved = usePluginRoute<PageCollectionResponse>({
+  const resolved = useBuilderRoute<PageCollectionResponse>({
     plugin: PAGE_BUILDER_PLUGIN_NAME,
     path: PAGE_COLLECTION_ROUTE_PATH,
     enabled: collection,
@@ -178,15 +178,87 @@ export function RemoveLayoutAction({
   published,
   heldBecause,
 }: RemoveLayoutActionProps): JSX.Element | null {
+  const toList = (): void => {
+    navigateTo(`/admin/collections/${collectionSlug}`);
+  };
+  const { open, dialog } = useRemoveLayout({
+    entryId,
+    published,
+    // On the set's own form: the list after a delete, else the form read
+    // again, which shows the set unpublished.
+    leave: action => {
+      if (action === "delete") toList();
+      else window.location.reload();
+    },
+  });
+  // Nothing to remove while a Layout is being created.
+  if (entryId === null || entryId === "" || entryId === "create") {
+    return null;
+  }
+  return (
+    <>
+      <Button
+        type="button"
+        variant="outline"
+        disabled={heldBecause !== undefined}
+        {...(heldBecause === undefined ? {} : { title: heldBecause })}
+        onClick={open}
+      >
+        Remove header & footer set…
+      </Button>
+      {dialog}
+    </>
+  );
+}
+
+/**
+ * The Remove Layout dialog for one set, and the call that opens it, for
+ * wherever a set is taken down: its own form's button, and the builder's
+ * Pages panel. `leave` is what follows a removal, after a delete or an
+ * unpublish; the checks and writes are the same everywhere.
+ */
+export function useRemoveLayout({
+  entryId,
+  published,
+  leave,
+  closeOnLeave = false,
+  afterStoppedMove,
+}: {
+  readonly entryId: string | null;
+  readonly published: boolean;
+  /**
+   * What follows a removal, with the pages a move took off the set first,
+   * by id (none where nothing was moved).
+   */
+  readonly leave: (
+    action: "delete" | "unpublish",
+    moved: readonly string[]
+  ) => void;
+  /**
+   * Whether the dialog closes as it leaves: where the author stays (the
+   * Pages panel). On the set's own form it stays up while the page goes.
+   */
+  readonly closeOnLeave?: boolean;
+  /**
+   * When a move that began closes before the set was removed (stopped,
+   * refused or failed), with the pages it may have moved, by id: those
+   * already moved stay moved.
+   */
+  readonly afterStoppedMove?: (mayHaveMoved: readonly string[]) => void;
+}): { readonly open: () => void; readonly dialog: JSX.Element | null } {
   const [state, setState] = useState<DialogState>({ kind: "closed" });
   // Each opening of the dialog, numbered: an answer that arrives for an
   // earlier one, after the author closed it, changes nothing.
   const opening = useRef(0);
   // Set once a move removed the Layout: closing the dialog then leaves it.
   const movedAway = useRef<"delete" | "unpublish" | null>(null);
+  // The pages that move took off the Layout, by id, for what follows.
+  const movedPages = useRef<readonly string[]>([]);
+  // The pages a begun move may have changed, until it removes the set.
+  const moveBegun = useRef<readonly string[] | null>(null);
   // Nothing to remove while a Layout is being created.
   if (entryId === null || entryId === "" || entryId === "create") {
-    return null;
+    return { open: () => undefined, dialog: null };
   }
 
   /** Set the state, unless the dialog was closed since `asked`. */
@@ -197,6 +269,9 @@ export function RemoveLayoutAction({
   const close = (): void => {
     opening.current += 1;
     setState({ kind: "closed" });
+    const begun = moveBegun.current;
+    moveBegun.current = null;
+    if (begun !== null) afterStoppedMove?.(begun);
   };
 
   const open = (): void => {
@@ -227,15 +302,13 @@ export function RemoveLayoutAction({
     );
   };
 
-  const toList = (): void => {
-    navigateTo(`/admin/collections/${collectionSlug}`);
+  /** What follows a removal, closing the dialog where the author stays. */
+  const finish = (action: "delete" | "unpublish"): void => {
+    moveBegun.current = null;
+    if (closeOnLeave) setState({ kind: "closed" });
+    leave(action, movedPages.current);
   };
-
-  /** Leave a Layout a move removed: the list after a delete, else reread it. */
-  const leave = (action: "delete" | "unpublish"): void => {
-    if (action === "delete") toList();
-    else window.location.reload();
-  };
+  const toList = (): void => finish("delete");
 
   const confirm = (check: RemovalCheck, action: "delete" | "unpublish") => {
     const asked = opening.current;
@@ -251,9 +324,7 @@ export function RemoveLayoutAction({
             toList();
           }
         } else {
-          // The form still holds the published Layout; reading it again
-          // shows it unpublished.
-          window.location.reload();
+          finish("unpublish");
         }
       },
       (error: unknown) =>
@@ -267,59 +338,56 @@ export function RemoveLayoutAction({
     );
   };
 
-  return (
-    <>
-      <Button
-        type="button"
-        variant="outline"
-        disabled={heldBecause !== undefined}
-        {...(heldBecause === undefined ? {} : { title: heldBecause })}
-        onClick={open}
+  const dialog = (
+    <AlertDialog
+      open={state.kind !== "closed"}
+      onOpenChange={next => {
+        if (next || state.kind === "removing") return;
+        // The Layout is gone once deleted: closing leaves for the list.
+        if (state.kind === "deleted") toList();
+        else if (movedAway.current !== null) {
+          const action = movedAway.current;
+          movedAway.current = null;
+          finish(action);
+        } else close();
+      }}
+    >
+      <AlertDialogContent
+        // Wider while it offers a move: its buttons name the count and what
+        // follows the move, and three of them side by side do not fit the
+        // dialog's usual width.
+        className={
+          state.kind === "checked" && movable(state.check)
+            ? "max-w-2xl"
+            : undefined
+        }
       >
-        Remove header & footer set…
-      </Button>
-      <AlertDialog
-        open={state.kind !== "closed"}
-        onOpenChange={next => {
-          if (next || state.kind === "removing") return;
-          // The Layout is gone once deleted: closing leaves for the list.
-          if (state.kind === "deleted") toList();
-          else if (movedAway.current !== null) leave(movedAway.current);
-          else close();
-        }}
-      >
-        <AlertDialogContent
-          // Wider while it offers a move: its buttons name the count and what
-          // follows the move, and three of them side by side do not fit the
-          // dialog's usual width.
-          className={
-            state.kind === "checked" && movable(state.check)
-              ? "max-w-2xl"
-              : undefined
-          }
-        >
-          {state.kind === "checked" && movable(state.check) ? (
-            <MovePagesDialog
-              entryId={entryId}
-              check={state.check}
-              published={published}
-              onRemoved={action => {
-                movedAway.current = action;
-              }}
-              onFinished={leave}
-            />
-          ) : (
-            <PlainDialog
-              state={state}
-              published={published}
-              toList={toList}
-              confirm={confirm}
-            />
-          )}
-        </AlertDialogContent>
-      </AlertDialog>
-    </>
+        {state.kind === "checked" && movable(state.check) ? (
+          <MovePagesDialog
+            entryId={entryId}
+            check={state.check}
+            published={published}
+            onRemoved={action => {
+              movedAway.current = action;
+              movedPages.current = state.check.pages.map(page => page.id);
+            }}
+            onStarted={() => {
+              moveBegun.current = state.check.pages.map(page => page.id);
+            }}
+            onFinished={finish}
+          />
+        ) : (
+          <PlainDialog
+            state={state}
+            published={published}
+            toList={toList}
+            confirm={confirm}
+          />
+        )}
+      </AlertDialogContent>
+    </AlertDialog>
   );
+  return { open, dialog };
 }
 
 /** Whether the dry run found pages a move can take off the Layout. */

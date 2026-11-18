@@ -15,12 +15,12 @@ import type {
 import * as React from "react";
 
 import type { BindingServices } from "./binding-services";
+import type { InlineRichTextEditorLoader } from "./canvas/use-inline-rich-text";
 import type { EditableProp } from "./inspector";
 import type { QueryField } from "./list-query-model";
 import type { CustomSource } from "./named-query-model";
 import type { OpenPassages } from "./open-passages";
 import type { PreferenceStore } from "./shell-state";
-import type { InlineRichTextEditorLoader } from "./use-inline-rich-text";
 
 /** One item the host's media picker returned. Only its id is ever stored. */
 export interface PickedMedia {
@@ -48,6 +48,20 @@ export interface FoundMedia extends MediaSummary {
   readonly id: string;
 }
 
+/**
+ * Put one file in the host's media library, through the library's own upload
+ * and its checks (the types and size the site accepts, and the author's
+ * right to upload), telling `onProgress` how far it is, from 0 to 100.
+ * Resolves to the stored item, and rejects with the reason the upload was
+ * refused, in words an author can read.
+ *
+ * @experimental Settles with the canvas's image empty state.
+ */
+export type UploadMedia = (
+  file: File,
+  onProgress?: (percent: number) => void
+) => Promise<PickedMedia>;
+
 /** What the content controls hand the host's media picker. */
 export interface MediaPickerProps {
   open: boolean;
@@ -58,6 +72,14 @@ export interface MediaPickerProps {
   accept?: string;
   /** What is chosen when it opens: the file the prop stores, if any. */
   initialSelectedIds?: Set<string>;
+  /**
+   * One file, or several: `multi` lets the author pick many, handed back in
+   * the order they were picked, as a Gallery's "Add images" asks. Unset is
+   * one.
+   *
+   * @experimental Settles with the Gallery's "Add images".
+   */
+  mode?: "single" | "multi";
 }
 
 /** What a relation control asks the host for: one collection's entries. */
@@ -156,7 +178,13 @@ export interface LoopCollection {
     readonly timeOnly?: boolean;
     /** The primitive a plugin's field type is stored as, which gives its kind. */
     readonly storage?: FieldStoragePrimitive;
+    /** For an upload field: whether it takes images, where it says. */
+    readonly takesImages?: boolean;
   }[];
+  /** The field the admin titles its entries by, where visitors may read it. */
+  readonly titleField?: string;
+  /** Whether its entries are served as pages of their own. */
+  readonly entriesHavePages?: boolean;
 }
 
 /** A list's matching entries, and how many of them it shows. */
@@ -164,6 +192,41 @@ export interface ListEntriesCount {
   readonly matching: number;
   readonly shown: number;
 }
+
+/**
+ * One form a provider lists for an author to pick in a Form block.
+ *
+ * @experimental Settles with the form provider contract.
+ */
+export interface PickableForm {
+  /** The provider's own reference to it, which the block stores. */
+  readonly ref: string;
+  readonly title: string;
+  readonly state: "draft" | "published" | "closed";
+  /** Where the author edits it in the admin, as the provider gives it. */
+  readonly editHref?: string;
+}
+
+/**
+ * A source of forms other than the block's own fields (the forms plugin),
+ * with the forms the author may pick from it.
+ *
+ * @experimental Settles with the form provider contract.
+ */
+export interface FormSource {
+  /** The provider's id, which the block stores beside a form's reference. */
+  readonly id: string;
+  /** What authors read: "Forms" in "Fields … come from Forms." */
+  readonly label: string;
+  readonly forms: readonly PickableForm[];
+}
+
+/**
+ * A picked form's state as its author sees it on the canvas.
+ *
+ * @experimental Settles with the form provider contract.
+ */
+export type PickedFormState = "published" | "draft" | "closed" | "missing";
 
 /**
  * What the host lends the Content tab: the parts of the admin this package
@@ -177,6 +240,23 @@ export interface ListEntriesCount {
 export interface ContentServices extends BindingServices {
   /** The admin's media library, as a dialog the control opens. */
   readonly MediaPicker?: React.ComponentType<MediaPickerProps>;
+  /**
+   * The admin's media library upload, for a file an author drops on an
+   * Image or chooses from its empty state. Absent, an Image offers no
+   * Upload and takes no dropped file.
+   *
+   * @experimental Settles with the canvas's image empty state.
+   */
+  readonly uploadMedia?: UploadMedia;
+  /**
+   * Copy the picture a video's provider shows for it into the media library,
+   * once: a second copy for the same video answers the first. Given the
+   * Embed's link as stored; the host fetches only from the provider's fixed
+   * picture host. Absent, an Embed offers no "Use the video's thumbnail".
+   *
+   * @experimental Settles with the Embed's poster.
+   */
+  readonly copyEmbedThumbnail?: (link: string) => Promise<PickedMedia>;
   /** The shared rich-text editor, loaded when a passage is first focused. */
   readonly loadRichTextEditor?: InlineRichTextEditorLoader;
   /**
@@ -252,6 +332,40 @@ export interface ContentServices extends BindingServices {
    * picker offers no Recent row.
    */
   readonly recentIcons?: PreferenceStore;
+  /**
+   * A form a Form block picked from a provider, read with the signed-in
+   * author's own access, for what its own "After sending" setting is.
+   * Absent, or answering `undefined`, the panel names the choice without
+   * saying what it is.
+   *
+   * @experimental Settles with the form provider contract.
+   */
+  /**
+   * The site's form sources other than the block's own fields, each with
+   * the forms the signed-in author may pick, for a Form block's "Form: <pick
+   * a form>". An empty list is a site with no such source, where the panel
+   * says what installing one adds. Absent, the panel offers neither.
+   *
+   * @experimental Settles with the form provider contract.
+   */
+  readonly listForms?: () => Promise<readonly FormSource[]>;
+  /**
+   * A picked form's state, read with the signed-in author's own access, for
+   * what the canvas says over it: a draft, closed, or deleted. Rejects where
+   * it could not be read, and the canvas then says nothing.
+   *
+   * @experimental Settles with the form provider contract.
+   */
+  readonly pickedFormState?: (form: {
+    readonly provider: string;
+    readonly ref: string;
+  }) => Promise<PickedFormState>;
+  readonly describeForm?: (form: {
+    readonly provider: string;
+    readonly ref: string;
+  }) => Promise<
+    { readonly afterSending: { readonly kind: "message" | "page" } } | undefined
+  >;
 }
 
 /**

@@ -50,9 +50,9 @@ import {
   newId,
   OpError,
   planInsertPattern,
-  registryNestingSource,
   type BlockDocument,
   type BlockNode,
+  type BlockRegistryReader,
   type BuilderOp,
   type DocumentLimits,
   type OpPosition,
@@ -179,6 +179,8 @@ export interface PageActionsSetup {
   readonly limits?: () => DocumentLimits;
   /** What an action's bindings are judged with; absent, they are not. */
   readonly bindings?: () => BindingJudging | undefined;
+  /** The site's block registry, whose rules the actions plan and judge by. */
+  readonly blocks: BlockRegistryReader;
 }
 
 /** The context the page actions run with. */
@@ -260,6 +262,7 @@ export async function runPageAction(
       ...(read.templateTarget === undefined
         ? {}
         : { templateTarget: read.templateTarget.collection }),
+      blocks: setup.blocks,
     },
     setup
   );
@@ -378,6 +381,7 @@ async function bindingRefusals(
     {
       ...judging,
       storedForms: () => storedFormsOf(ctx, page, field, read),
+      blocks: setup.blocks,
     }
   );
   return issues.map(issue => issue.message);
@@ -592,7 +596,13 @@ async function opsFor(
         ops: [entryContentFieldUpdate(document, action.nodeId, action.field)],
       };
     case "insert-pattern":
-      return insertPatternOps(ctx, action.patternId, action.at, document);
+      return insertPatternOps(
+        ctx,
+        action.patternId,
+        action.at,
+        document,
+        source.blocks
+      );
     case "place-component":
       return placeComponentOps(ctx, action, document, components);
     case "set-placement-values":
@@ -638,7 +648,9 @@ async function insertPatternOps(
   ctx: PageActionsContext,
   patternId: string,
   at: OpPosition | undefined,
-  document: BlockDocument
+  document: BlockDocument,
+  /** The site's block registry, whose nesting rules the plan follows. */
+  blocks: BlockRegistryReader
 ): Promise<{ ops: readonly BuilderOp[] }> {
   // A published pattern, as the caller may read it: the insert panel offers
   // only published patterns.
@@ -660,7 +672,7 @@ async function insertPatternOps(
     document,
     { id: patternId, document: pattern },
     at ?? { index: document.nodes.length },
-    registryNestingSource()
+    blocks.nestingSource()
   );
   if (plan.problem !== undefined) throw planRefusal(plan, "insert-pattern");
   return { ops: plan.pageOps };
@@ -1002,7 +1014,7 @@ function refusedAction(messages: readonly string[]): NextlyError {
 }
 
 /** The page actions route declaration. */
-export function pageActionsRoute(setup: PageActionsSetup = {}): {
+export function pageActionsRoute(setup: PageActionsSetup): {
   method: "POST";
   checksAccess: true;
   path: string;

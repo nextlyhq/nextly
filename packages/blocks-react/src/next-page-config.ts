@@ -10,6 +10,7 @@
  */
 import type {
   BlockSeoContribution,
+  CustomCssLevel,
   DocumentLimits,
   SiteSheetInput,
   StyleCompileContext,
@@ -33,6 +34,7 @@ import type {
   NamedQueryLookup,
   ResolvedMedia,
 } from "./context";
+import type { ImageCopies } from "./image-slot";
 import type { BlocksLayoutsProvider } from "./next-layouts";
 import type { BlockResolver } from "./resolver";
 import type { PageStyles } from "./styles";
@@ -60,6 +62,29 @@ export function isSiteStylesProvider(
     );
   }
   return typeof value === "object" && value !== null && "read" in value;
+}
+
+/**
+ * A host's checker for custom CSS, and a per-render read of the site's own,
+ * together with the Singles that read depends on (see
+ * {@link SiteStylesProvider.singles} for why they are required).
+ *
+ * @experimental
+ */
+export interface CustomCssSource {
+  /** Which checker this is: a stored sheet compiled under another recompiles. */
+  readonly id: string;
+  /** Whether this CSS may be drawn at this level. */
+  accepts(css: string, level: CustomCssLevel): boolean;
+  /** The site's own CSS, read once per render; `undefined` for none. */
+  readSite: () => string | undefined | Promise<string | undefined>;
+  /** The Single slugs `readSite` consults, so a write to one busts the page. */
+  readonly singles: readonly string[];
+  /**
+   * Cache tags of other data `readSite` consults, such as a plugin's own
+   * (`pluginCacheTag`), whose expiry busts the page as a Single's write does.
+   */
+  readonly tags?: readonly string[];
 }
 
 /**
@@ -98,6 +123,23 @@ export interface SiteStylesProvider {
 }
 
 /**
+ * What a route draws around a published page, for a plugin that adds to every
+ * page it serves: `before` ahead of the page's own output, and `after` behind
+ * it. Asked once per render with the entry as read, the field drawn, and its
+ * own stored value (the page's document before any template is composed in).
+ *
+ * @experimental Settles with page code.
+ */
+export type PageSurroundings = (args: {
+  readonly entry: ContentEntry;
+  readonly field: string;
+  readonly document: unknown;
+  readonly context: RenderContext;
+}) =>
+  | { readonly before?: ReactNode; readonly after?: ReactNode }
+  | Promise<{ readonly before?: ReactNode; readonly after?: ReactNode }>;
+
+/**
  * Config for {@link createBlocksPage}.
  *
  * Everything {@link ContentRouteConfig} accepts, minus `render` — supplying
@@ -129,7 +171,15 @@ export interface BlocksPageConfig
    * site settings are cached under it, as every public read of the route is.
    */
   nextly?: NextlyContentReader & Partial<PublicSiteSettingsSource>;
-  /** Where block definitions come from. Defaults to the process registry. */
+  /**
+   * Where block definitions come from. Defaults to the blocks of the site
+   * the process serves, read from its page builder on each render, so a
+   * page draws its registered blocks, custom ones included, with nothing
+   * passed. A process serving two sites binds each route to its own with
+   * `blocks: blocksOf(builder)` from `@nextlyhq/plugin-page-builder`, since
+   * an instance's services are kept once per process. A resolver passed here
+   * is always the one used.
+   */
   blocks?: BlockResolver;
   /**
    * The stylesheet compiled when this entry was saved.
@@ -199,6 +249,15 @@ export interface BlocksPageConfig
    */
   siteStyles?: SiteStylesInput | SiteStylesProvider;
   /**
+   * The host's checker for author-written CSS, and where the site's own CSS is
+   * read. Without it the route draws no custom CSS at any level: the compile
+   * draws only what a checker accepts. A page builder provides one for its
+   * pages route.
+   *
+   * @experimental
+   */
+  customCss?: CustomCssSource;
+  /**
    * A dynamic collection to resolve media ids against, for a site storing its
    * images in one of its own.
    *
@@ -266,7 +325,11 @@ export interface BlocksPageConfig
   /**
    * How many reads one page render may perform, shared by the whole page.
    *
-   * Defaults to {@link DEFAULT_MAX_QUERIES}. A budget is not optional here the
+   * Defaults to the site's page data limit, `pageBuilder({ maxQueries })`,
+   * which the editor's page data meter counts against too, and without one
+   * to {@link DEFAULT_MAX_QUERIES}. A value set here is this route's alone:
+   * the editor's meter does not know it, so set the limit on `pageBuilder()`
+   * instead where the meter should agree. A budget is not optional here the
    * way it is on a hand-built context: depth in a document becomes
    * MULTIPLICATION in reads, so three nested `core/collection-loop` blocks over
    * a hundred entries each is a million reads from one page view — and a route
@@ -289,8 +352,20 @@ export interface BlocksPageConfig
    * standalone renderer was given.
    */
   hostPolicy?: BlockHostPolicy;
-  /** Shown in place of an asynchronous block until its output arrives. */
+  /**
+   * Shown in place of an asynchronous block until its output arrives. Given,
+   * each asynchronous block streams in a boundary of its own, which a visitor
+   * without JavaScript never sees revealed; absent, the page waits for its
+   * blocks and its HTML holds them (`PageRendererProps.blockFallback`).
+   */
   blockFallback?: ReactNode;
+  /**
+   * What the route draws around each page it serves (`PageSurroundings`).
+   * A content page's provider may supply it for every page and entry.
+   *
+   * @experimental Settles with page code.
+   */
+  around?: PageSurroundings;
   /**
    * The time zone a bound date-time is shown in, as an IANA name such as
    * `Europe/Paris`. A calendar date is shown as its own day whatever this is.
@@ -312,6 +387,18 @@ export interface BlocksPageConfig
    * @experimental
    */
   namedQueries?: NamedQueryLookup;
+  /**
+   * Resized copies of the site's images: `pageBuilderImageCopies(reader)` from
+   * `@nextlyhq/plugin-page-builder`, which asks the site's media for them
+   * through a reader carrying `media.copiesOf`.
+   * Given, each Image block offers copies sized to where it sits (`srcset`
+   * and `sizes`) and never sends one more than twice its widest drawn width,
+   * and the images in the page's first block load first. Absent, or for an
+   * image no copy can be had of, the original is drawn as it always was.
+   *
+   * @experimental
+   */
+  imageCopies?: ImageCopies;
   /**
    * The caps this site holds its documents to, used while repairing a stored
    * shape. Passed to the renderer AND used when deriving metadata, so a site
@@ -557,6 +644,14 @@ export interface ContentPageConfig {
    * whose sheet is compiled from `styleContext`.
    */
   readonly pages: BlocksPageConfig;
+  /**
+   * What the route draws around every page and entry it serves, as
+   * `BlocksPageConfig.around` takes it; the page builder supplies the page's
+   * own code. A `pages.around` the site sets wins.
+   *
+   * @experimental Settles with page code.
+   */
+  readonly around?: PageSurroundings;
   /**
    * Who holds `path` in `locale`: the path as served (the route's
    * `mountPath` included, each segment percent-encoded), and the route's

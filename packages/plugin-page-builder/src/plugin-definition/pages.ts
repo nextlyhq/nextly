@@ -670,7 +670,7 @@ export function routesForPages(def: Definition): {
     // The relation control's read: a collection's entries as `{ id, title }`,
     // for the collections a registered block prop names as relation targets,
     // read as the author asking.
-    entries: entriesRoute(),
+    entries: entriesRoute(def.blocks),
     // The editor's page search: the site's pages (entries of collections
     // with a Page Builder field, the composition stores left out), by
     // title, read as the author asking.
@@ -681,8 +681,9 @@ export function routesForPages(def: Definition): {
     addressWaiting: addressWaitingRoute(),
     // The Pages panel's writes: create, duplicate, rename and delete a
     // page, each as the author asking, in exactly the collections the
-    // search lists.
-    pagesWrite: pagesWriteRoutes(componentStoreOf(opts)),
+    // search lists; and the New page dialog's read of what a new page
+    // would get, its address shown where the search shows a page's.
+    pagesWrite: pagesWriteRoutes(componentStoreOf(opts), opts.pagePreviewPath),
     // Which collection holds the pages, as renamed: the picker draws on
     // that collection's forms and no other.
     pageCollection: pageCollectionRoute(),

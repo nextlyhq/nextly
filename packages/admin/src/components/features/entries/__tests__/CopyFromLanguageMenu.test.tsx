@@ -259,7 +259,7 @@ describe("CopyFromLanguageMenu", () => {
     await waitFor(() => {
       expect(seenValues.title).toBe("Hello");
     });
-    expect(copiedValuesFor(seenControl).provenanceForSave(seenValues)).toEqual({
+    expect(copiedValuesFor(seenControl).beginSave(seenValues).claims).toEqual({
       title: { origin: "copy", sourceLocale: "en" },
       body: { origin: "copy", sourceLocale: "en" },
     });

@@ -122,6 +122,32 @@ export interface SelectInputProps<
  * />
  * ```
  */
+/**
+ * Whether a single choice (a select or a radio group) offers to be cleared.
+ *
+ * Unless the field says it may not: the builder's Clearable switch is drawn ON
+ * for a field that has never set it (`isClearable !== false`), and the form
+ * once read the same unset value as OFF, so an optional choice the builder
+ * called clearable could not be emptied once picked. Never for a required
+ * field, though, whatever it says — "none" is not an answer it accepts, and
+ * clearing it would only trade the value for a required error.
+ */
+export function choiceIsClearable(field: {
+  required?: boolean;
+  validation?: { required?: boolean };
+  // Any admin options: a radio's declare no `isClearable`, and still say
+  // nothing against clearing.
+  admin?: object;
+}): boolean {
+  const required =
+    field.required === true || field.validation?.required === true;
+  const turnedOff =
+    field.admin !== undefined &&
+    "isClearable" in field.admin &&
+    field.admin.isClearable === false;
+  return !required && !turnedOff;
+}
+
 export function SelectInput<TFieldValues extends FieldValues = FieldValues>({
   name,
   field,
@@ -166,9 +192,12 @@ export function SelectInput<TFieldValues extends FieldValues = FieldValues>({
   // trigger, not on it: drawn over the trigger it crowded the chevron into
   // "⌄×", and it could not be reached from the keyboard. The form value, not
   // radix's open state, decides whether it shows.
-  const isClearable = field.admin?.isClearable === true;
   const showClear =
-    isClearable && !disabled && !readOnly && value !== "" && value != null;
+    choiceIsClearable(field) &&
+    !disabled &&
+    !readOnly &&
+    value !== "" &&
+    value != null;
 
   const handleClear = (e: React.MouseEvent) => {
     e.preventDefault();

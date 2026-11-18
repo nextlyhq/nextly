@@ -53,12 +53,14 @@ import {
 import { useDocumentLocale, usePluginRoute } from "@nextlyhq/plugin-sdk/admin";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 
+import type { LayoutArea } from "../collections/areas";
 // The CONTRACT, not the route, for the reason the pattern client gives: the
 // route reaches the collection through server-only modules.
 import {
   componentLibraryPath,
   PAGE_BUILDER_PLUGIN_NAME,
   type ComponentLibraryResponse,
+  type LibraryComponent,
 } from "../library-contract";
 
 import {
@@ -92,6 +94,11 @@ export interface ComponentLibraryRead {
    * Derived with the list, so the two cannot come to disagree.
    */
   readonly titleOf: ComponentTitleOf;
+  /**
+   * A component's "Use as" area by id, from the same rows: what tells a
+   * placed header or footer apart. Undefined for one with none, or unknown.
+   */
+  readonly areaOf: (componentId: string) => LayoutArea | undefined;
   /**
    * Whether the ceiling cut the read short.
    *
@@ -170,6 +177,7 @@ export function useComponentLibrary({
       definitions,
       components: data.items,
       titleOf: componentTitles(data.items),
+      areaOf: componentAreas(data.items),
       truncated: data.meta.truncated,
     };
   }, [data]);
@@ -202,10 +210,22 @@ export function useComponentLibrary({
  */
 const NOTHING_YET: Pick<
   ComponentLibraryRead,
-  "definitions" | "components" | "titleOf" | "truncated"
+  "definitions" | "components" | "titleOf" | "areaOf" | "truncated"
 > = {
   definitions: new Map(),
   components: [],
   titleOf: componentTitles([]),
+  areaOf: () => undefined,
   truncated: false,
 };
+
+/** Each component's "Use as" area by id, where it has one. */
+function componentAreas(
+  items: readonly LibraryComponent[]
+): ComponentLibraryRead["areaOf"] {
+  const areas = new Map<string, LayoutArea>();
+  for (const item of items) {
+    if (item.area !== undefined) areas.set(item.id, item.area);
+  }
+  return componentId => areas.get(componentId);
+}

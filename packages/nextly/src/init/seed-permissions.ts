@@ -583,7 +583,7 @@ async function seedEverything(): Promise<void> {
     });
   }
   // Roles an earlier release gave a retired `manage-` permission, each named
-  // at every start until `nextly upgrade` converts it. Named last: the writers
+  // at every start until `nextly migrate` converts it. Named last: the writers
   // above store a retired permission as the plain four, so a preset, the
   // Public role or a plugin role holding one is converted by this seeding, and
   // naming it before would ask for an upgrade this boot already did.

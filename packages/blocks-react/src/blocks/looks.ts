@@ -119,3 +119,29 @@ export function sectionLooks<P extends object>(): BlockVariation<P>[] {
     },
   ]);
 }
+
+/**
+ * A quote's looks: Line is its own, a line in the site's accent colour; Plain
+ * takes the line away; Large is bigger, centred words, with no line beside
+ * them.
+ */
+export function quoteLooks<P extends object>(): BlockVariation<P>[] {
+  return looksOf<P>([
+    { name: "line", label: "Line", isDefault: true },
+    {
+      name: "plain",
+      label: "Plain",
+      styles: values({ border: { style: "none" } }),
+    },
+    {
+      name: "large",
+      label: "Large",
+      styles: values({
+        border: { style: "none" },
+        padding: { inlineStart: "0" },
+        fontSize: "1.5em",
+        textAlign: "center",
+      }),
+    },
+  ]);
+}

@@ -26,14 +26,23 @@ import {
 import { ChevronDown } from "lucide-react";
 import * as React from "react";
 
+import { HiddenColours } from "./built-in-colours";
 import { ChoiceList } from "./choice-list";
+import { useFieldDescription } from "./css-hint";
 import { isElement } from "./dom-kind";
 import { InheritedValue } from "./inherited-value";
+import {
+  RecentColoursStore,
+  rememberColour,
+  useRecentColours,
+} from "./recent-colours";
+import type { PreferenceStore } from "./shell-state";
 import {
   activeTokenMode,
   colourHexOf,
   variableFor,
   variableLabel,
+  shownVariables,
   variablesFor,
   contrastAtLeaf,
   contrastPartnerOf,
@@ -44,6 +53,12 @@ import type { StyleControl } from "./style-controls";
 import type { CommitOutcome } from "./style-field-surroundings";
 import { useDraft, TextField } from "./style-text-field";
 import { readStyleValue, type StyleAddress } from "./style-values";
+import {
+  focusAfterUnlink,
+  UnlinkButton,
+  VariableTipped,
+  variableTip,
+} from "./variable-choice";
 import { ColourPair, swatchStyle } from "./variable-swatch";
 
 /**
@@ -250,9 +265,9 @@ const PICKER_FALLBACK = "#000000";
  *
  * **A token reference is EDITABLE here rather than read-only**, which is the
  * other half of what this control adds: it shows the token's CURRENT name on
- * its own trigger, with its swatch, and lets the author swap it, replace it
- * with a literal, or remove it. Every other field shows a held variable as the
- * chip beside its ◇ instead.
+ * its own trigger, in green with its swatch, and lets the author swap it, or
+ * Unlink it to the colour it gives now. Every other field shows a held
+ * variable as a green chip, its name the way to choose another, instead.
  *
  * **A token is stored by IDENTITY, never by the name shown.** The two differ
  * after a rename, and `SiteVariable` carries both for that reason — the list
@@ -296,10 +311,19 @@ export function ColourField({
   // Lifted out of the text field because two controls edit one value: a draft
   // private to the field would leave the swatch painting a superseded one.
   const { draft, setDraft, edited, reset } = useDraft(stored);
+  const commitColour = rememberingCommit(
+    onCommit,
+    React.useContext(RecentColoursStore)
+  );
 
   const reference = isTokenRef(stored) ? stored.$token : null;
   const mode = activeTokenMode(prefersDark);
-  const choices = variablesFor(control.leaf, tokens, mode);
+  // Without the built-in colours the site hides, as every picker lists them.
+  const choices = shownVariables(
+    variablesFor(control.leaf, tokens, mode),
+    React.useContext(HiddenColours),
+    reference
+  );
   // What the picker composed, written once the gesture is over. Compared
   // against the stored text so closing a picker nobody moved writes nothing.
   // What the picker has produced and not yet written. Held in a ref as well as
@@ -313,11 +337,13 @@ export function ColourField({
    * dismisses the picker, and the close reads `pending.current` to decide what
    * the gesture produced — so clearing it first leaves that close with nothing
    * to write, and the discrete choice is the only edit. One rule expressed
-   * once: a second expression of it is what drifts.
+   * once: a second expression of it is what drifts. A recent colour is one
+   * such choice, and joins the front of Recent colours again; a variable or
+   * a clear is no colour of its own and is not remembered.
    */
   const commitInstead = (value: StyleValue | null): void => {
     pending.current = null;
-    onCommit(value);
+    settle(commitColour(value), reset);
   };
   /*
    * The picker closed, whichever outcome that close had.
@@ -343,15 +369,15 @@ export function ColourField({
     const unwritten = pending.current;
     pending.current = null;
     if (outcome === "superseded" || unwritten === null) return;
-    if (onCommit(unwritten) === "unchanged") reset();
+    settle(commitColour(unwritten), reset);
   };
   // The current writer, held so the teardown below depends on nothing. A
   // teardown listing `onCommit` would re-run its cleanup on every render that
   // gives the field a new callback — which is every render — and flush a
   // gesture the author is still making.
-  const write = React.useRef(onCommit);
+  const write = React.useRef(commitColour);
   React.useEffect(() => {
-    write.current = onCommit;
+    write.current = commitColour;
   });
   /*
    * Write an unfinished gesture when this field goes away, and do it NOW.
@@ -393,6 +419,9 @@ export function ColourField({
   // surface to it: the controls snapped back mid-drag and a token could not be
   // replaced with a literal by using the picker at all.
   const storedLabel = storedTokenLabel(reference, tokens, mode, choices);
+  // The variable held, as the canvas shows it, for the trigger's tooltip and
+  // for Unlink; `undefined` for a value, none, or a variable the site lacks.
+  const held = heldVariable(reference, tokens, mode);
   const showing = reference === null || edited ? draft : stored;
   const shown = colourHexOf(showing, tokens, mode);
   // Measured from what the surface is SHOWING, which is the same value the
@@ -426,6 +455,7 @@ export function ColourField({
           tokensRead={tokens !== undefined}
           reference={reference}
           referenceLabel={storedLabel}
+          referenceTip={heldTip(held, storedLabel, tokens)}
           customFirst={writtenAsValue(stored)}
           actionName={actionName}
           describedBy={describes}
@@ -447,14 +477,15 @@ export function ColourField({
           onClosed={closed}
           /*
            * Any control that writes THIS field's value for itself, declared on
-           * the element. The token clear beside this picker is one; a
+           * the element. The Unlink beside a held variable is one; a
            * breakpoint Reset is another, and it lives in a different component
            * that has no way to hand a ref down here.
            */
           supersededBy={target => supersedes(target, id)}
-          // A variable is one discrete choice rather than a gesture, so it
-          // commits immediately, exactly as the select and toggle controls do.
-          onToken={identity => commitInstead({ $token: identity })}
+          // A variable, or a recent colour, is one discrete choice rather
+          // than a gesture, so it commits immediately, exactly as the select
+          // and toggle controls do.
+          onChoose={commitInstead}
         />
         {reference === null ? (
           // The SAME field every other text control uses, rather than one
@@ -474,13 +505,18 @@ export function ColourField({
             // The REFUSAL alone. `describes` also carries the contrast verdict,
             // which is supplementary text and never a complaint.
             invalid={describedBy !== undefined}
-            onCommit={onCommit}
+            onCommit={commitColour}
           />
         ) : (
-          <TokenClear
-            actionName={actionName}
+          <ColourUnlink
+            held={held}
             fieldId={id}
-            onClear={() => commitInstead(null)}
+            actionName={actionName}
+            onUnlink={value => {
+              commitInstead(value);
+              // The typed field takes Unlink's place, holding the colour.
+              focusAfterUnlink(() => document.getElementById(id));
+            }}
           />
         )}
       </div>
@@ -492,7 +528,8 @@ export function ColourField({
 
 /**
  * The trigger, and the surface it opens onto: the site's colour variables
- * first, and a custom colour behind its own button at the end.
+ * first, then the author's Recent colours, and a custom colour behind its own
+ * button at the end.
  *
  * The variables lead because a variable carries a light and a dark value and a
  * colour written as a value carries one, which the visitor's dark mode cannot
@@ -514,6 +551,7 @@ function ColourPicker({
   tokensRead,
   reference,
   referenceLabel,
+  referenceTip,
   customFirst,
   actionName,
   describedBy,
@@ -522,7 +560,7 @@ function ColourPicker({
   onColour,
   onClosed,
   supersededBy,
-  onToken,
+  onChoose,
 }: {
   /** The resolved colour, or `undefined` when nothing here can resolve one. */
   shown: string | undefined;
@@ -533,6 +571,8 @@ function ColourPicker({
   reference: string | null;
   /** What that reference is called, for the trigger. */
   referenceLabel: string;
+  /** What the held variable is, for the trigger's tooltip; see `variableTip`. */
+  referenceTip: string | undefined;
   /** Whether the custom colour opens already showing. */
   customFirst: boolean;
   actionName: string;
@@ -567,8 +607,14 @@ function ColourPicker({
    * this is bound.
    */
   supersededBy: (target: EventTarget | null) => boolean;
-  onToken: (identity: string) => void;
+  /**
+   * A discrete choice: a variable, as a reference to its identity, or a
+   * recent colour, as it is listed.
+   */
+  onChoose: (value: StyleValue) => void;
 }): React.JSX.Element {
+  // The refusal, and the CSS names while they are shown.
+  const described = useFieldDescription(describedBy);
   // Whether the dismissal in progress belongs to a control that writes for
   // itself. Read once by the close below and reset there, so it cannot leak
   // into the next open.
@@ -596,19 +642,16 @@ function ColourPicker({
         onClosed(own ? "superseded" : "committed");
       }}
     >
-      <PopoverTrigger asChild>
-        <ColourTrigger
-          shown={painted}
-          data-inherited={
-            shown === undefined && inherited !== undefined ? "" : undefined
-          }
-          reference={reference}
-          referenceLabel={referenceLabel}
-          actionName={actionName}
-          aria-describedby={describedBy}
-          aria-invalid={invalid ? true : undefined}
-        />
-      </PopoverTrigger>
+      <PickerTrigger
+        painted={painted}
+        inherited={shown === undefined && inherited !== undefined}
+        reference={reference}
+        referenceLabel={referenceLabel}
+        referenceTip={referenceTip}
+        actionName={actionName}
+        described={described}
+        invalid={invalid}
+      />
       <PopoverContent
         align="end"
         className="nx-style-inspector__picker"
@@ -650,9 +693,14 @@ function ColourPicker({
           onPick={identity => {
             // One discrete choice, committed at once; the close that follows
             // has nothing left to write.
-            onToken(identity);
+            onChoose({ $token: identity });
             setOpen(false);
           }}
+        />
+        <RecentColourChoices
+          onPick={onChoose}
+          // One discrete choice, as a variable is: the picker closes.
+          onPicked={setOpen}
         />
         <CustomColour
           open={custom}
@@ -665,6 +713,83 @@ function ColourPicker({
         />
       </PopoverContent>
     </Popover>
+  );
+}
+
+/**
+ * After a commit the document did not need, the field goes back to what it
+ * holds: a picker gesture or a choice that ends where it began leaves no
+ * draft behind for a later blur to write.
+ */
+function settle(outcome: CommitOutcome, reset: () => void): void {
+  if (outcome === "unchanged") reset();
+}
+
+/**
+ * A field's commit that also remembers the raw colour it wrote, or chose
+ * again, among the author's Recent colours; a refused value is not one, nor
+ * a variable or a clear.
+ */
+function rememberingCommit(
+  onCommit: (value: StyleValue | null) => CommitOutcome,
+  store: PreferenceStore | undefined
+): (value: StyleValue | null) => CommitOutcome {
+  return value => {
+    const outcome = onCommit(value);
+    if (outcome !== "refused") rememberColour(store, value);
+    return outcome;
+  };
+}
+
+/**
+ * Recent colours, between the variables and Custom colour: the last colours
+ * this author typed or picked, each a swatch named by its value. Shown while
+ * there are none too, saying what will appear, so the place is known.
+ */
+function RecentColourChoices({
+  onPick,
+  onPicked,
+}: {
+  onPick: (colour: string) => void;
+  /** Called with `false` once a colour is picked, to close the picker. */
+  onPicked: (open: false) => void;
+}): React.JSX.Element {
+  const headingId = React.useId();
+  const [colours] = useRecentColours();
+  return (
+    <div
+      className="nx-style-inspector__recent"
+      role="group"
+      aria-labelledby={headingId}
+    >
+      <p className="nx-style-inspector__recent-heading" id={headingId}>
+        Recent colours
+      </p>
+      {colours.length === 0 ? (
+        <p className="nx-vars__note nx-style-inspector__recent-none">
+          Colours you type or pick show here.
+        </p>
+      ) : (
+        <div className="nx-style-inspector__recent-list">
+          {colours.map(colour => (
+            <button
+              key={colour}
+              type="button"
+              className="nx-style-inspector__swatch"
+              aria-label={colour}
+              title={colour}
+              // A colour written as a value paints the same anywhere, so it
+              // is painted as it is listed; no variable is ever listed here.
+              style={{ "--nx-swatch": colour } as React.CSSProperties}
+              onClick={() => {
+                onPick(colour);
+                onPicked(false);
+              }}
+            />
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -724,12 +849,55 @@ function ColourTrigger({
       type="button"
       className="nx-font-pick__trigger nx-style-inspector__colour-pick"
       aria-label={`Colour for ${actionName}: ${referenceLabel}`}
+      // Green, as every value that comes from a variable is.
+      data-bound=""
       {...paint}
     >
       <span className="nx-vars__swatch" aria-hidden="true" />
       <span className="nx-font-pick__value">{referenceLabel}</span>
       <ChevronDown aria-hidden="true" size={14} />
     </button>
+  );
+}
+
+/**
+ * The picker's trigger, with what a held variable is in its tooltip: see
+ * {@link ColourTrigger} for what it draws.
+ */
+function PickerTrigger({
+  painted,
+  inherited,
+  reference,
+  referenceLabel,
+  referenceTip,
+  actionName,
+  described,
+  invalid,
+}: {
+  painted: string | undefined;
+  /** Whether the colour painted reaches here from another tier. */
+  inherited: boolean;
+  reference: string | null;
+  referenceLabel: string;
+  referenceTip: string | undefined;
+  actionName: string;
+  described: string | undefined;
+  invalid: boolean;
+}): React.JSX.Element {
+  return (
+    <VariableTipped tip={referenceTip}>
+      <PopoverTrigger asChild>
+        <ColourTrigger
+          shown={painted}
+          data-inherited={inherited ? "" : undefined}
+          reference={reference}
+          referenceLabel={referenceLabel}
+          actionName={actionName}
+          aria-describedby={described}
+          aria-invalid={invalid ? true : undefined}
+        />
+      </PopoverTrigger>
+    </VariableTipped>
   );
 }
 
@@ -901,40 +1069,55 @@ function storedTokenLabel(
   return token === undefined ? reference : variableLabel(token, among);
 }
 
+/** The variable a reference holds, or `undefined` for none or one the site lacks. */
+function heldVariable(
+  reference: string | null,
+  tokens: SiteTokenSet | undefined,
+  mode: TokenMode
+): SiteVariable | undefined {
+  return reference === null ? undefined : variableFor(reference, tokens, mode);
+}
+
+/** What a held colour variable is, for its trigger's tooltip; none for none. */
+function heldTip(
+  held: SiteVariable | undefined,
+  label: string,
+  tokens: SiteTokenSet | undefined
+): string | undefined {
+  return held === undefined ? undefined : variableTip(held, label, tokens);
+}
+
 /**
- * The way to remove a stored variable, beside the trigger that names it.
- *
- * The name itself is on the trigger: the variable's current name, qualified
- * with its identity where another listed variable shares it, and the stored
- * identity when the site defines no such variable — an unknown variable is a
- * warning rather than an error, so the value goes on compiling and the author
- * is shown the string their document holds rather than an empty space.
+ * Unlink beside a held colour variable: the colour it gives in the mode the
+ * canvas shows, kept as a plain value in one commit. Nothing for a variable
+ * the site no longer has, which has no colour to keep; the row's Reset
+ * removes it.
  */
-function TokenClear({
-  actionName,
+function ColourUnlink({
+  held,
   fieldId,
-  onClear,
+  actionName,
+  onUnlink,
 }: {
-  actionName: string;
-  /** The field whose value this clear writes. See {@link commitsFor}. */
+  held: SiteVariable | undefined;
+  /** The field whose value this press writes. See {@link commitsFor}. */
   fieldId: string;
-  onClear: () => void;
-}): React.JSX.Element {
+  actionName: string;
+  onUnlink: (value: StyleValue) => void;
+}): React.JSX.Element | null {
+  if (held === undefined) return null;
   return (
-    <button
+    <UnlinkButton
       /*
-       * This press writes this field's value: it commits the clear, and the
+       * This press writes this field's value: it commits the colour, and the
        * picker must not also write the draft its dismissal would otherwise
        * flush. Declared rather than handed up as a ref, so any control making
        * the same promise says so the same way.
        */
       {...commitsFor(fieldId)}
-      type="button"
-      onClick={onClear}
-      aria-label={`Clear ${actionName}`}
-    >
-      Clear
-    </button>
+      label={actionName}
+      onUnlink={() => onUnlink(held.value)}
+    />
   );
 }
 

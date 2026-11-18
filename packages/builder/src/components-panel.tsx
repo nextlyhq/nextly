@@ -49,13 +49,13 @@ import {
   type EntryOffer,
   type InsertPanelProps,
   type LibraryTierState,
-} from "./insert-panel";
+} from "./panels/add/insert-panel";
 import {
   filterEntries,
   unplaceableComponentEntries,
   type ComponentInsertEntry,
   type SavedComponent,
-} from "./inserter";
+} from "./panels/add/inserter";
 
 export interface ComponentsPanelProps {
   /** The editor whose document this places into, as Add is given it. */
@@ -87,6 +87,8 @@ export interface ComponentsPanelProps {
   inside?: string;
   /** The block a gap's "+" chose to add after, as Add is handed it. */
   after?: string;
+  /** Any other place the author chose, by position, as Add is handed it. */
+  at?: InsertPanelProps["at"];
   /** Begins a drag onto the canvas, as Add's tiles do. */
   beginInsertDrag?: InsertPanelProps["beginInsertDrag"];
   /** Notified after a placement, with the node that was added. */
@@ -169,6 +171,7 @@ export function ComponentsPanel({
   nesting,
   inside,
   after,
+  at,
   beginInsertDrag,
   onInsert,
   onEditComponent,
@@ -184,6 +187,7 @@ export function ComponentsPanel({
       nesting,
       inside,
       after,
+      at,
       onInsert,
     });
   const unplaceable = React.useMemo(

@@ -42,6 +42,7 @@ import { describeValue, pointer } from "../issue-text";
 import { isPlainRecord } from "../plain-record";
 import type { ValidationIssue } from "../validation";
 
+import { appearPrelude } from "./appear";
 import { childGapForms } from "./child-gap";
 import {
   breakpointContexts,
@@ -54,6 +55,17 @@ import {
   readClassSlug,
   type StyleCompileContext,
 } from "./compile-page-context";
+import { customCssOf } from "./compile-page-custom-css";
+import {
+  classLinksNarrowing,
+  type ContainerReading,
+  holdsBlocks,
+  linksFollowContainers,
+  type NodeReading,
+  nodeLinksNarrowing,
+  readContainers,
+  typeLinksNarrowing,
+} from "./compile-page-links";
 import {
   documentNodes,
   FLOW_CHILDREN,
@@ -65,6 +77,7 @@ import {
   STATE_SELECTORS,
   TYPOGRAPHIC_ELEMENTS,
 } from "./compile-page-states";
+import { contentWidthRules } from "./content-width";
 import { escapeIdentifier } from "./css-value";
 import {
   compileStyleValues,
@@ -75,6 +88,7 @@ import {
   classNameOf,
   isDefaultLook,
   isLook,
+  isTextStyle,
   isUsableNamedClass,
   MAX_NAMED_CLASS_NAME_LENGTH,
   NAMED_CLASS_SLUG_RE,
@@ -83,6 +97,7 @@ import {
   orderedNamedClasses,
   orderedNamedClassPositions,
   ownLooksRead,
+  starredLooksOf,
   usableNamedClassPositions,
 } from "./named-class";
 import {
@@ -94,14 +109,18 @@ import {
   PAGE_ROOT_SELECTOR,
 } from "./node-class";
 import { OVERLAY_PREFIX, OVERLAY_RESET } from "./overlay";
+import { paddingPresetStyles } from "./padding-preset";
 import { partRouting } from "./part-routing";
 import { type CssRule, serializeRules } from "./serialize";
+import { SITE_TEXT_ROOT } from "./site-text";
 import type { StyleTraceEntry } from "./style-trace";
 import { newStyleIssueBudget } from "./validate-style-value";
 import { newWarningAllowance, pushBoundedWarning } from "./warning-allowance";
 
 export type {
   CompiledPageCss,
+  CustomCssLevel,
+  CustomCssPolicy,
   StyleCompileContext,
 } from "./compile-page-context";
 export {
@@ -213,6 +232,14 @@ export function compilePageCss(
     seenIds.add(id);
   }
 
+  // The containers whose links take their text colour, read once: none while
+  // the site's Links row sets a colour.
+  const readings = nodeReadings(nodes, classes, duplicateIds);
+  const containers = readContainers(
+    readings,
+    linksFollowContainers(ctx.siteText)
+  );
+
   const rules: CssRule[] = [];
   // A null-prototype record, because a node id is author data and `__proto__` is a legal one.
   // Assigning it on an ordinary object runs the inherited setter instead of creating an own
@@ -227,6 +254,32 @@ export function compilePageCss(
   // One array for the whole compile, appended to in emission order by every tier below.
   const trace: StyleTraceEntry[] | undefined =
     ctx.trace === true ? [] : undefined;
+
+  // The element tier's root: Site text's Body row, on the page root itself so
+  // every block inherits it. On the single root class, so the page's own
+  // values below, on the doubled one, outrank it on the same element; first,
+  // so the trace records it before the page as the cascade ranks them.
+  const elements = ctx.elementBases ?? {};
+  if (Object.hasOwn(elements, SITE_TEXT_ROOT)) {
+    rules.push(
+      ...envelopeRules(
+        elements[SITE_TEXT_ROOT],
+        defaultsAnchor,
+        pointer("/elementBases", SITE_TEXT_ROOT),
+        contexts,
+        tokenPrefix,
+        warnings,
+        budget,
+        warningAllowance,
+        {
+          origin: { kind: "element", tag: SITE_TEXT_ROOT },
+          previewStates,
+          trace,
+          mayFetchUrl,
+        }
+      )
+    );
+  }
 
   // Page-scoped values, on the root every other selector is anchored to. First
   // because it is the outermost element: what it sets is what everything inside
@@ -251,7 +304,6 @@ export function compilePageCss(
   // as, and a caller naming anything else is not describing this document's
   // typography. An allow-list rather than a grammar, because the set is small,
   // known, and has no reason to grow without someone deciding it should.
-  const elements = ctx.elementBases ?? {};
   for (const tag of TYPOGRAPHIC_ELEMENTS) {
     if (!Object.hasOwn(elements, tag)) continue;
     rules.push(
@@ -332,6 +384,7 @@ export function compilePageCss(
             trace,
             mayFetchUrl,
             weightlessAnchor: defaultsAnchor,
+            linksNarrowing: typeLinksNarrowing(containers, type),
           }
         )
       );
@@ -626,6 +679,24 @@ export function compilePageCss(
       ...named,
     });
   }
+  // Each block type's ★ look, for its blocks wearing none of the type's looks: ahead of the
+  // class tier, so a shared style a block wears still wins over it.
+  rules.push(
+    ...starredLookRules(usableClasses, {
+      pageRoot,
+      contexts,
+      tokenPrefix,
+      previewStates,
+      trace,
+      mayFetchUrl,
+      routing,
+      wearers: readings,
+      containers,
+      flowGaps,
+      defaultsAnchor,
+      stateSelectors: stateSelectorsOfCompile,
+    })
+  );
   for (const position of writtenPositions) {
     const cls = library[position];
     rules.push(
@@ -653,11 +724,18 @@ export function compilePageCss(
             // A look reaches only its own block type, so a reader of the
             // trace can refuse it on any other, as the compiler does.
             ...(isLook(cls) ? { blockType: cls.blockType } : {}),
+            // A text style is named as one wherever the trace is read.
+            ...(isTextStyle(cls) ? { role: "text" as const } : {}),
           },
           previewStates,
           trace,
           mayFetchUrl,
           routing,
+          linksNarrowing: classLinksNarrowing(
+            containers,
+            cls.id,
+            isLook(cls) ? cls.blockType : undefined
+          ),
         }
       )
     );
@@ -705,7 +783,33 @@ export function compilePageCss(
     }
     const selector = `${pageRoot} .${className}`;
     const traceBeforeNode = trace?.length ?? 0;
+    const preset = paddingPresetStyles(node, {
+      path,
+      warnings,
+      warningAllowance,
+    });
     const nodeRules = [
+      // A Section's padding preset: a default of this one block, weightless
+      // and after its type's, so a block style and its own values still win.
+      ...(preset === undefined
+        ? []
+        : envelopeRules(
+            preset,
+            `.${className}`,
+            pointer(path, "props"),
+            contexts,
+            tokenPrefix,
+            warnings,
+            budget,
+            warningAllowance,
+            {
+              origin: { kind: "blockType", type: node.type, node: node.id },
+              trace,
+              mayFetchUrl,
+              previewStates,
+              weightlessAnchor: defaultsAnchor,
+            }
+          )),
       ...envelopeRules(
         node.styles,
         selector,
@@ -721,8 +825,17 @@ export function compilePageCss(
           mayFetchUrl,
           previewStates,
           routing,
+          linksNarrowing: nodeLinksNarrowing(containers, node.id),
         }
       ),
+      // The container's own content width, which the site sheet's rule reads.
+      ...contentWidthRules(node, {
+        selector,
+        path,
+        tokenPrefix,
+        warnings,
+        warningAllowance,
+      }),
       ...visibilityRules(
         node,
         selector,
@@ -921,12 +1034,27 @@ export function compilePageCss(
     attributeClasses.set(node.id, names.join(" "));
   }
 
+  // Custom CSS last, after every rule above, so an author's CSS wins a tie
+  // with the builder's own. Read before the gated entries are serialized into
+  // the sheet, since a gated block's CSS joins its own entry.
+  const custom = customCssOf({
+    doc,
+    nodes,
+    classes,
+    duplicateIds,
+    pageRoot,
+    policy: ctx.customCss,
+    gated,
+  });
+
   return {
     ...(effectiveScope === undefined ? {} : { scope: effectiveScope }),
     // The NORMALISED name, so a refused one leaves this absent and the artifact
     // reads as the published sheet it actually is.
     ...(preview === undefined ? {} : { previewContainer: preview }),
-    css: withOverlayReset(rules, gated),
+    css: [withPreludes(rules, gated, scope), custom]
+      .filter(part => part !== "")
+      .join("\n"),
     warnings,
     classes: attributeClasses,
     // Omitted rather than empty when nobody asked, so a caller cannot mistake "not requested"
@@ -939,26 +1067,183 @@ export function compilePageCss(
 }
 
 /**
- * The page's rules, preceded by the overlay's reset when a rule reads it: so a
- * section's overlay stops at its own image rather than reaching nested ones.
+ * The page's rules, preceded by what a rule in them reads from the page: the
+ * entrance animation's prelude, and the overlay's reset, so a section's
+ * overlay stops at its own image rather than reaching nested ones.
  */
-function withOverlayReset(
+function withPreludes(
   rules: readonly CssRule[],
-  gated: Readonly<Record<string, string>>
+  gated: Readonly<Record<string, string>>,
+  scope: string
 ): string {
   const css = serializeRules(rules);
+  // A gated node's rules are kept apart, and appended for a reader who sees
+  // it: each prelude stays in the sheet, so the page put back together is the
+  // one an ungated compile writes.
+  const fragments = Object.values(gated);
+  const preludes = [
+    appearPrelude([css, ...fragments], scope),
+    readsOverlay(rules, fragments) ? OVERLAY_RESET : undefined,
+  ].filter((prelude): prelude is string => prelude !== undefined);
+  // Joined only to what is there: a sheet whose every rule is gated is its
+  // preludes alone, so the page put back together has no blank line in it.
+  return [...preludes, ...(css === "" ? [] : [css])].join("\n");
+}
+
+/** Whether any rule, kept in the sheet or apart, reads the overlay. */
+function readsOverlay(
+  rules: readonly CssRule[],
+  fragments: readonly string[]
+): boolean {
   // Any of the overlay's properties read: the image's layer, or a longhand's
   // entry lined up with it.
   const reading = `var(${OVERLAY_PREFIX}`;
-  // A gated node's rules are kept apart, and appended for a reader who sees
-  // it: the reset stays in the sheet, so the page put back together is the
-  // one an ungated compile writes.
-  const reads =
+  return (
     rules.some(rule =>
       rule.declarations.some(declaration => declaration.value.includes(reading))
-    ) || Object.values(gated).some(fragment => fragment.includes(reading));
-  if (!reads) return css;
-  // Joined only to what is there: a sheet whose every rule is gated is the
-  // reset alone, so the page put back together has no blank line in it.
-  return css === "" ? OVERLAY_RESET : `${OVERLAY_RESET}\n${css}`;
+    ) || fragments.some(fragment => fragment.includes(reading))
+  );
+}
+
+/** What the ★ tier is written with: the compile's own reading of each. */
+interface StarredLookCompile {
+  readonly pageRoot: string;
+  readonly contexts: ReturnType<typeof breakpointContexts>;
+  readonly tokenPrefix: string;
+  readonly previewStates: boolean;
+  readonly trace: StyleTraceEntry[] | undefined;
+  readonly mayFetchUrl: StyleCompileContext["mayFetchUrl"];
+  readonly routing: ReturnType<typeof partRouting>;
+  /** Each block's own class, type and the classes it lists, in document order. */
+  readonly wearers: readonly NodeReading[];
+  /** The document's containers, for the links inside the ones a ★ look colours. */
+  readonly containers: ContainerReading;
+  /** The flow margins each container type in the document writes, by type. */
+  readonly flowGaps: ReadonlyMap<string, readonly Declaration[]>;
+  readonly defaultsAnchor: string;
+  readonly stateSelectors: Parameters<typeof layoutModeRules>[6];
+}
+
+/**
+ * The document's blocks as the class-reading tiers read them: each with the
+ * class the compiler gave it, the class references the engine reads per node,
+ * and whether it holds blocks. A block sharing its id with another is left
+ * out, as its own rules are. The ★ tier and the containers' link rules read
+ * this one list.
+ */
+function nodeReadings(
+  nodes: ReturnType<typeof documentNodes>,
+  classes: ReadonlyMap<string, string>,
+  duplicateIds: ReadonlySet<string>
+): NodeReading[] {
+  const readings: NodeReading[] = [];
+  for (const { node } of nodes) {
+    const className = classes.get(node.id);
+    if (className === undefined || duplicateIds.has(node.id)) continue;
+    if (typeof node.type !== "string") continue;
+    readings.push({
+      id: node.id,
+      className,
+      type: node.type,
+      classes: Array.isArray(node.classes)
+        ? node.classes.slice(0, MAX_CLASSES_PER_NODE)
+        : [],
+      holdsBlocks: holdsBlocks(node),
+    });
+  }
+  return readings;
+}
+
+/**
+ * Each block type's ★ look, written again for the document's blocks of its
+ * type that wear none of the type's looks, under the page root as a worn
+ * look is, in type order. Named by each block's own class rather than by the
+ * type's, which an image's picture or a list's entry wrappers carry too, so
+ * the look lands on the blocks alone. Nothing while no look is starred, so a
+ * site that never moved ★ compiles as it did.
+ *
+ * Its value problems were reported once already, by the look's own rule, so
+ * they are not reported twice.
+ */
+function starredLookRules(
+  written: readonly NamedClass[],
+  about: StarredLookCompile
+): CssRule[] {
+  const starred = starredLooksOf(written);
+  const rules: CssRule[] = [];
+  for (const type of [...starred.keys()].sort()) {
+    const look = starred.get(type) as NamedClass;
+    const typeLooks = written.filter(
+      cls => isLook(cls) && !isDefaultLook(cls) && cls.blockType === type
+    );
+    const lookIds = new Set(typeLooks.map(cls => cls.id));
+    const reached = about.wearers
+      .filter(
+        wearer =>
+          wearer.type === type &&
+          !wearer.classes.some(id => typeof id === "string" && lookIds.has(id))
+      )
+      .map(wearer => `.${escapeIdentifier(wearer.className)}`);
+    if (reached.length === 0) continue;
+    // `:is()` weighs its heaviest member, one class, so the rule weighs what
+    // a worn look's does and a state appended to it applies to every block.
+    const selector = `:is(${reached.join(", ")})`;
+    rules.push(
+      ...envelopeRules(
+        look.styles,
+        `${about.pageRoot} ${selector}`,
+        pointer("/classes", look.id),
+        about.contexts,
+        about.tokenPrefix,
+        // Silent, with an allowance of its own: what it finds is said by the
+        // look's own rule, which must still have the page's allowance to say it.
+        [],
+        newStyleIssueBudget(),
+        newWarningAllowance(),
+        {
+          // Which looks leave a block out, so a reader of the trace answers
+          // which blocks this rule reaches as its selector does.
+          origin: {
+            kind: "class",
+            id: look.id,
+            slug: look.slug,
+            blockType: type,
+            unlessWearing: [...lookIds],
+          },
+          previewStates: about.previewStates,
+          trace: about.trace,
+          mayFetchUrl: about.mayFetchUrl,
+          routing: about.routing,
+          linksNarrowing: typeLinksNarrowing(about.containers, type),
+        }
+      ),
+      ...starredLayoutRules(look, type, selector, about)
+    );
+  }
+  return rules;
+}
+
+/**
+ * A ★ look that makes a container flex or grid swaps the flow margin for
+ * `gap` on the container type's blocks it reaches, as a worn look's class
+ * does on the containers wearing it: those blocks wear no class of its, so
+ * only the ★ selector can say which they are.
+ */
+function starredLayoutRules(
+  look: NamedClass,
+  type: string,
+  selector: string,
+  about: StarredLookCompile
+): CssRule[] {
+  const flow = about.flowGaps.get(type);
+  if (flow === undefined) return [];
+  return layoutModeRules(
+    look.styles,
+    `${selector}.${CHILD_GAP_CLASS}`,
+    flow,
+    about.contexts,
+    about.defaultsAnchor,
+    about.tokenPrefix,
+    about.stateSelectors
+  );
 }

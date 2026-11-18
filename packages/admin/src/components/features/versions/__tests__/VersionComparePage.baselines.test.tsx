@@ -16,6 +16,8 @@ const {
   navigateMock,
   seenMock,
   diffMountMock,
+  drawn,
+  versionMock,
 } = vi.hoisted(() => ({
   useVersionsMock: vi.fn(),
   baselineMock: vi.fn(),
@@ -23,10 +25,14 @@ const {
   navigateMock: vi.fn(),
   seenMock: vi.fn(),
   diffMountMock: vi.fn(),
+  // The language of the comparison the stand-in view draws.
+  drawn: { locale: null as string | null },
+  versionMock: vi.fn(),
 }));
 
 // A stand-in for a comparison that has arrived and is drawn: it reports its
-// pair once on screen, as the real view does once its fields are.
+// pair, and the language its answer names, once on screen, as the real view
+// does once its fields are.
 vi.mock("../diff/VersionDiffView", async () => {
   const { useEffect } = await import("react");
   return {
@@ -35,12 +41,14 @@ vi.mock("../diff/VersionDiffView", async () => {
       to: number;
       view?: string;
       onViewChange?: (layout: "inline" | "split") => void;
-      onShown?: (pair: { from: number; to: number } | null) => void;
+      onShown?: (
+        pair: { from: number; to: number; locale: string | null } | null
+      ) => void;
     }) => {
       diffMountMock(props);
       const { from, to, onShown } = props;
       useEffect(() => {
-        onShown?.({ from, to });
+        onShown?.({ from, to, locale: drawn.locale });
       }, [from, to, onShown]);
       return <div data-testid="diff-view">{`${from}-${to}`}</div>;
     },
@@ -50,6 +58,9 @@ vi.mock("../diff/VersionDiffView", async () => {
 vi.mock("@admin/hooks/queries/useVersions", () => ({
   useVersions: (...a: unknown[]) => useVersionsMock(...a),
   useBaselineDiff: (...a: unknown[]) => baselineMock(...a),
+  // One stored version, read for the language of a version the page names
+  // but has no comparison of.
+  useVersion: (...a: unknown[]) => versionMock(...a),
   // Each comparison has arrived and is drawn, with no field an editor wrote,
   // so the page may mark what it shows and the rail draws no summary line.
   useVersionDiff: () => ({
@@ -111,6 +122,8 @@ function renderPage(props: Record<string, unknown> = {}) {
 describe("VersionComparePage, its choices", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    drawn.locale = null;
+    versionMock.mockReturnValue({ data: undefined });
     canMock.mockReturnValue(true);
     useVersionsMock.mockReturnValue({
       data: { pages: [{ items: [row(5), row(4), row(3)] }] },
@@ -341,6 +354,7 @@ describe("VersionComparePage, its choices", () => {
       refetch: vi.fn(),
     });
 
+    drawn.locale = "de";
     renderPage({ from: 4, to: 5, locale: "de" });
 
     await userEvent.click(screen.getByRole("button", { name: "Restore…" }));
@@ -364,5 +378,208 @@ describe("VersionComparePage, its choices", () => {
     renderPage({ from: 4, to: 5 });
 
     expect(screen.queryByRole("button", { name: "Restore…" })).toBeNull();
+  });
+
+  it("hands the comparison's own language to the editor when the address names none", async () => {
+    // A numbered address need not name its language: the server finds the
+    // part from the version, and the comparison it answers says which it is.
+    drawn.locale = "fr";
+    renderPage({ from: 4, to: 5 });
+
+    await userEvent.click(screen.getByRole("button", { name: "Restore…" }));
+
+    const target = new URL(
+      String(navigateMock.mock.calls.at(-1)?.[0]),
+      "http://admin.test"
+    );
+    expect(target.searchParams.get("locale")).toBe("fr");
+  });
+
+  it("asks a baseline that names no version in the page's language", () => {
+    renderPage({ from: "published", locale: "fr" });
+
+    expect(baselineMock).toHaveBeenCalledWith(
+      expect.objectContaining({ baseline: "published", locale: "fr" })
+    );
+  });
+
+  it("draws a baseline comparison from the answer the baseline already gave", () => {
+    baselineMock.mockReturnValue({
+      data: { from: 3, to: 5, baseline: { name: "published", versionNo: 3 } },
+      isLoading: false,
+      isError: false,
+    });
+
+    renderPage({ from: "published", to: 5 });
+
+    expect(diffMountMock.mock.calls.at(-1)?.[0]).toMatchObject({
+      from: 3,
+      to: 5,
+      seededBy: "published",
+    });
+  });
+
+  it("offers to try a comparison that failed to load again", async () => {
+    const refetch = vi.fn();
+    baselineMock.mockReturnValue({
+      data: undefined,
+      error: Object.assign(new Error("Internal error"), { status: 500 }),
+      isLoading: false,
+      isError: true,
+      refetch,
+    });
+
+    renderPage({ from: "draft", to: 5 });
+    await userEvent.click(screen.getByRole("button", { name: "Try again" }));
+
+    expect(refetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers no retry for a baseline the server refused, which would answer the same", () => {
+    baselineMock.mockReturnValue({
+      data: undefined,
+      error: Object.assign(new Error("Validation failed."), {
+        status: 400,
+        code: "VALIDATION_ERROR",
+        data: {
+          errors: [
+            {
+              path: "baseline",
+              code: "INVALID_VALUE",
+              message:
+                '"prev" is not a comparison baseline. Known baselines: previous, published.',
+            },
+          ],
+        },
+      }),
+      isLoading: false,
+      isError: true,
+      refetch: vi.fn(),
+    });
+
+    renderPage({ from: "prev", to: 5 });
+
+    expect(
+      screen.getByText(/"prev" is not a comparison baseline/)
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
+  });
+
+  it("names a baseline another feature registered in Compare with", () => {
+    baselineMock.mockReturnValue({
+      data: {
+        from: 3,
+        to: 5,
+        baseline: { name: "since-approved", versionNo: 3 },
+      },
+      isLoading: false,
+      isError: false,
+    });
+
+    renderPage({ from: "since-approved", to: 5 });
+
+    const select = screen.getByRole("combobox", { name: "Compare with" });
+    expect(select).toHaveValue("since-approved");
+    expect(
+      screen.getByRole("option", { name: "Since approved" })
+    ).toBeInTheDocument();
+  });
+
+  it("offers to restore the version named while there is nothing to compare it with", async () => {
+    // Nothing to compare with is no reason to withhold the version itself:
+    // its restore list compares it with the editor, not with a baseline.
+    useVersionsMock.mockReturnValue({
+      data: {
+        pages: [{ items: [{ ...row(5), locale: "de" }, row(4), row(3)] }],
+      },
+      isLoading: false,
+      isError: false,
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
+      refetch: vi.fn(),
+    });
+    baselineMock.mockReturnValue({
+      data: undefined,
+      error: Object.assign(new Error("Validation failed."), {
+        status: 400,
+        code: "VALIDATION_ERROR",
+        data: {
+          errors: [
+            {
+              path: "baseline",
+              code: "NO_BASELINE",
+              message: "This part of the document has no current draft.",
+            },
+          ],
+        },
+      }),
+      isLoading: false,
+      isError: true,
+    });
+
+    versionMock.mockReturnValue({ data: { versionNo: 5, locale: "de" } });
+
+    renderPage({ from: "draft", to: 5 });
+    await userEvent.click(screen.getByRole("button", { name: "Restore…" }));
+
+    const target = new URL(
+      String(navigateMock.mock.calls.at(-1)?.[0]),
+      "http://admin.test"
+    );
+    expect(Object.fromEntries(target.searchParams)).toEqual({
+      history: "1",
+      version: "5",
+      restore: "1",
+      locale: "de",
+    });
+  });
+
+  it("offers to restore the version named beyond the loaded history, in its own language", async () => {
+    // The history is paged: the version a refused baseline names can sit
+    // behind many newer ones, and its own record still says its language.
+    useVersionsMock.mockReturnValue({
+      data: { pages: [{ items: [row(9), row(8), row(7)] }] },
+      isLoading: false,
+      isError: false,
+      hasNextPage: true,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
+      refetch: vi.fn(),
+    });
+    versionMock.mockImplementation(
+      ({ versionNo }: { versionNo: number | null }) =>
+        versionNo === 5
+          ? { data: { versionNo: 5, locale: "fr" } }
+          : { data: undefined }
+    );
+    baselineMock.mockReturnValue({
+      data: undefined,
+      error: Object.assign(new Error("Validation failed."), {
+        status: 400,
+        code: "VALIDATION_ERROR",
+        data: {
+          errors: [
+            {
+              path: "baseline",
+              code: "NO_BASELINE",
+              message: "This is the version that is published.",
+            },
+          ],
+        },
+      }),
+      isLoading: false,
+      isError: true,
+    });
+
+    renderPage({ from: "published", to: 5 });
+    await userEvent.click(screen.getByRole("button", { name: "Restore…" }));
+
+    const target = new URL(
+      String(navigateMock.mock.calls.at(-1)?.[0]),
+      "http://admin.test"
+    );
+    expect(target.searchParams.get("version")).toBe("5");
+    expect(target.searchParams.get("locale")).toBe("fr");
   });
 });

@@ -39,11 +39,14 @@ import {
   CANVAS_BINDINGS_ROUTE_PATH,
   conditionsFromWire,
   demandFromWire,
+  sourcesChangedAskOf,
   type CanvasBindingsRequest,
   type CanvasBindingsResponse,
 } from "./canvas-bindings-contract";
+import { sourcesChangedStampAsCaller } from "./canvas-sources-changed-route";
 import { readBodyWith } from "./composition-route-kit";
 import { editorReaderAsCaller, mediaReaderAsCaller } from "./entry-reads";
+import { allowanceFromWire, MOST_PAGE_READS } from "./page-allowance";
 
 /** A field name a binding may read: no paths, operators or quoting. */
 const NAME = z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/);
@@ -57,9 +60,6 @@ const SLUG = z
 
 /** At most this many fields, follows or Singles in one ask: a page's worth. */
 const MOST = 200;
-
-/** The most reads an ask may be allowed: far past any page's allowance. */
-const MOST_READS = 100_000;
 
 /** What one source is read for, as the canvas sends it. */
 /*
@@ -140,7 +140,14 @@ const CanvasBindingsBody = z
       .strict()
       .optional(),
     // At most a published page's allowance: an ask is one page's reads.
-    allowance: z.number().int().min(0).max(MOST_READS).optional(),
+    // `null` is no limit, for a site that sets none (`page-allowance`).
+    allowance: z
+      .number()
+      .int()
+      .min(0)
+      .max(MOST_PAGE_READS)
+      .nullable()
+      .optional(),
   })
   .strict()
   .refine(body => shapeLookupsOf(body) <= MOST, {
@@ -198,7 +205,9 @@ function directCanvasBindingsReads(
       // they were made, as a named query's run reports its reads.
       // Under the reads the page has left at that point, when the meter
       // says, so a read past them is refused here as it is there.
-      const budget = blocks.createQueryBudget(request.allowance);
+      const budget = blocks.createQueryBudget(
+        allowanceFromWire(request.allowance)
+      );
       const bindings = await next.readBindingSources({
         documents: [],
         demand: demandFromWire(request.demand),
@@ -255,9 +264,19 @@ export function canvasBindingsRoute(): {
         CanvasBindingsBody,
         "canvas bindings"
       );
-      return respondDoc(
-        await readCanvasBindings(body, directCanvasBindingsReads(ctx))
+      // The change check's mark of what this reads, taken BEFORE it reads:
+      // a save landing while it reads is then not in the mark, so the
+      // editor's next check differs and the canvas reads again. A mark that
+      // cannot be read is left out, and the editor asks the check itself.
+      const stamp = await sourcesChangedStampAsCaller(
+        ctx,
+        sourcesChangedAskOf(body)
+      ).catch(() => undefined);
+      const answer = await readCanvasBindings(
+        body,
+        directCanvasBindingsReads(ctx)
       );
+      return respondDoc(stamp === undefined ? answer : { ...answer, stamp });
     },
   };
 }

@@ -84,7 +84,7 @@ import {
   type VersionRow,
 } from "../versions/versions-repository";
 
-import { approvalDigest } from "./approval-digest";
+import { approvalDigest, partExemptFields } from "./approval-digest";
 import {
   allowsSelfApproval,
   entersReview,
@@ -228,7 +228,9 @@ const WORKFLOW_STEP_ERROR_CODES = {
   nothingToApprove: "WORKFLOW_NOTHING_TO_APPROVE",
   // A part with nothing unpublished: published content stays live, with no review to open.
   nothingToReview: "WORKFLOW_NOTHING_TO_REVIEW",
-  singlesNotSupported: "WORKFLOW_SINGLES_NOT_SUPPORTED",
+  // A part the document cannot have: a language the site does not configure, or any language of
+  // a document kept in none.
+  unknownPart: "WORKFLOW_UNKNOWN_PART",
 } as const;
 
 /** @experimental */
@@ -354,8 +356,12 @@ export function workflowEventKind(kind: WorkflowStepKind | "assign"): string {
   return WORKFLOW_CONTENT_EVENT_KINDS[kind].name;
 }
 
-/** Whether `stage` allows publishing. */
-function allowsPublish(workflow: Workflow, stage: string): boolean {
+/**
+ * Whether `stage` allows publishing: the one answer a step into it and a publish from it share.
+ *
+ * @experimental
+ */
+export function allowsPublish(workflow: Workflow, stage: string): boolean {
   return workflow.stages.some(
     candidate => candidate.name === stage && candidate.allowsPublish
   );
@@ -396,8 +402,15 @@ export function stepNeedsPerson(step: ResolvedWorkflowStep): boolean {
   return step.kind === "approve" || step.kind === "request-changes";
 }
 
-/** The action of `stage`'s primary step, or null for a stage with no step out of it. */
-function primaryAction(workflow: Workflow, stage: string): string | null {
+/**
+ * The action of `stage`'s primary step, or null for a stage with no step out of it.
+ *
+ * @experimental
+ */
+export function primaryAction(
+  workflow: Workflow,
+  stage: string
+): string | null {
   const primary = primaryStep(workflow, stage);
   return primary ? stepAction(workflow, primary) : null;
 }
@@ -447,6 +460,19 @@ interface ResolvedCaller {
   event: ContentEventActor;
   /** A key's owner, named in the event's payload. */
   ownerId: string | null;
+}
+
+/**
+ * The actor a workflow caller is decided as: a person's own grants, a key's own scope, or trusted
+ * code's. The one resolution steps and reads of review state share.
+ *
+ * @experimental
+ */
+export async function workflowCallerActor(
+  adapter: DrizzleAdapter,
+  caller: WorkflowCaller
+): Promise<Actor> {
+  return (await resolveCaller(adapter, caller)).actor;
 }
 
 async function resolveCaller(
@@ -567,14 +593,73 @@ async function defaultReviewer(
  * The parts a step names: each once. For `"all"`, every configured language and the shared part
  * of a collection that keeps translations; the shared part alone of one that does not, whose
  * content and versions belong to no language.
+ *
+ * @experimental
  */
-function namedParts(
+export function namedParts(
   parts: TakeStepInput["parts"],
   localized: boolean
 ): (string | null)[] {
   if (parts !== "all") return [...new Set(parts)];
   if (!localized) return [null];
   return [...(configuredLocales() ?? []), null];
+}
+
+/**
+ * Refuses each named part the document cannot have, before anything is read or written: a
+ * language the site does not configure, or any language of a document kept in none, whose only
+ * part is the shared one. Without this, a part named in error would be given a review state of
+ * its own, which no read of the document shows. `pathOf` names where each part was given.
+ */
+function refuseUnknownParts(
+  table: DocumentTable,
+  parts: readonly (string | null)[],
+  pathOf: (index: number) => string
+): void {
+  const languages = table.localized ? (configuredLocales() ?? new Set()) : null;
+  const unknown = parts.flatMap((part, index) =>
+    part !== null && (languages === null || !languages.has(part))
+      ? [{ part, index }]
+      : []
+  );
+  if (unknown.length === 0) return;
+  throw NextlyError.validation({
+    errors: unknown.map(({ part, index }) => ({
+      path: pathOf(index),
+      code: WORKFLOW_STEP_ERROR_CODES.unknownPart,
+      message:
+        languages === null
+          ? `"${part}" is not a part of this document, which is kept in no language.`
+          : `"${part}" is not a language this site has.`,
+    })),
+  });
+}
+
+/**
+ * Refuses, as not found, a document whose row is not there, read on `tx`: a step or an assignment
+ * on it would otherwise give a review state to a document that does not exist.
+ */
+async function refuseMissingDocument(
+  tx: TransactionContext,
+  dialect: SupportedDialect,
+  table: DocumentTable,
+  document: ReviewDocument,
+  forUpdate: boolean
+): Promise<void> {
+  const found = await readDocumentRevision(tx, {
+    dialect,
+    table: table.table,
+    id: document.entryId,
+    forUpdate,
+  });
+  if (found !== undefined) return;
+  throw NextlyError.notFound({
+    logContext: {
+      reason: "workflow-document-missing",
+      scopeKind: document.scopeKind,
+      scopeSlug: document.scopeSlug,
+    },
+  });
 }
 
 const partOf = (document: ReviewDocument, part: string | null): ReviewPart => ({
@@ -587,7 +672,12 @@ const seenRevision = (
   part: string | null
 ): number | undefined => seen.find(entry => entry.part === part)?.revision;
 
-function staleRefusal(parts: (string | null)[]): NextlyError {
+/**
+ * The refusal of a move whose parts changed since they were judged: a step's, or a publish's.
+ *
+ * @experimental
+ */
+export function staleRefusal(parts: (string | null)[]): NextlyError {
   const data: WorkflowRefusalPublicData = { reason: "stale", parts };
   return NextlyError.conflict({
     reason: "state",
@@ -757,24 +847,116 @@ function findStep(workflow: Workflow, name: string): ResolvedWorkflowStep {
  * A workflow's own action has no collection rule, so its permission answers for every part.
  */
 async function partsAllowed(
-  input: TakeStepInput,
+  document: ReviewDocument,
+  asked: WorkflowCaller,
   parts: readonly (string | null)[],
   action: string,
-  caller: ResolvedCaller,
-  slug: string
+  caller: ResolvedCaller
 ): Promise<(part: string | null) => boolean> {
   if (!isEntryWrite(action)) {
-    const allowed = decidePermission(caller.actor, action, slug).allowed;
+    const allowed = decidePermission(
+      caller.actor,
+      action,
+      document.scopeSlug
+    ).allowed;
     return () => allowed;
   }
   const answers = new Map<string | null, boolean>();
   for (const part of parts) {
-    answers.set(
-      part,
-      await entryWriteAllowed(input.document, part, action, input.caller)
-    );
+    answers.set(part, await entryWriteAllowed(document, part, action, asked));
   }
   return part => answers.get(part) === true;
+}
+
+/**
+ * Whether `caller` is one who may take `step` at all: an approval or a request for changes is
+ * taken only by a signed-in person, never by a key or trusted code.
+ */
+function takenBy(step: ResolvedWorkflowStep, caller: WorkflowCaller): boolean {
+  return !stepNeedsPerson(step) || caller.kind === "user";
+}
+
+/**
+ * Whether `step` refuses the person `accountable` for the act on a part `enteredBy` brought into
+ * its stage: a step that refuses self-approval, asked of the one who entered the stage.
+ */
+function refusesSelf(
+  step: ResolvedWorkflowStep,
+  accountable: string | null,
+  enteredBy: string | null | undefined
+): boolean {
+  return (
+    !allowsSelfApproval(step) &&
+    accountable !== null &&
+    enteredBy === accountable
+  );
+}
+
+/**
+ * A part as the steps out of its stage are judged for a caller: where it stands, and who brought
+ * it there.
+ *
+ * @experimental
+ */
+export interface StepJudgedPart {
+  part: string | null;
+  /** Its stage; null for a part with nothing unpublished, which no step leaves. */
+  stage: string | null;
+  enteredBy: string | null;
+}
+
+/**
+ * Which steps out of each part's stage `caller` may take on `document`, judged by the checks a
+ * step makes of who takes it, through the same functions the step runs: its permission
+ * (`partsAllowed`, the collection's own gate for a built-in write), a person for an approval or a
+ * request for changes (`takenBy`), and the self-approval a step refuses (`refusesSelf`). What a
+ * step checks of the content when taken (the revision and version seen, a comment, fields an
+ * approver cannot read) is asked then. Read on the pool.
+ *
+ * @experimental
+ */
+export async function stepsTakeableBy(
+  adapter: DrizzleAdapter,
+  workflow: Workflow,
+  document: ReviewDocument,
+  caller: WorkflowCaller,
+  parts: readonly StepJudgedPart[]
+): Promise<(part: string | null, step: string) => boolean> {
+  const resolved = await resolveCaller(adapter, caller);
+  const staged = parts.filter(entry => entry.stage !== null);
+  // Each action any step out of a part's stage needs, asked once for every part in a stage.
+  const actions = new Set<string>();
+  for (const entry of staged) {
+    for (const step of workflow.steps) {
+      if (entry.stage !== null && step.from.includes(entry.stage)) {
+        actions.add(stepAction(workflow, step));
+      }
+    }
+  }
+  const allowedOn = new Map<string, (part: string | null) => boolean>();
+  for (const action of actions) {
+    allowedOn.set(
+      action,
+      await partsAllowed(
+        document,
+        caller,
+        staged.map(entry => entry.part),
+        action,
+        resolved
+      )
+    );
+  }
+  return (part, name) => {
+    const entry = parts.find(candidate => candidate.part === part);
+    const step = workflow.steps.find(candidate => candidate.name === name);
+    if (!entry || entry.stage === null || !step) return false;
+    if (!step.from.includes(entry.stage)) return false;
+    return (
+      allowedOn.get(stepAction(workflow, step))?.(part) === true &&
+      takenBy(step, caller) &&
+      !refusesSelf(step, resolved.accountable, entry.enteredBy)
+    );
+  };
 }
 
 /** Everything a step reads on the pool, before its transaction opens. */
@@ -791,6 +973,7 @@ async function prepareStep(
   const table = await documentTableOf(input.document);
   const action = stepAction(workflow, step);
   const parts = namedParts(input.parts, table.localized);
+  refuseUnknownParts(table, parts, () => "parts");
   return {
     input,
     workflow,
@@ -803,7 +986,13 @@ async function prepareStep(
     dialect: adapter.getCapabilities().dialect,
     table,
     action,
-    allowedOn: await partsAllowed(input, parts, action, caller, slug),
+    allowedOn: await partsAllowed(
+      input.document,
+      input.caller,
+      parts,
+      action,
+      caller
+    ),
     liveOn: await livePartsOf(adapter, input.document, parts),
     approves: allowsPublish(workflow, step.to),
     approver: await approverOf(
@@ -850,18 +1039,14 @@ async function approverOf(
 /**
  * The document's own row, locked before anything is read. Every save takes this lock before it
  * writes, so a save in flight is waited for, and the version a step reads after it is the one it
- * committed rather than the one it is replacing.
+ * committed rather than the one it is replacing. A document whose row is not there is refused as
+ * not found.
  */
 async function lockDocument(
   tx: TransactionContext,
   c: StepContext
 ): Promise<void> {
-  await readDocumentRevision(tx, {
-    dialect: c.dialect,
-    table: c.table.table,
-    id: c.input.document.entryId,
-    forUpdate: true,
-  });
+  await refuseMissingDocument(tx, c.dialect, c.table, c.input.document, true);
 }
 
 /**
@@ -988,7 +1173,7 @@ function checkPermission(c: StepContext, movable: readonly ReadPart[]): void {
 
 /** Approvals and requests for changes come only from a signed-in person. */
 function checkPerson(c: StepContext): void {
-  if (stepNeedsPerson(c.step) && c.input.caller.kind !== "user") {
+  if (!takenBy(c.step, c.input.caller)) {
     throw NextlyError.personOnly({
       doing: "approve or request changes",
       logContext: { refusal: "workflow-person-only", step: c.step.name },
@@ -998,11 +1183,10 @@ function checkPerson(c: StepContext): void {
 
 /** The person accountable for a part's stage may not take a step that refuses it. */
 function checkSelfApproval(c: StepContext, movable: readonly ReadPart[]): void {
-  const accountable = c.caller.accountable;
   if (
-    !allowsSelfApproval(c.step) &&
-    accountable !== null &&
-    movable.some(entry => entry.state?.enteredBy === accountable)
+    movable.some(entry =>
+      refusesSelf(c.step, c.caller.accountable, entry.state?.enteredBy)
+    )
   ) {
     throw NextlyError.forbidden({
       publicData: { reason: "self-approval" },
@@ -1051,6 +1235,7 @@ async function readRecorded(
 /** Entering a stage that allows publishing approves the version shown, by a person. */
 function approvalChange(
   c: StepContext,
+  part: string | null,
   shown: VersionRow | undefined,
   now: Date
 ): ReviewStateChange {
@@ -1059,12 +1244,19 @@ function approvalChange(
   return {
     approval: {
       versionNo: shown.versionNo,
-      // Without the fields an edit may change while an approval stands, so a save compared with
-      // it leaves out the same ones.
+      // Without the fields an edit may change while an approval stands, and for the shared part
+      // of a translated document without its translations, so a save compared with it leaves out
+      // the same ones.
+      // Under the document's own kind: a Single's digest leaves out a Single's framework columns,
+      // as the publish gate's comparison does.
       digest: approvalDigest(
         shown.snapshot,
-        "collection",
-        c.workflow.onEdit.exemptFields
+        c.input.document.scopeKind,
+        partExemptFields(
+          c.workflow.onEdit.exemptFields,
+          part,
+          c.table.translated
+        )
       ),
       by,
       at: now,
@@ -1089,7 +1281,7 @@ function stepChange(
       : {}),
     // Leaving a stage that allows publishing withdraws the approval it held.
     ...(allowsPublish(c.workflow, entry.stage) ? { approval: null } : {}),
-    ...approvalChange(c, shown, now),
+    ...approvalChange(c, entry.part, shown, now),
     ...(c.reviewer.reviewer ? { assignee: c.reviewer.reviewer } : {}),
   };
 }
@@ -1604,6 +1796,8 @@ interface AssignContext {
   gated: ReadonlyMap<string, boolean>;
   /** Whether each assignment's part is live, by its index, read before the transaction. */
   live: readonly boolean[];
+  /** The table each assignment's document lives in, by its index, read before the transaction. */
+  tables: readonly DocumentTable[];
   dialect: SupportedDialect;
   /** What telling each assignee needs from the pool; null where no one can be told. */
   telling: NoticeTelling | null;
@@ -1901,6 +2095,25 @@ async function runAssignment(
   tx: TransactionContext,
   c: AssignContext
 ): Promise<AssignResult> {
+  // Each document asked once, before any part of it is read.
+  const asked = new Set<string>();
+  for (const [index, { assignment }] of c.entries.entries()) {
+    const { document } = assignment;
+    const key = JSON.stringify([
+      document.scopeKind,
+      document.scopeSlug,
+      document.entryId,
+    ]);
+    if (asked.has(key)) continue;
+    asked.add(key);
+    await refuseMissingDocument(
+      tx,
+      c.dialect,
+      c.tables[index],
+      document,
+      false
+    );
+  }
   const parts = assignableParts(await readAssignedParts(tx, c));
   checkAssigners(c, parts);
   checkAssignees(c, parts);
@@ -1934,9 +2147,20 @@ export async function assignWorkflowParts(
     assignment,
     registered: attachedWorkflow(assignment.document),
   }));
+  const tables: DocumentTable[] = [];
+  for (const [index, { assignment }] of entries.entries()) {
+    const table = await documentTableOf(assignment.document);
+    refuseUnknownParts(
+      table,
+      [assignment.part],
+      () => `assignments[${index}].part`
+    );
+    tables.push(table);
+  }
   const context: AssignContext = {
     entries,
     caller,
+    tables,
     eligibility: await assigneeEligibility(adapter, entries),
     gated: await assignerGates(entries, input.caller),
     live: await assignedLiveness(adapter, entries),

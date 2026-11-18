@@ -118,17 +118,46 @@ export interface DocumentSettings {
   /** The page's own title, description and social image. */
   seo?: DocumentSeo;
   /**
-   * Document-scoped custom CSS, as the author wrote it.
+   * Code added to this page only, as the author wrote it: in the page's
+   * `<head>`, and at the end of its `<body>`. Its shape alone is the
+   * engine's; whether it may be stored, and who may change it, is the
+   * host's to judge on every write, and nothing here renders it.
+   */
+  code?: DocumentCode;
+  /**
+   * The page's own custom CSS, as the author wrote it.
    *
-   * NOT sanitized, and nothing renders it. This said "sanitized" while no
-   * sanitizer existed, which is the most expensive kind of wrong comment: it
-   * reads as a guarantee to whoever adds the render call, and the render call
-   * is the change that would make it dangerous. A stylesheet needs its
-   * selectors scoped and its properties allow-listed before it reaches a page,
-   * which is a different job from the value-level checks the rich-text path
-   * performs.
+   * Drawn into the page's sheet after the site's custom CSS and before each
+   * block's, and only where the host's checker accepts it: the compile draws
+   * no custom CSS without one (`StyleCompileContext.customCss`). A value the
+   * checker refuses is kept here and not drawn.
    */
   customCss?: string;
+}
+
+/** The fields a document's own code holds. */
+export const DOCUMENT_CODE_FIELDS = [
+  "head",
+  "body",
+  "acknowledgedCsp",
+] as const;
+
+/**
+ * Code a document adds to its own page.
+ *
+ * @experimental Settles with page code.
+ */
+export interface DocumentCode {
+  /** Added to the page's `<head>`. */
+  head?: string;
+  /** Added at the end of the page's `<body>`. */
+  body?: string;
+  /**
+   * What the author said they understood: the key of the findings the
+   * site's security policy raised against this code when it was saved, so
+   * the host can tell the code was kept knowingly.
+   */
+  acknowledgedCsp?: string;
 }
 
 /**
@@ -256,15 +285,30 @@ export interface BlockNode {
   /** Author-facing instance label, shown in the Layers panel. */
   name?: string;
   /**
-   * Per-node custom CSS, as the author wrote it.
+   * The block's own custom CSS, as the author wrote it, with `selector` where
+   * the block goes.
    *
-   * NOT sanitized or scoped: the style compiler never reads this key. The claim
-   * that it was compiled is the same wrong guarantee the document-level field
-   * carried, one level down.
+   * Kept with `selector` and scoped when the page is compiled, so a block
+   * copied, moved, saved as a section or exported carries CSS that scopes to
+   * wherever it lands. Drawn last, after the page's, and only where the host's
+   * checker accepts it and every rule starts from `selector`; otherwise kept
+   * here and not drawn.
    */
   customCss?: string;
   /** CSS id applied to the node's root element. */
   cssId?: string;
+  /**
+   * The author's own CSS class names for the node's root element: text, the
+   * names separated by spaces, as written. Drawn after the classes Nextly
+   * generates, so a site's own stylesheet can target the block.
+   *
+   * Apart from {@link BlockNode.classes}, which holds the ids of shared styles
+   * the site's class library defines and counts. These are free text no library
+   * holds. Each name has to be a CSS identifier and may not start with `nx-`
+   * (see `cssClassNameRefusal`); a save refuses a node holding one that isn't,
+   * naming it.
+   */
+  cssClasses?: string;
   /**
    * "Never quote this": the node's root element carries `data-nosnippet`, so
    * search engines that read it, Google's among them, show none of its text

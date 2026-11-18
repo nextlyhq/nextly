@@ -8,13 +8,16 @@
  * What a reader is shown is decided by the read rules at the moment of
  * reading, never when the pin was made: a pin of something they may no longer
  * read is left out of the list, with no title and no placeholder, and kept
- * stored, so it comes back if their access does. Pinning needs read access to
+ * stored, so it comes back if their access does. It still counts toward their
+ * limit, so the reader is told how many of their own pins those are (a count
+ * alone: no target, title or time leaves the server) and may have the server
+ * remove them, asking again at that moment which ones they may not read.
+ * Pinning needs read access to
  * the target, so a reader cannot learn that an entry exists by pinning it. A
  * pin whose target no longer exists is removed when the pins are read, so it
  * never costs the reader one of their pins.
  *
  * @module services/dashboard/dashboard-pins-service
- * @experimental Until the dashboard's pins are drawn on it.
  */
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
@@ -49,6 +52,26 @@ export interface ShownPin extends DocumentHeading {
   /** The pinned entry's id; "" for a Single. */
   entryId: string;
   pinnedAt: string;
+}
+
+/** The reader's pins: those they may read, and how many they no longer may. */
+interface ReaderPins {
+  /** The pins they may read, newest first, each with its heading. */
+  shown: ShownPin[];
+  /**
+   * How many of their pins name documents that exist but they may not read
+   * now: a count alone, so no target of one leaves the server; they are
+   * removed there ({@link DashboardPinsService.removeUnreadable}).
+   */
+  unreadableCount: number;
+}
+
+/** The reader's live pins, split by whether they may read each now. */
+interface SortedPins {
+  /** Each pin they may read, with its heading as they read it. */
+  readable: { pin: DashboardPin; heading: DocumentHeading }[];
+  /** Each pin of a document that exists but they may not read now. */
+  unreadable: DashboardPin[];
 }
 
 /** The document a stored pin names, as the headings are keyed. */
@@ -87,27 +110,75 @@ class DashboardPinsService {
    * longer exists, so they are neither shown nor counted against the limit.
    */
   async list(caller: ReadCaller): Promise<ShownPin[]> {
+    return (await this.read(caller)).shown;
+  }
+
+  /**
+   * The reader's pins they may read, newest first, each with its heading, and
+   * how many of their pins name documents they may no longer read. One read
+   * per collection, as {@link list}.
+   *
+   * 🔴 An unreadable pin is only counted: no target, title, status or time of
+   * it is answered. A pin whose target is gone is never one of them: it is
+   * removed first ({@link livePins}).
+   */
+  async read(caller: ReadCaller): Promise<ReaderPins> {
+    const { readable, unreadable } = await this.sorted(caller);
+    return {
+      shown: readable.map(({ pin, heading }) => ({
+        targetType: pin.targetType,
+        targetSlug: pin.targetSlug,
+        entryId: pin.entryId,
+        ...heading,
+        pinnedAt: new Date(pin.pinnedAt).toISOString(),
+      })),
+      unreadableCount: unreadable.length,
+    };
+  }
+
+  /**
+   * Remove the reader's own pins of documents they may not read now; how many
+   * went. Read access is asked again here, as the reader, for every pin they
+   * hold, before anything is removed: a pin they may read again by now stays,
+   * whatever an earlier read counted. Only the reader's pins are read, and
+   * each removal names the reader, so no one else's pin can go.
+   */
+  async removeUnreadable(caller: ReadCaller): Promise<number> {
+    const { unreadable } = await this.sorted(caller);
+    // Every removal settles before the answer, so a failure is never reported
+    // while others are still being written, and a read that follows it sees
+    // them all; then the first failure fails the request.
+    const settled = await Promise.allSettled(
+      unreadable.map(pin => this.pins.unpin(caller.user.id, targetOf(pin)))
+    );
+    const failed = settled.find(
+      (each): each is PromiseRejectedResult => each.status === "rejected"
+    );
+    if (failed !== undefined) throw failed.reason;
+    return settled.filter(each => each.status === "fulfilled" && each.value)
+      .length;
+  }
+
+  /**
+   * The reader's live pins, newest first, split by whether they may read each
+   * now, with the heading of each they may: the one access read that both
+   * {@link read} and {@link removeUnreadable} take their answer from.
+   */
+  private async sorted(caller: ReadCaller): Promise<SortedPins> {
     const pins = await this.livePins(caller.user.id);
-    if (pins.length === 0) return [];
+    if (pins.length === 0) return { readable: [], unreadable: [] };
     const headings = await readableHeadings(
       pins.map(refOf),
       caller,
       this.registries
     );
-    return pins.flatMap(pin => {
+    const sorted: SortedPins = { readable: [], unreadable: [] };
+    for (const pin of pins) {
       const heading = headings.get(headingKey(refOf(pin)));
-      return heading === undefined
-        ? []
-        : [
-            {
-              targetType: pin.targetType,
-              targetSlug: pin.targetSlug,
-              entryId: pin.entryId,
-              ...heading,
-              pinnedAt: new Date(pin.pinnedAt).toISOString(),
-            },
-          ];
-    });
+      if (heading === undefined) sorted.unreadable.push(pin);
+      else sorted.readable.push({ pin, heading });
+    }
+    return sorted;
   }
 
   /**
@@ -156,8 +227,12 @@ class DashboardPinsService {
    *
    * 🔴 Existence, not readability: a pin of something the reader may not read
    * now is kept, so it returns when their access does. The existence read
-   * ignores access, and what it learns reaches the reader only as their own
-   * pin of a deleted target going away.
+   * ignores access, and what it learns reaches the reader only about their
+   * own pins, as a count: how many they can no longer read
+   * (`ReaderPins.unreadableCount`, so they may have them removed), which
+   * drops when such a target is deleted. That is the price of letting them
+   * free its place under the limit; no target, title, status or time of one
+   * is answered.
    */
   private async livePins(userId: string): Promise<DashboardPin[]> {
     const pins = await this.pins.list(userId);

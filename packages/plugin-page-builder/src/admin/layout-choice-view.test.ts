@@ -23,6 +23,7 @@ const main: LayoutChoice = {
   published: true,
   draftChangesNotLive: false,
   regions: [{ area: "header", componentId: "h" }],
+  areasFilled: ["header"],
 };
 const landing: LayoutChoice = {
   id: "landing",
@@ -30,13 +31,34 @@ const landing: LayoutChoice = {
   published: true,
   draftChangesNotLive: true,
   regions: [{ area: "footer", componentId: "f" }],
+  areasFilled: ["footer"],
 };
+// Unpublished, so it lists no regions, but its own areas name a header.
 const unfinished: LayoutChoice = {
   id: "unfinished",
   title: "Unfinished",
   published: false,
   draftChangesNotLive: false,
   regions: [],
+  areasFilled: ["header"],
+};
+// Published with no header and no footer: what the site was seeded with.
+const seed: LayoutChoice = {
+  id: "seed",
+  title: "Site layout",
+  published: true,
+  draftChangesNotLive: false,
+  regions: [],
+  areasFilled: [],
+};
+// Never published, and its own areas name nothing either.
+const blank: LayoutChoice = {
+  id: "blank",
+  title: "Blank",
+  published: false,
+  draftChangesNotLive: false,
+  regions: [],
+  areasFilled: [],
 };
 
 function ready(
@@ -68,17 +90,129 @@ const page = (layout: unknown = null, noHeaderFooter = false) => ({
 });
 
 describe("the page's Layout picker", () => {
-  it("offers the default by name, published Layouts, unpublished ones marked, then none", () => {
+  it("offers the site default by name, the other published sets, unpublished ones marked, then none, each with its picture and a note", () => {
     expect(layoutPickerView(page(), ready()).options).toEqual([
-      { value: SITE_DEFAULT_VALUE, label: "Site default", note: "Main" },
-      { value: layoutValue("main"), label: "Main" },
-      { value: layoutValue("landing"), label: "Landing" },
+      {
+        value: SITE_DEFAULT_VALUE,
+        label: "Site default (Main)",
+        note: "Follows the site if the default changes",
+        // The default set's own picture: it is what the option draws.
+        picture: main.regions,
+      },
+      // Main is the default, so it is offered once, as the site default.
+      {
+        value: layoutValue("landing"),
+        label: "Landing",
+        note: "Footer only",
+        picture: landing.regions,
+      },
       {
         value: layoutValue("unfinished"),
-        label: "Unfinished (not published: the site default shows until it is)",
+        label: "Unfinished",
+        note: "Not published: the site default shows until it is",
+        // Nothing of it is published, so nothing is drawn.
+        picture: [],
       },
-      { value: NO_HEADER_FOOTER_VALUE, label: "No header or footer" },
+      {
+        value: NO_HEADER_FOOTER_VALUE,
+        label: "None",
+        note: "No header or footer",
+        picture: [],
+      },
     ]);
+  });
+
+  it("notes which areas each set fills", () => {
+    const both: LayoutChoice = {
+      ...landing,
+      id: "both",
+      title: "Both",
+      regions: [
+        { area: "header", componentId: "bh" },
+        { area: "footer", componentId: "bf" },
+      ],
+      areasFilled: ["header", "footer"],
+    };
+    const header: LayoutChoice = {
+      ...main,
+      id: "top",
+      title: "Top",
+    };
+    const notes = new Map(
+      layoutPickerView(
+        page(),
+        ready({}, [main, both, header, landing])
+      ).options.map(option => [option.value, option.note])
+    );
+    expect(notes.get(layoutValue("both"))).toBe("Header and footer");
+    expect(notes.get(layoutValue("top"))).toBe("Header only");
+    expect(notes.get(layoutValue("landing"))).toBe("Footer only");
+  });
+
+  it("offers no set that holds no header and no footer, published or not", () => {
+    // Choosing one would be the same as "No header or footer", under a name
+    // that hides it, and a page that chose it would stay blank when the
+    // site default changes.
+    const values = layoutPickerView(
+      page(),
+      ready({}, [main, seed, unfinished, blank, landing])
+    ).options.map(option => option.value);
+    expect(values).not.toContain(layoutValue("seed"));
+    expect(values).not.toContain(layoutValue("blank"));
+    expect(values).toEqual([
+      SITE_DEFAULT_VALUE,
+      layoutValue("landing"),
+      layoutValue("unfinished"),
+      NO_HEADER_FOOTER_VALUE,
+    ]);
+  });
+
+  it("keeps an empty set the page already names, shown and selected", () => {
+    for (const named of [seed, blank]) {
+      const view = layoutPickerView(
+        page(named.id),
+        ready({}, [main, seed, blank, landing])
+      );
+      expect(view.value).toBe(layoutValue(named.id));
+      expect(view.options.map(option => option.value)).toContain(
+        layoutValue(named.id)
+      );
+      if (named === seed) {
+        // Published and empty: its note says it draws nothing.
+        expect(
+          view.options.find(o => o.value === layoutValue("seed"))?.note
+        ).toBe("Empty: no header or footer shows");
+      }
+      // Only the page's own: the other empty set is still not offered.
+      const other = named === seed ? blank : seed;
+      expect(view.options.map(option => option.value)).not.toContain(
+        layoutValue(other.id)
+      );
+    }
+  });
+
+  it("keeps the default set the page names directly, shown and selected by its own name", () => {
+    const view = layoutPickerView(page("main"), ready());
+    expect(view.value).toBe(layoutValue("main"));
+    expect(view.options).toContainEqual({
+      value: layoutValue("main"),
+      label: "Main",
+      note: "Header only",
+      picture: main.regions,
+    });
+    // And the site default is still offered beside it.
+    expect(view.options[0]?.value).toBe(SITE_DEFAULT_VALUE);
+  });
+
+  it("does not list an unpublished default set by its own name either", () => {
+    const view = layoutPickerView(
+      page(),
+      ready({ defaultLayout: "unfinished" })
+    );
+    expect(view.options[0]?.label).toBe("Site default (none set)");
+    expect(view.options.map(option => option.value)).not.toContain(
+      layoutValue("unfinished")
+    );
   });
 
   it("names the default in effect for a page naming nothing", () => {
@@ -114,10 +248,7 @@ describe("the page's Layout picker", () => {
     expect(view.options.find(o => o.value === view.value)?.label).toBe(
       "A header & footer set you can't view, or one that was deleted"
     );
-    expect(view.options[0]).toMatchObject({
-      label: "Site default",
-      note: "Main",
-    });
+    expect(view.options[0]).toMatchObject({ label: "Site default (Main)" });
     expect(view.why).toBe(
       "You can't see this header & footer set. It may have been deleted, or you may not have access to it. Choose another header & footer set to change it."
     );
@@ -178,10 +309,8 @@ describe("the page's Layout picker", () => {
     ]) {
       const view = layoutPickerView(page({ id: "unfinished" }), ready(meta));
       expect(
-        view.options.find(o => o.value === layoutValue("unfinished"))?.label
-      ).toBe(
-        "Unfinished (not published: no header or footer shows until it is)"
-      );
+        view.options.find(o => o.value === layoutValue("unfinished"))?.note
+      ).toBe("Not published: no header or footer shows until it is");
       expect(view.why).toBe(
         "Unfinished (not published, so no header or footer shows)"
       );
@@ -192,8 +321,8 @@ describe("the page's Layout picker", () => {
   it("says the site default shows for an unpublished option when one is usable", () => {
     const view = layoutPickerView(page(), ready());
     expect(
-      view.options.find(o => o.value === layoutValue("unfinished"))?.label
-    ).toBe("Unfinished (not published: the site default shows until it is)");
+      view.options.find(o => o.value === layoutValue("unfinished"))?.note
+    ).toBe("Not published: the site default shows until it is");
   });
 
   it("says when the site has no published default", () => {
@@ -264,6 +393,7 @@ describe("a Layout behind Remove Layout's fence", () => {
       value: layoutValue("landing"),
       label: "Landing",
       note: "Being removed",
+      picture: landing.regions,
       description:
         "This header & footer set is being removed, so pages can't choose it. Choose another header & footer set.",
       disabled: true,
@@ -272,6 +402,7 @@ describe("a Layout behind Remove Layout's fence", () => {
       value: layoutValue("unfinished"),
       label: "Unfinished",
       note: "Unpublished. Publish it again to choose it.",
+      picture: [],
       description:
         "This header & footer set was unpublished with Remove header & footer set, so pages can't choose it until it is published again. Choose another header & footer set.",
       disabled: true,

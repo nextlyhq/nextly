@@ -8,11 +8,11 @@
  */
 import { validateFontFace, type FontFaceDef } from "@nextlyhq/blocks-engine";
 import {
-  FontsPanel,
+  FontsScreen,
   withoutFamily,
   type FontCatalogue,
   type FontFaceUpload,
-  type FontsPanelProps,
+  type FontsScreenProps,
   type SiteFamily,
 } from "@nextlyhq/builder/shell";
 import {
@@ -324,7 +324,7 @@ function faceIdentity(face: FontFaceDef): string {
  * with previews from the file host the server names. `undefined` when the
  * host turned the catalogue off.
  */
-function useFontCatalogue(): FontCatalogue | undefined {
+export function useFontCatalogue(): FontCatalogue | undefined {
   const config = usePluginClientConfig(PLUGIN_SOURCE);
   const client = useFontCatalogueClient();
   // The file host the last read named, which previews are built under. Rows
@@ -356,23 +356,35 @@ function useFontCatalogue(): FontCatalogue | undefined {
 }
 
 /**
- * The Fonts tab, with the writers that add and remove a face and the
- * catalogue.
+ * The one Fonts screen, with the writers that add and remove a face and the
+ * catalogue: what the builder opens over its Design panel and the admin's
+ * Fonts page draws, so every way in writes through the same site-style client.
  *
- * Its own component rather than more hooks in the editor: a panel that needs
+ * Its own component rather than more hooks in the editor: a screen that needs
  * writers is the thing that should own them. Shown read-only to a role
  * without `update-site-style`, which the server would refuse anyway.
  */
-export function FontsPanelWithUpload({
+export function SiteFontsScreen({
   faces,
   codeFaces,
   tokens,
   absence,
   onOpenTokens,
+  onClose,
+  labelledBy,
   storedFaces,
   storedPending,
   unreadableFonts,
-}: FontsPanelProps & {
+}: Pick<
+  FontsScreenProps,
+  | "faces"
+  | "codeFaces"
+  | "tokens"
+  | "absence"
+  | "onOpenTokens"
+  | "onClose"
+  | "labelledBy"
+> & {
   storedFaces: readonly FontFaceDef[] | undefined;
   storedPending: boolean;
   unreadableFonts: readonly string[];
@@ -381,7 +393,7 @@ export function FontsPanelWithUpload({
   const writer = useFontFaceWriter(storedFaces, storedPending, unreadableFonts);
   const catalogue = useFontCatalogue();
   return (
-    <FontsPanel
+    <FontsScreen
       absence={absence}
       acceptFiles={FONT_FILE_ACCEPT}
       faces={faces}
@@ -390,8 +402,10 @@ export function FontsPanelWithUpload({
       onAddFace={writer.add}
       onRemoveFamily={writer.remove}
       catalogue={catalogue}
-      onOpenTokens={onOpenTokens}
       tokens={tokens}
+      {...(onOpenTokens === undefined ? {} : { onOpenTokens })}
+      {...(onClose === undefined ? {} : { onClose })}
+      {...(labelledBy === undefined ? {} : { labelledBy })}
     />
   );
 }

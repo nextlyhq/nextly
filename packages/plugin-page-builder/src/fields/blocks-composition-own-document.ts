@@ -261,6 +261,7 @@ async function judgeComposedLists(args: {
       shapesOf: bindingShapes,
       storedForms: site.storedForms,
       maxNodes: site.maxNodes,
+      blocks: args.setup.blocks,
       onUnjudged: (bindings: number) =>
         args.setup.onBindingsUnjudged?.({ ...args.unjudged, bindings }),
       // A placed list's item bindings, against its query's rows.
@@ -347,18 +348,21 @@ async function readPlacedBy(
   }
 ): Promise<unknown[]> {
   const { library, surveyed } = at;
-  const next: unknown[] = [];
+  const placed: string[] = [];
   for (const placing of documents) {
     if (!isForest(placing)) continue;
     const nodes = (placing as BlockDocument).nodes;
     for (const id of componentIdsIn(nodes, at.limits.maxNodes)) {
       if (surveyed.has(id)) continue;
       surveyed.add(id);
-      await readInto(library, at.read, id);
-      if (library.held.has(id)) next.push(library.held.get(id));
+      placed.push(id);
     }
   }
-  return next;
+  // The level's definitions asked for together, so they are read in one go.
+  await Promise.all(placed.map(id => readInto(library, at.read, id)));
+  return placed.flatMap(id =>
+    library.held.has(id) ? [library.held.get(id)] : []
+  );
 }
 
 /** One definition into the library, unless it was already asked for. */

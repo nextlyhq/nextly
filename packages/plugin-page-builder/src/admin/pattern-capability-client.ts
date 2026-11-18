@@ -16,7 +16,6 @@
  *
  * @module admin/pattern-capability-client
  */
-import { usePluginRoute } from "@nextlyhq/plugin-sdk/admin";
 
 // The CONTRACT, not the route: `capability-route` reaches the collection
 // registry through server-only modules, and importing it here for one path
@@ -26,6 +25,8 @@ import {
   PAGE_BUILDER_PLUGIN_NAME,
   type PatternCapabilityResponse,
 } from "../library-contract";
+
+import { useBuilderRoute } from "./builder-route-read";
 
 /**
  * Whether the save-as-pattern verb should be offered.
@@ -43,7 +44,7 @@ import {
  * refusal carries the only explanation an author gets.
  */
 export function useMayCreatePattern(): boolean {
-  const read = usePluginRoute<PatternCapabilityResponse>({
+  const read = useBuilderRoute<PatternCapabilityResponse>({
     plugin: PAGE_BUILDER_PLUGIN_NAME,
     path: CAPABILITY_ROUTE_PATH,
     // Fresh on every mount, matching `useCurrentUserPermissions` in the admin
@@ -66,7 +67,7 @@ export function useMayCreatePattern(): boolean {
  * @experimental Settles when the composition API ships.
  */
 export function useMayCreateComponent(): boolean {
-  const read = usePluginRoute<PatternCapabilityResponse>({
+  const read = useBuilderRoute<PatternCapabilityResponse>({
     plugin: PAGE_BUILDER_PLUGIN_NAME,
     path: CAPABILITY_ROUTE_PATH,
     staleTime: 0,
@@ -81,7 +82,7 @@ export function useMayCreateComponent(): boolean {
  * @experimental Settles when the composition API ships.
  */
 export function useMayUpdatePattern(): boolean {
-  const read = usePluginRoute<PatternCapabilityResponse>({
+  const read = useBuilderRoute<PatternCapabilityResponse>({
     plugin: PAGE_BUILDER_PLUGIN_NAME,
     path: CAPABILITY_ROUTE_PATH,
     staleTime: 0,
@@ -103,7 +104,7 @@ export function useMayUpdatePattern(): boolean {
 export function useComponentEditing():
   | { readonly collection: string; readonly field: string }
   | undefined {
-  const read = usePluginRoute<PatternCapabilityResponse>({
+  const read = useBuilderRoute<PatternCapabilityResponse>({
     plugin: PAGE_BUILDER_PLUGIN_NAME,
     path: CAPABILITY_ROUTE_PATH,
     staleTime: 0,

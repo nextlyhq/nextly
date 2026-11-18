@@ -238,18 +238,65 @@
     var(--nx-destructive),
     white 95%
   );
+  /*
+   * A small picture of a document (a saved section, a header & footer set):
+   * its edge, the ground an icon sits on while there is no picture, and that
+   * icon. The edge is the panel mixed toward the admin's text colour far
+   * enough to hold 3:1 against the panel in both themes, so a white page drawn
+   * on a white panel still reads as a picture with a boundary. The icon takes
+   * the muted text, which holds 3:1 on the well in both. Mixed from the
+   * admin's tokens only, so the dark theme follows through them and the
+   * page's own colours are never touched. `chrome-panel-tokens.test.ts`
+   * holds both ratios in both themes.
+   */
+  --nx-builder-picture-edge: color-mix(
+    in oklch,
+    var(--nx-builder-panel) 58%,
+    var(--nx-foreground)
+  );
+  --nx-builder-picture-ground: var(--nx-builder-well);
+  --nx-builder-picture-icon: var(--nx-builder-text-muted);
   /* The editing colours, picked for the admin's theme — see below. */
   --nx-builder-select: var(--nx-builder-select-on-light);
   --nx-builder-component: var(--nx-builder-component-on-light);
   /* A prop bound to a field: its chip, its bind button while open. */
   --nx-builder-bound: var(--nx-builder-bound-on-light);
-  /* The "what you're editing" target: this block (pink), a shared style (green). */
-  --nx-builder-local: var(--nx-builder-local-on-light);
+  /* A shared style's green, where the canvas and the look bar draw one. */
   --nx-builder-shared: var(--nx-success);
+  /*
+   * The editing bar's chips, words in each colour on a ground of it: this
+   * block (pink), a shared style (green), a state other than Normal (amber),
+   * and the state's tint behind the Style tab's sections. Text on its ground
+   * measures 6.3:1, 5.9:1 and 6.3:1 here, and 8.8:1, 8.6:1 and 9.8:1 in dark.
+   */
+  --nx-builder-target-block: #a3165a; /* design-lint-ok: this-block pink; no admin token */
+  --nx-builder-target-block-ground: #fde7f1; /* design-lint-ok: this-block pink ground */
+  --nx-builder-target-shared: #0f6b43; /* design-lint-ok: shared-style green; no admin token */
+  --nx-builder-target-shared-ground: #e6f7ee; /* design-lint-ok: shared-style green ground */
+  --nx-builder-target-state: #7a5200; /* design-lint-ok: state amber; no admin token */
+  --nx-builder-target-state-ground: #fff4d6; /* design-lint-ok: state amber ground */
+  --nx-builder-target-state-tint: color-mix(
+    in srgb,
+    var(--nx-builder-target-state-ground) 45%,
+    var(--nx-builder-surface, var(--nx-background))
+  );
   --nx-builder-component-text: var(--nx-builder-component-text-on-light);
   --nx-builder-select-text: var(--nx-builder-select-text-on-light);
   --nx-builder-ink: #15171c; /* design-lint-ok: the action bar's fixed dark ink */
   --nx-builder-ink-text: #f8f9fa; /* design-lint-ok: text on the fixed dark ink */
+  /*
+   * A header or footer edited in place: the bar above the canvas in the
+   * component purple, its words and Done in the text that reads on it (7.3:1
+   * here, 8.2:1 in dark), and the dim over the rest of the page, the well
+   * made see-through and drawn by the chrome, so the page keeps its colours.
+   */
+  --nx-builder-region-bar: var(--nx-builder-component-on-light);
+  --nx-builder-region-bar-text: var(--nx-builder-component-text-on-light);
+  --nx-builder-region-dim: color-mix(
+    in oklch,
+    var(--nx-builder-well) 72%,
+    transparent
+  );
   /*
    * The editor's ONE density scale, for the top bar, the panels and the
    * inspector alike, so every control in the editor is one size:
@@ -267,6 +314,12 @@
   --nx-builder-title-size: 0.75rem;
   --nx-builder-title-weight: 600;
   --nx-builder-row-gap: 0.5rem;
+  /*
+   * The frame around each section of the block panel: none, so sections sit
+   * flat and are divided by a line. One value to try cards on the real panel
+   * (`0 0 0 1px var(--nx-builder-border)`, say).
+   */
+  --nx-builder-section-frame: none;
 }
 
 /*
@@ -303,9 +356,6 @@
   /* A bound prop's violet, apart from a component's purple: 5.9:1 on white, 8.9:1 on #15171c (AA). */
   --nx-builder-bound-on-light: #7a3ce0; /* design-lint-ok: bound violet; no admin token */
   --nx-builder-bound-on-dark: #c9a6ff; /* design-lint-ok: bound violet; no admin token */
-  /* This block's pink: 5.9:1 on the light ground, 9.4:1 on the dark (AA). */
-  --nx-builder-local-on-light: #c2185b; /* design-lint-ok: this-block pink; no admin token */
-  --nx-builder-local-on-dark: #f48fb1; /* design-lint-ok: this-block pink; no admin token */
   --nx-builder-component-text-on-light: #ffffff; /* design-lint-ok: text on the deep purple */
   --nx-builder-component-text-on-dark: #15171c; /* design-lint-ok: text on the light purple */
   --nx-builder-select-text-on-light: #ffffff; /* design-lint-ok: text on the deep select blue */
@@ -336,10 +386,18 @@
   --nx-builder-select: var(--nx-builder-select-on-dark);
   --nx-builder-component: var(--nx-builder-component-on-dark);
   --nx-builder-bound: var(--nx-builder-bound-on-dark);
-  --nx-builder-local: var(--nx-builder-local-on-dark);
+  --nx-builder-target-block: #ffb3d4; /* design-lint-ok: this-block pink on dark */
+  --nx-builder-target-block-ground: #4a1530; /* design-lint-ok: this-block pink ground on dark */
+  --nx-builder-target-shared: #8ee0b5; /* design-lint-ok: shared-style green on dark */
+  --nx-builder-target-shared-ground: #0e3624; /* design-lint-ok: shared-style green ground on dark */
+  --nx-builder-target-state: #ffd27a; /* design-lint-ok: state amber on dark */
+  --nx-builder-target-state-ground: #3a2a05; /* design-lint-ok: state amber ground on dark */
   --nx-builder-component-text: var(--nx-builder-component-text-on-dark);
   --nx-builder-select-text: var(--nx-builder-select-text-on-dark);
   --nx-builder-ink: #0b0c0f; /* design-lint-ok: the action bar's fixed dark ink */
+  /* The region bar's pair for the dark theme; the dim follows the dark well. */
+  --nx-builder-region-bar: var(--nx-builder-component-on-dark);
+  --nx-builder-region-bar-text: var(--nx-builder-component-text-on-dark);
   /* The admin's destructive pair in the dark theme: the solid red, on a
      ground tinted from the editor's raised surface. */
   --nx-builder-destructive-text: var(--nx-destructive-solid);

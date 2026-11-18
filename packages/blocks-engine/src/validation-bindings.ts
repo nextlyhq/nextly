@@ -5,9 +5,18 @@
  * @module validation-bindings
  */
 import { isBindPath } from "./binding-rules";
-import { BINDING_SOURCES, type BlockNode, isBindingSource } from "./document";
+import {
+  BINDING_SOURCES,
+  type BlockNode,
+  COMPONENT_INSTANCE_TYPE,
+  isBindingSource,
+} from "./document";
 import { describeValue, pointer } from "./issue-text";
 import { isPlainRecord } from "./plain-record";
+import {
+  boundSettingId,
+  keepsItsListWhenMoved,
+} from "./resolve-instances-exposures";
 import type { ValidationIssue } from "./validation-contract";
 
 /**
@@ -36,10 +45,38 @@ export function validateBindings(
   const bindingsPath = pointer(path, "bindings");
   for (const [prop, binding] of Object.entries(node.bindings)) {
     const bPath = pointer(bindingsPath, prop);
+    // A component placement has no props of its own to fill: it binds its
+    // settings, each under `overrides.<setting id>`, and composing it writes
+    // the binding onto the component's block that the setting fills.
+    if (
+      node.type === COMPONENT_INSTANCE_TYPE &&
+      boundSettingId(prop) === undefined
+    ) {
+      issues.push({
+        path: bPath,
+        code: "invalid-binding",
+        severity: "error",
+        message: `A component placement binds only its settings, each as overrides.<setting id>, not "${describeValue(prop)}".`,
+      });
+      continue;
+    }
     // The schema-aware checks run over the whole document once the walk is
     // done (`bindingSchemaIssues`), so a problem a stored form already held
     // stays a warning.
-    validBindingShape(binding, bPath, issues);
+    const readable = validBindingShape(binding, bPath, issues);
+    if (
+      readable &&
+      node.type === COMPONENT_INSTANCE_TYPE &&
+      !keepsItsListWhenMoved(binding)
+    ) {
+      issues.push({
+        path: pointer(bPath, "list"),
+        code: "invalid-binding",
+        severity: "error",
+        message:
+          "A component placement's list item binding names the list it reads, by its id: the component's block it fills may sit in a list of its own.",
+      });
+    }
   }
 }
 
@@ -117,5 +154,29 @@ export function validBindingShape(
       message: 'sourceKey is only allowed when source is "single".',
     });
   }
+  listShapeIssue(binding, source, bPath, issues);
   return true;
+}
+
+/**
+ * The enclosing list an item binding names, where one is named: a list's
+ * node id, and only on an item binding, the one source a list draws.
+ */
+function listShapeIssue(
+  binding: Record<string, unknown>,
+  source: unknown,
+  bPath: string,
+  issues: ValidationIssue[]
+): void {
+  const list = binding.list;
+  if (list === undefined) return;
+  if (source !== "item" || typeof list !== "string" || list.length === 0) {
+    issues.push({
+      path: pointer(bPath, "list"),
+      code: "invalid-binding",
+      severity: "error",
+      message:
+        'list names the enclosing list an item binding reads, by its id, and is only allowed when source is "item".',
+    });
+  }
 }

@@ -50,6 +50,7 @@ import { NextlyError } from "../../errors/nextly-error";
 import { createAdminAction } from "../commands/create-admin";
 import { runDemote } from "../commands/db-sync-demote";
 import { runPromote } from "../commands/db-sync-promote";
+import { i18nConvertZonedDatesAction } from "../commands/i18n-convert-zoned-dates";
 import { upgradeAction } from "../commands/upgrade";
 import type { CommandContext } from "../program";
 
@@ -108,16 +109,18 @@ vi.mock("../utils/command-prerequisites", async importOriginal => ({
   }),
 }));
 
-vi.mock("../utils/adapter", () => ({
-  createCliAdapter: () =>
+vi.mock("../utils/adapter", () => {
+  const opened = () =>
     Promise.resolve({
       getCapabilities: () => ({ dialect: "sqlite" }),
       getDrizzle: () => ({}),
       tableExists: () => Promise.resolve(false),
       dropTable: () => Promise.resolve(),
       disconnect: () => Promise.resolve(),
-    }),
-}));
+    });
+  // One connection for a command that opens its own way or the shared way.
+  return { createCliAdapter: opened, openCommandAdapter: opened };
+});
 
 vi.mock("../utils/config-loader", () => ({
   loadConfig: () =>
@@ -160,18 +163,22 @@ vi.mock("../../domains/schema/pipeline/locks", async importOriginal => ({
   ) => ({ ran: true as const, value: await fn() }),
 }));
 
+// The one step `i18n:convert-zoned-dates` runs: here it has work, so the
+// command reaches its backup question.
 vi.mock("../commands/upgrade-steps", () => ({
-  UPGRADE_STEPS: [
-    {
-      title: "a step with work",
-      pending: () => Promise.resolve(1),
-      run: seen.stepRun,
-    },
-  ],
+  MIGRATE_DATA_STEPS: [],
+  zonedDatesStep: {
+    title: "a step with work",
+    pending: () => Promise.resolve(1),
+    run: seen.stepRun,
+  },
 }));
 
 vi.mock("../../domains/schema/events/legacy-detection", () => ({
   assertNoLegacyBookkeeping: () => Promise.resolve(),
+  // `nextly migrate` reads which legacy tables there are: none here.
+  detectLegacyBookkeeping: () =>
+    Promise.resolve({ hasLegacy: false, tables: [] }),
 }));
 
 vi.mock("../../domains/field-groups/storage/resolve-storage-names", () => ({
@@ -320,12 +327,14 @@ describe("--non-interactive at a terminal", () => {
     expect(printedError()).toContain("--email");
   });
 
-  it("upgrade's backup question is not asked, nothing runs, and --confirm-backed-up is named", async () => {
-    await upgradeAction({}, new Command());
+  it("i18n:convert-zoned-dates' backup question is not asked, nothing runs, and --backup-confirmed is named", async () => {
+    await i18nConvertZonedDatesAction({}, new Command());
     expect(seen.createInterface).not.toHaveBeenCalled();
     expect(seen.stepRun).not.toHaveBeenCalled();
     expect(process.exitCode).toBe(1);
-    expect(printedError()).toContain("--confirm-backed-up");
+    expect(printedError()).toContain(
+      "nextly i18n:convert-zoned-dates --backup-confirmed"
+    );
   });
 
   it("upgrade --reconcile-core does not ask, changes nothing, and names the consent that would cover it", async () => {
@@ -605,12 +614,82 @@ describe("a command run with no terminal", () => {
     NEXTLY_RUN_TIMEOUT
   );
 
+  /**
+   * A role holding a retired `manage-` permission, as an earlier release
+   * stored one: work for `nextly migrate`'s data steps. Each row is a copy of one the
+   * migrated database already holds, so it has every column the table needs.
+   */
+  function giveARoleARetiredManagePermission() {
+    const db = new Database(dbFile);
+    try {
+      const copy = (table: string, change: Record<string, unknown>) => {
+        const row = db.prepare(`SELECT * FROM "${table}" LIMIT 1`).get() as
+          | Record<string, unknown>
+          | undefined;
+        if (row === undefined) throw new Error(`${table} holds no row to copy`);
+        const next = { ...row, ...change };
+        const columns = Object.keys(next);
+        db.prepare(
+          `INSERT INTO "${table}" (${columns.map(c => `"${c}"`).join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`
+        ).run(...columns.map(column => next[column]));
+      };
+      copy("permissions", {
+        id: "nw-manage-media",
+        name: "Manage media",
+        slug: "manage-media",
+        action: "manage",
+        resource: "media",
+      });
+      copy("role_permissions", {
+        id: "nw-holds-manage-media",
+        permission_id: "nw-manage-media",
+      });
+    } finally {
+      db.close();
+    }
+  }
+
   it(
-    "upgrade does not ask whether the database is backed up, and names --confirm-backed-up",
+    "migrate does not ask whether the database is backed up before its data steps, and names --backup-confirmed",
+    async () => {
+      // A migrated database where one of the run's data steps has work: the
+      // backup is asked about only then.
+      await appliedPosts();
+      giveARoleARetiredManagePermission();
+      await expectRefusal(["migrate"], "nextly migrate --backup-confirmed");
+    },
+    NEXTLY_RUN_TIMEOUT
+  );
+
+  it(
+    "upgrade, run for the database work it used to do, changes nothing and names nextly migrate",
+    async () => {
+      await appliedPosts();
+      giveARoleARetiredManagePermission();
+      await expectRefusal(["upgrade"], "(UPGRADE_WORK_MOVED)");
+      await expectRefusal(
+        ["upgrade", "--confirm-backed-up"],
+        "`nextly migrate`"
+      );
+    },
+    NEXTLY_RUN_TIMEOUT
+  );
+
+  it(
+    "migrate does not ask whether the database is backed up before moving an earlier release's records, and names --backup-confirmed",
     async () => {
       writeFileSync(join(project, "nextly.config.ts"), CONFIG_WITH(""));
       seedDatabase();
-      await expectRefusal(["upgrade"], "--confirm-backed-up");
+      // The ledger as an earlier release kept it, holding one record.
+      const db = new Database(dbFile);
+      db.exec(
+        "CREATE TABLE nextly_migrations (id TEXT PRIMARY KEY, filename TEXT NOT NULL UNIQUE, sha256 TEXT NOT NULL, status TEXT NOT NULL, applied_at INTEGER NOT NULL, applied_by TEXT, duration_ms INTEGER, error_json TEXT)"
+      );
+      db.exec(
+        "INSERT INTO nextly_migrations (id, filename, sha256, status, applied_at) VALUES ('1', '20200101_000000_000_posts.sql', 'aa', 'applied', 1)"
+      );
+      db.close();
+      await expectRefusal(["migrate"], "--backup-confirmed");
     },
     NEXTLY_RUN_TIMEOUT
   );
@@ -618,7 +697,10 @@ describe("a command run with no terminal", () => {
   it(
     "migrate:fresh does not ask to drop every table, and names --accept-data-loss",
     async () => {
-      writeFileSync(join(project, "nextly.config.ts"), CONFIG_WITH(POSTS));
+      // A configuration with nothing a migration could record: migrate:fresh drops every table
+      // whatever the configuration declares, and refuses one ahead of its migrations before it
+      // reaches the consent this run is about.
+      writeFileSync(join(project, "nextly.config.ts"), CONFIG_WITH(""));
       seedDatabase();
       await expectRefusal(["migrate:fresh"], "--accept-data-loss");
     },

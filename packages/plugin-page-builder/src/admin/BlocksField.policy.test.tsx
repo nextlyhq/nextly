@@ -18,7 +18,14 @@
  * @module admin/BlocksField.policy.test
  */
 import { BASE_BREAKPOINT } from "@nextlyhq/blocks-engine";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
+import { TooltipProvider } from "@nextlyhq/ui";
 import * as React from "react";
 import { useForm, type FieldValues } from "react-hook-form";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -41,7 +48,7 @@ const seen: {
  * for. The real shell draws one at a time and this mock draws none unless
  * told, so a case about a panel's props names the panel.
  */
-let shownPanel: "classes" | null = null;
+let shownPanel: "styles" | null = null;
 
 /** What `usePluginClientConfig` answers with for the test in hand. */
 let clientConfig: Record<string, unknown> | undefined;
@@ -80,6 +87,14 @@ let siteStyleRead: { data: unknown; isPending: boolean; error: Error | null } =
   };
 /** What reached the plugin's routes, in order. */
 const routeWrites: unknown[] = [];
+
+/**
+ * The document around the field and the person signed in: none for every
+ * case but the one about the canvas's bindings read, which needs both to
+ * ask anything.
+ */
+let documentIdentity: unknown = null;
+let signedIn: string | null = null;
 
 vi.mock("@nextlyhq/builder/shell", async importOriginal => {
   /*
@@ -133,28 +148,35 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
         returnFocus: () => HTMLElement | null;
       }) => React.ReactNode;
     }): React.JSX.Element => (
-      <div>
-        {/*
-         * The top bar is rendered for the same reason the children are: the
-         * breakpoint manager lives there, and a stub that dropped the slot
-         * would leave its assertions passing on absence.
-         */}
-        {/* The real shell renders the host's Settings on every pass, open
+      // Inside a tooltip provider, as the real shell renders everything: the
+      // top bar's controls, the device buttons among them, carry tooltips.
+      <TooltipProvider>
+        <div>
+          {/*
+           * The top bar is rendered for the same reason the children are: the
+           * breakpoint manager lives there, and a stub that dropped the slot
+           * would leave its assertions passing on absence.
+           */}
+          {/* The real shell renders the host's Settings on every pass, open
             or not, which is where the breakpoint manager now lives. */}
-        {renderSettings?.({
-          open: false,
-          onOpenChange: () => {},
-          returnFocus: () => null,
-        })}
-        {topBar}
-        {topBarCenter}
-        {topBarEnd}
-        {inspector}
-        {shownPanel === null
-          ? null
-          : renderPanel?.("design", { current: shownPanel, choose: () => {} })}
-        {children}
-      </div>
+          {renderSettings?.({
+            open: false,
+            onOpenChange: () => {},
+            returnFocus: () => null,
+          })}
+          {topBar}
+          {topBarCenter}
+          {topBarEnd}
+          {inspector}
+          {shownPanel === null
+            ? null
+            : renderPanel?.("design", {
+                current: shownPanel,
+                choose: () => {},
+              })}
+          {children}
+        </div>
+      </TooltipProvider>
     ),
     BreakpointManager: nothing,
     InspectorPanel: record("inspector"),
@@ -243,6 +265,10 @@ vi.mock("./site-style-read", () => ({
 }));
 
 vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
+  // Where the page opens and the pin's id, which the top bar reads; no
+  // collection is named here, so the exit goes to the form.
+  useDocumentOpensIn: () => null,
+  PIN_TO_DASHBOARD_ACTION: "pin-to-dashboard",
   // The canvas's media read, answering nothing: these cases draw no image.
   // One function for every call, as the admin's own hook keeps it.
   useMediaResolver: (
@@ -276,7 +302,7 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   usePluginClientConfig: () => clientConfig,
   // No document around the field: the state every case here was written
   // against, and the one that offers every component.
-  useDocumentIdentity: () => null,
+  useDocumentIdentity: () => documentIdentity,
   navigateTo: vi.fn(),
   // Nor a language the field could know: the component read asks for the
   // app default.
@@ -305,13 +331,26 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   DocumentSaveAndPublish: () => null,
   useDocumentLifeStage: () => null,
   useDocumentActions: () => null,
+  // The page menu's New page dialog, which the top bar mounts.
+  useLeaveWithoutWarning: () => () => {},
   // `null` is a real answer the pill handles — "no status has been persisted",
   // which is what a create form and a preview both look like — so this mounts
   // the top bar without putting a second subject in the assertions below.
   // No preview here: the top bar's Preview draws nothing.
   useDocumentPreview: () => null,
   // No one signed in: the editor keeps no preferences.
-  useCurrentUserId: () => null,
+  useCurrentUserId: () => signedIn,
+  // What the editor remembers for a signed-in person, kept nowhere: only
+  // the bindings case signs anyone in.
+  // The schema never moves here.
+  schemaVersion: () => 1,
+  onSchemaChange: () => () => {},
+  readPluginRoute: async () => ({ items: [], meta: {} }),
+  devicePreferenceStore: () => ({
+    read: () => null,
+    write: () => {},
+    remove: () => {},
+  }),
   useDocumentStatus: () => null,
   // The editor registers its restore; nothing here offers one.
   useDocumentRestore: () => undefined,
@@ -389,6 +428,8 @@ beforeEach(() => {
     refetch: () => {},
   };
   editorDocument = EMPTY_PAGE;
+  documentIdentity = null;
+  signedIn = null;
   shownPanel = null;
   seen.classes = undefined;
 });
@@ -1106,7 +1147,7 @@ describe("what the inspector is told about provenance", () => {
         },
       ],
     };
-    shownPanel = "classes";
+    shownPanel = "styles";
 
     openEditor();
 
@@ -1148,7 +1189,7 @@ describe("what the Shared styles tab says a style declares", () => {
    * say it declares.
    */
   async function summaryAsDrawn(): Promise<string> {
-    shownPanel = "classes";
+    shownPanel = "styles";
     openEditor();
     const props = seen.classes as
       | React.ComponentProps<typeof RealSharedStylesPanel>
@@ -1227,5 +1268,72 @@ describe("what the Shared styles tab says a style declares", () => {
     const undefinedTier = await summaryAsDrawn();
     expect(undefinedTier).toContain("color");
     expect(undefinedTier).not.toContain("more on other devices");
+  });
+});
+
+describe("the page data limit the canvas draws under", () => {
+  /**
+   * The reads the canvas's draw is granted, from the context it hands the
+   * renderer, which every list, image and link on the canvas claims from.
+   */
+  function canvasReadsGranted(): number {
+    const render = seen.canvas?.render as
+      | { context?: { queries?: { take(): boolean } } }
+      | undefined;
+    const queries = render?.context?.queries;
+    if (queries === undefined) throw new Error("the canvas has no budget");
+    let taken = 0;
+    while (queries.take() && taken < 5000) taken += 1;
+    return taken;
+  }
+
+  it("is the site's own limit, from the client config the meter reads", () => {
+    clientConfig = { maxQueries: 20 };
+    openEditor();
+    expect(canvasReadsGranted()).toBe(20);
+    cleanup();
+
+    clientConfig = { maxQueries: 1500 };
+    openEditor();
+    expect(canvasReadsGranted()).toBe(1500);
+  });
+
+  it("has no limit for a site that sets none, sent as null", () => {
+    clientConfig = { maxQueries: null };
+    openEditor();
+    expect(canvasReadsGranted()).toBe(5000);
+  });
+
+  it("is the default 500 where the site sets no limit", () => {
+    openEditor();
+    expect(canvasReadsGranted()).toBe(500);
+  });
+
+  it("is the limit the canvas's bindings are read under too", async () => {
+    clientConfig = { maxQueries: 20 };
+    documentIdentity = { kind: "collection", slug: "posts", documentId: "p1" };
+    signedIn = "u-limit";
+    editorDocument = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "h",
+          type: "core/heading",
+          version: 1,
+          props: { text: "Fallback", level: "h1" },
+          bindings: { text: { $bind: "title" } },
+        },
+      ],
+    };
+    routeWrites.length = 0;
+    openEditor();
+    await waitFor(() =>
+      expect(
+        routeWrites.find(
+          write => (write as { path?: string }).path === "/canvas-bindings"
+        )
+      ).toMatchObject({ body: { allowance: 20 } })
+    );
   });
 });

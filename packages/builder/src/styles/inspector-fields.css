@@ -1,42 +1,3 @@
-/* Content's last section: the CSS id and the custom attributes. */
-.nx-inspector__advanced {
-  margin-block-start: 1rem;
-  padding-block-start: 0.75rem;
-  border-block-start: 1px solid var(--nx-builder-border);
-}
-
-/*
- * The panel's own chevron rather than the browser's triangle, which drew in
- * a different glyph, weight and colour in each browser: right while closed,
- * down while open, as the Style tab's section headings are.
- */
-.nx-inspector__advanced > summary {
-  display: flex;
-  align-items: center;
-  gap: 0.375rem;
-  list-style: none;
-  cursor: pointer;
-  font-size: var(--nx-builder-title-size);
-  font-weight: var(--nx-builder-title-weight);
-}
-
-.nx-inspector__advanced > summary::-webkit-details-marker {
-  display: none;
-}
-
-.nx-inspector__advanced-chevron {
-  flex: none;
-  color: var(--nx-muted-foreground);
-}
-
-.nx-inspector__advanced[open] > summary > .nx-inspector__advanced-chevron {
-  rotate: 90deg;
-}
-
-.nx-inspector__advanced[open] > summary {
-  margin-block-end: 0.75rem;
-}
-
 .nx-inspector__heading {
   margin: 0 0 0.5rem;
   font-size: var(--text-xs);
@@ -47,25 +8,51 @@
 }
 
 /*
- * A rich-text field in the Content tab, drawn as a field: at least the
- * control's height, so even an empty one is a target an author can hit (an
- * unstyled element was as tall as its one 16px line, under the 24px a target
- * needs), with the input's edge and surface and the focus ring.
+ * A rich-text field in the Content tab, drawn as a field at least four lines
+ * high, so it never reads as a one-line input, and growing with its words (a
+ * least height, never a fixed or largest one). Its words keep their lines
+ * before the editor attaches (`pre-wrap`, one line per block from the
+ * preview) and after (the editor's blocks drawn on the field's own lines,
+ * below), so focusing it does not change its size. The input's edge and
+ * surface, and a focus ring drawn inside its edge, so it never covers the
+ * row under it.
  */
 .nx-inspector__rich-text {
-  min-height: var(--nx-control-height);
+  min-height: calc(4 * var(--nx-builder-line-height) + 0.75rem + 2px);
   padding: 0.375rem 0.5rem;
   border: 1px solid var(--nx-input);
   border-radius: var(--radius-md);
   background: var(--nx-background);
   font-size: var(--nx-builder-font-size);
   line-height: var(--nx-builder-line-height);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
   cursor: text;
 }
 
 .nx-inspector__rich-text:focus-visible {
   outline: 2px solid var(--nx-ring);
-  outline-offset: 1px;
+  outline-offset: -1px;
+}
+
+/*
+ * The editor's blocks inside the field, on the field's lines: no gaps and no
+ * heading sizes, so a passage is as tall attached as it was as its preview.
+ * Under the chrome root, to outrank the editor theme's own spacing classes.
+ */
+.nx-builder-chrome
+  .nx-inspector__rich-text
+  > :is(p, h1, h2, h3, h4, h5, h6, ul, ol, blockquote, pre),
+.nx-builder-chrome .nx-inspector__rich-text li {
+  margin-block: 0;
+  font-size: inherit;
+  line-height: inherit;
+}
+
+/* "Open the full editor", under the panel's line on where Rich text is edited. */
+.nx-inspector__full-editor {
+  align-self: flex-start;
+  margin-top: 0.25rem;
 }
 
 /* An option's value beside its words, muted: an HTML tag after its name. */
@@ -899,4 +886,396 @@
   flex-direction: row;
   align-items: center;
   gap: 0.5rem;
+}
+
+/*
+ * A section of any tab of the block panel, the Style tab's included: flat,
+ * divided from the next by the shared item's line, and framed by one token.
+ */
+.nx-panel-section,
+.nx-style-inspector [data-section] {
+  box-shadow: var(--nx-builder-section-frame);
+}
+
+/* A section's controls a row apart, under its header. */
+.nx-panel-section__body > div {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nx-builder-row-gap);
+  min-width: 0;
+}
+
+/*
+ * The tabs and, at the row's end, the panel's options menu, over the one
+ * line the tab list drew alone. It stays at the top of the panel while a tab
+ * scrolls (the block card scrolls away), so the tabs and the panel's options
+ * stay in reach and the Style tab's editing bar can stay in view under it.
+ * Sticky offsets count from inside the panel's 12px padding, so -0.75rem
+ * sets it at the panel's top edge; its own ground hides what scrolls under.
+ */
+.nx-inspector__tabrow {
+  position: sticky;
+  inset-block-start: -0.75rem;
+  z-index: 2;
+  display: flex;
+  align-items: stretch;
+  gap: 0.25rem;
+  min-width: 0;
+  border-block-end: 1px solid var(--nx-builder-border);
+  background: var(--nx-builder-surface, var(--nx-background));
+}
+
+.nx-inspector__tabrow > .nx-inspector__tablist {
+  flex: 1;
+  min-width: 0;
+  border-block-end: 0;
+}
+
+.nx-inspector__options {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  inline-size: var(--nx-builder-control-height);
+  block-size: var(--nx-builder-control-height);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--nx-muted-foreground);
+  cursor: pointer;
+}
+
+.nx-inspector__options:hover {
+  color: var(--nx-foreground);
+}
+
+.nx-inspector__options:focus-visible {
+  outline: 2px solid var(--nx-accent);
+  outline-offset: -2px;
+}
+
+/*
+ * What a control writes, in its tooltip: what it does in words, then the code
+ * on a line of its own, in the panel's monospace.
+ */
+.nx-css-hint {
+  display: grid;
+  gap: 0.125rem;
+  max-inline-size: 18rem;
+}
+
+.nx-css-hint__code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: var(--nx-builder-font-size);
+  overflow-wrap: anywhere;
+}
+
+/*
+ * A control's CSS names under its label, while Show CSS names is on: small,
+ * quiet and in monospace, so the label still reads first.
+ */
+.nx-css-names {
+  display: block;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.6875rem;
+  line-height: 1.3;
+  color: var(--nx-builder-text-muted);
+  overflow-wrap: anywhere;
+}
+
+/*
+ * A container's Arrange: Stack, Row or Grid, the CSS it writes small under
+ * the choice, and the rows the choice offers.
+ */
+.nx-arrange {
+  display: grid;
+  row-gap: var(--nx-builder-row-gap);
+  min-width: 0;
+}
+
+.nx-arrange__css {
+  margin: 0;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.6875rem;
+  line-height: 1.3;
+  color: var(--nx-muted-foreground);
+  overflow-wrap: anywhere;
+}
+
+.nx-arrange__custom,
+.nx-arrange__unused {
+  margin: 0;
+  font-size: var(--nx-builder-font-size);
+  color: var(--nx-muted-foreground);
+}
+
+.nx-arrange__link,
+.nx-arrange__clear {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--nx-foreground);
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+  justify-self: start;
+}
+
+.nx-arrange__link:focus-visible,
+.nx-arrange__clear:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 2px;
+}
+
+.nx-arrange__select {
+  inline-size: 100%;
+  min-inline-size: 0;
+  block-size: var(--nx-builder-control-height);
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-md);
+  background: var(--nx-background);
+  color: var(--nx-foreground);
+  font-size: var(--nx-builder-font-size);
+}
+
+/*
+ * The 3×3 Align: nine named points, the chosen one filled. Small enough to sit
+ * beside its label at the panel's narrowest width.
+ */
+.nx-align-grid__wrap {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.nx-align-grid__wrap .nx-inspector__note {
+  margin: 0;
+}
+
+.nx-align-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1.25rem);
+  grid-template-rows: repeat(3, 1.25rem);
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-md);
+  flex: none;
+}
+
+.nx-align-grid__point {
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.nx-align-grid__point::after {
+  content: "";
+  inline-size: 4px;
+  block-size: 4px;
+  border-radius: 50%;
+  background: var(--nx-muted-foreground);
+}
+
+.nx-align-grid__point:hover::after {
+  background: var(--nx-foreground);
+}
+
+.nx-align-grid__point[aria-checked="true"] {
+  background: var(--nx-foreground);
+}
+
+.nx-align-grid__point[aria-checked="true"]::after {
+  background: var(--nx-background);
+}
+
+.nx-align-grid__point:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 0;
+}
+
+/*
+ * "Find a setting" and "Only changed", under the tabs on every tab: the field
+ * takes the row, the toggle keeps its words, and both fit at 280px.
+ */
+.nx-settings-search {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  min-width: 0;
+  margin-block: 0.5rem;
+}
+
+.nx-settings-search__field {
+  position: relative;
+  display: flex;
+  flex: 1;
+  align-items: center;
+  min-width: 0;
+}
+
+.nx-settings-search__icon {
+  position: absolute;
+  inset-inline-start: 0.5rem;
+  color: var(--nx-muted-foreground);
+  pointer-events: none;
+}
+
+.nx-settings-search__input {
+  inline-size: 100%;
+  min-inline-size: 0;
+  block-size: var(--nx-builder-control-height);
+  padding-block: 0;
+  padding-inline: 1.75rem;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-md);
+  background: var(--nx-background);
+  color: var(--nx-foreground);
+  font-size: var(--nx-builder-font-size);
+}
+
+.nx-settings-search__input::placeholder {
+  color: var(--nx-muted-foreground);
+}
+
+/* The browser's own clear button would sit beside ours. */
+.nx-settings-search__input::-webkit-search-cancel-button {
+  appearance: none;
+}
+
+.nx-settings-search__input:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: -1px;
+}
+
+.nx-settings-search__clear {
+  position: absolute;
+  inset-inline-end: 0.125rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  inline-size: 1.5rem;
+  block-size: 1.5rem;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--nx-muted-foreground);
+  cursor: pointer;
+}
+
+.nx-settings-search__clear:hover {
+  color: var(--nx-foreground);
+}
+
+.nx-settings-search__clear:focus-visible,
+.nx-settings-search__toggle:focus-visible,
+.nx-settings-note__link:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 1px;
+}
+
+.nx-settings-search__toggle {
+  flex: none;
+  block-size: var(--nx-builder-control-height);
+  padding-inline: 0.5rem;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--nx-foreground);
+  font-size: var(--nx-builder-font-size);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.nx-settings-search__toggle[aria-pressed="true"] {
+  border-color: var(--nx-foreground);
+  background: var(--nx-foreground);
+  color: var(--nx-background);
+}
+
+/* What a tab says while the filter keeps nothing on it, with its links. */
+.nx-settings-note {
+  margin: 0.25rem 0 0.5rem;
+  color: var(--nx-muted-foreground);
+  font-size: var(--nx-builder-font-size);
+}
+
+.nx-settings-note__link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--nx-foreground);
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+/*
+ * Where the block is hidden, at the top of every tab: amber words on an
+ * amber-tinted plate, held 4.5:1 in both themes by the warning pair, with
+ * "Change" in the same ink.
+ */
+.nx-hidden-status {
+  margin: 0.5rem 0;
+  padding: 0.375rem 0.5rem;
+  border-radius: var(--radius-md);
+  background: var(--nx-builder-warning-ground);
+  color: var(--nx-builder-warning-text);
+}
+
+.nx-hidden-status > .nx-settings-note__link {
+  color: inherit;
+  font-weight: 600;
+}
+
+/*
+ * A tab's match count, set over the label's end so it arriving or going
+ * moves no tab and no control.
+ */
+.nx-inspector__tab-count {
+  position: absolute;
+  inset-block-start: 0.125rem;
+  inset-inline-start: 100%;
+  margin-inline-start: 0.125rem;
+  font-size: 0.625rem;
+  font-weight: 600;
+  line-height: 1;
+  color: var(--nx-muted-foreground);
+  pointer-events: none;
+}
+
+/* A setting the filter may hide: drawn as its own row, hidden when it must. */
+.nx-setting {
+  display: contents;
+}
+
+.nx-setting[hidden] {
+  display: none;
+}
+
+/* "Inside its parent": Width, and Height under a Row or a Grid. */
+.nx-inside-parent {
+  display: grid;
+  row-gap: var(--nx-builder-row-gap);
+  min-width: 0;
+}
+
+.nx-inside-parent__axis {
+  display: grid;
+  row-gap: 0.25rem;
+  min-width: 0;
+}
+
+.nx-inside-parent__axis > .nx-inspector__note {
+  margin: 0;
 }

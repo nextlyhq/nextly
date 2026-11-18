@@ -9,7 +9,19 @@
  *
  * @module canvas-page-context.test
  */
+import {
+  DOCUMENT_FORMAT_VERSION,
+  type BlockDocument,
+} from "@nextlyhq/blocks-engine";
+import {
+  createBlockResolver,
+  PageRenderer,
+  type PageContext,
+} from "@nextlyhq/blocks-react";
+import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import { act, renderHook, waitFor } from "@testing-library/react";
+import { createElement } from "react";
+import { renderToReadableStream } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
 const readMedia = vi.fn<(id: string) => Promise<unknown>>();
@@ -38,6 +50,7 @@ const {
   listEntryCollectionOf,
   namedHostRetryDelay,
   useCanvasPageContext,
+  usePictureContext,
   visitorListWords,
 } = await import("./canvas-page-context");
 const { canvasListReadsIn } = await import("../list-entries-client");
@@ -106,6 +119,31 @@ describe("the canvas's page context", () => {
     const first = result.current;
     rerender();
     expect(result.current).toBe(first);
+  });
+
+  it("is made afresh for a new round of picked forms, so a Form changed in its own tab is drawn again", () => {
+    const { result, rerender } = renderHook(
+      ({ round }: { round: number }) =>
+        useCanvasPageContext(
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          round
+        ),
+      { initialProps: { round: 0 } }
+    );
+    const first = result.current;
+    rerender({ round: 0 });
+    expect(result.current).toBe(first);
+    rerender({ round: 1 });
+    expect(result.current).not.toBe(first);
+    const second = result.current;
+    rerender({ round: 1 });
+    expect(result.current).toBe(second);
   });
 
   it("draws a list as an author looks at it, with entries read for the canvas", () => {
@@ -346,8 +384,23 @@ describe("a list's sample for the binding picker", () => {
       year: "2026",
       "author.name": "Ada",
     });
-    // A value with nothing to show is left out, never shown as "null".
-    expect(sample).not.toHaveProperty("cover");
+    // A value holding nothing is said as empty, never shown as "null".
+    expect(sample).toMatchObject({ cover: { empty: true } });
+  });
+
+  it("samples the entry the author clicked, else the first", async () => {
+    await answering([
+      { id: "p1", title: "Highway 9 realignment" },
+      { id: "p2", title: "Cedar Ridge subdivision" },
+    ]);
+    const props = { collection: "posts", limit: 3, sort: "title" };
+    expect(
+      await canvasListSample(props, "en", "clicked-reader", NO_ENTRY, 1)
+    ).toMatchObject({ title: "Cedar Ridge subdivision" });
+    // An entry the list no longer shows reads the first.
+    expect(
+      await canvasListSample(props, "en", "clicked-reader", NO_ENTRY, 5)
+    ).toMatchObject({ title: "Highway 9 realignment" });
   });
 
   it("reads through the canvas's own read of the list, so asking again reads nothing new", async () => {
@@ -358,9 +411,9 @@ describe("a list's sample for the binding picker", () => {
     await canvasListSample(props, "en", "kept-reader", NO_ENTRY);
     const made = route.mock.calls.length;
     expect(made).toBeGreaterThan(0);
-    expect(await canvasListSample(props, "en", "kept-reader", NO_ENTRY)).toEqual(
-      { id: "p1", title: "Kept" }
-    );
+    expect(
+      await canvasListSample(props, "en", "kept-reader", NO_ENTRY)
+    ).toEqual({ id: "p1", title: "Kept" });
     expect(route.mock.calls.length).toBe(made);
   });
 
@@ -390,5 +443,199 @@ describe("a list's sample for the binding picker", () => {
         NO_ENTRY
       )
     ).toBeUndefined();
+  });
+});
+
+describe("the context saved section pictures draw with", () => {
+  it("resolves a media id through the admin's media read, as the canvas does", async () => {
+    readMedia.mockResolvedValue({
+      id: "m1",
+      url: "/uploads/hero.jpg",
+      altText: "The hero",
+      width: 1600,
+      height: 900,
+    });
+    const { result } = renderHook(() => usePictureContext());
+    await expect(result.current.resolveMedia("m1")).resolves.toEqual({
+      url: "/uploads/hero.jpg",
+      alt: "The hero",
+      width: 1600,
+      height: 900,
+    });
+    readMedia.mockResolvedValue(null);
+    await expect(result.current.resolveMedia("gone")).resolves.toBeNull();
+  });
+
+  it("resolves an icon from the set a published page draws with", async () => {
+    const { result } = renderHook(() => usePictureContext());
+    await expect(
+      result.current.resolveIcon("lucide:star")
+    ).resolves.not.toBeNull();
+  });
+
+  it("is one object for as long as the media read is the same", () => {
+    const { result, rerender } = renderHook(() => usePictureContext());
+    const first = result.current;
+    rerender();
+    expect(result.current).toBe(first);
+  });
+});
+
+describe("the page data limit the canvas draws under", () => {
+  /** A page of `count` lists, each reading one entry. */
+  const pageOfLists = (count: number): BlockDocument => ({
+    formatVersion: DOCUMENT_FORMAT_VERSION,
+    kind: "page",
+    nodes: Array.from({ length: count }, (_, index) => ({
+      id: `list-${String(index + 1)}`,
+      type: "core/collection-loop",
+      version: 1,
+      props: { collection: "posts", limit: 1 },
+      slots: {
+        children: [
+          {
+            id: `t-${String(index + 1)}`,
+            type: "core/text",
+            version: 1,
+            props: { text: "Post" },
+          },
+        ],
+      },
+    })),
+  });
+
+  /**
+   * How many entries each list drew, by its id, when the canvas draws `page`
+   * under its own page context. Only the rows are stood in for, read here
+   * rather than from the admin; the budget each list claims its read from is
+   * the canvas's own.
+   */
+  async function drawnOnCanvas(
+    context: PageContext,
+    page: BlockDocument
+  ): Promise<ReadonlyMap<string, number>> {
+    const shown = new Map<string, number>();
+    const stream = await renderToReadableStream(
+      createElement(PageRenderer, {
+        document: page,
+        blocks: createBlockResolver(coreBlocks),
+        siteStyles: false,
+        context: {
+          ...context,
+          data: {
+            find: () => Promise.resolve({ items: [{ id: "a" }], total: 1 }),
+          },
+          listShown: (id, count) => {
+            shown.set(id, count);
+          },
+        },
+      })
+    );
+    await stream.allReady;
+    await new Response(stream).text();
+    return shown;
+  }
+
+  /** The lists that drew no entry, by id. */
+  const empty = (shown: ReadonlyMap<string, number>): string[] =>
+    [...shown].filter(([, count]) => count === 0).map(([id]) => id);
+
+  it("draws a list past 500 for a site whose limit is above 500, as its published page does", async () => {
+    const { result } = renderHook(() =>
+      useCanvasPageContext(
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        600
+      )
+    );
+    const shown = await drawnOnCanvas(result.current, pageOfLists(520));
+    expect(shown.size).toBe(520);
+    // The 501st list and every one after it drew its entry.
+    expect(shown.get("list-501")).toBe(1);
+    expect(empty(shown)).toEqual([]);
+  });
+
+  it("leaves a list past a lower limit empty, as the published page leaves it", async () => {
+    const { result } = renderHook(() =>
+      useCanvasPageContext(
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        20
+      )
+    );
+    const shown = await drawnOnCanvas(result.current, pageOfLists(25));
+    expect(shown.get("list-20")).toBe(1);
+    expect(empty(shown)).toEqual([
+      "list-21",
+      "list-22",
+      "list-23",
+      "list-24",
+      "list-25",
+    ]);
+  });
+
+  it("refuses no read for a site that sets no limit", async () => {
+    const { result } = renderHook(() =>
+      useCanvasPageContext(
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        Number.POSITIVE_INFINITY
+      )
+    );
+    const shown = await drawnOnCanvas(result.current, pageOfLists(520));
+    expect(empty(shown)).toEqual([]);
+    let taken = 0;
+    while (result.current.queries?.take() === true && taken < 20_000) {
+      taken += 1;
+    }
+    expect(taken).toBe(20_000);
+  });
+
+  it("draws under the default 500 where the site sets no limit of its own", async () => {
+    // CONTROL: the same page as the raised limit's case, drawn under the
+    // default, leaves its lists past 500 empty.
+    const { result } = renderHook(() => useCanvasPageContext());
+    const shown = await drawnOnCanvas(result.current, pageOfLists(520));
+    expect(shown.get("list-500")).toBe(1);
+    expect(empty(shown)).toHaveLength(20);
+    expect(empty(shown)[0]).toBe("list-501");
+  });
+
+  it("begins each draw afresh under the site's limit", () => {
+    const { result, rerender } = renderHook(() =>
+      useCanvasPageContext(
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        3
+      )
+    );
+    const first = result.current;
+    const takeAll = (): number => {
+      let taken = 0;
+      while (result.current.queries?.take() === true && taken <= 1000) {
+        taken += 1;
+      }
+      return taken;
+    };
+    expect(takeAll()).toBe(3);
+    rerender();
+    expect(result.current).toBe(first);
+    expect(takeAll()).toBe(3);
   });
 });

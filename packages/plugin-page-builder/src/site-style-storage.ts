@@ -23,6 +23,7 @@ import {
   resolveSiteTokens,
   tokenDisplayLabel,
   tokenIdentity,
+  type SiteTokenSet,
 } from "@nextlyhq/blocks-engine";
 import { defineSingle, json, type SingleConfig } from "nextly/config";
 import { NextlyError } from "nextly/errors";
@@ -35,8 +36,15 @@ import {
 import { restoreClasses } from "./breakpoint-removal/restore";
 import { stripClass } from "./breakpoint-removal/strip";
 import { documentVersionOf } from "./document-version";
-import type { StoredSiteStyle } from "./library-contract";
-import { resolveSiteStyle, type SiteStyleData } from "./site-style";
+import {
+  SHARED_STYLE_IN_USE_CODE,
+  type StoredSiteStyle,
+} from "./library-contract";
+import {
+  resolveSiteStyle,
+  siteCssPrefix,
+  type SiteStyleData,
+} from "./site-style";
 import {
   checkStoredBreakpoints,
   checkStoredClasses,
@@ -46,6 +54,7 @@ import {
   type SectionCheck,
   type SectionPolicy,
 } from "./site-style-record";
+import { siteTextReasons } from "./site-text-uses";
 import { readStoredJson, sameStoredValue } from "./stored-json";
 import {
   sharedStyleVariables,
@@ -118,6 +127,70 @@ export function refuseBreakpointsOutsideSettings(hook: {
     publicMessage: BREAKPOINTS_OUTSIDE_SETTINGS,
     logContext: { reason: "site-breakpoints-outside-settings" },
   });
+}
+
+/** What any other write that changes the site's CSS variable prefix is told. */
+const PREFIX_OUTSIDE_SETTINGS =
+  "The CSS variable prefix is changed in Settings → Site.";
+
+/**
+ * The prefix a stored `tokens` section has the site's pages written under,
+ * over the code's: `siteCssPrefix`'s own answer, so the guard judges the
+ * prefix the compiler writes and not the spelling stored. SQLite hands the
+ * section back as text.
+ */
+function writtenPrefixOf(
+  defaults: SiteStyleData | undefined,
+  section: unknown
+): string {
+  const held = readStoredJson(section);
+  const prefix =
+    isPlainRecord(held) && typeof held.prefix === "string"
+      ? held.prefix
+      : undefined;
+  return siteCssPrefix(
+    defaults,
+    prefix === undefined ? undefined : { tokens: { tokens: [], prefix } }
+  ).current;
+}
+
+/**
+ * Refuse a write to this Single that changes the prefix the site's variables
+ * are written under, unless the Settings route made it.
+ *
+ * The prefix has one door, as the breakpoints do: it is a site setting under
+ * the site permission, since a change breaks any CSS of the site's own that
+ * names the old prefix, and the `tokens` section it is stored in is otherwise
+ * Design's to save. A save that carries the prefix through unchanged passes
+ * (judged on the prefix written, so dropping a saved prefix equal to the
+ * code's passes too), as does server code acting as nobody.
+ */
+function prefixOutsideSettingsGuard(
+  defaults: SiteStyleData | undefined
+): (hook: {
+  data?: Record<string, unknown>;
+  originalData?: Record<string, unknown>;
+  user?: { id: string };
+  principal?: unknown;
+  context?: Record<string, unknown>;
+}) => void {
+  return hook => {
+    if (hook.context?.[SITE_SETTINGS_WRITE] === true) return;
+    const data = hook.data;
+    if (data === undefined || !Object.hasOwn(data, "tokens")) return;
+    if (hook.user === undefined && hook.principal === undefined) return;
+    if (
+      writtenPrefixOf(defaults, data.tokens) ===
+      writtenPrefixOf(defaults, hook.originalData?.tokens)
+    ) {
+      return;
+    }
+    throw new NextlyError({
+      code: "FORBIDDEN",
+      publicMessage: PREFIX_OUTSIDE_SETTINGS,
+      logContext: { reason: "site-css-prefix-outside-settings" },
+    });
+  };
 }
 
 /** The mark the shared-style lock route puts on its own write. */
@@ -370,12 +443,16 @@ export function suppliedVariableIds(
 
 /**
  * Whether the variables are still used, refusing (by throwing) when any is:
- * the one check a removal makes, handed the site's shared styles as they
- * will be once the write lands. The plugin supplies it once installed.
+ * the one check a removal makes, handed the site's shared styles and its
+ * variables (every tier merged, {@link siteTokensOverCode}) as they will be
+ * once the write lands. The variables say which custom property each one is
+ * written under, so a `var()` naming it counts, and which of them name
+ * another in their own values. The plugin supplies it once installed.
  */
 export type VariablesInUseCheck = (
   removable: readonly NamedVariable[],
-  classes: readonly unknown[]
+  classes: readonly unknown[],
+  variables: SiteTokenSet
 ) => Promise<void>;
 
 /**
@@ -419,6 +496,12 @@ function variableRemovalGuard(
       suppliedVariableIds(defaults)
     );
     if (dropped.length === 0) return;
+    // A Site text row the write leaves pointing at a dropped variable, from
+    // the section in hand: a value of this write, asked before any read.
+    refuseDroppedSiteTextUses(
+      dropped,
+      siteTokensOverCode(defaults, data.tokens)
+    );
     const inUse = check?.();
     if (inUse === undefined) return;
     // The shared styles as they will be once this write lands: the classes it
@@ -426,8 +509,33 @@ function variableRemovalGuard(
     const classes = Object.hasOwn(data, "classes")
       ? data.classes
       : hook.originalData?.classes;
-    await inUse(dropped, sharedStylesOverCode(defaults, classes));
+    await inUse(
+      dropped,
+      sharedStylesOverCode(defaults, classes),
+      siteTokensOverCode(defaults, data.tokens)
+    );
   };
+}
+
+/**
+ * Refuse a write that drops a variable a Site text row still points at, the
+ * code's rows included, as the write leaves them, naming each row, as the
+ * remove route does.
+ */
+function refuseDroppedSiteTextUses(
+  dropped: readonly NamedVariable[],
+  merged: SiteTokenSet
+): void {
+  const reasons = siteTextReasons(dropped, merged);
+  if (reasons.length === 0) return;
+  throw NextlyError.validation({
+    errors: reasons.map(reason => ({
+      path: "tokens",
+      code: SHARED_STYLE_IN_USE_CODE,
+      message: reason.message,
+    })),
+    logContext: { variableIds: dropped.map(variable => variable.id) },
+  });
 }
 
 /**
@@ -463,6 +571,23 @@ export function sharedStylesOverCode(
   );
 }
 
+/**
+ * The site's variables as the stylesheet resolves them: the engine's, the
+ * code's, then the stored tokens section `tokens` over them (as stored or as
+ * written; SQLite hands it back as text), with the site's prefix.
+ */
+export function siteTokensOverCode(
+  defaults: SiteStyleData | undefined,
+  tokens: unknown
+): SiteTokenSet {
+  return resolveSiteTokens(
+    resolveSiteStyle(
+      defaults,
+      readSiteStyleRecord({ tokens: readStoredJson(tokens) })
+    ).tokens
+  );
+}
+
 /** Every variable the stored shared styles name, the first entry per id. */
 function sharedStylesVariables(raw: unknown): Set<string> {
   const found = new Set<string>();
@@ -487,12 +612,7 @@ export function undefinedSharedStyleVariables(
   // Nothing named, nothing to resolve: an ordinary class save pays nothing.
   if (used.size === 0) return [];
   const defined = new Set(
-    resolveSiteTokens(
-      resolveSiteStyle(
-        defaults,
-        readSiteStyleRecord({ tokens: readStoredJson(sections.tokens) })
-      ).tokens
-    ).tokens.map(tokenIdentity)
+    siteTokensOverCode(defaults, sections.tokens).tokens.map(tokenIdentity)
   );
   return newUndefinedIds(used, defined, sharedStylesVariables(sections.held));
 }
@@ -687,6 +807,8 @@ export function siteStyleSingle(
     hooks: {
       beforeValidate: [
         refuseBreakpointsOutsideSettings,
+        // The prefix's one door, judged like the breakpoints' above.
+        prefixOutsideSettingsGuard(policy.defaults),
         sharedStyleGuard(openRemoval, policy.defaults?.classes),
         variableRemovalGuard(variablesInUse, policy.defaults),
         sharedStyleVariableGuard(policy.defaults),
@@ -719,7 +841,7 @@ export function siteStyleSingle(
         validate: refusing(raw => checkStoredTokens(raw, policy)),
         admin: {
           description:
-            'A token set: { tokens: [{ id?, name, label?, kind, values: { light, dark? } }], prefix?, darkMode? }. Values are per mode; "light" is what a reader with no mode set resolves. `id` is the token\'s stable identity — set it once and a later rename of `name` leaves every page that references the token working; omit it and the name is the identity.',
+            'A token set: { tokens: [{ id?, name, label?, kind, values: { light, dark? }, fluid?: { small, large }, group? }], prefix?, darkMode?, fluidRange?: { min, max }, order?: [identity], builtInColoursShown?: boolean, siteText?: { body?, h1?…h6?, link?, button?, caption? } }. Values are per mode; "light" is what a reader with no mode set resolves. `id` is the token\'s stable identity — set it once and a later rename of `name` leaves every page that references the token working; omit it and the name is the identity. `fluid` is the two sizes in px a fluid size was made from, and `fluidRange` the screen widths in px it grows between (360 to 1280 when absent). `group` is the named group a colour is listed under and `order` the identities of the colours in the order they are listed, both display-only. `builtInColoursShown: false` leaves the built-in colours the site does not use out of the Design panel and the colour pickers; they are still written on every page. `siteText` sets the text of every page: each row holds `fontFamily`, `fontSize` and `lineHeight` (a variable reference such as { $token: "font-size.h2" } or a value; the Body font is `body.fontFamily` set to { $token: "font.body" } and the Headings font is `fontFamily` set to { $token: "font.heading" } on every heading row), and the `link` row `color`, `hoverColor` and `underline` ("always", "hover" or "never") instead; a row left out keeps its built-in value.',
         },
       }),
       json({

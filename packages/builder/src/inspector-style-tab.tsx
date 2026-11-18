@@ -1,8 +1,11 @@
 "use client";
 
 /**
- * The inspector's Style tab: the bar that says what an edit changes and the
- * devices it reaches, its State menu, then the style controls themselves.
+ * The inspector's Style tab: the bar that says what an edit changes, on which
+ * device and in which state, then the style controls themselves. While a
+ * state other than Normal is edited, the controls sit on a tint of the
+ * state's amber under a line that says so, so an author scrolled deep into
+ * the tab still sees they are not editing the normal look.
  *
  * @module inspector-style-tab
  */
@@ -17,6 +20,9 @@ import {
 } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
+import { useCanvasTokenModeAt } from "./canvas/prefers-dark";
+import type { CanvasReading } from "./canvas/use-canvas-reading";
+import { stateLookLine } from "./editing-bar";
 import { FocalFrame } from "./focal-frame";
 import type { selectedNode } from "./inspector";
 import type {
@@ -24,7 +30,13 @@ import type {
   StyleStateBinding,
 } from "./inspector-panel-types";
 import { editedStyleState } from "./inspector-style-state";
-import { useCanvasTokenModeAt } from "./prefers-dark";
+import {
+  blockStyleTilesOf,
+  RenderedSample,
+  type BlockSample,
+} from "./look-tiles-view";
+import { FirstSectionAbove } from "./panel-folds-context";
+import { deviceOptions, tierIcon } from "./shell/breakpoint-switcher";
 import { StyleStateField } from "./state-switcher";
 import {
   breakpointLabel,
@@ -34,14 +46,28 @@ import {
 import { StyleTargetBar, useStyleTarget } from "./style-target";
 
 /**
- * Where an edit lands, as the bar's second line says it: the devices the
- * value reaches, in words rather than as a breakpoint's id.
+ * Where an edit lands, as the bar's device chip says it: the device the top
+ * bar shows, named and drawn as the top bar names and draws it, and the
+ * devices the value reaches, in words rather than as a breakpoint's id.
  */
 function barPlace(
   breakpoints: BreakpointSet | undefined,
   breakpoint: BreakpointId | undefined
-): { device: string } {
-  return { device: editReach(breakpoints, breakpoint ?? BASE_BREAKPOINT) };
+): {
+  device: string;
+  deviceReach: string;
+  deviceIcon: React.ComponentType<{ className?: string }>;
+} {
+  const id = breakpoint ?? BASE_BREAKPOINT;
+  // The top bar's own list, so the chip says what the switcher says; a
+  // container tier, which it does not offer, goes by its definition's label.
+  const option = deviceOptions(breakpoints).find(each => each.id === id);
+  return {
+    device: option?.label ?? breakpointLabel(breakpoints, id),
+    deviceReach: editReach(breakpoints, id),
+    // The base is drawn as a screen, as the top bar draws it.
+    deviceIcon: tierIcon(id === BASE_BREAKPOINT ? undefined : option?.preview),
+  };
 }
 
 /**
@@ -74,8 +100,7 @@ export function StyleTab({
   editor,
   styleNode,
   renderedTag,
-  renderedPicture,
-  renderedPicturePosition,
+  rendered,
   sideOrientation,
   styleState,
   policy,
@@ -106,11 +131,12 @@ export function StyleTab({
   | "sharedStyles"
   | "verbs"
   | "fonts"
+  | "onEditBlockStyles"
 > & {
   styleNode: ReturnType<typeof selectedNode>;
   renderedTag: StyleInspectorPanelProps["renderedTag"];
-  renderedPicture: string | undefined;
-  renderedPicturePosition: string | undefined;
+  /** What the canvas draws of the block: its picture, where it places it, and its quotation. */
+  rendered: Pick<CanvasReading, "picture" | "picturePosition" | "words">;
   sideOrientation: StyleInspectorPanelProps["sideOrientation"];
 }): React.JSX.Element {
   const state = editedStyleState(styleState);
@@ -123,6 +149,14 @@ export function StyleTab({
   // The mode the selected block is drawn in, read once for the look tiles and
   // the controls below, so the canvas is watched by one subscription.
   const tokenMode = useCanvasTokenModeAt(editor.selectedId);
+  // The state switch for what the bar edits: a shared style's own values
+  // while one is edited, the block's otherwise.
+  const stateControl = stateControlFor(
+    state,
+    styleState,
+    target.kind === "shared" ? target.style : styleNode,
+    breakpoints
+  );
   return (
     <>
       {/*
@@ -131,7 +165,8 @@ export function StyleTab({
       and an author would have edited a value before meeting the thing
       that says which state the value belongs to.
     */}
-      <StyleTargetBar
+      <SampledBar
+        rendered={{ picture: rendered.picture, words: rendered.words }}
         editor={editor}
         tokens={tokens}
         tokenMode={tokenMode}
@@ -142,41 +177,95 @@ export function StyleTab({
         libraryAbsence={shared.classLibraryAbsence}
         host={shared.sharedStyles}
         verbs={shared.verbs}
+        // "Edit block styles", under the Block style tiles, where the host
+        // can open Design.
+        onEditBlockStyles={shared.onEditBlockStyles}
         {...barPlace(breakpoints, breakpoint)}
         breakpoints={breakpoints}
         state={state}
-        stateControl={stateControlFor(
-          state,
-          styleState,
-          target.kind === "shared" ? target.style : styleNode,
-          breakpoints
-        )}
+        stateControl={stateControl}
       />
-      {/* The picture the canvas draws, for the focal point aimed over it. */}
-      <FocalFrame.Provider
-        value={{ picture: renderedPicture, position: renderedPicturePosition }}
+      {/* The Block style section above the bar is the tab's first where it
+        is drawn, so the first section under the bar does not also open for
+        being first. */}
+      <FirstSectionAbove.Provider
+        value={blockStyleTilesOf(editor, shared.classLibrary) !== undefined}
       >
-        <StyleInspectorPanel
-          editor={editor}
-          tokenMode={tokenMode}
-          // The block card above says why a held block can't be changed.
-          showReadOnlyReason={false}
-          renderedTag={renderedTag}
-          sideOrientation={sideOrientation}
-          policy={policy}
-          state={state}
-          breakpoint={breakpoint}
-          cascade={cascade}
-          breakpoints={breakpoints}
-          previewContainer={previewContainer}
-          liveBreakpoints={liveBreakpoints}
-          onJumpToBreakpoint={onJumpToBreakpoint}
-          tokens={tokens}
-          target={target}
-          fonts={fonts}
-        />
-      </FocalFrame.Provider>
+        <StateTinted state={state}>
+          {/* The picture the canvas draws, for the focal point aimed over it. */}
+          <FocalFrame.Provider
+            value={{
+              picture: rendered.picture,
+              position: rendered.picturePosition,
+            }}
+          >
+            <StyleInspectorPanel
+              editor={editor}
+              tokenMode={tokenMode}
+              // The block card above says why a held block can't be changed.
+              showReadOnlyReason={false}
+              renderedTag={renderedTag}
+              sideOrientation={sideOrientation}
+              policy={policy}
+              state={state}
+              breakpoint={breakpoint}
+              cascade={cascade}
+              breakpoints={breakpoints}
+              previewContainer={previewContainer}
+              liveBreakpoints={liveBreakpoints}
+              onJumpToBreakpoint={onJumpToBreakpoint}
+              tokens={tokens}
+              target={target}
+              fonts={fonts}
+              // The Text section's "Text style" picker lists from it.
+              classLibrary={shared.classLibrary}
+            />
+          </FocalFrame.Provider>
+        </StateTinted>
+      </FirstSectionAbove.Provider>
     </>
+  );
+}
+
+/**
+ * The bar, with what the canvas draws of the block (its picture and its
+ * quotation) handed to the Block style tiles in it, which draw it in each
+ * style.
+ */
+function SampledBar({
+  rendered,
+  ...bar
+}: React.ComponentProps<typeof StyleTargetBar> & {
+  readonly rendered: BlockSample;
+}): React.JSX.Element {
+  return (
+    <RenderedSample.Provider value={rendered}>
+      <StyleTargetBar {...bar} />
+    </RenderedSample.Provider>
+  );
+}
+
+/**
+ * The Style tab's sections, on a tint of the state's colour under a line
+ * that names the state while one other than Normal is edited: the bar can
+ * scroll far from a control, and the words stay beside it.
+ */
+function StateTinted({
+  state,
+  children,
+}: {
+  state: StyleState;
+  children: React.ReactNode;
+}): React.JSX.Element {
+  return (
+    <div className="nx-style-tab__body" data-state={state}>
+      {state === "base" ? null : (
+        <p className="nx-style-tab__state-line" data-editing-state-line="">
+          {stateLookLine(state)}
+        </p>
+      )}
+      {children}
+    </div>
   );
 }
 

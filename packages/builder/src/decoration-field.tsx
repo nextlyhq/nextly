@@ -38,6 +38,7 @@ import * as React from "react";
 
 // Enter commits without submitting the entry form the builder sits in.
 import { commitOnEnter } from "./commit-on-enter";
+import { useFieldDescription } from "./css-hint";
 import { IconChoiceField } from "./icon-choice-field";
 import { InheritedValue } from "./inherited-value";
 import { commitRawCss } from "./raw-css";
@@ -382,11 +383,13 @@ function DecorationStyle({
   held: boolean;
   children: React.ReactNode;
 }): React.JSX.Element {
+  // The refusal, and the CSS names while they are shown.
+  const described = useFieldDescription(describedBy);
   const [thickness, setThickness] = useDraft(parts?.thickness);
   const [color, setColor] = useDraft(parts?.color);
   const disabled = held || parts === undefined || parts.line === "none";
   const refusal = {
-    "aria-describedby": describedBy,
+    "aria-describedby": described,
     "aria-invalid": describedBy === undefined ? undefined : true,
   } as const;
   const commitThickness = () => {
@@ -473,6 +476,8 @@ function DecorationCss({
   held: boolean;
   onCommit: (value: string | null) => CommitOutcome;
 }): React.JSX.Element {
+  // The refusal, and the CSS names while they are shown.
+  const described = useFieldDescription(describedBy);
   const [text, setText] = useDraft(stored);
   const commit = () => {
     commitRawCss(text, stored, onCommit);
@@ -482,7 +487,7 @@ function DecorationCss({
       <span>Write as CSS</span>
       <Input
         aria-label={`${actionName} as CSS`}
-        aria-describedby={describedBy}
+        aria-describedby={described}
         aria-invalid={describedBy === undefined ? undefined : true}
         disabled={held}
         placeholder="underline overline"

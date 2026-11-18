@@ -40,7 +40,9 @@ const documentUsing = (...classes: string[]) => ({
 });
 
 /** A store that answers from a fixed row set and records every call in order. */
-function recordingStore(rows: { id: string; classId: string }[] = []) {
+function recordingStore(
+  rows: { id: string; classId: string; blocks?: number | null }[] = []
+) {
   const calls: string[] = [];
   const store: ClassUsageIndexStore = {
     find: async args => {
@@ -50,7 +52,9 @@ function recordingStore(rows: { id: string; classId: string }[] = []) {
         `find:sort=${args.sort}:where=${Object.keys(args.where).sort().join(",")}`
       );
       return {
-        items: rows.map(r => ({ ...page, ...r })),
+        // One block wears each class unless a row says otherwise, as a
+        // current row records it.
+        items: rows.map(r => ({ ...page, blocks: 1, ...r })),
         meta: { hasNext: false },
       };
     },
@@ -229,6 +233,7 @@ describe("a row written before the locale column existed", () => {
             field: "content",
             variant: "published",
             classId: "hero",
+            blocks: 1,
           },
         ],
         meta: { hasNext: false },
@@ -312,8 +317,8 @@ describe("a subject whose rows span several pages", () => {
     // partial row set reads every unread row as a reference the document has
     // dropped, and deletes it.
     const pages = [
-      [{ ...page, id: "r1", classId: "hero" }],
-      [{ ...page, id: "r2", classId: "card" }],
+      [{ ...page, id: "r1", classId: "hero", blocks: 1 }],
+      [{ ...page, id: "r2", classId: "card", blocks: 1 }],
       [{ ...page, id: "r3", classId: "stale" }],
     ];
     const deletes: string[] = [];
