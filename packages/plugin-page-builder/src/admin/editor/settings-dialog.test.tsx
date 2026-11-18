@@ -56,6 +56,7 @@ interface DeliveredTab {
   trigger: ReactNode;
   panel: ReactNode;
   accessibleName?: string;
+  leftOut?: boolean;
 }
 /** The place's tabs, in the order delivered; a case sets them. */
 let delivered: DeliveredTab[] = [];
@@ -73,6 +74,13 @@ let tabOf: (path: string) => unknown = () => null;
 let reveal: ((path: string) => (() => void) | null) | null = null;
 /** Whether the page takes edits now. */
 let titleWritable = true;
+/**
+ * What a plugin draws at the place where the builder shows the page's search
+ * and sharing; null where no plugin adds a block, as without the SEO plugin.
+ */
+let searchBlock: ReactNode | null = null;
+/** What each draw of the search and sharing place was handed. */
+const searchAsked: Record<string, unknown>[] = [];
 const navigateTo = vi.fn();
 
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
@@ -99,6 +107,25 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
         refetch: vi.fn(),
       };
     }
+    if (path.startsWith("/loop-collections")) {
+      return {
+        data: {
+          items: [
+            {
+              slug: "pages",
+              label: "Pages",
+              singular: "Page",
+              fields: [],
+              relations: [],
+            },
+          ],
+        },
+        pending: false,
+        error: null,
+        fetching: false,
+        refetch: vi.fn(),
+      };
+    }
     if (path.startsWith("/pages/address")) {
       addressAsked.push(path);
       return {
@@ -117,6 +144,14 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
       refetch,
     };
   },
+  // The admin's slot, standing in: a plugin's block where a case adds one,
+  // else the page's fallback, as the real slot draws a plugin's place.
+  TargetSlot: (props: Record<string, unknown>) => {
+    searchAsked.push(props);
+    if (props.context === null) return null;
+    return searchBlock === null ? (props.fallback as ReactNode) : searchBlock;
+  },
+  useDocumentLocale: () => null,
   usePlaceTabs: (options: Record<string, unknown>) => {
     placeAsked.push(options);
     return options.context === null ? [] : delivered;
@@ -262,7 +297,6 @@ interface Shown {
   onOpenChange?: ReturnType<typeof vi.fn>;
   kind?: "page" | "component" | "template";
   open?: boolean;
-  seoFields?: boolean;
   address?: SettingsAddress | null;
   place?: SettingsPlace | null;
   openAsForm?: () => void;
@@ -272,7 +306,6 @@ function show({
   onOpenChange = vi.fn(),
   kind = "page",
   open = true,
-  seoFields = true,
   address = null,
   place = PAGE_PLACE,
   openAsForm,
@@ -294,7 +327,6 @@ function show({
         }
         place={place}
         share={{ title: "Who we are", description: "We build tools." }}
-        seoFields={seoFields}
         address={address}
         breakpoints={{
           value: { viewport: [], container: [] },
@@ -324,6 +356,8 @@ const order = (a: Node, b: Node) =>
 
 beforeEach(() => {
   delivered = [];
+  searchBlock = null;
+  searchAsked.length = 0;
   placeAsked.length = 0;
   fieldsAsked.length = 0;
   contentLeft = true;
@@ -472,14 +506,54 @@ describe("Page settings", () => {
     expect(screen.queryByText(/To put this page beneath another/)).toBeNull();
   });
 
-  it("shows the share preview on General, and says the SEO plugin adds fields only without them", () => {
-    show({ seoFields: false });
+  it("shows its own read-only search and sharing preview on General only where no plugin draws one", () => {
+    // No plugin adds a block: the builder's preview, built from the page.
+    show();
     const preview = screen.getByRole("figure", { name: "Share preview" });
     expect(preview.textContent).toContain("Who we are");
-    expect(screen.getByText(/The SEO plugin adds fields/)).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Built from this page's title, first heading and first image. The SEO plugin lets you set them yourself."
+      )
+    ).toBeTruthy();
+    // Asked at the Settings place, for General, with the page being edited
+    // and its type's name for its pages.
+    expect(searchAsked.at(-1)).toMatchObject({
+      place: "nextlyhq-plugin-page-builder.settings",
+      context: PAGE_PLACE.context,
+      blockProps: {
+        at: "general",
+        typePlural: "Pages",
+        control: PAGE_PLACE.tabProps.control,
+        design: PAGE_PLACE.tabProps.design,
+      },
+    });
     cleanup();
-    show({ seoFields: true });
-    expect(screen.queryByText(/The SEO plugin adds fields/)).toBeNull();
+
+    // A plugin that edits SEO draws it: no second preview beside it, and no
+    // line saying a plugin is missing.
+    searchBlock = <p>The plugin&apos;s own search panel</p>;
+    show();
+    expect(screen.getByText("The plugin's own search panel")).toBeTruthy();
+    expect(screen.queryByRole("figure", { name: "Share preview" })).toBeNull();
+    expect(
+      screen.queryByRole("heading", { name: "Search and sharing" })
+    ).toBeNull();
+    expect(screen.queryByText(/SEO plugin lets you|adds fields/)).toBeNull();
+  });
+
+  it("leaves a tab out of the row while it says it does not apply, keeping its panel", () => {
+    delivered = [
+      {
+        ...placeTab("nextlyhq-plugin-seo.page-builder-tab", "SEO"),
+        leftOut: true,
+      },
+      placeTab("acme-reviews.tab", "Reviews"),
+    ];
+    show();
+    expect(tabNames()).toEqual(["General", "Fields", "Reviews"]);
+    // Mounted, hidden, so it can bring itself back.
+    expect(screen.getByText("SEO panel", { selector: "p" })).toBeTruthy();
   });
 
   it("draws Fields with the form's renderer, the page's identity left to General", async () => {
@@ -749,7 +823,6 @@ describe("the page's saved address", () => {
         pageTitle="About"
         fieldName="layout"
         share={{ title: "About" }}
-        seoFields
         address={shown}
         breakpoints={{
           value: { viewport: [], container: [] },
@@ -897,7 +970,6 @@ describe("Site settings", () => {
           fieldName="layout"
           place={null}
           share={{ title: "Who we are", description: "We build tools." }}
-          seoFields
           address={null}
           breakpoints={{
             value: { viewport: [], container: [] },
@@ -937,7 +1009,6 @@ describe("Site settings", () => {
           fieldName="layout"
           place={null}
           share={{ title: "Who we are", description: "We build tools." }}
-          seoFields
           address={null}
           breakpoints={{
             value: { viewport: [], container: [] },
@@ -986,7 +1057,6 @@ describe("Site settings", () => {
           headerFooter={<Menu />}
           place={null}
           share={{ title: "Who we are" }}
-          seoFields
           breakpoints={{
             value: { viewport: [], container: [] },
             onSave: vi.fn(),
@@ -1064,7 +1134,6 @@ describe("Site settings", () => {
         fieldName="layout"
         place={PAGE_PLACE}
         share={{ title: "Who we are" }}
-        seoFields
         breakpoints={{
           value: { viewport: [], container: [] },
           onSave: vi.fn(),
