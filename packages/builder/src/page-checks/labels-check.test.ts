@@ -67,6 +67,25 @@ describe("the labels check", () => {
     ]);
   });
 
+  it("leaves the block's own fields alone while it draws a picked form", () => {
+    // The picked form's provider draws its own fields; the block's are unused.
+    const own = { fields: [{ label: "", type: "text" }] };
+    expect(
+      findings(
+        block("f", "core/form", {
+          ...own,
+          form: { provider: "forms", ref: "contact" },
+        })
+      )
+    ).toEqual([]);
+    // The page builder's own provider is the block's own fields.
+    expect(
+      findings(
+        block("g", "core/form", { ...own, form: { provider: "simple" } })
+      )
+    ).toHaveLength(1);
+  });
+
   it("reads a form's fields that are not a list as none", () => {
     expect(findings(block("f", "core/form", { fields: "broken" }))).toEqual([]);
   });

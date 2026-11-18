@@ -141,6 +141,36 @@ function linkWordsFinding(
   };
 }
 
+/** The buttons a rich text button node draws: one, or each of a group's. */
+function richButtons(part: {
+  readonly type: string;
+  readonly buttons?: unknown;
+}): Record<string, unknown>[] {
+  if (part.type === "button-link") return [part];
+  if (part.type !== "button-group" || !Array.isArray(part.buttons)) return [];
+  return part.buttons.filter(
+    (entry): entry is Record<string, unknown> =>
+      typeof entry === "object" && entry !== null
+  );
+}
+
+/** A rich text button with only vague words; one with none isn't drawn. */
+function richButtonFinding(
+  node: BlockNode,
+  button: Record<string, unknown>,
+  part: string
+): PageCheckResult | undefined {
+  const words = textOf(button.text);
+  if (words === "" || !isVague(words)) return undefined;
+  return {
+    nodeId: node.id,
+    part,
+    what: `Button text doesn’t say where it goes: “${words}”`,
+    why: WHY_VAGUE,
+    todo: "Use words that say where it goes, like “See pricing”.",
+  };
+}
+
 /** A Heading that links, judged by its words; the links in rich text. */
 function linkFindings(node: BlockNode): PageCheckResult[] {
   const found: PageCheckResult[] = [];
@@ -153,14 +183,25 @@ function linkFindings(node: BlockNode): PageCheckResult[] {
   }
   let index = 0;
   eachRichTextNode(node, part => {
-    if (part.type !== "link") return;
-    const finding = linkWordsFinding(
-      node,
-      richTextWords(part),
-      `link-${String(index)}`
-    );
-    index += 1;
-    if (finding !== undefined) found.push(finding);
+    if (part.type === "link") {
+      const finding = linkWordsFinding(
+        node,
+        richTextWords(part),
+        `link-${String(index)}`
+      );
+      index += 1;
+      if (finding !== undefined) found.push(finding);
+      return;
+    }
+    for (const button of richButtons(part)) {
+      const finding = richButtonFinding(
+        node,
+        button,
+        `button-${String(index)}`
+      );
+      index += 1;
+      if (finding !== undefined) found.push(finding);
+    }
   });
   return found;
 }

@@ -18,8 +18,23 @@ function textOf(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
+/**
+ * Whether the Form draws its own fields: not while it names another
+ * provider's form, which draws that form's fields instead. `simple` is the
+ * page builder's own provider, the block's own fields, as the renderer reads
+ * the setting.
+ */
+function drawsOwnFields(form: unknown): boolean {
+  if (typeof form !== "object" || form === null) return true;
+  const { provider } = form as { provider?: unknown };
+  return (
+    typeof provider !== "string" || provider === "" || provider === "simple"
+  );
+}
+
 /** Each of the Form's fields with no label of its own. */
 function formFindings(node: BlockNode): PageCheckResult[] {
+  if (!drawsOwnFields(node.props.form)) return [];
   const fields = node.props.fields;
   if (!Array.isArray(fields)) return [];
   return fields.flatMap((field: unknown, index): PageCheckResult[] => {

@@ -168,7 +168,45 @@ describe("the headings check", () => {
     ).toEqual([]);
   });
 
-  it("ignores a heading with a level it does not know", () => {
-    expect(findings(page(heading("a", "h1"), heading("b", "big")))).toEqual([]);
+  it("reads a heading with no level as the page draws it, a Heading 2", () => {
+    const untold: BlockNode = {
+      id: "b",
+      type: "core/heading",
+      version: 1,
+      props: { text: "Untold" },
+    };
+    expect(
+      findings(page(heading("a", "h1"), untold, heading("c", "h3")))
+    ).toEqual([]);
+  });
+
+  it("reads inside the page's component placements, pointing at the placement", () => {
+    const placed = (id: string): BlockNode => ({
+      id,
+      type: "nextly/component-instance",
+      version: 1,
+      props: { componentId: "hero" },
+    });
+    const hero: BlockDocument = {
+      formatVersion: 1,
+      kind: "component",
+      nodes: [heading("hero-title", "h1")],
+    };
+    const definitions = new Map([["hero", hero]]);
+    const run = (...nodes: BlockNode[]) =>
+      runPageChecks({ document: page(...nodes), definitions }, [HEADING_CHECK])
+        .findings;
+
+    // The component's Heading 1 is the page's main heading.
+    expect(run(placed("p1"), heading("b", "h2"))).toEqual([]);
+    // A second placement draws a second one: the item selects that placement,
+    // and opens no Level, which is the component's to change.
+    const [second, ...rest] = run(placed("p1"), placed("p2"));
+    expect(rest).toEqual([]);
+    expect(second).toMatchObject({
+      nodeId: "p2",
+      what: "More than one main heading (H1)",
+    });
+    expect(second?.fix).toBeUndefined();
   });
 });

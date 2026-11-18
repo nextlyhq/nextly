@@ -90,6 +90,11 @@ export interface CheckedPage {
   readonly blocks?: (type: string) => AnyBlockDefinition | undefined;
   /** The header and footer drawn around it, where the caller knows them. */
   readonly regions?: readonly PageRegionDocument[];
+  /**
+   * The definitions the page's own component placements are drawn from, so
+   * a check that reads what the page draws can read inside them.
+   */
+  readonly definitions?: DefinitionsById;
 }
 
 /** The page as every check is handed it, its definitions resolved. */
@@ -98,6 +103,8 @@ export interface ResolvedPage {
   readonly blocks: (type: string) => AnyBlockDefinition | undefined;
   /** The header and footer drawn around it; none where none is known. */
   readonly regions: readonly PageRegionDocument[];
+  /** The page's component definitions, where the caller knows them. */
+  readonly definitions?: DefinitionsById;
 }
 
 /** What one check reports about one problem. */
@@ -187,6 +194,9 @@ export function runPageChecks(
     document: page.document,
     blocks: page.blocks ?? getBlock,
     regions: (page.regions ?? []).map(composedRegion),
+    ...(page.definitions === undefined
+      ? {}
+      : { definitions: page.definitions }),
   };
   const order = pageOrder(page.document);
   const taken = new Set<string>();

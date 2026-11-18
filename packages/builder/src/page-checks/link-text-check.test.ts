@@ -164,6 +164,38 @@ describe("the link text check", () => {
     ]);
   });
 
+  it("flags a button in rich text, alone or in a group, with only vague words", () => {
+    const passage = (children: unknown[]) =>
+      block("r", "core/rich-text", {
+        content: { root: { type: "root", children } },
+      });
+    expect(
+      findings(
+        passage([
+          { type: "button-link", url: "/a", text: "Read more" },
+          {
+            type: "button-group",
+            buttons: [
+              { url: "/b", text: "See pricing" },
+              { url: "/c", text: "Click here" },
+              // Not drawn: a button with no words.
+              { url: "/d", text: "" },
+            ],
+          },
+        ])
+      )
+    ).toEqual([
+      expect.objectContaining({
+        nodeId: "r",
+        what: "Button text doesn’t say where it goes: “Read more”",
+      }),
+      expect.objectContaining({
+        nodeId: "r",
+        what: "Button text doesn’t say where it goes: “Click here”",
+      }),
+    ]);
+  });
+
   it("flags a heading that links with only vague words", () => {
     expect(
       findings(

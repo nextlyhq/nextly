@@ -170,6 +170,10 @@ export function editorTopBar(
             // The site's header and footer, read with the page, so their
             // headings count in the page's order.
             regions={view.canvasRegions}
+            // The components the canvas draws the page's placements with.
+            {...(canvasRender.definitions === undefined
+              ? {}
+              : { definitions: canvasRender.definitions })}
           />
         ) : null}
         {/* Last, at the bar's far end where the header kept them: Save and
