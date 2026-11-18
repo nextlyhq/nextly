@@ -59,6 +59,7 @@ import {
   liveCompanionShape,
 } from "../../i18n/runtime/companion-io";
 import { assertLanguageStatesAgreeWithEntry } from "../../i18n/runtime/language-states-agree";
+import { landingPush } from "../builder-save/landing-push";
 import { runStatement } from "../pipeline/_internal/run-statement";
 import {
   createApplyDesiredSchema,
@@ -324,6 +325,13 @@ export interface CollectionSchemaChange {
    * would run before the column it fills exists.
    */
   fills?: ReadonlyArray<{ field: string; value: unknown; required: boolean }>;
+  /**
+   * Called once a push this change runs may have changed the database (`landingPush`): one that
+   * succeeded, or outside PostgreSQL one that failed, whose earlier statements may have stayed.
+   * A caller writing the change's migration keeps its files when the change fails after this,
+   * and withdraws them when it fails before, as a refusal before the push leaves nothing.
+   */
+  onLanded?: () => void;
 }
 
 /**
@@ -788,7 +796,18 @@ async function applyHoldingSchemaLock(
   // managed table: without the others, tables of other entity types in the live database are
   // absent from the desired snapshot and are offered as rename candidates for this collection.
   const desired = await buildFullDesiredSchema();
-  const { apply, promptDispatcher, defaultLocale } = changeApply(change, deps);
+  const changed = changeApply(change, deps);
+  const { promptDispatcher, defaultLocale } = changed;
+  // Every push below, the settings push and the companion's included, tells the caller once it
+  // may have changed the database; the checks before them change nothing.
+  const landing = landingPush(changed.apply, dialect);
+  const apply: ApplyDesired = async (...args) => {
+    try {
+      return await landing.push(...args);
+    } finally {
+      if (landing.landed()) change.onLanded?.();
+    }
+  };
 
   const oldFields = (collection.fields ?? []) as unknown as FieldDefinition[];
   // The answer on a translated field's rename, refused when it does not say, before anything

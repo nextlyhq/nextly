@@ -4,9 +4,10 @@
  *
  * - A refusal before the push runs, or a busy table's stop that says nothing ran, leaves nothing:
  *   no file, no snapshot, no change to the definition, the table or the registry row.
- * - On MySQL, which commits each schema statement as it runs, a push that fails after a statement
- *   committed keeps its files, recorded applied nowhere, so the next `nextly migrate` names the
- *   change the database already holds part of.
+ * - On MySQL, which commits each schema statement as it runs, and on SQLite, whose push keeps the
+ *   statements before the one that fails, a push that fails after a statement ran keeps its
+ *   files, recorded applied nowhere, and the admin is told the database holds part of the change
+ *   and what to run next. PostgreSQL's push, run in one transaction, leaves nothing.
  *
  * Each save switches a relationship from one entry to many (`reachesRelationStorage`), a change
  * the push applies on every dialect.
@@ -223,52 +224,114 @@ for (const dialect of getConfiguredTestDialects()) {
       expect(await standing()).toEqual(before);
     }, 60_000);
 
-    // The failure comes through the test's seam on the push's statement executor: the first
-    // statement runs, which MySQL commits and SQLite's push keeps, and the second fails. No
-    // production hook.
-    it.runIf(dialect === "mysql" || dialect === "sqlite")(
-      "keeps the files of a push whose second statement failed after its first committed",
-      async () => {
-        const filesBefore = Object.keys(filesIn(migrationsDir(), ".sql"));
-        const definitionOf = () =>
-          readTableDefinition(
-            statement => exec(statement),
-            adapterOf().getCapabilities().dialect,
-            "dc_posts"
-          );
-        const tableBefore = await definitionOf();
-        const run = DrizzleStatementExecutor.prototype.executeStatements;
-        const sent: string[] = [];
-        const failing = vi
-          .spyOn(DrizzleStatementExecutor.prototype, "executeStatements")
-          .mockImplementation(async function (
-            this: DrizzleStatementExecutor,
-            tx: unknown,
-            statements: string[]
-          ) {
-            for (const statement of statements) {
-              sent.push(statement);
-              if (sent.length > 1) {
-                throw new Error("the second statement failed");
-              }
-              await run.call(this, tx, [statement]);
+    /**
+     * The test's seam on the push's statement executor, with no production hook: every statement
+     * the push sends, across its calls, is noted; the first runs, which MySQL commits, SQLite's push
+     * keeps and PostgreSQL's transaction rolls back with the rest, and the second fails.
+     */
+    function failSecondStatement(): { sent: string[]; restore: () => void } {
+      const run = DrizzleStatementExecutor.prototype.executeStatements;
+      const sent: string[] = [];
+      const failing = vi
+        .spyOn(DrizzleStatementExecutor.prototype, "executeStatements")
+        .mockImplementation(async function (
+          this: DrizzleStatementExecutor,
+          tx: unknown,
+          statements: string[]
+        ) {
+          for (const statement of statements) {
+            sent.push(statement);
+            if (sent.length > 1) {
+              throw new Error("the second statement failed");
             }
-          });
+            await run.call(this, tx, [statement]);
+          }
+        });
+      return { sent, restore: () => failing.mockRestore() };
+    }
 
-        await expect(save(SWITCHED)).rejects.toBeInstanceOf(Error);
-        failing.mockRestore();
+    const definitionOf = () =>
+      readTableDefinition(
+        statement => exec(statement),
+        adapterOf().getCapabilities().dialect,
+        "dc_posts"
+      );
 
-        expect(sent.length, sent.join("\n")).toBeGreaterThan(1);
-        // The first statement stayed: the table is no longer as it was.
-        expect(await definitionOf()).not.toEqual(tableBefore);
-        const kept = Object.keys(filesIn(migrationsDir(), ".sql")).filter(
-          name => !filesBefore.includes(name)
+    /** The admin's update of the collection, through the metadata service's update road. */
+    const update = (fields: Field[]) =>
+      dispatchCollections(
+        {} as ServiceContainer,
+        "updateCollection",
+        { collectionName: "posts" },
+        { fields }
+      );
+
+    // Each road a collection's change is pushed by in development: the schema dialog's apply and
+    // the admin's update.
+    for (const [road, change] of [
+      ["the schema dialog", save],
+      ["an update", update],
+    ] as const) {
+      it.runIf(dialect === "mysql" || dialect === "sqlite")(
+        `keeps the files of a push through ${road} whose second statement failed after its first committed, and says so`,
+        async () => {
+          const filesBefore = Object.keys(filesIn(migrationsDir(), ".sql"));
+          const tableBefore = await definitionOf();
+          const failing = failSecondStatement();
+
+          const failure = await change(SWITCHED).then(
+            () => undefined,
+            (error: unknown) => error
+          );
+          failing.restore();
+
+          expect(failing.sent.length, failing.sent.join("\n")).toBeGreaterThan(
+            1
+          );
+          // The first statement stayed: the table is no longer as it was.
+          expect(await definitionOf()).not.toEqual(tableBefore);
+          const kept = Object.keys(filesIn(migrationsDir(), ".sql")).filter(
+            name => !filesBefore.includes(name)
+          );
+          expect(kept).not.toEqual([]);
+          const applied = (await ledger().listFileApplies())
+            .filter(entry => entry.status === "applied")
+            .map(entry => String(entry.filename));
+          for (const file of kept) expect(applied).not.toContain(file);
+          // The admin is told the database holds part of the change, which files were kept for
+          // it, and what to run next.
+          const told = (failure as { publicMessage?: string } | undefined)
+            ?.publicMessage;
+          expect(told, String(failure)).toContain(
+            "The database now holds part of this change"
+          );
+          for (const file of kept) expect(told).toContain(file);
+          expect(told).toContain("nextly migrate:resolve --applied");
+        },
+        60_000
+      );
+    }
+
+    // PostgreSQL's push runs in one transaction, which the failure rolls back whole: nothing of
+    // the change stays, so its files are withdrawn and the admin is not told of a part held.
+    it.runIf(dialect === "postgresql")(
+      "leaves nothing when a push whose second statement failed is rolled back whole",
+      async () => {
+        const before = await standing();
+        const failing = failSecondStatement();
+
+        const failure = await save(SWITCHED).then(
+          () => undefined,
+          (error: unknown) => error
         );
-        expect(kept).not.toEqual([]);
-        const applied = (await ledger().listFileApplies())
-          .filter(entry => entry.status === "applied")
-          .map(entry => String(entry.filename));
-        for (const file of kept) expect(applied).not.toContain(file);
+        failing.restore();
+
+        expect(failing.sent.length, failing.sent.join("\n")).toBeGreaterThan(1);
+        expect(failure).toBeInstanceOf(Error);
+        expect(
+          (failure as { publicMessage?: string }).publicMessage ?? ""
+        ).not.toContain("holds part of this change");
+        expect(await standing()).toEqual(before);
       },
       60_000
     );

@@ -59,6 +59,87 @@ export function landingPush<A extends unknown[], R extends PushOutcome>(
 }
 
 /**
+ * A push for a writer's `appliedBy` (`writeCollectionSave`) that says when it
+ * failed after changing the database. `push` is handed `onLanded`, which it
+ * calls once a push it ran may have changed the database (`landingPush`). A
+ * failure before that is thrown as it is, so the writer withdraws its files;
+ * one after it answers `"partly-applied"`, so the writer keeps them, and is
+ * held until the caller, once the writer has returned the files it kept,
+ * throws it with `throwIfFailed`.
+ */
+export function partWayPush(push: (onLanded: () => void) => Promise<void>): {
+  appliedBy: () => Promise<void | "partly-applied">;
+  throwIfFailed: (keptFiles: readonly string[]) => void;
+} {
+  // Held in an object, as the push sets it from inside the writer.
+  const failed: { error?: unknown } = {};
+  return {
+    appliedBy: async () => {
+      let landed = false;
+      try {
+        await push(() => {
+          landed = true;
+        });
+        return undefined;
+      } catch (error) {
+        if (!landed) throw error;
+        failed.error = error;
+        return "partly-applied";
+      }
+    },
+    throwIfFailed: keptFiles => {
+      if ("error" in failed) throw partlyAppliedChange(failed.error, keptFiles);
+    },
+  };
+}
+
+/**
+ * The failure of a push that changed the database before it stopped, as the
+ * admin is told it: what stopped it, that the database now holds part of the
+ * change, the files kept for it, and what to run next. Its code is the
+ * failure's own, so a caller reading the code (a busy table's stop, say) reads
+ * it unchanged; a failure that is not a `NextlyError` is told without its
+ * text, which a driver can fill with identifiers and values.
+ */
+export function partlyAppliedChange(
+  error: unknown,
+  keptFiles: readonly string[]
+): NextlyError {
+  const files = keptFiles.join(", ");
+  const resolve =
+    keptFiles.length === 1
+      ? `\`nextly migrate:resolve --applied ${files}\``
+      : `\`nextly migrate:resolve --applied <file>\` for each of them`;
+  const kept =
+    keptFiles.length === 0
+      ? "The database now holds part of this change."
+      : `The database now holds part of this change, so its migration ${keptFiles.length === 1 ? "file" : "files"} ${files} ${keptFiles.length === 1 ? "was" : "were"} kept and not recorded as applied. ` +
+        `Finish the change by hand and run ${resolve}, or reverse what of it ran and run \`nextly migrate\`, which runs ${keptFiles.length === 1 ? "it" : "them"} from the start.`;
+  if (NextlyError.is(error)) {
+    return new NextlyError({
+      code: error.code,
+      statusCode: error.statusCode,
+      publicMessage: `${error.publicMessage} ${kept}`,
+      ...(error.publicData === undefined
+        ? {}
+        : { publicData: error.publicData }),
+      ...(error.logMessage === undefined
+        ? {}
+        : { logMessage: error.logMessage }),
+      logContext: { ...error.logContext, keptFiles: [...keptFiles] },
+      cause: error,
+    });
+  }
+  return new NextlyError({
+    code: "NEXTLY_MIGRATION_PARTIALLY_APPLIED",
+    publicMessage: `The schema change failed part way. ${kept}`,
+    logMessage: error instanceof Error ? error.message : String(error),
+    logContext: { reason: "partially-applied", keptFiles: [...keptFiles] },
+    ...(error instanceof Error ? { cause: error } : {}),
+  });
+}
+
+/**
  * Whether a push on `dialect` runs in one transaction that a failure rolls back
  * whole, leaving nothing of it: PostgreSQL's alone.
  */

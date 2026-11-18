@@ -8,7 +8,8 @@ import { describe, expect, it } from "vitest";
 import { tableBusyError } from "../../busy-table/report";
 import type { BusyTableOutcome, BusyTableStop } from "../../busy-table/types";
 import type { PipelineResult } from "../../pipeline/pushschema-pipeline";
-import { landingPush } from "../landing-push";
+import { NextlyError } from "../../../../errors/nextly-error";
+import { landingPush, partWayPush } from "../landing-push";
 
 const answered = (success: boolean) => (): Promise<PipelineResult> =>
   Promise.resolve({ success, statementsExecuted: 0, renamesApplied: 0 });
@@ -121,4 +122,84 @@ describe("landingPush", () => {
       expect(refused.landed()).toBe(true);
     }
   );
+});
+
+// A writer's push that says when it failed after changing the database: a failure before keeps
+// nothing (thrown as it is, so the writer withdraws the files), one after keeps the files and is
+// thrown, once they are kept, saying the database holds part of the change and what to run next.
+describe("partWayPush", () => {
+  const refused = new NextlyError({
+    code: "NEXTLY_MIGRATION_APPLY_FAILED",
+    publicMessage: "The index could not be created.",
+    logContext: { collection: "posts" },
+  });
+
+  it("throws a failure before the push landed as it is, for the writer to withdraw the files", async () => {
+    const pushed = partWayPush(() => Promise.reject(refused));
+    await expect(pushed.appliedBy()).rejects.toBe(refused);
+    expect(() => pushed.throwIfFailed([])).not.toThrow();
+  });
+
+  it("answers a success as nothing held", async () => {
+    const pushed = partWayPush(onLanded => {
+      onLanded();
+      return Promise.resolve();
+    });
+    await expect(pushed.appliedBy()).resolves.toBeUndefined();
+    expect(() => pushed.throwIfFailed(["0002_posts.sql"])).not.toThrow();
+  });
+
+  it("keeps the files of a failure after the push landed, and says what the database holds and what to run", async () => {
+    const pushed = partWayPush(onLanded => {
+      onLanded();
+      return Promise.reject(refused);
+    });
+    await expect(pushed.appliedBy()).resolves.toBe("partly-applied");
+
+    const thrown = (() => {
+      try {
+        pushed.throwIfFailed(["0002_posts.sql"]);
+      } catch (error) {
+        return error;
+      }
+    })();
+    // The failure's own code and words, so a caller reading the code reads it unchanged.
+    expect(thrown).toMatchObject({
+      code: "NEXTLY_MIGRATION_APPLY_FAILED",
+      statusCode: refused.statusCode,
+      cause: refused,
+      logContext: { collection: "posts", keptFiles: ["0002_posts.sql"] },
+    });
+    expect((thrown as NextlyError).publicMessage).toBe(
+      "The index could not be created. The database now holds part of this change, so its " +
+        "migration file 0002_posts.sql was kept and not recorded as applied. Finish the change " +
+        "by hand and run `nextly migrate:resolve --applied 0002_posts.sql`, or reverse what of " +
+        "it ran and run `nextly migrate`, which runs it from the start."
+    );
+  });
+
+  it("names every kept file, and never a driver's own text", async () => {
+    const pushed = partWayPush(onLanded => {
+      onLanded();
+      return Promise.reject(new Error("duplicate key value 'secret'"));
+    });
+    await pushed.appliedBy();
+
+    const thrown = (() => {
+      try {
+        pushed.throwIfFailed(["0002_a.sql", "0003_b.sql"]);
+      } catch (error) {
+        return error as NextlyError;
+      }
+    })();
+    expect(thrown?.code).toBe("NEXTLY_MIGRATION_PARTIALLY_APPLIED");
+    expect(thrown?.publicMessage).toContain(
+      "its migration files 0002_a.sql, 0003_b.sql were kept"
+    );
+    expect(thrown?.publicMessage).toContain(
+      "`nextly migrate:resolve --applied <file>` for each of them"
+    );
+    expect(thrown?.publicMessage).not.toContain("secret");
+    expect(thrown?.logMessage).toContain("secret");
+  });
 });
