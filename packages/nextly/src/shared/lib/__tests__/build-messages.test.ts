@@ -5,7 +5,11 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { type BuildMessage, withEditorPlaces } from "../build-messages";
+import {
+  type BuildMessage,
+  buildMessagesOf,
+  withEditorPlaces,
+} from "../build-messages";
 
 /** esbuild's failure for an import it could not resolve, with the notes it attaches. */
 function unresolved(notes: BuildMessage[]): Error {
@@ -24,6 +28,39 @@ function unresolved(notes: BuildMessage[]): Error {
     ],
   });
 }
+
+describe("buildMessagesOf", () => {
+  // esbuild echoes what it could not read, an import's specifier among it, and every surface
+  // prints that text, under CI too; a control character in it would act on the terminal or log.
+  it("writes a control character in a message or a note as its escape", () => {
+    const [message] = buildMessagesOf(
+      Object.assign(new Error("Build failed with 1 error"), {
+        errors: [
+          {
+            text: 'Could not resolve "./posts\u001b[2J"',
+            location: null,
+            notes: [{ text: "Tried ./posts\u0007" }],
+          },
+        ],
+      })
+    );
+
+    const all = [message.text, ...(message.notes ?? []).map(n => n.text)];
+    for (const text of all) {
+      const raw = Array.from(text).filter(character => {
+        const code = character.codePointAt(0) ?? 0;
+        return (
+          code <= 0x08 ||
+          (code >= 0x0b && code <= 0x1f) ||
+          (code >= 0x7f && code <= 0x9f)
+        );
+      });
+      expect(raw, text).toEqual([]);
+    }
+    expect(message.text).toContain("./posts\\x1b[2J");
+    expect(message.notes?.[0]?.text).toContain("./posts\\x07");
+  });
+});
 
 describe("withEditorPlaces", () => {
   it("keeps each note esbuild attached, after the message it belongs to", () => {

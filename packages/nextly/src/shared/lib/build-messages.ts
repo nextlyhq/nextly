@@ -38,8 +38,9 @@ export interface EditorPlace {
 
 /**
  * The build messages esbuild attached to `cause`, or none when it is no build failure, each with
- * every credential in its text redacted (`redactCredentialsInText`): esbuild quotes what it could
- * not read, an import's specifier with its query among it, and every surface prints the text. The
+ * every credential in its text redacted (`redactCredentialsInText`) and each control character
+ * written as its escape (`withControlCharactersEscaped`): esbuild quotes what it could not read,
+ * an import's specifier with its query among it, and every surface prints the text, under CI too. The
  * line's own text is kept as written, since the column is counted in it; `formatBuildMessages`
  * redacts it where it is shown.
  */
@@ -58,7 +59,7 @@ export function buildMessagesOf(cause: unknown): BuildMessage[] {
     )
     .map(message => ({
       ...message,
-      text: redactCredentialsInText(message.text),
+      text: withControlCharactersEscaped(redactCredentialsInText(message.text)),
       // A note quotes what it explains, a specifier among it, so it is redacted as the text is.
       ...(Array.isArray(message.notes)
         ? {
@@ -66,7 +67,9 @@ export function buildMessagesOf(cause: unknown): BuildMessage[] {
               .filter(note => typeof note?.text === "string")
               .map(note => ({
                 ...note,
-                text: redactCredentialsInText(note.text),
+                text: withControlCharactersEscaped(
+                  redactCredentialsInText(note.text)
+                ),
               })),
           }
         : {}),
