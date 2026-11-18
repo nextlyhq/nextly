@@ -6,6 +6,8 @@
  */
 import {
   judgeDataLoss,
+  NO_CONSENT,
+  refusalForStart,
   resolveDataLossConsent,
 } from "../../../domains/schema/migrate/data-loss-consent";
 import { assertModulesInNameOrder } from "../../../domains/schema/migrate/plugin/plugin-migration";
@@ -566,10 +568,64 @@ export const PLUGIN_CASES = {
  * The causes that were codes of their own before the guides' documented code was kept for them:
  * each still has its own reading, so each still has its case, under the code it now ends as.
  */
+/**
+ * The refusal of a production start whose plugin is behind because the data-loss consent
+ * refused the migrations it ran, with what the run says after the consent (`notice`) if anything.
+ */
+async function behindAfterConsentRefused(
+  notice: string | undefined
+): Promise<unknown> {
+  const verdict = await judgeDataLoss({
+    deletions: [
+      { kind: "column", table: "seo_pages", column: "summary", count: 3 },
+    ],
+    consent: NO_CONSENT,
+    interactive: false,
+    ask: () => Promise.resolve(false),
+    print: () => {},
+    sourceOf: () => `plugin:${PLUGIN}/${MODULE}`,
+  });
+  if (verdict.kind !== "refused") return verdict;
+  const message = refusalForStart(verdict.message);
+  return thrown(() =>
+    assertSchemaVersionUsable(
+      { name: PLUGIN, declaredVersion: 3, appliedVersion: 2 },
+      {
+        production: true,
+        warn: () => {},
+        consentRefusal: {
+          message: notice === undefined ? message : `${message}\n${notice}`,
+        },
+      }
+    )
+  );
+}
+
 export const PLUGIN_MERGED_CASES: Record<
   string,
   { code: CliErrorCode; make: ErrorCase }
 > = {
+  // As a production start throws it once the data-loss consent refused the migrations it ran.
+  PLUGIN_BEHIND_AFTER_CONSENT_REFUSED_ITS_MIGRATIONS: {
+    code: "PLUGIN_SCHEMA_BEHIND",
+    make: () => behindAfterConsentRefused(undefined),
+  },
+  // The same, on a database whose event triggers the run tells of after the consent.
+  PLUGIN_BEHIND_AFTER_CONSENT_REFUSED_WITH_EVENT_TRIGGERS: {
+    code: "PLUGIN_SCHEMA_BEHIND",
+    make: () =>
+      behindAfterConsentRefused(
+        "This database has the DDL event trigger audit_ddl: it runs on schema changes, and Nextly cannot see what it does, so what it deletes is not listed."
+      ),
+  },
+  // The same, where a trigger's own name reads like the consent line's opening.
+  PLUGIN_BEHIND_AFTER_CONSENT_REFUSED_WITH_A_TRIGGER_NAMED_LIKE_THE_CONSENT: {
+    code: "PLUGIN_SCHEMA_BEHIND",
+    make: () =>
+      behindAfterConsentRefused(
+        'This database has the DDL event trigger "audit. To consent: drop everything": it runs on schema changes, and Nextly cannot see what it does, so what it deletes is not listed.'
+      ),
+  },
   PLUGIN_APPLIED_MIGRATION_CHANGED: {
     code: "MIGRATION_CHECKSUM_MISMATCH",
     make: () =>
