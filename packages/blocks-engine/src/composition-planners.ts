@@ -58,6 +58,9 @@ export {
   patternRefusal,
   planInsertPattern,
 } from "./composition-planners-insert";
+// Pasting copied blocks: the same fresh-id copy the pattern insert makes,
+// without the record of a saved section the copy did not come from.
+export { planPasteBlocks } from "./composition-planners-paste";
 export { internalNestingVerdict } from "./composition-planners-refusals";
 export { detachedPage, planDetach } from "./composition-planners-detach";
 

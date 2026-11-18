@@ -320,19 +320,44 @@ export function entryRoles(
   catalog: readonly InsertEntry[],
   definitions: readonly AnyBlockDefinition[] | undefined
 ): ReadonlyMap<string, EntryRole> {
+  const isLayout = layoutTest(definitions);
+  const roles = new Map<string, EntryRole>();
+  for (const entry of catalog) {
+    roles.set(entry.id, roleOf(entry, isLayout));
+  }
+  return roles;
+}
+
+/**
+ * Whether a block type is a layout block: in the Layout group, and holding
+ * blocks. The one reading every role here is derived from.
+ */
+function layoutTest(
+  definitions: readonly AnyBlockDefinition[] | undefined
+): (type: string) => boolean {
   const byName = definitionsByName(definitions);
-  const isLayout = (type: string): boolean => {
+  return type => {
     const definition = byName.get(type);
     return (
       definition?.editor?.category === LAYOUT_CATEGORY &&
       Object.keys(definition.slots ?? {}).length > 0
     );
   };
-  const roles = new Map<string, EntryRole>();
-  for (const entry of catalog) {
-    roles.set(entry.id, roleOf(entry, isLayout));
-  }
-  return roles;
+}
+
+/**
+ * The role of a run of blocks placed together, such as pasted ones, from the
+ * types its top-level blocks draw: a band when one is a Section, a layout
+ * block when one is a layout block, and content otherwise. The same reading a
+ * saved section's or a component's tile takes, so a pasted run lands where a
+ * click on such a tile would put it.
+ */
+export function runRole(
+  types: readonly string[],
+  definitions?: readonly AnyBlockDefinition[]
+): EntryRole {
+  if (types.includes(SECTION_BLOCK)) return "band";
+  return types.some(layoutTest(definitions)) ? "layout" : "content";
 }
 
 /** One entry's role, given which block types are layout blocks. */
