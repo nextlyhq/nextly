@@ -181,4 +181,21 @@ describe("an unsaved field's name", () => {
     expect(nameInput()).toBeEnabled();
     expect(renameButton()).toBeNull();
   });
+
+  // A field-group field keeps its values in the group's own table, so no column carries its name
+  // and the column's length does not reach it; a text field's name is held to it.
+  it("is held to the column's length only where the field makes a column", () => {
+    const long = "a".repeat(64);
+    panel(
+      [SUMMARY, text("f-card", long, { type: "component", component: "seo" })],
+      "f-card",
+      ["f-summary"]
+    );
+    expect(screen.queryByText(/Too long/)).toBeNull();
+  });
+
+  it("is refused as too long for a text field's column", () => {
+    panel([SUMMARY, text("f-long", "a".repeat(64))], "f-long", ["f-summary"]);
+    expect(screen.getByText(/Too long/)).toBeInTheDocument();
+  });
 });
