@@ -33,4 +33,4 @@ The dashboard's "Continue where you left off" card now shows every pin. On its M
 
 Pinning now says "Pinned to your dashboard." only while the card is on your dashboard, and otherwise says how to add it. At the limit, the refusal reads "You can keep up to 20 pins. Unpin one first." with "View all pins", which opens the dialog on any screen.
 
-`GET /api/dashboard/pins` also answers `unreadable`: your pins of documents you may no longer read, by what each pin names (no title).
+`GET /api/dashboard/pins` also answers `unreadableCount`, how many of your pins name documents you can no longer open, and `DELETE /api/dashboard/pins?unreadable=1` removes those pins on the server.

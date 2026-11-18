@@ -318,6 +318,59 @@ export function ownWithLevel(
 }
 
 /**
+ * The actions that work on what the role must see first: each needs read on
+ * its row. Create is not among them: the Public role creates form submissions
+ * it is never shown.
+ */
+const NEEDS_READ: ReadonlySet<string> = new Set([
+  "update",
+  "delete",
+  "publish",
+  "unpublish",
+]);
+
+/**
+ * The role's own permission list with the action `id` of `row` turned on or
+ * off under the row's switch.
+ *
+ * Turning on an action that needs read turns on the row's read with it, and
+ * turning read off turns off the role's own actions that need it, so a role
+ * is never left able to edit what it cannot see. A read a base role gives
+ * (`lockedIds`) already counts: it is not copied onto the role, and the
+ * role's own read taken away leaves the base's standing, so nothing that
+ * needs it is turned off.
+ */
+export function ownWithAction(
+  own: readonly string[],
+  row: LevelRow,
+  id: string,
+  on: boolean,
+  lockedIds: readonly string[] = []
+): string[] {
+  const action = row.permissions.find(permission => permission.id === id);
+  const read = row.permissions.find(permission => permission.action === "read");
+  const readFromBase = read !== undefined && lockedIds.includes(read.id);
+  if (on) {
+    const next = own.includes(id) ? [...own] : [...own, id];
+    const needsRead =
+      read !== undefined &&
+      action !== undefined &&
+      NEEDS_READ.has(action.action) &&
+      !readFromBase &&
+      !next.includes(read.id);
+    return needsRead ? [...next, read.id] : next;
+  }
+  const next = own.filter(kept => kept !== id);
+  if (action?.action !== "read" || readFromBase) return next;
+  const needingRead = new Set(
+    row.permissions
+      .filter(permission => NEEDS_READ.has(permission.action))
+      .map(permission => permission.id)
+  );
+  return next.filter(kept => !needingRead.has(kept));
+}
+
+/**
  * The levels `row` offers a role whose base roles give it `lockedIds`.
  *
  * A level is offered when setting it keeps the row at that level: one whose

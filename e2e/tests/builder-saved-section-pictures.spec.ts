@@ -11,11 +11,11 @@
  *   panel its pictures.
  * - The tab the panel opens on (Blocks) holds no picture at all, so opening
  *   the panel never waits on them.
- * - With no mode picked, on a light device, the drawn page sits on a light
- *   ground with no theme marker. After Dark is picked in the Design panel the
- *   same pictures carry the site's dark theme marker and a dark ground, and
- *   after Light, the light ones. A picture drawn in the admin's own scheme,
- *   or one that ignored a pick, fails one side or the other.
+ * - Before the top bar's preview is pressed, the drawn page carries the
+ *   site's light theme marker on a light ground, as the canvas starts light.
+ *   Once it previews dark the same pictures carry the dark marker and a dark
+ *   ground, and light ones again after. A picture drawn in the admin's own
+ *   scheme, or one that ignored the preview, fails one side or the other.
  * - A saved section placing a component that no longer exists shows the
  *   section's plain icon instead of a broken picture, and is still offered.
  *
@@ -28,6 +28,7 @@
 import { expect, type Locator, type Page } from "@playwright/test";
 
 import { gotoAdmin } from "./support/admin";
+import { LOCK } from "./support/locks";
 import { test } from "./support/test";
 
 const PAGES = "/admin/api/collections/pages/entries";
@@ -92,17 +93,6 @@ async function openAdd(page: Page): Promise<void> {
   ).toBeVisible();
 }
 
-/** Show the Design panel, unless it is open already. */
-async function openDesign(page: Page): Promise<void> {
-  const design = railButton(page, "Design");
-  if ((await design.getAttribute("aria-pressed")) !== "true") {
-    await design.click();
-  }
-  await expect(
-    page.getByRole("region", { name: "Design panel" })
-  ).toBeVisible();
-}
-
 function tile(page: Page, title: string): Locator {
   return page.getByRole("option", { name: title, exact: true });
 }
@@ -114,14 +104,20 @@ function drawnPage(page: Page, title: string): Locator {
   );
 }
 
-/** Pick a mode on the Design panel's preview switch, and see its tag. */
+/** Preview the canvas in a mode on the top bar's switch. */
 async function pickPreview(page: Page, mode: "Light" | "Dark"): Promise<void> {
-  await openDesign(page);
-  await page
-    .getByRole("group", { name: "Preview" })
-    .getByRole("button", { name: mode })
-    .click();
-  await expect(page.getByText(`${mode} preview`)).toBeVisible();
+  const darkPreview = page.getByRole("button", {
+    name: "Preview in dark mode",
+  });
+  if (
+    (await darkPreview.getAttribute("aria-pressed")) !== String(mode === "Dark")
+  ) {
+    await darkPreview.click();
+  }
+  await expect(darkPreview).toHaveAttribute(
+    "aria-pressed",
+    String(mode === "Dark")
+  );
 }
 
 /**
@@ -165,7 +161,10 @@ async function pictureLook(target: Locator) {
 }
 
 test.describe("saved section pictures in the Add panel", () => {
-  test.describe.configure({ timeout: 180_000 });
+  // The pictures are drawn in the site's variables, and the dark preview is
+  // offered only while one has a dark value, so no other file may change
+  // them meanwhile.
+  test.describe.configure({ timeout: 180_000, lock: [LOCK.siteStyle] });
 
   test("each saved section shows its own picture, which follows the dark preview", async ({
     page,
@@ -243,7 +242,7 @@ test.describe("saved section pictures in the Add panel", () => {
             .evaluate(element => getComputedStyle(element).textAlign)
         ).toBe("start");
         const look = await pictureLook(drawn);
-        expect(look.marker, title).toBeNull();
+        expect(look.marker, title).toBe("light");
         expect(look.lightness, `${title} ground`).toBeGreaterThan(0.8);
       }
 
@@ -258,7 +257,7 @@ test.describe("saved section pictures in the Add panel", () => {
         0
       );
 
-      // Dark, picked in the Design panel, on a light device; then Light.
+      // Dark, picked in the top bar, on a light device; then Light.
       await pickPreview(page, "Dark");
       await expectPicturesIn(page, [hero, pricing], "dark");
       await pickPreview(page, "Light");

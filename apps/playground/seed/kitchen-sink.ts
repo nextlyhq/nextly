@@ -37,7 +37,10 @@
  *
  * @module seed/kitchen-sink
  */
-import type { BlockDocument } from "@nextlyhq/blocks-engine";
+import { toOneParagraph, type BlockDocument } from "@nextlyhq/blocks-engine";
+
+/** A Text block's words, as the one paragraph it stores. */
+const para = (words: string) => toOneParagraph(words).value;
 
 /** The slug this page is served at: `/blocks/kitchen-sink`. */
 export const KITCHEN_SINK_SLUG = "kitchen-sink";
@@ -105,9 +108,11 @@ export const KITCHEN_SINK_DOCUMENT: BlockDocument = {
           {
             id: "ks-intro-text",
             type: "core/text",
-            version: 1,
+            version: 2,
             props: {
-              text: "Nothing on this page carries authored styles. It shows what the block library gives an author before they change anything, which is the only view in which a block that stopped one property short of finishing looks wrong.",
+              text: para(
+                "Nothing on this page carries authored styles. It shows what the block library gives an author before they change anything, which is the only view in which a block that stopped one property short of finishing looks wrong."
+              ),
             },
           },
         ],
@@ -154,9 +159,11 @@ export const KITCHEN_SINK_DOCUMENT: BlockDocument = {
                       {
                         id: "ks-col-1-t",
                         type: "core/text",
-                        version: 1,
+                        version: 2,
                         props: {
-                          text: "Two columns sit side by side with a gutter between them.",
+                          text: para(
+                            "Two columns sit side by side with a gutter between them."
+                          ),
                         },
                       },
                     ],
@@ -178,9 +185,11 @@ export const KITCHEN_SINK_DOCUMENT: BlockDocument = {
                       {
                         id: "ks-col-2-t",
                         type: "core/text",
-                        version: 1,
+                        version: 2,
                         props: {
-                          text: "A row of one would be a box, so a row starts with two.",
+                          text: para(
+                            "A row of one would be a box, so a row starts with two."
+                          ),
                         },
                       },
                     ],
@@ -207,9 +216,11 @@ export const KITCHEN_SINK_DOCUMENT: BlockDocument = {
                 {
                   id: "ks-card-text",
                   type: "core/text",
-                  version: 1,
+                  version: 2,
                   props: {
-                    text: "An image at a card's top edge follows the rounded corner instead of overhanging it.",
+                    text: para(
+                      "An image at a card's top edge follows the rounded corner instead of overhanging it."
+                    ),
                   },
                 },
               ],
@@ -225,9 +236,11 @@ export const KITCHEN_SINK_DOCUMENT: BlockDocument = {
                 {
                   id: "ks-box-text",
                   type: "core/text",
-                  version: 1,
+                  version: 2,
                   props: {
-                    text: "A box is the plain container everything else is a preset over.",
+                    text: para(
+                      "A box is the plain container everything else is a preset over."
+                    ),
                   },
                 },
               ],
@@ -282,7 +295,7 @@ export const KITCHEN_SINK_DOCUMENT: BlockDocument = {
           {
             id: "ks-quote",
             type: "core/quote",
-            version: 1,
+            version: 2,
             props: {
               text: "Simplicity is the soul of efficiency.",
               attribution: "Austin Freeman",
@@ -369,9 +382,11 @@ export const KITCHEN_SINK_DOCUMENT: BlockDocument = {
                       {
                         id: "ks-acc-1-t",
                         type: "core/text",
-                        version: 1,
+                        version: 2,
                         props: {
-                          text: "A section only the accordion may hold, so it cannot be dropped between two others.",
+                          text: para(
+                            "A section only the accordion may hold, so it cannot be dropped between two others."
+                          ),
                         },
                       },
                     ],
@@ -387,9 +402,11 @@ export const KITCHEN_SINK_DOCUMENT: BlockDocument = {
                       {
                         id: "ks-acc-2-t",
                         type: "core/text",
-                        version: 1,
+                        version: 2,
                         props: {
-                          text: "This one does, which is what `open` states.",
+                          text: para(
+                            "This one does, which is what `open` states."
+                          ),
                         },
                       },
                     ],
@@ -411,9 +428,8 @@ export const KITCHEN_SINK_DOCUMENT: BlockDocument = {
           {
             id: "ks-form",
             type: "core/form",
-            version: 1,
+            version: 2,
             props: {
-              method: "post",
               submitText: "Send",
               fields: [
                 { label: "Name", name: "name", type: "text", required: true },
@@ -467,8 +483,8 @@ export const KITCHEN_SINK_DOCUMENT: BlockDocument = {
                 {
                   id: "ks-loop-item",
                   type: "core/text",
-                  version: 1,
-                  props: { text: "One entry from the collection." },
+                  version: 2,
+                  props: { text: para("One entry from the collection.") },
                 },
               ],
             },

@@ -53,6 +53,22 @@ const SOURCES: readonly BindingFieldSource[] = [
   },
 ];
 
+/**
+ * What a block holds beyond its example, where its example draws only part
+ * of its controls: an Image placed with no picture shows the library side of
+ * its Source, and its address field (with its own bind button) only once it
+ * holds an address; its link (with its bind button) only while a click
+ * follows it; and its Caption section, folded while it holds nothing, opens
+ * on a caption.
+ */
+const HOLDING: Readonly<Record<string, Record<string, unknown>>> = {
+  "core/image": {
+    src: "https://cdn.example/a.png",
+    whenClicked: "link",
+    caption: "A caption",
+  },
+};
+
 /** The block alone on a page, as its example fills it over its defaults. */
 function drawn(block: (typeof coreBlocks)[number]): BlockDocument {
   const document = {
@@ -66,6 +82,7 @@ function drawn(block: (typeof coreBlocks)[number]): BlockDocument {
         props: {
           ...(block.defaultProps as Record<string, unknown>),
           ...(block.example?.props as Record<string, unknown> | undefined),
+          ...HOLDING[block.name],
         },
       },
     ],
@@ -92,6 +109,26 @@ function drawn(block: (typeof coreBlocks)[number]): BlockDocument {
     />
   );
   return document;
+}
+
+/**
+ * Settings the builder draws as a choice of its own, which no field fills, or
+ * only once that choice asks for them: a Form's After sending says what the
+ * block does once a send is accepted, and its page is drawn (with its bind
+ * button) only once it goes to a page.
+ */
+const CHOSEN_NEVER_FILLED: ReadonlySet<string> = new Set([
+  "core/form.afterSending",
+  "core/form.href",
+]);
+
+/** Every folded section of the tab showing unfolded, as an author opens one. */
+function unfoldSections(): void {
+  for (const trigger of screen.queryAllByRole("button", { expanded: false })) {
+    if (trigger.classList.contains("nx-style-inspector__section-trigger")) {
+      fireEvent.click(trigger);
+    }
+  }
 }
 
 describe("the core block library's bind buttons", () => {
@@ -127,14 +164,23 @@ describe("the core block library's bind buttons", () => {
         ...props.filter(prop => advanced.has(prop.name)),
       ];
       let onAdvanced = false;
+      // Every Content section unfolded, as an author opens one: a section
+      // holding no value yet (a Form's After sending) starts folded.
+      unfoldSections();
       for (const prop of inTabOrder) {
         if (bindablePropKind(prop.schema) === undefined) continue;
+        if (CHOSEN_NEVER_FILLED.has(`${block.name}.${prop.name}`)) {
+          unbound.push(`${block.name}.${prop.name}`);
+          continue;
+        }
         if (grouped.has(prop.name) && !binds.has(prop.name)) {
           unbound.push(`${block.name}.${prop.name}`);
           continue;
         }
         if (advanced.has(prop.name) && !onAdvanced) {
           fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+          // Its sections too: HTML holding nothing yet (a Heading's) is folded.
+          unfoldSections();
           onAdvanced = true;
         }
         const buttons = screen.queryAllByRole("button", {
@@ -145,9 +191,10 @@ describe("the core block library's bind buttons", () => {
       cleanup();
     }
     // Named, with why, so neither a group binding nothing nor one binding
-    // everything passes: a link's target, rel and entry qualify the address
+    // everything passes: a link's target and entry qualify the address
     // its own button binds (the entry is bound from the Link's picker, which
-    // writes both halves at once); an image's decorative mark is a mode of its
+    // writes both halves at once; a link relationship, in Advanced, has a
+    // button of its own); an image's decorative mark is a mode of its
     // words' menu; a list's query is chosen, never filled from a field.
     expect(unbound.sort()).toEqual(
       [
@@ -156,7 +203,6 @@ describe("the core block library's bind buttons", () => {
         "core/box.target",
         "core/button.entryCollection",
         "core/button.entryId",
-        "core/button.rel",
         "core/button.target",
         "core/card.entryCollection",
         "core/card.entryId",
@@ -166,17 +212,25 @@ describe("the core block library's bind buttons", () => {
         "core/collection-loop.offset",
         "core/collection-loop.paginate",
         "core/collection-loop.sort",
-        "core/heading.rel",
+        "core/form.afterSending",
+        "core/form.entryCollection",
+        "core/form.entryId",
+        "core/form.href",
+        "core/heading.entryCollection",
+        "core/heading.entryId",
         "core/heading.target",
         "core/icon.entryCollection",
         "core/icon.entryId",
-        "core/icon.rel",
         "core/icon.target",
         "core/image.decorative",
         "core/image.entryCollection",
         "core/image.entryId",
-        "core/image.rel",
         "core/image.target",
+        // What a click does is chosen, not filled from a field.
+        "core/image.whenClicked",
+        "core/quote.entryCollection",
+        "core/quote.entryId",
+        "core/quote.target",
       ].sort()
     );
   });

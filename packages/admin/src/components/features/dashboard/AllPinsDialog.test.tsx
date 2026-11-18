@@ -1,8 +1,10 @@
 /**
  * "View all pins": drawn by its host only once opened, every pin newest first
  * opening where its document opens, each with Unpin; the pins the reader may
- * no longer open counted, with "Remove them" unpinning each; and focus given
- * back to what opened it, the Continue card's footer or a pin toast's button.
+ * no longer open counted, with "Remove them" asking the server to remove
+ * them in one request and reading the pins again once it has answered; and
+ * focus given back to what opened it, the Continue card's footer or a pin
+ * toast's button.
  */
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -45,7 +47,7 @@ function shown(n: number, minutesAgo: number) {
 }
 
 /** The reader's pins and layout, answered by path. */
-function answer(pins: { items: unknown[]; unreadable?: unknown[] }) {
+function answer(pins: { items: unknown[]; unreadableCount?: number }) {
   get.mockImplementation(async (path: string) =>
     path.startsWith("/dashboard/layout") ? { placements: [] } : pins
   );
@@ -73,7 +75,7 @@ describe("View all pins", () => {
     const user = userEvent.setup();
     answer({
       items: [1, 2, 3, 4, 5, 6, 7].map(n => shown(n, n)),
-      unreadable: [],
+      unreadableCount: 0,
     });
     render(<AllPinsHost />);
     openAllPins();
@@ -108,13 +110,9 @@ describe("View all pins", () => {
     );
   });
 
-  it("says how many pins the reader can no longer open, and removes each with Remove them", async () => {
+  it("says how many pins the reader can no longer open, and removes them on the server with Remove them", async () => {
     const user = userEvent.setup();
-    const gone = [
-      { targetType: "collection", targetSlug: "secret", entryId: "s1" },
-      { targetType: "single", targetSlug: "hidden" },
-    ];
-    answer({ items: [shown(1, 1)], unreadable: gone });
+    answer({ items: [shown(1, 1)], unreadableCount: 2 });
     render(<AllPinsHost />);
     openAllPins();
     const notice = await screen.findByTestId("all-pins-unreadable");
@@ -122,51 +120,15 @@ describe("View all pins", () => {
     await user.click(
       within(notice).getByRole("button", { name: "Remove them" })
     );
-    await waitFor(() => expect(del).toHaveBeenCalledTimes(2));
-    expect(del).toHaveBeenCalledWith("/dashboard/pins", gone[0]);
-    expect(del).toHaveBeenCalledWith("/dashboard/pins", gone[1]);
+    await waitFor(() => expect(del).toHaveBeenCalledTimes(1));
+    // One request, naming no pin: the server finds and removes them.
+    expect(del.mock.calls[0]).toEqual(["/dashboard/pins?unreadable=1"]);
   });
 
-  it("says so when a pin could not be removed", async () => {
+  it("says so when the pins could not be removed, and reads them again", async () => {
     const user = userEvent.setup();
-    answer({
-      items: [],
-      unreadable: [{ targetType: "single", targetSlug: "hidden" }],
-    });
+    answer({ items: [], unreadableCount: 1 });
     del.mockRejectedValue(new Error("offline"));
-    render(
-      <>
-        <Toaster />
-        <AllPinsHost />
-      </>
-    );
-    openAllPins();
-    const notice = await screen.findByTestId("all-pins-unreadable");
-    await user.click(
-      within(notice).getByRole("button", { name: "Remove them" })
-    );
-    expect(
-      await screen.findByText("Some pins could not be removed. Try again.")
-    ).toBeInTheDocument();
-  });
-
-  it("reads the pins again only once every removal has finished, one failing early", async () => {
-    const user = userEvent.setup();
-    answer({
-      items: [],
-      unreadable: [
-        { targetType: "single", targetSlug: "first" },
-        { targetType: "single", targetSlug: "second" },
-      ],
-    });
-    let finishSecond: () => void = () => {};
-    del.mockImplementation(
-      async (_path: string, target: { targetSlug: string }) => {
-        if (target.targetSlug === "first") throw new Error("offline");
-        await new Promise<void>(resolve => (finishSecond = resolve));
-        return { message: "Unpinned.", unpinned: true };
-      }
-    );
     const pinReads = () =>
       get.mock.calls.filter(([path]) => path === "/dashboard/pins").length;
     render(
@@ -181,18 +143,46 @@ describe("View all pins", () => {
     await user.click(
       within(notice).getByRole("button", { name: "Remove them" })
     );
-    await waitFor(() => expect(del).toHaveBeenCalledTimes(2));
-    // The first failed at once; the second is still on its way.
+    expect(
+      await screen.findByText("Some pins could not be removed. Try again.")
+    ).toBeInTheDocument();
+    // A failed removal may still have removed some, so the count is read again.
+    await waitFor(() => expect(pinReads()).toBe(before + 1));
+  });
+
+  it("reads the pins again only once the removal has answered", async () => {
+    const user = userEvent.setup();
+    answer({ items: [], unreadableCount: 2 });
+    let finish: () => void = () => {};
+    del.mockImplementation(async () => {
+      await new Promise<void>(resolve => (finish = resolve));
+      return {
+        message: "Removed 2 pins you could no longer open.",
+        removed: 2,
+      };
+    });
+    const pinReads = () =>
+      get.mock.calls.filter(([path]) => path === "/dashboard/pins").length;
+    render(<AllPinsHost />);
+    openAllPins();
+    const notice = await screen.findByTestId("all-pins-unreadable");
+    const before = pinReads();
+    await user.click(
+      within(notice).getByRole("button", { name: "Remove them" })
+    );
+    await waitFor(() => expect(del).toHaveBeenCalledTimes(1));
+    // Still on its way: no read yet, and the button waits.
     await new Promise(resolve => setTimeout(resolve, 50));
     expect(pinReads()).toBe(before);
     expect(
       within(notice).getByRole("button", { name: "Remove them" })
     ).toBeDisabled();
-    finishSecond();
+    answer({ items: [], unreadableCount: 0 });
+    finish();
     await waitFor(() => expect(pinReads()).toBe(before + 1));
-    expect(
-      await screen.findByText("Some pins could not be removed. Try again.")
-    ).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.queryByTestId("all-pins-unreadable")).toBeNull()
+    );
   });
 
   it("says one pin in the singular", () => {

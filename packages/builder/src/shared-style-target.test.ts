@@ -25,10 +25,12 @@ import {
   planSaveAsSharedStyle,
   saveAsSharedStyleRefusal,
   sharedStyleChange,
+  sharedStyleChanges,
   sharedStyleMoveSummary,
   sharedStyleWrite,
   NO_DESIGN_RIGHT,
 } from "./shared-style-target";
+import type { StyleAddress } from "./style-values";
 
 const BREAKPOINTS: BreakpointSet = {
   viewport: [
@@ -828,6 +830,49 @@ describe("Move to", () => {
       kind: "write",
       styles: { base: { base: { opacity: 0.9 } } },
     });
+  });
+
+  it("sets several addresses as one change, and puts all of them back as one", () => {
+    // The sides of a padding set together in a shared style: one change for
+    // the host to store, so one undo takes the whole gesture back.
+    const side = (name: string): StyleAddress => ({
+      state: "base",
+      breakpoint: "base",
+      property: "padding",
+      path: [name],
+    });
+    const change = sharedStyleChanges([
+      { address: side("blockStart"), value: "8px" },
+      { address: side("blockEnd"), value: "16px" },
+    ]);
+    const before = { base: { base: { padding: { blockStart: "2px" } } } };
+    const after = change(before);
+    expect(after).toEqual({
+      kind: "write",
+      styles: {
+        base: { base: { padding: { blockStart: "8px", blockEnd: "16px" } } },
+      },
+    });
+    if (after.kind !== "write") throw new Error("not written");
+    // Its inverse is one change too: the top back to 2px, the bottom cleared.
+    expect(change.invert(before)(after.styles)).toEqual({
+      kind: "write",
+      styles: { base: { base: { padding: { blockStart: "2px" } } } },
+    });
+  });
+
+  it("refuses the whole change when one of its values is refused", () => {
+    const side = (name: string): StyleAddress => ({
+      state: "base",
+      breakpoint: "base",
+      property: "padding",
+      path: [name],
+    });
+    const change = sharedStyleChanges([
+      { address: side("blockStart"), value: "8px" },
+      { address: side("blockEnd"), value: "red" },
+    ]);
+    expect(change({}).kind).toBe("refused");
   });
 
   it("refuses when the block sets nothing there", () => {

@@ -40,7 +40,7 @@ import { deletionChanges } from "../utils/data-loss-consent";
 import type { ResolvedDevOptions } from "./db-sync";
 import { syncRefusalOf } from "./db-sync-registry";
 import { collectOrphanDeletions, publishExtensionSchema } from "./dev-build";
-import { desiredSchemaForSync, productionSyncRefusal } from "./dev-server";
+import { desiredSchemaForSync } from "./dev-server";
 import { fieldsLeavingForSync } from "./sync-schema";
 
 /** What a sync's dry run does not show, and what its schema plan is made against. */
@@ -108,24 +108,6 @@ export async function planDbSync(
           target: projectPath(cwd, file),
         }))
       );
-
-      // In production a real sync pushes nothing, and refuses on what its registry step found
-      // created or updated, as that step decides it.
-      if (options.autoSync !== false && process.env.NODE_ENV === "production") {
-        const refusal = productionSyncRefusal(planned.sync);
-        return {
-          changes,
-          ...(refusal === undefined
-            ? {}
-            : { refusals: [`${refusal.what} ${refusal.why}`] }),
-          notes: [
-            // Only collection changes are refused there: the Single and field-group steps still
-            // create and update their tables, so the note must not promise an unchanged schema.
-            "NODE_ENV is production: a real run pushes no collection schema change, but still creates or updates Single and field-group tables, which are not shown here (use nextly migrate:create and nextly migrate for collections).",
-            SYNC_DRY_RUN_NOTE,
-          ],
-        };
-      }
 
       const push = await planPush(
         configResult,

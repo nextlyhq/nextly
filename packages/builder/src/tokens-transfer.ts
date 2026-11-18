@@ -34,18 +34,21 @@
  */
 import {
   isPlainRecord,
-  compileSiteSheet,
   dtcgToTokens,
+  emitTokenBlocks,
   modeFilesToTokens,
+  NEXTLY_EXTENSION,
   resolverToTokens,
   sameSiteToken,
   tokensToFigma,
   tokensToResolver,
   tokenCustomProperty,
+  tokenDisplayLabel,
   tokenIdentity,
   tokensToDtcg,
   type SiteToken,
   type SiteTokenSet,
+  type TokenKind,
 } from "@nextlyhq/blocks-engine";
 
 import { labelClashes } from "./tokens-studio";
@@ -843,6 +846,28 @@ export interface ExportResult {
   readonly mime: string;
   /** Tokens the format could not represent, in the engine's words. */
   readonly skipped: readonly string[];
+  /**
+   * The same report in the author's words, one entry per variable, with the
+   * variables the file keeps only as Nextly data beside the ones it left out:
+   * the list "What wasn't exported" shows.
+   */
+  readonly gaps: readonly ExportGap[];
+}
+
+/** One variable a file did not write as other tools read it, and why. */
+export interface ExportGap {
+  /** Its code name; absent for a report that names no variable. */
+  readonly name?: string;
+  /** The name an author sees it by. */
+  readonly label?: string;
+  /**
+   * `kept`: written only as Nextly data, which Nextly reads back exactly and
+   * other tools skip. `left-out`: not in the file at all. `without-data`: in
+   * the file with its value, but without vendor data a file cannot hold.
+   */
+  readonly outcome: "kept" | "left-out" | "without-data";
+  /** Why, in plain words. */
+  readonly why: string;
 }
 
 /**
@@ -854,7 +879,10 @@ export interface ExportResult {
  */
 export function exportDtcg(tokens: SiteTokenSet): ExportResult {
   let skipped: string[];
+  let refused: string[];
+  let lost: string[];
   let text: string;
+  let kept: readonly string[];
   try {
     /*
      * EVERY step that reads the vendor data is inside this guard, the
@@ -867,7 +895,12 @@ export function exportDtcg(tokens: SiteTokenSet): ExportResult {
      * line added later from landing outside it.
      */
     const { document, issues } = tokensToDtcg(tokens);
-    skipped = [...issues.map(issue => issue.message), ...unwritable(tokens)];
+    // Kept apart for the list: a variable the engine refused is not in the
+    // file, while one whose vendor data cannot be written still is.
+    refused = issues.map(issue => issue.message);
+    lost = unwritable(tokens);
+    skipped = [...refused, ...lost];
+    kept = carriedNames(document);
     text = `${JSON.stringify(document, null, 2)}\n`;
   } catch {
     /*
@@ -882,6 +915,9 @@ export function exportDtcg(tokens: SiteTokenSet): ExportResult {
      * caller downloads what it is given, so a file that cannot be written has
      * to arrive here as a report.
      */
+    const skipped = [
+      "This site's tokens carry vendor data that cannot be written to a file — a value JSON has no form for, such as a very large number or a structure that refers to itself. Nothing was exported.",
+    ];
     return {
       text: "",
       filename: "tokens.json",
@@ -893,9 +929,8 @@ export function exportDtcg(tokens: SiteTokenSet): ExportResult {
        * nothing to report but this. Naming issues from a conversion that did
        * not finish would be reporting a list nobody produced.
        */
-      skipped: [
-        "This site's tokens carry vendor data that cannot be written to a file — a value JSON has no form for, such as a very large number or a structure that refers to itself. Nothing was exported.",
-      ],
+      skipped,
+      gaps: gapsOf(tokens, skipped, []),
     };
   }
   return {
@@ -904,7 +939,23 @@ export function exportDtcg(tokens: SiteTokenSet): ExportResult {
     label: "variables",
     mime: "application/json",
     skipped,
+    gaps: gapsOf(tokens, refused, kept, lost),
   };
+}
+
+/**
+ * The variables a token file holds only in Nextly's own extension: the ones
+ * the format has no type for, written exactly so Nextly reads them back, and
+ * skipped by every other tool. The engine writes them without a report, since
+ * nothing is lost to Nextly, so they are read off the document it wrote.
+ */
+function carriedNames(document: Record<string, unknown>): string[] {
+  const root = document["$extensions"];
+  const own = isPlainRecord(root) ? root[NEXTLY_EXTENSION] : undefined;
+  // `variables` is the file format's key for them, which Nextly's importer
+  // reads back; a key in the files people keep, so it does not move.
+  const carried = isPlainRecord(own) ? own["variables"] : undefined;
+  return isPlainRecord(carried) ? Object.keys(carried) : [];
 }
 
 /** The file name a DTCG export is saved under, and its theme file's. */
@@ -924,6 +975,7 @@ export function exportDtcgWithTheme(tokens: SiteTokenSet): ExportResult[] {
     return [main];
   }
   const theme = tokensToResolver(tokens, DTCG_FILE);
+  const themeSkipped = theme.issues.map(entry => entry.message);
   return [
     main,
     {
@@ -932,11 +984,83 @@ export function exportDtcgWithTheme(tokens: SiteTokenSet): ExportResult[] {
       // It holds the dark values the format can type, which a file name
       // ending in "resolver" does not say; the token file's extension holds
       // every dark value exactly.
-      label: "theme file: dark values",
+      label: "dark values in a theme file",
       mime: "application/json",
-      skipped: theme.issues.map(entry => entry.message),
+      skipped: themeSkipped,
+      gaps: [
+        ...gapsOf(tokens, themeSkipped, []),
+        ...darkValuesKept(tokens, theme.resolver, themeSkipped, main.gaps),
+      ],
     },
   ];
+}
+
+/**
+ * The variables whose dark value only the token file's Nextly data holds.
+ *
+ * The engine writes a dark value the format has no type for into the token
+ * file's own extension and leaves it out of the theme file without a report,
+ * since Nextly reads it back exactly. A variable whose light value IS typed
+ * is in the token file as other tools read it, so nothing else names it, yet
+ * those tools have no dark value for it and use the light one in dark mode.
+ * Read off the theme file the engine wrote rather than worked out again here,
+ * so what this names is what the file holds. A variable the token file
+ * already names, or the theme file refused, is not named a second time.
+ */
+function darkValuesKept(
+  tokens: SiteTokenSet,
+  resolver: unknown,
+  skipped: readonly string[],
+  named: readonly ExportGap[]
+): ExportGap[] {
+  const written = darkDocumentOf(resolver);
+  const elsewhere = new Set<string>(
+    named.flatMap(gap => (gap.name === undefined ? [] : [gap.name]))
+  );
+  for (const message of skipped) {
+    const token = aboutWhich(tokens.tokens, message);
+    if (token !== undefined) elsewhere.add(token.name);
+  }
+  return tokens.tokens.flatMap(token =>
+    token.values.dark === undefined ||
+    elsewhere.has(token.name) ||
+    holdsTokenAt(written, token.name)
+      ? []
+      : [
+          {
+            name: token.name,
+            label: tokenDisplayLabel(token),
+            outcome: "kept" as const,
+            why: `${DARK_KEPT_WHY} ${KEPT_WHY[token.kind]}`,
+          },
+        ]
+  );
+}
+
+/** What a dark value kept only as Nextly data means for other tools. */
+const DARK_KEPT_WHY =
+  "Its dark value is kept for Nextly only, so design tools use its light value in dark mode.";
+
+/** The token tree a theme file gives its `dark` context, if it has one. */
+function darkDocumentOf(resolver: unknown): unknown {
+  const modifiers = isPlainRecord(resolver) ? resolver["modifiers"] : undefined;
+  if (!isPlainRecord(modifiers)) return undefined;
+  for (const modifier of Object.values(modifiers)) {
+    const contexts = isPlainRecord(modifier) ? modifier["contexts"] : undefined;
+    const dark = isPlainRecord(contexts) ? contexts["dark"] : undefined;
+    if (Array.isArray(dark)) return dark[0];
+  }
+  return undefined;
+}
+
+/** Whether a token tree holds a token at a dotted name's path. */
+function holdsTokenAt(tree: unknown, name: string): boolean {
+  let node = tree;
+  for (const segment of name.split(".")) {
+    if (!isPlainRecord(node) || !Object.hasOwn(node, segment)) return false;
+    node = node[segment];
+  }
+  return isPlainRecord(node) && "$value" in node;
 }
 
 /**
@@ -948,12 +1072,15 @@ export function exportForFigma(tokens: SiteTokenSet): ExportResult[] {
   return (["light", "dark"] as const).map(mode => {
     const made = tokensToFigma(tokens, mode);
     const empty = Object.keys(made.document).length === 0;
+    const skipped =
+      mode === "light" ? made.issues.map(entry => entry.message) : [];
     return {
       text: empty ? "" : `${JSON.stringify(made.document, null, 2)}\n`,
       filename: `${mode}.tokens.json`,
-      label: `Figma ${mode} mode`,
+      label: `${mode} mode`,
       mime: "application/json",
-      skipped: mode === "light" ? made.issues.map(entry => entry.message) : [],
+      skipped,
+      gaps: gapsOf(tokens, skipped, []),
     };
   });
 }
@@ -1082,43 +1209,195 @@ function isJsonLeaf(value: unknown): boolean {
 }
 
 /**
- * The site's tokens as the CSS custom properties a page actually resolves.
+ * The site's variables as the CSS a page reads them from, light and dark,
+ * under the site's prefix: what "Copy CSS variables" hands a developer.
  *
- * Compiled with `compileSiteSheet` rather than assembled here, so what this
- * hands over is the same text a visitor's stylesheet contains. A second
- * renderer would agree today and drift, and the drift would be invisible: the
- * exported file would describe a site that does not exist.
+ * Emitted by `emitTokenBlocks` under `:root`, the call the site sheet makes
+ * for its variable blocks, so the copy is those blocks byte for byte rather
+ * than a second rendering that agrees today and drifts. Variables only: the
+ * sheet's other rules (the content width, block defaults) are not variables.
  *
- * Export only. Reading CSS back would need a parser nothing in this system has,
+ * Copy only. Reading CSS back would need a parser nothing in this system has,
  * and a token table recovered from custom properties would have lost every
- * token's kind — which is what decides where it may be used.
+ * token's kind, which is what decides where it may be used.
  */
-export function exportCss(tokens: SiteTokenSet): ExportResult {
-  const sheet = compileSiteSheet(
-    {
-      tokens,
-      /*
-       * No breakpoints, and TYPED rather than cast. Token declarations are not
-       * emitted under any at-rule, so the axes decide nothing here — but the cast
-       * that used to stand in for them hid the fact that the value was the wrong
-       * SHAPE entirely, and a wrong argument to this call would have gone on
-       * compiling. A `BreakpointSet` with two empty axes says the same thing and
-       * says it in the type.
-       */
-      breakpoints: { viewport: [], container: [] },
-    },
-    // Tokens only: no class is compiled, so no part routes anything.
-    {}
-  );
+export function variableCss(tokens: SiteTokenSet): {
+  readonly css: string;
+  /**
+   * What the writer left out, in its own words: a variable whose CSS name
+   * another already took, or a prefix it could not use. Named to the author,
+   * so a copy that is missing a variable never reads as complete.
+   */
+  readonly skipped: readonly string[];
+} {
+  const { css, issues } = emitTokenBlocks(tokens, ":root");
+  // Empty stays empty: a lone newline would be copied and confirmed, telling
+  // an author their variables were copied when nothing was.
   return {
-    // An empty sheet stays empty rather than becoming a newline. A
-    // one-character file downloads as `tokens.css` and reports as saved, which
-    // tells an author their tokens were written when nothing was — and the
-    // warnings saying why are the report they actually needed.
-    text: sheet.css === "" ? "" : `${sheet.css}\n`,
-    filename: "tokens.css",
-    label: "CSS variables",
-    mime: "text/css",
-    skipped: sheet.warnings.map(warning => warning.message),
+    css: css === "" ? "" : `${css}\n`,
+    skipped: issues.map(issue => issue.message),
   };
 }
+
+/**
+ * An export's report as the list "What wasn't exported" shows: each variable
+ * by its name, what happened to it, and why, in plain words.
+ *
+ * Each engine sentence starts with the quoted code name of the variable it is
+ * about, which is how it is matched to its variable; one naming none (a whole
+ * file that could not be written) keeps its words and names no variable.
+ */
+function gapsOf(
+  tokens: SiteTokenSet,
+  skipped: readonly string[],
+  kept: readonly string[],
+  lost: readonly string[] = []
+): ExportGap[] {
+  const byName = new Map(tokens.tokens.map(token => [token.name, token]));
+  const gaps: ExportGap[] = [
+    ...skipped.map(message => gapNamedBy(tokens, message, "left-out")),
+    ...lost.map(message => gapNamedBy(tokens, message, "without-data")),
+  ];
+  for (const name of kept) {
+    const token = byName.get(name);
+    if (token === undefined) continue;
+    gaps.push({
+      name,
+      label: tokenDisplayLabel(token),
+      outcome: "kept",
+      why: KEPT_WHY[token.kind],
+    });
+  }
+  return gaps;
+}
+
+/** One engine sentence as a row of the list, under the variable it names. */
+function gapNamedBy(
+  tokens: SiteTokenSet,
+  message: string,
+  outcome: ExportGap["outcome"]
+): ExportGap {
+  const token = aboutWhich(tokens.tokens, message);
+  if (token === undefined) return { outcome, why: message };
+  return {
+    name: token.name,
+    label: tokenDisplayLabel(token),
+    outcome,
+    why: plainWhy(message.slice(token.name.length + 3)),
+  };
+}
+
+/**
+ * The variable an engine sentence is about: the one whose quoted code name
+ * opens it. The longest such name wins, so `"space.4"` is not read as being
+ * about a variable called `space`.
+ */
+function aboutWhich(
+  tokens: readonly SiteToken[],
+  message: string
+): SiteToken | undefined {
+  let found: SiteToken | undefined;
+  for (const token of tokens) {
+    if (!message.startsWith(`"${token.name}" `)) continue;
+    if (found === undefined || token.name.length > found.name.length) {
+      found = token;
+    }
+  }
+  return found;
+}
+
+/**
+ * Why a file left a variable out, in an author's words, from the rest of the
+ * engine's sentence after the variable's name.
+ *
+ * The engine's sentences are written for a developer reading a report ("token
+ * name", "vendor data"); a designer reading the list needs what the tool takes
+ * instead. A sentence not listed here keeps the engine's words, with "token"
+ * said as "variable", so a reason added there later still reads.
+ */
+function plainWhy(rest: string): string {
+  for (const [pattern, words] of PLAIN_WHY) {
+    const match = pattern.exec(rest);
+    if (match !== null) return typeof words === "string" ? words : words(match);
+  }
+  const sentence = rest
+    .replace(/,? so it was (?:not exported|left out of the Figma files)/, "")
+    .replace(/ It was left out of the Figma files\.$/, "")
+    .replace(/\btokens?\b/g, word =>
+      word === "token" ? "variable" : "variables"
+    );
+  return `It ${sentence}`;
+}
+
+const PLAIN_WHY: readonly (readonly [
+  RegExp,
+  string | ((match: RegExpExecArray) => string),
+])[] = [
+  [/^is a shadow\./, "Figma keeps shadows as effect styles, not variables."],
+  [
+    /^carries vendor data that a file cannot hold/,
+    "It holds data from another tool that a file can't store, so the file has its value but not that data. Importing the file back treats it as a new variable.",
+  ],
+  [
+    /^is a size Figma cannot read/,
+    "Figma takes sizes in px or rem, and fluid sizes that end in px or rem.",
+  ],
+  [
+    /^is a colour Figma cannot read/,
+    "Figma takes colours written as hex or rgb().",
+  ],
+  [
+    /^is not a list of font names Figma can read/,
+    "Figma takes a font as a list of font names.",
+  ],
+  [/^names no font family Figma can read/, "It names no font Figma can use."],
+  [
+    /^is a font weight Figma cannot read/,
+    "Figma takes a font weight as a number, normal or bold.",
+  ],
+  [/^is not a plain number/, "Figma takes a plain number here."],
+  [/^is a duration Figma cannot read/, "Figma takes durations in ms or s."],
+  [
+    /^sits where another variable's group is/,
+    "Another variable's group already uses this name.",
+  ],
+  [/^is nested too deeply/, "Its code name has too many parts."],
+  [
+    /^is written under more than (\d+) characters/,
+    match => `Its code name is longer than ${match[1] ?? ""} characters.`,
+  ],
+  [/^is not a token name/, "Its code name can't be written to a file."],
+  [
+    /^has an id that is not a token name/,
+    "Its stored id can't be written to a file. Its value is still here in Nextly.",
+  ],
+  [
+    /^is exported more than once/,
+    "Another variable has the same code name, so only one was written.",
+  ],
+  [
+    /^cannot be exported, because "([^"]+)" is already a token/,
+    match =>
+      `"${match[1] ?? ""}" is a variable, so nothing can sit under its name.`,
+  ],
+  [
+    /^carries vendor data that a file cannot hold/,
+    "Data another tool stored on it can't be written to a file. Imported back, it would arrive as a new variable.",
+  ],
+];
+
+/**
+ * Why the token file keeps a variable only as Nextly data, by its kind: the
+ * format types a value of that kind only in some forms, and this one is not
+ * among them.
+ */
+const KEPT_WHY: Readonly<Record<TokenKind, string>> = {
+  color: "Design tools can't read this colour as it is written.",
+  dimension: "Design tools take sizes in px or rem only.",
+  fontFamily: "Design tools can't read this font list as it is written.",
+  fontWeight: "Design tools can't read this font weight as it is written.",
+  number: "Design tools can't read this number as it is written.",
+  shadow: "Design tools can't read a shadow from this file.",
+  duration: "Design tools take durations in ms or s only.",
+  custom: "A custom value has no type design tools read.",
+};

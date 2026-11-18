@@ -166,7 +166,10 @@ describe("a font variable", () => {
       fireEvent.click(within(editor).getByRole("button", { name: /^Font, / }));
       const list = screen.getByRole("group", { name: group, hidden: true });
       fireEvent.click(
-        within(list).getByRole("option", { name: new RegExp(`^${name}`), hidden: true })
+        within(list).getByRole("option", {
+          name: new RegExp(`^${name}`),
+          hidden: true,
+        })
       );
     };
     // Two different picks, so a field writing one fixed family fails.

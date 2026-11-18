@@ -22,18 +22,18 @@ import { CornerDownRight } from "lucide-react";
 import * as React from "react";
 
 import { BlockIconMark } from "../../block-icon";
+import { usePublishInsertionPreview } from "../../canvas/insertion-preview";
 import { isElement } from "../../dom-kind";
 import { withEntryContentField } from "../../entry-content-rules";
 
 import type { EntryOffer } from "./insert-panel-offers";
-import {
-  cardAnchor,
-  NOWHERE,
-  useSummonAnswer,
-  type Measurable,
-} from "./insert-panel-summon";
+import { cardAnchor, NOWHERE, type Measurable } from "./insert-panel-summon";
 import type { InsertPanelProps } from "./insert-panel-types";
-import { placementSentence, placementWords } from "./insert-placement-words";
+import {
+  placementSentence,
+  placementWords,
+  placeWords,
+} from "./insert-placement-words";
 import {
   nodeForComponentEntry,
   nodeForEntry,
@@ -264,11 +264,14 @@ function howToAdd(entry: InsertEntry): string {
  * already says where it goes, so announcing the line too would say it twice
  * on every arrow key. The block is named as Layers names it, an author's own
  * name first, so the line agrees with the tree beside it.
+ *
+ * While a tile is highlighted the line names it, "Heading goes inside Hero,
+ * at the end", and hands that place and those words to the canvas, which
+ * draws its insertion line there (`insertion-preview`).
  */
 export function PlacementLine({
   document,
-  root,
-  summons,
+  flash,
   first,
   shown,
   groups,
@@ -276,10 +279,8 @@ export function PlacementLine({
   offers,
 }: {
   document: BlockDocument;
-  /** The panel, whose search and list a press is answered in. */
-  root: React.RefObject<HTMLDivElement | null>;
-  /** A canvas press still to answer, and where to say it was answered. */
-  summons: Pick<InsertPanelProps, "summoned" | "onSummoned">;
+  /** The canvas press the panel answered, while its line is highlighted. */
+  flash: number | undefined;
   first: InsertionCandidate;
   shown: boolean;
   groups: readonly InsertGroup<InsertEntry>[];
@@ -287,13 +288,20 @@ export function PlacementLine({
   offers: ReadonlyMap<string, EntryOffer>;
 }): React.JSX.Element {
   const highlighted = useCommandHighlight();
-  // The line answers a canvas press for the whole panel, highlighted for it.
-  const flash = useSummonAnswer(root, summons.summoned, summons.onSummoned);
   const entry = shown
     ? highlightedEntry(groups, tokens, highlighted)
     : undefined;
-  const place =
-    (entry === undefined ? undefined : offers.get(entry.id)?.place) ?? first;
+  const own = entry === undefined ? undefined : offers.get(entry.id)?.place;
+  const place = own ?? first;
+  // Named only where it has a place of its own: a tile refused here leaves
+  // the line at the resting place, which it does not take.
+  const lead =
+    entry === undefined || own === undefined ? "Adding" : `${entry.label} goes`;
+  usePublishInsertionPreview(
+    own === undefined || entry === undefined
+      ? null
+      : { at: own.at, words: `${lead} ${placeWords(document, own)}` }
+  );
   return (
     <p
       className="nx-insert-panel__placement"
@@ -301,7 +309,7 @@ export function PlacementLine({
       aria-live={entry === undefined ? "polite" : "off"}
     >
       <CornerDownRight aria-hidden="true" size={14} />
-      <span>{placementWords("Adding", document, place)}</span>
+      <span>{placementWords(lead, document, place)}</span>
     </p>
   );
 }

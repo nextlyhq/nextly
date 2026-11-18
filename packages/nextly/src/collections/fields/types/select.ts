@@ -133,9 +133,10 @@ export interface SelectFieldAdminOptions extends FieldAdminOptions {
   /**
    * Allow users to clear the selection.
    *
-   * When `true`, displays a clear button to remove the selected value.
+   * When `true`, an optional field displays a clear button to remove the
+   * selected value. A required field never does, whatever this is set to.
    *
-   * @default false
+   * @default true
    */
   isClearable?: boolean;
 

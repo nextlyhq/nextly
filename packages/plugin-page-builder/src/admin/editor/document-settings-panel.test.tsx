@@ -25,6 +25,16 @@ import {
 } from "react-hook-form";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+/**
+ * What a plugin draws where the builder shows the page's search result;
+ * null where no plugin adds a block, as without the SEO plugin. And what
+ * each draw of that place was handed.
+ */
+const search: {
+  block: React.ReactNode | null;
+  asked: Record<string, unknown>[];
+} = vi.hoisted(() => ({ block: null, asked: [] }));
+
 /** The entry's form as the document editor holds it, for the SDK's hooks. */
 const live: {
   form?: UseFormReturn<FieldValues>;
@@ -51,17 +61,44 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
     };
   },
   useDocumentIdentity: () => ({ kind: live.identity, slug: "pages" }),
-  usePluginRoute: (args: { enabled?: boolean }) => ({
-    data: args.enabled === false ? undefined : { path: live.savedPath },
+  usePluginRoute: (args: { enabled?: boolean; path: string }) => ({
+    data:
+      args.enabled === false
+        ? undefined
+        : args.path.startsWith("/loop-collections")
+          ? {
+              items: [
+                {
+                  slug: "pages",
+                  label: "Pages",
+                  singular: "Page",
+                  fields: [],
+                  relations: [],
+                },
+              ],
+            }
+          : { path: live.savedPath },
     error: null,
     refetch: () => Promise.resolve(),
   }),
+  useDocumentLocale: () => null,
+  // The admin's slot, standing in: a plugin's block where a case adds one,
+  // else the page's fallback, as the real slot draws a plugin's place.
+  TargetSlot: (props: Record<string, unknown>) => {
+    search.asked.push(props);
+    if (props.context === null) return null;
+    return search.block ?? (props.fallback as React.ReactNode);
+  },
 }));
 
 // The one header & footer picker, tested where it lives.
 vi.mock("../page-layout", () => ({
   PageLayoutPicker: ({ disabled }: { disabled?: boolean }) => (
-    <p>{disabled === true ? "Header & footer picker, held" : "Header & footer picker"}</p>
+    <p>
+      {disabled === true
+        ? "Header & footer picker, held"
+        : "Header & footer picker"}
+    </p>
   ),
 }));
 
@@ -77,7 +114,29 @@ const ADDRESS = {
   savedRevision: 0,
 } as const;
 
+/** The place a page's panel draws its search result at. */
+const PLACE = {
+  context: {
+    userId: "u1",
+    document: "page" as const,
+    collection: "pages",
+    entryId: "p1",
+    draws: null,
+  },
+  tabProps: {
+    seo: { value: undefined, set: () => true },
+    design: { formatVersion: 1, kind: "page", nodes: [] },
+    control: {} as never,
+    writable: true,
+    holdEdit: () => () => {},
+    designField: "layout",
+  },
+  flushHeld: () => null,
+} as unknown as NonNullable<DocumentSettingsPanelProps["place"]>;
+
 beforeEach(() => {
+  search.block = null;
+  search.asked.length = 0;
   live.writable = true;
   live.savedPath = "/pricing";
   live.sets = [];
@@ -104,7 +163,7 @@ function mount(
           opened += 1;
         }}
         address={ADDRESS}
-        seoEditsPage={false}
+        place={PLACE}
         {...props}
       />
     );
@@ -145,9 +204,9 @@ describe("a page's settings in the right panel", () => {
     expect(form().getValues("title")).toBe("Plans");
     // The summary follows the title as it is typed.
     expect(
-      within(
-        screen.getByRole("region", { name: "Search result" })
-      ).getByText("Plans")
+      within(screen.getByRole("region", { name: "Search result" })).getByText(
+        "Plans"
+      )
     ).toBeTruthy();
   });
 
@@ -196,11 +255,36 @@ describe("a page's settings in the right panel", () => {
     expect(open()).toBe(1);
   });
 
-  it("leaves the search result to the SEO plugin where it edits the page", () => {
-    mount("page", { seoEditsPage: true });
+  it("leaves the search result to a plugin that draws one, drawing its own only where none does", () => {
+    // No plugin adds a block: the builder's own summary.
+    mount("page");
+    expect(screen.getByRole("region", { name: "Search result" })).toBeTruthy();
+    expect(search.asked.at(-1)).toMatchObject({
+      place: "nextlyhq-plugin-page-builder.settings",
+      context: PLACE.context,
+      blockProps: {
+        at: "panel",
+        typePlural: "Pages",
+        design: PLACE.tabProps.design,
+        designField: "layout",
+      },
+    });
+    cleanup();
+
+    search.block = <p>The plugin&apos;s own result</p>;
+    mount("page");
+    expect(screen.getByText("The plugin's own result")).toBeTruthy();
     expect(screen.queryByRole("region", { name: "Search result" })).toBeNull();
     // And says nothing of its own about search.
     expect(screen.queryByText(/Built from the page/)).toBeNull();
+  });
+
+  it("keeps its own search result on a Single's page, which the place does not take", () => {
+    // The place names collection entries only, so a Single's context stays
+    // null; that is not the place still loading, and the page keeps its own.
+    live.identity = "single";
+    mount("page", { place: { ...PLACE, context: null } });
+    expect(screen.getByRole("region", { name: "Search result" })).toBeTruthy();
   });
 
   it("holds its fields while the page takes no edits", () => {
@@ -223,7 +307,9 @@ describe("a page's settings in the right panel", () => {
     const view = panel("Page settings");
     const line = within(view).getByText("Page data line");
     const result = within(view).getByRole("region", { name: "Search result" });
-    const all = within(view).getByRole("button", { name: "All page settings…" });
+    const all = within(view).getByRole("button", {
+      name: "All page settings…",
+    });
     expect(
       result.compareDocumentPosition(line) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();
@@ -253,9 +339,9 @@ describe("a title or address the panel must not change", () => {
     expect(title.value).toBe("42");
     expect(title.readOnly).toBe(true);
     expect(
-      within(
-        screen.getByRole("region", { name: "Search result" })
-      ).getByText("42")
+      within(screen.getByRole("region", { name: "Search result" })).getByText(
+        "42"
+      )
     ).toBeTruthy();
   });
 });

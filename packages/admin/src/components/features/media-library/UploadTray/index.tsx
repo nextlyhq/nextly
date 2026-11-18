@@ -5,7 +5,8 @@
  *
  * Lists every file in an upload queue: its name, a small preview, and its
  * progress, the reason it failed or was refused, or that it is done. A
- * failure offers Retry on its own row. The heading counts the files through,
+ * failure offers Retry on its own row, and an uploaded image offers Add alt
+ * text where the caller handles it. The heading counts the files through,
  * and the same line goes to a polite live region, which stays mounted while
  * the tray is closed so the first announcement of a new upload is heard too.
  *
@@ -20,14 +21,19 @@
  * The queue itself is {@link useUploadQueue}; this only draws it.
  */
 
-import { Button, Progress } from "@nextlyhq/ui";
+import { Button, Progress, toast } from "@nextlyhq/ui";
 import * as React from "react";
 
 import { Check, RefreshCw, X } from "@admin/components/icons";
 import { MEDIA_DESTRUCTIVE_TEXT_CLASSES } from "@admin/constants/media";
 import { TOAST_OFFSET_BOTTOM_PROPERTY } from "@admin/constants/ui";
+import { useRetryableModule } from "@admin/hooks/useRetryableModule";
 import { formatFileSize } from "@admin/lib/media-utils";
+import { retryableModule } from "@admin/lib/retryable-module";
 import { cn } from "@admin/lib/utils";
+import type { Media, MediaUpdateInput } from "@admin/types/media";
+
+import type { MediaSave } from "../MediaDetails";
 
 import type { UploadQueue, UploadRow } from "./useUploadQueue";
 
@@ -40,6 +46,13 @@ export interface UploadTrayProps {
    * the page's body. The library passes its heading.
    */
   returnFocusRef?: React.RefObject<HTMLElement | null>;
+  /**
+   * Saves an uploaded image's alt text. Given, each uploaded image's row
+   * offers Add alt text, which opens the Edit dialog on that field: files
+   * upload the moment they are chosen, so this is the first place alt text
+   * can be written. Without it, no row offers the action.
+   */
+  onSaveMedia?: MediaSave;
   className?: string;
 }
 
@@ -125,6 +138,94 @@ function UploadThumbnail({ file }: { file: File }): React.JSX.Element {
   );
 }
 
+/**
+ * The Edit dialog opened from a row's Add alt text: which image it is open on,
+ * and the save that keeps what was written.
+ *
+ * A row keeps its media as it uploaded, so what was saved since is laid over
+ * it here. Without that, a second Add alt text on the same row would open on
+ * an empty field again. Only the values sent are laid over: an empty field is
+ * not sent, and the server keeps what it had.
+ */
+function useAltTextEditor(onSaveMedia: MediaSave | undefined): {
+  media: Media | null;
+  open: (media: Media) => void;
+  close: () => void;
+  save: (updates: MediaUpdateInput) => Promise<void>;
+} {
+  const [media, setMedia] = React.useState<Media | null>(null);
+  const [saved, setSaved] = React.useState<Record<string, Media>>({});
+
+  const open = React.useCallback(
+    (uploaded: Media) => setMedia(saved[uploaded.id] ?? uploaded),
+    [saved]
+  );
+  const close = React.useCallback(() => setMedia(null), []);
+  const save = React.useCallback(
+    async (updates: MediaUpdateInput) => {
+      if (!media || !onSaveMedia) return;
+      await onSaveMedia(media.id, updates);
+      const sent = Object.fromEntries(
+        Object.entries(updates).filter(([, value]) => value !== undefined)
+      );
+      setSaved(prev => ({ ...prev, [media.id]: { ...media, ...sent } }));
+    },
+    [media, onSaveMedia]
+  );
+
+  return { media, open, close, save };
+}
+
+/**
+ * The Edit dialog's code, fetched the first time Add alt text is used. Drawn
+ * into the tray directly it came in the tray's own chunk, which loads as the
+ * library mounts, and took that chunk well past its size budget for a dialog
+ * most visits never open.
+ */
+const editDialogModule = retryableModule(() =>
+  import("../MediaEditDialog").then(m => m.MediaEditDialog)
+);
+
+/**
+ * The Edit dialog on an uploaded image's alt text, once its code has arrived;
+ * nothing while it is on its way. If the code could not be fetched it says so
+ * and closes, and the next Add alt text fetches it again.
+ */
+function AltTextDialog({
+  media,
+  onClose,
+  onSave,
+}: {
+  media: Media;
+  onClose: () => void;
+  onSave: (updates: MediaUpdateInput) => Promise<void>;
+}): React.JSX.Element | null {
+  const { state } = useRetryableModule(
+    editDialogModule,
+    "The edit dialog's code"
+  );
+  React.useEffect(() => {
+    if (state.status !== "error") return;
+    toast.error("Alt text can't be added right now", {
+      description: "The edit dialog could not be loaded. Try again.",
+    });
+    onClose();
+  }, [state.status, onClose]);
+  if (state.status !== "ok") return null;
+  const MediaEditDialog = state.value;
+  return (
+    <MediaEditDialog
+      open
+      media={media}
+      onOpenChange={open => {
+        if (!open) onClose();
+      }}
+      onSave={onSave}
+      focusAltText
+    />
+  );
+}
+
 /** What a row says under its name, by the state the file is in. */
 function RowStatus({ row }: { row: UploadRow }): React.JSX.Element {
   switch (row.status) {
@@ -159,10 +260,21 @@ function RowStatus({ row }: { row: UploadRow }): React.JSX.Element {
 function UploadTrayRow({
   row,
   onRetry,
+  onAddAltText,
 }: {
   row: UploadRow;
   onRetry: (id: string) => void;
+  onAddAltText?: (media: Media) => void;
 }): React.JSX.Element {
+  // Alt text describes an image, so only an uploaded image offers it. The type
+  // is read with care: a row is drawn from whatever the upload answered, and
+  // a row the tray could not draw would hide every other file's progress.
+  const altTextFor =
+    onAddAltText &&
+    row.status === "success" &&
+    row.media?.mimeType?.startsWith("image/")
+      ? row.media
+      : undefined;
   return (
     <li className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 border-b border-border px-3 py-2 last:border-b-0">
       <UploadThumbnail file={row.file} />
@@ -202,6 +314,17 @@ function UploadTrayRow({
             Retry
           </Button>
         )}
+        {altTextFor && onAddAltText && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => onAddAltText(altTextFor)}
+            aria-label={`Add alt text to ${row.filename}`}
+            className="h-7 px-2"
+          >
+            Add alt text
+          </Button>
+        )}
       </div>
     </li>
   );
@@ -211,9 +334,11 @@ export function UploadTray({
   queue,
   placement,
   returnFocusRef,
+  onSaveMedia,
   className,
 }: UploadTrayProps): React.JSX.Element {
   const { rows, summary, isUploading } = queue;
+  const altText = useAltTextEditor(onSaveMedia);
   const trayRef = React.useRef<HTMLElement>(null);
   const listRef = React.useRef<HTMLUListElement>(null);
   useToastClearance(trayRef, placement === "floating" && rows.length > 0);
@@ -267,10 +392,22 @@ export function UploadTray({
             className="min-h-0 flex-1 overflow-y-auto focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
           >
             {rows.map(row => (
-              <UploadTrayRow key={row.id} row={row} onRetry={queue.retry} />
+              <UploadTrayRow
+                key={row.id}
+                row={row}
+                onRetry={queue.retry}
+                onAddAltText={onSaveMedia ? altText.open : undefined}
+              />
             ))}
           </ul>
         </section>
+      )}
+      {onSaveMedia && altText.media && (
+        <AltTextDialog
+          media={altText.media}
+          onClose={altText.close}
+          onSave={altText.save}
+        />
       )}
     </>
   );

@@ -274,6 +274,29 @@ describe("pushCarriesValues", () => {
       ).toBe(true);
     });
 
+    it("runs the file for a field that gains or loses a column of its own, which changes no column's type", async () => {
+      // A many-to-many keeps its values in a junction table; made one-to-one, it gets a column.
+      const manyToMany = field("lead", {
+        type: "relationship",
+        options: { relationType: "manyToMany", target: "people" },
+      });
+      const oneToOne = field("lead", {
+        type: "relationship",
+        options: { relationType: "oneToOne", target: "people" },
+      });
+      // Gaining a column, and losing one the other way round.
+      expect(
+        await pushCarriesValues(
+          save({ oldFields: [manyToMany], newFields: [oneToOne] })
+        )
+      ).toBe(false);
+      expect(
+        await pushCarriesValues(
+          save({ oldFields: [oneToOne], newFields: [manyToMany] })
+        )
+      ).toBe(false);
+    });
+
     it("runs the file for a field made required, whose column keeps its type", async () => {
       expect(
         await pushCarriesValues(

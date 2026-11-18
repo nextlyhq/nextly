@@ -14,16 +14,18 @@ import {
 } from "@nextlyhq/blocks-engine";
 import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
   screen,
+  waitFor,
   within,
 } from "@testing-library/react";
 import * as React from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { typedWidth } from "./content-width-control";
+import { ContentWidthControl, typedWidth } from "./content-width-control";
 import type { EditorState } from "./editor-state";
 import { StyleInspectorPanel } from "./style-inspector-panel";
 
@@ -342,5 +344,63 @@ describe("a typed width", () => {
     ["", undefined],
   ])("reads %j as %j", (text, stored) => {
     expect(typedWidth(text)).toBe(stored);
+  });
+});
+
+describe("a site variable as the width", () => {
+  it("is chosen from the width field's own menu, a chevron at its end", () => {
+    const editor = mount([node("s", "core/section", { contained: true })], "s");
+    fireEvent.click(
+      screen.getByRole("button", { name: "Change for this section" })
+    );
+    const menu = screen.getByRole("button", { name: "Variables for Width" });
+    expect(menu.querySelector(".lucide-chevron-down")).not.toBeNull();
+    expect(menu.querySelector(".lucide-diamond")).toBeNull();
+    fireEvent.click(menu);
+    fireEvent.click(screen.getByRole("option", { name: /1600px$/ }));
+    expect(written(editor)).toMatchObject({
+      contentWidth: { $token: "content.wide" },
+    });
+  });
+
+  it("shows as a green chip, and Unlink keeps its width as the container's own", () => {
+    const editor = mount(
+      [
+        node("s", "core/section", {
+          contained: true,
+          contentWidth: { $token: "content.wide" },
+        }),
+      ],
+      "s"
+    );
+    const chip = screen.getByRole("group", { name: "Width" });
+    expect(chip.classList.contains("nx-variable-chip")).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Unlink Width" }));
+    expect(editor.apply).toHaveBeenCalledTimes(1);
+    expect(written(editor)).toMatchObject({ contentWidth: "1600px" });
+  });
+});
+
+describe("focus after Unlink", () => {
+  it("lands on the width field, holding the width, once Unlink keeps it", async () => {
+    const props = {
+      contained: true,
+      tokens: siteTokens("1152px"),
+      variables: [],
+      held: undefined,
+      onContained: vi.fn(),
+      onWidth: vi.fn(),
+    };
+    const { rerender } = render(
+      <ContentWidthControl {...props} width={{ $token: "content.wide" }} />
+    );
+    const unlink = screen.getByRole("button", { name: "Unlink Width" });
+    act(() => unlink.focus());
+    fireEvent.click(unlink);
+    expect(props.onWidth).toHaveBeenCalledWith("1600px");
+    rerender(<ContentWidthControl {...props} width="1600px" />);
+    const field = screen.getByLabelText("Width") as HTMLInputElement;
+    await waitFor(() => expect(document.activeElement).toBe(field));
+    expect(field.value).toBe("1600px");
   });
 });

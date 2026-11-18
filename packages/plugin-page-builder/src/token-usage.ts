@@ -19,19 +19,46 @@
  * type's own default styles (`baseStyles`) is that block type's, read from
  * the block registry.
  *
+ * ## A variable named in CSS text
+ *
+ * A value can name a variable as `var()` of the custom property it is written
+ * under (a shadow's colour is kept that way). Which variable that is depends
+ * on the site's prefix, which a stored document does not carry, and two
+ * identities can map to one property (`tokenCustomProperty`), so the
+ * property is recorded as it is, under its own key ({@link propertyUsageKey}),
+ * and never mapped back. A question about a variable asks for its identity
+ * and for the key of the property it is written under on this site
+ * ({@link variablesAsked}), and folds the answers back to it, wherever the
+ * question is asked from.
+ *
  * @module token-usage
  */
 import {
   MAX_TOKEN_NAME_LENGTH,
   blockLabelFrom,
-  contentWidthTokenOf,
+  documentTokenUsage,
+  onlySiteProperties,
+  onlyVariableIdentities as onlyVariables,
+  styleSitePropertiesIn as propertiesIn,
+  styleVariablesIn as variablesIn,
+  type TokenUsage,
   isPlainRecord,
-  selectNodes,
+  isTokenName,
+  resolveTokenPrefix,
+  tokenCustomProperty,
+  tokenDisplayLabel,
+  tokenIdentity,
   type DocumentLimits,
+  type SiteTokenSet,
 } from "@nextlyhq/blocks-engine";
 
 import { readStoredJson } from "./stored-json";
-import { collectStyleTokens, styleEnvelopeTokens } from "./style-token-refs";
+import {
+  collectStyleProperties,
+  collectStyleTokens,
+  styleEnvelopeProperties,
+  styleEnvelopeTokens,
+} from "./style-token-refs";
 import type { UsageIndex, UsageSubject } from "./usage-index";
 
 /** One row: this document, through this field, uses this variable. */
@@ -58,90 +85,156 @@ export const UNDETERMINED_TOKEN_ID: string = `undetermined:${"-".repeat(
   MAX_TOKEN_NAME_LENGTH
 )}`;
 
-/** What a stored document says about the variables it uses. */
-export interface TokenUsage {
-  /** The variable identities the document uses, sorted, without repeats. */
-  ids: string[];
-  /**
-   * Whether the whole document was read. False when a bound ended the node
-   * selection early, so `ids` is a SUBSET and an absence proves nothing.
-   */
-  complete: boolean;
-  /**
-   * How many blocks use each variable, by identity: a block counts once
-   * however many of its values name it. A variable used only by the
-   * document's own `settings.styles` is in `ids` and absent here, since no
-   * block uses it. A Map, so an identity such as `__proto__` is a key like
-   * any other.
-   */
-  blocks: ReadonlyMap<string, number>;
-}
-
 /**
- * Whether a stored reference can name a variable the site could write.
- * Longer identities are never emitted, so they use nothing, and skipping them
- * is what keeps {@link UNDETERMINED_TOKEN_ID} disjoint from every reference.
+ * What marks a usage key as a custom property rather than an identity: a
+ * colon, which the token name grammar (`isTokenName`) never holds, so no
+ * identity can wear one. The undetermined marker starts otherwise, so it is
+ * disjoint from these too.
  */
-function namesAVariable(identity: string): boolean {
-  return identity.length <= MAX_TOKEN_NAME_LENGTH;
-}
+const PROPERTY_KEY_MARK = "var:";
 
-/** The identities in `found` that can name a variable at all. */
-function onlyVariables(found: Set<string>): Set<string> {
-  for (const identity of found) {
-    if (!namesAVariable(identity)) found.delete(identity);
-  }
-  return found;
-}
-
-/** The variables one style envelope names that can name a variable at all. */
-function variablesIn(styles: unknown): Set<string> {
-  const found = new Set<string>();
-  styleEnvelopeTokens(styles, found);
-  return onlyVariables(found);
+/**
+ * The usage key a custom property read through `var()` is recorded under,
+ * disjoint from every identity by {@link PROPERTY_KEY_MARK}.
+ */
+function propertyUsageKey(property: string): string {
+  return `${PROPERTY_KEY_MARK}${property}`;
 }
 
 /**
- * The variables a stored document uses, and whether it could all be read.
+ * Every usage key a reading records: each identity a variable can have, and
+ * each property under its own key. An identity outside the name grammar is
+ * none a site can define, and leaving it out keeps the two kinds of key
+ * disjoint: a stored `$token` spelled like a property's key names nothing.
+ */
+export function usageKeysOf(
+  usage: Pick<TokenUsage, "ids" | "properties">
+): string[] {
+  return [
+    ...usage.ids.filter(identity => isTokenName(identity)),
+    ...usage.properties.map(propertyUsageKey),
+  ];
+}
+
+/**
+ * Whether a usage key is an identity rather than a custom property's key
+ * ({@link propertyUsageKey}).
+ */
+export function isIdentityKey(key: string): boolean {
+  return !key.startsWith(PROPERTY_KEY_MARK);
+}
+
+/**
+ * The key of every site property any string anywhere in a stored value
+ * reads through `var()`, whatever field holds it: what a page the index does
+ * not cover is read for (`uncovered-pages`), where no walk of its blocks can
+ * be made. A string holding stored JSON (SQLite hands a JSON column back as
+ * text) is read as the value it holds.
  *
- * Total by construction: persisted data arrives unvalidated, and a shape this
- * cannot read contributes nothing rather than raising. `limits` is required,
- * as the component reader's is: the caller is the index, which must read
- * under the bounds the page is drawn with.
+ * Walked with a list rather than by recursion, since such a page can be
+ * nested past any depth a recursive walk survives. Every string counts, so
+ * a `var()` in text that is no style is a use too: this errs towards
+ * refusing a removal, never towards allowing one.
+ */
+export function propertyKeysAnywhere(value: unknown): Set<string> {
+  const properties = new Set<string>();
+  const pending: unknown[] = [value];
+  while (pending.length > 0) {
+    // Pushed one at a time: spreading a very long list into one call can
+    // exceed the engine's argument limit.
+    for (const item of storedChildren(pending.pop(), properties)) {
+      pending.push(item);
+    }
+  }
+  return new Set(
+    usageKeysOf({ ids: [], properties: [...onlySiteProperties(properties)] })
+  );
+}
+
+/**
+ * What a stored value holds for {@link propertyKeysAnywhere} to read next: a
+ * list's items, a record's values, or the value stored JSON text holds. Any
+ * other string is read for its properties into `properties` here.
+ */
+function storedChildren(
+  value: unknown,
+  properties: Set<string>
+): readonly unknown[] {
+  if (Array.isArray(value)) return value;
+  if (isPlainRecord(value)) return Object.values(value);
+  if (typeof value !== "string") return [];
+  const held = /^\s*[[{]/.test(value) ? readStoredJson(value) : undefined;
+  if (typeof held === "object" && held !== null) return [held];
+  collectStyleProperties(value, properties);
+  return [];
+}
+
+/** Every usage key one stored style envelope records, likewise. */
+function styleUsageKeys(styles: unknown): Set<string> {
+  return new Set(
+    usageKeysOf({
+      ids: [...variablesIn(styles)],
+      properties: [...propertiesIn(styles)],
+    })
+  );
+}
+
+/**
+ * A question about some variables, as this site writes them: each one's
+ * identity and the key of the custom property it is written under.
+ */
+export interface VariablesAsked {
+  /** Every key asked for, identities and properties alike, without repeats. */
+  readonly keys: readonly string[];
+  /** The identities asked about that any of the keys `found` answers for. */
+  identitiesIn(found: Iterable<string>): Set<string>;
+}
+
+/**
+ * The one way a question about variables is asked: each identity, with the
+ * key of the custom property it is written under on a site whose token
+ * prefix is `prefix` (as stored; refused or absent, the default). Two
+ * identities written under one property both answer to its key, so a
+ * reference to it uses both: either may be the one it resolves to.
+ */
+export function variablesAsked(
+  identities: Iterable<string>,
+  prefix: string | undefined
+): VariablesAsked {
+  const written = resolveTokenPrefix(prefix).prefix;
+  const askedBy = new Map<string, string[]>();
+  for (const identity of new Set(identities)) {
+    const keys = [
+      identity,
+      propertyUsageKey(tokenCustomProperty(identity, written)),
+    ];
+    for (const key of keys) {
+      askedBy.set(key, [...(askedBy.get(key) ?? []), identity]);
+    }
+  }
+  return {
+    keys: [...askedBy.keys()],
+    identitiesIn: found => {
+      const identities = new Set<string>();
+      for (const key of found) {
+        for (const identity of askedBy.get(key) ?? []) identities.add(identity);
+      }
+      return identities;
+    },
+  };
+}
+
+/**
+ * The variables a stored document uses, and whether it could all be read:
+ * the engine's walk (`documentTokenUsage`), over the stored JSON read.
+ * Total by construction: persisted data arrives unvalidated, and a shape the
+ * walk cannot read contributes nothing rather than raising.
  */
 export function tokenUsageOf(
   stored: unknown,
   limits: DocumentLimits
 ): TokenUsage {
-  const document = readStoredJson(stored);
-  if (!isPlainRecord(document) || !Array.isArray(document.nodes)) {
-    return { ids: [], complete: true, blocks: new Map() };
-  }
-  // The compiler's own selection, so a variable on a node the stylesheet
-  // writes rules for is never missed, and a bound that ends it says so.
-  const selection = selectNodes(document, limits);
-  const blocks = new Map<string, number>();
-  for (const entry of selection.nodes) {
-    const styles: unknown = (entry.node as { styles?: unknown }).styles;
-    const found = variablesIn(styles);
-    // A container's own content width is a prop the compiler writes from, so
-    // a variable it names is used as one in the styles is.
-    const ownWidth = contentWidthTokenOf(entry.node);
-    if (ownWidth !== undefined && namesAVariable(ownWidth)) found.add(ownWidth);
-    for (const identity of found) {
-      blocks.set(identity, (blocks.get(identity) ?? 0) + 1);
-    }
-  }
-  const ids = new Set(blocks.keys());
-  const settings = document.settings;
-  if (isPlainRecord(settings)) {
-    for (const identity of variablesIn(settings.styles)) ids.add(identity);
-  }
-  return {
-    ids: [...ids].sort(),
-    complete: selection.stopped === undefined,
-    blocks,
-  };
+  return documentTokenUsage(readStoredJson(stored), limits);
 }
 
 /** A shared style naming a variable: its id, its name, and a look's block type. */
@@ -155,14 +248,16 @@ export interface SharedStyleNaming {
 /**
  * The shared styles whose own styles name each variable asked about, by
  * identity: a shared style's reference is a use whether or not any block
- * applies the style, since removing the variable changes the style.
+ * applies the style, since removing the variable changes the style. A
+ * reference is a `$token` or a `var()` of the property the variable is
+ * written under ({@link variablesAsked}).
  *
  * Takes the site style's classes as merged (the code's and the stored ones),
  * as stored values: each entry's `styles` is walked like a node's.
  */
 export function sharedStylesUsing(
   classes: readonly unknown[],
-  identities: ReadonlySet<string>
+  asked: VariablesAsked
 ): ReadonlyMap<string, readonly SharedStyleNaming[]> {
   const using = new Map<string, SharedStyleNaming[]>();
   for (const entry of classes) {
@@ -176,8 +271,7 @@ export function sharedStylesUsing(
         ? { blockType: entry.blockType }
         : {}),
     };
-    for (const identity of sharedStyleVariables(entry)) {
-      if (!identities.has(identity)) continue;
+    for (const identity of asked.identitiesIn(styleUsageKeys(entry.styles))) {
       using.set(identity, [...(using.get(identity) ?? []), style]);
     }
   }
@@ -205,16 +299,27 @@ export interface BlockTypeDefaults {
  * than an envelope. A block's looks are not read here: the site receives
  * them as shared styles, and they are counted there.
  */
-function blockDefaultVariables(block: BlockTypeDefaults): Set<string> {
-  const found = new Set<string>();
-  styleEnvelopeTokens(block.baseStyles, found);
+function blockDefaultKeys(block: BlockTypeDefaults): Set<string> {
+  const ids = new Set<string>();
+  const properties = new Set<string>();
+  const envelopes: unknown[] = [block.baseStyles];
   if (isPlainRecord(block.parts)) {
     for (const part of Object.values(block.parts)) {
-      if (isPlainRecord(part)) styleEnvelopeTokens(part.baseStyles, found);
+      if (isPlainRecord(part)) envelopes.push(part.baseStyles);
     }
   }
-  collectStyleTokens(block.childGap, found);
-  return onlyVariables(found);
+  for (const styles of envelopes) {
+    styleEnvelopeTokens(styles, ids);
+    styleEnvelopeProperties(styles, properties);
+  }
+  collectStyleTokens(block.childGap, ids);
+  collectStyleProperties(block.childGap, properties);
+  return new Set(
+    usageKeysOf({
+      ids: [...onlyVariables(ids)],
+      properties: [...onlySiteProperties(properties)],
+    })
+  );
 }
 
 /**
@@ -226,7 +331,7 @@ function blockDefaultVariables(block: BlockTypeDefaults): Set<string> {
  */
 export function blockDefaultsUsing(
   blocks: readonly BlockTypeDefaults[],
-  identities: ReadonlySet<string>
+  asked: VariablesAsked
 ): ReadonlyMap<string, readonly { type: string; label: string }[]> {
   const using = new Map<string, { type: string; label: string }[]>();
   const sorted = [...blocks].sort((a, b) =>
@@ -237,19 +342,53 @@ export function blockDefaultsUsing(
       type: block.name,
       label: blockLabelFrom(block.name, block),
     };
-    for (const identity of blockDefaultVariables(block)) {
-      if (!identities.has(identity)) continue;
+    for (const identity of asked.identitiesIn(blockDefaultKeys(block))) {
       using.set(identity, [...(using.get(identity) ?? []), named]);
     }
   }
   return using;
 }
 
-/** The variables one stored shared style's own styles name. */
+/** The variables one stored shared style's own styles name through `$token`. */
 export function sharedStyleVariables(
   entry: Readonly<Record<string, unknown>>
 ): Set<string> {
   return variablesIn(entry.styles);
+}
+
+/** A variable naming another in its value: its identity and its name. */
+export interface VariableNaming {
+  readonly id: string;
+  readonly name: string;
+}
+
+/**
+ * The site's variables whose own values name each variable asked about
+ * through `var()`, by identity, in the site's order: a shadow variable keeps
+ * its colour that way, so removing the colour changes the shadow. Takes the
+ * site's variables every tier merged (`resolveSiteTokens`), as the write
+ * leaves them, so a variable removed with the one it names is not its use.
+ * A variable's value naming its own property is not a use of itself.
+ */
+export function variablesUsing(
+  tokens: SiteTokenSet,
+  asked: VariablesAsked
+): ReadonlyMap<string, readonly VariableNaming[]> {
+  const using = new Map<string, VariableNaming[]>();
+  for (const token of tokens.tokens) {
+    const properties = new Set<string>();
+    collectStyleProperties(token.values, properties);
+    const keys = usageKeysOf({
+      ids: [],
+      properties: [...onlySiteProperties(properties)],
+    });
+    const naming = { id: tokenIdentity(token), name: tokenDisplayLabel(token) };
+    for (const identity of asked.identitiesIn(keys)) {
+      if (identity === naming.id) continue;
+      using.set(identity, [...(using.get(identity) ?? []), naming]);
+    }
+  }
+  return using;
 }
 
 /** The code a write adding a reference to a variable the site lacks is refused with. */
@@ -309,5 +448,10 @@ export const tokenUsageIndex: UsageIndex<TokenUsageRow> = {
   whereUndetermined: () => ({ tokenId: { equals: UNDETERMINED_TOKEN_ID } }),
   markerFor: subject => ({ ...subject, tokenId: UNDETERMINED_TOKEN_ID }),
   isMarker: row => row.tokenId === UNDETERMINED_TOKEN_ID,
-  derive: (document, limits) => tokenUsageOf(document, limits),
+  // Each `$token` identity and each `var()` property under its own key,
+  // which a question about a variable asks for together (`variablesAsked`).
+  derive: (document, limits) => {
+    const usage = tokenUsageOf(document, limits);
+    return { ids: usageKeysOf(usage), complete: usage.complete };
+  },
 };

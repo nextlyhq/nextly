@@ -124,8 +124,12 @@ function resultText(answer: SeoAnswer): string {
   );
 }
 
-/** The page as one result on Google, with the overlay when it is hidden. */
-function SearchResult({
+/**
+ * The page as one result on Google, with the overlay when it is hidden: the
+ * SEO tab's own, and the one the Page Builder's right panel shows, so the
+ * two never draw one page differently.
+ */
+export function SearchResult({
   answer,
   site,
 }: {

@@ -240,10 +240,11 @@ export class FieldGroupMetadataService {
     // registration accepted would otherwise be built and stored against the new one, and every
     // later write to the field group would fail on options the active plugin rejects.
     await this.assertNewAddressAvailable(input.slug, input.tableName);
-    const { assertValidPluginFieldOptions } = await import(
-      "../../../api/fields-payload"
-    );
+    const { assertOptionValuesDistinct, assertValidPluginFieldOptions } =
+      await import("../../../api/fields-payload");
     assertValidPluginFieldOptions(input.fields);
+    // Nor two options sharing one value, which the stored value could not tell apart.
+    assertOptionValuesDistinct(input.fields);
     // A new field group holds no pair of sibling fields yet, so every pair it is created with is new.
     assertNoNewSiblingClashes(
       { kind: "fieldGroup", slug: input.slug },
@@ -460,10 +461,11 @@ export class FieldGroupMetadataService {
       });
     }
     if (input.fields !== undefined) {
-      const { assertValidPluginFieldOptions } = await import(
-        "../../../api/fields-payload"
-      );
+      const { assertOptionValuesDistinct, assertValidPluginFieldOptions } =
+        await import("../../../api/fields-payload");
       assertValidPluginFieldOptions(input.fields);
+      // Nor two options sharing one value, which the stored value could not tell apart.
+      assertOptionValuesDistinct(input.fields);
       // Judged against the fields as stored now, so only a pair of sibling fields this save
       // creates is refused, and one the field group already holds keeps working.
       assertNoNewSiblingClashes(

@@ -80,28 +80,46 @@ const html = (element: ReactElement | null): string =>
   element === null ? "" : renderToStaticMarkup(element);
 
 describe("core/heading", () => {
-  it("renders the stored level rather than one derived from nesting", () => {
+  it("renders the stored level rather than one derived from nesting", async () => {
     // A level computed from depth changes when a block is dragged, which is the
     // accessibility failure headings exist to prevent.
-    expect(html(renderHeading(args({ text: "Title", level: "h3" })))).toBe(
-      '<h3 class="nx-n1">Title</h3>'
-    );
+    expect(
+      html(await renderHeading(args({ text: "Title", level: "h3" })))
+    ).toBe('<h3 class="nx-n1">Title</h3>');
   });
 
-  it("falls back to h2 for a level nothing recognises", () => {
+  it("falls back to h2 for a level nothing recognises", async () => {
     const stored = { text: "Title", level: "h9" } as never;
-    expect(html(renderHeading(args(stored)))).toContain("<h2");
+    expect(html(await renderHeading(args(stored)))).toContain("<h2");
   });
 
-  it("puts the link inside the heading, not around it", () => {
+  it("puts the link inside the heading, not around it", async () => {
     // Around it, a screen reader announces the whole heading as a link.
-    const out = html(renderHeading(args({ text: "Title", href: "/docs" })));
+    const out = html(
+      await renderHeading(args({ text: "Title", href: "/docs" }))
+    );
     expect(out).toBe('<h2 class="nx-n1"><a href="/docs">Title</a></h2>');
   });
 
-  it("adds noopener noreferrer to a new-tab link", () => {
+  it("links to an entry through the shared link, as a button does", async () => {
+    // The heading's link is the one every linking block declares: a page on
+    // this site is linked by its entry, followed to its current address.
     const out = html(
-      renderHeading(args({ text: "T", href: "/x", target: "_blank" }))
+      await renderHeading(
+        args(
+          { text: "Read more", entryCollection: "posts", entryId: "p1" },
+          context({ resolveEntryPath: () => Promise.resolve("/posts/current") })
+        )
+      )
+    );
+    expect(out).toBe(
+      '<h2 class="nx-n1"><a href="/posts/current">Read more</a></h2>'
+    );
+  });
+
+  it("adds noopener noreferrer to a new-tab link", async () => {
+    const out = html(
+      await renderHeading(args({ text: "T", href: "/x", target: "_blank" }))
     );
     expect(out).toContain('target="_blank"');
     expect(out).toContain("noopener");
@@ -166,7 +184,11 @@ describe("core/quote", () => {
     // The figcaption is a PART now, so it carries a class. Asserted on the
     // content and the element rather than on the exact opening tag, which is
     // what made this pin markup the block is free to change.
-    expect(out).toContain("Ada, <cite>A Book</cite></figcaption>");
+    // The dash drawn in CSS on an empty, hidden element before the name, so
+    // it is never part of the words, copied or read out.
+    expect(out).toContain(
+      '<span data-nx-quote-dash="" aria-hidden="true"></span>Ada, <cite>A Book</cite></figcaption>'
+    );
   });
 
   it("is a bare blockquote when there is nothing to attribute", () => {
@@ -258,10 +280,10 @@ describe("executable urls", () => {
     }
   });
 
-  it("refuses them on a heading link", () => {
+  it("refuses them on a heading link", async () => {
     for (const href of hostile) {
       expect(
-        html(renderHeading(args({ text: "t", href }))),
+        html(await renderHeading(args({ text: "t", href }))),
         href
       ).not.toContain("href=");
     }
@@ -1209,17 +1231,6 @@ describe("declared empty output", () => {
   // without being rendered, and these pin the answers against the SAME props
   // the render path treats as empty — the two must not drift.
   it.each([
-    ["core/image", image, {}, true],
-    ["core/image with a direct url", image, { src: "/a.jpg" }, false],
-    ["core/image with a media id", image, { mediaId: "m1" }, false],
-    // A refused scheme leaves nothing usable, so it is empty for this purpose
-    // exactly as `renderImage` treats it.
-    [
-      "core/image with a refused url",
-      image,
-      { src: "javascript:alert(1)" },
-      true,
-    ],
     ["core/embed", embed, {}, true],
     ["core/embed with a url", embed, { src: "https://e.com/v" }, false],
     [
@@ -1243,12 +1254,6 @@ describe("declared empty output", () => {
     // case is checked in BOTH directions, and through the real render rather
     // than through one of the two blocks.
     const declaredEmpty = [
-      { label: "image with nothing", definition: image, props: {} },
-      {
-        label: "image with a refused scheme",
-        definition: image,
-        props: { src: "javascript:alert(1)" },
-      },
       { label: "embed with nothing", definition: embed, props: {} },
       {
         label: "embed with a refused scheme",
@@ -1261,12 +1266,7 @@ describe("declared empty output", () => {
       expect(definition.rendersNothing?.(props as never), label).toBe(true);
     }
 
-    // Every one of them, rendered. `core/image` is asynchronous, which is why it
-    // was the one this assertion previously skipped.
-    expect(html(await renderImage(args({})))).toBe("");
-    expect(html(await renderImage(args({ src: "javascript:alert(1)" })))).toBe(
-      ""
-    );
+    // Every one of them, rendered.
     expect(html(renderEmbed(args({})))).toBe("");
     expect(
       html(renderEmbed(args({ src: "javascript:alert(1)", title: "t" })))
@@ -1274,10 +1274,21 @@ describe("declared empty output", () => {
 
     // And the other direction: a block with usable input must NOT declare empty,
     // or a drawing block would be exempted from the diagnostic it needs.
-    expect(image.rendersNothing?.({ src: "/a.png" } as never)).toBe(false);
-    expect(image.rendersNothing?.({ mediaId: "m1" } as never)).toBe(false);
     expect(embed.rendersNothing?.({ src: "https://e.com/v" } as never)).toBe(
       false
+    );
+  });
+
+  it("is not declared by core/image, whose empty box the canvas draws", async () => {
+    // An Image with no picture draws its empty box where an author is looking,
+    // in the block's own classes, and the stylesheet holds back the rules of a
+    // block declaring it draws nothing: declared, the box would lose them.
+    // So it declares nothing, and draws nothing at render time on a page a
+    // visitor is served, with no source or with a refused one.
+    expect(image.rendersNothing).toBeUndefined();
+    expect(html(await renderImage(args({})))).toBe("");
+    expect(html(await renderImage(args({ src: "javascript:alert(1)" })))).toBe(
+      ""
     );
   });
 });

@@ -1301,6 +1301,8 @@ async function generateFor(
     collections: inputs.collections,
     singles: inputs.singles,
     components: inputs.components,
+    // The starting point the inputs were checked against, read once.
+    previous: inputs.latest,
     metadataUpserts: inputs.metadataUpserts,
     previousMetadataUpserts: inputs.previousMetadataUpserts,
     appStream: inputs.appStream,
