@@ -393,13 +393,19 @@ function useTokenCommits(
   };
   const notice =
     conflict === undefined ? undefined : { text: conflict, onReload: reload };
-  const cleanUp = useCleanUp(changeThrough, reread, stored => {
-    // What the server holds once the route has written, as the studio shows
-    // and knows it stored: not its own older copy, less what went.
-    const adopted = tokensFromStored(supplied, stored);
-    latest.current = adopted;
-    persisted.current = adopted;
-    show(adopted);
+  const cleanUp = useCleanUp(changeThrough, reread, () => {
+    const before = latest.current;
+    return stored => {
+      // An edit made while the route ran is saved after it, onto what the
+      // route left, and its own answer says what is shown: never this.
+      if (latest.current !== before) return;
+      // What the server holds once the route has written, as the studio
+      // shows and knows it stored: not its own older copy, less what went.
+      const adopted = tokensFromStored(supplied, stored);
+      latest.current = adopted;
+      persisted.current = adopted;
+      show(adopted);
+    };
   });
   return { edits, shownNow, issue, notice, commit, cleanUp };
 }
@@ -434,16 +440,18 @@ type CleanUpThrough = (
  * "Clean up unused…": the colours removed through the clean-up route, which
  * judges each on its own, as one step of the editor's history whose halves
  * are the server's own: the section as its last removal wrote it, and that
- * with what each removal took put back. Where any went, the studio shows
- * the section the server answered at once; the site style is read again
- * whatever came of it.
+ * with what each removal took put back. Where any went, and the author
+ * made no edit while it ran, the studio shows the section the server
+ * answered at once; the site style is read again whatever came of it.
  */
 function useCleanUp(
   changeThrough: ReturnType<typeof useSaveSiteStyle>["changeThrough"],
   reread: () => void,
-  adopt: (stored: unknown) => void
+  /** Called as the clean-up starts; what it hands back takes the answer. */
+  begin: () => (stored: unknown) => void
 ): CleanUpThrough {
   return async (ids, uses) => {
+    const adopt = begin();
     let answer: Awaited<ReturnType<typeof cleanUpUnused>> | undefined;
     await changeThrough("tokens", async () => {
       answer = await cleanUpUnused(ids, uses);

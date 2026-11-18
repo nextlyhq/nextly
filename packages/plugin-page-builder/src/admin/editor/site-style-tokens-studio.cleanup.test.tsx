@@ -17,6 +17,8 @@ const calls = vi.hoisted(() => ({
   may: true,
   cleaned: undefined as unknown,
   asked: [] as (readonly string[])[],
+  /** Holds the route's answer back until the test lets it go. */
+  gate: undefined as undefined | Promise<void>,
 }));
 
 const panels = vi.hoisted(() => ({
@@ -25,6 +27,7 @@ const panels = vi.hoisted(() => ({
     | {
         tokens: { tokens: { id?: string; name: string }[]; order?: string[] };
         onCleanUp?: (ids: readonly string[]) => Promise<unknown>;
+        onChange?: (next: unknown) => void;
       },
 }));
 
@@ -56,6 +59,7 @@ vi.mock("../variables-client", async importOriginal => ({
   cleanUpUnused: async (ids: readonly string[]) => {
     calls.order.push("route");
     calls.asked.push(ids);
+    await calls.gate;
     return calls.cleaned;
   },
 }));
@@ -88,6 +92,7 @@ beforeEach(() => {
   calls.rereads = 0;
   calls.may = true;
   calls.halves = undefined;
+  calls.gate = undefined;
   calls.cleaned = {
     result: { kind: "done", removed: ["t-spare"], kept: [] },
     // As the server answered them: another author has since made Accent
@@ -143,6 +148,34 @@ describe("cleaning up unused colours from the studio", () => {
       panels.tokens?.tokens.tokens.find(token => token.id === "t-accent")
     ).toMatchObject({ values: { light: "#0000ff" } });
     expect(panels.tokens?.tokens.order).toEqual(["t-added"]);
+    expect(calls.rereads).toBe(1);
+  });
+
+  it("keeps an edit made while the clean-up runs, rather than the server's answer from before it", async () => {
+    renderStudio();
+    let letGo: () => void = () => {};
+    calls.gate = new Promise(resolve => {
+      letGo = resolve;
+    });
+    let running: Promise<unknown> | undefined;
+    await act(async () => {
+      running = panels.tokens?.onCleanUp?.(["t-spare"]);
+    });
+    // The author closes the dialog and makes Accent red meanwhile.
+    const redAccent = { ...accent, values: { light: "#ff0000" } };
+    act(() => {
+      panels.tokens?.onChange?.({
+        tokens: [spare, redAccent],
+        order: ["t-accent", "t-spare"],
+      });
+    });
+    await act(async () => {
+      letGo();
+      await running;
+    });
+    expect(
+      panels.tokens?.tokens.tokens.find(token => token.id === "t-accent")
+    ).toMatchObject({ values: { light: "#ff0000" } });
     expect(calls.rereads).toBe(1);
   });
 
