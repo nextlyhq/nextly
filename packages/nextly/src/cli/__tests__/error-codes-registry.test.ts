@@ -12,7 +12,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { NEXTLY_ERROR_STATUS } from "../../errors/error-codes";
 import {
@@ -131,6 +131,15 @@ describe("the CLI's error codes", () => {
       .filter(name => name.endsWith(".mdx") && name !== "index.mdx")
       .map(name => name.replace(/\.mdx$/, ""));
     expect(pages.sort()).toEqual(codes.map(cliErrorSlug).sort());
+  });
+
+  // The examples show a developer's machine: under `CI` an error shows no line of the user's
+  // source, and the runner that runs these sets it.
+  beforeEach(() => {
+    vi.stubEnv("CI", "");
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   it("each docs page's example is what the terminal prints for that code", async () => {

@@ -241,13 +241,40 @@ describe("the Header & footer group", () => {
     ).toEqual(["h-main", "h-landing", "h-promo", "h-campaign", "h-big"]);
   });
 
-  it("opens a set's form, and a new set's, without leaving the builder", () => {
-    render(<HeaderFooterGroup folds={folds} />);
-    const landing = screen.getByRole("link", { name: /^Landing/ });
-    expect(landing.getAttribute("href")).toBe(
-      "/admin/collections/layouts/landing"
+  it("opens a set in the builder, with the way back to the page it was opened from", () => {
+    window.history.replaceState(
+      null,
+      "",
+      "/admin/collections/pages/home/builder?section=s1"
     );
-    expect(landing.getAttribute("target")).toBe("_blank");
+    render(<HeaderFooterGroup folds={folds} here="Home" />);
+    const landing = screen.getByRole("link", { name: /^Landing/ });
+    const href = landing.getAttribute("href") ?? "";
+    expect(href.split("?")[0]).toBe(
+      "/admin/collections/layouts/landing/in-builder"
+    );
+    const back = new URLSearchParams(href.split("?")[1]);
+    // Back to the page, not to the section the author was on.
+    expect(back.get("return")).toBe("/admin/collections/pages/home/builder");
+    expect(back.get("from")).toBe("Home");
+    // In the same tab: it is opened as another page is.
+    expect(landing.getAttribute("target")).toBeNull();
+  });
+
+  it("marks the set whose own screen is open", () => {
+    render(<HeaderFooterGroup folds={folds} currentSetId="landing" />);
+    expect(
+      screen
+        .getByRole("link", { name: /^Landing/ })
+        .getAttribute("aria-current")
+    ).toBe("page");
+    expect(
+      screen.getByRole("link", { name: /^Main/ }).getAttribute("aria-current")
+    ).toBeNull();
+  });
+
+  it("opens a new set's form without leaving the builder", () => {
+    render(<HeaderFooterGroup folds={folds} />);
     const add = screen.getByRole("link", { name: /New header & footer/ });
     expect(add.getAttribute("href")).toBe("/admin/collections/layouts/create");
     expect(add.getAttribute("target")).toBe("_blank");

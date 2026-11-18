@@ -19,10 +19,17 @@
  * and nothing else, and the keyboard layer that answers Escape is mounted
  * apart from every panel.
  *
+ * A draft in a field of the document is also work the page has not saved:
+ * the page says so from the draft's first keystroke ({@link
+ * useFieldDraftHeld}), and a store of the page writes it first ({@link
+ * finishFieldEdit}), so Save pressed from the keyboard, with focus still in
+ * the field, saves what the author typed.
+ *
  * @module field-edit
  */
 
 import * as React from "react";
+import { flushSync } from "react-dom";
 
 /** An edit in progress: where it is, and how to put it back. */
 interface FieldEdit {
@@ -30,10 +37,35 @@ interface FieldEdit {
   readonly element: Element | null;
   /** Put back the value from before the edit, recording nothing. */
   readonly cancel: () => void;
+  /**
+   * Whether it is a draft of the document's that the field writes only when
+   * it is left: unsaved work until then. A field that writes as it is typed
+   * has its keystrokes in the document already.
+   */
+  readonly draft: boolean;
 }
+
+/**
+ * Whether the fields drawn here edit the document: provided by the block
+ * settings panel. A field elsewhere, such as a site variable's, holds a
+ * draft the page does not contain, so the page neither waits for it nor
+ * counts it.
+ */
+export const FieldsOfDocument: React.Context<boolean> =
+  React.createContext<boolean>(false);
 
 /** The edit in progress, or `null` for none. */
 let current: FieldEdit | null = null;
+
+/** Told whenever the edit in progress changes. */
+const listeners = new Set<() => void>();
+
+/** Make `next` the edit in progress, telling whoever is listening. */
+function setCurrent(next: FieldEdit | null): void {
+  if (current === next) return;
+  current = next;
+  for (const listener of listeners) listener();
+}
 
 /** Fields an edit has been put back in, which the next Escape leaves. */
 const putBack = new WeakSet<Element>();
@@ -48,11 +80,11 @@ interface FieldEditHandle {
 
 /** Begin an edit, displacing any other field's. */
 function beginFieldEdit(edit: FieldEdit): FieldEditHandle {
-  current = edit;
+  setCurrent(edit);
   if (edit.element !== null) putBack.delete(edit.element);
   return {
     end: () => {
-      if (current === edit) current = null;
+      if (current === edit) setCurrent(null);
     },
     held: () => current === edit,
   };
@@ -75,6 +107,7 @@ export function useFieldEdit(
   stored: string,
   setDraft: (next: string) => void
 ): (next: string) => void {
+  const ofDocument = React.useContext(FieldsOfDocument);
   // Read when Escape lands, so the value put back is the one stored now.
   const latestStored = React.useRef(stored);
   latestStored.current = stored;
@@ -100,9 +133,48 @@ export function useFieldEdit(
           handle.current = null;
           setDraft(latestStored.current);
         },
+        draft: ofDocument,
       });
     },
-    [setDraft, end]
+    [setDraft, end, ofDocument]
+  );
+}
+
+/**
+ * The edit of a field that writes as it is typed (`live-draft.ts`), whose own
+ * writes move the stored value as it goes, so the edit cannot end when the
+ * stored value moves, as a draft's does. Begun at the first keystroke in the
+ * element focus is in, unless this field already holds the edit in progress;
+ * ended by the field when its edit ends (blur, Enter, the value moved by
+ * something else) and when it goes. Escape's put-back runs `cancel`.
+ */
+export function useTypedFieldEdit(): {
+  readonly begin: (cancel: () => void) => void;
+  readonly end: () => void;
+} {
+  const handle = React.useRef<FieldEditHandle | null>(null);
+  const end = React.useCallback(() => {
+    handle.current?.end();
+    handle.current = null;
+  }, []);
+  React.useEffect(() => end, [end]);
+  return React.useMemo(
+    () => ({
+      begin: (cancel: () => void) => {
+        if (handle.current?.held() === true) return;
+        handle.current = beginFieldEdit({
+          element:
+            typeof document === "undefined" ? null : document.activeElement,
+          cancel: () => {
+            handle.current = null;
+            cancel();
+          },
+          draft: false,
+        });
+      },
+      end,
+    }),
+    [end]
   );
 }
 
@@ -128,7 +200,7 @@ export function escapeFieldEdit(origin: Element | null): FieldEscape {
   if (origin === null) return "none";
   const edit = current;
   if (edit !== null && inField(edit, origin)) {
-    current = null;
+    setCurrent(null);
     edit.cancel();
     if (edit.element !== null) putBack.add(edit.element);
     return "put-back";
@@ -140,4 +212,50 @@ export function escapeFieldEdit(origin: Element | null): FieldEscape {
     }
   }
   return "none";
+}
+
+/** Subscribe to the edit in progress. */
+function subscribe(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
+/** Whether a field of the document holds a draft it has not written yet. */
+function draftHeld(): boolean {
+  return current?.draft === true;
+}
+
+/**
+ * Whether a field of the document holds a draft it has not written yet:
+ * work the page has not saved, from the draft's first keystroke.
+ *
+ * @experimental
+ */
+export function useFieldDraftHeld(): boolean {
+  return React.useSyncExternalStore(subscribe, draftHeld, () => false);
+}
+
+/**
+ * Write the draft a field of the document holds, as leaving the field would,
+ * without the author leaving it: for a store of the page made while focus is
+ * still in the field, as Save from the keyboard is. The field's own blur
+ * writes it, with every rule that field applies on the way out, and focus
+ * and the caret stay where they are. The editor has drawn what it wrote by
+ * the time this returns.
+ *
+ * Nothing for a field that writes as it is typed: its keystrokes are in the
+ * document already.
+ *
+ * @experimental
+ */
+export function finishFieldEdit(): void {
+  const edit = current;
+  if (edit === null || !edit.draft) return;
+  const { element } = edit;
+  if (element === null || !element.isConnected) return;
+  flushSync(() => {
+    element.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+  });
 }

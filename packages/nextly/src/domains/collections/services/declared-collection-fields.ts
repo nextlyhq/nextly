@@ -9,13 +9,20 @@
  * lacks is judged against these as well as the row, so such a field is named
  * as not migrated, as a Single's declared fields are.
  *
- * A module of its own, importing nothing, so the error mapping every entry
- * service uses can read it without loading the registry service.
+ * A module of its own, importing only the process-global helper, so the error
+ * mapping every entry service uses can read it without loading the registry
+ * service.
  *
  * @module domains/collections/services/declared-collection-fields
  */
 
-const declaredFields = new Map<string, readonly unknown[]>();
+import { processGlobal } from "../../../shared/process-global";
+
+/** One per process: see {@link processGlobal}. */
+const declaredFields = processGlobal(
+  "declaredCollectionFields",
+  () => new Map<string, readonly unknown[]>()
+);
 
 /**
  * Replace the declared fields with those `collections` declare. A replacement

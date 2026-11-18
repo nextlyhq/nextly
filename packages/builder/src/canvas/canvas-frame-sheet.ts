@@ -35,12 +35,21 @@ import {
   ENTRY_CONTENT_NOTE_ATTRIBUTE,
 } from "@nextlyhq/blocks-react";
 
+import {
+  QUESTION_ROOM_ATTRIBUTE,
+  QUESTION_ROOM_PROPERTY,
+} from "../accordion-questions";
 import { GALLERY_BLOCK } from "../gallery-pictures";
 import { CANVAS_ROOT_CLASS } from "../shell-state";
 
 import { APPEAR_REPLAY_RULES } from "./appear-replay";
 import { DEVICE_HIDDEN_ATTRIBUTE } from "./canvas-device-hidden";
-import { EMPTY_CONTAINER_SELECTOR, EMPTY_TEXT_SELECTOR } from "./empty-slot";
+import { PAGE_PLACEHOLDER_ATTRIBUTE } from "./page-placeholder";
+import {
+  EMPTY_CONTAINER_SELECTOR,
+  EMPTY_DISCLOSURE_SELECTOR,
+  EMPTY_TEXT_SELECTOR,
+} from "./empty-slot";
 
 const ROOT = `.${CANVAS_ROOT_CLASS}`;
 
@@ -256,6 +265,27 @@ ${EMPTY_CONTAINER_SELECTOR} {
   outline: 1px dashed color-mix(in srgb, currentColor 45%, transparent);
   outline-offset: -1px;
 }
+/* An open Question emptied of its answer has the same start under its
+   title: the box an empty container draws, after the summary, where the
+   answer's blocks go. Drawn by the editor only (see
+   EMPTY_DISCLOSURE_SELECTOR); the published page draws nothing there. */
+/* The selected Accordion's row of room after its last question, where
+   "+ Add a question" sits (accordion-add-question.tsx): inside its own box,
+   so its margins and the blocks around it stay as set. The button's height
+   at the canvas's zoom. Marked by the canvas only; a published page never has it. */
+${ROOT} [${QUESTION_ROOM_ATTRIBUTE}]::after {
+  content: "";
+  display: block;
+  min-height: var(${QUESTION_ROOM_PROPERTY}, 2.75rem);
+}
+${EMPTY_DISCLOSURE_SELECTOR}::after {
+  content: "";
+  display: block;
+  min-height: 2.75rem;
+  margin-block-start: 0.5rem;
+  outline: 1px dashed color-mix(in srgb, currentColor 45%, transparent);
+  outline-offset: -1px;
+}
 
 /* An empty page's body, held open in the editor for its start area: the
    overlay sets the area's height on the root while the page holds no blocks,
@@ -264,6 +294,28 @@ ${EMPTY_CONTAINER_SELECTOR} {
    published page never has it. */
 ${ROOT} > [data-nx-region="footer"] { margin-block-start: var(--nx-canvas-start-room, 0px); }
 ${ROOT}:not(:has(> [data-nx-region="footer"])) { padding-block-end: var(--nx-canvas-start-room, 0px); }
+
+/* Where a page goes, for a document with no page of its own: a grey box
+   between the header and the footer, roomy enough to read as a page's body,
+   in the page's own ink so it reads on a light site and a dark one alike.
+   At the admin's size whatever the zoom. A visitor's page never has it. */
+${ROOT} [${PAGE_PLACEHOLDER_ATTRIBUTE}] {
+  display: grid;
+  place-items: center;
+  min-block-size: 18rem;
+  margin: 1.5rem;
+  border: 1.5px dashed color-mix(in srgb, currentColor 30%, transparent);
+  border-radius: var(--radius-md, 0.5rem);
+  background: color-mix(in srgb, currentColor 6%, transparent);
+  font-family: var(--font-sans, system-ui), sans-serif;
+  font-size: calc(0.875rem / var(--nx-canvas-zoom, 1));
+  line-height: 1.4;
+  cursor: default;
+}
+
+${ROOT} [${PAGE_PLACEHOLDER_ATTRIBUTE}] > span {
+  color: color-mix(in srgb, currentColor 70%, transparent);
+}
 
 /* The cursor says what a press does: grab a block, place a caret in text being
    edited, and while dragging, whether the block can land. */
@@ -723,6 +775,74 @@ ${EMPTY_LIST}[data-nx-list-visitors]:not([data-nx-list-still])::before {
   box-shadow:
     inset 0 0 0 2px var(--nx-region-mark),
     inset 0 0 0 4px var(--nx-builder-halo, #fff);
+}
+
+/* Where the page's header & footer set has no header (or footer): a dashed
+   band in the region's place saying so, with the ways to fill it. In the
+   admin's scheme and face, which the frame hands it as values, so it reads
+   the same over any site; its size is the admin's whatever the zoom, and
+   its spacing in its own text's units. A visitor's page never draws one. */
+.nx-canvas-region-empty {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75em 1.25em;
+  margin: 0.75em;
+  padding: 1em 1.25em;
+  color-scheme: var(--nx-builder-scheme, light);
+  border: 1.5px dashed var(--nx-builder-text-muted, GrayText);
+  border-radius: var(--radius-sm, 0.25rem);
+  background: var(--nx-builder-surface-raised, Canvas);
+  color: var(--nx-builder-text, CanvasText);
+  font-family: var(--font-sans, system-ui), sans-serif;
+  font-size: calc(0.875rem / var(--nx-canvas-zoom, 1));
+  line-height: 1.5;
+}
+
+.nx-canvas-region-empty__sentence,
+.nx-canvas-region-empty__ask {
+  margin: 0;
+  max-width: 60ch;
+}
+
+.nx-canvas-region-empty__ask {
+  color: var(--nx-builder-text-muted, GrayText);
+}
+
+.nx-canvas-region-empty__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5em;
+}
+
+/* Its two buttons: the first fills the area at once, on the select hue; the
+   second opens the choice, edged in the text's own colour. */
+.nx-canvas-region-empty__actions > button {
+  padding: 0.35em 0.85em;
+  border: 1px solid currentColor;
+  border-radius: var(--radius-sm, 0.25rem);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.nx-canvas-region-empty__actions > button[data-nx-region-empty-action="create"] {
+  border-color: var(--nx-builder-select, Highlight);
+  background: var(--nx-builder-select, Highlight);
+  color: var(--nx-builder-select-text, HighlightText);
+}
+
+.nx-canvas-region-empty__actions > button:focus-visible {
+  outline: 2px solid var(--nx-builder-select, Highlight);
+  outline-offset: -2px;
+}
+
+.nx-canvas-region-empty__actions > button:disabled {
+  opacity: 0.6;
+  cursor: default;
 }
 
 /* The part holding the page between its regions lays out as if it were not

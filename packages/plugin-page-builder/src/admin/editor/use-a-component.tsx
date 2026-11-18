@@ -25,7 +25,7 @@ import {
   toast,
 } from "@nextlyhq/ui";
 import { ChevronDown } from "lucide-react";
-import { useId, useRef, useState, type JSX } from "react";
+import { useId, useRef, useState, type JSX, type RefObject } from "react";
 
 import { MAX_AREA_COMPONENTS } from "../../layout-area-contract";
 import { OptionRow } from "../header-footer-menu";
@@ -54,40 +54,18 @@ export interface UseAComponentProps {
   readonly current: string;
 }
 
-export function UseAComponent({
-  area,
-  setId,
-  current,
-}: UseAComponentProps): JSX.Element | null {
-  const [open, setOpen] = useState(false);
+/**
+ * Put a chosen component in `area` of set `setId`: the route's sentence
+ * as a toast, the choices read again so the canvas draws it, and whether a
+ * write is out. Shared by the starter's card and the canvas's empty band.
+ */
+export function useChooseInArea(
+  area: RegionArea,
+  setId: string
+): { readonly busy: boolean; readonly choose: (id: string) => Promise<void> } {
   const [busy, setBusy] = useState(false);
-  const listRoot = useRef<HTMLDivElement>(null);
-  const listId = useId();
-  const list = useAreaComponents(area);
-  const withPictures = useAreaComponents(area, {
-    enabled: open,
-    pictures: true,
-  });
   const askChoicesAgain = useAskChoicesAgain();
-  const picture = useSetPictures(
-    withPictures.data?.meta.definitions ?? {},
-    withPictures.data !== undefined
-  );
-  const answer = withPictures.data ?? list.data;
-  // A read that failed is said, with a way to ask again, rather than looking
-  // like a choice this author may not make.
-  if (answer === undefined && list.error !== null) {
-    return (
-      <Button type="button" size="sm" variant="ghost" onClick={list.refetch}>
-        Couldn&rsquo;t load the components. Try again
-      </Button>
-    );
-  }
-  if (answer === undefined || !answer.meta.mayChoose) return null;
-
   const choose = async (component: string) => {
-    setOpen(false);
-    if (component === current) return;
     setBusy(true);
     try {
       // The route's own sentence, so the toast and the API say one thing.
@@ -100,8 +78,30 @@ export function UseAComponent({
       setBusy(false);
     }
   };
+  return { busy, choose };
+}
 
-  const others = answer.items.some(item => item.id !== current);
+export function UseAComponent({
+  area,
+  setId,
+  current,
+}: UseAComponentProps): JSX.Element | null {
+  const [open, setOpen] = useState(false);
+  const listRoot = useRef<HTMLDivElement>(null);
+  const listId = useId();
+  const list = useAreaComponents(area);
+  const { busy, choose } = useChooseInArea(area, setId);
+  // A read that failed is said, with a way to ask again, rather than looking
+  // like a choice this author may not make.
+  if (list.data === undefined && list.error !== null) {
+    return (
+      <Button type="button" size="sm" variant="ghost" onClick={list.refetch}>
+        Couldn&rsquo;t load the components. Try again
+      </Button>
+    );
+  }
+  if (list.data === undefined || !list.data.meta.mayChoose) return null;
+
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
@@ -128,39 +128,93 @@ export function UseAComponent({
           listRoot.current?.focus();
         }}
       >
-        <Command
-          ref={listRoot}
-          shouldFilter={false}
-          label={`Components to use as the ${area}`}
-          defaultValue={current}
-          className="rounded-md"
-        >
-          <CommandList
-            id={listId}
-            label={`Components to use as the ${area}`}
-            className="max-h-80 p-1"
-          >
-            {answer.items.map(item => {
-              const regions: LayoutRegion[] = [{ area, componentId: item.id }];
-              return (
-                <OptionRow
-                  key={item.id}
-                  option={{
-                    value: item.id,
-                    label: item.title,
-                    picture: regions,
-                  }}
-                  current={item.id === current}
-                  picture={picture(regions)}
-                  onSelect={() => void choose(item.id)}
-                />
-              );
-            })}
-          </CommandList>
-          <MenuNote area={area} others={others} more={answer.meta.more} />
-        </Command>
+        <AreaComponentList
+          area={area}
+          current={current}
+          listId={listId}
+          listRef={listRoot}
+          onChoose={component => {
+            setOpen(false);
+            if (component !== current) void choose(component);
+          }}
+        />
       </PopoverContent>
     </Popover>
+  );
+}
+
+/**
+ * The components marked for `area`, each with its picture, as the menu
+ * lists them: drawn once the menu opens, so the pictures are read only then,
+ * and a row whose picture is still on its way shows a quiet placeholder.
+ */
+export function AreaComponentList({
+  area,
+  current,
+  listId,
+  listRef,
+  onChoose,
+}: {
+  readonly area: RegionArea;
+  /** The component the area shows now, or null where it shows none. */
+  readonly current: string | null;
+  readonly listId: string;
+  /** The list, focused as the menu opens so the arrow keys move in it. */
+  readonly listRef: RefObject<HTMLDivElement | null>;
+  readonly onChoose: (component: string) => void;
+}): JSX.Element {
+  const list = useAreaComponents(area);
+  const withPictures = useAreaComponents(area, { pictures: true });
+  const picture = useSetPictures(
+    withPictures.data?.meta.definitions ?? {},
+    withPictures.data !== undefined
+  );
+  const answer = withPictures.data ?? list.data;
+  const items = answer?.items ?? [];
+  const others = items.some(item => item.id !== current);
+  return (
+    <Command
+      ref={listRef}
+      shouldFilter={false}
+      label={`Components to use as the ${area}`}
+      {...(current === null ? {} : { defaultValue: current })}
+      className="rounded-md"
+    >
+      <CommandList
+        id={listId}
+        label={`Components to use as the ${area}`}
+        className="max-h-80 p-1"
+      >
+        {items.map(item => {
+          const regions: LayoutRegion[] = [{ area, componentId: item.id }];
+          return (
+            <OptionRow
+              key={item.id}
+              option={{
+                value: item.id,
+                label: item.title,
+                picture: regions,
+              }}
+              current={item.id === current}
+              picture={picture(regions)}
+              onSelect={() => onChoose(item.id)}
+            />
+          );
+        })}
+      </CommandList>
+      {answer === undefined ? (
+        <p className="px-3 py-2 text-xs text-muted-foreground">
+          Loading the components…
+        </p>
+      ) : (
+        <MenuNote
+          area={area}
+          others={others}
+          any={current !== null}
+          more={answer.meta.more}
+        />
+      )}
+    </Command>
   );
 }
 
@@ -168,14 +222,18 @@ export function UseAComponent({
 function MenuNote({
   area,
   others,
+  any,
   more,
 }: {
   area: RegionArea;
   others: boolean;
+  /** Whether the area shows one already, which the list holds. */
+  any: boolean;
   more: boolean;
 }): JSX.Element | null {
+  const which = any ? "other component" : "component";
   const note = !others
-    ? `No other component is marked “Use as: ${USE_AS[area]}” yet. Mark one in Components to choose it here.`
+    ? `No ${which} is marked “Use as: ${USE_AS[area]}” yet. Mark one in Components to choose it here.`
     : more
       ? `Showing the first ${String(MAX_AREA_COMPONENTS)} by name.`
       : null;
