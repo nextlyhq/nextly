@@ -707,6 +707,63 @@ describe("a step's renames", () => {
     });
   });
 
+  it("re-point a component's exposures of the renamed prop, on that node only", () => {
+    // A placement's override is written through the exposure's path, so an
+    // exposure left on the old name writes where the upgraded block no longer
+    // reads, and every placement's own value is lost.
+    const exposure = (id: string, nodeId: string, propPath: string) => ({
+      id,
+      label: id,
+      nodeId,
+      propPath,
+      type: "url",
+    });
+    const component = {
+      formatVersion: 1,
+      kind: "component",
+      nodes: [
+        { id: "q", type: "core/quote", version: 1, props: { citeUrl: "/a" } },
+        { id: "other", type: "t", version: 1, props: { citeUrl: "/b" } },
+      ],
+      exposed: [
+        exposure("link", "q", "citeUrl"),
+        exposure("deep", "q", "citeUrl.label"),
+        exposure("words", "q", "text"),
+        exposure("elsewhere", "other", "citeUrl"),
+      ],
+    } as unknown as BlockDocument;
+    const { doc } = migrateDocument(
+      component,
+      source({ "core/quote": quote, t: { version: 1 } })
+    );
+    const paths = (doc as { exposed?: { id: string; propPath: string }[] })
+      .exposed;
+    expect(paths?.map(each => [each.id, each.propPath])).toEqual([
+      ["link", "href"],
+      ["deep", "href.label"],
+      ["words", "text"],
+      ["elsewhere", "citeUrl"],
+    ]);
+    // The stored document is left as it was.
+    expect(
+      (component as { exposed: { propPath: string }[] }).exposed[0]?.propPath
+    ).toBe("citeUrl");
+  });
+
+  it("leave a component's exposures as the same list when nothing is renamed", () => {
+    const exposed = [
+      { id: "w", label: "w", nodeId: "q", propPath: "text", type: "text" },
+    ];
+    const component = {
+      formatVersion: 1,
+      kind: "component",
+      nodes: [{ id: "q", type: "core/quote", version: 2, props: {} }],
+      exposed,
+    } as unknown as BlockDocument;
+    const { doc } = migrateDocument(component, source({ "core/quote": quote }));
+    expect((doc as { exposed?: unknown }).exposed).toBe(exposed);
+  });
+
   it("reach every migration source through the one reading of a definition", () => {
     expect(migrationInfoOf(quote)).toEqual(quote);
     expect(migrationInfoOf({ version: 1 })).toEqual({ version: 1 });

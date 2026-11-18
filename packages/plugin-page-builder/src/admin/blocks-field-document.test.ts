@@ -153,6 +153,29 @@ describe("documentFrom, on blocks stored at an older version", () => {
     });
   });
 
+  it("upgrades a Quote whose source address is only bound, with no words stored", () => {
+    // Its props come through the step unchanged, so only its version and its
+    // binding say it was upgraded; a document read as "nothing rewritten"
+    // would hand the editor the binding under the name no control uses.
+    const doc = documentFrom({
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [
+        {
+          id: "quote",
+          type: "core/quote",
+          version: 1,
+          props: { text: "Said", source: "Ada" },
+          bindings: { citeUrl: { source: "entry", field: "website" } },
+        },
+      ],
+    });
+    expect(doc.nodes[0]?.version).toBe(2);
+    expect(doc.nodes[0]?.bindings).toEqual({
+      href: { source: "entry", field: "website" },
+    });
+  });
+
   it("runs each block's own step: the Form's and the Text's too", () => {
     const doc = documentFrom(stored());
     expect(byId(doc, "form")?.props).toMatchObject({
