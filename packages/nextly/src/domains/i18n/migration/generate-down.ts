@@ -26,8 +26,11 @@ const ARCHIVE = "nextly_i18n_archive";
  *      (id is DB-generated, so the INSERT ... SELECT omits it)
  *   4. DROP the companion table
  */
-export function buildLocalizationDownSql(spec: CompanionMigrationSpec): string {
-  return buildLocalizationDownStatements(spec)
+export function buildLocalizationDownSql(
+  spec: CompanionMigrationSpec,
+  options: Pick<LocalizationDownOptions, "afterRestore"> = {}
+): string {
+  return buildLocalizationDownStatements(spec, options)
     .map(s => `${s};`)
     .join("\n\n");
 }
@@ -52,6 +55,13 @@ export interface LocalizationDownOptions {
    * already-completed restore is what silently reverts content to its pre-localization state.
    */
   existingMainColumns?: readonly string[];
+  /**
+   * Statements to run once the values are back on the main table, before anything is archived or
+   * the companion dropped: the settings the main table's snapshot records of the restored columns
+   * (a Required field's NOT NULL), which a column added empty could not take before the copy. A
+   * value the setting refuses then stops the run with every translation still in place.
+   */
+  afterRestore?: readonly string[];
   /**
    * Whether to carry the restored row's publishing state back onto main.
    *
@@ -477,6 +487,7 @@ export function buildLocalizationDownStatements(
       { restoreStatus: options.restoreStatus === true }
     )
   );
+  stmts.push(...(options.afterRestore ?? []));
 
   // 3. archive every translation but the one restored: the default language's, or, with the
   // spec's ranking, the row its readers saw (`chosenRowOrder`), so nothing restored is archived

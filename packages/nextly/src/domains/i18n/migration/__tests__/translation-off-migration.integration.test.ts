@@ -233,6 +233,64 @@ for (const entry of DIALECTS) {
       await expect(migrate()).resolves.toBe(0);
     });
 
+    // A Required field goes back NOT NULL, as the main table's snapshot records it, once its values
+    // are copied: the runner checks the next main file against that table.
+    it("applies the files that turn translation off for a Required field, its column put back required", async () => {
+      const required = (entity: MinimalConfigEntity): MinimalConfigEntity => ({
+        ...entity,
+        fields: entity.fields.map(f =>
+          f.name === "label" ? { ...f, required: true } : f
+        ),
+      });
+      await migrateCreate(required(translated));
+      await migrate();
+      await adapter.executeQuery(
+        `INSERT INTO ${q(table)} (${q("id")}, ${q("title")}, ${q("slug")}) VALUES ('e1', 'One', 'one')`
+      );
+      await adapter.executeQuery(
+        `INSERT INTO ${q(`${table}_locales`)} (${q("_parent")}, ${q("_locale")}, ${q("body")}, ${q("label")}) ` +
+          `VALUES ('e1', 'en', 'Hello', 'Hi'), ('e1', 'es', 'Hola', 'Ola')`
+      );
+
+      await migrateCreate(required(untranslated));
+      await migrate();
+
+      expect(await mainValues()).toEqual([{ body: "Hello", label: "Hi" }]);
+      await expect(
+        adapter.executeQuery(
+          `INSERT INTO ${q(table)} (${q("id")}, ${q("title")}, ${q("slug")}) VALUES ('e2', 'Two', 'two')`
+        )
+      ).rejects.toThrow();
+      await expect(migrate()).resolves.toBe(0);
+    });
+
+    // An entry whose language the copy keeps has no value: the column cannot be required over it.
+    // The runner refuses before the setting, naming the field, and the translations stay.
+    it("refuses to turn translation off for a Required field an entry holds no value of", async () => {
+      const required = (entity: MinimalConfigEntity): MinimalConfigEntity => ({
+        ...entity,
+        fields: entity.fields.map(f =>
+          f.name === "label" ? { ...f, required: true } : f
+        ),
+      });
+      await migrateCreate(required(translated));
+      await migrate();
+      await adapter.executeQuery(
+        `INSERT INTO ${q(table)} (${q("id")}, ${q("title")}, ${q("slug")}) VALUES ('e1', 'One', 'one')`
+      );
+      await adapter.executeQuery(
+        `INSERT INTO ${q(`${table}_locales`)} (${q("_parent")}, ${q("_locale")}, ${q("body")}) VALUES ('e1', 'en', 'Hello')`
+      );
+
+      await migrateCreate(required(untranslated));
+      await expect(migrate()).rejects.toThrow(/label/);
+
+      const kept = await adapter.executeQuery<{ body: string }>(
+        `SELECT ${q("body")} AS body FROM ${q(`${table}_locales`)} WHERE ${q("_parent")} = 'e1'`
+      );
+      expect(kept).toEqual([{ body: "Hello" }]);
+    });
+
     it.runIf(dialect === "mysql")(
       "refuses, on a server that is not strict, a value longer than the restored column holds, and keeps it",
       async () => {

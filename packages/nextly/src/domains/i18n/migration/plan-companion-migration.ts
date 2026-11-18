@@ -51,6 +51,12 @@ export interface PlanCompanionArgs {
    * transition.
    */
   previouslyLocalized?: boolean;
+  /**
+   * A DISABLE's statements to run once the values are back on the main table
+   * (`LocalizationDownOptions.afterRestore`): the Required settings the main table's snapshot
+   * records of the restored columns.
+   */
+  afterRestore?: readonly string[];
 }
 
 /**
@@ -75,7 +81,11 @@ export function planCompanionMigration(
       // UP restores the default locale onto main, archives non-default translations into
       // `nextly_i18n_archive`, then drops the companion. DOWN is the inverse (re-enable).
       kind: "disable",
-      upSql: buildLocalizationDownSql(spec),
+      upSql: buildLocalizationDownSql(spec, {
+        ...(args.afterRestore === undefined
+          ? {}
+          : { afterRestore: args.afterRestore }),
+      }),
       downSql: buildLocalizationUpSql(spec),
       spec,
     };

@@ -2265,6 +2265,50 @@ function planCompanionMigrations(
 }
 
 /**
+ * The statements that make each restored column Required where the main table's snapshot records
+ * it so (`nullable: false`), run by a disable once the values are back: added empty, the column
+ * could not take NOT NULL before the copy, and the main file that follows does not add it (its
+ * `add_column` is the disable's, `stripRelocatedDrops`), so without them the main table is at
+ * neither end of that file. Rendered as a field leaving translation renders them
+ * (`settingsAfterCopy`), against the main table as the disable leaves it: the previous one with the
+ * restored columns, which a SQLite rebuild recreates, and nothing the main file adds after. The
+ * runner refuses the setting over an entry left without a value, naming the field
+ * (`requiredColumnCheckpoint`). Unique indexes stay the main file's.
+ */
+function requiredAfterRestore(
+  prevMain: TableSpec,
+  desiredMain: TableSpec | undefined,
+  restored: readonly string[],
+  dialect: SupportedDialect
+): string[] | undefined {
+  const held = {
+    ...heldSettingsOf(prevMain.name, restored, desiredMain),
+    uniqueIndexes: [],
+  };
+  if (desiredMain === undefined || held.required.size === 0) return undefined;
+  const names = new Set(restored);
+  const kept = new Set(prevMain.columns.map(c => c.name));
+  // The previous table without its translation record, which describes the companion the disable
+  // drops, and with the restored columns as the snapshot records them.
+  const {
+    localized: _localized,
+    localizedColumns: _localizedColumns,
+    uniqueLocalizedColumns: _uniqueLocalizedColumns,
+    ...previous
+  } = prevMain;
+  const afterDisable: TableSpec = {
+    ...previous,
+    columns: [
+      ...prevMain.columns,
+      ...desiredMain.columns.filter(
+        c => names.has(c.name) && !kept.has(c.name)
+      ),
+    ],
+  };
+  return settingsAfterCopy(held, afterDisable, dialect, [afterDisable]).up;
+}
+
+/**
  * `column` with the main-table column a snapshot records for it (`restoredAs`): its type as the
  * main file renders it (`renderedType`) and its default. A disable that puts the values back on the
  * main table then leaves the column the runner checks the next main file against, where a wider
@@ -2365,6 +2409,12 @@ function disableEntryFor(
     companionExisted: false,
     localized: false,
     previouslyLocalized: true,
+    afterRestore: requiredAfterRestore(
+      prevMain,
+      desiredMain,
+      disableSpec.columns.map(col => col.name),
+      dialect
+    ),
   });
   return plan.kind === "none"
     ? undefined
