@@ -186,10 +186,6 @@
       "efb4bab56ba352c7"
     ]
   },
-  "packages/nextly/src/cli/commands/index.ts": {
-    "count": 1,
-    "digests": ["56c5af3c8ee88673"]
-  },
   "packages/nextly/src/cli/commands/migrate-check.test.ts": {
     "count": 1,
     "digests": ["a532c6cee9e6e280"]

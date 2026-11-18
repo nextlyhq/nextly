@@ -677,7 +677,7 @@ search (<kbd>Ctrl</kbd>+<kbd>K</kbd>).
 - A paste lands where a clicked block would (see
   [Where a clicked block lands](#where-a-clicked-block-lands)). Content blocks
   (Heading, Text, Image…) go inside a selected container at the end, and after a
-  selected block that holds none. Layout blocks (Box, Columns, Card) go after a selected
+  selected block that holds none; layout blocks (Box, Columns, Card) go after a selected
   container, and a Section goes after the top-level block holding the selection. With
   nothing selected, the paste goes at the end of the page. The pasted blocks are
   selected, and one undo takes the whole paste back.
@@ -702,6 +702,29 @@ cut and paste the text, as usual. The same goes for text you have highlighted.
 
 The first time you use **Paste** from a menu, the browser may ask to let the site see
 what you copied. The keys never ask.
+
+### Copy style and Paste style
+
+To give several blocks the look of one, pick **Copy style** on the block that looks right,
+select the blocks to change, and pick **Paste style**. Both are in the block's toolbar under
+**More actions**, in its right-click menu and in search (<kbd>Ctrl</kbd>+<kbd>K</kbd>).
+
+- Each block you paste onto gets the copied block's own settings on every device and
+  in every state (such as hover), its block style, its text style and its shared styles.
+  These replace what the block had: a block wearing the text style "Display" ends with
+  the copied block's text style, or with none when the copied block wears none.
+- Only the look is copied. Each block keeps its own text, images and links.
+- One undo takes the whole paste back, however many blocks it changed.
+- A paste always changes the blocks themselves, never a shared style, even while the
+  Style tab is editing a shared style. So it never changes blocks you didn't select, here
+  or on other pages.
+- A setting a block can't have is left out, and the builder says how many: "3 settings
+  don't apply to Image". A block style belongs to one kind of block, and a text style
+  needs a block with text.
+- **Copy style** takes one block's look, so it waits for one block to be selected. A
+  paste onto a locked block is refused, with the reason, and nothing changes.
+- The copied style is kept until you copy another, while the builder stays open. It
+  doesn't replace what you copied with <kbd>Ctrl</kbd>+<kbd>C</kbd>.
 
 ## Adding an image
 
