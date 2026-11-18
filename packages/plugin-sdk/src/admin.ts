@@ -448,8 +448,63 @@ export {
  * It is built from the FORM'S OWN control, so what the surface draws and what
  * the form submits are one thing. Constructing a second form would fork the
  * state and lose the edit made in whichever copy did not save.
+ *
+ * The second argument (`EntryFieldsOptions`, @experimental) asks for part of
+ * them: `presentation: "dialog"` draws them flat for a dialog that frames
+ * them; `group: "page"` draws the document's identity alone (its title, and
+ * in the dialog its slug as the full address, with copy and edit, as the
+ * entry header draws it), `group: "content"` everything else; and
+ * `leaveOut` names top-level fields the surface draws its own way, such as
+ * another editor of its kind. A left-out field keeps its value in the form.
+ * `null` answers the same question for what is asked: nothing left to draw.
+ *
+ * ```tsx
+ * const general = useEntryFieldsPanel(name, {
+ *   presentation: "dialog",
+ *   group: "page",
+ * });
+ * const fields = useEntryFieldsPanel(name, {
+ *   presentation: "dialog",
+ *   group: "content",
+ *   leaveOut: ["sidebar"],
+ * });
+ * ```
  */
 export { useEntryFieldsPanel } from "@nextlyhq/admin/kit/document";
+export type {
+  EntryFieldsGroup,
+  EntryFieldsOptions,
+  EntryFieldsPresentation,
+} from "@nextlyhq/admin/kit/document";
+
+/**
+ * Where the entry page draws each of the document's fields (@experimental),
+ * for the surface covering it: `tabOf(path)` answers the document's identity
+ * (`{ kind: "page" }`, the title and slug), its own content
+ * (`{ kind: "content" }`), a plugin's tab that takes the field
+ * (`{ kind: "tab", id }`, the contribution's id), or `null` where the page
+ * draws it nowhere (hidden, kept off the type). `contentFields` lists the
+ * top-level fields the content draws, by name, type and label, so a surface
+ * finds the ones it draws its own way. `null` outside a form a surface
+ * covers, as for `useEntryFieldsPanel`.
+ */
+export { useEntryFieldsLayout } from "@nextlyhq/admin/kit/document";
+export type {
+  EntryContentField,
+  EntryFieldsLayout,
+  EntryFieldTab,
+} from "@nextlyhq/admin/kit/document";
+
+/**
+ * Show a field a refused save names (@experimental), for a document view
+ * that draws some of the document's fields out of sight, in a dialog or a
+ * closed tab. Pass `(path) => show | null`: a function that opens what holds
+ * the field at that form path and focuses it, or `null` where the view
+ * cannot show it. The refusal's message then names each field the view can
+ * show with "Show me", which runs it. The latest function is used while the
+ * caller is mounted; outside a document view nothing asks.
+ */
+export { useRevealField, type FieldReveal } from "@nextlyhq/admin/kit/document";
 
 /**
  * Edit this site's rich text from your own surface (@experimental).
@@ -967,6 +1022,21 @@ export type {
   PlaceTabProps,
   PlaceTabsProps,
   TargetSlotProps,
+} from "@nextlyhq/admin/kit/plugin-parts";
+
+/**
+ * A place's tabs as data (@experimental), for a page that draws them in a
+ * row of its own beside tabs of its own, rather than under the strip
+ * `PlaceTabs` draws: the same tabs, filtered and handed the same props, each
+ * with its `trigger` (label and count), its `accessibleName` where it shows a
+ * count, and its `panel`. Keep every panel mounted while another tab is
+ * shown, only hidden, as `PlaceTabs` does, so its count and what it holds are
+ * kept. None while the page's `context` is `null`.
+ */
+export { usePlaceTabs } from "@nextlyhq/admin/kit/plugin-parts";
+export type {
+  PlaceTabEntry,
+  UsePlaceTabsOptions,
 } from "@nextlyhq/admin/kit/plugin-parts";
 
 /**

@@ -163,9 +163,9 @@ async function openBuilder(page: Page, pageId: string): Promise<void> {
   });
 }
 
-/** Open the editor's Settings dialog, whose "This page" tab holds the picker. */
+/** Open the editor's Page settings, whose General tab holds the picker. */
 async function openSettings(page: Page): Promise<void> {
-  const dialog = page.getByRole("dialog", { name: "Settings" });
+  const dialog = page.getByRole("dialog", { name: /^Page settings · / });
   if (await dialog.isVisible()) return;
   await page
     .getByRole("navigation", { name: "Editor panels" })
@@ -212,7 +212,7 @@ test("offers one menu with pictures, the same on the entry page and in Settings,
   await openBuilder(page, pageId);
   await openSettings(page);
   // The dialog's, not the right panel's beside it, which says the same.
-  const settings = page.getByRole("dialog", { name: "Settings" });
+  const settings = page.getByRole("dialog", { name: /^Page settings · / });
   const picker = settings.getByRole("combobox", { name: "Header & footer" });
   await expect(picker).toBeVisible();
   await expect(picker.locator('[data-slot="hf-name"]')).toHaveText(
@@ -325,7 +325,7 @@ test("draws the set's regions on the canvas around the page, selected as a whole
   await openSettings(page);
   await expect(
     page
-      .getByRole("dialog", { name: "Settings" })
+      .getByRole("dialog", { name: /^Page settings · / })
       .getByRole("combobox", { name: "Header & footer" })
       .locator('[data-slot="hf-name"]')
   ).toHaveText(`Site default (${MAIN})`);

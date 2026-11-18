@@ -60,6 +60,7 @@ import { SITE_STYLE_DEFAULTS } from "./src/lib/site-style-defaults";
 import { blockFixturePlugin } from "./src/plugins/block-fixture/plugin";
 import { contributionsFixturePlugin } from "./src/plugins/contributions-fixture/plugin";
 import { missingWidgetFixturePlugin } from "./src/plugins/missing-widget-fixture/plugin";
+import { pageSummaryFixturePlugin } from "./src/plugins/page-summary-fixture/plugin";
 import { readingListsFixturePlugin } from "./src/plugins/reading-lists-fixture/plugin";
 import { slowWidgetFixturePlugin } from "./src/plugins/slow-widget-fixture/plugin";
 import { startupReadFixturePlugin } from "./src/plugins/startup-read-fixture/plugin";
@@ -397,6 +398,11 @@ export default defineConfig({
     // admin's startup request. A test page, on the suite's own server only.
     ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1"
       ? [startupReadFixturePlugin]
+      : []),
+    // A "Summary" field on the Page Builder's Pages, as a site adds one, for
+    // the browser test of the builder's Page settings. Fixtures only.
+    ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1"
+      ? [pageSummaryFixturePlugin]
       : []),
     // Always on, for the same reason: the blocks it contributes reach the
     // editor through the committed component map. Offered only in the Add

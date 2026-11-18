@@ -119,16 +119,23 @@ test.describe("binding inside a collection list", () => {
     // The item's fields first, named for the list's entries, then the page's
     // own sources.
     const groups = picker.getByRole("group");
-    await expect(groups.first()).toHaveAttribute("aria-label", "Each blog post");
+    await expect(groups.first()).toHaveAttribute(
+      "aria-label",
+      "Each blog post in the list"
+    );
     await expect(groups.nth(1)).toHaveAttribute("aria-label", /^This /);
     // The item's Title shows the list's first entry's value.
-    const item = picker.getByRole("group", { name: "Each blog post" });
+    const item = picker.getByRole("group", {
+      name: "Each blog post in the list",
+    });
     const title = item.getByRole("option", { name: /^Title/ });
     await expect(title).toContainText(titles[0] ?? "", { timeout: 30_000 });
     await title.click();
 
     await expect(
-      page.getByRole("button", { name: /^Text: bound to Title of each blog post/ })
+      page.getByRole("button", {
+        name: /^Text: bound to Title of each blog post/,
+      })
     ).toBeVisible();
     // Each row now shows its own entry's title.
     await expect
@@ -145,7 +152,7 @@ test.describe("binding inside a collection list", () => {
     await expect(marked).toHaveCount(1);
     await expect(
       again
-        .getByRole("group", { name: "Each blog post" })
+        .getByRole("group", { name: "Each blog post in the list" })
         .locator("[data-current]")
     ).toContainText("Title");
   });

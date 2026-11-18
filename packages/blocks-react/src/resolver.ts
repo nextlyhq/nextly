@@ -1,5 +1,6 @@
 import {
   getBlock,
+  migrationInfoOf,
   type AnyBlockDefinition,
   type BlockRegistryReader,
   type MigrationSource,
@@ -251,10 +252,9 @@ export function migrationSourceFor(resolver: BlockResolver): MigrationSource {
   return {
     get: type => {
       const definition = resolver.get(type);
-      if (!definition) return undefined;
-      return definition.migrate === undefined
-        ? { version: definition.version }
-        : { version: definition.version, migrate: definition.migrate };
+      // The engine's one reading of a definition's migration info, so its
+      // renames reach the page as they reach the registry.
+      return definition ? migrationInfoOf(definition) : undefined;
     },
   };
 }
