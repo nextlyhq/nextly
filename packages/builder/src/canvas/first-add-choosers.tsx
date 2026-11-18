@@ -259,7 +259,24 @@ export function FirstAddChoosers({
     if (editor.selectedId !== dismissed) setDismissed(undefined);
   }, [editor.selectedId, dismissed]);
   const sourceless = useSourcelessListAsk(editor, dismissed, dismiss);
-  const firstAdd = hidden ? undefined : (editor.firstAdd ?? sourceless);
+  // Skipping a just-added list's question also puts it away while the list
+  // stays selected, or the question it asks with no source would come
+  // straight back.
+  const added = editor.firstAdd;
+  const justAdded = React.useMemo<FirstAdd | undefined>(
+    () =>
+      added === undefined
+        ? undefined
+        : {
+            ...added,
+            skip: () => {
+              dismiss(added.nodeId);
+              added.skip();
+            },
+          },
+    [added, dismiss]
+  );
+  const firstAdd = hidden ? undefined : (justAdded ?? sourceless);
   const nodeId = firstAdd?.nodeId;
 
   // Read by the measure, which outlives the render that made it.
