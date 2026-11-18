@@ -55,6 +55,26 @@ function consentFor(targets: string): DataLossConsent {
   return resolveDataLossConsent({ flag: targets, env: {} });
 }
 
+/**
+ * A row as one comparable string: its columns in name order, with the values each driver hands
+ * back in its own type (a date, a big integer, bytes) turned into text the same way every time.
+ */
+function comparableRow(row: Record<string, unknown>): string {
+  const value = (v: unknown): unknown =>
+    v instanceof Date
+      ? v.toISOString()
+      : typeof v === "bigint"
+        ? v.toString()
+        : v instanceof Uint8Array
+          ? Buffer.from(v).toString("hex")
+          : v;
+  return JSON.stringify(
+    Object.keys(row)
+      .sort()
+      .map(key => [key, value(row[key])])
+  );
+}
+
 /** A many-to-many field keeping its links in a junction it names. */
 function manyToMany(name: string, target: string, junctionTable: string) {
   return {
@@ -331,12 +351,16 @@ describe.each(LOCK_DIALECTS)(
     /** Every table's row count, the registries' slugs and the ledger. */
     async function databaseState() {
       const tables: Record<string, number> = {};
+      // Each table's rows as well as how many: a refusal that rewrote a value, or replaced a row,
+      // without changing the count must show as a change too.
+      const contents: Record<string, string[]> = {};
       for (const name of (await adapter.listTables()).sort()) {
         if (LOCK_TABLES.has(name)) continue;
-        const rows = await adapter.executeQuery<{ n: unknown }>(
-          `SELECT COUNT(*) AS n FROM ${name}`
+        const rows = await adapter.executeQuery<Record<string, unknown>>(
+          `SELECT * FROM ${name}`
         );
-        tables[name] = Number(rows[0]?.n ?? 0);
+        tables[name] = rows.length;
+        contents[name] = rows.map(comparableRow).sort();
       }
       const slugs = async (registry: string) =>
         (
@@ -366,6 +390,7 @@ describe.each(LOCK_DIALECTS)(
         .sort();
       return {
         tables,
+        contents,
         permissions,
         collections: await slugs("dynamic_collections"),
         singles: await slugs("dynamic_singles"),

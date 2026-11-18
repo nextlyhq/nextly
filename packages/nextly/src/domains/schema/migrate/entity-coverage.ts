@@ -88,17 +88,25 @@ export interface EntityOwners {
 }
 
 /**
- * Whose each of `entities`' tables is, compared without regard to case as a
- * statement may spell a name. A table more than one entity claims, or one
- * that is any entity's main table, has no owner besides itself; and a main
- * table more than one entity names is no entity's.
+ * Whose each of `entities`' tables is, by its physical name: exactly as
+ * spelled, so on a server that keeps the case of table names (PostgreSQL's
+ * quoted names, MySQL on a case-sensitive file system) a table differing only
+ * in case is another table, owned by nobody; and without regard to case only
+ * where the server folds it (`foldsCase`, SQLite's names). A table more than
+ * one entity claims, or one that is any entity's main table, has no owner
+ * besides itself; and a main table more than one entity names is no entity's.
  */
-export function entityOwners(entities: readonly CoveredEntity[]): EntityOwners {
+export function entityOwners(
+  entities: readonly CoveredEntity[],
+  options: { foldsCase?: boolean } = {}
+): EntityOwners {
+  const keyOf = (table: string) =>
+    options.foldsCase === true ? table.toLowerCase() : table;
   // A main table more than one registry row names belongs to none of them, so a drop of it is
   // covered only where it is named, and lists no entity's shared rows on another's behalf.
   const named = new Map<string, CoveredEntity[]>();
   for (const entity of entities) {
-    const key = entity.table.toLowerCase();
+    const key = keyOf(entity.table);
     named.set(key, [...(named.get(key) ?? []), entity]);
   }
   const mains = new Map<string, CoveredEntity>();
@@ -108,16 +116,16 @@ export function entityOwners(entities: readonly CoveredEntity[]): EntityOwners {
   const claims = new Map<string, CoveredEntity[]>();
   for (const entity of entities) {
     // Each table once per entity: a field declared twice names its junction twice.
-    const owned = new Set(entity.tables.slice(1).map(t => t.toLowerCase()));
+    const owned = new Set(entity.tables.slice(1).map(keyOf));
     for (const key of owned) {
       if (named.has(key)) continue;
       claims.set(key, [...(claims.get(key) ?? []), entity]);
     }
   }
   return {
-    mainOf: table => mains.get(table.toLowerCase()),
+    mainOf: table => mains.get(keyOf(table)),
     ownerOf: table => {
-      const claimed = claims.get(table.toLowerCase());
+      const claimed = claims.get(keyOf(table));
       return claimed?.length === 1 ? claimed[0] : undefined;
     },
   };

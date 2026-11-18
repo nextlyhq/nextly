@@ -106,7 +106,9 @@ export function judgedDeletions(args: {
   const removed = args.plan.removedEntities ?? [];
   const perFile = coverRunDeletions(
     read,
-    entityOwners(args.plan.entities ?? []),
+    entityOwners(args.plan.entities ?? [], {
+      foldsCase: args.dialect === "sqlite",
+    }),
     entity =>
       removed.some(
         r =>

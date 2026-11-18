@@ -116,7 +116,8 @@ describe("what an entity owns", () => {
 
 describe("whose a dropped table is", () => {
   it("gives a table the entity owns its main table as owner, and the main table none", () => {
-    const owners = entityOwners([posts, home]);
+    // On a server that folds the case of table names, as SQLite does.
+    const owners = entityOwners([posts, home], { foldsCase: true });
     expect(
       withOwners(
         [
@@ -144,6 +145,24 @@ describe("whose a dropped table is", () => {
       { kind: "table", table: "single_home_locales", owner: "single_home" },
       table("dc_other"),
     ]);
+  });
+
+  it("owns no table that differs from its own only in case, where the server keeps case", () => {
+    // A quoted `DC_POSTS_LOCALES` is a table of its own on PostgreSQL: naming `dc_posts` covers none of it.
+    const owners = entityOwners([posts]);
+    expect(
+      withOwners([table("DC_POSTS_LOCALES"), table("dc_posts_locales")], owners)
+    ).toEqual([
+      table("DC_POSTS_LOCALES"),
+      { kind: "table", table: "dc_posts_locales", owner: "dc_posts" },
+    ]);
+    expect(owners.mainOf("DC_POSTS")).toBeUndefined();
+    expect(
+      consentCovers(
+        consent("dc_posts"),
+        withOwners([table("DC_POSTS_LOCALES")], owners)[0]
+      )
+    ).toBe(false);
   });
 
   it("gives a table two entities claim no owner, so each must be named", () => {

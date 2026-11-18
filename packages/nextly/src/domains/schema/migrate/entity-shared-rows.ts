@@ -247,7 +247,10 @@ export async function withEntityCoverage(
     (await within(readCoveredEntities(reader.db, reader.dialect), deadline)) ??
     [];
   if (entities.length === 0) return perUnit.map(list => [...list]);
-  const owners = entityOwners(entities);
+  // SQLite's table names are case-insensitive; elsewhere a table is named exactly.
+  const owners = entityOwners(entities, {
+    foldsCase: reader.dialect === "sqlite",
+  });
   const covered = coverRunDeletions(perUnit, owners, reader.retires);
   const counted: Deletion[][] = [];
   for (const list of covered) {
