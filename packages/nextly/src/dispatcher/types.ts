@@ -12,6 +12,8 @@ import type { NextlyError } from "../errors/nextly-error";
 export type ServiceType =
   | "users"
   | "releases"
+  // Review state, steps and assignments under a workflow (@experimental).
+  | "workflows"
   | "rbac"
   | "auth"
   | "posts"

@@ -18,6 +18,7 @@ import {
   DropIndicator,
   DropRefusal,
   elementAnchor,
+  EmbedStates,
   EmptyContainerAppenders,
   PageInserters,
   RepairNotice,
@@ -281,6 +282,9 @@ export function editorCanvasRegion(view: EditorView): React.JSX.Element {
                       })}
                   dragging={dragging}
                 />
+                {/* An Embed with no link: "Paste a YouTube, Vimeo or other
+                    link", stored with the provider's shape. */}
+                <EmbedStates editor={editor} dragging={dragging} />
                 {/* A selected block the page hides on this device is drawn
                     anyway, and its ring says so. */}
                 <CanvasMarks

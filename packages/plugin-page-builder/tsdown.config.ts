@@ -11,6 +11,7 @@ import { defineConfig } from "tsdown";
  *   - src/admin/index.ts  → "./admin"  ("use client"; the blocks field's summary)
  *   - src/canvas/index.tsx → "./canvas" ("use client"; the site's canvas route page)
  *   - src/site/index.tsx   → "./site"   (server; `<SiteCode>` for the site's layout)
+ *   - src/site/page-code-boundary.tsx (client; imported by "./site", not exported)
  *
  * There was a `./render` entry, and a separate one for its error boundary — the
  * single client island inside an otherwise server-first renderer. Both are gone
@@ -45,6 +46,10 @@ export default defineConfig({
     // entry because it reads Next's draft mode, which the isomorphic root
     // entry must not import.
     "src/site/index.tsx",
+    // `<PageCodeBoundary>`, the one client component `./site` draws: its own
+    // entry so its `"use client"` heads its own file, which `./site` imports
+    // rather than bundling it into a server component's.
+    "src/site/page-code-boundary.tsx",
   ],
   format: ["esm"],
   // `.js` and `.d.ts`, the names the exports map already publishes.

@@ -72,6 +72,11 @@ export interface VariableRowProps {
   usage: VariableUsageHere | undefined;
   /** Every variable the row stands for, together, once read. */
   reach: VariableReach | undefined;
+  /**
+   * Marked "Built-in": a built-in colour still listed while the site hides
+   * the ones it does not use, so the author can tell why it stayed.
+   */
+  builtIn?: boolean;
 }
 
 /**
@@ -94,6 +99,7 @@ export function VariableRow({
   fresh,
   usage,
   reach,
+  builtIn = false,
 }: VariableRowProps): React.JSX.Element {
   const token = tokens.tokens[entry.row.at];
   const [removing, setRemoving] = React.useState(false);
@@ -128,6 +134,7 @@ export function VariableRow({
               mode={mode}
               reach={reach}
               marked={fresh?.marked === true}
+              builtIn={builtIn}
               open={open}
               quiet={open || menuOpen}
               button={button}
@@ -216,6 +223,7 @@ function RowTrigger({
   mode,
   reach,
   marked,
+  builtIn,
   open,
   quiet,
   button,
@@ -227,6 +235,8 @@ function RowTrigger({
   mode: TokenMode;
   reach: VariableReach | undefined;
   marked: boolean;
+  /** Marked "Built-in"; see {@link VariableRowProps.builtIn}. */
+  builtIn: boolean;
   open: boolean;
   /** The tooltip stays closed: the editor or the menu is open. */
   quiet: boolean;
@@ -241,7 +251,15 @@ function RowTrigger({
           type="button"
           className="nx-vars__row"
           data-variable-key={entry.row.key}
-          aria-label={rowLabel({ entry, token, tokens, mode, reach, marked })}
+          aria-label={rowLabel({
+            entry,
+            token,
+            tokens,
+            mode,
+            reach,
+            marked,
+            builtIn,
+          })}
           data-kind={entry.row.kind}
           // Drawn as chosen while its editor is open. Its own mark: the
           // row's tooltip sets `data-state` too, over the popover's.
@@ -254,6 +272,7 @@ function RowTrigger({
             tokens={tokens}
             mode={mode}
             marked={marked}
+            builtIn={builtIn}
           />
         </button>
       </PopoverTrigger>
@@ -342,6 +361,7 @@ function rowLabel({
   mode,
   reach,
   marked,
+  builtIn,
 }: {
   entry: VariableEntry;
   token: SiteToken | undefined;
@@ -349,9 +369,11 @@ function rowLabel({
   mode: TokenMode;
   reach: VariableReach | undefined;
   marked: boolean;
+  builtIn: boolean;
 }): string {
   const fresh = marked ? ", new" : "";
-  return `${shownName(entry)}${fresh}${describe(entry, token, tokens, mode)}${countWords(reach)}`;
+  const supplied = builtIn ? ", built-in" : "";
+  return `${shownName(entry)}${fresh}${supplied}${describe(entry, token, tokens, mode)}${countWords(reach)}`;
 }
 
 /**
@@ -364,17 +386,24 @@ function RowFace({
   tokens,
   mode,
   marked,
+  builtIn,
 }: {
   entry: VariableEntry;
   token: SiteToken | undefined;
   tokens: SiteTokenSet;
   mode: TokenMode;
   marked: boolean;
+  builtIn: boolean;
 }): React.JSX.Element {
   return (
     <>
       <RowLead entry={entry} token={token} tokens={tokens} mode={mode} />
       <RowName entry={entry} />
+      {builtIn ? (
+        <span className="nx-vars__built-in" aria-hidden="true">
+          Built-in
+        </span>
+      ) : null}
       {marked ? (
         <span className="nx-vars__new" aria-hidden="true">
           New

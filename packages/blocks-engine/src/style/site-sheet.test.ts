@@ -16,6 +16,12 @@ import type { NamedClass } from "./named-class";
 import { previewStateClass } from "./compile-page";
 import { CONTENT_WIDTH_CLASS } from "./node-class";
 import { compileSiteSheet } from "./site-sheet";
+import { tokenCustomProperty } from "./declarations";
+import {
+  defaultSiteTokens,
+  resolveSiteTokens,
+  tokenIdentity,
+} from "./site-tokens";
 
 const styles = (values: Record<string, unknown>): NodeStyles =>
   ({ base: { base: values } }) as unknown as NodeStyles;
@@ -96,6 +102,24 @@ describe("what the shared sheet carries", () => {
     // The synthetic nodes exist only to make each type present. If one of them ever contributed a
     // rule, the shared sheet would carry a page's content.
     expect(sheet().css).not.toContain("site-sheet-");
+  });
+});
+
+describe("the built-in colours setting", () => {
+  it("writes every built-in colour while the built-in colours are hidden, byte for byte as shown", () => {
+    const shown = sheet({ tokens: resolveSiteTokens({ tokens: [] }) }).css;
+    const hidden = sheet({
+      tokens: resolveSiteTokens({ tokens: [], builtInColoursShown: false }),
+    }).css;
+    // Hiding is the Design panel's and the pickers' alone: core blocks keep
+    // reading every built-in colour, so the sheet still declares each one.
+    for (const token of defaultSiteTokens()) {
+      if (token.kind !== "color") continue;
+      expect(hidden).toContain(
+        `${tokenCustomProperty(tokenIdentity(token), "--site-")}:`
+      );
+    }
+    expect(hidden).toBe(shown);
   });
 });
 
