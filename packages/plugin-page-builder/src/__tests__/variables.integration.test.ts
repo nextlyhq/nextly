@@ -946,6 +946,17 @@ describe.each(getConfiguredTestDialects())(
       expect(JSON.parse(await storedSection(t))).toMatchObject({
         builtInColoursShown: false,
       });
+      // Anything but true or false is refused, and nothing is stored.
+      const settled = await storedSection(t);
+      const malformed = await call("PATCH", SINGLE, designer, {
+        tokens: { tokens, builtInColoursShown: "no" },
+        _overwrite: true,
+      });
+      expect(malformed.status).toBe(400);
+      expect(JSON.stringify(malformed.body)).toContain(
+        "Whether the built-in colours are shown must be true or false."
+      );
+      expect(await storedSection(t)).toBe(settled);
       // Read by every author who may read Design, so all of them see it.
       const read = await call("GET", SINGLE, reader);
       expect(read.status).toBe(200);
