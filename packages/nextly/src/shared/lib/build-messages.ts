@@ -62,3 +62,34 @@ export function editorPlaceOf(message: BuildMessage): EditorPlace | undefined {
     ...(typeof at.lineText === "string" ? { lineText: at.lineText } : {}),
   };
 }
+
+/**
+ * Each message as `file:line:column: text` at the place an editor shows (`editorPlaceOf`),
+ * followed by the line itself where esbuild kept it, one per line. Every surface that prints a
+ * build failure renders it here, so the error's reason and its verbose context name one place.
+ */
+export function formatBuildMessages(messages: readonly BuildMessage[]): string {
+  return messages
+    .map(message => {
+      const place = editorPlaceOf(message);
+      if (place === undefined) return message.text;
+      const at = `${place.file}:${place.line}:${place.column}: ${message.text}`;
+      return place.lineText === undefined ? at : `${at}\n${place.lineText}`;
+    })
+    .join("\n");
+}
+
+/**
+ * A failure carrying `failure`'s build messages, its message rendered by `formatBuildMessages`.
+ * esbuild's own message counts the column in bytes from 0, so a report that printed it, or chained
+ * it as a cause, under the editor's place named one error at two places; the messages are all
+ * kept, so nothing a reader of them needs is lost. Undefined when `failure` carries none.
+ */
+export function withEditorPlaces(failure: unknown): Error | undefined {
+  const messages = buildMessagesOf(failure);
+  if (messages.length === 0) return undefined;
+  return Object.assign(
+    new Error(`Build failed:\n${formatBuildMessages(messages)}`),
+    { errors: messages }
+  );
+}

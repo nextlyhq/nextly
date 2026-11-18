@@ -28,12 +28,15 @@ afterEach(() => {
 });
 
 /** What a command ends with when it loads the project's configuration, as the terminal shows it. */
-async function reportFor(source: string): Promise<string> {
+async function reportFor(
+  source: string,
+  options: { verbose?: boolean } = {}
+): Promise<string> {
   writeFileSync(join(dir, "nextly.config.ts"), source);
   try {
     await loadConfig({ cwd: dir });
   } catch (error) {
-    return formatCliError(toCliError(error), { color: false });
+    return formatCliError(toCliError(error), { color: false, ...options });
   }
   throw new Error("expected the configuration to be refused");
 }
@@ -67,5 +70,14 @@ describe("a configuration that does not parse", () => {
     // The line itself, as written, once.
     expect(occurrences(report, ERROR_LINE), report).toBe(1);
     expect(report).toMatchSnapshot();
+  });
+
+  it("names no other place under --verbose, its context and stack included", async () => {
+    const report = await reportFor(MISSING_BRACE, { verbose: true });
+
+    // The context and the stack name the editor's place too; esbuild's own never appears.
+    expect(report).toContain("Context:");
+    expect(report).toContain("nextly.config.ts:4:12");
+    expect(occurrences(report, ":4:13"), report).toBe(0);
   });
 });

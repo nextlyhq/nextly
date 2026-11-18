@@ -14,7 +14,7 @@ import { NextlyError } from "../../../errors/nextly-error";
 import {
   type BuildMessage,
   buildMessagesOf,
-  editorPlaceOf,
+  formatBuildMessages,
 } from "../../../shared/lib/build-messages";
 import { CliError } from "../cli-error";
 import { defineCodes } from "../define";
@@ -50,20 +50,9 @@ function missingModule(error: NextlyError): string | undefined {
 const isUnresolved = (message: BuildMessage) =>
   message.text.startsWith("Could not resolve");
 
-/**
- * Each message as `file:line:column: text`, at the place the user's editor shows (`editorPlaceOf`),
- * followed by the line itself where esbuild kept it. The place is named here and nowhere else in
- * the error, so a reader meets it once.
- */
+/** Each message at the place the user's editor shows, with its line (`formatBuildMessages`). */
 function located(messages: readonly BuildMessage[]): string {
-  return messages
-    .map(message => {
-      const place = editorPlaceOf(message);
-      if (place === undefined) return message.text;
-      const at = `${place.file}:${place.line}:${place.column}: ${message.text}`;
-      return place.lineText === undefined ? at : `${at}\n${place.lineText}`;
-    })
-    .join("\n");
+  return formatBuildMessages(messages);
 }
 
 /** What the file's default export was, as the loader recorded its `typeof`. */
@@ -112,11 +101,12 @@ export const CONFIG_CODES = defineCodes({
           return messages.length > 0 && !messages.some(isUnresolved);
         },
         // The place is named once, in Why with its line: Next says what to do without
-        // naming it again.
+        // naming it again, nor a file, since the error may be in a file the configuration
+        // imports.
         describe: error => ({
           what: `\`${configFile(error)}\` has a syntax error, so it could not be read.`,
           why: located(buildMessages(error)),
-          next: `Fix the code shown in \`${configFile(error)}\`, then run the command again.`,
+          next: "Fix the code shown above, then run the command again.",
         }),
       },
     ],
