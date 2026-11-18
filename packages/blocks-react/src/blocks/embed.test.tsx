@@ -82,7 +82,8 @@ describe("a new Embed", () => {
     // author gets on adding one.
     const placed = { ...embed.defaultProps, ...embed.example.props };
     expect(placed).not.toHaveProperty("src");
-    expect(placed).toMatchObject({ load: "click", privacy: true });
+    // No label of the example's: the frame is named for what its link is.
+    expect(placed).toMatchObject({ title: "", load: "click", privacy: true });
   });
 
   it("draws the box for the editor's link field on the canvas, and nothing for a visitor", async () => {
@@ -266,6 +267,14 @@ describe("posterDocument", () => {
     });
     expect(doc.toLowerCase()).not.toContain("<script");
     expect(doc).toContain("min-width:44px;min-height:44px");
+    // Its scheme follows the device's, as the site's frame does, so the
+    // browser draws no opaque backdrop over the site's colour behind it.
+    expect(
+      new DOMParser()
+        .parseFromString(doc, "text/html")
+        .querySelector('meta[name="color-scheme"]')
+        ?.getAttribute("content")
+    ).toBe("light dark");
     expect(new DOMParser().parseFromString(doc, "text/html").documentElement.lang).toBe("en-GB");
   });
 });

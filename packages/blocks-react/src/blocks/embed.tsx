@@ -385,6 +385,11 @@ export function posterDocument({
     picture === undefined ? "" : `<img src="${escapeHtml(picture)}" alt="">`;
   return (
     `<!doctype html><html${language}><head><meta charset="utf-8">` +
+    // Both schemes, so the poster's document takes the device's, as the
+    // site's own frame does where the site follows the device: a frame whose
+    // document's scheme differs from its element's is painted with an opaque
+    // backdrop, which would cover the site's colour behind the poster.
+    `<meta name="color-scheme" content="light dark">` +
     `<meta name="referrer" content="strict-origin-when-cross-origin">` +
     `<style>${POSTER_STYLES}</style></head><body>` +
     `<a href="${escapeHtml(player)}" aria-label="${escapeHtml(`Play: ${title}`)}">` +
@@ -489,12 +494,12 @@ export const embed: BlockDefinition<EmbedProps, PageContext> = defineBlock({
     load: "click",
     privacy: true,
   },
-  // No link: a block is placed with its example's props, and an example
-  // address would be stored on every new Embed and loaded on the canvas. A
-  // new Embed starts empty, and the editor asks for a link.
-  example: {
-    props: { title: "A product demo" },
-  },
+  // Nothing: a block is placed with its example's props, so an example
+  // address would be stored on every new Embed and loaded on the canvas, and
+  // an example label would name every new Embed's frame instead of what its
+  // link turns out to be. A new Embed starts empty, and the editor asks for a
+  // link.
+  example: { props: {} },
   baseStyles: EMBED_BASE_STYLES,
   supports: {
     spacing: true,

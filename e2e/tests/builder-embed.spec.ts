@@ -232,7 +232,10 @@ test.describe("an Embed in the editor", () => {
 
     const video = videoId();
     await field.fill(`https://www.youtube.com/shorts/${video}`);
-    await page.getByRole("button", { name: "Embed", exact: true }).click();
+    await page
+      .locator(".nx-embed-state")
+      .getByRole("button", { name: "Embed", exact: true })
+      .click();
 
     // The poster replaces the box, and the inspector says what was found.
     await expect(
@@ -277,7 +280,9 @@ test.describe("an Embed in the editor", () => {
       "draft"
     );
     await openBuilder(page, id);
-    await canvasFrame(page).locator(`iframe[data-nx-node="${EMBED}"]`).click();
+    // The editor's see-through cover over the frame takes the click and
+    // selects the Embed: the frame's own document never sees it.
+    await page.locator('.nx-embed-state[data-embed-state="frame"]').click();
 
     const thumbnail = page.getByRole("button", {
       name: "Use the video's thumbnail",

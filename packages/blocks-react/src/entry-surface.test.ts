@@ -23,6 +23,8 @@ import { describe, expect, it } from "vitest";
 
 import * as bindingWireModule from "./binding-wire";
 import * as boundaryModule from "./block-boundary";
+import * as embedModule from "./blocks/embed";
+import * as embedProvidersModule from "./blocks/embed-providers";
 import * as blocksEntry from "./blocks/index";
 import * as listReadModule from "./blocks/list-read";
 import * as blockPropsModule from "./blocks/props";
@@ -113,6 +115,22 @@ const SOURCE_MODULES: ReadonlyArray<{
       "receiverKeepsName",
       "sentNameOf",
     ],
+  },
+  {
+    name: "blocks/embed-providers",
+    module: embedProvidersModule,
+    // `detectEmbed` is public, so the editor and the thumbnail copy answer
+    // from the table the block renders by. The player origins and the
+    // origin check are the block's own frame-trust rule.
+    internal: ["EMBED_PLAYER_ORIGINS", "isPlayerOf"],
+  },
+  {
+    name: "blocks/embed",
+    module: embedModule,
+    // The empty box's attribute is public, so the editor's canvas finds the
+    // box by the name the block writes. The block itself is published from
+    // the blocks entry; its render and its poster document are its own.
+    internal: ["embed", "posterDocument", "renderEmbed"],
   },
   {
     name: "blocks/typography-defaults",
@@ -589,6 +607,9 @@ describe("the root entry", () => {
       // The read budget's default: see `createQueryBudget`.
       "DEFAULT_MAX_QUERIES",
       "EDITOR_NAMESPACE",
+      // The box an Embed with no link draws on the editor's canvas, public so
+      // the canvas draws its link field over the box the block writes.
+      "EMBED_EMPTY_ATTRIBUTE",
       // The Entry content block's marks on the editor's canvas, public so the
       // canvas's sheet draws by the names the renderer writes.
       "ENTRY_CONTENT_DRAWN_ATTRIBUTE",
@@ -659,6 +680,9 @@ describe("the root entry", () => {
       "defineBlock",
       // The definitions a document reaches, discovered as the render does.
       "definitionsFor",
+      // Which provider an Embed's link is from, by the block's own table:
+      // the editor says what it found and the thumbnail copy fetches from it.
+      "detectEmbed",
       "emptyDataProvider",
       "fetchPolicyLabel",
       // The image and embed blocks' one filter on an address, public so a
