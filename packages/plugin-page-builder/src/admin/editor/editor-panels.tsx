@@ -77,6 +77,7 @@ import {
 } from "./editor-preference-stores";
 import { useLookEditing, type LookEditingState } from "./look-editing";
 import {
+  offeredSelfOf,
   withoutSelf,
   withoutSelfPatterns,
   type ComponentGraph,
@@ -270,14 +271,19 @@ type OfferedLibrary = {
 };
 
 /** The library the insert panel may offer, for the field being edited. */
-function useOfferedLibrary({
-  componentLibrary,
-  documentLimits,
-  initialDocument,
-}: Pick<
-  EditorMount,
-  "componentLibrary" | "documentLimits" | "initialDocument"
->): OfferedLibrary {
+function useOfferedLibrary(
+  {
+    componentLibrary,
+    documentLimits,
+    initialDocument: opened,
+    editing,
+  }: Pick<
+    EditorMount,
+    "componentLibrary" | "documentLimits" | "initialDocument" | "editing"
+  >,
+  /** The regions around the page, with the component filling each. */
+  cards: readonly RegionCardFacts[]
+): OfferedLibrary {
   /*
    * The rows the panel may OFFER: the library without the definition this very
    * field is editing, when it is editing one. The MAP stays whole — the
@@ -287,7 +293,14 @@ function useOfferedLibrary({
   // Judged on the document the editor OPENED with: a document's kind does not
   // change while it is edited, and the opening document is the one this
   // field's own value described.
-  const identity = useDocumentIdentity();
+  // While a header or footer is edited in place, the one judged is its
+  // component, so the header is never offered inside itself.
+  const opener = useDocumentIdentity();
+  const { target } = editing;
+  const { document: initialDocument, identity } = useMemo(
+    () => offeredSelfOf(target, cards, { document: opened, identity: opener }),
+    [target, cards, opened, opener]
+  );
   /*
    * Built once and asked by BOTH tiers: the components filter below and the
    * patterns filter the panel runs on the rows it reads for itself. One
@@ -619,7 +632,7 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
     ...(checklistStore === undefined ? {} : { store: checklistStore }),
   });
 
-  const library = useOfferedLibrary(mount);
+  const library = useOfferedLibrary(mount, layoutRegions.cards);
   const requests = useEditorRequests(editor);
   // Whether the editor's search is open: ⌘K opens it, and so does the top
   // bar's button, so the state sits above both.

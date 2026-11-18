@@ -67,6 +67,10 @@ import { FACTS_PENDING, useComponentFacts } from "../component-facts-client";
 import { sayFillNotices, type BuilderSets } from "../filled-default-notice";
 import { siteRegionName, type RegionCardFacts } from "../page-layout";
 import { useComponentEditing } from "../pattern-capability-client";
+import {
+  useRemovalQuestion,
+  type RemovalQuestion,
+} from "../removal-hold-client";
 
 import {
   RegionDoneDialog,
@@ -95,6 +99,8 @@ interface InlineTyping {
   readonly commit: () => InlineEditOutcome;
   readonly editing: unknown;
   readonly editingRich: unknown;
+  /** End whichever passage is open, its words discarded. */
+  readonly cancel?: () => void;
   /** A passage open in an inspector field, whose words are not yet written. */
   readonly inspecting?: boolean;
 }
@@ -273,11 +279,57 @@ function useRegionSavePoint(
   }
   const dirty =
     editingArea !== undefined &&
-    (savedAt !== active.undoDepth ||
-      inline.editing !== null ||
-      inline.editingRich !== null ||
-      inline.inspecting === true);
+    (savedAt !== active.undoDepth || passageOpen(inline));
   return { dirty, stored };
+}
+
+/** Whether a passage is open, on the canvas or in an inspector field. */
+function passageOpen(inline: InlineTyping): boolean {
+  return (
+    inline.editing !== null ||
+    inline.editingRich !== null ||
+    inline.inspecting === true
+  );
+}
+
+/**
+ * Whether the opening of a region is refused: a colleague holds it, said by
+ * name, or it could not be read, said with "Try again", which asks again as
+ * the author asks (never while something is edited).
+ */
+function openingRefused(
+  session: DocumentSession,
+  area: RegionArea,
+  retry: React.RefObject<((area: RegionArea) => void) | undefined>
+): boolean {
+  if (session.lock.status === "held-by-other") {
+    toast.error(lockedBy(area, session.lock.holder));
+    return true;
+  }
+  if (session.open.status === "failed") {
+    toast.error(couldNotOpen(area), {
+      action: { label: TRY_AGAIN, onClick: () => retry.current?.(area) },
+    });
+    return true;
+  }
+  return false;
+}
+
+/** The region's document once it is read, locked and counted, else nothing. */
+function enterable(
+  session: DocumentSession,
+  field: string,
+  reach: { known: boolean }
+): BlockDocument | undefined {
+  if (session.lock.status !== "held" || !reach.known) return undefined;
+  return regionDocumentOf(session, field);
+}
+
+/** When the version opened was changed, where it is newer than the live one. */
+function unpublishedFromOf(session: DocumentSession): string | undefined {
+  if (session.open.status !== "ready") return undefined;
+  const { published, unpublishedChanges, changedAt } = session.open;
+  return published && unpublishedChanges ? (changedAt ?? undefined) : undefined;
 }
 
 /** A refusal of a save or publish, in the author's words. */
@@ -325,38 +377,19 @@ function useRegionOpening({
   useEffect(() => {
     if (opening === null || inRegion || field === undefined) return;
     const { area } = opening;
-    if (session.lock.status === "held-by-other") {
-      toast.error(lockedBy(area, session.lock.holder));
+    if (openingRefused(session, area, retry)) {
       setOpening(null);
       return;
     }
-    if (session.open.status === "failed") {
-      setOpening(null);
-      // Asked again as the author asks: never while something is edited.
-      toast.error(couldNotOpen(area), {
-        action: { label: TRY_AGAIN, onClick: () => retry.current?.(area) },
-      });
-      return;
-    }
-    const document = regionDocumentOf(session, field);
-    if (
-      document === undefined ||
-      session.open.status !== "ready" ||
-      session.lock.status !== "held" ||
-      !reach.known
-    ) {
-      return;
-    }
+    const document = enterable(session, field, reach);
+    if (document === undefined) return;
     // The page's own passage, if one is open, ends here, in the page; one
     // that could not be written keeps the page, with the words in it.
     if (inline.commit().status === "refused") {
       setOpening(null);
       return;
     }
-    const unpublishedFrom =
-      session.open.published && session.open.unpublishedChanges
-        ? (session.open.changedAt ?? undefined)
-        : undefined;
+    const unpublishedFrom = unpublishedFromOf(session);
     enter({
       area,
       document,
@@ -415,12 +448,15 @@ function useRegionStore({
   inline,
   active,
   session,
+  removal,
   stored,
   rereadRegions,
   sets,
 }: {
   area: RegionArea | undefined;
   field: string | undefined;
+  /** The component edited, and the hold its publish takes first. */
+  removal: RegionRemoval;
   inline: InlineTyping;
   active: Pick<EditorState, "document">;
   session: DocumentSession;
@@ -438,6 +474,10 @@ function useRegionStore({
       const finished = finishInlineEdit(inline, active.document);
       if (!finished.mayClose) return false;
       setBusy(true);
+      if (intent === "publish" && !(await held(removal, finished.document))) {
+        setBusy(false);
+        return false;
+      }
       const changes = { [field]: finished.document };
       const outcome = await (intent === "publish"
         ? session.publish(changes)
@@ -460,10 +500,42 @@ function useRegionStore({
       if (intent === "publish") void sayFillNotices(sets);
       return true;
     },
-    [area, field, inline, active.document, session, stored, rereadRegions, sets]
+    [
+      area,
+      field,
+      inline,
+      active.document,
+      session,
+      removal,
+      stored,
+      rereadRegions,
+      sets,
+    ]
   );
   latest.current = store;
   return { busy, store };
+}
+
+/**
+ * The removal's hold a publish of the region takes first, as the component's
+ * own view takes it: the fields it removes held at the count told, asked
+ * again while that grew. Answers whether the publish may go ahead; called
+ * off, nothing is said, and a hold that could not be had says why.
+ */
+async function held(
+  removal: RegionRemoval,
+  document: BlockDocument
+): Promise<boolean> {
+  if (removal.componentId === undefined) return false;
+  try {
+    await removal.hold(removal.componentId, () => document, removal.locale);
+    return true;
+  } catch (error) {
+    if (!(error instanceof DOMException && error.name === "AbortError")) {
+      toast.error(error instanceof Error ? error.message : String(error));
+    }
+    return false;
+  }
 }
 
 /** Leaving the region, and the questions Done and Publish ask first. */
@@ -483,6 +555,7 @@ function useRegionLeaving({
   area,
   dirty,
   busy,
+  inline,
   editing,
   session,
   store,
@@ -495,6 +568,7 @@ function useRegionLeaving({
   dirty: boolean;
   /** A store is on its way, whose outcome the question waits for. */
   busy: boolean;
+  inline: Pick<InlineTyping, "cancel">;
   editing: Pick<EditingTargetState, "leave">;
   session: Pick<DocumentSession, "discard">;
   store: RegionStore["store"];
@@ -540,6 +614,9 @@ function useRegionLeaving({
         ask(null);
         return;
       }
+      // Discarded, a passage still open in the header (one its cap refused,
+      // say) ends with it, never to be written into the page left for.
+      if (choice === "discard") inline.cancel?.();
       const left =
         choice === "discard"
           ? await session.discard().then(() => true)
@@ -548,7 +625,7 @@ function useRegionLeaving({
       ask(null);
       leave();
     },
-    [session, store, leave]
+    [inline, session, store, leave]
   );
   return { asking, ask, done, leaveThen, answer };
 }
@@ -584,6 +661,7 @@ function RegionQuestions({
   leaving,
   mayPublish,
   draftable,
+  removal,
 }: {
   area: RegionArea | undefined;
   reach: RegionReach;
@@ -591,6 +669,8 @@ function RegionQuestions({
   leaving: RegionLeaving;
   mayPublish: boolean;
   draftable: boolean;
+  /** The removal's question, asked again while its count grew. */
+  removal: JSX.Element;
 }): JSX.Element {
   const shown = area ?? "header";
   const { asking, ask, answer } = leaving;
@@ -617,6 +697,7 @@ function RegionQuestions({
           });
         }}
       />
+      {removal}
     </>
   );
 }
@@ -661,6 +742,7 @@ function useOpenedComponent(opening: Opening | null): {
   session: DocumentSession;
   facts: ComponentFieldsHost | undefined;
   reach: { known: boolean; reach: RegionReach };
+  locale: string | undefined;
 } {
   const store = useComponentEditing();
   const locale = useDocumentLocale()?.code ?? null;
@@ -675,7 +757,42 @@ function useOpenedComponent(opening: Opening | null): {
   );
   const facts = useComponentFacts(opening?.componentId);
   const reach = useMemo(() => reachOf(facts), [facts]);
-  return { store, session, facts, reach };
+  return { store, session, facts, reach, locale: locale ?? undefined };
+}
+
+/** `value` while a region is edited, else nothing. */
+function whileEdited<T>(
+  area: RegionArea | undefined,
+  value: T | undefined
+): T | undefined {
+  return area === undefined ? undefined : value;
+}
+
+/** The component a region's publish holds the removals of. */
+interface RegionRemoval {
+  readonly componentId: string | undefined;
+  readonly locale: string | undefined;
+  readonly hold: RemovalQuestion["hold"];
+}
+
+/**
+ * The fields a publish of the region removes, held first: told as each one
+ * left the header while it was edited, for this opening of it.
+ */
+function useRegionRemoval(
+  editing: BlockDocument,
+  facts: ComponentFieldsHost | undefined,
+  opening: Opening | null,
+  locale: string | undefined
+): { removal: RegionRemoval; dialog: JSX.Element } {
+  const question = useRemovalQuestion(editing, () => facts?.reach, opening);
+  const componentId = opening?.componentId;
+  const { hold } = question;
+  const removal = useMemo(
+    () => ({ componentId, locale, hold }),
+    [componentId, locale, hold]
+  );
+  return { removal, dialog: question.dialog };
 }
 
 /**
@@ -716,6 +833,7 @@ export function useRegionEditing({
     session,
     facts: componentFacts,
     reach,
+    locale,
   } = useOpenedComponent(opening);
   const field = place?.field;
   const area = editedAreaOf(editing);
@@ -734,12 +852,19 @@ export function useRegionEditing({
     onEntered: requestLayers,
   });
   useRecordedRegion(session, field, active.document, savePoint.dirty);
+  const { removal, dialog: removalDialog } = useRegionRemoval(
+    active.document,
+    componentFacts,
+    opening,
+    locale
+  );
   const store = useRegionStore({
     area,
     field,
     inline,
     active,
     session,
+    removal,
     stored: savePoint.stored,
     rereadRegions,
     sets,
@@ -749,6 +874,7 @@ export function useRegionEditing({
     area,
     dirty: savePoint.dirty,
     busy: store.busy,
+    inline,
     editing,
     session,
     store: store.store,
@@ -773,7 +899,7 @@ export function useRegionEditing({
     leaveThen: leaving.leaveThen,
     topBar: regionTopBar(area, facts, store.store, leaving.ask),
     dirty: savePoint.dirty,
-    componentFacts: area === undefined ? undefined : componentFacts,
+    componentFacts: whileEdited(area, componentFacts),
     dialogs: (
       <RegionQuestions
         area={area}
@@ -782,6 +908,7 @@ export function useRegionEditing({
         leaving={leaving}
         mayPublish={session.mayPublish}
         draftable={draftable}
+        removal={removalDialog}
       />
     ),
   };

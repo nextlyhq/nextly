@@ -51,10 +51,12 @@ const hoisted = vi.hoisted(() => ({
     | undefined
     | {
         commit: () => never;
+        cancel?: () => void;
         editing: unknown;
         editingRich: unknown;
         inspecting?: boolean;
       },
+  hold: vi.fn(),
 }));
 
 vi.mock("@nextlyhq/plugin-sdk/admin", async importOriginal => ({
@@ -88,9 +90,13 @@ vi.mock("../pattern-capability-client", () => ({
   useComponentEditing: () => ({ collection: "components", field: "content" }),
 }));
 vi.mock("../filled-default-notice", () => ({ sayFillNotices: hoisted.fills }));
+vi.mock("../removal-hold-client", () => ({
+  useRemovalQuestion: () => ({ hold: hoisted.hold, dialog: null }),
+}));
 
 import type { RegionCardFacts } from "../page-layout";
 
+import { offeredSelfOf } from "./offered-library";
 import {
   pageInlineOf,
   useRegionEditing,
@@ -120,6 +126,8 @@ beforeEach(() => {
   hoisted.fills.mockReset();
   hoisted.locale = null;
   hoisted.inline = undefined;
+  hoisted.hold.mockReset();
+  hoisted.hold.mockResolvedValue(undefined);
   hoisted.session = sessionWith({});
 });
 
@@ -512,6 +520,49 @@ describe("saving the header", () => {
     await waitFor(() => expect(hoisted.fills).toHaveBeenCalledTimes(1));
   });
 
+  it("holds the header's removed fields before publishing it", async () => {
+    const publish = vi.fn(() => Promise.resolve(STORED));
+    hoisted.session = sessionWith({ publish });
+    render(<Host />);
+    await enterHeader();
+    editHeader();
+
+    act(() => current().host.topBar?.publish());
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Publish header" })
+    );
+
+    await waitFor(() => expect(publish).toHaveBeenCalledTimes(1));
+    expect(hoisted.hold).toHaveBeenCalledTimes(1);
+    const [id, document] = hoisted.hold.mock.calls[0] as [
+      string,
+      () => BlockDocument,
+    ];
+    expect(id).toBe("h1");
+    expect(document().nodes.map(node => node.id)).toEqual(["menu", "cart"]);
+  });
+
+  it("publishes nothing when the removal's hold is called off, and keeps editing", async () => {
+    const publish = vi.fn(() => Promise.resolve(STORED));
+    hoisted.session = sessionWith({ publish });
+    hoisted.hold.mockRejectedValue(
+      new DOMException("Publishing was cancelled.", "AbortError")
+    );
+    render(<Host />);
+    await enterHeader();
+    editHeader();
+
+    act(() => current().host.topBar?.publish());
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Publish header" })
+    );
+
+    await waitFor(() => expect(hoisted.hold).toHaveBeenCalledTimes(1));
+    expect(publish).not.toHaveBeenCalled();
+    expect(current().host.area).toBe("header");
+    expect(current().host.dirty).toBe(true);
+  });
+
   it("saves the header, not the page, when the page is stored meanwhile", async () => {
     const saveDraft = vi.fn(() => Promise.resolve(STORED));
     hoisted.session = sessionWith({ saveDraft });
@@ -549,6 +600,20 @@ describe("Done", () => {
 
     await waitFor(() => expect(current().host.area).toBeUndefined());
     expect(discard).toHaveBeenCalledTimes(1);
+  });
+
+  it("ends the header's open passage on Discard, so it never lands in the page", async () => {
+    const cancel = vi.fn();
+    hoisted.inline = { ...INLINE, cancel };
+    render(<Host />);
+    await enterHeader();
+    editHeader();
+
+    act(() => current().host.done());
+    fireEvent.click(await screen.findByRole("button", { name: "Discard" }));
+
+    await waitFor(() => expect(current().host.area).toBeUndefined());
+    expect(cancel).toHaveBeenCalledTimes(1);
   });
 
   it("keeps editing on Keep editing", async () => {
@@ -613,5 +678,24 @@ describe("the page while a header is edited", () => {
     ).toBe(PAGE);
     expect(headerPassage.commit).not.toHaveBeenCalled();
     expect(pageInlineOf(undefined, headerPassage)).toBe(headerPassage);
+  });
+});
+
+describe("what Add offers while a header is edited", () => {
+  it("leaves out the header's own component, judged as that component", () => {
+    const page = { document: PAGE, identity: { documentId: "p1" } };
+    const target = {
+      kind: "region" as const,
+      area: "header" as const,
+      document: HEADER,
+      label: "Site header",
+      words: { bar: "", done: "Done", entered: "", left: "" },
+    };
+
+    expect(offeredSelfOf({ kind: "page" }, CARDS, page)).toBe(page);
+    expect(offeredSelfOf(target, CARDS, page)).toEqual({
+      document: HEADER,
+      identity: { documentId: "h1" },
+    });
   });
 });

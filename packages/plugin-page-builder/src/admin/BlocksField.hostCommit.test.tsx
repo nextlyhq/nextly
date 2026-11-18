@@ -216,6 +216,7 @@ vi.mock("./publish-offer", () => ({
 }));
 vi.mock("./removal-hold-client", () => ({
   useRemovalHold: () => null,
+  useRemovalQuestion: () => ({ hold: () => Promise.resolve(), dialog: null }),
 }));
 
 /** Asking the stored style again, as the editor does after a save. */
