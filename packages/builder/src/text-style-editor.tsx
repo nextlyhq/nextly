@@ -26,11 +26,13 @@ import {
 } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
+import { FluidButton } from "./fluid-popover";
 import { ChoiceMenu } from "./font-choice-menu";
 import { FontChoicesContext } from "./font-family-field";
-import { FluidButton } from "./fluid-popover";
-import type { SharedStyleChange } from "./shared-style-target";
-import { sharedStyleChange } from "./shared-style-target";
+import {
+  sharedStyleChange,
+  type SharedStyleChange,
+} from "./shared-style-target";
 import { roleFamilies } from "./site-font-roles-model";
 import { fontWeightOptions, lineHeightFromText } from "./style-folded";
 import {
@@ -90,7 +92,9 @@ function plain(value: StyleValue | undefined): string {
 }
 
 /** The text style's parts. */
-export function TextStyleEditor(props: TextStyleEditorProps): React.JSX.Element {
+export function TextStyleEditor(
+  props: TextStyleEditorProps
+): React.JSX.Element {
   const [refusal, setRefusal] = React.useState<string | null>(null);
   const readOnly = props.heldBy !== undefined;
   /** Store a value at one device, or clear it with `null`. */
@@ -107,7 +111,10 @@ export function TextStyleEditor(props: TextStyleEditorProps): React.JSX.Element 
   const at = (property: string): StyleValue | undefined =>
     partAt(props.styles, TEXT_STYLE_BASE, property);
   return (
-    <div className="nx-vars-editor__body nx-text-styles__editor" spellCheck={false}>
+    <div
+      className="nx-vars-editor__body nx-text-styles__editor"
+      spellCheck={false}
+    >
       <p className="nx-vars-editor__label nx-site-text__title">{props.name}</p>
       {props.heldBy === undefined ? null : (
         <p className="nx-inspector__note">{props.heldBy}</p>
@@ -323,7 +330,9 @@ function SizePart({
         value={size}
         readOnly={readOnly}
         onCommit={onValue}
-        css={`font-size: ${size};`}
+        css={`
+          font-size: ${size};
+        `}
       />
       {readOnly || range === undefined || tokens === undefined ? null : (
         <FluidButton
