@@ -11,7 +11,7 @@ import type { BlockDocument, BlockNode } from "@nextlyhq/blocks-engine";
 
 import { MAX_HISTORY } from "./editor-history";
 import { useEditorState } from "./editor-state";
-import { joinTyping } from "./typing-run";
+import { endTypingRuns, joinTyping } from "./typing-run";
 
 const text = (words: string): BlockNode => ({
   id: "t",
@@ -225,5 +225,51 @@ describe("cancelling a run of typing", () => {
     });
     expect(cancelled).toBe(false);
     expect(label(result.current.document)).toBe("ABC");
+  });
+});
+
+describe("a save while a field is still being typed in", () => {
+  it("ends the run, so typing on after the save is a step of its own", () => {
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: page(text("A")) })
+    );
+    const run = {};
+    act(() => {
+      joinTyping(run, () => result.current.apply(write("AB")));
+    });
+    // The save shortcut, pressed without leaving the field.
+    act(() => {
+      endTypingRuns();
+    });
+    act(() => {
+      joinTyping(run, () => result.current.apply(write("ABC")));
+    });
+    // Two steps: undo after the save takes back only what came after it, so
+    // the saved page and the history's count of unsaved work agree.
+    expect(result.current.undoDepth).toBe(2);
+    act(() => {
+      void result.current.undo();
+    });
+    expect(label(result.current.document)).toBe("AB");
+  });
+
+  it("leaves the saved words alone when Escape cancels after the save", () => {
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: page(text("A")) })
+    );
+    const run = {};
+    act(() => {
+      joinTyping(run, () => result.current.apply(write("AB")));
+    });
+    act(() => {
+      endTypingRuns();
+    });
+    let cancelled = true;
+    act(() => {
+      cancelled = result.current.cancelTyping(run);
+    });
+    // What was saved is ordinary history now: Escape takes nothing back.
+    expect(cancelled).toBe(false);
+    expect(label(result.current.document)).toBe("AB");
   });
 });

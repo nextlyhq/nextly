@@ -14,7 +14,12 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 
 import type { BuilderOp } from "./op-vocabulary";
-import { joinsTyping, typingRunNow, type TypingStep } from "./typing-run";
+import {
+  joinsTyping,
+  typingEpoch,
+  typingRunNow,
+  type TypingStep,
+} from "./typing-run";
 
 /** How deep the undo history goes before the oldest step is dropped. */
 export const MAX_HISTORY = 100;
@@ -281,7 +286,7 @@ function beganTyping(
   entry: HistoryEntry,
   before: TypingBefore
 ): TypingHeld | null {
-  return run === null ? null : { run, entry, before };
+  return run === null ? null : { run, entry, before, epoch: typingEpoch() };
 }
 
 /** The history's stacks and runs, as `takeTypingBack` reads and resets them. */
@@ -305,7 +310,10 @@ function takeTypingBack(
   sync: () => void
 ): HistoryEntry | undefined {
   const last = refs.typing.current;
-  if (last === null || last.run !== run) return undefined;
+  // A run a save ended (`endTypingRuns`) is over: what it wrote was saved.
+  if (last === null || last.run !== run || last.epoch !== typingEpoch()) {
+    return undefined;
+  }
   const { before } = last;
   if (refs.undoStack.current.at(-1) !== last.entry) return undefined;
   refs.undoStack.current.pop();

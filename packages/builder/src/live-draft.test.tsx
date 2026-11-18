@@ -9,7 +9,7 @@ import { act, renderHook } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { typedNumber, typedStyleText, useLiveDraft } from "./live-draft";
-import { typingRunNow } from "./typing-run";
+import { endTypingRuns, typingRunNow } from "./typing-run";
 
 /** A stored value the hook follows, and the writes made to it. */
 function storedValue(initial: string) {
@@ -68,6 +68,17 @@ describe("a live draft", () => {
     const { result } = renderHook(() => useLiveDraft(state.stored));
     act(() => result.current.type("AB", write));
     act(() => result.current.end());
+    act(() => result.current.type("ABC", write));
+    expect(state.runs[0]).not.toBeNull();
+    expect(state.runs[1]).not.toBeNull();
+    expect(state.runs[0]).not.toBe(state.runs[1]);
+  });
+
+  it("starts a new run after a save, though the field was never left", () => {
+    const { state, write } = storedValue("A");
+    const { result } = renderHook(() => useLiveDraft(state.stored));
+    act(() => result.current.type("AB", write));
+    act(() => endTypingRuns());
     act(() => result.current.type("ABC", write));
     expect(state.runs[0]).not.toBeNull();
     expect(state.runs[1]).not.toBeNull();

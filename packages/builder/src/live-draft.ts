@@ -28,7 +28,7 @@ import { trimCssWhitespace } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
 import { useFieldEdit, useTypedFieldEdit } from "./field-edit";
-import { joinTyping } from "./typing-run";
+import { joinTyping, typingEpoch } from "./typing-run";
 
 /** A field's draft over the stored value, written as it is typed. */
 export interface LiveDraft {
@@ -74,6 +74,8 @@ export const TypingCancel: React.Context<
 interface Stretch {
   /** The run it writes in, from its first keystroke. */
   run: object | null;
+  /** The stretch of typing the run began in (`typingEpoch`). */
+  epoch: number;
   /** The stored text before its first keystroke, which Escape puts back. */
   before: string;
   /** Whether the stored value is about to move for a keystroke's own write. */
@@ -106,6 +108,7 @@ export function useLiveDraft(stored: string): LiveDraft {
   const cancelTyping = React.useContext(TypingCancel);
   const stretch = React.useRef<Stretch>({
     run: null,
+    epoch: typingEpoch(),
     before: stored,
     own: false,
     wrote: null,
@@ -136,8 +139,12 @@ export function useLiveDraft(stored: string): LiveDraft {
       setDraft,
       type: (next, write) => {
         show(next);
-        if (stretch.run === null) {
+        // A new run from the first keystroke, and again after a save ended
+        // every run (`endTypingRuns`): what was saved is its own step, and
+        // Escape puts back the saved text, not the text before the save.
+        if (stretch.run === null || stretch.epoch !== typingEpoch()) {
           stretch.run = {};
+          stretch.epoch = typingEpoch();
           stretch.before = stored;
         }
         edit.begin(putBack);

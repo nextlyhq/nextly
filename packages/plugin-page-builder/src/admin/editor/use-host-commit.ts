@@ -11,7 +11,11 @@
  * @module @nextlyhq/plugin-page-builder/admin/editor/use-host-commit
  */
 import type { BlockDocument } from "@nextlyhq/blocks-engine";
-import { documentAfter, type InlineEditOutcome } from "@nextlyhq/builder/shell";
+import {
+  documentAfter,
+  endTypingRuns,
+  type InlineEditOutcome,
+} from "@nextlyhq/builder/shell";
 import {
   useBeforeDocumentAction,
   useDocumentActions,
@@ -205,6 +209,10 @@ export function documentToStore(
   held: BlockDocument,
   flushHeld: (() => BlockDocument | null) | undefined
 ): BlockDocument {
+  // A store ends every run of typing: a field still being typed in when the
+  // page is saved writes on into a new step, so the save point and the step
+  // it stored are one, and undo after the save takes back only what followed.
+  endTypingRuns();
   return finishInlineEdit(inline, flushHeld?.() ?? held).document;
 }
 
