@@ -709,6 +709,18 @@ export interface ResolvedIcon {
  * CDN, a signed URL, or a local folder differs only in the function it passes,
  * and none of that reaches a block author.
  */
+/**
+ * One list's entry as the list draws it: the entry as stored, and the
+ * collection or named query it is a row of.
+ *
+ * @experimental
+ */
+export interface DrawnListEntry {
+  readonly item: Record<string, unknown>;
+  readonly itemSource?: string;
+  readonly itemQuery?: string;
+}
+
 export interface PageContext {
   /**
    * The entry the page renders, when there is one. `null` in standalone use,
@@ -794,6 +806,15 @@ export interface PageContext {
    * @experimental
    */
   itemFollowed?: Readonly<Record<string, Readonly<Record<string, unknown>>>>;
+  /**
+   * The entry each list around this point is drawing, by the list's node id,
+   * the nearest included: set by each list beside its entry, so an item
+   * binding naming the list it reads (`list`), for a block inside a list
+   * inside another, reads that list's entry. Absent outside every list.
+   *
+   * @experimental
+   */
+  listEntries?: ReadonlyMap<string, DrawnListEntry>;
   /**
    * The blocks the route kept because their conditions held for the page's
    * entry, by id: what a list asks the renderer's own condition gate with,

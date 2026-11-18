@@ -45,6 +45,7 @@ import { conditionAllows } from "../visibility";
 
 import { ICON_TYPE, iconMayDraw } from "./icon";
 import { firstMediaRead, IMAGE_TYPE, imageFollowsLink } from "./image";
+import { enclosingListEntries } from "./list-entries";
 import { readClaimOf } from "./props";
 
 /** Where a prop's value comes from: as set, or a list item's field path. */
@@ -74,6 +75,9 @@ function itemPath(binding: unknown): readonly string[] | undefined {
     : DEFAULT_BINDING_SOURCE;
   const path = Object.hasOwn(binding, "$bind") ? binding.$bind : undefined;
   if (source !== "item" || !isBindPath(path)) return undefined;
+  // One naming the list it reads reads that list's entry, as it stores it,
+  // never the entry this list reads ahead for.
+  if (Object.hasOwn(binding, "list")) return undefined;
   const segments = path.split(".");
   // One hop at most, as every binding path; a deeper one falls back where it
   // is resolved, so nothing is read for it.
@@ -694,7 +698,7 @@ function itemRefOf(context: Pick<PageContext, "itemSource" | "itemQuery">): {
 /** The part of a page context that says which list item a node is drawn for. */
 export type ItemPlacement = Pick<
   PageContext,
-  "item" | "itemFollowed" | "itemSource" | "itemQuery"
+  "item" | "itemFollowed" | "itemSource" | "itemQuery" | "listEntries"
 >;
 
 /**
@@ -715,6 +719,7 @@ export function fillItemBindings<N extends BlockNode>(
   readonly issues: readonly BindingIssue[];
 } {
   const itemRef = itemRefOf(context);
+  const lists = enclosingListEntries(context);
   let props = node.props;
   let bound: BoundValues | undefined;
   const issues: BindingIssue[] = [];
@@ -727,6 +732,7 @@ export function fillItemBindings<N extends BlockNode>(
       phase: "item",
       ...(pass.item === undefined ? {} : { item: pass.item }),
       ...itemRef,
+      ...(lists === undefined ? {} : { lists }),
     });
     issues.push(...result.issues);
     if (result.bound === undefined) continue;

@@ -120,9 +120,17 @@ describe("an outer list's entry, judged at save", () => {
       judged([
         list("categories", "categories", [
           list("posts", "posts", [
-            heading("kept", { $bind: "name", source: "item", list: "categories" }),
+            heading("kept", {
+              $bind: "name",
+              source: "item",
+              list: "categories",
+            }),
             // `title` is a post's, not a category's.
-            heading("gone", { $bind: "title", source: "item", list: "categories" }),
+            heading("gone", {
+              $bind: "title",
+              source: "item",
+              list: "categories",
+            }),
             heading("inner", { $bind: "title", source: "item" }),
           ]),
         ]),
@@ -149,7 +157,13 @@ describe("an outer list's entry, judged at save", () => {
             "posts",
             "posts",
             [],
-            [heading("h", { $bind: "name", source: "item", list: "categories" })]
+            [
+              heading("h", {
+                $bind: "name",
+                source: "item",
+                list: "categories",
+              }),
+            ]
           ),
         ]),
       ])
