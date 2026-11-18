@@ -344,7 +344,7 @@ function minus(value: StyleValue, taken: StyleValue): StyleValue | undefined {
       continue;
     }
     // Nested sides (a border's widths) are taken out one by one too.
-    const rest = minus(inner, taken[side]);
+    const rest = minus(inner, taken[side] as StyleValue);
     if (rest !== undefined) left.push([side, rest]);
   }
   return left.length === 0 ? undefined : Object.fromEntries(left);
@@ -360,7 +360,7 @@ function overlaps(value: StyleValue, taken: StyleValue): boolean {
   if (!isSides(value) || !isSides(taken)) return true;
   return Object.entries(value).some(
     ([side, inner]) =>
-      Object.hasOwn(taken, side) && overlaps(inner, taken[side])
+      Object.hasOwn(taken, side) && overlaps(inner, taken[side] as StyleValue)
   );
 }
 
