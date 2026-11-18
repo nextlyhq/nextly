@@ -16,7 +16,7 @@
  *
  * @module admin/editor/two-regions-notice
  */
-import type { BlockNode } from "@nextlyhq/blocks-engine";
+import type { BlockDocument, BlockNode } from "@nextlyhq/blocks-engine";
 import type { PreferenceStore } from "@nextlyhq/builder";
 import type { EditorState } from "@nextlyhq/builder/shell";
 import { TriangleAlert } from "lucide-react";
@@ -67,6 +67,7 @@ const KEPT_DISMISSALS = 100;
  */
 export function useTwoRegionsNotice({
   editor,
+  applied,
   regionCards,
   areaOf,
   currentPage,
@@ -74,6 +75,8 @@ export function useTwoRegionsNotice({
   openSettings,
 }: {
   readonly editor: Pick<EditorState, "document" | "select">;
+  /** The page with its conditions applied, while "Preview as visitor" is on. */
+  readonly applied: { readonly document: BlockDocument } | undefined;
   readonly regionCards: readonly DrawnRegionFacts[];
   readonly areaOf: (componentId: string) => LayoutArea | undefined;
   /** The page being edited, or null for any other document. */
@@ -90,7 +93,7 @@ export function useTwoRegionsNotice({
     focusHeaderFooterMenu();
   }, [openSettings]);
   return useTwoRegionsNotices({
-    nodes: editor.document.nodes,
+    nodes: pageAsDrawn(editor.document, applied),
     cards: regionCards,
     componentArea: areaOf,
     pageId: currentPage?.id ?? null,
@@ -98,6 +101,18 @@ export function useTwoRegionsNotice({
     onSelect,
     onOpenSettings,
   });
+}
+
+/**
+ * The page's blocks as the canvas draws them: with "Preview as visitor" on,
+ * the page its conditions were applied to, where a hidden block is a marker,
+ * so a header no visitor sees here is not counted; else the page as edited.
+ */
+export function pageAsDrawn(
+  edited: BlockDocument,
+  applied: { readonly document: BlockDocument } | undefined
+): readonly BlockNode[] {
+  return (applied?.document ?? edited).nodes;
 }
 
 /** The notices as a component, drawing nothing where none shows. */

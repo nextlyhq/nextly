@@ -34,10 +34,14 @@ const FOOTER_WORDS = `This page shows two footers: the site footer (${SET_TITLE}
 interface Seeded {
   ownBlocks: string;
   placed: string;
-  previousDefault: string | null;
 }
 
 let seeded: Seeded | undefined;
+/**
+ * The site's default set before this spec made its own the default, kept
+ * BEFORE the change, so a seed that fails part-way still puts it back.
+ */
+let previousDefault: string | undefined;
 
 async function idOf(
   response: {
@@ -139,6 +143,10 @@ async function seed(page: Page): Promise<Seeded> {
   const choices = (await (
     await api.get(`${PLUGIN}/layouts/choices`)
   ).json()) as { meta: { defaultLayout: string | null } };
+  // A fresh site always has one, the boot's seeded set; there is no route
+  // that clears the default, so a site with none could not be put back.
+  const before = choices.meta.defaultLayout;
+  if (before === null) throw new Error("the site has no default set");
   const header = await idOf(
     await api.post(`${API}/collections/components/entries`, {
       data: {
@@ -169,6 +177,7 @@ async function seed(page: Page): Promise<Seeded> {
     }),
     "creating the header & footer set"
   );
+  previousDefault = before;
   await makeDefault(page, set);
   const marked = await component(api, "Own header", "header");
   seeded = {
@@ -182,17 +191,16 @@ async function seed(page: Page): Promise<Seeded> {
       },
       heading("body", "Page body"),
     ]),
-    previousDefault: choices.meta.defaultLayout,
   };
   return seeded;
 }
 
 test.afterAll(async ({ browser }) => {
-  if (seeded?.previousDefault == null) return;
+  if (previousDefault === undefined) return;
   const page = await browser.newPage();
   try {
     await gotoAdmin(page, "/");
-    await makeDefault(page, seeded.previousDefault);
+    await makeDefault(page, previousDefault);
   } finally {
     await page.close();
   }

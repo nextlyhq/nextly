@@ -8,14 +8,17 @@
  * @module admin/editor/two-regions-notice.test
  */
 import type { BlockNode } from "@nextlyhq/blocks-engine";
-import { COMPONENT_INSTANCE_TYPE } from "@nextlyhq/blocks-engine";
+import {
+  COMPONENT_INSTANCE_TYPE,
+  CONDITION_HIDDEN_TYPE,
+} from "@nextlyhq/blocks-engine";
 import type { PreferenceStore } from "@nextlyhq/builder";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { LayoutArea } from "../../collections/areas";
 
-import { TwoRegionsNotices } from "./two-regions-notice";
+import { pageAsDrawn, TwoRegionsNotices } from "./two-regions-notice";
 
 afterEach(cleanup);
 
@@ -207,6 +210,35 @@ describe("TwoRegionsNotices", () => {
       nodes: [section("own-header", "header")],
       store: memoryStore("{not json"),
     });
+    expect(screen.getByText(HEADER_WORDS)).toBeTruthy();
+  });
+
+  it("says nothing of a header block the visitor preview hides", () => {
+    // With "Preview as visitor" on, a block its conditions hide is drawn as
+    // a marker, so the canvas shows one header; the notice reads that page.
+    const stored = {
+      formatVersion: 1 as const,
+      kind: "page" as const,
+      nodes: [section("own-header", "header")],
+    };
+    const applied = {
+      document: {
+        ...stored,
+        nodes: [
+          {
+            id: "own-header",
+            type: CONDITION_HIDDEN_TYPE,
+            version: 1,
+            props: {},
+          },
+        ],
+      },
+    };
+    draw({ nodes: pageAsDrawn(stored, applied) });
+    expect(screen.queryByText(HEADER_WORDS)).toBeNull();
+
+    cleanup();
+    draw({ nodes: pageAsDrawn(stored, undefined) });
     expect(screen.getByText(HEADER_WORDS)).toBeTruthy();
   });
 

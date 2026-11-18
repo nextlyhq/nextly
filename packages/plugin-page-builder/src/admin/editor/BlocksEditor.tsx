@@ -673,6 +673,7 @@ function EditorBody<TFieldValues extends FieldValues>({
   // out above the canvas; the same for footers.
   const twoRegions = useTwoRegionsNotice({
     editor,
+    applied: conditions.applied,
     regionCards: view.regionCards,
     areaOf: mount.componentLibrary.areaOf,
     currentPage: view.pages.currentPage,
