@@ -32,7 +32,7 @@ import {
   type PlacementTarget,
 } from "@nextlyhq/blocks-engine";
 
-import { placementWording } from "./canvas/drag-refusal";
+import { refusalWording } from "./canvas/drag-refusal";
 import type { BuilderOp } from "./op-vocabulary";
 import { normalizeSelection } from "./selection";
 import type { SelectionRefusal } from "./selection-ops";
@@ -75,21 +75,30 @@ function targetOf(
     : { kind: "slot", parentType: parent.type, slot };
 }
 
-/** The refusal for `types` at `where`, in a refused drop's words, if any. */
+/**
+ * The refusal for `types` at `where`, in a refused drop's words, if any:
+ * the first type the rule refuses, named with the reason and where it may go.
+ */
 function placementRefusal(
   types: readonly string[],
   where: PlacementTarget,
   nesting: NestingSource
 ): SelectionRefusal | null {
-  const verdict = placementVerdict(types, where, nesting);
-  if (verdict.allowed) return null;
-  return {
-    reason: placementWording(
-      verdict,
-      verdict.blockType,
+  for (const type of types) {
+    const verdict = placementVerdict([type], where, nesting);
+    if (verdict.allowed) continue;
+    const words = refusalWording(
+      { reason: verdict.reason, permitted: verdict.permitted },
+      type,
       where.kind === "slot" ? where.parentType : undefined
-    ).headline,
-  };
+    );
+    // Both lines, as a refused drop draws them: why, and what goes there.
+    return {
+      reason:
+        words.remedy === null ? words.headline : `${words.headline} ${words.remedy}`,
+    };
+  }
+  return null;
 }
 
 /**

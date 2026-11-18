@@ -69,7 +69,7 @@ describe("planWrap", () => {
     });
   });
 
-  it("refuses to wrap a Column, which belongs only inside Columns", () => {
+  it("refuses to wrap a Column, since a Box cannot sit inside Columns", () => {
     const document = page({
       id: "row",
       type: "core/columns",
@@ -84,7 +84,10 @@ describe("planWrap", () => {
     });
     const plan = planWrap(document, ["c1"], nesting());
     expect(plan !== null && isRefusal(plan)).toBe(true);
-    expect(plan !== null && isRefusal(plan) ? plan.reason : "").toMatch(/Column/);
+    // Why, and what that place takes instead.
+    const reason = plan !== null && isRefusal(plan) ? plan.reason : "";
+    expect(reason).toMatch(/Box/);
+    expect(reason).toMatch(/Column/);
   });
 });
 
