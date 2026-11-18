@@ -230,6 +230,56 @@ describe("dragging a handle", () => {
   });
 });
 
+describe("handing the frame back on release", () => {
+  it("leaves the frame's box as the host draws it, when the host's width for it is unchanged", () => {
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation(step => {
+      step(0);
+      return 1;
+    });
+    // A fitted frame: its box fills the region at any width, so the host
+    // draws it 800px wide before the drag and after.
+    function Fitted(): React.JSX.Element {
+      const [override, setOverride] = React.useState<number | null>(null);
+      const width = override ?? 1280;
+      const scale = 800 / width;
+      return (
+        <div {...{ [CANVAS_FRAME_BOX_ATTRIBUTE]: "" }} style={{ width: 800 }}>
+          <iframe
+            className="nx-canvas-frame__page"
+            title="Page"
+            style={{ width }}
+          />
+          <PreviewWidthEdges
+            width={width}
+            scale={scale}
+            control={{
+              breakpoints: SITE,
+              edited: BASE_BREAKPOINT,
+              deviceWidth: 1280,
+              override,
+              onChange: next => {
+                told.push(next);
+                setOverride(next);
+              },
+            }}
+          />
+        </div>
+      );
+    }
+    render(<Fitted />);
+    const box = document.querySelector<HTMLElement>(
+      `[${CANVAS_FRAME_BOX_ATTRIBUTE}]`
+    );
+    const page = document.querySelector<HTMLElement>(".nx-canvas-frame__page");
+    // 118.75 screen pixels at 800/1280 is 190px of width a side: 900.
+    drag(handle("right"), [-118.75]);
+    expect(told).toEqual([900]);
+    expect(box?.style.width).toBe("800px");
+    expect(page?.style.width).toBe("900px");
+    vi.restoreAllMocks();
+  });
+});
+
 describe("a drag that ends without a release", () => {
   it("gives the page its pointer back when the frame goes mid-drag", () => {
     const { unmount } = render(<Host />);

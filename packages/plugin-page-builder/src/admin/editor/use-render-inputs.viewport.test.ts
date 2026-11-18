@@ -83,6 +83,29 @@ describe("a width previewed in place of the device's own", () => {
     expect(result.current.frameWidth).toBe(1280);
   });
 
+  it("goes when the site's breakpoints narrow the range under it", () => {
+    const wide: BreakpointSet = {
+      viewport: [{ id: "laptop", label: "Laptop", maxWidth: 1440 }],
+      container: [],
+    };
+    const rendered = (set: BreakpointSet) =>
+      ({ styleContext: { breakpoints: set } }) as CanvasRender["canvasRender"];
+    const { result, rerender } = renderHook(
+      ({ set }) =>
+        useCanvasViewport({
+          canvasRender: rendered(set),
+          siteStyleCurrent: true,
+        }),
+      { initialProps: { set: wide } }
+    );
+    act(() => result.current.setPreviewWidth(1400));
+    expect(result.current.frameWidth).toBe(1400);
+    rerender({ set: breakpoints });
+    // Desktop now reaches 1280 at most: the device's own width again.
+    expect(result.current.previewWidth).toBeNull();
+    expect(result.current.frameWidth).toBe(1280);
+  });
+
   it("goes on Reset", () => {
     const { result } = viewport();
     act(() => result.current.setPreviewWidth(900));

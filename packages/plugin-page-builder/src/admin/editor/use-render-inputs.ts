@@ -494,10 +494,14 @@ type CanvasViewport = {
  * Session state, never stored, and kept with the device it was set on, so it
  * is the device's own width again once another device is edited, whether
  * chosen here or reported by the shell, and going back to the first device
- * shows its own width too. A page switch or a reload mounts the editor
- * afresh, without it.
+ * shows its own width too. It goes too once it is wider than the widest a
+ * preview reaches, `widest`, as when the site's breakpoints change under it.
+ * A page switch or a reload mounts the editor afresh, without it.
  */
-function usePreviewWidth(editedBreakpoint: string): {
+function usePreviewWidth(
+  editedBreakpoint: string,
+  widest: number
+): {
   previewWidth: number | null;
   setPreviewWidth: (width: number | null) => void;
 } {
@@ -505,7 +509,10 @@ function usePreviewWidth(editedBreakpoint: string): {
     width: number;
     device: string;
   } | null>(null);
-  const kept = preview?.device === editedBreakpoint ? preview : null;
+  const kept =
+    preview?.device === editedBreakpoint && preview.width <= widest
+      ? preview
+      : null;
   if (preview !== null && kept === null) setPreview(null);
   const setPreviewWidth = useCallback(
     (width: number | null): void => {
@@ -592,8 +599,11 @@ export function useCanvasViewport({
    */
   const deviceWidth =
     previewWidth(breakpoints, editedBreakpoint) ?? DESKTOP_PREVIEW_WIDTH;
-  const { previewWidth: previewedWidth, setPreviewWidth } =
-    usePreviewWidth(editedBreakpoint);
+  const { previewWidth: previewedWidth, setPreviewWidth } = usePreviewWidth(
+    editedBreakpoint,
+    // The widest a preview reaches: the Desktop preview width.
+    previewWidth(breakpoints, BASE_BREAKPOINT) ?? DESKTOP_PREVIEW_WIDTH
+  );
   const chooseDevice = useCallback(
     (breakpoint: BreakpointId | null): void => {
       // A device pressed shows its own width, even the device being edited.

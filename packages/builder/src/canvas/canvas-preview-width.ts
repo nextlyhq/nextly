@@ -14,13 +14,12 @@
  */
 
 import {
-  authoredBreakpoints,
   BASE_BREAKPOINT,
   type BreakpointId,
   type BreakpointSet,
 } from "@nextlyhq/blocks-engine";
 
-import { BASE_DEVICE_LABEL } from "../breakpoints";
+import { deviceLabel } from "../shell/breakpoint-switcher";
 
 import {
   baseWidth,
@@ -48,9 +47,9 @@ const ARROW_STEP = 10;
 const FINE_STEP = 1;
 
 /**
- * The name the device switcher gives a breakpoint: Desktop for the base, else
- * the label of the definition the compiler kept at that bound, so two rows
- * sharing one bound are named by the one that applies.
+ * The name the device switcher gives a breakpoint, read from the switcher's
+ * own answer so every surface names a device as its button does; the id
+ * itself for one the switcher does not offer.
  *
  * @experimental
  */
@@ -58,14 +57,7 @@ export function deviceLabelOf(
   set: BreakpointSet | undefined,
   id: BreakpointId
 ): string {
-  if (id === BASE_BREAKPOINT) return BASE_DEVICE_LABEL;
-  const tier = offeredTiers(set).find(offered => offered.id === id);
-  if (tier === undefined) return id;
-  return (
-    authoredBreakpoints(set).viewport.find(
-      def => def.id === tier.id && def.maxWidth === tier.maxWidth
-    )?.label ?? id
-  );
+  return deviceLabel(set, id) ?? id;
 }
 
 /**
@@ -85,7 +77,7 @@ export function rulerMarks(set: BreakpointSet | undefined): RulerMark[] {
   const marks: RulerMark[] = [];
   const desktop = baseWidth(set);
   if (desktop !== undefined) {
-    marks.push({ width: desktop, label: BASE_DEVICE_LABEL });
+    marks.push({ width: desktop, label: deviceLabelOf(set, BASE_BREAKPOINT) });
   }
   tiers.forEach((tier, index) => {
     const narrower = tiers[index + 1];

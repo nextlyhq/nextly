@@ -82,8 +82,23 @@ interface Drag {
   readonly scale: number;
   readonly box: HTMLElement | null;
   readonly page: HTMLElement | null;
+  /**
+   * The widths the host last drew the box and its page at, put back as the
+   * drag ends: the host draws the settled width over them where it differs,
+   * and a fitted box the same width before and after is not drawn again.
+   */
+  readonly drawn: { readonly box: string; readonly page: string };
   width: number;
   frameRequest: number | null;
+}
+
+/** The box and its page as the host drew them, before a drag wrote over them. */
+function giveBack(held: Drag): void {
+  if (held.box !== null) held.box.style.width = held.drawn.box;
+  if (held.page !== null) {
+    held.page.style.width = held.drawn.page;
+    held.page.style.pointerEvents = "";
+  }
 }
 
 /**
@@ -198,7 +213,7 @@ function Edges({
           held.frameRequest
         );
       }
-      if (held.page !== null) held.page.style.pointerEvents = "";
+      giveBack(held);
       draggingSeen.current?.(false);
     },
     []
@@ -256,6 +271,7 @@ function Edges({
       box,
       page,
       width,
+      drawn: { box: box?.style.width ?? "", page: page?.style.width ?? "" },
       frameRequest: null,
     };
     setDragging(true);
@@ -294,8 +310,10 @@ function Edges({
         held.frameRequest
       );
     }
+    // The handles' values at the settled width, then the box and page back
+    // to the host, which draws the settled width where it differs.
     show(held);
-    if (held.page !== null) held.page.style.pointerEvents = "";
+    giveBack(held);
     setDragging(false);
     // Before the width settles, so the frame reads the settled one.
     onDragging?.(false);
