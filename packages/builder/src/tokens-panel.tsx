@@ -48,6 +48,7 @@ import * as React from "react";
 import { createPortal } from "react-dom";
 
 import { useCanvasTokenModeAt } from "./canvas/prefers-dark";
+import { ColourCleanUp, type CleanUpColours } from "./colour-cleanup";
 import {
   ColourGroupHead,
   ColourGroupHostContext,
@@ -201,6 +202,14 @@ export interface TokensPanelProps {
    * editor's document, so it follows unsaved edits. Absent: none.
    */
   usedOnPage?: ReadonlySet<string>;
+  /**
+   * Remove the colours the site made that nothing uses, each judged on its
+   * own: "Clean up unused…" under the Colours tab's filter. Absent: not
+   * offered.
+   *
+   * @experimental Settles with the Colours tab's clean-up.
+   */
+  onCleanUp?: CleanUpColours;
 }
 
 /**
@@ -389,6 +398,15 @@ function VariablesView({
           readOnly={readOnly}
         />
         {colourFilter.control}
+        <ColourCleanUp
+          groups={groups}
+          tokens={tokens}
+          usage={usage}
+          usedOnPage={hosted.usedOnPage}
+          builtIn={identity => suppliedFor(supplied, identity) !== undefined}
+          readOnly={readOnly}
+          onCleanUp={hosted.onCleanUp}
+        />
         <VariableGroups
           shown={shown}
           searching={searching}

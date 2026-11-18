@@ -114,6 +114,37 @@ describe("the link text check", () => {
     ]);
   });
 
+  it("reads a line break inside a link as a space between its words", () => {
+    const passage = block("r", "core/rich-text", {
+      content: {
+        root: {
+          type: "root",
+          children: [
+            {
+              type: "paragraph",
+              children: [
+                {
+                  type: "link",
+                  url: "/more",
+                  children: [
+                    { type: "text", text: "Read" },
+                    { type: "linebreak" },
+                    { type: "text", text: "more" },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      },
+    });
+    expect(findings(passage)).toEqual([
+      expect.objectContaining({
+        what: "Link text doesn’t say where it goes: “Read more”",
+      }),
+    ]);
+  });
+
   it("leaves a rich text link or button with nowhere to go, drawn as plain words", () => {
     const passage = block("r", "core/rich-text", {
       content: {

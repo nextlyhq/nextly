@@ -436,9 +436,14 @@ export function anchorsWithin(
     anchors.push(`p${passage}`);
     holdsPassage = true;
   });
-  // And by every id the page's headings and authors use, which its anchors
-  // step past and which a change anywhere on the page may move.
-  if ((holdsPassage || anchors.length > 0) && record !== undefined) {
+  // And, for what is drawn inside a list's entry or holds blocks drawn
+  // there, by every id the page's headings and authors use: their anchors
+  // step past those ids, which a change anywhere on the page may move. Any
+  // other block's anchors are the outline's own, already in the key.
+  if (
+    (holdsPassage || ctx.itemPosition !== undefined) &&
+    record !== undefined
+  ) {
     anchors.push(...record.drawn);
   }
   return anchors;

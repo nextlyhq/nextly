@@ -508,3 +508,88 @@ describe("an open menu when the saved breakpoints stop being trusted", () => {
     expect(onSelect).not.toHaveBeenCalled();
   });
 });
+
+describe("a width previewed in place of the device's own", () => {
+  it("shows the previewed width in the warning colour, with Reset", () => {
+    const onPreviewWidth = vi.fn();
+    mount({ previewWidth: 900, onPreviewWidth });
+    const width = activeWidth();
+    expect(width?.textContent).toBe("900px");
+    expect(width?.hasAttribute("data-previewing")).toBe(true);
+    // The device being edited stays chosen.
+    expect(checked().map(option => option.getAttribute("aria-label"))).toEqual([
+      expect.stringMatching(/^Desktop/),
+    ]);
+    fireEvent.click(screen.getByRole("button", { name: "Reset" }));
+    expect(onPreviewWidth).toHaveBeenCalledWith(null);
+  });
+
+  it("offers no Reset at the device's own width", () => {
+    mount({ previewWidth: null, onPreviewWidth: vi.fn() });
+    expect(activeWidth()?.textContent).toBe("1280px");
+    expect(activeWidth()?.hasAttribute("data-previewing")).toBe(false);
+    expect(screen.queryByRole("button", { name: "Reset" })).toBeNull();
+  });
+
+  it("lets the author type a width, applied with Enter", () => {
+    const onPreviewWidth = vi.fn();
+    mount({ previewWidth: null, onPreviewWidth });
+    fireEvent.click(screen.getByRole("button", { name: /^Preview width/ }));
+    const field = screen.getByRole("spinbutton", { name: "Preview width" });
+    expect(document.activeElement).toBe(field);
+    fireEvent.change(field, { target: { value: "600" } });
+    fireEvent.keyDown(field, { key: "Enter" });
+    expect(onPreviewWidth).toHaveBeenCalledWith(600);
+    expect(screen.queryByRole("spinbutton")).toBeNull();
+  });
+
+  it("keeps a typed width inside the range, and the device's own as none", () => {
+    const onPreviewWidth = vi.fn();
+    mount({ previewWidth: 900, onPreviewWidth });
+    const type = (value: string): void => {
+      fireEvent.click(screen.getByRole("button", { name: /^Preview width/ }));
+      const field = screen.getByRole("spinbutton", { name: "Preview width" });
+      fireEvent.change(field, { target: { value } });
+      fireEvent.keyDown(field, { key: "Enter" });
+    };
+    type("100");
+    type("1280");
+    expect(onPreviewWidth.mock.calls).toEqual([[320], [null]]);
+  });
+
+  it("cancels a typed width with Escape", () => {
+    const onPreviewWidth = vi.fn();
+    mount({ previewWidth: null, onPreviewWidth });
+    fireEvent.click(screen.getByRole("button", { name: /^Preview width/ }));
+    const field = screen.getByRole("spinbutton", { name: "Preview width" });
+    fireEvent.change(field, { target: { value: "600" } });
+    fireEvent.keyDown(field, { key: "Escape" });
+    expect(onPreviewWidth).not.toHaveBeenCalled();
+    expect(screen.queryByRole("spinbutton")).toBeNull();
+    expect(activeWidth()?.textContent).toBe("1280px");
+  });
+
+  it("stays plain text where the host previews no other width", () => {
+    mount();
+    expect(screen.queryByRole("button", { name: /^Preview width/ })).toBeNull();
+    expect(activeWidth()?.textContent).toBe("1280px");
+  });
+});
+
+describe("a previewed width on a site with no viewport breakpoints", () => {
+  const none = (): BreakpointSet => ({ viewport: [], container: [] });
+
+  it("still shows the width and Reset, with no device buttons", () => {
+    const onPreviewWidth = vi.fn();
+    mount({ breakpoints: none(), previewWidth: 900, onPreviewWidth });
+    expect(screen.queryByRole("radiogroup")).toBeNull();
+    expect(activeWidth()?.textContent).toBe("900px");
+    fireEvent.click(screen.getByRole("button", { name: "Reset" }));
+    expect(onPreviewWidth).toHaveBeenCalledWith(null);
+  });
+
+  it("offers the Desktop width to type over", () => {
+    mount({ breakpoints: none(), previewWidth: null, onPreviewWidth: vi.fn() });
+    expect(activeWidth()?.textContent).toBe("1280px");
+  });
+});

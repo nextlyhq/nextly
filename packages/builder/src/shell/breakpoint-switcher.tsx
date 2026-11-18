@@ -46,7 +46,13 @@ import { ChevronDown, Laptop, Monitor, Smartphone, Tablet } from "lucide-react";
 import * as React from "react";
 
 import { authoredBreakpoints, BASE_DEVICE_LABEL } from "../breakpoints";
-import { baseWidth, offeredTiers, previewWidth } from "../canvas/canvas-width";
+import { PreviewWidthText } from "../canvas/canvas-preview-width-field";
+import {
+  baseWidth,
+  offeredTiers,
+  previewWidth,
+  previewWidthRange,
+} from "../canvas/canvas-width";
 import { ChromeTooltip } from "../chrome-tooltip";
 import { radioGroupStep } from "../roving-radios";
 
@@ -67,6 +73,18 @@ export interface BreakpointSwitcherProps {
    * replaced would style a breakpoint the site may not have.
    */
   status: "loading" | "unavailable" | "ready";
+  /**
+   * The width the canvas previews in place of the chosen device's own, or
+   * `null` at the device's own. Shown in the warning colour with "Reset"
+   * beside it; the device chosen stays the one every edit goes to.
+   */
+  previewWidth?: number | null;
+  /**
+   * Where a typed width and Reset go, `null` for the device's own. Given, the
+   * width beside the buttons is a button that swaps in a field to type one;
+   * left out, it is text.
+   */
+  onPreviewWidth?: (width: number | null) => void;
 }
 
 /**
@@ -328,11 +346,84 @@ function MoreDevices({
   );
 }
 
+/**
+ * The width the canvas is laid out at, beside the buttons at every top-bar
+ * width: the devices are icons, and this is the number an author styles
+ * against. Where the host previews other widths it is a button to type one,
+ * and a width other than the device's own is in the warning colour with
+ * Reset. Otherwise it is text hidden from assistive technology, which hears
+ * it in the chosen device's name and in the switcher's announcement.
+ */
+function ActiveWidth({
+  deviceWidth,
+  breakpoints,
+  previewed,
+  onPreviewWidth,
+}: {
+  deviceWidth: number;
+  breakpoints: BreakpointSet | undefined;
+  previewed: number | null;
+  onPreviewWidth: ((width: number | null) => void) | undefined;
+}): React.JSX.Element {
+  if (onPreviewWidth === undefined) {
+    return (
+      <span
+        data-nx-active-width=""
+        aria-hidden="true"
+        className="px-1.5 text-xs tabular-nums"
+      >
+        {`${deviceWidth}px`}
+      </span>
+    );
+  }
+  return (
+    <PreviewWidthText
+      shown={previewed ?? deviceWidth}
+      previewing={previewed !== null}
+      deviceWidth={deviceWidth}
+      range={previewWidthRange(breakpoints)}
+      onPreviewWidth={onPreviewWidth}
+    />
+  );
+}
+
+/**
+ * The width on a site with no device to switch to, where the host previews
+ * other widths: the canvas still takes any width from its handles, so the
+ * width and Reset are offered without the buttons. Desktop's own width is
+ * the widest a preview reaches.
+ */
+function WidthWithoutDevices({
+  ready,
+  breakpoints,
+  previewed,
+  onPreviewWidth,
+}: {
+  ready: boolean;
+  breakpoints: BreakpointSet | undefined;
+  previewed: number | null;
+  onPreviewWidth: ((width: number | null) => void) | undefined;
+}): React.JSX.Element | null {
+  if (!ready || onPreviewWidth === undefined) return null;
+  return (
+    <div className="inline-flex h-[var(--nx-builder-control-height,1.75rem)] items-center rounded-md border p-0.5">
+      <ActiveWidth
+        deviceWidth={previewWidthRange(breakpoints).max}
+        breakpoints={breakpoints}
+        previewed={previewed}
+        onPreviewWidth={onPreviewWidth}
+      />
+    </div>
+  );
+}
+
 export function BreakpointSwitcher({
   breakpoints,
   selected,
   onSelect,
   status,
+  previewWidth: previewed = null,
+  onPreviewWidth,
 }: BreakpointSwitcherProps): React.JSX.Element | null {
   const ready = status === "ready";
   const options = React.useMemo(
@@ -361,9 +452,18 @@ export function BreakpointSwitcher({
     onSelect(next.id);
   };
 
-  // Desktop alone is not a choice: the control appears once the site has a
-  // breakpoint to switch to.
-  if (options.length < 2) return null;
+  // Desktop alone is not a choice: the device buttons appear once the site
+  // has a breakpoint to switch to. A previewed width still has its own.
+  if (options.length < 2) {
+    return (
+      <WidthWithoutDevices
+        ready={ready}
+        breakpoints={breakpoints}
+        previewed={previewed}
+        onPreviewWidth={onPreviewWidth}
+      />
+    );
+  }
 
   return (
     // The whole switcher one control high, its border and padding inside that
@@ -412,18 +512,13 @@ export function BreakpointSwitcher({
           onSelect={onSelect}
         />
       )}
-      {/* The width being styled, as text, at every top-bar width: the devices
-        are icons, and this is the number an author styles against. Hidden
-        from assistive technology, which hears it in the chosen device's
-        name and in the announcement above. */}
       {ready && active?.preview !== undefined ? (
-        <span
-          data-nx-active-width=""
-          aria-hidden="true"
-          className="px-1.5 text-xs tabular-nums"
-        >
-          {`${active.preview}px`}
-        </span>
+        <ActiveWidth
+          deviceWidth={active.preview}
+          breakpoints={breakpoints}
+          previewed={previewed}
+          onPreviewWidth={onPreviewWidth}
+        />
       ) : null}
     </div>
   );

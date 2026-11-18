@@ -196,17 +196,18 @@ describe("the headings check", () => {
       version: 1,
       props: { componentId: "big" },
     });
-    const found = runPageChecks(
+    const report = runPageChecks(
       {
         document: page(placed("p1"), placed("p2")),
         definitions: new Map([["big", big]]),
       },
       [HEADING_CHECK]
-    ).findings;
-    // Every Heading 1 after the first is one finding: the second placement
-    // stays a placement, so no more than the first's are read.
-    expect(found.length).toBeLessThan(3000);
-    expect(found.every(each => each.nodeId === "p1")).toBe(true);
+    );
+    // The check ran, and every Heading 1 after the first is one finding:
+    // the second placement stays a placement, so only the first's are read.
+    expect(report.notRun).toEqual([]);
+    expect(report.findings).toHaveLength(2999);
+    expect(report.findings.every(each => each.nodeId === "p1")).toBe(true);
   });
 
   it("leaves a placement the resolver keeps, such as a missing component", () => {
@@ -266,6 +267,37 @@ describe("the headings check", () => {
         fix: { tab: "content", id: "level" },
       }),
     ]);
+  });
+
+  it("reads a component the canvas draws under its conditions, as drawn", () => {
+    // The editing canvas draws conditioned blocks with their conditions
+    // lifted, so the page's main heading in a conditioned component counts.
+    const hero: BlockDocument = {
+      formatVersion: 1,
+      kind: "component",
+      nodes: [heading("hero-title", "h1")],
+    };
+    const gated: BlockNode = {
+      id: "p1",
+      type: "nextly/component-instance",
+      version: 1,
+      props: { componentId: "hero" },
+      visibility: {
+        conditions: {
+          match: "all",
+          rules: [{ source: "entry", path: "featured", op: "isTrue" }],
+        },
+      } as never,
+    };
+    const report = runPageChecks(
+      {
+        document: page(gated, heading("b", "h2")),
+        definitions: new Map([["hero", hero]]),
+      },
+      [HEADING_CHECK]
+    );
+    expect(report.notRun).toEqual([]);
+    expect(report.findings).toEqual([]);
   });
 
   it("counts a Heading 1 whose words come from a field", () => {

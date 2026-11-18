@@ -886,6 +886,23 @@ describe("pageOutline", () => {
     expect(within("other")).not.toEqual(within("title--0"));
   });
 
+  it("keeps what an editor keeps a heading's output by while an unrelated heading changes", () => {
+    // A Heading linked to an entry draws after a promise; its kept output
+    // need not be drawn again (its entry's path read again) for a rename
+    // that leaves its own anchor as it was.
+    const linked = heading("Pricing", { id: "linked" });
+    const within = (words: string) =>
+      anchorsWithin(
+        {
+          outline: pageOutline(
+            parts(["content", [heading(words, { id: "other" }), linked]])
+          ),
+        },
+        linked
+      );
+    expect(within("Intro")).toEqual(within("Introduction"));
+  });
+
   it("numbers entry passages per part, as node ids are only unique within one", () => {
     const list = (): BlockNode => ({
       id: "list",
