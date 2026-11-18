@@ -52,6 +52,7 @@ import type {
   BuilderSaveSetup,
   writeCollectionSave,
 } from "../../domains/schema/builder-save/collection-save";
+import { partWayPush } from "../../domains/schema/builder-save/landing-push";
 import {
   saveOfSchemaChange,
   type SchemaChangeAnswers,
@@ -1186,9 +1187,14 @@ const COLLECTIONS_METHODS: Record<
               : undefined,
           };
           let pushedSummary: PushSummary | undefined;
-          const push = async (): Promise<void> => {
-            pushedSummary = (await applyCollectionSchemaChange(change)).summary;
-          };
+          // A push that fails after changing the database keeps its files, recorded applied
+          // nowhere, and the failure tells the admin so (`partWayPush`); one that fails before
+          // withdraws them.
+          const push = partWayPush(async onLanded => {
+            pushedSummary = (
+              await applyCollectionSchemaChange({ ...change, onLanded })
+            ).summary;
+          });
           const pushReason = pushReasonOf({
             adapter,
             tableName,
@@ -1205,7 +1211,7 @@ const COLLECTIONS_METHODS: Record<
             pushReason,
           });
           const written = await saveThroughWriter({
-            appliedBy: push,
+            appliedBy: push.appliedBy,
             // Whether the push applies the change in development, the writer recording its
             // migration once the push has run (`pushReasonOf`).
             pushWhen: async () => (await pushReason()) !== null,
@@ -1223,6 +1229,9 @@ const COLLECTIONS_METHODS: Record<
                 : { acknowledgedConversions }),
             },
           });
+          // Thrown before the registry row is written: the row keeps the fields the database
+          // held before, as the kept files record the change still to finish.
+          push.throwIfFailed(written?.files ?? []);
           const storedFields =
             written === undefined
               ? (fields as unknown as FieldDefinition[])
@@ -2116,7 +2125,7 @@ function pushReasonOf(args: {
 async function saveThroughWriter(
   change: WriterChange & {
     /** Applies the change in development instead of the file (`writeCollectionSave`). */
-    appliedBy?: () => Promise<void>;
+    appliedBy?: () => Promise<void | "partly-applied">;
     /**
      * Whether `appliedBy` applies this change rather than the file. Asked only where the
      * answer is used, a save the writer runs in development, so a production save or one with
@@ -2124,7 +2133,10 @@ async function saveThroughWriter(
      */
     pushWhen?: () => Promise<boolean>;
   }
-): Promise<{ fields: FieldDefinition[]; applied: boolean } | undefined> {
+): Promise<
+  | { fields: FieldDefinition[]; applied: boolean; files: readonly string[] }
+  | undefined
+> {
   const prepared = await writerSaveOf(change);
   if (prepared === undefined) return undefined;
   const viaPush =
@@ -2143,7 +2155,11 @@ async function saveThroughWriter(
       ? { appliedBy: change.appliedBy }
       : {}
   );
-  return { fields: prepared.fields, applied: result.applied };
+  return {
+    fields: prepared.fields,
+    applied: result.applied,
+    files: result.files,
+  };
 }
 
 /**

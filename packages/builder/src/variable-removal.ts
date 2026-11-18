@@ -16,7 +16,6 @@ import {
 import { VARIABLE_LOSS_WORDS } from "./editor-words";
 import { removeToken, type VariableEntry } from "./tokens-studio";
 import {
-  combinedReach,
   variableRemoval,
   type VariableReach,
   type VariableRemoval,
@@ -66,7 +65,7 @@ export function removalPlan(
   const reach =
     gate === undefined
       ? undefined
-      : combinedReach(removable.map(part => gate.reachOf(part.identity)));
+      : gate.reachTogether(removable.map(part => part.identity));
   // The whole variable when every half is the site's own; otherwise only the
   // half that is, named, since the other stays.
   const halves = removable.map(part => part.name).join(" and ");

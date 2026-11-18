@@ -34,6 +34,7 @@ import { Check, ChevronDown } from "lucide-react";
 import {
   useContext,
   useRef,
+  useState,
   type JSX,
   type ReactNode,
   type RefObject,
@@ -292,6 +293,9 @@ export function PictureMenuPopover({
   face: ReactNode;
   children: ReactNode;
 }): JSX.Element {
+  // The list element the open menu shows, which the trigger names as what
+  // it controls: its id is the list part's own, read once it has mounted.
+  const [listbox, setListbox] = useState<string | undefined>(undefined);
   return (
     <Popover open={open} onOpenChange={onOpenChange}>
       <PopoverTrigger asChild>
@@ -302,11 +306,7 @@ export function PictureMenuPopover({
           role="combobox"
           aria-haspopup="listbox"
           aria-expanded={open}
-          aria-controls={
-            open && trigger.controls !== undefined
-              ? trigger.controls
-              : undefined
-          }
+          aria-controls={open ? (listbox ?? trigger.controls) : undefined}
           aria-describedby={trigger.describedBy}
           aria-invalid={trigger.invalid === true ? true : undefined}
           disabled={trigger.disabled}
@@ -333,6 +333,8 @@ export function PictureMenuPopover({
           const root = listRoot.current;
           const input = root?.querySelector<HTMLInputElement>("[cmdk-input]");
           (input ?? root)?.focus();
+          const found = root?.querySelector('[role="listbox"]')?.id;
+          setListbox(found === undefined || found === "" ? undefined : found);
         }}
       >
         {children}
