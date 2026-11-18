@@ -66,6 +66,9 @@ const TURN_INTO_WORDS = {
   unbound: "Its bound field is removed",
   /** Said when part of a block style gives way to a shared style. */
   lookTrimmed: "Part of its block style gives way to its other styles",
+  /** Said when the block takes the new type's default block style. */
+  defaultLook: (name: string): string =>
+    `Its block style changes to ${name}'s default`,
   /** Said when the page refused the edit for a reason nothing judged first. */
   refused: "The page refused this edit, so nothing changed.",
   label: (name: string): string => `Turn into ${name}`,
@@ -119,11 +122,14 @@ export interface TurnIntoJudging {
 }
 
 /** What a turn removes, as one line: the converter's words, then a binding. */
-function turnIntoNote(plan: TurnIntoPlan): string | undefined {
+function turnIntoNote(plan: TurnIntoPlan, name: string): string | undefined {
   const said = [
     plan.dropped,
     plan.unbound.length > 0 ? TURN_INTO_WORDS.unbound : undefined,
     plan.lookTrimmed === true ? TURN_INTO_WORDS.lookTrimmed : undefined,
+    plan.defaultLookChanges === true
+      ? TURN_INTO_WORDS.defaultLook(name)
+      : undefined,
   ].filter((each): each is string => each !== undefined);
   return said.length === 0 ? undefined : said.join(". ");
 }
@@ -209,7 +215,7 @@ function judge(
   if ("refused" in plan) {
     return { offer: { ...base, enabled: false, reason: plan.refused } };
   }
-  const note = turnIntoNote(plan);
+  const note = turnIntoNote(plan, name);
   const reason = judgedReason(document, plan, judging);
   return {
     offer: {

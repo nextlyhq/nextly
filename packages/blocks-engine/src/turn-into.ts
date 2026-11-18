@@ -39,6 +39,7 @@ import { STYLE_CATALOG } from "./style/catalog";
 import {
   isLook,
   orderedNamedClasses,
+  starredLooksOf,
   type NamedClass,
 } from "./style/named-class";
 import { overlaidStyles } from "./style/overlaid-styles";
@@ -67,6 +68,12 @@ export interface TurnIntoPlan {
    * shared style the block keeps, which set the same thing at another width.
    */
   readonly lookTrimmed?: true;
+  /**
+   * Set when the block wears no block style of its own and a type's default
+   * (starred) one decided or will decide its look: after the turn it takes
+   * the new type's default, so its look changes.
+   */
+  readonly defaultLookChanges?: true;
 }
 
 /**
@@ -192,6 +199,9 @@ export function planTurnInto(
     ...(converted.dropped === undefined ? {} : { dropped: converted.dropped }),
     unbound,
     ...(worn.trimmed === true ? { lookTrimmed: true as const } : {}),
+    ...(defaultLookChanges(node, to, library)
+      ? { defaultLookChanges: true as const }
+      : {}),
   };
 }
 
@@ -201,6 +211,25 @@ function labelOf(
   name: string
 ): string {
   return definition?.editor?.label ?? name;
+}
+
+/**
+ * Whether a block that wears no block style of its own changes look by
+ * taking the new type's default: either type has a default (starred) block
+ * style, which a block of that type wearing none is drawn with.
+ */
+function defaultLookChanges(
+  node: BlockNode,
+  to: string,
+  library: readonly NamedClass[]
+): boolean {
+  const worn = new Set(node.classes ?? []);
+  const wearsOwn = library.some(
+    cls => worn.has(cls.id) && isLook(cls) && cls.blockType === node.type
+  );
+  if (wearsOwn) return false;
+  const starred = starredLooksOf(library);
+  return starred.has(node.type) || starred.has(to);
 }
 
 /** Whether a component offers any of this block's props to its placements. */
@@ -282,12 +311,18 @@ function stateOrder(state: string): number {
 /** `value` without what `taken` sets: the sides of a composite, or all. */
 function minus(value: StyleValue, taken: StyleValue): StyleValue | undefined {
   if (!isSides(value) || !isSides(taken)) return undefined;
-  const left = Object.entries(value).filter(
-    ([side]) => !Object.hasOwn(taken, side)
-  );
+  const left: [string, StyleValue][] = [];
+  for (const [side, inner] of Object.entries(value)) {
+    if (!Object.hasOwn(taken, side)) {
+      left.push([side, inner]);
+      continue;
+    }
+    // Nested sides (a border's widths) are taken out one by one too.
+    const rest = minus(inner, taken[side] as StyleValue);
+    if (rest !== undefined) left.push([side, rest]);
+  }
   return left.length === 0 ? undefined : Object.fromEntries(left);
 }
-
 /** Whether a stored value holds named sides (a token reference does not). */
 function isSides(each: StyleValue): each is Record<string, StyleValue> {
   return typeof each === "object" && each !== null && !isTokenRef(each);
@@ -296,9 +331,11 @@ function isSides(each: StyleValue): each is Record<string, StyleValue> {
 /** Whether taking `taken` out of `value` removes anything from it. */
 function overlaps(value: StyleValue, taken: StyleValue): boolean {
   if (!isSides(value) || !isSides(taken)) return true;
-  return Object.keys(value).some(side => Object.hasOwn(taken, side));
+  return Object.entries(value).some(
+    ([side, inner]) =>
+      Object.hasOwn(taken, side) && overlaps(inner, taken[side] as StyleValue)
+  );
 }
-
 /** Whether two places are one state at one width. */
 function samePlace(
   a: Omit<Placed, "value">,

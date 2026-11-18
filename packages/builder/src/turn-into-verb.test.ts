@@ -216,6 +216,29 @@ describe("turnIntoOffers", () => {
     expect(toRichText?.enabled).toBe(false);
   });
 
+  it("says when the block style changes to the new type's default", () => {
+    const library = [
+      {
+        id: "heading-star",
+        slug: "heading-star",
+        orderIndex: 0,
+        blockType: "core/heading",
+        starred: true as const,
+        styles: { base: { desktop: { color: "#0a0" } } },
+      },
+    ];
+    const plainText = text({
+      props: { text: rich(paragraph(words("Plain"))) },
+    });
+    const [toRichText, toHeading] = turnIntoOffers(page(plainText), "t1", {
+      library,
+    });
+    expect(toHeading?.note).toBe(
+      "Its block style changes to Heading's default"
+    );
+    expect(toRichText?.note).toBeUndefined();
+  });
+
   it("dims every turn of a locked block, with the lock's words", () => {
     const offers = turnIntoOffers(
       page(text({ locked: true, name: "Intro" })),

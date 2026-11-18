@@ -59,6 +59,7 @@ const DEFINITIONS: ReadonlyMap<string, AnyBlockDefinition> = new Map(
         "test/title": TO_TITLE,
         "test/passage": TO_PASSAGE,
         "test/unregistered": TO_TITLE,
+        "test/framed": TO_PASSAGE,
       },
     }),
     definition({
@@ -102,6 +103,12 @@ const DEFINITIONS: ReadonlyMap<string, AnyBlockDefinition> = new Map(
       editor: { label: "Passage" },
       props: { passage: { type: "richText" } },
       supports: { color: true, typography: true, spacing: true },
+    }),
+    definition({
+      name: "test/framed",
+      editor: { label: "Framed" },
+      props: { passage: { type: "richText" } },
+      supports: { border: true },
     }),
     definition({
       name: "test/box",
@@ -654,6 +661,45 @@ describe("a block style, which belongs to one block type", () => {
     });
   });
 
+  it("keeps the nested sides a shared style does not set", () => {
+    // The look sets both border widths; the shared style only the top one.
+    const framed: NamedClass = {
+      id: "look-framed",
+      slug: "framed",
+      orderIndex: 0,
+      blockType: "test/words",
+      styles: {
+        base: {
+          desktop: {
+            border: { width: { blockStart: "4px", blockEnd: "4px" } },
+          },
+        },
+      },
+    };
+    const top: NamedClass = {
+      id: "top",
+      slug: "top",
+      orderIndex: 1,
+      styles: {
+        base: { desktop: { border: { width: { blockStart: "6px" } } } },
+      },
+    };
+    const worn = {
+      ...WORDS,
+      classes: ["look-framed", "top"],
+      styles: undefined,
+    };
+    const plan = planTurnInto(page(worn), "w1", "test/framed", lookup, [
+      framed,
+      top,
+    ]);
+    if ("refused" in plan) throw new Error(plan.refused);
+    expect(plan.op.node.styles).toEqual({
+      base: { desktop: { border: { width: { blockEnd: "4px" } } } },
+    });
+    expect(plan.lookTrimmed).toBeUndefined();
+  });
+
   it("folds only a look the block was drawn with", () => {
     // A look of a third type was never drawn on this block, so nothing of it
     // comes along.
@@ -697,6 +743,61 @@ describe("a block style, which belongs to one block type", () => {
   });
 });
 
+describe("a block wearing no block style of its own", () => {
+  const starred = (id: string, blockType: string): NamedClass => ({
+    id,
+    slug: id,
+    orderIndex: 0,
+    blockType,
+    starred: true,
+    styles: { base: { desktop: { color: "#0a0" } } },
+  });
+  const plain = { ...WORDS, classes: undefined, styles: undefined };
+
+  it("takes the new type's default, and the plan says the look changes", () => {
+    const plan = planTurnInto(page(plain), "w1", "test/passage", lookup, [
+      starred("passage-star", "test/passage"),
+    ]);
+    if ("refused" in plan) throw new Error(plan.refused);
+    expect(plan.op.node.styles).toBeUndefined();
+    expect(plan.op.node.classes).toBeUndefined();
+    expect(plan.defaultLookChanges).toBe(true);
+  });
+
+  it("says the look changes when it loses its own type's default", () => {
+    const plan = planTurnInto(page(plain), "w1", "test/passage", lookup, [
+      starred("words-star", "test/words"),
+    ]);
+    if ("refused" in plan) throw new Error(plan.refused);
+    expect(plan.defaultLookChanges).toBe(true);
+  });
+
+  it("says nothing when neither type has a default block style", () => {
+    const plan = planTurnInto(page(plain), "w1", "test/passage", lookup, []);
+    if ("refused" in plan) throw new Error(plan.refused);
+    expect(plan.defaultLookChanges).toBeUndefined();
+  });
+
+  it("says nothing of defaults for a block that wears its own block style", () => {
+    const own: NamedClass = {
+      id: "look-own",
+      slug: "own",
+      orderIndex: 1,
+      blockType: "test/words",
+      styles: { base: { desktop: { fontSize: "2rem" } } },
+    };
+    const plan = planTurnInto(
+      page({ ...plain, classes: ["look-own"] }),
+      "w1",
+      "test/passage",
+      lookup,
+      [starred("passage-star", "test/passage"), own]
+    );
+    if ("refused" in plan) throw new Error(plan.refused);
+    expect(plan.defaultLookChanges).toBeUndefined();
+  });
+});
+
 describe("a component's offered words", () => {
   it("refuses to turn a block whose props the component offers to its placements", () => {
     const component = {
@@ -724,6 +825,7 @@ describe("turnIntoTargets", () => {
     expect(turnIntoTargets("test/words", lookup)).toEqual([
       "test/title",
       "test/passage",
+      "test/framed",
     ]);
   });
 
