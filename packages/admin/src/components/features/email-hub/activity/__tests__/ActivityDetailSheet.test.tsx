@@ -215,4 +215,31 @@ describe("the detail sheet", () => {
     expect(state.textContent).toContain("Failed: it never reached a provider");
     expect(state.textContent).not.toMatch(/send it again/i);
   });
+
+  it("treats a delivery with a queued email behind it as one of its attempts, never a direct send", () => {
+    showing({
+      source: "delivery",
+      detail: {
+        id: "d1",
+        createdAt: "2026-11-16T11:00:00.000Z",
+        outcome: "failed",
+        templateSlug: "order-shipped",
+        provider: { id: null, type: "resend" },
+        recipientKind: "to",
+        failureReason: "Resend answered 503",
+        namedPerson: true,
+        erased: false,
+        queuedId: "q7",
+        templateVersion: "none",
+        failureKind: "retryable",
+        failureStatus: 503,
+        timeline: [],
+        timelineTruncated: false,
+      },
+    });
+    renderSheet();
+    const state = screen.getAllByRole("status")[0];
+    expect(state.textContent).not.toMatch(/direct send/i);
+    expect(state.textContent).toMatch(/one attempt of a queued email/i);
+  });
 });
