@@ -29,6 +29,7 @@ import { drawsItsEntry } from "./list-query-contract";
 import { isPlainRecord } from "./plain-record";
 import { choicesFitProp, exposureTypeForProp } from "./prop-exposure";
 import { defineEntry, ownEntry, ownKeys } from "./safe-record";
+import type { SlotDefaultSource } from "./tree-slot-defaults";
 import type { ValidationIssue } from "./validation-contract";
 
 /**
@@ -177,13 +178,24 @@ export function settingBindingIssues(
   doc: BlockDocument,
   limits: FollowerLimits = DEFAULT_LIMITS,
   /**
-   * A block's prop's schema, where its block is known; a prop a setting of
-   * another type would fill is refused, as is a select prop lacking one of a
-   * select setting's choices. Unknown, it is not judged.
+   * The block definitions, for each follower's prop schema: a prop a setting
+   * of another type would fill is refused, as is a select prop lacking one of
+   * a select setting's choices. A block or prop they don't declare is not
+   * judged. The save and the exposure planners both pass theirs, so an edit
+   * the planners take is one the save takes.
    */
-  propSchemaOf?: (node: BlockNode, prop: string) => PropSchema | undefined
+  definitions?: Pick<SlotDefaultSource, "get">
 ): ValidationIssue[] {
   if (!isPlainRecord(doc)) return [];
+  const propSchemaOf =
+    definitions === undefined
+      ? undefined
+      : (node: BlockNode, prop: string): PropSchema | undefined => {
+          const props = definitions.get(node.type)?.props;
+          return isPlainRecord(props) && Object.hasOwn(props, prop)
+            ? props[prop]
+            : undefined;
+        };
   const issues: ValidationIssue[] = [];
   const component = doc.kind === "component";
   const exposed = ownEntry(doc, "exposed");
