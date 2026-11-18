@@ -46,6 +46,7 @@ import {
   siteSizesBlocks,
   type ImageCopies,
 } from "./image-slot";
+import { routeStyleContext } from "./next-custom-css";
 import { drawnDocumentOf, fittedFor } from "./next-documents";
 import {
   listPageSlug,
@@ -504,6 +505,10 @@ export function blocksRouteConfig(
         ? config.siteStyles.singles
         : []
       ).flatMap(slug => nextlySingleTags(slug)),
+      // The singles the site's custom CSS is read from, for the same reason.
+      ...(config.customCss?.singles ?? []).flatMap(slug =>
+        nextlySingleTags(slug)
+      ),
     ],
     // Supplied only when asked for, so a route without it keeps whatever
     // `buildMetadata` the caller passed straight through to the content route.
@@ -719,6 +724,13 @@ export function blocksRouteConfig(
         isPublic,
         listWindow
       );
+      // The page's compile context with the host's custom CSS checker and the
+      // site's CSS, read for this render; the route's own without a source.
+      const pageStyleContext = await routeStyleContext(
+        config,
+        isPublic,
+        listWindow
+      );
       // Derived ONCE, from the breakpoints the site already stated. A second
       // answer to "what are this site's breakpoints" is how the shared sheet
       // and the page sheet come to disagree about which at-rules a tier is
@@ -811,7 +823,7 @@ export function blocksRouteConfig(
           ),
         },
         blocks: resolver,
-        styleContext,
+        styleContext: pageStyleContext,
         blockFallback,
         limits,
         // Spread conditionally: `PageRenderer` distinguishes an absent policy
