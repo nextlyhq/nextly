@@ -807,6 +807,59 @@ describe.each(getConfiguredTestDialects())(
         expect(await readAll(t)).toEqual(before);
       });
 
+      it("a move whose field the dialog's answer also renames", async () => {
+        const t = await boot(dialect);
+        await createPosts(t);
+        await seed(t);
+        const before = await readAll(t);
+        const stated = await definition();
+        const files = await filesWritten();
+        const [, ...rest] = MOVED_FIELDS;
+        // `summary` moved into the group, and the dialog's drop-and-add pair answered as a rename
+        // of `summary` to the new `subtitle`: the same column would be both copied and renamed.
+        await expect(
+          dispatchCollections(
+            {} as ServiceContainer,
+            "applySchemaChanges",
+            { collectionName: SLUG },
+            {
+              fields: [
+                { name: "subtitle", type: "text" },
+                ...rest,
+                group("meta", [NOTE, MOVED_FIELDS[0] as Field]),
+              ],
+              confirmed: true,
+              schemaVersion: await versionOf(t, SLUG),
+              hints: {
+                moves: [{ from: ["summary"], to: ["meta", "summary"] }],
+              },
+              renameResolutions: [
+                {
+                  tableName: TABLE,
+                  fromColumn: "summary",
+                  toColumn: "subtitle",
+                  choice: "rename",
+                },
+              ],
+            }
+          )
+        ).rejects.toThrow(
+          expect.objectContaining({
+            publicData: {
+              errors: [
+                expect.objectContaining({
+                  code: "FIELD_MOVE_REFUSED",
+                  message: expect.stringContaining("also renamed"),
+                }),
+              ],
+            },
+          })
+        );
+        expect(await filesWritten()).toBe(files);
+        expect(await definition()).toBe(stated);
+        expect(await readAll(t)).toEqual(before);
+      });
+
       it("a move out of a group the same save deletes", async () => {
         const t = await boot(dialect);
         await createPosts(t, SLUG, { fields: INSIDE });

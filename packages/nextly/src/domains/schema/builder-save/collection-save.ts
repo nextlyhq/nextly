@@ -56,7 +56,10 @@ import type { AddressKind } from "../../../shared/address-rule";
 import { builderColumnIsUnique } from "../../dynamic-collections/services/dynamic-collection-schema-service";
 import { appLanguageOrder } from "../../i18n/configured-locales";
 import { joinRetries } from "../../i18n/migration/archive-preflight";
-import { mainTableFields } from "../../i18n/per-language-storage";
+import {
+  mainTableFields,
+  storesPerLanguage,
+} from "../../i18n/per-language-storage";
 import { busyTableBounds, type BusyTableBounds } from "../busy-table/bounds";
 import { runUnitInTries } from "../busy-table/run-unit";
 import { boundedStopRecord } from "../busy-table/stopped-record";
@@ -1507,7 +1510,10 @@ function plannedMovesOf(
     before: (save.previous.fields ?? []) as FieldDefinition[],
     after: (save.entity.fields ?? []) as FieldDefinition[],
     moves: save.moves,
-    localized: save.entity.localized === true,
+    // Where the values are stored, not whether the entity is translated: under per-language
+    // storage a shared entity keeps its translatable fields in the language table too.
+    localized: storesPerLanguage(save.entity),
+    renames: save.renamedFields ?? [],
     table,
     dialect: deps.adapter.getCapabilities().dialect,
   });

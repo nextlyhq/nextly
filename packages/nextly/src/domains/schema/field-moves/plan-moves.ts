@@ -115,6 +115,84 @@ function placed(
  * Refuses a move with no place in the file: into a group the same save creates, whose column the
  * file adds after it drops the field's, or out of one it deletes, whose column goes first.
  */
+/**
+ * Refuses a move that is not its field's own: a field keeps its name as it moves, so two moves
+ * whose places were swapped, or one whose field the save also renames, would carry one field's
+ * values into another's place. Each is a change of its own: the move, then the rename.
+ */
+function refuseUnbound(
+  request: FieldMoveRequest,
+  renames: readonly { from: string; to: string }[]
+): void {
+  const name = request.from.at(-1) ?? "";
+  if (request.to.at(-1) !== name) {
+    throw refused(
+      request,
+      `${request.from.join(".")} moves to ${request.to.join(".")}, a field of another name. A field keeps its name as it moves: move it, then rename it in a later save.`
+    );
+  }
+  const renamed = renames.find(
+    r =>
+      toSnakeCase(r.from) === toSnakeCase(name) ||
+      toSnakeCase(r.to) === toSnakeCase(name)
+  );
+  if (renamed !== undefined) {
+    throw refused(
+      request,
+      `${name} is moved in this save and also renamed (${renamed.from} to ${renamed.to}). Move it first, then rename it in a later save.`
+    );
+  }
+}
+
+/**
+ * Refuses a move whose group was another kind of field on the other side of the save: a JSON field
+ * or a repeater of the same name keeps a value of its own there, which the group's statements
+ * would leave or overwrite rather than carry.
+ */
+function refuseHoldersNotGroups(
+  request: FieldMoveRequest,
+  move: PlannedMove,
+  fields: {
+    before: readonly FieldDefinition[];
+    after: readonly FieldDefinition[];
+  }
+): void {
+  // A name with no field on that side is a group the save makes or deletes, refused with its own
+  // reason (`refuseUnplaceable`); here only one another kind of field holds.
+  const otherKind = (
+    list: readonly FieldDefinition[],
+    name: string | undefined
+  ): boolean => {
+    if (name === undefined) return false;
+    const placed = placeOf(list, [name]);
+    return placed !== null && placed.field.type !== "group";
+  };
+  if (move.to.kind === "json" && otherKind(fields.before, request.to[0])) {
+    throw refused(
+      request,
+      `${request.to[0]} was not a group before this save. Save it as a group first, then move the field into it.`
+    );
+  }
+  if (move.from.kind === "json" && otherKind(fields.after, request.from[0])) {
+    throw refused(
+      request,
+      `${request.from[0]} is not a group after this save. Move the field out first, then change ${request.from[0]}.`
+    );
+  }
+}
+
+/**
+ * Refuses a move whose values are kept for each language: this save's statements carry one value
+ * for every language, so such a move waits for the saves that move each language's row.
+ */
+function refusePerLanguage(request: FieldMoveRequest, move: PlannedMove): void {
+  if (!move.perLanguage) return;
+  throw refused(
+    request,
+    `${request.from.at(-1) ?? "This field"}'s values are kept for each language, and moving it with them is not available yet for this kind of entity.`
+  );
+}
+
 function refuseUnplaceable(
   request: FieldMoveRequest,
   move: PlannedMove,
@@ -244,6 +322,8 @@ export function planEntityMoves(args: {
   before: readonly FieldDefinition[];
   after: readonly FieldDefinition[];
   moves: readonly FieldMoveRequest[];
+  /** The fields the save renames, by name: a moved field may not be one of them. */
+  renames?: readonly { from: string; to: string }[];
   /** Whether the entity keeps its values per language. */
   localized: boolean;
   table: string;
@@ -264,12 +344,15 @@ export function planEntityMoves(args: {
     // A field that keeps its path (moved into or out of a group with no name) keeps its place.
     if (samePath(request.from, request.to)) continue;
     refuseInsideOwnPlace(request);
+    refuseUnbound(request, args.renames ?? []);
     refuseUnmatched(args.before, args.after, request);
     const checked = checkMove(args.before, args.after, request, {
       localized: args.localized,
     });
     if (!checked.ok) throw refused(request, checked.message);
     const { move } = checked;
+    refusePerLanguage(request, move);
+    refuseHoldersNotGroups(request, move, args);
     refuseUnplaceable(request, move, columns);
     // A field moving between places on one level (a group with no name) keeps its column.
     if (move.from.kind === "column" && move.to.kind === "column") continue;
