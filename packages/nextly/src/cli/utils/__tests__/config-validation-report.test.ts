@@ -68,6 +68,25 @@ describe("the offending line of a configuration that does not parse", () => {
   });
 });
 
+describe("an import the configuration names that cannot be found", () => {
+  // esbuild's own message quotes the specifier, which may carry a credential in its query.
+  const WITH_TOKEN = [
+    "import posts from './collections/posts?token=hunter2-not-a-real-one';",
+    "export default { collections: [posts] };",
+    "",
+  ].join("\n");
+
+  it("is named with the credential in its specifier redacted, --verbose included", async () => {
+    for (const verbose of [false, true]) {
+      const report = await reportFor(WITH_TOKEN, { verbose });
+
+      expect(report, report).toContain("CONFIG_IMPORT_NOT_FOUND");
+      expect(report, report).toContain("./collections/posts?token=");
+      expect(report, report).not.toContain("hunter2-not-a-real-one");
+    }
+  });
+});
+
 describe("a configuration that does not parse", () => {
   // A brace left open: esbuild stops at the `]` on line 4. Two characters outside ASCII before
   // it on that line make esbuild's column (bytes, from 0) differ from an editor's (characters,

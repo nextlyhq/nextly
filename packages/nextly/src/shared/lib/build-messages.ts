@@ -30,19 +30,30 @@ export interface EditorPlace {
   lineText?: string;
 }
 
-/** The build messages esbuild attached to `cause`, or none when it is no build failure. */
+/**
+ * The build messages esbuild attached to `cause`, or none when it is no build failure, each with
+ * every credential in its text redacted (`redactCredentialsInText`): esbuild quotes what it could
+ * not read, an import's specifier with its query among it, and every surface prints the text. The
+ * line's own text is kept as written, since the column is counted in it; `formatBuildMessages`
+ * redacts it where it is shown.
+ */
 export function buildMessagesOf(cause: unknown): BuildMessage[] {
   if (typeof cause !== "object" || cause === null || !("errors" in cause)) {
     return [];
   }
   const { errors } = cause;
   if (!Array.isArray(errors)) return [];
-  return errors.filter(
-    (message): message is BuildMessage =>
-      typeof message === "object" &&
-      message !== null &&
-      typeof (message as { text?: unknown }).text === "string"
-  );
+  return errors
+    .filter(
+      (message): message is BuildMessage =>
+        typeof message === "object" &&
+        message !== null &&
+        typeof (message as { text?: unknown }).text === "string"
+    )
+    .map(message => ({
+      ...message,
+      text: redactCredentialsInText(message.text),
+    }));
 }
 
 /**
