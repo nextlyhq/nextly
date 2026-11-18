@@ -122,8 +122,11 @@ function nameRefusal(
   return undefined;
 }
 
-/** The next position in the library: after every style, so the new one is last. */
-function nextOrderIndex(library: readonly NamedClass[]): number {
+/**
+ * The next position in the library: after every style, so the new one is
+ * last. Text styles are placed the same way.
+ */
+export function nextOrderIndex(library: readonly NamedClass[]): number {
   return (
     library.reduce(
       (max, entry) =>
@@ -161,8 +164,9 @@ function ownStyleOf(
 /**
  * A class name no style in the library has: the one given, or, where a long
  * name was cut to the same one, that one cut further with `-2`, `-3`… on it.
+ * Text styles take theirs the same way.
  */
-function unusedSlug(library: readonly NamedClass[], slug: string): string {
+export function unusedSlug(library: readonly NamedClass[], slug: string): string {
   const taken = new Set(library.map(entry => entry.slug));
   if (!taken.has(slug)) return slug;
   for (let count = 2; ; count += 1) {
