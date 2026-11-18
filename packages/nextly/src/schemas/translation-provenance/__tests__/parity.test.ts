@@ -24,9 +24,12 @@ import {
 
 const TABLE = "nextly_translation_provenance";
 
-// The postgresql and mysql tables this file reads; the unit setup loads only the run's own dialect.
+// Every dialect's tables this file reads, its own run's included: the unit setup loads only the
+// run's dialect (`DB_DIALECT`), so the cases for the other two would otherwise throw.
 beforeAll(async () => {
-  await Promise.all(["postgresql", "mysql"].map(d => loadDialectTables(d)));
+  await Promise.all(
+    ["postgresql", "mysql", "sqlite"].map(d => loadDialectTables(d))
+  );
 });
 
 /** Property and column names, by asking Drizzle what each property is. */
