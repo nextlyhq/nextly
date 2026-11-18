@@ -128,17 +128,17 @@ const SOURCE_MODULES: ReadonlyArray<{
   {
     name: "outline",
     module: outlineModule,
-    // Its types are published, for `ctx.outline`. Building the outline, and
-    // putting it on a context, are the renderer's: a block reads its anchors
-    // with `outlineAnchors`, inside this package, and an editor keeps an
-    // output by `anchorsWithin`.
+    // Its types are published, for `ctx.outline`, and `pageOutline`, for a
+    // caller judging a page's headings without drawing it. Putting it on a
+    // context is the renderer's: a block reads its anchors with
+    // `outlineAnchors`, inside this package, and an editor keeps an output
+    // by `anchorsWithin`.
     internal: [
       "anchorsWithin",
       "contextBeforeOutline",
       "headingAnchors",
       "outlineAnchors",
       "outlineForPart",
-      "pageOutline",
       "passageAnchors",
       "withOutline",
     ],
@@ -731,6 +731,9 @@ describe("the root entry", () => {
       // The one reading of the site's forms service an instance offers.
       "offeredSiteForms",
       "pageBindingRun",
+      // Added deliberately: the page outline, the one reading of which
+      // headings a page draws, for the editor's page checks to judge them by.
+      "pageOutline",
       "pageStyleTrace",
       "prepareDocumentAsDrawn",
       "prepareDocumentForRead",
