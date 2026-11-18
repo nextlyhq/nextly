@@ -70,7 +70,7 @@ import {
   listCollectionsWhere,
   listPropsAsBound,
 } from "./list-collections";
-import { pageOutline, withOutline } from "./outline";
+import { outlineForPart, pageOutline, withOutline } from "./outline";
 import { layoutPartSheets, type PagePart } from "./page-parts";
 import { outlinePartOf, PageRenderer } from "./page-renderer";
 import {
@@ -899,7 +899,12 @@ export function drawWithRegions(args: {
   return drawnParts.map(({ area, key, props }) => {
     const drawn = createElement(PageRenderer, {
       ...props,
-      context: withOutline(props.context ?? createStandaloneContext(), outline),
+      // The page's outline as this part reads it: node ids are unique only
+      // within one document, so a part's blocks find their own anchors.
+      context: withOutline(
+        props.context ?? createStandaloneContext(),
+        outlineForPart(outline, area)
+      ),
       key,
     });
     return area === "content"

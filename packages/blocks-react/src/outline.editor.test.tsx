@@ -96,6 +96,31 @@ describe("an editor drawing the page as a heading changes", () => {
     expect(runs.count).toBe(1);
   });
 
+  it("draws a list again when a heading inside it is renumbered by one outside", async () => {
+    // A Collection list renders after its read, so an editor keeps its output,
+    // and the entries' blocks inside it were drawn with the outline of then.
+    const list: BlockNode = {
+      id: "list",
+      type: "core/collection-loop",
+      version: 1,
+      props: { collection: "posts", limit: 10 },
+      slots: { children: [heading("in-list", "Title")] },
+    };
+    const context = createStandaloneContext({
+      data: {
+        find: () => Promise.resolve({ items: [{ id: "a" }], total: 1 }),
+      },
+    });
+    const view = await act(async () =>
+      render(canvas(page(heading("a", "Other"), list), context))
+    );
+    expect(ids(view.container)).toEqual(["other", "title--0"]);
+    await act(async () => {
+      view.rerender(canvas(page(heading("a", "Title"), list), context));
+    });
+    expect(ids(view.container)).toEqual(["title", "title-2--0"]);
+  });
+
   it("draws a heading again when its own anchor changes because another heading moved", async () => {
     // A heading linked to an entry renders after a promise, so its output is
     // one an editor keeps; its words stay, while a heading put before it

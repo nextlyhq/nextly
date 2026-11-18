@@ -130,10 +130,13 @@ const SOURCE_MODULES: ReadonlyArray<{
     module: outlineModule,
     // Its types are published, for `ctx.outline`. Building the outline, and
     // putting it on a context, are the renderer's: a block reads its anchors
-    // with `outlineAnchors`, inside this package.
+    // with `outlineAnchors`, inside this package, and an editor keeps an
+    // output by `anchorsWithin`.
     internal: [
+      "anchorsWithin",
       "contextBeforeOutline",
       "outlineAnchors",
+      "outlineForPart",
       "pageOutline",
       "withOutline",
     ],

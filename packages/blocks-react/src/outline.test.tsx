@@ -312,6 +312,46 @@ describe("a host's own class-based context", () => {
     expect(html).toContain("/resolved");
   });
 
+  it("works on a frozen one, whose own fields a view may not report changed", async () => {
+    class HostContext implements PageContext {
+      entry = null;
+      // An own field, and an own method field: frozen, both are read-only.
+      outline = undefined;
+      resolveMedia = (): Promise<null> => Promise.resolve(null);
+      resolveEntryPath(): Promise<string> {
+        return Promise.resolve("/resolved");
+      }
+    }
+    const caller = defineBlock<Record<string, never>>({
+      name: "test/frozen-caller",
+      version: 1,
+      description: "Calls the context's own method field.",
+      example: { props: {} },
+      render: async ({ ctx, className }) => (
+        <p className={className}>
+          {String(await ctx.resolveMedia("m"))}
+          {await ctx.resolveEntryPath("posts", "1")}
+        </p>
+      ),
+    });
+    const html = await renderToHtml(
+      <PageRenderer
+        document={page(heading("Notes"), {
+          id: "caller",
+          type: "test/frozen-caller",
+          version: 1,
+          props: {},
+        })}
+        blocks={createBlockResolver([...coreBlocks, caller])}
+        siteStyles={false}
+        context={Object.freeze(new HostContext())}
+      />
+    );
+    expect(headingIds(html)).toEqual(["notes"]);
+    // Both methods answered: the own field and the one on the prototype.
+    expect(html.replaceAll("<!-- -->", "")).toContain("null/resolved");
+  });
+
   it("keeps the outline where a block copies the context for what it holds", async () => {
     // A Collection list draws each entry under a copy of its context, as an
     // object spread: the view must hand that copy the outline too.
@@ -405,6 +445,34 @@ describe("the outline of a page drawn inside its Layout", () => {
   });
 });
 
+describe("the outline of parts that reuse a node id", () => {
+  it("anchors each part's block by its own heading, not the first part's", async () => {
+    // Node ids are unique within one document; a header and a page are two.
+    const shared = {
+      context: createStandaloneContext(),
+      blocks: resolver,
+    };
+    const html = await renderToHtml(
+      <>
+        {drawWithRegions({
+          regions: [
+            {
+              region: { area: "header", componentId: "header-component" },
+              document: page(heading("Notes", { id: "same" })),
+              prepared: null,
+            },
+          ],
+          page: { ...shared, document: page(heading("Notes", { id: "same" })) },
+          shared,
+          siteStyles: undefined,
+          definitions: new Map(),
+        })}
+      </>
+    );
+    expect(headingIds(html)).toEqual(["notes", "notes-2"]);
+  });
+});
+
 describe("a heading drawn once per entry of a Collection list", () => {
   it("carries the entry's place after its anchor, so no two entries share an id", async () => {
     const find = vi.fn(() =>
@@ -421,6 +489,23 @@ describe("a heading drawn once per entry of a Collection list", () => {
       { context: createStandaloneContext({ data: { find } }) }
     );
     expect(headingIds(html)).toEqual(["title", "title-2--0", "title-2--1"]);
+  });
+
+  it("never draws an entry's id an author gave another block", async () => {
+    const find = vi.fn(() =>
+      Promise.resolve({ items: [{ id: "a" }, { id: "b" }], total: 2 })
+    );
+    const html = await drawn(
+      page(heading("Elsewhere", { cssId: "title--0" }), {
+        id: "list",
+        type: "core/collection-loop",
+        version: 1,
+        props: { collection: "posts", limit: 10 },
+        slots: { children: [heading("Title")] },
+      }),
+      { context: createStandaloneContext({ data: { find } }) }
+    );
+    expect(headingIds(html)).toEqual(["title--0", "title--0--2", "title--1"]);
   });
 });
 

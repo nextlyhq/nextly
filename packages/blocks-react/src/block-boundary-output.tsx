@@ -21,7 +21,7 @@ import {
   warnNoHostRoot,
 } from "./block-boundary-root-checks";
 import type { BlockHostPolicy, PageContext } from "./context";
-import { contextBeforeOutline, outlineAnchors } from "./outline";
+import { anchorsWithin, contextBeforeOutline } from "./outline";
 import { BlockPlaceholder } from "./placeholder";
 import { describeThrown, normalizeRenderable } from "./renderable";
 
@@ -263,8 +263,9 @@ const EDITOR_OUTPUTS_KEPT = 256;
  * markers that make its text editable. So is the host's policy, which a
  * block judges a remote host by: a host it now allows or refuses is judged
  * again rather than shown as it was. So are the anchors the page outline
- * gives the block's headings, which a heading draws as its id: a heading
- * renumbered because another changed is drawn again.
+ * gives the headings in the block and inside it, drawn as their ids: a
+ * heading, or a list holding one, is drawn again when a heading elsewhere
+ * renumbers it.
  */
 function editorOutputKey(
   marked: boolean,
@@ -345,12 +346,12 @@ export function editorOutputSlot(
     className,
     node,
     bound,
-    outlineAnchors(context, node.id)
+    anchorsWithin(context, node)
   );
   if (key === undefined) return UNKEPT;
   // Kept by the context before the page outline was put on it: the outline
   // changes as an author types in a heading, and the other blocks' outputs
-  // stay the same (the anchors a block draws are in its key above).
+  // stay the same (the anchors a block and its children draw are in its key).
   const owner = contextBeforeOutline(context);
   const outputs = EDITOR_OUTPUTS.get(owner);
   const kept = outputs?.get(key);

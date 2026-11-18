@@ -149,19 +149,37 @@ function authorIds(parts: readonly OutlinePart[]): Set<string> {
   return taken;
 }
 
+/** What an outline keeps beside its headings, for this module alone. */
+interface OutlineRecord {
+  /** Each part's blocks' anchors, by node id: ids are unique within a part. */
+  readonly byPart: ReadonlyMap<OutlineArea, ReadonlyMap<string, string[]>>;
+  /** Every id an author gave a block on the page. */
+  readonly taken: ReadonlySet<string>;
+}
+
+/** The record of each outline this module made, and of each part's view. */
+const RECORDS = new WeakMap<PageOutline, OutlineRecord>();
+
 /**
  * The outline of a page drawn in these parts, in this order.
  *
  * Pure: the same parts give the same outline, which is what lets the
- * published route and the editor's canvas read one page alike.
+ * published route and the editor's canvas read one page alike. Its
+ * `anchorsOf` answers for the first part holding a node id; a part's own
+ * renderer reads `outlineForPart`, since node ids are unique only within
+ * one document.
  *
  * @experimental
  */
 export function pageOutline(parts: readonly OutlinePart[]): PageOutline {
-  const allocator = anchorAllocator(authorIds(parts));
+  const taken = authorIds(parts);
+  const allocator = anchorAllocator(new Set(taken));
   const headings: OutlineHeading[] = [];
-  const byNode = new Map<string, { node: BlockNode; anchors: string[] }>();
+  const byPart = new Map<OutlineArea, Map<string, string[]>>();
+  const firstById = new Map<string, string[]>();
   for (const part of parts) {
+    const byNode = byPart.get(part.area) ?? new Map<string, string[]>();
+    byPart.set(part.area, byNode);
     const withinOf = new Map<BlockNode, readonly string[]>();
     walkNodes([...part.nodes], (node, parent) => {
       const within =
@@ -171,12 +189,9 @@ export function pageOutline(parts: readonly OutlinePart[]): PageOutline {
       withinOf.set(node, within);
       const found = headingsOfBlock(node);
       if (found.length === 0) return;
-      // Node ids are unique within a document, not across a page's parts: a
-      // second block reusing an id is still listed, but the id answers the
-      // first block's anchors.
-      const known = byNode.get(node.id);
       const anchors: string[] = [];
-      if (known === undefined) byNode.set(node.id, { node, anchors });
+      if (!byNode.has(node.id)) byNode.set(node.id, anchors);
+      if (!firstById.has(node.id)) firstById.set(node.id, anchors);
       for (const heading of found) {
         const anchor = heading.own ?? allocator.take(heading.text);
         anchors.push(anchor);
@@ -192,16 +207,42 @@ export function pageOutline(parts: readonly OutlinePart[]): PageOutline {
       }
     });
   }
-  return {
+  const outline: PageOutline = {
     headings,
-    anchorsOf: nodeId => byNode.get(nodeId)?.anchors ?? NONE,
+    anchorsOf: nodeId => firstById.get(nodeId) ?? NONE,
   };
+  RECORDS.set(outline, { byPart, taken });
+  return outline;
+}
+
+/**
+ * The page's outline as one part's blocks read it: the same headings, with
+ * each node id answered from that part, so a header and a page that both
+ * hold a block `h1` each draw their own anchors.
+ *
+ * @experimental
+ */
+export function outlineForPart(
+  outline: PageOutline,
+  area: OutlineArea
+): PageOutline {
+  const record = RECORDS.get(outline);
+  if (record === undefined) return outline;
+  const byNode = record.byPart.get(area);
+  const view: PageOutline = {
+    headings: outline.headings,
+    anchorsOf: nodeId => byNode?.get(nodeId) ?? NONE,
+  };
+  RECORDS.set(view, record);
+  return view;
 }
 
 /**
  * The anchors a block's headings are drawn with on this render: the
  * outline's, with the entry's place after each inside a Collection list's
- * entry, where the block is drawn once per entry.
+ * entry, where the block is drawn once per entry (`title--0`). A made anchor
+ * never holds two hyphens in a row, so these never meet another heading's;
+ * one an author gave a block is stepped past (`title--0--2`).
  *
  * @experimental
  */
@@ -209,11 +250,38 @@ export function outlineAnchors(
   ctx: Pick<PageContext, "outline" | "itemPosition">,
   nodeId: string
 ): readonly string[] {
-  const anchors = ctx.outline?.anchorsOf(nodeId) ?? NONE;
+  const outline = ctx.outline;
+  const anchors = outline?.anchorsOf(nodeId) ?? NONE;
   const place = ctx.itemPosition;
-  return place === undefined || anchors.length === 0
-    ? anchors
-    : anchors.map(anchor => `${anchor}--${place}`);
+  if (place === undefined || anchors.length === 0) return anchors;
+  const taken = outline === undefined ? undefined : RECORDS.get(outline)?.taken;
+  return anchors.map(anchor => {
+    const id = `${anchor}--${place}`;
+    if (taken === undefined || !taken.has(id)) return id;
+    let n = 2;
+    while (taken.has(`${id}--${n}`)) n += 1;
+    return `${id}--${n}`;
+  });
+}
+
+/**
+ * The anchors of every block in a subtree, in order: what a container's
+ * output depends on through the headings inside it. An editor keeps an async
+ * block's output by it, so a list whose inner heading is renumbered by a
+ * heading outside it is drawn again.
+ *
+ * @experimental
+ */
+export function anchorsWithin(
+  ctx: Pick<PageContext, "outline" | "itemPosition">,
+  node: BlockNode
+): readonly string[] {
+  if (ctx.outline === undefined) return NONE;
+  const anchors: string[] = [];
+  walkNodes([node], each => {
+    anchors.push(...outlineAnchors(ctx, each.id));
+  });
+  return anchors;
 }
 
 /** Each context this module gave an outline, and the one it was given. */
@@ -255,48 +323,56 @@ export function withOutline(
  * as its receiver (bound once per method, so a method read twice is the same
  * function both times). The outline is also one of its own properties, so a
  * copy of the view keeps it.
+ *
+ * The proxy's target is an empty object of its own, not the host's: a proxy
+ * may not report a frozen target's property as anything but what it holds,
+ * and this one reports the outline and bound methods in place of them.
  */
 function outlineView(ctx: PageContext, outline: PageOutline): PageContext {
   const bound = new Map<unknown, unknown>();
-  return new Proxy(ctx, {
-    get(target, key) {
-      if (key === "outline") return outline;
-      const value: unknown = Reflect.get(target, key, target);
-      if (typeof value !== "function") return value;
-      let method = bound.get(value);
-      if (method === undefined) {
-        method = (value as (...args: unknown[]) => unknown).bind(target);
-        bound.set(value, method);
-      }
-      return method;
-    },
-    has(target, key) {
-      return key === "outline" || Reflect.has(target, key);
-    },
-    // Listed among its own properties, so a block that copies the context
-    // for what it holds (`{ ...ctx, item }`) copies the outline with it. Not
-    // for a frozen or sealed host object, where a proxy may not report a
-    // property its target lacks: a copy of that goes without it.
-    ownKeys(target) {
-      const keys = Reflect.ownKeys(target);
-      return keys.includes("outline") || !Object.isExtensible(target)
-        ? keys
-        : [...keys, "outline"];
-    },
-    getOwnPropertyDescriptor(target, key) {
-      const own = Reflect.getOwnPropertyDescriptor(target, key);
-      // The host's own `outline` slot (a field declared and left unset) is
-      // reported as the outline, unless the proxy rules forbid it.
-      if (key !== "outline" || own?.configurable === false) return own;
-      if (own === undefined && !Object.isExtensible(target)) return own;
-      return {
-        value: outline,
-        writable: own?.writable ?? false,
-        enumerable: true,
-        configurable: true,
-      };
-    },
-  });
+  const view = new Proxy<object>(
+    {},
+    {
+      get(_target, key) {
+        if (key === "outline") return outline;
+        const value: unknown = Reflect.get(ctx, key, ctx);
+        if (typeof value !== "function") return value;
+        let method = bound.get(value);
+        if (method === undefined) {
+          method = (value as (...args: unknown[]) => unknown).bind(ctx);
+          bound.set(value, method);
+        }
+        return method;
+      },
+      set(_target, key, value) {
+        return Reflect.set(ctx, key, value, ctx);
+      },
+      has(_target, key) {
+        return key === "outline" || Reflect.has(ctx, key);
+      },
+      ownKeys() {
+        const keys = Reflect.ownKeys(ctx);
+        return keys.includes("outline") ? keys : [...keys, "outline"];
+      },
+      getOwnPropertyDescriptor(_target, key) {
+        if (key === "outline") {
+          return {
+            value: outline,
+            writable: false,
+            enumerable: true,
+            configurable: true,
+          };
+        }
+        const own = Reflect.getOwnPropertyDescriptor(ctx, key);
+        // Configurable, as the empty target's own properties may only be.
+        return own === undefined ? undefined : { ...own, configurable: true };
+      },
+      getPrototypeOf() {
+        return Reflect.getPrototypeOf(ctx);
+      },
+    }
+  );
+  return view as PageContext;
 }
 
 /** The context `withOutline` was given, or `ctx` itself. @experimental */
