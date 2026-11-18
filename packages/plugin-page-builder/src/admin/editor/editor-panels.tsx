@@ -98,6 +98,7 @@ import {
   TokensStudio,
   VariablesTab,
 } from "./site-style-studios";
+import type { TextStylesTab as TextStylesTabPart } from "./site-text-styles-tab";
 import type { ComponentView } from "./use-component-view";
 import type { EditorMount } from "./use-editor-mount";
 import type { CanvasInputs, SiteStyleInputs } from "./use-render-inputs";
@@ -117,6 +118,14 @@ const FontsPanelWithUpload: typeof FontsPanelWithUploadPart = lazyPart(() =>
  */
 const FontRolesTab: typeof FontRolesTabPart = lazyPart(() =>
   import("./site-font-roles-tab").then(m => m.FontRolesTab)
+);
+
+/**
+ * The Type tab's text styles, fetched when the tab first draws them, as the
+ * Body and Headings fonts are.
+ */
+const TextStylesTab: typeof TextStylesTabPart = lazyPart(() =>
+  import("./site-text-styles-tab").then(m => m.TextStylesTab)
 );
 
 /** A key for the document the editor has open, from its identity. */
@@ -1177,6 +1186,12 @@ export function editorPanelRenderer({
                   </DesignReveal>
                 </DesignGroup>
                 <VariablesTab tab="type" />
+                {/* After the type sizes they are built on. */}
+                <TextStylesTab
+                  classes={classes}
+                  breakpoints={classSummaryContext.breakpoints}
+                  pageBlocks={pageClassBlocks}
+                />
               </>
             ),
             spacing: () => <VariablesTab tab="spacing" />,
