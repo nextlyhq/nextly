@@ -319,9 +319,7 @@ describe("the Body and Headings fonts", () => {
     );
     expect(heading).toMatchObject({ kind: "fontFamily" });
     expect(
-      Object.values(DEFAULT_SITE_TEXT).some(
-        row => row?.fontFamily !== undefined
-      )
+      Object.values(DEFAULT_SITE_TEXT).some(row => row?.fontFamily !== undefined)
     ).toBe(false);
   });
 
