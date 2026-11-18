@@ -20,6 +20,7 @@ import * as React from "react";
 
 import { ACCORDION_BLOCK } from "./accordion-icon";
 import { accordionContentSections } from "./accordion-icon-field";
+import { EMBED_BLOCK_TYPE, embedLinkOp } from "./canvas/embed-states-model";
 import { columnsContentSection } from "./columns-layout-field";
 import {
   PropExposeControl,
@@ -27,10 +28,6 @@ import {
 } from "./component-fields-panel";
 import type { ContentServices } from "./content-controls";
 import type { EditorState } from "./editor-state";
-import {
-  EMBED_BLOCK_TYPE,
-  embedLinkOp,
-} from "./canvas/embed-states-model";
 import { embedSectionBodies } from "./embed-sections";
 import { FORM_BLOCK } from "./form-picked";
 import { formSectionBodies, formSourceSections } from "./form-sections";
@@ -151,7 +148,11 @@ export function commitProp(
   // An Embed's link, typed or pasted into its Link field, takes the
   // provider's shape with it, in the same step, as a link pasted on the
   // canvas does.
-  if (node.type === EMBED_BLOCK_TYPE && name === "src" && typeof value === "string") {
+  if (
+    node.type === EMBED_BLOCK_TYPE &&
+    name === "src" &&
+    typeof value === "string"
+  ) {
     const linked = embedLinkOp(document, id, value, {
       shape: designIsWritable(document, id, lockViewOf(editor)),
     });
@@ -406,6 +407,9 @@ function ContentSurface({
           ) === undefined
             ? undefined
             : reasonId,
+        breakpoints: around?.breakpoints,
+        cascade: around?.cascade,
+        renderedTag: around?.renderedTag,
       },
       builderContentSectionsOf(inspection.blockName)
     ),

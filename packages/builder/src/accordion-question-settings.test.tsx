@@ -20,7 +20,10 @@ import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { AccordionIconField } from "./accordion-icon-field";
+import {
+  AccordionIconField,
+  accordionContentSections,
+} from "./accordion-icon-field";
 import { accordionIconOf, planAccordionIcon } from "./accordion-icon";
 import type { EditorState } from "./editor-state";
 import { builderContentSectionsOf, inspectSelection } from "./inspector";
@@ -223,6 +226,88 @@ describe("an Accordion's Icon", () => {
     expect(JSON.stringify(apply.mock.calls[0])).toContain(
       '"disclosureIcon":"none"'
     );
+  });
+
+  it("reads the icon a shared style gives the accordion while it holds none of its own", () => {
+    const bare = page({ openMode: "one" }).nodes[0] as BlockNode;
+    expect(accordionIconOf(bare, "chevron")).toBe("chevron");
+    expect(accordionIconOf(bare, " None ")).toBe("none");
+    // A value no tile offers claims none, rather than the default.
+    expect(accordionIconOf(bare, "inherit")).toBeUndefined();
+    // The control: the accordion's own icon wins over what reaches it.
+    const own = page(
+      { openMode: "one" },
+      { base: { [BASE_BREAKPOINT]: { disclosureIcon: "plus" } } }
+    ).nodes[0] as BlockNode;
+    expect(accordionIconOf(own, "chevron")).toBe("plus");
+
+    render(
+      <AccordionIconField
+        editor={
+          {
+            document: page({ openMode: "one" }),
+            apply: vi.fn(),
+          } as unknown as EditorState
+        }
+        nodeId="acc"
+        heldBy={undefined}
+        inherited="chevron"
+      />
+    );
+    expect(
+      screen
+        .getByRole("radio", { name: "Chevron" })
+        .getAttribute("aria-checked")
+    ).toBe("true");
+  });
+
+  it("is read through the canvas's cascade, from a shared style the accordion wears", () => {
+    const document = page({ openMode: "one" });
+    (document.nodes[0] as { classes?: string[] }).classes = ["cls-1"];
+    const editor = {
+      document,
+      selectedId: "acc",
+      apply: vi.fn(),
+    } as unknown as EditorState;
+    const sections = (value: string, origin: Record<string, unknown>) =>
+      accordionContentSections(
+        {
+          editor,
+          nodeId: "acc",
+          designHeldBy: undefined,
+          breakpoints: { viewport: [], container: [] },
+          cascade: {
+            entries: [
+              {
+                origin,
+                state: "base",
+                breakpoint: BASE_BREAKPOINT,
+                property: "--nx-pb-disclosure-icon",
+                value,
+              },
+            ],
+            nodes: document.nodes,
+          } as never,
+          renderedTag: "div",
+        },
+        ["Icon"]
+      );
+    const checked = (name: string) =>
+      screen.getByRole("radio", { name }).getAttribute("aria-checked");
+    render(
+      <>
+        {
+          sections("chevron", { kind: "class", id: "cls-1", slug: "faq" })[0]
+            ?.body
+        }
+      </>
+    );
+    expect(checked("Chevron")).toBe("true");
+    cleanup();
+    // The control: a value the cascade says is the accordion's own is not
+    // read as reaching it; what it stores is (none here, so the default).
+    render(<>{sections("chevron", { kind: "node", id: "acc" })[0]?.body}</>);
+    expect(checked("+ / −")).toBe("true");
   });
 
   it("resets the accordion's own icon, so a shared style or the default shows again", () => {

@@ -71,12 +71,20 @@ function defaultIcon(type: string): AccordionIcon | undefined {
 
 /**
  * The icon the tiles show as chosen: the accordion's own base value, else
- * its default. `undefined` where neither is an offered icon (a CSS-wide
+ * the one reaching it from elsewhere at its base values (a shared style it
+ * wears, read from the canvas's cascade by the caller), else its default.
+ * `undefined` where the one in force is not an offered icon (a CSS-wide
  * keyword stored by hand), so no tile claims it.
  */
-export function accordionIconOf(node: BlockNode): AccordionIcon | undefined {
+export function accordionIconOf(
+  node: BlockNode,
+  inherited?: string
+): AccordionIcon | undefined {
   const stored = readStyleValue(node.styles, ADDRESS);
-  return stored === undefined ? defaultIcon(node.type) : offeredIcon(stored);
+  if (stored !== undefined) return offeredIcon(stored);
+  return inherited === undefined
+    ? defaultIcon(node.type)
+    : offeredIcon(inherited);
 }
 
 /** Choosing an icon, as ONE op; `null` where it changes nothing. */

@@ -7,7 +7,13 @@
  *
  * @module accordion-icon-field
  */
-import { findNode } from "@nextlyhq/blocks-engine";
+import {
+  BASE_BREAKPOINT,
+  DISCLOSURE_ICON_PROPERTY,
+  findNode,
+  type BreakpointSet,
+} from "@nextlyhq/blocks-engine";
+import type { PageStyleCascade } from "@nextlyhq/blocks-react";
 import { TooltipProvider } from "@nextlyhq/ui";
 import { RotateCcw } from "lucide-react";
 import * as React from "react";
@@ -28,6 +34,7 @@ import type { EditorState } from "./editor-state";
 import { HeldByLock } from "./held-by-lock";
 import type { PanelSection } from "./panel-section";
 import { SettingSlot } from "./settings-filter";
+import { appliedAtReader, selectedSubject } from "./style-panel-reading";
 
 /** The section's name, and the row's. */
 const ICON_WORDS = "Icon";
@@ -42,11 +49,17 @@ export function AccordionIconField({
   editor,
   nodeId,
   heldBy,
+  inherited,
 }: {
   editor: Pick<EditorState, "document" | "apply">;
   nodeId: string;
   /** The id of the lock reason while a lock holds the design, else none. */
   heldBy: string | undefined;
+  /**
+   * The icon reaching the accordion from elsewhere at its base values, a
+   * shared style it wears, which the canvas draws while it holds none.
+   */
+  inherited?: string | undefined;
 }): React.JSX.Element | null {
   const id = React.useId();
   const node = findNode(editor.document.nodes, nodeId);
@@ -67,7 +80,7 @@ export function AccordionIconField({
             labelledBy={`${id}-label`}
             options={ACCORDION_ICONS}
             labels={ACCORDION_ICONS.map(each => ACCORDION_ICON_WORDS[each])}
-            value={accordionIconOf(node)}
+            value={accordionIconOf(node, inherited)}
             disabled={held}
             onChoose={option => {
               if (held || !isIcon(option)) return;
@@ -112,6 +125,11 @@ export function accordionContentSections(
     readonly editor: EditorState;
     readonly nodeId: string;
     readonly designHeldBy: string | undefined;
+    readonly breakpoints?: BreakpointSet | undefined;
+    /** The canvas's cascade, for an icon reaching it from a shared style. */
+    readonly cascade?: PageStyleCascade | undefined;
+    /** The tag the canvas draws the accordion as, the cascade's subject. */
+    readonly renderedTag?: string | undefined;
   },
   labels: readonly string[]
 ): PanelSection[] {
@@ -119,6 +137,20 @@ export function accordionContentSections(
   if (node?.type !== ACCORDION_BLOCK || !labels.includes(ICON_WORDS)) {
     return [];
   }
+  // The icon in force at the base values, where the row writes, when it
+  // comes from something other than the accordion's own styles.
+  const reaching = appliedAtReader({
+    cascade: context.cascade,
+    subject: selectedSubject(
+      context.editor,
+      context.cascade,
+      context.renderedTag
+    ),
+    state: "base",
+    breakpoints: context.breakpoints,
+    nodeId: context.nodeId,
+  })?.(BASE_BREAKPOINT, DISCLOSURE_ICON_PROPERTY);
+  const inherited = reaching?.own === false ? reaching.value : undefined;
   return [
     {
       key: ICON_WORDS,
@@ -129,6 +161,7 @@ export function accordionContentSections(
           editor={context.editor}
           nodeId={context.nodeId}
           heldBy={context.designHeldBy}
+          inherited={inherited}
         />
       ),
     },
