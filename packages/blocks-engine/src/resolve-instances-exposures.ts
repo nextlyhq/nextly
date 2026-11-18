@@ -23,6 +23,11 @@ import {
 } from "./resolve-instances-contract";
 import type { RetiredExposures } from "./retired-exposures";
 import { boundedOwnKeys, defineEntry, ownEntry } from "./safe-record";
+import {
+  followerFills,
+  type FollowerFill,
+  type FollowerLimits,
+} from "./setting-bindings";
 import { isConditionGated } from "./visibility";
 
 // ---------------------------------------------------------------------------
@@ -35,6 +40,36 @@ interface PropEdit {
   value: OverrideValue;
   /** Clear the prop rather than replace it. */
   unset: boolean;
+  /**
+   * The segments written, where they are not `path` split at its dots: a
+   * placement's setting, `overrides` and its whole id.
+   */
+  segments?: readonly string[];
+}
+
+/**
+ * The edit a follower's fill writes: its value at its prop, and on a
+ * placement following into one of its own settings, at that setting's whole
+ * id, which is how composition reads it. The one way both the placed and the
+ * shown-alone fill write it.
+ *
+ * A cleared setting clears a block's prop, and a placement's setting is
+ * cleared by its `$unset` override: removing the override would give it the
+ * placed component's default instead, which is not what the setting shows.
+ *
+ * @experimental Settles with the editor's binding controls.
+ */
+export function followerEdit(fill: FollowerFill): PropEdit {
+  const id = fill.placement ? boundSettingId(fill.prop) : undefined;
+  if (id === undefined) {
+    return { path: fill.prop, value: fill.value, unset: fill.unset };
+  }
+  return {
+    path: fill.prop,
+    value: fill.unset ? { $unset: true } : fill.value,
+    unset: false,
+    segments: ["overrides", id],
+  };
 }
 
 /** Everything one instance changes about one node of the definition. */
@@ -56,6 +91,12 @@ export interface NodePlan {
    * the page gave is still known as the page's inside a nested component.
    */
   bindingKeys?: Record<string, string>;
+  /**
+   * Prop path to a binding of the component's own that fills it: a block
+   * following a setting shows the setting's block's own binding, read where
+   * the node's own bindings are, as a binding of this definition.
+   */
+  ownBindings?: Record<string, unknown>;
 }
 
 /**
@@ -79,12 +120,20 @@ export function planEdits(
   definition: ComponentDocument,
   instance: ResolvedBlockNode,
   supplied: Record<string, ResolvedBlockNode[]> | undefined,
-  composed: boolean
+  composed: boolean,
+  /**
+   * The limits the definition is read under, for its followers, with the
+   * caller's work allowance its follower walks are charged to.
+   */
+  limits?: FollowerLimits
 ): Map<string, NodePlan> {
   const plans = new Map<string, NodePlan>();
   const values = effectiveOverrides(definition, instance);
   if (values.size > 0) planExposed(definition.exposed, values, plans);
   planBoundSettings(definition.exposed, instance.bindings, plans);
+  // After both: a block following a setting shows what the setting's own
+  // block ends up with.
+  planFollowers(definition, plans, limits);
   if (supplied !== undefined) {
     planSlots(definition.slots, supplied, plans, composed);
   }
@@ -893,6 +942,57 @@ function planBoundSettings(
   }
 }
 
+/**
+ * Each block following a setting, given what its setting's block is: the
+ * same value at its prop, and the binding over it, the placement's or else
+ * the component's own.
+ */
+function planFollowers(
+  definition: ComponentDocument,
+  plans: Map<string, NodePlan>,
+  limits: FollowerLimits | undefined
+): void {
+  const fills = followerFills(
+    definition,
+    (nodeId, path) => {
+      const plan = plans.get(nodeId);
+      const edit = plan?.props.filter(entry => entry.path === path).at(-1);
+      const binding =
+        plan?.bindings === undefined
+          ? undefined
+          : ownEntry(plan.bindings, path);
+      const key =
+        plan?.bindingKeys === undefined
+          ? undefined
+          : ownEntry(plan.bindingKeys, path);
+      return {
+        ...(edit === undefined
+          ? {}
+          : { edit: { value: edit.value, unset: edit.unset } }),
+        ...(binding === undefined
+          ? {}
+          : { given: { binding, ...(key === undefined ? {} : { key }) } }),
+      };
+    },
+    limits
+  );
+  for (const fill of fills) {
+    const plan = planFor(plans, fill.nodeId);
+    plan.props.push(followerEdit(fill));
+    if (fill.given !== undefined) {
+      plan.bindings = { ...plan.bindings };
+      defineEntry(plan.bindings, fill.prop, fill.given.binding);
+      if (fill.given.key !== undefined) {
+        plan.bindingKeys = { ...plan.bindingKeys };
+        defineEntry(plan.bindingKeys, fill.prop, fill.given.key);
+      }
+    } else if (fill.own !== undefined) {
+      plan.ownBindings = { ...plan.ownBindings };
+      defineEntry(plan.ownBindings, fill.prop, fill.own);
+    }
+  }
+}
+
 /** A bound setting, and the target it fills. */
 interface BoundWinner {
   readonly property: ExposedProperty;
@@ -1064,7 +1164,7 @@ export function editedProps(
  * never had the key.
  */
 function writeEdit(root: Record<string, unknown>, edit: PropEdit): void {
-  const segments = edit.path.split(".");
+  const segments = edit.segments ?? edit.path.split(".");
   let target = root;
   for (let i = 0; i < segments.length - 1; i += 1) {
     const next = descend(target, segments[i], edit.unset);

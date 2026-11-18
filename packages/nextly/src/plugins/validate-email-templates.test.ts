@@ -56,6 +56,9 @@ describe("a plugin's email template at boot", () => {
       "gives both HTML and blocks",
     ],
     ["neither HTML nor blocks", {}, "gives neither HTML nor blocks"],
+    // An untyped plugin's empty HTML would otherwise register an empty body.
+    ["HTML that is null", { htmlContent: null }, "gives HTML that isn't text"],
+    ["HTML that is a number", { htmlContent: 5 }, "gives HTML that isn't text"],
     [
       "blocks that don't pass the written rules",
       {

@@ -403,13 +403,25 @@ describe("a colour leaf draws a colour control", () => {
     ).toBe("");
   });
 
-  it("commits a typed colour on blur", () => {
+  it("writes a typed colour as it is typed, before blur", () => {
     const editor = mount(styles("#3b82f6"));
     const field = screen.getByRole("textbox", { name: "Colour" });
     fireEvent.change(field, { target: { value: "#ff0000" } });
-    expect(editor.applyAll).not.toHaveBeenCalled();
-    fireEvent.blur(field);
     expect(editor.applyAll).toHaveBeenCalledTimes(1);
+    // The selected block's text colour, not merely some write of the value.
+    expect(editor.applyAll.mock.calls[0]?.[0]).toEqual([
+      expect.objectContaining({
+        kind: "update",
+        id: "a",
+        patch: expect.objectContaining({
+          styles: expect.objectContaining({
+            base: expect.objectContaining({
+              base: expect.objectContaining({ color: "#ff0000" }),
+            }),
+          }),
+        }),
+      }),
+    ]);
   });
 
   it("CLEARS rather than storing an empty colour", () => {

@@ -27,6 +27,7 @@ import { DEFAULT_LIMITS } from "./limits";
 import { type ListFieldSource, listQueryIssues } from "./list-query";
 import { surveyDocument } from "./measure-bytes";
 import { definitelyNotARecord, isPlainRecord } from "./plain-record";
+import { settingBindingIssues } from "./setting-bindings";
 import { validateDocumentCode } from "./validation-code";
 import { validateComponentEnvelope } from "./validation-components";
 import type {
@@ -214,6 +215,11 @@ export function validateDocument(
     // a clash is refused depends on the stored definition, which only a save
     // brings, and no exposure edit can create one.
     issues.push(...variantLabelIssues(envelope.doc.variants, ctx.stored));
+  }
+  // Where a block following a component's setting may stand, in a component
+  // and anywhere a copy of one lands, against the settings it has.
+  if (!overLimits) {
+    issues.push(...settingBindingIssues(doc, survey.limits, ctx.definitions));
   }
 
   const state = nodeCheckState(ctx, issues, knownBreakpoints, unknownSeverity, {

@@ -181,8 +181,15 @@ export { useModalKeyboardHold } from "./shell/modal-keyboard-hold";
 export type { CanvasProps } from "./canvas/canvas";
 // The regions of a page's layout around the page on the canvas, and which one
 // is selected.
-export type { CanvasRegion } from "./canvas/canvas-regions";
-export { REGION_ATTRIBUTE } from "./canvas/canvas-regions";
+export type {
+  CanvasRegion,
+  EmptyRegionAnchor,
+  EmptyRegionBandProps,
+} from "./canvas/canvas-regions";
+export {
+  EMPTY_REGION_ATTRIBUTE,
+  REGION_ATTRIBUTE,
+} from "./canvas/canvas-regions";
 export {
   useRegionSelection,
   type RegionSelection,
@@ -547,6 +554,15 @@ export { useFormsShownAgain } from "./form-source-control";
  */
 export { FirstAddChoosers } from "./canvas/first-add-choosers";
 export type { FirstAddChoosersProps } from "./canvas/first-add-choosers";
+/**
+ * "+ Add a question" under a selected Accordion's last question, drawn over
+ * the canvas: it adds the next numbered question, opens it and types its
+ * title, through the host's way into a block's text.
+ *
+ * @experimental
+ */
+export { AccordionAddQuestion } from "./canvas/accordion-add-question";
+export type { AccordionAddQuestionProps } from "./canvas/accordion-add-question";
 /**
  * The badge on a block whose bound value a visitor will not see, drawn in the
  * canvas's overlay from the host's `visitorUnreadableBindings` answer.
@@ -1003,3 +1019,13 @@ export { PageChecksChip } from "./page-checks/page-checks-chip";
 export type { PageChecksChipProps } from "./page-checks/page-checks-chip";
 export { PageChecksList } from "./page-checks/page-checks-list";
 export type { PageChecksListProps } from "./page-checks/page-checks-list";
+
+/**
+ * Ending every run of typing at once, for a host's save: a field still being
+ * typed in when the page is stored keeps writing into a new step, so undo
+ * after the save takes back only what came after it. `typingEpoch` says which
+ * stretch of typing the editor is in.
+ *
+ * @experimental
+ */
+export { endTypingRuns, typingEpoch } from "./typing-run";

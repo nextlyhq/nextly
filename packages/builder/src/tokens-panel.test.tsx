@@ -534,6 +534,25 @@ describe("the editor beside the panel", () => {
     }
   });
 
+  it("holds a variable's size while it is typed, and writes it when the field is left", async () => {
+    // A variable changes every page that uses it, so its fields settle on
+    // leaving rather than writing each keystroke as a block's do.
+    const onChange = vi.fn();
+    render(<Hosted tokens={SITE} onChange={onChange} />);
+    const size = await openEditor(/^Space 4/);
+    const field = within(size).getByLabelText("Light") as HTMLInputElement;
+    act(() => field.focus());
+    fireEvent.change(field, { target: { value: "2" } });
+    fireEvent.change(field, { target: { value: "24" } });
+    expect(onChange).not.toHaveBeenCalled();
+    fireEvent.blur(field);
+    expect(onChange).toHaveBeenCalledTimes(1);
+    const written = onChange.mock.calls[0]?.[0] as SiteTokenSet;
+    expect(
+      written.tokens.filter(token => token.values.light === "24rem")
+    ).toHaveLength(1);
+  });
+
   it("keeps Tab inside while it is open, both ways round", async () => {
     render(<Hosted tokens={SITE} />);
     const editor = await openEditor(/^Text/);

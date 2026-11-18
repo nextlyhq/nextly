@@ -53,6 +53,7 @@ import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { AddressKind } from "../../../shared/address-rule";
 import { builderColumnIsUnique } from "../../dynamic-collections/services/dynamic-collection-schema-service";
+import { statedMoment } from "../../dynamic-collections/services/stated-default";
 import { appLanguageOrder } from "../../i18n/configured-locales";
 import { joinRetries } from "../../i18n/migration/archive-preflight";
 import { mainTableFields } from "../../i18n/per-language-storage";
@@ -85,6 +86,7 @@ import {
   type GenerateArgs,
 } from "../migrate-create/generate";
 import { loadLatestSnapshot } from "../migrate-create/snapshot-io";
+import { isWriterOvertaken } from "../migrate-create/writer-hold";
 import { countRowsBreakingNotNull } from "../pipeline/classifier/count-helpers";
 import { diffSnapshots } from "../pipeline/diff/diff";
 import { introspectLiveSnapshot } from "../pipeline/diff/introspect-live";
@@ -208,6 +210,13 @@ export interface CollectionSave {
     | { column: string; kind: "fill"; value: unknown }
     | { column: string; kind: "delete_nonconforming" }
   >;
+  /**
+   * A Single's one row given the default each field new to its table states (`singleRowFills`):
+   * written into the change's file as a fill, and the column left as its field declares it.
+   * Accepted for a Single alone, whose table holds one row; a collection's rows are settled only
+   * by the person's own answer (`resolutions`).
+   */
+  rowFills?: ReadonlyArray<{ column: string; value: unknown }>;
   /**
    * The other collections deleted with this one: gone from the definition
    * the save writes, so the links between them do not hold this one's delete
@@ -558,6 +567,12 @@ export async function previewCollectionSave(
     const meta = join(deps.migrationsDir, "meta");
     if (existsSync(meta)) {
       await cp(meta, join(scratch, "meta"), { recursive: true });
+      // And each snapshot's migration file beside it: a snapshot counts as
+      // written only with its file there (`recordedSnapshotNames`), so
+      // without them the preview would start from no snapshot at all.
+      for (const file of await sqlFiles(deps.migrationsDir)) {
+        await cp(join(deps.migrationsDir, file), join(scratch, file));
+      }
     }
     const files = await writeFiles(
       { ...deps, migrationsDir: scratch },
@@ -853,6 +868,100 @@ function answeredField(
   );
 }
 
+/**
+ * Refuses a save's row fills that are not a Single's fields new to its table, each with a value
+ * the field takes, before anything is written. A row fill is the default a field states, given to
+ * a Single's one row; a collection, whose rows only the person's answer settles, is refused one
+ * whoever passes it, and a column the table already has keeps the values it holds.
+ */
+async function refuseRowFillsOutsideSingle(
+  save: CollectionSave,
+  live: TableSpec | undefined
+): Promise<void> {
+  const refusal = (path: string, code: string, message: string) =>
+    NextlyError.validation({ errors: [{ path, code, message }] });
+  for (const fill of save.rowFills ?? []) {
+    if (save.kind !== "single") {
+      throw refusal(
+        fill.column,
+        "ROW_FILL_NOT_SINGLE",
+        "Only a Single's row is filled with a field's default; a collection's rows are settled by the answer given for them."
+      );
+    }
+    const field = answeredField(save, fill.column);
+    if (field === undefined) {
+      throw refusal(
+        fill.column,
+        "RESOLUTION_FIELD_UNKNOWN",
+        `${fill.column} is not a field of the saved Single.`
+      );
+    }
+    const column = toSnakeCase(fill.column);
+    if (live?.columns.some(c => c.name === column) === true) {
+      throw refusal(
+        fill.column,
+        "ROW_FILL_NOT_NEW",
+        `${fill.column} is already a column of the Single, so its value is kept rather than filled.`
+      );
+    }
+    // Judged by the entry validator every write of the Single answers to, as a Single's PATCH
+    // judges the default it fills: a value its own rules refuse would be refused by every write.
+    const { validateEntryData } = await import(
+      "../../../shared/lib/entry-validation"
+    );
+    const issues = await validateEntryData(
+      { [fill.column]: fill.value },
+      [field],
+      { mode: "create" }
+    );
+    if (issues.length > 0) {
+      throw refusal(
+        `fields.${fill.column}`,
+        "DEFAULT_FAILS_FIELD_RULES",
+        `The default "${fill.column}" states would fill the entry this Single already holds, ` +
+          `but the field's own rules refuse it. ${issues[0]?.message ?? ""} Change the default or the ` +
+          `rule, then save again.`
+      );
+    }
+  }
+}
+
+/**
+ * The fills and deletes a save's file writes between a column's creation and its NOT NULL: the
+ * person's answers, and a Single's row fills (`CollectionSave.rowFills`) as fills, each a column
+ * of `table`. A structured value (a JSON, chips or plugin JSON field's) is written as the JSON
+ * text its column stores.
+ */
+function fileResolutions(
+  save: CollectionSave,
+  table: string
+): { resolutions?: ColumnResolution[] } {
+  const answers = [
+    ...(save.resolutions ?? []),
+    ...(save.rowFills ?? []).map(fill => ({
+      column: fill.column,
+      kind: "fill" as const,
+      // A date is written as the moment it names, which the fill stores in the dialect's form
+      // (`storedDateValue`), as the PATCH road's fill does; never the text it was stated in.
+      value:
+        answeredField(save, fill.column)?.type === "date"
+          ? (statedMoment(fill.value) ?? fill.value)
+          : fill.value,
+    })),
+  ];
+  if (answers.length === 0) return {};
+  return {
+    resolutions: answers.map(r => ({
+      ...r,
+      tableName: table,
+      columnName: toSnakeCase(r.column),
+      ...(r.kind === "fill" && storesJson(save, r.column)
+        ? { json: true }
+        : {}),
+    })),
+  };
+}
+
 async function settledRows(
   deps: CollectionSaveDeps,
   save: CollectionSave,
@@ -864,6 +973,7 @@ async function settledRows(
   const live = exists
     ? (await introspectLiveSnapshot(db, dialect, [table])).tables[0]
     : undefined;
+  await refuseRowFillsOutsideSingle(save, live);
   const settled: SettledRows[] = [];
   for (const resolution of save.resolutions ?? []) {
     const field = answeredField(save, resolution.column);
@@ -944,7 +1054,8 @@ async function settledRows(
 
 /** Whether field `name` of the saved collection keeps its value as JSON. */
 function storesJson(save: CollectionSave, name: string): boolean {
-  const field = save.entity?.fields.find(f => f.name === name);
+  // Found as the answer it serializes was: among the row's fields, inside a group with no name too.
+  const field = answeredField(save, name);
   return (
     field !== undefined &&
     classifyFieldKind(field as FieldDefinition, kindOf(save).builtBy) === "json"
@@ -1159,20 +1270,7 @@ async function writeFiles(
     table: plan.table,
     now: new Date(now.getTime() + offset),
     appended: addedStatements(deps, save, plan.table),
-    ...(save.resolutions === undefined
-      ? {}
-      : {
-          resolutions: save.resolutions.map(r => ({
-            ...r,
-            tableName: plan.table,
-            columnName: toSnakeCase(r.column),
-            // A structured value (a JSON, chips or plugin JSON field's) is
-            // written as the JSON text its column stores.
-            ...(r.kind === "fill" && storesJson(save, r.column)
-              ? { json: true }
-              : {}),
-          })),
-        }),
+    ...fileResolutions(save, plan.table),
     ...(save.keys === undefined
       ? {}
       : { newTableKeys: new Map([[plan.table, save.keys.after]]) }),
@@ -1451,7 +1549,9 @@ async function generateFor(
   try {
     result = await generated;
   } catch (error) {
-    await removeWritten();
+    // Overtaken by another writer, the generation put nothing of its own in
+    // the folder, and what is new there is that writer's: it stays.
+    if (!isWriterOvertaken(error)) await removeWritten();
     throw error;
   }
   if (result === null) return [];

@@ -24,6 +24,7 @@ import { gotoAdmin } from "./support/admin";
 import { canvasFrame } from "./support/canvas-frame";
 import { storedPageNodes } from "./support/stored-page";
 import { test } from "./support/test";
+import { includingHidden } from "./support/visible";
 
 const API = "/admin/api";
 const ENTRIES = `${API}/collections/pages/entries`;
@@ -142,8 +143,12 @@ test.describe("picking a Forms form in the Form block", () => {
     // A published one is drawn with nothing said over it.
     await picker.click();
     await page.getByRole("option", { name: quote.name, exact: true }).click();
+    // Absence must see hidden elements too: a notice drawn but hidden would
+    // otherwise pass a visible-only locator.
     await expect(
-      page.getByText("Draft form: visitors can't send it until it's published")
+      includingHidden(page).getByText(
+        "Draft form: visitors can't send it until it's published"
+      )
     ).toHaveCount(0);
 
     await content.getByRole("button", { name: "or use a simple form" }).click();

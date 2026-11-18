@@ -407,6 +407,14 @@ Hover already chosen, it opens on Style.
 
 ### Editing a field
 
+The canvas follows what you type in the **Content** and **Style** fields, letter by
+letter, without waiting for you to leave the field. While a value isn't complete yet,
+such as `12p` on the way to `12px`, half a hex colour or an emptied number, the canvas
+keeps the last value that worked. A Style field says what's wrong; a Content number
+quietly goes back to its last value when you leave it. Some fields save only when you
+leave them or press Enter: the **Advanced** tab's, such as **Anchor (ID)**, and a shared
+style's, because a shared style changes every page that uses it.
+
 One edit to a field is one step to undo, however many keys it takes: a sentence typed
 into a Text's words, or a value dragged on a number field's label, comes back whole with
 one **Undo**. Two separate edits are two steps. An edit ends when you leave the field,
@@ -1148,7 +1156,7 @@ it beats Site text.
 Blocks have no outer margin of their own. The space between two blocks is the gap of
 the container holding them, set per container or by the spacing variables:
 
-- **Section, Box, Card, Column**, an accordion item and a Collection list put a gap above
+- **Section, Box, Card, Column**, an accordion's question and a Collection list put a gap above
   every block after the first. Set the container to flex or grid and the same gap
   becomes its `gap`.
 - **Columns** and **Gallery** space their columns and images with a wider gap.
@@ -1327,13 +1335,15 @@ tabs with the arrow keys.
 - Tabs other plugins add, such as the [SEO plugin](/docs/plugins/seo#in-the-page-builder)'s,
   follow, in the order the plugins declare them. A tab shows only on the pages it applies
   to: the SEO tab is there exactly where the page's own edit page shows its SEO tab.
-- **Code**, last, holds code added to this page only: a **Head** box and an **End of body**
-  box. You see it only if you may change the site's settings. **Check and keep** checks the
-  code exactly as [site code](/docs/page-builder/site-code#page-code) is checked, then keeps
-  it with the page, so it is saved in the draft on **Save**, goes live on **Publish**, and
-  comes back with an older version you restore. Anyone else sees one line on General, "This
-  page adds its own code. Only people who can change site settings can see or edit it.",
-  and never the code.
+- **Code**, last, holds code and CSS added to this page only: a **CSS** box, then a **Head**
+  box and an **End of body** box. You see it only if you may change the site's settings.
+  **Check and keep** checks the code exactly as
+  [site code](/docs/page-builder/site-code#page-code) is checked, and **Check and keep CSS**
+  checks the CSS as [custom CSS](/docs/page-builder/custom-css#a-pages-css) is checked; each
+  then keeps it with the page, so it is saved in the draft on **Save**, goes live on
+  **Publish**, and comes back with an older version you restore. Anyone else sees one line
+  on General, "This page adds its own code or CSS. Only people who can change site settings
+  can see or edit it.", and never the code or the CSS.
 
 If a **Save** or **Publish** is refused for a field shown in Page settings, the message names
 the field with **Show me**, which opens Page settings on that field's tab with the field
@@ -1486,6 +1496,20 @@ Collection list, it lists the list's entries first, so a card's **Headline** can
 each post's title, every row its own, on the canvas and on the published page. The
 binding belongs to this placement only, and fills the component's block the setting
 feeds. Unbinding keeps the value the placement already had for the setting.
+
+**Make this a setting of the component.** Below a placement's settings, this section
+lists the component's text, link and image blocks that aren't settings yet. Pick a field
+for one, and it becomes a new setting of the component, bound to that field on this
+placement only; the canvas shows the field's data at once. The component's draft gets
+the new setting with the page's next **Save**, or when you open the page as a form.
+When you **Publish** a page whose component is live without the setting, the editor
+first asks whether to publish the component too, since its other unpublished changes
+go live with it (see
+[Publishing a page whose parts aren't published](#publishing-a-page-whose-parts-arent-published)).
+Other pages that place the component keep showing what they show now. If the component
+can't take the setting, for instance because someone changed it since, the binding comes
+off this page, the Save stops with a message that says why, and **Save again** saves the
+page without it.
 
 **Format.** A date or a number shows as text only through a format, so a text prop bound
 to one has a **Format** under its fallback. The picker names the format a date or a number

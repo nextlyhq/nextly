@@ -16,7 +16,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import { parseLocalizationIntent } from "../../../i18n/migration/migration-intent";
 import { generateMigration, type MinimalConfigEntity } from "../generate";
-import { writeSnapshot } from "../snapshot-io";
+import { recordedSnapshot } from "./helpers/recorded-snapshot";
 
 const NOW = new Date("2026-07-09T12:00:00.000Z");
 
@@ -576,7 +576,7 @@ describe("generateMigration — the recorded intent matches the emitted statemen
   it("records only the columns the previous main table actually held", async () => {
     const metaDir = resolve(migrationsDir, "meta");
     // Previous state: `body` on main and not yet localized. `subtitle` does not exist at all.
-    await writeSnapshot(
+    await recordedSnapshot(
       metaDir,
       "20260101_000000_base",
       {

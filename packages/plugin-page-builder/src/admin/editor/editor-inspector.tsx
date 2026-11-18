@@ -18,7 +18,7 @@ import { contributedInspector } from "../contributed-blocks";
 
 import { FONTS_SCREEN_VIEW } from "./design-panel";
 import { DocumentSettingsPanel } from "./document-settings-panel";
-import { servicesFor } from "./editor-services";
+import { servicesFor, withSettingMaker } from "./editor-services";
 import { pageAddressOf, type PageFacts } from "./editor-settings";
 import type { CardVerbs, EditorView } from "./editor-view";
 import { PageReadMeter, type PageDataCount } from "./page-read-meter";
@@ -94,21 +94,26 @@ export function editorInspector<TFieldValues extends FieldValues>(
       // handed out of it because the inspector is drawn beside the canvas
       // rather than under it.
       verbs={verbs}
-      contentServices={servicesFor(
-        view.passages,
-        view.locale,
-        view.readMedia,
-        view.searchMedia,
-        view.entryCollection,
-        view.userId,
-        {
-          entry: view.bindingEntry,
-          page: view.editedDocument,
-          canvas: view.canvasEntry,
-        },
-        // The language the canvas's binding pass is given, its context's, as
-        // the published page's is its route's.
-        canvasRender.context?.locale
+      contentServices={withSettingMaker(
+        servicesFor(
+          view.passages,
+          view.locale,
+          view.readMedia,
+          view.searchMedia,
+          view.entryCollection,
+          view.userId,
+          {
+            entry: view.bindingEntry,
+            page: view.editedDocument,
+            canvas: view.canvasEntry,
+          },
+          // The language the canvas's binding pass is given, its context's,
+          // as the published page's is its route's.
+          canvasRender.context?.locale
+        ),
+        // A placement's "Make this a setting of the component", held for
+        // the page's Save.
+        view.makeComponentSetting
       )}
       // A placement's exposed passage the canvas is editing in place: its
       // field in the placement panel is held meanwhile, as one editor serves
