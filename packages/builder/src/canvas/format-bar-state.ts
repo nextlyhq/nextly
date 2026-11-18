@@ -14,6 +14,8 @@
  * @module format-bar-state
  */
 
+import type { BlockDocument } from "@nextlyhq/blocks-engine";
+
 /** One thing the bar offers. */
 export type FormatAction = "bold" | "italic" | "link" | "turnInto";
 
@@ -58,7 +60,20 @@ export interface FormatTarget {
   /** Finish the edit, as leaving the passage does. */
   readonly finish: () => void;
   /** Turn the block into another; absent where the host cannot. */
-  readonly turnInto?: () => void;
+  readonly turnInto?: FormatTurnInto;
+}
+
+/**
+ * What "Turn into" needs from the passage being edited: the block, the page
+ * as it would stand with the words typed so far (what the choices are judged
+ * on), and a way to finish the edit, answering the page it left, or `null`
+ * when the words could not be written. The choices and the turn are the
+ * editor's own verbs (`BlockActions.turnIntoIn`).
+ */
+export interface FormatTurnInto {
+  readonly nodeId: string;
+  readonly typedPage: () => BlockDocument;
+  readonly finish: () => BlockDocument | null;
 }
 
 /** Everything the bar draws from. */
@@ -67,6 +82,8 @@ export interface FormatBarSnapshot {
   readonly selection: FormatSelection | null;
   /** The address field is open, by the Link button or ⌘K. */
   readonly linking: boolean;
+  /** The "Turn into" choices are open, by the Turn into button. */
+  readonly turning: boolean;
   /** A change (a paste) lost what the passage cannot hold. */
   readonly dropped: boolean;
   /** Raised to ask the bar to take the focus, as Alt+F10 does. */
@@ -77,6 +94,7 @@ const EMPTY: FormatBarSnapshot = {
   target: null,
   selection: null,
   linking: false,
+  turning: false,
   dropped: false,
   focusRequest: 0,
 };
@@ -91,6 +109,7 @@ export interface FormatBarStore {
   readonly close: (element: HTMLElement) => void;
   readonly selected: (selection: FormatSelection) => void;
   readonly setLinking: (open: boolean) => void;
+  readonly setTurning: (open: boolean) => void;
   readonly setDropped: (dropped: boolean) => void;
   readonly requestFocus: () => void;
   /**
@@ -136,6 +155,10 @@ export function createFormatBarStore(): FormatBarStore {
       if (snapshot.target === null || snapshot.linking === linking) return;
       set({ linking });
     },
+    setTurning: turning => {
+      if (snapshot.target === null || snapshot.turning === turning) return;
+      set({ turning });
+    },
     setDropped: dropped => {
       if (snapshot.target === null || snapshot.dropped === dropped) return;
       set({ dropped });
@@ -155,10 +178,10 @@ export function createFormatBarStore(): FormatBarStore {
 export const formatBar: FormatBarStore = createFormatBarStore();
 
 /**
- * Whether the bar is shown: words are selected, or the address field is
- * open, or the bar holds the focus.
+ * Whether the bar is shown: words are selected, or the address field or the
+ * "Turn into" choices are open, or the bar holds the focus.
  */
 export function formatBarShown(state: FormatBarSnapshot): boolean {
   if (state.target === null) return false;
-  return state.linking || state.selection?.collapsed === false;
+  return state.linking || state.turning || state.selection?.collapsed === false;
 }

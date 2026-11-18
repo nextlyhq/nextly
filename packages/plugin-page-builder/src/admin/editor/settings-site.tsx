@@ -59,6 +59,7 @@ import { undoableHint } from "./breakpoint-undo-flow";
 import { UndoStatusRow, UndoStepPanel } from "./breakpoint-undo-step";
 import { ManageSetsContext } from "./manage-sets";
 import type { SiteCodeSection as SiteCodeSectionPart } from "./site-code-settings";
+import { SiteCssPrefixSetting } from "./site-css-prefix-setting";
 import {
   useBreakpointRemoval,
   type BreakpointRemoval,
@@ -476,6 +477,8 @@ function SiteSettings({
       {takesOver ? null : (
         <LaterSections
           read={read}
+          reread={reread}
+          refreshStyle={refresh}
           codeOpen={codeOpen}
           code={{
             onEditingChange: onEditingCode,
@@ -490,14 +493,21 @@ function SiteSettings({
 
 /**
  * The Site sections after the breakpoints: the site default's line, which
- * steps aside while the code is open, and the code.
+ * steps aside while the code is open, the code, and Advanced (the CSS
+ * variable prefix), which steps aside with the site default's line.
  */
 function LaterSections({
   read,
+  reread,
+  refreshStyle,
   codeOpen,
   code,
 }: {
   read: SiteSettingsRead;
+  /** Reads the Site tab again, after the prefix is saved. */
+  reread: () => void;
+  /** Reads the site style again, so the canvas follows a new prefix. */
+  refreshStyle: () => void;
   codeOpen: boolean;
   code: ComponentProps<typeof SiteCodeSection>;
 }): JSX.Element {
@@ -505,6 +515,13 @@ function LaterSections({
     <>
       {codeOpen ? null : <SiteDefaultLine read={read} />}
       <SiteCodeSection {...code} />
+      {codeOpen || read.prefix === undefined ? null : (
+        <SiteCssPrefixSetting
+          prefix={read.prefix}
+          reread={reread}
+          refreshStyle={refreshStyle}
+        />
+      )}
     </>
   );
 }

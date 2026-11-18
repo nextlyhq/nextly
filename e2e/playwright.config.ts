@@ -278,10 +278,14 @@ export default defineConfig({
       // canvas that a production build never draws, which the keyboard specs
       // walking in and out of the frame would otherwise meet.
       NEXTLY_E2E_DEV_INDICATORS: "0",
-      // Registers the style fixture, which plugin-admin-styling.spec.ts and
-      // plugin-page-routing.spec.ts both depend on. Off by default so a test
-      // double does not appear in a contributor's plugins list or inject a
-      // showcase section into the Posts collection.
+      // Registers the playground's test fixtures: the style fixture
+      // (plugin-admin-styling.spec.ts, plugin-page-routing.spec.ts), the
+      // block fixture's "Test fixture: …" blocks (plugin-blocks.spec.ts,
+      // plugin-block-frame-environment.spec.ts), the widget-kit fixture's
+      // dashboard widgets (the dashboard and widget-kit specs) and the
+      // contributions fixture (plugin-contributions.spec.ts and the specs that
+      // read its pieces). Off by default so no test double appears in a
+      // contributor's plugins list, Add panel or dashboard.
       NEXTLY_E2E_STYLE_FIXTURE: "1",
       // Leaves the query devtools out of the dev server's admin: their floating icon sits over
       // the bottom-right corner, where a toast's Undo is drawn, and takes the click a phone-width

@@ -110,7 +110,11 @@ describe("a write that drops a variable", () => {
     await written(
       {
         data: { tokens: { prefix: "--brand-", tokens: [brand] } },
-        originalData: stored(brand, accent),
+        // The prefix carried through: only Settings may change it, which
+        // the prefix guard beside this one refuses everywhere else.
+        originalData: {
+          tokens: { prefix: "--brand-", tokens: [brand, accent] },
+        },
         user: author,
         context: {},
       },

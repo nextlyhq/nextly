@@ -207,6 +207,91 @@ describe("filling bound props on a published page", () => {
     expect(headings(html)).toEqual(["First post", "Second post"]);
   });
 
+  it("fills a binding naming an OUTER list from that list's entry, in a list inside a list", async () => {
+    const posts: BlockNode = {
+      id: "posts",
+      type: "core/collection-loop",
+      version: 1,
+      props: { collection: "posts", limit: 2 },
+      slots: {
+        children: [
+          // The category the post is listed under, then the post itself.
+          heading("category", {
+            $bind: "name",
+            source: "item",
+            list: "categories",
+          }),
+          heading("post", { $bind: "title", source: "item" }),
+        ],
+      },
+    };
+    const categories: BlockNode = {
+      id: "categories",
+      type: "core/collection-loop",
+      version: 1,
+      props: { collection: "categories", limit: 2 },
+      slots: { children: [posts] },
+    };
+    const html = await render(
+      page(categories),
+      {},
+      {
+        context: createStandaloneContext({
+          data: {
+            find: query =>
+              Promise.resolve({
+                items:
+                  query.collection === "categories"
+                    ? [
+                        { id: "c1", name: "Surveys" },
+                        { id: "c2", name: "Roads" },
+                      ]
+                    : [{ id: "p1", title: "Highway 9" }],
+              }),
+          },
+        }),
+      }
+    );
+    expect(headings(html)).toEqual([
+      "Surveys",
+      "Highway 9",
+      "Roads",
+      "Highway 9",
+    ]);
+  });
+
+  it("shows the fallback of a binding naming a list it is not inside", async () => {
+    const loop: BlockNode = {
+      id: "loop",
+      type: "core/collection-loop",
+      version: 1,
+      props: { collection: "posts", limit: 1 },
+      slots: {
+        children: [
+          heading("item", {
+            $bind: "title",
+            source: "item",
+            list: "elsewhere",
+            fallback: "No list",
+          }),
+        ],
+      },
+    };
+    const html = await render(
+      page(loop),
+      {},
+      {
+        context: createStandaloneContext({
+          data: {
+            find: () =>
+              Promise.resolve({ items: [{ id: "p1", title: "Highway 9" }] }),
+          },
+        }),
+      }
+    );
+    expect(headings(html)).toEqual(["No list"]);
+  });
+
   it("follows one to-one relation (author.name), and falls back when the relation is missing", async () => {
     const document = page(
       heading("a", { $bind: "author.name", fallback: "No author" })

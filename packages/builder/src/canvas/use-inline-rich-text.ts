@@ -46,7 +46,9 @@ import {
   TEXT_FORMAT_ACTIONS,
   type FormatSelection,
   type FormatSession,
+  type FormatTurnInto,
 } from "./format-bar-state";
+import { formatTurnInto } from "./format-turn-into";
 import {
   INLINE_EDIT_DISCARDED,
   INLINE_EDIT_UNAVAILABLE,
@@ -299,16 +301,21 @@ function attachPassage(
     : live.attach(element, value);
 }
 
-/** Serve the format bar for a one-paragraph value, where the editor can. */
+/**
+ * Serve the format bar for a one-paragraph value, where the editor can, with
+ * "Turn into" where the block can be turned.
+ */
 function serveFormatBar(
   target: { readonly oneParagraph?: true },
   session: EditorSession,
   element: HTMLElement,
-  finish: () => unknown
+  finish: () => unknown,
+  turnInto: () => FormatTurnInto | undefined
 ): void {
   if (target.oneParagraph !== true) return;
   const verbs = formatVerbs(session);
   if (verbs === null) return;
+  const turn = turnInto();
   formatBar.open({
     element,
     session: verbs,
@@ -316,6 +323,7 @@ function serveFormatBar(
     finish: () => {
       finish();
     },
+    ...(turn === undefined ? {} : { turnInto: turn }),
   });
 }
 
@@ -933,7 +941,24 @@ export function useInlineRichText(
           // A carried passage keeps the baselines it opened with.
           baseline: carry === null ? session.read() : carry.baseline,
         };
-        serveFormatBar(target, session, element, commit);
+        serveFormatBar(target, session, element, commit, () =>
+          formatTurnInto({
+            editing,
+            editor: () => editorRef.current,
+            typed: () => {
+              const live = mounted.current;
+              return live === null || live.session !== session
+                ? null
+                : {
+                    editing: live.editing,
+                    words: session.read(),
+                    baseline: live.baseline,
+                    opened: live.opened,
+                  };
+            },
+            commit,
+          })
+        );
       },
       () => {
         /*

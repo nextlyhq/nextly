@@ -89,6 +89,7 @@ import {
 import {
   resolveSiteStyle,
   siteBreakpoints,
+  siteCssPrefix,
   type SiteStyleData,
 } from "./site-style";
 import {
@@ -96,7 +97,7 @@ import {
   readSiteStyleRecord,
 } from "./site-style-record";
 import {
-  loadSiteStyle,
+  readStoredSiteStyleVersioned,
   SITE_SETTINGS_WRITE_CONTEXT,
   SITE_STYLE_SLUG,
 } from "./site-style-storage";
@@ -1403,17 +1404,20 @@ export async function readSiteSettings(
   const { defaultLayout } = await readLayoutSettings(nextly, slugs);
   const layouts = await defaultNamed(nextly, slugs.layouts, defaultLayout);
   // The breakpoints as the canvas resolves them, read past Design's read:
-  // the site permission admits their write, so it admits seeing them.
-  const { breakpoints } = await loadSiteStyle({
+  // the site permission admits their write, so it admits seeing them. The
+  // stored record is kept apart too, so the prefix can say which tier set it.
+  const { stored } = await readStoredSiteStyleVersioned({
     nextly,
     // The Single the route writes, renamed or not.
     slug: ctx.self.singles[SITE_STYLE_SLUG] ?? SITE_STYLE_SLUG,
-    ...(defaults === undefined ? {} : { defaults }),
   });
+  const record = readSiteStyleRecord(stored);
+  const { breakpoints } = resolveSiteStyle(defaults, record);
   const read = await removalStatuses(removal);
   return {
     mayManageSite: true,
     breakpoints: breakpoints ?? null,
+    prefix: siteCssPrefix(defaults, record),
     mayChooseDefaultLayout,
     defaultLayout,
     layouts,

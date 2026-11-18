@@ -544,10 +544,11 @@ While you are typing in a block's text, <kbd>/</kbd> is just a character.
 ## Copy, cut and paste
 
 Select one or more blocks and press <kbd>Ctrl</kbd>+<kbd>C</kbd> to copy them, or
-<kbd>Ctrl</kbd>+<kbd>X</kbd> to cut them, then <kbd>Ctrl</kbd>+<kbd>V</kbd> to paste. On
-a Mac, use <kbd>⌘</kbd>. **Copy**, **Cut** and **Paste** are also in the block's
-toolbar under **More actions**, in its right-click menu and in search
-(<kbd>Ctrl</kbd>+<kbd>K</kbd>).
+
+<kbd>Ctrl</kbd>+<kbd>X</kbd> to cut them, then <kbd>Ctrl</kbd>+<kbd>V</kbd> to
+paste. On a Mac, use <kbd>⌘</kbd>. **Copy**, **Cut** and **Paste** are also in
+the block's toolbar under **More actions**, in its right-click menu and in
+search (<kbd>Ctrl</kbd>+<kbd>K</kbd>).
 
 - Blocks are copied with their content, styles and the blocks inside them.
 - A paste lands where a clicked block would (see
@@ -691,6 +692,28 @@ block.
 The Text's field in the inspector edits the same words, and the canvas shows them as you
 type. A Text bound to a field takes a text field's words as one plain paragraph; a
 rich-text field isn't offered for it.
+
+### Turn into another text block
+
+A Text, a Rich text and a Heading can each become one of the other two. Right-click the
+block (or open **More actions** on its bar) and choose **Turn into Text**, **Turn into
+Rich text** or **Turn into Heading**. The bar over selected words has the same choices
+under **Turn into**, and the paste note above offers **Turn into Rich text**.
+
+- The words always stay. A Text keeps its bold, italic and links as a Rich text.
+- A Heading holds plain words, so turning a Text or a Rich text into one says "Bold and
+  links are removed" beside the choice (or "Formatting is removed" when there's no bold
+  or link to name).
+- A Rich text can become a Text or a Heading only while it is one paragraph or one
+  heading of words and links. Otherwise the choice is dimmed with the reason; delete the
+  extra paragraphs or the buttons first. A heading's level is kept.
+- The block keeps its name, its styles, its block style and shared styles, **Hide on**
+  and **Show when**. A block style belongs to one kind of block, so it comes along as
+  the block's own styles. A block that wears no block style takes the new kind's default one,
+  and the choice says so when that changes how it looks. A field it is bound to stays bound when the new block can show that
+  field's words; otherwise the choice says the bound field is removed.
+
+It's one change: **Undo** once and the block is what it was.
 
 ## Pages
 
@@ -970,7 +993,7 @@ to the block holding it, and <kbd>Ctrl</kbd>+<kbd>K</kbd> (<kbd>⌘</kbd>+
 
 ## Settings
 
-**Settings** at the bottom of the rail opens **Page settings · <the page's title>**, with one
+**Settings** at the bottom of the rail opens **Page settings**, titled with the page's name, with one
 row of tabs that stays in view while a tab scrolls. Everything in it saves with the page, from
 **Save** or **Publish** in the top bar, as the line at the bottom of every tab says, beside
 **Open as form**, which opens the page's form with your unsaved changes. Pressing Enter in a
@@ -1120,7 +1143,10 @@ it. A field visitors can't read says **Not public**, and one whose value is only
 draft says **Draft**.
 
 **Nearest first.** For a block inside a Collection list, the list's own entries come
-first, named for them: **Each project in the list**. Then come **This page**, then the
+first, named for them: **Each project in the list**. In a list that sits inside another
+list, the outer list's entries come next (**Each category in the list**). A field picked
+there shows, in every row of the inner list, the outer entry that row is drawn in, on the
+canvas and on the published page. Then come **This page**, then the
 Singles and the site, which start folded into one row each under **Singles · Site**
 while a list's entries are listed. Choose a row to open it, or type in **Find a field**
 to search all of them. Each list field shows its value in the entry you clicked on the
