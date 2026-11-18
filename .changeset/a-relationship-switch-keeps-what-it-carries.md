@@ -29,4 +29,4 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-A relationship switched from several links to one is accepted again where each row holds one link or none, and keeps that link. A switch between one target collection and several is accepted again where no row holds a link, and refused, with the rows counted, where one does. Since the field type-change check, both were refused even where nothing would be lost.
+A relationship switched from several links to one is accepted again where each row holds one link or none, and keeps that link. A switch between one target collection and several is accepted again where no row holds a link, and refused, with the rows counted, where one does. Since the field type-change check, both were refused even where nothing would be lost. A required relationship switched to one link is refused before anything changes, naming the rows, where a row holds an empty value of any kind (an empty list, a blank, or JSON null), rather than failing part-way.
