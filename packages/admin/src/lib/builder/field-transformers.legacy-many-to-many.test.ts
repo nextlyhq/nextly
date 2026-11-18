@@ -10,6 +10,7 @@ import {
   convertToBuilderField,
   convertToFieldDefinition,
 } from "./field-transformers";
+import { builderFieldErrors } from "./field-validators";
 
 type Stored = Parameters<typeof convertToBuilderField>[0];
 
@@ -26,7 +27,11 @@ function resaved(stored: Stored, edit: Record<string, unknown> = {}) {
   const loaded = convertToBuilderField(stored, 0);
   return convertToFieldDefinition({ ...loaded, ...edit }) as unknown as {
     relationTo?: unknown;
-    options?: { target?: unknown; relationType?: unknown };
+    options?: {
+      target?: unknown;
+      relationType?: unknown;
+      junctionTable?: unknown;
+    };
     hasMany?: unknown;
   };
 }
@@ -119,5 +124,62 @@ describe("a relationship's stored options and the Builder's own controls", () =>
     const copy = copyWithNewIds(convertToBuilderField(stored, 0));
     expect(copy.storedRelationOptions?.junctionTable).toBeUndefined();
     expect(copy.storedRelationOptions?.relationType).toBe("manyToMany");
+  });
+});
+
+// The Builder's cardinality controls decide how a many-to-many is stored: the stored options carry
+// only what the Builder has no control for.
+describe("a many-to-many's cardinality, as the Builder's controls set it", () => {
+  /** A many-to-many stored the current way, with Allow multiple on and a link table named. */
+  const MANY = {
+    ...(CURRENT as unknown as Record<string, unknown>),
+    hasMany: true,
+    options: {
+      target: "lm_tags",
+      relationType: "manyToMany",
+      junctionTable: "lm_tags_links",
+    },
+  } as unknown as Stored;
+
+  it("links one entry once Allow multiple is turned off", () => {
+    const sent = resaved(MANY, { hasMany: false });
+    expect(sent.hasMany).toBe(false);
+    expect(sent.options?.relationType).toBe("manyToOne");
+    // One entry per row needs no link table.
+    expect(sent.options?.junctionTable).toBeUndefined();
+  });
+
+  it("links one entry once Allow multiple is turned off, stored the earlier way", () => {
+    const sent = resaved(LEGACY, { hasMany: false });
+    expect(sent.options).toMatchObject({
+      target: "lm_tags",
+      relationType: "manyToOne",
+    });
+  });
+
+  it("stays a many-to-many with Allow multiple left on", () => {
+    expect(resaved(MANY, { label: "Topics" }).options).toMatchObject({
+      relationType: "manyToMany",
+      junctionTable: "lm_tags_links",
+    });
+  });
+
+  // A many-to-many keeps its links in a table made for one collection.
+  it("is refused with several collections picked", () => {
+    const loaded = {
+      ...convertToBuilderField(MANY, 0),
+      relationTo: ["lm_tags", "lm_other"],
+    };
+    expect(builderFieldErrors([loaded]).get(loaded.id)?.message).toBe(
+      'Relationship field "tags" keeps its links for one collection: pick only one'
+    );
+  });
+
+  it("is not refused with one collection picked", () => {
+    const loaded = {
+      ...convertToBuilderField(MANY, 0),
+      relationTo: "lm_other",
+    };
+    expect(builderFieldErrors([loaded]).get(loaded.id)).toBeUndefined();
   });
 });
