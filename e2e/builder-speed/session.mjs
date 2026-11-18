@@ -40,11 +40,11 @@ import {
  * click to the save request's send, and to the editor saying it is saved.
  */
 export async function publishes(page, watcher, id, count) {
-  const base = (await textOf(page, LEAD)).replace(/!$/, "");
-  await selectAndWait(page, LEAD, await textOf(page, LEAD));
+  const base = (await textOf(page, HEADING)).replace(/!$/, "");
+  await selectAndWait(page, HEADING, await textOf(page, HEADING));
   const out = { request: [], saved: [] };
   for (let i = 0; i < count; i++) {
-    const current = await textOf(page, LEAD);
+    const current = await textOf(page, HEADING);
     const expected = current.endsWith("!") ? base : `${base}!`;
     await caretAtEnd(page);
     if (expected === base) await page.keyboard.press("Backspace");
@@ -53,7 +53,7 @@ export async function publishes(page, watcher, id, count) {
     await page.waitForFunction(
       t =>
         window.__builderSpeedChecks.canvasText({
-          id: "speed-hero-lead",
+          id: HEADING,
           text: t,
         }),
       expected,

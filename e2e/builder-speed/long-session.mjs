@@ -197,8 +197,9 @@ async function lockNotice(page) {
 
 /** One round of editing, as the module's header lists it. */
 async function editingRound(page, watcher, texts) {
-  await selectAndWait(page, HEADING, texts[HEADING]);
+  // The lead, then the heading, whose plain text field takes the edit below.
   await selectAndWait(page, LEAD, texts[LEAD]);
+  await selectAndWait(page, HEADING, texts[HEADING]);
 
   // The sidebar's Style tab and back to Content.
   const inspector = page.getByTestId("inspector");
@@ -213,8 +214,8 @@ async function editingRound(page, watcher, texts) {
 
   // A text edit, then the same edit taken back.
   for (const [key, expected] of [
-    ["!", `${texts[LEAD]}!`],
-    ["Backspace", texts[LEAD]],
+    ["!", `${texts[HEADING]}!`],
+    ["Backspace", texts[HEADING]],
   ]) {
     await caretAtEnd(page);
     if (key === "!") await page.keyboard.type("!");
@@ -223,7 +224,7 @@ async function editingRound(page, watcher, texts) {
     await page.waitForFunction(
       text =>
         window.__builderSpeedChecks.canvasText({
-          id: "speed-hero-lead",
+          id: HEADING,
           text,
         }),
       expected,
