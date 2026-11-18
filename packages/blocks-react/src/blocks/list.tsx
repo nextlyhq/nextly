@@ -7,7 +7,11 @@
  *
  * @module blocks/list
  */
-import { type BlockDefinition, defineBlock } from "@nextlyhq/blocks-engine";
+import {
+  type BlockDefinition,
+  defineBlock,
+  itemPropName,
+} from "@nextlyhq/blocks-engine";
 import type { ReactElement } from "react";
 
 import type { BlockRenderArgs, PageContext } from "../context";
@@ -67,6 +71,7 @@ export interface ListProps {
 export function renderList({
   props,
   className,
+  markProp,
 }: BlockRenderArgs<ListProps>): ReactElement {
   // A stored array can hold anything, and a non-string item would reach React
   // as a child it cannot render. Coerced rather than dropped, so an item typed
@@ -81,7 +86,11 @@ export function renderList({
     // The index is the key because the items have no identity of their own:
     // they are strings in an array, and two identical strings are the same
     // value. Reordering re-renders the text, which is all there is to preserve.
-    <li key={index}>{item}</li>
+    // Each item marked with its own address, so the canvas edits it as a
+    // line of its own and writes the list back.
+    <li key={index} {...markProp?.(itemPropName("items", index))}>
+      {item}
+    </li>
   ));
 
   const kind = oneOf(props.kind, LIST_KINDS, "unordered");
@@ -186,7 +195,15 @@ export const list: BlockDefinition<ListProps, PageContext> = defineBlock({
       type: "select",
       options: [...LIST_KINDS],
     },
-    items: { label: "Items", role: "content", type: "array", of: "text" },
+    // Typed on the canvas item by item: Enter adds the next, Backspace in an
+    // empty one removes it.
+    items: {
+      label: "Items",
+      role: "content",
+      type: "array",
+      of: "text",
+      inline: true,
+    },
     // Only a numbered list counts, so the number it starts at is offered only
     // while the list is one; a stored start on a bulleted list is kept.
     start: {
