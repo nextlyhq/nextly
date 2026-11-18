@@ -9,7 +9,9 @@
  * page's title in the top bar and the Save button follow at once, and the
  * change is saved with the page's draft. Nothing here is a second copy of a
  * field: the header & footer row is the one picker Settings and the entry
- * page draw, and "All page settings…" opens Settings itself.
+ * page draw, and "All page settings…" opens Settings itself. The search
+ * result row is what a plugin that edits SEO draws there (`settings-search`),
+ * or, where none does, the builder's own summary.
  *
  * @module admin/editor/document-settings-panel
  */
@@ -35,6 +37,8 @@ import type { Control, FieldValues } from "react-hook-form";
 import { PageLayoutPicker } from "../page-layout";
 
 import { useSavedAddress, type SettingsAddress } from "./settings-address";
+import type { SettingsPlace } from "./settings-place";
+import { SearchPlace } from "./settings-search";
 import { shareTitle } from "./share-preview";
 
 /** Each document's panel heading, and the way to the rest of its settings. */
@@ -73,12 +77,10 @@ export interface DocumentSettingsPanelProps {
    */
   address: SettingsAddress | null;
   /**
-   * Whether the SEO plugin edits search and sharing for this page's type.
-   * Where it does, the search summary is its own to draw, so the builder
-   * draws none of its own; where it does not, the panel shows what search
-   * would take from the page.
+   * The Settings place, where a plugin that edits SEO draws the page's
+   * search result; null for a document that offers none.
    */
-  seoEditsPage: boolean;
+  place: SettingsPlace | null;
   /** How much the page reads, in its place after the search result. */
   pageData?: ReactNode;
 }
@@ -89,7 +91,7 @@ export function DocumentSettingsPanel({
   control,
   onOpenSettings,
   address,
-  seoEditsPage,
+  place,
   pageData = null,
 }: DocumentSettingsPanelProps): JSX.Element {
   const words = DOCUMENT_SETTINGS_WORDS[kind];
@@ -121,8 +123,14 @@ export function DocumentSettingsPanel({
         <AddressRow field={slug} address={address} />
       ) : null}
       {page ? <PageLayoutPicker control={control} disabled={held} /> : null}
-      {page && !seoEditsPage ? (
-        <SearchSummary title={titleText(title?.value)} address={address} />
+      {page ? (
+        <SearchPlace
+          place={place}
+          at="panel"
+          plain={
+            <SearchSummary title={titleText(title?.value)} address={address} />
+          }
+        />
       ) : null}
       {page ? pageData : null}
       {own}
@@ -260,8 +268,8 @@ function CopyAddress({ path }: { path: string }): JSX.Element {
 
 /**
  * What a search result would show where nothing sets it: the page's title
- * over its address. Only where the SEO plugin does not edit the page's type,
- * so no two summaries of one page can disagree.
+ * over its address. Only where no plugin edits SEO, so no two summaries of
+ * one page can disagree.
  */
 function SearchSummary({
   title,

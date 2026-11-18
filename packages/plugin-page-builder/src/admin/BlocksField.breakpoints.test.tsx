@@ -260,6 +260,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   // settings alone, as the admin draws them with no tab.
   // No plugin adds a tab to Page settings here.
   usePlaceTabs: () => [],
+  // Nor a block where the page's search result is drawn: the builder's own.
+  TargetSlot: ({ fallback }: { fallback?: unknown }) => fallback ?? null,
   // The canvas's media read, answering nothing: these cases draw no image.
   // One function for every call, as the admin's own hook keeps it.
   useMediaResolver: (

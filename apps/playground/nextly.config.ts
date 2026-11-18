@@ -24,7 +24,7 @@
  */
 
 import { formBuilder } from "@nextlyhq/plugin-form-builder";
-import { pageBuilder } from "@nextlyhq/plugin-page-builder";
+import { blocks, pageBuilder } from "@nextlyhq/plugin-page-builder";
 import { seoPlugin } from "@nextlyhq/plugin-seo";
 import {
   defineCollection,
@@ -122,6 +122,10 @@ const SeoPages = defineCollection({
     text({ name: "author", label: "Author" }),
     date({ name: "publishedAt", label: "Published at" }),
     upload({ name: "coverImage", label: "Cover image", relationTo: "media" }),
+    // A Page Builder field after the excerpt, so these pages still open as a
+    // form while the builder can open them too: the builder's SEO tab is then
+    // the plugin's own, as on the entry page, for builder-seo-tab.spec.ts.
+    blocks({ name: "body", label: "Body" }),
   ],
   publicAddress: "/seo/{slug}",
 });
