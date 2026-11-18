@@ -129,7 +129,8 @@ export async function writeBuilderSchemaChange(
   // Asked at most once: it reads the live table.
   let pushes: Promise<boolean> | undefined;
   const pushesNow = () =>
-    (pushes ??= fileRoad === undefined ? Promise.resolve(true) : fileRoad.pushWhen());
+    (pushes ??=
+      fileRoad === undefined ? Promise.resolve(true) : fileRoad.pushWhen());
   // A save that moves fields keeps their values only through its own file: one the push would
   // apply instead is refused before anything is written, in every environment alike.
   await refuseMovesOffTheFile({
@@ -145,17 +146,20 @@ export async function writeBuilderSchemaChange(
   // against the live table; only where the answer is used, a save the writer runs.
   const runsFile =
     deps.applies && fileRoad !== undefined && !(await pushesNow());
-  const save = withMoves(saveOfSchemaChange({
-    ...change,
-    row: {
-      labels: change.stored.labels,
-      fields: change.stored.fields as unknown as FieldDefinition[],
-    },
-    definition: await loadUiSchema({
-      projectRoot: deps.projectRoot,
-      uiSchemaFile: deps.config.db.uiSchemaFile,
-    }),
-  }).save, change.moves);
+  const save = withMoves(
+    saveOfSchemaChange({
+      ...change,
+      row: {
+        labels: change.stored.labels,
+        fields: change.stored.fields as unknown as FieldDefinition[],
+      },
+      definition: await loadUiSchema({
+        projectRoot: deps.projectRoot,
+        uiSchemaFile: deps.config.db.uiSchemaFile,
+      }),
+    }).save,
+    change.moves
+  );
   const { writeEntitySave } = await loadEntitySave();
   if (runsFile) {
     await writeEntitySave(deps, save, apply, { runsFile: true });
@@ -227,17 +231,20 @@ export async function reviewBuilderSchemaChange(
   change: Parameters<typeof writeBuilderSchemaChange>[2]
 ): Promise<BuilderSaveReview> {
   if (deps === undefined) return NOTHING_TO_REVIEW;
-  const save = withMoves(saveOfSchemaChange({
-    ...change,
-    row: {
-      labels: change.stored.labels,
-      fields: change.stored.fields as unknown as FieldDefinition[],
-    },
-    definition: await loadUiSchema({
-      projectRoot: deps.projectRoot,
-      uiSchemaFile: deps.config.db.uiSchemaFile,
-    }),
-  }).save, change.moves);
+  const save = withMoves(
+    saveOfSchemaChange({
+      ...change,
+      row: {
+        labels: change.stored.labels,
+        fields: change.stored.fields as unknown as FieldDefinition[],
+      },
+      definition: await loadUiSchema({
+        projectRoot: deps.projectRoot,
+        uiSchemaFile: deps.config.db.uiSchemaFile,
+      }),
+    }).save,
+    change.moves
+  );
   const { previewCollectionSave } = await loadCollectionSave();
   return reviewOf(await previewCollectionSave(deps, save));
 }

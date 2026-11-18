@@ -234,8 +234,7 @@ function moveColumn(
     dialect,
     kind: classifyFieldKind(move.field, builtBy),
     columnType:
-      getColumnDescriptor(move.field, dialect, builtBy)?.dialectType ??
-      "text",
+      getColumnDescriptor(move.field, dialect, builtBy)?.dialectType ?? "text",
   };
 }
 

@@ -63,6 +63,31 @@ describe("pushCarriesValues", () => {
     ).toBe(true);
   });
 
+  it("runs the file for a translated field moved into a translated group, which keeps its values there", async () => {
+    const group = (fields: FieldDefinition[]) =>
+      ({
+        name: "meta",
+        type: "group",
+        localized: true,
+        fields,
+      }) as unknown as FieldDefinition;
+    const intoGroup = (moved?: { from: string[]; to: string[] }[]) =>
+      save({
+        oldFields: [translated("title"), group([])],
+        newFields: [group([translated("title")])],
+        wasStored: true,
+        isStored: true,
+        ...(moved === undefined ? {} : { moved }),
+      });
+    // Without the move it reads as a translated field removed, which the push drops.
+    expect(await pushCarriesValues(intoGroup())).toBe(true);
+    expect(
+      await pushCarriesValues(
+        intoGroup([{ from: ["title"], to: ["meta", "title"] }])
+      )
+    ).toBe(false);
+  });
+
   it("keeps the push for a translated field removed, its companion column dropped", async () => {
     const removed = save({
       oldFields: [translated("title"), shared("body")],
@@ -179,6 +204,29 @@ describe("pushCarriesValues", () => {
       expect(
         await pushCarriesValues(
           added(field("tagline", { required: true }), false)
+        )
+      ).toBe(false);
+    });
+
+    it("runs the file for a required field moved out of a group onto the row, its values coming from the group", async () => {
+      const group = (fields: FieldDefinition[]) =>
+        ({ name: "meta", type: "group", fields }) as unknown as FieldDefinition;
+      const outOfGroup = (moved?: { from: string[]; to: string[] }[]) =>
+        save({
+          oldFields: [group([field("tagline", { required: true })])],
+          newFields: [field("tagline", { required: true }), group([])],
+          singleRow: {
+            renamedTo: [],
+            fills,
+            holdsRow: () => Promise.resolve(true),
+          },
+          ...(moved === undefined ? {} : { moved }),
+        });
+      // Without the move it reads as a field new to the row, which the push fills.
+      expect(await pushCarriesValues(outOfGroup())).toBe(true);
+      expect(
+        await pushCarriesValues(
+          outOfGroup([{ from: ["meta", "tagline"], to: ["tagline"] }])
         )
       ).toBe(false);
     });
