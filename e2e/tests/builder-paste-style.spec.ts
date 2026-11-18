@@ -31,7 +31,7 @@ import {
   openEditorWith,
   pressSave,
 } from "./canvas/editor-driver";
-import { expectNoAxeViolations } from "./support/axe";
+import { emptyScanReason, scanAxe } from "./support/axe-scan.mjs";
 import { LOCK } from "./support/locks";
 import { test } from "./support/test";
 
@@ -192,6 +192,49 @@ async function device(page: Page, name: RegExp): Promise<void> {
     .click();
 }
 
+/**
+ * The open menu's accessibility scan, saying why when axe could measure no
+ * contrast inside it: the reasons axe gives for each item it left
+ * unmeasured, so a scan of nothing names its cause rather than only its
+ * silence.
+ */
+async function expectMenuScanned(page: Page): Promise<void> {
+  // Drawn at full strength first: the menu and everything around it at an
+  // opacity of 1, which is what an opening fade ends on.
+  await expect
+    .poll(() =>
+      page.getByRole("menu").evaluate(menu => {
+        let opacity = 1;
+        for (
+          let at: Element | null = menu;
+          at !== null;
+          at = at.parentElement
+        ) {
+          opacity *= Number(getComputedStyle(at).opacity);
+        }
+        return opacity;
+      })
+    )
+    .toBe(1);
+  const scope = { include: '[role="menu"]' };
+  const { results, findings } = await scanAxe(page, scope);
+  const unmeasured = results.incomplete
+    .filter(rule => rule.id === "color-contrast")
+    .flatMap(rule =>
+      rule.nodes.map(
+        node =>
+          `${node.target.map(String).join(" ")}: ${node.any
+            .map(check => check.message)
+            .join("; ")}`
+      )
+    );
+  expect(
+    emptyScanReason(results, scope),
+    `axe left unmeasured:\n${unmeasured.join("\n")}`
+  ).toBeNull();
+  expect(findings).toEqual([]);
+}
+
 /** Move to a menu item with the arrows, and take it. */
 async function takeWithKeys(page: Page, name: string): Promise<void> {
   await blockMenu(page).focus();
@@ -323,6 +366,8 @@ test.describe("Copy style and Paste style", () => {
   test("its menu items pass the accessibility scan in light and dark, and work from the keyboard", async ({
     page,
   }) => {
+    // Menus open without their fade, so a scan reads them as drawn.
+    await page.emulateMedia({ reducedMotion: "reduce" });
     await openEditorWith(page, NODES, SOURCE);
     await clickBlock(page, SOURCE);
     for (const dark of [false, true]) {
@@ -335,20 +380,11 @@ test.describe("Copy style and Paste style", () => {
           page.getByRole("menuitem", { name, exact: true })
         ).toBeVisible();
       }
-      // Scanned once it has finished opening: mid-fade, axe can read no
-      // contrast and the scan says it saw nothing.
-      await page
-        .getByRole("menu")
-        .evaluate(menu =>
-          Promise.all(
-            menu.getAnimations({ subtree: true }).map(each => each.finished)
-          )
-        );
-      await expectNoAxeViolations(page, { include: '[role="menu"]' });
       // The menu as an author sees it, kept with the run's results.
       await page.getByRole("menu").screenshot({
         path: test.info().outputPath(`menu-${dark ? "dark" : "light"}.png`),
       });
+      await expectMenuScanned(page);
       await page.keyboard.press("Escape");
     }
 
