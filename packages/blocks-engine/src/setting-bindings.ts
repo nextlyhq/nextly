@@ -14,12 +14,12 @@
  */
 import type { BlockDocument, BlockNode, ExposedProperty } from "./document";
 import { pointer } from "./issue-text";
-import { COLLECTION_LIST_TYPE } from "./list-query-contract";
 import {
   DEFAULT_LIMITS,
   type DocumentLimits,
   MAX_ENVELOPE_ENTRIES,
 } from "./limits";
+import { COLLECTION_LIST_TYPE } from "./list-query-contract";
 import { isPlainRecord } from "./plain-record";
 import { defineEntry, ownEntry, ownKeys } from "./safe-record";
 import type { ValidationIssue } from "./validation-contract";
@@ -102,8 +102,10 @@ function eachFollower(
   budget.depth -= 1;
   for (let i = 0; i < nodes.length && budget.left > 0; i += 1) {
     const node: unknown = nodes[i];
-    if (!isPlainRecord(node)) continue;
+    // Charged for every entry read, a node or not, so a forest of entries
+    // that are no nodes is read only as far as the budget, as one of nodes is.
     budget.left -= 1;
+    if (!isPlainRecord(node)) continue;
     const at = `${path}/${i}`;
     followersOn(node as unknown as BlockNode, at, visit);
     // A follower in a placement's slot content is this component's too.
@@ -380,9 +382,11 @@ function nodesById(
     if (!Array.isArray(forest) || depth > limits.maxDepth) return;
     for (const node of forest as unknown[]) {
       if (budget.left <= 0) return;
+      // Charged before the entry is judged, a node or not, as the follower
+      // walk is, so entries that are no nodes don't read past the budget.
+      budget.left -= 1;
       const inner = indexed(node, list, found);
       if (inner === null) continue;
-      budget.left -= 1;
       for (const children of slotForests(node))
         visit(children, inner, depth + 1);
     }

@@ -26,7 +26,7 @@ import {
   resolveComponentInstances,
   type ResolvedBlockNode,
 } from "./resolve-instances";
-import { settingBindingIssues } from "./setting-bindings";
+import { followerFills, settingBindingIssues } from "./setting-bindings";
 import { validateDocument } from "./validation";
 import { componentEnvelopeIssues } from "./validation-components";
 import { FIXTURE_BREAKPOINTS } from "./validation.fixtures";
@@ -288,22 +288,36 @@ describe("a block following a setting, its edges", () => {
       ),
       "card-echo"
     );
-    const posts = copyOf(
-      composed(
-        page([placement("p", "card")]),
-        new Map<string, BlockDocument>([["card", card]])
-      ),
-      "card-title"
+    // The composed copies of the two lists, found by the collection each
+    // reads, so the follower's list is judged against the ids they compose to.
+    const lists = composed(
+      page([placement("p", "card")]),
+      new Map<string, BlockDocument>([["card", card]])
+    ).filter(
+      entry =>
+        entry.type === COLLECTION_LIST_TYPE && entry.instanceOf !== undefined
     );
+    const listReading = (collection: string): string | undefined =>
+      lists.find(
+        entry =>
+          (entry.props.query as { collection?: unknown } | undefined)
+            ?.collection === collection
+      )?.id;
+    const posts = listReading("posts");
+    const comments = listReading("comments");
+    expect(posts).toBeDefined();
+    expect(comments).toBeDefined();
     expect(echo?.bindings?.text).toMatchObject({
       $bind: "title",
       source: "item",
     });
-    // Named, and named as the composed Posts list is.
-    const named = (echo?.bindings?.text as { list?: string } | undefined)?.list;
-    expect(named).toBeDefined();
-    expect(named).not.toBe("comments");
-    expect(posts).toBeDefined();
+    // Named as the composed Posts list is: not the stored id, which names
+    // nothing once composed, and not the Comments list it sits in.
+    expect((echo?.bindings?.text as { list?: string } | undefined)?.list).toBe(
+      posts
+    );
+    expect(posts).not.toBe("posts");
+    expect(posts).not.toBe(comments);
   });
 
   it("shows the setting's default in a component placed inside the one shown alone", () => {
@@ -379,6 +393,33 @@ describe("a block following a setting, its edges", () => {
       resolveComponentInstances(card, new Map<string, BlockDocument>())
     ).not.toThrow();
     expect(() => withSettingDefaults(card)).not.toThrow();
+  });
+
+  it("charges entries that are no nodes against the node budget", () => {
+    // Three entries that are no nodes use a budget of three up, in both
+    // walks: the followers', and the index the setting's block is found in.
+    const stray = [null, null, null] as unknown as BlockNode[];
+    const tight = { maxDepth: 12, maxNodes: 3 };
+    const room = { maxDepth: 12, maxNodes: 4 };
+    // Past them, a follower of a setting the component lacks isn't read.
+    const lacking = component(
+      [...stray, heading("card-echo", "x", { text: follows("gone") })],
+      [exposure("title", "card-title", "text")]
+    );
+    expect(settingBindingIssues(lacking, tight)).toEqual([]);
+    expect(settingBindingIssues(lacking, room)).toHaveLength(1);
+    // A follower read first, and its setting's block past them, isn't found.
+    const late = component(
+      [
+        heading("card-echo", "x", { text: follows("title") }),
+        null as unknown as BlockNode,
+        null as unknown as BlockNode,
+        heading("card-title", "Plain title"),
+      ],
+      [exposure("title", "card-title", "text")]
+    );
+    expect(followerFills(late, () => ({}), tight)).toEqual([]);
+    expect(followerFills(late, () => ({}), room)).toHaveLength(1);
   });
 
   it("fills a follower past the default node budget when the limits allow it", () => {
