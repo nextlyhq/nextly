@@ -298,6 +298,65 @@ describeEachDialect(
       });
     });
 
+    // The picker may hold the one collection in a list, as the API may store it: the admin sends
+    // that collection as the target, as its test pins it.
+    it("keeps its link table and the link it holds with its collection given as a list", async () => {
+      const { before, after } = await resave({
+        ...SENT_TAGS,
+        relationTo: ["lm_tags"],
+        options: { target: "lm_tags", relationType: "manyToMany" },
+      });
+      const report = JSON.stringify({ before, after }, null, 2);
+      expect(after.outcome, report).toBe("accepted");
+      expect(after.junction, report).toEqual(before.junction);
+    });
+
+    // Unique turned off on a one-to-one: the admin sends it as `manyToOne`, as its test pins it,
+    // and the database stops holding its values unique.
+    it("lets two entries name one entry once a one-to-one's Unique is turned off", async () => {
+      const lead = {
+        name: "lead",
+        label: "Lead",
+        type: "relationship",
+        relationTo: "lm_tags",
+      };
+      const applyFields = async (leadField: Record<string, unknown>) =>
+        dispatchCollections(
+          {} as ServiceContainer,
+          "applySchemaChanges",
+          { collectionName: "lm_posts" },
+          {
+            fields: [{ name: "body", type: "text" }, SENT_TAGS, leadField],
+            confirmed: true,
+            schemaVersion: await schemaVersion(),
+          }
+        );
+      await applyFields({
+        ...lead,
+        unique: true,
+        options: { target: "lm_tags", relationType: "oneToOne" },
+      });
+      await applyFields({
+        ...lead,
+        unique: false,
+        options: { target: "lm_tags", relationType: "manyToOne" },
+      });
+      const column = (await sql.columnsOf("dc_lm_posts")).find(name =>
+        name.startsWith("lead")
+      );
+      expect(column).toBeDefined();
+      const { q, query } = sql;
+      for (const id of ["p2", "p3"]) {
+        await query(
+          `INSERT INTO ${q("dc_lm_posts")} (${q("id")}, ${q("title")}, ${q("slug")}, ${q(column!)}) VALUES ('${id}', '${id}', '${id}', 't1')`
+        );
+      }
+      const rows = await query<{ id: string }>(
+        `SELECT ${q("id")} AS id FROM ${q("dc_lm_posts")} WHERE ${q(column!)} = 't1'`
+      );
+      expect(rows.map(row => row.id).sort()).toEqual(["p2", "p3"]);
+    });
+
     // Allow multiple turned off: the admin sends the field as one link (`manyToOne`), as its test
     // pins it. One link per entry needs no link table, so the table goes and the posts hold the
     // link in a column of their own.
