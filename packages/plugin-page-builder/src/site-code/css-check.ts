@@ -29,7 +29,7 @@ import type { CssNode, WalkContext } from "css-tree";
 import parse from "css-tree/parser";
 import walk from "css-tree/walker";
 
-import { cssFetches } from "./css-urls";
+import { cssFetchLocations, cssName } from "./css-urls";
 import { SITE_CODE_LIMITS } from "./limits";
 import { siteCodeUrlProblem, STYLE_ELEMENT_END } from "./url-rule";
 
@@ -171,7 +171,7 @@ function parsedProblems(css: string, problems: Problems): void {
   walk(ast, {
     enter(this: WalkContext, node: CssNode) {
       const line = node.loc?.start.line ?? 1;
-      if (node.type === "Atrule" && node.name.toLowerCase() === "import") {
+      if (node.type === "Atrule" && cssName(node.name) === "import") {
         problems.add(line, "@import isn't allowed.");
         return;
       }
@@ -195,12 +195,10 @@ function parsedProblems(css: string, problems: Problems): void {
  * alike. An `@import` is refused as an import, above.
  */
 function fetchProblems(css: string, problems: Problems): void {
-  for (const fetch of cssFetches(css)) {
+  for (const fetch of cssFetchLocations(css)) {
     if (fetch.via === "import") continue;
     const problem = fetchProblem(fetch.url);
-    if (problem === undefined) continue;
-    const at = css.indexOf(fetch.url);
-    problems.add(at === -1 ? 1 : lineAt(css, at), problem);
+    if (problem !== undefined) problems.add(fetch.line, problem);
   }
 }
 

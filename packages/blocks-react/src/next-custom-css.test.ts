@@ -4,7 +4,6 @@
  * read, tagged with the Singles the source names, so a save of the site's CSS
  * reaches the next page view; a route with no source draws no custom CSS.
  */
-import type { StyleCompileContext } from "@nextlyhq/blocks-engine";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const runtime = vi.hoisted(() => ({
@@ -25,15 +24,11 @@ vi.mock("nextly/runtime", async importActual => {
   };
 });
 
-const { routeStyleContext } = await import("./next-custom-css");
+const { routeCustomCss } = await import("./next-custom-css");
 
 beforeEach(() => {
   runtime.reads = [];
 });
-
-const BASE: StyleCompileContext = {
-  breakpoints: { viewport: [], container: [] },
-};
 
 const source = (site: string | undefined) => ({
   id: "checker-1",
@@ -44,46 +39,36 @@ const source = (site: string | undefined) => ({
 
 const route = { collections: ["pages"], field: "content" };
 
-describe("routeStyleContext", () => {
-  it("is the route's own context when it names no custom CSS", async () => {
-    expect(
-      await routeStyleContext({ ...route, styleContext: BASE }, true, undefined)
-    ).toBe(BASE);
+describe("routeCustomCss", () => {
+  it("is none when the route names no custom CSS", async () => {
+    expect(await routeCustomCss({ ...route }, true, undefined)).toEqual({});
   });
 
-  it("gives the compile the host's checker and the site's CSS", async () => {
-    const given = source("body { margin: 0; }");
-    const context = await routeStyleContext(
-      { ...route, styleContext: BASE, customCss: given },
+  it("is the host's checker with the site's CSS", async () => {
+    const { customCss: policy } = await routeCustomCss(
+      { ...route, customCss: source("body { margin: 0; }") },
       false,
       undefined
     );
-    expect(context?.breakpoints).toBe(BASE.breakpoints);
-    expect(context?.customCss?.id).toBe("checker-1");
-    expect(context?.customCss?.site).toBe("body { margin: 0; }");
-    expect(context?.customCss?.accepts("@import url(/a.css);", "page")).toBe(
-      false
-    );
-    expect(context?.customCss?.accepts("p { color: red; }", "page")).toBe(true);
+    expect(policy?.id).toBe("checker-1");
+    expect(policy?.site).toBe("body { margin: 0; }");
+    expect(policy?.accepts("@import url(/a.css);", "page")).toBe(false);
+    expect(policy?.accepts("p { color: red; }", "page")).toBe(true);
   });
 
   it("carries no site CSS when the site has none", async () => {
-    const context = await routeStyleContext(
-      { ...route, styleContext: BASE, customCss: source(undefined) },
+    const { customCss: policy } = await routeCustomCss(
+      { ...route, customCss: source(undefined) },
       false,
       undefined
     );
-    expect(context?.customCss).toBeDefined();
-    expect(context?.customCss).not.toHaveProperty("site");
+    expect(policy).toBeDefined();
+    expect(policy).not.toHaveProperty("site");
   });
 
   it("caches a public route's read, tagged with the Singles it names", async () => {
     const given = source("body { margin: 0; }");
-    await routeStyleContext(
-      { ...route, styleContext: BASE, customCss: given },
-      true,
-      undefined
-    );
+    await routeCustomCss({ ...route, customCss: given }, true, undefined);
     expect(runtime.reads).toHaveLength(1);
     expect(runtime.reads[0]?.tags).toContain(
       "nextly:single:page-builder-site-code"
@@ -115,21 +100,11 @@ describe("routeStyleContext", () => {
   });
 
   it("reads a draft route's site CSS fresh, uncached", async () => {
-    await routeStyleContext(
-      { ...route, styleContext: BASE, customCss: source("x{}") },
+    await routeCustomCss(
+      { ...route, customCss: source("x{}") },
       false,
       undefined
     );
     expect(runtime.reads).toHaveLength(0);
-  });
-
-  it("compiles nothing it was not given a context for", async () => {
-    expect(
-      await routeStyleContext(
-        { ...route, customCss: source("x{}") },
-        false,
-        undefined
-      )
-    ).toBeUndefined();
   });
 });

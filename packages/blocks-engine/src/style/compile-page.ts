@@ -88,6 +88,7 @@ import {
   classNameOf,
   isDefaultLook,
   isLook,
+  isTextStyle,
   isUsableNamedClass,
   MAX_NAMED_CLASS_NAME_LENGTH,
   NAMED_CLASS_SLUG_RE,
@@ -723,6 +724,8 @@ export function compilePageCss(
             // A look reaches only its own block type, so a reader of the
             // trace can refuse it on any other, as the compiler does.
             ...(isLook(cls) ? { blockType: cls.blockType } : {}),
+            // A text style is named as one wherever the trace is read.
+            ...(isTextStyle(cls) ? { role: "text" as const } : {}),
           },
           previewStates,
           trace,

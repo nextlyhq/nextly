@@ -21,12 +21,15 @@
  *   a block is visible on, and variable choices.
  * - canvas: the canvas region and frame, the marks drawn over blocks, the drop
  *   line and its refusals.
+ * - canvas-preview-width: the handles at the frame's edges, the ruler of
+ *   breakpoint starts and the line naming the device still edited.
  * - layers: the Layers panel.
  * - block-toolbar: the bottom bar, the breadcrumb, the block toolbar and the
  *   spacing overlay.
  * - variables: the Variables panel, its editor and import.
  * - site-text: the Type tab's Site text rows and their popups, and a type
  *   size's line height under a block's field.
+ * - text-styles: the Style tab's "Text style" picker and its menu.
  * - field-rows: attribute rows, where a value came from, a style field's row.
  * - inserters: the "+" on an empty container and between blocks.
  * - shared-styles: class chips, the Layers key hint, the zoom control, shared
@@ -74,6 +77,8 @@
 @import "./style-inspector.css";
 
 @import "./canvas.css";
+/* The handles, ruler and notice for previewing another width. */
+@import "./canvas-preview-width.css";
 
 @import "./layers.css";
 
@@ -90,6 +95,8 @@
 @import "./shadow.css";
 
 @import "./site-text.css";
+
+@import "./text-styles.css";
 
 @import "./field-rows.css";
 
@@ -121,6 +128,8 @@
 @import "./bindings.css";
 
 @import "./image-states.css";
+
+@import "./embed-states.css";
 
 @import "./form-fields.css";
 

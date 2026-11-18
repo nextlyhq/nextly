@@ -1289,6 +1289,60 @@ export interface VariableRemoveRequest {
   readonly ids: readonly string[];
 }
 
+/**
+ * Where "Clean up unused…" removes many variables the site added at once.
+ * Unlike the remove route, each variable is judged and removed on its own,
+ * by the same checks and in its own write: one found in use is kept and
+ * named with why, and the rest are removed whatever became of it. Declares
+ * Design's update permission, as the remove route does.
+ *
+ * @experimental Settles with the Colours tab's clean-up.
+ */
+export const VARIABLE_CLEAN_UP_ROUTE_PATH = "/variables/clean-up";
+
+/** What the clean-up route is sent: the variables to remove, by identity. */
+export interface VariableCleanUpRequest {
+  readonly ids: readonly string[];
+}
+
+/** One variable the clean-up kept, with why, in words an author reads. */
+export interface VariableKept {
+  readonly id: string;
+  /** The name an author knows it by, or its id where it has none. */
+  readonly name: string;
+  /** Why it stays, naming where it is used where that is known. */
+  readonly reason: string;
+}
+
+/**
+ * One variable a removal took out of the stored tokens section: its entry
+ * as stored then, and its places in the list and in the colour order, so
+ * Undo puts back exactly what went.
+ */
+export interface VariableTaken {
+  readonly id: string;
+  readonly entry: unknown;
+  readonly at: number;
+  /** Its place in the colour order, or `null` where the order did not name it. */
+  readonly orderAt: number | null;
+}
+
+/**
+ * What the clean-up did: the variables it removed and the ones it kept, by
+ * identity, each in the order asked. One already gone is in neither.
+ */
+export interface VariableCleanUpAnswer {
+  readonly removed: readonly string[];
+  readonly kept: readonly VariableKept[];
+  /** What each removal took out, in the order the removals were made. */
+  readonly taken: readonly VariableTaken[];
+  /**
+   * The stored tokens section as the last removal wrote it; absent when
+   * nothing was removed.
+   */
+  readonly section?: unknown;
+}
+
 /** The usage route's path for some variables, each named by its own `id`. */
 export function variableUsagePath(ids: readonly string[]): string {
   const params = new URLSearchParams();

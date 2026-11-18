@@ -21,3 +21,30 @@ export function keepsColour(
   if (filter === "all") return true;
   return filter === "unused" ? state === "unused" : onPage;
 }
+
+/**
+ * The colours "Clean up unused…" lists, in the order given: each one the
+ * site made (its code and the engine supply none of them) that the site's
+ * count has shown unused and the open page does not use, since a colour
+ * applied on the canvas is a use before any save says so. A built-in colour
+ * is never listed: it is never removed. `counting` says one of the site's
+ * own colours is still being counted, so the list may grow.
+ */
+export function cleanUpCandidates<E extends { readonly identity: string }>(
+  colours: readonly E[],
+  rule: {
+    readonly stateOf: (identity: string) => UsageState;
+    readonly builtIn: (identity: string) => boolean;
+    readonly onPage: ReadonlySet<string> | undefined;
+  }
+): { listed: E[]; counting: boolean } {
+  const own = colours.filter(entry => !rule.builtIn(entry.identity));
+  return {
+    listed: own.filter(
+      entry =>
+        rule.stateOf(entry.identity) === "unused" &&
+        rule.onPage?.has(entry.identity) !== true
+    ),
+    counting: own.some(entry => rule.stateOf(entry.identity) === "counting"),
+  };
+}

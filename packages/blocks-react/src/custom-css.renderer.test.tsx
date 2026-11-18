@@ -50,6 +50,21 @@ const checker = (refuse: readonly string[] = []): CustomCssPolicy => ({
   site: SITE,
 });
 
+/** The page drawn as a route does that states its breakpoints only through
+ *  the site's styles: no compile context, the checker handed on its own. */
+async function fromSiteStyles(doc: BlockDocument, customCss?: CustomCssPolicy) {
+  const stream = await renderToReadableStream(
+    <PageRenderer
+      document={doc}
+      blocks={resolver}
+      siteStyles={{ breakpoints: { viewport: [], container: [] } }}
+      {...(customCss === undefined ? {} : { customCss })}
+    />
+  );
+  await stream.allReady;
+  return new Response(stream).text();
+}
+
 async function html(doc: BlockDocument, customCss?: CustomCssPolicy) {
   const stream = await renderToReadableStream(
     <PageRenderer
@@ -94,5 +109,15 @@ describe("custom CSS on a rendered page", () => {
     expect(out).not.toContain("border:4px solid blue");
     expect(doc.settings?.customCss).toBe(PAGE);
     expect(doc.nodes[0]?.customCss).toBe(BLOCK);
+  });
+
+  it("draws it where the site's styles supply the compile context", async () => {
+    const out = await fromSiteStyles(document(), checker());
+    expect(out).toContain(PAGE);
+    expect(out).toContain(`.${nodeClassName("t1")}{border:4px solid blue}`);
+    // CONTROL: the same render with no checker draws none.
+    const without = await fromSiteStyles(document());
+    expect(without).toContain("#111111");
+    expect(without).not.toContain("page-mark");
   });
 });

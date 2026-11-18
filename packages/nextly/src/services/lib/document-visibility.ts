@@ -29,6 +29,7 @@ import { configuredLocales } from "../../domains/i18n/configured-locales";
 import { rethrowIfAnyRuleCouldNotRun } from "../../errors/rule-could-not-run";
 import type { ReadCaller } from "../dashboard/readable-resources";
 
+import { documentReadableIn } from "./document-readable-in";
 import { readableDocumentIds } from "./readable-documents";
 import { registeredContentSnapshot } from "./registered-content-slugs";
 
@@ -237,7 +238,7 @@ async function visibleSingleItems<T>(
   // elsewhere in this package as producing a broken execution order, and the
   // failure would land at boot rather than here. Deferring it also means a
   // caller whose rows are all collections never loads the Singles service.
-  const { singleDocumentReadable, resolveSingleDocumentId } = await import(
+  const { resolveSingleDocumentId } = await import(
     "../../domains/singles/services/single-document-access"
   );
 
@@ -262,17 +263,16 @@ async function visibleSingleItems<T>(
     const live = unit.entries.filter(entry => entry.entryId === liveId);
     if (live.length === 0) return [];
 
-    // `routeAuthorized: false` states the truth: the surface asking this
+    // The one per-language document check, which a document's history asks
+    // too, so a Single's row and its history answer one question one way. It
+    // attests nothing (`routeAuthorized: false`): the surface asking this
     // authorized a dashboard read, not a read of this Single, so the coarse
     // gate has not run for that operation and must not be skipped.
-    const allowed = await singleDocumentReadable(unit.subject.slug, {
-      user: caller.user,
-      ...(caller.authenticatedScope
-        ? { actor: caller.authenticatedScope }
-        : {}),
-      routeAuthorized: false,
-      ...(unit.subject.locale === null ? {} : { locale: unit.subject.locale }),
-    });
+    const allowed = await documentReadableIn(
+      { kind: "single", slug: unit.subject.slug, entryId: liveId },
+      caller,
+      unit.subject.locale
+    );
     return allowed ? live.map(entry => entry.item) : [];
   });
 }

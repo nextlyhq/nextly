@@ -518,6 +518,8 @@ export type { EmptyContainerAppendersProps } from "./canvas/empty-container-appe
  */
 export { ImageStates } from "./canvas/image-states";
 export type { ImageStatesProps } from "./canvas/image-states";
+export { EmbedStates } from "./canvas/embed-states";
+export type { EmbedStatesProps } from "./canvas/embed-states";
 /**
  * The chooser a block just added asks for, drawn over it on the canvas while
  * the editor's first-add step holds: the Columns layouts with Skip. A canvas

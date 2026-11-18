@@ -52,6 +52,8 @@ describe.each(LEVELS)("custom CSS at the %s level", level => {
     ["a script address", 'url("javascript:alert(1)")'],
     ["a data address", 'url("data:image/svg+xml,<svg/>")'],
     ["an image-set string", 'image-set("https://tracker.example/p" 1x)'],
+    ["an escaped url()", 'u\\72l("https://tracker.example/p")'],
+    ["an escaped image-set()", '\\69mage-set("https://tracker.example/p" 1x)'],
   ])("refuses a fetch from %s", (_case, url) => {
     const problems = checkCustomCss(at(level, `background: ${url};`), level);
     expect(problems).toHaveLength(1);
@@ -72,6 +74,37 @@ describe.each(LEVELS)("custom CSS at the %s level", level => {
     expect(problems).toHaveLength(1);
     expect(problems[0]?.line).toBe(2);
     expect(problems[0]?.reason).toMatch(/tracker\.example/);
+  });
+
+  it("refuses an escaped url() kept in a custom property", () => {
+    const css = at(
+      level,
+      '--picture: u\\72l("https://tracker.example/p"); background: var(--picture);'
+    );
+    expect(reasons(css).join(" ")).toMatch(/tracker\.example/);
+  });
+
+  it("refuses an @import written with an escaped name", () => {
+    expect(
+      reasons(
+        `${at(level, "color: red;")}\n@\\69mport "https://tracker.example/a.css";`
+      )
+    ).toContain("@import isn't allowed.");
+  });
+
+  it("names the line each fetch is on, not where its address first appears", () => {
+    // A comment holding the same address comes first, and the address is used
+    // twice: each refusal names the rule it is in.
+    const url = "https://tracker.example/p";
+    const css = [
+      `/* ${url} */`,
+      "",
+      at(level, `background: url(${url});`),
+      at(level, `border-image: url(${url}) 30;`),
+    ].join("\n");
+    expect(checkCustomCss(css, level).map(problem => problem.line)).toEqual([
+      3, 4,
+    ]);
   });
 
   it("refuses CSS that would end the style element, naming its line", () => {
