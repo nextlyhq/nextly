@@ -15,6 +15,7 @@
 
 import type { FieldConfig } from "../../collections/fields/types";
 import { NextlyError } from "../../errors";
+import { processGlobal } from "../../shared/process-global";
 import {
   evaluateDraftSplitEligibility,
   type DraftSplitDisabledReason,
@@ -213,7 +214,10 @@ export async function buildWorkflowRegistry(
   );
 }
 
-let registered: ReadonlyMap<string, RegisteredWorkflow> = new Map();
+/** One per process: see {@link processGlobal}. The boot fills it and every route reads it. */
+const published = processGlobal("workflows", () => ({
+  registered: new Map() as ReadonlyMap<string, RegisteredWorkflow>,
+}));
 
 /**
  * Make `next` the install's registry, and answer the one it replaces, so a
@@ -224,8 +228,8 @@ let registered: ReadonlyMap<string, RegisteredWorkflow> = new Map();
 export function publishWorkflows(
   next: ReadonlyMap<string, RegisteredWorkflow>
 ): ReadonlyMap<string, RegisteredWorkflow> {
-  const previous = registered;
-  registered = next;
+  const previous = published.registered;
+  published.registered = next;
   return previous;
 }
 
@@ -235,7 +239,7 @@ export function publishWorkflows(
  * @experimental
  */
 export function publishedWorkflows(): ReadonlyMap<string, RegisteredWorkflow> {
-  return registered;
+  return published.registered;
 }
 
 /**
@@ -244,7 +248,7 @@ export function publishedWorkflows(): ReadonlyMap<string, RegisteredWorkflow> {
  * @experimental
  */
 export function registeredWorkflows(): RegisteredWorkflow[] {
-  return [...registered.values()];
+  return [...published.registered.values()];
 }
 
 /**

@@ -1067,3 +1067,49 @@ describe("what a publish asks about the page's Layout", () => {
     });
   });
 });
+
+describe("the default's empty areas, where the canvas draws its band", () => {
+  function emptyFor(defaults: FieldValues) {
+    return renderHook(() => {
+      const form = useForm({ defaultValues: defaults });
+      return usePageLayoutRegions(form.control, null);
+    }).result.current.empty;
+  }
+  const main = choices.items[0];
+  if (main === undefined) throw new Error("the fixture lost Main");
+
+  it("names the area the default does not fill, for a page that follows it", () => {
+    answering(choices);
+    expect(emptyFor({ layout: null, noHeaderFooter: false })).toEqual([
+      { area: "footer", setId: "main", setTitle: "Main" },
+    ]);
+  });
+
+  it("names both areas of a default that fills neither, though no region is drawn", () => {
+    answering({
+      ...choices,
+      items: [{ ...main, areasFilled: [], regions: [] }],
+    });
+    expect(emptyFor({ layout: null, noHeaderFooter: false })).toEqual([
+      { area: "header", setId: "main", setTitle: "Main" },
+      { area: "footer", setId: "main", setTitle: "Main" },
+    ]);
+  });
+
+  it("names none for a page that picks a set by name, the default's own included, or no header or footer", () => {
+    answering(choices);
+    expect(emptyFor({ layout: "main", noHeaderFooter: false })).toEqual([]);
+    expect(emptyFor({ layout: "landing", noHeaderFooter: false })).toEqual([]);
+    expect(emptyFor({ layout: null, noHeaderFooter: true })).toEqual([]);
+  });
+
+  it("names none while the default is not published, or the site has none", () => {
+    answering({ ...choices, items: [{ ...main, published: false }] });
+    expect(emptyFor({ layout: null, noHeaderFooter: false })).toEqual([]);
+    answering({
+      ...choices,
+      meta: { ...choices.meta, defaultLayout: null },
+    });
+    expect(emptyFor({ layout: null, noHeaderFooter: false })).toEqual([]);
+  });
+});

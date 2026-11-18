@@ -166,13 +166,15 @@
 }
 
 /*
- * Set or cleared on this page: the accent, in the same quiet line. A cleared
- * value is told from an inherited one by its words and its icon, not by
- * colour or an outline.
+ * Set or cleared on this page: the text colour at a medium weight, a step up
+ * from an inherited value's muted line. Not the accent: that is a fill a
+ * brand may set too light to read as small text. A cleared value is told from
+ * an inherited one by its words and its icon, not by colour or an outline.
  */
 .nx-inspector__source[data-source="instance"],
 .nx-inspector__source[data-source="cleared"] {
-  color: var(--nx-primary);
+  color: var(--nx-builder-text);
+  font-weight: 500;
 }
 
 /*

@@ -84,6 +84,15 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
     refetch,
   }),
   readPluginRoute: async ({ path }: { path: string }) => {
+    // The site's CSS, which the Code section beside the breakpoints reads.
+    if (path === "/site/css") {
+      return {
+        css: "",
+        sha256: "0".repeat(64),
+        changedAt: null,
+        changedBy: null,
+      };
+    }
     // The removals alone, asked by the watch for another tab's removal.
     if (path === "/site/breakpoints/removal") return removalsThere();
     statusAsked.push(path);

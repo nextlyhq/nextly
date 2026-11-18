@@ -30,6 +30,7 @@ import {
   surveyHost,
 } from "./resolve-instances-run";
 import { boundedOwnKeys, defineEntry, ownEntry } from "./safe-record";
+import { withoutSettingBindings } from "./setting-bindings";
 import { hashId } from "./style/node-class";
 import { mintDomId } from "./tree";
 import { isConditionGated } from "./visibility";
@@ -292,10 +293,16 @@ export function scopeNode(
   };
   ctx.nodeIds.set(node.id, scoped.id);
   // A binding naming a list of this definition reads that list under its
-  // scoped id; one naming a list around the instance is left as it is.
-  if (node.bindings !== undefined) {
+  // scoped id; one naming a list around the instance is left as it is. A
+  // block following a setting takes the setting's block's own binding here,
+  // as a binding of this definition.
+  const own =
+    plan?.ownBindings === undefined
+      ? node.bindings
+      : { ...node.bindings, ...plan.ownBindings };
+  if (own !== undefined) {
     scoped.bindings = remapListBindings(
-      node.bindings,
+      own,
       ctx.nodeIds
     ) as ResolvedBlockNode["bindings"];
   }
@@ -308,6 +315,11 @@ export function scopeNode(
     } as ResolvedBlockNode["bindings"];
     notePageBound(ctx, scoped.id, plan);
   }
+  // Each binding following a setting was filled above or has no setting to
+  // follow: none is left for the binding pass, which reads no setting.
+  const followed = withoutSettingBindings(scoped.bindings);
+  if (followed === undefined) delete scoped.bindings;
+  else scoped.bindings = followed as ResolvedBlockNode["bindings"];
   // Removing the envelope rather than emptying it: `conditions` is only half of
   // what gates a node, and an instance saying "show this" means the reader
   // should stop asking.

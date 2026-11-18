@@ -69,10 +69,15 @@ import {
   type DesignRevealRequest,
   type DesignView,
 } from "./design-panel";
+import { readSiteHeaderFooter } from "./double-header-notice";
 import {
   checklistStoreFor,
   designFoldsStoreFor,
 } from "./editor-preference-stores";
+import {
+  useEmptyRegionBands,
+  type EmptyRegionBands,
+} from "./empty-region-bands";
 import { useLookEditing, type LookEditingState } from "./look-editing";
 import {
   offeredSelfOf,
@@ -665,6 +670,14 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
     availablePanels: AVAILABLE_PANELS,
     pageLayout,
     canvasRegions: layoutRegions.canvas,
+    // Where the site default shows no header or footer, the canvas's band
+    // saying so, with its ways to fill it.
+    emptyRegionBands: useEmptyRegionBands({
+      empty: layoutRegions.empty,
+      siteHeaderFooter: readSiteHeaderFooter(clientConfig),
+      followsDefault: layoutRegions.followsDefault,
+      reread: layoutRegions.reread,
+    }),
     siteTokens: page.siteTokens,
     layersRegions: layoutRegions.selectedRegion.layers,
     selectedRegion: layoutRegions.selectedRegion,
@@ -831,6 +844,8 @@ export type EditorPanels = OfferedLibrary &
     pageLayout: ReactNode | null;
     /** The regions of the page's Layout, drawn locked around the page. */
     canvasRegions: readonly CanvasRegion[];
+    /** The bands where the site default shows no header or footer. */
+    emptyRegionBands: EmptyRegionBands;
     /** The site's variables as the panels offer them, once they are read. */
     siteTokens: SiteTokenSet | undefined;
     /** The same regions, as rows in Layers that select them. */

@@ -1003,6 +1003,37 @@ describe.each(getConfiguredTestDialects())(
       expect(await nullable("subtitle")).toBe(false);
     });
 
+    // A row fill gives a Single's one row a field's default. A collection holds any number of rows,
+    // which only the person's own answer settles, so a save of a collection carrying one is
+    // refused whoever passes it, and nothing is written.
+    it("refuses a row fill on a collection's save, writing nothing", async () => {
+      await writeCollectionSave(deps(), {
+        slug: "posts",
+        previous: null,
+        entity: posts([text("body")]),
+        change: "create",
+      });
+      const files = migrationFiles();
+      const written = definition();
+
+      await expect(
+        writeCollectionSave(deps(), {
+          slug: "posts",
+          previous: posts([text("body")]),
+          entity: posts([text("body"), text("subtitle")]),
+          change: "update",
+          rowFills: [{ column: "subtitle", value: "Hello" }],
+        })
+      ).rejects.toMatchObject({
+        publicData: {
+          errors: [expect.objectContaining({ code: "ROW_FILL_NOT_SINGLE" })],
+        },
+      });
+      expect(migrationFiles()).toEqual(files);
+      expect(definition()).toBe(written);
+      expect(await columns()).not.toContain("subtitle");
+    });
+
     it("deletes the rows that do not fit a field made required, here, and asks consent on replay", async () => {
       await writeCollectionSave(deps(), {
         slug: "posts",
