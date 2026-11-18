@@ -145,6 +145,23 @@ describe("blocks in plain words, for a change only in how they look", () => {
   });
 });
 
+describe("a variable's fallback in words", () => {
+  it("can't be read as the end of one variable and the start of another", () => {
+    const one: WrittenBlock = {
+      type: "heading",
+      text: [{ type: "chip", variable: "v", fallback: 'a"][w, or "b' }],
+    };
+    const two: WrittenBlock = {
+      type: "heading",
+      text: [
+        { type: "chip", variable: "v", fallback: "a" },
+        { type: "chip", variable: "w", fallback: "b" },
+      ],
+    };
+    expect(describeBlocks([one])).not.toEqual(describeBlocks([two]));
+  });
+});
+
 describe("an owner's changes to written blocks", () => {
   const changes = (
     theirs: WrittenDocument,
@@ -208,13 +225,24 @@ describe("an owner's changes to written blocks", () => {
           id: "blocks:0",
           kind: "move",
           conflict: true,
-          base: ["Heading: C"],
-          theirs: ["Heading: C"],
+          base: [expect.stringContaining("Heading: C (")],
+          theirs: [expect.stringContaining("Heading: C (")],
           mine: mineLines,
         }),
       ]);
     }
   );
+
+  it("says where a moved block was and where it goes", () => {
+    const [move] = changes(doc(B, A, C));
+    expect(move.kind).toBe("move");
+    expect(move.base).toHaveLength(1);
+    expect(move.theirs).toHaveLength(1);
+    expect(move.base[0]).not.toBe(move.theirs[0]);
+    expect([move.base[0], move.theirs[0]].join(" ")).toMatch(
+      /at the start|after "Heading: [ABC]"/
+    );
+  });
 
   it("offers both sides where the site edited the same block", () => {
     expect(changes(doc(A, heading("B2"), C), doc(A, heading("B3"), C))).toEqual(
@@ -419,6 +447,21 @@ describe("a block moved on either side is never sent twice or lost", () => {
     );
     expect(apply({ "blocks:0": { use: "mine" } })).toEqual(
       doc(C, A, B, D, heading("E2"))
+    );
+  });
+
+  it("keeps a site-only edit between a move's two places as the site's", () => {
+    const { changes, apply } = review(
+      doc(A, B, C),
+      doc(C, A, heading("B2")),
+      doc(heading("A3"), B, C)
+    );
+    expect(changes).toHaveLength(1);
+    expect(apply({ "blocks:0": { use: "theirs" } })).toEqual(
+      doc(C, heading("A3"), heading("B2"))
+    );
+    expect(apply({ "blocks:0": { use: "mine" } })).toEqual(
+      doc(heading("A3"), B, C)
     );
   });
 

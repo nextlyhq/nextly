@@ -18,7 +18,11 @@ import type {
 
 /** A variable as the reader sees it, with its fallback when it has one. */
 function chip(c: Chip): string {
-  return c.fallback ? `[${c.variable}, or "${c.fallback}"]` : `[${c.variable}]`;
+  if (!c.fallback) return `[${c.variable}]`;
+  // Quotes and backslashes escaped, so a fallback can never read as the end
+  // of this variable and the start of another.
+  const fallback = c.fallback.replace(/["\\]/g, char => `\\${char}`);
+  return `[${c.variable}, or "${fallback}"]`;
 }
 
 /** The characters a description gives meaning to: marks, variables, breaks. */

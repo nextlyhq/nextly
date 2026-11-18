@@ -610,7 +610,8 @@ function joinRegions(
   base: string[],
   regions: BlockRegion[],
   first: number,
-  last: number
+  last: number,
+  moved: ReadonlySet<string>
 ): BlockRegion {
   const parts = regions.slice(first, last + 1);
   const theirs: string[] = [];
@@ -618,7 +619,16 @@ function joinRegions(
   let at = parts[0].bStart;
   for (const part of parts) {
     const between = base.slice(at, part.bStart);
-    theirs.push(...between, ...part.theirs);
+    // Taking the owner's side takes what the owner changed. A part only the
+    // site changed stays the site's, unless it holds a moved block: there it
+    // follows the owner, or the block would be sent from both places.
+    const holdsMove = [
+      ...base.slice(part.bStart, part.bEnd),
+      ...part.theirs,
+      ...part.mine,
+    ].some(key => moved.has(key));
+    const ownerSide = part.offered || holdsMove ? part.theirs : part.mine;
+    theirs.push(...between, ...ownerSide);
     mine.push(...between, ...part.mine);
     at = part.bEnd;
   }
@@ -631,6 +641,18 @@ function joinRegions(
     offered: !sameItems(theirs, covered) && !sameItems(theirs, mine),
     siteChanged: !sameItems(mine, covered),
   };
+}
+
+/**
+ * Lines describing a block, the first with where it sits: at the start, or
+ * after the base's block before place `at`.
+ */
+function placed(base: string[], lines: string[], at: number): string[] {
+  const where =
+    at === 0
+      ? "at the start"
+      : `after "${describeBlocks(blocksOf([base[at - 1]]))[0].trim()}"`;
+  return lines.map((line, k) => (k === 0 ? `${line} (${where})` : line));
 }
 
 /**
@@ -649,6 +671,10 @@ function mergeBlocks(
   const theirKeys = blockKeys(theirs);
   const myKeys = blockKeys(mine);
   const merge = mergeSequence(blockKeys(base), theirKeys, myKeys);
+  const movedKeys = new Set([
+    ...movedOn(merge.base, theirKeys).keys(),
+    ...movedOn(merge.base, myKeys).keys(),
+  ]);
   let regions = blockRegions(merge);
   let partner = pairMoves(merge.base, regions);
   // A block moved on either side whose two places would be decided apart is
@@ -666,7 +692,7 @@ function mergeBlocks(
     if (last <= first) break;
     regions = [
       ...regions.slice(0, first),
-      joinRegions(merge.base, regions, first, last),
+      joinRegions(merge.base, regions, first, last, movedKeys),
       ...regions.slice(last + 1),
     ];
     partner = pairMoves(merge.base, regions);
@@ -700,14 +726,24 @@ function mergeBlocks(
         mine: blocksOf([...regions[first].mine, ...regions[second].mine]),
       };
     }
+    let baseLines = describeBlocks(sides.base);
+    let theirLines = describeBlocks(sides.theirs);
+    if (other !== undefined) {
+      // A move shows the same block on each side, so it says where the block
+      // was and where it goes, by the block before each place.
+      const from = blockChangeKind(r) === "delete" ? i : other;
+      const to = from === i ? other : i;
+      baseLines = placed(merge.base, baseLines, regions[from].bStart);
+      theirLines = placed(merge.base, theirLines, regions[to].bStart);
+    }
     const change: OwnerChange = {
       id: `blocks:${changes.length}`,
       field: "blocks",
       kind: other === undefined ? blockChangeKind(r) : "move",
       conflict:
         r.siteChanged || (other !== undefined && regions[other].siteChanged),
-      base: describeBlocks(sides.base),
-      theirs: describeBlocks(sides.theirs),
+      base: baseLines,
+      theirs: theirLines,
       mine: describeBlocks(sides.mine),
       blocks: sides,
     };
