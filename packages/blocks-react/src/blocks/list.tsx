@@ -7,7 +7,11 @@
  *
  * @module blocks/list
  */
-import { type BlockDefinition, defineBlock } from "@nextlyhq/blocks-engine";
+import {
+  type BlockDefinition,
+  defineBlock,
+  itemPropName,
+} from "@nextlyhq/blocks-engine";
 import type { ReactElement } from "react";
 
 import type { BlockRenderArgs, PageContext } from "../context";
@@ -15,7 +19,26 @@ import type { BlockRenderArgs, PageContext } from "../context";
 import { CONTENT } from "./categories";
 import { number, oneOf, text } from "./props";
 
-export const LIST_KINDS = ["unordered", "ordered"] as const;
+export const LIST_KINDS = ["unordered", "ordered", "checks", "none"] as const;
+
+/** The mark a bulleted list drawn another way carries: its kind. */
+const KIND_ATTRIBUTE = "data-nx-list";
+
+/**
+ * The markers Checks and None draw, which no stored style can say: a tick in
+ * the text's colour (a `::marker` takes the item's colour), or none. Under
+ * the page's root, so it outweighs the list's own default marker and loses
+ * to a marker an author set on the block. None keeps `role="list"` on the
+ * element, since a list drawn with no markers is otherwise not announced as
+ * one by every screen reader. Hoisted and deduped by React, one per page.
+ */
+const LIST_KIND_CSS = [
+  `.nx-pb-page [${KIND_ATTRIBUTE}="checks"]{list-style-type:"\\2713\\00a0"}`,
+  `.nx-pb-page [${KIND_ATTRIBUTE}="none"]{list-style-type:none}`,
+].join("");
+
+/** The key the list kinds' rule is hoisted under. */
+const LIST_KIND_STYLE_KEY = "nx-list-kinds";
 
 /**
  * How many items are rendered from one stored list.
@@ -34,8 +57,11 @@ export const LIST_KINDS = ["unordered", "ordered"] as const;
 const MAX_ITEMS = 1_000;
 
 export interface ListProps {
-  /** Whether the order of the items is meaningful. */
-  kind?: "unordered" | "ordered";
+  /**
+   * How the items are marked: bullets, numbers (the order is meaningful),
+   * ticks, or nothing.
+   */
+  kind?: (typeof LIST_KINDS)[number];
   /** The items, in order. */
   items?: string[];
   /** The first number of an ordered list. */
@@ -45,6 +71,7 @@ export interface ListProps {
 export function renderList({
   props,
   className,
+  markProp,
 }: BlockRenderArgs<ListProps>): ReactElement {
   // A stored array can hold anything, and a non-string item would reach React
   // as a child it cannot render. Coerced rather than dropped, so an item typed
@@ -59,10 +86,15 @@ export function renderList({
     // The index is the key because the items have no identity of their own:
     // they are strings in an array, and two identical strings are the same
     // value. Reordering re-renders the text, which is all there is to preserve.
-    <li key={index}>{item}</li>
+    // Each item marked with its own address, so the canvas edits it as a
+    // line of its own and writes the list back.
+    <li key={index} {...markProp?.(itemPropName("items", index))}>
+      {item}
+    </li>
   ));
 
-  if (oneOf(props.kind, LIST_KINDS, "unordered") === "ordered") {
+  const kind = oneOf(props.kind, LIST_KINDS, "unordered");
+  if (kind === "ordered") {
     const start = number(props.start, { min: 1, max: 1_000_000, fallback: 1 });
     return (
       <ol className={className} {...(start === 1 ? {} : { start })}>
@@ -70,7 +102,19 @@ export function renderList({
       </ol>
     );
   }
-  return <ul className={className}>{children}</ul>;
+  if (kind === "unordered") return <ul className={className}>{children}</ul>;
+  return (
+    <ul
+      className={className}
+      {...{ [KIND_ATTRIBUTE]: kind }}
+      {...(kind === "none" ? { role: "list" } : {})}
+    >
+      <style href={LIST_KIND_STYLE_KEY} precedence="default">
+        {LIST_KIND_CSS}
+      </style>
+      {children}
+    </ul>
+  );
 }
 
 // Defined against the ENGINE's `defineBlock`, not the plugin SDK's: the engine
@@ -142,11 +186,24 @@ export const list: BlockDefinition<ListProps, PageContext> = defineBlock({
   props: {
     kind: {
       label: "List as",
-      optionLabels: { unordered: "Bullets", ordered: "Numbers" },
+      optionLabels: {
+        unordered: "Bullets",
+        ordered: "Numbers",
+        checks: "Checks",
+        none: "None",
+      },
       type: "select",
       options: [...LIST_KINDS],
     },
-    items: { label: "Items", role: "content", type: "array", of: "text" },
+    // Typed on the canvas item by item: Enter adds the next, Backspace in an
+    // empty one removes it.
+    items: {
+      label: "Items",
+      role: "content",
+      type: "array",
+      of: "text",
+      inline: true,
+    },
     // Only a numbered list counts, so the number it starts at is offered only
     // while the list is one; a stored start on a bulleted list is kept.
     start: {

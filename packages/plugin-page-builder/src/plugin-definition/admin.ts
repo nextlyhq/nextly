@@ -114,13 +114,14 @@ export function adminContributions(def: Definition): PluginAdminContributions {
     // form; the component draws only on a saved Layout's own.
     entryFormToolbarSlot: REMOVE_LAYOUT_ACTION_COMPONENT,
     // The editor's Settings dialog, where other plugins may add a tab
-    // beside the page's or the design's own settings.
+    // beside the page's or the design's own settings, and a block drawn
+    // where the builder shows the page's search result.
     places: [
       {
         name: PAGE_BUILDER_SETTINGS_PLACE,
         description:
-          "A tab in the Page Builder's Settings dialog, beside the page's or the design's own settings.",
-        accepts: ["tab"],
+          "A tab in the Page Builder's Settings dialog, beside the page's or the design's own settings; or a block drawn where the builder shows the page's search result.",
+        accepts: ["tab", "block"],
       },
     ],
     // An entry's own design, where an author meets it.

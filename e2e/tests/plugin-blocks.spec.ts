@@ -2,10 +2,13 @@
  * Blocks another plugin contributes, in the real editor.
  *
  * The playground's block fixture declares two blocks for the page builder and
- * names an editor entry exporting them; the generated component map imports
- * that entry and the custom block's own inspector. So these tests cover the
- * whole path a contributed block takes: declaration, generated map, the
- * browser registry, the Add panel, the inspector, the save and a reload.
+ * names an editor entry exporting them. The fixture runs only on this suite's
+ * server, so the committed component map is written without it, and its own
+ * admin module hands the entry and the custom block's inspector to the editor
+ * as the map would. So these tests cover the path a contributed block takes
+ * from there: declaration, the browser registry, the Add panel, the
+ * inspector, the save and a reload. What the map writes for an editor entry
+ * is the generator's own unit tests' to hold.
  *
  * What each asserts, and the broken version it rules out:
  *

@@ -6,12 +6,14 @@
  * tab's content scrolls.
  *
  * - **General**: the page's title, its address (the site's address and the
- *   page's part, with copy and edit) and its header & footer, then how a
- *   shared link to it would look (`settings-general`).
+ *   page's part, with copy and edit) and its header & footer, then its
+ *   search and sharing, as a plugin that edits SEO says it, or the builder's
+ *   own preview where none does (`settings-general`).
  * - **Fields**: every other field of the page, drawn by the entry form's own
  *   renderer (`settings-fields`); left out where nothing is left for it.
  * - Then the tabs other plugins add to the Settings place, in their declared
- *   order, lifted into the same row.
+ *   order, lifted into the same row; a tab that says it does not apply to
+ *   this document (`setLeftOut`) is left out of the row, its panel kept.
  *
  * "Site settings ▸" sits apart at the right of the row, only for a role that
  * may change the site's settings: they apply to the live site at once, so
@@ -112,11 +114,6 @@ export interface SettingsDialogProps extends DialogState {
    * server knows which.
    */
   share: SharePreview;
-  /**
-   * Whether the page has the SEO plugin's fields. Where it does not, the
-   * preview is all there is, and a line says the SEO plugin adds them.
-   */
-  seoFields: boolean;
   /** The saved page, for the hint about addresses beneath another page's. */
   address?: SettingsAddress | null;
   breakpoints: SettingsBreakpoints;
@@ -178,16 +175,18 @@ function useSettingsTabs({
   const placeTabs = usePlaceTabs(
     placeTabsOf(place, () => tabs.choose(GENERAL_TAB))
   );
+  // A tab left out of the row is never shown: General comes back instead.
+  const offered = placeTabs.filter(tab => !tab.leftOut);
   const ids = [
     GENERAL_TAB,
     ...(fields === null ? [] : [FIELDS_TAB]),
-    ...placeTabs.map(tab => tab.id),
+    ...offered.map(tab => tab.id),
   ];
   const contentTab = contentTabOf(page, fields !== null);
   useShowMe({
     fieldName,
     contentTab,
-    placeTabs,
+    placeTabs: offered,
     show: (tab, path) => {
       tabs.show(tab, path);
       onOpenChange(true);
@@ -196,6 +195,7 @@ function useSettingsTabs({
   return {
     fields,
     placeTabs,
+    offered,
     shown: ids.includes(tabs.chosen) ? tabs.chosen : GENERAL_TAB,
     choose: tabs.choose,
     focusPath: tabs.focusPath,
@@ -213,7 +213,6 @@ export function SettingsDialog({
   headerFooter = null,
   place = null,
   share,
-  seoFields,
   address = null,
   breakpoints,
   openAsForm,
@@ -255,7 +254,8 @@ export function SettingsDialog({
           >
             <TabRow
               showsFields={tabs.fields !== null}
-              placeTabs={tabs.placeTabs}
+              // A tab that left the row keeps its panel below, hidden.
+              placeTabs={tabs.offered}
               site={site.offer}
             />
             <ReadOnlyNote />
@@ -268,7 +268,7 @@ export function SettingsDialog({
                   fieldName={fieldName}
                   headerFooter={headerFooter}
                   share={share}
-                  seoFields={seoFields}
+                  place={place}
                   address={address}
                   open={open}
                 />
@@ -399,7 +399,7 @@ function GeneralTab({
   fieldName,
   headerFooter,
   share,
-  seoFields,
+  place,
   address,
   open,
 }: {
@@ -407,17 +407,13 @@ function GeneralTab({
   fieldName: string;
   headerFooter: ReactNode | null;
   share: SharePreview;
-  seoFields: boolean;
+  place: SettingsPlace | null;
   address: SettingsAddress | null;
   open: boolean;
 }): JSX.Element {
   if (!page) {
     return (
-      <DocumentGeneral
-        fieldName={fieldName}
-        share={share}
-        seoFields={seoFields}
-      />
+      <DocumentGeneral fieldName={fieldName} share={share} place={place} />
     );
   }
   return (
@@ -425,7 +421,7 @@ function GeneralTab({
       fieldName={fieldName}
       headerFooter={headerFooter}
       share={share}
-      seoFields={seoFields}
+      place={place}
       address={address}
       open={open}
     />

@@ -435,12 +435,34 @@ const FONT_FORMAT = /^[a-z0-9-]+$/i;
 export function resolveTokenPrefix(prefix: string | undefined): {
   prefix: string;
   issue?: ValidationIssue;
+  /**
+   * Why the requested prefix was refused, in words for the person choosing
+   * one (the site's settings), where `issue` reports to a compile. Both come
+   * from the one verdict, so a prefix a person is told is fine is the one the
+   * sheet is written under.
+   */
+  refusal?: string;
 } {
   const safe = safeTokenPrefix(prefix);
   return safe.warning === undefined
     ? { prefix: safe.prefix }
-    : { prefix: safe.prefix, issue: tokenIssue(safe.warning) };
+    : {
+        prefix: safe.prefix,
+        issue: tokenIssue(safe.warning),
+        refusal: PREFIX_REFUSALS[safe.reserved ?? "shape"],
+      };
 }
+
+/**
+ * The plain reason for each way a prefix is refused: each reserved prefix by
+ * whose it is, and a prefix the wrong shape by what a prefix looks like.
+ */
+const PREFIX_REFUSALS = {
+  "--nx-": "--nx- is kept for the admin's own styles. Choose another prefix.",
+  "--tw-": "--tw- is used by Tailwind. Choose another prefix.",
+  shape:
+    "A prefix starts with two dashes, uses only lowercase letters, numbers and dashes, and ends with a dash, like --brand-.",
+} as const;
 
 function tokenIssue(
   message: string,
