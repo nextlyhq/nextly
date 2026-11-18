@@ -129,6 +129,8 @@
 
 @import "./image-states.css";
 
+@import "./embed-states.css";
+
 @import "./form-fields.css";
 
 @import "./first-add.css";
