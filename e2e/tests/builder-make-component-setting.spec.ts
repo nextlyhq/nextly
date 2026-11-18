@@ -171,6 +171,17 @@ async function stored(
   };
 }
 
+/** The page's stored status. */
+async function statusOf(api: APIRequestContext, id: string): Promise<unknown> {
+  const read = await api.get(`${PAGES}/${id}?status=all`);
+  if (!read.ok()) return undefined;
+  const body = (await read.json()) as {
+    item?: { status?: unknown };
+    status?: unknown;
+  };
+  return body.item?.status ?? body.status;
+}
+
 test.describe("making a component's block a setting from a placement", () => {
   test.describe.configure({ timeout: 300_000 });
 
@@ -204,6 +215,10 @@ test.describe("making a component's block a setting from a placement", () => {
         { timeout: 30_000 }
       )
       .toEqual(["Headline", "Title"]);
+    // The page is published after its component.
+    await expect
+      .poll(() => statusOf(page.request, seeded.page), { timeout: 30_000 })
+      .toBe("published");
 
     await page.goto(`/${seeded.slug}`);
     const titles = page.locator(".nx-pb-page h4");
