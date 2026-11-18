@@ -51,6 +51,7 @@ import type {
   UndoEmailTemplateUpdateArgs,
 } from "../types/email";
 import type {
+  ActivityEntry,
   ActivityPage,
   CancelQueuedEmailArgs,
   CreateEmailProviderArgs,
@@ -64,6 +65,7 @@ import type {
   DirectAPIConfig,
   EmailLastSentArgs,
   EmailOverdueArgs,
+  FindEmailActivityArgs,
   FindEmailDeliveriesArgs,
   FindEmailDeliveryByIDArgs,
   FindEmailProviderByIDArgs,
@@ -271,6 +273,11 @@ export function createEmailNamespace(ctx: NextlyContext): EmailNamespace {
 export interface EmailDeliveriesNamespace {
   /** Delivery records, newest first, by outcome, template, provider and time. */
   find(args?: FindEmailDeliveriesArgs): Promise<ActivityPage<DeliveryActivity>>;
+  /**
+   * Queued emails and the deliveries of sends not queued, merged newest
+   * first under one cursor, by status, template, provider and time.
+   */
+  activity(args?: FindEmailActivityArgs): Promise<ActivityPage<ActivityEntry>>;
   /** Queued emails, newest first, by state, template and time. */
   findQueued(
     args?: FindQueuedEmailsArgs
@@ -305,6 +312,10 @@ export function createEmailDeliveriesNamespace(
     async find(args = {}) {
       await checked(args);
       return ctx.emailDeliveryActivity.listDeliveries(args);
+    },
+    async activity(args = {}) {
+      await checked(args);
+      return ctx.emailDeliveryActivity.listActivity(args);
     },
     async findQueued(args = {}) {
       await checked(args);
