@@ -230,10 +230,11 @@ const PATHS: readonly SavePath[] = [
       >,
   },
   {
-    // A translated collection's change is applied by the development push.
+    // A translated collection's change is applied by the development push. Its text fields are
+    // translated, so they are columns of its translations table, which each case reads.
     name: "a translated collection's Builder apply (the push)",
     slug: "sts_articles",
-    table: "dc_sts_articles",
+    table: "dc_sts_articles_locales",
     registry: "dynamic_collections",
     push: true,
     translated: true,
