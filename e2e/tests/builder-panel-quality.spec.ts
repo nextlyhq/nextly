@@ -9,8 +9,9 @@
  *   no control above or beside it moves.
  * - **Names and colours:** axe finds nothing at WCAG 2.2 AA on each tab, in
  *   light and dark.
- * - **Widths:** at the panel's narrowest, 320px and its widest, with classic
- *   scrollbars, no tab scrolls sideways and nothing ends past its edge.
+ * - **Widths:** at the panel's narrowest, 320px and its widest (each width
+ *   checked as reached), with classic scrollbars, no tab scrolls sideways,
+ *   nothing ends past its edge, and no control's words are cut.
  * - **Hit areas:** every switch and toggle answers a pointer over at least
  *   24 by 24 pixels.
  * - **Focus returns:** a menu or popover closed with Escape gives focus back
@@ -32,9 +33,11 @@ import { ownSeat, test } from "./support/test";
 const ENTRIES = "/admin/api/collections/pages/entries";
 const AA_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"];
 const HEADING = "00000000-0000-4000-8000-00000000d201";
+/** A Section below the heading: a block with more controls (Height's presets). */
+const SECTION = "00000000-0000-4000-8000-00000000d202";
 const TABS = ["Content", "Style", "Advanced"] as const;
 
-/** A draft page holding one heading, and its id. */
+/** A draft page holding one heading and an empty Section, and its id. */
 async function createPage(page: Page): Promise<string> {
   const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const created = await page.request.post(ENTRIES, {
@@ -54,6 +57,14 @@ async function createPage(page: Page): Promise<string> {
             type: "core/heading",
             version: 1,
             props: { text: "A heading to style", level: "h2" },
+          },
+          {
+            id: SECTION,
+            type: "core/section",
+            version: 1,
+            props: { as: "section" },
+            styles: { base: { base: { minHeight: "200px" } } },
+            slots: { children: [] },
           },
         ],
       },
@@ -136,25 +147,95 @@ async function forceClassicScrollbars(page: Page): Promise<void> {
   });
 }
 
-/** Drag the canvas and inspector divider until the inspector is `width` wide, or as near as its bounds allow. */
+/**
+ * Set the inspector `width` wide, or as near as its bounds allow, and answer
+ * the width it reached. It widens by the divider's arrow keys, since a drag
+ * toward the canvas passes over the canvas's frame, which takes the pointer
+ * from the page, and narrows by a drag over the inspector itself.
+ */
 async function setInspectorWidth(
   page: Page,
   inspector: Locator,
   width: number
 ): Promise<number> {
   const handle = page.getByRole("separator", { name: "Canvas and inspector" });
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const now = (await inspector.boundingBox())?.width ?? 0;
+  const now = async () =>
+    Math.round((await inspector.boundingBox())?.width ?? 0);
+  for (let press = 0; press < 60 && (await now()) < width; press++) {
+    const before = await now();
+    await handle.press("ArrowLeft");
+    // At its widest, a key moves nothing.
+    if ((await now()) === before) break;
+  }
+  for (let attempt = 0; attempt < 3 && (await now()) > width; attempt++) {
     const grip = await handle.boundingBox();
     if (grip === null) throw new Error("the divider has no box");
     const x = grip.x + grip.width / 2;
     const y = grip.y + grip.height / 2;
     await page.mouse.move(x, y);
     await page.mouse.down();
-    await page.mouse.move(x - (width - now), y, { steps: 6 });
+    await page.mouse.move(x + ((await now()) - width), y, { steps: 6 });
     await page.mouse.up();
   }
-  return Math.round((await inspector.boundingBox())?.width ?? 0);
+  return now();
+}
+
+/**
+ * The controls whose words are cut: a button, label or tab whose text is
+ * wider than its box, or wraps past a box that clips it.
+ */
+async function clippedWords(inspector: Locator): Promise<string[]> {
+  return inspector.evaluate(root =>
+    [...root.querySelectorAll("button, label, [role=tab], [role=radio]")]
+      .filter(element => {
+        const box = element.getBoundingClientRect();
+        if (box.width === 0 || box.height === 0) return false;
+        if ((element.textContent ?? "").trim() === "") return false;
+        const style = getComputedStyle(element);
+        const clips =
+          style.overflow !== "visible" || style.overflowX !== "visible";
+        // A control's words that spill out of its own box (wrapped past a
+        // fixed height, say) are cut as surely as clipped ones: they run
+        // under the next row or past the edge. A label may hold a control
+        // taller than itself, so only a clipping label counts.
+        const control = element.tagName !== "LABEL";
+        const wide = element.scrollWidth > element.clientWidth + 1;
+        const tall = element.scrollHeight > element.clientHeight + 1;
+        // An ellipsis on purpose, with the whole words in a tooltip, is not cut.
+        const ellipsed =
+          style.textOverflow === "ellipsis" &&
+          element.getAttribute("title") !== null;
+        return (clips || control) && (wide || tall) && !ellipsed;
+      })
+      .map(
+        element =>
+          `${element.tagName.toLowerCase()} "${(element.textContent ?? "").trim().slice(0, 30)}"`
+      )
+  );
+}
+
+/**
+ * Waits, a bounded while, until the panel's layout reads the same twice in a
+ * row: its height and every control's box. A row that moves after the first
+ * draw is then measured where it ends up.
+ */
+async function settleLayout(inspector: Locator): Promise<void> {
+  const shape = () =>
+    inspector.evaluate(root =>
+      [root, ...root.querySelectorAll("button, [role=radio], [role=tab]")]
+        .map(element => {
+          const box = element.getBoundingClientRect();
+          return `${Math.round(box.x)},${Math.round(box.y)},${Math.round(box.width)},${Math.round(box.height)}`;
+        })
+        .join(";")
+    );
+  let last = await shape();
+  for (let look = 0; look < 12; look++) {
+    await new Promise(resolve => setTimeout(resolve, 250));
+    const now = await shape();
+    if (now === last) return;
+    last = now;
+  }
 }
 
 /** What overflows the inspector sideways: its own scroll, and boxes past its edge. */
@@ -378,15 +459,44 @@ test.describe("the block panel", () => {
       // Asked for less than the panel allows: it stops at its narrowest.
       const narrowest = await setInspectorWidth(page, inspector, 200);
       expect(narrowest).toBeLessThanOrEqual(320);
-      for (const target of [narrowest, 320, 520]) {
-        const width = await setInspectorWidth(page, inspector, target);
-        for (const tab of TABS) {
-          await chooseTab(inspector, tab);
-          await openSections(inspector);
-          expect(await overflowOf(inspector), `${tab} at ${width}px`).toEqual({
-            scrolls: [],
-            past: [],
-          });
+      // The heading, then the Section, whose Size draws Height's presets.
+      // A Section has no Content tab: its settings are all Style and Advanced.
+      const tabsOf = { Heading: TABS, Section: ["Style", "Advanced"] } as const;
+      for (const block of ["Heading", "Section"] as const) {
+        if (block === "Section") {
+          await canvasBlock(page, SECTION)
+            .first()
+            .click({ position: { x: 6, y: 6 } });
+          await expect(inspector.locator("[data-block-card]")).toContainText(
+            "Section"
+          );
+        }
+        for (const target of [narrowest, 320, 520]) {
+          const width = await setInspectorWidth(page, inspector, target);
+          // The width asked for is the width measured, or the run proves
+          // nothing about it.
+          expect(
+            Math.abs(width - target),
+            `reached ${width}px for ${target}px`
+          ).toBeLessThanOrEqual(2);
+          for (const tab of tabsOf[block]) {
+            await chooseTab(inspector, tab);
+            await openSections(inspector);
+            // Measured once the sections have finished opening and the
+            // panel has stopped moving: a header mid-transition reads taller
+            // than its box, and a Section's Height presets move over the Min
+            // height field a moment after the section draws.
+            await settleTransitions(page);
+            await settleLayout(inspector);
+            const at = `${block} ${tab} at ${width}px`;
+            expect(await overflowOf(inspector), at).toEqual({
+              scrolls: [],
+              past: [],
+            });
+            expect
+              .soft(await clippedWords(inspector), `${at}: words cut`)
+              .toEqual([]);
+          }
         }
       }
     });
