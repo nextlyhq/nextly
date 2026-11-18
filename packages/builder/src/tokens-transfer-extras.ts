@@ -147,14 +147,20 @@ export function importExtras(
  */
 function followingAdoption<T>(value: T, adoption: Adoption | undefined): T {
   if (adoption === undefined || adoption.ids.size === 0) return value;
-  const properties = [...adoption.ids].map(([from, to]) => [
-    `var(${tokenCustomProperty(from, adoption.prefix)}`,
-    `var(${tokenCustomProperty(to, adoption.prefix)}`,
-  ]);
+  // Each adopted variable's custom property as a whole name inside `var()`:
+  // ended by a space, a fallback's comma or the closing parenthesis, so a
+  // longer property it begins is left alone.
+  const properties = [...adoption.ids].map(([from, to]) => ({
+    pattern: new RegExp(
+      `(var\\(\\s*)${escapeRegExp(tokenCustomProperty(from, adoption.prefix))}(?=[\\s,)])`,
+      "g"
+    ),
+    to: tokenCustomProperty(to, adoption.prefix),
+  }));
   const walk = (node: unknown): unknown => {
     if (typeof node === "string") {
       return properties.reduce(
-        (text, [from = "", to = ""]) => text.split(from).join(to),
+        (text, { pattern, to }) => text.replace(pattern, `$1${to}`),
         node
       );
     }
@@ -170,6 +176,11 @@ function followingAdoption<T>(value: T, adoption: Adoption | undefined): T {
     );
   };
   return walk(value) as T;
+}
+
+/** `text` as a regular expression matching it literally. */
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 /**

@@ -159,11 +159,8 @@ export function TokensStudio({
    * tier further down.
    */
   const { editable, baseline } = resolvedTiers(merged, supplied);
-  const { edits, shownNow, issue, notice, commit, cleanUp } = useTokenCommits(
-    baseline,
-    editable,
-    supplied
-  );
+  const { edits, shownNow, issue, notice, commit, commitNow, cleanUp } =
+    useTokenCommits(baseline, editable, supplied);
 
   /*
    * The set as it is at the moment an import needs it, rather than the one
@@ -175,6 +172,7 @@ export function TokensStudio({
     withReadPrefix(shownNow(), editable);
   const header = useVariablesHeader({
     onChange: commit,
+    storeTokensNow: commitNow,
     currentTokens,
     readOnly: !mayChange,
     ...useTransferInputs({ classes, onEditClasses, breakpoints, mode }),
@@ -332,6 +330,11 @@ function useTokenCommits(
   /** What the last save met of someone else's, with the way to read again. */
   notice: TokensPanelProps["notice"];
   commit: (next: SiteTokenSet) => void;
+  /**
+   * An edit saved at once rather than at the author's pause, answering
+   * whether it was stored: what an import's text styles are stored after.
+   */
+  commitNow: (next: SiteTokenSet) => Promise<boolean>;
   /** "Clean up unused…": see {@link useCleanUp}. */
   cleanUp: CleanUpThrough;
 } {
@@ -364,7 +367,16 @@ function useTokenCommits(
     show(next);
     setIssue(undefined);
     setConflict(undefined);
-    send(next, shownBefore, { hold: true, keepIssue: false });
+    void send(next, shownBefore, { hold: true, keepIssue: false });
+  };
+
+  const commitNow = (next: SiteTokenSet): Promise<boolean> => {
+    // As `commit`, written without waiting for the author's pause.
+    const shownBefore = shownNow() ?? editable;
+    show(next);
+    setIssue(undefined);
+    setConflict(undefined);
+    return send(next, shownBefore, { hold: false, keepIssue: false });
   };
 
   /*
@@ -376,7 +388,7 @@ function useTokenCommits(
     next: SiteTokenSet,
     from: SiteTokenSet | undefined,
     how: { hold: boolean; keepIssue: boolean }
-  ): void => {
+  ): Promise<boolean> => {
     latest.current = next;
     const base =
       from === undefined ? undefined : tokenOverrideOf(baseline, from);
@@ -386,7 +398,7 @@ function useTokenCommits(
      * the database on the first edit and mask the site's code from then on.
      */
     const sent = tokenOverrideOf(baseline, next);
-    void save("tokens", sent, {
+    return save("tokens", sent, {
       hold: how.hold,
       ...(base === undefined ? {} : { base }),
     }).then(result => {
@@ -407,11 +419,12 @@ function useTokenCommits(
           persisted.current
         ).issue;
         setIssue(said ?? undefined);
-        send(kept, persisted.current ?? undefined, {
+        void send(kept, persisted.current ?? undefined, {
           hold: false,
           keepIssue: true,
         });
-        return;
+        // Refused in part: what was asked for wasn't stored as asked.
+        return false;
       }
       settleTokenSave(
         result,
@@ -438,6 +451,7 @@ function useTokenCommits(
         ? conflictWords("tokens", result.conflicts)
         : undefined;
       if (words !== undefined) setConflict(words);
+      return result.saved;
     });
   };
   /*
@@ -467,7 +481,7 @@ function useTokenCommits(
       show(adopted);
     };
   });
-  return { edits, shownNow, issue, notice, commit, cleanUp };
+  return { edits, shownNow, issue, notice, commit, commitNow, cleanUp };
 }
 
 /**

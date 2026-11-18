@@ -322,6 +322,41 @@ describe("an import carrying the site's own design data", () => {
     });
   });
 
+  it("follows only the whole custom property of a merged variable, never one it begins", () => {
+    const mine: SiteTokenSet = {
+      tokens: [
+        {
+          id: "t-own-h2",
+          name: "font-size.h2",
+          kind: "dimension",
+          values: { light: "2rem" },
+        },
+      ],
+    };
+    const source: SiteTokenSet = {
+      ...SITE,
+      tokens: [
+        ...SITE.tokens,
+        {
+          name: "font-size.h2-large",
+          kind: "dimension",
+          values: { light: "2.5rem" },
+        },
+      ],
+      siteText: {
+        h2: { fontSize: "var(--site-font-size-h2-large)" },
+        h3: { fontSize: "var(--site-font-size-h2, 1rem)" },
+        h4: { fontSize: "calc(var(--site-font-size-h2) * 1.2)" },
+      },
+    };
+    const plan = ready(planImport(files(source, []), mine, { textStyles: [] }));
+    expect(plan.extras.site?.siteText).toEqual({
+      h2: { fontSize: "var(--site-font-size-h2-large)" },
+      h3: { fontSize: "var(--site-t-own-h2, 1rem)" },
+      h4: { fontSize: "calc(var(--site-t-own-h2) * 1.2)" },
+    });
+  });
+
   it("keeps this site's Site text row where the file's follows a text style that wasn't imported, saying so", () => {
     const mine: NamedClass = { ...eyebrow, id: "ts-mine" };
     const into: SiteTokenSet = {

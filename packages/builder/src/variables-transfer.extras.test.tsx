@@ -83,18 +83,25 @@ function Host({
   onChange = () => undefined,
   onEditClasses,
   catalogue,
+  storeNow = async () => true,
 }: {
   tokens: SiteTokenSet;
   classes?: readonly NamedClass[];
   onChange?: (tokens: SiteTokenSet) => void;
   onEditClasses?: EditClasses;
   catalogue?: FontCatalogue;
+  /** The host's write at once, answering whether it was stored. */
+  storeNow?: (tokens: SiteTokenSet) => Promise<boolean>;
 }): React.JSX.Element {
   const latest = React.useRef(tokens);
   const transfer = useVariablesTransfer({
     onChange: next => {
       latest.current = next;
       onChange(next);
+    },
+    storeTokensNow: async next => {
+      latest.current = next;
+      return storeNow(next);
     },
     currentTokens: () => latest.current,
     readOnly: false,
@@ -226,18 +233,70 @@ describe("importing a file with text styles and the site's design data", () => {
     ).toBeDefined();
   });
 
-  it("stores the text styles before the variables and Site text that follow them, so Undo takes the rows back first", async () => {
-    // The class write is a step of the history, and so is the variables
-    // write. Stored text styles first, the rows following them land as the
-    // newer step: Undo then takes the rows back before the text styles, which
-    // the site refuses to remove while a row still follows one.
+  it("stores the variables, then the text styles that name them, then the Site text that follows them", async () => {
+    // Three writes, each a step of the history. The site refuses a text
+    // style naming a variable it doesn't hold, so the variables go first;
+    // it refuses to remove a text style a row still follows, so the rows go
+    // last and Undo takes them back first, then the text styles, then the
+    // variables.
     const onChange = vi.fn();
+    let stored: (done: boolean) => void = () => undefined;
+    const storeNow = vi.fn(
+      (_tokens: SiteTokenSet) =>
+        new Promise<boolean>(resolve => {
+          stored = resolve;
+        })
+    );
     let finish: (refusal: string | undefined) => void = () => undefined;
     const onEditClasses = vi.fn<EditClasses>(
       () =>
         new Promise<string | undefined>(resolve => {
           finish = resolve;
         })
+    );
+    render(
+      <WithFonts
+        tokens={{ tokens: [] }}
+        onChange={onChange}
+        onEditClasses={onEditClasses}
+        storeNow={storeNow}
+      />
+    );
+    await chooseFile("variables.tokens.json", exported());
+    const preview = await screen.findByRole("dialog", {
+      name: "Import variables",
+    });
+    fireEvent.click(within(preview).getByRole("button", { name: "Import" }));
+    await waitFor(() => expect(storeNow).toHaveBeenCalledTimes(1));
+    const variables = storeNow.mock.calls[0]?.[0];
+    if (variables === undefined) throw new Error("nothing was stored");
+    expect(variables.tokens.map(token => token.name)).toEqual(
+      SOURCE.tokens.map(token => token.name)
+    );
+    expect(variables.fluidRange).toEqual(SOURCE.fluidRange);
+    expect(variables.siteText).toBeUndefined();
+    expect(onEditClasses).not.toHaveBeenCalled();
+    await act(async () => {
+      stored(true);
+    });
+    await waitFor(() => expect(onEditClasses).toHaveBeenCalledTimes(1));
+    expect(onChange).not.toHaveBeenCalled();
+    await act(async () => {
+      finish(undefined);
+    });
+    await waitFor(() => expect(onChange).toHaveBeenCalledTimes(1));
+    expect((onChange.mock.calls[0]?.[0] as SiteTokenSet).siteText).toEqual(
+      SOURCE.siteText
+    );
+    expect(
+      await screen.findByText("Imported 3 variables and 1 text style.")
+    ).toBeDefined();
+  });
+
+  it("counts only what was stored: refused text styles, and the rows following them, are said", async () => {
+    const onChange = vi.fn();
+    const onEditClasses = vi.fn<EditClasses>(
+      async () => "Shared styles name a variable this site doesn't define."
     );
     render(
       <WithFonts
@@ -251,15 +310,39 @@ describe("importing a file with text styles and the site's design data", () => {
       name: "Import variables",
     });
     fireEvent.click(within(preview).getByRole("button", { name: "Import" }));
-    await waitFor(() => expect(onEditClasses).toHaveBeenCalledTimes(1));
+    expect(
+      await screen.findByText(
+        "The text styles weren't imported, so neither was Site text."
+      )
+    ).toBeDefined();
+    expect(await screen.findByText("Imported 3 variables.")).toBeDefined();
+    expect(screen.queryByText(/text style\./)).toBeNull();
     expect(onChange).not.toHaveBeenCalled();
-    await act(async () => {
-      finish(undefined);
-    });
-    await waitFor(() => expect(onChange).toHaveBeenCalledTimes(1));
-    expect((onChange.mock.calls[0]?.[0] as SiteTokenSet).siteText).toEqual(
-      SOURCE.siteText
+  });
+
+  it("stores nothing more when the variables aren't stored", async () => {
+    const onEditClasses = vi.fn<EditClasses>(async () => undefined);
+    const onChange = vi.fn();
+    render(
+      <WithFonts
+        tokens={{ tokens: [] }}
+        onChange={onChange}
+        onEditClasses={onEditClasses}
+        storeNow={async () => false}
+      />
     );
+    await chooseFile("variables.tokens.json", exported());
+    const preview = await screen.findByRole("dialog", {
+      name: "Import variables",
+    });
+    fireEvent.click(within(preview).getByRole("button", { name: "Import" }));
+    expect(
+      await screen.findByText(
+        "The variables weren't saved, so nothing was imported."
+      )
+    ).toBeDefined();
+    expect(onEditClasses).not.toHaveBeenCalled();
+    expect(onChange).not.toHaveBeenCalled();
   });
 
   it("lists the fonts the site lacks, offering Google Fonts for one the catalogue has", async () => {

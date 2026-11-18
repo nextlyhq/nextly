@@ -51,7 +51,7 @@ import {
 import { Ellipsis } from "lucide-react";
 import * as React from "react";
 
-import type { EditClasses } from "./block-style-actions";
+import type { ClassListEdit, EditClasses } from "./block-style-actions";
 import { ChromeTooltip } from "./chrome-tooltip";
 import { DESIGN_ACTION_WORDS as WORDS } from "./editor-words";
 import { FontChoicesContext, type FontChoices } from "./font-family-field";
@@ -134,6 +134,7 @@ export function useVariablesTransfer({
   readOnly,
   currentClasses,
   onEditClasses,
+  storeTokensNow,
   catalogue,
   breakpoints,
 }: {
@@ -147,6 +148,14 @@ export function useVariablesTransfer({
   currentClasses?: () => readonly NamedClass[] | undefined;
   /** The host's one class writer, which an import's text styles are stored through. */
   onEditClasses?: EditClasses;
+  /**
+   * The host's variables write made at once rather than at the author's
+   * pause, answering whether it was stored. An import's text styles name
+   * its variables, and the site refuses a text style naming a variable it
+   * doesn't hold yet, so those are stored first through this. Absent, like
+   * `onEditClasses`: an import brings in no text styles.
+   */
+  storeTokensNow?: (tokens: SiteTokenSet) => Promise<boolean>;
   /** The Google Fonts catalogue, which a missing font is added from. */
   catalogue?: ImportCatalogue;
   /**
@@ -174,6 +183,7 @@ export function useVariablesTransfer({
     currentTokens,
     currentClasses,
     onEditClasses,
+    storeTokensNow,
     breakpoints,
   });
   React.useLayoutEffect(() => {
@@ -182,6 +192,7 @@ export function useVariablesTransfer({
       currentTokens,
       currentClasses,
       onEditClasses,
+      storeTokensNow,
       breakpoints,
     };
   });
@@ -255,48 +266,52 @@ export function useVariablesTransfer({
       refuse(result.error, result.skipped);
       return;
     }
-    const edit = latest.current.onEditClasses;
-    if (result.classes !== undefined && edit !== undefined) {
-      // The text styles are stored first, and the variables and Site text
-      // once that write settles, so the rows following a text style are the
-      // newer step of the history: Undo takes them back before the text
-      // styles, which the site won't remove while a row still follows one.
-      // Laid over the variables as they are then, so an edit made meanwhile
-      // isn't lost.
-      const storeTokens = (): void => {
-        const now = latest.current.currentTokens() ?? into;
-        const again = applyImport(plan, now, choices);
-        // Not ok only where the site already holds all of it by now.
-        if (again.ok) latest.current.onChange(again.tokens);
-      };
-      void edit(result.classes).then(
-        refusal => {
-          if (refusal !== undefined) {
-            refuse("The text styles weren't imported.", [refusal]);
-          }
-          storeTokens();
-        },
-        () => {
-          refuse("The text styles weren't imported.");
-          storeTokens();
-        }
+    // What the toast says once the import is stored: only what arrived.
+    const done = (textStyles: number): void => {
+      const imported = importedWords(result.imported, textStyles);
+      if (result.skipped.length === 0) {
+        toast(imported);
+        return;
+      }
+      // Refused in part: what did not arrive is named, and stays named
+      // until the author has read it.
+      const refused = result.skipped.length;
+      sayUntilDismissed(
+        "warning",
+        `${imported} ${counted(refused, "value was", "values were")} refused:`,
+        result.skipped
       );
-    } else {
+    };
+    const { onEditClasses: edit, storeTokensNow: storeNow } = latest.current;
+    if (
+      result.classes === undefined ||
+      edit === undefined ||
+      storeNow === undefined
+    ) {
       latest.current.onChange(result.tokens);
-    }
-    const imported = importedWords(result.imported, result.textStyles ?? 0);
-    if (result.skipped.length === 0) {
-      toast(imported);
+      done(result.textStyles ?? 0);
       return;
     }
-    // Refused in part: what did not arrive is named, and stays named until
-    // the author has read it.
-    const refused = result.skipped.length;
-    sayUntilDismissed(
-      "warning",
-      `${imported} ${counted(refused, "value was", "values were")} refused:`,
-      result.skipped
-    );
+    void importInSteps({
+      variables: withSiteRowsOf(result.tokens, into),
+      classes: result.classes,
+      // Laid over the variables as they are by then, so an edit made
+      // meanwhile isn't lost; not ok only where the site holds it all.
+      rows: () => {
+        const again = applyImport(
+          plan,
+          latest.current.currentTokens() ?? into,
+          choices
+        );
+        return again.ok ? again.tokens : undefined;
+      },
+      writers: { storeNow, edit, onChange: latest.current.onChange },
+      refuse,
+    }).then(stored => {
+      if (stored !== "nothing") {
+        done(stored === "all" ? (result.textStyles ?? 0) : 0);
+      }
+    });
   };
 
   const send = (kind: ExportKind): void => {
@@ -649,12 +664,68 @@ function ImportPreview({
 }
 
 /**
+ * An import with text styles, stored in three steps, each a step of the
+ * history: the variables (and the site's other design data) first, since
+ * the site refuses a text style naming a variable it doesn't hold; then the
+ * text styles; then the Site text rows, which may follow them. Undo takes
+ * them back in the opposite order, which the site accepts at each step: it
+ * refuses to remove a text style while a row still follows it. Answers what
+ * was stored.
+ */
+async function importInSteps(steps: {
+  /** The import's variables, with the site's own Site text kept. */
+  variables: SiteTokenSet;
+  classes: ClassListEdit;
+  /** The import whole, laid over the variables as they are then. */
+  rows: () => SiteTokenSet | undefined;
+  writers: {
+    storeNow: (tokens: SiteTokenSet) => Promise<boolean>;
+    edit: EditClasses;
+    onChange: (tokens: SiteTokenSet) => void;
+  };
+  refuse: (headline: string, detail?: readonly string[]) => void;
+}): Promise<"all" | "variables" | "nothing"> {
+  const { writers, refuse } = steps;
+  const stored = await writers.storeNow(steps.variables).catch(() => false);
+  if (!stored) {
+    refuse("The variables weren't saved, so nothing was imported.");
+    return "nothing";
+  }
+  const refusal = await writers
+    .edit(steps.classes)
+    .catch(() => "The text styles couldn't be saved.");
+  if (refusal !== undefined) {
+    refuse("The text styles weren't imported, so neither was Site text.", [
+      refusal,
+    ]);
+    return "variables";
+  }
+  const rows = steps.rows();
+  if (rows !== undefined) writers.onChange(rows);
+  return "all";
+}
+
+/** `tokens` with the Site text rows `site` holds rather than its own. */
+function withSiteRowsOf(
+  tokens: SiteTokenSet,
+  site: SiteTokenSet
+): SiteTokenSet {
+  const { siteText: _imported, ...rest } = tokens;
+  return site.siteText === undefined
+    ? rest
+    : { ...rest, siteText: site.siteText };
+}
+
+/**
  * What an import is planned against: the site's text styles where the host
- * can store the file's, and its fonts where the host says which it has.
+ * can store the file's (it has both writers an import's steps go through), and its fonts where the host says which it has.
  */
 function importContext(
   host: {
     readonly onEditClasses?: EditClasses | undefined;
+    readonly storeTokensNow?:
+      | ((tokens: SiteTokenSet) => Promise<boolean>)
+      | undefined;
     readonly currentClasses?:
       | (() => readonly NamedClass[] | undefined)
       | undefined;
@@ -663,7 +734,7 @@ function importContext(
   fonts: FontChoices | undefined
 ): ImportContext {
   return {
-    ...(host.onEditClasses === undefined
+    ...(host.onEditClasses === undefined || host.storeTokensNow === undefined
       ? {}
       : { textStyles: host.currentClasses?.() ?? [] }),
     ...(fonts?.faces === undefined

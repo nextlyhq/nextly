@@ -965,6 +965,56 @@ describe.each(getConfiguredTestDialects())(
       );
     });
 
+    it("stores an import's variables, text styles and Site text in that order, and takes them back in the reverse", async () => {
+      // The order the editor's import writes in, against the site's own
+      // guards: a text style naming a variable the site doesn't hold is
+      // refused, and so is removing a text style a row still follows.
+      const { t } = await boot();
+      const designer = await holding(t, ...DESIGN);
+      const fresh = {
+        id: "t-fresh",
+        name: "font-size.fresh",
+        kind: "dimension",
+        values: { light: "1.25rem" },
+      };
+      const eyebrow = {
+        id: "ts-eyebrow",
+        slug: "eyebrow",
+        label: "Eyebrow",
+        orderIndex: 0,
+        role: "text",
+        styles: { base: { base: { fontSize: { $token: "t-fresh" } } } },
+      };
+      const rows = { h3: { textStyle: "ts-eyebrow" } };
+      // The site as booted, which every write keeps beside the import's.
+      const doc = (await t.nextly.findSingle({
+        slug: SITE_STYLE_SLUG,
+        overrideAccess: true,
+      })) as Record<string, unknown> | null;
+      const read = (raw: unknown): unknown =>
+        typeof raw === "string" ? JSON.parse(raw) : raw;
+      const site = (read(doc?.tokens) ?? { tokens: [] }) as {
+        tokens: unknown[];
+      };
+      const classes = (read(doc?.classes) ?? []) as unknown[];
+      const variables = { ...site, tokens: [...site.tokens, fresh] };
+      const write = async (body: Record<string, unknown>) =>
+        (await call("PATCH", SINGLE, designer, { ...body, _overwrite: true }))
+          .status;
+      // Text styles first would be refused: their variable isn't stored yet.
+      expect(await write({ classes: [...classes, eyebrow] })).toBe(400);
+      expect(await write({ tokens: variables })).toBe(200);
+      expect(await write({ classes: [...classes, eyebrow] })).toBe(200);
+      expect(await write({ tokens: { ...variables, siteText: rows } })).toBe(
+        200
+      );
+      // Undo, newest first. The text style can't go while a row follows it.
+      expect(await write({ classes })).toBe(400);
+      expect(await write({ tokens: variables })).toBe(200);
+      expect(await write({ classes })).toBe(200);
+      expect(await write({ tokens: site })).toBe(200);
+    });
+
     it("refuses a design token import's writes to a role that may read Design but not change it", async () => {
       const { t } = await boot();
       const reader = await holding(t, "read-site-style");
