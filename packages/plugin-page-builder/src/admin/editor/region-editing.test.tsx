@@ -693,6 +693,32 @@ describe("Done", () => {
     expect(current().host.dirty).toBe(false);
   });
 
+  it("waits on Discard before anything else is answered", async () => {
+    let emptied: () => void = () => undefined;
+    const discard = vi.fn(
+      () =>
+        new Promise<void>(resolve => {
+          emptied = resolve;
+        })
+    );
+    hoisted.session = sessionWith({ discard });
+    render(<Host />);
+    await enterHeader();
+    editHeader();
+
+    act(() => current().host.done());
+    fireEvent.click(await screen.findByRole("button", { name: "Discard" }));
+    await waitFor(() => expect(discard).toHaveBeenCalled());
+
+    const keep = screen.getByRole("button", { name: "Keep editing" });
+    expect(keep).toHaveProperty("disabled", true);
+    fireEvent.click(keep);
+    expect(screen.getByRole("alertdialog")).toBeTruthy();
+
+    await act(async () => emptied());
+    await waitFor(() => expect(current().host.area).toBeUndefined());
+  });
+
   it("keeps editing on Keep editing", async () => {
     render(<Host />);
     await enterHeader();

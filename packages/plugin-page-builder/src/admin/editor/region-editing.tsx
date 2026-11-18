@@ -559,6 +559,8 @@ interface RegionLeaving {
   readonly done: () => void;
   readonly leaveThen: (next: () => void) => void;
   readonly answer: (choice: DoneAnswer) => Promise<void>;
+  /** A Discard is on its way: nothing else is answered until it lands. */
+  readonly discarding: boolean;
 }
 
 /**
@@ -593,6 +595,7 @@ function useRegionLeaving({
   rereadRegions: () => void;
 }): RegionLeaving {
   const [asking, ask] = useState<"done" | "publish" | null>(null);
+  const [discarding, setDiscarding] = useState(false);
   const leaving = useRef<(() => void) | null>(null);
   const { leave: leaveTarget } = editing;
   const leave = useCallback(() => {
@@ -629,19 +632,29 @@ function useRegionLeaving({
         return;
       }
       // Discarded, a passage still open in the header (one its cap refused,
-      // say) ends with it, never to be written into the page left for.
-      if (choice === "discard") inline.cancel?.();
+      // say) ends with it, never to be written into the page left for; and
+      // nothing else is answered until the recovery point is emptied.
+      if (choice === "discard") {
+        inline.cancel?.();
+        setDiscarding(true);
+      }
       const left =
         choice === "discard"
-          ? await session.discard().then(() => true)
+          ? await session.discard().then(
+              () => true,
+              // The point could not be emptied: the author still chose to
+              // throw the changes away, so the header is left all the same.
+              () => true
+            )
           : await store(choice);
+      setDiscarding(false);
       if (!left) return;
       ask(null);
       leave();
     },
     [inline, session, store, leave]
   );
-  return { asking, ask, done, leaveThen, answer };
+  return { asking, ask, done, leaveThen, answer, discarding };
 }
 
 /** The top bar's Save and Publish for the region, while one is edited. */
@@ -687,14 +700,14 @@ function RegionQuestions({
   removal: JSX.Element;
 }): JSX.Element {
   const shown = area ?? "header";
-  const { asking, ask, answer } = leaving;
+  const { asking, ask, answer, discarding } = leaving;
   return (
     <>
       <RegionDoneDialog
         open={asking === "done" && area !== undefined}
         area={shown}
         reach={reach}
-        busy={store.busy}
+        busy={store.busy || discarding}
         mayPublish={mayPublish}
         draftable={draftable}
         onAnswer={choice => void answer(choice)}

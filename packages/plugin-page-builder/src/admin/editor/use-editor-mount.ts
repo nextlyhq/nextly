@@ -624,10 +624,13 @@ function useJudgedEdits(
   notices: NoticeQueue
 ): RegionStateArgs {
   const { raise } = notices;
-  const { components } = componentLibrary;
+  const { components, definitions } = componentLibrary;
   return useMemo(
     () => ({
       limits,
+      // The library's definitions as they are now: a component made while a
+      // header is edited in place is drawn and judged in it at once.
+      definitions,
       onRefused: refusal => raise(refusal.sentence),
       // A lock refusal, said the same way: the author reads why, in words.
       onLockRefused: refusal => raise(refusal.sentence),
@@ -640,7 +643,7 @@ function useJudgedEdits(
       // here rather than seeing the edit silently not happen.
       onPlacementRefused: refusal => raise(placementSentence(refusal)),
     }),
-    [limits, raise, components]
+    [limits, raise, components, definitions]
   );
 }
 
