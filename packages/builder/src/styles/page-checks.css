@@ -224,12 +224,12 @@
   line-height: 1.45;
 }
 
-.nx-page-checks__foot > p {
+.nx-page-checks__note {
   margin: 0;
 }
 
 .nx-page-checks__not-run {
-  margin-bottom: 0.375rem;
+  margin: 0 0 0.375rem;
   color: var(--nx-builder-warning-text);
 }
 
