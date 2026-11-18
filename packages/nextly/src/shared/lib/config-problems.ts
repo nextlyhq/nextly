@@ -26,6 +26,12 @@ export interface ConfigProblem {
   path: string;
   code: string;
   message: string;
+  /**
+   * Whether the entity was declared through its `define*` function, which marked it
+   * (`withProblemsRecorded`), rather than written as a plain object. A start refuses the first
+   * and warns about the second, which the start never judged before.
+   */
+  declaredByDefine: boolean;
 }
 
 /** The configuration's entities, as far as finding their problems reads them. */
@@ -33,6 +39,31 @@ export interface ConfigEntities {
   collections?: readonly unknown[];
   singles?: readonly unknown[];
   fieldGroups?: readonly unknown[];
+}
+
+/**
+ * The mark a `define*` function leaves on an entity it found problems in. A registered symbol,
+ * so a second copy of this module (the configuration's bundle beside the runtime's) reads the
+ * same one; enumerable, so a copy of the entity made by spreading it keeps the mark, which JSON
+ * and the settings records, reading string keys only, never see.
+ */
+const PROBLEMS_RECORDED = Symbol.for("nextly.config.problemsRecorded");
+
+/**
+ * `entity`, as its `define*` function declares it, marked as one whose problems that function
+ * found and left for the configuration's load and start to report, rather than throwing.
+ */
+export function withProblemsRecorded<T extends object>(entity: T): T {
+  return { ...entity, [PROBLEMS_RECORDED]: true };
+}
+
+/** Whether `entity` carries the mark `withProblemsRecorded` leaves. */
+function problemsRecorded(entity: unknown): boolean {
+  return (
+    typeof entity === "object" &&
+    entity !== null &&
+    (entity as Record<symbol, unknown>)[PROBLEMS_RECORDED] === true
+  );
 }
 
 /** `path` within the entity at `kind[index]`, as a path in the whole configuration. */
@@ -63,41 +94,56 @@ export function configurationProblems(config: ConfigEntities): ConfigProblem[] {
     },
     (kind, index) => `${kind}[${index}]`
   );
-  const fieldTypesOf = (kind: string, index: number) =>
-    fieldTypes.filter(
-      issue =>
-        issue.path === `${kind}[${index}]` ||
-        issue.path.startsWith(`${kind}[${index}].`)
-    );
+
+  // Each kind with the validator that judges it, in the order problems are listed.
+  const kinds: ReadonlyArray<
+    [
+      string,
+      readonly unknown[],
+      (
+        entry: unknown
+      ) => ReadonlyArray<Omit<ConfigProblem, "declaredByDefine">>,
+    ]
+  > = [
+    [
+      "collections",
+      collections,
+      entry =>
+        validateCollectionConfig(entry as CollectionConfig, collectionSlugs)
+          .errors,
+    ],
+    [
+      "singles",
+      singles,
+      entry => validateSingleConfig(entry as SingleConfig).errors,
+    ],
+    [
+      "fieldGroups",
+      fieldGroups,
+      entry => validateFieldGroupConfig(entry as FieldGroupConfig).errors,
+    ],
+  ];
 
   const problems: ConfigProblem[] = [];
-  collections.forEach((entry, index) => {
-    for (const error of validateCollectionConfig(
-      entry as CollectionConfig,
-      collectionSlugs
-    ).errors) {
-      problems.push({
-        ...error,
-        path: within("collections", index, error.path),
-      });
-    }
-    problems.push(...fieldTypesOf("collections", index));
-  });
-  singles.forEach((entry, index) => {
-    for (const error of validateSingleConfig(entry as SingleConfig).errors) {
-      problems.push({ ...error, path: within("singles", index, error.path) });
-    }
-    problems.push(...fieldTypesOf("singles", index));
-  });
-  fieldGroups.forEach((entry, index) => {
-    for (const error of validateFieldGroupConfig(entry as FieldGroupConfig)
-      .errors) {
-      problems.push({
-        ...error,
-        path: within("fieldGroups", index, error.path),
-      });
-    }
-    problems.push(...fieldTypesOf("fieldGroups", index));
-  });
+  for (const [kind, entries, validate] of kinds) {
+    entries.forEach((entry, index) => {
+      const declaredByDefine = problemsRecorded(entry);
+      for (const error of validate(entry)) {
+        problems.push({
+          ...error,
+          path: within(kind, index, error.path),
+          declaredByDefine,
+        });
+      }
+      for (const issue of fieldTypes) {
+        if (
+          issue.path === `${kind}[${index}]` ||
+          issue.path.startsWith(`${kind}[${index}].`)
+        ) {
+          problems.push({ ...issue, declaredByDefine });
+        }
+      }
+    });
+  }
   return problems;
 }

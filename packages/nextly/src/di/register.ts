@@ -343,6 +343,7 @@ import {
 } from "../shared/builder-refusal";
 import { assertNoLegacyFieldGroupKey } from "../shared/legacy-field-group-key";
 import { assertPluginFieldDeclarations } from "../shared/lib/assert-plugin-field-declarations";
+import { configurationProblems } from "../shared/lib/config-problems";
 import { replaceFieldFunctions } from "../shared/lib/field-level-registry";
 import type {
   AdminConfig,
@@ -983,6 +984,30 @@ async function registerServicesOnce(
     unresolvedPermissions,
     pluginBootContributions,
   } = validateBootContributions(transformedConfig, transformedPlugins);
+  // The configuration as the app declares it, judged by the rules that judge each entity, as
+  // every command's load judges it (`configurationProblems`): an entity the `define*` functions
+  // record a problem for, rather than throw at import, stops the start here, before the adapter
+  // connects, with every problem listed. Its field types are registered by now. Only the app's own
+  // entities: a plugin's contributions keep the checks of their own type above.
+  const problems = configurationProblems(config);
+  if (problems.some(problem => problem.declaredByDefine)) {
+    throw NextlyError.validation({
+      errors: problems.map(({ path, code, message }) => ({
+        path,
+        code,
+        message,
+      })),
+      logContext: { reason: "config-invalid" },
+    });
+  }
+  // An entity written as a plain object was never judged at the start before: a site serving
+  // one with a problem today is told of it, with where and what to do, and starts as it did.
+  // Every command refuses it, so it is fixed before the next migration or build.
+  for (const problem of problems) {
+    (transformedConfig.logger ?? consoleLogger).warn(
+      `[Nextly] Configuration problem at ${problem.path}: ${problem.message} Every nextly command refuses this configuration until it is fixed.`
+    );
+  }
   // Before any plugin context exists to read them: the dependencies `ctx.db`
   // grants table access by are the ones this boot's plugins declare.
   publishPluginDependencies(transformedPlugins);

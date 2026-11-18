@@ -41,13 +41,14 @@
 
 import type { FieldConfig } from "../../collections/fields/types";
 import type { AuthorableFieldConfig } from "../../collections/fields/types/plugin-field";
+import { withProblemsRecorded } from "../../shared/lib/config-problems";
 
 import type {
   FieldGroupConfig,
   FieldGroupLabel,
   FieldGroupAdminOptions,
 } from "./types";
-import { assertValidFieldGroupConfig } from "./validate-field-group";
+import { validateFieldGroupConfig } from "./validate-field-group";
 
 // ============================================================
 // Utility Functions
@@ -181,10 +182,19 @@ export function defineFieldGroup(
   // Comprehensive Validation
   // ============================================================
 
-  assertValidFieldGroupConfig({
-    ...config,
-    fields: asDeclaredFields(config.fields),
-  });
+  // Judged, not thrown: a configuration's load and the start judge every entity in it by the
+  // same rules (`configurationProblems`) and report every problem, where a throw here would stop
+  // at the first field group with one, during the import. One with a problem is returned as declared
+  // and marked (`withProblemsRecorded`): the defaults below assume an entity the rules accept,
+  // and the mark is what tells the start to refuse it rather than warn.
+  if (
+    !validateFieldGroupConfig({
+      ...config,
+      fields: asDeclaredFields(config.fields),
+    }).valid
+  ) {
+    return withProblemsRecorded(config) as unknown as FieldGroupConfig;
+  }
 
   // ============================================================
   // Apply Defaults

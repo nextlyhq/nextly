@@ -42,6 +42,7 @@ import type { WebhookEventType } from "../../domains/webhooks/types";
 import type { Workflow } from "../../domains/workflows/types";
 import type { RevalidateConfig } from "../../revalidation/types";
 import type { VersionsConfig } from "../../schemas/versions/types";
+import { withProblemsRecorded } from "../../shared/lib/config-problems";
 import { simplePluralize } from "../../shared/lib/pluralization";
 import type { CollectionFilterRuleInput } from "../../shared/types/rule-filter";
 import type { AuthorableFieldConfig, FieldConfig } from "../fields/types";
@@ -50,7 +51,7 @@ import type { TextFieldConfig } from "../fields/types/text";
 import { asDeclaredFields, toTitleCase } from "./declared-config";
 // Import validation conditionally - only in server environments
 // This prevents client-side bundlers from including the validation code
-import { assertValidCollectionConfig } from "./validate-config";
+import { validateCollectionConfig } from "./validate-config";
 
 // ============================================================
 // Collection Labels
@@ -1307,10 +1308,19 @@ export function defineCollection<
   // - Access function type validation
   // Validated as declared; the fields are narrowed to the shared union only
   // after, which is what makes the narrowing safe to make at all.
-  assertValidCollectionConfig({
-    ...config,
-    fields: asDeclaredFields(config.fields),
-  });
+  // Judged, not thrown: a configuration's load and the start judge every entity in it by the
+  // same rules (`configurationProblems`) and report every problem, where a throw here would stop
+  // at the first collection with one, during the import. One with a problem is returned as declared
+  // and marked (`withProblemsRecorded`): the defaults below assume an entity the rules accept,
+  // and the mark is what tells the start to refuse it rather than warn.
+  if (
+    !validateCollectionConfig({
+      ...config,
+      fields: asDeclaredFields(config.fields),
+    }).valid
+  ) {
+    return withProblemsRecorded(config) as unknown as CollectionConfig;
+  }
 
   // ============================================================
   // Auto-inject system fields (title, slug)

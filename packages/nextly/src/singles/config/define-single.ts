@@ -49,6 +49,7 @@ import type {
 } from "../../collections/fields/types";
 import type { SingleAccessControl } from "../../domains/auth/services/access-control-types";
 import { columnsDeclaredBy } from "../../domains/schema/services/field-column-descriptor";
+import { withProblemsRecorded } from "../../shared/lib/config-problems";
 
 import type {
   SingleConfig,
@@ -57,7 +58,7 @@ import type {
   SingleHooks,
   SinglePreviewConfig,
 } from "./types";
-import { assertValidSingleConfig } from "./validate-single";
+import { validateSingleConfig } from "./validate-single";
 
 // ============================================================
 // Utility Functions
@@ -194,10 +195,19 @@ export function defineSingle(config: SingleConfigInput): SingleConfig {
   // - Nested field validation (array, group, blocks)
   // - Access function type validation (read/update only)
   // Validated as declared; narrowed to the shared union only after.
-  assertValidSingleConfig({
-    ...config,
-    fields: asDeclaredFields(config.fields),
-  });
+  // Judged, not thrown: a configuration's load and the start judge every entity in it by the
+  // same rules (`configurationProblems`) and report every problem, where a throw here would stop
+  // at the first Single with one, during the import. One with a problem is returned as declared
+  // and marked (`withProblemsRecorded`): the defaults below assume an entity the rules accept,
+  // and the mark is what tells the start to refuse it rather than warn.
+  if (
+    !validateSingleConfig({
+      ...config,
+      fields: asDeclaredFields(config.fields),
+    }).valid
+  ) {
+    return withProblemsRecorded(config) as unknown as SingleConfig;
+  }
 
   // ============================================================
   // Auto-inject system fields (title, slug)

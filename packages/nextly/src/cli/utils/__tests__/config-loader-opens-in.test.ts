@@ -81,7 +81,11 @@ describe("loading the configuration for a command", () => {
   });
 
   it("loads the same collection opening in the form", async () => {
-    exported.config = { collections: [notes("form")] };
+    // The plugin offering `blocks` is declared: a field type nothing offers is refused at load.
+    exported.config = {
+      collections: [notes("form")],
+      plugins: [builderPlugin(true)],
+    };
     await expect(loadConfig({ cwd: project() })).resolves.toBeDefined();
   });
 

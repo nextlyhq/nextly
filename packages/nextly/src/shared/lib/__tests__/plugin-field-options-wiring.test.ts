@@ -26,6 +26,13 @@ import { mutateManifest } from "../../../domains/schema/ui-schema/mutate";
 import { uiSchemaFieldSchema } from "../../../schemas/_zod/ui-schema";
 import { validateSingleConfig } from "../../../singles/config/validate-single";
 import type { SingleConfig } from "../../../singles/config/types";
+import { configurationProblems } from "../config-problems";
+
+/** Every problem the configuration's load reports for these entities, as one text. */
+const problemText = (entities: Parameters<typeof configurationProblems>[0]) =>
+  configurationProblems(entities)
+    .map(problem => `[${problem.code}] ${problem.path}: ${problem.message}`)
+    .join("\n");
 
 afterEach(() => {
   clearFieldTypes();
@@ -118,12 +125,16 @@ describe("declaration checks reach every authoring path", () => {
     // actually protect a plugin type all run after registration.
     registerDocument();
 
-    expect(() =>
-      defineCollection({
-        slug: "posts",
-        fields: [badField],
-      } as unknown as CollectionConfig)
-    ).toThrow(/policy\.kinds must name at least one kind/);
+    expect(
+      problemText({
+        collections: [
+          defineCollection({
+            slug: "posts",
+            fields: [badField],
+          } as unknown as CollectionConfig),
+        ],
+      })
+    ).toMatch(/policy\.kinds must name at least one kind/);
   });
 
   it("still checks the name of a field whose type it defers", () => {
