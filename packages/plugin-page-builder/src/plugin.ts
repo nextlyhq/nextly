@@ -42,6 +42,12 @@ import {
   FORM_SERVICE,
   startFormProviders,
 } from "./forms/providers";
+import {
+  createPageCheckProviders,
+  PAGE_CHECKS_SERVICE,
+  startPageCheckProviders,
+} from "./page-check-providers";
+import { providedChecksRoute } from "./page-checks-provided-route";
 import { FORM_SEND_LIMITS, formReceiverRoute } from "./forms/route";
 import { SITE_FORMS_SERVICE_NAME, siteForms } from "./forms/site-forms";
 import { PAGE_BUILDER_PLUGIN_NAME } from "./library-contract";
@@ -118,6 +124,12 @@ import {
   BREAKPOINT_REMOVAL_UNDONE_AUDIT,
   BREAKPOINT_REMOVAL_UNDONE_METADATA,
 } from "./site-breakpoint-undo";
+import { appOrigin } from "./site-code/page-code";
+import {
+  PAGE_CODE_SAVED_AUDIT,
+  PAGE_CODE_SAVED_METADATA,
+  registerPageCodeAudit,
+} from "./site-code/page-code-audit";
 import {
   SITE_CSS_SAVED_AUDIT,
   SITE_CSS_SAVED_METADATA,
@@ -153,6 +165,9 @@ export const pageBuilder = (
   const def = createDefinition(opts);
   // The form providers other plugins register, read by the form receiver.
   const formProviders = createFormProviders();
+  // The page check providers other plugins register, run by the
+  // provided-checks route for the editor's Page checks list.
+  const pageCheckProviders = createPageCheckProviders();
   // What a routed page's forms need: where they post, and its providers' forms.
   const pageForms = siteForms({
     providers: formProviders,
@@ -292,6 +307,8 @@ export const pageBuilder = (
       // Starts this boot's form providers, so the last boot's are forgotten
       // even when no plugin registers one.
       startFormProviders(ctx.services);
+      // And this boot's page check providers, the same way.
+      startPageCheckProviders(ctx.services);
       pageForms.start(ctx.self);
       // The site's named queries and the ones plugins declare, into a
       // registry emptied for this boot.
@@ -360,6 +377,14 @@ export const pageBuilder = (
         countPlacements
       );
       installBindingReport(ctx, def, bindingReportDeps);
+      // An audit row for each committed change to a page's own code.
+      registerPageCodeAudit({
+        ctx,
+        mayHoldBlocks: collection =>
+          def.state.writeReach.mayHoldBlocks(collection),
+        options: opts.siteCode,
+        siteOrigin: () => appOrigin(process.env.NEXT_PUBLIC_APP_URL),
+      });
       installBreakpointRemoval(
         ctx,
         def,
@@ -408,6 +433,11 @@ export const pageBuilder = (
             kind: SITE_CODE_SAVED_AUDIT,
             metadataKeys: [...SITE_CODE_SAVED_METADATA],
           },
+          // And one per committed change to a page's own code, the same.
+          {
+            kind: PAGE_CODE_SAVED_AUDIT,
+            metadataKeys: [...PAGE_CODE_SAVED_METADATA],
+          },
           // One per site CSS save: hashes and sizes, never the CSS.
           {
             kind: SITE_CSS_SAVED_AUDIT,
@@ -423,6 +453,8 @@ export const pageBuilder = (
       services: {
         ...pluginServices(def, { removalService, readRetiredFor }),
         [FORM_SERVICE]: () => formProviders.start(),
+        // And `pageChecks`, the channel a plugin adds page checks through.
+        [PAGE_CHECKS_SERVICE]: () => pageCheckProviders.start(),
         [SITE_FORMS_SERVICE_NAME]: () => pageForms.service(),
         // The site's CSS, for a route whose copy of the page builder never
         // started (`pageBuilderCustomCss({ plugin })`).
@@ -477,6 +509,8 @@ export const pageBuilder = (
       // plugin route declares one permission, so the tier a role may read
       // without the other has to be reachable without the other's gate.
       routes: [
+        // Other plugins' page checks about the page being edited.
+        providedChecksRoute(() => pageCheckProviders.all()),
         components.blocksList,
         components.patternLibrary,
         components.componentLibrary,

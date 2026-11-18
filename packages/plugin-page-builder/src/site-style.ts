@@ -274,8 +274,24 @@ export function tokenOverrideOf(
     sameJsonValue(edited.order, defaults?.order)
       ? {}
       : { order: edited.order }),
+    ...storedBuiltInColoursShown(defaults, edited),
     ...rows,
   };
+}
+
+/**
+ * Whether the built-in colours are shown, as the stored tier holds it: only
+ * where it differs from the code's, so a site that never hides them, or
+ * hides them as its code does, stores nothing. Unset reads as shown.
+ */
+function storedBuiltInColoursShown(
+  defaults: SiteTokenSet | undefined,
+  edited: SiteTokenSet
+): Pick<SiteTokenSet, "builtInColoursShown"> {
+  const shown = edited.builtInColoursShown ?? true;
+  return shown === (defaults?.builtInColoursShown ?? true)
+    ? {}
+    : { builtInColoursShown: shown };
 }
 
 /**
@@ -459,6 +475,7 @@ const SITE_WIDE_SETTINGS = [
   "darkMode",
   "fluidRange",
   "order",
+  "builtInColoursShown",
 ] as const satisfies readonly (keyof SiteTokenSet)[];
 
 /** Each site-wide setting the stored tier or the code sets, the stored first. */

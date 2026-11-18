@@ -29,6 +29,7 @@ import { revealNode } from "../canvas/reveal-node";
 import { ShowInspectorContext } from "../shell/show-inspector";
 
 import { IMAGE_ALT_CHECK } from "./image-alt-check";
+import type { PageCheck } from "./page-checks";
 import { PageChecksChip, type PageChecksChipProps } from "./page-checks-chip";
 
 vi.mock("../canvas/reveal-node", () => ({ revealNode: vi.fn(() => true) }));
@@ -166,6 +167,87 @@ describe("pressing an item", () => {
       screen.getByRole("button", { name: "Image has no alt text: Photo a" })
     );
     expect(show).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens the document's settings at the tab a finding names", () => {
+    const openTab = vi.fn();
+    const editor = {
+      document: page({}),
+      select: vi.fn(),
+      askSetting: vi.fn(),
+    };
+    const search: PageCheck = {
+      id: "seo",
+      group: "search",
+      run: () => [
+        {
+          what: "Title is too long",
+          why: "Search results cut it short.",
+          todo: "Shorten the title.",
+          settingsTab: "seo-tab",
+        },
+      ],
+    };
+    render(
+      <PageChecksChip
+        editor={editor}
+        canvas={null}
+        blocks={blocks}
+        checks={[search]}
+        onOpenSettingsTab={openTab}
+      />
+    );
+    fireEvent.click(chip());
+    fireEvent.click(screen.getByRole("button", { name: /Title is too long/ }));
+    expect(openTab).toHaveBeenCalledWith("seo-tab");
+    expect(editor.select).not.toHaveBeenCalled();
+  });
+
+  it("offers a fix in another editor as a link in the bar, selecting nothing", () => {
+    const editor = {
+      document: page({ a: undefined }),
+      select: vi.fn(),
+      askSetting: vi.fn(),
+    };
+    const opens = {
+      href: "/admin/layouts/main",
+      text: "Edit header & footer",
+      name: "Edit the Main header & footer, in a new tab",
+    };
+    const elsewhere: PageCheck = {
+      id: "elsewhere",
+      group: "content",
+      run: () => [
+        {
+          part: "nav",
+          what: "Over the page data limit in Site header",
+          why: "Its entries don't load.",
+          todo: "Show fewer entries there.",
+          opens,
+        },
+      ],
+    };
+    render(
+      <PageChecksChip
+        editor={editor}
+        canvas={null}
+        blocks={blocks}
+        checks={[IMAGE_ALT_CHECK, elsewhere]}
+      />
+    );
+    fireEvent.click(chip());
+    // In from the page's block, then on to the header's with Next.
+    fireEvent.click(screen.getAllByRole("button", { name: /no alt text/ })[0]!);
+    editor.select.mockClear();
+    fireEvent.click(screen.getByRole("button", { name: "Next check" }));
+    const link = screen.getByRole("link", {
+      name: "Over the page data limit in Site header. Edit the Main header & footer, in a new tab",
+    });
+    expect(link.getAttribute("href")).toBe("/admin/layouts/main");
+    expect(bar()?.textContent).toContain("Check 2 of 2");
+    // No block of the page is left looking like the problem.
+    expect(editor.select).toHaveBeenCalledWith(null);
+    expect(editor.askSetting).toHaveBeenCalledTimes(1);
   });
 
   it("closes the list back on the count after walking with Next", async () => {

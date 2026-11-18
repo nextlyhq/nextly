@@ -123,6 +123,23 @@ export interface SiteStylesProvider {
 }
 
 /**
+ * What a route draws around a published page, for a plugin that adds to every
+ * page it serves: `before` ahead of the page's own output, and `after` behind
+ * it. Asked once per render with the entry as read, the field drawn, and its
+ * own stored value (the page's document before any template is composed in).
+ *
+ * @experimental Settles with page code.
+ */
+export type PageSurroundings = (args: {
+  readonly entry: ContentEntry;
+  readonly field: string;
+  readonly document: unknown;
+  readonly context: RenderContext;
+}) =>
+  | { readonly before?: ReactNode; readonly after?: ReactNode }
+  | Promise<{ readonly before?: ReactNode; readonly after?: ReactNode }>;
+
+/**
  * Config for {@link createBlocksPage}.
  *
  * Everything {@link ContentRouteConfig} accepts, minus `render` — supplying
@@ -342,6 +359,13 @@ export interface BlocksPageConfig
    * blocks and its HTML holds them (`PageRendererProps.blockFallback`).
    */
   blockFallback?: ReactNode;
+  /**
+   * What the route draws around each page it serves (`PageSurroundings`).
+   * A content page's provider may supply it for every page and entry.
+   *
+   * @experimental Settles with page code.
+   */
+  around?: PageSurroundings;
   /**
    * The time zone a bound date-time is shown in, as an IANA name such as
    * `Europe/Paris`. A calendar date is shown as its own day whatever this is.
@@ -620,6 +644,14 @@ export interface ContentPageConfig {
    * whose sheet is compiled from `styleContext`.
    */
   readonly pages: BlocksPageConfig;
+  /**
+   * What the route draws around every page and entry it serves, as
+   * `BlocksPageConfig.around` takes it; the page builder supplies the page's
+   * own code. A `pages.around` the site sets wins.
+   *
+   * @experimental Settles with page code.
+   */
+  readonly around?: PageSurroundings;
   /**
    * Who holds `path` in `locale`: the path as served (the route's
    * `mountPath` included, each segment percent-encoded), and the route's
