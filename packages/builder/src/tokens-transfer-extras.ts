@@ -172,32 +172,34 @@ export function followingAdoption<T>(
   // to the one it is read under here: its id here, under this site's
   // prefix. Matched as a whole name inside `var()`, ended by a space, a
   // fallback's comma or the closing parenthesis, so a longer property it
-  // begins is left alone.
-  const properties = adoption.identities.flatMap(identity => {
+  // begins is left alone; and in one pass over the text as written, so a
+  // property already pointed elsewhere is never pointed again.
+  const table = new Map<string, string>();
+  for (const identity of adoption.identities) {
     const from = tokenCustomProperty(identity, adoption.from);
     const to = tokenCustomProperty(
       adoption.ids.get(identity) ?? identity,
       adoption.to
     );
-    return from === to
-      ? []
-      : [
-          {
-            pattern: new RegExp(
-              `(var\\(\\s*)${escapeRegExp(from)}(?=[\\s,)])`,
-              "g"
-            ),
-            to,
-          },
-        ];
-  });
-  if (properties.length === 0 && adoption.ids.size === 0) return value;
+    if (from !== to && !table.has(from)) table.set(from, to);
+  }
+  if (table.size === 0 && adoption.ids.size === 0) return value;
+  const names = [...table.keys()]
+    .sort((left, right) => right.length - left.length)
+    .map(escapeRegExp);
+  const pattern =
+    names.length === 0
+      ? undefined
+      : new RegExp(`(var\\(\\s*)(${names.join("|")})(?=[\\s,)])`, "g");
   const walk = (node: unknown): unknown => {
     if (typeof node === "string") {
-      return properties.reduce(
-        (text, { pattern, to }) => text.replace(pattern, `$1${to}`),
-        node
-      );
+      return pattern === undefined
+        ? node
+        : node.replace(
+            pattern,
+            (_match, open: string, name: string) =>
+              `${open}${table.get(name) ?? name}`
+          );
     }
     if (Array.isArray(node)) return node.map(walk);
     if (node === null || typeof node !== "object") return node;

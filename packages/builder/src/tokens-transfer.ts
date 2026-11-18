@@ -41,6 +41,8 @@ import {
   resolverToTokens,
   resolveTokenPrefix,
   sameSiteToken,
+  SITE_TEXT_LABELS,
+  siteTextUses,
   tokensToFigma,
   tokensToResolver,
   tokenCustomProperty,
@@ -53,6 +55,7 @@ import {
   type ModesRead,
   type NamedClass,
   type SiteToken,
+  type SiteTextRole,
   type SiteTokenSet,
 } from "@nextlyhq/blocks-engine";
 
@@ -308,12 +311,67 @@ export function planImport(
   // the first reported.
   const dropped: string[] = [];
   const unique = [...oneEach(withStoredIds(tokens, adopted), dropped).values()];
+  // Rows using a variable the merge would refuse keep the site's own,
+  // judged against every incoming variable taken; applying judges again
+  // against what the author's choices take.
+  const rowsLeft: string[] = [];
+  const site = rowsItsVariablesReach(
+    extras.site,
+    unique,
+    mergeById(withFluidRangeOf(into, extras.site), unique).tokens,
+    rowsLeft
+  );
   return {
     ok: true,
-    skipped: [...skipped, ...refusedStyles, ...dropped],
+    skipped: [...skipped, ...refusedStyles, ...dropped, ...rowsLeft],
     ...planned(unique, into),
-    extras,
+    extras: {
+      ...extras,
+      ...(site === undefined ? {} : { site }),
+    },
   };
+}
+
+/**
+ * The file's site data without the Site text rows that use one of the
+ * file's variables the merge didn't take (refused for a name another
+ * variable here holds): such a row would read nothing, so the site's own
+ * row is kept, and `refused` names it.
+ */
+function rowsItsVariablesReach(
+  site: DtcgSiteData | undefined,
+  incoming: readonly SiteToken[],
+  merged: SiteTokenSet,
+  refused: string[]
+): DtcgSiteData | undefined {
+  if (site?.siteText === undefined) return site;
+  const prefix = resolveTokenPrefix(merged.prefix).prefix;
+  const keys = (token: SiteToken): string[] => [
+    tokenIdentity(token),
+    tokenCustomProperty(tokenIdentity(token), prefix),
+  ];
+  const landed = new Set(merged.tokens.flatMap(keys));
+  const names = new Map(
+    incoming.flatMap(token =>
+      keys(token).map(key => [key, token.name] as const)
+    )
+  );
+  const left = new Map<SiteTextRole, string>();
+  for (const [key, roles] of siteTextUses(site.siteText)) {
+    const name = names.get(key);
+    if (name === undefined || landed.has(key)) continue;
+    for (const role of roles) if (!left.has(role)) left.set(role, name);
+  }
+  if (left.size === 0) return site;
+  const rows: Record<string, unknown> = { ...site.siteText };
+  for (const [role, name] of left) {
+    delete rows[role];
+    refused.push(
+      `Site text: ${SITE_TEXT_LABELS[role]} kept this site's own settings, because a variable it uses, “${name}”, wasn't imported.`
+    );
+  }
+  const { siteText: _all, ...rest } = site;
+  return Object.keys(rows).length === 0 ? rest : { ...rest, siteText: rows };
 }
 
 /**
@@ -584,6 +642,13 @@ export function applyImport(
     };
   }
   const merged = mergeById(withFluidRangeOf(into, plan.extras.site), taken);
+  const rowsLeft: string[] = [];
+  const site = rowsItsVariablesReach(
+    plan.extras.site,
+    plan.incoming,
+    merged.tokens,
+    rowsLeft
+  );
   // Refused rather than saved: two variables under one name cannot be told
   // apart in the panel, and the site's own edits are held to the same rule.
   const clashing = newLabelClashes(into, merged.tokens);
@@ -602,9 +667,9 @@ export function applyImport(
     ok: true,
     // The site's own design data laid over the merged variables, so the two
     // save, merge and undo as one edit.
-    tokens: withSiteData(merged.tokens, plan.extras.site),
+    tokens: withSiteData(merged.tokens, site),
     imported: merged.landed,
-    skipped: [...plan.skipped, ...merged.refused],
+    skipped: [...plan.skipped, ...merged.refused, ...rowsLeft],
     ...(styles === 0
       ? {}
       : {

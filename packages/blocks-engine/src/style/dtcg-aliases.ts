@@ -51,9 +51,12 @@ export function resolveAliases(document: DtcgNode): {
   // written as that colour's value.
   const layered = new Map<string, unknown>();
   for (const [path, entry] of found) {
-    if (entry.type !== "shadow") continue;
-    const value = withLayerColours(entry.node.$value, found, settled);
-    if (value !== entry.node.$value) layered.set(path, value);
+    // A whole alias to a shadow takes that shadow's value, resolved alike.
+    const to = settled.get(path);
+    const end = to === undefined || typeof to === "string" ? entry : to;
+    if (end.type !== "shadow") continue;
+    const value = withLayerColours(end.node.$value, found, settled);
+    if (value !== end.node.$value) layered.set(path, value);
   }
   return { document: substituted(document, [], settled, layered), issues };
 }
@@ -216,7 +219,11 @@ function substituted(
     } else if (typeof outcome !== "string") {
       entries.push([
         key,
-        { ...child, $type: outcome.type, $value: outcome.node.$value },
+        {
+          ...child,
+          $type: outcome.type,
+          $value: layered.get(here.join(".")) ?? outcome.node.$value,
+        },
       ]);
     }
   }
