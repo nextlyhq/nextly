@@ -564,12 +564,33 @@ function storedRelationOptionsOf(
   return Object.keys(kept).length > 0 ? kept : undefined;
 }
 
-/** A Max depth a relationship stored in its `options`, for the control the person edits. */
-function storedOptionsMaxDepth(field: FieldDefinition): number | undefined {
+/**
+ * The Max depth the Builder's control shows: the field's own, else for a relationship a depth it
+ * stored in its `options`, which the save then writes as the field's own.
+ */
+function builderMaxDepthOf(field: FieldDefinition): number | undefined {
+  if (field.maxDepth !== undefined || field.type !== "relationship") {
+    return field.maxDepth;
+  }
   const stored: unknown = field.options;
   return isPlainRecord(stored) && typeof stored.maxDepth === "number"
     ? stored.maxDepth
     : undefined;
+}
+
+/**
+ * What the Builder keeps of how a relationship is stored, for its save to write back: its stored
+ * options (`storedRelationOptionsOf`) and whether Allow multiple was stored on (`storedHasMany`).
+ */
+function storedRelationStateOf(
+  field: FieldDefinition
+): Pick<BuilderField, "storedRelationOptions" | "storedHasMany"> {
+  return {
+    storedRelationOptions: storedRelationOptionsOf(field),
+    ...(field.type === "relationship" && field.hasMany === true
+      ? { storedHasMany: true as const }
+      : {}),
+  };
 }
 
 /**
@@ -655,12 +676,7 @@ export function convertToBuilderField(
     },
     // Relationship properties
     relationTo: field.relationTo,
-    // A depth stored in `options` shows on the control too, which the save then writes.
-    maxDepth:
-      field.maxDepth ??
-      (field.type === "relationship"
-        ? storedOptionsMaxDepth(field)
-        : undefined),
+    maxDepth: builderMaxDepthOf(field),
     allowCreate: field.allowCreate,
     allowEdit: field.allowEdit,
     isSortable: field.isSortable,
@@ -717,10 +733,7 @@ export function convertToBuilderField(
     }));
   }
 
-  builderField.storedRelationOptions = storedRelationOptionsOf(field);
-  if (field.type === "relationship" && field.hasMany === true) {
-    builderField.storedHasMany = true;
-  }
+  Object.assign(builderField, storedRelationStateOf(field));
 
   return builderField;
 }
