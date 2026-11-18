@@ -202,6 +202,9 @@ vi.mock("./site-style-read", () => ({
 }));
 
 vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
+  // The empty page's starter pages read, offering none: no case here starts
+  // a page from one.
+  readPluginRoute: async () => ({ items: [] }),
   // Where the page opens and the pin's id, which the top bar reads; no
   // collection is named here, so the exit goes to the form.
   useDocumentOpensIn: () => null,

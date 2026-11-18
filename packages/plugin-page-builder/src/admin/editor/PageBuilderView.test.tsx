@@ -211,6 +211,9 @@ vi.mock("../site-style-read", () => ({
 }));
 
 vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
+  // The empty page's starter pages read, offering none: no case here starts
+  // a page from one.
+  readPluginRoute: async () => ({ items: [] }),
   // The canvas's media read, answering nothing: these cases draw no image.
   // One function for every call, as the admin's own hook keeps it.
   useMediaResolver: (
