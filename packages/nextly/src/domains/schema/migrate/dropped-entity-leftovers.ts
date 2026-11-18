@@ -133,28 +133,54 @@ async function goneEntities(args: {
 }): Promise<DroppedEntity[]> {
   const dropped = droppedEntities(args.chain);
   const gone: DroppedEntity[] = [];
-  for (const [kind, key] of RECORDED_KINDS) {
+  for (const [kind] of RECORDED_KINDS) {
     for (const slug of dropped[kind]) {
-      if (isReservedResourceSlug(slug)) continue;
-      if (await registryHolds(args.adapter, kind, slug)) continue;
-      // The newest record that held it names the table it was dropped with.
-      const holder = [...args.chain]
-        .reverse()
-        .find(record => slug in record[key]);
-      const entry = holder?.[key][slug];
-      if (entry === undefined) continue;
-      const table = recordedEntityTable(kind, slug, entry);
-      let stands: boolean;
-      try {
-        stands = await args.adapter.tableExists(table);
-      } catch {
-        stands = true;
-      }
-      if (!stands) gone.push({ kind, slug, table });
+      const table = await goneTableOf(args, kind, slug);
+      if (table !== undefined) gone.push({ kind, slug, table });
     }
   }
   return gone;
 }
+
+/**
+ * The table dropped entity `kind` `slug` was dropped with, where its registry
+ * row and that table are both gone; undefined otherwise, for a reserved slug,
+ * and where no record names its table.
+ */
+async function goneTableOf(
+  args: { adapter: DrizzleAdapter; chain: readonly EntitySettingsRecord[] },
+  kind: SettingsEntityKind,
+  slug: string
+): Promise<string | undefined> {
+  if (isReservedResourceSlug(slug)) return undefined;
+  if (await registryHolds(args.adapter, kind, slug)) return undefined;
+  // The newest record that held it names the table it was dropped with.
+  const key = RECORD_KEYS[kind];
+  const entry = [...args.chain].reverse().find(record => slug in record[key])?.[
+    key
+  ][slug];
+  if (entry === undefined) return undefined;
+  const table = recordedEntityTable(kind, slug, entry);
+  return (await tableStands(args.adapter, table)) ? undefined : table;
+}
+
+/** Whether `table` is there; one that cannot be asked about counts as standing. */
+async function tableStands(
+  adapter: DrizzleAdapter,
+  table: string
+): Promise<boolean> {
+  try {
+    return await adapter.tableExists(table);
+  } catch {
+    return true;
+  }
+}
+
+/** Where a snapshot's entity record keeps each kind. */
+const RECORD_KEYS = Object.fromEntries(RECORDED_KINDS) as Record<
+  SettingsEntityKind,
+  keyof EntitySettingsRecord
+>;
 
 /** The registry table each kind's rows are kept in; a field group's is resolved, as it has two names. */
 const REGISTRY_TABLES: Record<
