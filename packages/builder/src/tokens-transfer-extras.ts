@@ -168,6 +168,20 @@ export function followingAdoption<T>(
   adoption: Adoption | undefined
 ): T {
   if (adoption === undefined) return value;
+  // Built once per import, however many values it is asked of.
+  let remap = remappers.get(adoption);
+  if (remap === undefined) {
+    remap = remapperFor(adoption);
+    remappers.set(adoption, remap);
+  }
+  return remap(value) as T;
+}
+
+/** Each import's remapper, kept with the adoption it was built for. */
+const remappers = new WeakMap<Adoption, (value: unknown) => unknown>();
+
+/** The walk that points a value's references where `adoption` says. */
+function remapperFor(adoption: Adoption): (value: unknown) => unknown {
   // Each of the file's variables' custom properties, as the file writes it,
   // to the one it is read under here: its id here, under this site's
   // prefix. Matched as a whole name inside `var()`, ended by a space, a
@@ -183,7 +197,7 @@ export function followingAdoption<T>(
     );
     if (from !== to && !table.has(from)) table.set(from, to);
   }
-  if (table.size === 0 && adoption.ids.size === 0) return value;
+  if (table.size === 0 && adoption.ids.size === 0) return value => value;
   const names = [...table.keys()]
     .sort((left, right) => right.length - left.length)
     .map(escapeRegExp);
@@ -212,7 +226,7 @@ export function followingAdoption<T>(
       ])
     );
   };
-  return walk(value) as T;
+  return walk;
 }
 
 /** `text` as a regular expression matching it literally. */

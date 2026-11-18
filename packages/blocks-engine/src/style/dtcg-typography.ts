@@ -36,6 +36,7 @@ import {
   type NamedClass,
 } from "./named-class";
 import { type SiteToken, tokenIdentity } from "./site-tokens";
+import { validateStyleValues } from "./validate-style-value";
 
 /** The group the typography values sit under, at the file's root. */
 export const TEXT_STYLES_GROUP = "textStyles";
@@ -210,7 +211,30 @@ function textStyleOf(entry: unknown): NamedClass | undefined {
     ...(locked === true ? { locked: true as const } : {}),
     role: "text" as const,
   };
-  return isUsableNamedClass(style) ? style : undefined;
+  return isUsableNamedClass(style) && valuesStorable(style.styles)
+    ? style
+    : undefined;
+}
+
+/**
+ * Whether every value a text style holds passes the engine's own value
+ * check, the one the site's class save judges each style by: one it
+ * would refuse would refuse the whole save with it.
+ */
+function valuesStorable(styles: NamedClass["styles"]): boolean {
+  for (const [state, byBreakpoint] of Object.entries(styles)) {
+    if (!isPlainObject(byBreakpoint)) continue;
+    for (const [breakpoint, values] of Object.entries(byBreakpoint)) {
+      if (!isPlainObject(values)) continue;
+      const issues = validateStyleValues(
+        values,
+        `styles.${state}.${breakpoint}`,
+        "forgiving"
+      );
+      if (issues.some(found => found.severity === "error")) return false;
+    }
+  }
+  return true;
 }
 
 /** Whether the fields a class's check doesn't judge are in their shapes. */

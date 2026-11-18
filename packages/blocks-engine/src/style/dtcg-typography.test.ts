@@ -27,7 +27,7 @@ const eyebrow: NamedClass = {
         fontFamily: { $token: "font.heading" },
         fontSize: { $token: "font-size.h2" },
         lineHeight: { $token: "line-height.h2" },
-        fontWeight: "700",
+        fontWeight: 700,
         letterSpacing: "0.05rem",
         textTransform: "uppercase",
       },

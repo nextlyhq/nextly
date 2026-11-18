@@ -484,7 +484,7 @@ describe("an import carrying the site's own design data", () => {
         }
       )
     );
-    expect(performance.now() - started).toBeLessThan(2500);
+    expect(performance.now() - started).toBeLessThan(1500);
   });
 
   it("follows only the whole custom property of a merged variable, never one it begins", () => {
