@@ -377,7 +377,8 @@ type PanelRequests = {
  */
 interface RequestPanel {
   (panel: LeftPanel): void;
-  (panel: "design", view?: DesignView): void;
+  // A tab, or the Fonts screen opened over the panel.
+  (panel: "design", view?: DesignView | typeof FONTS_SCREEN_VIEW): void;
   (panel: Exclude<LeftPanel, "design">, view?: string): void;
 }
 
