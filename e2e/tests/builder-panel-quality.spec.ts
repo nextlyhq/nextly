@@ -313,6 +313,15 @@ test.describe("the block panel", () => {
           await chooseTab(inspector, tab);
           // Every section open, so each control is scanned.
           await openSections(inspector);
+          if (tab === "Advanced") {
+            // The block's own CSS is scanned with the rest: the section is
+            // drawn for a person who may change site code, as this one may.
+            await expect(
+              inspector.locator(".nx-style-inspector__section-trigger", {
+                hasText: "Custom CSS",
+              })
+            ).toBeVisible();
+          }
           // Scrolled back to the top, so no control sits under the panel's
           // sticky head while it is judged.
           await inspector.evaluate(root => {
