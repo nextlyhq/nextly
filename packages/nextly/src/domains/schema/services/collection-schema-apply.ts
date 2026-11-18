@@ -94,10 +94,15 @@ import { RegexRenameDetector } from "../pipeline/rename-detector";
 import type { Resolution } from "../pipeline/resolution/types";
 import { recoverInterruptedSqliteRebuilds } from "../pipeline/sqlite-rebuild-recovery";
 import type { DesiredCollection, DesiredSchema } from "../pipeline/types";
+import {
+  entityLabel,
+  perLanguageBefore,
+  refuseFieldTypeChanges,
+} from "../value-conversion/type-change/field-type-changes";
 
 import { DrizzleStatementExecutor } from "./drizzle-statement-executor";
 import { withStoredRelationshipOptions } from "./editor-relationship-fields";
-import { toSnakeCase } from "./field-column-descriptor";
+import { fieldsStoredOnRow, toSnakeCase } from "./field-column-descriptor";
 import { withSchemaChangeExcluded } from "./schema-change-exclusion";
 
 /**
@@ -872,6 +877,27 @@ async function applyHoldingSchemaLock(
     newFields: fields,
     subject: `Collection '${slug}'`,
   });
+  // A translated field renamed and retyped at once: the companion's rename carries each language's
+  // value to the new name, which the push, blind to the companion, never pairs. A rename is offered
+  // only between fields of one type and one storage today, so none carries a type change; were one
+  // offered across a type change, it is judged here, over the companion's values, before anything
+  // runs.
+  if (companionRename) {
+    await refuseFieldTypeChanges(adapter.getDrizzle(), dialect, {
+      label: entityLabel("collection", slug),
+      table: tableName,
+      translationsTable: `${tableName}_locales`,
+      ...perLanguageBefore({ localized: wasLocalized }, tableName, oldFields),
+      previous: fieldsStoredOnRow(oldFields).filter(
+        field => field.name === companionRename.from
+      ),
+      next: fieldsStoredOnRow(fields).filter(
+        field => field.name === companionRename.to
+      ),
+      renamed: new Map([[companionRename.from, companionRename.to]]),
+      builtBy: builtByFor("collection", true),
+    });
+  }
   // A column made unique over entries that already repeat a value is refused before anything
   // runs, naming the field and how many values repeat.
   await refuseUniqueOverRepeats({
