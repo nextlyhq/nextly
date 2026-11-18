@@ -32,9 +32,9 @@ describe("what a removal takes out, and putting it back", () => {
   });
 
   it("says a colour the order does not name has no place in it", () => {
-    expect(
-      takenFrom({ tokens: [entry("t-a")] }, new Set(["t-a"]))
-    ).toEqual([{ id: "t-a", entry: entry("t-a"), at: 0, orderAt: null }]);
+    expect(takenFrom({ tokens: [entry("t-a")] }, new Set(["t-a"]))).toEqual([
+      { id: "t-a", entry: entry("t-a"), at: 0, orderAt: null },
+    ]);
   });
 
   it("puts back removals made one at a time, latest first, exactly where they were", () => {
