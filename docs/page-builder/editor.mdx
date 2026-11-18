@@ -1191,6 +1191,15 @@ each post's title, every row its own, on the canvas and on the published page. T
 binding belongs to this placement only, and fills the component's block the setting
 feeds. Unbinding keeps the value the placement already had for the setting.
 
+**Make this a setting of the component.** Below a placement's settings, this section
+lists the component's text, link and image blocks that aren't settings yet. Pick a field
+for one, and it becomes a new setting of the component, bound to that field on this
+placement only; the canvas shows the field's data at once. The component itself changes
+with the page's next **Save**, and **Publish** publishes it too. Other pages that place
+the component keep showing what they show now. If the component can't take the setting,
+for instance because someone changed it since, the binding comes off this page, the Save
+stops with a message that says why, and **Save again** saves the page without it.
+
 **Format.** A date or a number shows as text only through a format, so a text prop bound
 to one has a **Format** under its fallback. The picker names the format a date or a number
 starts with, **Long date** or **Number**, and a pick writes it with the binding; change it
