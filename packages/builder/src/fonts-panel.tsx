@@ -425,11 +425,7 @@ function FontsList({
       </div>
       <div className="nx-vars__body">
         {uploading ? null : question}
-        {readOnly ? (
-          <p className="nx-vars__note">
-            {`You can view the site’s ${fonts} but not change them.`}
-          </p>
-        ) : null}
+        <ReadOnlyNote readOnly={readOnly} />
         <Popover open={uploading} onOpenChange={setUploading} modal>
           <section className="nx-vars__group" aria-labelledby="nx-fonts-site">
             <PopoverAnchor asChild>
@@ -459,13 +455,12 @@ function FontsList({
           </section>
           <UploadEditor upload={upload} question={question} />
         </Popover>
-        {needle !== "" && rows.length === 0 ? null : (
-          <FontVariables
-            rows={rows}
-            faces={faces}
-            onOpenTokens={onOpenTokens}
-          />
-        )}
+        <FontVariables
+          rows={rows}
+          faces={faces}
+          searching={needle !== ""}
+          onOpenTokens={onOpenTokens}
+        />
         <p className="nx-vars__note nx-fonts__privacy">
           Fonts are stored on your site. Visitors&rsquo; browsers never contact
           Google.
@@ -501,6 +496,20 @@ function UploadEditor({
         acceptFiles={upload.acceptFiles}
       />
     </PopoverContent>
+  );
+}
+
+/** What a role without the grant is told above the list. */
+function ReadOnlyNote({
+  readOnly,
+}: {
+  readOnly: boolean;
+}): React.JSX.Element | null {
+  if (!readOnly) return null;
+  return (
+    <p className="nx-vars__note">
+      {`You can view the site’s ${words().fonts} but not change them.`}
+    </p>
   );
 }
 
@@ -924,16 +933,22 @@ function labelOf(row: FontTokenRow): string {
   return tokenDisplayLabel(row.token);
 }
 
-/** The site's font variables, each with a note when its first font has no file. */
+/**
+ * The site's font variables, each with a note when its first font has no
+ * file; nothing while a search matches none of them.
+ */
 function FontVariables({
   rows,
   faces,
+  searching,
   onOpenTokens,
 }: {
   rows: readonly FontTokenRow[];
   faces: readonly FontFaceDef[];
+  searching: boolean;
   onOpenTokens: (() => void) | undefined;
-}): React.JSX.Element {
+}): React.JSX.Element | null {
+  if (searching && rows.length === 0) return null;
   return (
     <section className="nx-vars__group" aria-labelledby="nx-fonts-variables">
       <div className="nx-vars__group-head">
