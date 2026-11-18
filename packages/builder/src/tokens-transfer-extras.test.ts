@@ -520,8 +520,11 @@ describe("an import carrying the site's own design data", () => {
     );
     const applied = applyImport(plan, fresh, new Map());
     if (!applied.ok) throw new Error(applied.error);
-    // The class list as it is when the write is made: the style is gone.
-    expect(applied.classes?.([])).toEqual({ classes: [eyebrow] });
+    // The class list as it is when the write is made: the style is gone, so
+    // it is stored again, after every class.
+    expect(applied.classes?.([])).toEqual({
+      classes: [{ ...eyebrow, orderIndex: 0 }],
+    });
   });
 
   it("leaves out a text style naming a refused variable's property that a variable here also writes", () => {

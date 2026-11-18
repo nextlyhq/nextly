@@ -43,15 +43,19 @@ export function reachingVariables(
     tokenIdentity(token),
     tokenCustomProperty(tokenIdentity(token), prefix),
   ];
-  const landed = new Set(merged.tokens.flatMap(keys));
-  const names = new Map(
-    incoming.flatMap(token =>
-      keys(token).map(key => [key, token.name] as const)
-    )
+  // By identity: a property another variable here also writes doesn't
+  // make the file's variable land.
+  const landed = new Set(merged.tokens.map(tokenIdentity));
+  const owners = new Map(
+    incoming.flatMap(token => keys(token).map(key => [key, token] as const))
   );
   // The name of a variable of the file's that didn't land, for a key.
-  const missing = (key: string): string | undefined =>
-    landed.has(key) ? undefined : names.get(key);
+  const missing = (key: string): string | undefined => {
+    const owner = owners.get(key);
+    return owner === undefined || landed.has(tokenIdentity(owner))
+      ? undefined
+      : owner.name;
+  };
   const left = new Map<string, string>();
   const keep = (style: NamedClass): boolean => {
     const name = keysUsed(style.styles)

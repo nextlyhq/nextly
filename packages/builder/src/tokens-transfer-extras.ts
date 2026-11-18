@@ -110,9 +110,11 @@ export function importExtras(
   refused: string[],
   adoption?: Adoption
 ): ImportExtras {
-  const fileStyles = (read.textStyles ?? []).map(style =>
-    followingAdoption(style, adoption)
-  );
+  // Their values only: a name is the author's words, whatever it reads.
+  const fileStyles = (read.textStyles ?? []).map(style => ({
+    ...style,
+    styles: followingAdoption(style.styles, adoption),
+  }));
   const fileSite = siteFollowingAdoption(read.site, adoption);
   if (context.textStyles === undefined && fileStyles.length > 0) {
     refused.push(
@@ -496,7 +498,9 @@ export function textStylesEdit(plan: TextStylesPlan): ClassListEdit {
     );
     const held = new Set(classes.map(entry => entry.id));
     let next = nextOrderIndex(classes);
-    for (const style of plan.added) {
+    // An update whose style was removed meanwhile is stored as new, so what
+    // the import says it stored is stored.
+    for (const style of [...plan.added, ...plan.updated]) {
       if (held.has(style.id)) continue;
       classes.push({ ...style, orderIndex: next });
       next += 1;

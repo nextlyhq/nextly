@@ -294,7 +294,7 @@ export function useVariablesTransfer({
       return;
     }
     void importInSteps({
-      variables: withSiteRowsOf(result.tokens, into),
+      variables: withSiteRowsOf(result.tokens, into, result.rows),
       classes: result.classes,
       // The rows laid over the variables as they are by then, so an edit
       // made meanwhile isn't lost.
@@ -716,15 +716,25 @@ function withRows(
     : { ...now, siteText: next };
 }
 
-/** `tokens` with the Site text rows `site` holds rather than its own. */
+/**
+ * `tokens` with the import's own Site text rows (`rows`) held back: each
+ * of those roles keeps the row `site` holds, to be laid over by the last
+ * step. Every other row is the one `tokens` holds, which a changed fluid
+ * range has already remade.
+ */
 function withSiteRowsOf(
   tokens: SiteTokenSet,
-  site: SiteTokenSet
+  site: SiteTokenSet,
+  rows: SiteTokenSet["siteText"]
 ): SiteTokenSet {
-  const { siteText: _imported, ...rest } = tokens;
-  return site.siteText === undefined
-    ? rest
-    : { ...rest, siteText: site.siteText };
+  const { siteText: merged, ...rest } = tokens;
+  const kept: Record<string, unknown> = { ...merged };
+  for (const role of Object.keys(rows ?? {})) {
+    const own = site.siteText?.[role as keyof typeof site.siteText];
+    if (own === undefined) delete kept[role];
+    else kept[role] = own;
+  }
+  return Object.keys(kept).length === 0 ? rest : { ...rest, siteText: kept };
 }
 
 /**
