@@ -38,4 +38,4 @@ Small links and buttons in the admin now read in the admin's own text colour rat
 - the media library's "Move" in its bulk bar;
 - the file drop area's browse hint.
 
-They were drawn in the brand's primary colour. A site can set that to a shade too light to read as small text on a light surface: an indigo such as `#6366f1` falls under the 4.5:1 small text needs. Icons, spinners and tinted chips keep the brand colour.
+They were drawn in the brand's primary colour. A site can set that to a shade too light to read as small text on a light surface: an indigo such as `#6366f1` falls under the 4.5:1 small text needs. The links among them are underlined at rest, so they still read as links. Icons, spinners and tinted chips keep the brand colour.
