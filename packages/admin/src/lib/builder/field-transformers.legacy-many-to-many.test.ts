@@ -149,11 +149,15 @@ describe("a many-to-many's cardinality, as the Builder's controls set it", () =>
     expect(sent.options?.junctionTable).toBeUndefined();
   });
 
-  it("links one entry once Allow multiple is turned off, stored the earlier way", () => {
-    const sent = resaved(LEGACY, { hasMany: false });
-    expect(sent.options).toMatchObject({
-      target: "lm_tags",
-      relationType: "manyToOne",
+  // Stored off beside a many-to-many, the control changed nothing: the links stay where they are.
+  it("stays a many-to-many when Allow multiple was stored off", () => {
+    const storedOff = {
+      ...(MANY as unknown as Record<string, unknown>),
+      hasMany: false,
+    } as unknown as Stored;
+    expect(resaved(storedOff, { label: "Topics" }).options).toMatchObject({
+      relationType: "manyToMany",
+      junctionTable: "lm_tags_links",
     });
   });
 
