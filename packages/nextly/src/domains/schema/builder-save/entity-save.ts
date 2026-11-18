@@ -21,6 +21,7 @@ import {
   writeCollectionSave,
   type CollectionSave,
   type CollectionSaveDeps,
+  type CollectionSaveResult,
 } from "./collection-save";
 
 // Kept in a module of its own, so a service can tell whether it has a writer
@@ -65,7 +66,9 @@ export async function checkEntitySaveHistory(
  *
  * `apply` answers `"partly-applied"` where it changed the database and then
  * failed part way: the files are kept and recorded applied nowhere (see
- * `writeCollectionSave`'s `appliedBy`).
+ * `writeCollectionSave`'s `appliedBy`). The files the writer wrote are
+ * answered, in run order, so a caller can name the ones a part-way failure
+ * kept; none without a writer.
  */
 export async function writeEntitySave(
   deps: CollectionSaveDeps | undefined,
@@ -80,21 +83,30 @@ export async function writeEntitySave(
      * `apply` still runs once they are written.
      */
     runsFile?: boolean;
+    /**
+     * With `runsFile`, work done inside the last file's transaction, after its ledger row (the
+     * writer's `inLastTransaction`): a registry write that commits or rolls back with the file.
+     */
+    inLastTransaction?: () => Promise<void>;
   } = {}
-): Promise<void> {
+): Promise<CollectionSaveResult | undefined> {
   if (deps === undefined) {
     await apply();
-    return;
+    return undefined;
   }
   if (deps.applies && options.runsFile === true) {
-    await writeCollectionSave(deps, save, { historyChecked: true });
-    return;
+    return writeCollectionSave(deps, save, {
+      historyChecked: true,
+      ...(options.inLastTransaction === undefined
+        ? {}
+        : { inLastTransaction: options.inLastTransaction }),
+    });
   }
   // Only a part-way failure is the writer's to know; anything else `apply`
   // answers is the caller's.
   const run = async () =>
     (await apply()) === "partly-applied" ? "partly-applied" : undefined;
-  await writeCollectionSave(deps, save, {
+  return writeCollectionSave(deps, save, {
     historyChecked: true,
     // In development the writer runs it and records the files applied;
     // elsewhere it runs once they are written. Either way a failure that

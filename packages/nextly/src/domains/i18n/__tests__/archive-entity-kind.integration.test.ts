@@ -205,7 +205,7 @@ describeEachDialect("the archive's entity kind", dialect => {
   > {
     return query<{ kind: string; entry: string; value: string }>(
       `SELECT ${q("entity_kind")} AS kind, ${q("entry_id")} AS entry, ${q("value")} AS value FROM ${q("nextly_i18n_archive")} ` +
-        `WHERE ${q("collection")} = 'hero' ORDER BY ${q("entity_kind")}`
+        `WHERE ${q("collection")} = 'hero' ORDER BY ${q("entity_kind")}, ${q("value")}`
     );
   }
 
@@ -224,6 +224,8 @@ describeEachDialect("the archive's entity kind", dialect => {
 
     expect(await archived()).toEqual([
       { kind: "collection", entry: collectionId, value: "Colección" },
+      // The field group's save runs its migration file, which archives the kept language too.
+      { kind: "fieldGroup", entry: groupId, value: "Group" },
       { kind: "fieldGroup", entry: groupId, value: "Grupo" },
     ]);
   });
@@ -297,6 +299,8 @@ describeEachDialect("the archive's entity kind", dialect => {
 
     expect(purged.archiveRowsPurged).toBe(1);
     expect(await archived()).toEqual([
+      // The field group's save runs its migration file, which archives the kept language too.
+      { kind: "fieldGroup", entry: groupId, value: "Group" },
       { kind: "fieldGroup", entry: groupId, value: "Grupo" },
     ]);
   });
@@ -733,6 +737,8 @@ describeEachDialect("the archive's entity kind", dialect => {
 
     expect(await archived()).toEqual([
       { kind: "collection", entry: collectionId, value: "Colección" },
+      // The field group's save runs its migration file, which archives the kept language too.
+      { kind: "fieldGroup", entry: groupId, value: "Group" },
       { kind: "fieldGroup", entry: groupId, value: "Grupo" },
       { kind: "unknown", entry: collectionId, value: "Antes" },
     ]);

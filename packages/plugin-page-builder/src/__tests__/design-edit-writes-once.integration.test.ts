@@ -127,13 +127,26 @@ let browser: { teardown: (global: object) => unknown } | undefined;
 /** The browser's `window`, while its globals are installed. */
 let browserWindow: unknown;
 
-/** The site's code supplies Brand and Ratio; nothing is stored yet. */
+/**
+ * The site's code supplies a colour, a text value, a size, a shadow and a
+ * font; nothing is stored yet.
+ */
 const SUPPLIED = {
   tokens: [
     { name: "color.brand", kind: "color", values: { light: "#1d2b6b" } },
     { name: "custom.ratio", kind: "custom", values: { light: "4 / 3" } },
+    { name: "space.gutter", kind: "dimension", values: { light: "16px" } },
+    {
+      name: "shadow.raised",
+      kind: "shadow",
+      values: { light: "0px 2px 4px 0px #000000" },
+    },
+    { name: "font.heading", kind: "fontFamily", values: { light: "serif" } },
   ],
 };
+
+/** The variables the canvas below draws, each read back by its name. */
+const DRAWN = SUPPLIED.tokens.map(token => token.name);
 
 /** The site's code, under whatever is stored, as the editor reads the site. */
 const CONFIG = { tokens: SUPPLIED };
@@ -148,22 +161,19 @@ function drawnValue(
   );
 }
 
-/** What the canvas draws Brand's and Ratio's values as, read as it reads. */
+/** What the canvas draws each variable's value as, read as it reads. */
 function Canvas(): React.JSX.Element {
   const { siteStyle } = ui.useSiteStyle(CONFIG);
   const tokens = siteStyle.tokens ?? { tokens: [] };
   return createElement(
     "div",
     null,
-    createElement(
-      "output",
-      { "data-testid": "canvas" },
-      drawnValue(tokens, "color.brand")
-    ),
-    createElement(
-      "output",
-      { "data-testid": "canvas-ratio" },
-      drawnValue(tokens, "custom.ratio")
+    ...DRAWN.map(name =>
+      createElement(
+        "output",
+        { key: name, "data-testid": `canvas-${name}` },
+        drawnValue(tokens, name)
+      )
     )
   );
 }
@@ -217,10 +227,11 @@ function Editor({ tab = "colours" }: { tab?: string }): React.JSX.Element {
   );
 }
 
-const canvas = (): string | null =>
-  ui.dom.screen.getByTestId("canvas").textContent;
-const canvasRatio = (): string | null =>
-  ui.dom.screen.getByTestId("canvas-ratio").textContent;
+/** A variable's value as the canvas draws it now. */
+const drawnNow = (name: string): string | null =>
+  ui.dom.screen.getByTestId(`canvas-${name}`).textContent;
+const canvas = (): string | null => drawnNow("color.brand");
+const canvasRatio = (): string | null => drawnNow("custom.ratio");
 
 /**
  * Longer than a held write waits for the author's pause, so a value handed
@@ -463,6 +474,114 @@ describe.each(getConfiguredTestDialects())(
       expect(written("custom.ratio")).toEqual(["16 / 9"]);
       expect(storedValue(await stored(), "custom.ratio")).toBe("16 / 9");
       expect(canvasRatio()).toBe("16 / 9");
+    });
+
+    it("draws a size typed slowly as it goes, keeps the last valid one, and stores it once, when the field is left", async () => {
+      const stored = await boot();
+      const { act, fireEvent, render, waitFor, within } = ui.dom;
+      render(createElement(Editor, { tab: "spacing" }));
+      const editor = await openRow(/^Section padding \(sides\),/);
+      const field = within(editor).getByLabelText("Light");
+
+      const drawn: (string | null)[] = [];
+      for (const typed of ["2", "2r", "2re", "2rem"]) {
+        act(() => {
+          fireEvent.change(field, { target: { value: typed } });
+        });
+        drawn.push(drawnNow("space.gutter"));
+        await pause(slow());
+      }
+      // A unit on its way in keeps the last valid size drawn.
+      expect(drawn).toEqual(["2px", "2px", "2px", "2rem"]);
+      expect(database.writes).toEqual([]);
+
+      act(() => {
+        fireEvent.blur(field);
+      });
+      await waitFor(() => expect(database.writes).toHaveLength(1), {
+        timeout: 5000,
+      });
+      await pause(1500);
+      expect(written("space.gutter")).toEqual(["2rem"]);
+      expect(storedValue(await stored(), "space.gutter")).toBe("2rem");
+      expect(drawnNow("space.gutter")).toBe("2rem");
+    });
+
+    it("draws a shadow as a layer's size is typed slowly, and stores it once, on Enter", async () => {
+      const stored = await boot();
+      const { act, fireEvent, render, waitFor, within } = ui.dom;
+      render(createElement(Editor, { tab: "spacing" }));
+      const editor = await openRow(/^Raised,/);
+      const blur = within(editor).getByLabelText("Blur");
+
+      const drawn: (string | null)[] = [];
+      for (const typed of ["8", "-8", "12"]) {
+        act(() => {
+          fireEvent.change(blur, { target: { value: typed } });
+        });
+        drawn.push(drawnNow("shadow.raised"));
+        await pause(slow());
+      }
+      // A negative blur is no shadow: the last one that was stays drawn.
+      expect(drawn).toEqual([
+        "0px 2px 8px 0px #000000",
+        "0px 2px 8px 0px #000000",
+        "0px 2px 12px 0px #000000",
+      ]);
+      expect(database.writes).toEqual([]);
+
+      act(() => {
+        fireEvent.keyDown(blur, { key: "Enter" });
+      });
+      await waitFor(() => expect(database.writes).toHaveLength(1), {
+        timeout: 5000,
+      });
+      await pause(1500);
+      expect(written("shadow.raised")).toEqual(["0px 2px 12px 0px #000000"]);
+      expect(storedValue(await stored(), "shadow.raised")).toBe(
+        "0px 2px 12px 0px #000000"
+      );
+    });
+
+    it("draws each font the keyboard moves to in the list, and stores the one picked once", async () => {
+      const stored = await boot();
+      const { act, fireEvent, render, screen, waitFor, within } = ui.dom;
+      render(createElement(Editor, { tab: "type" }));
+      const editor = await openRow(/^Heading,/);
+      act(() => {
+        fireEvent.click(
+          within(editor).getByRole("button", { name: /^Font, / })
+        );
+      });
+      const keys =
+        screen.queryByRole("combobox", {
+          name: "Search fonts",
+          hidden: true,
+        }) ?? screen.getByRole("listbox", { name: "Fonts", hidden: true });
+
+      const drawn: (string | null)[] = [];
+      for (let move = 0; move < 3; move += 1) {
+        act(() => {
+          fireEvent.keyDown(keys, { key: "ArrowDown" });
+        });
+        drawn.push(drawnNow("font.heading"));
+        await pause(slow());
+      }
+      // Each family moved to is drawn, and none is stored.
+      expect(new Set(drawn).size).toBe(3);
+      expect(drawn).not.toContain("serif");
+      expect(database.writes).toEqual([]);
+
+      act(() => {
+        fireEvent.keyDown(keys, { key: "Enter" });
+      });
+      await waitFor(() => expect(database.writes).toHaveLength(1), {
+        timeout: 5000,
+      });
+      await pause(1500);
+      const last = drawn.at(-1);
+      expect(written("font.heading")).toEqual([last]);
+      expect(storedValue(await stored(), "font.heading")).toBe(last);
     });
   }
 );
