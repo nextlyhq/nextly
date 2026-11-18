@@ -1,0 +1,325 @@
+// @vitest-environment jsdom
+
+/**
+ * Design → Type → "Text styles", driven as an author drives it: the rows and
+ * their previews, "+ Add text style", rename in place, the ⋯ menu's copy,
+ * lock and removal, each part of a style, and the section read-only.
+ *
+ * @module text-styles-section.test
+ */
+import {
+  BASE_BREAKPOINT,
+  type BreakpointSet,
+  type NamedClass,
+  type NodeStyles,
+} from "@nextlyhq/blocks-engine";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+
+import type { ClassListEdit } from "./block-style-actions";
+import type { SharedStyleChange } from "./shared-style-target";
+import type { SharedStylesAccess } from "./shared-styles-types";
+import { TextStylesSection } from "./text-styles-section";
+
+afterEach(cleanup);
+
+beforeAll(() => {
+  const element = window.Element.prototype as unknown as Record<
+    string,
+    unknown
+  >;
+  element.scrollIntoView = function scrollIntoView(): void {};
+  element.hasPointerCapture = () => false;
+  element.releasePointerCapture = () => undefined;
+  (window as unknown as Record<string, unknown>).ResizeObserver =
+    class ResizeObserver {
+      observe(): void {}
+      unobserve(): void {}
+      disconnect(): void {}
+    };
+});
+
+const eyebrow: NamedClass = {
+  id: "t-eyebrow",
+  slug: "eyebrow",
+  label: "Eyebrow",
+  orderIndex: 1,
+  role: "text",
+  styles: {
+    base: {
+      [BASE_BREAKPOINT]: {
+        fontSize: "12px",
+        lineHeight: 1.4,
+        fontWeight: 600,
+        letterSpacing: "0.08em",
+        textTransform: "uppercase",
+      },
+    },
+  } as NodeStyles,
+};
+const card: NamedClass = {
+  id: "c-card",
+  slug: "card",
+  label: "Card",
+  orderIndex: 0,
+  styles: {},
+};
+const breakpoints = {
+  viewport: [
+    { id: "tablet", label: "Tablet", maxWidth: 1024 },
+    { id: "mobile", label: "Mobile", maxWidth: 640 },
+  ],
+  container: [],
+} as unknown as BreakpointSet;
+
+/** The section over a library, with a host that records every write. */
+function mount(
+  options: {
+    library?: NamedClass[];
+    readOnly?: boolean;
+    access?: Partial<SharedStylesAccess>;
+  } = {}
+) {
+  let library = options.library ?? [card, eyebrow];
+  const edit = vi.fn(async (compose: ClassListEdit) => {
+    const answer = compose(library);
+    if ("reason" in answer) return answer.reason;
+    library = answer.classes;
+    return undefined;
+  });
+  const writeStyles = vi.fn(
+    async (_id: string, _change: SharedStyleChange) =>
+      undefined as string | undefined
+  );
+  const access = {
+    usage: vi.fn(),
+    uses: vi.fn(),
+    lock: vi.fn(async () => undefined),
+    remove: vi.fn(async () => undefined),
+    ...options.access,
+  } as unknown as SharedStylesAccess;
+  const view = render(
+    <TextStylesSection
+      library={library}
+      tokens={{ tokens: [] }}
+      mode="light"
+      breakpoints={breakpoints}
+      readOnly={options.readOnly ?? false}
+      onEditClasses={edit}
+      host={{ mayChange: !(options.readOnly ?? false), writeStyles }}
+      access={access}
+    />
+  );
+  return { edit, writeStyles, access, stored: () => library, view };
+}
+
+/** What a part's change writes over the styles given. */
+function written(
+  writeStyles: ReturnType<typeof vi.fn>,
+  over: NodeStyles = eyebrow.styles
+): NodeStyles | undefined {
+  const change = writeStyles.mock.lastCall?.[1] as SharedStyleChange;
+  const out = change(over);
+  return out.kind === "write" ? out.styles : undefined;
+}
+
+const row = (name: RegExp) => screen.getByRole("button", { name });
+
+describe("the rows", () => {
+  it("list the text styles only, each with a preview and its size", () => {
+    mount();
+    const eyebrowRow = row(/^Text styles: Eyebrow, 12 \/ 1\.4/);
+    const sample = within(eyebrowRow).getByText("The quick survey");
+    expect(sample.style.textTransform).toBe("uppercase");
+    expect(screen.queryByRole("button", { name: /Card/ })).toBeNull();
+  });
+
+  it("say there are none yet on a site with none", () => {
+    mount({ library: [card] });
+    expect(screen.getByText(/No text styles yet/)).toBeDefined();
+    expect(
+      screen.getByRole("button", { name: "+ Add text style" })
+    ).toBeDefined();
+  });
+});
+
+describe("+ Add text style", () => {
+  it("makes a text style with the name typed", async () => {
+    const { stored } = mount();
+    fireEvent.click(screen.getByRole("button", { name: "+ Add text style" }));
+    const field = screen.getByRole("textbox", { name: "New text style name" });
+    fireEvent.change(field, { target: { value: "Display" } });
+    await act(async () => {
+      fireEvent.keyDown(field, { key: "Enter" });
+    });
+    expect(stored().at(-1)).toMatchObject({
+      label: "Display",
+      slug: "display",
+      role: "text",
+    });
+  });
+
+  it("says why a name is refused, and keeps the field open", async () => {
+    mount();
+    fireEvent.click(screen.getByRole("button", { name: "+ Add text style" }));
+    const field = screen.getByRole("textbox", { name: "New text style name" });
+    fireEvent.change(field, { target: { value: "eyebrow" } });
+    await act(async () => {
+      fireEvent.keyDown(field, { key: "Enter" });
+    });
+    expect(screen.getByRole("alert").textContent).toMatch(
+      /already a text style named/
+    );
+  });
+});
+
+describe("a row's keys and menu", () => {
+  it("renames in place with F2, and Escape puts the field down", async () => {
+    const { stored } = mount();
+    fireEvent.keyDown(row(/^Text styles: Eyebrow/), { key: "F2" });
+    const field = screen.getByRole("textbox", { name: "Rename Eyebrow" });
+    fireEvent.keyDown(field, { key: "Escape" });
+    expect(screen.queryByRole("textbox", { name: "Rename Eyebrow" })).toBeNull();
+
+    fireEvent.keyDown(row(/^Text styles: Eyebrow/), { key: "F2" });
+    const again = screen.getByRole("textbox", { name: "Rename Eyebrow" });
+    fireEvent.change(again, { target: { value: "Kicker" } });
+    await act(async () => {
+      fireEvent.keyDown(again, { key: "Enter" });
+    });
+    expect(stored().find(entry => entry.id === "t-eyebrow")?.label).toBe(
+      "Kicker"
+    );
+  });
+
+  /** Open a row's ⋯ menu from the row, with Shift+F10. */
+  const menuOf = (): HTMLElement => {
+    fireEvent.keyDown(row(/^Text styles: Eyebrow/), {
+      key: "F10",
+      shiftKey: true,
+    });
+    return screen.getByRole("menu");
+  };
+
+  it("duplicates from the ⋯ menu, opened with Shift+F10", async () => {
+    const { stored } = mount();
+    const menu = menuOf();
+    await act(async () => {
+      fireEvent.click(within(menu).getByRole("menuitem", { name: "Duplicate" }));
+    });
+    expect(stored().at(-1)).toMatchObject({
+      label: "Eyebrow copy",
+      role: "text",
+    });
+  });
+
+  it("locks and removes through the shared styles' routes", async () => {
+    const { access } = mount();
+    const menu = menuOf();
+    await act(async () => {
+      fireEvent.click(within(menu).getByRole("menuitem", { name: "Lock" }));
+    });
+    expect(access.lock).toHaveBeenCalledWith("t-eyebrow", true);
+    cleanup();
+    const second = mount();
+    const again = menuOf();
+    await act(async () => {
+      fireEvent.click(within(again).getByRole("menuitem", { name: "Remove" }));
+    });
+    expect(second.access.remove).toHaveBeenCalledWith(["t-eyebrow"]);
+  });
+
+  it("says where a text style is used when its removal is refused", async () => {
+    const words = "Eyebrow is used: Heading 1 uses it, and 2 blocks on Home.";
+    mount({ access: { remove: vi.fn(async () => words) } });
+    fireEvent.keyDown(row(/^Text styles: Eyebrow/), {
+      key: "F10",
+      shiftKey: true,
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("menuitem", { name: "Remove" }));
+    });
+    expect(screen.getByRole("alert").textContent).toBe(words);
+  });
+
+  it("offers a locked one Unlock, and neither Rename nor Remove", () => {
+    mount({ library: [{ ...eyebrow, locked: true }] });
+    fireEvent.keyDown(row(/^Text styles: Eyebrow, .*locked/), {
+      key: "F10",
+      shiftKey: true,
+    });
+    const menu = screen.getByRole("menu");
+    expect(
+      within(menu)
+        .getAllByRole("menuitem")
+        .map(item => item.textContent)
+    ).toEqual(["Duplicate", "Unlock"]);
+  });
+});
+
+describe("a text style's parts", () => {
+  const openParts = () => fireEvent.click(row(/^Text styles: Eyebrow/));
+
+  it("sets its case", () => {
+    const { writeStyles } = mount();
+    openParts();
+    fireEvent.click(screen.getByRole("radio", { name: "Capitalised" }));
+    expect(writeStyles.mock.lastCall?.[0]).toBe("t-eyebrow");
+    expect(written(writeStyles)?.base?.[BASE_BREAKPOINT]).toMatchObject({
+      textTransform: "capitalize",
+    });
+    expect(screen.getByRole("radio", { name: "As typed" })).toBeDefined();
+    expect(screen.getByRole("radio", { name: "UPPERCASE" })).toBeDefined();
+    expect(screen.getByRole("radio", { name: "lowercase" })).toBeDefined();
+  });
+
+  it("takes letter spacing in em unless another unit is typed", () => {
+    const { writeStyles } = mount();
+    openParts();
+    const field = screen.getByRole("textbox", { name: "Letter spacing" });
+    expect((field as HTMLInputElement).value).toBe("0.08");
+    fireEvent.change(field, { target: { value: "0.1" } });
+    fireEvent.blur(field);
+    expect(written(writeStyles)?.base?.[BASE_BREAKPOINT]).toMatchObject({
+      letterSpacing: "0.1em",
+    });
+  });
+
+  it("sets a size for each device, Desktop, Tablet and Mobile", () => {
+    const { writeStyles } = mount();
+    openParts();
+    const mobile = screen.getByRole("textbox", { name: "Size on Mobile" });
+    expect(screen.getByRole("textbox", { name: "Size on Desktop" })).toBeDefined();
+    expect(screen.getByRole("textbox", { name: "Size on Tablet" })).toBeDefined();
+    fireEvent.change(mobile, { target: { value: "10px" } });
+    fireEvent.blur(mobile);
+    expect(written(writeStyles)?.base?.mobile).toMatchObject({
+      fontSize: "10px",
+    });
+  });
+});
+
+describe("read-only", () => {
+  it("offers no add, no menu and no changes to a role that may not change design", () => {
+    const { writeStyles } = mount({ readOnly: true });
+    expect(screen.queryByRole("button", { name: "+ Add text style" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: /^More actions for/ })
+    ).toBeNull();
+    fireEvent.keyDown(row(/^Text styles: Eyebrow/), { key: "F2" });
+    expect(screen.queryByRole("textbox", { name: "Rename Eyebrow" })).toBeNull();
+    fireEvent.click(row(/^Text styles: Eyebrow/));
+    expect(screen.getByText("You can't change this site's design.")).toBeDefined();
+    const caps = screen.getByRole("radio", { name: "Capitalised" });
+    expect((caps as HTMLInputElement).disabled).toBe(true);
+    fireEvent.click(caps);
+    expect(writeStyles).not.toHaveBeenCalled();
+  });
+});
