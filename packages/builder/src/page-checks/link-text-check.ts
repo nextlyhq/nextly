@@ -74,7 +74,13 @@ const WHY_VAGUE =
 
 /** A Button with no words, or only vague ones. */
 function buttonFindings(node: BlockNode): PageCheckResult[] {
-  if (textOf(node.props.ariaLabel) !== "" || bound(node, "label")) return [];
+  if (
+    textOf(node.props.ariaLabel) !== "" ||
+    bound(node, "ariaLabel") ||
+    bound(node, "label")
+  ) {
+    return [];
+  }
   const label = textOf(node.props.label);
   const fix = { tab: "content", id: "label" } as const;
   if (label === "") {

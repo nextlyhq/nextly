@@ -85,6 +85,49 @@ describe("the link text check", () => {
     ).toEqual([]);
   });
 
+  it("leaves a button whose screen reader label is bound to a field", () => {
+    expect(
+      findings(
+        button(
+          "a",
+          { label: "Read more" },
+          {
+            bindings: {
+              ariaLabel: { source: "entry", path: "summary" } as never,
+            },
+          }
+        )
+      )
+    ).toEqual([]);
+  });
+
+  it("reads a rich text link holding only an image by the image's alt text", () => {
+    const passage = (alt: string) =>
+      block("r", "core/rich-text", {
+        content: {
+          root: {
+            type: "root",
+            children: [
+              {
+                type: "paragraph",
+                children: [
+                  {
+                    type: "link",
+                    url: "/team",
+                    children: [{ type: "image", src: "/t.jpg", altText: alt }],
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      });
+    expect(findings(passage("Our team at the office"))).toEqual([]);
+    expect(findings(passage(""))).toEqual([
+      expect.objectContaining({ what: "Link has no text" }),
+    ]);
+  });
+
   it("leaves a button whose words are bound to a field", () => {
     expect(
       findings(

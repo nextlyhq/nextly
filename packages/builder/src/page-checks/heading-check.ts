@@ -15,10 +15,12 @@
 import {
   COMPONENT_INSTANCE_TYPE,
   MAX_DEPTH,
+  MAX_NODES,
   resolveComponentInstances,
   walkNodes,
   type BlockNode,
   type DefinitionsById,
+  type WorkAllowance,
 } from "@nextlyhq/blocks-engine";
 import {
   pageOutline,
@@ -38,26 +40,50 @@ interface DrawnPage {
   readonly placementOf: ReadonlyMap<string, string>;
 }
 
+/** What a heading whose words come from a field is read with here. */
+const BOUND_WORDS = "Bound heading";
+
+/**
+ * A Heading whose words are bound to a field, read as having words: the page
+ * draws the entry's, and the outline lists only a heading with words.
+ */
+function withBoundWords(node: BlockNode): BlockNode {
+  const { text } = node.props;
+  const empty = typeof text !== "string" || text.trim() === "";
+  if (
+    node.type !== HEADING_TYPE ||
+    node.bindings?.text === undefined ||
+    !empty
+  ) {
+    return node;
+  }
+  return { ...node, props: { ...node.props, text: BOUND_WORDS } };
+}
+
 /**
  * The page's blocks with each of its component placements drawn as the
  * component's blocks, recording which placement each drawn block is from.
- * Placements are drawn one at a time so each is known by its own id.
+ * Placements are drawn one at a time so each is known by its own id, under
+ * one allowance for the whole page, so many placements of a large component
+ * do no more work together than one page may.
  */
 function drawnPage(
   nodes: readonly BlockNode[],
   definitions: DefinitionsById | undefined
 ): DrawnPage {
   const placementOf = new Map<string, string>();
-  if (definitions === undefined) return { nodes: [...nodes], placementOf };
+  const work: WorkAllowance = { left: MAX_NODES };
   const draw = (list: readonly BlockNode[], depth: number): BlockNode[] =>
-    list.flatMap(node => {
-      if (node.type === COMPONENT_INSTANCE_TYPE) {
+    list.flatMap((stored): BlockNode[] => {
+      const node = withBoundWords(stored);
+      if (node.type === COMPONENT_INSTANCE_TYPE && definitions !== undefined) {
         const drawn = resolveComponentInstances(
           { formatVersion: 1, kind: "page", nodes: [node] },
-          definitions
+          definitions,
+          { work }
         ).document.nodes;
         walkNodes(drawn, inner => placementOf.set(inner.id, node.id));
-        return drawn;
+        return draw(drawn, depth + 1);
       }
       if (node.slots === undefined || depth >= MAX_DEPTH) return [node];
       const slots = Object.fromEntries(

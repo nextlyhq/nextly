@@ -180,6 +180,46 @@ describe("the headings check", () => {
     ).toEqual([]);
   });
 
+  it("draws the page's placements under one allowance for the whole page", () => {
+    // Two placements of a 3,000-block component: drawn each with a fresh
+    // allowance they would make 6,000 blocks; the page may draw 5,000.
+    const big: BlockDocument = {
+      formatVersion: 1,
+      kind: "component",
+      nodes: Array.from({ length: 3000 }, (_, index) =>
+        heading(`h-${String(index)}`, "h1")
+      ),
+    };
+    const placed = (id: string): BlockNode => ({
+      id,
+      type: "nextly/component-instance",
+      version: 1,
+      props: { componentId: "big" },
+    });
+    const found = runPageChecks(
+      {
+        document: page(placed("p1"), placed("p2")),
+        definitions: new Map([["big", big]]),
+      },
+      [HEADING_CHECK]
+    ).findings;
+    // Every Heading 1 after the first is one finding: the second placement
+    // stays a placement, so no more than the first's are read.
+    expect(found.length).toBeLessThan(3000);
+    expect(found.every(each => each.nodeId === "p1")).toBe(true);
+  });
+
+  it("counts a Heading 1 whose words come from a field", () => {
+    const bound: BlockNode = {
+      id: "title",
+      type: "core/heading",
+      version: 1,
+      props: { text: "", level: "h1" },
+      bindings: { text: { $bind: "title" } as never },
+    };
+    expect(findings(page(bound, heading("b", "h2")))).toEqual([]);
+  });
+
   it("reads inside the page's component placements, pointing at the placement", () => {
     const placed = (id: string): BlockNode => ({
       id,
