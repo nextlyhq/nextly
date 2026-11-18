@@ -45,6 +45,8 @@ export interface InstancePlacement {
    * `relayOf`.
    */
   relay?: ReadonlyMap<string, PropExposure>;
+  /** For an instance a component holds: that component's expansion. */
+  host?: InlineContext;
 }
 
 /**

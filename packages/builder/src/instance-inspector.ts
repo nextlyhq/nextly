@@ -24,6 +24,7 @@
 
 import {
   bindablePropKind,
+  boundSettingId,
   DOCUMENT_FORMAT_VERSION,
   findNode,
   getBlock,
@@ -438,22 +439,40 @@ function composedTargets(
   return targets;
 }
 
+/** How many components inside components a declared target is followed through. */
+const MAX_DECLARED_NESTING = 8;
+
 /**
- * A setting's target as the component itself declares it, for one whose
- * block composing left out here (hidden by a setting or a variant): its own
- * block and prop, so a binding the placement holds keeps its controls.
+ * A setting's target as the components declare it, for one composing maps
+ * to nothing here: a block hidden by a setting or a variant, or one inside a
+ * component inside the component, followed through each nested placement's
+ * own setting to the block prop it fills. A binding the placement holds
+ * keeps its controls.
  */
 function ownTarget(
   definition: ComponentDocument | undefined,
-  property: Exposure
+  property: Exposure,
+  definitions: ComponentLookup
 ): ComposedTarget | undefined {
-  const node =
-    definition === undefined
-      ? undefined
-      : findNode(definition.nodes, property.nodeId);
-  return node === undefined || isComponentInstance(node)
-    ? undefined
-    : { type: node.type, path: property.propPath };
+  let from = definition;
+  let setting: Exposure | undefined = property;
+  for (let hop = 0; hop <= MAX_DECLARED_NESTING; hop += 1) {
+    if (from === undefined || setting === undefined) return undefined;
+    const node = findNode(from.nodes, setting.nodeId);
+    if (node === undefined) return undefined;
+    if (!isComponentInstance(node)) {
+      return { type: node.type, path: setting.propPath };
+    }
+    const id = boundSettingId(setting.propPath);
+    from = readableDefinition(definitions.get(storedComponentId(node)));
+    setting =
+      id === undefined || from === undefined
+        ? undefined
+        : instanceExposure(from, node).properties.find(
+            state => state.property.id === id
+          )?.property;
+  }
+  return undefined;
 }
 
 /**
@@ -464,10 +483,12 @@ function ownTarget(
 function bindableSchemaOf(
   property: Exposure,
   targets: ReadonlyMap<string, ComposedTarget>,
-  definition: ComponentDocument | undefined
+  definition: ComponentDocument | undefined,
+  definitions: ComponentLookup
 ): PropSchema | undefined {
   if (!BINDABLE_SETTING_TYPES.has(property.type)) return undefined;
-  const target = targets.get(property.id) ?? ownTarget(definition, property);
+  const target =
+    targets.get(property.id) ?? ownTarget(definition, property, definitions);
   const declared =
     target === undefined ? undefined : getBlock(target.type)?.props;
   const schema =
@@ -524,7 +545,7 @@ function rowsOf(
       state.property.type
     ),
     options: optionsOf(state.property.options),
-    ...bindingOf(state.property, node, targets, definition),
+    ...bindingOf(state.property, node, { targets, definition, definitions }),
     ...(state.shadowedBy === undefined
       ? {}
       : {
@@ -541,10 +562,18 @@ function rowsOf(
 function bindingOf(
   property: Exposure,
   node: BlockNode,
-  targets: ReadonlyMap<string, ComposedTarget>,
-  definition: ComponentDocument | undefined
+  from: {
+    readonly targets: ReadonlyMap<string, ComposedTarget>;
+    readonly definition: ComponentDocument | undefined;
+    readonly definitions: ComponentLookup;
+  }
 ): Pick<ExposedRow, "bindable" | "binding"> {
-  const bindable = bindableSchemaOf(property, targets, definition);
+  const bindable = bindableSchemaOf(
+    property,
+    from.targets,
+    from.definition,
+    from.definitions
+  );
   if (bindable === undefined) return {};
   const binding = storedBindingOf(node, property.id);
   return binding === undefined ? { bindable } : { bindable, binding };
