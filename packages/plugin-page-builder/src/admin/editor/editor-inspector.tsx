@@ -22,6 +22,7 @@ import { pageAddressOf, type PageFacts } from "./editor-settings";
 import type { CardVerbs, EditorView } from "./editor-view";
 import { PageReadMeter, type PageDataCount } from "./page-read-meter";
 import { SelectedRegionCard } from "./region-card";
+import type { SettingsPlace } from "./settings-place";
 import {
   offerableFaces,
   offerableTokens,
@@ -34,6 +35,8 @@ interface EntryForm<TFieldValues extends FieldValues> {
   page: PageFacts;
   /** The page's data count, which Page settings shows at every level. */
   pageData: PageDataCount | null;
+  /** The Settings place, where a plugin that edits SEO draws the search result. */
+  place: SettingsPlace | null;
 }
 
 /** The inspector, given the same readings the canvas draws with. */
@@ -176,9 +179,8 @@ export function editorInspector<TFieldValues extends FieldValues>(
           control={form.control as unknown as Control<FieldValues>}
           onOpenSettings={view.pages.openSettings}
           address={pageAddressOf(view, form.page)}
-          // The one signal Settings reads too: the SEO plugin's group on
-          // the page's form.
-          seoEditsPage={form.page.seo !== undefined}
+          // The same place Settings' General draws the search result at.
+          place={form.place}
           // The page's data at every level, so it can always be found.
           pageData={<PageReadMeter count={form.pageData} place="settings" />}
         />
