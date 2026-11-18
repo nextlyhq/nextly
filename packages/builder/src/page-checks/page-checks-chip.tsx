@@ -58,6 +58,8 @@ export interface PageChecksChipProps {
   readonly definitions?: CheckedPage["definitions"];
   /** The site's variables, which colours written as one are read through. */
   readonly tokens?: CheckedPage["tokens"];
+  /** The site's shared styles, its edits to block types' looks among them. */
+  readonly namedClasses?: CheckedPage["namedClasses"];
 }
 
 /** Whether the list, the bar, or neither is open. */
@@ -212,6 +214,7 @@ export function PageChecksChip({
   regions,
   definitions,
   tokens,
+  namedClasses,
 }: PageChecksChipProps): React.JSX.Element {
   const { document } = editor;
   const report = React.useMemo(
@@ -223,10 +226,11 @@ export function PageChecksChip({
           ...(regions === undefined ? {} : { regions }),
           ...(definitions === undefined ? {} : { definitions }),
           ...(tokens === undefined ? {} : { tokens }),
+          ...(namedClasses === undefined ? {} : { namedClasses }),
         },
         checks
       ),
-    [document, blocks, regions, definitions, tokens, checks]
+    [document, blocks, regions, definitions, tokens, namedClasses, checks]
   );
   const { findings } = report;
   const [opened, setOpened] = React.useState<Opened>("closed");

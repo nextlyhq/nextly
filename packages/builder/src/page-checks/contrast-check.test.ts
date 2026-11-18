@@ -9,6 +9,7 @@ import type {
   AnyBlockDefinition,
   BlockDocument,
   BlockNode,
+  NamedClass,
   SiteTokenSet,
 } from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
@@ -221,6 +222,69 @@ describe("the contrast check", () => {
     expect(run({ color: "#ffffff" })).toEqual([]);
     // A pale background the author chose, under the Button's white text.
     expect(run({ backgroundColor: "#e5e7eb" })).toHaveLength(1);
+  });
+
+  it("reads the site's edit of a block type's look over the type's own", () => {
+    const button = {
+      name: "core/button",
+      version: 1,
+      editor: { label: "Button" },
+      props: {},
+      baseStyles: { base: { base: { backgroundColor: "#1d4ed8" } } },
+      render: () => null,
+    } as unknown as AnyBlockDefinition;
+    // The site made its Buttons white.
+    const whiteButtons = {
+      id: "look:core/button:white",
+      slug: "button-white",
+      orderIndex: 0,
+      blockType: "core/button",
+      isDefault: true,
+      styles: { base: { base: { backgroundColor: "#ffffff" } } },
+    } as unknown as NamedClass;
+    const found = runPageChecks(
+      {
+        document: {
+          formatVersion: 1,
+          kind: "page",
+          nodes: [block("b", "core/button", { color: "#000000" })],
+        },
+        blocks: type => (type === "core/button" ? button : undefined),
+        tokens: LIGHT_ONLY,
+        namedClasses: [whiteButtons],
+      },
+      [CONTRAST_CHECK]
+    ).findings;
+    // Black on the site's white, 21:1, not black on the type's blue.
+    expect(found).toEqual([]);
+  });
+
+  it("judges no rich text whose runs carry colours of their own", () => {
+    const passage = (style: string | undefined) => ({
+      ...block("r", "core/rich-text", { color: "#e5e7eb" }),
+      props: {
+        content: {
+          root: {
+            type: "root",
+            children: [
+              {
+                type: "paragraph",
+                children: [
+                  {
+                    type: "text",
+                    text: "Dark words",
+                    ...(style === undefined ? {} : { style }),
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      },
+    });
+    expect(findings([passage("color: #111111")])).toEqual([]);
+    // The control: runs with no colour of their own are the block's colour.
+    expect(findings([passage(undefined)])).toHaveLength(1);
   });
 
   it("holds a heading to 3:1 only where it is large: level 1 or 2, or a size of 24px", () => {

@@ -30,6 +30,7 @@ import {
 } from "../style-colour";
 
 import type { PageCheck, PageCheckResult, ResolvedPage } from "./page-checks";
+import { eachRichTextNode } from "./rich-text-parts";
 
 /** The blocks that draw text, each judged against its background. */
 const TEXT_BLOCKS: ReadonlySet<string> = new Set([
@@ -86,33 +87,80 @@ function coloursIn(styles: NodeStyles | undefined): Colours {
   };
 }
 
+/** The block type's own look (a Button's blue), as the site has edited it. */
+function typeColours(
+  type: string,
+  { blocks, siteLooks }: Pick<ResolvedPage, "blocks" | "siteLooks">
+): Colours {
+  const site = coloursIn(siteLooks[type]);
+  const base = coloursIn(blocks(type)?.baseStyles);
+  const color = site.color ?? base.color;
+  const background = site.background ?? base.background;
+  return {
+    ...(color === undefined ? {} : { color }),
+    ...(background === undefined ? {} : { background }),
+  };
+}
+
+/** Whether a block's colours come from somewhere this check can't read. */
+function unreadable(node: BlockNode): boolean {
+  const look = node.props.look;
+  if ((node.classes?.length ?? 0) > 0) return true;
+  if (typeof look === "string" && look !== "") return true;
+  return colouredInline(node);
+}
+
+/** The first colour set, nearest first. */
+function nearest(
+  ...colours: readonly (StyleValue | undefined)[]
+): StyleValue | undefined {
+  return colours.find(colour => colour !== undefined);
+}
+
 /** What the node's text is drawn with: its own, its type's, its container's. */
 function paintedBy(
   node: BlockNode,
   around: Painted,
-  blocks: ResolvedPage["blocks"]
+  page: Pick<ResolvedPage, "blocks" | "siteLooks">
 ): Painted {
   const own = coloursIn(node.styles);
-  // The block type's own look (a Button's blue), under the node's own.
-  const type = coloursIn(blocks(node.type)?.baseStyles);
-  const color = own.color ?? type.color ?? around.color;
-  const background = own.background ?? type.background ?? around.background;
+  const type = typeColours(node.type, page);
+  const color = nearest(own.color, type.color, around.color);
+  const background = nearest(
+    own.background,
+    type.background,
+    around.background
+  );
   const obscuring = contrastObscuringIn(node.styles);
-  const opaque = (own.background ?? type.background) !== undefined;
-  const look = node.props.look;
+  // A background of its own covers what its container paints behind it.
+  const covered = nearest(own.background, type.background) !== undefined;
   return {
     ...(color === undefined ? {} : { color }),
     ...(background === undefined ? {} : { background }),
     chosen:
       around.chosen || own.color !== undefined || own.background !== undefined,
-    // A background of its own covers what its container paints behind it.
-    backdrop: obscuring.local !== undefined || (!opaque && around.backdrop),
+    backdrop: obscuring.local !== undefined || (!covered && around.backdrop),
     subtree: around.subtree || obscuring.subtree !== undefined,
-    unknown:
-      around.unknown ||
-      (node.classes?.length ?? 0) > 0 ||
-      (typeof look === "string" && look !== ""),
+    unknown: around.unknown || unreadable(node),
   };
+}
+
+/** Inline styles that change what colour a run of text is drawn in. */
+const INLINE_COLOUR = /(^|;)\s*(color|background(-color)?|opacity)\s*:/i;
+
+/**
+ * Whether the block's rich text gives some of its runs a colour, background
+ * or opacity of their own: its text is then not one pair, so it isn't judged
+ * as one.
+ */
+function colouredInline(node: BlockNode): boolean {
+  let coloured = false;
+  eachRichTextNode(node, part => {
+    if (typeof part.style === "string" && INLINE_COLOUR.test(part.style)) {
+      coloured = true;
+    }
+  });
+  return coloured;
 }
 
 /** Text this many px or more is large, as WCAG counts it (18pt). */
@@ -224,7 +272,7 @@ function contrastFindings(page: ResolvedPage): PageCheckResult[] {
     if (typeof block.type !== "string" || typeof block.props !== "object") {
       continue;
     }
-    const painted = paintedBy(block, around, page.blocks);
+    const painted = paintedBy(block, around, page);
     if (TEXT_BLOCKS.has(block.type)) {
       const finding = contrastFinding(block, painted, page.tokens);
       if (finding !== undefined) found.push(finding);

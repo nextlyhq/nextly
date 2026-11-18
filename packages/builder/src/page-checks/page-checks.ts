@@ -15,6 +15,7 @@
  * @experimental The checks and the provider point grow with later checks.
  */
 import {
+  blockDefaultsOf,
   getBlock,
   resolveComponentInstances,
   walkNodes,
@@ -24,6 +25,8 @@ import {
   type DefinitionsById,
   type RegionArea,
   type ResolvedBlockNode,
+  type NamedClass,
+  type NodeStyles,
   type SiteTokenSet,
 } from "@nextlyhq/blocks-engine";
 
@@ -107,6 +110,11 @@ export interface CheckedPage {
    * them is then not judged.
    */
   readonly tokens?: SiteTokenSet;
+  /**
+   * The site's shared styles, among them its edits to a block type's own
+   * look, which a block is drawn with under its own values.
+   */
+  readonly namedClasses?: readonly NamedClass[];
 }
 
 /** The page as every check is handed it, its definitions resolved. */
@@ -126,6 +134,8 @@ export interface ResolvedPage {
   readonly definitions?: DefinitionsById;
   /** The site's variables, where the caller knows them. */
   readonly tokens?: SiteTokenSet;
+  /** The site's edits to each block type's own look, by type. */
+  readonly siteLooks: Readonly<Record<string, NodeStyles>>;
 }
 
 /** What one check reports about one problem. */
@@ -270,6 +280,7 @@ function resolvedPageOf(page: CheckedPage): ResolvedPage {
       ? {}
       : { definitions: page.definitions }),
     ...(page.tokens === undefined ? {} : { tokens: page.tokens }),
+    siteLooks: blockDefaultsOf(page.namedClasses ?? []),
   };
 }
 
