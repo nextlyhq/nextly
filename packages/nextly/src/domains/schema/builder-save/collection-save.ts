@@ -109,6 +109,7 @@ import {
   type ColumnOrigin,
 } from "../services/field-column-descriptor";
 import {
+  refuseUniqueOnList,
   uniquenessCanBeAnIndex,
   uniquenessNotEnforceableError,
 } from "../services/index-name";
@@ -874,6 +875,9 @@ function refuseUnenforceableUniques(
   const dialect = deps.adapter.getCapabilities().dialect;
   const entity = save.entity;
   if (entity === null) return;
+  // A list marked unique is refused as declared, before the fields are narrowed to the main
+  // table's: a translated one, or one inside a named group, asks the same of no index.
+  refuseUniqueOnList(table, entity.fields, dialect);
   // The row holds the fields inside a group with no name as columns (`fieldsStoredOnRow`), an
   // entry's and a field group's instance's alike, so a unique one among them is judged as one
   // beside the group is.
@@ -1299,6 +1303,8 @@ async function generateFor(
     collections: inputs.collections,
     singles: inputs.singles,
     components: inputs.components,
+    // The starting point the inputs were checked against, read once.
+    previous: inputs.latest,
     metadataUpserts: inputs.metadataUpserts,
     previousMetadataUpserts: inputs.previousMetadataUpserts,
     appStream: inputs.appStream,

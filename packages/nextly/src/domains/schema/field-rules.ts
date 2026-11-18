@@ -60,12 +60,120 @@ export function siblingNameClash(
 export function builderColumnIsUnique(field: {
   readonly type?: unknown;
   readonly unique?: unknown;
+  readonly hasMany?: unknown;
   readonly options?: unknown;
 }): boolean {
+  // A relation holding a list is never unique, whatever it is marked
+  // (`relationHoldsReferenceList` says why).
+  if (relationHoldsReferenceList(field)) return false;
   if (field.unique === true) return true;
   if (field.type !== "relationship") return false;
   // Read as given: a relationship's options are an object, other fields'
   // a list of choices or nothing, and only the object can say one-to-one.
   const options = field.options as { relationType?: unknown } | undefined;
   return options?.relationType === "oneToOne";
+}
+
+/**
+ * Whether a field's values live in a junction table instead of a column on its own row.
+ *
+ * The DDL generator asks this to decide whether to emit a junction table, and `fieldProducesColumn`
+ * asks it to decide there is no parent column — one rule, so the two cannot disagree about the same
+ * field. They did disagree, and the disagreement was resolved toward the row: an `upload` carrying
+ * `relationType: "manyToMany"` had no descriptor column while the generator emitted one.
+ *
+ * **Junction storage is a `relationship` feature only**, deliberately, because that is the only
+ * shape the persistence layer implements. Both halves select junction-backed fields by type:
+ * `collection-mutation-service` filters `f.type === "relationship" && relationType === "manyToMany"`
+ * on every write, and `collection-relationship-service` builds its relation set from
+ * `isRelationshipField`, which is `field.type === "relationship"`. Treating an upload as
+ * junction-backed would give it a table that nothing writes to and nothing reads from, so an upload
+ * keeps its column and the option is inert on it.
+ */
+export function usesJunctionTable(field: {
+  type?: unknown;
+  options?: unknown;
+}): boolean {
+  if (field.type !== "relationship") return false;
+  const options: unknown = field.options;
+  const relationType =
+    typeof options === "object" && options !== null
+      ? (options as { relationType?: unknown }).relationType
+      : undefined;
+  return relationType === "manyToMany";
+}
+
+/**
+ * Whether a relation holds a LIST of references, on any row: a `hasMany` relationship or upload (to
+ * one collection or several), or a many-to-many, whose links a collection keeps in a junction table
+ * and a component row in its own column.
+ *
+ * Also the rule for which relation is never unique, on every dialect. "Unique" on a list would mean
+ * no two entries hold the identical list, which is rarely what is meant, and a unique btree over a
+ * long list refuses the save on PostgreSQL once the list holds about a hundred ids. A single
+ * reference, polymorphic or not, is one value and keeps its uniqueness.
+ */
+export function relationHoldsReferenceList(field: {
+  type?: unknown;
+  hasMany?: unknown;
+  options?: unknown;
+}): boolean {
+  const isRelation = field.type === "relationship" || field.type === "upload";
+  return (isRelation && Boolean(field.hasMany)) || usesJunctionTable(field);
+}
+
+/**
+ * The words every road uses to refuse a list relation marked unique (`relationHoldsReferenceList`
+ * says why it cannot be): they name the field and what to do instead.
+ */
+export function uniqueNotOnListMessage(fieldName: string): string {
+  return (
+    `"${fieldName}" holds a list of links, which cannot be unique: it would mean ` +
+    `no two entries hold the identical list. Turn Unique off on "${fieldName}", or ` +
+    `make it a single link.`
+  );
+}
+
+/**
+ * Whether `field` is a relation holding a list that is marked unique: the one decision every road
+ * refusing the mark asks (`relationHoldsReferenceList` says why no list can be unique), and the one
+ * a change asks of the field as it was, to drop the index an earlier release made for it.
+ */
+export function isListMarkedUnique(field: {
+  type?: unknown;
+  unique?: unknown;
+  hasMany?: unknown;
+  options?: unknown;
+}): boolean {
+  return field.unique === true && relationHoldsReferenceList(field);
+}
+
+/**
+ * The name of the first relation holding a list that is marked unique among `fields`, wherever it
+ * is declared: at the top level, inside a group or a repeater at any depth, translated or not.
+ * Undefined when there is none. Asked of the fields as declared, before any road filters them by
+ * where their values are stored, so no storage location lets the mark through unjudged.
+ */
+export function listMarkedUnique(
+  fields: readonly unknown[]
+): string | undefined {
+  for (const field of fields) {
+    if (typeof field !== "object" || field === null) continue;
+    const declared = field as {
+      name?: unknown;
+      type?: unknown;
+      unique?: unknown;
+      hasMany?: unknown;
+      options?: unknown;
+      fields?: unknown;
+    };
+    if (isListMarkedUnique(declared)) {
+      return typeof declared.name === "string" ? declared.name : "";
+    }
+    if (Array.isArray(declared.fields)) {
+      const nested = listMarkedUnique(declared.fields);
+      if (nested !== undefined) return nested;
+    }
+  }
+  return undefined;
 }

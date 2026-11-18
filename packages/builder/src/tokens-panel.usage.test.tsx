@@ -567,7 +567,7 @@ describe("removing a variable not counted yet", () => {
 });
 
 describe("a variable the site's code supplies", () => {
-  it("keeps Reset alone, with no usage line", async () => {
+  it("keeps Reset alone, and still says where a built-in is used", async () => {
     const supplied: SiteTokenSet = {
       tokens: [
         { name: "color.brand", kind: "color", values: { light: "#000000" } },
@@ -578,7 +578,9 @@ describe("a variable the site's code supplies", () => {
     const editor = await openEditor(/^Brand.*Used in 4 places$/);
     expect(within(editor).getByRole("button", { name: "Reset" })).toBeDefined();
     expect(within(editor).queryByRole("button", { name: "Remove" })).toBeNull();
-    expect(within(editor).queryByText("Used in 4 places")).toBeNull();
+    expect(
+      within(editor).getByRole("group", { name: "Where it's used" }).textContent
+    ).toContain("Used in 4 places");
   });
 });
 

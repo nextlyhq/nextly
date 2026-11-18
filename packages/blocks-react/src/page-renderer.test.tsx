@@ -483,12 +483,49 @@ describe("PageRenderer", () => {
       expect(html).toContain("async part");
     });
 
-    it("does not let a promise child hold back the rest of the page", async () => {
-      // The reason the boundary exists. Without one the suspension travels up
-      // past every sibling to whatever boundary sits above the whole page, so
-      // one slow async child delays everything around it. Asserting only that
-      // the content eventually appears cannot tell the two apart: the finished
-      // HTML is identical. The arrival ORDER is what differs.
+    it("does not let a promise child hold back the rest of a page that shows a fallback", async () => {
+      // The reason the boundary exists where a render streams. Without one
+      // the suspension travels up past every sibling to whatever boundary
+      // sits above the whole page, so one slow async child delays everything
+      // around it. Asserting only that the content eventually appears cannot
+      // tell the two apart: the finished HTML is identical. The arrival ORDER
+      // is what differs.
+      const slowChild = defineBlock({
+        name: "test/slow-child",
+        version: 1,
+        description: "Returns a list containing a slow promise child.",
+        example: { props: {} },
+        render: () => [
+          new Promise<ReactElement>(resolve => {
+            setTimeout(() => resolve(<span key="a">late part</span>), 50);
+          }),
+        ],
+      });
+
+      const chunks = await renderToChunks(
+        <PageRenderer
+          document={doc(
+            node("a", "test/slow-child"),
+            node("b", "test/text", { props: { value: "immediate part" } })
+          )}
+          blocks={createBlockResolver([
+            slowChild as AnyBlockDefinition,
+            text as AnyBlockDefinition,
+          ])}
+          blockFallback="Loading"
+        />
+      );
+
+      expect(chunks.length).toBeGreaterThan(1);
+      expect(chunks[0]).toContain("immediate part");
+      expect(chunks[0]).not.toContain("late part");
+      expect(chunks.join("")).toContain("late part");
+    });
+
+    it("draws a promise child in place on a published render, so the page's HTML holds it", async () => {
+      // The other side of the case above. React sends a boundary's content in
+      // a hidden part only its script reveals, so a published page, which
+      // shows no fallback, waits for the child and holds it in place.
       const slowChild = defineBlock({
         name: "test/slow-child",
         version: 1,
@@ -514,10 +551,12 @@ describe("PageRenderer", () => {
         />
       );
 
-      expect(chunks.length).toBeGreaterThan(1);
-      expect(chunks[0]).toContain("immediate part");
-      expect(chunks[0]).not.toContain("late part");
-      expect(chunks.join("")).toContain("late part");
+      const html = chunks.join("");
+      expect(html).not.toContain("<!--$");
+      expect(html).not.toMatch(/<div hidden id="S:/);
+      expect(html.indexOf("late part")).toBeLessThan(
+        html.indexOf("immediate part")
+      );
     });
 
     it("contains an invalid value embedded in returned JSX", async () => {
@@ -4918,7 +4957,10 @@ describe("PageRenderer", () => {
       expect(html).not.toContain(BOUNDARY_MARKER);
     });
 
-    it("creates one for an asynchronous block", async () => {
+    it("creates none for an asynchronous block on a published render", async () => {
+      // A boundary's finished content can be sent in a hidden part that only
+      // React's script reveals, so a published render, which shows no
+      // fallback, draws the block in place for a visitor without JavaScript.
       const slow = defineBlock({
         name: "test/slow",
         version: 1,
@@ -4934,6 +4976,30 @@ describe("PageRenderer", () => {
         <PageRenderer
           document={doc(node("a", "test/slow"))}
           blocks={createBlockResolver([slow as AnyBlockDefinition])}
+        />
+      );
+
+      expect(html).not.toContain(BOUNDARY_MARKER);
+      expect(html).toContain("late");
+    });
+
+    it("creates one for an asynchronous block where a fallback is shown", async () => {
+      const slow = defineBlock({
+        name: "test/slow",
+        version: 1,
+        description: "Awaits before rendering.",
+        example: { props: {} },
+        render: async () => {
+          await Promise.resolve();
+          return <span>late</span>;
+        },
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(node("a", "test/slow"))}
+          blocks={createBlockResolver([slow as AnyBlockDefinition])}
+          blockFallback="Loading"
         />
       );
 
@@ -6206,6 +6272,7 @@ describe("a stated NULL among the reconciled inputs", () => {
       tokenPrefix: null,
       previewContainer: null,
       previewStates: null,
+      siteText: null,
     });
 
     /*
@@ -6219,6 +6286,7 @@ describe("a stated NULL among the reconciled inputs", () => {
       "namedClasses",
       "previewContainer",
       "previewStates",
+      "siteText",
       "tokenPrefix",
     ]);
     expect(Object.values(stripped).every(v => v === undefined)).toBe(true);

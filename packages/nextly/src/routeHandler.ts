@@ -140,11 +140,13 @@ import {
   SYSTEM_WRITE_POLICY,
   type RouteGrant,
 } from "./domains/auth/system-write-policy";
+import { collectionTableName } from "./domains/collections/services/collection-utils";
 import { recordIfServerError } from "./domains/health/server-errors";
 import {
   appLocalization,
   withCurrentLanguages,
 } from "./domains/i18n/configured-locales";
+import { resolveSingleTableName } from "./domains/singles/services/resolve-single-table-name";
 import { hasLifecycle } from "./domains/versions/recorded-status";
 import { collectionDefaultForReader } from "./domains/widgets/collection-cards";
 import { visibilityToken } from "./domains/widgets/layout";
@@ -811,6 +813,10 @@ export const SINGLE_DOCUMENT_METHODS = new Set([
   // What publishing every language would do, without doing it. A read, but
   // admitted on the publish grant as the publish is (LIFECYCLE_ROUTE_ACTIONS).
   "previewPublishAllSingleLocales",
+  // Publishing or unpublishing chosen parts of the Single: admitted on the grant of that action,
+  // as a collection entry's are (LIFECYCLE_ROUTE_ACTIONS), never on a definition's.
+  "publishSingleParts",
+  "unpublishSingleParts",
   // Discarding the working draft reverts the document to its live row. Left out
   // of the read branch below so it resolves to `update-{slug}`: a caller who may
   // not update the document may not throw away its pending edits either.
@@ -932,6 +938,17 @@ const STATUS_WRITE_METHODS: ReadonlySet<string> = new Set([
   "updateSingleDocument",
 ]);
 
+/** The table a Single's document is stored in, as its record names it. */
+function singleTableNameOf(record: unknown, slug: string): string {
+  const stored =
+    typeof record === "object" && record !== null
+      ? (record as { tableName?: unknown }).tableName
+      : undefined;
+  return typeof stored === "string" && stored.length > 0
+    ? stored
+    : resolveSingleTableName({ slug });
+}
+
 /**
  * The action a status write route's request asks, read only once every
  * action has refused it, so the refusal names that action: the gate the
@@ -956,25 +973,27 @@ function actionAskedBy(
       if (typeof write !== "object" || write === null || Array.isArray(write)) {
         return "update";
       }
-      // The entity's lifecycle, from the record the services read it from.
-      const lifecycle = async () =>
-        hasLifecycle(
-          entity === "single"
-            ? await container
-                .get<{
-                  getSingleBySlug(slug: string): Promise<unknown>;
-                }>("singleRegistryService")
-                .getSingleBySlug(slug)
-            : await container
-                .get<{
-                  getCollectionBySlug(slug: string): Promise<unknown>;
-                }>("collectionRegistryService")
-                .getCollectionBySlug(slug)
-        );
+      // The entity's record, as the services read it: its lifecycle, and the table whose
+      // contributed columns the write may name, which the gate leaves out as the write does.
+      const record =
+        entity === "single"
+          ? await container
+              .get<{
+                getSingleBySlug(slug: string): Promise<unknown>;
+              }>("singleRegistryService")
+              .getSingleBySlug(slug)
+          : await container
+              .get<{
+                getCollectionBySlug(slug: string): Promise<unknown>;
+              }>("collectionRegistryService")
+              .getCollectionBySlug(slug);
       return await writeGateFor(
         write as Record<string, unknown>,
         entity,
-        lifecycle
+        entity === "single"
+          ? singleTableNameOf(record, slug)
+          : collectionTableName(record, slug),
+        () => hasLifecycle(record)
       );
     } catch {
       return "update";
@@ -996,6 +1015,8 @@ const LIFECYCLE_ROUTE_ACTIONS: Readonly<
   unpublishParts: "unpublish",
   publishAllSingleLocales: "publish",
   previewPublishAllSingleLocales: "publish",
+  publishSingleParts: "publish",
+  unpublishSingleParts: "unpublish",
   previewPublishAllLocales: "publish",
 };
 

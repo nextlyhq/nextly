@@ -130,10 +130,12 @@ const MYSQL: JsonDialect = {
   holds: (c, k) =>
     `JSON_TYPE(JSON_EXTRACT(${c}, ${dollarPath(k)})) IS NOT NULL AND JSON_TYPE(JSON_EXTRACT(${c}, ${dollarPath(k)})) <> 'NULL'`,
   hasKey: (c, k) => `JSON_CONTAINS_PATH(${c}, 'one', ${dollarPath(k)})`,
-  set: (c, k, v) => `JSON_SET(COALESCE(${c}, JSON_OBJECT()), ${dollarPath(k)}, ${v})`,
+  set: (c, k, v) =>
+    `JSON_SET(COALESCE(${c}, JSON_OBJECT()), ${dollarPath(k)}, ${v})`,
   remove: (c, k) => `JSON_REMOVE(${c}, ${dollarPath(k)})`,
   emptyObject: "JSON_OBJECT()",
-  isObject: (c, k) => `JSON_TYPE(JSON_EXTRACT(${c}, ${dollarPath(k)})) = 'OBJECT'`,
+  isObject: (c, k) =>
+    `JSON_TYPE(JSON_EXTRACT(${c}, ${dollarPath(k)})) = 'OBJECT'`,
   toJson: (c, target) => {
     if (target.kind === "boolean") {
       return `IF(${c}, CAST('true' AS JSON), CAST('false' AS JSON))`;

@@ -39,9 +39,11 @@ import {
   CANVAS_BINDINGS_ROUTE_PATH,
   conditionsFromWire,
   demandFromWire,
+  sourcesChangedAskOf,
   type CanvasBindingsRequest,
   type CanvasBindingsResponse,
 } from "./canvas-bindings-contract";
+import { sourcesChangedStampAsCaller } from "./canvas-sources-changed-route";
 import { readBodyWith } from "./composition-route-kit";
 import { editorReaderAsCaller, mediaReaderAsCaller } from "./entry-reads";
 import { allowanceFromWire, MOST_PAGE_READS } from "./page-allowance";
@@ -262,9 +264,19 @@ export function canvasBindingsRoute(): {
         CanvasBindingsBody,
         "canvas bindings"
       );
-      return respondDoc(
-        await readCanvasBindings(body, directCanvasBindingsReads(ctx))
+      // The change check's mark of what this reads, taken BEFORE it reads:
+      // a save landing while it reads is then not in the mark, so the
+      // editor's next check differs and the canvas reads again. A mark that
+      // cannot be read is left out, and the editor asks the check itself.
+      const stamp = await sourcesChangedStampAsCaller(
+        ctx,
+        sourcesChangedAskOf(body)
+      ).catch(() => undefined);
+      const answer = await readCanvasBindings(
+        body,
+        directCanvasBindingsReads(ctx)
       );
+      return respondDoc(stamp === undefined ? answer : { ...answer, stamp });
     },
   };
 }

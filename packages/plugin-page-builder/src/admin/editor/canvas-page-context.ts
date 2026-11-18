@@ -84,6 +84,30 @@ function drawnMedia(item: MediaItem | null): ResolvedMedia | null {
   };
 }
 
+/** Resolve a media id as the canvas draws it, through the admin's read. */
+function canvasMediaResolver(
+  readMedia: (id: string) => Promise<MediaItem | null>
+): (id: string) => Promise<ResolvedMedia | null> {
+  return async id => drawnMedia(await readMedia(id));
+}
+
+/**
+ * The context saved section pictures draw with: media and icons resolved as
+ * the canvas resolves them, read-only, and nothing listed or queried. One
+ * object for as long as the admin's media read is the same.
+ */
+export function usePictureContext(): PageContext {
+  const readMedia = useMediaResolver();
+  return useMemo(
+    () =>
+      createStandaloneContext({
+        resolveMedia: canvasMediaResolver(readMedia),
+        resolveIcon: resolveCanvasIcon,
+      }),
+    [readMedia]
+  );
+}
+
 /**
  * A read budget the canvas renews for each draw: one object, so the context
  * holding it stays the editor's one object, whose allowance is a published
@@ -203,7 +227,7 @@ export function useCanvasPageContext(
   const base = useMemo(
     () =>
       createStandaloneContext({
-        resolveMedia: async id => drawnMedia(await readMedia(id)),
+        resolveMedia: canvasMediaResolver(readMedia),
         resolveIcon: resolveCanvasIcon,
         ...lists.terms,
         data: lists.data,
@@ -383,26 +407,29 @@ function ownListReads(
 }
 
 /**
- * The start of each field's value in the first entry a collection list
- * shows, as the person editing reads it, by the field's path: the binding
- * picker's samples beside the list item's fields. Read through the list's
- * own read and the canvas's provider, whose answers are kept a while, so it
- * is the canvas's own first row and reads nothing new while that is held.
- * `undefined` for a list fed by a named query, one naming no collection, one
- * with no entry, or one whose read fails.
+ * Each field's value in one entry a collection list shows (the one the
+ * author clicked, `at`, else the first), as the person editing reads it, by
+ * the field's path: the binding picker's samples beside the list item's
+ * fields. Read through the list's own read and the canvas's provider, whose
+ * answers are kept a while, so it is the canvas's own row and reads nothing
+ * new while that is held. `undefined` for a list fed by a named query, one
+ * naming no collection, one with no entry, or one whose read fails.
  *
  * @param props - the list's stored props
  * @param locale - the language being edited
  * @param userId - the signed-in person, whose reads these are
  * @param entry - the entry the canvas draws, for a list of related entries
- * @returns the previews by path, or `undefined`
+ * @param at - the clicked row's place among those the list shows
+ * @returns the samples by path, or `undefined`
  */
 export async function canvasListSample(
   props: Readonly<Record<string, unknown>>,
   locale: string | undefined,
   userId: string | null,
-  entry: CanvasEntry
-): Promise<Readonly<Record<string, string>> | undefined> {
+  entry: CanvasEntry,
+  /** The entry's place among those the list shows; the first if absent. */
+  at?: number
+): Promise<ReturnType<typeof rowPreviews> | undefined> {
   if (props.namedQuery !== undefined && props.namedQuery !== null) {
     return undefined;
   }
@@ -413,8 +440,10 @@ export async function canvasListSample(
     find: async query => (await reads.data.find(query)).items,
     claim: () => true,
   });
-  const first = outcome.items[0];
-  return first === undefined ? undefined : rowPreviews(first);
+  // The entry the author clicked, else the first: one the list no longer
+  // shows (it changed since the click) reads the first.
+  const sampled = outcome.items[at ?? 0] ?? outcome.items[0];
+  return sampled === undefined ? undefined : rowPreviews(sampled);
 }
 
 /** No list drawn yet. */

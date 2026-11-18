@@ -1,6 +1,6 @@
 /**
- * The field's stored value read as a document, and the name the plugin's
- * client reads go by.
+ * The field's stored value read as a document, with every block upgraded to
+ * its current version, and the name the plugin's client reads go by.
  *
  * Shared by the field control at rest and the editor it opens, so both seed
  * from one reading of a stored value. A module of its own because the editor
@@ -8,12 +8,17 @@
  *
  * @module @nextlyhq/plugin-page-builder/admin/editor/stored-document
  */
-import type { BlockDocument, DocumentKind } from "@nextlyhq/blocks-engine";
+import {
+  migrateDocument,
+  type BlockDocument,
+  type DocumentKind,
+} from "@nextlyhq/blocks-engine";
+import { migrationSourceFor } from "@nextlyhq/blocks-react";
 
 import { emptyBlockDocument } from "../../fields/blocks-document";
+import { entryBlockResolver } from "../entry-block-resolver";
 
-/** Names the registry attributes these blocks to, for diagnostics. */
-export const PLUGIN_SOURCE = "@nextlyhq/plugin-page-builder";
+export { PLUGIN_SOURCE } from "../plugin-source";
 
 /**
  * A stored value that is not a usable document is treated as absent.
@@ -41,10 +46,67 @@ export function documentFrom(
   value: unknown,
   kinds?: readonly DocumentKind[]
 ): BlockDocument {
-  if (typeof value !== "object" || value === null)
-    return emptyBlockDocument(kinds);
-  const candidate = value as Partial<BlockDocument>;
-  return Array.isArray(candidate.nodes)
-    ? (value as BlockDocument)
+  return isDocument(value)
+    ? atCurrentVersions(value)
     : emptyBlockDocument(kinds);
+}
+
+/**
+ * A stored value with every block in it at its current version, as
+ * {@link documentFrom} reads it; any value that is not a document is returned
+ * as it came, for `documentFrom` to replace.
+ *
+ * For the editor's read of the saved entry, which compares what arrives with
+ * what the editor holds before it hands anything on: the editor holds the
+ * upgraded document, so an arrival is compared upgraded too, or the same page
+ * read back at its stored versions would count as a different one.
+ */
+export function storedAtCurrentVersions(value: unknown): unknown {
+  return isDocument(value) ? atCurrentVersions(value) : value;
+}
+
+/** Whether a stored value is a document the canvas can walk. */
+function isDocument(value: unknown): value is BlockDocument {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    Array.isArray((value as Partial<BlockDocument>).nodes)
+  );
+}
+
+/**
+ * The document with every block at its block's current version, upgraded as
+ * the page's renderer upgrades it.
+ *
+ * Upgraded once, as the document is read, rather than left to each render.
+ * The editor hands over the whole document it holds on the first edit, so a
+ * block held at the version it was stored at is saved with its edited props
+ * under the OLD version stamp, and the renderer's upgrade then reads those
+ * props as old ones: a Quote's source address edited under its new name is
+ * overwritten by the old name's value. Upgraded here, the first edit saves the
+ * block at its current version, and opening alone saves nothing, since the
+ * editor's unsaved work is its own history, which a read does not touch.
+ *
+ * Resolved as the entry screen resolves blocks, the registry first, so a
+ * block the editor has registered and one only the core set or a plugin's
+ * contribution defines are both upgraded, with or without the editor open.
+ *
+ * The stored object itself is returned when no block needed upgrading, so a
+ * reader comparing by identity sees the same document it already holds. The
+ * stored value is never modified.
+ */
+function atCurrentVersions(doc: BlockDocument): BlockDocument {
+  const migrated = migrateDocument(
+    doc,
+    migrationSourceFor(entryBlockResolver())
+  );
+  // Judged by the nodes, not by `rewritten`: that names only nodes whose
+  // PROPS were replaced, and an upgrade may change a node's version and its
+  // bindings alone (a source address held only as a binding). Migration
+  // returns each node it left untouched as the very object it was handed, so
+  // the same objects in the same places mean nothing was upgraded.
+  const unchanged =
+    migrated.doc.nodes.length === doc.nodes.length &&
+    migrated.doc.nodes.every((node, index) => node === doc.nodes[index]);
+  return unchanged ? doc : migrated.doc;
 }

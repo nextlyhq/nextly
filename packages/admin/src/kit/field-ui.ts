@@ -82,6 +82,19 @@ export {
   EDITABLE_VALIDATION_RULES,
 } from "../components/field-ui";
 
+/**
+ * Whether a numeric validation bound can be kept as it stands — the rule the
+ * settings panel says under each bound, and a surface that saves what the
+ * panel edited asks of every bound before it persists, so the panel's red
+ * words are never only a warning its own save ignores. The Schema Builder's
+ * pre-save check and the Form Builder's save refusal are the two askers.
+ */
+export {
+  boundProblem,
+  NUMERIC_BOUND_RULES,
+  type NumericRule,
+} from "../lib/validation-bounds";
+
 export type {
   FieldPickerProps,
   FieldPickerConfig,

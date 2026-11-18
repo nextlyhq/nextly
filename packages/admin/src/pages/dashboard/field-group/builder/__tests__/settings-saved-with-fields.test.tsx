@@ -11,6 +11,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { render, screen, waitFor, within } from "@admin/__tests__/utils";
 import { RestartProvider } from "@admin/context/RestartContext";
+import {
+  addUnsavedEntity,
+  removeUnsavedEntity,
+  unsavedEntity,
+} from "@admin/lib/builder/unsaved-entities";
 import type { ApiFieldGroup } from "@admin/types/entities";
 
 import FieldGroupBuilderEditPage from "../[slug]";
@@ -171,7 +176,9 @@ describe("a field group's settings saved with a field change", () => {
     // A settings change: a new name, description and icon.
     await user.click(screen.getByRole("button", { name: "Settings" }));
     const settings = await screen.findByRole("dialog");
-    const name = within(settings).getByLabelText("Singular name");
+    const name = within(settings).getByRole("textbox", {
+      name: "Singular name",
+    });
     await user.clear(name);
     await user.type(name, "Banner");
     await user.type(within(settings).getByLabelText("Description"), "Top");
@@ -245,6 +252,60 @@ describe("a field group's settings saved on their own", () => {
       expect.objectContaining({ description: "Top" })
     );
     expect(applied).toHaveLength(0);
+  });
+});
+
+// A field group this editor's picker made and no field uses is let go once a save lands, a
+// settings-only save included, and only then: a save that has not landed may still be retried.
+describe("the field groups this editor's picker made, at a settings-only save", () => {
+  afterEach(() => {
+    removeUnsavedEntity("field-group", "promo");
+    updateFieldGroup.mockReset();
+  });
+
+  async function saveSettingsOnly() {
+    previewFindsChanges = false;
+    addUnsavedEntity({
+      kind: "field-group",
+      address: "promo",
+      settings: { singularName: "Promo", slug: "promo", icon: "" },
+      fields: [],
+      ownedBy: { kind: "field-group", address: "hero" },
+    });
+    const user = userEvent.setup();
+    render(
+      <RestartProvider>
+        <FieldGroupBuilderEditPage params={{ slug: "hero" }} />
+        <Toaster />
+      </RestartProvider>
+    );
+    await screen.findByTestId("field-row-heading");
+    await user.click(screen.getByRole("button", { name: "Settings" }));
+    const settings = await screen.findByRole("dialog");
+    await user.type(within(settings).getByLabelText("Description"), "Top");
+    await user.click(within(settings).getByRole("button", { name: "Save" }));
+    await user.click(screen.getByRole("button", { name: /^save/i }));
+    const review = await screen.findByRole("alertdialog");
+    await user.click(within(review).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(updateFieldGroup).toHaveBeenCalledTimes(1));
+  }
+
+  it("lets go of one no field uses once the save lands", async () => {
+    updateFieldGroup.mockImplementation(
+      (_vars: unknown, options?: { onSuccess?: () => void }) =>
+        options?.onSuccess?.()
+    );
+    await saveSettingsOnly();
+    await waitFor(() =>
+      expect(unsavedEntity("field-group", "promo")).toBeUndefined()
+    );
+  });
+
+  it("keeps it while the save has not landed", async () => {
+    await saveSettingsOnly();
+    expect(unsavedEntity("field-group", "promo")).toEqual(
+      expect.objectContaining({ address: "promo" })
+    );
   });
 });
 

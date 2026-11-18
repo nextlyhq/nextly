@@ -20,7 +20,7 @@ import type { BindingFieldShape } from "@nextlyhq/blocks-engine";
 import type {
   BlocksFieldShapeRef,
   BlocksFieldShapes,
-  BlocksSiteSettings,
+  BlocksSiteValues,
   PageBindings,
 } from "./context";
 
@@ -87,7 +87,7 @@ export interface WireBindings {
     string,
     Readonly<Record<string, unknown>> | null,
   ])[];
-  readonly site?: BlocksSiteSettings | null;
+  readonly site?: BlocksSiteValues | null;
   readonly timeZone?: string;
   readonly shapes: readonly (readonly [
     string,

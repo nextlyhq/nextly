@@ -33,6 +33,12 @@ import type {
   PublishAllPreview,
 } from "./publishAllPreview";
 import {
+  publishPartsBody,
+  type PublishPartsChoice,
+  type PublishPartsDirection,
+  type PublishPartsResult,
+} from "./publishParts";
+import {
   acknowledgedConversionsBody,
   type FieldResolution,
   type SchemaApplyResponse,
@@ -162,6 +168,12 @@ type SingleApiType = {
   readonly previewPublishAllLocales: (
     slug: string
   ) => Promise<PublishAllPreview>;
+  /** @experimental Until publishing per language is complete. */
+  readonly publishParts: (
+    slug: string,
+    direction: PublishPartsDirection,
+    choice: PublishPartsChoice
+  ) => Promise<PublishPartsResult>;
 };
 
 /**
@@ -428,6 +440,23 @@ export const singleApi: SingleApiType = {
    */
   previewPublishAllLocales: async (slug: string): Promise<PublishAllPreview> =>
     protectedApi.get<PublishAllPreview>(`/singles/${slug}/publish-all`),
+
+  /**
+   * Publish or unpublish the parts of a Single a person chose: some of its languages, and
+   * separately its shared fields. With `describe`, say what that would do and change nothing.
+   * Hits `POST /api/singles/{slug}/publish` (or `/unpublish`).
+   */
+  publishParts: async (
+    slug: string,
+    direction: PublishPartsDirection,
+    choice: PublishPartsChoice
+  ): Promise<PublishPartsResult> => {
+    const result = await protectedApi.post<{
+      message: string;
+      item: PublishPartsResult;
+    }>(`/singles/${slug}/${direction}`, publishPartsBody(choice));
+    return result.item;
+  },
 } as const;
 
 // ============================================================

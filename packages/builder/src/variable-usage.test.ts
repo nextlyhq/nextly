@@ -17,6 +17,7 @@ import { describe, expect, it } from "vitest";
 import { VARIABLE_LOSS_WORDS } from "./editor-words";
 import {
   sharedStyleSets,
+  usageState,
   variableCountWords,
   variableLossSentence,
   variableRemoval,
@@ -38,6 +39,9 @@ function reach(
     byKind: { ...NONE, pages: documents },
     sharedStyles,
     blockDefaults,
+    // As a current host answers: no variable and no Site text row names it.
+    variables: [],
+    siteText: [],
     complete,
   };
 }
@@ -79,6 +83,42 @@ describe("how widely a row's variable is used, in words", () => {
 
   it('says "Not counted yet" for a zero that is a floor', () => {
     expect(variableCountWords(reach(0, [], false))).toBe("Not counted yet");
+  });
+});
+
+describe("whether a variable is used, for the usage filter", () => {
+  it("is used by a page, a component or any other document", () => {
+    expect(usageState(reach(1))).toBe("used");
+  });
+
+  it("is used by a shared style or a block style", () => {
+    expect(usageState(reach(0, ["card"]))).toBe("used");
+  });
+
+  it("is used where a Site text row uses it", () => {
+    expect(usageState({ ...reach(0), siteText: ["link"] })).toBe("used");
+  });
+
+  it("is used where another variable names it through var()", () => {
+    expect(usageState({ ...reach(0), variables: ["shadow.lift"] })).toBe(
+      "used"
+    );
+  });
+
+  it("is unused where only a core block's built-in look names it", () => {
+    expect(usageState(reach(0, [], true, ["core/button"]))).toBe("unused");
+  });
+
+  it("is still counting where the count says nothing of the variables or rows naming it", () => {
+    // An older server's answer: neither relation is said, so neither is none.
+    const { variables: _v, siteText: _s, ...unsaid } = reach(0);
+    expect(usageState(unsaid)).toBe("counting");
+  });
+
+  it("is unused only once every document is counted", () => {
+    expect(usageState(reach(0))).toBe("unused");
+    expect(usageState(reach(0, [], false))).toBe("counting");
+    expect(usageState(undefined)).toBe("counting");
   });
 });
 

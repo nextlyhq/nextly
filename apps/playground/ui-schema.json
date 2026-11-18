@@ -1,0 +1,108 @@
+{
+  "$schema": "https://nextlyhq.com/schemas/ui-schema.v1.json",
+  "version": 1,
+  "collections": [
+    {
+      "slug": "bag",
+      "labels": {
+        "singular": "Bag",
+        "plural": "Bags"
+      },
+      "status": true,
+      "fields": [],
+      "localized": false,
+      "versions": false,
+      "revalidate": true,
+      "webhooks": true
+    },
+    {
+      "slug": "view",
+      "labels": {
+        "singular": "View",
+        "plural": "Views"
+      },
+      "status": true,
+      "fields": [
+        {
+          "name": "test",
+          "type": "text",
+          "required": false,
+          "label": "Test",
+          "unique": false,
+          "index": false
+        },
+        {
+          "name": "logo",
+          "type": "upload",
+          "required": false,
+          "label": "logo",
+          "unique": false,
+          "index": false
+        },
+        {
+          "name": "blocks",
+          "type": "blocks",
+          "required": false,
+          "label": "blocks",
+          "unique": false,
+          "index": false
+        },
+        {
+          "name": "tags",
+          "type": "repeater",
+          "required": false,
+          "label": "Tags",
+          "unique": false,
+          "index": false,
+          "fields": [
+            {
+              "name": "alpha",
+              "type": "text",
+              "label": "Alpha",
+              "required": false,
+              "unique": false,
+              "index": false
+            },
+            {
+              "name": "aaaa",
+              "type": "date",
+              "label": "aaaa",
+              "required": false,
+              "unique": false,
+              "index": false
+            }
+          ]
+        }
+      ],
+      "localized": false,
+      "versions": false,
+      "revalidate": true,
+      "webhooks": true
+    }
+  ],
+  "singles": [
+    {
+      "slug": "test-single-pb",
+      "labels": {
+        "singular": "Test Single PB",
+        "plural": "Test Single PB"
+      },
+      "status": true,
+      "fields": [
+        {
+          "name": "ttt",
+          "type": "text",
+          "required": false,
+          "label": "TTT",
+          "unique": false,
+          "index": false
+        }
+      ],
+      "localized": false,
+      "versions": false,
+      "revalidate": true,
+      "webhooks": true
+    }
+  ],
+  "components": []
+}

@@ -46,7 +46,7 @@ import {
   type PickerField,
   type PickerSource,
 } from "./binding-fields-contract";
-import { previewOf } from "./binding-preview";
+import { isEmptyValue, previewOf, thumbnailOf } from "./binding-preview";
 import { collectionNaming } from "./bindings-report/readable";
 import { labelOf } from "./collection-labels";
 import { PAGES_SLUG } from "./collections/pages";
@@ -246,17 +246,55 @@ function pickerField(shape: BindingFieldShape, read: SourceRead): PickerField {
   // The value as the person editing reads it, a draft's included and marked
   // as one: the read is their own, through core's gate, so a draft's value
   // reaches only someone that gate lets read it.
-  const preview = isPublic ? previewOf(value) : undefined;
+  // A media item stored by its id is shown by its picture, never the id.
+  const preview =
+    isPublic && shape.type !== "upload" ? previewOf(value) : undefined;
   const group = groupRead(shape, read, publicShape);
   return {
     ...own,
     public: isPublic,
     ...(isPublic && draft ? { draft: true as const } : {}),
     ...(preview === undefined ? {} : { preview }),
+    ...(isPublic ? pictureOrEmpty(value) : {}),
     ...(group === undefined
       ? {}
       : { fields: group.shapes.map(inner => pickerField(inner, group)) }),
   };
+}
+
+/**
+ * What the picker shows for a value with no text to preview: a picture's
+ * small thumbnail, or that the field holds nothing. Only for a field
+ * visitors may read, as a preview is.
+ */
+function pictureOrEmpty(
+  value: unknown
+): Pick<PickerField, "thumbnail" | "empty"> {
+  const thumbnail = thumbnailOf(value);
+  if (thumbnail !== undefined) return { thumbnail };
+  return isEmptyValue(value) ? { empty: true } : {};
+}
+
+/** What a field shows of its value, with nothing absent written as a key. */
+function shownValue(
+  value: Pick<PickerField, "preview" | "thumbnail" | "empty">
+): Pick<PickerField, "preview" | "thumbnail" | "empty"> {
+  return Object.fromEntries(
+    Object.entries(value).filter(([, shown]) => shown !== undefined)
+  );
+}
+
+/**
+ * The thumbnail of the media a picture field names by its id, from the
+ * record the listing followed it to: only for a field visitors may read.
+ */
+function followedThumbnail(
+  field: PickerField,
+  record: Readonly<Record<string, unknown>>
+): Pick<PickerField, "thumbnail"> {
+  if (!field.public || field.thumbnail !== undefined) return {};
+  const thumbnail = thumbnailOf(record);
+  return thumbnail === undefined ? {} : { thumbnail };
 }
 
 /**
@@ -269,7 +307,7 @@ function throughRelation(
   inner: PickerField,
   relation: PickerField
 ): PickerField {
-  const { preview, ...withoutPreview } = inner;
+  const { preview, thumbnail, empty, ...withoutPreview } = inner;
   const { draft: ownDraft, ...rest } = withoutPreview;
   const isPublic = inner.public && relation.public;
   const draft = relation.draft === true || ownDraft === true;
@@ -279,7 +317,7 @@ function throughRelation(
     ...withoutInside,
     public: isPublic,
     ...(isPublic && draft ? { draft: true as const } : {}),
-    ...(isPublic && preview !== undefined ? { preview } : {}),
+    ...(isPublic ? shownValue({ preview, thumbnail, empty }) : {}),
     ...(inside === undefined
       ? {}
       : { fields: inside.map(field => throughRelation(field, relation)) }),
@@ -335,7 +373,12 @@ async function sourceFields(
 ): Promise<readonly PickerField[]> {
   return Promise.all(
     read.shapes.map(async shape => {
-      const field = pickerField(shape, read);
+      const field = await withGroupPictures(
+        pickerField(shape, read),
+        shape,
+        read.row[shape.name],
+        { reads, budget }
+      );
       const target = followable(shape);
       const id = relatedId(read.row[shape.name]);
       if (target === undefined || id === undefined) return field;
@@ -346,6 +389,8 @@ async function sourceFields(
       if (related === undefined || related === "failed") return field;
       return {
         ...field,
+        // A picture stored by its id shows the media it names, read here.
+        ...followedThumbnail(field, related.row),
         fields: [
           ...related.shapes.map(inner =>
             throughRelation(pickerField(inner, related), field)
@@ -361,6 +406,58 @@ async function sourceFields(
       };
     })
   );
+}
+
+/** What following one more relation needs: the reads, and what is left. */
+interface FollowTerms {
+  readonly reads: BindingFieldsReads;
+  readonly budget: FollowBudget;
+}
+
+/**
+ * A group's field with each picture inside it that is stored by its id
+ * shown by its media's thumbnail (`seo.ogImage`), the media read as the
+ * caller within the follow budget, as a top-level picture's is.
+ */
+async function withGroupPictures(
+  field: PickerField,
+  shape: BindingFieldShape,
+  row: unknown,
+  terms: FollowTerms
+): Promise<PickerField> {
+  const inside = field.fields;
+  if (shape.fields === undefined || inside === undefined) return field;
+  if (!isPlainRecord(row)) return field;
+  const declared = shape.fields;
+  const fields = await Promise.all(
+    inside.map(inner =>
+      innerPicture(
+        inner,
+        declared.find(each => each.name === inner.name),
+        row[inner.name],
+        terms
+      )
+    )
+  );
+  return { ...field, fields };
+}
+
+/** One field inside a group, with its picture's thumbnail where it holds one by id. */
+async function innerPicture(
+  inner: PickerField,
+  shape: BindingFieldShape | undefined,
+  value: unknown,
+  { reads, budget }: FollowTerms
+): Promise<PickerField> {
+  if (shape?.type !== "upload" || !inner.public) return inner;
+  const target = followable(shape);
+  const id = relatedId(value);
+  if (target === undefined || id === undefined) return inner;
+  if (budget.followed >= MOST_RELATIONS) return inner;
+  budget.followed += 1;
+  const related = await readOrFailed({ collection: target, id }, reads);
+  if (related === undefined || related === "failed") return inner;
+  return { ...inner, ...followedThumbnail(inner, related.row) };
 }
 
 /**
@@ -406,7 +503,8 @@ async function siteSource(reads: BindingFieldsReads): Promise<PickerSource> {
     binding: { source: "site" },
     label: "Site",
     fields: SITE_SETTING_FIELD_SHAPES.map((shape): PickerField => {
-      const preview = previewOf(values[shape.name]);
+      const value = values[shape.name];
+      const preview = previewOf(value);
       return {
         name: shape.name,
         type: shape.type,
@@ -414,6 +512,9 @@ async function siteSource(reads: BindingFieldsReads): Promise<PickerSource> {
         ...siteSettingLabel(shape.name),
         public: true,
         ...(preview === undefined ? {} : { preview }),
+        ...(preview === undefined && isEmptyValue(value)
+          ? { empty: true as const }
+          : {}),
       };
     }),
   };

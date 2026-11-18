@@ -10,13 +10,19 @@ import type {
   BlockNode,
   ComponentLookup,
   NestingSource,
+  OpPosition,
 } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
 import type { InsertDragEntry } from "../../canvas/canvas-drag";
 import type { EditorState } from "../../editor-state";
 
-import type { InsertEntry, SavedComponent, SavedPattern } from "./inserter";
+import type {
+  InsertEntry,
+  PatternInsertEntry,
+  SavedComponent,
+  SavedPattern,
+} from "./inserter";
 
 /**
  * Where one tier of the host's library read stands, as the panel says it.
@@ -162,6 +168,13 @@ export interface InsertPanelProps {
    */
   after?: string;
   /**
+   * Any other place the author chose, by position: the page's top level from
+   * an empty page's start area, or before the first block of a container.
+   * Every block goes there; it is judged against the page as it is now, and
+   * the host keeps it only while nothing that could move it has happened.
+   */
+  at?: OpPosition;
+  /**
    * Draws a preview of an entry for the popover beside the panel, when the
    * host has one (a block's example, rendered). Answering nothing falls back
    * to the entry's mark, drawn large.
@@ -170,6 +183,17 @@ export interface InsertPanelProps {
    * does not hold.
    */
   renderPreview?: (entry: InsertEntry) => React.ReactNode;
+  /**
+   * Draws a small picture of a saved section for its tile, in place of the
+   * tier's mark, when the host has one (`DocumentMiniature`, given the
+   * section's published document and the site's rendering). Answering nothing
+   * keeps the mark.
+   *
+   * The host's for the reason `renderPreview` is: the panel holds no
+   * renderer inputs. The picture waits until its tile is on screen, so
+   * offering one never holds the panel up.
+   */
+  renderPicture?: (entry: PatternInsertEntry) => React.ReactNode;
   /**
    * How many times an add control on the canvas has asked for this panel,
    * counted by the host. Each new count is a press the panel answers, so the
@@ -181,4 +205,10 @@ export interface InsertPanelProps {
   summoned?: number;
   /** Told each count the panel has answered, so the host asks no more. */
   onSummoned?: (count: number) => void;
+  /**
+   * The tab a press asks for, with its count: "Insert a saved section" on an
+   * empty page opens the Saved sections tab. Absent, the panel keeps the tab
+   * it is on.
+   */
+  summonedTab?: "blocks" | "sections";
 }

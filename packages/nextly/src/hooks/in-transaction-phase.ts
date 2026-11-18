@@ -34,6 +34,7 @@ import { NextlyError } from "../errors/nextly-error";
 import { getNextlyLogger } from "../observability/logger";
 import { markWriteIntegrityFailure } from "../shared/write-integrity";
 
+import { withHookLanguage } from "./hook-language";
 import { runWatched, watchOutboundCalls } from "./in-transaction-outbound";
 import { normalizeHookError } from "./normalize-hook-error";
 import type {
@@ -117,10 +118,11 @@ export async function runInTransactionPhase(
     );
   }
 
-  const write: InTransactionWrite = {
+  // Told the languages and parts as any hook is, read now, in the write.
+  const write: InTransactionWrite = withHookLanguage({
     ...input,
     context: detachedContext(input.context),
-  };
+  });
   await phaseDepth.run(depth, async () => {
     for (const { handler, owner } of entries) {
       try {

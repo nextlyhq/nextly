@@ -4,7 +4,7 @@
  * included, and stays put otherwise.
  */
 import { SITE_SETTING_FIELD_SHAPES } from "@nextlyhq/blocks-engine";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { schemaFingerprint, type FingerprintSources } from "./fingerprint";
 
@@ -79,5 +79,23 @@ describe("the schema fingerprint", () => {
     expect(await schemaFingerprint(rows(["id"]))).toBe(
       await schemaFingerprint(rows(["id"]))
     );
+  });
+
+  it("moves when the format of the index of where documents bind a Single changes", async () => {
+    // A release raising the format checks every document once, which is what
+    // fills the index on an upgraded site.
+    const now = await schemaFingerprint(sources("g1"));
+    vi.resetModules();
+    vi.doMock("./uses", async importOriginal => ({
+      ...(await importOriginal<typeof import("./uses")>()),
+      BINDING_USES_FORMAT: 999,
+    }));
+    try {
+      const raised = await import("./fingerprint");
+      expect(await raised.schemaFingerprint(sources("g1"))).not.toBe(now);
+    } finally {
+      vi.doUnmock("./uses");
+      vi.resetModules();
+    }
   });
 });

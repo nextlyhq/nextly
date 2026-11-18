@@ -337,6 +337,41 @@ export function previewWidth(
   return tiers.find(tier => tier.id === id)?.maxWidth;
 }
 
+/** The narrowest width the canvas previews a page at: a small phone. */
+export const NARROWEST_PREVIEW_WIDTH = 320;
+
+/** The widths a preview width can take, both ends included. */
+export interface PreviewWidthRange {
+  readonly min: number;
+  readonly max: number;
+}
+
+/**
+ * The widths the author can preview the page at by dragging the frame's
+ * edges: from a small phone to the Desktop preview width, which is 1280 or
+ * one pixel past the widest bound where a site's widest breakpoint reaches
+ * 1280. A site with no viewport breakpoints previews up to 1280 too, the
+ * width its canvas is drawn at.
+ *
+ * @experimental
+ */
+export function previewWidthRange(
+  set: BreakpointSet | undefined
+): PreviewWidthRange {
+  return {
+    min: NARROWEST_PREVIEW_WIDTH,
+    max: previewWidth(set, BASE_BREAKPOINT) ?? DESKTOP_PREVIEW_WIDTH,
+  };
+}
+
+/** A width brought into the range, in whole pixels. @experimental */
+export function clampPreviewWidth(
+  width: number,
+  range: PreviewWidthRange
+): number {
+  return Math.min(range.max, Math.max(range.min, Math.round(width)));
+}
+
 /**
  * The breakpoint an edit goes to, from the device the author chose.
  *

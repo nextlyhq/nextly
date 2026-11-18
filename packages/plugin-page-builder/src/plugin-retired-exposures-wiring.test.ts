@@ -61,7 +61,13 @@ describe("the retirement of removed component fields, as installed", () => {
   });
 
   it("is not wired where the host renders components from its own source", async () => {
-    const wired = await registrations({ componentReadiness: false });
+    // Drawing the header and footer in code as well, so the first-header
+    // fill, which also listens to the store's updates, is not wired either:
+    // what is left on the store's updates is the retirement's alone.
+    const wired = await registrations({
+      componentReadiness: false,
+      siteHeaderFooter: "code",
+    });
 
     expect(wired).not.toContain(`afterUpdate ${COMPONENTS_SLUG}`);
     expect(wired).not.toContain("beforeCreate *");

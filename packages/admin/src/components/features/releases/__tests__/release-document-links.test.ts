@@ -1,7 +1,8 @@
 /**
  * A release's document opens where the admin's one rule for opening a
  * document opens it, the same as from a list row: an entry of a collection
- * that opens in a view links to that view, and a Single to its page.
+ * that opens in a view links to that view, and so does a Single of that
+ * shape, at the Single's own address.
  */
 import { describe, expect, it } from "vitest";
 
@@ -47,12 +48,12 @@ describe("where a release's document leads", () => {
     );
   });
 
-  it("opens a Single at its page", () => {
+  it("opens a Single where the same rule opens it, at its own address", () => {
     expect(
       documentHref(
         member({ scopeKind: "single", scopeSlug: "homepage", entryId: "" }),
         addressOf
       )
-    ).toBe("/admin/singles/homepage");
+    ).toBe("/admin/singles/homepage/builder?field=sections");
   });
 });

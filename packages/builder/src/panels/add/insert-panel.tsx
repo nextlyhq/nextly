@@ -88,7 +88,7 @@ import { usePreviewedCollection } from "../../previewed-entry";
 
 import { LibraryNotices, type LibraryTier } from "./insert-panel-notices";
 import { useInsertOffers } from "./insert-panel-offers";
-import { SummonAnswerOnly } from "./insert-panel-summon";
+import { useSummonAnswer } from "./insert-panel-summon";
 import {
   beginEntryDrag,
   InsertAnnouncement,
@@ -99,6 +99,7 @@ import {
   TouchGestureHint,
 } from "./insert-panel-tiles";
 import type { InsertPanelProps } from "./insert-panel-types";
+import { recordInsert, useInsertUsage } from "./insert-usage";
 import {
   categoryHeading,
   filterEntries,
@@ -165,6 +166,13 @@ function tabOf(entry: InsertEntry): PanelTab {
 const GRID_COLUMNS = 3;
 
 /**
+ * How many tiles sit in a row where each draws a picture of its saved
+ * section: two, so a picture is wide enough to read at the panel's default
+ * width. Fixed per tab for the reason {@link GRID_COLUMNS} is.
+ */
+const PICTURE_COLUMNS = 2;
+
+/**
  * The tier a tab offers: components among the blocks, patterns as sections.
  */
 function tierOf(tab: PanelTab): LibraryTier {
@@ -177,17 +185,20 @@ export function InsertPanel({
   blockOrder,
   beginInsertDrag,
   renderPreview,
+  renderPicture,
   // A canvas press to answer, handed to the line that answers it.
   summoned,
   onSummoned,
+  summonedTab,
   // What it offers, and where: the sources the offers are judged from.
   ...offerInputs
 }: InsertPanelProps): React.JSX.Element {
   const { editor, nesting, onInsert } = offerInputs;
-  const summons = { summoned, onSummoned };
+  // Where a dragged block's insert is counted, as a clicked one's is.
+  const usage = useInsertUsage();
   const [query, setQuery] = React.useState("");
   // Blocks first: what an author adds most. Sections holds the patterns.
-  const [tab, setTab] = React.useState<PanelTab>("blocks");
+  const [tab, setTab] = usePanelTab(summoned, summonedTab);
   /*
    * Whether the author has moved through the tiles, and with what.
    *
@@ -213,6 +224,10 @@ export function InsertPanel({
   // The panel's own element, which the popover anchors inside and treats as
   // "not outside".
   const root = React.useRef<HTMLDivElement | null>(null);
+  // The panel answers a canvas press once, here, rather than in the line
+  // that shows it: the line is drawn again with the tab a press opens, and
+  // the highlight has to last through that.
+  const flash = useSummonAnswer(root, summoned, onSummoned);
   // What can be added, where, and the act of adding it: shared with the
   // editor's search, so a row there and a tile here are one answer.
   const { catalog, rest, announcement, offers, blockSource, insert } =
@@ -299,8 +314,6 @@ export function InsertPanel({
     // on the page.)
     return (
       <div className="nx-insert-panel" data-empty="unplaceable">
-        {/* A press is still answered, with nothing to focus, so it waits for no later open. */}
-        <SummonAnswerOnly {...summons} />
         {header}
         <p className="nx-insert-panel__note">
           The container chosen to add into is no longer on the page. Select a
@@ -334,8 +347,7 @@ export function InsertPanel({
       />
       <PlacementLine
         document={editor.document}
-        root={root}
-        summons={summons}
+        flash={flash}
         first={firstPlace}
         shown={moved !== null}
         groups={groups}
@@ -433,7 +445,13 @@ export function InsertPanel({
                       begin: beginInsertDrag,
                       definitions: blockSource,
                       nesting,
-                      onInserted: onInsert,
+                      // Counted toward the most used, as a click's is.
+                      onInserted: node => {
+                        if (entry.kind === "block") {
+                          recordInsert(usage, entry.blockName);
+                        }
+                        onInsert?.(node);
+                      },
                       entryField: firstBlocksField,
                       refusedEverywhere:
                         entry.kind === "block" &&
@@ -445,7 +463,9 @@ export function InsertPanel({
                     });
                   }}
                 >
-                  <BlockIconMark icon={entry.icon} size={20} />
+                  {tilePicture(entry, renderPicture) ?? (
+                    <BlockIconMark icon={entry.icon} size={20} />
+                  )}
                   <span className="nx-insert-panel__label">{entry.label}</span>
                   {/* Kept in the tile and not drawn: `aria-describedby`
                       needs an element to point at, and keeping it here is what
@@ -499,7 +519,13 @@ export function InsertPanel({
          element the grid is applied to — their items container — and a
          property set on a wrapper inside it would be inherited by the tiles
          instead of read by the grid. */
-      style={{ "--nx-insert-columns": GRID_COLUMNS } as React.CSSProperties}
+      style={
+        {
+          "--nx-insert-columns": picturesIn(tab, renderPicture)
+            ? PICTURE_COLUMNS
+            : GRID_COLUMNS,
+        } as React.CSSProperties
+      }
       // The current tile is painted once the author has moved through the
       // tiles, or typed a search whose first match Enter would take.
       data-highlight={
@@ -540,6 +566,52 @@ export function InsertPanel({
       </Tabs>
     </div>
   );
+}
+
+/**
+ * The tab the panel shows, and the way to change it. A canvas press that
+ * names a tab opens it in the very render that answers the press, so the
+ * search the answer focuses is that tab's, not one a later render would
+ * replace; opened for such a press, the panel starts on that tab.
+ */
+function usePanelTab(
+  summoned: number | undefined,
+  summonedTab: PanelTab | undefined
+): readonly [PanelTab, (tab: PanelTab) => void] {
+  const [tab, setTab] = React.useState<PanelTab>(() =>
+    summoned !== undefined && summonedTab !== undefined ? summonedTab : "blocks"
+  );
+  const [tabbedPress, setTabbedPress] = React.useState(summoned);
+  if (tabbedPress !== summoned) {
+    setTabbedPress(summoned);
+    if (summoned !== undefined && summonedTab !== undefined) {
+      setTab(summonedTab);
+    }
+  }
+  return [tab, setTab];
+}
+
+/** Whether a tab's tiles draw pictures: the saved sections, given a host's. */
+function picturesIn(
+  tab: PanelTab,
+  renderPicture: InsertPanelProps["renderPicture"]
+): boolean {
+  return tab === "sections" && renderPicture !== undefined;
+}
+
+/**
+ * A saved section's picture for its tile, or nothing to keep the mark: only
+ * a pattern has a document to draw, and a host may answer none for one.
+ */
+function tilePicture(
+  entry: InsertEntry,
+  renderPicture: InsertPanelProps["renderPicture"]
+): React.ReactNode {
+  if (entry.kind !== "pattern" || renderPicture === undefined) return null;
+  const picture = renderPicture(entry);
+  // A host writing `has(entry) && <Picture />` hands back `false` for none,
+  // which draws nothing; the tile keeps its mark for it, as for `null`.
+  return typeof picture === "boolean" ? null : picture;
 }
 
 /**

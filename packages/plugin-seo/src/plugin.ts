@@ -127,12 +127,7 @@ import { withSeoOff } from "./resolver/seo-off";
 import { routeValuesCollection } from "./route-values/collection";
 import { withRouteValues } from "./route-values/record";
 import { seoSchema, seoSchemaPlugin } from "./schema/definition";
-import {
-  seoExtendClauses,
-  seoTypesOf,
-  typesLeftOut,
-  type SeoTypes,
-} from "./seo-types";
+import { seoExtendClauses, seoTypesOf, type SeoTypes } from "./seo-types";
 import {
   contentTypesRoute,
   settingsDocumentRoute,
@@ -176,7 +171,10 @@ import {
 } from "./structured-data/rules";
 import { seoTabParts } from "./tab/install";
 import { SEO_GROUP } from "./tab/typed";
-import { PAGE_BUILDER_TAB } from "./template/contributions";
+import {
+  PAGE_BUILDER_SEARCH,
+  PAGE_BUILDER_TAB,
+} from "./template/contributions";
 import { seoTemplateRoute } from "./template/route";
 import {
   SEO_PROBLEMS_ATTENTION_ID,
@@ -975,7 +973,11 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       ...tab.admin,
       // The SEO tab on every edit page the group is added to, and the one in
       // the Page Builder's Settings, where it runs.
-      contributions: [...(tab.admin?.contributions ?? []), PAGE_BUILDER_TAB],
+      contributions: [
+        ...(tab.admin?.contributions ?? []),
+        PAGE_BUILDER_TAB,
+        PAGE_BUILDER_SEARCH,
+      ],
       clientConfig: {
         aiCrawlers: options.aiCrawlers ?? "all",
         hiddenTypes: [...new Set(options.hiddenTypes ?? [])],
@@ -986,16 +988,6 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
         // where the settings hold none of their own. Every one is public
         // already: each page's structured data states it.
         brand: codeBrandOption(options),
-        // The collections whose pages the SEO tab edits, so the tab in the
-        // Page Builder's Settings knows a page it has a group to edit.
-        tabCollections: tab.tabCollections,
-        // Where SEO is on every type, the tab there edits each page whose
-        // type has the group, which only the page's own fields say.
-        tabEveryType: tab.tabEveryType,
-        // The types the site's code leaves out where SEO is on every type, so
-        // the tab there says SEO is off for a page of one rather than asking
-        // for an SEO answer its type does not have.
-        tabExcluded: typesLeftOut(extend),
       },
       // The section's menu, in the order the section is used: where it
       // stands, its pages, what to fix, its redirects, its rules. Each

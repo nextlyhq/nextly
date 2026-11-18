@@ -126,7 +126,7 @@ function withLabels(
 }
 
 /** The admin's name for each Single, by slug. */
-type SingleLabels = ReadonlyMap<string, string>;
+export type SingleLabels = ReadonlyMap<string, string>;
 
 /** Every Single the stored rows name: reported Singles and the Singles bound. */
 function singlesNamed(stored: readonly StoredDocumentReport[]): Set<string> {
@@ -149,8 +149,8 @@ function singlesNamed(stored: readonly StoredDocumentReport[]): Set<string> {
  * wording: a read that fails, or a Single the registry no longer lists, leaves
  * that Single named by its slug rather than failing the report.
  */
-async function singleLabelsOf(
-  ctx: PluginRouteContext,
+export async function singleLabelsOf(
+  ctx: Pick<PluginRouteContext, "services">,
   slugs: ReadonlySet<string>
 ): Promise<SingleLabels> {
   const labels = new Map<string, string>();
