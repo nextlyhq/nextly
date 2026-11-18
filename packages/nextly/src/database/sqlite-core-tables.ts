@@ -1051,6 +1051,10 @@ export function generateSqliteCoreTableStatements(): string[] {
       ON "${EMAIL_QUEUE_TABLE}" ("created_at", "id")`,
     `CREATE INDEX IF NOT EXISTS "email_queue_template_idx"
       ON "${EMAIL_QUEUE_TABLE}" ("template_slug", "created_at")`,
+    `CREATE INDEX IF NOT EXISTS "email_queue_provider_type_idx"
+      ON "${EMAIL_QUEUE_TABLE}" ("provider_type", "created_at")`,
+    `CREATE INDEX IF NOT EXISTS "email_queue_provider_origin_idx"
+      ON "${EMAIL_QUEUE_TABLE}" ("provider_origin", "created_at")`,
     `CREATE TABLE IF NOT EXISTS "${EMAIL_QUEUE_RECIPIENTS_TABLE}" (
       "queued_id" TEXT NOT NULL,
       "recipient_hash" TEXT NOT NULL,

@@ -22,6 +22,8 @@ const TEMPLATE_INDEX = "email_deliveries_template_idx";
 const QUEUE_INDEXES = {
   email_queue_created_idx: ["created_at", "id"],
   email_queue_template_idx: ["template_slug", "created_at"],
+  email_queue_provider_type_idx: ["provider_type", "created_at"],
+  email_queue_provider_origin_idx: ["provider_origin", "created_at"],
 };
 const DELIVERY_ID = "00000000-0000-4000-8000-0000000000d1";
 const QUEUED_ID = "00000000-0000-4000-8000-0000000000q1";

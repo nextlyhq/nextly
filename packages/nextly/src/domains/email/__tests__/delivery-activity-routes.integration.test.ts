@@ -353,6 +353,21 @@ for (const dialect of getConfiguredTestDialects()) {
         expect((await get(path, reader)).status, path).toBe(200);
         expect((await get(path, root)).status, path).toBe(200);
       }
+      // The merged route lists queued emails and unqueued sends together.
+      const { body } = await read(
+        "email-deliveries/activity?limit=100",
+        reader
+      );
+      const items = itemsOf(body);
+      expect(items).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ kind: "queued", id: sentQueuedId }),
+          expect.objectContaining({
+            kind: "delivery",
+            createdAt: "2026-11-01T10:00:00.000Z",
+          }),
+        ])
+      );
     });
 
     it("lets a reader open a delivery's and a queued email's detail, and refuses the rest", async () => {

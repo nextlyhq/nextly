@@ -3,7 +3,8 @@
  * it and filters by it.
  *
  * - `stored`: a provider row that still exists, named by its id.
- * - `code`: the site's configured provider, which has no row.
+ * - `code`: no provider row: the site's configured provider, or the
+ *   built-in log provider an install with none configured falls back to.
  * - `deleted`: a provider row deleted since. PostgreSQL and SQLite null the
  *   record's provider id when the row goes, and MySQL keeps it dangling, so
  *   a record says `stored` when written and is read against the providers

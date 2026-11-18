@@ -75,5 +75,7 @@ export const emailQueuePg = pgTable(
     // The Activity list: newest first, by cursor, and by template.
     index("email_queue_created_idx").on(t.createdAt, t.id),
     index("email_queue_template_idx").on(t.templateSlug, t.createdAt),
+    index("email_queue_provider_type_idx").on(t.providerType, t.createdAt),
+    index("email_queue_provider_origin_idx").on(t.providerOrigin, t.createdAt),
   ]
 );

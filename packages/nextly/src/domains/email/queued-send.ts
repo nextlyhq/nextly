@@ -537,9 +537,15 @@ function shapeOf(message: QueuedMessage): {
 async function noteAttempt(
   adapter: DrizzleAdapter,
   queuedId: string,
-  provider: SentProvider | undefined,
-  finals: readonly FinalRecipient[]
+  attempt: {
+    provider: SentProvider | undefined;
+    failed: boolean;
+    finals: readonly FinalRecipient[];
+  }
 ): Promise<void> {
+  const { provider, failed, finals } = attempt;
+  // The recipients it went to: one a plugin left out was never sent.
+  const reached = finals.filter(entry => entry.outcome !== "skipped");
   const values = {
     ...(provider
       ? {
@@ -547,9 +553,14 @@ async function noteAttempt(
           providerId: provider.id,
           providerOrigin: provider.origin,
         }
-      : {}),
+      : failed
+        ? // Failed before any provider was asked: no provider is shown for
+          // it, rather than an earlier attempt's. A repeat answered from its
+          // key, which sends nothing, keeps the provider that sent it.
+          { providerType: null, providerId: null, providerOrigin: null }
+        : {}),
     ...(finals.length > 0
-      ? { recipientKinds: kindsText(finals.map(entry => entry.kind)) }
+      ? { recipientKinds: kindsText(reached.map(entry => entry.kind)) }
       : {}),
   };
   if (Object.keys(values).length === 0) return;
@@ -1067,9 +1078,11 @@ export async function attemptQueuedEmail(
       provider = heard;
     }
   );
-  await noteAttempt(deps.adapter, row.id, provider, finals).catch(
-    () => undefined
-  );
+  await noteAttempt(deps.adapter, row.id, {
+    provider,
+    failed: failure !== undefined,
+    finals,
+  }).catch(() => undefined);
   // Digested before the change's transaction opens: the plugin's digest key
   // is read on a connection of its own the first time.
   const recipients = changesObserved(row.scope)

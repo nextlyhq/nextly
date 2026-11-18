@@ -36,12 +36,12 @@ The Email hub's Activity can now be read as one merged list, and each provider s
   - Each row gives its kind, status, template (`{ slug }`, `none` or `not-recorded`), provider, recipient kinds, last failure reason, and, for a queued email, its attempts and next attempt. None returns an address, subject or body. It needs `read-email-deliveries`.
 - **Provider origin:** every delivery's provider now carries `origin`:
   - `stored` for a provider row that still exists (only then is its `id` returned, on every dialect);
-  - `code` for the site's configured provider;
+  - `code` for no provider row: the site's configured provider, or the built-in log provider an install with none falls back to;
   - `deleted` for a provider row deleted since;
   - `not-recorded` for a delivery written before origins were.
-- **Queued email** records what it is (a message or a template), the kinds of recipient it goes to (never an address), and the provider its latest attempt went through. One not yet tried has no provider.
+- **Queued email** records what it is (a message or a template), the kinds of recipient it goes to (never an address), and the provider its latest attempt went through, with the recipient kinds that attempt finally reached. One not yet tried has no provider.
 - A route with a segment past a queued email's id no longer resolves to its detail.
 
 Compatibility: this changes an existing response shape. `provider` on the delivery list (`GET /api/email-deliveries`, `nextly.emailDeliveries.find`) and on the detail reads (`/:id`, `findByID`, and each timeline attempt) gains a required `origin`, and its `id` is now null once that provider is deleted, on every dialect (MySQL used to keep the deleted id). Code that validates these responses exactly, snapshots them, or builds `DeliveryActivity` values by hand must add `origin` and allow a null `id` for a deleted provider. These reads are `@experimental`.
 
-Migration: the core reconcile adds a nullable `provider_origin` column to `email_deliveries`, with an index on it and time. It also adds nullable `message_kind`, `recipient_kinds`, `provider_type`, `provider_id` and `provider_origin` columns to `email_queue`, in place, with existing rows kept. Older rows read as not recorded.
+Migration: the core reconcile adds a nullable `provider_origin` column to `email_deliveries`, with an index on it and time. It also adds nullable `message_kind`, `recipient_kinds`, `provider_type`, `provider_id` and `provider_origin` columns to `email_queue` with indexes on provider type and on origin, in place, with existing rows kept. Older rows read as not recorded.

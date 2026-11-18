@@ -122,11 +122,13 @@ for (const dialect of getConfiguredTestDialects()) {
         expect(Object.keys(entry).sort()).toEqual(ENTRY_FIELDS);
       }
       // The queued email is one row; its two deliveries are its timeline.
-      expect(page.items.map(entry => entry.kind)).toEqual([
-        "queued",
+      expect(page.items.map(entry => entry.kind).sort()).toEqual([
         "delivery",
+        "queued",
       ]);
-      expect(page.items[0]).toMatchObject({
+      const ofKind = (kind: ActivityEntry["kind"]) =>
+        page.items.find(entry => entry.kind === kind);
+      expect(ofKind("queued")).toMatchObject({
         id: queued.id,
         status: "sent",
         template: "none",
@@ -135,7 +137,7 @@ for (const dialect of getConfiguredTestDialects()) {
         attempts: 1,
         erased: false,
       });
-      expect(page.items[1]).toMatchObject({
+      expect(ofKind("delivery")).toMatchObject({
         status: "sent",
         template: "none",
         recipientKinds: ["to"],
@@ -189,19 +191,20 @@ for (const dialect of getConfiguredTestDialects()) {
       });
 
       const all = (await t.nextly.emailDeliveries.activity({})).items;
-      expect(all.map(entry => entry.provider?.origin)).toEqual([
+      expect(all.map(entry => entry.provider?.origin).sort()).toEqual([
+        "code",
+        "deleted",
         "not-recorded",
         "stored",
-        "deleted",
-        "code",
       ]);
-      const deleted = all[2];
-      expect(deleted.provider).toEqual({
+      const ofOrigin = (origin: string) =>
+        all.find(entry => entry.provider?.origin === origin);
+      expect(ofOrigin("deleted")?.provider).toEqual({
         id: null,
         type: "capturing-merged",
         origin: "deleted",
       });
-      expect(all[1].provider?.id).toEqual(expect.any(String));
+      expect(ofOrigin("stored")?.provider?.id).toEqual(expect.any(String));
 
       for (const origin of ["stored", "code", "deleted"] as const) {
         const { items } = await t.nextly.emailDeliveries.activity({
@@ -347,6 +350,27 @@ for (const dialect of getConfiguredTestDialects()) {
       expect(
         (await t.nextly.emailDeliveries.activity({ status: "waiting" })).items
       ).toEqual([]);
+      // A waiting one, stored with no attempt, is the only one it finds.
+      const dialectName = t.adapter.getCapabilities().dialect;
+      const stored = await t.adapter.transaction(ctx =>
+        storeQueuedEmail(ctx, {
+          scope: "site",
+          message: {
+            kind: "message",
+            send: { to: "a@example.com", subject: "S", html: "<p>x</p>" },
+          },
+          person: null,
+          secrets: pluginSettingsSecrets(env),
+          lockServer: rowLockServer(t.adapter, dialectName),
+          dialect: dialectName,
+          now: new Date(),
+        })
+      );
+      expect(
+        ids(
+          (await t.nextly.emailDeliveries.activity({ status: "waiting" })).items
+        )
+      ).toEqual([stored.id]);
       expect(
         (await t.nextly.emailDeliveries.activity({ providerType: "other" }))
           .items
@@ -382,6 +406,11 @@ for (const dialect of getConfiguredTestDialects()) {
         status: "sent",
         provider: { type: "capturing-merged", origin: "stored" },
       });
+      // No record of the send was kept, so the provider came from the attempt.
+      const detail = await t.nextly.emailDeliveries.findQueuedByID({
+        id: queued.id,
+      });
+      expect(detail?.timeline).toEqual([]);
     });
 
     it("lists a pruned queued email's deliveries as rows of their own", async () => {

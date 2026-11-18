@@ -806,6 +806,9 @@ export class EmailDeliveryActivity {
       options.status === "sent" || options.status === "failed"
         ? options.status
         : undefined;
+    // The queue is read first: a settled email pruned between the two reads
+    // then has its deliveries listed on their own, never neither.
+    const queued = await this.queuedEntries(options, after, limit + 1);
     // A state only a queued email can be in matches no delivery.
     const deliveries =
       options.status !== undefined && outcome === undefined
@@ -823,7 +826,6 @@ export class EmailDeliveryActivity {
               : undefined,
             limit: limit + 1,
           });
-    const queued = await this.queuedEntries(options, after, limit + 1);
     const entries = [...deliveries.map(deliveryEntry), ...queued]
       .sort(newestFirst)
       .slice(0, limit + 1);
