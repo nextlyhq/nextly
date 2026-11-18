@@ -432,7 +432,7 @@ export async function readSavesInProgress(
   const table = loadedDialect(adapter.getCapabilities().dialect).tables
     .nextlyMeta;
   const rows = await adapter
-    .getDrizzle()
+    .getDrizzle<RecordRows>()
     .select({ value: table.value })
     .from(table)
     .where(like(table.key, `${KEY_PREFIX}%`));
