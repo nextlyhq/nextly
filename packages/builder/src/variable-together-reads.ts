@@ -3,11 +3,14 @@
  * variables, or a type size and its line height. A page naming two of them
  * is one place, not two, so where the host can count the documents each
  * once ({@link VariablesAccess.usageTogether}), a group's documents are its
- * count; elsewhere, and while that count fails, they are the variables'
- * added up, as before.
+ * count; elsewhere, they are the variables' added up, as before.
  *
  * A group is read once each of its variables is, and read again whenever
- * any of theirs changes, so a recount of the variables carries to it.
+ * any of them is: two reads can say the same numbers of two variables while
+ * the pages they share have changed. The host's count stands only for the
+ * reads it was made from. Until it is read for them, and where it fails,
+ * the group is added up, which says rightly whether anything uses it, so a
+ * removal is never offered for a group in use while its count is read.
  *
  * @module variable-together-reads
  */
@@ -66,12 +69,33 @@ interface Kept {
   readonly value: VariablesTogether | "failed";
 }
 
-/** The usage of a group's variables as one value, so a change to any is seen. */
+/** Each read's answer for a variable, numbered as first seen. */
+const answerNumbers = new WeakMap<VariableReach, number>();
+let answersSeen = 0;
+
+/**
+ * Which read a variable's usage came from: each read answers with its own
+ * object, so two reads saying the same numbers are told apart.
+ */
+function answerNumber(reach: VariableReach): number {
+  const known = answerNumbers.get(reach);
+  if (known !== undefined) return known;
+  answersSeen += 1;
+  answerNumbers.set(reach, answersSeen);
+  return answersSeen;
+}
+
+/** The reads a group's variables' usage came from, as one value. */
 function stampOf(
   group: readonly string[],
   values: ReadonlyMap<string, VariableReach>
 ): string {
-  return JSON.stringify(group.map(id => values.get(id) ?? null));
+  return JSON.stringify(
+    group.map(id => {
+      const reach = values.get(id);
+      return reach === undefined ? null : answerNumber(reach);
+    })
+  );
 }
 
 /** Every group's answer, read a batch at a time; a batch that fails, failed. */
@@ -117,9 +141,9 @@ function dueGroups(
 /**
  * How widely some variables are used together, for the groups a screen
  * shows: answers a group's reach from its variables' `values`, with the
- * host's count of their documents together where it has one. A group the
- * host can count is unread until it has; one it cannot, or not asked
- * about here, is added up. A single variable is its own reach.
+ * host's count of their documents together where it has one for the reads
+ * in hand. Otherwise, and for a group not asked about here, it is added up.
+ * A single variable is its own reach.
  *
  * @param access - The host's usage reads; none reads nothing
  * @param groups - The groups the screen shows, each the variables in it
@@ -136,7 +160,10 @@ export function useReachTogether(
       ...new Set(
         groups
           .map(groupOf)
-          .filter(group => group.length > 1)
+          // One variable is its own count; more than a read holds, added up.
+          .filter(
+            group => group.length > 1 && group.length <= TOGETHER_READ_SIZE
+          )
           .map(idsKey)
       ),
     ].sort()
@@ -168,14 +195,15 @@ export function useReachTogether(
       if (read === undefined || !wanted.has(key)) {
         return combinedReach(reaches);
       }
-      // Unread until the host has counted the group under these counts.
+      // The host's count only for the reads it was made from.
       const held = kept.get(key);
-      if (held === undefined || held.stamp !== stampOf(group, values)) {
-        return undefined;
-      }
-      return held.value === "failed"
-        ? combinedReach(reaches)
-        : reachTogether(reaches, held.value);
+      const current =
+        held !== undefined &&
+        held.value !== "failed" &&
+        held.stamp === stampOf(group, values);
+      return current
+        ? reachTogether(reaches, held.value)
+        : combinedReach(reaches);
     },
     [read, wanted, kept, values]
   );
