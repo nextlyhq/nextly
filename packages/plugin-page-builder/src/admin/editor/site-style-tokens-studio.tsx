@@ -47,8 +47,7 @@ import {
   readSiteStyleRecord,
   tokensKeptAfterRefusal,
 } from "../../site-style-record";
-import { readStoredJson, sameStoredValue } from "../../stored-json";
-import { withoutVariables } from "../../variables-without";
+import { sameStoredValue } from "../../stored-json";
 import { conflictWords } from "../conflict-words";
 import { useHeldSiteStyle, useSaveSiteStyle } from "../site-style-client";
 import { useShown } from "../use-shown";
@@ -409,9 +408,11 @@ type CleanUpThrough = (
 
 /**
  * "Clean up unused…": the colours removed through the clean-up route, which
- * judges each on its own, as one step of the editor's history, whose halves
- * are the section before it and as the route left it. What went is taken out
- * of what the studio shows at once, and the site style read again.
+ * judges each on its own, as one step of the editor's history whose halves
+ * are the server's own: the section as its last removal wrote it, and that
+ * with what each removal took put back. What went is taken out of what the
+ * studio shows at once, and the site style is read again whatever came of
+ * it, so what is shown is what is stored.
  */
 function useCleanUp(
   changeThrough: ReturnType<typeof useSaveSiteStyle>["changeThrough"],
@@ -420,20 +421,15 @@ function useCleanUp(
 ): CleanUpThrough {
   return async (ids, uses) => {
     let result: CleanUpResult | undefined;
-    await changeThrough("tokens", async before => {
-      result = await cleanUpUnused(ids, uses);
-      const gone = removedBy(result);
-      const section = readStoredJson(before);
-      // Nothing removed, or nothing stored to remove it from: no step.
-      if (gone.size === 0 || !isSection(section)) return undefined;
-      return withoutVariables(section, gone);
+    await changeThrough("tokens", async () => {
+      const answer = await cleanUpUnused(ids, uses);
+      result = answer.result;
+      return answer.halves;
     });
     const done = result ?? NOT_ASKED;
     const gone = removedBy(done);
-    if (gone.size > 0) {
-      taken(gone);
-      reread();
-    }
+    if (gone.size > 0) taken(gone);
+    reread();
     return done;
   };
 }
@@ -447,11 +443,6 @@ const NOT_ASKED: CleanUpResult = {
 /** The identities a clean-up removed. */
 function removedBy(result: CleanUpResult): ReadonlySet<string> {
   return new Set(result.kind === "done" ? result.removed : []);
-}
-
-/** Whether a stored section is one to take variables out of. */
-function isSection(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 /** The set without these colours, and without their places in the order. */

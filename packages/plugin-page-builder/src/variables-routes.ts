@@ -142,8 +142,12 @@ import {
 } from "./uncovered-pages";
 import type { DocumentsUsing } from "./usage-count";
 import { indexIsWhole, indexStillCounting } from "./usage-index-health";
-import { cleanUpVariables, type CleanUpEach } from "./variables-clean-up";
-import { withoutVariables } from "./variables-without";
+import {
+  cleanUpVariables,
+  type CleanUpEach,
+  type RemovedOne,
+} from "./variables-clean-up";
+import { takenFrom, withoutVariables } from "./variables-without";
 
 /** A variable's identity, as the engine bounds one it can write. */
 const IDENTITY = z.string().min(1).max(MAX_TOKEN_NAME_LENGTH);
@@ -755,16 +759,17 @@ export async function removeVariables(
 
 /**
  * The removal itself, of every variable in `ids` or none, as
- * {@link removeVariables} describes it; throws the refusal.
+ * {@link removeVariables} describes it: what it took out of the section it
+ * wrote from, and the section it wrote. Throws the refusal.
  */
 async function removeStoredVariables(
   ids: readonly string[],
   store: VariableStore,
   supplied: ReadonlySet<string>,
   checks: Pick<VariableRemovalChecks, "inUse">
-): Promise<void> {
+): Promise<RemovedOne> {
   const gone = new Set(ids);
-  await retryOnStale(
+  return retryOnStale(
     () => store.read(),
     async read => {
       const { reasons, removable } = storedRefusals(
@@ -789,7 +794,9 @@ async function removeStoredVariables(
       // Judged against the same set, so a variable removed beside the one
       // its value names is not its use.
       await checks.inUse(removable, read.classes, merged);
+      // Written with the read's version, so what it stored is `after`.
       await store.write(after, read);
+      return { taken: takenFrom(read.section, gone), section: after };
     }
   );
 }
@@ -995,7 +1002,12 @@ export function variableRoutes(setup: VariableRouteSetup): {
               setup.defaults
             ),
             suppliedVariableIds(setup.defaults),
-            setup.inUse(ctx, namedDocumentsReader(ctx))
+            setup.inUse(ctx, namedDocumentsReader(ctx)),
+            (id, error) =>
+              ctx.logger.warn(
+                "[page-builder] a clean-up stopped at a variable it could not remove.",
+                { variableId: id, error }
+              )
           )
         ),
     },
@@ -1007,12 +1019,14 @@ export function variableRoutes(setup: VariableRouteSetup): {
  * that variable alone, so its refusal is its own and its write a transaction
  * of its own. Names are read once, from the stored section.
  */
-function cleanUpEach(
+export function cleanUpEach(
   store: VariableStore,
   supplied: ReadonlySet<string>,
-  checks: Pick<VariableRemovalChecks, "inUse">
+  checks: Pick<VariableRemovalChecks, "inUse">,
+  failed?: CleanUpEach["failed"]
 ): CleanUpEach {
   return {
+    ...(failed === undefined ? {} : { failed }),
     names: async () =>
       new Map(
         [...storedVariables((await store.read()).section)].map(

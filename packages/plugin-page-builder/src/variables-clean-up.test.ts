@@ -41,6 +41,11 @@ function eachOf(
     remove: vi.fn(async (id: string) => {
       if (Object.hasOwn(refusals, id)) throw refusals[id];
       removed.push(id);
+      // What the removal took, and the section as its write left it.
+      return {
+        taken: [{ id, entry: { id }, at: 0, orderAt: null }],
+        section: { tokens: [], after: [...removed] },
+      };
     }),
   };
 }
@@ -62,7 +67,16 @@ describe("cleaning up unused variables", () => {
     expect(each.removed).toEqual(["t-spare", "t-other"]);
     expect(await response.json()).toEqual({
       message: "2 variables were removed.",
-      item: { removed: ["t-spare", "t-other"], kept: [] },
+      item: {
+        removed: ["t-spare", "t-other"],
+        kept: [],
+        // What each took out, in turn, and the section the last one left.
+        taken: [
+          { id: "t-spare", entry: { id: "t-spare" }, at: 0, orderAt: null },
+          { id: "t-other", entry: { id: "t-other" }, at: 0, orderAt: null },
+        ],
+        section: { tokens: [], after: ["t-spare", "t-other"] },
+      },
     });
   });
 
@@ -76,7 +90,7 @@ describe("cleaning up unused variables", () => {
     );
     // The refusal of one is no refusal of the next.
     expect(each.removed).toEqual(["t-spare", "t-other"]);
-    expect(await response.json()).toEqual({
+    expect(await response.json()).toMatchObject({
       message: "2 variables were removed. 1 was kept, as it is in use.",
       item: {
         removed: ["t-spare", "t-other"],
@@ -144,7 +158,7 @@ describe("cleaning up unused variables", () => {
       post({ ids: ["t-spare", "t-other"] }),
       each
     );
-    expect(await response.json()).toEqual({
+    expect(await response.json()).toMatchObject({
       message: "1 variable was removed.",
       item: { removed: ["t-other"], kept: [] },
     });
@@ -156,15 +170,39 @@ describe("cleaning up unused variables", () => {
     expect(each.remove).toHaveBeenCalledTimes(1);
   });
 
-  it("stops on a failure that is no refusal, with what came before it removed", async () => {
+  it("stops at a failure that is no refusal, still saying what it removed, and keeps the rest", async () => {
     const broken = new Error("the database went away");
-    const each = eachOf({ "t-accent": broken });
-    expect(
-      await refusal(
-        cleanUpVariables(post({ ids: ["t-spare", "t-accent"] }), each)
-      )
-    ).toBe(broken);
+    const failed = vi.fn();
+    const each = { ...eachOf({ "t-accent": broken }), failed };
+    const response = await cleanUpVariables(
+      post({ ids: ["t-spare", "t-accent", "t-other"] }),
+      each
+    );
+    // Said where the site's operators read it, not swallowed.
+    expect(failed).toHaveBeenCalledWith("t-accent", broken);
+    // Nothing asked after the failure.
     expect(each.removed).toEqual(["t-spare"]);
+    expect(each.remove).toHaveBeenCalledTimes(2);
+    const unfinished = "It could not be removed just now. Try again.";
+    expect(await response.json()).toMatchObject({
+      item: {
+        removed: ["t-spare"],
+        taken: [{ id: "t-spare" }],
+        section: { after: ["t-spare"] },
+        kept: [
+          { id: "t-accent", name: "Accent", reason: unfinished },
+          { id: "t-other", name: "Other", reason: unfinished },
+        ],
+      },
+    });
+  });
+
+  it("answers no section when nothing was removed", async () => {
+    const each = eachOf({ "t-spare": inUse("Spare is used on Home.") });
+    const response = await cleanUpVariables(post({ ids: ["t-spare"] }), each);
+    const { item } = (await response.json()) as { item: object };
+    expect(item).toMatchObject({ removed: [], taken: [] });
+    expect(item).not.toHaveProperty("section");
   });
 
   it("refuses a body that does not name variables, removing nothing", async () => {

@@ -550,6 +550,12 @@ export interface SiteStyleSlot {
   readonly stored: (before: unknown, after: unknown) => void;
 }
 
+/** A section as a route found it stored and as its write left it. */
+export interface StoredHalves {
+  readonly before: unknown;
+  readonly after: unknown;
+}
+
 export interface SiteStyleWrite {
   /** Save ONE section. Every other section is left exactly as it was. */
   readonly save: (
@@ -565,13 +571,13 @@ export interface SiteStyleWrite {
   /**
    * Make a change through a route rather than a section save, as one step
    * of the editor's history. `change` runs after every write already made to
-   * the section, is handed the section as they leave it, and answers the
-   * section as its route left it, or `undefined` when it stored nothing. A
+   * the section, and answers the section as the route found it and as it
+   * left it, the server's own, or `undefined` when it stored nothing. A
    * refusal it throws is passed on, and keeps no step.
    */
   readonly changeThrough: (
     section: SiteStyleSection,
-    change: (before: unknown) => Promise<unknown>
+    change: () => Promise<StoredHalves | undefined>
   ) => Promise<void>;
   /** Whether a save is in flight. */
   readonly saving: boolean;
@@ -1144,9 +1150,9 @@ export function useSaveSiteStyle(): SiteStyleWrite {
    */
   const changeThrough = (
     section: SiteStyleSection,
-    change: (before: unknown) => Promise<unknown>
+    change: () => Promise<StoredHalves | undefined>
   ): Promise<void> =>
-    changedThrough({ history, reserve, chainOf, stored }, section, change);
+    changedThrough({ history, reserve, chainOf }, section, change);
 
   const reread = useCallback(() => {
     void refetch();
@@ -1174,8 +1180,8 @@ function holdsNow(chain: SectionChain, after: unknown): void {
 
 /**
  * A route's change, run after the writes before it and filled into the
- * place taken for it: given up when it stored nothing or refused. Outside
- * the editor it runs against the section as read, and is no step.
+ * place taken for it with the halves the route answered: given up when it
+ * stored nothing or refused. Outside the editor it is no step.
  */
 async function changedThrough(
   editor: {
@@ -1187,23 +1193,21 @@ async function changedThrough(
       settled: SiteStyleHistory["settled"],
       section: SiteStyleSection
     ) => SectionChain;
-    /** The stored document as read. */
-    readonly stored: { readonly current: unknown };
   },
   section: SiteStyleSection,
-  change: (before: unknown) => Promise<unknown>
+  change: () => Promise<StoredHalves | undefined>
 ): Promise<void> {
   const { history } = editor;
   if (history === null) {
-    await change(storedSection(editor.stored.current, section));
+    await change();
     return;
   }
   const slot = editor.reserve(section);
   try {
-    const before = await editor.chainOf(history.settled, section).tail;
-    const after = await change(before);
-    if (after === undefined) slot.cancel();
-    else slot.stored(before, after);
+    await editor.chainOf(history.settled, section).tail;
+    const halves = await change();
+    if (halves === undefined) slot.cancel();
+    else slot.stored(halves.before, halves.after);
   } catch (refused) {
     slot.cancel();
     throw refused;

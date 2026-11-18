@@ -870,6 +870,13 @@ describe.each(getConfiguredTestDialects())(
           ],
         },
       });
+      // What went, as stored, for the editor's Undo to put back exactly.
+      expect(cleaned.body).toMatchObject({
+        item: {
+          taken: [{ id: "t-spare", entry: spare, at: 2, orderAt: null }],
+          section: { tokens: [accent, styled] },
+        },
+      });
       expect(await storedIds(t)).toEqual(["t-accent", "t-styled"]);
     });
 

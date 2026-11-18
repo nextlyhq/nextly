@@ -900,19 +900,18 @@ describe("a save inside the editor, as a step of its history", () => {
       order: ["t-kept"],
     };
 
-    it("is one step: undo writes back what stood before it, redo what the route left", async () => {
-      readAnswer = { data: { tokens: before }, isPending: false, error: null };
+    it("is one step: undo writes back the route's own before, redo its after", async () => {
+      // The editor's copy is older than what the route found stored.
+      readAnswer = { data: { tokens: after }, isPending: false, error: null };
       const { steps, wrapper } = editorHistory();
       const { result } = renderHook(() => useSaveSiteStyle(), { wrapper });
-      const handed: unknown[] = [];
       await act(async () => {
-        await result.current.changeThrough("tokens", async held => {
-          handed.push(held);
-          return after;
-        });
+        await result.current.changeThrough("tokens", async () => ({
+          before,
+          after,
+        }));
       });
       // The route made the write; the history only records it.
-      expect(handed).toEqual([before]);
       expect(writes).toEqual([]);
       expect(steps).toHaveLength(1);
 
@@ -926,19 +925,19 @@ describe("a save inside the editor, as a step of its history", () => {
       expect(writes.at(-1)).toEqual({ tokens: after });
     });
 
-    it("hands the route the section as the writes before it left it", async () => {
+    it("runs the route once the writes before it have answered", async () => {
       readAnswer = { data: { tokens: before }, isPending: false, error: null };
       const { wrapper } = editorHistory();
       const { result } = renderHook(() => useSaveSiteStyle(), { wrapper });
-      const handed: unknown[] = [];
+      const seen: unknown[] = [];
       await act(async () => {
         void result.current.save("tokens", after);
-        await result.current.changeThrough("tokens", async held => {
-          handed.push(held);
+        await result.current.changeThrough("tokens", async () => {
+          seen.push(writes.length);
           return undefined;
         });
       });
-      expect(handed).toEqual([after]);
+      expect(seen).toEqual([1]);
     });
 
     it("keeps no step when the route stored nothing, or refused", async () => {

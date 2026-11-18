@@ -10,18 +10,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const calls = vi.hoisted(() => ({
   order: [] as string[],
-  /** The section the history hands the route's change. */
-  before: undefined as unknown,
-  /** What the route's change answered, the section as the route left it. */
-  after: undefined as unknown,
+  /** The halves the route's change answered for the history's step. */
+  halves: undefined as unknown,
   changes: 0,
   rereads: 0,
   may: true,
-  cleaned: {
-    kind: "done",
-    removed: ["t-spare"],
-    kept: [] as unknown[],
-  } as unknown,
+  cleaned: undefined as unknown,
   asked: [] as (readonly string[])[],
 }));
 
@@ -43,13 +37,10 @@ vi.mock("../site-style-client", () => ({
     reread: () => {
       calls.rereads += 1;
     },
-    changeThrough: async (
-      section: string,
-      change: (before: unknown) => Promise<unknown>
-    ) => {
+    changeThrough: async (section: string, change: () => Promise<unknown>) => {
       calls.order.push(`change ${section}`);
       calls.changes += 1;
-      calls.after = await change(calls.before);
+      calls.halves = await change();
     },
   }),
   useHeldSiteStyle: () => ({
@@ -94,9 +85,12 @@ beforeEach(() => {
   calls.changes = 0;
   calls.rereads = 0;
   calls.may = true;
-  calls.before = { tokens: [spare, accent], order: ["t-accent", "t-spare"] };
-  calls.after = undefined;
-  calls.cleaned = { kind: "done", removed: ["t-spare"], kept: [] };
+  calls.halves = undefined;
+  calls.cleaned = {
+    result: { kind: "done", removed: ["t-spare"], kept: [] },
+    // As the server answered them.
+    halves: { before: { server: "before" }, after: { server: "after" } },
+  };
   panels.tokens = undefined;
 });
 
@@ -130,9 +124,12 @@ describe("cleaning up unused colours from the studio", () => {
     });
     expect(calls.order).toEqual(["release", "change tokens", "route"]);
     expect(calls.asked).toEqual([["t-spare", "t-accent"]]);
-    // The step's second half is the section as the route left it.
-    expect(calls.after).toEqual({ tokens: [accent], order: ["t-accent"] });
-    expect(answer).toEqual(calls.cleaned);
+    // The step's halves are the server's, as the route answered them.
+    expect(calls.halves).toEqual({
+      before: { server: "before" },
+      after: { server: "after" },
+    });
+    expect(answer).toEqual({ kind: "done", removed: ["t-spare"], kept: [] });
     expect(shownIds()).toEqual(expect.arrayContaining(["t-accent"]));
     expect(shownIds()).not.toContain("t-spare");
     expect(panels.tokens?.tokens.order).toEqual(["t-accent"]);
@@ -140,14 +137,15 @@ describe("cleaning up unused colours from the studio", () => {
   });
 
   it("keeps no step and changes nothing shown when nothing was removed", async () => {
-    calls.cleaned = { kind: "refused", reason: "No." };
+    calls.cleaned = { result: { kind: "refused", reason: "No." } };
     renderStudio();
     await act(async () => {
       await panels.tokens?.onCleanUp?.(["t-spare"]);
     });
-    expect(calls.after).toBeUndefined();
+    expect(calls.halves).toBeUndefined();
     expect(shownIds()).toEqual(expect.arrayContaining(["t-spare", "t-accent"]));
-    expect(calls.rereads).toBe(0);
+    // Read again all the same, so what is shown is what is stored.
+    expect(calls.rereads).toBe(1);
   });
 
   it("offers no clean-up to an author who may not change Design", () => {

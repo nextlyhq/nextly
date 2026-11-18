@@ -1346,12 +1346,32 @@ export interface VariableKept {
 }
 
 /**
+ * One variable a removal took out of the stored tokens section: its entry
+ * as stored then, and its places in the list and in the colour order, so
+ * Undo puts back exactly what went.
+ */
+export interface VariableTaken {
+  readonly id: string;
+  readonly entry: unknown;
+  readonly at: number;
+  /** Its place in the colour order, or `null` where the order did not name it. */
+  readonly orderAt: number | null;
+}
+
+/**
  * What the clean-up did: the variables it removed and the ones it kept, by
  * identity, each in the order asked. One already gone is in neither.
  */
 export interface VariableCleanUpAnswer {
   readonly removed: readonly string[];
   readonly kept: readonly VariableKept[];
+  /** What each removal took out, in the order the removals were made. */
+  readonly taken: readonly VariableTaken[];
+  /**
+   * The stored tokens section as the last removal wrote it; absent when
+   * nothing was removed.
+   */
+  readonly section?: unknown;
 }
 
 /** The usage route's path for some variables, each named by its own `id`. */
