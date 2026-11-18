@@ -502,7 +502,7 @@ export function pluginVersionWrites(
         // rather than failing after the label and its history event are in.
         const shown = await service().get(ref, versionNo);
         await redactSnapshotForUser(
-          shown.snapshot,
+          shown,
           ref.scopeKind,
           ref.scopeSlug,
           writer.user,

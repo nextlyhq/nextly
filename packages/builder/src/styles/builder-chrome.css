@@ -53,6 +53,8 @@
  * - form-fields: a Form's Fields and After sending.
  * - first-add: the chooser a block just added asks for on the canvas, such
  *   as the Columns layouts.
+ * - region-editing: the bar and the dim while a header or footer is edited
+ *   in place.
  *
  * Tests that read the stylesheet's rules read it through
  * `chrome-stylesheet.ts` beside this file, which follows these imports in
@@ -125,3 +127,5 @@
 @import "./form-fields.css";
 
 @import "./first-add.css";
+
+@import "./region-editing.css";

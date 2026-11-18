@@ -10,6 +10,7 @@
  */
 import { useCallback, useMemo, useState } from "react";
 
+import { useRestartOn } from "./editor-history";
 import type { SettingTab } from "./settings-index";
 
 /** A setting of a block's panel: its tab, and its id in the settings index. */
@@ -37,12 +38,21 @@ export interface EditorAsks {
 }
 
 /** The asks, and the way to make each, selecting through `select`. */
-export function useEditorAsks(select: (id: string) => void): EditorAsks {
+export function useEditorAsks(
+  select: (id: string) => void,
+  session?: unknown
+): EditorAsks {
   const [sortFieldAsked, setSortFieldAsked] =
     useState<EditorAsks["sortFieldAsked"]>(undefined);
   const [settingAsked, setSettingAsked] = useState<SettingAsked | undefined>(
     undefined
   );
+  // An ask is about a block of the session's document: a new session (an
+  // editor state started again on another document) has none.
+  useRestartOn(session, () => {
+    setSortFieldAsked(undefined);
+    setSettingAsked(undefined);
+  });
   const askSortField = useCallback(
     (id: string) => {
       select(id);
