@@ -169,6 +169,31 @@ describe("tables dropped", () => {
     }
   );
 
+  it.each(["postgresql", "mysql", "sqlite"] as const)(
+    "names a dropped translations table the table it translates on %s, by its key and not its name",
+    dialect => {
+      const statements = [
+        "DROP TABLE IF EXISTS posts_locales",
+        "DROP TABLE IF EXISTS pages_locales",
+        "DROP TABLE posts",
+      ];
+      const deletions = read(dialect, statements, {
+        columns: {
+          // Keyed by `_parent` and `_locale`: `posts`' translations table.
+          posts_locales: { _parent: "text", _locale: "text", title: "text" },
+          // Named so, but an entity's own table: no key of a translations table.
+          pages_locales: { id: "text", title: "text" },
+          posts: { id: "text" },
+        },
+      });
+      expect(deletions).toEqual([
+        { kind: "table", table: "posts_locales", translates: "posts" },
+        table("pages_locales"),
+        table("posts"),
+      ]);
+    }
+  );
+
   it("counts a table created IF NOT EXISTS as live: it may have been there", () => {
     expect(
       read("postgresql", [
