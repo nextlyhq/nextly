@@ -27,6 +27,7 @@ import { DEFAULT_LIMITS } from "./limits";
 import { type ListFieldSource, listQueryIssues } from "./list-query";
 import { surveyDocument } from "./measure-bytes";
 import { definitelyNotARecord, isPlainRecord } from "./plain-record";
+import { validateDocumentCode } from "./validation-code";
 import { validateComponentEnvelope } from "./validation-components";
 import type {
   IssueSeverity,
@@ -71,6 +72,7 @@ export {
 } from "./validation-node";
 export { componentEnvelopeIssues } from "./validation-components";
 export { documentSeoIssues } from "./validation-seo";
+export { documentCodeIssues } from "./validation-code";
 
 /**
  * Issues only — the narrow view, DERIVED from {@link validateDocument} rather
@@ -229,6 +231,9 @@ export function validateDocument(
   // walked whole.
   if (!overLimits && isPlainRecord(settings) && settings.seo !== undefined) {
     validateDocumentSeo(settings.seo, "/settings/seo", issues);
+  }
+  if (!overLimits && isPlainRecord(settings) && settings.code !== undefined) {
+    validateDocumentCode(settings.code, "/settings/code", issues);
   }
 
   validateNodeForest(envelope.nodes, state, survey.limits.maxNodes);

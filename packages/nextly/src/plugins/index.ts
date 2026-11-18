@@ -119,6 +119,7 @@ export type {
   PluginFieldType,
   PluginFieldValidateArgs,
   PluginFieldWrite,
+  PluginFieldWriteCaller,
   PluginStoredValue,
   PluginStoredValueTarget,
   PluginStoredValuesTarget,
