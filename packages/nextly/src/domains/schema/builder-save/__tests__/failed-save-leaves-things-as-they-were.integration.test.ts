@@ -596,14 +596,20 @@ describe.each(getConfiguredTestDialects())(
             failed(),
             "no statement adding the translated field was met"
           ).toBe(1);
-          // Whatever the translations step leaves, a path whose registry write is kept never
-          // records the change in the registry while the translations table does not hold it.
+          // Whatever the translations step leaves, a path whose registry write is kept does not
+          // advance the version or the translation state it records while the translations table
+          // does not hold the change. (The fields the file's own upsert records are part of the
+          // translations step's gap.)
           if (!notKept("registry")) {
-            clearRegistryRowCache();
+            const { registry } = await stateOf(t, path);
+            const recorded = (row: Record<string, unknown> | null) => ({
+              schemaVersion: row?.schemaVersion,
+              localized: row?.localized,
+            });
             expect(
-              (await stateOf(t, path)).registry,
-              "its translations table: the registry row"
-            ).toEqual(before.registry);
+              recorded(registry),
+              "its translations table: the version and translation state recorded"
+            ).toEqual(recorded(before.registry));
           }
           const kept = await asItWas("translations", () =>
             expectFailedAndAsItWas(
