@@ -539,8 +539,10 @@ describe("the Schema Builder's field picker", () => {
     const dialog = await screen.findByRole("dialog", {
       name: "New field group",
     });
-    const name = within(dialog).getByLabelText("Name");
-    const address = within(dialog).getByLabelText("API address");
+    const name = within(dialog).getByRole("textbox", { name: "Name" });
+    const address = within(dialog).getByRole("textbox", {
+      name: "API address",
+    });
     const create = within(dialog).getByRole("button", { name: "Create" });
     await user.type(name, "Hero");
     await waitFor(() =>
@@ -581,12 +583,17 @@ describe("the Schema Builder's field picker", () => {
     await user.click(screen.getByRole("option", { name: /Field group/ }));
     await user.click(screen.getByRole("button", { name: "New field group" }));
     let dialog = await screen.findByRole("dialog", { name: "New field group" });
-    await user.type(within(dialog).getByLabelText("Name"), "Draft");
+    await user.type(
+      within(dialog).getByRole("textbox", { name: "Name" }),
+      "Draft"
+    );
     await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
 
     await user.click(screen.getByRole("button", { name: "New field group" }));
     dialog = await screen.findByRole("dialog", { name: "New field group" });
-    expect(within(dialog).getByLabelText("Name")).toHaveValue("");
+    expect(within(dialog).getByRole("textbox", { name: "Name" })).toHaveValue(
+      ""
+    );
   });
 
   it("lists a field group another host's picker made once that host is left", async () => {
