@@ -6,11 +6,11 @@
  * field's default, and that field stays optional: the file fills the row and leaves the column
  * taking NULL, as the field declares it.
  */
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { defineCollection } from "../../../../collections/config/define-collection";
 import { text } from "../../../../collections/fields/helpers";
@@ -36,6 +36,10 @@ let migrationsDir: string;
 
 beforeEach(async () => {
   migrationsDir = await mkdtemp(join(tmpdir(), "nextly-fill-keeps-optional-"));
+});
+
+afterEach(async () => {
+  await rm(migrationsDir, { recursive: true, force: true });
 });
 
 /** The SQL of the migration that adds `field`, its rows filled with "Hello". */
