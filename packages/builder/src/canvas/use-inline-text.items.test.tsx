@@ -138,6 +138,30 @@ describe("Enter in a list item", () => {
     expect(caret()).toEqual({ prop: item(1), offset: 0, collapsed: true });
   });
 
+  it("shows each item's own words after a split of words typed into it", () => {
+    // The first item's stored words do not change, so nothing redraws it:
+    // what the author typed after the caret must leave it all the same.
+    open(["One", "Three"], 0);
+    element(0).textContent = "OneTwo";
+    caretAt(0, 3);
+    press(0, "Enter");
+    expect(itemsNow()).toEqual(["One", "Two", "Three"]);
+    expect(element(0).textContent).toBe("One");
+    expect(element(1).textContent).toBe("Two");
+  });
+
+  it("keeps a line break on either side of the caret", () => {
+    open(["One"], 0);
+    element(0).innerHTML = "a<br>b";
+    const range = document.createRange();
+    range.setStart(element(0).lastChild!, 1);
+    range.collapse(true);
+    window.getSelection()!.removeAllRanges();
+    window.getSelection()!.addRange(range);
+    press(0, "Enter");
+    expect(itemsNow()).toEqual(["a\nb", ""]);
+  });
+
   it("at an item's end adds an empty one after it", () => {
     open(["One", "Two"], 1);
     caretAt(1, 3);
@@ -165,6 +189,22 @@ describe("Backspace in a list item", () => {
     expect(itemsNow()).toEqual(["One", "Three"]);
     expect(inline?.editing?.prop).toBe(item(0));
     expect(caret()).toEqual({ prop: item(0), offset: 3, collapsed: true });
+  });
+
+  it("removes an item the author emptied, the browser's placeholder left in it", () => {
+    // Deleting an item's last letter leaves a `<br>` holding its line open.
+    open(["One", "Two"], 1);
+    element(1).innerHTML = "<br>";
+    const event = press(1, "Backspace");
+    expect(event.defaultPrevented).toBe(true);
+    expect(itemsNow()).toEqual(["One"]);
+  });
+
+  it("stores an item emptied to the placeholder as empty, not as a line break", () => {
+    open(["One", "Two"], 1);
+    element(1).innerHTML = "<br>";
+    press(1, "Escape");
+    expect(itemsNow()).toEqual(["One", ""]);
   });
 
   it("leaves an item with words in it to the browser", () => {

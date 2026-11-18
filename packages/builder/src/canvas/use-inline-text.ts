@@ -310,7 +310,24 @@ function wordsAroundCaret(element: HTMLElement): [string, string] {
   const after = element.ownerDocument.createRange();
   after.selectNodeContents(element);
   after.setStart(range.endContainer, range.endOffset);
-  return [before.toString(), after.toString()];
+  // Read as the element is, a `<br>` as the line break it stands for, so a
+  // split changes nothing either side of the caret.
+  return [
+    elementWords(before.cloneContents()),
+    elementWords(after.cloneContents()),
+  ];
+}
+
+/**
+ * The words an open edit holds. An item of a list is one line, so the `<br>`
+ * a browser leaves to hold an emptied line open is not a line break in it:
+ * an item emptied that way holds nothing, and is stored as nothing.
+ */
+function editedWords(element: Node, editing: InlineTextEditing): string {
+  const words = elementWords(element);
+  return itemOfPropName(editing.prop) !== null && words.endsWith("\n")
+    ? words.slice(0, -1)
+    : words;
 }
 
 /** An edit to a list's items, planned against the document as it stands. */
@@ -340,7 +357,9 @@ function itemKeyPlan(
         : { op: split.op, next: { prop: split.next, caret: "start" } };
     };
   }
-  if (event.key !== "Backspace" || elementWords(element) !== "") return null;
+  if (event.key !== "Backspace" || editedWords(element, editing) !== "") {
+    return null;
+  }
   return () => removeItemOp(documentNow(), nodeId, prop);
 }
 
@@ -432,6 +451,7 @@ interface ItemMoveHost {
  */
 function moveThroughItems(
   host: ItemMoveHost,
+  element: HTMLElement,
   editing: InlineTextEditing,
   plan: ItemPlan
 ): void {
@@ -440,6 +460,12 @@ function moveThroughItems(
   if (planned === null) return host.refused("no-longer-editable");
   const written = host.editor.apply(planned.op);
   if (written === null) return host.refused("rejected");
+  // The element the author typed into, given back holding what its item now
+  // holds. Its item's stored words may not have changed (a split at the end
+  // of words typed after them), and then nothing redraws it: the words after
+  // the caret would show in it and in the item that took them.
+  element.textContent =
+    inlineTarget(written, editing.nodeId, editing.prop)?.value ?? "";
   host.release();
   const { next } = planned;
   if (next === null) return;
@@ -471,7 +497,7 @@ function listenForItemKeys(
     event.stopImmediatePropagation();
     // A held Enter's auto-repeat adds no run of empty items.
     if (event.repeat && event.key === "Enter") return;
-    moveThroughItems(current, editing, plan);
+    moveThroughItems(current, element, editing, plan);
   };
   element.addEventListener("keydown", onKey);
   return () => element.removeEventListener("keydown", onKey);
@@ -574,7 +600,7 @@ export function useInlineText(
     // than `innerText` or `innerHTML`: the first is what
     // the value IS regardless of what the element ended up containing, and the
     // last would store markup this value cannot hold.
-    const next = elementWords(element);
+    const next = editedWords(element, current);
     const opened = session.current.opened;
     if (next === opened || !element.isConnected) return NOTHING_TO_WRITE;
     const refused = stalenessOf(editorRef.current, current, opened);
