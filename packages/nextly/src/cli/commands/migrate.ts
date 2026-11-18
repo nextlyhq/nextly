@@ -503,11 +503,12 @@ async function pluginsOnMigrateStep(args: {
 }
 
 /**
- * End the run through `fail` where a plugin's `onMigrate` failed, once every
- * other step has run: the schema it applied stays applied, and running it
- * again runs the hook again.
+ * End the run through `fail` with a failure kept until every other step has
+ * run: a plugin's `onMigrate` that failed, or the data steps' backup refusal.
+ * The schema the run applied stays applied, and running it again takes the
+ * hook, or the steps, again.
  */
-function endIfHooksFailed(
+function endIfFailed(
   failure: NextlyError | null,
   fail: (error: unknown) => never
 ): void {
@@ -808,11 +809,7 @@ export async function runMigrate(
     // Data an earlier release stored is brought up to date once the
     // migrations have applied, and only with a backup confirmed: work whose
     // backup nobody confirmed is refused here, before anything changes.
-    try {
-      await storedData.confirmBeforeMigrations(options.step);
-    } catch (error) {
-      fail(error);
-    }
+    await storedData.confirmBeforeMigrations(options.step).catch(fail);
 
     // The retired-table cleanup has flags of its own: removing those tables
     // and losing rows still in them are each a separate decision from
@@ -1095,12 +1092,12 @@ export async function runMigrate(
     // container, where this run did not reach the step that hashes them.
     await storedData.warnOfPasswordsLeft();
 
-    // The data steps' backup refusal, made after the migrations applied.
-    const storedDataRefused = storedData.refusal();
-    if (storedDataRefused !== null) fail(storedDataRefused);
+    // The data steps' backup refusal, made after the migrations applied:
+    // the run ends with it now that its other work is done.
+    endIfFailed(storedData.refusal(), fail);
 
     // Last, once the read-only notices above have run.
-    endIfHooksFailed(hooksFailed, fail);
+    endIfFailed(hooksFailed, fail);
 
     const duration = Date.now() - startTime;
     logger.divider();
