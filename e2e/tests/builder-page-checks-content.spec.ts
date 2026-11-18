@@ -13,7 +13,6 @@
  */
 import { expect, type APIRequestContext, type Page } from "@playwright/test";
 
-import { canvasRoot } from "./canvas/editor-driver";
 import { gotoAdmin } from "./support/admin";
 import { test } from "./support/test";
 
@@ -102,14 +101,18 @@ test("lists the empty blocks and the page's data, and opens each fix", async ({
   });
   await search.fill("/signup");
   await search.press("Enter");
+  // The Link now names it, and the fix bar counts the item fixed at once.
   await expect(
-    (await canvasRoot(page)).locator('[data-nx-node="go"] a')
-  ).toHaveAttribute("href", "/signup");
-  // Judged on the draft as it stands: the item is gone, unsaved.
-  await page
-    .locator('[data-topbar="end"]')
-    .getByRole("button", { name: /^(\d+ checks?|Checks)\b/ })
-    .click();
+    page
+      .locator(".nx-inspector")
+      .getByRole("button", { name: /^Link: \/signup/ })
+  ).toBeVisible();
+  await expect(
+    page.getByRole("status").filter({ hasText: /^Fixed/ })
+  ).toBeVisible();
+  // Judged on the draft as it stands: the item is gone, unsaved, in the
+  // list the fix bar opens again.
+  await page.getByRole("button", { name: "All checks" }).click();
   await expect(
     page.getByRole("dialog", { name: "Page checks" })
   ).not.toContainText("Button has no link");
