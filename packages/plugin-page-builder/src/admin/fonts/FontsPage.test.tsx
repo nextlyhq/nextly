@@ -41,7 +41,10 @@ vi.mock("@nextlyhq/plugin-sdk/client", () => ({
     permission === "update-site-style" ? can.update : false,
 }));
 
-vi.mock("../site-style-client", () => ({
+vi.mock("../site-style-client", async () => ({
+  // Outside an editor: no history, and nothing drawn over the read.
+  SiteStyleHistoryContext: (await import("react")).createContext(null),
+  SiteStylePreviewContext: (await import("react")).createContext(new Map()),
   // The editor's own read, handed the site's code tier: what it merges is
   // what the page lists.
   useSiteStyle: (defaults: { fonts?: FontFaceDef[] } | undefined) => {
@@ -71,6 +74,8 @@ vi.mock("../site-style-client", () => ({
 
 vi.mock("@nextlyhq/plugin-sdk/admin", async importOriginal => ({
   ...(await importOriginal<typeof import("@nextlyhq/plugin-sdk/admin")>()),
+  // The author the catalogue keeps the choice to show previews for.
+  useCurrentUserId: () => "u1",
   useUploadMedia: () => ({ mutateAsync: vi.fn(), isPending: false }),
   usePluginClientConfig: () => ({ siteStyle: { fonts: [FROM_CODE] } }),
   navigateTo: () => undefined,

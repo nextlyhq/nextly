@@ -1163,6 +1163,19 @@ export const VARIABLE_PAGE_PARAM = "page";
 export const VARIABLE_USAGE_IDS_MAX = 50;
 
 /**
+ * The query parameter naming a group of variables whose documents a usage
+ * read counts together, each document once: the positions of its variables
+ * among the read's `id` parameters, from 0, separated by commas (`0,1`).
+ * Repeated for several groups, answered in the order asked.
+ *
+ * @experimental Settles with the Variables panel's usage.
+ */
+export const VARIABLE_TOGETHER_PARAM = "together";
+
+/** The most groups one usage read counts together. */
+export const VARIABLE_USAGE_GROUPS_MAX = 50;
+
+/**
  * How widely one variable is used: the documents whose blocks or page
  * settings name it, from the variable usage index; the shared styles whose
  * own styles name it, from the site style; and the block types whose own
@@ -1216,6 +1229,29 @@ export interface VariablesUsageResponse {
   readonly mayCount: boolean;
   /** Each variable asked about, by identity. */
   readonly variables: Readonly<Record<string, VariableUsage>>;
+  /**
+   * Each group asked about with {@link VARIABLE_TOGETHER_PARAM}, in the order
+   * asked; absent where none was, and from an older server.
+   */
+  readonly together?: readonly VariablesTogetherUsage[];
+}
+
+/**
+ * How many documents a group of variables is used in together: each
+ * document once, however many of the group's variables it names, counted
+ * as {@link VariableUsage} counts them, gated and hidden content included.
+ * Numbers alone: the variables' own answers name their shared styles and
+ * block types, which a reader joins itself.
+ *
+ * @experimental Settles with the Variables panel's usage.
+ */
+export interface VariablesTogetherUsage {
+  /** How many documents use any of the group's variables. */
+  readonly documents: number;
+  /** The same documents, by kind. */
+  readonly byKind: Readonly<Record<SharedStyleUsageKind, number>>;
+  /** False makes `documents` and `byKind` floors: "at least". */
+  readonly complete: boolean;
 }
 
 /**
@@ -1343,10 +1379,28 @@ export interface VariableCleanUpAnswer {
   readonly section?: unknown;
 }
 
-/** The usage route's path for some variables, each named by its own `id`. */
-export function variableUsagePath(ids: readonly string[]): string {
+/**
+ * The usage route's path for some variables, each named by its own `id`, and for groups of them to count together, each a `together` naming
+ * its variables' positions; a group's variable not among `ids` is asked too.
+ */
+export function variableUsagePath(
+  ids: readonly string[],
+  together: readonly (readonly string[])[] = []
+): string {
+  // The ids as handed, which the route reads once each, then any member of
+  // a group they leave out.
+  const asked = [
+    ...ids,
+    ...new Set(together.flat().filter(id => !ids.includes(id))),
+  ];
   const params = new URLSearchParams();
-  for (const id of ids) params.append(VARIABLE_ID_PARAM, id);
+  for (const id of asked) params.append(VARIABLE_ID_PARAM, id);
+  for (const group of together) {
+    params.append(
+      VARIABLE_TOGETHER_PARAM,
+      group.map(id => String(asked.indexOf(id))).join(",")
+    );
+  }
   return `${VARIABLE_USAGE_ROUTE_PATH}?${params.toString()}`;
 }
 

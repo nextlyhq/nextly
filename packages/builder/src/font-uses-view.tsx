@@ -21,6 +21,7 @@ import * as React from "react";
 import { roleStack, type SiteFamily } from "./font-library";
 import {
   familyUses,
+  followedStyleWords,
   roleLabel,
   roleRefusal,
   nowYourFontWords,
@@ -33,8 +34,8 @@ import {
   withRoleSnapshot,
   type FontRole,
 } from "./site-font-roles-model";
+import { useReachTogether } from "./variable-together-reads";
 import {
-  combinedReach,
   variableRemoval,
   variableStatus,
   type VariableReach,
@@ -81,16 +82,18 @@ export function useFamiliesUses(
     [byKey]
   );
   const reads = useVariableUsage(usage, identities);
+  const groups = React.useMemo(
+    () => [...byKey.values()].map(uses => uses.counted),
+    [byKey]
+  );
+  // A page naming two of a font's variables is one place.
+  const together = useReachTogether(usage, groups, reads.values);
   return (key: string): FamilyUsesHere => {
     const uses = byKey.get(key);
     if (uses === undefined) return UNUSED;
     // Every variable naming it counts, a role's own included.
     const reach =
-      uses.counted.length === 0
-        ? undefined
-        : combinedReach(
-            uses.counted.map(identity => reads.values.get(identity))
-          );
+      uses.counted.length === 0 ? undefined : together(uses.counted);
     return { uses, reach };
   };
 }
@@ -263,11 +266,18 @@ export interface UseForHost {
   readonly onTokensChange: ((tokens: SiteTokenSet) => void) | undefined;
   /** The Site text rows the site's code supplies, which a role change keeps. */
   readonly suppliedText: SiteTextMap | undefined;
+  /** The site's classes, where the text styles rows follow are. */
+  readonly classes?: readonly NamedClass[] | undefined;
   /**
    * Told once a role is chosen, so the upload editor the question sits in
    * closes: open, it holds the toast's Undo and the canvas out of reach.
    */
   readonly onChosen?: () => void;
+}
+
+/** A toast's description saying what a role choice left as it is, if anything. */
+function keptDescription(kept: readonly string[]): { description?: string } {
+  return kept.length === 0 ? {} : { description: kept.join(" ") };
 }
 
 /**
@@ -278,6 +288,11 @@ export interface UseForHost {
  */
 export function useUseFor(host: UseForHost): {
   readonly asked: Asked | null;
+  /**
+   * What a role chosen now leaves as it is: the rows following a text style,
+   * which keep its font. Said beside the question.
+   */
+  readonly kept: readonly string[];
   readonly ask: (family: string, category?: string) => void;
   readonly answer: (roles: readonly FontRole[] | null) => void;
   /** Stop asking about a family once it is removed: it has no faces now. */
@@ -321,6 +336,8 @@ export function useUseFor(host: UseForHost): {
     onTokensChange(set);
     host.onChosen?.();
     offered.current = toast.success(nowYourFontWords(asked.family, roles), {
+      // Said again once chosen, of the roles chosen: the question is gone.
+      ...keptDescription(followedStyleWords(now, roles, host.classes)),
       action: {
         label: "Undo",
         onClick: () => {
@@ -342,18 +359,29 @@ export function useUseFor(host: UseForHost): {
         : current
     );
   };
-  return { asked, ask, answer, dismiss };
+  const kept = React.useMemo(
+    () =>
+      asked === null || host.tokens === undefined
+        ? []
+        : followedStyleWords(host.tokens, ["body", "heading"], host.classes),
+    [asked, host.tokens, host.classes]
+  );
+  return { asked, kept, ask, answer, dismiss };
 }
 
 /**
  * "Use <font> for: Body / Headings / Both / Not now", in place, while a font
- * that finished adding waits for an answer; nothing otherwise.
+ * that finished adding waits for an answer, with what a choice leaves as it
+ * is; nothing otherwise.
  */
 export function UseForQuestion({
   asked,
+  kept = [],
   onAnswer,
 }: {
   asked: Asked | null;
+  /** The rows following a text style, which keep its font, in words. */
+  kept?: readonly string[];
   onAnswer: (roles: readonly FontRole[] | null) => void;
 }): React.JSX.Element | null {
   const id = React.useId();
@@ -383,6 +411,11 @@ export function UseForQuestion({
           Not now
         </button>
       </div>
+      {kept.map(words => (
+        <p key={words} className="nx-fonts-use__kept">
+          {words}
+        </p>
+      ))}
     </div>
   );
 }

@@ -33,6 +33,7 @@ import {
   type SiteFamily,
 } from "./font-library";
 import { previewFamily, usePreview } from "./font-preview";
+import type { PreferenceStore } from "./shell-state";
 
 /** One family in the catalogue, as the host hands it over. */
 export interface CatalogueFamilyView {
@@ -74,6 +75,32 @@ export interface FontCatalogue {
   ) => string;
   /** Add a family to the site. Resolves to a message when refused. */
   readonly add: (request: CatalogueAddRequest) => Promise<string | undefined>;
+  /**
+   * Where the author's choice to show previews is kept, so they are asked
+   * once. Absent, nothing is kept and the author is asked on every visit.
+   */
+  readonly previewConsent?: PreferenceStore;
+}
+
+/** What the consent store holds once the author has asked for previews. */
+const PREVIEWS_SHOWN = "shown";
+
+/**
+ * Whether previews may load, and the way to allow them. The kept choice is
+ * read again whenever the store changes, since it can arrive late (the
+ * author's identity is read after the catalogue may open), and a press made
+ * before it arrived is kept in it once it does.
+ */
+function usePreviewConsent(
+  store: PreferenceStore | undefined
+): readonly [boolean, () => void] {
+  const kept = React.useMemo(() => store?.read() === PREVIEWS_SHOWN, [store]);
+  const [pressed, setPressed] = React.useState(false);
+  React.useEffect(() => {
+    if (pressed && !kept) store?.write(PREVIEWS_SHOWN);
+  }, [pressed, kept, store]);
+  const allow = React.useCallback(() => setPressed(true), []);
+  return [kept || pressed, allow];
 }
 
 /** The list before the catalogue has answered, kept so its order is too. */
@@ -216,6 +243,7 @@ export function FontCatalogueView({
   onAdded?: (family: string, category: string) => void;
 }): React.JSX.Element {
   const { load, retry } = useCatalogue(catalogue);
+  const [previews, allowPreviews] = usePreviewConsent(catalogue.previewConsent);
   const [query, setQuery] = React.useState(initialQuery);
   const [category, setCategory] = React.useState<Category>("all");
   const [sort, setSort] = React.useState<Sort>("popular");
@@ -316,6 +344,7 @@ export function FontCatalogueView({
         />
       </div>
       <div className="nx-vars__body">
+        <PreviewConsent previews={previews} onAllow={allowPreviews} />
         {load.status === "loading" ? <Loading /> : null}
         {load.status === "failed" ? (
           <div className="nx-fonts-catalogue__failed">
@@ -345,6 +374,7 @@ export function FontCatalogueView({
                 family={family}
                 catalogue={catalogue}
                 sample={sample}
+                previews={previews}
                 site={onSite.find(
                   each => each.key === family.family.toLowerCase()
                 )}
@@ -357,11 +387,45 @@ export function FontCatalogueView({
           count={Math.min(hidden, PAGE_SIZE)}
           onMore={() => setPages(count => count + 1)}
         />
-        <p className="nx-vars__note">
-          Previews load from Fontsource while you browse. Fonts you add are
-          stored on your site.
-        </p>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Above the catalogue: that fonts added are copied to the site, and, until
+ * the author agrees, where previews would load from, with "Show previews".
+ * Until then each family is named in the builder's own font.
+ */
+function PreviewConsent({
+  previews,
+  onAllow,
+}: {
+  previews: boolean;
+  onAllow: () => void;
+}): React.JSX.Element {
+  return (
+    <div className="nx-fonts-catalogue__consent">
+      <p className="nx-vars__note">
+        Fonts you add are copied to your site. Visitors never contact Google.
+      </p>
+      {previews ? null : (
+        <div className="nx-fonts-catalogue__previews">
+          <p className="nx-vars__note">
+            To show previews, your browser loads them from Fontsource, a free
+            copy of Google Fonts.
+          </p>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="nx-vars-editor__button"
+            onClick={onAllow}
+          >
+            Show previews
+          </Button>
+        </div>
+      )}
     </div>
   );
 }
@@ -420,12 +484,15 @@ function CatalogueRow({
   family,
   catalogue,
   sample,
+  previews,
   site,
   onAdded,
 }: {
   family: CatalogueFamilyView;
   catalogue: FontCatalogue;
   sample: string;
+  /** Whether the author has agreed to previews loading. */
+  previews: boolean;
   site: SiteFamily | undefined;
   onAdded: ((family: string, category: string) => void) | undefined;
 }): React.JSX.Element {
@@ -434,7 +501,13 @@ function CatalogueRow({
   const loaded = usePreview(
     element,
     family.id,
-    catalogue.previewUrl(family, previewWeight(family), startingStyle(family))
+    previews
+      ? catalogue.previewUrl(
+          family,
+          previewWeight(family),
+          startingStyle(family)
+        )
+      : null
   );
   const meta = metaLine(family);
   return (

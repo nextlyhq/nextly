@@ -373,8 +373,8 @@ export {
   styleGroupKeys,
 } from "../style/supports-map";
 
+export { migrateDocument } from "../migrate-document";
 export {
-  migrateDocument,
   migrateProps,
   migrationInfoOf,
   findMigrationGaps,
@@ -385,6 +385,7 @@ export type {
   MigratedNode,
   MigrateFn,
   MigrateResult,
+  MigrationDrops,
   MigrationFailure,
   MigrationMap,
   MigrationRenames,

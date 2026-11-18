@@ -80,9 +80,9 @@ const SERVER = process.env.E2E_SERVER === "production" ? "production" : "dev";
  * - `notification-bell`: the bell lists the Schema Builder's changes, so the
  *   admin offers it only where the builder runs, and a production build hides
  *   it with the builder.
- * - `builder-fonts`: its stand-in font catalogue is plain http on localhost,
- *   which only a development server may reach; a production server rightly
- *   refuses it.
+ * - `builder-fonts` and `builder-fonts-network`: their stand-in font
+ *   catalogue is plain http on localhost, which only a development server may
+ *   reach; a production server rightly refuses it.
  * - `admin-hydration`: React reports invalid nesting in a development build
  *   only. The spec also watches the document itself, which holds anywhere.
  * - `builder-publish-requests`: it counts the engine's whole-document survey
@@ -104,6 +104,7 @@ const DEV_SPECS = [
   "**/builder-canvas-embed.spec.ts",
   "**/removed-from-code-singles-list.spec.ts",
   "**/builder-fonts.spec.ts",
+  "**/builder-fonts-network.spec.ts",
   "**/admin-hydration.spec.ts",
   "**/builder-publish-requests.spec.ts",
 ];
@@ -135,8 +136,8 @@ const RUN_OUTPUT = DEV_SPECS_ONLY
   : HEADER_FOOTER_IN_CODE_ONLY
     ? "header-footer-in-code"
     : EVERY_DIALECT_ONLY
-    ? E2E_DATABASE.dialect
-    : "suite";
+      ? E2E_DATABASE.dialect
+      : "suite";
 
 /**
  * The commands that start each server, after the database is emptied.
