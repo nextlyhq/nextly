@@ -353,12 +353,7 @@ export async function waitingFor(
     takeable.push(scoped);
   }
   if (takeable.length === 0) return { items: [], total: 0 };
-  // The roles the caller holds now, inherited ones included: work assigned to any of them is theirs.
-  const { roleIds } = await resolveUserRoles(query.caller.userId);
-  const mine: ReviewAssignee[] = [
-    { kind: "user", id: query.caller.userId },
-    ...[...roleIds].map(id => ({ kind: "role" as const, id })),
-  ];
+  const mine = await holdersOf(query.caller);
   const terms = await waitingTerms(adapter, takeable, mine);
   const candidates = await readWaitingReviewStates(
     adapter,
@@ -393,6 +388,25 @@ export async function waitingFor(
     items: waiting.slice(query.offset, query.offset + query.limit),
     total: waiting.length,
   };
+}
+
+/**
+ * Whom the caller stands for when work is assigned: a person, as themselves and every role they
+ * hold now (inherited ones included); a key scoped to roles, as those roles alone, never its
+ * owner nor the owner's other roles, as its permissions are those roles' alone; a key without a
+ * role scope, as its owner does.
+ */
+async function holdersOf(
+  caller: WaitingQuery["caller"]
+): Promise<ReviewAssignee[]> {
+  if (caller.kind === "key" && caller.scope.roles !== undefined) {
+    return caller.scope.roles.map(id => ({ kind: "role" as const, id }));
+  }
+  const { roleIds } = await resolveUserRoles(caller.userId);
+  return [
+    { kind: "user", id: caller.userId },
+    ...[...roleIds].map(id => ({ kind: "role" as const, id })),
+  ];
 }
 
 /**
