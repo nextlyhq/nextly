@@ -11,6 +11,7 @@ import {
 } from "@admin/lib/validation-bounds";
 
 import { brokenConditions } from "./condition-identity";
+import { relationshipOptionsToSave } from "./field-transformers";
 
 export interface FieldBuilderValidationResult {
   valid: boolean;
@@ -114,9 +115,10 @@ const needsOptions: FieldCheck = field => {
 };
 
 /**
- * A relationship needs a collection to link to (`linksSomewhere`). A many-to-many it stores
- * (`storedRelationOptions.relationType`) needs exactly one: its links are kept in a table made for
- * one collection, so several picked would name none the save can keep them for.
+ * A relationship needs a collection to link to (`linksSomewhere`). One the save sends as a
+ * many-to-many (`relationshipOptionsToSave`, after the person's controls) needs exactly one: its
+ * links are kept in a table made for one collection, so several picked would name none the save
+ * can keep them for.
  */
 const needsTarget: FieldCheck = field => {
   if (field.type !== "relationship") return null;
@@ -126,7 +128,7 @@ const needsTarget: FieldCheck = field => {
       message: `Relationship field "${field.name}" must link to a collection`,
     };
   }
-  return field.storedRelationOptions?.relationType === "manyToMany" &&
+  return relationshipOptionsToSave(field)?.relationType === "manyToMany" &&
     Array.isArray(field.relationTo) &&
     field.relationTo.length > 1
     ? {

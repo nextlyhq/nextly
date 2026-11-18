@@ -605,9 +605,10 @@ function storedRelationStateOf(
  * The `options` a relationship's save writes: the stored ones, with `target` following the one
  * collection the person picked (`onlyCollection`), so a many-to-many stays one and links to what
  * the field now names, and with the relation type the person's controls leave it
- * (`withCardinalityAsSet`). Undefined where none were stored.
+ * (`withCardinalityAsSet`). Undefined where none were stored. The Builder's check of a
+ * relationship (`needsTarget`) judges these options, so it refuses what the save would send.
  */
-function relationshipOptionsToSave(
+export function relationshipOptionsToSave(
   field: BuilderField
 ): Readonly<Record<string, unknown>> | undefined {
   const stored = field.storedRelationOptions;
