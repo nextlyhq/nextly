@@ -137,19 +137,22 @@ export function callerReads(ctx: PluginRouteContext, locale?: string): ReadsAs {
 }
 
 /**
- * The types of `checks` that `user` may read, by the key their pages are
- * kept under, as core decides it for that person (`readableContent`): for
- * a reader that is handed a person rather than a route's caller.
+ * The types of `checks` that `caller` may read, by the key their pages are
+ * kept under, as core decides it for them (`readableContent`): for a reader
+ * that is handed a person rather than a route's caller. An API key's scope
+ * goes with it, so its grants decide rather than its owner's.
  */
 export async function readableTypesOf(
-  user: ReadableContentCaller["user"],
+  caller: ReadableContentCaller,
   checks: Pick<ProblemChecks, "targets" | "singles">
 ): Promise<Set<string>> {
+  const { user, authenticatedScope } = caller;
   const { entities } = await readableContent({
     user: {
       id: user.id,
       ...(user.roles === undefined ? {} : { roles: user.roles }),
     },
+    ...(authenticatedScope === undefined ? {} : { authenticatedScope }),
   });
   const collections = new Set(checks.targets);
   const singles = new Set(checks.singles);

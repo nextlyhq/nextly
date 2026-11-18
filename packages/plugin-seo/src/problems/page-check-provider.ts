@@ -30,7 +30,7 @@ import type {
 import { PAGE_BUILDER_PLUGIN } from "../resolver/design-level";
 import { PAGE_BUILDER_TAB } from "../template/contributions";
 
-import { problemList, type ProblemChecks } from "./check";
+import { checkedInTurn, problemList, type ProblemChecks } from "./check";
 import { KIND_TEXT, type Problem } from "./contract";
 import { readableTypesOf, readerAs, readsAs } from "./reader";
 
@@ -70,6 +70,29 @@ function isAbout(
   return type === page.collection && id === entryId && locale === asked;
 }
 
+/**
+ * How long the page's own check is waited for: the page builder gives a
+ * provider ten seconds in all, and the list is read after it.
+ */
+const OWN_CHECK_WAIT_MS = 6000;
+
+/**
+ * Once the check the page's last save started has finished, or the wait
+ * has run out: a save starts its check without waiting on it, so the items
+ * asked for just after a save are the saved page's, not what the list found
+ * before it.
+ */
+async function afterOwnCheck(type: string, id: string): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([
+    checkedInTurn(type, id),
+    new Promise<void>(resolve => {
+      timer = setTimeout(resolve, OWN_CHECK_WAIT_MS);
+    }),
+  ]);
+  clearTimeout(timer);
+}
+
 /** The page's problems, as the problem list shows them to `access`'s person. */
 async function pageFindings(
   ctx: PluginContext,
@@ -80,13 +103,25 @@ async function pageFindings(
   const entryId = page.entryId;
   // A page not saved yet has not been checked.
   if (entryId === null) return [];
-  const types = await readableTypesOf(access.user, checks);
-  if (!types.has(page.collection)) return [];
-  const reader = readerAs(
-    readsAs(ctx.services.collections, access),
-    types,
-    false
+  // Asked as the person, an API key's scope kept, so its grants decide.
+  const types = await readableTypesOf(
+    {
+      user: access.user,
+      ...(access.authenticatedScope === undefined
+        ? {}
+        : { authenticatedScope: access.authenticatedScope }),
+    },
+    checks
   );
+  if (!types.has(page.collection)) return [];
+  await afterOwnCheck(page.collection, entryId);
+  // Each entry read in the language edited, as a read rule may read a
+  // translated field.
+  const reads = readsAs(ctx.services.collections, {
+    ...access,
+    ...(page.locale === undefined ? {} : { locale: page.locale }),
+  });
+  const reader = readerAs(reads, types, false);
   const { problems } = await problemList(ctx, checks, reader);
   const defaultLanguage = await ctx.publicAddresses.defaultLanguage();
   return problems

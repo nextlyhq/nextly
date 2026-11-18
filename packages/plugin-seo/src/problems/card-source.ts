@@ -62,7 +62,7 @@ export function problemsForCard(checks: ProblemChecks): ProblemsFor {
           }),
         count: type => services.count(type),
       },
-      await readableTypesOf(user, checks),
+      await readableTypesOf({ user }, checks),
       false
     );
     return (await problemList(ctx, checks, reader)).problems;

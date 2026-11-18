@@ -100,9 +100,8 @@ describe.each(getConfiguredTestDialects())(
       throw new Error("the page's check never finished");
     }
 
-    it("lists the page's problems under Search, those found among pages too", async () => {
-      const a = await publish("Harbour", "a");
-      await publish("Harbour", "b");
+    /** The SEO provider's item in the page builder's provided checks for `id`. */
+    async function seoChecksOf(id: string) {
       const response = await createDynamicHandlers().POST(
         new Request(`${ORIGIN}/api/${ROUTE.join("/")}`, {
           method: "POST",
@@ -114,7 +113,7 @@ describe.each(getConfiguredTestDialects())(
           },
           body: JSON.stringify({
             collection: "posts",
-            entryId: a,
+            entryId: id,
             document: { formatVersion: 1, kind: "page", nodes: [] },
           }),
         }),
@@ -126,16 +125,22 @@ describe.each(getConfiguredTestDialects())(
           provider: string;
           group: string;
           ran: boolean;
-          findings: unknown[];
+          findings: { part: string; fix?: unknown }[];
         }[];
       };
-      const seo = items.find(item => item.provider === "seo");
+      return items.find(item => item.provider === "seo");
+    }
+
+    it("lists the page's problems under Search, those found among pages too", async () => {
+      const a = await publish("Harbour", "a");
+      await publish("Harbour", "b");
+      const seo = await seoChecksOf(a);
       expect(seo).toMatchObject({
         provider: "seo",
         group: "search",
         ran: true,
       });
-      const findings = seo?.findings as { part: string; fix?: unknown }[];
+      const findings = seo?.findings ?? [];
       // Kept with the page's row: a description is set in the page's SEO tab.
       expect(findings).toContainEqual(
         expect.objectContaining({
@@ -145,6 +150,24 @@ describe.each(getConfiguredTestDialects())(
       );
       // Found only by the list, comparing the page with the other.
       expect(findings.map(each => each.part)).toContain("sharedTitle");
+    });
+
+    it("lists what the page's save found, asked for at once after it", async () => {
+      const a = await publish("Lighthouse", "c");
+      await publish("Lighthouse", "d");
+      expect((await seoChecksOf(a))?.findings.map(each => each.part)).toContain(
+        "sharedTitle"
+      );
+      // Saved with a title of its own and asked about straight away, before
+      // the check the save started has had time to finish.
+      await t.nextly.update({
+        collection: "posts",
+        id: a,
+        data: { title: "Pier", _overwrite: true },
+      });
+      const parts = (await seoChecksOf(a))?.findings.map(each => each.part);
+      expect(parts).not.toContain("sharedTitle");
+      expect(parts).toContain("noDescription");
     });
   }
 );

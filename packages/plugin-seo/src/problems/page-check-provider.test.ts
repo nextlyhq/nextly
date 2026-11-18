@@ -15,15 +15,25 @@ import { findingOfProblem, seoPageChecks } from "./page-check-provider";
 const listed = vi.fn<() => Promise<Problem[]>>();
 const readable = vi.fn<() => Promise<Set<string>>>();
 const asReader = vi.fn();
+const askedTypes = vi.fn();
+const readsWith = vi.fn();
+const ownCheck = vi.fn<() => Promise<void>>();
 vi.mock("./check", () => ({
+  checkedInTurn: () => ownCheck(),
   problemList: async (_ctx: unknown, _checks: unknown, reader: unknown) => {
     asReader(reader);
     return { problems: await listed() } as Partial<ProblemListBody>;
   },
 }));
 vi.mock("./reader", () => ({
-  readableTypesOf: () => readable(),
-  readsAs: () => "reads",
+  readableTypesOf: (caller: unknown) => {
+    askedTypes(caller);
+    return readable();
+  },
+  readsAs: (_collections: unknown, access: unknown) => {
+    readsWith(access);
+    return "reads";
+  },
   readerAs: (reads: string, types: Set<string>, seesRedirects: boolean) => ({
     reads,
     types: [...types],
@@ -32,8 +42,12 @@ vi.mock("./reader", () => ({
 }));
 
 beforeEach(() => {
+  vi.useRealTimers();
   listed.mockReset();
   asReader.mockReset();
+  askedTypes.mockReset();
+  readsWith.mockReset();
+  ownCheck.mockReset().mockResolvedValue(undefined);
   readable.mockReset().mockResolvedValue(new Set(["pages"]));
 });
 
@@ -127,5 +141,44 @@ describe("the SEO page checks", () => {
     readable.mockResolvedValue(new Set(["posts"]));
     expect(await provider().check(PAGE, ACCESS)).toEqual([]);
     expect(asReader).not.toHaveBeenCalled();
+  });
+
+  it("asks which types an API key may read with its scope, so its grants decide", async () => {
+    listed.mockResolvedValue([]);
+    const scope = { actorType: "apiKey" as const, permissions: ["read-pages"] };
+    const access = { ...ACCESS.access, authenticatedScope: scope };
+    await provider().check(PAGE, { access });
+    expect(askedTypes).toHaveBeenCalledWith({
+      user: ACCESS.access.user,
+      authenticatedScope: scope,
+    });
+  });
+
+  it("reads each entry in the language edited", async () => {
+    listed.mockResolvedValue([]);
+    await provider().check({ ...PAGE, locale: "fr" }, ACCESS);
+    expect(readsWith).toHaveBeenCalledWith({ ...ACCESS.access, locale: "fr" });
+  });
+
+  it("reads the list once the check the page's save started has finished", async () => {
+    listed.mockResolvedValue([noTitle]);
+    let finish = () => {};
+    ownCheck.mockReturnValue(new Promise<void>(resolve => (finish = resolve)));
+    const found = provider().check(PAGE, ACCESS);
+    await new Promise(resolve => setTimeout(resolve, 10));
+    expect(asReader).not.toHaveBeenCalled();
+    finish();
+    expect((await found).map(each => each.part)).toEqual(["noTitle"]);
+  });
+
+  it("reads the list anyway once the wait for that check runs out", async () => {
+    vi.useFakeTimers();
+    listed.mockResolvedValue([noTitle]);
+    ownCheck.mockReturnValue(new Promise<void>(() => {}));
+    const found = provider().check(PAGE, ACCESS);
+    await vi.advanceTimersByTimeAsync(5900);
+    expect(asReader).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(200);
+    expect((await found).map(each => each.part)).toEqual(["noTitle"]);
   });
 });
