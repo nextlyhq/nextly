@@ -185,9 +185,9 @@ describeEachDialect("a Single's schema save that cannot apply", dialect => {
   });
 
   it("refuses a type the value the Single holds cannot be read as, naming the field, and changes nothing", async () => {
-    // "abc" is no number: the database would refuse the cast (PostgreSQL) or keep a text in a
+    // "zzq" is no number, and no row id (a UUID is hex) can contain it: the database would refuse the cast (PostgreSQL) or keep a text in a
     // number column (SQLite). The save is refused first, by field and code, with the value kept.
-    await heroWith([{ name: "heading", type: "text" }], { heading: "abc" });
+    await heroWith([{ name: "heading", type: "text" }], { heading: "zzq" });
     const fieldsBefore = await registeredFields();
 
     const refused = await refusal(save([{ name: "heading", type: "number" }]));
@@ -205,12 +205,12 @@ describeEachDialect("a Single's schema save that cannot apply", dialect => {
         ],
       },
     });
-    expect(JSON.stringify(refused)).not.toContain("abc");
+    expect(JSON.stringify(refused)).not.toContain("zzq");
     expect(await registeredFields()).toEqual(fieldsBefore);
     const [row] = await query<{ heading: string }>(
       `SELECT ${q("heading")} AS heading FROM ${q("single_hero")}`
     );
-    expect(row?.heading).toBe("abc");
+    expect(row?.heading).toBe("zzq");
   });
 
   it("saves a length the value the Single holds still fits", async () => {

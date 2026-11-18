@@ -709,29 +709,33 @@ function useFocusShownField(
 }
 
 /**
- * The Code tab's body: the page's own code, held as the title is while the
- * page takes no edits.
+ * The Code tab's body: the page's own code and CSS, held as the title is
+ * while the page takes no edits.
  */
 function PageCodeTabBody({
   pageCode,
+  pageCss,
 }: {
   pageCode: SettingsPlace["pageCode"];
+  pageCss: SettingsPlace["pageCss"];
 }): JSX.Element {
   const writable = useDocumentField("title")?.writable !== false;
   return (
     <PageCodeTab
       value={pageCode.value}
       set={pageCode.set}
+      css={pageCss}
       writable={writable}
     />
   );
 }
 
 /**
- * The page's own code in Page settings: its tab, last, for someone who may
- * change the site's settings, whose permission the server holds every change
- * to; and, for anyone else, whether General says the page adds code. Only a
- * page's own top-level field holds code (`holdsPageCode`).
+ * The page's own code and CSS in Page settings: its tab, last, for someone
+ * who may change the site's settings, whose permission the server holds
+ * every change to; and, for anyone else, whether General says the page adds
+ * code or CSS. Only a page's own top-level field holds code
+ * (`holdsPageCode`).
  */
 function usePageCode(
   page: boolean,
@@ -746,14 +750,15 @@ function usePageCode(
       ? "none"
       : pageCodeShown({
           held: pageCode.value,
+          css: place?.pageCss.value,
           mayManageSite: site.data.mayManageSite,
         });
   return {
     showsCode: shown === "tab",
     holdsHiddenCode: shown === "line",
     codeBody:
-      shown === "tab" && pageCode !== null ? (
-        <PageCodeTabBody pageCode={pageCode} />
+      shown === "tab" && pageCode !== null && place !== null ? (
+        <PageCodeTabBody pageCode={pageCode} pageCss={place.pageCss} />
       ) : null,
   };
 }

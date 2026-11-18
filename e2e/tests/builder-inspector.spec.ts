@@ -238,13 +238,14 @@ async function lockAndUnlock(page: Page): Promise<void> {
   await expect(content.getByLabel("Text", { exact: true })).toBeEnabled();
   await page.getByRole("tab", { name: "Style" }).click();
   const style = page.locator(".nx-style-inspector");
-  // A control of the open section, enabled before the lock, so its being
-  // disabled after is the lock's doing.
-  const field = style
-    .locator('[data-section][data-state="open"]')
-    .first()
-    .getByRole("textbox")
-    .first();
+  // A field of Text, enabled before the lock, so its being disabled after
+  // is the lock's doing. Opened by name: the tab's first section, Inside its
+  // parent, draws choices, and Spacing draws buttons, rather than a field.
+  const text = style.locator('[data-section="typography"]');
+  if ((await text.getAttribute("data-state")) !== "open") {
+    await text.locator("button").first().click();
+  }
+  const field = text.getByRole("textbox").first();
   await expect(field).toBeEnabled();
   await page.getByRole("tab", { name: "Content" }).click();
 
@@ -387,16 +388,19 @@ test.describe("the inspector", () => {
     const id = await createPage(page.request);
     await openBuilder(page, id);
 
-    // A heading: no Layout, Text's common controls first.
+    // A heading: no Layout, Text's common controls first. Every block in
+    // the page's flow has Inside its parent, first after Layout.
     await select(page, HEADING);
     await page.getByRole("tab", { name: "Style" }).click();
     await expect
       .poll(() => sectionLabels(page))
       .toEqual([
+        "Inside its parent",
         "Spacing",
         "Size",
         "Position",
         "Text",
+        "Background",
         "Border",
         "Effects",
         "CSS properties",
@@ -411,14 +415,17 @@ test.describe("the inspector", () => {
     ]);
     expect(await addableProperties(page)).toContain("letter-spacing in Text");
 
-    // An image: the media fit controls show at once in Size.
+    // An image: the media fit controls show at once in Size, and Text styles
+    // its caption.
     await select(page, IMAGE);
     await expect
       .poll(() => sectionLabels(page))
       .toEqual([
+        "Inside its parent",
         "Spacing",
         "Size",
         "Position",
+        "Text",
         "Border",
         "Effects",
         "CSS properties",
@@ -426,22 +433,32 @@ test.describe("the inspector", () => {
     const size = await shownProperties(page, "size");
     expect(size).toEqual(expect.arrayContaining(["aspectRatio", "objectFit"]));
 
-    // A section: Layout first; the container query and box sizing are added
-    // from "CSS properties", each said to be of its own section.
+    // A section: Layout first, and Text for the type its blocks take; the
+    // container query and box sizing are added from "CSS properties", each
+    // said to be of its own section.
     await select(page, SECTION, "corner");
     await expect
       .poll(() => sectionLabels(page))
       .toEqual([
         "Layout",
+        "Inside its parent",
         "Spacing",
         "Size",
         "Position",
+        "Text",
         "Background",
         "Border",
         "Effects",
         "CSS properties",
       ]);
-    expect(await shownProperties(page, "layout")).toEqual(["display"]);
+    // Arrange draws the display in plain words, and its Space between is the
+    // one CSS row Layout shows.
+    expect(await shownProperties(page, "layout")).toEqual(["gap"]);
+    await expect(
+      page
+        .locator('.nx-style-inspector [data-section="layout"]')
+        .getByRole("radiogroup", { name: "Arrange" })
+    ).toBeVisible();
     const addable = await addableProperties(page);
     expect(addable).toContain("container-type in Layout");
     expect(addable).toContain("box-sizing in Size");
@@ -529,8 +546,9 @@ test.describe("the inspector", () => {
       page.getByRole("switch", { name: "Keep out of search previews" })
     ).toHaveCount(0);
 
-    // The tab stays Advanced as the selection moves to the section.
-    await select(page, SECTION);
+    // The tab stays Advanced as the selection moves to the section, chosen
+    // at its corner: its centre holds the empty slot's Add a block.
+    await select(page, SECTION, "corner");
     const never = page.getByRole("switch", {
       name: "Keep out of search previews",
     });
@@ -579,7 +597,7 @@ test.describe("the inspector", () => {
     await expect(page.getByRole("region", { name: "Canvas" })).toBeVisible({
       timeout: 60_000,
     });
-    await select(page, SECTION);
+    await select(page, SECTION, "corner");
     await page.getByRole("tab", { name: "Advanced" }).click();
     await expect(
       page.getByRole("switch", { name: "Keep out of search previews" })
