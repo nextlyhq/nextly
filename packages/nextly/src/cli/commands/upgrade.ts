@@ -227,7 +227,9 @@ export async function previewUpgrade(
     }
     if (pending === 0) idle.push(step.title);
     else changes.push(stepChange(step.title, pending));
-    if (pending > 0 && step.report) {
+    // Asked of every step that lists anything, with work or without: a step can have nothing to
+    // change and still something an editor should check.
+    if (step.report) {
       const listed = await step.report(context);
       report.move.push(...listed.move);
       report.conflicts.push(...listed.conflicts);

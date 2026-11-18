@@ -81,6 +81,15 @@ const localisationDraftsStep: UpgradeStep = {
     (await import("./localisation-drafts")).draftsSplitReport(context),
 };
 
+/** Listing the archived translations no entity can be found for: nothing to change, only to check. */
+const localisationArchiveStep: UpgradeStep = {
+  title: "list archived translations of no known entity",
+  pending: () => Promise.resolve(0),
+  run: () => Promise.resolve(0),
+  report: async context =>
+    (await import("./localisation-archive")).unclaimedArchiveReport(context),
+};
+
 export const UPGRADE_STEPS: readonly UpgradeStep[] = [
   schemaEventsStep,
   storedPasswordsStep,
@@ -91,4 +100,5 @@ export const UPGRADE_STEPS: readonly UpgradeStep[] = [
   localisationKeysStep,
   localisationValuesStep,
   localisationDraftsStep,
+  localisationArchiveStep,
 ];
