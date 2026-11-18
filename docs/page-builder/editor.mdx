@@ -139,13 +139,37 @@ Under **Accessibility**, the checks find:
   ratio can be measured there, and a block whose colours come from a shared style isn't
   judged.
 
+Under **Content and data**, the list always starts with the page's data, **Page data: 12 of
+500**: how many reads the page makes against the limit a page may make (500 unless your
+site sets `maxQueries`). The top bar shows the same count only once a page nears the
+limit. Over the limit, each block that then shows empty on the live page is listed, with
+what it misses. The checks also find:
+
+- **Bindings that no longer fit**, the same ones [Bindings to fix](#bindings-to-fix)
+  lists for the page.
+- **A page that shows two headers** (or footers): its header & footer set draws one
+  around it, and it has a header block of its own. Choosing the item selects the page's
+  own header block. It stays listed even if you dismissed the notice above the canvas.
+- **Blocks left empty**: an Image with no picture, a Button with no link (one that sends
+  or clears a form has a job, so it isn't listed), and a Collection list with no source.
+  Choosing the item opens the setting that fills it.
+
+Under **Publishing**, the list names each component the page uses that isn't published,
+and its header & footer set when that isn't, as [Publish asks about
+them](#publishing-a-page-whose-parts-arent-published). It's asked again after each save
+and each pause in editing.
+
 Checks never stop you saving or publishing. Automatic checks catch common problems; they
 don't replace an accessibility review.
 
 The checks are plain functions over a page's content, so a script or a route gets the same
 findings the editor lists: `runPageChecks` and `CORE_PAGE_CHECKS` from
 `@nextlyhq/builder`. They read block definitions from the blocks registered in that
-process, or from the `blocks` you pass.
+process, or from the `blocks` you pass. The content, data and publishing checks also read
+`facts` you pass where you have them (`PageFacts`: the page's bindings to fix, its data
+count, its unpublished parts and a header shown twice); a check whose fact you leave out
+finds nothing. A check's line under its group, such as the data count, is in
+`report.notes`.
 
 ```ts
 import type { BlockDocument } from "@nextlyhq/blocks-engine";

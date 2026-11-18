@@ -636,6 +636,7 @@ export {
   type PageCheck,
   type PageCheckGroup,
   type PageCheckGroupView,
+  type PageCheckNote,
   type PageCheckReport,
   type PageCheckResult,
   type PageFinding,
@@ -643,3 +644,12 @@ export {
   type ResolvedPage,
 } from "./page-checks/page-checks";
 export { CORE_PAGE_CHECKS } from "./page-checks/core-checks";
+// What a caller knows of the page beyond its document, for the content,
+// data and publishing checks: a script hands in the same facts the editor does.
+export type {
+  BindingToFix,
+  DoubledRegionFact,
+  PageDataFact,
+  PageFacts,
+  UnpublishedPart,
+} from "./page-checks/page-facts";
