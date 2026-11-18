@@ -183,6 +183,12 @@ const speedExtraCollections = Array.from(
  */
 export const pageBuilderPlugin = pageBuilder({
   siteStyle: SITE_STYLE_DEFAULTS,
+  // A site that draws its header and footer in code, for the browser tests
+  // of that mode alone (`NEXTLY_E2E_SITE_HEADER_FOOTER=code`); the Page
+  // Builder's own sets otherwise, as a default install has.
+  ...(process.env.NEXTLY_E2E_SITE_HEADER_FOOTER === "code"
+    ? { siteHeaderFooter: "code" as const }
+    : {}),
   // The browser tests' custom sources, registered by the same switch as
   // the collections and the Single they read.
   ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1"
