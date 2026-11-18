@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import type { NextlySchemaSnapshot } from "../../pipeline/diff/types";
-import { droppedTranslations } from "../dropped-translations";
+import {
+  droppedTranslations,
+  translationsDropsPlaced,
+} from "../dropped-translations";
 import type { EntitySettingsRecord, SettingsObject } from "../entity-settings";
 
 /** A previous record holding one translated collection, `notes`, with these fields. */
@@ -54,7 +57,7 @@ describe("the translations table of a dropped table", () => {
         dialect,
         defaultLocale: "en",
       });
-      expect(up).toEqual([drop]);
+      expect(up).toEqual([{ table: "dc_notes", statement: drop }]);
     }
   });
 
@@ -111,7 +114,9 @@ describe("the translations table of a dropped table", () => {
       defaultLocale: "en",
     });
     // Dropped where it stands; made again by the runtime's own check at the next start.
-    expect(up).toEqual(['DROP TABLE IF EXISTS "dc_notes_locales"']);
+    expect(up.map(d => d.statement)).toEqual([
+      'DROP TABLE IF EXISTS "dc_notes_locales"',
+    ]);
     expect(down).toEqual([]);
   });
 });
@@ -151,5 +156,33 @@ describe("the translations table of a dropped field group", () => {
     expect(down[0]).toMatch(
       /^CREATE TABLE IF NOT EXISTS "comp_custom_cards_locales"/
     );
+  });
+});
+
+describe("where a translations table's drop goes in the file", () => {
+  it("goes right before its table's drop, after the guards the file leads with", () => {
+    const guard =
+      'SELECT CASE WHEN EXISTS (SELECT 1 FROM "dc_posts" WHERE "tags" IS NOT NULL) THEN 1 END';
+    const placed = translationsDropsPlaced(
+      [
+        guard,
+        'DROP TABLE "dc_notes"',
+        'ALTER TABLE "dc_posts" DROP COLUMN "tags"',
+      ],
+      [
+        {
+          table: "dc_notes",
+          statement: 'DROP TABLE IF EXISTS "dc_notes_locales"',
+        },
+      ],
+      "sqlite"
+    );
+    // A guard that refuses stops the file before any translations table is dropped.
+    expect(placed).toEqual([
+      guard,
+      'DROP TABLE IF EXISTS "dc_notes_locales"',
+      'DROP TABLE "dc_notes"',
+      'ALTER TABLE "dc_posts" DROP COLUMN "tags"',
+    ]);
   });
 });

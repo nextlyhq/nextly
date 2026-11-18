@@ -1084,8 +1084,10 @@ export async function readForeignKeyColumns(
 
 /**
  * Each column of `tableName` that carries a foreign key, with the tables its keys reference,
- * lower-cased as the database names them: bare where the table is on the search path
- * (PostgreSQL), or in the current database (MySQL). A column without a key has no entry.
+ * named exactly as the database names them, so two tables a name can tell apart stay apart:
+ * PostgreSQL's `regclass` text, bare for an unquoted name on the search path and quoted for
+ * any other (`"Posts"` is not `posts`), MySQL's name in the current database, and SQLite's
+ * lower-cased, as its names are compared without case. A column without a key has no entry.
  */
 export async function readForeignKeyTargets(
   db: unknown,
@@ -1094,10 +1096,7 @@ export async function readForeignKeyTargets(
 ): Promise<Map<string, string[]>> {
   const out = new Map<string, string[]>();
   const record = (column: string, target: string) => {
-    out.set(column, [
-      ...(out.get(column) ?? []),
-      target.replace(/"/g, "").toLowerCase(),
-    ]);
+    out.set(column, [...(out.get(column) ?? []), target]);
   };
 
   if (dialect === "postgresql") {
@@ -1134,7 +1133,7 @@ export async function readForeignKeyTargets(
   const rows = (await (db as SqliteAll).all(
     sql`PRAGMA foreign_key_list(${sql.identifier(tableName)})`
   )) as (SqliteForeignKeyRow & { table: string })[];
-  for (const row of rows) record(row.from, row.table);
+  for (const row of rows) record(row.from, row.table.toLowerCase());
   return out;
 }
 
