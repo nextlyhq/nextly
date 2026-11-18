@@ -228,6 +228,25 @@ export function variablesFor(
 }
 
 /**
+ * The variables a picker lists, without the colours the site hides (its
+ * unused built-in colours, while it hides them), keeping the one the field
+ * holds, so a field never stops naming its own value.
+ */
+export function shownVariables(
+  offered: readonly SiteVariable[],
+  hidden: ReadonlySet<string>,
+  held: string | null
+): readonly SiteVariable[] {
+  if (hidden.size === 0) return offered;
+  return offered.filter(
+    variable =>
+      variable.kind !== "color" ||
+      variable.identity === held ||
+      !hidden.has(variable.identity)
+  );
+}
+
+/**
  * Whether the leaf accepts this variable's value, in the mode asked for, by
  * the engine's own rule for the leaf, the one a typed value goes through.
  *
