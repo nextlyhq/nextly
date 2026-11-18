@@ -280,6 +280,14 @@ export interface InspectorPanelProps {
    * @experimental Settles with editing a header or footer in place.
    */
   regionCard?: React.ReactNode;
+  /**
+   * The name of the region of the page's layout edited in place, while one
+   * is ("Site header"): `editor` is the region's, and the selected block's
+   * card says where it is, "Navigation · in Site header".
+   *
+   * @experimental Settles with editing a header or footer in place.
+   */
+  editingIn?: string;
 }
 
 /** What the host draws of the open document while nothing is selected. */
