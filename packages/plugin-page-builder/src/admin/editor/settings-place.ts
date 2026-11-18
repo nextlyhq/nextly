@@ -50,6 +50,16 @@ export interface SettingsPlace {
     /** Answers whether the edit was made. */
     set: (next: DocumentCode | null) => boolean;
   };
+  /**
+   * The document's own CSS (`settings.customCss`), and how to change it:
+   * one edit of the document, as `pageCode` is. The editor's own, never
+   * handed to another plugin's tab.
+   */
+  pageCss: {
+    value: string | undefined;
+    /** Answers whether the edit was made; `null` removes the CSS. */
+    set: (next: string | null) => boolean;
+  };
 }
 
 /** The editor, as far as the place reads and edits it. */
@@ -144,8 +154,17 @@ export function useSettingsPlace<TFieldValues extends FieldValues>(
     }),
     [code, apply]
   );
+  const css = editor.document.settings?.customCss;
+  const pageCss = useMemo(
+    () => ({
+      value: css,
+      set: (next: string | null) =>
+        apply({ kind: "code", customCss: next }) !== null,
+    }),
+    [css, apply]
+  );
   if (document === null) return null;
-  return { context, tabProps, flushHeld: held.flush, pageCode };
+  return { context, tabProps, flushHeld: held.flush, pageCode, pageCss };
 }
 
 /**

@@ -42,18 +42,18 @@ import {
   FORM_SERVICE,
   startFormProviders,
 } from "./forms/providers";
-import {
-  createPageCheckProviders,
-  PAGE_CHECKS_SERVICE,
-  startPageCheckProviders,
-} from "./page-check-providers";
-import { providedChecksRoute } from "./page-checks-provided-route";
 import { FORM_SEND_LIMITS, formReceiverRoute } from "./forms/route";
 import { SITE_FORMS_SERVICE_NAME, siteForms } from "./forms/site-forms";
 import { PAGE_BUILDER_PLUGIN_NAME } from "./library-contract";
 import { registerNamedQueriesAtBoot } from "./named-queries";
 import { warnNestedBlocksFields } from "./nested-blocks-fields";
 import { PAGE_BUILDER_PLACEMENT } from "./overview/admin-panel";
+import {
+  createPageCheckProviders,
+  PAGE_CHECKS_SERVICE,
+  startPageCheckProviders,
+} from "./page-check-providers";
+import { providedChecksRoute } from "./page-checks-provided-route";
 import { adminContributions } from "./plugin-definition/admin";
 import {
   bindingReportParts,
@@ -124,16 +124,18 @@ import {
   BREAKPOINT_REMOVAL_UNDONE_AUDIT,
   BREAKPOINT_REMOVAL_UNDONE_METADATA,
 } from "./site-breakpoint-undo";
-import { appOrigin } from "./site-code/page-code";
-import {
-  PAGE_CODE_SAVED_AUDIT,
-  PAGE_CODE_SAVED_METADATA,
-  registerPageCodeAudit,
-} from "./site-code/page-code-audit";
 import {
   SITE_CSS_SAVED_AUDIT,
   SITE_CSS_SAVED_METADATA,
 } from "./site-code/css-route";
+import { appOrigin } from "./site-code/page-code";
+import {
+  DOCUMENT_CSS_SAVED_AUDIT,
+  DOCUMENT_CSS_SAVED_METADATA,
+  PAGE_CODE_SAVED_AUDIT,
+  PAGE_CODE_SAVED_METADATA,
+  registerPageCodeAudit,
+} from "./site-code/page-code-audit";
 import {
   SITE_CODE_SAVED_AUDIT,
   SITE_CODE_SAVED_METADATA,
@@ -377,7 +379,8 @@ export const pageBuilder = (
         countPlacements
       );
       installBindingReport(ctx, def, bindingReportDeps);
-      // An audit row for each committed change to a page's own code.
+      // An audit row for each committed change to a page's own code, and
+      // to a document's custom CSS.
       registerPageCodeAudit({
         ctx,
         mayHoldBlocks: collection =>
@@ -443,6 +446,12 @@ export const pageBuilder = (
             kind: SITE_CSS_SAVED_AUDIT,
             metadataKeys: [...SITE_CSS_SAVED_METADATA],
           },
+          // And one per committed change to a document's own or its
+          // blocks' custom CSS, the same.
+          {
+            kind: DOCUMENT_CSS_SAVED_AUDIT,
+            metadataKeys: [...DOCUMENT_CSS_SAVED_METADATA],
+          },
         ],
       },
       // The channel another plugin adds blocks through. Core carries no
@@ -487,7 +496,15 @@ export const pageBuilder = (
           () => state.composition,
           // The started site's registry: a dev server's config reload builds
           // this field type again from a definition whose init never runs.
-          runningBlocks(def.blocks)
+          runningBlocks(def.blocks),
+          // A page's own code, judged on every write that changes it against
+          // the policy the site declared for its site code, from the site's
+          // own origin as the app knows it. Known here, so a reload keeps
+          // judging it.
+          {
+            options: opts.siteCode,
+            siteOrigin: () => appOrigin(process.env.NEXT_PUBLIC_APP_URL),
+          }
         ),
       ],
       // The one read the insert panel makes. A route rather than a collection

@@ -849,7 +849,9 @@ export function applyOp(
       return applySeo(document, op, limits);
 
     case "code":
-      return applyCode(document, op, limits);
+      return "customCss" in op
+        ? applyCustomCss(document, op, limits)
+        : applyCode(document, op, limits);
 
     case "turnInto":
       return applyTurnInto(document, op, limits, options);
@@ -1010,12 +1012,20 @@ function applyEnvelope(
 
 /** A document setting an op writes whole: its key, and what it is called. */
 interface WholeSetting {
-  readonly key: "seo" | "code";
+  readonly key: "seo" | "code" | "customCss";
   /** What the document holds there, in an op's refusal: "metadata". */
   readonly noun: string;
-  /** Its problems, judged by its shape alone, as a save judges it. */
-  readonly issues: (value: unknown) => ValidationIssue[];
+  /**
+   * Its problems, judged by its shape alone, as a save judges it. Absent for
+   * a text setting, which is any text but the empty one.
+   */
+  readonly issues?: (value: unknown) => ValidationIssue[];
 }
+
+const CUSTOM_CSS_SETTING: WholeSetting = {
+  key: "customCss",
+  noun: "custom CSS",
+};
 
 const SEO_SETTING: WholeSetting = {
   key: "seo",
@@ -1060,7 +1070,7 @@ function applySeo(
  */
 function applyCode(
   document: BlockDocument,
-  op: Extract<BuilderOp, { kind: "code" }>,
+  op: Extract<BuilderOp, { kind: "code"; code: unknown }>,
   limits: DocumentLimits
 ): AppliedOp {
   const { result, prior } = writeWholeSetting(
@@ -1074,6 +1084,36 @@ function applyCode(
     inverse: {
       kind: "code",
       code: prior === undefined ? null : snapshot(prior),
+    },
+  };
+}
+
+/**
+ * Apply a `code` op's CSS shape: write the document's own custom CSS whole,
+ * or remove it, held exactly as its code is. An op naming both the code and
+ * the CSS is refused: one edit is of one of them.
+ */
+function applyCustomCss(
+  document: BlockDocument,
+  op: Extract<BuilderOp, { kind: "code"; customCss: unknown }>,
+  limits: DocumentLimits
+): AppliedOp {
+  if (Object.hasOwn(op, "code")) {
+    throw new OpError(
+      "code: an op carries one of the page's code or its CSS, not both."
+    );
+  }
+  const { result, prior } = writeWholeSetting(
+    document,
+    CUSTOM_CSS_SETTING,
+    op.customCss,
+    limits
+  );
+  return {
+    document: result,
+    inverse: {
+      kind: "code",
+      customCss: typeof prior === "string" ? prior : null,
     },
   };
 }
@@ -1113,6 +1153,16 @@ function writeWholeSetting(
 
 /** Refuse an op's value that is not one a save would accept for `setting`. */
 function assertWholeSetting(setting: WholeSetting, written: unknown): void {
+  if (setting.issues === undefined) {
+    // A text setting: any text but the empty one, which is no value.
+    if (typeof written !== "string" || written === "") {
+      throw new OpError(
+        `${setting.key}: ${describe(written)} is not a document's ` +
+          `${setting.noun}. The op carries the text, or null to remove it.`
+      );
+    }
+    return;
+  }
   if (!isPlainRecord(written) || !isJsonValue(written)) {
     throw new OpError(
       `${setting.key}: ${describe(written)} is not a document's ` +

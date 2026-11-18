@@ -25,9 +25,9 @@ import type { ComponentStoreAddress } from "../component-cycle-guard";
 import type { FencedComponents } from "../host-rewrite/fence";
 
 import type { DeclaredShapesReader } from "./binding-judgement";
+import type { PatternStore } from "./custom-css-judgement";
 import type { EntryBlocksFieldsReader } from "./entry-content-judgement";
 import type { ListFieldsReader, TemplateTargets } from "./list-query-judgement";
-import type { PageCodeJudgeDeps } from "./page-code-judgement";
 
 /** The issue shape core's validation envelope carries. */
 export interface Issue {
@@ -171,11 +171,11 @@ export interface CompositionSetup {
    * (`site-definitions`).
    */
   /**
-   * What a page's own code (`settings.code`) is judged with on every write
-   * that changes it: the site code's declared policy and the site's origin.
-   * Absent, page code is not judged, as where nothing installed the plugin.
+   * Where saved sections are kept, so block CSS a section placed on a page
+   * brings is known as CSS someone permitted already wrote. Absent, none is,
+   * and such CSS is judged as the write's own.
    */
-  readonly pageCode?: PageCodeJudgeDeps;
+  readonly patterns?: PatternStore;
   readonly siteDefinitions?: (
     transaction?: PluginCollectionTransaction
   ) => Promise<SiteDefinitions>;

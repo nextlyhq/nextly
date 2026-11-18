@@ -55,6 +55,7 @@ import { blocksOptionsOf, DEFAULT_ACCEPTED_KINDS } from "./blocks-options";
 import { validateBlocksValue } from "./blocks-validator";
 import { newBreakpointIssues } from "./breakpoint-reference-judgement";
 import { newClassReferenceIssues } from "./class-reference-judgement";
+import { customCssHeldBy, customCssIssues } from "./custom-css-judgement";
 import { newEntryContentIssues } from "./entry-content-judgement";
 import {
   judgesLayersLocks,
@@ -63,7 +64,11 @@ import {
 } from "./layers-lock-judgement";
 import { newConditionIssues, newListQueryIssues } from "./list-query-judgement";
 import { readStoredForms } from "./lock-baselines";
-import { pageCodeBaseline, pageCodeIssues } from "./page-code-judgement";
+import {
+  changedFormsBaseline,
+  pageCodeIssues,
+  type PageCodeJudgeDeps,
+} from "./page-code-judgement";
 import { newTokenReferenceIssues } from "./token-reference-judgement";
 
 /** The engine's issue for a child of a contentOnly slot changed besides content. */
@@ -290,9 +295,17 @@ export function blocksFieldType(
    * document is judged by. Absent, a document's validation throws rather than
    * judging it against no blocks.
    */
-  blocks?: BlockRegistryReader
+  blocks?: BlockRegistryReader,
+  /**
+   * What a page's own code is judged with: the site code's declared policy
+   * and the site's origin. Handed in when the field type is built rather
+   * than read from the setup, so a dev server's config reload, which builds
+   * the field type again from a definition whose `init` never runs, keeps
+   * judging it. Absent, a change to page code is refused.
+   */
+  pageCode?: PageCodeJudgeDeps
 ): PluginFieldType {
-  return withPageCodeJudged(composition, {
+  return withPageCodeJudged(composition, pageCode, {
     type: BLOCKS_TYPE,
     storage: "json",
     component: BLOCKS_FIELD_COMPONENT,
@@ -581,14 +594,22 @@ export function blocksFieldType(
  */
 export const BLOCKS_FIELD_TYPE: PluginFieldType = blocksFieldType();
 
+/** Whether a blocks value holds custom CSS, its own or any block's. */
+function holdsCustomCss(value: unknown): boolean {
+  const held = customCssHeldBy(value);
+  return held.document !== null || held.blocks.length > 0;
+}
+
 /**
- * The field type with a page's own code judged too, on any write that
- * changes it, whatever the document's own rules answered, so one round fixes
- * both: who may change it, what can't be stored, and what the site's
- * declared policy would block unacknowledged (`page-code-judgement`).
+ * The field type with a page's own code and the value's custom CSS judged
+ * too, on any write that changes either, whatever the document's own rules
+ * answered, so one round fixes all: who may change them, what can't be
+ * stored, and what the site's declared policy would block unacknowledged
+ * (`page-code-judgement`, `custom-css-judgement`).
  */
 function withPageCodeJudged(
   composition: (() => CompositionSetup | undefined) | undefined,
+  pageCode: PageCodeJudgeDeps | undefined,
   type: PluginFieldType
 ): PluginFieldType {
   const judged = type.validate;
@@ -596,26 +617,33 @@ function withPageCodeJudged(
   return {
     ...type,
     // Run on every write, whatever else is set up: with no write behind the
-    // value, code is refused as from nobody; before the setup is installed,
-    // a change to it is refused rather than let through unjudged.
+    // value, code and CSS are refused as from nobody.
     validate: (value, args) => {
       const answered = judged(value, args);
-      // No write and no code: nothing of the page's code to judge.
-      if (args.write === undefined && pageCodeOf(value) === null) {
+      // No write, and neither code nor CSS: nothing of either to judge.
+      if (
+        args.write === undefined &&
+        pageCodeOf(value) === null &&
+        !holdsCustomCss(value)
+      ) {
         return answered;
       }
-      const pageCode = composition?.()?.pageCode;
       const label =
         typeof args.field.label === "string" ? args.field.label : args.path;
-      return Promise.resolve(answered).then(verdict =>
-        pageCodeIssues(
+      // One read of the stored forms the write changes, for both.
+      const stored = onceAsked(changedFormsBaseline(args));
+      return Promise.resolve(answered).then(async verdict => {
+        const code = await pageCodeIssues(value, args, label, pageCode, stored);
+        const css = await customCssIssues(
           value,
           args,
           label,
-          pageCode,
-          pageCodeBaseline(args)
-        ).then(found => withLockIssues(verdict, found, args.path))
-      );
+          stored,
+          // Where saved sections are kept, once the setup is installed.
+          composition?.()?.patterns
+        );
+        return withLockIssues(verdict, [...code, ...css], args.path);
+      });
     },
   };
 }

@@ -60,6 +60,35 @@ every cached published page is refreshed, so the next visitor gets the new CSS.
   Keep a copy if you may want to go back.
 </Callout>
 
+## A page's CSS
+
+A page's CSS is written in the builder, in **Page settings → Code**, in the **CSS** box above
+**Head** and **End of body**: "CSS for this page only. Site-wide CSS lives in Site settings."
+**Check and keep CSS** checks it with the same checker the server uses, naming each line it
+refuses, and keeps it with the page. Like the page's code, it is saved in the draft on
+**Save**, goes live on **Publish**, and comes back with an older version you restore. Where
+the page's field is kept per language, each language keeps its own.
+
+Only people who may change the site's settings see the box. Anyone else sees one line on
+General, "This page adds its own code or CSS. Only people who can change site settings can
+see or edit it.", and never the CSS.
+
+## Who may change page and block CSS
+
+The server judges every save of a page, a saved section, a component or a template that adds
+or changes CSS, whatever the editor checked first:
+
+- only someone who may change the site's settings may add or change it, and never through
+  an API key. Anyone else's save is refused: "Only people who can change site settings can
+  change custom CSS."
+- what the checker refuses is refused, naming the line, and nothing is saved.
+
+Anyone who may edit the page may still move, duplicate and delete blocks that have CSS, and
+place a saved section whose blocks carry some: that CSS was written, and checked, by someone
+permitted. Changing its text is a change, and needs the permission. Each change to a
+document's CSS, its own or its blocks', is recorded in the audit log: hashes and sizes of
+both, before and after, and which document and field, never the CSS itself.
+
 ## A block's CSS starts from `selector`
 
 Write `selector` where the block goes. Every rule of a block's CSS must start from it:

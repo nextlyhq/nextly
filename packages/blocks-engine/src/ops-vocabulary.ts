@@ -267,6 +267,19 @@ export type BuilderOp =
        */
       readonly kind: "code";
       readonly code: DocumentCode | null;
+    }
+  | {
+      /**
+       * The `code` op's second shape: an edit to the document's own custom
+       * CSS (`settings.customCss`), which the page's Code tab holds beside
+       * its code. Written whole, so one change is one undo step; `null`
+       * removes it. Judged by its shape; what the CSS may hold, and who may
+       * change it, is the save's question, as for the code.
+       *
+       * @experimental Settles with page CSS.
+       */
+      readonly kind: "code";
+      readonly customCss: string | null;
     };
 
 /**
