@@ -19,6 +19,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { resetSessionStandingForTests } from "../../../../auth/session/session-standing";
+import { defineCollection, text } from "../../../../config";
 import { dispatchComponents } from "../../../../dispatcher/handlers/component-dispatcher";
 import { dispatchSingles } from "../../../../dispatcher/handlers/single-dispatcher";
 import {
@@ -34,6 +35,7 @@ import {
 } from "../../../i18n/runtime/companion-readiness";
 import { resolveSingleTableName } from "../../../singles/services/resolve-single-table-name";
 import { SchemaEventsRepository } from "../../events/schema-events-repository";
+import { junctionTablesOf } from "../../services/field-column-descriptor";
 import { resolveComponentTableName } from "../../utils/resolve-table-name";
 
 // A step after the delete's commit made to fail: forgetting the dropped translations table on the
@@ -90,7 +92,17 @@ interface Deleted {
   slug: string;
   table: string;
   registry: string;
+  /** Its many-to-many fields' junction tables, which the delete drops with it. */
+  junctions: string[];
 }
+
+/** The collection the Single's many-to-many relationship points at. */
+const TARGETS = "dw_targets";
+const targetsField = {
+  name: "targets",
+  type: "relationship",
+  options: { relationType: "manyToMany", target: TARGETS },
+};
 
 describe.each(getConfiguredTestDialects())(
   "a Single's or a field group's delete that fails after its table drop (%s)",
@@ -100,6 +112,9 @@ describe.each(getConfiguredTestDialects())(
         dialect,
         db: { migrationsDir: HISTORY, uiSchemaFile: "./schema/builder.json" },
         localization: { locales: ["en", "de"], defaultLocale: "en" },
+        collections: [
+          defineCollection({ slug: TARGETS, fields: [text({ name: "name" })] }),
+        ],
       });
       instance = t;
       // As the Builder runs: each save is applied, and recorded, here.
@@ -117,14 +132,19 @@ describe.each(getConfiguredTestDialects())(
           slug,
           label: "Notice",
           localized: true,
-          fields: [{ name: "heading", type: "text", localized: true }],
+          fields: [
+            { name: "heading", type: "text", localized: true },
+            targetsField,
+          ],
         }
       );
+      const table = resolveSingleTableName({ slug });
       return {
         kind: "single",
         slug,
-        table: resolveSingleTableName({ slug }),
+        table,
         registry: "dynamic_singles",
+        junctions: junctionTablesOf(table, [targetsField as never]),
       };
     }
 
@@ -146,6 +166,7 @@ describe.each(getConfiguredTestDialects())(
         slug,
         table: resolveComponentTableName(slug),
         registry: await resolveRegistryTableName(t.adapter),
+        junctions: [],
       };
     }
 
@@ -209,6 +230,9 @@ describe.each(getConfiguredTestDialects())(
       expect(await t.adapter.tableExists(entity.table)).toBe(true);
       expect(await t.adapter.tableExists(companion)).toBe(true);
       expect(await registryRowCount(t, entity)).toBe(1);
+      for (const junction of entity.junctions) {
+        expect(await t.adapter.tableExists(junction)).toBe(true);
+      }
       const filesBefore = migrationFiles(t);
       const allow = await refuseRowDelete(t, entity);
 
@@ -227,6 +251,10 @@ describe.each(getConfiguredTestDialects())(
         // no delete file is left behind, since nothing it describes ran.
         expect(await t.adapter.tableExists(entity.table)).toBe(true);
         expect(await t.adapter.tableExists(companion)).toBe(true);
+        // The junction tables too: they are dropped on the same transaction, not the pool.
+        for (const junction of entity.junctions) {
+          expect(await t.adapter.tableExists(junction)).toBe(true);
+        }
         expect(deleteFile(t, entity)).toEqual([]);
         expect(migrationFiles(t)).toEqual(filesBefore);
       }
@@ -247,6 +275,9 @@ describe.each(getConfiguredTestDialects())(
       expect(await t.adapter.tableExists(companion)).toBe(false);
       expect(await registryRowCount(t, entity)).toBe(0);
       expect(deleteFile(t, entity)).toHaveLength(1);
+      for (const junction of entity.junctions) {
+        expect(await t.adapter.tableExists(junction)).toBe(false);
+      }
       if (whole) {
         // Forgotten on the adapter itself, not only on the transaction's: an entity made again
         // under the name starts from nothing remembered about the dropped table.
@@ -297,6 +328,9 @@ describe.each(getConfiguredTestDialects())(
         false
       );
       expect(await registryRowCount(t, entity)).toBe(0);
+      for (const junction of entity.junctions) {
+        expect(await t.adapter.tableExists(junction)).toBe(false);
+      }
       const [file, ...more] = deleteFile(t, entity);
       expect(file).toBeDefined();
       expect(more).toEqual([]);
