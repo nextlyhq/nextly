@@ -292,9 +292,25 @@ describe("useFieldGroupsFirst", () => {
     });
     expect(unsavedEntity("collection", "authors")).toBeDefined();
 
-    // Its editor gone, the collection it made goes with it.
+    // Its editor gone without a leave: its field groups become their own, and
+    // the collection it made stays its own, for a leave or its save.
     unmount();
-    expect(unsavedEntity("collection", "authors")).toBeUndefined();
+    expect(unsavedEntity("collection", "authors")?.ownedBy).toEqual(POSTS);
+    expect(unsavedEntity("field-group", "promo")?.ownedBy).toBeUndefined();
+  });
+
+  it("keeps the host's own collections through React's StrictMode check of its effects", () => {
+    addUnsavedEntity(collection("authors", "Authors", POSTS));
+    const client = createTestQueryClient();
+    // Testing Library's own StrictMode root: it runs each effect's cleanup
+    // once after mounting, as the development build of the admin does.
+    renderBare(() => useFieldGroupsFirst(POSTS.kind, POSTS.address, []), {
+      reactStrictMode: true,
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <QueryClientProvider client={client}>{children}</QueryClientProvider>
+      ),
+    });
+    expect(unsavedEntity("collection", "authors")?.ownedBy).toEqual(POSTS);
   });
 
   it("lets go of the host's own collections when it is left, and keeps its field groups as their own", () => {

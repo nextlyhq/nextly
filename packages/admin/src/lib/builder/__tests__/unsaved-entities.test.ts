@@ -207,7 +207,19 @@ describe("an unsaved entity's new address", () => {
       address: "hero",
       ownedBy: { kind: "single", address: "products" },
     });
+    // A collection the host made is not released: only a field group is offered
+    // on its own by another host's picker.
+    addUnsavedEntity({
+      ...products,
+      address: "authors",
+      ownedBy: { kind: "collection", address: "products" },
+    });
     releaseUnsavedFieldGroupsOf({ kind: "collection", address: "products" });
+    expect(unsavedEntity("collection", "authors")?.ownedBy).toEqual({
+      kind: "collection",
+      address: "products",
+    });
+    removeUnsavedEntity("collection", "authors");
     expect(unsavedEntity("field-group", "seo")?.ownedBy).toBeUndefined();
     expect(unsavedEntity("field-group", "seo")?.address).toBe("seo");
     expect(unsavedEntity("field-group", "hero")?.ownedBy).toEqual({

@@ -173,14 +173,12 @@ export function useFieldGroupsFirst(
     }
   }, [held, host]);
 
-  // Leaving the host lets go of the collections it made, which no list or
-  // picker offers on their own, so kept they would only hold their addresses;
-  // its field groups stay, each one of its own, which any host's picker offers.
+  // Leaving the host (its changes discarded) lets go of the collections it
+  // made, which no list or picker offers on their own, so kept they would only
+  // hold their addresses; its field groups stay, each one of its own, which any
+  // host's picker offers. Read through a ref, the entities as they stand then.
   const release = useCallback(() => {
     if (!host) return;
-    // The entities as they stand when the editor goes, read through a ref, so
-    // this callback, and the unmount cleanup that runs it, keep one identity
-    // while the store changes: a change is no leave.
     for (const entity of heldNow.current) {
       if (
         entity.kind === "collection" &&
@@ -193,10 +191,17 @@ export function useFieldGroupsFirst(
     releaseUnsavedFieldGroupsOf(host);
   }, [host]);
 
-  // However the editor is left, with a pending change or none (a picker cancelled after a
-  // group was made leaves none), the groups its picker made stay as unsaved field groups of
-  // their own, which no other host's picker would otherwise offer.
-  useEffect(() => release, [release]);
+  // However the editor goes, with a pending change or none (a picker cancelled after a group
+  // was made leaves none), the groups its picker made stay as unsaved field groups of their
+  // own, which no other host's picker would otherwise offer. Field groups only: this cleanup
+  // also runs in React's StrictMode check of a mount, which is no leave, so it never lets a
+  // collection go; the leave itself (`release`) does.
+  useEffect(
+    () => () => {
+      if (host) releaseUnsavedFieldGroupsOf(host);
+    },
+    [host]
+  );
 
   // Absent when the save has nothing to create and nothing to let go.
   const fieldGroupsFirst = useMemo(
