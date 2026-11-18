@@ -294,6 +294,9 @@ function pickerGroups(
   });
 }
 
+/** What choosing a folded Single or the site does, said to a screen reader. */
+const FOLD_HINT = "Shows its fields here.";
+
 /**
  * A source's group in the picker: headed by its name, and, `folded`, a
  * Single or the site drawn as one row ("Homepage", "Site settings") under
@@ -307,8 +310,8 @@ function pickerGroup(source: PickerSource, folded: boolean): ChoiceGroup {
     ...group,
     fold:
       at === "single"
-        ? { heading: "Singles", label: source.label }
-        : { heading: "Site", label: "Site settings" },
+        ? { heading: "Singles", label: source.label, hint: FOLD_HINT }
+        : { heading: "Site", label: "Site settings", hint: FOLD_HINT },
   };
 }
 
