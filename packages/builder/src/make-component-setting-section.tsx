@@ -34,7 +34,12 @@ export interface MakeSettingPlacement {
   readonly label: string;
   /** How many pages place the component, where the library can say. */
   readonly usedOn: number | undefined;
-  readonly definition: ComponentDocument;
+  /** The component, or `undefined` where it could not be read. */
+  readonly definition: ComponentDocument | undefined;
+  /** Whether the lookup held the component, as the panel's rows read it. */
+  readonly definitionFound: boolean;
+  /** Whether the placement is locked, which offers no new setting. */
+  readonly locked: boolean;
   readonly document: BlockDocument;
   readonly services: ContentServices | undefined;
   /** Apply one op as an edit; `false` where the editor refused it. */
@@ -81,8 +86,11 @@ export function MakeSettingSection(
 ): React.JSX.Element | null {
   const headingId = React.useId();
   const candidates = React.useMemo(
-    () => settingCandidates(props.definition),
-    [props.definition]
+    () =>
+      props.definition === undefined || !props.definitionFound || props.locked
+        ? []
+        : settingCandidates(props.definition),
+    [props.definition, props.definitionFound, props.locked]
   );
   // Said by the section, not the row: a setting made leaves the list, as
   // it is a setting now, and its row with it.

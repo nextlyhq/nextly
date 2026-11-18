@@ -98,6 +98,28 @@ function blockNameOf(node: BlockNode): string {
   return getBlock(node.type)?.editor?.label ?? node.type;
 }
 
+/**
+ * Whether a block's prop may become a setting: content whose value a field
+ * can be, not a setting already and not bound to a field already. Never a
+ * setting of how the block is linked or drawn: a link's entry reference is
+ * set with its address.
+ */
+function offered(
+  node: BlockNode,
+  propPath: string,
+  schema: PropSchema,
+  taken: ReadonlySet<string>
+): boolean {
+  if (!SETTING_KINDS.has(bindablePropKind(schema) ?? "")) return false;
+  if (schema.role !== "content" || ENTRY_LINK_NAMES.has(propPath)) {
+    return false;
+  }
+  if (taken.has(`${node.id}\u0000${propPath}`)) return false;
+  return !(
+    isPlainRecord(node.bindings) && Object.hasOwn(node.bindings, propPath)
+  );
+}
+
 /** One block's props a placement may make a setting, in declared order. */
 function candidatesOf(
   node: BlockNode,
@@ -105,29 +127,21 @@ function candidatesOf(
 ): SettingCandidate[] {
   // A placement's type is reserved, so no block declares props for it: a
   // component placed inside this one offers none of its own.
-  const declared = getBlock(node.type)?.props;
-  if (declared === undefined) return [];
-  const bound = isPlainRecord(node.bindings) ? node.bindings : {};
+  const declared = getBlock(node.type)?.props ?? {};
   const props = isPlainRecord(node.props) ? node.props : {};
-  const found: SettingCandidate[] = [];
-  for (const [propPath, schema] of Object.entries(declared)) {
-    if (schema === undefined) continue;
-    if (!SETTING_KINDS.has(bindablePropKind(schema) ?? "")) continue;
-    // Content only: what the page shows, never a setting of how it is
-    // linked or drawn. A link's entry reference is set with its address.
-    if (schema.role !== "content" || ENTRY_LINK_NAMES.has(propPath)) continue;
-    // Already a setting, or already showing data of its own.
-    if (taken.has(`${node.id}\u0000${propPath}`)) continue;
-    if (Object.hasOwn(bound, propPath)) continue;
-    found.push({
-      nodeId: node.id,
-      propPath,
-      label: `${blockNameOf(node)} · ${propLabel(propPath, schema)}`,
-      schema,
-      value: Object.hasOwn(props, propPath) ? props[propPath] : undefined,
-    });
-  }
-  return found;
+  return Object.entries(declared).flatMap(([propPath, schema]) =>
+    schema === undefined || !offered(node, propPath, schema, taken)
+      ? []
+      : [
+          {
+            nodeId: node.id,
+            propPath,
+            label: `${blockNameOf(node)} · ${propLabel(propPath, schema)}`,
+            schema,
+            value: Object.hasOwn(props, propPath) ? props[propPath] : undefined,
+          },
+        ]
+  );
 }
 
 /**

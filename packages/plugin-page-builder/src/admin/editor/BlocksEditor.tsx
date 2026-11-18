@@ -99,6 +99,7 @@ import {
   useTemplatePreviewState,
 } from "./template-preview-strip";
 import { useComponentView, type ComponentView } from "./use-component-view";
+import { useHeldComponentSettings } from "./component-setting-hold";
 import { useEditorMount, type EditorMount } from "./use-editor-mount";
 import {
   hasUnsavedWork,
@@ -372,10 +373,15 @@ function EditorBody<TFieldValues extends FieldValues>({
   // holding the same document. Kept as the object the editor already holds,
   // so a read that matches what is shown plans and draws nothing again.
   const readBack = useReadBack(onCommit);
-  const mount = useEditorMount(
-    readBack.kept("opened", initialValue),
-    kinds,
-    readBack.kept("stored", useStoredFieldValue(control, name, place.pathIn))
+  // A component setting made from a placement is held for the page's Save:
+  // the canvas and the inspector draw the planned component while the page
+  // binds it, and the editor's own apply keeps the stored components.
+  const mount = useHeldComponentSettings(
+    useEditorMount(
+      readBack.kept("opened", initialValue),
+      kinds,
+      readBack.kept("stored", useStoredFieldValue(control, name, place.pathIn))
+    )
   );
   const { editor, inline } = mount;
 

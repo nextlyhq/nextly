@@ -339,20 +339,18 @@ export function InstanceInspectorPanel({
           </section>
         )}
 
-        {inspection.definitionFound &&
-        !locked &&
-        definition !== undefined ? (
-          <MakeSettingSection
-            nodeId={inspection.nodeId}
-            componentId={inspection.componentId}
-            label={inspection.label}
-            usedOn={inspection.usedOn}
-            definition={definition}
-            document={editor.document}
-            services={bind.services}
-            onApply={bind.onApply}
-          />
-        ) : null}
+        <MakeSettingSection
+          nodeId={inspection.nodeId}
+          componentId={inspection.componentId}
+          label={inspection.label}
+          usedOn={inspection.usedOn}
+          definition={definition}
+          definitionFound={inspection.definitionFound}
+          locked={locked}
+          document={editor.document}
+          services={bind.services}
+          onApply={bind.onApply}
+        />
 
         {inspection.orphaned.length > 0 ? (
           // Held by the same Layers lock as the rows: discarding a stored value

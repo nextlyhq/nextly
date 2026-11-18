@@ -325,3 +325,30 @@ export function useComponentSettingHold(
 
   return { library: drawn, makeComponentSetting };
 }
+
+/**
+ * An editor's mount with its held settings: the library drawn with each live
+ * hold over the stored component, and the service the placement panel plans
+ * a new setting with.
+ *
+ * @experimental Settles with the editor's binding controls.
+ */
+export function useHeldComponentSettings<
+  M extends {
+    readonly editor: Pick<EditorState, "document" | "applyAll">;
+    readonly componentLibrary: ComponentLibraryRead;
+  },
+>(
+  mount: M
+): M & {
+  readonly makeComponentSetting: ReturnType<
+    typeof useComponentSettingHold
+  >["makeComponentSetting"];
+} {
+  const held = useComponentSettingHold(mount.editor, mount.componentLibrary);
+  return {
+    ...mount,
+    componentLibrary: held.library,
+    makeComponentSetting: held.makeComponentSetting,
+  };
+}
