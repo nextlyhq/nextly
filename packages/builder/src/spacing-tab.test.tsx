@@ -111,12 +111,28 @@ describe("the Spacing tab's groups", () => {
     expect(namesIn("Content width")).toEqual(["Content width"]);
   });
 
+  it("lists the Section padding presets' variables next to Section padding", () => {
+    render(<SpacingTab />);
+    const names = namesIn("Spacing");
+    const from = names.indexOf("Section padding (top and bottom)");
+    expect(names.slice(from, from + 6)).toEqual([
+      "Section padding (top and bottom)",
+      "Section padding (sides)",
+      "Section padding, compact (top and bottom)",
+      "Section padding, compact (sides)",
+      "Section padding, roomy (top and bottom)",
+      "Section padding, roomy (sides)",
+    ]);
+  });
+
   it("adds each kind to its own group, and other values to Other values", async () => {
     render(<SpacingTab />);
     fireEvent.click(screen.getByRole("button", { name: "Add radius" }));
     await screen.findByRole("dialog", { name: "Edit New radius" });
     expect(
-      document.querySelector('[data-group="radius"] [data-variable-key="radius.new-radius"]')
+      document.querySelector(
+        '[data-group="radius"] [data-variable-key="radius.new-radius"]'
+      )
     ).not.toBeNull();
     fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
   });
@@ -159,9 +175,7 @@ describe("each row's preview", () => {
 
   it("draws a radius as a square with the radius on its corners", () => {
     render(<SpacingTab />);
-    const square = rowOf(/^Md,/).querySelector<HTMLElement>(
-      ".nx-vars__radius"
-    );
+    const square = rowOf(/^Md,/).querySelector<HTMLElement>(".nx-vars__radius");
     expect(square?.style.borderRadius).toBe("8px");
   });
 

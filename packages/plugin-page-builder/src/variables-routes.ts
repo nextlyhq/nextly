@@ -92,6 +92,7 @@ import {
   type StoredDocuments,
   type StoredUse,
 } from "./shared-style-rescan";
+import { usageOf } from "./shared-style-usage-here";
 import {
   invalidRequest,
   jsonBody,
@@ -104,7 +105,6 @@ import {
   removalRefusalOf,
   respondWithUsesPage,
   siteStylePermission,
-  usageOf,
   usageRefusals,
   type ReadNamedDocuments,
   type ReadNamedSingle,

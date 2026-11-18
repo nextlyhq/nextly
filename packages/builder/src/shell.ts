@@ -848,6 +848,7 @@ export type {
   SharedStylesPanelProps,
 } from "./shared-styles-panel";
 export type {
+  SharedStyleHereParts,
   SharedStyleKind,
   SharedStyleReach,
   SharedStyleRefusal,
