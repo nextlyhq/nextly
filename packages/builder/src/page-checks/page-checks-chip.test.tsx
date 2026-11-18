@@ -29,6 +29,7 @@ import { revealNode } from "../canvas/reveal-node";
 import { ShowInspectorContext } from "../shell/show-inspector";
 
 import { IMAGE_ALT_CHECK } from "./image-alt-check";
+import type { PageCheck } from "./page-checks";
 import { PageChecksChip, type PageChecksChipProps } from "./page-checks-chip";
 
 vi.mock("../canvas/reveal-node", () => ({ revealNode: vi.fn(() => true) }));
@@ -166,6 +167,40 @@ describe("pressing an item", () => {
       screen.getByRole("button", { name: "Image has no alt text: Photo a" })
     );
     expect(show).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens the document's settings at the tab a finding names", () => {
+    const openTab = vi.fn();
+    const editor = {
+      document: page({}),
+      select: vi.fn(),
+      askSetting: vi.fn(),
+    };
+    const search: PageCheck = {
+      id: "seo",
+      group: "search",
+      run: () => [
+        {
+          what: "Title is too long",
+          why: "Search results cut it short.",
+          todo: "Shorten the title.",
+          settingsTab: "seo-tab",
+        },
+      ],
+    };
+    render(
+      <PageChecksChip
+        editor={editor}
+        canvas={null}
+        blocks={blocks}
+        checks={[search]}
+        onOpenSettingsTab={openTab}
+      />
+    );
+    fireEvent.click(chip());
+    fireEvent.click(screen.getByRole("button", { name: /Title is too long/ }));
+    expect(openTab).toHaveBeenCalledWith("seo-tab");
+    expect(editor.select).not.toHaveBeenCalled();
   });
 
   it("closes the list back on the count after walking with Next", async () => {

@@ -7,6 +7,7 @@
  *
  * @module @nextlyhq/plugin-page-builder/admin/editor/editor-top-bar
  */
+import type { PageCheck } from "@nextlyhq/builder";
 import { BreakpointSwitcher, PageChecksChip } from "@nextlyhq/builder/shell";
 import { DocumentSaveAndPublish } from "@nextlyhq/plugin-sdk/admin";
 
@@ -74,6 +75,10 @@ export function editorTopBar(
     visitor: VisitorPreview;
     pageData: PageDataCount | null;
     openAsForm: (() => void) | undefined;
+    /** The checks the Page checks count runs: the builder's and plugins'. */
+    pageChecks: readonly PageCheck[];
+    /** Opens Page settings at a tab, for a plugin's fix found there. */
+    openSettingsTab: (tab: string) => void;
   }
 ): {
   topBar: React.JSX.Element;
@@ -173,6 +178,9 @@ export function editorTopBar(
           <PageChecksChip
             editor={editor}
             canvas={page.canvas}
+            // The builder's checks and other plugins', in their own groups.
+            checks={page.pageChecks}
+            onOpenSettingsTab={page.openSettingsTab}
             // The site's header and footer, read with the page, so their
             // headings count in the page's order.
             regions={view.canvasRegions}
