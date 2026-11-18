@@ -14,21 +14,26 @@
  * subject is the provider's stable identifier for the person rather than a
  * display name or address, which change.
  *
+ * Uniqueness is enforced by `key_digest`, the plain SHA-256 of the provider
+ * key, the issuer and the subject as `externalIdentityKeyDigest` frames
+ * them, and by nothing else: one index over one 64-character column is
+ * exact by construction on every dialect — a collation cannot fold `Alice`
+ * into `alice` or pad a trailing space away where the thing compared is a
+ * digest — and an index that small fits any page size a database may use.
+ * The key's three columns themselves are unbounded text everywhere, so no
+ * width an install never agreed to can refuse a valid issuer or subject.
+ *
  * `issuer` is never NULL: a provider with no issuer writes "" instead, so
- * the unique index over (provider key, issuer, subject) holds on every
- * dialect. One subject from two issuers of one key is therefore two
- * identities, and a second row for an issuerless key and subject is
- * refused everywhere — NULLs are distinct in a unique index on PostgreSQL
- * and SQLite alike, and only MySQL treats repeated NULLs as equal, so a
- * scheme that leaned on a missing issuer would enforce the rule on one of
- * the three and not the other two.
+ * "no issuer" has ONE spelling. The digest is computed from definite
+ * strings, and two writers — one normalizing a missing issuer to null, one
+ * to "" — would otherwise mint two identities for the same row-facts.
  *
  * @module schemas/external-identities/postgres
  */
 // The same table in another dialect's Drizzle builders: each dialect's
 // column functions are distinct, so the declarations cannot be shared.
 // fallow-ignore-next-line code-duplication
-import { pgTable, text, timestamp } from "drizzle-orm/pg-core";
+import { pgTable, text, timestamp, varchar } from "drizzle-orm/pg-core";
 
 import {
   EXTERNAL_IDENTITIES_INDEXES,
@@ -50,6 +55,8 @@ export const nextlyExternalIdentitiesPg = pgTable(
     issuer: text("issuer").notNull(),
     // The subject: the issuer's stable identifier for the person.
     subject: text("subject").notNull(),
+    // The digest the unique index holds, from `externalIdentityKeyDigest`.
+    keyDigest: varchar("key_digest", { length: 64 }).notNull(),
     // The address the provider last asserted; null where it asserted none.
     // The local account's address is not rewritten from it.
     address: text("address"),

@@ -25,7 +25,11 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
-import { EXTERNAL_IDENTITIES_TABLE } from "../../../schemas/external-identities";
+import {
+  EXTERNAL_IDENTITIES_TABLE,
+  externalIdentityKeyDigest,
+} from "../../../schemas/external-identities";
+import { isUniqueViolation } from "../../../shared/lib/unique-violation";
 
 let current: TestNextly | undefined;
 
@@ -50,6 +54,14 @@ async function insertIdentity(
     providerKey: row.providerKey,
     issuer: row.issuer,
     subject: row.subject,
+    // The digest the unique index holds, derived exactly as the writer that
+    // hands sign-ins to core will derive it: the row and its key arrive
+    // together or the index refuses both.
+    keyDigest: externalIdentityKeyDigest(
+      row.providerKey,
+      row.issuer,
+      row.subject
+    ),
     ...(row.address !== undefined ? { address: row.address } : {}),
     userId: row.userId,
     createdAt: new Date("2020-01-01T00:00:00Z"),
@@ -68,6 +80,44 @@ async function identitiesOf(
   return (await handle.adapter.select(EXTERNAL_IDENTITIES_TABLE, {
     where: { and: [{ column: "userId", op: "=", value: userId }] },
   })) as Array<Record<string, unknown>>;
+}
+
+/**
+ * The dialect's own duplicate-key code off a refused write, or none.
+ *
+ * A driver's code sits NESTED — the adapter's `DatabaseError` wraps a query
+ * error wrapping the driver's error — so every level's `code` is collected,
+ * and the first one that names a duplicate names it. An errno of 1062 is
+ * MySQL's spelling and arrives as a number, so it is translated to the code
+ * it is, keeping the assertion one string per dialect.
+ */
+function duplicateCodeOf(refusal: unknown): string | undefined {
+  const seen = new Set<string>();
+  let level: unknown = refusal;
+  for (let depth = 0; depth < 5 && level; depth += 1) {
+    if (typeof level === "object") {
+      const record = level as {
+        code?: unknown;
+        errno?: unknown;
+        cause?: unknown;
+      };
+      if (typeof record.code === "string") seen.add(record.code);
+      if (record.errno === 1062) seen.add("ER_DUP_ENTRY");
+      level = record.cause;
+    } else {
+      break;
+    }
+  }
+  for (const code of seen) {
+    if (
+      code === "ER_DUP_ENTRY" ||
+      code === "23505" ||
+      code === "SQLITE_CONSTRAINT_UNIQUE"
+    ) {
+      return code;
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -114,6 +164,7 @@ describe.each(getConfiguredTestDialects())(
           "provider_key",
           "issuer",
           "subject",
+          "key_digest",
           "address",
           "user_id",
           "created_at",
@@ -161,6 +212,119 @@ describe.each(getConfiguredTestDialects())(
       expect(second[0]?.issuer).toBe("https://issuer-two.example");
     });
 
+    it("holds subjects that differ only by case as two identities", async () => {
+      current = await createTestNextly({ dialect });
+      const handle = current;
+
+      await handle.adapter.insert("users", {
+        id: "staff-one",
+        email: "one@test.local",
+      });
+      await handle.adapter.insert("users", {
+        id: "staff-two",
+        email: "two@test.local",
+      });
+
+      // The same key and the same issuer, subjects differing only by case:
+      // two rows. Uniqueness holds by the digest, so a collation cannot
+      // fold `Alice` into `alice` — an install's MySQL compares TEXT
+      // case-insensitively by default, and a provider's subject is
+      // case-sensitive (PostgreSQL and SQLite compare text exactly
+      // already, so MySQL is the dialect that would break the promise).
+      await insertIdentity(handle, {
+        providerKey: "sso/oidc",
+        issuer: "https://issuer.example",
+        subject: "Alice",
+        userId: "staff-one",
+      });
+      await insertIdentity(handle, {
+        providerKey: "sso/oidc",
+        issuer: "https://issuer.example",
+        subject: "alice",
+        userId: "staff-two",
+      });
+
+      const first = await identitiesOf(handle, "staff-one");
+      const second = await identitiesOf(handle, "staff-two");
+      // Both identities stand, each spelled as its provider spelled it.
+      expect(first).toHaveLength(1);
+      expect(second).toHaveLength(1);
+      expect(first[0]?.subject).toBe("Alice");
+      expect(second[0]?.subject).toBe("alice");
+    });
+
+    it("holds subjects that differ only by a trailing space as two identities", async () => {
+      current = await createTestNextly({ dialect });
+      const handle = current;
+
+      await handle.adapter.insert("users", {
+        id: "staff-one",
+        email: "one@test.local",
+      });
+      await handle.adapter.insert("users", {
+        id: "staff-two",
+        email: "two@test.local",
+      });
+
+      // `Alice` and `Alice `: one byte apart at the end. Every MySQL
+      // collation — the `_bin` ones included — compares TEXT under PAD
+      // SPACE, where trailing spaces are stripped before comparison and
+      // these two are THE SAME VALUE; an index over the columns themselves
+      // would refuse one of them as a duplicate. The digests differ, and
+      // the index reads only the digest, so both stand.
+      await insertIdentity(handle, {
+        providerKey: "sso/oidc",
+        issuer: "https://issuer.example",
+        subject: "Alice",
+        userId: "staff-one",
+      });
+      await insertIdentity(handle, {
+        providerKey: "sso/oidc",
+        issuer: "https://issuer.example",
+        subject: "Alice ",
+        userId: "staff-two",
+      });
+
+      const first = await identitiesOf(handle, "staff-one");
+      const second = await identitiesOf(handle, "staff-two");
+      expect(first).toHaveLength(1);
+      expect(second).toHaveLength(1);
+      expect(first[0]?.subject).toBe("Alice");
+      // Spelled back exactly as asserted in, space and all: PAD SPACE is a
+      // comparison rule, not storage, so the row keeps the byte.
+      expect(second[0]?.subject).toBe("Alice ");
+    });
+
+    it("holds an issuer and a subject longer than any bounded column", async () => {
+      current = await createTestNextly({ dialect });
+      const handle = current;
+
+      await handle.adapter.insert("users", {
+        id: "staff-one",
+        email: "one@test.local",
+      });
+
+      // An issuer is a URL whose length the provider chooses, and OIDC
+      // permits a subject of up to 255 ASCII characters: both longer than
+      // the 255 a bounded column would have asked MySQL to accept, and
+      // PostgreSQL and SQLite hold unbounded text. With nothing indexed
+      // over the columns themselves, no width this table picked refuses a
+      // valid identity on one dialect alone.
+      const longIssuer = `https://${"i".repeat(300)}.example`;
+      const longSubject = "s".repeat(300);
+      await insertIdentity(handle, {
+        providerKey: "sso/oidc",
+        issuer: longIssuer,
+        subject: longSubject,
+        userId: "staff-one",
+      });
+
+      const rows = await identitiesOf(handle, "staff-one");
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.issuer).toBe(longIssuer);
+      expect(rows[0]?.subject).toBe(longSubject);
+    });
+
     it("refuses a second identity for the same issuerless key and subject", async () => {
       current = await createTestNextly({ dialect });
       const handle = current;
@@ -174,9 +338,8 @@ describe.each(getConfiguredTestDialects())(
         email: "two@test.local",
       });
 
-      // No issuer: the row carries "" in its place, the scheme that makes
-      // the unique index hold on every dialect rather than only where the
-      // database compares missing values as equal.
+      // No issuer: the row carries "" in its place, the one spelling of
+      // "no issuer" every writer digests the same way.
       await insertIdentity(handle, {
         providerKey: "sso/oauth",
         issuer: "",
@@ -185,15 +348,30 @@ describe.each(getConfiguredTestDialects())(
       });
 
       // The same key and subject again, for another account and row id:
-      // refused, by the table, whatever the two accounts are.
-      await expect(
-        insertIdentity(handle, {
+      // refused BY THE UNIQUE DIGEST, and named as such — any error would
+      // satisfy a bare rejects.toThrow, and a width or FK failure is not
+      // the uniqueness this test exists to prove. The classifier and the
+      // dialect's own code both say duplicate.
+      let refusal: unknown;
+      try {
+        await insertIdentity(handle, {
           providerKey: "sso/oauth",
           issuer: "",
           subject: "issuerless-subject",
           userId: "staff-two",
-        })
-      ).rejects.toThrow();
+        });
+      } catch (err) {
+        refusal = err;
+      }
+      expect(refusal, "the duplicate insert is refused").toBeDefined();
+      expect(isUniqueViolation(refusal)).toBe(true);
+      expect(duplicateCodeOf(refusal)).toBe(
+        dialect === "mysql"
+          ? "ER_DUP_ENTRY"
+          : dialect === "postgresql"
+            ? "23505"
+            : "SQLITE_CONSTRAINT_UNIQUE"
+      );
 
       // The control: a DIFFERENT subject under the same issuerless key is a
       // different identity, so the refusal above was the uniqueness and not
@@ -316,9 +494,20 @@ describe.each(getConfiguredTestDialects())(
       // satisfy it by absence.
       expect(rows.length).toBeGreaterThanOrEqual(2);
 
+      // `keyDigest` is scanned by SHAPE rather than by token likeness: 64
+      // lowercase hex is exactly what an opaque 64-character token looks
+      // like, so the matcher below cannot tell them apart — but it does not
+      // have to. The digest is COMPUTED from the identity's own facts by
+      // `externalIdentityKeyDigest`, never received from a provider, and
+      // its shape is the proof it holds nothing else.
+      for (const row of rows) {
+        expect(String(row.keyDigest)).toMatch(/^[0-9a-f]{64}$/);
+      }
+
       const offenders: string[] = [];
       for (const row of rows) {
         for (const [column, value] of Object.entries(row)) {
+          if (column === "keyDigest") continue;
           if (typeof value === "string" && looksLikeToken(value)) {
             offenders.push(`${column}=${value.slice(0, 24)}…`);
           }
