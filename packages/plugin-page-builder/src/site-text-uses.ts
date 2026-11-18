@@ -14,6 +14,7 @@ import {
   isPlainRecord,
   resolveTokenPrefix,
   SITE_TEXT_LABELS,
+  SITE_TEXT_ROLES,
   siteTextUses,
   tokenCustomProperty,
   type SiteTextRole,
@@ -68,6 +69,51 @@ export function siteTextReasons(
   const rowsUsing = siteTextRowsUsing(section);
   return removable.flatMap(({ id, name }) => {
     const roles = rowsUsing(id);
+    if (roles.length === 0) return [];
+    const rows = roles.map(role => SITE_TEXT_LABELS[role]).join(", ");
+    return [
+      {
+        id,
+        message: `${name} is used by Site text: ${rows}.`,
+        used: true as const,
+      },
+    ];
+  });
+}
+
+/**
+ * The Site text rows following each text style, by its id: the rows naming it
+ * as their `textStyle`, in the order the rows are listed. `section` is a
+ * token set, stored or merged, read whether or not anything validated it.
+ * The one reading the removal refusals share, so the remove route and a
+ * write of the site style that drops a text style name the same rows.
+ */
+export function siteTextRowsFollowing(
+  section: unknown
+): (id: string) => readonly SiteTextRole[] {
+  const read = isPlainRecord(section) ? section : {};
+  const rows = isPlainRecord(read.siteText) ? read.siteText : {};
+  return id =>
+    SITE_TEXT_ROLES.filter(role => {
+      const row = Object.hasOwn(rows, role) ? rows[role] : undefined;
+      return isPlainRecord(row) && row.textStyle === id;
+    });
+}
+
+/**
+ * The reasons the site's text gives against removing each text style, naming
+ * the rows that follow it ("Eyebrow is used by Site text: Heading 1."). A row
+ * left following a removed text style would quietly fall back to its own
+ * values on every page, so the removal is refused until the author points
+ * the row elsewhere.
+ */
+export function textStyleReasons(
+  removable: readonly { readonly id: string; readonly name: string }[],
+  section: unknown
+): SiteTextReason[] {
+  const following = siteTextRowsFollowing(section);
+  return removable.flatMap(({ id, name }) => {
+    const roles = following(id);
     if (roles.length === 0) return [];
     const rows = roles.map(role => SITE_TEXT_LABELS[role]).join(", ");
     return [

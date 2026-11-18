@@ -98,6 +98,7 @@ import {
   usageOf,
   type UsageHereReaders,
 } from "./shared-style-usage-here";
+import type { SiteStyleData } from "./site-style";
 import {
   collectionsTheBuilderOpens,
   siteLocales,
@@ -109,7 +110,9 @@ import {
   SHARED_STYLE_LOCK_WRITE_CONTEXT,
   SITE_STYLE_SLUG,
   sharedStyleName,
+  siteTokensOverCode,
 } from "./site-style-storage";
+import { textStyleReasons } from "./site-text-uses";
 import { retryOnStale } from "./stale-retry";
 import { readStoredJson } from "./stored-json";
 import type { UncoveredPage } from "./uncovered-pages";
@@ -155,6 +158,12 @@ export const LOCK_SHARED_STYLES_PERMISSION: string = `${LOCK_SHARED_STYLES.actio
 export interface SharedStyleRead {
   /** As stored, unknown keys kept. */
   readonly entries: Record<string, unknown>[];
+  /**
+   * The same Single's stored variables section, whose Site text rows may
+   * follow a text style: read in the same read as the classes, so a removal
+   * judges the rows and the classes of one version.
+   */
+  readonly tokens?: unknown;
   /** The Single's version as read; absent from a server that issues none. */
   readonly rev: string | undefined;
 }
@@ -887,7 +896,9 @@ export async function removeSharedStyles(
   store: SharedStyleStore,
   usage: SharedStyleUsageSource,
   configClassIds: ReadonlySet<string>,
-  stillUsed: StillUsedCheck
+  stillUsed: StillUsedCheck,
+  /** The site's code-supplied style, whose Site text rows count too. */
+  defaults?: SiteStyleData
 ): Promise<Response> {
   const parsed = RemoveBody.safeParse(await jsonBody(req));
   if (!parsed.success) {
@@ -907,6 +918,14 @@ export async function removeSharedStyles(
         ids,
         classes,
         configClassIds
+      );
+      // A Site text row following a text style, the code's rows included,
+      // from the Single in hand: asked before the index, as it reads nothing.
+      reasons.push(
+        ...textStyleReasons(
+          removable,
+          siteTokensOverCode(defaults, read.tokens)
+        )
       );
       // Read just before the write, never taken from what the panel showed.
       reasons.push(
@@ -974,13 +993,18 @@ export function siteStyleClassStore(
         doc !== null && typeof doc === "object"
           ? readStoredJson((doc as Record<string, unknown>).classes)
           : undefined;
-      if (!Array.isArray(raw)) return { entries: [], rev };
+      const tokens =
+        doc !== null && typeof doc === "object"
+          ? readStoredJson((doc as Record<string, unknown>).tokens)
+          : undefined;
+      if (!Array.isArray(raw)) return { entries: [], rev, tokens };
       return {
         entries: raw.filter(
           (entry): entry is Record<string, unknown> =>
             entry !== null && typeof entry === "object" && !Array.isArray(entry)
         ),
         rev,
+        tokens,
       };
     },
     write: async (classes, context, from) => {
@@ -1360,6 +1384,8 @@ async function admitUsageReader(
 export interface SharedStyleRouteSetup {
   /** The ids of the classes the site's code supplies. */
   readonly configClassIds: ReadonlySet<string>;
+  /** The site's code-supplied style, whose Site text rows may follow a text style. */
+  readonly defaults?: SiteStyleData;
   /** The usage index for this request. */
   readonly usage: (ctx: PluginRouteContext) => SharedStyleUsageSource;
   /** The site's document limits, the bounds the stored documents are walked under. */
@@ -1464,7 +1490,8 @@ export function sharedStyleRoutes(setup: SharedStyleRouteSetup): {
                 readNamed,
                 async slug => (await ctx.caller?.can("read", slug)) ?? false
               ),
-          }
+          },
+          setup.defaults
         );
       },
     },
