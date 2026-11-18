@@ -809,8 +809,8 @@ export type { BlockNode } from "@nextlyhq/blocks-engine";
  * the page builder's own validation refuses. Leave an Image empty: the author
  * picks the site's own picture.
  *
- * A starter whose blocks or variables the site no longer has is left out of
- * the list, never offered half-drawn.
+ * A starter whose blocks, variables or shared styles the site no longer has
+ * is left out of the list, never offered half-drawn.
  *
  * @experimental The starter page contract is new; its names and shape may
  * change before the page builder's starter pages are marked stable.
