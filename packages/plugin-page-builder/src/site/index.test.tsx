@@ -7,6 +7,7 @@
  *
  * @module site/index.test
  */
+import type { ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -338,6 +339,17 @@ describe("<PageCode>", () => {
     draft = true;
     expect(await pageHtml("head")).toBe("");
     expect(await pageHtml("body")).toBe("");
+  });
+
+  it("is handed the site's per-request nonce by the published route, in both places", async () => {
+    const { pageBuilderContent } = await import("../page-content");
+    const { before, after } = await pageBuilderContent({
+      nonce: async () => "n0nce",
+    }).around({ document: page });
+    for (const drawn of [before, after]) {
+      const html = renderToStaticMarkup(drawn as ReactElement);
+      expect(html).toContain('nonce="n0nce"');
+    }
   });
 
   it("writes nothing for a page with no code of its own", async () => {

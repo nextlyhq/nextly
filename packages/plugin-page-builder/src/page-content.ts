@@ -52,6 +52,15 @@ export interface PageBuilderContentOptions {
   readonly nextly?: PageBuilderContentDirectApi;
   /** The templates collection's slug, where the host renamed it. */
   readonly templatesCollection?: string;
+  /**
+   * The site's per-request nonce, where its policy uses one: read once per
+   * page and handed to the page's own code in both places, as a site hands
+   * it to `<SiteCode>`. Reading it makes the page dynamic, which a
+   * nonce-based policy already does.
+   *
+   * @experimental Settles with page code.
+   */
+  readonly nonce?: () => string | undefined | Promise<string | undefined>;
 }
 
 /**
@@ -193,9 +202,11 @@ export function pageBuilderContent(
       // root, which a browser bundle imports, and `<PageCode>` reads the
       // request's draft mode.
       const { PageCode } = await import("./site");
+      const nonce = await options.nonce?.();
+      const withNonce = nonce === undefined ? {} : { nonce };
       return {
-        before: await PageCode({ slot: "head", document }),
-        after: await PageCode({ slot: "body", document }),
+        before: await PageCode({ slot: "head", document, ...withNonce }),
+        after: await PageCode({ slot: "body", document, ...withNonce }),
       };
     },
     resolveAddress: async (locale, path) =>

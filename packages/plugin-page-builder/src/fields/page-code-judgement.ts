@@ -42,21 +42,25 @@ export interface PageCodeJudgeDeps {
 
 /**
  * Whether the write changes the page's code: whether it holds code other than
- * what either stored form holds. Where the stored value can't be read (a
- * blocks field in a repeater's row, which no stored read can address), code
- * the write holds counts as a change, so it is judged rather than let
- * through; a write holding none adds no code to run, and is not asked about.
+ * what either stored form holds. A stored value that can't be read counts as
+ * a change, so a write that might add or remove code is judged rather than
+ * let through.
  */
 async function changesCode(
   written: HeldPageCode | null,
   stored: () => Promise<StoredForms>
 ): Promise<boolean> {
   const forms = await stored();
-  if (!forms.readable) return written !== null;
+  if (!forms.readable) return true;
   const held = forms.forms.map(form => pageCodeOf(form));
   // A new page holds nothing yet: no code is no change.
   if (held.length === 0) return written !== null;
   return !held.some(code => samePageCode(code, written));
+}
+
+/** Whether a field's path names a top-level field: no group, no row. */
+function isTopLevel(path: string): boolean {
+  return !path.includes(".") && !path.includes("[");
 }
 
 /** A refusal, at the field's path. */
@@ -99,6 +103,19 @@ export async function pageCodeIssues(
   stored: () => Promise<StoredForms>
 ): Promise<PluginFieldIssue[]> {
   const written = pageCodeOf(value);
+  // Only a page's own top-level blocks field keeps code: one inside a group
+  // or a repeater's row could lose it to a write that clears the group or
+  // drops the row, which no check of this field sees, so none may hold any.
+  if (!isTopLevel(args.path)) {
+    return written === null
+      ? []
+      : [
+          refusal(
+            args,
+            `${label}: page code is kept only on a page's own Page Builder field, at the top of the page, not inside a group or a list.`
+          ),
+        ];
+  }
   if (!(await changesCode(written, stored))) return [];
   // The caller first, before anything about the code is read out.
   const refused = await callerRefusal(args);

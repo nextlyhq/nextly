@@ -116,13 +116,6 @@ describe("a page's own code, judged on every write that changes it", () => {
     ).toEqual([]);
     expect(await issuesOf(pageWith(), editor)).toEqual([]);
     expect(editor.asked).toEqual([]);
-    // Where the stored value can't be read (a blocks field in a repeater's
-    // row), a write holding no code adds none, and is not asked about.
-    expect(
-      await pageCodeIssues(pageWith(), writeAs(editor), "Content", DEPS, () =>
-        Promise.resolve({ forms: [], readable: false })
-      )
-    ).toEqual([]);
     // A stored value that can't be read is no proof code it holds is unchanged.
     expect(
       await pageCodeIssues(
@@ -133,6 +126,29 @@ describe("a page's own code, judged on every write that changes it", () => {
         () => Promise.resolve({ forms: [], readable: false })
       )
     ).toHaveLength(1);
+  });
+
+  it("keeps code on a page's own top-level field only, so clearing a group or dropping a row can't remove it unjudged", async () => {
+    const nested = (path: string): JudgedField => ({
+      ...writeAs(caller("user", true)),
+      path,
+    });
+    const judge = (value: unknown, path: string) =>
+      pageCodeIssues(
+        value,
+        nested(path),
+        "Body",
+        DEPS,
+        stored(pageWith())
+      ).then(found => found.map(issue => issue.message));
+    for (const path of ["hero.body", "sections[0].body"]) {
+      // Even someone who may change the site's settings can't add it there.
+      expect(await judge(pageWith(HARMLESS), path)).toEqual([
+        "Body: page code is kept only on a page's own Page Builder field, at the top of the page, not inside a group or a list.",
+      ]);
+      // A code-free write there is an ordinary edit, asked nothing.
+      expect(await judge(pageWith(), path)).toEqual([]);
+    }
   });
 
   it("refuses what the site code rules can't store, by name, in its place", async () => {
