@@ -777,6 +777,10 @@ function useSessionWrite(
   // of the session it left.
   const currentKey = useRef(targetKey(target));
   currentKey.current = targetKey(target);
+  // Whether the session holds the lock now: a write that waited is sent only
+  // while it still does, since a colleague may have taken it meanwhile.
+  const holding = useRef(held);
+  holding.current = held;
   // Whether a write has landed that the read has not caught up with: the
   // next write reads the document again first, so it judges the status the
   // last one left (a publish makes a draft's next save a working draft).
@@ -812,6 +816,7 @@ function useSessionWrite(
         // document named now.
         const version = versionRef.current;
         if (moved()) return refused("moved");
+        if (!holding.current) return refused("locked");
         const result = await mutateAsync({
           ...changedFields(changes),
           ...statusFor(intent, verdict.published, read.hasStatus),
