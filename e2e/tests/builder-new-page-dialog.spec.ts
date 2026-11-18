@@ -2,8 +2,11 @@
  * The New page dialog, in a browser: from the Pages list to the builder on a
  * saved draft with Add open, which the live site doesn't show; typing a title
  * and clicking away makes nothing; the whole dialog by keyboard; from the
- * builder with unsaved changes, each of Save, Discard and Keep editing; and
- * its size at 1280 × 720 and at a phone's width, light and dark.
+ * builder with unsaved changes, each of Save, Discard and Keep editing; from
+ * the builder's two ways in, the page menu's "+ New page…" and the Pages
+ * panel's "New page", with and without unsaved work, and clicking away from
+ * either makes nothing; and its size at 1280 × 720 and at a phone's width,
+ * light and dark.
  *
  * @module tests/builder-new-page-dialog.spec
  */
@@ -117,6 +120,28 @@ async function unsavedEdit(page: Page): Promise<void> {
   await expect(page.getByRole("button", { name: "Undo" })).toBeEnabled();
 }
 
+/** The builder's two ways in to the dialog. */
+const WAYS_IN = {
+  "the page menu": async (page: Page, title: string) => {
+    await page.getByRole("button", { name: `${title}: switch page` }).click();
+    const menu = page.getByRole("menu");
+    // First in the menu, then the page on screen.
+    const items = menu.getByRole("menuitem");
+    await expect(items.first()).toHaveText("+ New page…");
+    await expect(items.nth(1)).toHaveText(title);
+    await expect(items.last()).toHaveText("All pages…");
+    await items.first().click();
+  },
+  "the Pages panel": async (page: Page) => {
+    await openPagesPanel(page);
+    await page
+      .getByRole("region", { name: "Pages" })
+      .first()
+      .getByRole("button", { name: "New page" })
+      .click();
+  },
+} as const;
+
 test.describe("the New page dialog", () => {
   test("from the Pages list: a draft, opened in the builder with Add open, that the live site doesn't show", async ({
     page,
@@ -139,7 +164,13 @@ test.describe("the New page dialog", () => {
       form.getByText("Header & footer", { exact: true })
     ).toBeVisible();
     await expect(form.getByText("Saved as a draft.")).toBeVisible();
-    await expect(form.getByText("Start from")).toHaveCount(0);
+    // The playground offers a starter page, and a page starts blank unless
+    // one is picked.
+    await expect(
+      form
+        .getByRole("group", { name: "Start from" })
+        .getByRole("radio", { name: "Blank" })
+    ).toBeChecked();
 
     await form.getByRole("button", { name: "Create and open builder" }).click();
     await expect(page).toHaveURL(
@@ -204,6 +235,13 @@ test.describe("the New page dialog", () => {
     await page.keyboard.press("Tab");
     await expect(
       form.getByRole("combobox", { name: "Header & footer" })
+    ).toBeFocused();
+    // Start from is one stop, on its chosen answer: Blank.
+    await page.keyboard.press("Tab");
+    await expect(
+      form
+        .getByRole("group", { name: "Start from" })
+        .getByRole("radio", { name: "Blank" })
     ).toBeFocused();
     await page.keyboard.press("Tab");
     await expect(form.getByRole("button", { name: "Cancel" })).toBeFocused();
@@ -274,6 +312,74 @@ test.describe("the New page dialog", () => {
         (await storedById(page.request, id)).content as { nodes: unknown[] }
       ).nodes;
       expect(nodes).toHaveLength(answer === "Save" ? 1 : 2);
+    });
+  }
+
+  for (const [way, openDialog] of Object.entries(WAYS_IN)) {
+    test(`from ${way} with nothing unsaved, opens the new draft in the builder`, async ({
+      page,
+    }) => {
+      const stamp = `Way ${Date.now()}`;
+      const here = `${stamp} here`;
+      const id = await createPage(page.request, here);
+      await openBuilder(page, id);
+      await openDialog(page, here);
+      const form = dialog(page);
+      await expect(form.getByRole("textbox", { name: "Title" })).toBeFocused();
+      await form.getByRole("textbox", { name: "Title" }).fill(`${stamp} new`);
+      await form
+        .getByRole("button", { name: "Create and open builder" })
+        .click();
+      // Nothing to save, so no question before leaving.
+      await expect(page).not.toHaveURL(builderOf(id), { timeout: 60_000 });
+      await expect(page).toHaveURL(/\/builder\?field=content$/);
+      await expect(page.getByRole("alertdialog")).toHaveCount(0);
+      const [made] = await storedTitled(page.request, `${stamp} new`);
+      expect(made).toMatchObject({ status: "draft" });
+    });
+
+    test(`from ${way} with unsaved work, asks first, then opens the new draft`, async ({
+      page,
+    }) => {
+      const stamp = `Way unsaved ${Date.now()}`;
+      const here = `${stamp} here`;
+      const id = await createPage(page.request, here);
+      await openBuilder(page, id);
+      await unsavedEdit(page);
+      await openDialog(page, here);
+      const form = dialog(page);
+      await form.getByRole("textbox", { name: "Title" }).fill(`${stamp} new`);
+      await form
+        .getByRole("button", { name: "Create and open builder" })
+        .click();
+      const question = page.getByRole("alertdialog", {
+        name: `Save changes to ${here} first?`,
+      });
+      await expect(question).toBeVisible();
+      // Nothing is made while the question is open.
+      expect(await storedTitled(page.request, `${stamp} new`)).toHaveLength(0);
+      await question.getByRole("button", { name: "Discard" }).click();
+      await expect(page).not.toHaveURL(builderOf(id), { timeout: 60_000 });
+      await expect(page).toHaveURL(/\/builder\?field=content$/);
+      const [made] = await storedTitled(page.request, `${stamp} new`);
+      expect(made).toMatchObject({ status: "draft" });
+    });
+
+    test(`from ${way}, typing a title and clicking away makes no page`, async ({
+      page,
+    }) => {
+      const stamp = `Way away ${Date.now()}`;
+      const here = `${stamp} here`;
+      const id = await createPage(page.request, here);
+      await openBuilder(page, id);
+      await openDialog(page, here);
+      await dialog(page)
+        .getByRole("textbox", { name: "Title" })
+        .fill(`${stamp} new`);
+      await page.mouse.click(5, 5);
+      await expect(dialog(page)).toBeHidden();
+      await expect(page).toHaveURL(builderOf(id));
+      expect(await storedTitled(page.request, `${stamp} new`)).toHaveLength(0);
     });
   }
 

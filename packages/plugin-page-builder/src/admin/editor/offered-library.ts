@@ -15,6 +15,32 @@ import {
   type DocumentLimits,
 } from "@nextlyhq/blocks-engine";
 import type { SavedComponent, SavedPattern } from "@nextlyhq/builder";
+import type { EditingTarget } from "@nextlyhq/builder/shell";
+
+/**
+ * What Add judges "itself" by: the document the editor opened and its
+ * identity, or, while a header or footer is edited in place, that region's
+ * component, so the header itself, a component reaching it and a pattern
+ * holding it are never offered inside it.
+ */
+export function offeredSelfOf<
+  I extends { readonly documentId?: string | undefined } | null,
+>(
+  target: EditingTarget,
+  cards: readonly { readonly area: string; readonly componentId: string }[],
+  page: { readonly document: BlockDocument; readonly identity: I }
+): {
+  readonly document: BlockDocument;
+  readonly identity: I | { readonly documentId: string };
+} {
+  if (target.kind !== "region") return page;
+  const card = cards.find(facts => facts.area === target.area);
+  if (card === undefined) return page;
+  return {
+    document: target.document,
+    identity: { documentId: card.componentId },
+  };
+}
 
 /**
  * The components a field may OFFER: every one the library holds, except the

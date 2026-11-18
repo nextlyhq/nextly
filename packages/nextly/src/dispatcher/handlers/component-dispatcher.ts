@@ -24,6 +24,7 @@ import {
   respondMutation,
 } from "../../api/response-shapes";
 import type { FieldConfig } from "../../collections/fields/types";
+import { container } from "../../di/container";
 import type { FieldOwner } from "../../domains/collections/services/collection-dependents";
 import { assertSaveLeavesNoFieldGroupCycle } from "../../domains/field-groups/field-group-cycles";
 import { assertNotDiverged } from "../../domains/field-groups/services/assert-not-diverged";
@@ -707,6 +708,11 @@ export const COMPONENTS_METHODS: Record<
           // left to a partial object the exclusion would call methods on.
           logger: getLoggerFromDI() ?? DISCARDED_LOG,
           label: `apply schema changes to field group "${slug}"`,
+          // The apply writes a migration where a writer is registered: its folder is held first.
+          migrationsDir: container.has("builderSaveSetup")
+            ? container.get<{ migrationsDir: string }>("builderSaveSetup")
+                .migrationsDir
+            : undefined,
           // This path runs the push pipeline, so it issues DDL and may create the lock table.
           issuesDdl: true,
         },

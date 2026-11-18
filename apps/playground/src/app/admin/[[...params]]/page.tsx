@@ -35,6 +35,9 @@ import "../../../plugins/startup-read-fixture/admin";
 import "../../../plugins/widget-kit-fixture/admin";
 import "../../../plugins/contributions-fixture/admin";
 import "../../../plugins/block-fixture/admin";
+// The template fixture's one template, for the e2e suite's check that a
+// template's needed collection is made too and saved first.
+import "../../../plugins/template-fixture/admin";
 
 export default function AdminPage() {
   return <RootLayout />;

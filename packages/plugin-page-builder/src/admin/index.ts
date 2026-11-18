@@ -31,6 +31,7 @@ import {
   COMPONENT_LIST_TOOLS_COMPONENT,
   DELETE_COMPONENT_REPLACEMENT_COMPONENT,
   ENTRY_DESIGN_SECTION_COMPONENT,
+  FONTS_PAGE_COMPONENT,
   LAYOUT_LIST_TOOLS_COMPONENT,
   NEW_PAGE_DIALOG_COMPONENT,
   SINGLE_SHOWN_ON_SECTION_COMPONENT,
@@ -54,6 +55,7 @@ import type {
 import type { PageBuilderView as PageBuilderViewPart } from "./editor/PageBuilderView";
 import { registerEntryDesignColumn } from "./entry-design-column";
 import type { EntryDesignSection as EntryDesignSectionPart } from "./EntryDesignSection";
+import type { FontsPage as FontsPagePart } from "./fonts/FontsPage";
 import { lazyPart, preloadPart, withEditorStylesheet } from "./lazy-part";
 import type { LayoutListTools as LayoutListToolsPart } from "./make-default-action";
 import type { NewPageCreateDialog as NewPageCreateDialogPart } from "./new-page/new-page-dialog";
@@ -109,6 +111,11 @@ const EntryDesignSection: typeof EntryDesignSectionPart = lazyPart(() =>
 );
 const ShownOnSection: typeof ShownOnSectionPart = lazyPart(() =>
   import("./shown-on/ShownOnSection").then(m => m.ShownOnSection)
+);
+// The Fonts page draws the builder's own Fonts screen, so it comes with the
+// editor's stylesheet.
+const FontsPage: typeof FontsPagePart = lazyPart(() =>
+  withEditorStylesheet(import("./fonts/FontsPage")).then(m => m.FontsPage)
 );
 // With the editor's stylesheet, which sizes the Header & footer menu's
 // pictures: the dialog opens over a list, where the editor's isn't loaded.
@@ -190,6 +197,8 @@ const COMPONENTS = {
   // The "Bindings to fix" page and its dashboard card.
   [BINDINGS_TO_FIX_PAGE_COMPONENT]: BindingsToFixPage,
   [BINDINGS_TO_FIX_CARD_COMPONENT]: BindingsToFixCard,
+  // The site's fonts, on a page of their own.
+  [FONTS_PAGE_COMPONENT]: FontsPage,
   // Above the Components list: Import from file, and the row action's
   // Delete component dialog; for a host's component store, the same tools
   // drawn through the header slot.
@@ -244,6 +253,7 @@ export {
   ComponentStoreDeleteHost,
   DeleteComponentReplacement,
   EntryDesignSection,
+  FontsPage,
   LayoutListTools,
   NewPageCreateDialog,
   PageBuilderOverview,

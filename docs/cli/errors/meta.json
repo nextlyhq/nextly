@@ -84,6 +84,8 @@
     "migrate-ledger-unreadable",
     "migration-sql-uncheckable",
     "migration-tampered",
+    "migrations-writer-busy",
+    "migrations-writer-overtaken",
     "missing-migration",
     "missing-snapshot",
     "nextly-core-destructive-refused",
@@ -222,6 +224,9 @@
     "upgrade-cancelled",
     "upgrade-events-table-taken",
     "upgrade-ledger-unreadable",
+    "upgrade-work-moved",
+    "data-steps-backup-declined",
+    "data-steps-backup-not-confirmed",
     "widget-generate-cancelled",
     "workflow-cannot-attach"
   ]

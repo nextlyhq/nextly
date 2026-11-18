@@ -199,6 +199,14 @@ export function SelectInput<TFieldValues extends FieldValues = FieldValues>({
     value !== "" &&
     value != null;
 
+  // The button is named after its field ("Clear Group by"), so a screen
+  // reader says what it clears and a form with several clearable selects has
+  // one distinct button for each; an unlabelled field keeps the plain name.
+  const clearName =
+    typeof field.label === "string" && field.label.trim() !== ""
+      ? `Clear ${field.label}`
+      : "Clear selection";
+
   const handleClear = (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
@@ -241,7 +249,7 @@ export function SelectInput<TFieldValues extends FieldValues = FieldValues>({
           type="button"
           onClick={handleClear}
           className="shrink-0 rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-primary/5 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          aria-label="Clear selection"
+          aria-label={clearName}
         >
           <X className="h-3.5 w-3.5" />
         </button>

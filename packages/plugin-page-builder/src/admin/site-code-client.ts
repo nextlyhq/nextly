@@ -1,11 +1,11 @@
 /**
  * Settings' calls for the site's code: the read of the policy the site sends,
- * the check, and the save.
+ * the check, and the save; and the site's CSS, read and saved.
  *
  * @module admin/site-code-client
  * @experimental
  */
-import { writePluginRoute } from "@nextlyhq/plugin-sdk/admin";
+import { readPluginRoute, writePluginRoute } from "@nextlyhq/plugin-sdk/admin";
 
 import {
   PAGE_BUILDER_PLUGIN_NAME,
@@ -14,6 +14,12 @@ import {
   type SiteCodeRequest,
   type SiteCodeSaved,
 } from "../library-contract";
+import {
+  SITE_CSS_ROUTE_PATH,
+  type SiteCssRead,
+  type SiteCssRequest,
+  type SiteCssSaved,
+} from "../site-css-contract";
 
 /** The policy a page of the site is served with, as a check is sent it. */
 export type LivePolicy = NonNullable<SiteCodeRequest["livePolicy"]>;
@@ -110,6 +116,57 @@ export async function saveSiteCode(
         ...(version === null ? {} : { version }),
         ...(acknowledgeCsp === null ? {} : { acknowledgeCsp }),
       } satisfies SiteCodeRequest,
+    })
+  );
+}
+
+/** Whether an answer is the site's CSS read, as far as the box relies on it. */
+function isSiteCssRead(answer: unknown): answer is SiteCssRead {
+  if (typeof answer !== "object" || answer === null) return false;
+  const { css, sha256, changedAt, changedBy } = answer as Record<
+    string,
+    unknown
+  >;
+  const text = (value: unknown) => value === null || typeof value === "string";
+  return (
+    typeof css === "string" &&
+    typeof sha256 === "string" &&
+    text(changedAt) &&
+    text(changedBy)
+  );
+}
+
+/**
+ * The site's CSS as saved, its hash, and who changed it last and when: what
+ * the CSS box opens with, and what its save hands back. An answer of any
+ * other shape is refused, as one the site did not give.
+ */
+export async function readSiteCss(signal?: AbortSignal): Promise<SiteCssRead> {
+  const read = await readPluginRoute<SiteCssRead>({
+    plugin: PAGE_BUILDER_PLUGIN_NAME,
+    path: SITE_CSS_ROUTE_PATH,
+    ...(signal === undefined ? {} : { signal }),
+  });
+  if (!isSiteCssRead(read)) {
+    throw new Error("The site did not answer. Try again.");
+  }
+  return read;
+}
+
+/**
+ * Save the site's CSS, made from the read whose hash is `sha256`. Refused,
+ * saving nothing, when someone saved it since that read ("Someone changed
+ * the site CSS; reload to see it") and for each line the checker refuses.
+ */
+export async function saveSiteCss(
+  css: string,
+  sha256: string
+): Promise<SiteCssSaved> {
+  return itemOf(
+    await writePluginRoute<Envelope<SiteCssSaved>>({
+      plugin: PAGE_BUILDER_PLUGIN_NAME,
+      path: SITE_CSS_ROUTE_PATH,
+      body: { css, sha256 } satisfies SiteCssRequest,
     })
   );
 }
