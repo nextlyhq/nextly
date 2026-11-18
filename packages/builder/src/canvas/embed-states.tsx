@@ -19,6 +19,12 @@
  * An Embed whose link a lock holds, or one inside a placed component, is not
  * offered the field: its link is set elsewhere.
  *
+ * An Embed with a link draws a frame, a document of its own that takes every
+ * press made over it, so the canvas would never see a click there, and a
+ * poster's play link would start the player inside the editor. Each frame is
+ * covered by a see-through plate that takes the press instead and selects
+ * the Embed, as a click on any other block does.
+ *
  * Drawn like `ImageStates`, in the overlay over the canvas, at each box's
  * measured rectangle (`shownRectOf`), and kept current by `watchCanvasFor`.
  *
@@ -41,6 +47,7 @@ import { useCanvasFrame } from "./canvas-frame-context";
 import { watchCanvasFor } from "./canvas-geometry-watch";
 import {
   EMBED_STATE_WORDS as WORDS,
+  embedFrames,
   embedLinkOp,
   emptyEmbedBoxes,
 } from "./embed-states-model";
@@ -62,6 +69,8 @@ interface Plate {
   readonly key: string;
   readonly nodeId: string;
   readonly rect: Rect;
+  /** `empty`: the link field; `frame`: the cover over a frame. */
+  readonly kind: "empty" | "frame";
 }
 
 /** What on a plate does something of its own when pressed. */
@@ -88,13 +97,22 @@ export function EmbedStates({
       return;
     }
     const found: Plate[] = [];
-    emptyEmbedBoxes(space.root, latest.current.document).forEach(
-      (box, index) => {
+    const { document } = latest.current;
+    for (const [kind, boxes] of [
+      ["empty", emptyEmbedBoxes(space.root, document)],
+      ["frame", embedFrames(space.root, document)],
+    ] as const) {
+      boxes.forEach((box, index) => {
         const rect = shownRectOf(box.element, space);
         if (rect === null) return;
-        found.push({ key: `${box.nodeId}:${String(index)}`, nodeId: box.nodeId, rect });
-      }
-    );
+        found.push({
+          key: `${box.nodeId}:${kind}:${String(index)}`,
+          nodeId: box.nodeId,
+          rect,
+          kind,
+        });
+      });
+    }
     setPlates(found);
   }, []);
 
@@ -135,16 +153,48 @@ export function EmbedStates({
       data-dragging={dragging ? "" : undefined}
       {...{ [CHROME_ATTRIBUTE]: "" }}
     >
-      {plates.map(plate => (
-        <EmbedPlate
-          key={plate.key}
-          plate={plate}
-          writable={writable(plate.nodeId)}
-          onSelect={mode => select(plate.nodeId, mode)}
-          onLink={link => store(plate.nodeId, link)}
-        />
-      ))}
+      {plates.map(plate =>
+        plate.kind === "frame" ? (
+          <FrameCover
+            key={plate.key}
+            plate={plate}
+            onSelect={mode => select(plate.nodeId, mode)}
+          />
+        ) : (
+          <EmbedPlate
+            key={plate.key}
+            plate={plate}
+            writable={writable(plate.nodeId)}
+            onSelect={mode => select(plate.nodeId, mode)}
+            onLink={link => store(plate.nodeId, link)}
+          />
+        )
+      )}
     </div>
+  );
+}
+
+/**
+ * The see-through cover over an Embed's frame: a press on it selects the
+ * Embed. Hidden from assistive technology and the tab order, which reach the
+ * block through Layers as they reach any other.
+ */
+function FrameCover({
+  plate,
+  onSelect,
+}: {
+  readonly plate: Plate;
+  readonly onSelect: (mode: SelectionMode) => void;
+}): React.JSX.Element {
+  const { x, y, width, height } = plate.rect;
+  return (
+    <div
+      className="nx-embed-state"
+      data-embed-state="frame"
+      aria-hidden="true"
+      style={{ left: x, top: y, width, height }}
+      onClick={event => onSelect(selectionModeFor(event))}
+    />
   );
 }
 

@@ -670,6 +670,52 @@ picture on the canvas or in **Layers** to change its place. With a picture selec
 inspector names it by its place, **Picture 2 · in Gallery**, and **← Back to the
 gallery** selects the gallery.
 
+## Embedding a video or a map
+
+A new Embed starts empty: on the canvas it reads **Paste a YouTube, Vimeo or other link**,
+with a field for the link. Paste one and it is stored at once; type one and press
+**Embed** or <kbd>Enter</kbd>. The link is kept exactly as you pasted it.
+
+The Embed knows four providers, and sizes itself for each when its link is pasted:
+
+| Provider | Links it knows | Size it takes |
+| --- | --- | --- |
+| YouTube | a video's page, a `youtu.be` share link, a Short, a live stream, a player link | 16:9, or 9:16 for a Short |
+| Vimeo | a video's page, an unlisted video's link, a player link | 16:9 |
+| Spotify | a track, album, playlist, episode, show or artist | Spotify's own player height |
+| Google Maps | the link in Maps' **Share → Embed a map** code | 4:3 |
+
+The size is written as the block's own proportion (or height), in **Style**, so you can
+change it like any other. Under **Link**, the inspector says what it found: **YouTube
+detected. Size set from the video.** Any other link is **Shown as a plain frame**: a
+sandboxed frame under your site's frame rules, loaded with the page.
+
+### Nothing loads from the provider until play
+
+For a provider's link, **Load** chooses when its player loads:
+
+- **When played** (a new Embed's choice): the page shows a poster, a frame with the
+  title, the provider's name and a play button named **Play:** and the title. Nothing is
+  requested from the provider (no player, no cookies, no picture) until a visitor
+  presses play, and the poster needs no JavaScript. Pressing play loads the player in
+  place and starts it.
+- **Right away**: the player loads with the page, as the visitor scrolls near it.
+
+An Embed added before **Load** existed reads as **Right away**.
+
+**Privacy mode**, on by default, uses YouTube's no-cookie player and asks Vimeo's player
+not to track. Spotify and Google Maps have no such player, so the setting isn't shown for
+them.
+
+The poster is drawn on your site's surface colour, in light and dark. To show a picture
+instead, choose one under **Poster** from the media library, or press **Use the video's
+thumbnail** (YouTube and Vimeo): the video's picture is copied into your media library
+once, and pressing it again finds that copy. Either way the picture comes from your own
+site, never from the provider.
+
+**Screen reader label** names the frame for screen readers. Left empty, it says what the
+link is, such as **YouTube video**.
+
 ## Bold, italic and links in a Text
 
 A Text is one paragraph of words, edited where it is shown: double-click it on the

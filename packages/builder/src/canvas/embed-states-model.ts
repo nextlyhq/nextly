@@ -98,6 +98,26 @@ export function emptyEmbedBoxes(
   return found;
 }
 
+/**
+ * The frames this page's Embeds draw once they have a link: each a document
+ * of its own, which takes the pointer from the canvas, so the editor covers
+ * it to keep a click selecting the block. One inside a placed component is
+ * left out, as its box is.
+ */
+export function embedFrames(
+  root: ParentNode,
+  document: BlockDocument
+): EmptyEmbedBox[] {
+  const found: EmptyEmbedBox[] = [];
+  root.querySelectorAll(`iframe[${NODE_ID_ATTRIBUTE}]`).forEach(element => {
+    if (element.hasAttribute(INSTANCE_ATTRIBUTE)) return;
+    const nodeId = element.getAttribute(NODE_ID_ATTRIBUTE);
+    if (nodeId === null || embedNodeOf(document, nodeId) === undefined) return;
+    found.push({ nodeId, element });
+  });
+  return found;
+}
+
 /** The style values a provider's shape writes on the block, at its base. */
 function shapeValues(shape: EmbedShape): Record<string, string | undefined> {
   // A proportion clears a height a player link set before, and a height

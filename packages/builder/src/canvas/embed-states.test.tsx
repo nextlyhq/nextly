@@ -48,7 +48,7 @@ const EMBED: BlockNode = {
 
 const EMPTY_BOX = '<div data-nx-node="e1" data-nx-embed-empty=""></div>';
 
-function mount(document: BlockDocument) {
+function mount(document: BlockDocument, boxes = EMPTY_BOX) {
   const apply = vi.fn<EditorState["apply"]>(() => document);
   const select = vi.fn<EditorState["select"]>();
   const editor = {
@@ -61,7 +61,7 @@ function mount(document: BlockDocument) {
   } as unknown as EditorState;
   render(
     <div className={CANVAS_ROOT_CLASS}>
-      <div dangerouslySetInnerHTML={{ __html: EMPTY_BOX }} />
+      <div dangerouslySetInnerHTML={{ __html: boxes }} />
       <EmbedStates editor={editor} />
     </div>
   );
@@ -119,6 +119,24 @@ describe("an Embed with no link", () => {
       screen.getByLabelText("Paste a YouTube, Vimeo or other link"),
       "two words"
     );
+    expect(apply).not.toHaveBeenCalled();
+  });
+});
+
+describe("an Embed with a link", () => {
+  it("is covered on the canvas, so a press on its frame selects it", () => {
+    const { select, apply } = mount(
+      page({ ...EMBED, props: { ...EMBED.props, src: "https://youtu.be/dQw4w9WgXcQ" } }),
+      '<iframe data-nx-node="e1" title="YouTube video"></iframe>'
+    );
+    // No field: it has its link.
+    expect(screen.queryByLabelText("Paste a YouTube, Vimeo or other link")).toBeNull();
+    const cover = document.querySelector('[data-embed-state="frame"]');
+    expect(cover).not.toBeNull();
+    // Out of the way of assistive technology, which reaches it through Layers.
+    expect(cover?.getAttribute("aria-hidden")).toBe("true");
+    fireEvent.click(cover as Element);
+    expect(select.mock.calls[0]?.[0]).toBe("e1");
     expect(apply).not.toHaveBeenCalled();
   });
 });

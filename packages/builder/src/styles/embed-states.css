@@ -38,6 +38,14 @@
   cursor: default;
 }
 
+/* The cover over an Embed's frame: nothing to see, only a press to take. */
+.nx-embed-state[data-embed-state="frame"] {
+  padding: 0;
+  border: none;
+  background: transparent;
+  container-type: normal;
+}
+
 /* Mid-drag of a block, the plates keep the page's shape and take nothing. */
 .nx-embed-states[data-dragging] .nx-embed-state {
   pointer-events: none;
