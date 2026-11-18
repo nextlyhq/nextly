@@ -5,18 +5,42 @@
  * cannot be read refuses. The database is named by a hash of where it is, which the credentials
  * that reach it do not change and do not appear in.
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { NextlyError } from "../../../../errors/nextly-error";
 import {
+  recordSaveStarted,
   refuseWhileSaveLeftPartWay,
   saveInProgressFolder,
+  withSaveRecords,
 } from "../save-in-progress";
 import { databaseIdentity, savedDatabase } from "../saved-database";
+
+// The record's row as a database holding one that is not a record would answer it.
+vi.mock("../../../meta/services/meta-service", () => ({
+  MetaService: class {
+    insertIfAbsent(): Promise<void> {
+      return Promise.resolve();
+    }
+    get(): Promise<unknown> {
+      return Promise.resolve(null);
+    }
+    delete(): Promise<void> {
+      return Promise.resolve();
+    }
+  },
+}));
 
 const URL_HERE = "postgres://editor:secret@db.example.test:5432/site";
 
@@ -266,5 +290,29 @@ describe("refuseWhileSaveLeftPartWay", () => {
     expect((outcome.refused as NextlyError).publicMessage).toContain(
       "collection-posts.json"
     );
+  });
+});
+
+// Nothing settles a record that cannot be read yet, so the refusal over one says how to clear it.
+describe("a save over a standing record that cannot be read", () => {
+  it("is refused naming the one row to remove and when", async () => {
+    const save = withSaveRecords(() =>
+      recordSaveStarted({
+        adapter: {} as DrizzleAdapter,
+        projectRoot,
+        kind: "collection",
+        slug: "posts",
+        definitionFile: join(projectRoot, "schema", "builder.json"),
+        definitionBefore: undefined,
+        database: undefined,
+      })
+    );
+
+    await expect(save).rejects.toMatchObject({
+      code: "CONFLICT",
+      publicMessage:
+        'A Builder save of this collection was left part-way, and its record cannot be read. To clear it, first check that no Builder save is running, then remove the one row "builder-save-in-progress:collection:posts" from the nextly_meta table; the next save then records its own.',
+    });
+    expect(existsSync(saveInProgressFolder(projectRoot))).toBe(false);
   });
 });

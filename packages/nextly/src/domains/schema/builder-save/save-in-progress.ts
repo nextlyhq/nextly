@@ -231,10 +231,11 @@ export async function recordSaveStarted(args: {
   const stood = savedRecord.safeParse(standing);
   if (!stood.success) {
     // A record that cannot be read names no save to keep a marker for: the save is refused, so
-    // nothing more is written over a part-way state that cannot be told.
+    // nothing more is written over a part-way state that cannot be told. Nothing settles such a
+    // record yet, so the refusal names the one row and the step that clears it by hand.
     throw NextlyError.conflict({
       reason: "state",
-      message: `A Builder save of this ${args.kind === "fieldGroup" ? "field group" : args.kind} was left part-way, and its record cannot be read. To settle it, ${SETTLES}.`,
+      message: `A Builder save of this ${args.kind === "fieldGroup" ? "field group" : args.kind} was left part-way, and its record cannot be read. ${unreadableRecordStep(key)}`,
       logContext: { reason: "builder-save-record-unreadable", key },
     });
   }
@@ -399,6 +400,14 @@ function described(record: SaveInProgress): string {
   return `a Builder save of the ${kind} "${record.slug}", started ${record.startedAt} on ${record.host}`;
 }
 
+/**
+ * The way out of an unreadable record, which nothing settles yet: the one row, removed by hand once
+ * no save is running, after which the next save starts its own record.
+ */
+function unreadableRecordStep(key: string): string {
+  return `To clear it, first check that no Builder save is running, then remove the one row "${key}" from the nextly_meta table; the next save then records its own.`;
+}
+
 const SETTLES =
   "start the app in development (`next dev`) on this project: its start settles the save";
 
@@ -516,7 +525,7 @@ export async function refuseWhileSaveInProgress(
   const named = rows.map(row =>
     "record" in row
       ? described(row.record)
-      : `the record ${row.key}, which could not be read`
+      : `the record ${row.key}, which could not be read (${unreadableRecordStep(row.key)})`
   );
   throw NextlyError.conflict({
     reason: "state",
