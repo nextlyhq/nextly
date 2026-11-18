@@ -163,10 +163,15 @@ async function enter(field: ReturnType<Page["locator"]>, value: string) {
   await field.press("Enter");
 }
 
-/** Pick an item from one of the popup's choice menus. */
+/**
+ * Pick an item from one of the popup's choice menus. Each step is bounded,
+ * so a step that can't be taken says which, rather than the test's timeout.
+ */
 async function choose(page: Page, menu: RegExp, item: RegExp): Promise<void> {
-  await page.getByRole("button", { name: menu }).click();
-  await page.getByRole("menuitemradio", { name: item }).click();
+  await page.getByRole("button", { name: menu }).click({ timeout: 15_000 });
+  await page
+    .getByRole("menuitemradio", { name: item })
+    .click({ timeout: 15_000 });
 }
 
 let before: Awaited<ReturnType<typeof stored>> | null = null;
