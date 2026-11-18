@@ -18,6 +18,8 @@ import type { PageStyleCascade } from "@nextlyhq/blocks-react";
 import { useIsomorphicLayoutEffect } from "@nextlyhq/ui";
 import * as React from "react";
 
+import { ACCORDION_BLOCK } from "./accordion-icon";
+import { accordionContentSections } from "./accordion-icon-field";
 import { columnsContentSection } from "./columns-layout-field";
 import {
   PropExposeControl,
@@ -177,6 +179,8 @@ function builderSectionsOf(
     labels
   );
   if (gallery.length > 0) return gallery;
+  // An Accordion's Icon is drawn after the block's own Behaviour, below.
+  if (inspection.blockName === ACCORDION_BLOCK) return [];
   const [label] = labels;
   if (label === undefined) return [];
   const section = columnsContentSection({
@@ -311,15 +315,34 @@ function ContentSurface({
   // the ones the builder draws for a core block (Columns' layout, a
   // Gallery's Pictures and Layout); a block
   // with none draws the fields' own note that there is nothing to set.
-  const sections = joinedSections(
-    builderSectionsOf(inspection, editor, around, reasonId, services),
-    inspection.sections.content.map(section => ({
-      key: section.label,
-      label: section.label,
-      holdsValue: rowsHoldValue(section.rows),
-      body: formBodies?.get(section.label) ?? fieldsFor(section.rows),
-    }))
-  );
+  const sections = [
+    ...joinedSections(
+      builderSectionsOf(inspection, editor, around, reasonId, services),
+      inspection.sections.content.map(section => ({
+        key: section.label,
+        label: section.label,
+        holdsValue: rowsHoldValue(section.rows),
+        body: formBodies?.get(section.label) ?? fieldsFor(section.rows),
+      }))
+    ),
+    // An Accordion's Icon, after its Behaviour: what the questions show,
+    // read after how they open. Held by a design lock, as it writes styles.
+    ...accordionContentSections(
+      {
+        editor,
+        nodeId: inspection.nodeId,
+        designHeldBy:
+          designReadOnlyReason(
+            editor.document,
+            inspection.nodeId,
+            lockViewOf(editor)
+          ) === undefined
+            ? undefined
+            : reasonId,
+      },
+      builderContentSectionsOf(inspection.blockName)
+    ),
+  ];
   const generated =
     sections.length === 0 ? (
       fieldsFor(contentRowsOf(inspection))

@@ -35,6 +35,7 @@ import {
   type SlotDefaultSource,
 } from "@nextlyhq/blocks-engine";
 
+import { ACCORDION_BLOCK } from "./accordion-icon";
 import type { RefusalWording } from "./canvas/drag-refusal";
 import { COLUMNS_ROW } from "./columns-layout";
 import {
@@ -325,7 +326,7 @@ function offered(
   defaults: Readonly<Record<string, unknown>> | undefined
 ): boolean {
   if (hiddenByOnlyWithout(schema, values, declared)) return false;
-  if (!appliesToValues(schema, values, defaults)) return false;
+  if (!appliesToValues(schema, values, declared, defaults)) return false;
   if (schema.type !== "select" || options.length >= 2) return true;
   return propIsSet(undefined, value) && !options.includes(String(value));
 }
@@ -353,26 +354,91 @@ function hiddenByOnlyWithout(
 }
 
 /**
- * Whether a prop's `onlyWhen`, `{ kind: ["ordered"] }`, holds: each prop it
- * names has one of the values listed, read as stored, else as the block's
- * default, since that is the value that applies. A prop without one always
- * applies; a malformed one, naming no list, never matches.
+ * The value a prop reads as while none is stored: what its schema says an
+ * unset value means (`whenUnset`), where it says, else the block's default.
+ *
+ * The two differ where a block's new instances start with a value that its
+ * older stored ones never had: an Accordion stored before "Open" opens each
+ * question alone ("Many"), while a new one starts with "One at a time". The
+ * renderer reads the unset value one way; the panel must show what it draws.
  */
-function appliesToValues(
+function unsetValueOf(
   schema: PropSchema,
+  name: string,
+  defaults: Readonly<Record<string, unknown>> | undefined
+): unknown {
+  return Object.hasOwn(schema, "whenUnset")
+    ? schema.whenUnset
+    : defaults?.[name];
+}
+
+/** A prop's value as it applies: stored, else what unset reads as. */
+function appliedValue(
   values: Readonly<Record<string, unknown>>,
+  name: string,
+  declared: Readonly<Partial<Record<string, PropSchema>>> | undefined,
+  defaults: Readonly<Record<string, unknown>> | undefined
+): unknown {
+  if (propIsSet(undefined, values[name])) return values[name];
+  const schema = declared?.[name];
+  return schema === undefined
+    ? defaults?.[name]
+    : unsetValueOf(schema, name, defaults);
+}
+
+/** Whether a rule `{ prop: [values] }` holds of these values. */
+function holdsFor(
+  when: unknown,
+  values: Readonly<Record<string, unknown>>,
+  declared: Readonly<Partial<Record<string, PropSchema>>> | undefined,
   defaults: Readonly<Record<string, unknown>> | undefined
 ): boolean {
-  const when = schema.onlyWhen;
   if (typeof when !== "object" || when === null || Array.isArray(when)) {
     return true;
   }
   return Object.entries(when).every(([name, allowed]) => {
-    const current = propIsSet(undefined, values[name])
-      ? values[name]
-      : defaults?.[name];
+    const current = appliedValue(values, name, declared, defaults);
     return Array.isArray(allowed) && allowed.includes(current);
   });
+}
+
+/**
+ * Whether a prop's `onlyWhen`, `{ kind: ["ordered"] }`, holds: each prop it
+ * names has one of the values listed, read as stored, else as unset reads
+ * (`whenUnset`, else the block's default), since that is the value that
+ * applies. A prop without one always applies; a malformed one, naming no
+ * list, never matches.
+ */
+function appliesToValues(
+  schema: PropSchema,
+  values: Readonly<Record<string, unknown>>,
+  declared: Readonly<Partial<Record<string, PropSchema>>>,
+  defaults: Readonly<Record<string, unknown>> | undefined
+): boolean {
+  return holdsFor(schema.onlyWhen, values, declared, defaults);
+}
+
+/**
+ * Whether a prop's `onlyWhenParent`, `{ openMode: ["many"] }`, holds of the
+ * block holding this one, read as its own `onlyWhen` is, by the parent's
+ * declaration: a question's "Open by default" shows only while its
+ * Accordion opens many. A prop without one always applies; one whose block
+ * has no parent never does.
+ */
+function appliesUnderParent(
+  schema: PropSchema,
+  parent: BlockNode | undefined
+): boolean {
+  const when = schema.onlyWhenParent;
+  if (when === undefined) return true;
+  if (parent === undefined) return false;
+  const definition = getBlock(parent.type);
+  return holdsFor(
+    when,
+    parent.props,
+    definition?.props ?? {},
+    definition?.defaultProps as Record<string, unknown> | undefined
+  );
 }
 
 /**
@@ -453,6 +519,10 @@ export function inspectSelection(
   const content = contentPropsOf(definition.props);
 
   const declared = definition.props ?? {};
+  const defaults = definition.defaultProps as
+    | Record<string, unknown>
+    | undefined;
+  const parent = locateNode(document.nodes, node.id)?.parent;
   const props = Object.entries(declared).flatMap<EditableProp>(
     ([name, schema]) => {
       if (schema === undefined) return [];
@@ -461,19 +531,18 @@ export function inspectSelection(
           name,
           schema,
           value: node.props[name],
-          defaultValue: (
-            definition.defaultProps as Record<string, unknown> | undefined
-          )?.[name],
+          defaultValue: unsetValueOf(schema, name, defaults),
           supported: hasContentControl(schema.type),
           options: optionsOf(schema),
-          offered: offered(
-            schema,
-            node.props[name],
-            node.props,
-            declared,
-            optionsOf(schema),
-            definition.defaultProps as Record<string, unknown> | undefined
-          ),
+          offered:
+            offered(
+              schema,
+              node.props[name],
+              node.props,
+              declared,
+              optionsOf(schema),
+              defaults
+            ) && appliesUnderParent(schema, parent),
           readOnly: designLock !== undefined && !content.has(name),
         },
       ];
@@ -593,6 +662,8 @@ export function inspectorTabsOf(
 const BUILDER_CONTENT_SECTIONS: Readonly<Record<string, readonly string[]>> = {
   [COLUMNS_ROW]: ["Columns"],
   [GALLERY_BLOCK]: ["Pictures", "Layout"],
+  // Which icon the questions show, a style value chosen as content.
+  [ACCORDION_BLOCK]: ["Icon"],
 };
 
 /** The Content sections the builder draws for a block, none for most. */

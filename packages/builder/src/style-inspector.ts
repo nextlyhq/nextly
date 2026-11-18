@@ -313,9 +313,11 @@ export function inspectStyle(
     ),
     state,
   };
-  const inspected = [...allowed].map(property => {
+  const inspected = [...allowed].flatMap(property => {
     const entry = getStyleProperty(property);
     const placement = placementOf(property, entry?.group ?? "effects");
+    // Chosen in the Content tab, so neither drawn nor added here.
+    if (placement.tier === "content") return [];
     const row = inspectProperty(property, styles, offered.has(property), {
       ...options,
       state,
@@ -324,16 +326,18 @@ export function inspectStyle(
     const has = applies(property, context);
     const shows = tierShows(placement.tier, tiers);
     const fields = fieldAnswers(property, context);
-    return {
-      placement,
-      row: {
-        ...row,
-        applies: has,
-        tierShows: shows,
-        ...(fields === undefined ? {} : { fieldApplies: fields }),
-        common: row.set || (has && shows),
+    return [
+      {
+        placement,
+        row: {
+          ...row,
+          applies: has,
+          tierShows: shows,
+          ...(fields === undefined ? {} : { fieldApplies: fields }),
+          common: row.set || (has && shows),
+        },
       },
-    };
+    ];
   });
   const sections: StyleSection[] = [];
   for (const section of INSPECTOR_SECTIONS) {
