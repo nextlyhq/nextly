@@ -241,6 +241,16 @@ export interface BindingSchemaSource {
 export interface BindingRefs {
   readonly entry?: BindingSchemaRef;
   readonly item?: BindingSchemaRef;
+  /**
+   * Every list the binding is drawn inside, by its node id, with the schema
+   * ref its entries bind against (none where it is not known): what an item
+   * binding naming its `list` is checked against. Absent where the caller
+   * does not know the lists, which leaves such a binding judged without a
+   * schema.
+   *
+   * @experimental Settles with the editor's binding controls.
+   */
+  readonly lists?: ReadonlyMap<string, BindingSchemaRef | undefined>;
 }
 
 /**
@@ -253,6 +263,8 @@ export interface CheckedBinding {
   readonly source: BindingSource;
   /** The Single a `single` binding reads. */
   readonly sourceKey?: string;
+  /** The enclosing list an `item` binding reads the entry of, when named. */
+  readonly list?: string;
   readonly path: string;
   readonly segments: readonly string[];
   /** What the prop takes, when the block's props were known. */
@@ -326,6 +338,7 @@ interface StoredBinding {
   readonly path: string;
   readonly source: BindingSource;
   readonly sourceKey?: string;
+  readonly list?: string;
   readonly hasFallback: boolean;
   readonly fallback: unknown;
   readonly format: unknown;
@@ -338,6 +351,14 @@ function sourceKeyFits(source: BindingSource, sourceKey: unknown): boolean {
     : sourceKey === undefined;
 }
 
+/** Only an item binding names a list, by a non-empty id. */
+function listFits(source: BindingSource, list: unknown): boolean {
+  return (
+    list === undefined ||
+    (source === "item" && typeof list === "string" && list !== "")
+  );
+}
+
 /** The fields a stored binding is read through, refusing anything else. */
 function readStoredBinding(value: unknown): StoredBinding | undefined {
   if (!isPlainRecord(value)) return undefined;
@@ -347,6 +368,8 @@ function readStoredBinding(value: unknown): StoredBinding | undefined {
   if (typeof source !== "string" || !isBindingSource(source)) return undefined;
   const sourceKey = ownEntry(value, "sourceKey");
   if (!sourceKeyFits(source, sourceKey)) return undefined;
+  const list = ownEntry(value, "list");
+  if (!listFits(source, list)) return undefined;
   const hasFallback =
     Object.prototype.hasOwnProperty.call(value, "fallback") &&
     ownEntry(value, "fallback") !== undefined;
@@ -354,6 +377,7 @@ function readStoredBinding(value: unknown): StoredBinding | undefined {
     path,
     source,
     ...(typeof sourceKey === "string" ? { sourceKey } : {}),
+    ...(typeof list === "string" ? { list } : {}),
     hasFallback,
     fallback: ownEntry(value, "fallback"),
     format: ownEntry(value, "format"),
@@ -800,7 +824,9 @@ function refFor(
     case "entry":
       return refs?.entry;
     case "item":
-      return refs?.item;
+      return stored.list === undefined
+        ? refs?.item
+        : refs?.lists?.get(stored.list);
     case "single":
       return stored.sourceKey === undefined
         ? undefined
@@ -816,6 +842,13 @@ function checkPath(
   segments: readonly string[],
   input: BindingCheckInput
 ): PathWalk {
+  const lists = input.refs?.lists;
+  if (stored.list !== undefined && lists?.has(stored.list) === false) {
+    return walkFailure(
+      "binding-source-unavailable",
+      "This binding reads the entries of a list this block is not inside."
+    );
+  }
   const ref = refFor(stored, input.refs);
   const root =
     ref === undefined || input.schema === undefined
@@ -1034,6 +1067,7 @@ function checkedBinding(
     prop: input.prop,
     source: stored.source,
     ...(stored.sourceKey === undefined ? {} : { sourceKey: stored.sourceKey }),
+    ...(stored.list === undefined ? {} : { list: stored.list }),
     path: stored.path,
     segments: stored.path.split("."),
     ...(prop.kind === undefined ? {} : { kind: prop.kind }),
