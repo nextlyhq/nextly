@@ -807,6 +807,28 @@ for (const dialect of getConfiguredTestDialects()) {
       ).toMatchObject({ relationTo: "authors" });
     });
 
+    // A required one-link column holds bare ids, which are not JSON: counting its rows that hold
+    // none reads them as text first, so the switch is refused for the value, not by a failed read.
+    it("refuses switching a required relationship to several collections while a row holds a value", async () => {
+      const t = await boot();
+      const { a } = await postsWithAuthors(t, false, "authors", true);
+      await t.nextly.create({
+        collection: "posts",
+        data: { title: "P1", author: a },
+      });
+
+      const outcome = await switchAuthor(database.adapter, {
+        relationTo: ["authors", "tags"],
+        required: true,
+      });
+      expect(outcome).toEqual({
+        refused: expect.stringContaining("'author'") as unknown as string,
+      });
+      expect((outcome as { refused: string }).refused).toContain(
+        "1 row holds a value"
+      );
+    });
+
     it("refuses switching from several collections to one while a row holds a value", async () => {
       const t = await boot();
       const { a } = await postsWithAuthors(t, false, ["authors", "tags"]);
