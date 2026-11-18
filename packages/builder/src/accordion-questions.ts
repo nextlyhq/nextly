@@ -21,6 +21,13 @@ import type { OpPosition } from "./op-vocabulary";
 /** A Question's registered name. */
 export const QUESTION_BLOCK = "core/accordion-item";
 
+/**
+ * The attribute the canvas marks the accordion "+ Add a question" is drawn
+ * for with, on the canvas's element only: the frame's sheet gives it a row
+ * of room after its last question, where the button sits.
+ */
+export const QUESTION_ROOM_ATTRIBUTE = "data-nx-question-room";
+
 /** The Accordion's registered name. */
 const ACCORDION_BLOCK = "core/accordion";
 

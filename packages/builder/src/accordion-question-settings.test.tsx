@@ -140,6 +140,20 @@ describe("an Accordion's Icon", () => {
     ]);
   });
 
+  it("shows in Style a value held at another device, so it can be cleared", () => {
+    const document = page(
+      { openMode: "one" },
+      { base: { tablet: { disclosureIcon: "chevron" } } }
+    );
+    const at = (breakpoint: string) =>
+      inspectStyle(document, "acc", { breakpoint })
+        ?.sections.flatMap(section => section.properties)
+        .map(each => each.property);
+    expect(at("tablet")).toContain("disclosureIcon");
+    // The control: at the base values, where Content writes, it is not.
+    expect(at(BASE_BREAKPOINT)).not.toContain("disclosureIcon");
+  });
+
   it("reads + / − while nothing is stored, and for a stored Browser default", () => {
     const node = (styles?: BlockNode["styles"]) =>
       page({}, styles).nodes[0] as BlockNode;

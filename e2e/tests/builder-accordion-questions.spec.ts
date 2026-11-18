@@ -200,12 +200,19 @@ test.describe("an Accordion in the editor", () => {
     // A question is called Question: in the Add panel, the header and Layers.
     await selectQuestion(page, String(questions[1]));
     await expect(page.locator("[data-block-card]")).toContainText("Question");
+    // Not the old name, which "Question 2" alone would not tell apart.
+    await expect(page.locator("[data-block-card]")).not.toContainText(
+      "Accordion item"
+    );
     await expect(
       page.getByRole("option", { name: "Question", exact: true })
     ).toBeVisible();
     await openLayers(page);
     await expect(layerRow(page, String(questions[1]))).toContainText(
       "Question"
+    );
+    await expect(layerRow(page, String(questions[1]))).not.toContainText(
+      "Accordion item"
     );
 
     // Its Open by default shows only once the accordion opens Many.
@@ -230,18 +237,32 @@ test.describe("an Accordion in the editor", () => {
   test("+ Add a question adds Question 4, opens it, and puts the cursor in its title", async ({
     page,
   }) => {
-    const id = await createPage(page.request, [accordionNode()]);
+    const id = await createPage(page.request, [
+      accordionNode(),
+      {
+        id: HEADING,
+        type: "core/heading",
+        version: 1,
+        props: { text: "After the questions", level: "h2" },
+      },
+    ]);
     await openBuilder(page, id);
     await selectQuestion(page, question(2));
     const add = page.getByRole("button", { name: "Add a question" });
     await expect(add).toBeVisible();
-    // Under the last question, never over it.
+    // Under the last question, never over it, nor over the block after.
     const last = await (await block(page, question(3))).boundingBox();
+    const after = await (await block(page, HEADING)).boundingBox();
     const button = await add.boundingBox();
     expect(button?.y ?? 0).toBeGreaterThanOrEqual(
       (last?.y ?? 0) + (last?.height ?? 0) - 1
     );
-    await add.click();
+    expect((button?.y ?? 0) + (button?.height ?? 0)).toBeLessThanOrEqual(
+      (after?.y ?? 0) + 1
+    );
+    // Reached and pressed from the keyboard.
+    await add.focus();
+    await page.keyboard.press("Enter");
 
     await expect
       .poll(async () =>
@@ -259,6 +280,13 @@ test.describe("an Accordion in the editor", () => {
       .poll(() => added.evaluate(element => (element as HTMLDetailsElement).open))
       .toBe(true);
     await expect(added.getByText("Write the answer here.")).toBeVisible();
+    for (const n of [1, 2, 3]) {
+      expect(
+        await (await block(page, question(n))).evaluate(
+          element => (element as HTMLDetailsElement).open
+        )
+      ).toBe(false);
+    }
     // The cursor in its title.
     await expect
       .poll(() =>
@@ -272,7 +300,13 @@ test.describe("an Accordion in the editor", () => {
         })
       )
       .toBe(true);
+    // A click placing the caret in the title leaves the question open.
+    await added.locator("summary h3").click();
+    expect(
+      await added.evaluate(element => (element as HTMLDetailsElement).open)
+    ).toBe(true);
     await page.keyboard.press("ControlOrMeta+a");
+    // Three spaces: an odd count, so a toggle on each would leave it closed.
     await page.keyboard.type("Do you ship abroad?");
     await page.keyboard.press("Enter");
     await expect(added.locator("summary h3")).toHaveText("Do you ship abroad?");
@@ -319,19 +353,26 @@ test.describe("an Accordion in the editor", () => {
       (summary?.y ?? 0) + (summary?.height ?? 0) - 1
     );
 
-    // A picture and a button go in, as any block does.
+    // A button, a picture and a list go in, as any block does.
     await append.click();
     await page
       .getByRole("dialog", { name: "Add a block" })
       .getByRole("gridcell", { name: "Button", exact: true })
       .click();
-    await expect
-      .poll(async () =>
-        (await structure(page)).filter(entry =>
-          entry.startsWith(`${question(1)}>`)
-        )
-      )
-      .toHaveLength(1);
+    const inAnswer = async () =>
+      (await structure(page)).filter(entry =>
+        entry.startsWith(`${question(1)}>`)
+      );
+    await expect.poll(inAnswer).toHaveLength(1);
+    // The Add panel puts each after the block just added, in the answer.
+    await page
+      .getByRole("navigation", { name: "Editor panels" })
+      .getByRole("button", { name: "Add", exact: true })
+      .click();
+    for (const name of ["Image", "List"]) {
+      await page.getByRole("option", { name, exact: true }).click();
+    }
+    await expect.poll(inAnswer).toHaveLength(3);
     await expect(page.getByRole("button", {
       name: /Add a block, or drop one here, in Question/,
     })).toHaveCount(0);

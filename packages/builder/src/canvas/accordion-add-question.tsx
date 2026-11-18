@@ -12,9 +12,11 @@
  *
  * Drawn like the other controls over the canvas, in the overlay at the
  * accordion's measured rectangle (`watchCanvasFor` keeps it current). The
- * accordion is given room for the button below it on the canvas only, while
- * the button shows, so the button never covers the block that follows; the
- * room is taken back as soon as the button goes.
+ * accordion is given a row of room after its last question, on the canvas
+ * only and inside its own box, where the button sits, so the button never
+ * covers a question or the block that follows; the room is taken back as
+ * soon as the accordion is no longer selected. Not drawn where a lock
+ * refuses the insert.
  *
  * @module canvas/accordion-add-question
  */
@@ -33,8 +35,8 @@ import * as React from "react";
 import {
   numberedForPlace,
   QUESTION_BLOCK,
+  QUESTION_ROOM_ATTRIBUTE,
 } from "../accordion-questions";
-import { isHTMLElement } from "../dom-kind";
 import type { EditorState } from "../editor-state";
 import type { Rect } from "../geometry";
 import type { BuilderOp } from "../op-vocabulary";
@@ -57,8 +59,8 @@ export const ADD_QUESTION_WORDS = "Add a question";
 /** The Accordion's registered name. */
 const ACCORDION_BLOCK = "core/accordion";
 
-/** The room made under the accordion for the button, in the page's pixels. */
-const ROOM_PX = 48;
+/** The room's height, in the page's pixels, as the frame's sheet draws it. */
+const ROOM_PX = 44;
 
 export interface AccordionAddQuestionProps {
   /** The editor the question is added through. */
@@ -127,47 +129,28 @@ function sameRect(a: Rect | null, b: Rect | null): boolean {
   );
 }
 
-/** The room made under an accordion, and the margin it had before. */
-interface Room {
-  readonly element: HTMLElement;
-  /** Its own inline margin, put back afterwards ("" for none). */
-  readonly before: string;
-  /** The margin the page gave it before the room was made. */
-  readonly base: string;
-}
-
-/** Put back the margin an accordion carried before its room was made. */
-function release(room: Room | null): void {
-  if (room === null) return;
-  if (room.before === "") {
-    room.element.style.removeProperty("margin-block-end");
-  } else {
-    room.element.style.setProperty("margin-block-end", room.before);
-  }
-}
-
 /**
- * Make room under the accordion for the button: the margin the page gave it,
- * read once before the room is added, and the button's height beside it.
- * Written on the canvas's element only, never stored, and only when it
- * changes, since the canvas watches the page's styles and measures again.
+ * Mark the accordion the button is drawn for, on the canvas's element only,
+ * never stored: the frame's sheet gives a marked accordion a 44px row after
+ * its last question (`canvas-frame-sheet.ts`), where the button sits. Inside
+ * the accordion's own box, so its margins, and the blocks around it, are as
+ * the author set them. Written only when it changes, since the canvas
+ * watches the page's attributes and measures again.
  */
-function makeRoom(holder: { current: Room | null }, element: Element): void {
-  if (!isHTMLElement(element)) return;
-  const view = element.ownerDocument.defaultView;
-  if (view === null) return;
-  if (holder.current?.element !== element) {
-    release(holder.current);
-    holder.current = {
-      element,
-      before: element.style.getPropertyValue("margin-block-end"),
-      base: view.getComputedStyle(element).marginBlockEnd,
-    };
+function markRoom(holder: { current: Element | null }, element: Element) {
+  if (holder.current !== element) {
+    holder.current?.removeAttribute(QUESTION_ROOM_ATTRIBUTE);
+    holder.current = element;
   }
-  const wanted = `calc(${holder.current.base} + ${String(ROOM_PX)}px)`;
-  if (element.style.getPropertyValue("margin-block-end") !== wanted) {
-    element.style.setProperty("margin-block-end", wanted);
+  if (!element.hasAttribute(QUESTION_ROOM_ATTRIBUTE)) {
+    element.setAttribute(QUESTION_ROOM_ATTRIBUTE, "");
   }
+}
+
+/** Take the room back from the accordion last given it. */
+function unmarkRoom(holder: { current: Element | null }): void {
+  holder.current?.removeAttribute(QUESTION_ROOM_ATTRIBUTE);
+  holder.current = null;
 }
 
 /** "+ Add a question" under the selected accordion's last question. */
@@ -177,13 +160,24 @@ export function AccordionAddQuestion({
   onEditText,
 }: AccordionAddQuestionProps): React.JSX.Element {
   const layer = React.useRef<HTMLDivElement | null>(null);
-  const room = React.useRef<Room | null>(null);
-  const [rect, setRect] = React.useState<Rect | null>(null);
+  const room = React.useRef<Element | null>(null);
+  const [place, setPlace] = React.useState<{
+    rect: Rect;
+    scale: number;
+  } | null>(null);
   // The question just added, opened and typed into once the canvas draws it.
   const [added, setAdded] = React.useState<string | undefined>(undefined);
-  const accordion = hidden
-    ? undefined
-    : accordionForSelection(editor.document, editor.selection.ids);
+  const selected = accordionForSelection(editor.document, editor.selection.ids);
+  // Not offered where a lock refuses the insert, as the Add panel's are not.
+  const op =
+    selected === undefined ? undefined : addQuestionOp(editor.document, selected);
+  const accordion =
+    op === undefined || editor.lockRefusalFor([op]) !== undefined
+      ? undefined
+      : selected;
+  // The room is kept mid-drag, with only the button hidden: taking it away
+  // would move every block below the accordion under the drag's measured
+  // targets.
   const accordionId = accordion?.id;
 
   const latest = React.useRef(accordionId);
@@ -202,16 +196,23 @@ export function AccordionAddQuestion({
       layoutFragments(block) === 0 ||
       renderSkips(block)
     ) {
-      release(room.current);
-      room.current = null;
-      setRect(current => (current === null ? current : null));
+      unmarkRoom(room);
+      setPlace(current => (current === null ? current : null));
       return;
     }
-    makeRoom(room, block);
+    markRoom(room, block);
     const visible = visiblePartOf(block, space.root);
-    const next =
+    const rect =
       visible === null || visible === "hidden" ? null : space.place(visible);
-    setRect(current => (sameRect(current, next) ? current : next));
+    setPlace(current =>
+      rect === null
+        ? null
+        : current !== null &&
+            current.scale === space.scale &&
+            sameRect(current.rect, rect)
+          ? current
+          : { rect, scale: space.scale }
+    );
   }, []);
 
   const canvasFrame = useCanvasFrame();
@@ -222,14 +223,8 @@ export function AccordionAddQuestion({
     () => watchCanvasFor(() => layer.current, measure),
     [measure, accordionId, canvasFrame]
   );
-  // The accordion's own margin comes back once the button goes.
-  React.useEffect(
-    () => () => {
-      release(room.current);
-      room.current = null;
-    },
-    [accordionId]
-  );
+  // The room goes once the accordion is no longer the one drawn for.
+  React.useEffect(() => () => unmarkRoom(room), [accordionId]);
 
   // Once the canvas draws the new question: open it, and type its title.
   React.useLayoutEffect(() => {
@@ -246,9 +241,8 @@ export function AccordionAddQuestion({
   }, [added, editor.document, onEditText]);
 
   const add = (): void => {
-    if (accordion === undefined) return;
-    const op = addQuestionOp(editor.document, accordion);
-    if (op === undefined || editor.apply(op) === null) return;
+    if (accordion === undefined || op === undefined) return;
+    if (editor.apply(op) === null) return;
     editor.select(op.node.id);
     setAdded(op.node.id);
   };
@@ -259,12 +253,16 @@ export function AccordionAddQuestion({
       className="nx-add-question"
       {...{ [CHROME_ATTRIBUTE]: "" }}
     >
-      {accordion === undefined || rect === null ? null : (
+      {accordion === undefined || place === null || hidden ? null : (
         <button
           type="button"
           className="nx-add-question__button"
           data-add-question={accordion.id}
-          style={{ left: rect.x, top: rect.y + rect.height + 2 }}
+          // In the room at the foot of the accordion, at the canvas's zoom.
+          style={{
+            left: place.rect.x,
+            top: place.rect.y + place.rect.height - ROOM_PX * place.scale,
+          }}
           onClick={event => {
             // Kept off the canvas, which would select what lies under it.
             event.stopPropagation();

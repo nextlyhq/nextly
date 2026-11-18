@@ -44,7 +44,8 @@ function words(text: string) {
 /** A published page of one accordion of three questions, and its slug. */
 async function accordionPage(
   request: APIRequestContext,
-  props: Record<string, unknown>
+  props: Record<string, unknown>,
+  opens: readonly boolean[] = [false, false, false]
 ): Promise<string> {
   const slug = `accordion-${stamp()}`;
   const id = (n: number) =>
@@ -68,7 +69,7 @@ async function accordionPage(
                 id: id(10 + n),
                 type: "core/accordion-item",
                 version: 1,
-                props: { title: `Question ${n}`, open: false },
+                props: { title: `Question ${n}`, open: opens[n - 1] === true },
                 slots: {
                   children: [
                     {
@@ -212,6 +213,7 @@ for (const script of [false, true]) {
         openMode: "one",
         firstOpen: true,
       });
+      const paints: Record<string, string> = {};
       for (const colorScheme of ["light", "dark"] as const) {
         const live = await visitor(browser, baseURL, script, {
           width: 320,
@@ -225,6 +227,7 @@ for (const script of [false, true]) {
           expect(box?.height ?? 0).toBeGreaterThanOrEqual(44);
         }
         // The icon is drawn, in the title's colour, whatever the scheme.
+        // Recorded per scheme: the site's dark values must change it.
         const icon = await first.evaluate(element => {
           const glyph = element.querySelector(".nx-pb-disclosure-icon");
           const box = glyph?.getBoundingClientRect();
@@ -236,6 +239,7 @@ for (const script of [false, true]) {
         });
         expect(icon.width).toBeGreaterThan(0);
         expect(icon.paint).toBe(icon.text);
+        paints[colorScheme] = icon.paint;
         expect(
           await live.evaluate(
             () => document.documentElement.scrollWidth <= window.innerWidth
@@ -258,6 +262,27 @@ for (const script of [false, true]) {
         expect(ring).toEqual({ style: "solid", width: "2px" });
         await live.context().close();
       }
+      // The site's text colours, as its default tokens hold them.
+      expect(paints).toEqual({
+        light: "rgb(17, 24, 39)",
+        dark: "rgb(249, 250, 251)",
+      });
+    });
+
+    test("an accordion stored before Open opens each question by its own setting", async ({
+      page,
+      browser,
+      baseURL,
+    }) => {
+      // No Open, no First open, and its second question set open itself.
+      const slug = await accordionPage(page.request, {}, [false, true, false]);
+      const live = await visitor(browser, baseURL, script);
+      await live.goto(`/${slug}`);
+      await expect(toggle(live, 0)).toBeVisible();
+      expect(await openOnes(live)).toEqual([false, true, false]);
+      await toggle(live, 0).click();
+      await expect.poll(() => openOnes(live)).toEqual([true, true, false]);
+      await live.context().close();
     });
   });
 }
