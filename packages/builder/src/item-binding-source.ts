@@ -108,40 +108,40 @@ function listItems(
   };
 }
 
+/** The most lists one block may sit inside, as a document's depth bounds it. */
+const MOST_LISTS = 64;
+
 /**
- * The item of the list block `nodeId` sits in, nearest first, or `undefined`
- * outside every list's entries. Asks the host for the collections, and for
- * its named queries, only while `wanted`, and only for a block in a list.
+ * Every list whose entries `id` is drawn in, innermost first: the list
+ * {@link outerListOf} finds, then the one around it, and so on out.
  *
- * @param document - the document the block is in
- * @param nodeId - the block
- * @param services - the host's reads
- * @param wanted - whether the item is asked for at all
- * @returns the item's source, named, with its fields once they are read
+ * @param nodes - the document's nodes
+ * @param id - the block
+ * @returns the lists, nearest first; none outside every list's entries
  */
-export function useListItem(
-  document: BlockDocument,
-  nodeId: string,
-  services: ContentServices | undefined,
-  wanted: boolean
-): ItemSource | undefined {
-  // Found in the document first, so a block outside every list asks the
-  // host for nothing.
-  const outer = wanted ? outerListOf(document.nodes, nodeId) : undefined;
-  const listed = useLoopCollections(
-    outer === undefined ? undefined : services?.listLoopCollections
-  );
-  const query =
-    outer === undefined ? undefined : readListQuery(outer.props).query;
-  // The site's named queries only for a list fed by one: a collection's list
-  // has no need of them, and their read is retried while it fails.
-  const customs = useCustomSources(
-    query?.namedQuery === undefined ? undefined : services?.listCustomSources
-  );
-  if (outer === undefined) return undefined;
+function enclosingLists(nodes: BlockNode[], id: string): readonly BlockNode[] {
+  const lists: BlockNode[] = [];
+  // Bounded: each step moves one list out, and no document is this deep.
+  for (
+    let list = outerListOf(nodes, id);
+    list !== undefined && lists.length < MOST_LISTS;
+    list = outerListOf(nodes, list.id)
+  ) {
+    lists.push(list);
+  }
+  return lists;
+}
+
+/** One list's item, named, from the collections and queries read. */
+function itemOf(
+  list: BlockNode,
+  collections: ReturnType<typeof useLoopCollections>,
+  customs: readonly CustomSource[] | undefined
+): ItemSource {
+  const query = readListQuery(list.props).query;
   const { found, fields } = listItems(
     query,
-    listed?.kind === "ready" ? listed.collections : [],
+    collections?.kind === "ready" ? collections.collections : [],
     customs
   );
   const one = (found?.singular ?? found?.label ?? "entry").toLowerCase();
@@ -149,15 +149,62 @@ export function useListItem(
     name: `Each ${one} in the list`,
     one,
     fields,
-    list: outer,
-    loading: listed?.kind === "loading",
+    list,
+    loading: collections?.kind === "loading",
   };
 }
 
 /**
+ * The item of every list block `nodeId` sits in, nearest first: none outside
+ * every list's entries. Asks the host for the collections, and for its named
+ * queries, only while `wanted`, and only for a block in a list.
+ *
+ * @param document - the document the block is in
+ * @param nodeId - the block
+ * @param services - the host's reads
+ * @param wanted - whether the items are asked for at all
+ * @returns each list's item source, named, with its fields once read
+ */
+export function useListItems(
+  document: BlockDocument,
+  nodeId: string,
+  services: ContentServices | undefined,
+  wanted: boolean
+): readonly ItemSource[] {
+  // Found in the document first, so a block outside every list asks the
+  // host for nothing.
+  const lists = wanted ? enclosingLists(document.nodes, nodeId) : [];
+  const listed = useLoopCollections(
+    lists.length === 0 ? undefined : services?.listLoopCollections
+  );
+  // The site's named queries only for a list fed by one: a collection's list
+  // has no need of them, and their read is retried while it fails.
+  const named = lists.some(
+    list => readListQuery(list.props).query.namedQuery !== undefined
+  );
+  const customs = useCustomSources(
+    named ? services?.listCustomSources : undefined
+  );
+  return lists.map(list => itemOf(list, listed, customs));
+}
+
+/**
+ * The item of the list block `nodeId` sits in, nearest first, or `undefined`
+ * outside every list's entries: the first of {@link useListItems}.
+ */
+export function useListItem(
+  document: BlockDocument,
+  nodeId: string,
+  services: ContentServices | undefined,
+  wanted: boolean
+): ItemSource | undefined {
+  return useListItems(document, nodeId, services, wanted)[0];
+}
+
+/**
  * The source of an item binding on block `nodeId`, or `undefined` for a
- * binding to another source: the list item {@link useListItem} finds, asked
- * for only for an item binding.
+ * binding to another source: the item of the list it names (`list`), else
+ * of the nearest list, asked for only for an item binding.
  */
 export function useItemSource(
   binding: Binding,
@@ -166,10 +213,17 @@ export function useItemSource(
   services: ContentServices | undefined
 ): ItemSource | undefined {
   const item = binding.source === "item";
-  const found = useListItem(document, nodeId, services, item);
-  if (!item || found !== undefined) return found;
-  // An item binding outside every list still names its source, with no
-  // fields to name its field from: the save refuses it there.
+  const items = useListItems(document, nodeId, services, item);
+  if (!item) return undefined;
+  const named = "list" in binding ? binding.list : undefined;
+  const found =
+    named === undefined
+      ? items[0]
+      : items.find(each => each.list?.id === named);
+  if (found !== undefined) return found;
+  // An item binding outside every list, or naming a list it is not inside,
+  // still names its source, with no fields to name its field from: the save
+  // refuses it there.
   return {
     name: "Each entry in the list",
     one: "entry",

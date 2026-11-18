@@ -230,7 +230,13 @@ describe("the groups, nearest first", () => {
     await within(list).findByRole("group", {
       name: "Each project in the list",
     });
-    expect(groupNames(list)[0]).toBe("Each project in the list");
+    // Then the outer list's, then this page; the Singles and site folded.
+    expect(groupNames(list)).toEqual([
+      "Each project in the list",
+      "Each category in the list",
+      "This page",
+      "Singles · Site",
+    ]);
   });
 
   it("opens a folded source in place, by click or by key", async () => {

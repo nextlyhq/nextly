@@ -359,25 +359,39 @@ function listFits(source: BindingSource, list: unknown): boolean {
   );
 }
 
-/** The fields a stored binding is read through, refusing anything else. */
-function readStoredBinding(value: unknown): StoredBinding | undefined {
-  if (!isPlainRecord(value)) return undefined;
-  const path = ownEntry(value, "$bind");
-  if (!isBindPath(path)) return undefined;
+/**
+ * Where a stored binding reads: its source, the Single it names, and the
+ * enclosing list it names; `undefined` for any that does not fit its source.
+ */
+function storedSource(
+  value: Readonly<Record<string, unknown>>
+): Pick<StoredBinding, "source" | "sourceKey" | "list"> | undefined {
   const source = ownEntry(value, "source") ?? DEFAULT_BINDING_SOURCE;
   if (typeof source !== "string" || !isBindingSource(source)) return undefined;
   const sourceKey = ownEntry(value, "sourceKey");
   if (!sourceKeyFits(source, sourceKey)) return undefined;
   const list = ownEntry(value, "list");
   if (!listFits(source, list)) return undefined;
+  return {
+    source,
+    ...(typeof sourceKey === "string" ? { sourceKey } : {}),
+    ...(typeof list === "string" ? { list } : {}),
+  };
+}
+
+/** The fields a stored binding is read through, refusing anything else. */
+function readStoredBinding(value: unknown): StoredBinding | undefined {
+  if (!isPlainRecord(value)) return undefined;
+  const path = ownEntry(value, "$bind");
+  if (!isBindPath(path)) return undefined;
+  const from = storedSource(value);
+  if (from === undefined) return undefined;
   const hasFallback =
     Object.prototype.hasOwnProperty.call(value, "fallback") &&
     ownEntry(value, "fallback") !== undefined;
   return {
     path,
-    source,
-    ...(typeof sourceKey === "string" ? { sourceKey } : {}),
-    ...(typeof list === "string" ? { list } : {}),
+    ...from,
     hasFallback,
     fallback: ownEntry(value, "fallback"),
     format: ownEntry(value, "format"),
