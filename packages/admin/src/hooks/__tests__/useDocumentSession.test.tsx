@@ -62,6 +62,8 @@ vi.mock("@admin/hooks/useCanRequest", () => ({
   useAsksTranslationStatus: () => api.localized.enabled,
 }));
 
+import { DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS } from "nextly/document-lock";
+
 import { parseApiError } from "@admin/lib/api/parseApiError";
 
 import {
@@ -427,6 +429,46 @@ describe("useDocumentSession: save as draft and publish", () => {
     });
 
     expect(outcome).toEqual({ ok: false, reason: "moved", message: null });
+    expect(api.update).not.toHaveBeenCalled();
+  });
+
+  it("sends nothing once a colleague took the document while the write waited", async () => {
+    // A recording on its way holds the write back; a beat meanwhile says a
+    // colleague took the document. Locks are advisory on the server, so the
+    // session itself must not send.
+    let land: (value: unknown) => void = () => undefined;
+    api.saveAutosave.mockImplementationOnce(
+      () => new Promise(resolve => (land = resolve))
+    );
+    const view = await heldSession();
+    act(() => view.result.current.record({ title: "Header" }));
+    await act(async () => void vi.advanceTimersByTime(DEBOUNCE_WAIT));
+    await waitFor(() => expect(api.saveAutosave).toHaveBeenCalledTimes(1));
+
+    let outcome: unknown;
+    let saving: Promise<unknown> = Promise.resolve();
+    act(() => {
+      saving = view.result.current
+        .publish({ title: "Header" })
+        .then(answer => (outcome = answer));
+    });
+    api.patch.mockResolvedValue({
+      message: "",
+      item: {
+        status: "lost",
+        holder: { ownerId: "u2", ownerLabel: "Bob Lee", expiresInSeconds: 90 },
+      },
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS);
+    });
+    await waitFor(() => expect(view.result.current.lock.status).toBe("lost"));
+    await act(async () => {
+      land({ updatedAt: "2026-11-18T09:00:00.000Z", locale: null });
+      await saving;
+    });
+
+    expect(outcome).toEqual({ ok: false, reason: "locked", message: null });
     expect(api.update).not.toHaveBeenCalled();
   });
 
