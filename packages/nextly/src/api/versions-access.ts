@@ -17,9 +17,11 @@
 
 import { z } from "zod";
 
+import { withVersionLanguage } from "../auth/access/rule-language";
 import { apiKeyScopeFrom } from "../auth/authenticated-scope";
 import type { AuthenticatedScope } from "../auth/authenticated-scope";
 import { authorizationGroups } from "../auth/entity-read-access";
+import { READ_DOCUMENT_HISTORY } from "../auth/middleware";
 import type { FieldConfig } from "../collections/fields/types";
 import { getService } from "../di";
 import { container } from "../di/container";
@@ -86,24 +88,38 @@ import { requireRouteCollectionAccess } from "./route-auth";
  * gating first would make the first request to a fresh process fail instead of
  * auto-initializing.
  *
- * @returns The resolved caller, for redacting whatever is returned next.
+ * `locale` is the language the request names, which both the route gate and
+ * the document gate ask the read rule in. Naming none, each is answered where
+ * any language the history holds is readable, and what is returned is
+ * narrowed to the readable ones afterwards.
+ *
+ * @returns The resolved caller, for redacting whatever is returned next, and
+ *   the languages the document gate found it may read the history in.
  */
 export async function requireRouteVersionReadAccess(
   request: Request,
   scopeKind: VersionScopeKind,
   slug: string,
-  entryId: string
-): Promise<{ user: UserContext; authenticatedScope?: AuthenticatedScope }> {
+  entryId: string,
+  locale?: string
+): Promise<{
+  user: UserContext;
+  authenticatedScope?: AuthenticatedScope;
+  readableLanguages: ReadonlySet<string>;
+}> {
   // The boot entry is loaded when a history is asked for, so the dispatchers
   // that import this module's helpers do not load the whole boot with them.
   const { getCachedNextly } = await import("../init");
   await getCachedNextly();
 
   // A history names one document: a caller who may not read it is answered
-  // as if it were missing, as the dispatcher's history routes answer.
+  // as if it were missing, as the dispatcher's history routes answer. The
+  // rule is asked in the language the request names, or where it names none,
+  // in each language alone (`READ_DOCUMENT_HISTORY`).
+  const named = locale !== undefined && locale !== "" ? locale : undefined;
   const auth = await requireRouteCollectionAccess(request, "read", slug, {
-    method: "readDocumentHistory",
-    params: {},
+    method: READ_DOCUMENT_HISTORY,
+    params: named === undefined ? {} : { locale: named },
     namesOne: true,
   });
 
@@ -127,15 +143,17 @@ export async function requireRouteVersionReadAccess(
   const authenticatedScope: AuthenticatedScope | undefined =
     auth.authMethod === "api-key" ? apiKeyScopeFrom(auth) : undefined;
 
-  await assertVersionDocumentReadable(
+  const readableLanguages = await assertVersionDocumentReadable(
     scopeKind,
     slug,
     entryId,
     user,
-    authenticatedScope
+    authenticatedScope,
+    {},
+    named === undefined ? [] : [named]
   );
 
-  return { user, authenticatedScope };
+  return { user, authenticatedScope, readableLanguages };
 }
 
 /**
@@ -155,6 +173,9 @@ export type { DocumentReadHookInputs };
  * separate from {@link requireRouteVersionReadAccess} means those rules are defined
  * once instead of drifting between the two entry points.
  *
+ * @returns The languages asked about that the caller may read the history
+ *   in: the named ones, or else every readable language the history holds.
+ *   Empty for a history that names no language.
  * @throws NextlyError.notFound when the caller may not see the document.
  */
 export async function assertVersionDocumentReadable(
@@ -171,7 +192,7 @@ export async function assertVersionDocumentReadable(
   // The languages the read names or returns, each asked about in its own
   // right; null is a part with no language, which the read above covers.
   locales: readonly (string | null)[] = []
-): Promise<void> {
+): Promise<ReadonlySet<string>> {
   // The document's history is open to a caller who may read the document in
   // a language its history is about: the languages the read names when it
   // names any, otherwise any language its history can be asked about. Never
@@ -233,43 +254,23 @@ export async function assertVersionDocumentReadable(
       },
     });
   }
+  return allowed;
 }
 
 /**
- * What a history listing reads, by language: the one it names, once its caller
- * may read the document in it, or else every language they may read it in.
- * Spread into the listing's options, so every listing narrows alike.
- *
- * @throws NextlyError.notFound when the named language is not readable.
+ * What a history listing reads, by language: the one it names, or else every
+ * language its caller may read it in. Derived from the answer of
+ * {@link assertVersionDocumentReadable}, asked with the same `locale`, which
+ * has refused a named language the caller may not read; so every listing
+ * narrows alike and no language is asked about twice.
  */
-export async function historyListLanguages(
-  scopeKind: VersionScopeKind,
-  slug: string,
-  entryId: string,
-  user: UserContext,
-  authenticatedScope: AuthenticatedScope | undefined,
-  locale: string | undefined
-): Promise<Pick<VersionListOptions, "locale" | "locales">> {
-  if (locale !== undefined && locale !== "") {
-    await assertHistoryLocalesReadable(
-      scopeKind,
-      slug,
-      entryId,
-      user,
-      authenticatedScope,
-      {},
-      [locale]
-    );
-    return { locale };
-  }
-  const readable = await readableHistoryLocales(
-    scopeKind,
-    slug,
-    entryId,
-    user,
-    authenticatedScope
-  );
-  return { locales: [...readable] };
+export function historyListLanguages(
+  locale: string | undefined,
+  readable: ReadonlySet<string>
+): Pick<VersionListOptions, "locale" | "locales"> {
+  return locale !== undefined && locale !== ""
+    ? { locale }
+    : { locales: [...readable] };
 }
 
 /**
@@ -633,9 +634,16 @@ export async function currentRedactionSchema(
  *
  * Fails closed: if the rules cannot be evaluated, every field carrying a read
  * rule is withheld rather than the snapshot returned as stored.
+ *
+ * Takes the version itself, its snapshot and the language it records, and
+ * runs every rule in that language (`withVersionLanguage`): a field rule
+ * answering by language withholds from a version what it withholds from a
+ * read in the version's language. The one redaction every surface returning a
+ * stored snapshot or a judgment of one calls, so none can judge it in another
+ * language.
  */
 export async function redactSnapshotForUser(
-  snapshot: unknown,
+  version: { snapshot: unknown; locale: string | null },
   scopeKind: VersionScopeKind,
   slug: string,
   user: UserContext,
@@ -648,6 +656,7 @@ export async function redactSnapshotForUser(
   schema?: RedactionSchema
 ): Promise<ReadonlySet<string>> {
   const withheld = new Set<string>();
+  const { snapshot } = version;
   if (typeof snapshot !== "object" || snapshot === null) return withheld;
   if (scopeKind !== "collection" && scopeKind !== "single") return withheld;
 
@@ -676,16 +685,18 @@ export async function redactSnapshotForUser(
     grants: callerAccessGrants(user, authenticatedScope),
   };
   try {
-    await applyFieldReadAccess({
-      kind: scopeKind,
-      slug,
-      entry,
-      user,
-      authenticatedScope,
-      grants: caller.grants,
-      overrideAccess: false,
+    await withVersionLanguage(version.locale, async () => {
+      await applyFieldReadAccess({
+        kind: scopeKind,
+        slug,
+        entry,
+        user,
+        authenticatedScope,
+        grants: caller.grants,
+        overrideAccess: false,
+      });
+      await applyComponentReadAccess(entry, fields, componentFields, caller);
     });
-    await applyComponentReadAccess(entry, fields, componentFields, caller);
   } catch (error) {
     // A rule that could not run never answered: the request ends with that,
     // not with every field carrying a read rule withheld.
@@ -1000,6 +1011,8 @@ export async function readableFieldSources<
   Row extends {
     // Null on an autosave row, which records no sources.
     versionNo: number | null;
+    // The row's language, which its snapshot is judged in.
+    locale: string | null;
     fieldSources?: Readonly<Record<string, number>> | null;
   },
 >(
@@ -1047,7 +1060,7 @@ export async function readableFieldSources<
         if (!(name in entry)) entry[name] = null;
       }
       const withheld = await redactSnapshotForUser(
-        entry,
+        { snapshot: entry, locale: row.locale },
         args.ref.scopeKind,
         args.ref.scopeSlug,
         args.user,
@@ -1506,7 +1519,7 @@ export async function diffDocumentVersions(args: {
   const user = args.user;
   const withheldFrom = user
     ? await redactSnapshotForUser(
-        fromRow.snapshot,
+        fromRow,
         args.scopeKind,
         args.slug,
         user,
@@ -1515,7 +1528,7 @@ export async function diffDocumentVersions(args: {
     : new Set<string>();
   const withheldTo = user
     ? await redactSnapshotForUser(
-        toRow.snapshot,
+        toRow,
         args.scopeKind,
         args.slug,
         user,

@@ -118,23 +118,18 @@ export const GET = privateToSession(
     // clamped, so no single request can serialize an entire long history.
     const limit = Math.min(requestedLimit ?? DEFAULT_LIMIT, MAX_LIMIT);
 
+    // Asked in the language the listing names, or in any its history holds.
     const caller = await requireRouteVersionReadAccess(
       request,
       scopeKind,
       slug,
-      id
+      id,
+      locale
     );
 
     // The languages this caller may read the history in: the one asked for,
     // or every one they may read.
-    const languages = await historyListLanguages(
-      scopeKind,
-      slug,
-      id,
-      caller.user,
-      caller.authenticatedScope,
-      locale
-    );
+    const languages = historyListLanguages(locale, caller.readableLanguages);
 
     const versions = getService("versionsService");
     // Fetch one more than asked for: its presence is what proves another page

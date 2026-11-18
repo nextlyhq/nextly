@@ -348,7 +348,8 @@ describe("assertVersionDocumentReadable", () => {
       assertVersionDocumentReadable("collection", "posts", "e1", {
         id: "user-1",
       })
-    ).resolves.toBeUndefined();
+      // No registered entity is localized: a history in no language.
+    ).resolves.toEqual(new Set());
 
     // Same document rules as the standalone route: drafts visible, and the
     // read rule asked again rather than taken as answered upstream, since an

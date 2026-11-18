@@ -116,7 +116,8 @@ describe.each(getConfiguredTestDialects())(
 
       probe.armed = true;
       const redacted = await redactSnapshotForUser(
-        { title: "T1", guarded: "G-1" },
+        // A version of a document without languages.
+        { snapshot: { title: "T1", guarded: "G-1" }, locale: null },
         "collection",
         POSTS,
         READER

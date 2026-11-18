@@ -30,6 +30,7 @@ import {
   parseComparisonQuery,
   hydrateVersionSnapshot,
   readableFieldSources,
+  readableHistoryLocales,
   readingPersonId,
   redactSnapshotForUser,
   resolveVersionsPolicy,
@@ -168,23 +169,20 @@ export async function listVersionsForDocument(
   // here rather than per dispatcher so every caller of this core is covered.
   assertVersionPaging(args);
 
-  await assertVersionDocumentReadable(
-    args.scopeKind,
-    args.slug,
-    args.entryId,
-    args.user,
-    args.authenticatedScope
-  );
-  // The languages this caller may read the history in: the one asked for, or
-  // every one they may read.
-  const languages = await historyListLanguages(
+  // Asked in the language the listing names, or in each its history holds,
+  // and answering the ones the caller may read.
+  const readable = await assertVersionDocumentReadable(
     args.scopeKind,
     args.slug,
     args.entryId,
     args.user,
     args.authenticatedScope,
-    args.locale
+    {},
+    args.locale === undefined ? [] : [args.locale]
   );
+  // The languages this caller may read the history in: the one asked for, or
+  // every one they may read.
+  const languages = historyListLanguages(args.locale, readable);
 
   const ref = {
     scopeKind: args.scopeKind,
@@ -386,7 +384,7 @@ export async function getVersionForDocument(
   // What the read rules withheld is named beside the snapshot, so a reader is
   // told a value is held back rather than shown a version that lacks it.
   const withheld = await redactSnapshotForUser(
-    row.snapshot,
+    row,
     args.scopeKind,
     args.slug,
     args.user,
@@ -1163,6 +1161,26 @@ export async function getAutosaveForDocument(
   // Null rather than a 404: having no recovery point is the ordinary state, not
   // a missing resource, and the editor asks on every open.
   if (!row) return null;
+  // A point saved in a language the caller may not read the document in is
+  // answered as none, as a refusal would tell them it exists. The document
+  // gate above admitted them in some language, not in this one.
+  if (
+    row.locale !== null &&
+    row.locale !== "" &&
+    !(
+      await readableHistoryLocales(
+        args.scopeKind,
+        args.slug,
+        args.entryId,
+        args.user,
+        authenticatedScope,
+        {},
+        [row.locale]
+      )
+    ).has(row.locale)
+  ) {
+    return null;
+  }
 
   // Same redaction a version read applies. Document-level access is not the
   // whole question: a field's `access.read` rule can deny this caller today
@@ -1171,7 +1189,7 @@ export async function getAutosaveForDocument(
   // The scope decoded above, the one the document gate judged: a direct
   // dispatch carries a key's scope in its params only.
   await redactSnapshotForUser(
-    row.snapshot,
+    row,
     args.scopeKind,
     args.slug,
     args.user,

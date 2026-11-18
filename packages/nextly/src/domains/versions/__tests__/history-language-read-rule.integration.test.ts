@@ -5,16 +5,24 @@
  * language is not. The same holds for the history route itself, and for a
  * discard, which hands back the document in the language it discards.
  */
+// Set before the harness boots: signing API keys reads it once.
+process.env.NEXTLY_SECRET =
+  process.env.NEXTLY_SECRET ??
+  "test-secret-must-be-at-least-32-characters-long!!";
+
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
   grantTo,
+  superAdminUser,
   userWhoMay,
 } from "../../../__tests__/fixtures/permission-holders";
+import { GET as listRoute } from "../../../api/versions";
 import {
   assertVersionDocumentReadable,
   readableHistoryLocales,
 } from "../../../api/versions-access";
+import { GET as detailRoute } from "../../../api/versions-detail";
 import { defineCollection, defineSingle, text } from "../../../config";
 import {
   asCaller,
@@ -22,6 +30,7 @@ import {
 } from "../../../dispatcher/__tests__/request-caller";
 import {
   discardWorkingDraftForDocument,
+  getAutosaveForDocument,
   getVersionDiffForDocument,
   getVersionForDocument,
   listVersionsForDocument,
@@ -58,7 +67,11 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         status: true,
         versions: { drafts: true },
         access: { read: ({ locale }: { locale?: string }) => locale === "es" },
-        fields: [text({ name: "title" })],
+        fields: [
+          text({ name: "title" }),
+          // Translated, and withheld from a read in Spanish.
+          text({ name: "note", access: { read: notSpanish } }),
+        ],
       }),
       defineCollection({
         slug: POSTS,
@@ -107,6 +120,125 @@ async function bilingualPost(t: TestNextly): Promise<string> {
     data: { title: "Puerto", status: "published", _overwrite: true },
   });
   return id;
+}
+
+/**
+ * A document readable in Spanish alone, saved once in English and twice in
+ * Spanish by a trusted server, with its English version and latest Spanish
+ * one. The Spanish saves carry a note a Spanish read withholds.
+ */
+async function spanishOnlyHistory(
+  t: TestNextly,
+  scopeKind: "collection" | "single"
+): Promise<{ id: string; english: number; spanish: number }> {
+  const saves = [
+    ["en", { title: "Harbour", note: "harbour-note" }],
+    ["es", { title: "Puerto", note: "nota-secreta" }],
+    ["es", { title: "Puerto 2", note: "nota-secreta-2" }],
+  ] as const;
+  let id = "";
+  for (const [locale, data] of saves) {
+    if (scopeKind === "single") {
+      const singles = t.getService("singleEntryService") as unknown as {
+        update(
+          slug: string,
+          data: Record<string, unknown>,
+          options: Record<string, unknown>
+        ): Promise<{ success: boolean; data?: { id?: unknown } | null }>;
+      };
+      const saved = await singles.update(
+        SPANISH_ONLY_SITE,
+        { title: data.title, status: "published", _overwrite: true },
+        { locale, overrideAccess: true }
+      );
+      expect(saved.success, JSON.stringify(saved)).toBe(true);
+      id = String(saved.data?.id ?? id);
+    } else if (id === "") {
+      id = String(
+        (
+          await t.nextly.create({
+            collection: SPANISH_ONLY,
+            locale,
+            data: { ...data, status: "published" },
+          })
+        ).item.id
+      );
+    } else {
+      await t.nextly.update({
+        collection: SPANISH_ONLY,
+        id,
+        locale,
+        data: { ...data, status: "published", _overwrite: true },
+      });
+    }
+  }
+  const versions = t.getService("versionsService") as unknown as {
+    list(
+      ref: Record<string, string>
+    ): Promise<{ locale: string | null; versionNo: number }[]>;
+  };
+  // Newest first.
+  const all = await versions.list({
+    scopeKind,
+    scopeSlug: scopeKind === "single" ? SPANISH_ONLY_SITE : SPANISH_ONLY,
+    entryId: id,
+  });
+  const english = all.find(v => v.locale === "en");
+  const spanish = all.find(v => v.locale === "es");
+  expect(english, "an English version is stored").toBeDefined();
+  expect(spanish, "a Spanish version is stored").toBeDefined();
+  return { id, english: english!.versionNo, spanish: spanish!.versionNo };
+}
+
+/**
+ * A role-based API key, made by a super-admin, whose role may read `slug` and
+ * nothing else: a caller of the published version routes, which take a
+ * session or a key.
+ */
+async function keyThatMayRead(
+  t: TestNextly,
+  name: string,
+  slug: string
+): Promise<string> {
+  // Seeds the permission where the boot did not.
+  await userWhoMay(t, `${name}-holder`, "read", [slug]);
+  const api = t.nextly as unknown as {
+    permissions: {
+      find(a: { limit: number }): Promise<{
+        items: { id: string; slug: string }[];
+      }>;
+    };
+    roles: {
+      create(a: { data: Record<string, unknown> }): Promise<{
+        item: { id: string };
+      }>;
+    };
+  };
+  const permission = (await api.permissions.find({ limit: 1000 })).items.find(
+    p => p.slug === `read-${slug}`
+  );
+  expect(permission, `read-${slug} is seeded`).toBeDefined();
+  const role = await api.roles.create({
+    data: {
+      name: `Key ${name}`,
+      slug: `key-${name}`,
+      permissionIds: [permission!.id],
+    },
+  });
+  const founder = await superAdminUser(t, `${name}-founder`);
+  const apiKeys = t.getService("apiKeyService") as unknown as {
+    createApiKey(
+      userId: string,
+      input: Record<string, unknown>
+    ): Promise<{ key: string }>;
+  };
+  const { key } = await apiKeys.createApiKey(founder, {
+    name,
+    tokenType: "role-based",
+    roleId: role.item.id,
+    expiresIn: "unlimited",
+  });
+  return key;
 }
 
 /** Whether `read` settles, keeping the refusal's code where it is refused. */
@@ -181,8 +313,9 @@ describe.each(getConfiguredTestDialects())(
           locales
         );
 
-      await expect(asReader(["es"])).resolves.toBeUndefined();
-      await expect(asReader([])).resolves.toBeUndefined();
+      // Opened, answering the one language the reader may read it in.
+      await expect(asReader(["es"])).resolves.toEqual(new Set(["es"]));
+      await expect(asReader([])).resolves.toEqual(new Set(["es"]));
       await expect(asReader(["en"])).rejects.toMatchObject({
         code: "NOT_FOUND",
       });
@@ -224,8 +357,9 @@ describe.each(getConfiguredTestDialects())(
           locales
         );
 
-      await expect(asReader(["es"])).resolves.toBeUndefined();
-      await expect(asReader([])).resolves.toBeUndefined();
+      // Opened, answering the one language the reader may read it in.
+      await expect(asReader(["es"])).resolves.toEqual(new Set(["es"]));
+      await expect(asReader([])).resolves.toEqual(new Set(["es"]));
       await expect(asReader(["en"])).rejects.toMatchObject({
         code: "NOT_FOUND",
       });
@@ -421,6 +555,130 @@ describe.each(getConfiguredTestDialects())(
       );
       // Spanish is refused rather than handed back.
       expect(await outcome(discard("es"))).toMatch(/^refused /);
+    }, 90_000);
+    // The published version routes judge a history read in the language it
+    // names, and one naming none in any language its history holds, as the
+    // document gate does: a rule admitting Spanish alone opens the Spanish
+    // history to them, and nothing else.
+    it.each([
+      { scopeKind: "collection" as const, slug: SPANISH_ONLY },
+      { scopeKind: "single" as const, slug: SPANISH_ONLY_SITE },
+    ])(
+      "opens the published $scopeKind history routes in the only language a read rule admits",
+      async ({ scopeKind, slug }) => {
+        const t = await boot(dialect);
+        const { id, english, spanish } = await spanishOnlyHistory(t, scopeKind);
+        const key = await keyThatMayRead(t, `hlr-route-${scopeKind}`, slug);
+        const document = { kind: scopeKind, slug, id };
+        const request = (path: string) =>
+          new Request(`http://localhost/api/versions/${path}`, {
+            headers: { authorization: `Bearer ${key}` },
+          });
+        const list = (search: string) =>
+          listRoute(request(`${scopeKind}/${slug}/${id}${search}`), {
+            params: Promise.resolve(document),
+          });
+        const detail = (versionNo: number) =>
+          detailRoute(request(`${scopeKind}/${slug}/${id}/${versionNo}`), {
+            params: Promise.resolve({
+              ...document,
+              versionNo: String(versionNo),
+            }),
+          });
+        const localesOf = async (response: Response) =>
+          (
+            (await response.json()) as { items: { locale: string | null }[] }
+          ).items.map(item => item.locale);
+
+        const spanishList = await list("?locale=es");
+        expect(spanishList.status).toBe(200);
+        expect(new Set(await localesOf(spanishList))).toEqual(new Set(["es"]));
+        const unnamed = await list("");
+        expect(unnamed.status).toBe(200);
+        expect(new Set(await localesOf(unnamed))).toEqual(new Set(["es"]));
+        expect((await detail(spanish)).status).toBe(200);
+        // English stays refused, by the route or the document gate.
+        expect((await list("?locale=en")).ok).toBe(false);
+        expect((await detail(english)).ok).toBe(false);
+      },
+      90_000
+    );
+
+    // A field rule judging by language is told a version's own language
+    // when its snapshot is redacted, as an ordinary read in that language
+    // tells it: a note withheld from a Spanish read is withheld from a
+    // Spanish version and a comparison of two.
+    it("withholds a field from a version in the language its read rule withholds it in", async () => {
+      const t = await boot(dialect);
+      const { id, spanish } = await spanishOnlyHistory(t, "collection");
+      const reader = await userWhoMay(t, "hlr-note-reader", "read", [
+        SPANISH_ONLY,
+      ]);
+      // The ordinary Spanish read withholds the note: the rule reaches it.
+      const read = await t.nextly.findByID({
+        collection: SPANISH_ONLY,
+        id,
+        locale: "es",
+        user: { id: reader },
+        overrideAccess: false,
+      } as never);
+      expect(JSON.stringify(read)).toContain("Puerto 2");
+      expect(JSON.stringify(read)).not.toContain("nota-secreta");
+      const as = {
+        scopeKind: "collection" as const,
+        slug: SPANISH_ONLY,
+        entryId: id,
+        user: { id: reader },
+      };
+
+      const version = await getVersionForDocument({
+        ...as,
+        versionNo: spanish,
+      });
+      expect(JSON.stringify(version.snapshot)).toContain("Puerto 2");
+      expect(JSON.stringify(version.snapshot)).not.toContain("nota-secreta");
+      expect(version.withheld).toContain("note");
+      const diff = await getVersionDiffForDocument({ ...as, locale: "es" });
+      expect(JSON.stringify(diff)).toContain("Puerto");
+      expect(JSON.stringify(diff)).not.toContain("nota-secreta");
+    }, 90_000);
+
+    // A reader's own recovery point in a language the read rule refuses them
+    // is answered as no recovery point at all, so its existence is not told.
+    it("answers a recovery point in a language the read rule refuses as none", async () => {
+      const t = await boot(dialect);
+      const id = await bilingualPost(t);
+      const reader = await userWhoMay(t, "hlr-autosave-reader", "read", [
+        POSTS,
+      ]);
+      const versions = t.getService("versionsService") as unknown as {
+        autosave(input: Record<string, unknown>): Promise<unknown>;
+      };
+      // Saved under the reader's id by a trusted server, in each language.
+      const autosave = (locale: string, title: string) =>
+        versions.autosave({
+          ref: { scopeKind: "collection", scopeSlug: POSTS, entryId: id },
+          status: "draft",
+          snapshot: { title },
+          locale,
+          createdBy: reader,
+        });
+      const readBack = () =>
+        asCaller(sessionCaller({ userId: reader }), () =>
+          getAutosaveForDocument({
+            scopeKind: "collection",
+            slug: POSTS,
+            entryId: id,
+            user: { id: reader },
+            params: { collectionName: POSTS, entryId: id },
+          })
+        );
+
+      await autosave("en", "Harbour draft");
+      // The reader reads their English point back: the fixture reaches it.
+      expect(JSON.stringify(await readBack())).toContain("Harbour draft");
+      await autosave("es", "Puerto borrador");
+      expect(await readBack()).toBeNull();
     }, 90_000);
   }
 );
