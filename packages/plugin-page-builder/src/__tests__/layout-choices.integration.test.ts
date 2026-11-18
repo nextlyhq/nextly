@@ -194,7 +194,7 @@ describe.each(getConfiguredTestDialects())(
           props: { componentId: logo },
         },
       ]);
-      const main = await layout(t, "main", header, "published");
+      const main = await layout(t, "chosen", header, "published");
       const unfinished = await layout(t, "unfinished", header, "draft");
       const landing = await layout(t, "landing", header, "published");
       // An edit saved to a published Layout, naming no status, waits as its

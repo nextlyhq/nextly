@@ -29,6 +29,7 @@
  */
 
 import {
+  isOneParagraphProp,
   ITEM_SCHEMA_MAX_DEPTH,
   optionLabel,
   type PropSchema,
@@ -50,7 +51,6 @@ import { ArrowDown, ArrowUp, Trash2 } from "lucide-react";
 import * as React from "react";
 
 import { propWrites } from "./code-hints";
-import { CssHint } from "./css-hint";
 import { CollectionControl, SortControl } from "./collection-loop-controls";
 import {
   CONTENT_CONTROL_TYPES,
@@ -58,6 +58,7 @@ import {
   type ContentControlType,
 } from "./content-control-types";
 import type { ContentControl, ContentControlProps } from "./content-services";
+import { CssHint } from "./css-hint";
 import { EntryFieldControl } from "./entry-field-control";
 import { propLabel, type EditableProp } from "./inspector";
 import { loadLucideIcons } from "./lucide-icon-source";
@@ -583,7 +584,9 @@ function ArrayItems({
     // arrived) changed nothing, and the next action must not start from it.
     if (onCommit(prop.name, next) !== null) latest.current = next;
   };
-  const position = (index: number) => `${label}, item ${index + 1}`;
+  // "Item 1", "Item 2": each item sits in the group the setting's own name
+  // labels, so repeating that name ("Items, item 1") says it twice.
+  const position = (index: number) => `Item ${index + 1}`;
   const move = (index: number, by: -1 | 1) => {
     const next = [...latest.current];
     const [taken] = next.splice(index, 1);
@@ -791,10 +794,23 @@ function IconControl({
   );
 }
 
+/**
+ * A `textarea` prop: typed words, or, for a value restricted to one paragraph
+ * with bold, italic and links (`oneParagraph`, a Text's), the rich-text
+ * field held to that.
+ */
+function TextareaControl(props: ContentControlProps): React.JSX.Element {
+  return isOneParagraphProp(props.prop.schema) ? (
+    <RichTextControl {...props} />
+  ) : (
+    <TextishControl {...props} />
+  );
+}
+
 /** Each type's control. Total over the list, so neither can gain a member alone. */
 const CONTROLS: Readonly<Record<ContentControlType, ContentControl>> = {
   text: TextControl,
-  textarea: TextishControl,
+  textarea: TextareaControl,
   url: TextishControl,
   number: TextishControl,
   checkbox: CheckboxControl,

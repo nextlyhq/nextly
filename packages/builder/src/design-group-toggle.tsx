@@ -86,20 +86,12 @@ export const OwnSearch: React.ForwardRefExoticComponent<
  * What the view searches for: the host's search where it keeps one, else
  * the view's own, with the needle both are matched by.
  */
-export function useViewSearch(
-  hostSearch: string | undefined,
-  onHostSearch: ((query: string) => void) | undefined
-): {
+export function useViewSearch(hostSearch: string | undefined): {
   query: string;
   needle: string;
   /** Whether a search is on. */
   searching: boolean;
   setQuery: (query: string) => void;
-  /**
-   * Empties the search, as adding a variable does, so its row is drawn: the
-   * host's, where it keeps the search, else the view's own.
-   */
-  clear: () => void;
   /** Whether the view draws its own search box. */
   own: boolean;
 } {
@@ -111,10 +103,6 @@ export function useViewSearch(
     needle,
     searching: needle !== "",
     setQuery,
-    clear: React.useCallback(() => {
-      if (hostSearch === undefined) setQuery("");
-      else onHostSearch?.("");
-    }, [hostSearch, onHostSearch]),
     own: hostSearch === undefined,
   };
 }

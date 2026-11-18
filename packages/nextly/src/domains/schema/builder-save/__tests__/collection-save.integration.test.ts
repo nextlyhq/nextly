@@ -1000,6 +1000,8 @@ describe.each(getConfiguredTestDialects())(
                 column: "body",
                 from: "text",
                 to: "varchar(255)",
+                change: "changes body from text to varchar(255)",
+                deletesValues: false,
               },
             ]
           : []
@@ -1007,7 +1009,7 @@ describe.each(getConfiguredTestDialects())(
       expect(preview.notices).toEqual(
         converts
           ? [
-              "This save also converts body from text to varchar(255), from an earlier Nextly version.",
+              "dc_posts was made by an earlier Nextly version. This save brings it up to date: changes body from text to varchar(255).",
             ]
           : []
       );
@@ -1065,7 +1067,7 @@ describe.each(getConfiguredTestDialects())(
           code: "NEXTLY_SCHEMA_CONVERSION_UNCONFIRMED",
           statusCode: 409,
           publicMessage: expect.stringContaining(
-            "converts body from text to varchar(255)"
+            "brings it up to date: changes body from text to varchar(255)"
           ),
         });
 

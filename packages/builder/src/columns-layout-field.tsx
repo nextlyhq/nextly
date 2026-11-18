@@ -39,6 +39,7 @@ import type { EditorState } from "./editor-state";
 import { HeldByLock } from "./held-by-lock";
 import type { PanelSection } from "./panel-section";
 import { arrowTo, SegmentChoices } from "./segment-choices";
+import { SettingSlot } from "./settings-filter";
 import { appliedAtReader, selectedSubject } from "./style-panel-reading";
 import { readStyleValue } from "./style-values";
 
@@ -49,8 +50,15 @@ const STACK_LABELS: Readonly<Record<StackOn, string>> = {
   mobile: "Mobile",
 };
 
-/** A tile's picture: its columns as bars, at their widths. */
-function Glyph({ layout }: { layout: ColumnsLayout }): React.JSX.Element {
+/**
+ * A tile's picture: its columns as bars, at their widths. Exported for the
+ * first-add picker, which offers the same tiles.
+ */
+export function ColumnsLayoutGlyph({
+  layout,
+}: {
+  layout: ColumnsLayout;
+}): React.JSX.Element {
   return (
     <span className="nx-columns-layout__glyph" aria-hidden="true">
       {layout.tracks.map((width, index) => (
@@ -91,8 +99,12 @@ type Row = NonNullable<ReturnType<typeof findNode>>;
  * Where every choice here writes: the row's own base values, whatever device,
  * state or shared style the Style tab is editing, since how many columns a
  * row holds is its structure. Stacking still names the devices it applies on.
+ * The first-add picker writes there too.
  */
-const ROW_OWN = { state: "base", breakpoint: BASE_BREAKPOINT } as const;
+export const ROW_OWN: {
+  readonly state: "base";
+  readonly breakpoint: typeof BASE_BREAKPOINT;
+} = { state: "base", breakpoint: BASE_BREAKPOINT };
 
 /** The width tiles: one tab stop, arrows choosing, a held tile saying why. */
 function WidthTiles({
@@ -160,7 +172,7 @@ function WidthTiles({
             onKeyDown={event => arrowTo(event, index, allowed, choose)}
             onClick={() => choose(index)}
           >
-            <Glyph layout={layout} />
+            <ColumnsLayoutGlyph layout={layout} />
             <span>{layout.label}</span>
           </button>
         );
@@ -235,49 +247,55 @@ export function ColumnsLayoutControl({
   return (
     <HeldByLock reasonId={heldBy}>
       <div className="nx-columns-layout" data-control="columns-layout">
-        <div className="nx-inspector__field nx-columns-layout__layout">
-          <span className="nx-inspector__field-name" id={labelId}>
-            Layout
-          </span>
-          <WidthTiles
-            row={row}
-            current={current}
-            labelId={labelId}
-            hintId={hintId}
-            onPoint={setPointed}
-            editor={editor}
-            held={heldBy !== undefined}
-          />
-        </div>
-        <p id={hintId} className="nx-inspector__note" aria-live="polite">
-          {heldReason(row, pointed, ROW_OWN) ??
-            hintFor(current, (stored ?? inherited) !== undefined)}
-        </p>
+        <SettingSlot ids={["columnsLayout"]}>
+          <div className="nx-inspector__field nx-columns-layout__layout">
+            <span className="nx-inspector__field-name" id={labelId}>
+              Layout
+            </span>
+            <WidthTiles
+              row={row}
+              current={current}
+              labelId={labelId}
+              hintId={hintId}
+              onPoint={setPointed}
+              editor={editor}
+              held={heldBy !== undefined}
+            />
+          </div>
+          <p id={hintId} className="nx-inspector__note" aria-live="polite">
+            {heldReason(row, pointed, ROW_OWN) ??
+              hintFor(current, (stored ?? inherited) !== undefined)}
+          </p>
+        </SettingSlot>
         {options.length > 1 ? (
           <>
-            <div className="nx-inspector__field">
-              <span className="nx-inspector__field-name" id={stackId}>
-                Stack on
-              </span>
-              <SegmentChoices
-                options={options}
-                on={stack.on}
-                labels={STACK_LABELS}
-                labelId={stackId}
-                onChoose={on => restack(on, stack.reversed)}
-              />
-            </div>
-            <div className="nx-inspector__field">
-              <span className="nx-inspector__field-name">
-                Reverse when stacked
-              </span>
-              <Switch
-                aria-label="Reverse when stacked"
-                checked={stack.reversed}
-                disabled={stack.on === "never"}
-                onCheckedChange={reversed => restack(stack.on, reversed)}
-              />
-            </div>
+            <SettingSlot ids={["stackOn"]}>
+              <div className="nx-inspector__field">
+                <span className="nx-inspector__field-name" id={stackId}>
+                  Stack on
+                </span>
+                <SegmentChoices
+                  options={options}
+                  on={stack.on}
+                  labels={STACK_LABELS}
+                  labelId={stackId}
+                  onChoose={on => restack(on, stack.reversed)}
+                />
+              </div>
+            </SettingSlot>
+            <SettingSlot ids={["reverseStacked"]}>
+              <div className="nx-inspector__field">
+                <span className="nx-inspector__field-name">
+                  Reverse when stacked
+                </span>
+                <Switch
+                  aria-label="Reverse when stacked"
+                  checked={stack.reversed}
+                  disabled={stack.on === "never"}
+                  onCheckedChange={reversed => restack(stack.on, reversed)}
+                />
+              </div>
+            </SettingSlot>
           </>
         ) : null}
       </div>

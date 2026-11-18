@@ -24,6 +24,12 @@ import type { BuilderShellProps } from "./shell-props";
 import { PANEL_DIVIDER_CLASS } from "./shell-stylesheet";
 
 /**
+ * The exit's words where the host names no other: it returns to the document
+ * that opened the editor.
+ */
+export const DEFAULT_EXIT_LABEL = "Exit editor";
+
+/**
  * The editor's top bar: three columns, the outer two equal, so the centre one
  * (the devices and the zoom) stays in the middle of the editor whatever the
  * sides hold. The shell draws its own controls here (exit, the zoom, the side
@@ -32,6 +38,7 @@ import { PANEL_DIVIDER_CLASS } from "./shell-stylesheet";
 export function ShellTopBar({
   headerRef,
   onExit,
+  exitLabel = DEFAULT_EXIT_LABEL,
   title,
   topBar,
   topBarCenter,
@@ -45,7 +52,7 @@ export function ShellTopBar({
   onInspector,
 }: Pick<
   BuilderShellProps,
-  "onExit" | "title" | "topBar" | "topBarCenter" | "topBarEnd"
+  "onExit" | "exitLabel" | "title" | "topBar" | "topBarCenter" | "topBarEnd"
 > & {
   headerRef: (element: HTMLElement | null) => void;
   zoom: CanvasZoom;
@@ -82,20 +89,21 @@ export function ShellTopBar({
             onClick={onExit}
             data-builder-animates
             /*
-             * The NAME stays "Exit editor" while the label becomes a glyph.
-             * This is the only route back to the document — `ChromeSuppression`
+             * The NAME stays the exit's words ("Exit editor", or where the
+             * host's exit goes) while the label becomes a glyph.
+             * This is the only way out of the editor — `ChromeSuppression`
              * withholds the navigation rail from a surface that cannot be left,
              * on the grounds that an author with unsaved work and no way out is
              * the worst state the editor can reach — so it keeps a real
              * accessible name and a tooltip rather than relying on the arrow
              * being self-evident.
              *
-             * An arrow rather than a cross: this returns to the document that
-             * opened the editor, and a cross reads as discarding rather than
-             * as going back.
+             * An arrow rather than a cross: this goes back, to the document
+             * that opened the editor or the list the host names, and a cross
+             * reads as discarding rather than as going back.
              */
-            aria-label="Exit editor"
-            title="Exit editor"
+            aria-label={exitLabel}
+            title={exitLabel}
             // A square at the editor's control height, as the bar's others are.
             className="border-[color:var(--nx-builder-border)] focus-visible:ring-ring inline-flex size-[var(--nx-builder-control-height)] items-center justify-center rounded-md border focus-visible:ring-2 focus-visible:outline-none"
           >

@@ -92,6 +92,9 @@ const verbs: CommandVerbs = {
   selectParent: () => {},
   move: () => {},
   duplicate: () => {},
+  copy: () => {},
+  cut: () => {},
+  paste: () => {},
   saveAsPattern: () => {},
   delete: () => {},
 };

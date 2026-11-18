@@ -110,6 +110,12 @@ export interface BuilderShellProps {
     readonly panel: LeftPanel;
     readonly view?: string;
     readonly count: number;
+    /**
+     * Asked by the editor rather than by the author: the Add panel an empty
+     * page opens on. It shows in the left side, but a left side the author
+     * hid themselves stays hidden.
+     */
+    readonly unlessHidden?: boolean;
   };
   /**
    * Reports the canvas zoom, and takes the change back.
@@ -216,6 +222,15 @@ export interface BuilderShellProps {
    * would be representable.
    */
   onExit?: () => void;
+  /**
+   * What the exit is called: its accessible name and tooltip, and the narrow
+   * notice's button. "Exit editor" when absent, which is right where leaving
+   * returns to the document that opened the editor. A host whose exit goes
+   * somewhere else names that place ("Back to Pages"), so the arrow says where
+   * it goes rather than claiming a return it doesn't make. Read only with
+   * `onExit`.
+   */
+  exitLabel?: string;
   /**
    * Where chrome preferences live. Defaults to `localStorage` in a browser and
    * to a store that remembers nothing anywhere else, so a server render is a

@@ -8,6 +8,7 @@ import {
   createBindingRun,
   DOCUMENT_FORMAT_VERSION,
   LIST_ENTRY_SLOT,
+  resolveNodeBindings,
   type BlockDocument,
   type BlockNode,
   type PropSchema,
@@ -16,8 +17,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   givenPlan,
+  itemOf,
   outOfReachOf,
   listOf,
+  scopeOf,
   pairedBindingRefusal,
   unboundAsWritten,
   unbindPlan,
@@ -290,7 +293,7 @@ describe("the list a list child is drawn in", () => {
       id,
       type: COLLECTION_LIST_TYPE,
       version: 1,
-      props: { query: { collection } },
+      props: { collection },
       slots: { [LIST_ENTRY_SLOT]: entries },
     }) as unknown as BlockNode;
   const title: BlockNode = {
@@ -309,6 +312,45 @@ describe("the list a list child is drawn in", () => {
     expect(listOf(page, "title")?.id).toBe("posts");
     expect(listOf(page, "posts")?.id).toBe("authors");
     expect(listOf(page, "authors")).toBeUndefined();
+  });
+
+  it("is the list a binding names, where that list holds the block", () => {
+    const keep = { item: "a1" };
+    expect(itemOf(page, "title", keep, "authors")).toEqual({
+      collection: "authors",
+      id: "a1",
+      list: "authors",
+    });
+    // CONTROL: naming none, the nearest list's entry.
+    expect(itemOf(page, "title", keep, undefined)).toEqual({
+      collection: "posts",
+      id: "a1",
+    });
+    // A list that does not hold the block is not read from.
+    expect(itemOf(page, "posts", keep, "posts")).toEqual({
+      needs: expect.stringContaining("isn't inside"),
+    });
+  });
+
+  it("reads the named list's entry for its value, as the binding reads it", async () => {
+    const reader = {
+      find: async () => ({ items: [{ id: "a1", name: "Ada" }] }),
+    };
+    const scope = await scopeOf(reader, {
+      collection: "authors",
+      id: "a1",
+      list: "authors",
+    });
+    if ("needs" in scope) throw new Error(scope.needs);
+    const heading: BlockNode = {
+      ...title,
+      bindings: { text: { $bind: "name", source: "item", list: "authors" } },
+    };
+    const run = createBindingRun({
+      sources: {},
+      props: { get: () => ({ props: { text: { type: "text" } } }) },
+    });
+    expect(resolveNodeBindings(heading, run, scope).props.text).toBe("Ada");
   });
 });
 
@@ -405,6 +447,25 @@ describe("an image bound into a collection other than the media library", () => 
       bindings: { text: { $bind: "meta.lede", source: "item" } },
     };
     expect(outOfReachOf(lede, "text", run, scope)).toBeUndefined();
+    // Naming the list it reads, judged by that list's schema.
+    const named = {
+      ...name,
+      bindings: {
+        text: { $bind: "author.name", source: "item", list: "posts-list" },
+      },
+    };
+    const namedScope = {
+      phase: "item" as const,
+      lists: new Map([
+        [
+          "posts-list",
+          { item: { author: "u1" }, itemRef: { collection: "posts" } },
+        ],
+      ]),
+    };
+    expect(outOfReachOf(named, "text", run, namedScope)).toEqual({
+      needs: expect.stringContaining("relation"),
+    });
   });
 
   it("reads the media library's own images as a visitor does", () => {

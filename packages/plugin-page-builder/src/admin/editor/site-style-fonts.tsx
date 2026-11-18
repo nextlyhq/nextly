@@ -324,7 +324,7 @@ function faceIdentity(face: FontFaceDef): string {
  * with previews from the file host the server names. `undefined` when the
  * host turned the catalogue off.
  */
-function useFontCatalogue(): FontCatalogue | undefined {
+export function useFontCatalogue(): FontCatalogue | undefined {
   const config = usePluginClientConfig(PLUGIN_SOURCE);
   const client = useFontCatalogueClient();
   // The file host the last read named, which previews are built under. Rows

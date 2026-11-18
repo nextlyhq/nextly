@@ -17,19 +17,13 @@
   padding: 0.5rem 0.75rem 0;
 }
 
-.nx-vars__controls,
-.nx-vars__preview {
+.nx-vars__controls {
   display: flex;
   align-items: center;
   gap: 0.375rem;
 }
 
-.nx-vars__preview-label {
-  font-size: 11px;
-  color: var(--nx-muted-foreground);
-}
-
-/* A segmented pair: the preview switch, and keep-or-use in the import. */
+/* A segmented choice: keep-or-use in the import, and other few-way picks. */
 .nx-vars__seg {
   display: inline-flex;
   padding: 2px;
@@ -81,13 +75,9 @@
   color: var(--nx-foreground);
 }
 
-.nx-vars__add {
-  width: 24px;
-  height: 24px;
-}
-
 .nx-vars__seg > button:focus-visible,
 .nx-vars__icon-button:focus-visible,
+.nx-vars__add-row:focus-visible,
 .nx-vars__row:focus-visible,
 .nx-vars__link:focus-visible,
 .nx-vars-editor__swatch:focus-visible {
@@ -406,45 +396,83 @@
   cursor: progress;
 }
 
-.nx-vars__report {
+.nx-vars__menu {
+  min-width: 11rem;
+}
+
+/* The ⋯ menu's design token export: its name, with the format beside it as
+   a quieter hint. */
+.nx-design-more__item {
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.nx-design-more__hint {
+  font-size: var(--text-xs);
+  color: var(--nx-muted-foreground);
+}
+
+/* "What wasn't exported": one row per variable, its name and what happened
+   on one line, why under them. Scrolls inside the dialog when long. */
+.nx-design-gaps__list {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
-  gap: 0.375rem;
-  padding: 0.5rem;
+  gap: 0.5rem;
+  max-height: 60vh;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.nx-design-gaps__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.125rem 0.75rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--nx-border);
   font-size: var(--text-xs);
   line-height: 1.4;
-  border: 1px solid var(--nx-border);
-  border-radius: var(--radius-sm);
-  background: var(--nx-muted);
 }
 
-.nx-vars__report[data-tone="refused"] {
-  color: var(--nx-destructive);
-  border-color: var(--nx-destructive);
+.nx-design-gaps__row:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
 }
 
-.nx-vars__report p {
-  margin: 0;
+.nx-design-gaps__name {
+  overflow-wrap: anywhere;
   font-weight: 600;
 }
 
-.nx-vars__report ul {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-  margin: 0;
-  padding-inline-start: 1rem;
+.nx-design-gaps__outcome {
+  color: var(--nx-muted-foreground);
+  white-space: nowrap;
 }
 
-.nx-vars__menu {
-  min-width: 11rem;
+.nx-design-gaps__why {
+  grid-column: 1 / -1;
+  color: var(--nx-muted-foreground);
+}
+
+/* An import's refused values, listed in the message that stays until it is
+   dismissed. Scrolls within the message rather than growing past the window. */
+.nx-design-toast__list {
+  max-height: 12rem;
+  margin: 0.25rem 0 0;
+  padding-inline-start: 1rem;
+  overflow-y: auto;
+  list-style: disc;
 }
 
 /* The editor beside the panel. Two classes, to outrank the popover's width. */
 [data-slot="popover-content"].nx-vars-editor {
   width: 240px;
   padding: 0.75rem;
+  /* Inside the window, scrolling within: a shadow of several layers is
+     taller than a laptop window. */
+  max-height: var(--radix-popover-content-available-height, 100vh);
+  overflow-y: auto;
 }
 
 .nx-vars-editor__body,
@@ -469,10 +497,187 @@
 
 .nx-vars-editor__code {
   margin: 0;
-  font-family: var(--font-mono, ui-monospace, monospace);
   font-size: 11px;
   color: var(--nx-muted-foreground);
   overflow-wrap: anywhere;
+}
+
+.nx-vars-editor__code code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  color: var(--nx-foreground);
+}
+
+/* "Fluid…" under a size, and its two sizes in place while it is open. */
+.nx-vars-editor__fluid {
+  align-self: flex-start;
+  font-size: var(--text-xs);
+}
+
+.nx-fluid {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.5rem;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-sm);
+}
+
+.nx-fluid__sizes {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 0.375rem 0.5rem;
+}
+
+/* The site's fluid range: two widths, in the Type tab and from "Fluid…". */
+.nx-fluid__range {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 0.375rem 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.nx-fluid__range > .nx-fluid__said {
+  grid-column: 1 / -1;
+}
+
+.nx-fluid__range-link {
+  align-self: flex-start;
+  font-size: var(--text-xs);
+}
+
+.nx-fluid__said {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--nx-muted-foreground);
+}
+
+/* What a built-in variable is for, under its name. */
+.nx-vars-editor__description {
+  margin: 0;
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  color: var(--nx-muted-foreground);
+}
+
+/* A spacing's preview: a bar as long as the value at the desktop width,
+   held to the row's room, before its value. */
+.nx-vars__tail {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  min-width: 0;
+}
+
+.nx-vars__bar {
+  flex: none;
+  max-width: 3rem;
+  height: 6px;
+  background: var(--nx-muted-foreground);
+  opacity: 0.55;
+}
+
+/* A radius's preview: a square wearing that radius on its corners. */
+.nx-vars__radius {
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid var(--nx-muted-foreground);
+  border-right-color: transparent;
+  border-bottom-color: transparent;
+}
+
+/* ☀ or ☾ before "Light" or "Dark", muted beside the words. */
+.nx-vars-editor__mode-icon {
+  margin-inline-end: 0.25rem;
+  vertical-align: -1px;
+  color: var(--nx-muted-foreground);
+}
+
+.nx-vars-editor__contrast-line .nx-vars-editor__mode-icon {
+  margin-inline-end: 0;
+}
+
+/* "Code name: --site-…", Copy at its end, the rename note under it. */
+.nx-vars-editor__code-name {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  column-gap: 0.5rem;
+}
+
+.nx-vars-editor__copy {
+  font-size: 11px;
+}
+
+.nx-vars-editor__copied {
+  grid-column: 1 / -1;
+  font-size: 11px;
+  color: var(--nx-muted-foreground);
+}
+
+.nx-vars-editor__copied:empty {
+  display: none;
+}
+
+.nx-vars-editor__hint {
+  grid-column: 1 / -1;
+  margin: 0.125rem 0 0;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--nx-muted-foreground);
+}
+
+/* How widely it is used, and where on request. */
+.nx-vars-editor__usage {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.5rem;
+  font-size: var(--text-xs);
+}
+
+.nx-vars-editor__usage > .nx-vars-editor__status {
+  margin-inline-end: 0;
+}
+
+/* Contrast with Background and Text: each a name over its light and dark
+   lines, the ratio in figures of one width so the two lines read down. */
+.nx-vars-editor__contrast {
+  display: grid;
+  gap: 0.375rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--nx-border);
+}
+
+.nx-vars-editor__contrast-pair {
+  display: grid;
+  gap: 0.125rem;
+  font-size: 11px;
+}
+
+.nx-vars-editor__contrast-name {
+  color: var(--nx-muted-foreground);
+}
+
+.nx-vars-editor__contrast-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 0.25rem;
+}
+
+.nx-vars-editor__ratio {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.nx-vars-editor__contrast-line[data-band="Low contrast"]
+  .nx-vars-editor__ratio {
+  color: var(--nx-destructive);
+}
+
+.nx-vars-editor__same-dark {
+  color: var(--nx-muted-foreground);
 }
 
 .nx-vars-editor__mono {
@@ -858,14 +1063,47 @@
 /* The adds of groups hidden while they hold nothing, worded, at the end of
    a tab, so the first such variable can still be made. */
 .nx-vars__hidden-adds {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 12px;
+  display: grid;
   margin: 0;
-  padding: 0.5rem 0;
+  padding: 0.25rem 0;
 }
-.nx-vars__worded-add {
-  display: inline-flex;
+/* The add rows a list ends with: "+ Add colour", quieter than a variable,
+   full width so the whole line is the target. */
+.nx-vars__add-rows {
+  display: grid;
+}
+
+.nx-vars__add-row {
+  display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 0.375rem;
+  width: 100%;
+  min-height: 28px;
+  padding: 4px 2px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--nx-muted-foreground);
+  font: inherit;
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.nx-vars__add-row:hover,
+.nx-vars__add-row[data-state="open"] {
+  background: var(--nx-muted);
+  color: var(--nx-foreground);
+}
+
+/* A new row a search does not match, held in view while it is edited. */
+.nx-vars__new {
+  padding: 0 5px;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-sm);
+  color: var(--nx-foreground);
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 16px;
+  vertical-align: 1px;
 }

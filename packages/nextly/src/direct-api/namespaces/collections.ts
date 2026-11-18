@@ -366,6 +366,9 @@ async function moveParts(
         context: config.context,
         disableRevalidate: config.disableRevalidate,
         data: args.data,
+        ...(args.withoutReview === undefined
+          ? {}
+          : { withoutReview: args.withoutReview }),
       },
       {
         direction,

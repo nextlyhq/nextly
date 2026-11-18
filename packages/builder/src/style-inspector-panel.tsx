@@ -57,6 +57,7 @@ import {
   walkNodes,
   type BreakpointId,
   type BreakpointSet,
+  type NamedClass,
   type SiteTokenSet,
   type TokenMode,
   type StyleState,
@@ -77,7 +78,9 @@ import { FocalFrame } from "./focal-frame";
 import { FontChoicesContext, type FontChoices } from "./font-family-field";
 import { PanelFoldsProvider } from "./panel-folds-context";
 import { layerLabel } from "./panels/layers/layers";
+import { ParentArrangementContext } from "./plain-parent-controls";
 import type { SideOrientation } from "./side-orientation";
+import { SpacingApplyToProvider } from "./spacing-side";
 import {
   BLOCK_TARGET,
   StyleTargetContext,
@@ -89,6 +92,7 @@ import {
   type EditedAddress,
 } from "./style-field-surroundings";
 import {
+  fieldStyles,
   sharedStyleNamer,
   targetProvenance,
   targetReadOnly,
@@ -107,6 +111,7 @@ import { StyleSections, rendersMedia } from "./style-panel-sections";
 import { breakpointLabel } from "./style-provenance-indicators";
 import type { StyleTarget } from "./style-target";
 import type { StylePolicy } from "./style-values";
+import { TextStyleLibrary } from "./text-style-picker";
 
 export { commitsFor, supersedes } from "./style-colour-field";
 export { pickedReference } from "./style-control-value";
@@ -284,6 +289,11 @@ export interface StyleInspectorPanelProps {
    */
   fonts?: FontChoices;
   /**
+   * The site's class library, for the Text section's "Text style" picker,
+   * which lists the text styles in it. Absent: no picker is drawn.
+   */
+  classLibrary?: readonly NamedClass[];
+  /**
    * Whether the tab says above its controls why a held block's design can't
    * be changed. True when omitted. A host that says it already, as the
    * inspector's block card does, turns it off, so the reason is said once.
@@ -388,16 +398,21 @@ export function StyleInspectorPanel(
 ): React.JSX.Element {
   return (
     <FontChoicesContext.Provider value={props.fonts}>
-      {/* The panel's own folds where nothing above lends them. */}
-      <PanelFoldsProvider>
-        <CssNamesProvider>
-          {props.tokenMode === undefined ? (
-            <StyleInspectorOwnMode {...props} />
-          ) : (
-            <StyleInspectorBody {...props} tokenMode={props.tokenMode} />
-          )}
-        </CssNamesProvider>
-      </PanelFoldsProvider>
+      {/* The library the Text section's "Text style" picker lists from. */}
+      <TextStyleLibrary.Provider value={props.classLibrary}>
+        {/* The panel's own folds where nothing above lends them. */}
+        <PanelFoldsProvider>
+          <SpacingApplyToProvider>
+            <CssNamesProvider>
+              {props.tokenMode === undefined ? (
+                <StyleInspectorOwnMode {...props} />
+              ) : (
+                <StyleInspectorBody {...props} tokenMode={props.tokenMode} />
+              )}
+            </CssNamesProvider>
+          </SpacingApplyToProvider>
+        </PanelFoldsProvider>
+      </TextStyleLibrary.Provider>
     </FontChoicesContext.Provider>
   );
 }
@@ -578,17 +593,9 @@ function StyleInspectorBody({
   return (
     <StyleTargetContext.Provider value={target}>
       <TokenPrefixContext.Provider value={tokenPrefixOf(cascade)}>
-        <AppliedAtTier.Provider
-          value={appliedAtReader({
-            cascade,
-            subject,
-            state: inspected.state,
-            breakpoints,
-            nodeId: inspected.nodeId,
-          })}
-        >
-          <BeneathAtTier.Provider
-            value={beneathAtReader({
+        <ParentArrangementContext.Provider value={inspection?.parentLayout}>
+          <AppliedAtTier.Provider
+            value={appliedAtReader({
               cascade,
               subject,
               state: inspected.state,
@@ -596,34 +603,49 @@ function StyleInspectorBody({
               nodeId: inspected.nodeId,
             })}
           >
-            <CanvasTokenModeProvider value={tokenMode}>
-              {/*
-               * Spell-check off for the tab's fields: they hold numbers,
-               * lengths, colours and keywords, which a spell-checker marks as
-               * misspelt with the same red line an error would show. Set once
-               * here because the attribute is inherited by every field inside,
-               * including the ones other components draw and any added later.
-               * The Content tab is a different element and keeps its own.
-               */}
-              <div
-                className="nx-style-inspector"
-                data-style-target={target.kind}
-                spellCheck={false}
-              >
-                {showReadOnlyReason ? (
-                  <ReadOnlyNote target={target} reason={readOnlyReason} />
-                ) : null}
-                <NoStyleProperties count={inspected.sections.length} />
-                <StyleSections
-                  sections={inspected.sections}
-                  readOnlyReason={readOnlyReason}
-                  surroundings={surroundings}
-                  fit={inspected.objectFit}
-                />
-              </div>
-            </CanvasTokenModeProvider>
-          </BeneathAtTier.Provider>
-        </AppliedAtTier.Provider>
+            <BeneathAtTier.Provider
+              value={beneathAtReader({
+                cascade,
+                subject,
+                state: inspected.state,
+                breakpoints,
+                nodeId: inspected.nodeId,
+              })}
+            >
+              <CanvasTokenModeProvider value={tokenMode}>
+                {/*
+                 * Spell-check off for the tab's fields: they hold numbers,
+                 * lengths, colours and keywords, which a spell-checker marks as
+                 * misspelt with the same red line an error would show. Set once
+                 * here because the attribute is inherited by every field inside,
+                 * including the ones other components draw and any added later.
+                 * The Content tab is a different element and keeps its own.
+                 */}
+                <div
+                  className="nx-style-inspector"
+                  data-style-target={target.kind}
+                  spellCheck={false}
+                >
+                  {showReadOnlyReason ? (
+                    <ReadOnlyNote target={target} reason={readOnlyReason} />
+                  ) : null}
+                  <NoStyleProperties count={inspected.sections.length} />
+                  <StyleSections
+                    sections={inspected.sections}
+                    readOnlyReason={readOnlyReason}
+                    surroundings={surroundings}
+                    fit={inspected.objectFit}
+                    report={{
+                      shared: target.kind === "shared",
+                      styles: editedStyles(target, editor),
+                      parent: inspected.parent,
+                    }}
+                  />
+                </div>
+              </CanvasTokenModeProvider>
+            </BeneathAtTier.Provider>
+          </AppliedAtTier.Provider>
+        </ParentArrangementContext.Provider>
       </TokenPrefixContext.Provider>
     </StyleTargetContext.Provider>
   );
@@ -782,4 +804,13 @@ function sharesItsId(editor: EditorState, id: string): boolean {
     if (node.id === id) seen += 1;
   });
   return seen > 1;
+}
+
+/**
+ * The edited target's own styles at every state and device, as the controls
+ * read them: a shared style's while one is the target, the block's otherwise.
+ */
+function editedStyles(target: StyleTarget, editor: EditorState): unknown {
+  if (editor.selectedId === null) return undefined;
+  return fieldStyles(target, editor, editor.selectedId).styles;
 }

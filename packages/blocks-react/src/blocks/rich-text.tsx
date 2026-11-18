@@ -33,9 +33,11 @@ import {
 import type { ReactElement } from "react";
 
 import type { BlockRenderArgs, PageContext } from "../context";
+import { passageAnchors } from "../outline";
 import { drawsInteractive, RichText } from "../rich-text";
 
 import { CONTENT } from "./categories";
+import { RICH_TEXT_CONVERTERS } from "./text-conversions";
 
 export interface RichTextBlockProps {
   /** The passage, as the editor serialized it. */
@@ -68,6 +70,8 @@ export function renderRichText({
   className,
   markProp,
   hostPolicy,
+  ctx,
+  node,
 }: BlockRenderArgs<RichTextBlockProps>): ReactElement {
   /*
    * The wrapper carries both the class and the mark, so the element an author
@@ -78,15 +82,16 @@ export function renderRichText({
   return (
     <div className={className} {...markProp?.("content")}>
       {/*
-       * Every heading carries its anchor, the id a table of contents bound to
-       * the same passage links to, so the two blocks agree without either
-       * being told about the other. Ids are unique within this passage;
-       * another passage on the page with the same heading repeats its id.
+       * Every heading carries its anchor from the page outline, unique on
+       * the whole page: a heading this passage shares with another, or with
+       * a Heading block, is numbered rather than repeated. Inside a list's
+       * entry the passage may be the entry's own, so its anchors are made
+       * from the passage drawn (`passageAnchors`).
        */}
       <RichText
         value={props.content}
         hostPolicy={hostPolicy}
-        anchorHeadings={true}
+        anchors={passageAnchors(ctx, node.id, props.content)}
       />
     </div>
   );
@@ -117,7 +122,7 @@ export const richText: BlockDefinition<RichTextBlockProps, PageContext> =
     },
     props: {
       content: {
-        label: "Content",
+        label: "Text",
         role: "content",
         type: RICH_TEXT_PROP_TYPE,
         inline: true,
@@ -179,5 +184,7 @@ export const richText: BlockDefinition<RichTextBlockProps, PageContext> =
       drawsInteractive(props.content.root.children)
         ? { is: ["flow", "interactive"] }
         : { is: ["flow"] },
+    // "Turn into" Text or Heading, while it is one paragraph or one heading.
+    converters: RICH_TEXT_CONVERTERS,
     render: renderRichText,
   });

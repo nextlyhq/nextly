@@ -9,13 +9,7 @@
  * @module canvas-drawn-page
  */
 
-import {
-  resolveComponentInstances,
-  revealConditioned,
-  type BlockDocument,
-  type DefinitionsById,
-  type DocumentLimits,
-} from "@nextlyhq/blocks-engine";
+import type { BlockDocument } from "@nextlyhq/blocks-engine";
 import {
   PageRenderer,
   registeredBlocks,
@@ -28,6 +22,7 @@ import {
 import { useEffect, useMemo, useState } from "react";
 
 import {
+  revealedDefinitions,
   revealedForCanvas,
   type AppliedConditions,
 } from "../conditions/applied-conditions";
@@ -36,40 +31,9 @@ import { withConditionHiddenBlock } from "../conditions/condition-hidden-block";
 import { useLayoutParts, type LayoutParts } from "./canvas-layout-parts";
 import type { CanvasRegion } from "./canvas-regions";
 
-/**
- * The definitions a page reaches, the components it places and those they
- * place, with each one's conditions lifted so the canvas draws its
- * conditioned blocks; every other definition as it is. The reached ones are
- * those the resolver reads composing the page as the canvas does, so a
- * component a variant or an override selects, at any depth and through any
- * setting a placement rewrites, is lifted exactly when it is drawn. Only
- * those are walked, so a large component library costs nothing on a page
- * that places none of it.
- *
- * Exported so a surface that reads the page as the canvas draws it composes
- * it from these same definitions.
- *
- * @experimental
- */
-export function revealedDefinitions(
-  document: BlockDocument,
-  definitions: DefinitionsById,
-  limits: DocumentLimits | undefined
-): DefinitionsById {
-  const reached = new Set(
-    resolveComponentInstances(document, definitions, {
-      conditioned: "carry",
-      ...(limits === undefined ? {} : { limits }),
-    }).referenced
-  );
-  if (reached.size === 0) return definitions;
-  const next = new Map(definitions);
-  for (const id of reached) {
-    const definition = definitions.get(id);
-    if (definition !== undefined) next.set(id, revealConditioned(definition));
-  }
-  return next;
-}
+// Moved beside `revealedForCanvas`, so a reader with no React (the page
+// checks) composes the page from the same definitions; kept importable here.
+export { revealedDefinitions } from "../conditions/applied-conditions";
 
 /**
  * The document and window the canvas draws in, held where nothing walking an
@@ -173,6 +137,7 @@ export function useDrawnPage({
   document,
   environment,
   applied,
+  addressed,
 }: {
   regions: readonly CanvasRegion[] | undefined;
   rendered: Omit<PageRendererProps, "document" | "siteStyles"> | undefined;
@@ -180,6 +145,13 @@ export function useDrawnPage({
   document: BlockDocument;
   environment: BlockEnvironment | undefined;
   applied: AppliedConditions | undefined;
+  /**
+   * Whether the page's blocks carry their addresses: false while a region of
+   * its layout is edited in place, so no surface can find, mark or select a
+   * block of the page then, nor take one for the region's block of the same
+   * id.
+   */
+  addressed: boolean;
 }): { drawn: LayoutParts | undefined; page: React.JSX.Element } {
   const drawn = useLayoutParts(regions, rendered, sheet);
   // Every conditioned block drawn, whoever the page would show it to, so the
@@ -214,12 +186,17 @@ export function useDrawnPage({
           // not carry an editor's addressing — so the canvas asks and a route
           // does not. Spread first and set here deliberately: a caller passing
           // `nodeAttribute: false` through `render` would silently disable
-          // selection for the whole canvas.
-          nodeAttribute
+          // selection for the whole canvas. Withheld only while a region is
+          // edited in place, when the page is not the document being edited.
+          nodeAttribute={addressed}
+          // What its images and lists drew is kept as it is while it is not
+          // addressed, as it is while it is: the node attribute alone would
+          // otherwise run them again on every edit in the region.
+          {...(addressed ? {} : { keepAsyncOutputs: true })}
         />
       </BlockEnvironmentProvider>
     ),
-    [drawnRender, drawable, sheet, environment, drawn]
+    [drawnRender, drawable, sheet, environment, drawn, addressed]
   );
   return { drawn, page };
 }

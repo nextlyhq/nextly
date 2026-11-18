@@ -107,6 +107,23 @@ describe("heldBaselines", () => {
     ]);
   });
 
+  it("holds a placement without its settings' bindings, which are the page's own", () => {
+    const levels = heldBaselines(
+      page([
+        {
+          ...placement("i1", { componentId: "promo" }),
+          bindings: {
+            "overrides.title": { $bind: "title", source: "item", list: "l" },
+          },
+        } as BlockNode,
+      ]),
+      LIMITS
+    );
+    expect(levels[0]!.document.nodes).toEqual([
+      placement("i1", { componentId: "promo" }),
+    ]);
+  });
+
   it("holds none for a page placing no component", () => {
     expect(heldBaselines(page([node("own")]), LIMITS)).toEqual([]);
   });

@@ -131,7 +131,20 @@ describe("useReveal", () => {
       useReveal(oddPage, [odd], SITE, "tablet")
     );
     expect(result.current.ids).toEqual([odd]);
-    expect(result.current.document.nodes[0]?.visibility).toBeUndefined();
+  });
+
+  it("leaves the selection's hidden blocks hidden in the document, for the canvas to stripe", () => {
+    // The canvas draws every block hidden on the device shown, striped and
+    // tagged from the hiding it reads: a document with the hiding lifted
+    // around the selection would leave the selected block, and the hidden
+    // section around a selected heading, unstriped.
+    const { result } = renderHook(() =>
+      useReveal(page, ["title", "hidden"], SITE, "tablet")
+    );
+    expect(result.current.document).toBe(page);
+    // The selected block drawn only because the canvas draws hidden blocks,
+    // whose ring says so.
+    expect(result.current.ids).toEqual(["title", "hidden"]);
   });
 
   it("answers the same document while nothing is lifted", () => {

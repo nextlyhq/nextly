@@ -39,6 +39,7 @@
  * @module domains/i18n/services/translation-worklist-service
  */
 
+import { PAGINATION_DEFAULTS } from "../../../types/pagination";
 import { resolveLocalizedFieldNames } from "../classify-fields";
 import type { TranslationFilterState } from "../companion-join";
 
@@ -148,6 +149,28 @@ export function countIsTrustworthy(
 export function worklistTotalPages(total: number, limit: number): number {
   if (limit <= 0) return 1;
   return Math.max(1, Math.ceil(total / limit));
+}
+
+/**
+ * The deepest page the worklist serves at `limit`. Each page reads the first `page × limit` rows
+ * of every collection so the order across them is the same on every page, and one collection read
+ * gives at most `PAGINATION_DEFAULTS.maxLimit` rows: a page reaching deeper would be cut from rows
+ * that were never read. At least 1, so a limit larger than that still has its first page.
+ */
+export function worklistMaxPage(limit: number): number {
+  return Math.max(1, Math.floor(PAGINATION_DEFAULTS.maxLimit / limit));
+}
+
+/**
+ * Whether a page after `page` holds rows and can be asked for: the backlog reaches past this page,
+ * and the next page is no deeper than {@link worklistMaxPage}.
+ */
+export function worklistHasNext(
+  page: number,
+  limit: number,
+  total: number
+): boolean {
+  return page * limit < total && page < worklistMaxPage(limit);
 }
 
 /**

@@ -27,6 +27,7 @@ import { useFieldDescription } from "./css-hint";
 import { InheritedValue } from "./inherited-value";
 import { useLabelScrub } from "./label-scrub";
 import { CompactSides } from "./spacing-box";
+import type { SiteVariable } from "./style-colour";
 import type { StyleControl } from "./style-controls";
 import type { CommitOutcome } from "./style-field-surroundings";
 import { keywordLabel } from "./style-keyword-labels";
@@ -49,7 +50,12 @@ import {
   storedText,
   placeholderFor,
 } from "./style-text-field";
-import { VariableChoice } from "./variable-choice";
+import {
+  focusVariableAfterPick,
+  pickedVariable,
+  useOfferedVariables,
+  VariableSelectItems,
+} from "./variable-choice";
 
 /**
  * Keywords a menu leaves out, still accepted when typed and still shown when
@@ -126,11 +132,23 @@ export function NumericField({
   tokens,
   describedBy,
   onCommit,
+  seed,
+  offerVariables = true,
 }: {
   id: string;
   control: StyleControl;
   stored: StyleValue | undefined;
   tokens: SiteTokenSet | undefined;
+  /**
+   * What the field starts with in place of the stored value, as if typed:
+   * the digit that opened a spacing side's popover.
+   */
+  seed?: string | undefined;
+  /**
+   * Whether its unit menu lists the site's variables first; a spacing
+   * side's popover lists them as its presets instead.
+   */
+  offerVariables?: boolean;
   /**
    * This control's own name, position included.
    *
@@ -156,6 +174,7 @@ export function NumericField({
   // the unitless draft, leaving `12px` stored — and the menu composed from
   // THAT, committing `12rem` and discarding the 20 they were looking at.
   const { draft, setDraft } = useDraft(stored);
+  useSeededDraft(seed, setDraft);
   // Read from the DRAFT, so the menu offers units for the quantity on screen
   // and swaps the unit on that quantity rather than on a superseded one.
   const measurement = measurementOfText(draft);
@@ -185,6 +204,17 @@ export function NumericField({
   // the field shows a unit being typed.
   const [typing, setTyping] = React.useState(false);
   const suffix = suffixState(unitMenu, typing, measurement);
+  const menu = useValueMenu({
+    // None in a side of the box, or where the caller lists them itself.
+    offered: offerVariables && !compact,
+    control,
+    tokens,
+    showUnits,
+    suffix,
+    hold,
+    chooseUnit: unitMenu.choose,
+    onCommit,
+  });
   // A stored unit the candidate list does not carry — `ch`, or an uppercase
   // `PX` the validator folds — is live and compiles while matching no item, and
   // a controlled select over it renders an EMPTY trigger above a value that is
@@ -236,64 +266,214 @@ export function NumericField({
           return String(next);
         }}
       />
-      {showUnits ? (
-        <Select
-          // The empty string, never `undefined`. Radix reads `""` as "no
-          // selection" and shows the placeholder, while `undefined` switches it
-          // from controlled to UNCONTROLLED — where it keeps whatever was last
-          // picked, so a unit added and then undone leaves the trigger still
-          // displaying it while the draft has none. The draft is the only unit
-          // state, and passing `undefined` would give it a second one.
-          value={suffix.value}
-          onValueChange={hold.choosing(unitMenu.choose)}
-          onOpenChange={hold.onOpenChange}
-        >
-          <SelectTrigger
-            ref={hold.trigger}
-            onBlur={hold.onTriggerBlur}
-            className="nx-style-inspector__unit"
-            aria-label={`Unit for ${actionName}`}
-            // A unit change can be refused — a document at its byte limit, a
-            // value the validator rejects — and the message that explains it is
-            // rendered once for the field. Pointed at from HERE as well as from
-            // the text input, because a screen-reader user who returns to the
-            // menu is otherwise on the control that failed with nothing saying
-            // so and no way to reach the reason.
-            aria-describedby={described}
-            aria-invalid={describedBy === undefined ? undefined : true}
-          >
-            <SelectValue placeholder={suffix.placeholder} />
-          </SelectTrigger>
-          <SelectContent ref={hold.content}>
-            {extraUnit === null ? null : (
-              <SelectItem value={extraUnit}>{extraUnit}</SelectItem>
-            )}
-            {units.map(choice => (
-              <SelectItem key={choice} value={choice}>
-                {choice}
-              </SelectItem>
-            ))}
-            <KeywordItems
-              cssProperty={control.leaf.cssProperty}
-              keywords={keywords}
-              draft={draft}
-            />
-          </SelectContent>
-        </Select>
-      ) : null}
-      {/* The site's variables for this field, after its unit; nothing where
-          the site has none the property takes. */}
-      <VariableChoice
-        leaf={control.leaf}
-        tokens={tokens}
-        bound={false}
-        empty={stored === undefined}
-        current={undefined}
-        label={actionName}
-        onPick={identity => onCommit({ $token: identity })}
+      <UnitMenu
+        unitsShown={showUnits}
+        {...menu}
+        hold={hold}
+        actionName={actionName}
+        described={described}
+        invalid={describedBy !== undefined}
+        extraUnit={extraUnit}
+        units={units}
+        cssProperty={control.leaf.cssProperty}
+        keywords={keywords}
+        draft={draft}
       />
     </div>
   );
+}
+
+/** No variables, as one value, for a field that offers none. */
+const NO_VARIABLES: readonly SiteVariable[] = Object.freeze([]);
+
+/**
+ * What a numeric field's value menu holds and shows: the site's variables
+ * the field takes, first, where it offers them; the unit in its trigger
+ * while units are listed, and nothing there while only variables are; and
+ * what a choice does: a unit or keyword goes to the unit's own choice, a
+ * variable is stored as `{ $token }`, the field becoming its chip.
+ */
+function useValueMenu({
+  offered,
+  control,
+  tokens,
+  showUnits,
+  suffix,
+  hold,
+  chooseUnit,
+  onCommit,
+}: {
+  offered: boolean;
+  control: StyleControl;
+  tokens: SiteTokenSet | undefined;
+  showUnits: boolean;
+  suffix: { value: string; placeholder: string };
+  hold: ReturnType<typeof useHeldBlur>;
+  chooseUnit: (choice: string) => void;
+  onCommit: (value: StyleValue | null) => CommitOutcome;
+}): {
+  variables: readonly SiteVariable[];
+  value: string;
+  placeholder: string;
+  choose: (choice: string) => void;
+} {
+  const variables = useOfferedVariables(control.leaf, tokens);
+  const shown = showUnits ? suffix : { value: "", placeholder: "" };
+  return {
+    variables: offered ? variables : NO_VARIABLES,
+    ...shown,
+    choose: choice => {
+      const identity = pickedVariable(choice);
+      if (identity === undefined) {
+        chooseUnit(choice);
+        return;
+      }
+      // The field becomes the variable's chip, and its menu goes with it.
+      focusVariableAfterPick(hold.trigger.current);
+      onCommit({ $token: identity });
+    },
+  };
+}
+
+/**
+ * A length field's value menu: the site's variables it takes first ("Your
+ * spacing", "Your sizes"), then its units, a stored unit it doesn't list, and
+ * its keywords after a line.
+ *
+ * The units are listed only where a choice of one could act. Over a value
+ * they cannot act on (`calc()`, an inherited `auto`) the menu still opens on
+ * the variables, the one way to them; with neither, nothing is drawn.
+ */
+function UnitMenu({
+  unitsShown,
+  variables,
+  value,
+  placeholder,
+  hold,
+  choose,
+  actionName,
+  described,
+  invalid,
+  extraUnit,
+  units,
+  cssProperty,
+  keywords,
+  draft,
+}: {
+  unitsShown: boolean;
+  variables: readonly SiteVariable[];
+  value: string;
+  placeholder: string;
+  hold: ReturnType<typeof useHeldBlur>;
+  choose: (choice: string) => void;
+  actionName: string;
+  described: string | undefined;
+  invalid: boolean;
+  extraUnit: string | null;
+  units: readonly string[];
+  cssProperty: string;
+  keywords: readonly string[];
+  draft: string;
+}): React.JSX.Element | null {
+  if (!unitsShown && variables.length === 0) return null;
+  return (
+    <Select
+      // The empty string, never `undefined`. Radix reads `""` as "no
+      // selection" and shows the placeholder, while `undefined` switches it
+      // from controlled to UNCONTROLLED — where it keeps whatever was last
+      // picked, so a unit added and then undone leaves the trigger still
+      // displaying it while the draft has none. The draft is the only unit
+      // state, and passing `undefined` would give it a second one.
+      value={value}
+      onValueChange={hold.choosing(choose)}
+      onOpenChange={hold.onOpenChange}
+    >
+      <SelectTrigger
+        ref={hold.trigger}
+        onBlur={hold.onTriggerBlur}
+        className="nx-style-inspector__unit"
+        // Named for what it changes: the unit where units are listed, the
+        // variable where only variables are.
+        aria-label={
+          unitsShown ? `Unit for ${actionName}` : `Variables for ${actionName}`
+        }
+        // A unit change can be refused — a document at its byte limit, a
+        // value the validator rejects — and the message that explains it is
+        // rendered once for the field. Pointed at from HERE as well as from
+        // the text input, because a screen-reader user who returns to the
+        // menu is otherwise on the control that failed with nothing saying
+        // so and no way to reach the reason.
+        aria-describedby={described}
+        aria-invalid={invalid ? true : undefined}
+      >
+        <SelectValue placeholder={placeholder} />
+      </SelectTrigger>
+      <SelectContent ref={hold.content}>
+        <VariableSelectItems offered={variables} before={unitsShown} />
+        <UnitItems
+          shown={unitsShown}
+          extraUnit={extraUnit}
+          units={units}
+          cssProperty={cssProperty}
+          keywords={keywords}
+          draft={draft}
+        />
+      </SelectContent>
+    </Select>
+  );
+}
+
+/**
+ * A unit menu's own choices: a stored unit it doesn't list, its units, and
+ * its keywords after a line. Nothing where no unit choice could act.
+ */
+function UnitItems({
+  shown,
+  extraUnit,
+  units,
+  cssProperty,
+  keywords,
+  draft,
+}: {
+  shown: boolean;
+  extraUnit: string | null;
+  units: readonly string[];
+  cssProperty: string;
+  keywords: readonly string[];
+  draft: string;
+}): React.JSX.Element | null {
+  if (!shown) return null;
+  return (
+    <>
+      {extraUnit === null ? null : (
+        <SelectItem value={extraUnit}>{extraUnit}</SelectItem>
+      )}
+      {units.map(choice => (
+        <SelectItem key={choice} value={choice}>
+          {choice}
+        </SelectItem>
+      ))}
+      <KeywordItems
+        cssProperty={cssProperty}
+        keywords={keywords}
+        draft={draft}
+      />
+    </>
+  );
+}
+
+/**
+ * The seed put in the draft once, after the draft has read the stored value:
+ * the first character of a value typed on a spacing side, which opened it.
+ */
+function useSeededDraft(
+  seed: string | undefined,
+  setDraft: (value: string) => void
+): void {
+  const first = React.useRef(seed);
+  React.useEffect(() => {
+    if (first.current !== undefined) setDraft(first.current);
+  }, [setDraft]);
 }
 
 /**

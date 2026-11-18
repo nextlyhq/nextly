@@ -65,6 +65,25 @@ export function useConditionServices(
  */
 export function editorStrip(
   preview: ReturnType<typeof useTemplatePreviewState>,
+  conditions: AppliedConditionsSwitch,
+  /** Notices about the page itself, drawn under the preview's rows. */
+  notice?: React.JSX.Element
+): React.JSX.Element | undefined {
+  const strip = previewStrip(preview, conditions);
+  if (notice === undefined) return strip;
+  return strip === undefined ? (
+    notice
+  ) : (
+    <>
+      {strip}
+      {notice}
+    </>
+  );
+}
+
+/** The template's Previewing row and the visitor's, where either shows. */
+function previewStrip(
+  preview: ReturnType<typeof useTemplatePreviewState>,
   conditions: AppliedConditionsSwitch
 ): React.JSX.Element | undefined {
   const visitor =

@@ -59,6 +59,7 @@ import { fieldsWithDeleted } from "@admin/lib/builder/outline/pending-rows";
 
 import { BUILDER_KIND_NOUN, type BuilderKind } from "./builder-config";
 import { AdvancedTab } from "./builder-field-settings/AdvancedTab";
+import { FieldErrorNotice } from "./FieldErrorNotice";
 import type { BuilderField } from "./types";
 
 /** The Builder's Advanced settings for one kind, which its help text names. */
@@ -288,8 +289,13 @@ export function BuilderFieldSettings({
     readOnly
   );
 
+  // Above the panel: where a read-only field is defined, and what the field lacks that the save
+  // would refuse it for.
   const definedAt = (
-    <DefinedAt reason={reason} onOpenFieldGroup={onOpenFieldGroup} />
+    <>
+      <DefinedAt reason={reason} onOpenFieldGroup={onOpenFieldGroup} />
+      <FieldErrorNotice fields={fields} fieldId={field.id} />
+    </>
   );
 
   const panel = (

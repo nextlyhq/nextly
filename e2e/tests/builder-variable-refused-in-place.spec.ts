@@ -13,7 +13,13 @@
  */
 import { expect, type Page } from "@playwright/test";
 
-import { block, openEditorWith, pressSave } from "./canvas/editor-driver";
+import {
+  block,
+  clickBlock,
+  openEditorWith,
+  pressSave,
+  selection,
+} from "./canvas/editor-driver";
 import { LOCK } from "./support/locks";
 import { test } from "./support/test";
 import { countEveryPage } from "./support/usage-count";
@@ -65,20 +71,35 @@ async function addSpacing(page: Page) {
     .getByRole("region", { name: "Design panel" })
     .getByRole("tab", { name: /^Spacing/ })
     .click();
-  await page
-    .getByRole("button", { name: "Add spacing, radius or shadow" })
-    .click();
-  await page.getByRole("menuitem", { name: "Spacing" }).click();
+  await page.getByRole("button", { name: "Add spacing" }).click();
   const editor = page.getByRole("dialog", { name: /^Edit New spacing/ });
   await expect(editor).toBeVisible();
   return editor;
 }
 
+/**
+ * The site's variables as the running test found them, put back after it.
+ *
+ * In an after hook rather than a `finally`: Playwright gives its after hooks a
+ * budget of their own, so a test that spends its whole timeout waiting still
+ * puts the variables back, and the next test does not open on a "New spacing"
+ * this one left behind.
+ */
+let found: { tokens: unknown } | null = null;
+
+test.afterEach(async ({ page }) => {
+  await page.unroute("**/variables/usage?**");
+  if (found === null) return;
+  const { tokens } = found;
+  found = null;
+  await writeTokens(page, tokens);
+});
+
 test("a value the save would refuse is refused in its field, and the page still saves", async ({
   page,
 }) => {
   test.setTimeout(180_000);
-  const before = await storedTokens(page);
+  found = { tokens: await storedTokens(page) };
   // Every site-style write the editor sends, by its body.
   const sent: string[] = [];
   page.on("request", request => {
@@ -86,64 +107,65 @@ test("a value the save would refuse is refused in its field, and the page still 
       sent.push(request.postData() ?? "");
     }
   });
-  try {
-    await openEditorWith(page, NODES, "refused-1");
-    await openDesign(page);
-    const editor = await addSpacing(page);
-    const light = editor.getByRole("textbox", { name: "Light" });
-    await light.fill("12pxred");
-    await light.press("Enter");
-    // Said under the field, in words, with what to type instead.
-    await expect(
-      editor.getByText(
-        '"12pxred" is measured in pxred, which is not a unit CSS knows, not a length. Type a number with a unit, such as 16px or 1.5rem.'
-      )
-    ).toBeVisible();
-    await expect(light).toHaveAttribute("aria-invalid", "true");
-    // A bare number becomes a length: the number, in pixels by its unit menu.
-    await light.fill("20");
-    await light.press("Enter");
-    await expect(light).toHaveValue("20");
-    await expect(editor.getByLabel("Unit for Light")).toContainText("px");
-    // The menu shows px by default, so what was written is what proves it.
-    await expect
-      .poll(() => sent.some(body => body.includes('"20px"')))
-      .toBe(true);
-    await expect(light).not.toHaveAttribute("aria-invalid", "true");
-    await page.keyboard.press("Escape");
-    await expect(editor).toBeHidden();
-    // The variable stays, and the refused value was never sent.
-    await expect(
-      page.getByRole("button", { name: /^New spacing/ })
-    ).toBeVisible();
-    expect(sent.some(body => body.includes("12pxred"))).toBe(false);
+  await openEditorWith(page, NODES, "refused-1");
+  await openDesign(page);
+  const editor = await addSpacing(page);
+  const light = editor.getByRole("textbox", { name: "Light" });
+  await light.fill("12pxred");
+  await light.press("Enter");
+  // Said under the field, in words, with what to type instead.
+  await expect(
+    editor.getByText(
+      '"12pxred" is measured in pxred, which is not a unit CSS knows, not a length. Type a number with a unit, such as 16px or 1.5rem.'
+    )
+  ).toBeVisible();
+  await expect(light).toHaveAttribute("aria-invalid", "true");
+  // A bare number becomes a length: the number, in pixels by its unit menu.
+  await light.fill("20");
+  await light.press("Enter");
+  await expect(light).toHaveValue("20");
+  await expect(editor.getByLabel("Unit for Light")).toContainText("px");
+  // The menu shows px by default, so what was written is what proves it.
+  await expect
+    .poll(() => sent.some(body => body.includes('"20px"')))
+    .toBe(true);
+  await expect(light).not.toHaveAttribute("aria-invalid", "true");
+  await page.keyboard.press("Escape");
+  await expect(editor).toBeHidden();
+  // The variable stays, and the refused value was never sent.
+  await expect(
+    page.getByRole("button", { name: /^New spacing/ })
+  ).toBeVisible();
+  expect(sent.some(body => body.includes("12pxred"))).toBe(false);
 
-    // An edit to the page, then Save: the page is saved.
-    const second = await block(page, "refused-1");
-    await second.click();
-    await page.keyboard.press("Delete");
-    const saved = page.waitForResponse(
-      response =>
-        response.url().includes(HOMEPAGE) &&
-        ["PATCH", "PUT", "POST"].includes(response.request().method())
-    );
-    await pressSave(page);
-    expect((await saved).ok()).toBe(true);
-    await expect(
-      includingHidden(page).getByText(
-        /wasn't saved, so this page wasn't either/
-      )
-    ).toHaveCount(0);
-  } finally {
-    await writeTokens(page, before);
-  }
+  // An edit to the page, then Save: the page is saved. The block is pressed
+  // at its right edge: with the Design panel open the canvas fits small, and
+  // a short block's middle is under the "+" that adds a section after the
+  // block before it.
+  await clickBlock(page, "refused-1");
+  await expect.poll(() => selection(page)).toEqual(["refused-1"]);
+  await page.keyboard.press("Delete");
+  await expect(await block(page, "refused-1")).toHaveCount(0);
+  // Bounded, so a save that never comes fails here with time left for the
+  // variables to be put back.
+  const saved = page.waitForResponse(
+    response =>
+      response.url().includes(HOMEPAGE) &&
+      ["PATCH", "PUT", "POST"].includes(response.request().method()),
+    { timeout: 30_000 }
+  );
+  await pressSave(page);
+  expect((await saved).ok()).toBe(true);
+  await expect(
+    includingHidden(page).getByText(/wasn't saved, so this page wasn't either/)
+  ).toHaveCount(0);
 });
 
 test("on a site not counted yet, a new variable is removed in one press", async ({
   page,
 }) => {
   test.setTimeout(180_000);
-  const before = await storedTokens(page);
+  found = { tokens: await storedTokens(page) };
   // The usage read as a site whose pages have not been counted answers it:
   // nothing counted whole, so every zero is a floor.
   await page.route("**/variables/usage?**", async route => {
@@ -160,23 +182,18 @@ test("on a site not counted yet, a new variable is removed in one press", async 
       await route.abort();
     }
   });
-  try {
-    await openEditorWith(page, NODES, "refused-1");
-    await openDesign(page);
-    const editor = await addSpacing(page);
-    // Nothing is counting, so the line does not say it is.
-    await expect(editor.getByText("Not counted yet")).toBeVisible();
-    await expect(editor.getByText(/Counting where/)).toHaveCount(0);
-    await editor.getByRole("button", { name: "Remove", exact: true }).click();
-    // The confirm, at once: no "can't be removed yet".
-    await expect(editor.getByText(/can't be removed/)).toHaveCount(0);
-    await editor.getByRole("button", { name: /^Remove New spacing/ }).click();
-    await expect(editor).toBeHidden();
-    await expect(
-      page.getByRole("button", { name: /^New spacing/ })
-    ).toHaveCount(0);
-  } finally {
-    await page.unroute("**/variables/usage?**");
-    await writeTokens(page, before);
-  }
+  await openEditorWith(page, NODES, "refused-1");
+  await openDesign(page);
+  const editor = await addSpacing(page);
+  // Nothing is counting, so the line does not say it is.
+  await expect(editor.getByText("Not counted yet")).toBeVisible();
+  await expect(editor.getByText(/Counting where/)).toHaveCount(0);
+  await editor.getByRole("button", { name: "Remove", exact: true }).click();
+  // The confirm, at once: no "can't be removed yet".
+  await expect(editor.getByText(/can't be removed/)).toHaveCount(0);
+  await editor.getByRole("button", { name: /^Remove New spacing/ }).click();
+  await expect(editor).toBeHidden();
+  await expect(page.getByRole("button", { name: /^New spacing/ })).toHaveCount(
+    0
+  );
 });

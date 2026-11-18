@@ -94,6 +94,35 @@ describe("collectDocumentReferences", () => {
     expect(sorted(into.tokens)).toEqual(["content.wide"]);
   });
 
+  it("carries the variables `$token` names and no var() in a value's CSS text", () => {
+    // A shadow keeps its colour as `var()` of the colour's custom property.
+    // An export's variables are the ones `$token` names; the usage index's
+    // key for a property never reaches its list.
+    const document: BlockDocument = {
+      formatVersion: 1,
+      kind: "pattern",
+      nodes: [
+        {
+          id: "card",
+          type: "core/box",
+          version: 1,
+          props: {},
+          styles: {
+            base: {
+              base: {
+                boxShadow: "0 1px 2px var(--site-color-ink)",
+                color: { $token: "color.brand" },
+              },
+            },
+          },
+        },
+      ],
+    };
+    const into = emptyReferences();
+    collectDocumentReferences(document, into, { mediaProps });
+    expect(sorted(into.tokens)).toEqual(["color.brand"]);
+  });
+
   it("reads a placement's component, its image values and its own slot content, never its type", () => {
     const document: BlockDocument = {
       formatVersion: 1,

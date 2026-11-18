@@ -13,7 +13,9 @@ import {
 } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
+import { APPEAR_PROPERTY, AppearPlay } from "./appear-play";
 import { batchStyleClearOps } from "./batch-style";
+import { propertyWordsFor, wordedProperty } from "./block-style-words";
 import { CssHint } from "./css-hint";
 import type { EditorState } from "./editor-state";
 import { fieldLabel } from "./inspector";
@@ -58,7 +60,7 @@ import {
  * with it.
  */
 export function StylePropertyFields({
-  property,
+  property: catalogProperty,
   orientation,
   nodeId,
   state,
@@ -79,6 +81,13 @@ export function StylePropertyFields({
    */
   namesSection: boolean;
 } & StyleFieldSurroundings): React.JSX.Element {
+  // The block's own words for this property, where it has them: the fields
+  // it draws, what each is called, and a line saying what it is here.
+  const words = propertyWordsFor(
+    findNode(editor.document.nodes, nodeId)?.type,
+    catalogProperty.property
+  );
+  const property = wordedProperty(catalogProperty, words);
   const many = property.controls.length > 1;
   const fold = property.offered
     ? foldedControlFor(property.property)
@@ -120,15 +129,14 @@ export function StylePropertyFields({
       className="nx-style-inspector__property"
       data-property={property.property}
     >
-      {headed ? (
-        // What the property does, then the CSS its fields write, on hover.
-        <CssHint
-          summary={property.summary}
-          writes={writtenProperties(property.controls)}
-        >
-          <p className="nx-style-inspector__property-label">{property.label}</p>
-        </CssHint>
-      ) : null}
+      <PropertyHeading
+        property={property}
+        headed={headed}
+        nodeId={nodeId}
+        state={state}
+        breakpoint={breakpoint}
+        editor={editor}
+      />
       {/*
         The forms the catalog offers at each union position, so every one is
         reachable. Without this an unset `borderRadius` could only ever be
@@ -145,6 +153,9 @@ export function StylePropertyFields({
         the value itself is the honest way to remove it, and it is already
         there.
       */}
+      {words?.hint === undefined ? null : (
+        <p className="nx-inspector__note">{words.hint}</p>
+      )}
       {above.map(toggle)}
       {property.offered ? null : (
         <p className="nx-inspector__note" data-not-offered={property.property}>
@@ -197,9 +208,10 @@ export function StylePropertyFields({
                     control={control}
                     side={sideOf(box, control)}
                     label={
-                      many
+                      words?.labels[control.path.join(".")] ??
+                      (many
                         ? positionLabel(control, orientation)
-                        : property.label
+                        : property.label)
                     }
                     summary={many ? undefined : property.summary}
                     propertyLabel={property.label}
@@ -220,6 +232,48 @@ export function StylePropertyFields({
           </SideBoxFrame>
         </FoldedUnion.Provider>
       </AlignmentFlow.Provider>
+    </div>
+  );
+}
+
+/**
+ * A property's heading, when it has one, and the action drawn beside it: Play
+ * beside "Animation when it appears", the one property that has one.
+ */
+function PropertyHeading({
+  property,
+  headed,
+  nodeId,
+  state,
+  breakpoint,
+  editor,
+}: {
+  property: InspectedStyleProperty;
+  headed: boolean;
+  nodeId: string;
+  state: StyleState;
+  breakpoint: BreakpointId;
+  editor: EditorState;
+}): React.JSX.Element | null {
+  const label = headed ? (
+    // What the property does, then the CSS its fields write, on hover.
+    <CssHint
+      summary={property.summary}
+      writes={writtenProperties(property.controls)}
+    >
+      <p className="nx-style-inspector__property-label">{property.label}</p>
+    </CssHint>
+  ) : null;
+  if (property.property !== APPEAR_PROPERTY) return label;
+  return (
+    <div className="nx-style-inspector__property-head">
+      {label}
+      <AppearPlay
+        nodeId={nodeId}
+        state={state}
+        breakpoint={breakpoint}
+        editor={editor}
+      />
     </div>
   );
 }
@@ -253,6 +307,15 @@ function placeChoices(
 }
 
 /**
+ * Rows whose stored key reads wrong as a word, by the kind of value and the
+ * CSS property they set: the background's `url` is the image an author
+ * chooses, not an address (a gradient writes the same property, as itself).
+ */
+const ROW_LABELS: Readonly<Record<string, string>> = {
+  "url:background-image": "Image",
+};
+
+/**
  * A control's name within its property: a side or a corner in plain words
  * ("Top", "Bottom left"), as the element's measured axes place it, rather
  * than CSS's logical words ("Block start", "End start"); any other position
@@ -264,6 +327,8 @@ function positionLabel(
   control: StyleControl,
   orientation: SideOrientation | undefined
 ): string {
+  const named = ROW_LABELS[`${control.leaf.kind}:${control.leaf.cssProperty}`];
+  if (named !== undefined) return named;
   const key = control.path[control.path.length - 1] ?? "";
   if (orientation === undefined) return fieldLabel(key);
   const plain =
