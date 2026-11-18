@@ -91,6 +91,13 @@ export interface ComponentFromSelectionPromptProps {
   >;
   readonly onClose: () => void;
   readonly returnFocusTo?: () => HTMLElement | null;
+  /**
+   * Run before the component is created: the page's held component
+   * settings written, which the selection may bind and the new component
+   * would keep binding. `false` when one was refused, and nothing is
+   * created, so no component is made binding a setting never made.
+   */
+  readonly beforeCreate?: () => true | Promise<boolean>;
 }
 
 /** How long a convert waits for the canvas to hold the new definition. */
@@ -314,6 +321,11 @@ function ComponentForm(
     if (busy || !complete) return;
     setBusy(true);
     setFailed(false);
+    // A refusal is said where it happened, with the binding taken off.
+    if (props.beforeCreate !== undefined && !(await props.beforeCreate())) {
+      setBusy(false);
+      return;
+    }
     const result = await writer.create({
       action,
       document: asked.document,

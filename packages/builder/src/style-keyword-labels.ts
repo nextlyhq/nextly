@@ -143,12 +143,13 @@ const KEYWORD_LABELS: Readonly<
     lowercase: "Lowercase",
     capitalize: "Capitalize words",
   },
-  // An Accordion's icon choices, traced on their own custom properties.
+  // An Accordion's icon choices, traced on their own custom properties, as
+  // the Content tab names them. A stored Browser default draws the plus.
   [DISCLOSURE_ICON_PROPERTY]: {
+    plus: "+ / −",
     chevron: "Chevron",
-    plus: "Plus",
     none: "None",
-    browser: "Browser default",
+    browser: "+ / −",
   },
   [DISCLOSURE_POSITION_PROPERTY]: {
     before: "Before",

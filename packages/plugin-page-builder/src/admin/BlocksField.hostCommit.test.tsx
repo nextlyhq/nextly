@@ -39,6 +39,7 @@ import {
   type FieldValues,
 } from "react-hook-form";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { closedDocumentSession } from "../__tests__/closed-document-session";
 
 /** Each unsaved-work report, as the key it was made under and its value. */
 const reports: { key: string; hasWork: boolean }[] = [];
@@ -212,12 +213,14 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
 vi.mock("./publish-offer", () => ({
   usePublishOffer: () => null,
   useFormPublishOffer: () => null,
+  usePublishQuestion: () => ({ offer: () => Promise.resolve(), dialog: null }),
   // Page checks asks which parts aren't published; answered as unknown, so
   // it lists none and these tests stay on what they test.
   askReadiness: async () => null,
 }));
 vi.mock("./removal-hold-client", () => ({
   useRemovalHold: () => null,
+  useRemovalQuestion: () => ({ hold: () => Promise.resolve(), dialog: null }),
 }));
 
 /** Asking the stored style again, as the editor does after a save. */
@@ -307,6 +310,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   },
   // The form's storing gate, which site style writes are tracked with.
   useTrackedWrite: () => () => {},
+  // The session a header edited in place opens; none is opened here.
+  useDocumentSession: () => closedDocumentSession(),
   useBeforeDocumentAction: (handler: () => void) => {
     const latest = React.useRef(handler);
     React.useEffect(() => {

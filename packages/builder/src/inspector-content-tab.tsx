@@ -18,6 +18,9 @@ import type { PageStyleCascade } from "@nextlyhq/blocks-react";
 import { useIsomorphicLayoutEffect } from "@nextlyhq/ui";
 import * as React from "react";
 
+import { ACCORDION_BLOCK } from "./accordion-icon";
+import { accordionContentSections } from "./accordion-icon-field";
+import { EMBED_BLOCK_TYPE, embedLinkOp } from "./canvas/embed-states-model";
 import { columnsContentSection } from "./columns-layout-field";
 import {
   PropExposeControl,
@@ -25,10 +28,6 @@ import {
 } from "./component-fields-panel";
 import type { ContentServices } from "./content-controls";
 import type { EditorState } from "./editor-state";
-import {
-  EMBED_BLOCK_TYPE,
-  embedLinkOp,
-} from "./canvas/embed-states-model";
 import { embedSectionBodies } from "./embed-sections";
 import { FORM_BLOCK } from "./form-picked";
 import { formSectionBodies, formSourceSections } from "./form-sections";
@@ -149,7 +148,11 @@ export function commitProp(
   // An Embed's link, typed or pasted into its Link field, takes the
   // provider's shape with it, in the same step, as a link pasted on the
   // canvas does.
-  if (node.type === EMBED_BLOCK_TYPE && name === "src" && typeof value === "string") {
+  if (
+    node.type === EMBED_BLOCK_TYPE &&
+    name === "src" &&
+    typeof value === "string"
+  ) {
     const linked = embedLinkOp(document, id, value, {
       shape: designIsWritable(document, id, lockViewOf(editor)),
     });
@@ -194,6 +197,8 @@ function builderSectionsOf(
     labels
   );
   if (gallery.length > 0) return gallery;
+  // An Accordion's Icon is drawn after the block's own Behaviour, below.
+  if (inspection.blockName === ACCORDION_BLOCK) return [];
   const [label] = labels;
   if (label === undefined) return [];
   const section = columnsContentSection({
@@ -355,38 +360,60 @@ function ContentSurface({
   // the ones the builder draws for a core block (Columns' layout, a
   // Gallery's Pictures and Layout); a block
   // with none draws the fields' own note that there is nothing to set.
-  const sections = joinedSections(
-    [
-      ...formSourceSections({
-        inspection,
-        stored,
-        sources: formSources,
-        writable: formWritable,
-        onCommit: (name, value) => {
-          onCommit(name, value);
-        },
-      }),
-      ...builderSectionsOf(inspection, editor, around, reasonId, services),
-    ],
-    // A section the builder draws as `null` is one the block has no use
-    // for as it stands: a picked form's own fields.
-    inspection.sections.content.flatMap(section => {
-      const body =
-        formBodies?.has(section.label) === true
-          ? formBodies.get(section.label)
-          : (embedBodies?.get(section.label) ?? fieldsFor(section.rows));
-      return body === null || body === undefined
-        ? []
-        : [
-            {
-              key: section.label,
-              label: section.label,
-              holdsValue: rowsHoldValue(section.rows),
-              body,
-            },
-          ];
-    })
-  );
+  const sections = [
+    ...joinedSections(
+      [
+        ...formSourceSections({
+          inspection,
+          stored,
+          sources: formSources,
+          writable: formWritable,
+          onCommit: (name, value) => {
+            onCommit(name, value);
+          },
+        }),
+        ...builderSectionsOf(inspection, editor, around, reasonId, services),
+      ],
+      // A section the builder draws as `null` is one the block has no use
+      // for as it stands: a picked form's own fields.
+      inspection.sections.content.flatMap(section => {
+        const body =
+          formBodies?.has(section.label) === true
+            ? formBodies.get(section.label)
+            : (embedBodies?.get(section.label) ?? fieldsFor(section.rows));
+        return body === null || body === undefined
+          ? []
+          : [
+              {
+                key: section.label,
+                label: section.label,
+                holdsValue: rowsHoldValue(section.rows),
+                body,
+              },
+            ];
+      })
+    ),
+    // An Accordion's Icon, after its Behaviour: what the questions show,
+    // read after how they open. Held by a design lock, as it writes styles.
+    ...accordionContentSections(
+      {
+        editor,
+        nodeId: inspection.nodeId,
+        designHeldBy:
+          designReadOnlyReason(
+            editor.document,
+            inspection.nodeId,
+            lockViewOf(editor)
+          ) === undefined
+            ? undefined
+            : reasonId,
+        breakpoints: around?.breakpoints,
+        cascade: around?.cascade,
+        renderedTag: around?.renderedTag,
+      },
+      builderContentSectionsOf(inspection.blockName)
+    ),
+  ];
   const generated =
     sections.length === 0 ? (
       fieldsFor(contentRowsOf(inspection))
