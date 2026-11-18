@@ -27,8 +27,10 @@ describe("the stamp of a stored sheet, for custom CSS", () => {
   it("is what it always was with no checker", () => {
     // The stamp the code before custom CSS existed gave these inputs, so a
     // change that moved every stamp, checker or not, fails here: it would
-    // recompile every stored sheet on sites that draw no custom CSS.
-    expect(stamp()).toBe("v12:213nkp93cfb");
+    // recompile every stored sheet on sites that draw no custom CSS. Pinned
+    // at the current encoding (v13, a stored Browser default disclosure icon
+    // drawing the plus), which moves every stamp on purpose.
+    expect(stamp()).toBe("v13:1yra78zo94z");
   });
 
   it("moves when a checker judges the compile", () => {
