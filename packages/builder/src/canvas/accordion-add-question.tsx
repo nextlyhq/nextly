@@ -56,7 +56,7 @@ import {
 } from "./geometry-dom";
 
 /** The button's words. */
-export const ADD_QUESTION_WORDS = "Add a question";
+const ADD_QUESTION_WORDS = "Add a question";
 
 /** The Accordion's registered name. */
 const ACCORDION_BLOCK = "core/accordion";
@@ -123,12 +123,17 @@ export function addQuestionOp(
   return { kind: "insert", node: numberedForPlace(made, at, document), at };
 }
 
-/** Two rectangles at the same place and size. */
-function sameRect(a: Rect | null, b: Rect | null): boolean {
-  if (a === null || b === null) return a === b;
-  return (
-    a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height
-  );
+/** Where the button is drawn: the accordion's shown box, and the zoom. */
+interface Place {
+  readonly rect: Rect;
+  readonly scale: number;
+}
+
+/** A place as one comparable value, so an unchanged measure sets nothing. */
+function placeKey(place: Place | null): string {
+  if (place === null) return "";
+  const { x, y, width, height } = place.rect;
+  return [x, y, width, height, place.scale].join(" ");
 }
 
 /**
@@ -181,10 +186,7 @@ export function AccordionAddQuestion({
 }: AccordionAddQuestionProps): React.JSX.Element {
   const layer = React.useRef<HTMLDivElement | null>(null);
   const room = React.useRef<Element | null>(null);
-  const [place, setPlace] = React.useState<{
-    rect: Rect;
-    scale: number;
-  } | null>(null);
+  const [place, setPlace] = React.useState<Place | null>(null);
   // The question just added, opened and typed into once the canvas draws it.
   const [added, setAdded] = React.useState<string | undefined>(undefined);
   const selected = accordionForSelection(editor.document, editor.selection.ids);
@@ -224,15 +226,8 @@ export function AccordionAddQuestion({
     const visible = visiblePartOf(block, space.root);
     const rect =
       visible === null || visible === "hidden" ? null : space.place(visible);
-    setPlace(current =>
-      rect === null
-        ? null
-        : current !== null &&
-            current.scale === space.scale &&
-            sameRect(current.rect, rect)
-          ? current
-          : { rect, scale: space.scale }
-    );
+    const next = rect === null ? null : { rect, scale: space.scale };
+    setPlace(current => (placeKey(current) === placeKey(next) ? current : next));
   }, []);
 
   const canvasFrame = useCanvasFrame();
