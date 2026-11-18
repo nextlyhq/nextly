@@ -310,6 +310,10 @@ test.describe("Copy style and Paste style", () => {
         ).toBeVisible();
       }
       await expectNoAxeViolations(page, { include: '[role="menu"]' });
+      // The menu as an author sees it, kept with the run's results.
+      await page.getByRole("menu").screenshot({
+        path: test.info().outputPath(`menu-${dark ? "dark" : "light"}.png`),
+      });
       await page.keyboard.press("Escape");
     }
 
