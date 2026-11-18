@@ -29,6 +29,35 @@ const REASON_TEXT: Record<ConversionReasonKind, string> = {
     "MySQL checks the rows and changes the column in separate transactions, so a value written meanwhile could be changed with no error",
   "cleared-under-not-null":
     "values that would be cleared, where the column does not allow a null, so a value would have to be invented",
+  // A field's type change gives these besides (`type-change/judge`).
+  "not-a-number": "values that are not a number would be cleared",
+  "not-a-date":
+    "values that are not an ISO 8601 date or date-time would be cleared",
+  "not-an-email": "values the email field's rule refuses would be cleared",
+  "not-an-option":
+    "values that are not one of the field's options would be cleared",
+  "not-a-boolean": "values other than true, false, 1 or 0 would be cleared",
+  "non-finite":
+    "NaN or infinite numbers the new field cannot hold would be cleared",
+  object:
+    "JSON objects, which only rich text or text can take, would be cleared",
+  "kind-never-held":
+    "JSON values of a kind the new type could never hold would be cleared",
+  "column-refuses": "values the new column refuses outright would be cleared",
+  "field-refuses":
+    "values the new field's own validation refuses would be cleared",
+  rounded: "values the new type holds only rounded",
+  "out-of-range": "values outside the range the new type holds",
+  "no-time-or-offset": "date texts that name no time or no offset from UTC",
+  "several-items": "lists of several items, which one value cannot keep",
+  "item-not-held":
+    "lists holding an item the new list cannot hold, and a list is never cut",
+  "pair-blocked": "no value of the old type could ever be held by the new one",
+  repeated:
+    "values that become one value of the new type, which a unique field holds once",
+  "needs-rewrite":
+    "values the new type reads only once they are rewritten into its form, which a save does not do yet",
+  "new-form": "values stored in the new type's form, nothing of them lost",
 };
 
 /** A row as every report and question names it: by its key, never by its value. */
@@ -72,7 +101,20 @@ export function describeClassed(judgement: {
 /** The reasons that block a column; the rest clear values, which a consent can allow. */
 export type BlockingReasonKind = Exclude<
   ConversionReasonKind,
-  "not-json" | "kept-unreadable"
+  | "not-json"
+  | "kept-unreadable"
+  // A type change's values cleared with consent, and one stored in its new form, block nothing.
+  | "not-a-number"
+  | "not-a-date"
+  | "not-an-email"
+  | "not-an-option"
+  | "not-a-boolean"
+  | "non-finite"
+  | "object"
+  | "kind-never-held"
+  | "column-refuses"
+  | "field-refuses"
+  | "new-form"
 >;
 
 /** What the owner can do where no conversion Nextly runs keeps the values. */
@@ -94,6 +136,17 @@ const REASON_OWNER_CAN: Record<BlockingReasonKind, string | null> = {
   "late-write": null,
   "cleared-under-not-null":
     "give the named rows a value the new type holds, or make the field optional",
+  rounded: "change the named values so the new type holds each exactly",
+  "out-of-range": "change the named values to ones within the new type's range",
+  "no-time-or-offset": "give the named dates a time and an offset from UTC",
+  "several-items": "leave one item in each named list",
+  "item-not-held":
+    "correct or remove, in the named rows, the items the new list cannot hold",
+  "pair-blocked": null,
+  repeated:
+    "make the named values distinct, or turn off Unique, before the change",
+  "needs-rewrite":
+    "rewrite the named values into the new type's form first, or keep them in a new field",
 };
 
 /** Whether `kind` blocks a column, whatever a consent names. */

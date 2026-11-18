@@ -548,6 +548,15 @@ export { useFormsShownAgain } from "./form-source-control";
 export { FirstAddChoosers } from "./canvas/first-add-choosers";
 export type { FirstAddChoosersProps } from "./canvas/first-add-choosers";
 /**
+ * "+ Add a question" under a selected Accordion's last question, drawn over
+ * the canvas: it adds the next numbered question, opens it and types its
+ * title, through the host's way into a block's text.
+ *
+ * @experimental
+ */
+export { AccordionAddQuestion } from "./canvas/accordion-add-question";
+export type { AccordionAddQuestionProps } from "./canvas/accordion-add-question";
+/**
  * The badge on a block whose bound value a visitor will not see, drawn in the
  * canvas's overlay from the host's `visitorUnreadableBindings` answer.
  */
@@ -610,6 +619,12 @@ export {
 export { PageInserters } from "./canvas/page-inserters";
 export type { PageInsertersProps, StartOptions } from "./canvas/page-inserters";
 export type { StarterPage } from "./canvas/page-start-area";
+// Starting an empty page from a starter page's blocks, as one undo step.
+export {
+  applyStarterPage,
+  planStarterPage,
+  type StarterPageSources,
+} from "./starter-page";
 
 /**
  * The editor's document state, published beside the canvas because it is a hook

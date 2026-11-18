@@ -208,6 +208,20 @@ export const CORE_SETTING_PLACES: readonly SettingPlace[] = [
   },
   {
     block: "core/accordion",
+    setting: "openMode",
+    tab: "content",
+    section: "Behaviour",
+    label: "Open",
+  },
+  {
+    block: "core/accordion",
+    setting: "firstOpen",
+    tab: "content",
+    section: "Behaviour",
+    label: "First open",
+  },
+  {
+    block: "core/accordion",
     setting: "titlesAs",
     tab: "content",
     section: "Behaviour",
@@ -238,14 +252,14 @@ export const CORE_SETTING_PLACES: readonly SettingPlace[] = [
     block: "core/accordion-item",
     setting: "title",
     tab: "content",
-    section: "Accordion item",
-    label: "Title",
+    section: "Question",
+    label: "Question",
   },
   {
     block: "core/accordion-item",
     setting: "open",
     tab: "content",
-    section: "Accordion item",
+    section: "Question",
     label: "Open by default",
   },
   {

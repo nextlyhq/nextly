@@ -51,6 +51,7 @@
 import { findNode } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
+import { numberedForPlace } from "../accordion-questions";
 import { layersLockFacts } from "../lock-refusal";
 import { lockBlockingMove } from "../locking";
 import type { OpPosition } from "../op-vocabulary";
@@ -684,8 +685,10 @@ export function useCanvasDrag({
 
       // From the caller's own snapshot of the palette, built once per gesture:
       // the same node the locks were asked about while the pointer aimed.
-      const node = subject.makeNode();
-      if (node === null) return;
+      const made = subject.makeNode();
+      if (made === null) return;
+      // A Question dropped into an Accordion takes the next number there.
+      const node = numberedForPlace(made, at, current.document);
       // The position and the nesting verdict were both computed for the type
       // the gesture ADVERTISED. A node of some other type was never asked
       // about, so inserting it here would place a block into a parent or slot

@@ -189,6 +189,27 @@ export const DASHBOARD_PREFERENCES_INDEXES = [
   },
 ] as const satisfies readonly CoreIndex<string>[];
 
+export const EXTERNAL_IDENTITIES_INDEXES = [
+  // One identity per provider key, issuer and subject, enforced by the
+  // digest of the three rather than by the three themselves
+  // (`externalIdentityKeyDigest`): a digest has nothing a collation could
+  // fold — MySQL compares TEXT case-insensitively and even its `_bin`
+  // collations pad trailing spaces away — and one 64-character index fits
+  // every InnoDB page size, where an index over the columns would not. The
+  // digest is plain SHA-256, so it survives any secret rotation; with
+  // "no issuer" spelled "" once, one subject from two issuers of one key is
+  // two rows, and a second row for an issuerless key and subject is refused
+  // on every dialect alike.
+  {
+    name: "nextly_external_identities_key_uidx",
+    columns: ["keyDigest"],
+    unique: true,
+  },
+  // One user's identities: listed by their owner, and removed with the
+  // account.
+  { name: "nextly_external_identities_user_idx", columns: ["userId"] },
+] as const satisfies readonly CoreIndex<string>[];
+
 export const NEXTLY_RELEASES_INDEXES = [
   // The due-release query reads exactly these two columns together.
   { name: "nextly_releases_due_idx", columns: ["state", "scheduledAt"] },

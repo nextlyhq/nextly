@@ -30,7 +30,7 @@ import {
   type SiteCssDrawn,
   type SiteCssRead,
   type SiteCssSaved,
-} from "../library-contract";
+} from "../site-css-contract";
 
 import { checkCustomCss, customCssProblemText } from "./css-check";
 import { SITE_CODE_LIMITS } from "./limits";

@@ -823,6 +823,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
         adapter: this.adapter,
         logger: this.logger,
         label: `delete field group "${slug}"`,
+        migrationsDir: this.builderSave?.migrationsDir,
         issuesDdl: true,
       },
       () => this.deleteComponentExcluded(slug)

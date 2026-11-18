@@ -14,6 +14,12 @@ import {
 } from "@nextlyhq/blocks-engine";
 
 import {
+  ACCORDION_BLOCK,
+  ACCORDION_ICON_WORDS,
+  ACCORDION_ICONS,
+  accordionIconHoldsValue,
+} from "./accordion-icon";
+import {
   BUTTON_BLOCK,
   ICON_BLOCK,
   SECTION_BLOCK,
@@ -40,6 +46,11 @@ import {
   writtenCss,
   type CssPropertyRow,
 } from "./css-properties";
+import {
+  CUSTOM_CSS_KEY,
+  CUSTOM_CSS_SECTION,
+  CUSTOM_CSS_SETTING,
+} from "./custom-css";
 import {
   galleryColumnsHoldValue,
   GALLERY_COLUMNS,
@@ -166,6 +177,17 @@ function builderRows(
   if (node?.type === GALLERY_BLOCK) {
     return galleryRows(node, section, breakpoints);
   }
+  // An Accordion's Icon: the questions' icon, a style value.
+  if (node?.type === ACCORDION_BLOCK) {
+    return [
+      {
+        id: "disclosureIcon",
+        label: "Icon",
+        options: ACCORDION_ICONS.map(each => ACCORDION_ICON_WORDS[each]),
+        set: accordionIconHoldsValue(node),
+      },
+    ];
+  }
   if (node === undefined || node.type !== COLUMNS_ROW) return [];
   const tiers = stackTiers(breakpoints);
   const template = readStyleValue(node.styles, {
@@ -221,16 +243,17 @@ export function contentEntries(
       drawnRows(contentRowsOf(inspection), bound)
     );
   }
-  return [
-    ...builder,
-    ...sections.flatMap(section =>
-      sectionEntries(
-        "content",
-        { key: section.label, label: section.label },
-        drawnRows(section.rows, bound)
-      )
-    ),
-  ];
+  const own = sections.flatMap(section =>
+    sectionEntries(
+      "content",
+      { key: section.label, label: section.label },
+      drawnRows(section.rows, bound)
+    )
+  );
+  // An Accordion's Icon is drawn after its Behaviour, so it is read there.
+  return inspection.blockName === ACCORDION_BLOCK
+    ? [...own, ...builder]
+    : [...builder, ...own];
 }
 
 /** Whether a block is hidden on any device. */
@@ -242,7 +265,12 @@ function hiddenSomewhere(node: BlockNode | undefined): boolean {
 /** The Advanced tab's settings: Visibility, HTML, then the block's own. */
 export function advancedEntries(
   inspection: BlockInspection,
-  node: BlockNode | undefined
+  node: BlockNode | undefined,
+  /**
+   * Whether Advanced draws Custom CSS, for a person who may change site
+   * code: only then can a search find it or Only changed count it.
+   */
+  offersCustomCss = false
 ): SettingEntry[] {
   const bound = boundProps(node);
   const { htmlRows, visibilityRows, others } = advancedRowsBySection(
@@ -307,6 +335,20 @@ export function advancedEntries(
         drawnRows(section.rows, bound)
       )
     ),
+    // Last, as the tab draws it; set by the one answer its dot reads.
+    ...(offersCustomCss
+      ? sectionEntries(
+          "advanced",
+          { key: CUSTOM_CSS_KEY, label: CUSTOM_CSS_SECTION },
+          [
+            {
+              id: CUSTOM_CSS_SETTING,
+              label: CUSTOM_CSS_SECTION,
+              set: inspection.hasCustomCss,
+            },
+          ]
+        )
+      : []),
   ];
 }
 

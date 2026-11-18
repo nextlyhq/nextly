@@ -32,7 +32,7 @@ import {
   type RecordSingleActivityInput,
 } from "../audit/record-activity";
 
-import { buildEnvelope } from "./envelope";
+import { buildEnvelope, sanitizedChange } from "./envelope";
 import {
   recordEvent,
   recordEventInTx,
@@ -47,6 +47,7 @@ import {
 import { isWebhookRecordingEnabled } from "./recording-policy";
 import type { EventRetentionClass } from "./retention-config";
 import {
+  componentRowPaths,
   sensitiveFieldPaths,
   type SensitiveFieldSource,
 } from "./sensitive-fields";
@@ -107,6 +108,25 @@ export interface RecordMutationEventArgs {
 }
 
 /**
+ * The fields an event about a change of `previous` into `data` names as
+ * changed, the sensitive ones of `fields` left out: what the outbox envelope
+ * names (`buildEnvelope`), for a write's in-process collection event, which
+ * is announced whether or not the outbox records the change.
+ */
+export function eventChangedFields(args: {
+  data: Record<string, unknown>;
+  previous?: Record<string, unknown> | null;
+  fields: readonly SensitiveFieldSource[];
+}): string[] {
+  return sanitizedChange({
+    data: args.data,
+    previous: args.previous ?? null,
+    sensitiveFields: sensitiveFieldPaths(args.fields),
+    componentRows: componentRowPaths(args.fields),
+  }).changedFields;
+}
+
+/**
  * Run the recording gates and build the envelope, or return null when the
  * mutation records nothing. Shared by both recorders so the policy (opt-out,
  * endpoint/audit gate, envelope assembly, secret stripping) lives in ONE place
@@ -152,6 +172,7 @@ function prepareMutationEnvelope(args: RecordMutationEventArgs): {
     previous: args.previous ?? null,
     actor: webhookActorOf(args.actor),
     sensitiveFields: sensitiveFieldPaths(args.fields),
+    componentRows: componentRowPaths(args.fields),
     ...(args.site !== undefined ? { site: args.site } : {}),
     ...(args.statusChange !== undefined
       ? { statusChange: args.statusChange }
@@ -235,6 +256,9 @@ async function recordActivity(
       ...(resource.locale !== undefined ? { locale: resource.locale } : {}),
       data: args.data,
       previous: args.previous ?? null,
+      // The same component rows the event's own diff passes over, so the trail
+      // and the event name the same fields changed.
+      componentRows: componentRowPaths(args.fields),
       actor: webhookActorOf(args.actor),
       ...(args.publication !== undefined
         ? { publication: args.publication }

@@ -6,6 +6,27 @@
 // two records: how its live column differs from its field as the database last had it applied,
 // and, separately, a change to that field the configuration holds and no migration has applied.
 //
+// Each entity has two sides: what the database last had applied, and what the next migration would
+// apply. Either may be missing, and the answer for every column follows from which sides there
+// are, one rule for every case:
+//
+// | configured        | applied | records per column                                             |
+// | ----------------- | ------- | -------------------------------------------------------------- |
+// | present           | none    | a pending add for every configured column, whatever is live     |
+// | none              | present | each applied column judged against the live one, and a pending  |
+// |                   |         | removal for every applied column                                |
+// | present, same     | present | each applied column judged; pending only where the two sides    |
+// | table             |         | differ in shape, or one side alone names the column             |
+// | present, another  | present | each applied column judged at the applied table; a pending move |
+// | table             |         | for every column both name, and an add or a removal for a       |
+// |                   |         | column one side alone names                                     |
+// | none              | none    | no entity at all                                                |
+//
+// With no applied definition no migration made the live table, so none would make it on another
+// database: every configured column is still the next migration's to create, even where a live
+// column already matches it. A record of what was applied that cannot be read stops the run before
+// any column is judged.
+//
 // @module domains/schema/repair-columns/types
 
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
@@ -59,6 +80,13 @@ export interface EntityDefinition {
    * the configuration says now.
    */
   recordedTypes?: Readonly<Record<string, string>>;
+  /**
+   * No record says which storage the app's overrides gave this definition's columns when it was
+   * applied: only a registry row says what was applied, and the configuration that declared the
+   * overrides no longer declares the entity at the table it was applied to. A column of the entity's own table that holds another
+   * type than its field's own may then be an override as applied, so its type is not judged.
+   */
+  storageUnknown?: boolean;
 }
 
 /**
@@ -80,22 +108,36 @@ export type AppliedDefinition = EntityDefinition & {
   source: AppliedDefinitionSource;
 };
 
-/** One entity, with its field list as last applied and as configured now. */
+/**
+ * One entity, with its field list as last applied and as configured now. At least one side is
+ * present: an entity with neither says nothing about the database and is not compared.
+ */
 export interface RepairEntity {
   kind: RepairEntityKind;
   slug: string;
-  /** The entity's own table; translatable fields live in `<table>_locales`. */
+  /**
+   * The entity's own table where the database holds it: the applied side's, or the configured
+   * side's where nothing was applied. Translatable fields live in `<table>_locales`.
+   */
   table: string;
   /**
+   * The table the configured side names where it is another (a code-first `dbName` change whose
+   * migration is pending): the database still holds the entity at `table`, so the applied columns
+   * are judged there and each configured column is reported as moving here. Absent otherwise.
+   */
+  renamedTo?: string;
+  /**
    * The definition every live column is judged against, or null where no record says what was
-   * applied: the configuration alone declares the entity, or its registry row waits for a
-   * migration and no applied snapshot says what it was before. Such an entity awaits a migration,
-   * so a column that differs from its configured definition is reported as pending, not judged.
+   * applied: the configuration alone declares the entity, or its registry row is not one a sync
+   * or a migration finished and no applied snapshot says what it was before. Then no live column
+   * is judged, and every configured column is reported as pending: no migration has created it.
    */
   applied: AppliedDefinition | null;
   /**
    * The definition the next migration would apply, or null where nothing declares the entity any
-   * more. Compared with `applied` to find the changes still pending a migration.
+   * more (removed from the configuration, its plugin, or a checked-out Builder manifest). Then
+   * every applied column is reported as pending removal, beside its judgement against the live
+   * column.
    */
   configured: EntityDefinition | null;
   /** The plugin that owns the entity, when one does. */
@@ -195,12 +237,20 @@ export interface DiffersFinding extends FindingBase {
 
 /**
  * A change to the field that the configuration holds and no migration has applied: the column is
- * left to that migration. `applied` is null for a field the configuration adds or where the applied
- * definition is unknown; `configured` is null for a field the configuration removes. `live` is the
- * column as it is now, or null where it does not exist.
+ * left to that migration.
+ *
+ * The two sides are paired by column name (and whether it is in the translation table), not by
+ * table, so a column a renamed table keeps is one record. `location` is where the configured side
+ * puts the column, or the applied side's location for a column the configuration removes.
+ * `applied` is null for a column no applied definition names (a field the configuration adds, or
+ * an entity nothing has applied); `configured` is null for one the configuration removes. `live`
+ * is the column where the database holds it now: at the applied side's location where that side
+ * names it, else at `location`; null where it does not exist.
  */
 export interface PendingMigrationFinding extends FindingBase {
   kind: "pending-migration";
+  /** The table the column moves from, where the configured side names another table. */
+  renamedFrom?: string;
   applied: ColumnState | null;
   configured: ColumnState | null;
   live: ColumnState | null;

@@ -55,6 +55,7 @@ import { walkForest } from "./forest-walk";
 import type { DocumentLimits } from "./limits";
 import { isPlainRecord } from "./plain-record";
 import { defineEntry, ownEntry, ownKeys } from "./safe-record";
+import { withSettingDefaults } from "./setting-defaults";
 import { isImageAddress } from "./url-policy";
 
 /**
@@ -624,7 +625,9 @@ function fillOf(
       message:
         binding.source === "item"
           ? "This binding reads a list item, and this block is not inside a list."
-          : `This binding's ${binding.source} source was not read for this page.`,
+          : binding.source === "setting"
+            ? "This binding follows a component's setting, and this block is not inside a component."
+            : `This binding's ${binding.source} source was not read for this page.`,
       path: binding.path,
     });
     return fallbackFillOf(binding.kind, binding.fallback);
@@ -855,9 +858,12 @@ export function bindDocument(
     return changed ? next : slots;
   };
 
-  const nodes = bindNodes(document.nodes);
+  // A component shown on its own shows each setting's default where a block
+  // follows it; composed, the placement filled it before this pass.
+  const shown = withSettingDefaults(document);
+  const nodes = bindNodes(shown.nodes);
   return {
-    document: nodes === document.nodes ? document : { ...document, nodes },
+    document: nodes === document.nodes ? document : { ...shown, nodes },
     bound,
     issues,
   };
