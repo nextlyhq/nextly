@@ -33,6 +33,8 @@ vi.mock("@admin/lib/api/refreshInterceptor", () => ({
 vi.mock("@admin/lib/auth/session", () => ({
   getCurrentUserId: () => Promise.resolve("user-1"),
   invalidateSessionCache: vi.fn(),
+  // The guard tells a busy server's refusal apart by this class.
+  SessionUnavailableError: class SessionUnavailableError extends Error {},
 }));
 vi.mock("@admin/lib/device-memory/server-answer", () => ({
   confirmDeviceMemory: () => Promise.resolve(),
