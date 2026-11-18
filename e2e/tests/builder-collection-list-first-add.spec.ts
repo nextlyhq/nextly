@@ -18,7 +18,7 @@
  */
 import { expect, type APIRequestContext, type Page } from "@playwright/test";
 
-import { pressSave, selection } from "./canvas/editor-driver";
+import { clearSelection, pressSave, selection } from "./canvas/editor-driver";
 import { gotoAdmin } from "./support/admin";
 import { canvasFrame } from "./support/canvas-frame";
 import { storedPageNodes } from "./support/stored-page";
@@ -124,7 +124,7 @@ test.describe("a Collection list in two clicks", () => {
     await expect(chooser(page)).toHaveCount(0);
 
     // One undo takes the whole list away, not just its layout.
-    await page.keyboard.press("ControlOrMeta+z");
+    await page.getByRole("button", { name: "Undo", exact: true }).click();
     await expect(canvas.locator(`[data-nx-node="${list}"]`)).toHaveCount(0);
   });
 
@@ -143,6 +143,8 @@ test.describe("a Collection list in two clicks", () => {
       canvas.getByRole("heading", { name: titles[2] ?? "" })
     ).toBeVisible();
 
+    // Added at the page's level, not inside the list just filled.
+    await clearSelection(page);
     const skipped = await addList(page);
     await chooser(page).getByRole("button", { name: "Posts", exact: true }).click();
     await chooser(page).getByRole("button", { name: "Skip" }).click();
