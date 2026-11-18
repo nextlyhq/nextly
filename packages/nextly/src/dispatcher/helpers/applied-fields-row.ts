@@ -8,6 +8,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { FieldConfig } from "../../collections/fields/types";
 import { clearRegistryRowCache } from "../../domains/dynamic-collections/services/collection-row-cache";
+import { bumpSchemaVersion } from "../../route-handler/schema-version";
 import { writeRegistryRows } from "../../domains/schema/schema-version";
 import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
 
@@ -45,4 +46,21 @@ export async function writeAppliedFieldsRow(
     )
   );
   clearRegistryRowCache();
+  await afterEnclosingCommit(adapter);
+}
+
+/**
+ * Where the write joined a transaction its caller opened (a save's file), the cached rows are
+ * cleared and the schema version signalled again once that transaction commits: until then the
+ * row it wrote is not what other connections read, so a read in between may cache the old row and
+ * take the first signal. Outside a transaction the write has committed, and nothing more is owed.
+ */
+export async function afterEnclosingCommit(
+  adapter: DrizzleAdapter
+): Promise<void> {
+  if (!adapter.inTransaction()) return;
+  await adapter.afterCommit(() => {
+    clearRegistryRowCache();
+    bumpSchemaVersion();
+  });
 }

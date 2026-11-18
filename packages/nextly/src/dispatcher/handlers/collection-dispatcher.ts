@@ -63,6 +63,7 @@ import type { Resolution } from "../../domains/schema/pipeline/resolution/types"
 import type { DesiredCollection } from "../../domains/schema/pipeline/types";
 import { refuseRenamedFieldOntoTakenColumn } from "../../domains/schema/rename-target";
 import { writeRegistryRows } from "../../domains/schema/schema-version";
+import { afterEnclosingCommit } from "../helpers/applied-fields-row";
 import {
   applyCollectionSchemaChange,
   fieldsAsStored,
@@ -1192,6 +1193,8 @@ const COLLECTIONS_METHODS: Record<
             // Written past the registry services, so the cached rows are cleared
             // here: a read during the save may have cached the row from before it.
             clearRegistryRowCache();
+            // And again once a file's transaction it joined commits (`afterEnclosingCommit`).
+            await afterEnclosingCommit(adapter);
           };
           const written = await saveThroughWriter({
             // Where the save runs its file, the row is written in the file's own transaction, so a

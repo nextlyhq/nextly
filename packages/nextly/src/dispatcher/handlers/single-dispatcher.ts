@@ -1846,8 +1846,12 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
                 }),
               afterFile: () => reconcileBuilderCompanion("single", companion),
               // On the file road the row is written in the file's own transaction, so a failed
-              // write leaves the save as it was and is answered as the failure it is.
-              registry: writeRow,
+              // write leaves the save as it was and is answered as the failure it is. Not where the
+              // translations table is reconciled after the file: the row would then record the
+              // change before that step holds it, so it is written after it, as before.
+              ...(layout.wasStored || layout.isStored
+                ? {}
+                : { registry: writeRow }),
             }
           );
 
