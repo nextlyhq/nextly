@@ -26,6 +26,7 @@ import type {
 } from "@nextlyhq/blocks-engine";
 
 import { revealNode } from "../canvas/reveal-node";
+import { ShowInspectorContext } from "../shell/show-inspector";
 
 import { PageChecksChip, type PageChecksChipProps } from "./page-checks-chip";
 
@@ -142,6 +143,41 @@ describe("pressing an item", () => {
     // The list gives way to the bar, which leaves the inspector uncovered.
     expect(screen.queryByRole("heading", { name: "Page checks" })).toBeNull();
     expect(bar()?.textContent).toContain("Check 2 of 2");
+  });
+
+  it("shows the inspector first, where the author hid it", () => {
+    const show = vi.fn();
+    const editor = {
+      document: page({ a: undefined }),
+      select: vi.fn(),
+      askSetting: vi.fn(),
+    };
+    render(
+      <ShowInspectorContext.Provider value={show}>
+        <PageChecksChip editor={editor} canvas={null} blocks={blocks} />
+      </ShowInspectorContext.Provider>
+    );
+    fireEvent.click(chip());
+    fireEvent.click(
+      screen.getByRole("button", { name: "Image has no alt text: Photo a" })
+    );
+    expect(show).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes the list back on the count after walking with Next", async () => {
+    mount(page({ a: undefined, b: undefined }));
+    chip().focus();
+    fireEvent.click(chip());
+    fireEvent.click(
+      screen.getByRole("button", { name: "Image has no alt text: Photo a" })
+    );
+    await new Promise(resolve => setTimeout(resolve, 20));
+    fireEvent.click(screen.getByRole("button", { name: "Next check" }));
+    fireEvent.click(screen.getByRole("button", { name: "All checks" }));
+    fireEvent.keyDown(document.activeElement ?? document.body, {
+      key: "Escape",
+    });
+    await waitFor(() => expect(document.activeElement).toBe(chip()));
   });
 
   it("leaves the cursor for the inspector, not back on the count", async () => {

@@ -21,6 +21,7 @@ import * as React from "react";
 
 import { revealNode } from "../canvas/reveal-node";
 import type { EditorState } from "../editor-state";
+import { ShowInspectorContext } from "../shell/show-inspector";
 
 import { CORE_PAGE_CHECKS } from "./core-checks";
 import {
@@ -216,18 +217,24 @@ export function PageChecksChip({
   const [opened, setOpened] = React.useState<Opened>("closed");
   const close = React.useCallback(() => setOpened("closed"), []);
   const { step, goTo } = useFixWalk(findings, opened, close);
-  // Going to a fix moves the cursor to the inspector: the list closing then
-  // must not take it back to the count.
+  // The fix opens in the inspector, shown first where the author hid it.
+  const showInspector = React.useContext(ShowInspectorContext);
+  // Going to a fix from the list moves the cursor to the inspector: the list
+  // closing then must not take it back to the count. Set only on leaving the
+  // list, so Previous and Next leave no stale mark for its next close.
   const fixing = React.useRef(false);
   const fix = (finding: PageFinding): void => {
     const { nodeId, fix: setting } = finding;
     if (nodeId !== undefined) {
       if (setting === undefined) editor.select(nodeId);
-      else editor.askSetting?.(nodeId, setting);
+      else {
+        showInspector?.();
+        editor.askSetting?.(nodeId, setting);
+      }
       if (canvas !== null) revealNode(canvas, nodeId);
     }
     goTo(finding);
-    fixing.current = true;
+    if (opened === "list") fixing.current = true;
     setOpened("bar");
   };
   const count = findings.length;
