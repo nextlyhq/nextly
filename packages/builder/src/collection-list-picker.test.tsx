@@ -11,9 +11,29 @@ import {
   type BlockDocument,
   type BuilderOp,
 } from "@nextlyhq/blocks-engine";
-import { box, card, heading, image, paragraph } from "@nextlyhq/blocks-react/blocks";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  box,
+  card,
+  heading,
+  image,
+  paragraph,
+} from "@nextlyhq/blocks-react/blocks";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 import { CollectionListPicker } from "./collection-list-picker";
 import type { LoopCollection } from "./content-services";
@@ -67,7 +87,9 @@ const DOCUMENT: BlockDocument = {
   ],
 };
 
-function mount(options: { collections?: readonly LoopCollection[]; custom?: boolean } = {}) {
+function mount(
+  options: { collections?: readonly LoopCollection[]; custom?: boolean } = {}
+) {
   const choose = vi.fn((_ops: readonly BuilderOp[]) => true);
   const skip = vi.fn();
   const firstAdd: FirstAdd = {
@@ -81,9 +103,14 @@ function mount(options: { collections?: readonly LoopCollection[]; custom?: bool
       firstAdd={firstAdd}
       document={DOCUMENT}
       services={{
-        listLoopCollections: () => Promise.resolve(options.collections ?? [POSTS, AUTHORS]),
+        listLoopCollections: () =>
+          Promise.resolve(options.collections ?? [POSTS, AUTHORS]),
         listCustomSources: () =>
-          Promise.resolve(options.custom === true ? [{ name: "featured", label: "Featured" } as never] : []),
+          Promise.resolve(
+            options.custom === true
+              ? [{ name: "featured", label: "Featured" } as never]
+              : []
+          ),
       }}
     />
   );
@@ -104,11 +131,9 @@ describe("the first step", () => {
     await settled();
     const step = screen.getByRole("group", { name: "Show entries from" });
     expect(step).toBeTruthy();
-    expect(screen.getAllByRole("button").map(button => button.textContent)).toEqual([
-      "Authors",
-      "Posts",
-      "Skip",
-    ]);
+    expect(
+      screen.getAllByRole("button").map(button => button.textContent)
+    ).toEqual(["Authors", "Posts", "Skip"]);
     // The first source is where the keyboard starts.
     expect(document.activeElement?.textContent).toBe("Authors");
   });
@@ -122,14 +147,18 @@ describe("the first step", () => {
   it("moves between sources with the arrow keys", async () => {
     mount();
     await settled();
-    fireEvent.keyDown(screen.getByRole("button", { name: "Authors" }), { key: "ArrowRight" });
+    fireEvent.keyDown(screen.getByRole("button", { name: "Authors" }), {
+      key: "ArrowRight",
+    });
     expect(document.activeElement?.textContent).toBe("Posts");
   });
 
   it("leaves a blank list on Escape, writing nothing", async () => {
     const { choose, skip } = mount();
     await settled();
-    fireEvent.keyDown(screen.getByRole("button", { name: "Authors" }), { key: "Escape" });
+    fireEvent.keyDown(screen.getByRole("button", { name: "Authors" }), {
+      key: "Escape",
+    });
     expect(skip).toHaveBeenCalledTimes(1);
     expect(choose).not.toHaveBeenCalled();
   });
@@ -143,7 +172,12 @@ describe("the second step", () => {
     expect(
       screen.getByRole("group", { name: "Posts · choose a starting layout" })
     ).toBeTruthy();
-    for (const name of ["Cards, 3 across", "List rows", "Titles only", "Skip"]) {
+    for (const name of [
+      "Cards, 3 across",
+      "List rows",
+      "Titles only",
+      "Skip",
+    ]) {
       expect(screen.getByRole("button", { name })).toBeTruthy();
     }
     expect(document.activeElement?.textContent).toBe("Cards, 3 across");
@@ -173,6 +207,22 @@ describe("the second step", () => {
     ]);
   });
 
+  it("binds a title of a plugin's field type, kept by the primitive it is stored as", async () => {
+    const products: LoopCollection = {
+      slug: "products",
+      label: "Products",
+      fields: [],
+      titleField: "label",
+      readable: [{ name: "label", type: "brand-label", storage: "text" }],
+    };
+    const { choose } = mount({ collections: [products] });
+    await settled();
+    fireEvent.click(screen.getByRole("button", { name: "Products" }));
+    fireEvent.click(screen.getByRole("button", { name: "Titles only" }));
+    const ops = choose.mock.calls[0]?.[0] ?? [];
+    expect(JSON.stringify(ops.slice(1))).toContain('"$bind":"label"');
+  });
+
   it("sets the source and leaves an empty item on Skip", async () => {
     const { choose } = mount();
     await settled();
@@ -180,15 +230,21 @@ describe("the second step", () => {
     fireEvent.click(screen.getByRole("button", { name: "Skip" }));
     const ops = choose.mock.calls[0]?.[0] ?? [];
     expect(ops).toHaveLength(1);
-    expect(ops[0]).toMatchObject({ patch: { props: { collection: "authors" } } });
+    expect(ops[0]).toMatchObject({
+      patch: { props: { collection: "authors" } },
+    });
   });
 
   it("goes back to the sources on Escape", async () => {
     const { choose, skip } = mount();
     await settled();
     fireEvent.click(screen.getByRole("button", { name: "Posts" }));
-    fireEvent.keyDown(screen.getByRole("button", { name: "Cards, 3 across" }), { key: "Escape" });
-    expect(screen.getByRole("group", { name: "Show entries from" })).toBeTruthy();
+    fireEvent.keyDown(screen.getByRole("button", { name: "Cards, 3 across" }), {
+      key: "Escape",
+    });
+    expect(
+      screen.getByRole("group", { name: "Show entries from" })
+    ).toBeTruthy();
     expect(choose).not.toHaveBeenCalled();
     expect(skip).not.toHaveBeenCalled();
   });
@@ -199,12 +255,19 @@ describe("without the host's collections", () => {
     const skip = vi.fn();
     render(
       <CollectionListPicker
-        firstAdd={{ nodeId: "list", chooser: "collection-source", choose: vi.fn(), skip }}
+        firstAdd={{
+          nodeId: "list",
+          chooser: "collection-source",
+          choose: vi.fn(),
+          skip,
+        }}
         document={DOCUMENT}
       />
     );
     await settled();
-    expect(screen.getByText("The collections couldn't be listed.")).toBeTruthy();
+    expect(
+      screen.getByText("The collections couldn't be listed.")
+    ).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Skip" }));
     expect(skip).toHaveBeenCalledTimes(1);
   });

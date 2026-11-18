@@ -27,9 +27,9 @@ import {
   BASE_BREAKPOINT,
   fieldFitsProp,
   findNode,
+  type FieldStoragePrimitive,
   getBlock,
   makeNode,
-  type PropSchema,
   type BlockDocument,
   type BlockNode,
   type NodeStyles,
@@ -47,6 +47,8 @@ export interface ItemField {
   readonly type: string;
   readonly hasMany?: boolean;
   readonly relationTo?: string | readonly string[];
+  /** The primitive a plugin's field type is stored as, which gives its kind. */
+  readonly storage?: FieldStoragePrimitive;
   /**
    * For an upload field: whether it takes images. Absent, an upload field is
    * taken to: the media library is mostly pictures, and an Image bound to a
@@ -88,7 +90,13 @@ const LONG_TEXT_TYPES = new Set(["textarea"]);
 const TITLE_NAMES = ["title", "name"];
 
 /** Names a summary goes by, best first. */
-const SUMMARY_NAMES = ["excerpt", "summary", "description", "intro", "subtitle"];
+const SUMMARY_NAMES = [
+  "excerpt",
+  "summary",
+  "description",
+  "intro",
+  "subtitle",
+];
 
 /**
  * Whether `field` may fill `prop` of `blockType` as it is: the engine's one
@@ -96,14 +104,17 @@ const SUMMARY_NAMES = ["excerpt", "summary", "description", "intro", "subtitle"]
  * item never carries a binding the save refuses.
  */
 function fits(field: ItemField, blockType: string, prop: string): boolean {
-  const schema = (getBlock(blockType)?.props as Record<string, PropSchema | undefined> | undefined)?.[prop];
+  const schema = getBlock(blockType)?.props?.[prop];
   if (schema === undefined) return false;
   return fieldFitsProp(
     {
       name: field.name,
       type: field.type,
       ...(field.hasMany === true ? { hasMany: true } : {}),
-      ...(field.relationTo === undefined ? {} : { relationTo: field.relationTo }),
+      ...(field.relationTo === undefined
+        ? {}
+        : { relationTo: field.relationTo }),
+      ...(field.storage === undefined ? {} : { storage: field.storage }),
     },
     schema
   );
@@ -206,10 +217,7 @@ function dressed(
 }
 
 /** The entry's title, linked to its page where entries have one. */
-function titleBlock(
-  fields: ItemFields,
-  slug: string
-): BlockNode | undefined {
+function titleBlock(fields: ItemFields, slug: string): BlockNode | undefined {
   if (fields.title === undefined) return undefined;
   const linked = fields.link;
   return dressed(

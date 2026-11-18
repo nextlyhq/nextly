@@ -82,7 +82,9 @@ async function addList(page: Page): Promise<string> {
   await expect(
     page.getByRole("combobox", { name: "Insert a block" })
   ).toBeVisible();
-  await page.getByRole("option", { name: "Collection list", exact: true }).click();
+  await page
+    .getByRole("option", { name: "Collection list", exact: true })
+    .click();
   await expect.poll(async () => (await selection(page)).length).toBe(1);
   const [id] = await selection(page);
   if (id === undefined) throw new Error("no new list");
@@ -104,10 +106,16 @@ test.describe("a Collection list in two clicks", () => {
     await openBuilder(page, await createPage(page.request));
     const list = await addList(page);
 
-    const sources = chooser(page).getByRole("group", { name: "Show entries from" });
+    const sources = chooser(page).getByRole("group", {
+      name: "Show entries from",
+    });
     await expect(sources).toBeVisible();
-    await expect(sources.getByRole("button", { name: "Posts", exact: true })).toBeVisible();
-    await expect(page.getByText("Choose on the canvas to start.")).toBeVisible();
+    await expect(
+      sources.getByRole("button", { name: "Posts", exact: true })
+    ).toBeVisible();
+    await expect(
+      page.getByText("Choose on the canvas to start.")
+    ).toBeVisible();
 
     await sources.getByRole("button", { name: "Posts", exact: true }).click();
     const layouts = chooser(page).getByRole("group", {
@@ -136,7 +144,9 @@ test.describe("a Collection list in two clicks", () => {
     await openBuilder(page, id);
 
     const titled = await addList(page);
-    await chooser(page).getByRole("button", { name: "Posts", exact: true }).click();
+    await chooser(page)
+      .getByRole("button", { name: "Posts", exact: true })
+      .click();
     await chooser(page).getByRole("button", { name: "Titles only" }).click();
     await expect(
       canvasFrame(page).getByRole("heading", { name: titles[2] ?? "" })
@@ -159,13 +169,22 @@ test.describe("a Collection list in two clicks", () => {
     await openBuilder(page, id);
 
     const skipped = await addList(page);
-    await chooser(page).getByRole("button", { name: "Posts", exact: true }).click();
+    await chooser(page)
+      .getByRole("button", { name: "Posts", exact: true })
+      .click();
     await chooser(page).getByRole("button", { name: "Skip" }).click();
-    const box = await canvasFrame(page)
-      .locator(`[data-nx-node="${skipped}"]`)
-      .boundingBox();
-    // Never a 0px line: the empty item draws its start.
-    expect(box?.height ?? 0).toBeGreaterThan(24);
+    // Never a 0px line: a list whose item has no blocks is an empty
+    // container, with the box the editor gives one to fill.
+    await expect
+      .poll(
+        async () =>
+          (
+            await canvasFrame(page)
+              .locator(`[data-nx-node="${skipped}"]`)
+              .boundingBox()
+          )?.height ?? 0
+      )
+      .toBeGreaterThan(24);
 
     await pressSave(page);
     await expect
@@ -183,12 +202,16 @@ test.describe("a Collection list in two clicks", () => {
     await openBuilder(page, await createPage(page.request));
     await addList(page);
 
-    const sources = chooser(page).getByRole("group", { name: "Show entries from" });
+    const sources = chooser(page).getByRole("group", {
+      name: "Show entries from",
+    });
     await expect(sources).toBeVisible();
     // The first source has the focus; the arrows walk to Posts.
     await expect(sources.getByRole("button").first()).toBeFocused();
     for (let step = 0; step < 20; step += 1) {
-      const focused = await page.evaluate(() => document.activeElement?.textContent ?? "");
+      const focused = await page.evaluate(
+        () => document.activeElement?.textContent ?? ""
+      );
       if (focused === "Posts") break;
       await page.keyboard.press("ArrowRight");
     }
@@ -197,7 +220,9 @@ test.describe("a Collection list in two clicks", () => {
       name: "Posts · choose a starting layout",
     });
     await expect(layouts).toBeVisible();
-    await expect(layouts.getByRole("button", { name: "Cards, 3 across" })).toBeFocused();
+    await expect(
+      layouts.getByRole("button", { name: "Cards, 3 across" })
+    ).toBeFocused();
 
     // Escape goes back, then leaves the list blank.
     await page.keyboard.press("Escape");

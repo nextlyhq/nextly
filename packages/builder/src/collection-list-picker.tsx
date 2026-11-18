@@ -80,6 +80,7 @@ function itemSourceOf(collection: LoopCollection): ItemSource {
       ...(field.relationTo === undefined
         ? {}
         : { relationTo: field.relationTo }),
+      ...(field.storage === undefined ? {} : { storage: field.storage }),
       ...(field.takesImages === undefined
         ? {}
         : { takesImages: field.takesImages }),
@@ -344,23 +345,62 @@ function LayoutGlyph({
     >
       {layout === "cards"
         ? [0, 1, 2].map(column => (
-            <g key={column} transform={`translate(${String(column * 24 + 2)} 4)`}>
-              <rect width="20" height="12" rx="2" className="nx-list-picker__fill" />
+            <g
+              key={column}
+              transform={`translate(${String(column * 24 + 2)} 4)`}
+            >
+              <rect
+                width="20"
+                height="12"
+                rx="2"
+                className="nx-list-picker__fill"
+              />
               <rect y="15" width="16" height="3" rx="1" />
-              <rect y="21" width="20" height="2" rx="1" className="nx-list-picker__faint" />
-              <rect y="25" width="14" height="2" rx="1" className="nx-list-picker__faint" />
+              <rect
+                y="21"
+                width="20"
+                height="2"
+                rx="1"
+                className="nx-list-picker__faint"
+              />
+              <rect
+                y="25"
+                width="14"
+                height="2"
+                rx="1"
+                className="nx-list-picker__faint"
+              />
             </g>
           ))
         : layout === "rows"
           ? [0, 1, 2].map(row => (
               <g key={row} transform={`translate(4 ${String(row * 14 + 2)})`}>
-                <rect width="11" height="11" rx="2" className="nx-list-picker__fill" />
+                <rect
+                  width="11"
+                  height="11"
+                  rx="2"
+                  className="nx-list-picker__fill"
+                />
                 <rect x="15" y="1" width="30" height="3" rx="1" />
-                <rect x="15" y="6" width="46" height="2" rx="1" className="nx-list-picker__faint" />
+                <rect
+                  x="15"
+                  y="6"
+                  width="46"
+                  height="2"
+                  rx="1"
+                  className="nx-list-picker__faint"
+                />
               </g>
             ))
           : [0, 1, 2, 3].map(row => (
-              <rect key={row} x="4" y={String(row * 10 + 4)} width={String(40 + (row % 2) * 16)} height="4" rx="1" />
+              <rect
+                key={row}
+                x="4"
+                y={String(row * 10 + 4)}
+                width={String(40 + (row % 2) * 16)}
+                height="4"
+                rx="1"
+              />
             ))}
     </svg>
   );

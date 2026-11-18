@@ -3,7 +3,13 @@ import {
   registerBlocks,
   type BlockNode,
 } from "@nextlyhq/blocks-engine";
-import { box, card, heading, image, paragraph } from "@nextlyhq/blocks-react/blocks";
+import {
+  box,
+  card,
+  heading,
+  image,
+  paragraph,
+} from "@nextlyhq/blocks-react/blocks";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import {
@@ -91,7 +97,12 @@ describe("itemFieldsOf", () => {
         slug: "albums",
         readable: [
           { name: "files", type: "upload", relationTo: "media", hasMany: true },
-          { name: "brief", type: "upload", relationTo: "media", takesImages: false },
+          {
+            name: "brief",
+            type: "upload",
+            relationTo: "media",
+            takesImages: false,
+          },
           // A relation to the library is a reference, which an Image's
           // picture does not take: the save would refuse it.
           { name: "photo", type: "relationship", relationTo: "media" },
@@ -121,6 +132,27 @@ describe("itemFieldsOf", () => {
     ).toBeUndefined();
   });
 
+  it("takes a plugin's field type by the primitive it is stored as", () => {
+    expect(
+      itemFieldsOf({
+        slug: "products",
+        titleField: "label",
+        readable: [
+          { name: "label", type: "brand-label", storage: "text" },
+          { name: "price", type: "money", storage: "number" },
+        ],
+      }).title
+    ).toBe("label");
+    // Without its primitive, the same field type has no kind to bind by.
+    expect(
+      itemFieldsOf({
+        slug: "products",
+        titleField: "label",
+        readable: [{ name: "label", type: "brand-label" }],
+      }).title
+    ).toBeUndefined();
+  });
+
   it("ignores a declared title field visitors cannot read", () => {
     expect(
       itemFieldsOf({
@@ -139,7 +171,10 @@ describe("startingItem", () => {
       {
         type: "core/card",
         children: [
-          { type: "core/image", bindings: { mediaId: { $bind: "cover", source: "item" } } },
+          {
+            type: "core/image",
+            bindings: { mediaId: { $bind: "cover", source: "item" } },
+          },
           {
             type: "core/heading",
             bindings: {
@@ -147,20 +182,31 @@ describe("startingItem", () => {
               entryId: { $bind: "id", source: "item" },
             },
           },
-          { type: "core/text", bindings: { text: { $bind: "excerpt", source: "item" } } },
+          {
+            type: "core/text",
+            bindings: { text: { $bind: "excerpt", source: "item" } },
+          },
         ],
       },
     ]);
     const [picture, title] = cardNode?.slots?.children ?? [];
-    expect(picture?.styles?.base?.base).toMatchObject({ aspectRatio: "16 / 9", objectFit: "cover" });
-    expect(title?.props).toMatchObject({ level: "h3", entryCollection: "posts" });
+    expect(picture?.styles?.base?.base).toMatchObject({
+      aspectRatio: "16 / 9",
+      objectFit: "cover",
+    });
+    expect(title?.props).toMatchObject({
+      level: "h3",
+      entryCollection: "posts",
+    });
   });
 
   it("links no title where entries have no pages", () => {
     const [cardNode] = startingItem(PEOPLE, "cards");
     const [title] = cardNode?.slots?.children ?? [];
     expect(title?.props).not.toHaveProperty("entryCollection");
-    expect(title?.bindings).toEqual({ text: { $bind: "name", source: "item" } });
+    expect(title?.bindings).toEqual({
+      text: { $bind: "name", source: "item" },
+    });
   });
 
   it("lays a row of a square picture beside the title and summary", () => {
@@ -168,7 +214,10 @@ describe("startingItem", () => {
       {
         type: "core/box",
         children: [
-          { type: "core/image", bindings: { mediaId: { $bind: "cover", source: "item" } } },
+          {
+            type: "core/image",
+            bindings: { mediaId: { $bind: "cover", source: "item" } },
+          },
           {
             type: "core/box",
             children: [
@@ -179,7 +228,10 @@ describe("startingItem", () => {
                   entryId: { $bind: "id", source: "item" },
                 },
               },
-              { type: "core/text", bindings: { text: { $bind: "excerpt", source: "item" } } },
+              {
+                type: "core/text",
+                bindings: { text: { $bind: "excerpt", source: "item" } },
+              },
             ],
           },
         ],
@@ -200,7 +252,10 @@ describe("startingItem", () => {
   });
 
   it("leaves an empty item for a collection with none of the fields", () => {
-    const bare: ItemSource = { slug: "bare", readable: [{ name: "count", type: "number" }] };
+    const bare: ItemSource = {
+      slug: "bare",
+      readable: [{ name: "count", type: "number" }],
+    };
     expect(startingItem(bare, "cards")).toEqual([]);
     expect(startingItem(bare, "titles")).toEqual([]);
   });
@@ -232,18 +287,39 @@ describe("planStartingList", () => {
   });
 
   it("keeps Newest first for a collection that keeps its creation dates", () => {
-    const [update] = planStartingList(list("-createdAt"), "list", { ...POSTS, sortsByCreated: true }, "titles") ?? [];
-    expect(update).toMatchObject({ patch: { props: { collection: "posts", sort: "-createdAt" } } });
+    const [update] =
+      planStartingList(
+        list("-createdAt"),
+        "list",
+        { ...POSTS, sortsByCreated: true },
+        "titles"
+      ) ?? [];
+    expect(update).toMatchObject({
+      patch: { props: { collection: "posts", sort: "-createdAt" } },
+    });
   });
 
   it("drops it for a collection with timestamps off, which a save would refuse", () => {
-    const [update] = planStartingList(list("-createdAt"), "list", { ...PEOPLE, sortsByCreated: false }, "skip") ?? [];
-    const props = (update as { patch: { props: Record<string, unknown> } }).patch.props;
+    const [update] =
+      planStartingList(
+        list("-createdAt"),
+        "list",
+        { ...PEOPLE, sortsByCreated: false },
+        "skip"
+      ) ?? [];
+    const props = (update as { patch: { props: Record<string, unknown> } })
+      .patch.props;
     expect(props).toEqual({ limit: 6, collection: "people" });
   });
 
   it("leaves an author's own sort alone", () => {
-    const [update] = planStartingList(list("title"), "list", { ...PEOPLE, sortsByCreated: false }, "skip") ?? [];
+    const [update] =
+      planStartingList(
+        list("title"),
+        "list",
+        { ...PEOPLE, sortsByCreated: false },
+        "skip"
+      ) ?? [];
     expect(update).toMatchObject({ patch: { props: { sort: "title" } } });
   });
 });

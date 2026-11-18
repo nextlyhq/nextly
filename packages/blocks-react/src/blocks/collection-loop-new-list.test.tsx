@@ -128,3 +128,56 @@ describe("sample items", () => {
     expect(html).toContain("Nothing here yet.");
   });
 });
+
+/** The page drawn with a list whose item has no blocks yet, over two posts. */
+async function drawItemless(diagnostics: boolean): Promise<string> {
+  return renderToHtml(
+    <PageRenderer
+      document={{
+        formatVersion: DOCUMENT_FORMAT_VERSION,
+        kind: "page",
+        nodes: [
+          {
+            id: "list",
+            type: "core/collection-loop",
+            version: 1,
+            props: { collection: "posts", limit: 6 },
+            slots: { children: [] },
+          },
+        ],
+      }}
+      blocks={resolver}
+      siteStyles={false}
+      bindings={{}}
+      context={createStandaloneContext({
+        data: {
+          find: () =>
+            Promise.resolve({ items: [{ id: "a" }, { id: "b" }], total: 2 }),
+        },
+        diagnostics,
+      })}
+    />
+  );
+}
+
+/** How many entries a page draws: one element per entry, inside the list. */
+function entries(html: string): number {
+  return (
+    html.match(/class="nx-bt-core--collection-loop nx-pb-gap"/g)?.length ?? 0
+  );
+}
+
+describe("a list whose item has no blocks yet", () => {
+  it("draws no entries where an author looks, so the editor shows it as an empty container", async () => {
+    const html = await drawItemless(true);
+    expect(entries(html)).toBe(0);
+    // The list's root itself is still drawn, empty.
+    expect(html).toMatch(
+      /<div class="[^"]*nx-bt-core--collection-loop"><\/div>/
+    );
+  });
+
+  it("still draws a visitor's page as before, an entry per post", async () => {
+    expect(entries(await drawItemless(false))).toBe(2);
+  });
+});

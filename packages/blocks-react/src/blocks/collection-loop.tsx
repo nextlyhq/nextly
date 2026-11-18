@@ -26,6 +26,7 @@
  */
 import {
   type BlockDefinition,
+  type BlockNode,
   blockTypeClassName,
   CHILD_GAP_CLASS,
   COLLECTION_LIST_TYPE,
@@ -450,7 +451,14 @@ export async function renderCollectionLoop({
     // collection's entries does, drawn with the query's own item context.
     return drawList(
       await withReadAhead(named, node, ctx, named.entriesOf),
-      { className, Tag, renderSlot, ctx, nodeId: node.id },
+      {
+        className,
+        Tag,
+        renderSlot,
+        ctx,
+        nodeId: node.id,
+        hasItem: hasItem(node),
+      },
       pageLinks(paging, named, props, partClass)
     );
   }
@@ -557,6 +565,7 @@ export async function renderCollectionLoop({
       renderSlot,
       ctx,
       nodeId: node.id,
+      hasItem: hasItem(node),
       sampled: samples !== undefined,
     },
     pages
@@ -654,6 +663,11 @@ function sampleItems(
   }));
 }
 
+/** Whether a list's item holds any block: its stored `children` slot. */
+function hasItem(node: BlockNode): boolean {
+  return (node.slots?.children?.length ?? 0) > 0;
+}
+
 /**
  * A list drawn from its read: each entry with the template, or the empty
  * state, then the links between its pages when it has them.
@@ -668,6 +682,8 @@ function drawList(
     readonly Tag: ReturnType<typeof rootTagOf>;
     /** The entries are samples, drawn for an author over an empty read. */
     readonly sampled?: boolean;
+    /** Whether the item holds any block to draw per entry. */
+    readonly hasItem: boolean;
   },
   pages: ReactElement | null = null
 ): ReactElement {
@@ -678,6 +694,12 @@ function drawList(
   // Samples are no entries: the list drew none of the collection's.
   const sampled = args.sampled === true;
   reportShown(ctx, args.nodeId, sampled ? 0 : outcome.items.length);
+  // An item with no blocks yet draws nothing for any entry. Where an author
+  // is looking, the list then holds nothing at all, so the editor treats it
+  // as the empty container it is, with a box and a "+" to fill it, rather
+  // than a row of empty entries no taller than a line. A visitor's page is
+  // drawn as before.
+  const itemless = ctx.diagnostics === true && !args.hasItem;
   const note = diagnosticNote(outcome, ctx);
   const marks = {
     ...emptyMarks(
@@ -691,36 +713,38 @@ function drawList(
   const content =
     outcome.items.length === 0
       ? renderSlot("empty")
-      : outcome.items.map((item, index) => (
-          <div
-            key={listItemKey(item, index, read.rowKey)}
-            className={ENTRY_CLASS}
-            // A sample, which the editor greys and tags "Sample".
-            {...(sampled ? { [LIST_SAMPLE_ATTRIBUTE]: "" } : {})}
-          >
-            {/* Drawn again per entry, with this entry on the context, so
+      : itemless
+        ? null
+        : outcome.items.map((item, index) => (
+            <div
+              key={listItemKey(item, index, read.rowKey)}
+              className={ENTRY_CLASS}
+              // A sample, which the editor greys and tags "Sample".
+              {...(sampled ? { [LIST_SAMPLE_ATTRIBUTE]: "" } : {})}
+            >
+              {/* Drawn again per entry, with this entry on the context, so
                 anything inside the template reads its own values rather than
                 the first entry's. Its source goes with it, so an item
                 binding is checked against that source's fields. */}
-            {renderSlot(
-              "children",
-              // Recorded among the entries of the lists around what it
-              // draws, for a binding inside naming this list.
-              withListEntry(
-                {
-                  ...itemContext(item),
-                  // Its place among the entries, after the places of the
-                  // entries around it: what tells its blocks' copies apart.
-                  itemPosition:
-                    ctx.itemPosition === undefined
-                      ? String(index)
-                      : `${ctx.itemPosition}-${index}`,
-                },
-                args.nodeId
-              )
-            )}
-          </div>
-        ));
+              {renderSlot(
+                "children",
+                // Recorded among the entries of the lists around what it
+                // draws, for a binding inside naming this list.
+                withListEntry(
+                  {
+                    ...itemContext(item),
+                    // Its place among the entries, after the places of the
+                    // entries around it: what tells its blocks' copies apart.
+                    itemPosition:
+                      ctx.itemPosition === undefined
+                        ? String(index)
+                        : `${ctx.itemPosition}-${index}`,
+                  },
+                  args.nodeId
+                )
+              )}
+            </div>
+          ));
   // The note, when an author is looking, goes above what visitors see.
   return (
     <Tag className={className} {...marks}>

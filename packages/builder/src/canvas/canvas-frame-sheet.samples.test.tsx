@@ -27,6 +27,18 @@ describe("a list's sample items on the canvas", () => {
               type: "core/collection-loop",
               version: 1,
               props: { collection: "posts" },
+              // An item to draw: a list whose item has no blocks draws no
+              // samples, and shows as an empty container instead.
+              slots: {
+                children: [
+                  {
+                    id: "title",
+                    type: "core/heading",
+                    version: 1,
+                    props: { text: "", level: "h3" },
+                  },
+                ],
+              },
             },
           ],
         }}
