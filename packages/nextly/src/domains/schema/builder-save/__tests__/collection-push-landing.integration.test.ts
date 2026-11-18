@@ -267,10 +267,11 @@ for (const dialect of getConfiguredTestDialects()) {
       );
 
     // Each road a collection's change is pushed by in development: the schema dialog's apply and
-    // the admin's update.
+    // the admin's update. On MySQL the update's push sends this change as one statement through the
+    // executor, so a second added field gives it the second statement the seam fails.
     for (const [road, change] of [
       ["the schema dialog", save],
-      ["an update", update],
+      ["an update", (fields: Field[]) => update([...fields, text("summary")])],
     ] as const) {
       it.runIf(dialect === "mysql" || dialect === "sqlite")(
         `keeps the files of a push through ${road} whose second statement failed after its first committed, and says so`,

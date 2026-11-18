@@ -14,8 +14,6 @@ import { landingPush, partWayPush } from "../landing-push";
 const answered = (success: boolean) => (): Promise<PipelineResult> =>
   Promise.resolve({ success, statementsExecuted: 0, renamesApplied: 0 });
 
-const desired = {} as Parameters<ReturnType<typeof landingPush>["push"]>[0];
-
 /** The error a push's tries end with over a busy table, as the busy-table engine builds it. */
 const busyStop = (
   outcome: BusyTableOutcome,
@@ -48,13 +46,13 @@ describe("landingPush", () => {
   it("counts a push that succeeded as one that changed the database", async () => {
     const tracked = landingPush(answered(true), "postgresql");
     expect(tracked.landed()).toBe(false);
-    await tracked.push(desired);
+    await tracked.push();
     expect(tracked.landed()).toBe(true);
   });
 
   it("counts a refused push as nothing applied on PostgreSQL, whose push runs in one transaction", async () => {
     const tracked = landingPush(answered(false), "postgresql");
-    await tracked.push(desired);
+    await tracked.push();
     expect(tracked.landed()).toBe(false);
   });
 
@@ -64,16 +62,14 @@ describe("landingPush", () => {
     "counts a refused push on %s as possibly part applied",
     async dialect => {
       const refused = landingPush(answered(false), dialect);
-      await refused.push(desired);
+      await refused.push();
       expect(refused.landed()).toBe(true);
 
       const thrown = landingPush(
         () => Promise.reject(new Error("the statement failed")),
         dialect
       );
-      await expect(thrown.push(desired)).rejects.toThrow(
-        "the statement failed"
-      );
+      await expect(thrown.push()).rejects.toThrow("the statement failed");
       expect(thrown.landed()).toBe(true);
     }
   );
@@ -85,14 +81,14 @@ describe("landingPush", () => {
         refusedWith(busyStop({ kind: "nothing-changed" })),
         dialect
       );
-      await refused.push(desired);
+      await refused.push();
       expect(refused.landed()).toBe(false);
 
       const thrown = landingPush(
         () => Promise.reject(busyStop({ kind: "nothing-changed" })),
         dialect
       );
-      await expect(thrown.push(desired)).rejects.toMatchObject({
+      await expect(thrown.push()).rejects.toMatchObject({
         code: "NEXTLY_TABLE_BUSY",
       });
       expect(thrown.landed()).toBe(false);
@@ -118,7 +114,7 @@ describe("landingPush", () => {
     "counts a busy table's stop that %s as possibly part applied on MySQL",
     async (_how, stop) => {
       const refused = landingPush(refusedWith(stop), "mysql");
-      await refused.push(desired);
+      await refused.push();
       expect(refused.landed()).toBe(true);
     }
   );
