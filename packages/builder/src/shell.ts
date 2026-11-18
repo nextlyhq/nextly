@@ -181,8 +181,15 @@ export { useModalKeyboardHold } from "./shell/modal-keyboard-hold";
 export type { CanvasProps } from "./canvas/canvas";
 // The regions of a page's layout around the page on the canvas, and which one
 // is selected.
-export type { CanvasRegion } from "./canvas/canvas-regions";
-export { REGION_ATTRIBUTE } from "./canvas/canvas-regions";
+export type {
+  CanvasRegion,
+  EmptyRegionAnchor,
+  EmptyRegionBandProps,
+} from "./canvas/canvas-regions";
+export {
+  EMPTY_REGION_ATTRIBUTE,
+  REGION_ATTRIBUTE,
+} from "./canvas/canvas-regions";
 export {
   useRegionSelection,
   type RegionSelection,
@@ -1022,3 +1029,12 @@ export type { PageChecksListProps } from "./page-checks/page-checks-list";
  * @experimental
  */
 export { endTypingRuns, typingEpoch } from "./typing-run";
+
+/**
+ * A draft held in a field of the block settings panel, for a host's save:
+ * the page has unsaved work from the draft's first keystroke, and a store
+ * writes the draft first, as leaving the field would, with focus left in it.
+ *
+ * @experimental
+ */
+export { finishFieldEdit, useFieldDraftHeld } from "./field-edit";

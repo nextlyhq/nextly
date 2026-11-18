@@ -24,6 +24,10 @@
  * an undo the shortcut layer still hears — and a form reading the live editor
  * would store something other than what was asked for.
  *
+ * Except once a held component setting is refused: the refusal takes its
+ * binding off the editor's document, so the snapshot binds a setting never
+ * made, and a retry stores the editor's document instead.
+ *
  * @module admin/SavePatternPrompt
  */
 import type { BlockDocument } from "@nextlyhq/blocks-engine";
@@ -63,6 +67,12 @@ export interface SavePatternPromptProps {
    * saved section binds a setting never made.
    */
   beforeSave?: () => true | Promise<boolean>;
+  /**
+   * The editor's document now. A refused held setting takes its binding off
+   * the editor's document, not off the snapshot, so a retry after a refusal
+   * saves this: the snapshot would store a binding to a setting never made.
+   */
+  currentDocument?: () => BlockDocument;
 }
 
 /**
@@ -82,6 +92,7 @@ export function SavePatternPrompt({
   onClose,
   returnFocusTo,
   beforeSave,
+  currentDocument,
 }: SavePatternPromptProps): React.JSX.Element | null {
   if (document === null) return null;
   return (
@@ -91,6 +102,7 @@ export function SavePatternPrompt({
       onClose={onClose}
       returnFocusTo={returnFocusTo}
       beforeSave={beforeSave}
+      currentDocument={currentDocument}
     />
   );
 }
@@ -102,6 +114,7 @@ function SavePatternForm({
   onClose,
   returnFocusTo,
   beforeSave,
+  currentDocument,
 }: Omit<SavePatternPromptProps, "document"> & {
   document: BlockDocument;
 }): React.JSX.Element {
@@ -117,6 +130,9 @@ function SavePatternForm({
     selectedIds,
     subject: subjectOf(document, selectedIds),
   }));
+  // Whether a held setting was refused here: the snapshot then still binds
+  // what the refusal took off the editor's document.
+  const refused = React.useRef(false);
 
   /*
    * A save that COMMITTED is still a save, whatever ran after it.
@@ -137,12 +153,15 @@ function SavePatternForm({
   const storing = React.useCallback(
     async (fields: Parameters<typeof writer.save>[2]) => {
       // A refusal is said where it happened, with the binding taken off.
-      if (beforeSave !== undefined && !(await beforeSave())) return false;
-      const answered = await writer.save(
-        saving.document,
-        saving.selectedIds,
-        fields
-      );
+      if (beforeSave !== undefined && !(await beforeSave())) {
+        refused.current = true;
+        return false;
+      }
+      const stored =
+        refused.current && currentDocument !== undefined
+          ? currentDocument()
+          : saving.document;
+      const answered = await writer.save(stored, saving.selectedIds, fields);
       if (answered === undefined) return false;
       toastMutationResult("Saved to Saved sections", answered.warnings);
       return true;
@@ -150,7 +169,7 @@ function SavePatternForm({
     // `saving` is in here even though it never changes: a snapshot taken once
     // at mount is stable by construction, and stating it is cheaper than a
     // suppression that would also hide the next dependency somebody forgets.
-    [writer, saving, beforeSave]
+    [writer, saving, beforeSave, currentDocument]
   );
 
   return (
