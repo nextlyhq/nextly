@@ -14,7 +14,7 @@
  * editor asks this one hook, so the three kinds cannot differ about which
  * entities a save creates.
  */
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 
 import type { FieldGroupCreate } from "@admin/components/features/schema-builder/FieldGroupCreatesList";
 import {
@@ -131,6 +131,11 @@ export function useFieldGroupsFirst(
     [kind, address]
   );
   const held = useHeldNamedEntities();
+  // The latest held entities, for the leave that reads them when the editor goes.
+  const heldNow = useRef(held);
+  useEffect(() => {
+    heldNow.current = held;
+  }, [held]);
   const steps = useCreateFirstSteps();
 
   const { used, unused } = useMemo(
@@ -173,7 +178,10 @@ export function useFieldGroupsFirst(
   // its field groups stay, each one of its own, which any host's picker offers.
   const release = useCallback(() => {
     if (!host) return;
-    for (const entity of held) {
+    // The entities as they stand when the editor goes, read through a ref, so
+    // this callback, and the unmount cleanup that runs it, keep one identity
+    // while the store changes: a change is no leave.
+    for (const entity of heldNow.current) {
       if (
         entity.kind === "collection" &&
         entity.ownedBy?.kind === host.kind &&
@@ -183,7 +191,7 @@ export function useFieldGroupsFirst(
       }
     }
     releaseUnsavedFieldGroupsOf(host);
-  }, [held, host]);
+  }, [host]);
 
   // However the editor is left, with a pending change or none (a picker cancelled after a
   // group was made leaves none), the groups its picker made stay as unsaved field groups of

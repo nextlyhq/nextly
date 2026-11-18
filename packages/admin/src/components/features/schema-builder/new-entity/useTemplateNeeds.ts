@@ -20,6 +20,7 @@
 import { useQueries, type UseQueryResult } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 
+import { useDebouncedValue } from "@admin/hooks/useDebouncedValue";
 import { apiErrorMessage, isApiError } from "@admin/lib/api/parseApiError";
 import type { TemplateNeed } from "@admin/lib/builder/template-check";
 import type { UnsavedEntity } from "@admin/lib/builder/unsaved-entities";
@@ -87,6 +88,20 @@ type Target = { key: string; kind: NeededKind; address: string };
 /** What the server answers about a target not held in this tab. */
 type TargetAnswer = Pick<NeedState, "status" | "refusal">;
 
+/** What the server says of a target alone: refused for its spelling, there, or absent. */
+type LookUp = TargetAnswer | { status: "absent" };
+
+/** The address rule's refusals of an address's spelling alone, whatever else is pending. */
+const SPELLING_REFUSALS: ReadonlySet<string> = new Set([
+  "SLUG_REQUIRED",
+  "SLUG_INVALID_TYPE",
+  "SLUG_INVALID_FORMAT",
+  "SLUG_TOO_LONG",
+]);
+
+/** How long the new entity's address settles before checks count it as pending. */
+const SETTLE_MS = 300;
+
 /** Whether the server holds the entity: a not-found says no; any other failure is no answer. */
 async function held(read: () => Promise<unknown>): Promise<boolean> {
   try {
@@ -103,22 +118,40 @@ async function held(read: () => Promise<unknown>): Promise<boolean> {
  * linked to or used as.
  */
 async function serverHolds(target: Target): Promise<boolean> {
+  // Encoded as a path segment: what is read is the target, never a route its
+  // characters would spell.
+  const address = encodeURIComponent(target.address);
   if (target.kind === "field-group") {
-    return held(() => fieldGroupApi.get(target.address));
+    return held(() => fieldGroupApi.get(address));
   }
-  if (SYSTEM_LINK_TARGETS.has(target.address)) return true;
   return (
-    (await held(() => collectionApi.get(target.address))) ||
-    held(() => singleApi.get(target.address))
+    (await held(() => collectionApi.get(address))) ||
+    held(() => singleApi.get(address))
   );
 }
 
-/** The server's answer for a target: there, missing, or refused. */
-async function answerFor(
+/**
+ * A target asked of the server alone, once per target: its spelling judged by
+ * the server's own address rule before any entity is read under it, then
+ * whether the server holds it.
+ */
+async function lookUp(target: Target): Promise<LookUp> {
+  const alone = await addressCheckApi.check(
+    CHECK_KIND[target.kind],
+    target.address,
+    []
+  );
+  if (alone.refusal && SPELLING_REFUSALS.has(alone.refusal.code)) {
+    return { status: "refused", refusal: alone.refusal.message };
+  }
+  return (await serverHolds(target)) ? { status: "met" } : { status: "absent" };
+}
+
+/** Whether an absent target can be made, with what this tab will create counted as pending. */
+async function makeable(
   target: Target,
   pending: readonly PendingAddress[]
 ): Promise<TargetAnswer> {
-  if (await serverHolds(target)) return { status: "met" };
   const answer = await addressCheckApi.check(
     CHECK_KIND[target.kind],
     target.address,
@@ -127,6 +160,28 @@ async function answerFor(
   return answer.refusal === null
     ? { status: "missing" }
     : { status: "refused", refusal: answer.refusal.message };
+}
+
+/**
+ * Whether the target is met here, asking nothing: a link to the entity being
+ * created (a Single's too, since links may name Singles), a system collection
+ * a link may name, or an entity this tab holds unsaved, which its save creates
+ * first.
+ */
+function metHere(
+  target: Target,
+  self: { kind: BuilderKind; address: string },
+  unsaved: readonly PendingAddress[]
+): boolean {
+  const linksToSelf =
+    target.address === self.address &&
+    (target.kind === self.kind ||
+      (target.kind === "collection" && self.kind === "single"));
+  return (
+    linksToSelf ||
+    (target.kind === "collection" && SYSTEM_LINK_TARGETS.has(target.address)) ||
+    heldUnsaved(target, unsaved)
+  );
 }
 
 /** Whether an entity this tab holds unsaved stands for the target. */
@@ -141,14 +196,12 @@ function heldUnsaved(
   );
 }
 
-/** A target's state from what is known of it here and what the server answered. */
-function stateOf(
+/** A query's answer, its failure named, or null while it is on its way. */
+function settled<T>(
   target: Target,
-  local: "met" | null,
-  query: UseQueryResult<TargetAnswer> | undefined
-): NeedState {
-  if (local) return { ...target, status: local };
-  if (query?.data) return { ...target, ...query.data };
+  query: UseQueryResult<T> | undefined
+): T | NeedState | null {
+  if (query?.data) return query.data;
   if (query?.isError) {
     return {
       ...target,
@@ -156,7 +209,21 @@ function stateOf(
       refusal: apiErrorMessage(query.error, "The server did not answer."),
     };
   }
-  return { ...target, status: "checking" };
+  return null;
+}
+
+/** A target's state from what is known of it here and what the server answered. */
+function stateOf(
+  target: Target,
+  local: boolean,
+  lookup: UseQueryResult<LookUp> | undefined,
+  check: UseQueryResult<TargetAnswer> | undefined
+): NeedState {
+  if (local) return { ...target, status: "met" };
+  const found = settled(target, lookup);
+  if (found === null) return { ...target, status: "checking" };
+  if (found.status !== "absent") return { ...target, ...found };
+  return { ...target, status: "checking", ...settled(target, check) };
 }
 
 /** Why Create waits for what the template needs, or null. */
@@ -204,45 +271,49 @@ export function useTemplateNeeds(
     return [...seen].map(([key, target]) => ({ key, ...target }));
   }, [needs]);
 
-  // A target is met here, asking nothing: a link to the entity being created,
-  // or an entity this tab holds unsaved, which its save creates first.
-  const local = targets.map(target =>
-    (target.kind === self.kind && target.address === self.address) ||
-    heldUnsaved(target, unsaved)
-      ? ("met" as const)
-      : null
-  );
-  // Everything this tab will create counts as pending for each target: its
-  // unsaved entities, the new entity, and the template's other targets, so
-  // two of them that would share an address are refused, not both made.
+  const local = targets.map(target => metHere(target, self, unsaved));
+  // Each target asked of the server alone once, whatever is typed.
+  const lookups = useQueries({
+    queries: targets.map((target, at) => ({
+      queryKey: ["template-need", target.kind, target.address],
+      queryFn: () => lookUp(target),
+      enabled: !local[at],
+      // An unanswered check is named, not retried behind a spinner.
+      retry: false,
+    })),
+  });
+  // Everything this tab will create counts as pending for an absent target:
+  // its unsaved entities, the new entity once its address settles, and the
+  // template's other targets, so two of them that would share an address are
+  // refused, not both made.
+  const settledSelf = useDebouncedValue(self.address, SETTLE_MS);
   const pendingFor = (target: Target): PendingAddress[] => [
     ...unsaved,
-    ...(self.address === ""
+    ...(settledSelf === ""
       ? []
-      : [{ kind: CHECK_KIND[self.kind], address: self.address }]),
+      : [{ kind: CHECK_KIND[self.kind], address: settledSelf }]),
     ...targets
       .filter(other => other.key !== target.key)
       .map(other => ({ kind: CHECK_KIND[other.kind], address: other.address })),
   ];
-  const answers = useQueries({
+  const checks = useQueries({
     queries: targets.map((target, at) => {
       const pending = pendingFor(target);
       return {
         queryKey: [
-          "template-need",
+          "template-need-made",
           target.kind,
           target.address,
           JSON.stringify(pending),
         ],
-        queryFn: () => answerFor(target, pending),
-        enabled: local[at] === null,
-        // An unanswered check is named, not retried behind a spinner.
+        queryFn: () => makeable(target, pending),
+        enabled: !local[at] && lookups[at]?.data?.status === "absent",
         retry: false,
       };
     }),
   });
   const states = targets.map((target, at) =>
-    stateOf(target, local[at], answers[at])
+    stateOf(target, local[at], lookups[at], checks[at])
   );
 
   // The targets the person chose not to make, for the template they were

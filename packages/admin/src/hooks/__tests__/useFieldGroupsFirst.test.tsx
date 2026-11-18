@@ -280,6 +280,23 @@ describe("useFieldGroupsFirst", () => {
     expect(unsavedEntity("collection", "authors")).toBeUndefined();
   });
 
+  it("keeps the host's own collections while its editor stays, whatever else the store gains", () => {
+    addUnsavedEntity(collection("authors", "Authors", POSTS));
+    const { unmount } = renderHook(() =>
+      useFieldGroupsFirst(POSTS.kind, POSTS.address, [])
+    );
+
+    // Another entity made in this tab while the editor is open.
+    act(() => {
+      addUnsavedEntity(group("promo", "Promo", POSTS));
+    });
+    expect(unsavedEntity("collection", "authors")).toBeDefined();
+
+    // Its editor gone, the collection it made goes with it.
+    unmount();
+    expect(unsavedEntity("collection", "authors")).toBeUndefined();
+  });
+
   it("lets go of the host's own collections when it is left, and keeps its field groups as their own", () => {
     addUnsavedEntity(collection("authors", "Authors", POSTS));
     addUnsavedEntity(collection("tags", "Tags", POSTS));

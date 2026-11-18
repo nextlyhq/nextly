@@ -12,6 +12,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { render } from "@admin/__tests__/utils";
 import { COLLECTION_BUILDER_CONFIG } from "@admin/pages/dashboard/collections/builder/builder-config";
+import { SINGLE_BUILDER_CONFIG } from "@admin/pages/dashboard/singles/builder/builder-config";
 
 vi.mock("@admin/components/field-ui", () => ({
   usePluginFieldTypeEntries: () => [],
@@ -41,9 +42,12 @@ vi.mock("@admin/services/addressCheckApi", () => ({
 let existing = new Set<string>();
 /** The entities whose read fails with a server error, by the same keys. */
 let failing = new Set<string>();
+/** Each read of one entity by address, as "kind:address" with the address as sent. */
+const reads: string[] = [];
 /** A read of one entity by address, as the services answer it. */
 function readOf(kind: string) {
   return async (address: string) => {
+    reads.push(`${kind}:${address}`);
     const key = `${kind}:${address}`;
     if (failing.has(key)) {
       throw Object.assign(new Error("The server is unavailable."), {
@@ -101,13 +105,14 @@ beforeAll(() => {
 afterEach(() => {
   refusals = {};
   checks.length = 0;
+  reads.length = 0;
   existing = new Set();
   failing = new Set();
 });
 
 type Needed = Omit<UnsavedEntity, "token">;
 
-function renderDialog() {
+function renderDialog(config = COLLECTION_BUILDER_CONFIG) {
   const onCreate =
     vi.fn<
       (
@@ -119,7 +124,7 @@ function renderDialog() {
   render(
     <NewEntityDialog
       open
-      config={COLLECTION_BUILDER_CONFIG}
+      config={config}
       onCancel={vi.fn()}
       onCreate={onCreate}
     />
@@ -349,24 +354,131 @@ describe("what a template needs", () => {
       await user.click(
         within(gallery).getByRole("button", { name: "Use Acme double" })
       );
-      await waitFor(() =>
-        expect(checks.map(each => each.address)).toEqual(
-          expect.arrayContaining(["blog-posts", "blog_posts"])
-        )
-      );
+      // Each is asked alone first, for its spelling; the check that counts
+      // what this tab will create follows.
       const pendingFor = (address: string) =>
         checks
-          .filter(each => each.address === address)
+          .filter(each => each.address === address && each.pending.length > 0)
           .at(-1)
           ?.pending.map(each => `${each.kind}:${each.address}`);
-      expect(pendingFor("blog-posts")).toEqual(
-        expect.arrayContaining(["collection:blog_posts", "collection:article"])
+      await waitFor(() =>
+        expect(pendingFor("blog-posts")).toEqual(
+          expect.arrayContaining([
+            "collection:blog_posts",
+            "collection:article",
+          ])
+        )
       );
-      expect(pendingFor("blog_posts")).toEqual(
-        expect.arrayContaining(["collection:blog-posts", "collection:article"])
+      await waitFor(() =>
+        expect(pendingFor("blog_posts")).toEqual(
+          expect.arrayContaining([
+            "collection:blog-posts",
+            "collection:article",
+          ])
+        )
       );
     } finally {
       remove();
     }
+  });
+
+  it("needs nothing made for a Single's link to its own address", async () => {
+    const remove = registerSchemaTemplates("Acme", [
+      {
+        id: "self-single",
+        kind: "single",
+        category: "Acme",
+        name: "Acme home",
+        description: "Links to itself.",
+        fields: [
+          {
+            name: "self",
+            label: "Self",
+            type: "relationship",
+            relationTo: "home",
+          },
+        ],
+      },
+    ]);
+    try {
+      const { onCreate, user } = renderDialog(SINGLE_BUILDER_CONFIG);
+      await user.type(screen.getByRole("textbox", { name: "Name" }), "Home");
+      await user.click(
+        screen.getByRole("button", { name: "Browse all templates" })
+      );
+      const gallery = await screen.findByRole("dialog", {
+        name: "All templates",
+      });
+      await user.click(
+        within(gallery).getByRole("button", { name: "Use Acme home" })
+      );
+      await waitFor(() => expect(createButton()).toBeEnabled());
+      expect(screen.queryByText(/collection home/)).toBeNull();
+      await user.click(createButton());
+      expect(onCreate.mock.calls.at(-1)?.[2]).toEqual([]);
+    } finally {
+      remove();
+    }
+  });
+
+  it("refuses a target not spelled as an address before reading any entity under it", async () => {
+    refusals = {
+      "collection:bad#slug": {
+        code: "SLUG_INVALID_FORMAT",
+        message:
+          "Collection address 'bad#slug' must start with a lowercase letter.",
+      },
+    };
+    const remove = registerSchemaTemplates("Acme", [
+      {
+        id: "malformed",
+        kind: "collection",
+        category: "Acme",
+        name: "Acme malformed",
+        description: "A bad link.",
+        fields: [
+          {
+            name: "bad",
+            label: "Bad",
+            type: "relationship",
+            relationTo: "bad#slug",
+          },
+        ],
+      },
+    ]);
+    try {
+      const { user } = renderDialog();
+      await user.type(screen.getByRole("textbox", { name: "Name" }), "Article");
+      await user.click(
+        screen.getByRole("button", { name: "Browse all templates" })
+      );
+      const gallery = await screen.findByRole("dialog", {
+        name: "All templates",
+      });
+      await user.click(
+        within(gallery).getByRole("button", { name: "Use Acme malformed" })
+      );
+      expect(
+        await screen.findByText(/The collection bad#slug cannot be made/)
+      ).toBeInTheDocument();
+      expect(createButton()).toBeDisabled();
+      expect(reads.filter(each => each.includes("bad"))).toEqual([]);
+    } finally {
+      remove();
+    }
+  });
+
+  it("reads each target once, and does not check it again for every letter of the address typed", async () => {
+    const { user } = renderDialog();
+    await user.click(screen.getByRole("radio", { name: /Blog posts/ }));
+    await user.type(screen.getByRole("textbox", { name: "Name" }), "Article");
+    await within(picked()).findByRole("checkbox", {
+      name: "Create the collection authors too",
+    });
+    expect(reads.filter(each => each === "collection:authors")).toHaveLength(1);
+    // Checked once alone for its spelling, then with what this tab will
+    // create, once the typing has settled: not once per letter.
+    const authorsChecks = checks.filter(each => each.address === "authors");
+    expect(authorsChecks.length).toBeLessThanOrEqual(3);
   });
 });
