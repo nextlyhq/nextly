@@ -25,12 +25,20 @@ import {
 } from "./component-fields-panel";
 import type { ContentServices } from "./content-controls";
 import type { EditorState } from "./editor-state";
-import { formSectionBodies } from "./form-sections";
+import {
+  EMBED_BLOCK_TYPE,
+  embedLinkOp,
+} from "./canvas/embed-states-model";
+import { embedSectionBodies } from "./embed-sections";
+import { FORM_BLOCK } from "./form-picked";
+import { formSectionBodies, formSourceSections } from "./form-sections";
+import { useFormSources } from "./form-source-control";
 import { galleryContentSections } from "./gallery-fields";
 import {
   blockIsReadOnly,
   builderContentSectionsOf,
   contentRowsOf,
+  designIsWritable,
   designReadOnlyReason,
   fieldLabel,
   lockViewOf,
@@ -138,6 +146,15 @@ export function commitProp(
   if (!propIsWritable(document, id, name, lockViewOf(editor))) return null;
   const node = findNode(document.nodes, id);
   if (node === undefined) return null;
+  // An Embed's link, typed or pasted into its Link field, takes the
+  // provider's shape with it, in the same step, as a link pasted on the
+  // canvas does.
+  if (node.type === EMBED_BLOCK_TYPE && name === "src" && typeof value === "string") {
+    const linked = embedLinkOp(document, id, value, {
+      shape: designIsWritable(document, id, lockViewOf(editor)),
+    });
+    if (linked !== null) return editor.apply(linked);
+  }
   return editor.apply({
     kind: "update",
     id,
@@ -281,17 +298,24 @@ function ContentSurface({
   );
   // The Form's Fields and After sending, which the builder draws in place
   // of their generated rows.
+  const stored =
+    findNode(editor.document.nodes, inspection.nodeId)?.props ?? {};
+  const formWritable = (name: string) =>
+    propIsWritable(
+      editor.document,
+      inspection.nodeId,
+      name,
+      lockViewOf(editor)
+    );
+  // Where a Form's form comes from, read only while a Form is inspected.
+  const formSources = useFormSources(
+    inspection.blockName === FORM_BLOCK ? services?.listForms : undefined
+  );
   const formBodies = formSectionBodies({
     inspection,
-    stored: findNode(editor.document.nodes, inspection.nodeId)?.props ?? {},
+    stored,
     services,
-    writable: name =>
-      propIsWritable(
-        editor.document,
-        inspection.nodeId,
-        name,
-        lockViewOf(editor)
-      ),
+    writable: formWritable,
     onCommit: (name, value) => {
       onCommit(name, value);
     },
@@ -307,18 +331,61 @@ function ContentSurface({
             />
           ),
   });
+  // The Embed's section: its Link, which writes the provider's shape with
+  // the link, and the settings that apply to what the link is.
+  const embedNode = findNode(editor.document.nodes, inspection.nodeId);
+  const embedBodies = embedSectionBodies({
+    inspection,
+    stored: embedNode?.props ?? {},
+    linkBound: embedNode?.bindings?.src !== undefined,
+    services,
+    writable: name =>
+      propIsWritable(
+        editor.document,
+        inspection.nodeId,
+        name,
+        lockViewOf(editor)
+      ),
+    onCommit: (name, value) => {
+      onCommit(name, value);
+    },
+    rowsOf: fieldsFor,
+  });
   // Each section the block places in Content, folding on its own, after
   // the ones the builder draws for a core block (Columns' layout, a
   // Gallery's Pictures and Layout); a block
   // with none draws the fields' own note that there is nothing to set.
   const sections = joinedSections(
-    builderSectionsOf(inspection, editor, around, reasonId, services),
-    inspection.sections.content.map(section => ({
-      key: section.label,
-      label: section.label,
-      holdsValue: rowsHoldValue(section.rows),
-      body: formBodies?.get(section.label) ?? fieldsFor(section.rows),
-    }))
+    [
+      ...formSourceSections({
+        inspection,
+        stored,
+        sources: formSources,
+        writable: formWritable,
+        onCommit: (name, value) => {
+          onCommit(name, value);
+        },
+      }),
+      ...builderSectionsOf(inspection, editor, around, reasonId, services),
+    ],
+    // A section the builder draws as `null` is one the block has no use
+    // for as it stands: a picked form's own fields.
+    inspection.sections.content.flatMap(section => {
+      const body =
+        formBodies?.has(section.label) === true
+          ? formBodies.get(section.label)
+          : (embedBodies?.get(section.label) ?? fieldsFor(section.rows));
+      return body === null || body === undefined
+        ? []
+        : [
+            {
+              key: section.label,
+              label: section.label,
+              holdsValue: rowsHoldValue(section.rows),
+              body,
+            },
+          ];
+    })
   );
   const generated =
     sections.length === 0 ? (

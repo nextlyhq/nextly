@@ -40,6 +40,12 @@ export interface CommandVerbs {
   readonly copy: () => void;
   readonly cut: () => void;
   readonly paste: () => void;
+  /**
+   * Copy one block's look, and give it to every selected block. Optional,
+   * so a host built before them keeps compiling; absent, they do nothing.
+   */
+  readonly copyStyle?: () => void;
+  readonly pasteStyle?: () => void;
   readonly selectParent: () => void;
   /**
    * Begin storing the selection in the pattern library.
@@ -73,6 +79,10 @@ export interface CommandVerbs {
   readonly detachComponent?: () => void;
   /** Begin duplicating the selected placement's component. */
   readonly duplicateComponent?: () => void;
+  /** Put the selected blocks in a new Box at their place. */
+  readonly wrapInBox?: () => void;
+  /** Replace the selected container by its blocks. */
+  readonly unwrap?: () => void;
   /** Begin replacing a pattern's content with the selection. */
   readonly updatePattern?: () => void;
   /** Begin saving the block's look as a shared style; the host owns the form. */
@@ -150,6 +160,15 @@ const BLOCK_COMMAND_COPY: Record<
     label: "Paste blocks",
     keywords: ["paste", "clipboard", "insert"],
   },
+  // Named exactly as the menu names them: the words say what is copied.
+  "copy-style": {
+    label: "Copy style",
+    keywords: ["copy style", "look", "format", "painter", "appearance"],
+  },
+  "paste-style": {
+    label: "Paste style",
+    keywords: ["paste style", "look", "format", "painter", "apply", "match"],
+  },
   // Changing which of the three text blocks it is, kept apart in words from
   // turning a selection into a component.
   "turn-into-text": {
@@ -223,6 +242,14 @@ const BLOCK_COMMAND_COPY: Record<
       "save over",
     ],
   },
+  "wrap-in-box": {
+    label: "Wrap blocks in a box",
+    keywords: ["wrap", "box", "group", "container", "nest"],
+  },
+  unwrap: {
+    label: "Unwrap block (keep what's inside)",
+    keywords: ["unwrap", "ungroup", "unnest", "remove container", "flatten"],
+  },
   delete: {
     label: "Delete block",
     keywords: ["delete", "remove", "destroy", "clear"],
@@ -260,6 +287,8 @@ export function blockActionRunners(
     copy: verbs.copy,
     cut: verbs.cut,
     paste: verbs.paste,
+    "copy-style": () => verbs.copyStyle?.(),
+    "paste-style": () => verbs.pasteStyle?.(),
     "turn-into-text": () =>
       verbs.turnInto?.(TURN_INTO_TARGETS["turn-into-text"]),
     "turn-into-rich-text": () =>
@@ -273,6 +302,8 @@ export function blockActionRunners(
     "detach-component": () => verbs.detachComponent?.(),
     "duplicate-component": () => verbs.duplicateComponent?.(),
     "update-pattern": () => verbs.updatePattern?.(),
+    "wrap-in-box": () => verbs.wrapInBox?.(),
+    unwrap: () => verbs.unwrap?.(),
     delete: verbs.delete,
   };
 }

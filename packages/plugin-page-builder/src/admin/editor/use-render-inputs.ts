@@ -50,6 +50,7 @@ import {
   previewWidth,
   selectionIsInspectable,
   useCanvasDrag,
+  useFormsShownAgain,
   type CanvasDrag,
   type CanvasZoom,
   type PageClassBlocks,
@@ -78,6 +79,7 @@ import { siteSheet, type SiteStyleData } from "../../site-style";
 import { readSiteStyleRecord } from "../../site-style-record";
 import { useCanvasBindings } from "../canvas-bindings-client";
 import { pageRenderInputs, type PageRenderInputs } from "../page-render-inputs";
+import { useDrawnSiteCss } from "../site-css-read";
 import { useSiteStyle } from "../site-style-client";
 import { useStoredSiteStyle } from "../site-style-read";
 
@@ -392,6 +394,9 @@ function useCanvasRender({
   // they set none of their own: the canvas draws under it too, so a block
   // past it comes up empty here as on the live page.
   const pageDataLimit = readPageDataLimit(clientConfig);
+  // A new round each time the author comes back to a page picking a form,
+  // which may have changed in its own tab: the canvas draws its Forms again.
+  const formsRound = useFormsShownAgain(editor.document);
   // While the conditions are applied, the lists read as a visitor of the
   // document, and those a visitor sees fewer entries of say so.
   const canvasContext = useCanvasPageContext(
@@ -401,8 +406,11 @@ function useCanvasRender({
     pagedList,
     editor.listsStillShowing,
     asVisitor,
-    pageDataLimit
+    pageDataLimit,
+    formsRound
   );
+  // The site's own CSS, drawn before the page's as on the live page.
+  const siteCss = useDrawnSiteCss();
   const pageInputs = useMemo(
     () =>
       pageRenderInputs({
@@ -412,6 +420,9 @@ function useCanvasRender({
         // sheet is compiled exactly as the published route compiles it.
         previewContainer: undefined,
         previewStates: true,
+        // A frame of its own, so the page's custom CSS is drawn, as live.
+        framed: true,
+        ...(siteCss === undefined ? {} : { siteCss }),
         limits: documentLimits,
         // The map's identity changes only when the read does, so this memo —
         // and the resolution the canvas runs from it — is not redone per
@@ -423,6 +434,7 @@ function useCanvasRender({
       clientConfig,
       documentLimits,
       componentLibrary.definitions,
+      siteCss,
     ]
   );
   // The page as the canvas draws it, before the sources its bindings read

@@ -101,8 +101,8 @@ export type SelectionPlan = SelectionEdit | SelectionRefusal | null;
  * need a different guard per verb. The `reason` field is what separates a
  * refusal, and only a refusal carries one.
  */
-export function isRefusal(
-  plan: SelectionEdit | SelectionMove | SelectionRefusal | null
+export function isRefusal<T extends object>(
+  plan: T | SelectionRefusal | null
 ): plan is SelectionRefusal {
   return plan !== null && "reason" in plan;
 }

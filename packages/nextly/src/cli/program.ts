@@ -28,6 +28,7 @@ import { registerEventsCommand } from "./commands/events.command";
 import { registerGenerateManifestCommand } from "./commands/generate-manifest.command";
 import { registerGenerateTypesCommand } from "./commands/generate-types.command";
 import { registerGenerateWidgetCommand } from "./commands/generate-widget.command";
+import { registerI18nConvertZonedDatesCommand } from "./commands/i18n-convert-zoned-dates.command";
 import { registerI18nRestoreCommand } from "./commands/i18n-restore.command";
 import { registerInitCommand } from "./commands/init.command";
 import { createMediaCommand } from "./commands/media.command";
@@ -280,6 +281,7 @@ function registerCommands(program: Command): void {
 
   // i18n recovery — replay translations archived by a localization disable.
   registerI18nRestoreCommand(program);
+  registerI18nConvertZonedDatesCommand(program);
 
   // Plan B — one-shot bookkeeping consolidation.
   registerUpgradeCommand(program);

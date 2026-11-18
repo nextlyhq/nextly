@@ -131,6 +131,24 @@ describe("what a row writes", () => {
     );
     expect(siteTextWrites(SITE, "body", undefined)).toBe("Nothing");
   });
+
+  it("names the text style's declarations for a row following one", () => {
+    const display = {
+      id: "ts-display",
+      slug: "display",
+      orderIndex: 0,
+      role: "text" as const,
+      styles: { base: { base: { fontSize: "56px", lineHeight: 1.05 } } },
+    };
+    expect(
+      siteTextWrites(
+        SITE,
+        "h1",
+        { fontSize: "40px", textStyle: "ts-display" },
+        [display]
+      )
+    ).toBe("h1 { font-size: 56px; line-height: 1.05 }");
+  });
 });
 
 describe("a removal a row refuses", () => {

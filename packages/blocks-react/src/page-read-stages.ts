@@ -788,6 +788,7 @@ export type SharedRendererProps = Pick<
   | "context"
   | "blocks"
   | "styleContext"
+  | "customCss"
   | "blockFallback"
   | "limits"
   | "hostPolicy"

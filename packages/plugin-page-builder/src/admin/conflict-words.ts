@@ -43,6 +43,7 @@ const SETTING_LABELS: Readonly<Record<string, string>> = {
   fluidRange: "the fluid range",
   siteText: "Site text",
   order: "the colour order",
+  builtInColoursShown: "the built-in colours setting",
 };
 
 /**

@@ -35,7 +35,11 @@ export type ActiveOverlay =
   | { kind: "none" }
   | { kind: "settings" }
   | { kind: "picker"; position: FieldInsertPosition }
-  | { kind: "edit"; fieldId: string };
+  /**
+   * `renaming`: opened from a row's Rename…, so its rename is asked for at once. A number for each
+   * request, so asking again on the field already open asks again.
+   */
+  | { kind: "edit"; fieldId: string; renaming?: number };
 
 type Props = {
   active: ActiveOverlay;

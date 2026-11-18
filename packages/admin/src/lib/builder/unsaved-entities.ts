@@ -99,10 +99,29 @@ function replace(next: ReadonlyMap<string, UnsavedEntity>): void {
 export function addUnsavedEntity(
   entity: Omit<UnsavedEntity, "token">
 ): boolean {
-  const key = keyOf(entity.kind, entity.address);
-  if (entities.has(key)) return false;
+  return addUnsavedEntities([entity]);
+}
+
+/**
+ * Holds several created entities at once, all or none: an entity with the
+ * ones it needs, made in one dialog. Returns false, adding none and keeping
+ * every one held, when any of them waits already under its kind and address,
+ * or two of them share one, so no entity is ever held without what it needs.
+ */
+export function addUnsavedEntities(
+  list: readonly Omit<UnsavedEntity, "token">[]
+): boolean {
+  const keys = list.map(entity => keyOf(entity.kind, entity.address));
+  if (
+    new Set(keys).size !== keys.length ||
+    keys.some(key => entities.has(key))
+  ) {
+    return false;
+  }
   const next = new Map(entities);
-  next.set(key, { ...entity, token: `unsaved-${nextToken++}` });
+  list.forEach((entity, at) => {
+    next.set(keys[at], { ...entity, token: `unsaved-${nextToken++}` });
+  });
   replace(next);
   return true;
 }
@@ -154,13 +173,16 @@ export function removeUnsavedEntity(kind: BuilderKind, address: string): void {
  * Clears `host` as the owner of the field groups its picker made, so each stays
  * an unsaved field group of its own, as one made from its create page: its own
  * editor's first save creates it. For a host left with its changes discarded,
- * which no longer names them.
+ * which no longer names them. Only field groups: another host's picker offers
+ * one on its own, where nothing offers an unsaved collection, so a collection
+ * the host made stays its own, for its leave to let go or its save to create.
  */
 export function releaseUnsavedFieldGroupsOf(
   host: NonNullable<UnsavedEntity["ownedBy"]>
 ): void {
   const owned = [...entities].filter(
     ([, entity]) =>
+      entity.kind === "field-group" &&
       entity.ownedBy?.kind === host.kind &&
       entity.ownedBy.address === host.address
   );
