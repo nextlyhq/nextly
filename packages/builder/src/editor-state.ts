@@ -79,6 +79,7 @@ import {
   type BlockSelection,
   type SelectionMode,
 } from "./selection";
+import type { SettingTab } from "./settings-index";
 import { joinsTyping, typingRunNow, type TypingStep } from "./typing-run";
 
 /** How deep the undo history goes before the oldest step is dropped. */
@@ -264,11 +265,37 @@ export interface EditorState {
   /** Select a list and take the author to its first sort row. */
   askSortField?: (id: string) => void;
   /**
+   * The block whose setting the author last asked to be taken to, from a
+   * page check's item: the tab and the setting's id as the settings index
+   * names it, with a count that grows on each ask, so the inspector opens
+   * the setting once per press. Editor state only, never stored.
+   * @experimental
+   */
+  settingAsked?: SettingAsked;
+  /** Select a block and take the author to one of its settings. */
+  askSetting?: (id: string, setting: AskedSetting) => void;
+  /**
    * A block just added that asks for a choice, while the canvas draws its
    * chooser: editor state only, never stored. See `first-add.ts`.
    * @experimental
    */
   firstAdd?: FirstAdd;
+}
+
+/** A setting of a block's panel: its tab, and its id in the settings index. */
+export interface AskedSetting {
+  readonly tab: SettingTab;
+  readonly id: string;
+}
+
+/** One ask to be taken to a block's setting. */
+export interface SettingAsked {
+  /** The block's id. */
+  readonly id: string;
+  readonly tab: SettingTab;
+  /** The setting's id, as the settings index names it. */
+  readonly setting: string;
+  readonly seq: number;
 }
 
 export interface UseEditorStateArgs {
@@ -1181,6 +1208,7 @@ export function useEditorState(args: UseEditorStateArgs): EditorState {
     },
     [select]
   );
+  const { settingAsked, askSetting } = useSettingAsk(select);
   return useMemo(
     () => ({
       ...state,
@@ -1190,6 +1218,8 @@ export function useEditorState(args: UseEditorStateArgs): EditorState {
       tagListStillShowing,
       ...(sortFieldAsked === undefined ? {} : { sortFieldAsked }),
       askSortField,
+      ...(settingAsked === undefined ? {} : { settingAsked }),
+      askSetting,
     }),
     [
       state,
@@ -1199,8 +1229,36 @@ export function useEditorState(args: UseEditorStateArgs): EditorState {
       tagListStillShowing,
       sortFieldAsked,
       askSortField,
+      settingAsked,
+      askSetting,
     ]
   );
+}
+
+/**
+ * The setting the author last asked to be taken to, and the ask: selecting
+ * first, so the inspector that opens the setting is the block's own.
+ */
+function useSettingAsk(select: (id: string) => void): {
+  readonly settingAsked: SettingAsked | undefined;
+  readonly askSetting: (id: string, setting: AskedSetting) => void;
+} {
+  const [settingAsked, setSettingAsked] = useState<SettingAsked | undefined>(
+    undefined
+  );
+  const askSetting = useCallback(
+    (id: string, setting: AskedSetting) => {
+      select(id);
+      setSettingAsked(current => ({
+        id,
+        tab: setting.tab,
+        setting: setting.id,
+        seq: (current?.seq ?? 0) + 1,
+      }));
+    },
+    [select]
+  );
+  return { settingAsked, askSetting };
 }
 
 /** The document, its selection and its history: see {@link useEditorState}. */
