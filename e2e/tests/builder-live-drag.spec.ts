@@ -11,7 +11,8 @@
  * 3. A slider (a Section's opacity): the canvas follows while the thumb
  *    moves; one Undo puts it back.
  * 4. Speed: the label drag on a processor slowed 4×. Each pointer move is
- *    timed from the move to the first canvas frame that shows its value. On a
+ *    timed from the move to the first canvas frame that shows the value that
+ *    move asked for (`support/move-latency.ts`), read from the field. On a
  *    production server the 75th percentile is held to 100 ms, the budget the
  *    builder's speed check gives a keystroke reaching the canvas; on `dev`
  *    the timings are attached to the report and only following is checked.
@@ -29,6 +30,12 @@ import { expect, type Locator, type Page } from "@playwright/test";
 import { gotoAdmin } from "./support/admin";
 import { canvasBlock } from "./support/canvas-frame";
 import { LOCK } from "./support/locks";
+import {
+  MOVE_BUDGET_MS,
+  moveLatencies,
+  p75,
+  type TimedMove,
+} from "./support/move-latency";
 import { test } from "./support/test";
 
 // Reads the site's devices, which a spec storing breakpoints changes.
@@ -38,8 +45,6 @@ const ENTRIES = "/admin/api/collections/pages/entries";
 const HEADING = "00000000-0000-4000-8000-00000000d201";
 const SECTION = "00000000-0000-4000-8000-00000000d202";
 
-/** The budget for a pointer move to reach the canvas, at the 75th percentile. */
-const MOVE_BUDGET_MS = 100;
 const PRODUCTION = process.env.E2E_SERVER === "production";
 
 const NODES = [
@@ -134,16 +139,29 @@ function headingText(page: Page): Promise<Locator> {
   );
 }
 
-/** The Font size field's label, the handle a drag takes. */
-async function fontSizeLabel(page: Page): Promise<Locator> {
+/** The Font size field, which shows each value a drag of its label makes. */
+function fontSizeField(page: Page): Locator {
   // Named by its label and the provenance after it ("Font size Set here").
-  const field = page
+  return page
     .getByTestId("inspector")
     .getByRole("textbox", { name: /^Font size\b/ });
+}
+
+/** The Font size field's label, the handle a drag takes. */
+async function fontSizeLabel(page: Page): Promise<Locator> {
+  const field = fontSizeField(page);
   await expect(field).toHaveValue("16");
   const id = await field.getAttribute("id");
   if (id === null) throw new Error("the Font size field has no id");
   return page.locator(`label[for="${id}"]`);
+}
+
+/** The times of the pointer moves the editor received while a button was down. */
+function movesSoFar(page: Page): Promise<number[]> {
+  return page.evaluate(() => [
+    ...((window as unknown as { __liveDragMoves?: number[] }).__liveDragMoves ??
+      []),
+  ]);
 }
 
 /** The centre of an element, where a drag starts. */
@@ -244,6 +262,12 @@ test("the opacity slider moves the canvas while it moves, as one undo step", asy
   await expect(undoButton(page)).toBeDisabled();
   expect(await drawn(page, SECTION, "opacity")).toBe("1");
   const thumb = inspector.getByRole("slider", { name: "Opacity slider" });
+  // Effects is the panel's last section, and opened it ends below the
+  // window: a pointer pressed where the thumb is laid out would land off the
+  // screen and press nothing. Scrolled into the panel's view first, as an
+  // author scrolls to it.
+  await thumb.scrollIntoViewIfNeeded();
+  await expect(thumb).toBeInViewport();
   const start = await centreOf(thumb);
 
   await page.mouse.move(start.x, start.y);
@@ -313,6 +337,10 @@ test("a label drag on a 4× slowed processor reaches the canvas within its budge
     );
   });
 
+  // Each step's move and the value it asked for, as the field shows it once
+  // the move is made: what the canvas has to draw for that move.
+  const field = fontSizeField(page);
+  const asked: TimedMove[] = [];
   const cdp = await page.context().newCDPSession(page);
   await cdp.send("Emulation.setCPUThrottlingRate", { rate: 4 });
   try {
@@ -320,9 +348,15 @@ test("a label drag on a 4× slowed processor reaches the canvas within its budge
     await page.mouse.move(start.x, start.y);
     await page.mouse.down();
     for (let step = 1; step <= 12; step += 1) {
+      const from = (await movesSoFar(page)).length;
       await page.mouse.move(start.x + step * 3, start.y);
       // Room for the move to be drawn before the next, as a hand moves.
       await page.waitForTimeout(150);
+      // The step's own move: the first the editor received after `from`.
+      const at = (await movesSoFar(page))[from];
+      if (at !== undefined) {
+        asked.push({ at, value: Number(await field.inputValue()) });
+      }
     }
     await page.mouse.up();
   } finally {
@@ -330,11 +364,6 @@ test("a label drag on a 4× slowed processor reaches the canvas within its budge
     await cdp.detach();
   }
 
-  const moves = await page.evaluate(
-    () =>
-      (window as unknown as { __liveDragMoves?: number[] }).__liveDragMoves ??
-      []
-  );
   const draws = await canvasBlock(page, HEADING)
     .first()
     .evaluate(
@@ -345,27 +374,33 @@ test("a label drag on a 4× slowed processor reaches the canvas within its budge
           }
         ).__liveDrag ?? []
     );
-  // Each move: from the move to the first frame drawing a size other than
-  // the one on the canvas when it arrived.
-  const latencies = moves.flatMap(at => {
-    const before = draws.filter(draw => draw.at <= at).at(-1)?.size;
-    const shown = draws.find(draw => draw.at > at && draw.size !== before);
-    return shown === undefined ? [] : [shown.at - at];
-  });
-  const sorted = [...latencies].sort((a, b) => a - b);
-  const p75 = sorted[Math.ceil(sorted.length * 0.75) - 1] ?? Infinity;
+  // Each move: from the move to the first frame drawing ITS value (or a
+  // later move's, which supersedes it), never just the next frame that
+  // changed, which a renderer running behind fills with an older move's.
+  const latencies = moveLatencies(
+    16,
+    asked,
+    draws.map(draw => ({ at: draw.at, value: Number.parseFloat(draw.size) }))
+  );
+  const slowest = p75(latencies);
   await testInfo.attach("live-drag-timings.json", {
     contentType: "application/json",
     body: JSON.stringify(
-      { server: PRODUCTION ? "production" : "dev", p75, latencies, draws },
+      {
+        server: PRODUCTION ? "production" : "dev",
+        p75: slowest,
+        latencies,
+        asked,
+        draws,
+      },
       null,
       2
     ),
   });
 
   // The canvas followed the drag: a size per move, not one at the end.
-  expect(moves.length).toBeGreaterThanOrEqual(12);
+  expect(asked.length).toBe(12);
   expect(latencies.length).toBeGreaterThanOrEqual(10);
   expect(new Set(draws.map(draw => draw.size)).size).toBeGreaterThanOrEqual(10);
-  if (PRODUCTION) expect(p75).toBeLessThanOrEqual(MOVE_BUDGET_MS);
+  if (PRODUCTION) expect(slowest).toBeLessThanOrEqual(MOVE_BUDGET_MS);
 });
