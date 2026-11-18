@@ -7,9 +7,12 @@
 import {
   COMPONENT_INSTANCE_TYPE,
   DOCUMENT_FORMAT_VERSION,
+  isComponentDocument,
   migrateDocument,
   type BlockDocument,
+  type ComponentDocument,
   type DefinitionsById,
+  type ExposedProperty,
 } from "@nextlyhq/blocks-engine";
 import { renderToReadableStream } from "react-dom/server";
 import { describe, expect, it } from "vitest";
@@ -102,6 +105,37 @@ describe("a Table of contents saved as version 1", () => {
     });
     // No marker is written: unset reads as bullets, as version 1 drew none.
     expect(node?.props).not.toHaveProperty("marker");
+    // Its passage's binding goes with the passage: nothing is left bound to
+    // a prop the block no longer has.
+    expect(node).not.toHaveProperty("bindings");
+  });
+
+  it("keeps its other bindings while its passage's goes", () => {
+    const title = { $bind: "title" };
+    const { doc } = migrateDocument(
+      page([{ ...v1, bindings: { ...v1.bindings, title } }]),
+      migrationSourceFor(resolver)
+    );
+    expect(doc.nodes[0]?.bindings).toEqual({ title });
+  });
+
+  it("drops a component's setting that exposed its passage", () => {
+    const exposure = (id: string, propPath: string): ExposedProperty => ({
+      id,
+      label: id,
+      nodeId: "toc",
+      propPath,
+      type: "richText",
+    });
+    const component: ComponentDocument = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "component",
+      nodes: [v1],
+      exposed: [exposure("passage", "content"), exposure("name", "title")],
+    };
+    const { doc } = migrateDocument(component, migrationSourceFor(resolver));
+    const exposed = isComponentDocument(doc) ? doc.exposed : undefined;
+    expect(exposed?.map(each => each.id)).toEqual(["name"]);
   });
 
   it("lists the page's own headings, as bullets, never the passage it held", async () => {

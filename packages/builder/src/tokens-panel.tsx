@@ -66,6 +66,7 @@ import {
   useListedGroups,
   useViewSearch,
 } from "./design-group-toggle";
+import { HOW_TEXT_WORKS_DOCS_HREF } from "./docs-links";
 import { commitFocusedField } from "./editor-field-commit";
 import { FluidRangeFields } from "./fluid-popover";
 import { ShowMore, withOpenRow } from "./panel-actions";
@@ -82,11 +83,8 @@ import {
 } from "./tokens-studio";
 import { ADDS, AddRows, EmptyGroup, type OnAdd } from "./variable-adds";
 import { VariableRow } from "./variable-row";
-import {
-  combinedReach,
-  type VariableReach,
-  type VariablesAccess,
-} from "./variable-usage";
+import { useReachTogether } from "./variable-together-reads";
+import type { VariableReach, VariablesAccess } from "./variable-usage";
 import {
   useVariableUsage,
   type VariableUsageHere,
@@ -400,6 +398,7 @@ function VariablesView({
         }
         overlays={placedOverlays(placed, header)}
       >
+        <TypeTabHelp groups={hosted.groups} />
         <TypeTabSiteText
           groups={hosted.groups}
           tokens={tokens}
@@ -458,6 +457,29 @@ function VariablesView({
         />
       </ViewBody>
     </div>
+  );
+}
+
+/**
+ * "How text works", first where the view lists the type scale: the docs page
+ * on how its parts fit together, in a new tab so the panel stays as it was.
+ * Drawn as "Manage fonts…" above it is, a target at least 24px tall.
+ */
+function TypeTabHelp({
+  groups,
+}: {
+  groups: readonly VariableGroup[] | undefined;
+}): React.JSX.Element | null {
+  if (groups !== undefined && !groups.includes("type")) return null;
+  return (
+    <a
+      className="nx-vars__link nx-fonts-manage"
+      href={HOW_TEXT_WORKS_DOCS_HREF}
+      target="_blank"
+      rel="noreferrer"
+    >
+      How text works
+    </a>
   );
 }
 
@@ -846,6 +868,12 @@ function useUsageOfRows(
   );
   const reads = useVariableUsage(access, identities);
   const { values, reread, readAgain } = reads;
+  // Each row's variables, counted together where it stands for two.
+  const rows = React.useMemo(
+    () => groups.flatMap(group => group.entries.map(rowIdentities)),
+    [groups]
+  );
+  const reachTogether = useReachTogether(access, rows, values);
   // The identities as of the latest render, read when a refusal arrives
   // rather than closed over, so the effect follows the issue alone.
   const listed = React.useRef(identities);
@@ -861,11 +889,12 @@ function useUsageOfRows(
         ? undefined
         : {
             reachOf: id => values.get(id),
+            reachTogether,
             readAgain,
             access,
             classes,
           },
-    [access, values, readAgain, classes]
+    [access, values, reachTogether, readAgain, classes]
   );
 }
 
@@ -882,7 +911,7 @@ function rowReach(
   usage: VariableUsageHere | undefined
 ): VariableReach | undefined {
   if (usage === undefined) return undefined;
-  return combinedReach(rowIdentities(entry).map(usage.reachOf));
+  return usage.reachTogether(rowIdentities(entry));
 }
 
 /** What shows while the variables are being read, or after a read failed. */

@@ -16,11 +16,7 @@ import { Moon, Sun } from "lucide-react";
 import * as React from "react";
 
 import { contrastLine } from "./variable-contrast";
-import {
-  combinedReach,
-  variableRemoval,
-  variableStatus,
-} from "./variable-usage";
+import { variableRemoval, variableStatus } from "./variable-usage";
 import {
   VariableUses,
   type RemovedPart,
@@ -129,7 +125,7 @@ export function UsageLine({
 }): React.JSX.Element {
   const [listed, setListed] = React.useState(false);
   // Counted together, as the row counts them.
-  const reach = combinedReach(parts.map(part => usage.reachOf(part.identity)));
+  const reach = usage.reachTogether(parts.map(part => part.identity));
   // Only something used has places to list.
   const used = variableRemoval(reach) === "in-use";
   return (
