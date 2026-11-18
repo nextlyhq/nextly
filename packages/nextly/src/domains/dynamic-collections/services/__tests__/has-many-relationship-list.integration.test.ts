@@ -40,6 +40,7 @@ import { createLogger } from "../../../../cli/utils/logger";
 import { NO_CONSENT } from "../../../schema/migrate/data-loss-consent";
 import { introspectLiveSnapshot } from "../../../schema/pipeline/diff/introspect-live";
 import { _resetApplyDesiredSchemaForTests } from "../../../schema/pipeline/index";
+import { refuseTargetSwitchesOverValues } from "../../../schema/pipeline/several-references-refusal";
 
 const SERVER_URL_ENV = {
   postgresql: "TEST_POSTGRES_URL",
@@ -807,9 +808,12 @@ for (const dialect of getConfiguredTestDialects()) {
       ).toMatchObject({ relationTo: "authors" });
     });
 
-    // A required one-link column holds bare ids, which are not JSON: counting its rows that hold
-    // none reads them as text first, so the switch is refused for the value, not by a failed read.
-    it("refuses switching a required relationship to several collections while a row holds a value", async () => {
+    // The refusal of a switch to or from naming several collections counts, where the column
+    // refuses NULL, the rows holding none: on a one-link column, whose bare ids are not JSON, that
+    // count reads them as text, so the switch is refused for its value rather than by a failed
+    // read. Asked directly: every save road's own type-change judgement refuses this switch first
+    // today, so no road reaches the count over such a column.
+    it("counts a required one-link column's rows for a switch naming several collections, reading its ids as text", async () => {
       const t = await boot();
       const { a } = await postsWithAuthors(t, false, "authors", true);
       await t.nextly.create({
@@ -817,16 +821,35 @@ for (const dialect of getConfiguredTestDialects()) {
         data: { title: "P1", author: a },
       });
 
-      const outcome = await switchAuthor(database.adapter, {
-        relationTo: ["authors", "tags"],
-        required: true,
-      });
-      expect(outcome).toEqual({
-        refused: expect.stringContaining("'author'") as unknown as string,
-      });
-      expect((outcome as { refused: string }).refused).toContain(
-        "1 row holds a value"
+      const refused = await refuseTargetSwitchesOverValues({
+        db: database.adapter.getDrizzle(),
+        dialect,
+        desired: { collections: {}, singles: {}, components: {} } as never,
+        live: {
+          tables: [
+            {
+              name: "dc_posts",
+              columns: [{ name: "author", nullable: false }],
+            },
+          ],
+        } as never,
+        operations: [
+          {
+            type: "change_column_type",
+            tableName: "dc_posts",
+            columnName: "author",
+            fromType: "text",
+            toType: "jsonb",
+            conversion: "requireEmpty",
+          },
+        ] as never,
+      }).then(
+        () => "accepted",
+        (error: unknown) => JSON.stringify(error)
       );
+      expect(refused).toContain("RELATIONSHIP_TARGETS_HOLD_VALUES");
+      expect(refused).toContain("1 row holds a value");
+      expect(refused).not.toContain("RELATIONSHIP_REQUIRED_HOLDS_NONE");
     });
 
     it("refuses switching from several collections to one while a row holds a value", async () => {
