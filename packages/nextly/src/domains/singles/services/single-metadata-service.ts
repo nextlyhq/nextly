@@ -739,7 +739,9 @@ export class SingleMetadataService {
     const fields = stored?.fields ?? [];
     const whole = this.wholeDeleteAdapter();
     return whole !== undefined
-      ? this.removeSingleWhole(whole, slug, tableName, fields, committed)
+      ? this.removeSingleWhole(whole, slug, tableName, fields, committed, {
+          rowRead: stored !== undefined && stored !== null,
+        })
       : this.removeSingleInSteps(this.adapter, slug, tableName, fields);
   }
 
@@ -788,7 +790,9 @@ export class SingleMetadataService {
     slug: string,
     tableName: string | undefined,
     fields: readonly unknown[],
-    committed: () => void
+    committed: () => void,
+    /** Whether the delete read the Single's registry row before it began. */
+    options: { rowRead: boolean }
   ): Promise<void> {
     const [{ teardownAdapterIn }, { forgetCompanionReadiness }] =
       await Promise.all([
@@ -805,6 +809,18 @@ export class SingleMetadataService {
           await this.dropSingleStorage(slug, tableName, through);
         }
         unregistered = await this.registry.unregisterSingleIn(tx, slug);
+        // A row the delete read, which its removal then did not remove (a row-level rule or a
+        // trigger keeping it), would describe storage this transaction dropped: refused here, so
+        // the drops roll back with it and the Single stays whole.
+        if (options.rowRead && unregistered.removed === 0) {
+          throw NextlyError.conflict({
+            reason: "state",
+            message:
+              "The Single's registry entry could not be removed, so nothing was deleted. Check what " +
+              "keeps the entry (a row-level rule or a trigger on the registry), then delete again.",
+            logContext: { reason: "single-registry-row-not-removed", slug },
+          });
+        }
       });
     } catch (error) {
       // Mapped as the registry's own delete maps a driver's failure, so every road reports one

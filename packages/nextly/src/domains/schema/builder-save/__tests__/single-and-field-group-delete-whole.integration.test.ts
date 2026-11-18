@@ -352,5 +352,58 @@ describe.each(getConfiguredTestDialects())(
         await failsAfterItsCommit(t, await aFieldGroup(t));
       }
     );
+    /** A trigger making the delete of `entity`'s registry row remove nothing, and its removal. */
+    async function keepRowOnDelete(t: TestNextly, entity: Deleted) {
+      const run = (sql: string) => t.adapter.executeQuery(sql);
+      const name = "nx_test_keep_registry_row";
+      if (dialect === "postgresql") {
+        await run(
+          `CREATE OR REPLACE FUNCTION ${name}() RETURNS trigger AS $$ BEGIN RETURN NULL; END $$ LANGUAGE plpgsql`
+        );
+        await run(
+          `CREATE TRIGGER ${name} BEFORE DELETE ON "${entity.registry}" FOR EACH ROW WHEN (OLD.slug = '${entity.slug}') EXECUTE FUNCTION ${name}()`
+        );
+        return async () => {
+          await run(`DROP TRIGGER ${name} ON "${entity.registry}"`);
+          await run(`DROP FUNCTION ${name}()`);
+        };
+      }
+      await run(
+        `CREATE TRIGGER ${name} BEFORE DELETE ON "${entity.registry}" WHEN OLD.slug = '${entity.slug}' BEGIN SELECT RAISE(IGNORE); END`
+      );
+      return async () => {
+        await run(`DROP TRIGGER ${name}`);
+      };
+    }
+
+    it.skipIf(dialect === "mysql")(
+      "a Single's, whose registry row the delete removes nothing of, is refused whole",
+      async () => {
+        const t = await boot();
+        const entity = await aSingle();
+        const companion = `${entity.table}_locales`;
+        const filesBefore = migrationFiles(t);
+        // The registry's own rule keeps the row: the delete runs, and removes nothing.
+        const allow = await keepRowOnDelete(t, entity);
+
+        await expect(remove(entity)).rejects.toBeDefined();
+
+        // Refused whole: the row would otherwise describe dropped storage.
+        expect(await registryRowCount(t, entity)).toBe(1);
+        expect(await t.adapter.tableExists(entity.table)).toBe(true);
+        expect(await t.adapter.tableExists(companion)).toBe(true);
+        for (const junction of entity.junctions) {
+          expect(await t.adapter.tableExists(junction)).toBe(true);
+        }
+        expect(deleteFile(t, entity)).toEqual([]);
+        expect(migrationFiles(t)).toEqual(filesBefore);
+
+        // With the rule gone, the delete finishes.
+        await allow();
+        await remove(entity);
+        expect(await registryRowCount(t, entity)).toBe(0);
+        expect(await t.adapter.tableExists(entity.table)).toBe(false);
+      }
+    );
   }
 );
