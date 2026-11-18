@@ -541,16 +541,35 @@ export function applyCarriedOptions(
 }
 
 /**
- * A relationship's stored `options` object (its `target` and `relationType`), or undefined for any
- * other field or a relationship storing none. Kept whole on the Builder field and written back by
- * the save (`relationshipOptionsToSave`).
+ * A relationship's stored `options` object, kept on the Builder field and written back by the save
+ * (`relationshipOptionsToSave`): how its links are stored (`relationType`, `junctionTable`) and
+ * what else the Builder does not edit. Two keys are left to the Builder's own controls, so a save
+ * never restores a value the person changed:
+ * - `target` is kept only for a relationship stored the earlier way, with no `relationTo`; any
+ *   other's collection is the picker's, and emptying the picker leaves it naming none;
+ * - `maxDepth` is the Max depth control's (`convertToBuilderField` shows a stored one there).
+ * Undefined for any other field, or a relationship storing nothing else.
  */
 function storedRelationOptionsOf(
   field: FieldDefinition
 ): Readonly<Record<string, unknown>> | undefined {
   if (field.type !== "relationship") return undefined;
   const stored: unknown = field.options;
-  return isPlainRecord(stored) ? stored : undefined;
+  if (!isPlainRecord(stored)) return undefined;
+  const picked =
+    (typeof field.relationTo === "string" && field.relationTo !== "") ||
+    (Array.isArray(field.relationTo) && field.relationTo.length > 0);
+  const { target, maxDepth: _maxDepth, ...rest } = stored;
+  const kept = picked || target === undefined ? rest : { ...rest, target };
+  return Object.keys(kept).length > 0 ? kept : undefined;
+}
+
+/** A Max depth a relationship stored in its `options`, for the control the person edits. */
+function storedOptionsMaxDepth(field: FieldDefinition): number | undefined {
+  const stored: unknown = field.options;
+  return isPlainRecord(stored) && typeof stored.maxDepth === "number"
+    ? stored.maxDepth
+    : undefined;
 }
 
 /**
@@ -626,7 +645,12 @@ export function convertToBuilderField(
     },
     // Relationship properties
     relationTo: field.relationTo,
-    maxDepth: field.maxDepth,
+    // A depth stored in `options` shows on the control too, which the save then writes.
+    maxDepth:
+      field.maxDepth ??
+      (field.type === "relationship"
+        ? storedOptionsMaxDepth(field)
+        : undefined),
     allowCreate: field.allowCreate,
     allowEdit: field.allowEdit,
     isSortable: field.isSortable,
