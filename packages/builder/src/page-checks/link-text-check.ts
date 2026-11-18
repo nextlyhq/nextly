@@ -239,7 +239,7 @@ export const LINK_TEXT_CHECK: PageCheck = {
   group: "accessibility",
   run: page => {
     const found: PageCheckResult[] = [];
-    walkNodes(page.document.nodes, node => {
+    walkNodes(page.drawn as BlockNode[], node => {
       if (node.type === "core/button") found.push(...buttonFindings(node));
       else if (node.type === "core/icon") found.push(...iconFindings(node));
       else found.push(...linkFindings(node));

@@ -106,7 +106,7 @@ export const IMAGE_ALT_CHECK: PageCheck = {
   group: "accessibility",
   run: page => {
     const found: PageCheckResult[] = [];
-    walkNodes(page.document.nodes, node => {
+    walkNodes(page.drawn as BlockNode[], node => {
       const finding = missingAlt(node, page);
       if (finding !== undefined) found.push(finding);
     });

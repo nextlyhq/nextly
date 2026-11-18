@@ -45,6 +45,35 @@ function richLink(id: string, words: string): BlockNode {
   });
 }
 
+describe("inside a component", () => {
+  it("lists a vague button a placed component draws, on the placement", () => {
+    const card: BlockDocument = {
+      formatVersion: 1,
+      kind: "component",
+      nodes: [button("cta", { label: "Read more", href: "/x" })],
+    };
+    const document: BlockDocument = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        block("p1", "nextly/component-instance", { componentId: "card" }),
+      ],
+    };
+    const found = runPageChecks(
+      { document, definitions: new Map([["card", card]]) },
+      [LINK_TEXT_CHECK]
+    ).findings;
+    expect(found).toEqual([
+      expect.objectContaining({
+        nodeId: "p1",
+        what: "Button text doesn’t say where it goes",
+      }),
+    ]);
+    // Its words are the component's to change, not a setting on the page.
+    expect(found[0]?.fix).toBeUndefined();
+  });
+});
+
 function findings(...nodes: BlockNode[]) {
   const document: BlockDocument = { formatVersion: 1, kind: "page", nodes };
   return runPageChecks({ document }, [LINK_TEXT_CHECK]).findings;

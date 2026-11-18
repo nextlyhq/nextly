@@ -84,7 +84,7 @@ export const LABELS_CHECK: PageCheck = {
   group: "accessibility",
   run: page => {
     const found: PageCheckResult[] = [];
-    walkNodes(page.document.nodes, node => {
+    walkNodes(page.drawn as BlockNode[], node => {
       if (node.type === "core/form") found.push(...formFindings(node));
       else if (node.type === "core/embed") found.push(...embedFindings(node));
     });

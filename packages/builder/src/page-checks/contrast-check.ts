@@ -148,7 +148,7 @@ function contrastFinding(
 function contrastFindings(page: ResolvedPage): PageCheckResult[] {
   const found: PageCheckResult[] = [];
   const start: Painted = { chosen: false, obscured: false, unknown: false };
-  const stack: { node: unknown; around: Painted }[] = [...page.document.nodes]
+  const stack: { node: unknown; around: Painted }[] = [...page.drawn]
     .reverse()
     .map(node => ({ node, around: start }));
   const seen = new Set<unknown>();
