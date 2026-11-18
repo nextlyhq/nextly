@@ -45,9 +45,9 @@ const WITH_EXTRA: Field[] = [...FIELDS, { name: "extra", type: "text" }];
  * The person's change that keeps the push rather than the save's file: a column's type changed,
  * whose stored values the push judges before it alters the column.
  */
-const VIEWS_AS_TEXT: Field[] = [
-  { name: "heading", type: "text" },
-  { name: "views", type: "text" },
+const HEADING_AS_NUMBER: Field[] = [
+  { name: "heading", type: "number" },
+  { name: "views", type: "number" },
 ];
 
 /** What the preview tells the Builder's review. */
@@ -268,7 +268,9 @@ for (const kind of KINDS) {
   );
 }
 
-for (const kind of KINDS) {
+// A Single's and a field group's save of a column type change is the push's; a collection's runs
+// its own files, adoption and conversion included, as the cases above show.
+for (const kind of KINDS.filter(k => k.name !== "a collection")) {
   describeEachDialect(
     `the first Builder save of ${kind.name}'s table an earlier version made with a column default, by a change the push applies`,
     dialect => {
@@ -280,8 +282,9 @@ for (const kind of KINDS) {
         await kind.create();
         await asCreatedBefore(t, dialect, kind.table);
         // An earlier create wrote a column DEFAULT for a field stating a default; today's writes
-        // none, and the field here states none, so the default is a difference to convert.
-        await withStrayDefault(t, dialect, kind.table, "heading", "untitled");
+        // none, and the field here states none, so the default is a difference to convert. On a
+        // number field's column, which takes a DEFAULT on every dialect.
+        await withStrayDefault(t, dialect, kind.table, "views", "0");
         await withNoHistory(t, dialect);
       });
 
@@ -295,19 +298,21 @@ for (const kind of KINDS) {
           (await tableOf(t, dialect, kind.table)).columns.find(
             c => c.name === name
           );
-        const viewsBefore = await columnOf("views");
-        expect((await columnOf("heading"))?.default).not.toBeNull();
+        const headingBefore = await columnOf("heading");
+        expect((await columnOf("views"))?.default).not.toBeNull();
 
-        const shown = await bodyOf<Preview>(await kind.preview(VIEWS_AS_TEXT));
+        const shown = await bodyOf<Preview>(
+          await kind.preview(HEADING_AS_NUMBER)
+        );
         const keys = (shown.conversions ?? []).map(c => c.column);
         expect(
-          keys.some(key => key.includes("heading")),
+          keys.some(key => key.includes("views")),
           JSON.stringify(shown)
         ).toBe(true);
 
         // A save the push applies records the files it wrote applied once the table stands as the
         // newest one says: a default the push left would refuse it as drift, here.
-        await kind.apply(VIEWS_AS_TEXT, {
+        await kind.apply(HEADING_AS_NUMBER, {
           schemaVersion: shown.schemaVersion,
           acknowledgedConversions: keys,
         });
@@ -319,9 +324,11 @@ for (const kind of KINDS) {
         );
         expect(recorded.length).toBeGreaterThan(0);
         expect(recorded.map(r => Number(r.ran))).toEqual(recorded.map(() => 0));
-        expect((await columnOf("views"))?.type).not.toBe(viewsBefore?.type);
-        expect((await columnOf("heading"))?.default ?? null).toBeNull();
-        const next = await bodyOf<Preview>(await kind.preview(VIEWS_AS_TEXT));
+        expect((await columnOf("heading"))?.type).not.toBe(headingBefore?.type);
+        expect((await columnOf("views"))?.default ?? null).toBeNull();
+        const next = await bodyOf<Preview>(
+          await kind.preview(HEADING_AS_NUMBER)
+        );
         expect(next.conversions).toEqual([]);
         const migrated = await migrateCore({
           extensionSchema: undefined,
