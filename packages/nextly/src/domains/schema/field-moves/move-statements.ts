@@ -68,10 +68,6 @@ interface JsonDialect {
   holds(column: string, keys: readonly string[]): string;
   /** Whether `keys` is there at all, null included. */
   hasKey(column: string, keys: readonly string[]): string;
-  /** The JSON type of the value at `keys`, as the dialect names it (a string is `string` or `text`). */
-  typeAt(column: string, keys: readonly string[]): string;
-  /** The value at `keys` as text: a string unquoted, any other value as the dialect writes it. */
-  textAt(column: string, keys: readonly string[]): string;
   /** The column's JSON with `value` set at `keys`, the column taken as an empty object when NULL. */
   set(column: string, keys: readonly string[], value: string): string;
   remove(column: string, keys: readonly string[]): string;
@@ -107,8 +103,6 @@ const POSTGRES: JsonDialect = {
   holds: (c, k) =>
     `jsonb_typeof(${c} #> ${pgPath(k)}) IS NOT NULL AND jsonb_typeof(${c} #> ${pgPath(k)}) <> 'null'`,
   hasKey: (c, k) => `(${c} #> ${pgPath(k)}) IS NOT NULL`,
-  typeAt: (c, k) => `jsonb_typeof(${c} #> ${pgPath(k)})`,
-  textAt: (c, k) => `${c} #>> ${pgPath(k)}`,
   set: (c, k, v) =>
     `jsonb_set(COALESCE(${c}, '{}'::jsonb), ${pgPath(k)}, ${v}, true)`,
   remove: (c, k) => `${c} #- ${pgPath(k)}`,
@@ -144,8 +138,6 @@ const MYSQL: JsonDialect = {
   holds: (c, k) =>
     `JSON_TYPE(JSON_EXTRACT(${c}, ${dollarPath(k)})) IS NOT NULL AND JSON_TYPE(JSON_EXTRACT(${c}, ${dollarPath(k)})) <> 'NULL'`,
   hasKey: (c, k) => `JSON_CONTAINS_PATH(${c}, 'one', ${dollarPath(k)})`,
-  typeAt: (c, k) => `JSON_TYPE(JSON_EXTRACT(${c}, ${dollarPath(k)}))`,
-  textAt: (c, k) => `JSON_UNQUOTE(JSON_EXTRACT(${c}, ${dollarPath(k)}))`,
   set: (c, k, v) =>
     `JSON_SET(COALESCE(${c}, JSON_OBJECT()), ${dollarPath(k)}, ${v})`,
   remove: (c, k) => `JSON_REMOVE(${c}, ${dollarPath(k)})`,
@@ -202,8 +194,6 @@ const SQLITE: JsonDialect = {
   holds: (c, k) =>
     `json_type(${c}, ${dollarPath(k)}) IS NOT NULL AND json_type(${c}, ${dollarPath(k)}) <> 'null'`,
   hasKey: (c, k) => `json_type(${c}, ${dollarPath(k)}) IS NOT NULL`,
-  typeAt: (c, k) => `json_type(${c}, ${dollarPath(k)})`,
-  textAt: (c, k) => `json_extract(${c}, ${dollarPath(k)})`,
   set: (c, k, v) => `json_set(COALESCE(${c}, '{}'), ${dollarPath(k)}, ${v})`,
   remove: (c, k) => `json_remove(${c}, ${dollarPath(k)})`,
   emptyObject: "json('{}')",
@@ -256,6 +246,28 @@ export function holdsValueAt(
 }
 
 /**
+ * Each dialect's reading of the value at `keys`: the name of its JSON type (a string's is `string`
+ * or `text`), and its text, a string unquoted.
+ */
+const HELD_VALUE: Record<
+  SupportedDialect,
+  (column: string, keys: readonly string[]) => { type: string; text: string }
+> = {
+  postgresql: (c, k) => ({
+    type: `jsonb_typeof(${c} #> ${pgPath(k)})`,
+    text: `${c} #>> ${pgPath(k)}`,
+  }),
+  mysql: (c, k) => ({
+    type: `JSON_TYPE(JSON_EXTRACT(${c}, ${dollarPath(k)}))`,
+    text: `JSON_UNQUOTE(JSON_EXTRACT(${c}, ${dollarPath(k)}))`,
+  }),
+  sqlite: (c, k) => ({
+    type: `json_type(${c}, ${dollarPath(k)})`,
+    text: `json_extract(${c}, ${dollarPath(k)})`,
+  }),
+};
+
+/**
  * The type and the text of the value each entry's group holds at `keys` of `column`, as select
  * expressions: what a check reads before a value is copied out of the group.
  */
@@ -264,14 +276,12 @@ export function heldValueAt(
   keys: readonly string[],
   dialect: SupportedDialect
 ): { type: string; text: string } {
-  const json = DIALECTS[dialect];
-  const quoted = quoteIdent(column, dialect);
-  return { type: json.typeAt(quoted, keys), text: json.textAt(quoted, keys) };
+  return HELD_VALUE[dialect](quoteIdent(column, dialect), keys);
 }
 
 /** An ISO date, alone or with a time and the offset it was written at. */
 const ISO_DATE =
-  /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d{1,3})?)?(?:Z|([+-])(\d{2}):(\d{2})))?$/;
+  /^(?<year>\d{4})-(?<month>\d{2})-(?<day>\d{2})(?:T(?<hour>\d{2}):(?<minute>\d{2})(?::(?<second>\d{2})(?:\.\d{1,3})?)?(?:Z|(?<sign>[+-])(?<offsetHour>\d{2}):(?<offsetMinute>\d{2})))?$/;
 
 /** The years a date column holds on each dialect: MySQL's DATETIME starts at the year 1000. */
 const FIRST_YEAR: Record<SupportedDialect, number> = {
@@ -292,35 +302,40 @@ export function movesAsTheSameDate(
   value: string,
   dialect: SupportedDialect
 ): boolean {
-  const parts = ISO_DATE.exec(value);
-  if (parts === null) return false;
-  const [year, month, day, hour, minute, second] = parts
-    .slice(1, 7)
-    .map(part => (part === undefined ? 0 : Number(part)));
-  const [, , , , , , , sign, offsetHour, offsetMinute] = parts;
-  // The day exists: JavaScript would roll the 30th of February into March.
-  const calendar = new Date(Date.UTC(2000, month - 1, day));
-  calendar.setUTCFullYear(year);
-  const realDay =
-    calendar.getUTCFullYear() === year &&
-    calendar.getUTCMonth() === month - 1 &&
-    calendar.getUTCDate() === day;
-  const realTime = hour < 24 && minute < 60 && second < 60;
-  // The offsets MySQL's CONVERT_TZ reads, which hold every zone in use.
-  const offset =
-    sign === undefined
-      ? 0
-      : (sign === "-" ? -1 : 1) *
-        (Number(offsetHour) * 60 + Number(offsetMinute));
-  const realOffset =
-    Number(offsetMinute ?? 0) < 60 &&
-    offset >= -(13 * 60 + 59) &&
-    offset <= 14 * 60;
-  if (!realDay || !realTime || !realOffset) return false;
+  const written = ISO_DATE.exec(value)?.groups;
+  if (written === undefined) return false;
+  const at = (name: string) => Number(written[name] ?? 0);
+  if (!dayExists(at("year"), at("month"), at("day"))) return false;
+  if (at("hour") > 23 || at("minute") > 59 || at("second") > 59) return false;
+  if (!offsetReadable(written.sign, at("offsetHour"), at("offsetMinute"))) {
+    return false;
+  }
   const instant = Date.parse(value);
   if (Number.isNaN(instant)) return false;
-  const utcYear = new Date(instant).getUTCFullYear();
-  return utcYear >= FIRST_YEAR[dialect] && utcYear <= 9999;
+  const year = new Date(instant).getUTCFullYear();
+  return year >= FIRST_YEAR[dialect] && year <= 9999;
+}
+
+/** Whether a day is on the calendar: JavaScript would roll the 30th of February into March. */
+function dayExists(year: number, month: number, day: number): boolean {
+  const calendar = new Date(Date.UTC(2000, month - 1, day));
+  calendar.setUTCFullYear(year);
+  return (
+    calendar.getUTCFullYear() === year &&
+    calendar.getUTCMonth() === month - 1 &&
+    calendar.getUTCDate() === day
+  );
+}
+
+/** Whether MySQL's CONVERT_TZ reads an offset; the range it takes holds every zone in use. */
+function offsetReadable(
+  sign: string | undefined,
+  hours: number,
+  minutes: number
+): boolean {
+  if (sign === undefined) return true;
+  const offset = (sign === "-" ? -1 : 1) * (hours * 60 + minutes);
+  return minutes < 60 && offset >= -(13 * 60 + 59) && offset <= 14 * 60;
 }
 
 /**

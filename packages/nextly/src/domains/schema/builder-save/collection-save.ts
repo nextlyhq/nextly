@@ -1481,6 +1481,24 @@ async function needsAdopting(
   return deps.adapter.tableExists(table);
 }
 
+type MovesFacts = Pick<
+  GenerateArgs,
+  "valueMoves" | "refilledColumns" | "valuesMovedIn"
+>;
+
+/** The facts of a save's moves the generator takes, each left out where the moves have none. */
+function movesFacts(args: MovesFacts): MovesFacts {
+  const facts: MovesFacts = {};
+  if ((args.valueMoves?.length ?? 0) > 0) facts.valueMoves = args.valueMoves;
+  if ((args.refilledColumns?.length ?? 0) > 0) {
+    facts.refilledColumns = args.refilledColumns;
+  }
+  if ((args.valuesMovedIn?.length ?? 0) > 0) {
+    facts.valuesMovedIn = args.valuesMovedIn;
+  }
+  return facts;
+}
+
 /**
  * Generate the collection's migration from `manifest` into the folder, and
  * name every file the run wrote (its main file and any companion beside it),
@@ -1565,15 +1583,7 @@ async function generateFor(
     ...(args.appended === undefined
       ? {}
       : { appendedStatements: args.appended }),
-    ...(args.valueMoves === undefined || args.valueMoves.length === 0
-      ? {}
-      : { valueMoves: args.valueMoves }),
-    ...(args.refilledColumns === undefined || args.refilledColumns.length === 0
-      ? {}
-      : { refilledColumns: args.refilledColumns }),
-    ...(args.valuesMovedIn === undefined || args.valuesMovedIn.length === 0
-      ? {}
-      : { valuesMovedIn: args.valuesMovedIn }),
+    ...movesFacts(args),
     ...(args.newTableKeys === undefined
       ? {}
       : { foreignKeysOfNewTables: args.newTableKeys }),
@@ -1784,52 +1794,73 @@ async function refuseUnreadableDates(
   planned: EntityMoves,
   table: string
 ): Promise<void> {
-  const dialect = deps.adapter.getCapabilities().dialect;
   for (const refill of planned.refilledColumns) {
     if (refill.kind !== "timestamp") continue;
-    const { column, keys } = refill.source;
-    const held = holdsValueAt(column, keys, dialect);
-    const value = heldValueAt(column, keys, dialect);
-    const unreadable: string[] = [];
-    // The last id read, as the driver gave it, so the next page starts past it whatever its type.
-    let after: unknown;
-    for (;;) {
-      const rows = await querySqlRows<{
-        id: unknown;
-        type: unknown;
-        text: unknown;
-      }>(
-        deps.adapter.getDrizzle(),
-        dialect,
-        sql`SELECT ${sql.identifier("id")} AS id, ${sql.raw(value.type)} AS type, ${sql.raw(value.text)} AS text FROM ${sql.identifier(table)} WHERE ${sql.raw(held)}${after === undefined ? sql`` : sql` AND ${sql.identifier("id")} > ${after}`} ORDER BY ${sql.identifier("id")} LIMIT ${DATE_CHECK_PAGE}`
-      );
-      for (const row of rows) {
-        const isString = ["string", "text"].includes(
-          String(row.type).toLowerCase()
-        );
-        if (!isString || !movesAsTheSameDate(String(row.text), dialect)) {
-          unreadable.push(String(row.id));
-        }
-      }
-      if (rows.length < DATE_CHECK_PAGE) break;
-      after = rows[rows.length - 1].id;
-    }
+    const unreadable = await unreadableDates(deps, table, refill.source);
     if (unreadable.length === 0) continue;
     const count = unreadable.length;
     const named = unreadable.slice(0, NAMED_ENTRIES).join(", ");
     const more =
       count > NAMED_ENTRIES ? ` and ${count - NAMED_ENTRIES} more` : "";
+    const each = count === 1 ? "it" : "each";
     throw NextlyError.validation({
       errors: [
         {
           path: refill.field,
           code: "FIELD_MOVE_REFUSED",
-          message: `${count} ${count === 1 ? "entry holds" : "entries hold"} a date for ${refill.field} in a form its own column would not read as the same date (${named}${more}). Write ${count === 1 ? "it" : "each"} as an ISO date, such as 2026-07-17 or 2026-07-17T10:00:00Z, then move the field.`,
+          message: `${count} ${count === 1 ? "entry holds" : "entries hold"} a date for ${refill.field} in a form its own column would not read as the same date (${named}${more}). Write ${each} as an ISO date, such as 2026-07-17 or 2026-07-17T10:00:00Z, then move the field.`,
         },
       ],
       logContext: { table, column: refill.column, unreadable: count },
     });
   }
+}
+
+/**
+ * The ids of the entries whose group holds a value at `source` that is not a date the copy reads
+ * as the same instant, read a page at a time in id order.
+ */
+async function unreadableDates(
+  deps: CollectionSaveDeps,
+  table: string,
+  source: { column: string; keys: readonly string[] }
+): Promise<string[]> {
+  const dialect = deps.adapter.getCapabilities().dialect;
+  const held = holdsValueAt(source.column, source.keys, dialect);
+  const value = heldValueAt(source.column, source.keys, dialect);
+  const id = sql.identifier("id");
+  const unreadable: string[] = [];
+  // The last id read, as the driver gave it, so the next page starts past it whatever its type.
+  let after: unknown;
+  for (;;) {
+    const past = after === undefined ? sql`` : sql` AND ${id} > ${after}`;
+    const rows = await querySqlRows<{
+      id: unknown;
+      type: unknown;
+      text: unknown;
+    }>(
+      deps.adapter.getDrizzle(),
+      dialect,
+      sql`SELECT ${id} AS id, ${sql.raw(value.type)} AS type, ${sql.raw(value.text)} AS text FROM ${sql.identifier(table)} WHERE ${sql.raw(held)}${past} ORDER BY ${id} LIMIT ${DATE_CHECK_PAGE}`
+    );
+    for (const row of rows) {
+      if (!readsAsTheSameDate(row, dialect)) unreadable.push(String(row.id));
+    }
+    if (rows.length < DATE_CHECK_PAGE) return unreadable;
+    after = rows[rows.length - 1].id;
+  }
+}
+
+/** Whether a value read out of a group is a string the copy reads as the same date. */
+function readsAsTheSameDate(
+  row: { type: unknown; text: unknown },
+  dialect: SupportedDialect
+): boolean {
+  const type = String(row.type).toLowerCase();
+  return (
+    (type === "string" || type === "text") &&
+    movesAsTheSameDate(String(row.text), dialect)
+  );
 }
 
 /**
