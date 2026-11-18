@@ -80,10 +80,9 @@ export {
   type PackageManager,
 } from "./add";
 
-// Upgrade command (Plan B — bookkeeping consolidation)
+// Upgrade command: what is left of it, the core reconcile.
 export {
   registerUpgradeCommand,
-  runUpgrade,
   type UpgradeCommandOptions,
   type UpgradeAdapter,
 } from "./upgrade";

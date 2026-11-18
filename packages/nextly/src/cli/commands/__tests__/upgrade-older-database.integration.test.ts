@@ -60,7 +60,6 @@ import { createLogger } from "../../utils/logger";
 import { runMigrate } from "../migrate";
 import { runMigrateCreate } from "../migrate-create";
 import { previewLegacyConsolidation } from "../legacy-bookkeeping";
-import { runUpgrade, type UpgradeAdapter } from "../upgrade";
 
 type LoadedConfig = Parameters<typeof MergeSetupResultIntoConfig>[0];
 type Row = Record<string, unknown>;
@@ -259,26 +258,6 @@ describe.each(getConfiguredTestDialects())(
       return said;
     }
 
-    /** `nextly upgrade --confirm-backed-up`; what it said. */
-    async function upgrade(at: string = url): Promise<string[]> {
-      const said: string[] = [];
-      await on(
-        adapter =>
-          runUpgrade(
-            { confirmBackedUp: true },
-            {
-              adapter: adapter as unknown as UpgradeAdapter,
-              logger: {
-                info: line => said.push(line),
-                warn: line => said.push(line),
-              },
-            }
-          ),
-        at
-      );
-      return said;
-    }
-
     /** A start on this database, as the site's own; destroyed after. */
     async function start<T>(fn: (t: TestNextly) => Promise<T>): Promise<T> {
       const t = await createTestNextly({
@@ -453,7 +432,6 @@ describe.each(getConfiguredTestDialects())(
         // A second run has nothing to move or apply; the columns are added.
         await migrate();
         expect((await fileApplies()).get(files[0] ?? "")).toHaveLength(1);
-        await upgrade();
         const columns = (
           await on(adapter =>
             adapter.executeQuery<Row>(
@@ -491,8 +469,8 @@ describe.each(getConfiguredTestDialects())(
         expect(await count(POSTS_TABLE)).toBe(before.posts);
         expect(await count("nextly_versions")).toBe(before.versions + 1);
 
-        // And a second upgrade has nothing to do.
-        expect((await upgrade()).join("\n")).toContain("Nothing to do");
+        // And another run has nothing to migrate.
+        expect((await migrate()).join("\n")).toContain("Nothing to migrate");
       },
       240_000
     );
