@@ -173,7 +173,10 @@ function AddressText({
       >
         <span className="min-w-0 truncate">
           {view.lead}
-          <span className="text-foreground">{view.shown}</span>
+          {/* Until there is a title, a mark where its part will go. */}
+          <span className="text-foreground">
+            {view.shown === "" ? "…" : view.shown}
+          </span>
           {view.tail}
         </span>
         <Button

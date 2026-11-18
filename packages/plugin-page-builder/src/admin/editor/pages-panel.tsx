@@ -19,6 +19,7 @@ import {
   navigateTo,
   readPluginRoute,
   useCurrentUserId,
+  useDocumentField,
   useDocumentIdentity,
   useDocumentStatus,
 } from "@nextlyhq/plugin-sdk/admin";
@@ -211,8 +212,7 @@ function PagesPanel({
   useRevealSets(reveal, folds, setsRef);
   const newPage = useNewPageDialog({
     unsavedWork,
-    title:
-      list.items.find(item => isCurrent(item, current))?.title ?? "this page",
+    title: useOnScreenTitle(list, current),
   });
 
   return (
@@ -433,6 +433,24 @@ function useActions({
       }),
   };
 }
+
+/**
+ * The page on screen's title, as its form holds it now: what the question
+ * about its unsaved work names it by. Its row's title where the form has no
+ * text title, and a plain "this page" where neither is known.
+ */
+function useOnScreenTitle(
+  list: PagesList,
+  current: PageReference | null
+): string {
+  const typed = useDocumentField(PAGE_TITLE_FIELD)?.value;
+  if (typeof typed === "string" && typed.trim() !== "") return typed.trim();
+  const listed = list.items.find(item => isCurrent(item, current))?.title;
+  return listed === undefined || listed === "" ? "this page" : listed;
+}
+
+/** The field a page's title is held in on its form. */
+const PAGE_TITLE_FIELD = "title";
 
 /** Whether this row is the page being edited. */
 function isCurrent(

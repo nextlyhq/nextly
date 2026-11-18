@@ -105,14 +105,22 @@ async function openPagesPanel(page: Page): Promise<void> {
 /** An edit not yet saved: the second heading deleted on the canvas. */
 async function unsavedEdit(page: Page): Promise<void> {
   const second = await block(page, SECOND);
-  await clickBlock(page, SECOND);
-  await page.keyboard.press("Delete");
-  await expect(second).toHaveCount(0);
+  await expect(second).toBeVisible({ timeout: 30_000 });
+  // Again until it takes: the first click on a canvas still settling can
+  // land before the block is selectable.
+  await expect(async () => {
+    await clickBlock(page, SECOND);
+    await page.keyboard.press("Delete");
+    await expect(second).toHaveCount(0, { timeout: 2_000 });
+  }).toPass({ timeout: 20_000 });
+  // Held as an edit, so the page on screen has unsaved work.
+  await expect(page.getByRole("button", { name: "Undo" })).toBeEnabled();
 }
 
 test.describe("the New page dialog", () => {
   test("from the Pages list: a draft, opened in the builder with Add open, that the live site doesn't show", async ({
     page,
+    playwright,
   }) => {
     await page.setViewportSize({ width: 1280, height: 720 });
     const title = `Fresh ${Date.now()}`;
@@ -127,7 +135,9 @@ test.describe("the New page dialog", () => {
     await expect(
       form.getByText("Made from the title. Change it any time.")
     ).toBeVisible();
-    await expect(form.getByText("Header & footer")).toBeVisible();
+    await expect(
+      form.getByText("Header & footer", { exact: true })
+    ).toBeVisible();
     await expect(form.getByText("Saved as a draft.")).toBeVisible();
     await expect(form.getByText("Start from")).toHaveCount(0);
 
@@ -152,16 +162,14 @@ test.describe("the New page dialog", () => {
       noHeaderFooter: false,
     });
     expect(stored?.layout ?? null).toBeNull();
-    const visitor = await page.request.get(`/${slug}`, {
-      headers: { cookie: "" },
-      maxRedirects: 0,
+    // A visitor: a request context of its own, with no session.
+    const site = await playwright.request.newContext({
+      baseURL: new URL(page.url()).origin,
     });
-    expect(
-      answeredNotFound({
-        status: visitor.status(),
-        html: await visitor.text(),
-      })
-    ).toBe(true);
+    const visitor = await site.get(`/${slug}`, { maxRedirects: 0 });
+    const html = await visitor.text();
+    expect(answeredNotFound({ status: visitor.status(), html })).toBe(true);
+    await site.dispose();
   });
 
   test("typing a title and clicking away makes no page", async ({ page }) => {
@@ -184,6 +192,10 @@ test.describe("the New page dialog", () => {
     await page.keyboard.press("Enter");
     const form = dialog(page);
     await expect(form.getByRole("textbox", { name: "Title" })).toBeFocused();
+    // The Header & footer menu takes focus once its choices have arrived.
+    await expect(
+      form.getByRole("combobox", { name: "Header & footer" })
+    ).toBeEnabled();
     await page.keyboard.type(title);
     await page.keyboard.press("Tab");
     await expect(
@@ -271,7 +283,14 @@ test.describe("the New page dialog", () => {
     }) => {
       await page.setViewportSize({ width: 1280, height: 720 });
       await openFromList(page, theme);
-      const frame = page.locator("[data-slot=dialog-content]");
+      // The dialog's own frame, not any other dialog on the screen.
+      const frame = page.locator(
+        "[data-slot=dialog-content]:has([data-slot=new-page-form])"
+      );
+      await expect(frame).toBeVisible();
+      // Measured once every row is drawn, with a title typed.
+      await expect(frame.getByText("Saved as a draft.")).toBeVisible();
+      await frame.getByRole("textbox", { name: "Title" }).fill("Pricing");
       const fits = await frame.evaluate(
         element =>
           element.scrollHeight <= element.clientHeight &&
@@ -281,13 +300,27 @@ test.describe("the New page dialog", () => {
       expect(fits).toBe(true);
       await page.screenshot({
         path: test.info().outputPath(`new-page-1280-${theme}.png`),
+        animations: "disabled",
       });
 
       await page.setViewportSize({ width: 390, height: 844 });
-      const box = await frame.boundingBox();
-      expect(box).toMatchObject({ x: 0, y: 0, width: 390, height: 844 });
+      await expect
+        .poll(async () => {
+          const box = await frame.boundingBox();
+          return box === null
+            ? null
+            : [box.x, box.y, box.width, box.height].map(Math.round);
+        })
+        .toEqual([0, 0, 390, 844]);
+      // No row wider than the sheet.
+      expect(
+        await frame.evaluate(
+          element => element.scrollWidth <= element.clientWidth
+        )
+      ).toBe(true);
       await page.screenshot({
         path: test.info().outputPath(`new-page-390-${theme}.png`),
+        animations: "disabled",
       });
     });
   }

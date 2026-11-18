@@ -110,8 +110,12 @@ const EntryDesignSection: typeof EntryDesignSectionPart = lazyPart(() =>
 const ShownOnSection: typeof ShownOnSectionPart = lazyPart(() =>
   import("./shown-on/ShownOnSection").then(m => m.ShownOnSection)
 );
+// With the editor's stylesheet, which sizes the Header & footer menu's
+// pictures: the dialog opens over a list, where the editor's isn't loaded.
 const NewPageCreateDialog: typeof NewPageCreateDialogPart = lazyPart(() =>
-  import("./new-page/new-page-dialog").then(m => m.NewPageCreateDialog)
+  withEditorStylesheet(import("./new-page/new-page-dialog")).then(
+    m => m.NewPageCreateDialog
+  )
 );
 const PageBuilderOverview: typeof PageBuilderOverviewPart = lazyPart(() =>
   import("./overview/PageBuilderOverview").then(m => m.PageBuilderOverview)

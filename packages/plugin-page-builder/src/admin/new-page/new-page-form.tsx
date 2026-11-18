@@ -149,10 +149,17 @@ const SHEET_BELOW_600 = `@media (max-width: 599.98px) {
   }
   [data-slot="new-page-form"] {
     flex: 1 1 auto;
-    align-content: start;
+    display: flex;
+    flex-direction: column;
   }
   [data-slot="new-page-footer"] {
     margin-top: auto;
+  }
+  [data-slot="new-page-footer"] > p {
+    flex-basis: 100%;
+  }
+  [data-slot="new-page-footer"] > button {
+    flex: 1 1 0;
   }
 }`;
 

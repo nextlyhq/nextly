@@ -42,6 +42,10 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   },
   useDocumentIdentity: () => identity,
   useDocumentStatus: () => liveStatus,
+  useDocumentField: (path: string) =>
+    path === "title" && formTitle !== undefined
+      ? { value: formTitle, writable: true, set: () => true }
+      : null,
   useCurrentUserId: () => userId,
   devicePreferenceStore: (key: string) => ({
     read: () => kept.get(key) ?? null,
@@ -50,6 +54,9 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
     },
   }),
 }));
+
+/** The page on screen's title as its form holds it, or undefined for none. */
+let formTitle: string | undefined;
 
 /** The author signed in, and what the preference store keeps, by key. */
 let userId: string | null = "ada";
@@ -219,6 +226,7 @@ beforeEach(() => {
   navigateTo.mockReset();
   for (const write of Object.values(client)) write.mockReset();
   identity = { kind: "collection", slug: "pages", documentId: "current" };
+  formTitle = undefined;
   editingPage = true;
   unsavedWork = false;
   liveStatus = null;
@@ -494,11 +502,21 @@ describe("a row's actions", () => {
     expect(newPage.opened).toEqual(["pages"]);
   });
 
-  it("tells the dialog about the page on screen's unsaved work, by its title", async () => {
+  it("tells the dialog about the page on screen's unsaved work, by the title its form holds now", async () => {
     identity = { kind: "collection", slug: "pages", documentId: "a" };
     unsavedWork = true;
+    // Typed, not saved: the list still has the old title, or none at all
+    // where the page is past the list's first rows.
+    formTitle = "Home, renamed";
+    await mount([item("b", "About")]);
+    expect(newPage.onScreen).toEqual({
+      unsavedWork: true,
+      title: "Home, renamed",
+    });
+    cleanup();
+    formTitle = undefined;
     await mount([item("a", "Home"), item("b", "About")]);
-    expect(newPage.onScreen).toEqual({ unsavedWork: true, title: "Home" });
+    expect(newPage.onScreen?.title).toBe("Home");
   });
 
   it("keeps New page when a search matches nothing", async () => {
