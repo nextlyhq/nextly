@@ -383,6 +383,46 @@ describe("resolveRepairEntities: the applied storage of a removed entity", () =>
   });
 });
 
+describe("resolveRepairEntities: the applied storage of a renamed entity", () => {
+  const wider = {
+    column: "title",
+    kind: "shortText" as const,
+    length: 200,
+    owner: { kind: "app" as const },
+  };
+
+  it("does not take the override declared for the table it moves to, where only a registry row says what was applied", () => {
+    // The override is declared for `articles`, the table the next migration creates. What the
+    // old table's column was applied with is not what that declares.
+    const entity = only(
+      resolveRepairEntities({
+        configured: [configured({ table: "articles" })],
+        registry: [registry({ tableName: "dc_posts" })],
+        snapshots: [],
+        overrides: { byTable: new Map([["articles", [wider]]]) },
+      })
+    );
+    expect(entity?.table).toBe("dc_posts");
+    expect(entity?.renamedTo).toBe("articles");
+    expect(entity?.applied?.columnOverrides).toBeUndefined();
+    expect(entity?.applied?.storageUnknown).toBe(true);
+    expect(entity?.configured?.columnOverrides).toEqual([wider]);
+  });
+
+  it("keeps the configuration's override as applied where the table is the same", () => {
+    const entity = only(
+      resolveRepairEntities({
+        configured: [configured()],
+        registry: [registry()],
+        snapshots: [],
+        overrides: { byTable: new Map([["dc_posts", [wider]]]) },
+      })
+    );
+    expect(entity?.applied?.columnOverrides).toEqual([wider]);
+    expect(entity?.applied?.storageUnknown).toBeUndefined();
+  });
+});
+
 describe("resolveRepairEntities: which registry rows say what was applied", () => {
   // With no snapshot, only a row a sync or a migration finished stands for the database.
   it.each(["applied", "synced"])(

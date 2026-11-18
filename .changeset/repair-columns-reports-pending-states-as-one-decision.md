@@ -36,3 +36,4 @@
 - An entity removed from the configuration or a plugin, or left out of a checked-out `ui-schema.json`, has each of its columns reported as pending removal. With no `ui-schema.json` in the project, a Schema Builder entity is read from its registry row as before. Where a removed entity has no migration snapshot, a column's type is not judged: its column overrides went with its declaration, so the column may be as applied.
 - Without a migration snapshot, a registry row says what was applied only where a sync or a migration finished it (`applied` or `synced`). A `pending`, `generated` or `failed` row no longer does.
 - A registry row that names no table, or that is marked as diverged, stops the run (exit 1), naming the row, as an unreadable applied migration snapshot already does.
+- The next step a pending record prints names the migration (`nextly migrate:create --name="<migration-name>"`): `migrate:create` refuses to write one with no name.

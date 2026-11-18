@@ -647,6 +647,7 @@ describe.each(getConfiguredTestDialects())(
         USER_EXT,
         MX_OLD,
         MX_NEW,
+        MX_RECASED,
       ]) {
         await run(`DROP TABLE IF EXISTS ${q(table)}`);
       }
@@ -1213,6 +1214,42 @@ describe.each(getConfiguredTestDialects())(
         ...removals(true),
       ]);
     });
+
+    // Only PostgreSQL holds two tables whose names differ by case alone. Both directions: with the
+    // two tables looked up under one name, whichever is read last stands for both, so one
+    // direction alone could pass by the order the database returns them.
+    it.skipIf(dialect !== "postgresql").each([
+      { from: MX_OLD, to: MX_RECASED },
+      { from: MX_RECASED, to: MX_OLD },
+    ])(
+      "judges a table renamed by case at the applied table where the destination exists ($from to $to)",
+      async ({ from, to }) => {
+        // The applied table holds `score` as text where its field is a number; the destination,
+        // which differs by case alone, holds it as the field describes it.
+        await createBuilderTable(from, MX_RETYPED);
+        await createBuilderTable(to, MX_FIELDS);
+        const findings = await find(
+          resolveRepairEntities({
+            configured: [mxConfigured(to)],
+            registry: [mxRow({ tableName: to })],
+            snapshots: [mxSnapshot({ table: from })],
+            hasManifest: true,
+          })
+        );
+        expect(findings.map(matrixRow)).toEqual([
+          ["differs", col(from, "score"), "", "", ""],
+          ...MX_COLUMNS.map(c => [
+            "pending-migration",
+            col(to, c),
+            "change",
+            from,
+            "live",
+          ]),
+        ]);
+        // The table a conversion would name is the applied one, never the destination.
+        expect(differs(findings)[0]?.judged?.liveTable).toBe(from);
+      }
+    );
 
     it("still judges a column's nullability where its applied storage is unknown", async () => {
       // `score` is held as nullable text; the field as applied is a required number. Its type may

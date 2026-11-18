@@ -481,7 +481,8 @@ function describePending(
       : from === to
         ? `moves from ${pending.renamedFrom}`
         : `moves from ${pending.renamedFrom}, ${change}`;
-  return ` ${what}. Run \`nextly migrate:create\`, then \`nextly migrate\`.`;
+  // `migrate:create` refuses to write a migration with no name, so the step names one.
+  return ` ${what}. Run \`nextly migrate:create --name="<migration-name>"\`, then \`nextly migrate\`.`;
 }
 
 /** What the record's own finding says, without the run's facts. */

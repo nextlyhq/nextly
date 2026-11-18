@@ -264,8 +264,34 @@ interface LiveTable {
   columns: ReadonlyMap<string, ColumnSpec>;
 }
 
-/** The live tables, by lower-cased name. */
-type LiveTables = ReadonlyMap<string, LiveTable>;
+/**
+ * A table's identity among the live tables, as the dialect tells names apart. PostgreSQL keeps the
+ * case of a quoted name, so two names that differ by case alone are two tables and are kept
+ * apart. MySQL and SQLite are looked up without regard to case.
+ */
+function tableKey(dialect: SupportedDialect, name: string): string {
+  return dialect === "postgresql" ? name : name.toLowerCase();
+}
+
+/** The live tables, looked up by name as the dialect tells names apart. */
+interface LiveTables {
+  get(table: string): LiveTable | undefined;
+  has(table: string): boolean;
+}
+
+/** The lookup over the live tables one or more reads returned. */
+function liveTablesOf(
+  dialect: SupportedDialect,
+  tables: readonly LiveTable[]
+): LiveTables {
+  const byKey = new Map(
+    tables.map(table => [tableKey(dialect, table.name), table])
+  );
+  return {
+    get: table => byKey.get(tableKey(dialect, table)),
+    has: table => byKey.has(tableKey(dialect, table)),
+  };
+}
 
 /**
  * A column within its entity: its name and whether it is in the translation table. Not its table,
@@ -290,9 +316,7 @@ function liveColumnAt(
   live: LiveTables,
   location: ColumnLocation
 ): ColumnSpec | undefined {
-  return live
-    .get(location.table.toLowerCase())
-    ?.columns.get(location.column.toLowerCase());
+  return live.get(location.table)?.columns.get(location.column.toLowerCase());
 }
 
 /**
@@ -303,7 +327,7 @@ function liveNamesOf(
   live: LiveTables,
   location: ColumnLocation
 ): { liveTable: string; liveColumn: string; keyedBy: KeyedBy } {
-  const table = live.get(location.table.toLowerCase());
+  const table = live.get(location.table);
   return {
     keyedBy: keyedByOf([...(table?.columns.values() ?? [])]),
     liveTable: table?.name ?? location.table,
@@ -346,23 +370,18 @@ async function readLiveTables(
   db: unknown,
   dialect: SupportedDialect,
   tableNames: readonly string[]
-): Promise<Map<string, LiveTable>> {
+): Promise<LiveTable[]> {
   const snapshot = await introspectLiveColumns(db, dialect, [...tableNames]);
-  return new Map(
-    snapshot.tables.map(table => [
-      table.name.toLowerCase(),
-      {
-        name: table.name,
-        // The per-document columns are Nextly's own, added by `nextly
-        // migrate` rather than by any field, so no comparison sees them.
-        columns: new Map(
-          table.columns
-            .filter(c => !isNextlyOwnedDocumentColumn(c.name))
-            .map(c => [c.name.toLowerCase(), c])
-        ),
-      },
-    ])
-  );
+  return snapshot.tables.map(table => ({
+    name: table.name,
+    // The per-document columns are Nextly's own, added by `nextly
+    // migrate` rather than by any field, so no comparison sees them.
+    columns: new Map(
+      table.columns
+        .filter(c => !isNextlyOwnedDocumentColumn(c.name))
+        .map(c => [c.name.toLowerCase(), c])
+    ),
+  }));
 }
 
 /**
@@ -427,7 +446,7 @@ export async function findColumnDifferences(args: {
   // A table's row count is the same for each of its columns, so it is read once per table.
   const countRows = rowCounter(dialect);
   const findings: ColumnFinding[] = [];
-  const lockOf = (table: string) => held.get(table.toLowerCase());
+  const lockOf = (table: string) => held.get(tableKey(dialect, table));
   const isRead = (column: NamedColumn) =>
     lockOf(column.location.table) === undefined;
   for (const each of planned) {
@@ -617,7 +636,7 @@ async function readDefinitions(
   | {
       kind: "done";
       live: LiveTables;
-      /** Each table whose tries ran out before its definition could be read, with the lock. */
+      /** Each table whose tries ran out before its definition could be read, by `tableKey`. */
       held: ReadonlyMap<string, TableLockFacts>;
     }
   | { kind: "ran-out"; lock: TableLockFacts }
@@ -628,7 +647,7 @@ async function readDefinitions(
   if (waits === undefined || dialect === "mysql") {
     return {
       kind: "done",
-      live: await readLiveTables(db, dialect, names),
+      live: liveTablesOf(dialect, await readLiveTables(db, dialect, names)),
       held: none,
     };
   }
@@ -638,23 +657,23 @@ async function readDefinitions(
     );
     return read.kind === "ran-out"
       ? read
-      : { kind: "done", live: read.value, held: none };
+      : { kind: "done", live: liveTablesOf(dialect, read.value), held: none };
   }
   // PostgreSQL: reading a table's definition opens the table, which waits behind another
   // session's change to it, so each table is read in its own tries.
-  const live = new Map<string, LiveTable>();
+  const live: LiveTable[] = [];
   const held = new Map<string, TableLockFacts>();
   for (const name of names) {
     const read = await waits.read(name, on =>
       readLiveTables(on, dialect, [name])
     );
     if (read.kind === "ran-out") {
-      held.set(name.toLowerCase(), read.lock);
+      held.set(tableKey(dialect, name), read.lock);
       continue;
     }
-    for (const [key, table] of read.value) live.set(key, table);
+    live.push(...read.value);
   }
-  return { kind: "done", live, held };
+  return { kind: "done", live: liveTablesOf(dialect, live), held };
 }
 
 /**
@@ -748,7 +767,7 @@ function notMigrated(
     kind: "not-migrated",
     location: column.location,
     ...ownedBy(entity.plugin),
-    missing: live.has(column.location.table.toLowerCase()) ? "column" : "table",
+    missing: live.has(column.location.table) ? "column" : "table",
     expected: column.expected,
   };
 }

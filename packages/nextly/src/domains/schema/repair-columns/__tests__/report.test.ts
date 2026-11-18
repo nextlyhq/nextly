@@ -472,7 +472,7 @@ describe("a fact an outcome does not have is null in the record and absent from 
     });
     expectNull(r, ["expected", "missing", ...UNCLASSED]);
     expect(formatRecord(r)).toBe(
-      'collection "posts", field "links" (dc_posts.links) [pending a migration]: int4 NULL as applied, removed as configured. Run `nextly migrate:create`, then `nextly migrate`.'
+      'collection "posts", field "links" (dc_posts.links) [pending a migration]: int4 NULL as applied, removed as configured. Run `nextly migrate:create --name="<migration-name>"`, then `nextly migrate`.'
     );
   });
 
@@ -486,7 +486,7 @@ describe("a fact an outcome does not have is null in the record and absent from 
     });
     expect(r.outcome).toBe("pending-migration");
     expect(formatRecord(r)).toBe(
-      'collection "posts", field "links" (dc_posts.links) [pending a migration]: not applied as applied, text NULL as configured. Run `nextly migrate:create`, then `nextly migrate`.'
+      'collection "posts", field "links" (dc_posts.links) [pending a migration]: not applied as applied, text NULL as configured. Run `nextly migrate:create --name="<migration-name>"`, then `nextly migrate`.'
     );
   });
 
@@ -503,7 +503,7 @@ describe("a fact an outcome does not have is null in the record and absent from 
     expect(r.table).toBe("articles");
     expect(r.pending?.renamedFrom).toBe("dc_posts");
     expect(formatRecord(r)).toBe(
-      'collection "posts", field "links" (articles.links) [pending a migration]: moves from dc_posts. Run `nextly migrate:create`, then `nextly migrate`.'
+      'collection "posts", field "links" (articles.links) [pending a migration]: moves from dc_posts. Run `nextly migrate:create --name="<migration-name>"`, then `nextly migrate`.'
     );
   });
 
@@ -517,7 +517,7 @@ describe("a fact an outcome does not have is null in the record and absent from 
       live: { type: "int4", nullable: true },
     });
     expect(formatRecord(r)).toBe(
-      'collection "posts", field "links" (articles.links) [pending a migration]: moves from dc_posts, int4 NULL as applied, text NULL as configured. Run `nextly migrate:create`, then `nextly migrate`.'
+      'collection "posts", field "links" (articles.links) [pending a migration]: moves from dc_posts, int4 NULL as applied, text NULL as configured. Run `nextly migrate:create --name="<migration-name>"`, then `nextly migrate`.'
     );
   });
 
