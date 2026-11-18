@@ -19,7 +19,9 @@
  */
 import type { ValidationIssue } from "../validation";
 
+import type { TokenKind } from "./catalog-types";
 import { parseColor } from "./contrast";
+import { tokenCustomProperty } from "./declarations";
 import {
   dtcgToTokens,
   exportNamingRefusal,
@@ -31,8 +33,6 @@ import {
   NEXTLY_EXTENSION,
   TEXT_STYLES_GROUP,
 } from "./dtcg";
-import type { TokenKind } from "./catalog-types";
-import { tokenCustomProperty } from "./declarations";
 import {
   resolveTokenPrefix,
   tokenIdentity,

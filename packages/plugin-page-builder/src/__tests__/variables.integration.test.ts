@@ -21,7 +21,9 @@ import {
   DOCUMENT_FORMAT_VERSION,
   dtcgToTokens,
   NEXTLY_EXTENSION,
+  resolverToTokens,
   tokensToDtcg,
+  tokensToResolver,
 } from "@nextlyhq/blocks-engine";
 import { getCachedNextly, type PluginDefinition } from "@nextlyhq/plugin-sdk";
 import {
@@ -1116,6 +1118,63 @@ describe.each(getConfiguredTestDialects())(
       ).map(entry => entry.id);
       expect(ids).toContain("good");
       expect(ids).not.toContain("odd");
+    });
+
+    it("stores dark shadows naming colour variables exactly as exported, through their theme file", async () => {
+      const { t } = await boot();
+      const designer = await holding(t, ...DESIGN);
+      const variables = [
+        {
+          id: "t-brand",
+          name: "color.brand",
+          kind: "color",
+          values: { light: "#336699", dark: "#99bbdd" },
+        },
+        {
+          id: "t-ink",
+          name: "color.ink",
+          kind: "color",
+          values: { light: "#111111", dark: "#eeeeee" },
+        },
+        {
+          id: "t-raised",
+          name: "shadow.raised",
+          kind: "shadow",
+          values: {
+            light:
+              "0 1px 2px var(--site-t-brand), inset 0 4px 8px 1px var(--site-t-ink)",
+            dark: "0 2px 4px var(--site-t-ink), 0 8px 16px var(--site-t-brand)",
+          },
+        },
+      ];
+      const doc = (await t.nextly.findSingle({
+        slug: SITE_STYLE_SLUG,
+        overrideAccess: true,
+      })) as Record<string, unknown> | null;
+      const raw = doc?.tokens;
+      const site = ((typeof raw === "string" ? JSON.parse(raw) : raw) ?? {
+        tokens: [],
+      }) as { tokens: unknown[] };
+      // Exported as the editor exports, then read back as an import reads.
+      const set = { tokens: variables } as Parameters<typeof tokensToDtcg>[0];
+      const file = tokensToDtcg(set).document;
+      const { resolver } = tokensToResolver(set, "site.tokens.json");
+      const read = resolverToTokens(
+        JSON.parse(JSON.stringify(resolver)),
+        new Map([["site.tokens.json", JSON.parse(JSON.stringify(file))]])
+      );
+      expect(read.issues).toEqual([]);
+      const written = await call("PATCH", SINGLE, designer, {
+        tokens: { ...site, tokens: [...site.tokens, ...read.tokens] },
+        _overwrite: true,
+      });
+      expect(written.status).toBe(200);
+      const stored = JSON.parse(await storedSection(t)) as {
+        tokens: { id?: string; values: unknown }[];
+      };
+      expect(
+        stored.tokens.find(token => token.id === "t-raised")?.values
+      ).toEqual(variables[2]?.values);
     });
 
     it("refuses a design token import's writes to a role that may read Design but not change it", async () => {
