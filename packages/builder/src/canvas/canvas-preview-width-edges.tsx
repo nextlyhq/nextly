@@ -115,13 +115,26 @@ export function PreviewWidthEdges({
   control,
   width,
   scale,
+  onDragging,
 }: {
   control: PreviewWidthControl | undefined;
   width: number;
   scale: number;
+  /**
+   * Told when a drag starts and ends, so the frame holds back what it reads
+   * off the page's resizing until the width settles.
+   */
+  onDragging?: (active: boolean) => void;
 }): React.JSX.Element | null {
   if (control === undefined) return null;
-  return <Edges control={control} width={width} scale={scale} />;
+  return (
+    <Edges
+      control={control}
+      width={width}
+      scale={scale}
+      onDragging={onDragging}
+    />
+  );
 }
 
 /** {@link PreviewWidthEdges}, for a host that previews other widths. */
@@ -129,10 +142,12 @@ function Edges({
   control,
   width,
   scale,
+  onDragging,
 }: {
   control: PreviewWidthControl;
   width: number;
   scale: number;
+  onDragging: ((active: boolean) => void) | undefined;
 }): React.JSX.Element {
   const { breakpoints, edited, deviceWidth, override, onChange } = control;
   const marks = React.useMemo(() => rulerMarks(breakpoints), [breakpoints]);
@@ -167,8 +182,11 @@ function Edges({
     return () => sizes.disconnect();
   }, []);
 
+  // The frame's latest listener, for a drag the handles' going cuts short.
+  const draggingSeen = React.useRef(onDragging);
+  draggingSeen.current = onDragging;
   // Nothing left waiting once the handles go, and a drag cut short gives
-  // the page its pointer back.
+  // the page its pointer back and the frame its reads.
   React.useEffect(
     () => () => {
       if (keyTimer.current !== null) clearTimeout(keyTimer.current);
@@ -181,6 +199,7 @@ function Edges({
         );
       }
       if (held.page !== null) held.page.style.pointerEvents = "";
+      draggingSeen.current?.(false);
     },
     []
   );
@@ -240,6 +259,7 @@ function Edges({
       frameRequest: null,
     };
     setDragging(true);
+    onDragging?.(true);
   };
 
   const onPointerMove = (event: React.PointerEvent<HTMLElement>): void => {
@@ -277,6 +297,8 @@ function Edges({
     show(held);
     if (held.page !== null) held.page.style.pointerEvents = "";
     setDragging(false);
+    // Before the width settles, so the frame reads the settled one.
+    onDragging?.(false);
     if (keyTimer.current !== null) clearTimeout(keyTimer.current);
     setAnnounced(previewAnnouncement(settle(held.width), device));
   };

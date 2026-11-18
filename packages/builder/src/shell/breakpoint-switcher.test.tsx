@@ -575,3 +575,21 @@ describe("a width previewed in place of the device's own", () => {
     expect(activeWidth()?.textContent).toBe("1280px");
   });
 });
+
+describe("a previewed width on a site with no viewport breakpoints", () => {
+  const none = (): BreakpointSet => ({ viewport: [], container: [] });
+
+  it("still shows the width and Reset, with no device buttons", () => {
+    const onPreviewWidth = vi.fn();
+    mount({ breakpoints: none(), previewWidth: 900, onPreviewWidth });
+    expect(screen.queryByRole("radiogroup")).toBeNull();
+    expect(activeWidth()?.textContent).toBe("900px");
+    fireEvent.click(screen.getByRole("button", { name: "Reset" }));
+    expect(onPreviewWidth).toHaveBeenCalledWith(null);
+  });
+
+  it("offers the Desktop width to type over", () => {
+    mount({ breakpoints: none(), previewWidth: null, onPreviewWidth: vi.fn() });
+    expect(activeWidth()?.textContent).toBe("1280px");
+  });
+});

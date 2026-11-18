@@ -387,6 +387,36 @@ function ActiveWidth({
   );
 }
 
+/**
+ * The width on a site with no device to switch to, where the host previews
+ * other widths: the canvas still takes any width from its handles, so the
+ * width and Reset are offered without the buttons. Desktop's own width is
+ * the widest a preview reaches.
+ */
+function WidthWithoutDevices({
+  ready,
+  breakpoints,
+  previewed,
+  onPreviewWidth,
+}: {
+  ready: boolean;
+  breakpoints: BreakpointSet | undefined;
+  previewed: number | null;
+  onPreviewWidth: ((width: number | null) => void) | undefined;
+}): React.JSX.Element | null {
+  if (!ready || onPreviewWidth === undefined) return null;
+  return (
+    <div className="inline-flex h-[var(--nx-builder-control-height,1.75rem)] items-center rounded-md border p-0.5">
+      <ActiveWidth
+        deviceWidth={previewWidthRange(breakpoints).max}
+        breakpoints={breakpoints}
+        previewed={previewed}
+        onPreviewWidth={onPreviewWidth}
+      />
+    </div>
+  );
+}
+
 export function BreakpointSwitcher({
   breakpoints,
   selected,
@@ -422,9 +452,18 @@ export function BreakpointSwitcher({
     onSelect(next.id);
   };
 
-  // Desktop alone is not a choice: the control appears once the site has a
-  // breakpoint to switch to.
-  if (options.length < 2) return null;
+  // Desktop alone is not a choice: the device buttons appear once the site
+  // has a breakpoint to switch to. A previewed width still has its own.
+  if (options.length < 2) {
+    return (
+      <WidthWithoutDevices
+        ready={ready}
+        breakpoints={breakpoints}
+        previewed={previewed}
+        onPreviewWidth={onPreviewWidth}
+      />
+    );
+  }
 
   return (
     // The whole switcher one control high, its border and padding inside that

@@ -14,7 +14,7 @@
  *
  * @module canvas-frame.test
  */
-import { act, cleanup, render } from "@testing-library/react";
+import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import * as React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -504,6 +504,82 @@ describe("previewing another width", () => {
     // The control is the frame's, never a marker on the page's document.
     const root = frameIn(container).contentDocument?.documentElement;
     expect(root?.getAttributeNames().join(" ")).not.toMatch(/preview/i);
+  });
+
+  it("reports no viewport mid-drag, and the settled one after", () => {
+    // jsdom lays nothing out, so the frame's page reports the width it is
+    // given here, as a browser's would as the frame is resized.
+    let pageWidth = 1280;
+    let seen: ReturnType<typeof useCanvasFrame> | null = null;
+    function Beside(): null {
+      seen = useCanvasFrame();
+      return null;
+    }
+    const element = (pointerId: number) => ({
+      button: 0,
+      pointerId,
+      clientX: 0,
+    });
+    const proto = window.Element.prototype as unknown as Record<
+      string,
+      unknown
+    >;
+    proto.setPointerCapture = function setPointerCapture(): void {};
+    proto.releasePointerCapture = function releasePointerCapture(): void {};
+    function Host(): React.JSX.Element {
+      const [override, setOverride] = React.useState<number | null>(null);
+      return (
+        <CanvasFrameProvider>
+          <Beside />
+          <CanvasFrame
+            width={override ?? 1280}
+            title="Home"
+            source={TEST_SOURCE}
+            previewWidth={{
+              breakpoints: undefined,
+              edited: "base",
+              deviceWidth: 1280,
+              override,
+              onChange: setOverride,
+            }}
+          />
+        </CanvasFrameProvider>
+      );
+    }
+    const { container } = render(<Host />);
+    const frame = frameIn(container);
+    loadPage(frame);
+    const root = frame.contentDocument?.documentElement;
+    if (root == null) throw new Error("no frame root");
+    Object.defineProperty(root, "clientWidth", { get: () => pageWidth });
+    const resize = (): void => {
+      act(() => {
+        frame.contentWindow?.dispatchEvent(new Event("resize"));
+      });
+    };
+    const reading = (): number | undefined =>
+      (seen as ReturnType<typeof useCanvasFrame> | null)?.viewport?.width;
+    resize();
+    expect(reading()).toBe(1280);
+
+    const right = container.querySelector<HTMLElement>(
+      '[role="slider"][data-side="right"]'
+    );
+    if (right === null) throw new Error("no handle");
+    act(() => {
+      fireEvent.pointerDown(right, element(1));
+    });
+    pageWidth = 1000;
+    resize();
+    // Held at the width before the drag: nothing reads the frame per step.
+    expect(reading()).toBe(1280);
+    act(() => {
+      fireEvent.pointerMove(right, { pointerId: 1, clientX: -140 });
+    });
+    act(() => {
+      fireEvent.pointerUp(right, { pointerId: 1, clientX: -140 });
+    });
+    expect(reading()).toBe(1000);
   });
 
   it("draws no handles without it", () => {
