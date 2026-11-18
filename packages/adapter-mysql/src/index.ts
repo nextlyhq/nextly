@@ -399,7 +399,7 @@ function errnoOf(error: unknown): number | undefined {
  * - No native ILIKE (uses LOWER() LIKE workaround)
  * - No native JSONB (uses JSON type)
  * - No array types
- * - Savepoints disabled for safety (MySQL has nested transaction quirks)
+ * - A transaction opened inside another's work joins it flat (its context still takes savepoints)
  *
  * @example
  * ```typescript
@@ -786,9 +786,6 @@ export class MySqlAdapter extends DrizzleAdapter {
    * MySQL transactions support isolation levels. Automatic retry is
    * implemented for deadlocks (error 1213) when `retryCount` is specified.
    *
-   * Note: Savepoints are disabled in this adapter for safety due to
-   * MySQL's quirks with nested transactions.
-   *
    * A call made inside another transaction's work therefore joins it flat,
    * on its connection: its statements are the outer's. Its failure cannot be
    * undone alone, so it fails the whole transaction, even when the outer
@@ -987,7 +984,6 @@ export class MySqlAdapter extends DrizzleAdapter {
    * - No arrays
    * - No native ILIKE
    * - No RETURNING clause
-   * - Savepoints disabled for safety
    */
   getCapabilities(): DatabaseCapabilities {
     return {
@@ -999,7 +995,7 @@ export class MySqlAdapter extends DrizzleAdapter {
       supportsFts: true, // MySQL has FULLTEXT indexes
       supportsIlike: false, // No native ILIKE, use LOWER() LIKE
       supportsReturning: false, // No RETURNING clause in MySQL
-      supportsSavepoints: false, // Disabled for safety per approved approach
+      supportsSavepoints: true, // On the transaction context; a nested transaction joins flat
       supportsOnConflict: true, // ON DUPLICATE KEY UPDATE
       maxParamsPerQuery: 65535, // MySQL limit
       maxIdentifierLength: 64, // MySQL limit
@@ -1347,10 +1343,6 @@ export class MySqlAdapter extends DrizzleAdapter {
 
   /**
    * Creates a TransactionContext for the given connection.
-   *
-   * @remarks
-   * Note: Savepoint methods are not implemented (set to undefined)
-   * as savepoints are disabled in this adapter per approved approach.
    */
   /**
    * Upsert with the meaning `INSERT … ON CONFLICT (target)` has on PostgreSQL
@@ -1860,10 +1852,24 @@ export class MySqlAdapter extends DrizzleAdapter {
 
       ...this.createTransactionForwarders(txDb),
 
-      // Savepoints disabled per approved approach
-      savepoint: undefined,
-      rollbackToSavepoint: undefined,
-      releaseSavepoint: undefined,
+      // InnoDB's savepoints, on this transaction's connection, so a part of the transaction can be
+      // undone alone (a failed item of a batch, say) and the rest kept, as on PostgreSQL and SQLite.
+      // A transaction opened inside this one's work still joins it flat: see `joinSteps`.
+      savepoint: async (name: string): Promise<void> => {
+        await connection.query(`SAVEPOINT ${this.escapeIdentifier(name)}`);
+      },
+
+      rollbackToSavepoint: async (name: string): Promise<void> => {
+        await connection.query(
+          `ROLLBACK TO SAVEPOINT ${this.escapeIdentifier(name)}`
+        );
+      },
+
+      releaseSavepoint: async (name: string): Promise<void> => {
+        await connection.query(
+          `RELEASE SAVEPOINT ${this.escapeIdentifier(name)}`
+        );
+      },
     };
   }
 

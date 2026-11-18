@@ -1229,17 +1229,27 @@ describe("@nextly/adapter-mysql", () => {
       });
     });
 
-    it("should not have savepoint methods", async () => {
+    it("sets, rolls back to and releases a savepoint on the transaction's connection", async () => {
       const adapter = createMySqlAdapter({
         url: "mysql://localhost:3306/test",
       });
       await adapter.connect();
 
       await adapter.transaction(async tx => {
-        expect(tx.savepoint).toBeUndefined();
-        expect(tx.rollbackToSavepoint).toBeUndefined();
-        expect(tx.releaseSavepoint).toBeUndefined();
+        await tx.savepoint!("nextly_item`1");
+        await tx.rollbackToSavepoint!("nextly_item`1");
+        await tx.releaseSavepoint!("nextly_item`1");
       });
+
+      expect(mockConnection.query).toHaveBeenCalledWith(
+        "SAVEPOINT `nextly_item``1`"
+      );
+      expect(mockConnection.query).toHaveBeenCalledWith(
+        "ROLLBACK TO SAVEPOINT `nextly_item``1`"
+      );
+      expect(mockConnection.query).toHaveBeenCalledWith(
+        "RELEASE SAVEPOINT `nextly_item``1`"
+      );
     });
   });
 
@@ -1263,7 +1273,7 @@ describe("@nextly/adapter-mysql", () => {
       expect(capabilities.supportsFts).toBe(true);
       expect(capabilities.supportsIlike).toBe(false);
       expect(capabilities.supportsReturning).toBe(false);
-      expect(capabilities.supportsSavepoints).toBe(false);
+      expect(capabilities.supportsSavepoints).toBe(true);
       expect(capabilities.supportsOnConflict).toBe(true);
       expect(capabilities.maxParamsPerQuery).toBe(65535);
       expect(capabilities.maxIdentifierLength).toBe(64);

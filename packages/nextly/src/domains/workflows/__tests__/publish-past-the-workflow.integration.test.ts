@@ -1127,7 +1127,7 @@ describe.each(getConfiguredTestDialects())(
         expect(await storedPages()).toEqual([]);
       });
 
-      it("keeps nothing of a batch item whose publish the gate fails to settle", async () => {
+      it("keeps nothing of a batch item whose publish the gate fails to settle, and keeps the rest", async () => {
         await boot(dialect);
         // A gate that lets every create through, and then fails as it settles one.
         container.register<PublishGate>("publishGate", () => ({
@@ -1144,11 +1144,10 @@ describe.each(getConfiguredTestDialects())(
           { title: "Stays a draft" },
         ]);
 
-        // MySQL's transactions take no savepoint, so nothing but the whole batch can take the
-        // failed item back: the batch rolls back. Elsewhere the item alone does, and the rest stays.
-        const kept = dialect === "mysql" ? [] : ["Stays a draft"];
-        expect(result.failed, JSON.stringify(result)).toBe(2 - kept.length);
-        expect((await storedPages()).map(page => page.title)).toEqual(kept);
+        expect(result.failed, JSON.stringify(result)).toBe(1);
+        expect((await storedPages()).map(page => page.title)).toEqual([
+          "Stays a draft",
+        ]);
       });
 
       it("creates as published for trusted code that names a reason, which is the control", async () => {

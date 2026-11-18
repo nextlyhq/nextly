@@ -253,8 +253,14 @@ export async function underSavepoint<T>(
     await db.releaseSavepoint(name);
     return result;
   } catch (err) {
-    await db.rollbackToSavepoint(name);
-    await db.releaseSavepoint(name);
+    try {
+      await db.rollbackToSavepoint(name);
+      await db.releaseSavepoint(name);
+    } catch {
+      // The savepoint is gone with the transaction it was in (MySQL rolls the whole transaction
+      // back on a deadlock), so nothing of it can be kept: the failure aborts the transaction.
+      throw markWriteIntegrityFailure(err);
+    }
     throw err;
   }
 }
