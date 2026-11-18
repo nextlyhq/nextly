@@ -58,7 +58,7 @@ import { MetaService } from "../../meta/services/meta-service";
 export type SaveInProgressKind = AddressKind;
 
 /** One save's record that it has started. */
-export interface SaveInProgress {
+interface SaveInProgress {
   /** Tells this save's record from another's for the same entity. */
   id: string;
   kind: SaveInProgressKind;
@@ -78,10 +78,7 @@ export interface SaveInProgress {
 const KEY_PREFIX = "builder-save-in-progress:";
 
 /** The `nextly_meta` key an entity's record is kept under. */
-export function saveInProgressKey(
-  kind: SaveInProgressKind,
-  slug: string
-): string {
+function saveInProgressKey(kind: SaveInProgressKind, slug: string): string {
   return `${KEY_PREFIX}${kind}:${slug}`;
 }
 
@@ -326,14 +323,12 @@ async function clearRecords(
 }
 
 /** A marker as read: the record, or why it could not be read. */
-export type ReadMarker =
+type ReadMarker =
   | { file: string; record: SaveInProgress }
   | { file: string; unreadable: string };
 
 /** The project's markers, each read, in file-name order. */
-export async function readSaveMarkers(
-  projectRoot: string
-): Promise<ReadMarker[]> {
+async function readSaveMarkers(projectRoot: string): Promise<ReadMarker[]> {
   const folder = saveInProgressFolder(projectRoot);
   let names: string[];
   try {
@@ -426,7 +421,7 @@ interface RecordRows {
  * The records the database holds, in one select over their keys. Each value is the JSON text
  * `MetaService` stores, which MySQL's driver hands back as a string and the others as stored.
  */
-export async function readSavesInProgress(
+async function readSavesInProgress(
   adapter: DrizzleAdapter
 ): Promise<SaveInProgress[]> {
   const table = loadedDialect(adapter.getCapabilities().dialect).tables
