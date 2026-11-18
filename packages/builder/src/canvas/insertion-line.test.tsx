@@ -308,6 +308,8 @@ describe("the line where a highlighted tile would land", () => {
     expect(revealed()).toEqual([
       ["box", { block: "center", inline: "center" }],
     ]);
+    // A press keeps the selection: the label is the editor's own chrome.
+    expect(edge.closest("[data-nx-chrome]")).not.toBeNull();
   });
 
   it("keeps an edge label a while after the panel lets go, and while it is pointed at", async () => {
@@ -383,10 +385,9 @@ describe("the line where a highlighted tile would land", () => {
     expect(revealed()).toEqual([]);
     if (edge === null) throw new Error("no edge label");
     fireEvent.click(edge);
-    // The block before the place, "far", to the middle of the canvas.
-    expect(revealed()).toEqual([
-      ["far", { block: "center", inline: "center" }],
-    ]);
+    // The block before the place, "far", with its end, where the place is,
+    // brought into view: a block taller than the screen still shows the gap.
+    expect(revealed()).toEqual([["far", { block: "end", inline: "end" }]]);
   });
 
   it("names a place off to the side at that edge, in a row wider than the screen", async () => {
@@ -422,9 +423,29 @@ describe("the line where a highlighted tile would land", () => {
     expect(edge?.textContent).toBe("→ Text goes inside Hero, at the end");
     if (edge === null) throw new Error("no edge label");
     fireEvent.click(edge);
-    expect(revealed()).toEqual([
-      ["two", { block: "center", inline: "center" }],
-    ]);
+    expect(revealed()).toEqual([["two", { block: "end", inline: "end" }]]);
+  });
+
+  it("reveals the rendered block nearest a place off screen, not one that draws nothing", async () => {
+    layOut();
+    const revealed = revealSpy();
+    // The page ends with a block that draws nothing, after "far".
+    const ending: BlockDocument = {
+      ...page,
+      nodes: [
+        ...page.nodes,
+        { id: "ghost", type: "acme/nothing", version: 1, props: {} },
+      ],
+    };
+    const { container } = drawWith(
+      { at: { index: 4 }, words: "Text goes at the end of the page" },
+      ending
+    );
+    await act(async () => undefined);
+    const edge = edgeIn(container);
+    if (edge === null) throw new Error("no edge label");
+    fireEvent.click(edge);
+    expect(revealed()).toEqual([["far", { block: "end", inline: "end" }]]);
   });
 
   it("puts a row line's label on its left where the screen's right edge leaves no room", async () => {

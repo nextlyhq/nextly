@@ -34,6 +34,7 @@ import {
   isOutermostForAddress,
   nodeAddressOf,
 } from "./canvas";
+import { CHROME_ATTRIBUTE } from "./canvas-chrome";
 import { useCanvasFrame } from "./canvas-frame-context";
 import {
   OVERLAY_OUTPUT_ATTRIBUTE,
@@ -43,7 +44,7 @@ import {
 import { DropIndicator } from "./drop-indicator";
 import type { DropTarget, RectSource } from "./drop-targets";
 import { canvasContentRect, onScreenOf, overlaySpaceOf } from "./geometry-dom";
-import { insertionMarkOf } from "./insertion-line-geometry";
+import { insertionMarkOf, type Neighbour } from "./insertion-line-geometry";
 import {
   useInsertionPreview,
   type InsertionPreview,
@@ -69,7 +70,7 @@ type Drawn =
   | {
       readonly kind: "edge";
       /** The block beside the place, scrolled into view to show it. */
-      readonly revealId: string | undefined;
+      readonly near: Neighbour | undefined;
       /** Which edge of the canvas the label is pinned to. */
       readonly edge: Edge;
       readonly left: number;
@@ -182,7 +183,7 @@ function within(value: number, low: number, high: number): number {
  * the chrome's coordinates.
  */
 function edgeLabelFor(
-  revealId: string | undefined,
+  near: Neighbour | undefined,
   drawnAt: Rect,
   screen: Rect
 ): Drawn | undefined {
@@ -195,7 +196,7 @@ function edgeLabelFor(
   const upright = edge === "top" ? screen.y + EDGE_GAP : bottom;
   return {
     kind: "edge",
-    revealId,
+    near,
     edge,
     left: across ? within(drawnAt.x, screen.x + EDGE_GAP, right) : sideways,
     top: across ? upright : within(drawnAt.y, screen.y + EDGE_GAP, bottom),
@@ -223,7 +224,9 @@ function drawnFor(
   const drawnAt = space.place(place);
   const screen = onScreenOf(space);
   const edge = edgeLabelFor(
-    mark.kind === "empty" ? mark.containerId : mark.nearId,
+    mark.kind === "empty"
+      ? { id: mark.containerId, side: "inside" }
+      : mark.near,
     drawnAt,
     screen
   );
@@ -238,19 +241,28 @@ function drawnFor(
   };
 }
 
+/** How a neighbour is scrolled to bring the place at its side into view. */
+const ALIGN: Readonly<Record<Neighbour["side"], ScrollLogicalPosition>> = {
+  // The place is at the block's end: that end in view, however tall it is.
+  after: "end",
+  before: "start",
+  inside: "center",
+};
+
 /**
- * Bring the place into view: the block beside it, scrolled to the middle of
- * the canvas by the browser, which moves every scroller that clips it, the
- * frame's page and the region around a zoomed frame alike, in both
- * directions.
+ * Bring the place into view: the side of the block beside it that the place
+ * touches, scrolled into view by the browser, which moves every scroller that
+ * clips it, the frame's page and the region around a zoomed frame alike, in
+ * both directions.
  */
-function revealPlace(layer: HTMLElement, revealId: string | undefined): void {
-  if (revealId === undefined) return;
+function revealPlace(layer: HTMLElement, near: Neighbour | undefined): void {
+  if (near === undefined) return;
   const space = overlaySpaceOf(layer, CANVAS_ROOT_CLASS);
   if (space === null) return;
+  const align = ALIGN[near.side];
   lazyRects(space.root)
-    .elementOf(revealId)
-    ?.scrollIntoView({ block: "center", inline: "center" });
+    .elementOf(near.id)
+    ?.scrollIntoView({ block: align, inline: align });
 }
 
 /**
@@ -349,7 +361,9 @@ export function InsertionLine({
     <div
       ref={layer}
       className="nx-insertion-line"
-      {...{ [OVERLAY_OUTPUT_ATTRIBUTE]: "" }}
+      // The editor's own chrome: a press on the edge label is not a press on
+      // the page, so it keeps the selection.
+      {...{ [OVERLAY_OUTPUT_ATTRIBUTE]: "", [CHROME_ATTRIBUTE]: "" }}
     >
       {drawn?.kind === "line" ? (
         <>
@@ -377,7 +391,7 @@ export function InsertionLine({
           onPointerLeave={() => pointed(false)}
           onClick={() => {
             if (layer.current !== null) {
-              revealPlace(layer.current, drawn.revealId);
+              revealPlace(layer.current, drawn.near);
             }
             release();
           }}

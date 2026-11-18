@@ -26,16 +26,22 @@ import {
 } from "./drop-targets";
 
 /** What the canvas draws for a place. */
+/**
+ * The rendered block a place is shown beside, and which of its sides the
+ * place touches: what is scrolled into view to show the place.
+ */
+export interface Neighbour {
+  readonly id: string;
+  /** The place comes after the block, before it, or inside it. */
+  readonly side: "after" | "before" | "inside";
+}
+
 export type InsertionMark =
-  /**
-   * A line at the place, as a drag's drop line, and the block beside it
-   * (before it, else after it, else its container), which is what is
-   * scrolled into view to show the place.
-   */
+  /** A line at the place, as a drag's drop line, and its neighbour. */
   | {
       readonly kind: "line";
       readonly target: DropTarget;
-      readonly nearId: string | undefined;
+      readonly near: Neighbour | undefined;
     }
   /** An empty container the block goes inside: its outline, not a line. */
   | { readonly kind: "empty"; readonly containerId: string };
@@ -79,14 +85,28 @@ export function insertionMarkOf(
   }
   const target = lineAt(targetsInRegion(region, rects), at.index);
   if (target === undefined) return undefined;
-  return {
-    kind: "line",
-    target,
-    nearId:
-      region.childIds[at.index - 1] ??
-      region.childIds[at.index] ??
-      region.parentId,
-  };
+  return { kind: "line", target, near: neighbourOf(region, at.index, rects) };
+}
+
+/**
+ * The rendered block nearest a place: the closest before it, else the
+ * closest after it, else its container. A block that draws nothing has no
+ * box to scroll to, so it is passed over.
+ */
+function neighbourOf(
+  region: DropRegion,
+  index: number,
+  rects: RectSource
+): Neighbour | undefined {
+  const drawn = (id: string | undefined): id is string =>
+    id !== undefined && rects.rectOf(id) !== undefined;
+  const before = region.childIds.slice(0, index).reverse().find(drawn);
+  if (before !== undefined) return { id: before, side: "after" };
+  const after = region.childIds.slice(index).find(drawn);
+  if (after !== undefined) return { id: after, side: "before" };
+  return region.parentId === undefined
+    ? undefined
+    : { id: region.parentId, side: "inside" };
 }
 
 /**
