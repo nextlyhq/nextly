@@ -26,12 +26,10 @@ import {
   DropdownMenuTrigger,
   toast,
 } from "@nextlyhq/ui";
-import { useQueryClient } from "@tanstack/react-query";
 import { MoreHorizontal, Plus } from "lucide-react";
 import * as React from "react";
 
 import {
-  LAYOUT_CHOICES_ROUTE_PATH,
   layoutChoicesPath,
   type LayoutChoice,
   type LayoutChoicesResponse,
@@ -52,6 +50,7 @@ import {
   useMakeDefaultFlow,
   type MakeDefaultAsked,
 } from "../make-default-action";
+import { useAskChoicesAgain } from "../page-layout";
 import { useRefreshOnReturn } from "../refresh-on-return";
 import { useRemoveLayout } from "../RemoveLayoutAction";
 
@@ -88,20 +87,6 @@ function setNote(
   if (!set.published) parts.push("Draft");
   else if (set.draftChangesNotLive) parts.push("Changes not published");
   return parts.join(" · ");
-}
-
-/**
- * Whether a cached read is one of this plugin's set choices reads, by the
- * key the admin keeps a plugin route's read under: `["plugin-route", path]`.
- */
-function isChoicesRead(key: readonly unknown[]): boolean {
-  const path = key[1];
-  return (
-    key[0] === "plugin-route" &&
-    typeof path === "string" &&
-    path.includes(PAGE_BUILDER_PLUGIN_NAME) &&
-    path.includes(LAYOUT_CHOICES_ROUTE_PATH)
-  );
 }
 
 /** Whether a failed read was the author being refused the sets. */
@@ -156,13 +141,11 @@ export function HeaderFooterGroup({
   // After a write here, every set choices read is asked again too, the
   // canvas's own among them: a new default, a removed set or a published one
   // changes the header and footer the page being edited is drawn inside.
-  const queryClient = useQueryClient();
+  const askChoicesAgain = useAskChoicesAgain();
   const afterWrite = React.useCallback(() => {
     refresh();
-    void queryClient.invalidateQueries({
-      predicate: query => isChoicesRead(query.queryKey),
-    });
-  }, [refresh, queryClient]);
+    askChoicesAgain();
+  }, [refresh, askChoicesAgain]);
   const picture = useSetPictures(
     choices.data?.meta.regionDefinitions ?? {},
     choices.data !== undefined

@@ -25,7 +25,15 @@ import {
   usePluginRoute,
 } from "@nextlyhq/plugin-sdk/admin";
 import { Button, Label } from "@nextlyhq/ui";
-import { useEffect, useId, useMemo, useState, type JSX } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useState,
+  type JSX,
+} from "react";
 import {
   useController,
   useWatch,
@@ -35,6 +43,7 @@ import {
 } from "react-hook-form";
 
 import {
+  LAYOUT_CHOICES_ROUTE_PATH,
   layoutChoicesPath,
   PAGE_COLLECTION_ROUTE_PATH,
   type LayoutChoicesResponse,
@@ -123,6 +132,35 @@ function useLayoutChoices(
   const stale =
     read.data === undefined && read.error === null && held !== undefined;
   return { state, stale, retry: read.refetch };
+}
+
+/**
+ * Whether a cached read is one of this plugin's set choices reads, whatever
+ * it asked, by the key the admin keeps a plugin route's read under:
+ * `["plugin-route", path]`.
+ */
+function isLayoutChoicesRead(key: readonly unknown[]): boolean {
+  const path = key[1];
+  return (
+    key[0] === "plugin-route" &&
+    typeof path === "string" &&
+    path.includes(PAGE_BUILDER_PLUGIN_NAME) &&
+    path.includes(LAYOUT_CHOICES_ROUTE_PATH)
+  );
+}
+
+/**
+ * Ask every set choices read again, the canvas's own among them: after a
+ * write that changes a set, the header and footer the page being edited is
+ * drawn inside may have changed with it.
+ */
+export function useAskChoicesAgain(): () => void {
+  const queryClient = useQueryClient();
+  return useCallback(() => {
+    void queryClient.invalidateQueries({
+      predicate: query => isLayoutChoicesRead(query.queryKey),
+    });
+  }, [queryClient]);
 }
 
 /**
@@ -547,6 +585,8 @@ function WhyLine({
 export interface RegionCardFacts {
   readonly area: RegionArea;
   readonly componentId: string;
+  /** The header & footer set the region comes from, by id. */
+  readonly setId: string;
   /** The title of the header & footer set the region comes from. */
   readonly setTitle: string;
   readonly starter: boolean;
@@ -641,6 +681,7 @@ function regionsOf(
     (region): RegionCardFacts => ({
       area: region.area,
       componentId: region.componentId,
+      setId: effective.id,
       setTitle: effective.title,
       starter: starterOf(region, meta) === region.area,
       ...noteOf(effective, region, meta),

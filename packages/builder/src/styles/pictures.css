@@ -40,11 +40,12 @@
  */
 .nx-picture__page {
   background: Canvas;
-  /* The site's ink and body font, which the drawing names as the canvas
-     root does (see canvas-site-surface.ts), with the browser's defaults where
-     the site states none. */
+  /* The site's ink, which the drawing names as the canvas root does (see
+     canvas-site-surface.ts), with the browser's default where the site states
+     none, and the canvas's plain base face: the site's Body font is the
+     drawn page's own rule on its root. */
   color: var(--nx-canvas-site-ink, CanvasText);
-  font-family: var(--nx-canvas-site-font, system-ui), sans-serif;
+  font-family: system-ui, sans-serif;
   text-align: start;
   font-size: medium;
   font-weight: normal;
