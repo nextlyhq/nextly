@@ -484,6 +484,47 @@ describe("the line where a highlighted tile would land", () => {
     expect(edge?.hasAttribute("data-before")).toBe(true);
   });
 
+  it("brings the line itself into view, the gap past its neighbour included", async () => {
+    // Hero below the screen, a 20px gap between its two blocks.
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+      function boxOf(this: Element) {
+        if (this.hasAttribute("data-scroller")) {
+          return new DOMRect(0, 0, 1000, 500);
+        }
+        switch (this.getAttribute(NODE_ID_ATTRIBUTE)) {
+          case "hero":
+            return new DOMRect(0, 900, 1000, 240);
+          case "one":
+            return new DOMRect(0, 900, 1000, 100);
+          case "two":
+            return new DOMRect(0, 1020, 1000, 100);
+          default:
+            return new DOMRect(0, 0, 1000, 2000);
+        }
+      }
+    );
+    const margins: string[] = [];
+    Element.prototype.scrollIntoView = function reveal(this: HTMLElement) {
+      margins.push(this.style.scrollMargin);
+    };
+    const { container } = drawWith({
+      at: { parentId: "hero", slot: "children", index: 1 },
+      words: "Text goes after One, inside Hero",
+    });
+    await act(async () => undefined);
+    const edge = edgeIn(container);
+    if (edge === null) throw new Error("no edge label");
+    fireEvent.click(edge);
+    // One's end brought in, with the 10px to the line and room for its label
+    // below it as the margin, so the line lands on screen.
+    expect(margins).toEqual(["0px 0px 34px 0px"]);
+    // The block's own style is left as it was.
+    const one = container.querySelector<HTMLElement>(
+      `[${NODE_ID_ATTRIBUTE}="one"]`
+    );
+    expect(one?.style.scrollMargin).toBe("");
+  });
+
   it("anchors the label to the part of its line on screen", async () => {
     // A zoomed canvas panned right: the screen shows 300px to 1300px, and the
     // line across Hero starts at 0, off its left.

@@ -26,6 +26,7 @@ import type { BlockDocument } from "@nextlyhq/blocks-engine";
 import { useIsomorphicLayoutEffect } from "@nextlyhq/ui";
 import * as React from "react";
 
+import { isHTMLElement } from "../dom-kind";
 import type { Rect } from "../geometry";
 
 import { CANVAS_ROOT_CLASS } from "./canvas";
@@ -71,6 +72,8 @@ type Drawn =
       readonly kind: "edge";
       /** The block beside the place, scrolled into view to show it. */
       readonly near: Neighbour | undefined;
+      /** The place itself, in the canvas's content coordinates. */
+      readonly place: Rect;
       /** Which edge of the canvas the label is pinned to. */
       readonly edge: Edge;
       readonly left: number;
@@ -162,6 +165,7 @@ function within(value: number, low: number, high: number): number {
  */
 function edgeLabelFor(
   near: Neighbour | undefined,
+  place: Rect,
   drawnAt: Rect,
   screen: Rect
 ): Drawn | undefined {
@@ -175,6 +179,7 @@ function edgeLabelFor(
   return {
     kind: "edge",
     near,
+    place,
     edge,
     left: across ? within(drawnAt.x, screen.x + EDGE_GAP, right) : sideways,
     top: across ? upright : within(drawnAt.y, screen.y + EDGE_GAP, bottom),
@@ -216,6 +221,7 @@ function drawnFor(
     mark.kind === "empty"
       ? { id: mark.containerId, side: "inside" }
       : mark.near,
+    place,
     drawnAt,
     screen
   );
@@ -243,20 +249,58 @@ const ALIGN: Readonly<Record<Neighbour["side"], ScrollLogicalPosition>> = {
   inside: "center",
 };
 
+/** Room kept past the place when it is scrolled into view, for its label. */
+const REVEAL_ROOM = 24;
+
+/**
+ * How far past the neighbour's side the place lies, plus room for its label,
+ * as a CSS `scroll-margin`: the line sits in the middle of the gap after a
+ * block, not on its edge. Along the line's own axis only; none for a place
+ * inside an empty container, which is centred.
+ */
+function revealMargin(near: Neighbour, block: Rect, place: Rect): string {
+  if (near.side === "inside") return "";
+  const down = place.height === 0;
+  const past =
+    near.side === "after"
+      ? down
+        ? place.y - (block.y + block.height)
+        : place.x - (block.x + block.width)
+      : down
+        ? block.y - place.y
+        : block.x - place.x;
+  const margin = `${String(Math.max(0, past) + REVEAL_ROOM)}px`;
+  const sides = [0, 0, 0, 0].map(() => "0px");
+  // top, right, bottom, left
+  const at = near.side === "after" ? (down ? 2 : 1) : down ? 0 : 3;
+  sides[at] = margin;
+  return sides.join(" ");
+}
+
 /**
  * Bring the place into view: the side of the block beside it that the place
- * touches, scrolled into view by the browser, which moves every scroller that
- * clips it, the frame's page and the region around a zoomed frame alike, in
- * both directions.
+ * touches, with the place itself past that side as a scroll margin, scrolled
+ * into view by the browser, which moves every scroller that clips it, the
+ * frame's page and the region around a zoomed frame alike, in both
+ * directions. The block's own style is left as it was.
  */
-function revealPlace(layer: HTMLElement, near: Neighbour | undefined): void {
+function revealPlace(
+  layer: HTMLElement,
+  near: Neighbour | undefined,
+  place: Rect
+): void {
   if (near === undefined) return;
   const space = overlaySpaceOf(layer, CANVAS_ROOT_CLASS);
   if (space === null) return;
+  const rects = lazyRects(space.root);
+  const element = rects.elementOf(near.id);
+  const block = rects.rectOf(near.id);
+  if (!isHTMLElement(element) || block === undefined) return;
   const align = ALIGN[near.side];
-  lazyRects(space.root)
-    .elementOf(near.id)
-    ?.scrollIntoView({ block: align, inline: align });
+  const kept = element.style.scrollMargin;
+  element.style.scrollMargin = revealMargin(near, block, place);
+  element.scrollIntoView({ block: align, inline: align });
+  element.style.scrollMargin = kept;
 }
 
 /**
@@ -386,7 +430,7 @@ export function InsertionLine({
           onPointerLeave={() => pointed(false)}
           onClick={() => {
             if (layer.current !== null) {
-              revealPlace(layer.current, drawn.near);
+              revealPlace(layer.current, drawn.near, drawn.place);
             }
             release();
           }}
