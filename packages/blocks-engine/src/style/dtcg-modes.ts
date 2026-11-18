@@ -31,7 +31,15 @@ import {
   NEXTLY_EXTENSION,
   TEXT_STYLES_GROUP,
 } from "./dtcg";
-import type { SiteToken, SiteTokenSet, TokenMode } from "./site-tokens";
+import type { TokenKind } from "./catalog-types";
+import { tokenCustomProperty } from "./declarations";
+import {
+  resolveTokenPrefix,
+  tokenIdentity,
+  type SiteToken,
+  type SiteTokenSet,
+  type TokenMode,
+} from "./site-tokens";
 
 /** The Resolver format version a theme file declares. */
 export const RESOLVER_VERSION = "2025.10";
@@ -322,6 +330,38 @@ export function modeFilesToTokens(files: readonly ModeFile[]): {
 }
 
 /**
+ * What a stored dark value reads as in the dark file this system wrote: its
+ * conversion, with each `var()` of a variable read as that variable's dark
+ * value, which is how the dark file's aliases resolve. A dark shadow naming
+ * a colour variable then reads as unedited, and keeps naming it.
+ */
+function darkReading(
+  lightRead: ModesRead,
+  darkByName: ReadonlyMap<string, SiteToken>
+): (kind: TokenKind, stored: string) => string | undefined {
+  const prefix = resolveTokenPrefix(lightRead.site?.prefix).prefix;
+  const darkOf = new Map(
+    lightRead.tokens.map(token => [
+      tokenCustomProperty(tokenIdentity(token), prefix),
+      darkByName.get(token.name)?.values.light ??
+        token.values.dark ??
+        token.values.light,
+    ])
+  );
+  return (kind, stored) => {
+    const direct = nativeReading(kind, stored);
+    if (direct !== undefined || !stored.includes("var(")) return direct;
+    return nativeReading(
+      kind,
+      stored.replace(
+        /var\(\s*(--[A-Za-z0-9_-]+)\s*\)/g,
+        (whole, property: string) => darkOf.get(property) ?? whole
+      )
+    );
+  };
+}
+
+/**
  * Light tokens, each given its dark value from the dark document by name.
  *
  * A dark value equal to the light one is not stored, because a token with no
@@ -339,6 +379,7 @@ function combineModes(light: unknown, dark: unknown): ModesRead {
     ...darkRead.issues.filter(entry => !said.has(entry.message)),
   ];
   const darkByName = new Map(darkRead.tokens.map(token => [token.name, token]));
+  const asDark = darkReading(lightRead, darkByName);
   const tokens = lightRead.tokens.map(token => {
     const other = darkByName.get(token.name);
     darkByName.delete(token.name);
@@ -351,7 +392,7 @@ function combineModes(light: unknown, dark: unknown): ModesRead {
     const unedited =
       stored !== undefined &&
       other !== undefined &&
-      other.values.light === nativeReading(token.kind, stored);
+      other.values.light === asDark(token.kind, stored);
     if (
       other === undefined ||
       unedited ||

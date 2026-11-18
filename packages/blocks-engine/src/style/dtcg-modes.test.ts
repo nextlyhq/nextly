@@ -86,7 +86,7 @@ describe("the theme (resolver) file", () => {
     });
   });
 
-  it("keeps a dark shadow's colour variable when the files come back unedited", () => {
+  it("keeps each dark shadow layer's colour variable when the files come back unedited", () => {
     const set: SiteTokenSet = {
       tokens: [
         {
@@ -95,11 +95,25 @@ describe("the theme (resolver) file", () => {
           values: { light: "#336699", dark: "#99bbdd" },
         },
         {
+          name: "color.ink",
+          kind: "color",
+          values: { light: "#111111", dark: "#eeeeee" },
+        },
+        {
           name: "shadow.card",
           kind: "shadow",
           values: {
             light: "0 1px 2px var(--site-color-brand)",
             dark: "0 2px 4px var(--site-color-brand)",
+          },
+        },
+        {
+          name: "shadow.raised",
+          kind: "shadow",
+          values: {
+            light:
+              "0 1px 2px var(--site-color-brand), inset 0 4px 8px 1px var(--site-color-ink)",
+            dark: "0 2px 4px var(--site-color-ink), 0 8px 16px var(--site-color-brand)",
           },
         },
       ],
@@ -111,9 +125,9 @@ describe("the theme (resolver) file", () => {
       new Map([["site.tokens.json", JSON.parse(JSON.stringify(file))]])
     );
     expect(back.issues).toEqual([]);
-    expect(back.tokens.find(token => token.name === "shadow.card")).toEqual(
-      set.tokens[1]
-    );
+    // Every variable comes back exactly, light and dark, each shadow layer
+    // still naming its colour variable.
+    expect(back.tokens).toEqual(set.tokens);
   });
 
   it("reads the token file's text styles and site data through its theme file", () => {
