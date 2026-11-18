@@ -531,10 +531,7 @@ export async function renderCollectionLoop({
   // Where an author is looking at a collection with nothing to show, the
   // item is drawn with sample entries instead, read ahead as entries are so
   // its bindings fill from them. A failed read keeps its empty state.
-  const samples =
-    outcome.items.length === 0 && !outcome.failed && readsEveryEntry(props, paging)
-      ? sampleItems(ctx, collection)
-      : undefined;
+  const samples = samplesFor(outcome, props, paging, ctx, collection);
   const read = await withReadAhead(
     {
       outcome: samples === undefined ? outcome : { ...outcome, items: samples },
@@ -583,6 +580,23 @@ function readsEveryEntry(
     (props.offset ?? 0) === 0 &&
     (paging?.page ?? 1) <= 1
   );
+}
+
+/**
+ * The sample entries a read that came back empty is drawn with for an
+ * author: only for an unnarrowed read that did not fail, else none.
+ */
+function samplesFor(
+  outcome: { readonly items: readonly unknown[]; readonly failed: boolean },
+  props: CollectionLoopProps,
+  paging: { readonly page?: number | undefined } | undefined,
+  ctx: PageContext,
+  collection: string
+): readonly Record<string, unknown>[] | undefined {
+  if (outcome.items.length > 0 || outcome.failed) return undefined;
+  return readsEveryEntry(props, paging)
+    ? sampleItems(ctx, collection)
+    : undefined;
 }
 
 /** How many sample items a list with nothing to show draws for an author. */

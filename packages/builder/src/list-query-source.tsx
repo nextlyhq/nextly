@@ -468,7 +468,7 @@ export function SourceField({
 }
 
 /** What the panel says while a list has no source. */
-export const CHOOSE_ON_CANVAS = "Choose on the canvas to start.";
+const CHOOSE_ON_CANVAS = "Choose on the canvas to start.";
 
 /** Whether a list shows nothing yet: no collection, relation or custom source. */
 function hasNoSource(query: ListQuery, named: ShownNamed | undefined): boolean {

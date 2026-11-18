@@ -290,7 +290,7 @@ export function startingItem(
  * Titles only sets them closer together. List rows keep the list's own
  * spacing.
  */
-export function startingListStyles(
+function startingListStyles(
   layout: StartingLayout
 ): Record<string, string> | undefined {
   switch (layout) {

@@ -106,10 +106,10 @@ test.describe("a Collection list in two clicks", () => {
 
     const sources = chooser(page).getByRole("group", { name: "Show entries from" });
     await expect(sources).toBeVisible();
-    await expect(sources.getByRole("button", { name: "Posts" })).toBeVisible();
+    await expect(sources.getByRole("button", { name: "Posts", exact: true })).toBeVisible();
     await expect(page.getByText("Choose on the canvas to start.")).toBeVisible();
 
-    await sources.getByRole("button", { name: "Posts" }).click();
+    await sources.getByRole("button", { name: "Posts", exact: true }).click();
     const layouts = chooser(page).getByRole("group", {
       name: "Posts · choose a starting layout",
     });
@@ -136,7 +136,7 @@ test.describe("a Collection list in two clicks", () => {
     await openBuilder(page, id);
 
     const titled = await addList(page);
-    await chooser(page).getByRole("button", { name: "Posts" }).click();
+    await chooser(page).getByRole("button", { name: "Posts", exact: true }).click();
     await chooser(page).getByRole("button", { name: "Titles only" }).click();
     const canvas = canvasFrame(page);
     await expect(
@@ -144,7 +144,7 @@ test.describe("a Collection list in two clicks", () => {
     ).toBeVisible();
 
     const skipped = await addList(page);
-    await chooser(page).getByRole("button", { name: "Posts" }).click();
+    await chooser(page).getByRole("button", { name: "Posts", exact: true }).click();
     await chooser(page).getByRole("button", { name: "Skip" }).click();
     const box = await canvas.locator(`[data-nx-node="${skipped}"]`).boundingBox();
     // Never a 0px line: the empty item draws its start.

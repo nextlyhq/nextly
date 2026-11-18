@@ -33,7 +33,7 @@ import type { FirstAdd } from "./first-add";
 import { radioGroupStep } from "./roving-radios";
 
 /** The words the two steps use, in one place. */
-export const COLLECTION_PICKER_WORDS = {
+const COLLECTION_PICKER_WORDS = {
   source: "Show entries from",
   moreSources: "More sources…",
   moreSourcesHint: "Choose a custom source in the panel.",
@@ -46,7 +46,7 @@ export const COLLECTION_PICKER_WORDS = {
 } as const;
 
 /** The starting layouts, in the order offered, with their words. */
-export const STARTING_LAYOUTS: readonly {
+const STARTING_LAYOUTS: readonly {
   readonly key: StartingLayout;
   readonly label: string;
 }[] = [
@@ -62,7 +62,7 @@ export type CollectionPickerServices = Pick<
 >;
 
 /** A collection as the item rule reads it. */
-export function itemSourceOf(collection: LoopCollection): ItemSource {
+function itemSourceOf(collection: LoopCollection): ItemSource {
   return {
     slug: collection.slug,
     ...(collection.titleField === undefined
