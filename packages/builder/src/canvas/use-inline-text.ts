@@ -313,6 +313,170 @@ function wordsAroundCaret(element: HTMLElement): [string, string] {
   return [before.toString(), after.toString()];
 }
 
+/** An edit to a list's items, planned against the document as it stands. */
+type ItemPlan = () => ItemEdit<ItemCaret | null> | null;
+
+/**
+ * What Enter or Backspace does in an item of a list, or `null` when the key
+ * is not the list's: Enter adds the next item with the words after the caret,
+ * and Backspace in an empty item removes it. Read when the key is pressed;
+ * planned when it is written, against the document then.
+ */
+function itemKeyPlan(
+  event: KeyboardEvent,
+  element: HTMLElement,
+  editing: InlineTextEditing,
+  documentNow: () => BlockDocument
+): ItemPlan | null {
+  if (editing.exposure !== undefined || event.isComposing) return null;
+  if (itemOfPropName(editing.prop) === null) return null;
+  const { nodeId, prop } = editing;
+  if (event.key === "Enter") {
+    const [head, tail] = wordsAroundCaret(element);
+    return () => {
+      const split = splitItemOp(documentNow(), nodeId, prop, head, tail);
+      return split === null
+        ? null
+        : { op: split.op, next: { prop: split.next, caret: "start" } };
+    };
+  }
+  if (event.key !== "Backspace" || elementWords(element) !== "") return null;
+  return () => removeItemOp(documentNow(), nodeId, prop);
+}
+
+/**
+ * Why the open value may not be written now, or `null`: it stopped being
+ * editable here (a lock arrived, so there is nowhere to write it), or it moved
+ * on while it was typed (writing would replace newer words with older ones).
+ * Every write an edit makes asks this first.
+ *
+ * @param opened - the value as it was when the caret went in
+ */
+function stalenessOf(
+  editor: EditorState,
+  current: InlineTextEditing,
+  opened: string | null
+): InlineEditRefusal | null {
+  const live = liveValueOf(editor, current);
+  if (live === undefined) return "no-longer-editable";
+  return opened !== null && live !== opened ? "moved-on" : null;
+}
+
+/**
+ * The edit's side of moving through a list's items, read afresh each time a
+ * key lands, so a key is judged against the editor and the session as they
+ * stand then.
+ */
+function itemMoveHostOf(
+  editor: { readonly current: EditorState },
+  editing: InlineTextEditing,
+  session: {
+    readonly current: {
+      readonly finished?: ((outcome: InlineEditOutcome) => void) | undefined;
+      readonly opened: string | null;
+    };
+  },
+  edit: ItemEditHandles
+): () => ItemMoveHost {
+  return () => itemMoveHost(editor.current, editing, session.current, edit);
+}
+
+/** What the edit hands over to open the next item. */
+interface ItemEditHandles {
+  readonly release: () => void;
+  readonly session: { current: { caretAt: CaretPlace } };
+  readonly setEditing: (next: InlineTextEditing) => void;
+}
+
+/** The edit's side of moving through a list's items, as it stands now. */
+function itemMoveHost(
+  editor: EditorState,
+  editing: InlineTextEditing,
+  session: {
+    readonly finished?: ((outcome: InlineEditOutcome) => void) | undefined;
+    readonly opened: string | null;
+  },
+  edit: ItemEditHandles
+): ItemMoveHost {
+  return {
+    editor,
+    stale: stalenessOf(editor, editing, session.opened),
+    refused: reason => session.finished?.({ status: "refused", reason }),
+    release: edit.release,
+    open: next => {
+      edit.session.current.caretAt = next.caret;
+      edit.setEditing({ nodeId: editing.nodeId, prop: next.prop });
+    },
+  };
+}
+
+/** What moving through a list's items needs of the edit it moves from. */
+interface ItemMoveHost {
+  readonly editor: EditorState;
+  /** Why the open value may not be written now, or `null`. */
+  readonly stale: InlineEditRefusal | null;
+  /** Told when the write is refused, the line staying open with its words. */
+  readonly refused: (reason: InlineEditRefusal) => void;
+  /** Ends the open edit. */
+  readonly release: () => void;
+  /** Opens the item the caret goes to. */
+  readonly open: (next: ItemCaret) => void;
+}
+
+/**
+ * A planned edit to a list's items, written, then the caret moved on: the
+ * refusal said when it cannot be written (the value moved on or stopped being
+ * editable, or the page refused the write). The item the caret goes to is
+ * asked of the document the write produced: the editor's own holds it only
+ * from its next render, and an item Enter added is not in it yet.
+ */
+function moveThroughItems(
+  host: ItemMoveHost,
+  editing: InlineTextEditing,
+  plan: ItemPlan
+): void {
+  if (host.stale !== null) return host.refused(host.stale);
+  const planned = plan();
+  if (planned === null) return host.refused("no-longer-editable");
+  const written = host.editor.apply(planned.op);
+  if (written === null) return host.refused("rejected");
+  host.release();
+  const { next } = planned;
+  if (next === null) return;
+  if (inlineTarget(written, editing.nodeId, next.prop) === null) return;
+  host.open(next);
+}
+
+/**
+ * Listen for Enter and Backspace in an item of a list being typed, and move
+ * through its items by them. A key the list takes goes no further, so the
+ * edit's own keys (Enter leaving a line) never see it. Returns the way to
+ * stop listening.
+ */
+function listenForItemKeys(
+  element: HTMLElement,
+  editing: InlineTextEditing,
+  host: () => ItemMoveHost
+): () => void {
+  const onKey = (event: KeyboardEvent) => {
+    const current = host();
+    const plan = itemKeyPlan(
+      event,
+      element,
+      editing,
+      () => current.editor.document
+    );
+    if (plan === null) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    // A held Enter's auto-repeat adds no run of empty items.
+    if (event.repeat && event.key === "Enter") return;
+    moveThroughItems(current, editing, plan);
+  };
+  element.addEventListener("keydown", onKey);
+  return () => element.removeEventListener("keydown", onKey);
+}
+
 /**
  * @param editor - the editor state whose document is being edited
  * @param onFinished - told when a key's way out of the line was refused and
@@ -354,30 +518,13 @@ export function useInlineText(
     finished?: (outcome: InlineEditOutcome) => void;
     opened: string | null;
     openedFor: InlineTextEditing | null;
-  }>({ opened: null, openedFor: null });
+    /*
+     * Where the caret goes in the next edit opened: across its value, unless
+     * Enter or Backspace moved it there from the item beside it.
+     */
+    caretAt: CaretPlace;
+  }>({ opened: null, openedFor: null, caretAt: "all" });
   session.current.finished = onFinished;
-
-  /*
-   * Where the caret goes in the next edit opened: across its value, unless
-   * Enter or Backspace moved it there from the item beside it.
-   */
-  const caretAt = useRef<CaretPlace>("all");
-
-  /**
-   * Why the open value may not be written now, or `null`: it stopped being
-   * editable here (a lock arrived, so there is nowhere to write it), or it
-   * moved on while it was typed (writing would replace newer words with
-   * older ones). Every write an edit makes asks this first.
-   */
-  const staleness = useCallback(
-    (current: InlineTextEditing): InlineEditRefusal | null => {
-      const live = liveValueOf(editorRef.current, current);
-      if (live === undefined) return "no-longer-editable";
-      const opened = session.current.opened;
-      return opened !== null && live !== opened ? "moved-on" : null;
-    },
-    []
-  );
 
   /** Take the element back, whatever else happens. */
   const release = useCallback(() => {
@@ -430,11 +577,11 @@ export function useInlineText(
     const next = elementWords(element);
     const opened = session.current.opened;
     if (next === opened || !element.isConnected) return NOTHING_TO_WRITE;
-    const refused = staleness(current);
+    const refused = stalenessOf(editorRef.current, current, opened);
     if (refused !== null) return { refused };
     const op = commitOp(current, next);
     return op === null ? NOTHING_TO_WRITE : { op };
-  }, [commitOp, staleness]);
+  }, [commitOp]);
 
   /**
    * The host's way out. It cannot leave the line open, because it is closing
@@ -564,8 +711,8 @@ export function useInlineText(
     element.setAttribute("contenteditable", "plaintext-only");
     element.setAttribute(EDITING_ATTRIBUTE, editing.prop);
     element.focus();
-    placeCaret(element, caretAt.current);
-    caretAt.current = "all";
+    placeCaret(element, session.current.caretAt);
+    session.current.caretAt = "all";
 
     /*
      * The words a keyboard exit's write was refused with, while the line
@@ -591,70 +738,19 @@ export function useInlineText(
       tryToLeave();
     };
     /*
-     * An item of a list moved through by a key: the list written with the
-     * item split or removed (one op, one undo), then the caret moved on to
-     * the item the edit names. Refused as any other write is, the line
-     * staying open with its words.
+     * Enter and Backspace in an item of a list: a listener of their own,
+     * added before the one below so a key the list takes goes no further.
      */
-    const moveThroughItems = (
-      plan: () => ItemEdit<ItemCaret | null> | null
-    ): void => {
-      const refuse = (reason: InlineEditRefusal) =>
-        session.current.finished?.({ status: "refused", reason });
-      const stale = staleness(editing);
-      if (stale !== null) return refuse(stale);
-      const planned = plan();
-      if (planned === null) return refuse("no-longer-editable");
-      const written = editorRef.current.apply(planned.op);
-      if (written === null) return refuse("rejected");
-      release();
-      // Asked of the document the write produced: the editor's own holds it
-      // only from its next render, and an item Enter added is not in it yet.
-      const next = planned.next;
-      if (next === null) return;
-      if (inlineTarget(written, editing.nodeId, next.prop) === null) return;
-      caretAt.current = next.caret;
-      setEditing({ nodeId: editing.nodeId, prop: next.prop });
-    };
-    /*
-     * Enter and Backspace in an item of a list: Enter adds the next item with
-     * the words after the caret, and Backspace in an empty item removes it.
-     * Whether the key was the list's, so nothing else acts on it.
-     */
-    const onItemKey = (event: KeyboardEvent): boolean => {
-      if (editing.exposure !== undefined || event.isComposing) return false;
-      if (itemOfPropName(editing.prop) === null) return false;
-      const { nodeId, prop } = editing;
-      if (event.key === "Enter") {
-        event.preventDefault();
-        // A held key's auto-repeat adds no run of empty items.
-        if (event.repeat) return true;
-        const [head, tail] = wordsAroundCaret(element);
-        moveThroughItems(() => {
-          const split = splitItemOp(
-            editorRef.current.document,
-            nodeId,
-            prop,
-            head,
-            tail
-          );
-          return split === null
-            ? null
-            : { op: split.op, next: { prop: split.next, caret: "start" } };
-        });
-        return true;
-      }
-      if (event.key !== "Backspace" || elementWords(element) !== "") {
-        return false;
-      }
-      event.preventDefault();
-      moveThroughItems(() =>
-        removeItemOp(editorRef.current.document, nodeId, prop)
-      );
-      return true;
-    };
+    const stopItemKeys = listenForItemKeys(
+      element,
+      editing,
+      itemMoveHostOf(editorRef, editing, session, {
+        release,
+        session,
+        setEditing,
+      })
+    );
     const onKeyDown = (event: KeyboardEvent) => {
-      if (onItemKey(event)) return;
       // Escape keeps what was typed and ends the edit, as Enter does on a
       // line: the editor's design asks for it, and an author pressing Escape
       // to get out of the text expects their words to stay. Stopped here, so
@@ -693,21 +789,14 @@ export function useInlineText(
     element.addEventListener("click", swallow);
     element.addEventListener("dblclick", swallow);
     return () => {
+      stopItemKeys();
       element.removeEventListener("keydown", onKeyDown);
       element.removeEventListener("blur", tryToLeave);
       element.removeEventListener("pointerdown", swallow);
       element.removeEventListener("click", swallow);
       element.removeEventListener("dblclick", swallow);
     };
-  }, [
-    editing,
-    cancel,
-    commit,
-    commitOrHold,
-    canvasDocument,
-    release,
-    staleness,
-  ]);
+  }, [editing, cancel, commit, commitOrHold, canvasDocument, release]);
 
   return { editing, begin, commit, cancel, onDoubleClick };
 }
