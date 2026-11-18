@@ -910,7 +910,23 @@ export class FieldGroupRegistryService extends BaseRegistryService<
           slug,
           tableName
         );
-        await tx.delete(table, this.whereEq("slug", slug));
+        const removed = await tx.delete(table, this.whereEq("slug", slug));
+        // The row this delete read, not removed (a row-level rule or a trigger keeping it), would
+        // describe storage this transaction dropped: refused here, so the drops roll back with it
+        // and the field group stays whole. The transaction's own delete counts its rows on every
+        // dialect.
+        if (removed === 0) {
+          throw NextlyError.conflict({
+            reason: "state",
+            message:
+              "The field group's registry entry could not be removed, so nothing was deleted. Check " +
+              "what keeps the entry (a row-level rule or a trigger on the registry), then delete again.",
+            logContext: {
+              reason: "field-group-registry-row-not-removed",
+              slug,
+            },
+          });
+        }
         // The stored schema version's count, on the same transaction.
         await this.countWriteOn(tx);
       });

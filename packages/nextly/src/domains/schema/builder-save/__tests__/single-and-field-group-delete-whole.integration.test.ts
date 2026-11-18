@@ -376,33 +376,48 @@ describe.each(getConfiguredTestDialects())(
       };
     }
 
+    /** A delete whose registry row the registry keeps: refused whole, and finishing once allowed. */
+    async function refusedWhenRowKept(
+      t: TestNextly,
+      entity: Deleted
+    ): Promise<void> {
+      const companion = `${entity.table}_locales`;
+      const filesBefore = migrationFiles(t);
+      // The registry's own rule keeps the row: the delete runs, and removes nothing.
+      const allow = await keepRowOnDelete(t, entity);
+
+      await expect(remove(entity)).rejects.toBeDefined();
+
+      // Refused whole: the row would otherwise describe dropped storage.
+      expect(await registryRowCount(t, entity)).toBe(1);
+      expect(await t.adapter.tableExists(entity.table)).toBe(true);
+      expect(await t.adapter.tableExists(companion)).toBe(true);
+      for (const junction of entity.junctions) {
+        expect(await t.adapter.tableExists(junction)).toBe(true);
+      }
+      expect(deleteFile(t, entity)).toEqual([]);
+      expect(migrationFiles(t)).toEqual(filesBefore);
+
+      // With the rule gone, the delete finishes.
+      await allow();
+      await remove(entity);
+      expect(await registryRowCount(t, entity)).toBe(0);
+      expect(await t.adapter.tableExists(entity.table)).toBe(false);
+    }
+
     it.skipIf(dialect === "mysql")(
       "a Single's, whose registry row the delete removes nothing of, is refused whole",
       async () => {
         const t = await boot();
-        const entity = await aSingle();
-        const companion = `${entity.table}_locales`;
-        const filesBefore = migrationFiles(t);
-        // The registry's own rule keeps the row: the delete runs, and removes nothing.
-        const allow = await keepRowOnDelete(t, entity);
+        await refusedWhenRowKept(t, await aSingle());
+      }
+    );
 
-        await expect(remove(entity)).rejects.toBeDefined();
-
-        // Refused whole: the row would otherwise describe dropped storage.
-        expect(await registryRowCount(t, entity)).toBe(1);
-        expect(await t.adapter.tableExists(entity.table)).toBe(true);
-        expect(await t.adapter.tableExists(companion)).toBe(true);
-        for (const junction of entity.junctions) {
-          expect(await t.adapter.tableExists(junction)).toBe(true);
-        }
-        expect(deleteFile(t, entity)).toEqual([]);
-        expect(migrationFiles(t)).toEqual(filesBefore);
-
-        // With the rule gone, the delete finishes.
-        await allow();
-        await remove(entity);
-        expect(await registryRowCount(t, entity)).toBe(0);
-        expect(await t.adapter.tableExists(entity.table)).toBe(false);
+    it.skipIf(dialect === "mysql")(
+      "a field group's, whose registry row the delete removes nothing of, is refused whole",
+      async () => {
+        const t = await boot();
+        await refusedWhenRowKept(t, await aFieldGroup(t));
       }
     );
   }
