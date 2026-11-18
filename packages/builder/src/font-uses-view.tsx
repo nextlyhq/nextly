@@ -22,7 +22,7 @@ import {
   familyUses,
   roleLabel,
   roleRefusal,
-  useForWords,
+  nowYourFontWords,
   type FamilyUses,
 } from "./font-uses";
 import {
@@ -236,7 +236,7 @@ function lowerFirst(words: string): string {
 }
 
 /** A font that finished adding, waiting for the author to say how to use it. */
-interface Asked {
+export interface Asked {
   readonly family: string;
   /** The catalogue's category, when it came from there. */
   readonly category?: string;
@@ -252,8 +252,11 @@ const ANSWERS: readonly (readonly [string, readonly FontRole[]])[] = [
 /** What the question needs from the host: the site's variables and a writer. */
 export interface UseForHost {
   readonly tokens: SiteTokenSet | undefined;
-  readonly faces: readonly FontFaceDef[];
+  /** The site's faces, `undefined` while unread. */
+  readonly faces: readonly FontFaceDef[] | undefined;
   readonly codeFaces: readonly FontFaceDef[];
+  /** A role that may not change the design is never asked. */
+  readonly readOnly: boolean;
   /** Absent, or while the variables are unread, nothing is asked. */
   readonly onTokensChange: ((tokens: SiteTokenSet) => void) | undefined;
   /** The Site text rows the site's code supplies, which a role change keeps. */
@@ -275,7 +278,7 @@ export function useUseFor(host: UseForHost): {
   // The variables as last drawn, so an Undo pressed later builds on them.
   const latest = React.useRef(host.tokens);
   latest.current = host.tokens;
-  const { onTokensChange } = host;
+  const onTokensChange = host.readOnly ? undefined : host.onTokensChange;
   const ask = (family: string, category?: string): void => {
     if (onTokensChange === undefined || host.tokens === undefined) return;
     setAsked(category === undefined ? { family } : { family, category });
@@ -286,7 +289,7 @@ export function useUseFor(host: UseForHost): {
     if (roles === null || asked === null || now === undefined) return;
     if (onTokensChange === undefined) return;
     const stack =
-      roleFamilies(host.faces, host.codeFaces).find(
+      roleFamilies(host.faces ?? [], host.codeFaces).find(
         each => each.family.toLowerCase() === asked.family.toLowerCase()
       )?.stack ?? roleStack(asked.family, asked.category);
     const set = roles.reduce(
@@ -294,7 +297,7 @@ export function useUseFor(host: UseForHost): {
       now
     );
     onTokensChange(set);
-    toast.success(useForWords(asked.family, roles), {
+    toast.success(nowYourFontWords(asked.family, roles), {
       action: {
         label: "Undo",
         onClick: () => {
@@ -334,15 +337,20 @@ function withRoleFrom(
   );
 }
 
-/** "Use <font> for: Body / Headings / Both / Not now", in place. */
+/**
+ * "Use <font> for: Body / Headings / Both / Not now", in place, while a font
+ * that finished adding waits for an answer; nothing otherwise.
+ */
 export function UseForQuestion({
-  family,
+  asked,
   onAnswer,
 }: {
-  family: string;
+  asked: Asked | null;
   onAnswer: (roles: readonly FontRole[] | null) => void;
-}): React.JSX.Element {
+}): React.JSX.Element | null {
   const id = React.useId();
+  if (asked === null) return null;
+  const { family } = asked;
   return (
     <div className="nx-fonts-use" role="group" aria-labelledby={id}>
       <p className="nx-fonts-use__ask" id={id}>

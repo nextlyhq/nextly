@@ -148,7 +148,7 @@ export function roleRefusal(
  * @param roles - The roles it now is
  * @returns The sentence
  */
-export function useForWords(
+export function nowYourFontWords(
   family: string,
   roles: readonly FontRole[]
 ): string {

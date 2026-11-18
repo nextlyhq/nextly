@@ -28,7 +28,9 @@
   font-weight: 600;
 }
 
-.nx-fonts__styles {
+/* A family's styles, and where it is used, one to a line. */
+.nx-fonts__styles,
+.nx-fonts__uses {
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -589,17 +591,22 @@ button.nx-font-roles__row:focus-visible {
 }
 
 /*
- * The screen on the admin's Fonts page: a panel-wide column on the panel's
- * surface, so it reads as the screen the builder opens, beside the page.
+ * The screen on the admin's Fonts page, and "Use <font> for" where a font
+ * finished adding: a bordered column on the panel's surface.
  */
-.nx-fonts-page {
+.nx-fonts-page,
+.nx-fonts-use {
   display: flex;
   flex-direction: column;
-  max-width: 28rem;
   border: 1px solid var(--nx-border);
   border-radius: var(--radius-md);
   background: var(--nx-builder-panel);
   color: var(--nx-foreground);
+}
+
+/* The admin's page: a panel-wide column, as the builder opens the screen. */
+.nx-fonts-page {
+  max-width: 28rem;
 }
 
 /*
@@ -608,12 +615,6 @@ button.nx-font-roles__row:focus-visible {
  * A link is at least 24px tall, as WCAG 2.2 asks of a target.
  */
 .nx-fonts__uses {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
   font-size: var(--text-xs);
 }
 
@@ -639,15 +640,9 @@ button.nx-font-roles__row:focus-visible {
  * adding: at the top of the screen, or of the upload editor while it is open.
  */
 .nx-fonts-use {
-  display: flex;
-  flex-direction: column;
   gap: 0.25rem;
   margin: 0 0 0.5rem;
   padding: 0.5rem 0.625rem;
-  border: 1px solid var(--nx-border);
-  border-radius: var(--radius-md);
-  background: var(--nx-builder-panel);
-  color: var(--nx-foreground);
 }
 
 .nx-fonts-use__ask {

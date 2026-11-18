@@ -370,13 +370,11 @@ export function SiteFontsScreen({
   codeFaces,
   tokens,
   absence,
-  onOpenTokens,
-  onOpenRole,
-  onClose,
-  labelledBy,
   storedFaces,
   storedPending,
   unreadableFonts,
+  // Where the screen sends the author and how it closes, passed through.
+  ...ways
 }: Pick<
   FontsScreenProps,
   | "faces"
@@ -395,12 +393,7 @@ export function SiteFontsScreen({
   const mayChange = useCan("update-site-style");
   const writer = useFontFaceWriter(storedFaces, storedPending, unreadableFonts);
   const catalogue = useFontCatalogue();
-  // Inside the Variables studio, as the Design panel and the admin's Fonts
-  // page mount it, the screen reads the studio's variables and their usage
-  // and writes the Body and Headings fonts through it, so a role set here
-  // is one variable edit the studio saves (and, in the builder, undoes).
   const studio = useVariablesStudio();
-  const writes = studio !== null && studio.readOnly !== true;
   return (
     <FontsScreen
       absence={absence}
@@ -412,17 +405,29 @@ export function SiteFontsScreen({
       onRemoveFamily={writer.remove}
       catalogue={catalogue}
       tokens={studio?.tokens ?? tokens}
-      {...(studio?.usage === undefined ? {} : { usage: studio.usage })}
-      {...(writes ? { onTokensChange: studio.onChange } : {})}
-      {...(studio?.supplied?.siteText === undefined
-        ? {}
-        : { suppliedText: studio.supplied.siteText })}
-      {...(onOpenRole === undefined ? {} : { onOpenRole })}
-      {...(onOpenTokens === undefined ? {} : { onOpenTokens })}
-      {...(onClose === undefined ? {} : { onClose })}
-      {...(labelledBy === undefined ? {} : { labelledBy })}
+      {...studioScreenProps(studio)}
+      {...ways}
     />
   );
+}
+
+/**
+ * What the screen takes from the Variables studio it is mounted in, as the
+ * Design panel and the admin's Fonts page mount it: the variables' usage,
+ * so a font says how many places use it, and the studio's writer, so a
+ * role set here is one variable edit the studio saves (and, in the builder,
+ * undoes). Nothing outside a studio, and no writer for a read-only one.
+ */
+function studioScreenProps(
+  studio: ReturnType<typeof useVariablesStudio>
+): Pick<FontsScreenProps, "usage" | "onTokensChange" | "suppliedText"> {
+  if (studio === null) return {};
+  const siteText = studio.supplied?.siteText;
+  return {
+    ...(studio.usage === undefined ? {} : { usage: studio.usage }),
+    ...(studio.readOnly === true ? {} : { onTokensChange: studio.onChange }),
+    ...(siteText === undefined ? {} : { suppliedText: siteText }),
+  };
 }
 
 /**

@@ -9,7 +9,7 @@
 import type { SiteTokenSet } from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
-import { familyUses, roleRefusal, useForWords } from "./font-uses";
+import { familyUses, roleRefusal, nowYourFontWords } from "./font-uses";
 import { withFontRole } from "./site-font-roles-model";
 
 const BASE: SiteTokenSet = {
@@ -104,11 +104,11 @@ describe("refusing to remove the Body or Headings font", () => {
 
 describe("what using a new font says", () => {
   it("says which font it now is", () => {
-    expect(useForWords("Inter", ["heading"])).toBe(
+    expect(nowYourFontWords("Inter", ["heading"])).toBe(
       "Inter is now your headings font"
     );
-    expect(useForWords("Inter", ["body"])).toBe("Inter is now your body font");
-    expect(useForWords("Inter", ["body", "heading"])).toBe(
+    expect(nowYourFontWords("Inter", ["body"])).toBe("Inter is now your body font");
+    expect(nowYourFontWords("Inter", ["body", "heading"])).toBe(
       "Inter is now your body and headings font"
     );
   });
