@@ -27,9 +27,10 @@ import {
 import { NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
 
 import { Canvas } from "./canvas";
-import { InsertionLine } from "./insertion-line";
+import { EDGE_HOLD_MS, InsertionLine } from "./insertion-line";
 import {
   InsertionPreviewProvider,
+  PREVIEW_GRACE_MS,
   usePublishInsertionPreview,
   type InsertionPreview,
 } from "./insertion-preview";
@@ -131,21 +132,62 @@ function Publish({ preview }: { preview: InsertionPreview | null }): null {
   return null;
 }
 
+/** The page with the empty Box moved far down, below the screen. */
+const boxBelow: BlockDocument = {
+  ...page,
+  nodes: [page.nodes[0]!, page.nodes[2]!, page.nodes[1]!],
+};
+
+/** As {@link layOut}, with the Box at 1100px, past the 500px screen. */
+function layOutBoxBelow(): void {
+  vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+    function boxOf(this: Element) {
+      if (this.hasAttribute("data-scroller")) {
+        return new DOMRect(0, 0, 1000, 500);
+      }
+      switch (this.getAttribute(NODE_ID_ATTRIBUTE)) {
+        case "hero":
+          return new DOMRect(0, 0, 1000, 300);
+        case "one":
+          return new DOMRect(0, 0, 1000, 100);
+        case "two":
+          return new DOMRect(0, 120, 1000, 100);
+        case "far":
+          return new DOMRect(0, 900, 1000, 100);
+        case "box":
+          return new DOMRect(0, 1100, 1000, 50);
+        default:
+          return new DOMRect(0, 0, 1000, 2000);
+      }
+    }
+  );
+}
+
 /** The canvas with the line over it, inside a 500px-tall scroller. */
-function drawWith(preview: InsertionPreview | null) {
-  return render(
+function canvasWith(
+  preview: InsertionPreview | null,
+  document: BlockDocument = page
+) {
+  return (
     <InsertionPreviewProvider>
       <div data-scroller="" style={{ overflowY: "auto" }}>
         <Canvas
-          document={page}
+          document={document}
           siteStyles={{ breakpoints: { viewport: [], container: [] } }}
           selectedId={null}
-          overlay={<InsertionLine document={page} />}
+          overlay={<InsertionLine document={document} />}
         />
       </div>
       <Publish preview={preview} />
     </InsertionPreviewProvider>
   );
+}
+
+function drawWith(
+  preview: InsertionPreview | null,
+  document: BlockDocument = page
+) {
+  return render(canvasWith(preview, document));
 }
 
 const lineIn = (container: HTMLElement) =>
@@ -215,6 +257,105 @@ describe("the line where a highlighted tile would land", () => {
       width: lit?.style.width,
       height: lit?.style.height,
     }).toEqual({ left: "0px", top: "320px", width: "1000px", height: "50px" });
+  });
+
+  it("puts the label below its line where there is no room above it", async () => {
+    layOut();
+    const { container } = drawWith({
+      at: { index: 0 },
+      words: "Text goes at the top of the page",
+    });
+    await act(async () => undefined);
+    // The line is at the top of the screen, where a label above it is cut off.
+    expect(lineIn(container)?.style.top).toBe("0px");
+    expect(labelIn(container)?.hasAttribute("data-below")).toBe(true);
+  });
+
+  it("keeps the label above its line where there is room (the control)", async () => {
+    layOut();
+    const { container } = drawWith({
+      at: { parentId: "hero", slot: "children", index: 1 },
+      words: "Text goes after One, inside Hero",
+    });
+    await act(async () => undefined);
+    expect(labelIn(container)?.hasAttribute("data-below")).toBe(false);
+  });
+
+  it("names an empty container below the screen at the edge, and scrolls it into view when pressed", async () => {
+    layOutBoxBelow();
+    const scrollBy = vi.fn();
+    Element.prototype.scrollBy = scrollBy;
+    const { container } = drawWith(
+      {
+        at: { parentId: "box", slot: "children", index: 0 },
+        words: "Text goes inside Box",
+      },
+      boxBelow
+    );
+    await act(async () => undefined);
+    expect(litIn(container)).toBeNull();
+    const edge = edgeIn(container);
+    expect(edge?.textContent).toBe("↓ Text goes inside Box");
+    if (edge === null) throw new Error("no edge label");
+    fireEvent.click(edge);
+    // The Box's middle, 1125, to the middle of the 500px screen.
+    expect(scrollBy).toHaveBeenCalledWith({ top: 875 });
+  });
+
+  it("keeps an edge label a while after the panel lets go, and while it is pointed at", async () => {
+    vi.useFakeTimers();
+    try {
+      layOut();
+      const far = {
+        at: { index: 3 },
+        words: "Text goes at the end of the page",
+      };
+      const { container, rerender } = drawWith(far);
+      await act(async () => undefined);
+      expect(edgeIn(container)).not.toBeNull();
+      // The pointer leaves the tiles for the label: the panel lets go.
+      rerender(canvasWith(null));
+      act(() => {
+        vi.advanceTimersByTime(PREVIEW_GRACE_MS + 50);
+      });
+      const edge = edgeIn(container);
+      expect(edge).not.toBeNull();
+      if (edge === null) throw new Error("no edge label");
+      // Pointed at, it stays however long the author takes.
+      fireEvent.pointerEnter(edge);
+      act(() => {
+        vi.advanceTimersByTime(EDGE_HOLD_MS * 3);
+      });
+      expect(edgeIn(container)).not.toBeNull();
+      // Left, it goes once the hold runs out.
+      fireEvent.pointerLeave(edge);
+      act(() => {
+        vi.advanceTimersByTime(EDGE_HOLD_MS);
+      });
+      expect(edgeIn(container)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not keep a line after the panel lets go (the control)", async () => {
+    vi.useFakeTimers();
+    try {
+      layOut();
+      const { container, rerender } = drawWith({
+        at: { parentId: "hero", slot: "children", index: 1 },
+        words: "Text goes after One, inside Hero",
+      });
+      await act(async () => undefined);
+      expect(lineIn(container)).not.toBeNull();
+      rerender(canvasWith(null));
+      act(() => {
+        vi.advanceTimersByTime(PREVIEW_GRACE_MS + 50);
+      });
+      expect(lineIn(container)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("names a place below the screen at the bottom edge, and scrolls only when that is pressed", async () => {

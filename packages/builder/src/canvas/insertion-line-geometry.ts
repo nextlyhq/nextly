@@ -17,8 +17,8 @@ import { findNode, type BlockDocument } from "@nextlyhq/blocks-engine";
 import type { OpPosition } from "../op-vocabulary";
 
 import {
-  axisOfRects,
-  ROOT_REGION,
+  rootRegion,
+  slotRegion,
   targetsInRegion,
   type DropRegion,
   type DropTarget,
@@ -33,43 +33,22 @@ export type InsertionMark =
   | { readonly kind: "empty"; readonly containerId: string };
 
 /**
- * The region a place is in: the container's slot, or the page's top level.
- * `undefined` when the container is no longer on the page or did not render.
+ * The region a place is in: the container's slot, or the page's top level,
+ * built as a drag builds it. `undefined` when the container is no longer on
+ * the page or did not render.
  */
 function regionOf(
   document: BlockDocument,
   at: OpPosition,
   rects: RectSource
 ): DropRegion | undefined {
-  const childRects = (ids: readonly string[]) =>
-    ids
-      .map(id => rects.rectOf(id))
-      .filter((rect): rect is NonNullable<typeof rect> => rect !== undefined);
   if (at.parentId === undefined || at.slot === undefined) {
-    const childIds = document.nodes.map(node => node.id);
-    return {
-      id: ROOT_REGION,
-      target: { kind: "root" },
-      depth: 0,
-      rect: rects.rootRect(),
-      axis: axisOfRects(childRects(childIds)),
-      childIds,
-    };
+    return rootRegion(document, rects);
   }
   const parent = findNode(document.nodes, at.parentId);
-  const rect = rects.rectOf(at.parentId);
-  if (parent === undefined || rect === undefined) return undefined;
-  const childIds = (parent.slots?.[at.slot] ?? []).map(child => child.id);
-  return {
-    id: `${parent.id}::${at.slot}`,
-    target: { kind: "slot", parentType: parent.type, slot: at.slot },
-    parentId: parent.id,
-    slot: at.slot,
-    depth: 1,
-    rect,
-    axis: axisOfRects(childRects(childIds)),
-    childIds,
-  };
+  return parent === undefined
+    ? undefined
+    : slotRegion(parent, at.slot, 1, rects);
 }
 
 /**

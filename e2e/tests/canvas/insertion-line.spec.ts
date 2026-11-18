@@ -338,6 +338,19 @@ test.describe("the line where a highlighted tile would land", () => {
     await expect(edge).toHaveText("↑ Heading goes inside Hero, at the end");
     await expect(line(page)).toHaveCount(0);
     expect(await scrolledBy(page)).toBe(before);
+
+    // The pointer leaves the tiles for the label, at a person's pace, and
+    // the label is still there to press: pressing it scrolls Hero back in.
+    const target = await edge.boundingBox();
+    if (target === null) throw new Error("[e2e] no edge label");
+    await page.mouse.move(
+      target.x + target.width / 2,
+      target.y + target.height / 2,
+      { steps: 40 }
+    );
+    await page.waitForTimeout(400);
+    await edge.click();
+    await expect.poll(() => scrolledBy(page)).toBeLessThan(before - 500);
   });
 
   test("lights an empty Box it would go inside, and draws no line", async ({

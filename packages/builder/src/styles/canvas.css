@@ -674,6 +674,11 @@
   transform: translateY(calc(-100% - 3px));
 }
 
+/* Below the line instead, where the top of the screen leaves no room above. */
+.nx-insertion-line__label[data-axis="y"][data-below] {
+  transform: translateY(3px);
+}
+
 /* Just after the top of a line down a row. */
 .nx-insertion-line__label[data-axis="x"] {
   transform: translateX(4px);

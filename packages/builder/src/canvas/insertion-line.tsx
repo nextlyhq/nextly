@@ -50,7 +50,10 @@ import {
   overlaySpaceOf,
 } from "./geometry-dom";
 import { insertionMarkOf } from "./insertion-line-geometry";
-import { useInsertionPreview } from "./insertion-preview";
+import {
+  useInsertionPreview,
+  type InsertionPreview,
+} from "./insertion-preview";
 
 export interface InsertionLineProps {
   /** The page the place is in, as the panel judged it. */
@@ -64,10 +67,13 @@ type Drawn =
       readonly target: DropTarget;
       /** The line's start, where its label sits. */
       readonly start: { readonly x: number; readonly y: number };
+      /** No room above the line on screen, so the label goes below it. */
+      readonly labelBelow: boolean;
     }
   | {
       readonly kind: "edge";
-      readonly target: DropTarget;
+      /** The place, in the canvas's content coordinates, to scroll to. */
+      readonly place: Rect;
       /** Which edge of the canvas the label is pinned to. */
       readonly edge: "top" | "bottom";
       readonly left: number;
@@ -77,6 +83,16 @@ type Drawn =
 
 /** How far an edge label keeps from the canvas's edge, in pixels. */
 const EDGE_GAP = 8;
+
+/** The room a label above its line needs on screen, in pixels. */
+const LABEL_ROOM = 22;
+
+/**
+ * How long an edge label outlasts the panel letting go of its place: long
+ * enough for the pointer to cross from the tiles to the label and press it.
+ * Pointed at, it stays for as long as the pointer does.
+ */
+export const EDGE_HOLD_MS = 1500;
 
 /**
  * The rectangles of a canvas's blocks, each measured only when asked for, so
@@ -128,6 +144,28 @@ function lineRectOf(target: DropTarget): Rect {
       };
 }
 
+/**
+ * The label pinned to the canvas edge for a place off screen, or `undefined`
+ * for one on screen. `place` is in the canvas's coordinates, to scroll to;
+ * `drawnAt` and `screen` are in the chrome's.
+ */
+function edgeLabelFor(
+  place: Rect,
+  drawnAt: Rect,
+  screen: Rect
+): Drawn | undefined {
+  const above = drawnAt.y + drawnAt.height < screen.y;
+  const below = drawnAt.y > screen.y + screen.height;
+  if (!above && !below) return undefined;
+  return {
+    kind: "edge",
+    place,
+    edge: above ? "top" : "bottom",
+    left: Math.max(screen.x + EDGE_GAP, drawnAt.x),
+    top: above ? screen.y + EDGE_GAP : screen.y + screen.height - EDGE_GAP,
+  };
+}
+
 /** The preview's drawing, measured from the layer it is drawn in. */
 function drawnFor(
   layer: HTMLElement,
@@ -139,71 +177,117 @@ function drawnFor(
   const rects = lazyRects(space.root);
   const mark = insertionMarkOf(document, at, rects);
   if (mark === undefined) return null;
-  if (mark.kind === "empty") {
-    const rect = rects.rectOf(mark.containerId);
-    return rect === undefined
-      ? null
-      : { kind: "empty", rect: space.place(rect) };
-  }
-  const line = space.place(lineRectOf(mark.target));
+  // The place in the canvas's own coordinates: the line, or the empty
+  // container it would light.
+  const place =
+    mark.kind === "empty"
+      ? rects.rectOf(mark.containerId)
+      : lineRectOf(mark.target);
+  if (place === undefined) return null;
+  const drawnAt = space.place(place);
   const screen = onScreenOf(space);
-  const above = line.y + line.height < screen.y;
-  const below = line.y > screen.y + screen.height;
-  if (!above && !below) {
-    return {
-      kind: "line",
-      target: mark.target,
-      start: { x: line.x, y: line.y },
-    };
-  }
+  const edge = edgeLabelFor(place, drawnAt, screen);
+  if (edge !== undefined) return edge;
+  if (mark.kind === "empty") return { kind: "empty", rect: drawnAt };
   return {
-    kind: "edge",
+    kind: "line",
     target: mark.target,
-    edge: above ? "top" : "bottom",
-    left: Math.max(screen.x + EDGE_GAP, line.x),
-    top: above ? screen.y + EDGE_GAP : screen.y + screen.height - EDGE_GAP,
+    start: { x: drawnAt.x, y: drawnAt.y },
+    labelBelow: drawnAt.y - LABEL_ROOM < screen.y,
   };
 }
 
 /**
- * Scroll the canvas so the line is in the middle of what it shows. Asked of
+ * Scroll the canvas so the place is in the middle of what it shows. Asked of
  * the canvas's own scroller, the frame's page where the canvas has a frame.
  */
-function scrollToLine(layer: HTMLElement, target: DropTarget): void {
+function scrollToPlace(layer: HTMLElement, place: Rect): void {
   const space = overlaySpaceOf(layer, CANVAS_ROOT_CLASS);
   if (space === null) return;
   const scroller = canvasScroller(space.root, space.frame !== null);
   if (scroller === null) return;
   const band = onScreenBandOf(space.root, space.frame);
-  const along =
-    target.axis === "y" ? target.line : (target.from + target.to) / 2;
+  const along = place.y + place.height / 2;
   scroller.scrollBy({ top: along - (band.y + band.height / 2) });
+}
+
+/**
+ * The preview to draw: the panel's, or the one an edge label is holding on
+ * to after the panel let go, so the pointer can reach the label and press
+ * it. Held for {@link EDGE_HOLD_MS}, and for as long as the label is
+ * pointed at; let go of when pressed.
+ */
+function useHeldPreview(
+  preview: InsertionPreview | null,
+  holdsEdge: boolean
+): {
+  shown: InsertionPreview | null;
+  pointed: (inside: boolean) => void;
+  release: () => void;
+} {
+  const [held, setHeld] = React.useState<InsertionPreview | null>(null);
+  const last = React.useRef<InsertionPreview | null>(null);
+  // Read when the panel lets go, not a reason to run again on its own.
+  const edgeShown = React.useRef(holdsEdge);
+  edgeShown.current = holdsEdge;
+  const timer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const stop = React.useCallback(() => {
+    if (timer.current !== null) clearTimeout(timer.current);
+    timer.current = null;
+  }, []);
+  const expire = React.useCallback(() => {
+    stop();
+    timer.current = setTimeout(() => setHeld(null), EDGE_HOLD_MS);
+  }, [stop]);
+  React.useEffect(() => {
+    if (preview !== null) {
+      last.current = preview;
+      stop();
+      setHeld(null);
+    } else if (edgeShown.current && last.current !== null) {
+      setHeld(last.current);
+      expire();
+    }
+  }, [preview, stop, expire]);
+  React.useEffect(() => stop, [stop]);
+  return {
+    shown: preview ?? held,
+    pointed: inside => (inside ? stop() : expire()),
+    release: () => {
+      stop();
+      setHeld(null);
+    },
+  };
 }
 
 export function InsertionLine({
   document,
 }: InsertionLineProps): React.JSX.Element {
-  const preview = useInsertionPreview();
   const layer = React.useRef<HTMLDivElement | null>(null);
   // A zoom, or the frame's page arriving, moves the place on screen.
   const canvasFrame = useCanvasFrame();
   const [drawn, setDrawn] = React.useState<Drawn | null>(null);
+  const { shown, pointed, release } = useHeldPreview(
+    useInsertionPreview(),
+    drawn?.kind === "edge"
+  );
 
   const measure = React.useCallback(() => {
     const element = layer.current;
     setDrawn(
-      element === null || preview === null
+      element === null || shown === null
         ? null
-        : drawnFor(element, document, preview.at)
+        : drawnFor(element, document, shown.at)
     );
-  }, [document, preview]);
+  }, [document, shown]);
 
   useIsomorphicLayoutEffect(measure, [measure, canvasFrame]);
 
   // Kept where the place is as the page scrolls, resizes or reflows, only
-  // while there is a place to keep.
+  // while there is a place to keep; again for a frame's new page, whose
+  // scrolls and sizes the old page's listeners never hear.
   React.useEffect(() => {
-    if (preview === null) return undefined;
+    if (shown === null) return undefined;
     const element = layer.current;
     const space =
       element === null ? null : overlaySpaceOf(element, CANVAS_ROOT_CLASS);
@@ -216,9 +300,9 @@ export function InsertionLine({
       stopGeometry?.();
       stopBand?.();
     };
-  }, [preview, measure]);
+  }, [shown, measure, canvasFrame]);
 
-  const words = preview?.words ?? "";
+  const words = shown?.words ?? "";
   return (
     <div
       ref={layer}
@@ -232,6 +316,7 @@ export function InsertionLine({
           <span
             className="nx-insertion-line__label"
             data-axis={drawn.target.axis}
+            {...(drawn.labelBelow ? { "data-below": "" } : {})}
             aria-hidden="true"
             style={{ left: drawn.start.x, top: drawn.start.y }}
           >
@@ -245,9 +330,12 @@ export function InsertionLine({
           className="nx-insertion-line__edge"
           data-edge={drawn.edge}
           style={{ left: drawn.left, top: drawn.top }}
+          onPointerEnter={() => pointed(true)}
+          onPointerLeave={() => pointed(false)}
           onClick={() => {
             if (layer.current !== null)
-              scrollToLine(layer.current, drawn.target);
+              scrollToPlace(layer.current, drawn.place);
+            release();
           }}
         >
           {`${drawn.edge === "top" ? "↑" : "↓"} ${words}`}

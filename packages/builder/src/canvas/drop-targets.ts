@@ -378,42 +378,71 @@ export function collectRegions(
     for (const node of nodes) {
       const declared = slotsOfNode?.(node) ?? slots.slotsOf(node.type) ?? [];
       for (const slot of declared) {
-        const rect = rects.rectOf(node.id);
-        if (rect === undefined) continue;
-        const children = node.slots?.[slot] ?? [];
-        const childRects = children
-          .map(child => rects.rectOf(child.id))
-          .filter((child): child is Rect => child !== undefined);
-        regions.push({
-          id: `${node.id}::${slot}`,
-          target: { kind: "slot", parentType: node.type, slot },
-          parentId: node.id,
-          slot,
-          depth,
-          rect,
-          axis: axisOfRects(childRects),
-          childIds: children.map(child => child.id),
-        });
-        walk(children, depth + 1);
+        const region = slotRegion(node, slot, depth, rects);
+        if (region === undefined) continue;
+        regions.push(region);
+        walk(node.slots?.[slot] ?? [], depth + 1);
       }
     }
   };
 
-  const rootChildRects = document.nodes
-    .map(node => rects.rectOf(node.id))
-    .filter((rect): rect is Rect => rect !== undefined);
+  regions.push(rootRegion(document, rects));
+  walk(document.nodes, 1);
+  return regions;
+}
 
-  regions.push({
+/** The axis the measured blocks among `ids` are laid out along. */
+function axisOfChildren(ids: readonly string[], rects: RectSource): DropAxis {
+  return axisOfRects(
+    ids
+      .map(id => rects.rectOf(id))
+      .filter((rect): rect is Rect => rect !== undefined)
+  );
+}
+
+/**
+ * The page's top level as a region. One construction for every caller: a
+ * drag's regions and the Add panel's insertion line read the same one.
+ */
+export function rootRegion(
+  document: BlockDocument,
+  rects: RectSource
+): DropRegion {
+  const childIds = document.nodes.map(node => node.id);
+  return {
     id: ROOT_REGION,
     target: { kind: "root" },
     depth: 0,
     rect: rects.rootRect(),
-    axis: axisOfRects(rootChildRects),
-    childIds: document.nodes.map(node => node.id),
-  });
+    axis: axisOfChildren(childIds, rects),
+    childIds,
+  };
+}
 
-  walk(document.nodes, 1);
-  return regions;
+/**
+ * One slot of a container as a region, or `undefined` when the container
+ * rendered nothing measurable (see {@link collectRegions}). One construction
+ * for every caller, as {@link rootRegion} is.
+ */
+export function slotRegion(
+  node: BlockNode,
+  slot: string,
+  depth: number,
+  rects: RectSource
+): DropRegion | undefined {
+  const rect = rects.rectOf(node.id);
+  if (rect === undefined) return undefined;
+  const childIds = (node.slots?.[slot] ?? []).map(child => child.id);
+  return {
+    id: `${node.id}::${slot}`,
+    target: { kind: "slot", parentType: node.type, slot },
+    parentId: node.id,
+    slot,
+    depth,
+    rect,
+    axis: axisOfChildren(childIds, rects),
+    childIds,
+  };
 }
 
 /**
