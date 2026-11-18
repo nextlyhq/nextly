@@ -74,12 +74,17 @@ function hasFormatting(nodes: readonly unknown[]): boolean {
   while (stack.length > 0) {
     const node = stack.pop();
     if (!isRichTextNode(node)) continue;
-    if (node.type === "link" || node.type === "autolink") return true;
-    if (typeof node.format === "number" && node.format !== 0) return true;
-    if (typeof node.style === "string" && node.style.trim() !== "") return true;
+    if (isFormatted(node)) return true;
     if (Array.isArray(node.children)) stack.push(...node.children);
   }
   return false;
+}
+
+/** Whether one node is itself formatting: a link, a mark, an inline style. */
+function isFormatted(node: RichTextNode): boolean {
+  if (node.type === "link" || node.type === "autolink") return true;
+  if (typeof node.format === "number" && node.format !== 0) return true;
+  return typeof node.style === "string" && node.style.trim() !== "";
 }
 
 /** A paragraph's inline nodes, as a one-paragraph value holds them. */

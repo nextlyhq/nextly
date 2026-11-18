@@ -59,10 +59,12 @@ export function isTurnIntoAction(id: string): id is TurnIntoActionId {
 }
 
 /** The words "Turn into" says, in one place. */
-export const TURN_INTO_WORDS = {
+const TURN_INTO_WORDS = {
   menu: "Turn into",
   /** Said when a binding cannot move to the new block. */
   unbound: "Its bound field is removed",
+  /** Said when part of a block style gives way to a shared style. */
+  lookTrimmed: "Part of its block style gives way to its shared style",
   /** Said when the page refused the edit for a reason nothing judged first. */
   refused: "The page refused this edit, so nothing changed.",
   label: (name: string): string => `Turn into ${name}`,
@@ -110,10 +112,11 @@ export interface TurnIntoJudging {
 }
 
 /** What a turn removes, as one line: the converter's words, then a binding. */
-export function turnIntoNote(plan: TurnIntoPlan): string | undefined {
+function turnIntoNote(plan: TurnIntoPlan): string | undefined {
   const said = [
     plan.dropped,
     plan.unbound.length > 0 ? TURN_INTO_WORDS.unbound : undefined,
+    plan.lookTrimmed === true ? TURN_INTO_WORDS.lookTrimmed : undefined,
   ].filter((each): each is string => each !== undefined);
   return said.length === 0 ? undefined : said.join(". ");
 }

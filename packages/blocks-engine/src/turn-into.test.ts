@@ -327,6 +327,44 @@ describe("a block style, which belongs to one block type", () => {
       hover: { desktop: { color: "#f00" } },
     });
     expect(plan.op.node.classes).toEqual(["shared-brand"]);
+    expect(plan.lookTrimmed).toBe(true);
+  });
+
+  it("gives way to a shared style that sets the same thing at another width, and says so", () => {
+    // The look colours the block on every width; the shared style colours it
+    // on mobile only, where it won. Written into the block's own styles, the
+    // look's colour would now win on mobile too, so it gives way.
+    const mobileBrand: NamedClass = {
+      id: "shared-brand",
+      slug: "brand",
+      orderIndex: 1,
+      styles: { base: { mobile: { color: "#00c" } } },
+    };
+    const plan = planTurnInto(
+      page({ ...WORDS, styles: undefined }),
+      "w1",
+      "test/passage",
+      lookup,
+      [LIBRARY[0] as NamedClass, mobileBrand]
+    );
+    if ("refused" in plan) throw new Error(plan.refused);
+    expect(plan.op.node.styles).toEqual({
+      base: { desktop: { fontSize: "3rem" } },
+      hover: { desktop: { color: "#f00" } },
+    });
+    expect(plan.lookTrimmed).toBe(true);
+  });
+
+  it("says nothing gave way when no kept class sets what the look sets", () => {
+    const plan = planTurnInto(
+      page({ ...WORDS, styles: undefined }),
+      "w1",
+      "test/passage",
+      lookup,
+      [LIBRARY[0] as NamedClass]
+    );
+    if ("refused" in plan) throw new Error(plan.refused);
+    expect(plan.lookTrimmed).toBeUndefined();
   });
 
   it("keeps only what the new block supports of it", () => {

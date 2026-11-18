@@ -158,7 +158,7 @@
 }
 
 .nx-format-bar__choice-note {
-  font-size: 0.85em;
+  font-size: var(--text-xs);
   line-height: 1.3;
   opacity: 0.8;
 }

@@ -143,6 +143,32 @@ describe("turnIntoOffers", () => {
     expect(toHeading?.note).toBe("Bold and links are removed");
   });
 
+  it("says when part of a block style gives way to a shared style", () => {
+    const library = [
+      {
+        id: "look-lead",
+        slug: "lead",
+        orderIndex: 0,
+        blockType: "core/text",
+        styles: { base: { desktop: { color: "#0a0" } } },
+      },
+      {
+        id: "brand",
+        slug: "brand",
+        orderIndex: 1,
+        styles: { base: { mobile: { color: "#00a" } } },
+      },
+    ];
+    const worn = text({
+      classes: ["look-lead", "brand"],
+      props: { text: rich(paragraph(words("Plain"))) },
+    });
+    const [toRichText] = turnIntoOffers(page(worn), "t1", { library });
+    expect(toRichText?.note).toBe(
+      "Part of its block style gives way to its shared style"
+    );
+  });
+
   it("dims every turn of a locked block, with the lock's words", () => {
     const offers = turnIntoOffers(
       page(text({ locked: true, name: "Intro" })),

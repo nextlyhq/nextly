@@ -53,6 +53,11 @@ export interface TurnIntoPlan {
   readonly dropped?: string;
   /** The old block's props whose binding is removed. */
   readonly unbound: readonly string[];
+  /**
+   * Set when part of a block style the new type cannot wear gave way to a
+   * shared style the block keeps, which set the same thing at another width.
+   */
+  readonly lookTrimmed?: true;
 }
 
 /**
@@ -173,6 +178,7 @@ export function planTurnInto(
     op: { kind: "turnInto", id: node.id, node: turned },
     ...(converted.dropped === undefined ? {} : { dropped: converted.dropped }),
     unbound,
+    ...(worn.trimmed === true ? { lookTrimmed: true as const } : {}),
   };
 }
 
@@ -195,15 +201,18 @@ function offeredToPlacements(document: BlockDocument, id: string): boolean {
  * when it wears several, and its classes without them; nothing when it wears
  * none the library names.
  *
- * A look is drawn under every other class the block wears, so a value a kept
- * class sets (a shared style) is left out of it: written into the block's own
- * styles it would otherwise win over that class, and the block would change.
+ * A look is drawn under every other class the block wears, so what a kept
+ * class (a shared style) sets wins over it at any width that class applies
+ * to. Written into the block's own styles the look would win instead, so a
+ * value a kept class also sets, in the same state at any width, is left out
+ * and `trimmed` says so: where the shared style did not apply, that part of
+ * the look is lost, which is said rather than guessed around.
  */
 function lookOf(
   node: BlockNode,
   to: string,
   library: readonly NamedClass[]
-): { look?: NodeStyles; classes?: string[] } {
+): { look?: NodeStyles; classes?: string[]; trimmed?: true } {
   const worn = new Set(node.classes ?? []);
   const wornHere = library.filter(cls => worn.has(cls.id));
   const looks = wornHere
@@ -216,43 +225,42 @@ function lookOf(
     (all, each) => under(all, each.styles),
     {}
   );
+  const left = without(look, kept);
   return {
-    look: without(look, kept),
+    look: left.styles,
     classes: (node.classes ?? []).filter(cls => !gone.has(cls)),
+    ...(left.trimmed ? { trimmed: true as const } : {}),
   };
 }
 
-/** Whether a class sets `property` at this state and breakpoint. */
-function sets(
-  cls: NamedClass,
-  state: string,
-  breakpoint: string,
-  property: string
-): boolean {
-  const values = (cls.styles as Record<string, Record<string, object>>)[
-    state
-  ]?.[breakpoint];
-  return values !== undefined && Object.hasOwn(values, property);
+/** Whether a class sets `property` in `state`, at any width. */
+function sets(cls: NamedClass, state: string, property: string): boolean {
+  const widths = (cls.styles as Record<string, Record<string, object>>)[state];
+  return Object.values(widths ?? {}).some(
+    values => values !== undefined && Object.hasOwn(values, property)
+  );
 }
 
-/** `styles` without each value one of `classes` sets at the same place. */
+/** `styles` without each value one of `classes` sets in the same state. */
 function without(
   styles: NodeStyles,
   classes: readonly NamedClass[]
-): NodeStyles {
+): { styles: NodeStyles; trimmed: boolean } {
   const out: Record<string, Record<string, Record<string, unknown>>> = {};
+  let trimmed = false;
   for (const [state, breakpoints] of Object.entries(styles)) {
     for (const [breakpoint, values] of Object.entries(breakpoints ?? {})) {
-      const left = Object.entries(values ?? {}).filter(
-        ([property]) =>
-          !classes.some(cls => sets(cls, state, breakpoint, property))
+      const all = Object.entries(values ?? {});
+      const left = all.filter(
+        ([property]) => !classes.some(cls => sets(cls, state, property))
       );
+      if (left.length < all.length) trimmed = true;
       if (left.length === 0) continue;
       out[state] ??= {};
       out[state][breakpoint] = Object.fromEntries(left);
     }
   }
-  return out;
+  return { styles: out, trimmed };
 }
 
 /** `below` with `above` laid over it, value by value: `above` wins. */
