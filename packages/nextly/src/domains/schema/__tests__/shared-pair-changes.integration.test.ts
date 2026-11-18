@@ -59,7 +59,12 @@ const CHANGES = {
 } as const;
 type Change = keyof typeof CHANGES;
 
-const ROADS = ["dialog", "push", "collectionPatch", "singlePatch"] as const;
+const ROADS = [
+  "dialog",
+  "outsideDevelopment",
+  "collectionPatch",
+  "singlePatch",
+] as const;
 type Road = (typeof ROADS)[number];
 
 describeEachDialect(
@@ -169,8 +174,8 @@ describeEachDialect(
             { fields }
           );
         } else {
-          // The push where a save is not in development; the save's own file there.
-          if (road === "push") vi.stubEnv("NODE_ENV", "test");
+          // A save outside development, which applies nothing at once (not the dialog's push road).
+          if (road === "outsideDevelopment") vi.stubEnv("NODE_ENV", "test");
           await dispatchCollections(
             {} as ServiceContainer,
             "applySchemaChanges",
