@@ -68,7 +68,6 @@ function stepContext(
     adapter,
     db: adapter.getDrizzle(),
     dialect: adapter.getCapabilities().dialect,
-    options: {},
     log: deps.log,
     warn: deps.warn,
   };

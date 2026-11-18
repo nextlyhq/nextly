@@ -1,5 +1,5 @@
 /**
- * Upgrade step: hash passwords stored before this release.
+ * Data step of `nextly migrate`: hash passwords stored before this release.
  *
  * An earlier release kept a password inside a container, through a field
  * group held inline in a group or repeater, as it was written. This step
@@ -29,8 +29,8 @@ const registries = new WeakMap<
 >();
 
 /**
- * Where the steps read, over the upgrade's connection. The CLI hands the
- * upgrade a DrizzleAdapter; its tables are resolved through a registry
+ * Where the steps read, over the command's connection. The CLI hands the
+ * run a DrizzleAdapter; its tables are resolved through a registry
  * installed here once, as every CLI command that reads through the adapter
  * installs one, and shared by the steps after, so a table one registers
  * stays resolvable for the rest; each step installs it again before reading.

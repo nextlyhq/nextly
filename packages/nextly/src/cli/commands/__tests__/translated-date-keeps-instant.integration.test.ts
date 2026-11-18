@@ -122,7 +122,6 @@ function contextLogging(logged: Logged): CommandContext {
       info: about(logged.notices),
       success: about(logged.notices),
     },
-    options: {},
     cwd: dir,
   } as unknown as CommandContext;
 }
@@ -185,7 +184,6 @@ async function runUpgradeStep(): Promise<{
     adapter: target.adapter,
     db: target.adapter.getDrizzle(),
     dialect: "postgresql" as const,
-    options: {},
     log: (message: string) => logged.push(message),
     warn: (message: string) => logged.push(message),
   } as unknown as UpgradeStepContext;
