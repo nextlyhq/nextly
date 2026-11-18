@@ -456,12 +456,13 @@ export function TextField({
     live: typedLive,
     settles: onType !== undefined,
   });
-  const mode = useCanvasTokenMode();
-  const write = typedWrite({
+  const onChange = useTypedChange({
+    live: typedLive,
     control,
     tokens,
-    mode,
     onType: onType ?? onCommit,
+    setDraft,
+    setTyping,
   });
 
   return (
@@ -477,11 +478,7 @@ export function TextField({
       aria-invalid={invalid ? true : undefined}
       // Written as it is typed, so the canvas follows; the stretch of typing
       // is one undo step, which blur and Enter end.
-      onChange={event => {
-        setTyping(true);
-        if (typedLive === undefined) setDraft(event.target.value);
-        else typedLive.type(event.target.value, write);
-      }}
+      onChange={onChange}
       {...focusHandlers(editing?.holdBlur, setTyping, commit)}
       onKeyDown={event => {
         if (commitOnEnter(event, commit)) return;
@@ -494,6 +491,34 @@ export function TextField({
       }}
     />
   );
+}
+
+/**
+ * What a keystroke in the field does: the text is shown as typed, and, where
+ * the field types live, written in the edit's run of typing.
+ */
+function useTypedChange({
+  live,
+  control,
+  tokens,
+  onType,
+  setDraft,
+  setTyping,
+}: {
+  live: LiveDraft | undefined;
+  control: StyleControl;
+  tokens: SiteTokenSet | undefined;
+  onType: (value: StyleValue | null) => CommitOutcome;
+  setDraft: (value: string) => void;
+  setTyping: (typing: boolean) => void;
+}): (event: React.ChangeEvent<HTMLInputElement>) => void {
+  const mode = useCanvasTokenMode();
+  const write = typedWrite({ control, tokens, mode, onType });
+  return event => {
+    setTyping(true);
+    if (live === undefined) setDraft(event.target.value);
+    else live.type(event.target.value, write);
+  };
 }
 
 /**
