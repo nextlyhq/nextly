@@ -15,7 +15,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { inspectInstance } from "./instance-inspector";
+import { inspectInstance, withPlacementLists } from "./instance-inspector";
 
 beforeEach(() => {
   registerBlocks(
@@ -251,6 +251,48 @@ describe("a placement's settings, bound to data", () => {
     expect(rows?.[0]?.bindable).toMatchObject({
       type: "text",
       label: "Headline",
+    });
+  });
+
+  it("names the nearest list on a placement's list binding, and leaves a malformed stored one alone", () => {
+    const placement = {
+      id: "p",
+      type: COMPONENT_INSTANCE_TYPE,
+      version: 1,
+      props: { componentId: "card" },
+    } as BlockNode;
+    const page = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [
+        {
+          id: "posts",
+          type: "core/collection-loop",
+          version: 1,
+          props: { collection: "posts" },
+          slots: { children: [placement] },
+        },
+      ],
+    } as BlockDocument;
+    const op = withPlacementLists(page, {
+      kind: "update",
+      id: "p",
+      patch: {
+        bindings: {
+          "overrides.title": { $bind: "title", source: "item" },
+          "overrides.goes": null,
+        } as never,
+      },
+    });
+    expect(op).toEqual({
+      kind: "update",
+      id: "p",
+      patch: {
+        bindings: {
+          "overrides.title": { $bind: "title", source: "item", list: "posts" },
+          "overrides.goes": null,
+        },
+      },
     });
   });
 });
