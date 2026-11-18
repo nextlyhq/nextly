@@ -131,20 +131,21 @@ async function serverHolds(target: Target): Promise<boolean> {
 }
 
 /**
- * A target asked of the server alone, once per target: its spelling judged by
- * the server's own address rule before any entity is read under it, then
- * whether the server holds it.
+ * A target asked of the server alone, once per target: whether the server
+ * holds it (read under its encoded address), and only for one it does not,
+ * its spelling by the server's own address rule. An entity that exists under
+ * an address newer rules refuse keeps working, so it stays a target.
  */
 async function lookUp(target: Target): Promise<LookUp> {
+  if (await serverHolds(target)) return { status: "met" };
   const alone = await addressCheckApi.check(
     CHECK_KIND[target.kind],
     target.address,
     []
   );
-  if (alone.refusal && SPELLING_REFUSALS.has(alone.refusal.code)) {
-    return { status: "refused", refusal: alone.refusal.message };
-  }
-  return (await serverHolds(target)) ? { status: "met" } : { status: "absent" };
+  return alone.refusal && SPELLING_REFUSALS.has(alone.refusal.code)
+    ? { status: "refused", refusal: alone.refusal.message }
+    : { status: "absent" };
 }
 
 /** Whether an absent target can be made, with what this tab will create counted as pending. */
@@ -217,12 +218,16 @@ function stateOf(
   target: Target,
   local: boolean,
   lookup: UseQueryResult<LookUp> | undefined,
-  check: UseQueryResult<TargetAnswer> | undefined
+  check: UseQueryResult<TargetAnswer> | undefined,
+  // Whether the new entity's address has changed since the checks counted it:
+  // an absent target is checking until it has, never answered for the old one.
+  settling: boolean
 ): NeedState {
   if (local) return { ...target, status: "met" };
   const found = settled(target, lookup);
   if (found === null) return { ...target, status: "checking" };
   if (found.status !== "absent") return { ...target, ...found };
+  if (settling) return { ...target, status: "checking" };
   return { ...target, status: "checking", ...settled(target, check) };
 }
 
@@ -312,16 +317,21 @@ export function useTemplateNeeds(
       };
     }),
   });
+  const settling = settledSelf !== self.address;
   const states = targets.map((target, at) =>
-    stateOf(target, local[at], lookups[at], checks[at])
+    stateOf(target, local[at], lookups[at], checks[at], settling)
   );
 
   // The targets the person chose not to make, for the template they were
-  // chosen for: a template picked anew makes every one too.
+  // chosen for. Every change of template is recorded as it happens, none
+  // between included, so a template picked anew makes every one too.
   const [notMade, setNotMade] = useState<{
     template: object | null;
     keys: ReadonlySet<string>;
   }>({ template, keys: new Set() });
+  if (notMade.template !== template) {
+    setNotMade({ template, keys: new Set() });
+  }
   const skipped =
     notMade.template === template ? notMade.keys : new Set<string>();
 

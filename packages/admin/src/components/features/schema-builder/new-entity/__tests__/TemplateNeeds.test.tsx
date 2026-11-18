@@ -6,11 +6,12 @@
  * server would refuse, or one not made too, holds Create until the field that
  * needs it is left out.
  */
-import { screen, waitFor, within } from "@testing-library/react";
+import { QueryClientProvider } from "@tanstack/react-query";
+import { renderHook, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { render } from "@admin/__tests__/utils";
+import { createTestQueryClient, render } from "@admin/__tests__/utils";
 import { COLLECTION_BUILDER_CONFIG } from "@admin/pages/dashboard/collections/builder/builder-config";
 import { SINGLE_BUILDER_CONFIG } from "@admin/pages/dashboard/singles/builder/builder-config";
 
@@ -94,6 +95,7 @@ import type { FieldDefinition } from "@admin/types/collection";
 
 import type { BuilderSettingsValues } from "../../BuilderSettingsModal";
 import { NewEntityDialog } from "../NewEntityDialog";
+import { useTemplateNeeds } from "../useTemplateNeeds";
 
 beforeAll(() => {
   Element.prototype.hasPointerCapture = () => false;
@@ -421,7 +423,7 @@ describe("what a template needs", () => {
     }
   });
 
-  it("refuses a target not spelled as an address before reading any entity under it", async () => {
+  it("refuses a target not spelled as an address that no entity holds, reading it only encoded", async () => {
     refusals = {
       "collection:bad#slug": {
         code: "SLUG_INVALID_FORMAT",
@@ -462,7 +464,9 @@ describe("what a template needs", () => {
         await screen.findByText(/The collection bad#slug cannot be made/)
       ).toBeInTheDocument();
       expect(createButton()).toBeDisabled();
-      expect(reads.filter(each => each.includes("bad"))).toEqual([]);
+      // Read only as one address, encoded: never as a route its characters spell.
+      expect(reads.filter(each => each.includes("bad"))).not.toEqual([]);
+      expect(reads.filter(each => each.includes("#"))).toEqual([]);
     } finally {
       remove();
     }
@@ -480,5 +484,100 @@ describe("what a template needs", () => {
     // create, once the typing has settled: not once per letter.
     const authorsChecks = checks.filter(each => each.address === "authors");
     expect(authorsChecks.length).toBeLessThanOrEqual(3);
+  });
+
+  it("takes an existing entity whose address only newer rules refuse", async () => {
+    existing = new Set(["collection:posts-"]);
+    refusals = {
+      "collection:posts-": {
+        code: "SLUG_INVALID_FORMAT",
+        message: "Collection address 'posts-' must not end with '-'.",
+      },
+    };
+    const remove = registerSchemaTemplates("Acme", [
+      {
+        id: "legacy",
+        kind: "collection",
+        category: "Acme",
+        name: "Acme legacy",
+        description: "Links to an older collection.",
+        fields: [
+          {
+            name: "post",
+            label: "Post",
+            type: "relationship",
+            relationTo: "posts-",
+          },
+        ],
+      },
+    ]);
+    try {
+      const { onCreate, user } = renderDialog();
+      await user.type(screen.getByRole("textbox", { name: "Name" }), "Article");
+      await user.click(
+        screen.getByRole("button", { name: "Browse all templates" })
+      );
+      const gallery = await screen.findByRole("dialog", {
+        name: "All templates",
+      });
+      await user.click(
+        within(gallery).getByRole("button", { name: "Use Acme legacy" })
+      );
+      await waitFor(() => expect(createButton()).toBeEnabled());
+      expect(screen.queryByText(/collection posts-/)).toBeNull();
+      await user.click(createButton());
+      expect(onCreate.mock.calls.at(-1)?.[2]).toEqual([]);
+    } finally {
+      remove();
+    }
+  });
+
+  it("makes every target too again when a template is picked anew", async () => {
+    const { user } = renderDialog();
+    await user.type(screen.getByRole("textbox", { name: "Name" }), "Article");
+    await user.click(screen.getByRole("radio", { name: /Blog posts/ }));
+    await user.click(
+      await within(picked()).findByRole("checkbox", {
+        name: "Create the collection authors too",
+      })
+    );
+    await user.click(screen.getByRole("radio", { name: /No template/ }));
+    await user.click(screen.getByRole("radio", { name: /Blog posts/ }));
+    expect(
+      await within(picked()).findByRole("checkbox", {
+        name: "Create the collection authors too",
+      })
+    ).toBeChecked();
+  });
+
+  it("holds Create while the new entity's address has not settled into the checks", async () => {
+    const needs = [
+      {
+        kind: "collection" as const,
+        slug: "authors",
+        path: "author",
+        key: "0",
+      },
+    ];
+    const template = {};
+    const client = createTestQueryClient();
+    const { result, rerender } = renderHook(
+      ({ address }: { address: string }) =>
+        useTemplateNeeds(needs, { kind: "collection", address }, [], template),
+      {
+        initialProps: { address: "thing" },
+        wrapper: ({ children }) => (
+          <QueryClientProvider client={client}>{children}</QueryClientProvider>
+        ),
+      }
+    );
+    // Settled: the target is missing and made too, so nothing holds Create.
+    await waitFor(() => expect(result.current.blockedBy).toBeNull());
+
+    // A new address, not yet counted by the checks: held, not answered from
+    // the check made for the old one.
+    rerender({ address: "thing-two" });
+    expect(result.current.blockedBy).toBe("Checking what the template needs…");
+    await waitFor(() => expect(result.current.blockedBy).toBeNull());
   });
 });
