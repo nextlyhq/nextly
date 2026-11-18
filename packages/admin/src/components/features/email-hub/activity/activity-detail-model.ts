@@ -13,6 +13,7 @@
 import type {
   DeliveryAttempt,
   DeliveryFailureKind,
+  EmailFailure,
   DeliveryOutcome,
   QueuedEmailState,
   TemplateVersion,
@@ -81,7 +82,7 @@ export type DetailSource = "delivery" | "attempt" | "queued";
  * can't be known, one worth trying again, or one refused for good.
  */
 export function failureKindOf(
-  failure: { retryable: boolean; unknown?: true } | null
+  failure: EmailFailure | null
 ): DeliveryFailureKind | null {
   if (failure === null) return null;
   if (failure.unknown) return "unknown";
