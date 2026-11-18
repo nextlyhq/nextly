@@ -359,15 +359,79 @@ describe("a type change collected over its stored values", () => {
       stored('["p1","p2"]', '["p3"]', "[]")
     );
     expect(result.judgement.class).toBe("blocked");
+    // Only the row holding several: the others convert as the next case says.
+    expect(result.judgement.reasons).toEqual([
+      {
+        kind: "several-items",
+        class: "blocked",
+        rows: { first: [{ id: "1" }], count: 1 },
+      },
+    ]);
+    expect(result.counts).toMatchObject({ changed: 1, blocked: 1, kept: 1 });
+  });
+
+  it("carries a list of links becoming one link where each row holds one link or none", async () => {
+    // Every road's many-to-one conversion (`referenceScalar`) writes a one-link list as its link
+    // and an empty list as no link, so neither is a value to rewrite first.
+    const result = await collectTypeChange(
+      typeOf("postgresql", "relationship", {
+        relationTo: "people",
+        hasMany: true,
+      }),
+      typeOf("postgresql", "relationship", { relationTo: "people" }),
+      stored('["p3"]', "[]", null)
+    );
+    expect(result.judgement.class).not.toBe("blocked");
     expect(
-      result.judgement.reasons.find(r => r.kind === "several-items")?.rows
-    ).toEqual({ first: [{ id: "1" }], count: 1 });
-    // The one-link list read as its link is a new form no save writes yet, and the empty list is
-    // stored as `[]`, which one link's column would keep as that text (`needs-rewrite`).
-    expect(
-      result.judgement.reasons.find(r => r.kind === "needs-rewrite")?.rows
-    ).toEqual({ first: [{ id: "2" }, { id: "3" }], count: 2 });
-    expect(result.counts).toMatchObject({ changed: 0, blocked: 3, kept: 0 });
+      result.judgement.reasons.filter(r => r.class === "blocked")
+    ).toEqual([]);
+    expect(result.counts).toEqual({ kept: 2, changed: 1, lost: 0, blocked: 0 });
+    expect(result.cleared).toEqual([]);
+  });
+
+  it("passes a relationship's change of collections over rows holding no link", async () => {
+    // A link to one collection and a reference naming its collection convert into neither, so the
+    // change needs every row empty: an empty column, or an empty list, has nothing to convert.
+    for (const [from, to, texts] of [
+      [{ relationTo: "people" }, { relationTo: ["people", "teams"] }, [null]],
+      [
+        { relationTo: ["people", "teams"], hasMany: true },
+        { relationTo: "people" },
+        ["[]", null],
+      ],
+    ] as const) {
+      const result = await collectTypeChange(
+        typeOf("postgresql", "relationship", from),
+        typeOf("postgresql", "relationship", to),
+        stored(...texts)
+      );
+      expect([from, to, result.judgement]).toEqual([
+        from,
+        to,
+        { class: "safe", reasons: [] },
+      ]);
+    }
+  });
+
+  it("blocks a relationship's change of collections where a row holds a link, counting its rows", async () => {
+    const result = await collectTypeChange(
+      typeOf("postgresql", "relationship", { relationTo: "people" }),
+      typeOf("postgresql", "relationship", {
+        relationTo: ["people", "teams"],
+      }),
+      stored("p1", null, "p2")
+    );
+    expect(result.judgement).toEqual({
+      class: "blocked",
+      reasons: [
+        {
+          kind: "link-not-carried",
+          class: "blocked",
+          rows: { first: [{ id: "1" }, { id: "3" }], count: 2 },
+        },
+      ],
+    });
+    expect(result.counts).toEqual({ kept: 1, changed: 0, lost: 0, blocked: 2 });
   });
 
   it("loses a value the new field's own validation refuses, though the rules would keep it", async () => {
