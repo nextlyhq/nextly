@@ -56,9 +56,6 @@ import {
 } from "@nextlyhq/blocks-engine";
 import { useCallback, useMemo, useRef, useState } from "react";
 
-// The history's bound, exported here since this is where it was always read.
-export { MAX_HISTORY } from "./editor-history";
-
 import {
   useEditorAsks,
   type AskedSetting,
@@ -93,6 +90,9 @@ import {
   type BlockSelection,
   type SelectionMode,
 } from "./selection";
+
+// The history's bound, exported here since this is where it was always read.
+export { MAX_HISTORY } from "./editor-history";
 
 export interface EditorState {
   /** The document as it currently stands. */
@@ -302,6 +302,15 @@ export interface UseEditorStateArgs {
    * is the one check none of them can miss, whatever a surface asked first.
    */
   onPlacementRefused?: (refusal: LocatedPlacementBreak) => void;
+  /**
+   * Which editing session this is. A different value starts the state again
+   * from `initialDocument`: nothing selected and an empty history, as a fresh
+   * mount would, while the component stays mounted. For a host that edits a
+   * second document for a while (a header in place) and drops its history
+   * when it is done. Absent, the state lives as long as the component.
+   * @experimental
+   */
+  session?: unknown;
 }
 
 /**
@@ -960,6 +969,30 @@ export function useEditorState(args: UseEditorStateArgs): EditorState {
   );
 }
 
+/**
+ * The document and its selection, started again in the render that sees
+ * `session` change (never on the first), with the history `clearHistory`
+ * forgets. During that render rather than after it, so no surface ever reads
+ * the old document under the new session: the updates are this component's
+ * own, so React drops that render and renders again at once with them.
+ */
+function useSessionDocument(
+  initialDocument: BlockDocument,
+  session: unknown,
+  clearHistory: () => void
+) {
+  const [document, setDocument] = useState<BlockDocument>(initialDocument);
+  const [selection, setSelection] = useState<BlockSelection>(EMPTY_SELECTION);
+  const [held, setHeld] = useState(session);
+  if (!Object.is(held, session)) {
+    setHeld(session);
+    setDocument(initialDocument);
+    setSelection(EMPTY_SELECTION);
+    clearHistory();
+  }
+  return { document, setDocument, selection, setSelection };
+}
+
 /** The document, its selection and its history: see {@link useEditorState}. */
 function useDocumentState({
   initialDocument,
@@ -971,6 +1004,7 @@ function useDocumentState({
   stored,
   onPlacementRefused,
   componentName,
+  session,
 }: UseEditorStateArgs): EditorState {
   // Read at apply time rather than closed over, so a library that reloads or
   // a host that swaps its callback does not rebuild `apply` and everything
@@ -988,8 +1022,13 @@ function useDocumentState({
   };
   const composition = useRef(atApply(host, initialDocument));
   composition.current = atApply(host, initialDocument);
-  const [document, setDocument] = useState<BlockDocument>(initialDocument);
-  const [selection, setSelection] = useState<BlockSelection>(EMPTY_SELECTION);
+  const { depths, push, pop, remove, withdraw, settle, clear } =
+    useHistoryStacks();
+  const { document, setDocument, selection, setSelection } = useSessionDocument(
+    initialDocument,
+    session,
+    clear
+  );
 
   /**
    * The document as it stands NOW, for everything a LATER event reaches.
@@ -1025,8 +1064,6 @@ function useDocumentState({
       locks
     );
   latestDocument.current = document;
-
-  const { depths, push, pop, remove, withdraw, settle } = useHistoryStacks();
 
   /**
    * Run an op and record its inverse on the given stack.
@@ -1166,7 +1203,8 @@ function useDocumentState({
     // would rebuild these callbacks every edit for a value none of them close
     // over. Stable identity is also the point — a stale `run` is now the same
     // `run`, folding onto the tree as it stands.
-    [limits, composerNow, push]
+    // The setters too, stable, listed since they arrive from a hook here.
+    [limits, composerNow, push, setDocument, setSelection]
   );
 
   const apply = useCallback((op: BuilderOp) => run([op], "new"), [run]);
@@ -1213,7 +1251,8 @@ function useDocumentState({
       setSelection(current =>
         applySelection(latestDocument.current, current, id, mode)
       ),
-    []
+    // Stable setter, listed since it arrives from a hook of this module.
+    [setSelection]
   );
 
   return useMemo(

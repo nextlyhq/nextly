@@ -78,6 +78,8 @@ export function useHistoryStacks(): {
   withdraw: (origin: HistoryStep, dropped: HistoryEntry | undefined) => void;
   /** A replay of the step took effect; the branch it ended is gone. */
   settle: (origin: HistoryStep) => void;
+  /** Forget everything: both stacks, and what fell off the old end. */
+  clear: () => void;
 } {
   const undoStack = useRef<HistoryEntry[]>([]);
   const redoStack = useRef<HistoryEntry[]>([]);
@@ -208,7 +210,20 @@ export function useHistoryStacks(): {
       endedBranch.current = null;
     }
   }, []);
-  return { depths, push, pop, remove, withdraw, settle };
+  /*
+   * A history started again, for a new session of the editor: nothing to undo
+   * or redo, no run of steps or of typing to join, and no edit forgotten, so
+   * the save point counts from the session's own start.
+   */
+  const clear = useCallback(() => {
+    undoStack.current = [];
+    redoStack.current = [];
+    forgotten.current = 0;
+    endedBranch.current = null;
+    typing.current = null;
+    sync();
+  }, [sync]);
+  return { depths, push, pop, remove, withdraw, settle, clear };
 }
 
 /** A run of recorded steps, the redo branch it ended, and what lay below it. */

@@ -2323,3 +2323,71 @@ describe("a block's setting, asked for from a page check", () => {
     expect(result.current.canUndo).toBe(false);
   });
 });
+
+describe("a new session", () => {
+  const insert = (id: string, index: number) =>
+    ({ kind: "insert", node: node(id), at: { index } }) as const;
+
+  it("starts again from its document, nothing selected and no history", () => {
+    const { result, rerender } = renderHook(
+      ({ session, start }: { session: object; start: BlockDocument }) =>
+        useEditorState({ initialDocument: start, session }),
+      { initialProps: { session: {}, start: doc([node("a")]) } }
+    );
+    act(() => {
+      result.current.apply(insert("b", 1));
+    });
+    act(() => result.current.select("a"));
+    act(() => {
+      result.current.undo();
+    });
+    expect(result.current.canRedo).toBe(true);
+
+    rerender({ session: {}, start: doc([node("x")]) });
+
+    expect(ids(result.current.document)).toEqual(["x"]);
+    expect(result.current.selectedId).toBeNull();
+    expect(result.current.canUndo).toBe(false);
+    expect(result.current.canRedo).toBe(false);
+    expect(result.current.undoDepth).toBe(0);
+    // An edit after the restart is the new session's first step, and undoing
+    // it lands on the session's own document, never the one before it.
+    act(() => {
+      result.current.apply(insert("y", 1));
+    });
+    act(() => {
+      result.current.undo();
+    });
+    expect(ids(result.current.document)).toEqual(["x"]);
+    expect(result.current.canUndo).toBe(false);
+  });
+
+  it("keeps the document and history while the session stays the same", () => {
+    const session = {};
+    const { result, rerender } = renderHook(
+      ({ start }: { start: BlockDocument }) =>
+        useEditorState({ initialDocument: start, session }),
+      { initialProps: { start: doc([node("a")]) } }
+    );
+    act(() => {
+      result.current.apply(insert("b", 1));
+    });
+    rerender({ start: doc([node("x")]) });
+    expect(ids(result.current.document)).toEqual(["a", "b"]);
+    expect(result.current.canUndo).toBe(true);
+  });
+
+  it("drops a recorded step of the session before it", async () => {
+    const calls: string[] = [];
+    const { result, rerender } = renderHook(
+      ({ session }: { session: object }) =>
+        useEditorState({ initialDocument: doc([node("a")]), session }),
+      { initialProps: { session: {} } }
+    );
+    act(() => result.current.recordStep(step(calls, "style")));
+    rerender({ session: {} });
+    expect(result.current.canUndo).toBe(false);
+    await act(async () => result.current.undo());
+    expect(calls).toEqual([]);
+  });
+});
