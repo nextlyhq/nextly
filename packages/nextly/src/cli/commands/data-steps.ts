@@ -7,8 +7,9 @@
  * one step; both run them through here, so both ask for a backup the same
  * way and hold the schema lock the same way.
  *
- * In order: every step is counted, read-only and with no lock, and a run
- * with nothing to change ends there, asking nothing. With work, a backup is
+ * In order: the steps are counted, read-only and with no lock, up to the
+ * first with work, and a run with nothing to change ends there, asking
+ * nothing. With work, a backup is
  * confirmed, by the command's flag or by a yes at a terminal, before the
  * lock, so no other run waits on a person. Then the schema lock is held
  * while each step is counted again and run, each before the next is counted,
@@ -22,6 +23,8 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { withMigrateLock } from "../../domains/schema/pipeline/locks";
 import { NextlyError } from "../../errors";
 import type { DryRunChange, DryRunPlan } from "../dry-run";
+
+import { dryRunRefusalOf } from "./migrate-create";
 
 import type {
   UpgradeAdapter,
@@ -76,67 +79,63 @@ const named = ({ step, pending }: PendingDataStep) =>
   `${step.title}: ${String(pending)}`;
 
 /**
- * The steps with work on the database as it stands, read-only and with no
- * lock. A step whose count refuses stops the read with that refusal.
+ * The first step with work on the database as it stands, read-only and with
+ * no lock; undefined when none has any. Counted in order and no further than
+ * the first with work: a later step may read what that one repairs, so its
+ * count means nothing until it has run. A step whose count refuses stops the
+ * read with that refusal.
  */
-export async function pendingDataSteps(
+export async function firstDataStepWithWork(
   deps: Pick<DataStepsDeps, "adapter" | "steps" | "log" | "warn">
-): Promise<PendingDataStep[]> {
+): Promise<PendingDataStep | undefined> {
   const context = stepContext(deps);
-  const withWork: PendingDataStep[] = [];
   for (const step of deps.steps) {
     const pending = await step.pending(context);
-    if (pending > 0) withWork.push({ step, pending });
+    if (pending > 0) return { step, pending };
   }
-  return withWork;
+  return undefined;
 }
 
 /** The refusal of steps with work whose backup nobody confirmed, and nobody can be asked about. */
-function backupNotConfirmed(
-  command: string,
-  withWork: readonly PendingDataStep[]
-): NextlyError {
+function backupNotConfirmed(command: string, first: PendingDataStep): NextlyError {
   return new NextlyError({
     code: "NEXTLY_UPGRADE_IN_PROGRESS",
     publicMessage:
-      `\`${command}\` would change data an earlier Nextly release stored (${withWork.map(named).join("; ")}), and does so only once a backup is confirmed. ` +
+      `\`${command}\` would change data an earlier Nextly release stored (${named(first)}), and does so only once a backup is confirmed. ` +
       `Back up the database, then run \`${command} --backup-confirmed\`.`,
     logContext: { reason: "data-steps-backup-not-confirmed", command },
   });
 }
 
 /** The refusal of steps with work whose backup question was answered no. */
-function backupDeclined(
-  command: string,
-  withWork: readonly PendingDataStep[]
-): NextlyError {
+function backupDeclined(command: string, first: PendingDataStep): NextlyError {
   return new NextlyError({
     code: "NEXTLY_UPGRADE_IN_PROGRESS",
     publicMessage:
-      `The data an earlier Nextly release stored was left as it is (${withWork.map(named).join("; ")}): the backup question was answered no. ` +
+      `The data an earlier Nextly release stored was left as it is (${named(first)}): the backup question was answered no. ` +
       `Back up the database, then run \`${command}\` again and answer yes, or pass \`--backup-confirmed\`.`,
     logContext: { reason: "data-steps-backup-declined", command },
   });
 }
 
 /**
- * Confirms a backup for `withWork`: by the flag, or by a yes at a terminal.
- * With neither it refuses, having changed nothing. With no work it asks
- * nothing, whatever the flag says.
+ * Confirms a backup for the work `first` starts: by the flag, or by a yes at
+ * a terminal. With neither it refuses, having changed nothing. With no work
+ * it asks nothing, whatever the flag says.
  */
 export async function confirmDataStepsBackup(
   deps: Pick<
     DataStepsDeps,
     "command" | "backupConfirmed" | "interactive" | "askBackedUp"
   >,
-  withWork: readonly PendingDataStep[]
+  first: PendingDataStep | undefined
 ): Promise<void> {
-  if (withWork.length === 0 || deps.backupConfirmed) return;
+  if (first === undefined || deps.backupConfirmed) return;
   if (!deps.interactive || deps.askBackedUp === undefined) {
-    throw backupNotConfirmed(deps.command, withWork);
+    throw backupNotConfirmed(deps.command, first);
   }
   if (!(await deps.askBackedUp())) {
-    throw backupDeclined(deps.command, withWork);
+    throw backupDeclined(deps.command, first);
   }
 }
 
@@ -148,9 +147,9 @@ export async function confirmDataStepsBackup(
 export async function runDataSteps(
   deps: DataStepsDeps
 ): Promise<{ title: string; changed: number }[]> {
-  await confirmDataStepsBackup(deps, await pendingDataSteps(deps));
-  // Asked or not, a run that found nothing leaves the lock alone.
-  if ((await pendingDataSteps(deps)).length === 0) return [];
+  const first = await firstDataStepWithWork(deps);
+  if (first === undefined) return [];
+  await confirmDataStepsBackup(deps, first);
 
   const context = stepContext(deps);
   const ran: { title: string; changed: number }[] = [];
@@ -159,7 +158,8 @@ export async function runDataSteps(
     context.dialect,
     async () => {
       // Counted again under the lock, each once the steps before it have
-      // run: a run this one waited behind may have done the work already.
+      // run: a run this one waited behind may have done the work already,
+      // and a step reads what the steps before it repaired.
       for (const step of deps.steps) {
         if ((await step.pending(context)) === 0) continue;
         const changed = await step.run(context);
@@ -206,20 +206,34 @@ export async function previewDataSteps(
     | "warn"
   >
 ): Promise<DryRunPlan> {
-  const withWork = await pendingDataSteps(deps);
+  const context = stepContext(deps);
+  const withWork: PendingDataStep[] = [];
   const notes: string[] = [];
   let refusal: string | undefined;
-  if (withWork.length > 0) {
+  for (const step of deps.steps) {
+    let pending: number;
+    try {
+      pending = await step.pending(context);
+    } catch (error) {
+      // A step whose count refuses stops the plan there, as it stops the run.
+      refusal = dryRunRefusalOf(error);
+      if (refusal === undefined) throw error;
+      break;
+    }
+    if (pending > 0) withWork.push({ step, pending });
+  }
+  const [first] = withWork;
+  if (first !== undefined) {
     notes.push(
       "Each count is taken before any step runs; a real run counts each step once the steps before it have run."
     );
-    if (!deps.backupConfirmed) {
+    if (!deps.backupConfirmed && refusal === undefined) {
       if (deps.interactive) {
         notes.push(
           "A real run first asks whether the database is backed up; pass --backup-confirmed to confirm it without being asked."
         );
       } else {
-        refusal = backupNotConfirmed(deps.command, withWork).publicMessage;
+        refusal = backupNotConfirmed(deps.command, first).publicMessage;
       }
     }
   }

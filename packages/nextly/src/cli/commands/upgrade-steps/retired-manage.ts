@@ -1,5 +1,5 @@
 /**
- * Upgrade step: convert roles holding a retired `manage-` permission.
+ * Data step of `nextly migrate`: convert roles holding a retired `manage-` permission.
  *
  * A role an earlier release gave `manage-<resource>` on media, settings,
  * email providers or email templates is given the plain read, create, update
@@ -9,7 +9,7 @@
  * never which.
  *
  * The step itself is declared in `./index.ts`, which loads this module only
- * when the upgrade asks the step: what it reads and writes reaches the role
+ * when the run asks the step: what it reads and writes reaches the role
  * services, which nothing else the CLI loads needs.
  *
  * @module cli/commands/upgrade-steps/retired-manage
@@ -57,11 +57,11 @@ export async function convertRoles(
     if (converted > 0) await afterGrantsChanged();
   });
   // A role whose resource lacks one of the plain four keeps its `manage-`
-  // permission rather than lose access, so the upgrade is not done for it:
+  // permission rather than lose access, so the conversion is not done for it:
   // said here with the remedy, never counted as converted.
   if (kept > 0) {
     context.warn(
-      `${kept} role(s) still hold a retired manage permission: a plain read, create, update or delete permission it stands for is missing. Start Nextly once so it seeds them, then run \`nextly upgrade\` again.`
+      `${kept} role(s) still hold a retired manage permission: a plain read, create, update or delete permission it stands for is missing. Start Nextly once so it seeds them, then run \`nextly migrate\` again.`
     );
   }
   return converted;

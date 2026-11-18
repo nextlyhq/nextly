@@ -1,11 +1,11 @@
 /**
- * `nextly upgrade` hashes a password an earlier release stored as given.
+ * `nextly migrate` hashes a password an earlier release stored as given.
  *
  * Each placement below once kept a password in a container's stored value as
  * it was written: a group or repeater of a collection, a Single or a field
  * group, a field group held inline in one, and a translated container on its
  * companion row. The rows are seeded that way through the adapter, as such a
- * release left them. An upgrade then stores each as a hash of what was
+ * release left them. The command's data steps then store each as a hash of what was
  * written, so the password still verifies; leaves a value already in a
  * hasher's format alone; reports counts and never a value; and a second run
  * finds nothing to do.
@@ -49,7 +49,7 @@ import {
 import { describeError } from "../../../errors";
 import { consoleLogger } from "../../../services/shared";
 import { installRegistryResolver } from "../../utils/registry-resolver";
-import { runUpgrade, type UpgradeAdapter } from "../upgrade";
+import { runMigrateDataSteps } from "./helpers/run-migrate-data-steps";
 
 type Doc = Record<string, unknown>;
 
@@ -86,20 +86,15 @@ function valuesAt(value: unknown, key: string): unknown[] {
 }
 
 describe.each(getConfiguredTestDialects())(
-  "nextly upgrade hashes passwords stored before this release (%s)",
+  "nextly migrate hashes passwords stored before this release (%s)",
   (dialect: TestDialect) => {
     let t: TestNextly;
     let trusted: Nextly;
     const lines: string[] = [];
-    const logger = {
-      info: (msg: string) => lines.push(msg),
-      warn: (msg: string) => lines.push(msg),
-    };
     const upgrade = () =>
-      runUpgrade(
-        { confirmBackedUp: true },
-        { adapter: t.adapter as unknown as UpgradeAdapter, logger }
-      );
+      runMigrateDataSteps(t.adapter, {
+        log: (msg: string) => lines.push(msg),
+      });
 
     beforeAll(async () => {
       t = await createTestNextly({
@@ -366,7 +361,7 @@ describe.each(getConfiguredTestDialects())(
 );
 
 describe.each(getConfiguredTestDialects())(
-  "the upgrade's password step, on the rows it rewrites (%s)",
+  "the password step, on the rows it rewrites (%s)",
   (dialect: TestDialect) => {
     let t: TestNextly;
     let trusted: Nextly;
@@ -535,7 +530,7 @@ describe.each(getConfiguredTestDialects())(
 );
 
 describe.each(getConfiguredTestDialects())(
-  "nextly upgrade removes passwords kept in version history (%s)",
+  "nextly migrate removes passwords kept in version history (%s)",
   (dialect: TestDialect) => {
     let t: TestNextly;
     let trusted: Nextly;
@@ -621,10 +616,7 @@ describe.each(getConfiguredTestDialects())(
         expect(valuesAt(version.snapshot, "pin")).toEqual(["retarget-plain"]);
       }
 
-      await runUpgrade(
-        { confirmBackedUp: true },
-        { adapter: t.adapter as unknown as UpgradeAdapter }
-      );
+      await runMigrateDataSteps(t.adapter);
 
       for (const version of await versionsOf(id)) {
         expect(valuesAt(version.snapshot, "pin")).toEqual([]);
@@ -662,16 +654,9 @@ describe.each(getConfiguredTestDialects())(
       }
 
       lines.length = 0;
-      await runUpgrade(
-        { confirmBackedUp: true },
-        {
-          adapter: t.adapter as unknown as UpgradeAdapter,
-          logger: {
-            info: msg => lines.push(msg),
-            warn: msg => lines.push(msg),
-          },
-        }
-      );
+      await runMigrateDataSteps(t.adapter, {
+        log: (msg: string) => lines.push(msg),
+      });
 
       for (const version of await versionsOf(id)) {
         expect(valuesAt(version.snapshot, "pin")).toEqual([]);
@@ -697,12 +682,10 @@ describe.each(getConfiguredTestDialects())(
           logger: consoleLogger,
         })
       ).toEqual([]);
-      await expect(
-        runUpgrade(
-          { confirmBackedUp: true },
-          { adapter: t.adapter as unknown as UpgradeAdapter }
-        )
-      ).resolves.toBeUndefined();
+      // The run ends without a refusal: what it changed, if anything.
+      await expect(runMigrateDataSteps(t.adapter)).resolves.toEqual(
+        expect.any(Array)
+      );
     });
   }
 );

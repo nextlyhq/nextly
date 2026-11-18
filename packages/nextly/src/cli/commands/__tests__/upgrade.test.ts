@@ -11,11 +11,10 @@ import {
   consolidateLegacyBookkeeping,
   type ConsolidateLegacyArgs,
 } from "../legacy-bookkeeping";
-import { runUpgrade, type UpgradeAdapter } from "../upgrade";
+import type { UpgradeAdapter } from "../upgrade-step";
 
-// The schema lock is exercised against real databases in its own suites. These drive the upgrade steps,
-// and the move of an earlier release's migration records that `nextly migrate` makes,
-// through a narrow adapter double that cannot hold it, so here the lock runs the work as given.
+// The schema lock is exercised against real databases in its own suites. These drive the move of
+// an earlier release's migration records that `nextly migrate` makes through a narrow adapter double that cannot hold it, so here the lock runs the work as given.
 // `program` imports every command, `migrate` with its whole graph among them;
 // the command under test takes only its context factory from it, and is
 // handed its context here.
@@ -226,146 +225,5 @@ describe("the move of an earlier release's migration records (sqlite)", () => {
       logContext: { reason: "migrate-ledger-unreadable" },
     });
     expect(tableExistsSync(testDb, "nextly_migrations")).toBe(true);
-  });
-
-  it("nextly upgrade refuses the database, running no step and naming nextly migrate", async () => {
-    let ran = false;
-    const refusal = await runUpgrade(
-      { confirmBackedUp: true },
-      {
-        adapter,
-        steps: [
-          {
-            title: "a step with work",
-            pending: () => Promise.resolve(1),
-            run: () => {
-              ran = true;
-              return Promise.resolve(1);
-            },
-          },
-        ],
-      }
-    ).then(
-      () => undefined,
-      (error: unknown) => error
-    );
-    expect(refusal).toMatchObject({
-      code: "NEXTLY_LEGACY_BOOKKEEPING_DETECTED",
-      publicMessage: expect.stringContaining(
-        "nextly migrate --backup-confirmed"
-      ) as string,
-    });
-    expect(ran).toBe(false);
-    expect(tableExistsSync(testDb, "nextly_migrations")).toBe(true);
-  });
-});
-
-describe("nextly upgrade runs a list of steps", () => {
-  let testDb: TestDb;
-  let adapter: UpgradeAdapter;
-
-  beforeEach(async () => {
-    // Already moved to nextly_schema_events: the first step has no work.
-    testDb = await createTestDb();
-    adapter = makeAdapter(testDb);
-  });
-
-  /** A step that says it has `pending` to do and records whether it ran. */
-  function step(title: string, pending: number) {
-    const ran: number[] = [];
-    return {
-      ran,
-      step: {
-        title,
-        pending: () => Promise.resolve(pending),
-        run: () => {
-          ran.push(pending);
-          return Promise.resolve(pending);
-        },
-      },
-    };
-  }
-
-  it("runs only the steps with work, and reports each one's count", async () => {
-    const idle = step("tidy one thing", 0);
-    const busy = step("tidy another thing", 2);
-    const lines: string[] = [];
-
-    await runUpgrade({ confirmBackedUp: true }, {
-      adapter,
-      logger: { info: msg => lines.push(msg) },
-      steps: [idle.step, busy.step],
-    } as Parameters<typeof runUpgrade>[1]);
-
-    expect(idle.ran).toEqual([]);
-    expect(busy.ran).toEqual([2]);
-    expect(lines.join("\n")).toContain("tidy another thing: 2");
-    expect(lines.join("\n")).not.toContain("Nothing to do");
-  });
-
-  it("asks for a backup only when a step has work", async () => {
-    const busy = step("tidy a thing", 1);
-
-    await expect(
-      runUpgrade({ confirmBackedUp: false }, {
-        adapter,
-        isTTY: false,
-        steps: [busy.step],
-      } as Parameters<typeof runUpgrade>[1])
-    ).rejects.toMatchObject({ code: "NEXTLY_UPGRADE_IN_PROGRESS" });
-    expect(busy.ran).toEqual([]);
-  });
-
-  it("says there is nothing to do only when no step has work, without asking for a backup", async () => {
-    const idle = step("tidy a thing", 0);
-    const lines: string[] = [];
-
-    await runUpgrade({ confirmBackedUp: false }, {
-      adapter,
-      isTTY: false,
-      logger: { info: msg => lines.push(msg) },
-      steps: [idle.step],
-    } as Parameters<typeof runUpgrade>[1]);
-
-    expect(idle.ran).toEqual([]);
-    expect(lines).toContain("Already upgraded. Nothing to do.");
-  });
-});
-
-describe("nextly upgrade runs its steps in order", () => {
-  it("brings each step up to date before asking the next what it has to do", async () => {
-    const testDb = await createTestDb();
-    const adapter = makeAdapter(testDb);
-    let firstRan = false;
-    const first = {
-      title: "repair the bookkeeping",
-      pending: () => Promise.resolve(firstRan ? 0 : 1),
-      run: () => {
-        firstRan = true;
-        return Promise.resolve(1);
-      },
-    };
-    // Reads what the first step repairs, so it can only count after it.
-    const second = {
-      title: "read what the bookkeeping holds",
-      pending: () =>
-        firstRan
-          ? Promise.resolve(1)
-          : Promise.reject(new Error("read before the repair")),
-      run: () => Promise.resolve(1),
-    };
-    const lines: string[] = [];
-
-    await runUpgrade(
-      { confirmBackedUp: true },
-      {
-        adapter,
-        logger: { info: msg => lines.push(msg) },
-        steps: [first, second],
-      }
-    );
-
-    expect(lines).toContain("repair the bookkeeping: 1");
-    expect(lines).toContain("read what the bookkeeping holds: 1");
   });
 });

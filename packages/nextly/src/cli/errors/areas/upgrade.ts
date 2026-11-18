@@ -35,29 +35,47 @@ export const UPGRADE_CODES = defineCodes({
   UPGRADE_CANCELLED: {
     cause:
       "The backup prompt of `nextly upgrade` was answered no, so the upgrade did not run.",
-    from: [
-      {
-        code: "NEXTLY_UPGRADE_IN_PROGRESS",
-        reason: "cancelled",
-        describe: error => ({
-          what: error.publicMessage,
-          why: "The upgrade asks for a backup before its first step that changes anything, and the answer was no. Nothing was changed.",
-          next: "Back up the database, then run `nextly upgrade` again and answer yes.",
-        }),
-      },
-    ],
+    retired: {
+      why: "`nextly upgrade` no longer changes stored data: `nextly migrate` and `nextly i18n:convert-zoned-dates` do, and a no at their backup question ends them as `DATA_STEPS_BACKUP_DECLINED`.",
+    },
   },
   UPGRADE_BACKUP_NOT_CONFIRMED: {
     cause:
       "`nextly upgrade` would change the database, and no backup was confirmed, with no terminal attached to ask.",
+    retired: {
+      why: "`nextly upgrade` no longer changes stored data: `nextly migrate` and `nextly i18n:convert-zoned-dates` do, and without a confirmed backup or a terminal they end as `DATA_STEPS_BACKUP_NOT_CONFIRMED`.",
+    },
+  },
+  UPGRADE_WORK_MOVED: {
+    cause:
+      "`nextly upgrade` was run for the database work it used to do, which `nextly migrate` and `nextly i18n:convert-zoned-dates` now do, so it changed nothing.",
+  },
+  DATA_STEPS_BACKUP_NOT_CONFIRMED: {
+    cause:
+      "A command would change data an earlier Nextly release stored, and no backup was confirmed, with no terminal attached to ask.",
     from: [
       {
         code: "NEXTLY_UPGRADE_IN_PROGRESS",
-        reason: "backup-not-confirmed",
+        reason: "data-steps-backup-not-confirmed",
         describe: error =>
           whatThenNext(
             error.publicMessage,
-            "No terminal is attached to ask whether the database is backed up, and `--confirm-backed-up` was not passed. Nothing was changed."
+            "No terminal is attached to ask whether the database is backed up, and `--backup-confirmed` was not passed. Nothing was changed."
+          ),
+      },
+    ],
+  },
+  DATA_STEPS_BACKUP_DECLINED: {
+    cause:
+      "A command would change data an earlier Nextly release stored, and its backup question was answered no.",
+    from: [
+      {
+        code: "NEXTLY_UPGRADE_IN_PROGRESS",
+        reason: "data-steps-backup-declined",
+        describe: error =>
+          whatThenNext(
+            error.publicMessage,
+            "The command rewrites stored values in place, so it asks for a backup first, and the answer was no. Nothing was changed."
           ),
       },
     ],

@@ -1501,7 +1501,7 @@ export async function ensureLocalizedCompanions(
   // sync converts it, no earlier instance writing beside it. `nextly migrate` (`supervised`) runs
   // while instances of the earlier release may still write, which would store a date in a
   // non-default language shifted into a converted column, so it only names each, and `nextly
-  // upgrade`, which converts them once the release serves every instance.
+  // i18n:convert-zoned-dates`, which converts them once the release serves every instance.
   if (phase === "afterApply") {
     const { convertZonedDateCompanions } = await import(
       "../../domains/i18n/runtime/zoned-date-companions"

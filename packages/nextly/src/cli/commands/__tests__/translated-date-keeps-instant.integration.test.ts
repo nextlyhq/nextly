@@ -173,7 +173,7 @@ async function runMigratePass(
   return logged;
 }
 
-/** The `nextly upgrade` step, as the upgrade runs it: counted, then run when it has work. */
+/** The step of `nextly i18n:convert-zoned-dates`, as the command runs it: counted, then run when it has work. */
 async function runUpgradeStep(): Promise<{
   pending: number;
   converted: number;
@@ -263,8 +263,8 @@ describe.runIf(PG).each(["Asia/Karachi", "America/Los_Angeles"])(
     });
 
     // `nextly migrate` runs while instances of the earlier release may still write: it converts
-    // nothing, and names the column and `nextly upgrade`.
-    it("leaves it through nextly migrate, naming nextly upgrade", async () => {
+    // nothing, and names the column and `nextly i18n:convert-zoned-dates`.
+    it("leaves it through nextly migrate, naming nextly i18n:convert-zoned-dates", async () => {
       await openIn(zone);
       await runSync(configOf(false));
       await insertMainRows();
@@ -277,11 +277,11 @@ describe.runIf(PG).each(["Asia/Karachi", "America/Los_Angeles"])(
         "timestamp with time zone"
       );
       expect(logged.warnings.join("\n")).toMatch(
-        new RegExp(`${COMPANION}\\.published.*nextly upgrade`)
+        new RegExp(`${COMPANION}\\.published.*nextly i18n:convert-zoned-dates`)
       );
     });
 
-    it("converts it through nextly upgrade, which then plans nothing", async () => {
+    it("converts it through nextly i18n:convert-zoned-dates, which then plans nothing", async () => {
       await openIn(zone);
       await runSync(configOf(false));
       await insertMainRows();
@@ -307,9 +307,9 @@ describe.runIf(PG).each(["Asia/Karachi", "America/Los_Angeles"])(
     });
 
     // Under per-language storage an entity keeps its translatable values in its translations table
-    // whatever its own `localized` says, and `nextly upgrade` reads no config to know it: the table
+    // whatever its own `localized` says, and `nextly i18n:convert-zoned-dates` reads no config to know it: the table
     // being there is what it goes by.
-    it("converts it through nextly upgrade for an entity not marked translated", async () => {
+    it("converts it through nextly i18n:convert-zoned-dates for an entity not marked translated", async () => {
       await openIn(zone);
       await runSync(configOf(false));
       await insertMainRows();
@@ -381,7 +381,7 @@ describe.runIf(PG).each(["Asia/Karachi", "America/Los_Angeles"])(
     });
 
     // Through the start's own check, the one a production server runs as it boots.
-    it("leaves it on an unattended production start, saying once that nextly upgrade converts it", async () => {
+    it("leaves it on an unattended production start, saying once that nextly i18n:convert-zoned-dates converts it", async () => {
       await openIn(zone);
       await runSync(configOf(false));
       await insertMainRows();
@@ -410,7 +410,7 @@ describe.runIf(PG).each(["Asia/Karachi", "America/Los_Angeles"])(
       expect(
         warnings.filter(
           w =>
-            w.includes(`${COMPANION}.published`) && w.includes("nextly upgrade")
+            w.includes(`${COMPANION}.published`) && w.includes("nextly i18n:convert-zoned-dates")
         )
       ).toHaveLength(1);
     });

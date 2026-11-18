@@ -307,7 +307,7 @@ import {
 } from "./clear-plaintext-passwords";
 import {
   confirmDataStepsBackup,
-  pendingDataSteps,
+  firstDataStepWithWork,
   previewDataSteps,
   runDataSteps,
   type DataStepsDeps,
@@ -872,7 +872,7 @@ export async function runMigrate(
         const steps = dataSteps();
         await confirmDataStepsBackup(
           steps,
-          await pendingDataSteps(steps).catch(() => [])
+          await firstDataStepWithWork(steps).catch(() => undefined)
         );
       } catch (error) {
         fail(error);
