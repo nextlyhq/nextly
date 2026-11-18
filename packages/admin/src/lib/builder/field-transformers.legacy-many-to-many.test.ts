@@ -187,3 +187,58 @@ describe("a many-to-many's cardinality, as the Builder's controls set it", () =>
     expect(builderFieldErrors([loaded]).get(loaded.id)).toBeUndefined();
   });
 });
+
+// A relationship's stored relation type follows the Builder's controls the person changed: one
+// collection however the picker holds it, and Unique for a one-to-one.
+describe("a relationship's stored relation type and the Builder's other controls", () => {
+  it("names its one collection when the picker holds it as a list", () => {
+    const listed = {
+      ...(CURRENT as unknown as Record<string, unknown>),
+      relationTo: ["lm_tags"],
+    } as unknown as Stored;
+    expect(resaved(listed, { label: "Topics" }).options).toMatchObject({
+      target: "lm_tags",
+      relationType: "manyToMany",
+    });
+  });
+
+  /** A one-to-one stored the current way, with Unique on. */
+  const ONE = {
+    name: "lead",
+    label: "Lead",
+    type: "relationship",
+    relationTo: "lm_tags",
+    unique: true,
+    options: { target: "lm_tags", relationType: "oneToOne" },
+  } as unknown as Stored;
+
+  /** What the save sends for `stored` with its Unique control set to `unique`. */
+  function withUnique(stored: Stored, unique: boolean) {
+    const loaded = convertToBuilderField(stored, 0);
+    return convertToFieldDefinition({
+      ...loaded,
+      advanced: { ...loaded.advanced, unique },
+    }) as unknown as { unique?: unknown; options?: { relationType?: unknown } };
+  }
+
+  it("is no longer one-to-one once Unique is turned off", () => {
+    const sent = withUnique(ONE, false);
+    expect(sent.unique).toBe(false);
+    expect(sent.options?.relationType).toBe("manyToOne");
+  });
+
+  it("stays one-to-one with Unique left on", () => {
+    expect(withUnique(ONE, true).options?.relationType).toBe("oneToOne");
+  });
+
+  // Stored off beside a one-to-one, the control changed nothing: the relation type stays.
+  it("stays one-to-one when Unique was stored off", () => {
+    const storedOff = {
+      ...(ONE as unknown as Record<string, unknown>),
+      unique: undefined,
+    } as unknown as Stored;
+    expect(resaved(storedOff, { label: "Topics" }).options).toMatchObject({
+      relationType: "oneToOne",
+    });
+  });
+});
