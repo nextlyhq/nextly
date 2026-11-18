@@ -380,6 +380,7 @@ exports[`plugin-sdk public export surface > \`./admin\` surface is unchanged 1`]
   "useEntryFieldsPanel (value)",
   "useFieldAddress (value)",
   "useFoldedPanel (value)",
+  "useLeaveWithoutWarning (value)",
   "useListColumns (value)",
   "useMediaItem (value)",
   "useMediaResolver (value)",

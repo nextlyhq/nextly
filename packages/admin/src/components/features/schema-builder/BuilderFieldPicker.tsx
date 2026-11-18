@@ -43,11 +43,12 @@ import { namingLevelFor } from "@admin/lib/builder/move-rule";
 import { BUILDER_FIELD_TYPES } from "@admin/lib/builder/offered-field-types";
 import { fieldsWithDeleted } from "@admin/lib/builder/outline/pending-rows";
 import {
-  addUnsavedEntity,
+  addUnsavedEntities,
   type UnsavedEntity,
   unsavedFieldGroupFrom,
   useUnsavedEntitiesOf,
 } from "@admin/lib/builder/unsaved-entities";
+import type { FieldDefinition } from "@admin/types/collection";
 
 import { pickerExcludedTypes, type BuilderConfig } from "./builder-config";
 import type { BuilderSettingsValues } from "./BuilderSettingsModal";
@@ -106,13 +107,30 @@ function useNewFieldGroupDialog(host: UnsavedEntity["ownedBy"]) {
     making?.(made);
     setMaking(null);
   };
-  const onCreate = (values: BuilderSettingsValues) => {
-    const entity = unsavedFieldGroupFrom(values, host);
-    // The dialog's check counts an unsaved entity's address as used, so this is reached only if
-    // another unsaved field group took it meanwhile.
-    if (!addUnsavedEntity(entity)) {
+  const onCreate = (
+    values: BuilderSettingsValues,
+    templateFields: FieldDefinition[],
+    needed: Omit<UnsavedEntity, "token">[]
+  ) => {
+    // It starts with its template's fields, or none, as one made from the
+    // field groups' list does.
+    const entity = {
+      ...unsavedFieldGroupFrom(values, host),
+      fields: templateFields,
+    };
+    // What its template needs belongs to the host, as it does: the host's
+    // save creates them before it, and the host's discard lets them go. With
+    // no host yet, they stay the field group's own.
+    const neededByHost = host
+      ? needed.map(each => ({ ...each, ownedBy: host }))
+      : needed;
+    // The dialog's checks count an unsaved entity's address as used, so this is reached only if
+    // another unsaved entity took one of these addresses meanwhile.
+    if (!addUnsavedEntities([...neededByHost, entity])) {
       toast.error(
-        "A field group not saved yet already uses this address. Choose another."
+        needed.length === 0
+          ? "A field group not saved yet already uses this address. Choose another."
+          : "An entity not saved yet already uses this address or one the template needs. Choose another."
       );
       return;
     }

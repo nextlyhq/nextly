@@ -58,7 +58,7 @@ const LOCAL_IMAGE = "/next.svg";
 
 /**
  * The rich-text passage, with a heading of its own so the table of contents
- * beside it has an entry to link to.
+ * on the page has an entry to link to.
  */
 const PASSAGE = {
   root: {
@@ -274,10 +274,15 @@ export const KITCHEN_SINK_DOCUMENT: BlockDocument = {
           {
             id: "ks-contents",
             type: "core/table-of-contents",
-            version: 1,
-            // The same passage as the one above, so each link reaches a
-            // heading drawn on this page.
-            props: { content: PASSAGE },
+            version: 2,
+            // Lists the page's own headings, among them the passage's above.
+            props: {
+              title: "On this page",
+              depth: "h2-h3",
+              marker: "numbered",
+              collapsible: true,
+              highlight: true,
+            },
           },
           {
             id: "ks-list",

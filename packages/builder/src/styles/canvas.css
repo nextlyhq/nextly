@@ -221,7 +221,16 @@
  * The drop container is DASHED and OUTSIDE, where the selection is solid and
  * inside, so the two are told apart by shape as well as by moment.
  */
-.nx-canvas-marks {
+/*
+ * The canvas's overlay layers, which share one place: over the canvas root's
+ * content box, taking no presses themselves. The marks, an Image's empty
+ * state (`image-states.css`) and what is said over a Form (`form-states.css`)
+ * each opt back in only where they draw.
+ */
+.nx-canvas-marks,
+.nx-image-states,
+.nx-embed-states,
+.nx-form-states {
   position: absolute;
   inset: 0;
   z-index: 1;

@@ -35,7 +35,6 @@ import {
 } from "./document";
 import type { BuilderOp } from "./ops-vocabulary";
 import { getBlock } from "./registry";
-import { STYLE_CATALOG } from "./style/catalog";
 import {
   isLook,
   orderedNamedClasses,
@@ -43,7 +42,7 @@ import {
   type NamedClass,
 } from "./style/named-class";
 import { overlaidStyles } from "./style/overlaid-styles";
-import { supportsAllowStyleProperty } from "./style/supports-map";
+import { supportedStylesOf } from "./style/supports-map";
 import { findNode } from "./tree";
 
 /** Where a plan reads block definitions: the registry, unless told. */
@@ -95,11 +94,6 @@ const KEPT_FIELDS = [
   "attributes",
   "origin",
 ] as const satisfies readonly (keyof BlockNode)[];
-
-/** Every style property the catalog knows, which `supports` decides. */
-const CATALOG_PROPERTIES: ReadonlySet<string> = new Set(
-  STYLE_CATALOG.map(entry => entry.property)
-);
 
 /**
  * The block types a block of `type` can be turned into, in the order its
@@ -344,7 +338,7 @@ function minus(value: StyleValue, taken: StyleValue): StyleValue | undefined {
       continue;
     }
     // Nested sides (a border's widths) are taken out one by one too.
-    const rest = minus(inner, taken[side] as StyleValue);
+    const rest = minus(inner, taken[side]);
     if (rest !== undefined) left.push([side, rest]);
   }
   return left.length === 0 ? undefined : Object.fromEntries(left);
@@ -360,7 +354,7 @@ function overlaps(value: StyleValue, taken: StyleValue): boolean {
   if (!isSides(value) || !isSides(taken)) return true;
   return Object.entries(value).some(
     ([side, inner]) =>
-      Object.hasOwn(taken, side) && overlaps(inner, taken[side] as StyleValue)
+      Object.hasOwn(taken, side) && overlaps(inner, taken[side])
   );
 }
 
@@ -520,38 +514,14 @@ function showsTheSame(
   return fills(from).every(each => taken.includes(each));
 }
 
-/** Whether the target block may carry a style property. */
-function targetTakes(target: AnyBlockDefinition, property: string): boolean {
-  return (
-    !CATALOG_PROPERTIES.has(property) ||
-    supportsAllowStyleProperty(target.supports, property)
-  );
-}
-
 /**
  * The block's styles without a property the target does not support, and
  * without a state or breakpoint that leaves empty; `undefined` when nothing
- * is left.
+ * is left. The engine's one reading of what a type's supports keep.
  */
 function supportedStyles(
   styles: NodeStyles | undefined,
   target: AnyBlockDefinition
 ): NodeStyles | undefined {
-  if (styles === undefined) return undefined;
-  const kept: Record<string, Record<string, Record<string, unknown>>> = {};
-  for (const [state, breakpoints] of Object.entries(styles)) {
-    const keptBreakpoints: Record<string, Record<string, unknown>> = {};
-    for (const [breakpoint, values] of Object.entries(breakpoints ?? {})) {
-      const keptValues = Object.fromEntries(
-        Object.entries(values ?? {}).filter(([property]) =>
-          targetTakes(target, property)
-        )
-      );
-      if (Object.keys(keptValues).length > 0) {
-        keptBreakpoints[breakpoint] = structuredClone(keptValues);
-      }
-    }
-    if (Object.keys(keptBreakpoints).length > 0) kept[state] = keptBreakpoints;
-  }
-  return Object.keys(kept).length === 0 ? undefined : kept;
+  return supportedStylesOf(styles, target.supports).styles;
 }

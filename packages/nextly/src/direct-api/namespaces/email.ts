@@ -60,10 +60,12 @@ import type {
   DeleteEmailTemplateArgs,
   DeleteUserFieldArgs,
   DeliveryActivity,
+  DeliveryDetail,
   DirectAPIConfig,
   EmailLastSentArgs,
   EmailOverdueArgs,
   FindEmailDeliveriesArgs,
+  FindEmailDeliveryByIDArgs,
   FindEmailProviderByIDArgs,
   FindEmailProvidersArgs,
   FindEmailTemplateByIDArgs,
@@ -78,6 +80,7 @@ import type {
   ReorderUserFieldsArgs,
   QueuedEmail,
   QueuedEmailActivity,
+  QueuedEmailDetail,
   QueuedEmailOverdue,
   QueueEmailArgs,
   QueueTemplateEmailArgs,
@@ -276,6 +279,12 @@ export interface EmailDeliveriesNamespace {
   lastSent(args?: EmailLastSentArgs): Promise<TemplatesLastSent>;
   /** Whether queued email is overdue because the jobs trigger is not running. */
   overdue(args?: EmailOverdueArgs): Promise<QueuedEmailOverdue>;
+  /** One delivery's detail and timeline; null for an id that names none. */
+  findByID(args: FindEmailDeliveryByIDArgs): Promise<DeliveryDetail | null>;
+  /** One queued email's detail and attempts; null for an id that names none. */
+  findQueuedByID(
+    args: FindEmailDeliveryByIDArgs
+  ): Promise<QueuedEmailDetail | null>;
 }
 
 /**
@@ -308,6 +317,14 @@ export function createEmailDeliveriesNamespace(
     async overdue(args = {}) {
       await checked(args);
       return ctx.emailDeliveryActivity.overdue();
+    },
+    async findByID(args) {
+      await checked(args);
+      return ctx.emailDeliveryActivity.findDelivery(args.id);
+    },
+    async findQueuedByID(args) {
+      await checked(args);
+      return ctx.emailDeliveryActivity.findQueuedEmail(args.id);
     },
   };
 }

@@ -973,6 +973,12 @@ export function generateSqliteCoreTableStatements(): string[] {
       "principal_kind" TEXT,
       "principal_id" TEXT,
       "key_digest" TEXT,
+      "queued_id" TEXT,
+      "template_owner" TEXT,
+      "template_overridden" INTEGER,
+      "template_digest" TEXT,
+      "failure_kind" TEXT,
+      "failure_status" INTEGER,
       "created_at" INTEGER NOT NULL
     )`,
     `CREATE INDEX IF NOT EXISTS "email_deliveries_created_idx"
@@ -989,10 +995,14 @@ export function generateSqliteCoreTableStatements(): string[] {
       ON "email_deliveries" ("principal_kind", "principal_id")`,
     `CREATE INDEX IF NOT EXISTS "email_deliveries_key_idx"
       ON "email_deliveries" ("key_digest")`,
+    `CREATE INDEX IF NOT EXISTS "email_deliveries_queued_idx"
+      ON "email_deliveries" ("queued_id")`,
     `CREATE INDEX IF NOT EXISTS "email_deliveries_provider_type_idx"
       ON "email_deliveries" ("provider_type", "created_at")`,
     `CREATE INDEX IF NOT EXISTS "email_deliveries_template_idx"
       ON "email_deliveries" ("template_slug", "status", "created_at")`,
+    `CREATE INDEX IF NOT EXISTS "email_deliveries_template_created_idx"
+      ON "email_deliveries" ("template_slug", "created_at", "id")`,
     `CREATE TABLE IF NOT EXISTS "${EMAIL_SEND_CLAIMS_TABLE}" (
       "id" TEXT PRIMARY KEY,
       "scope" TEXT NOT NULL,
