@@ -525,6 +525,8 @@ export const getTranslationWorklist = withErrorHandler(async (req: Request) => {
   );
   // Each Single the caller may read, judged from its own translation overview.
   const singles = await singleWork(locale, state, caller);
+  // The collections and the Singles that could not answer, one sorted list as each is.
+  const unanswerableSources = [...unanswerable, ...singles.unanswerable].sort();
 
   // Named here rather than only at the cap, because both are the same claim:
   // this answer did not cover that collection.
@@ -578,10 +580,10 @@ export const getTranslationWorklist = withErrorHandler(async (req: Request) => {
       // Kept apart from `notConsulted` on the wire for the same reason the service keeps them
       // apart: this is the one with a remedy. A screen that merges them tells an operator to
       // look again when what they need to do is migrate.
-      ...(unanswerable.length === 0
+      ...(unanswerableSources.length === 0
         ? {}
         : {
-            unanswerable,
+            unanswerable: unanswerableSources,
             // 🔴 WHICH remedy, decided where the environment is known. `nextly migrate` applies
             // migration FILES, and a development database managed by the sync/HMR loop has no
             // migration history containing this column — so that advice can leave the notice
@@ -612,7 +614,11 @@ async function singleWork(
   locale: string,
   state: TranslationFilterState,
   caller: ReadCaller
-): Promise<{ rows: TranslationWorkRow[]; failed: string[] }> {
+): Promise<{
+  rows: TranslationWorkRow[];
+  failed: string[];
+  unanswerable: string[];
+}> {
   const registry = getService("singleRegistryService");
   const singleEntries = getService("singleEntryService");
   const localized = (await registry.getAllSinglesForRead()).filter(
@@ -621,6 +627,8 @@ async function singleWork(
   );
   const isDefault = configuredLocalization()?.defaultLocale === locale;
   const failed: string[] = [];
+  const unanswerable: string[] = [];
+  const adapter = state === "stale" ? getAdapterFromDI() : undefined;
   const found = await inBoundedBatches(
     localized,
     AUTHORIZATION_CONCURRENCY,
@@ -635,6 +643,28 @@ async function singleWork(
         return null;
       }
       if (id === null) return null;
+      // Staleness compares when each language was written, which a translations table made before
+      // that column has no record of: such a Single is named as unanswerable, as a collection is
+      // (`resolveStalenessCapability`), rather than left out as if nothing in it were stale. A
+      // probe that fails is no schema fact: the Single is named as not consulted.
+      if (state === "stale") {
+        try {
+          const answers =
+            adapter !== undefined &&
+            (await resolveCompanionColumn(
+              adapter,
+              `${single.tableName}_locales`,
+              COMPANION_UPDATED_AT_COLUMN
+            ));
+          if (!answers) {
+            unanswerable.push(single.slug);
+            return null;
+          }
+        } catch {
+          failed.push(single.slug);
+          return null;
+        }
+      }
       const result = await singleEntries.get(single.slug, {
         user: caller.user,
         ...(caller.authenticatedScope === undefined
@@ -676,5 +706,6 @@ async function singleWork(
   return {
     rows: found.filter((row): row is TranslationWorkRow => row !== null),
     failed,
+    unanswerable,
   };
 }

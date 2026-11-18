@@ -241,4 +241,27 @@ describe("the translation worklist, page by page", () => {
     expect(items.map(item => item.collection)).toEqual(["pages"]);
     expect(meta.notConsulted).toEqual(expect.arrayContaining(["banner"]));
   });
+
+  it("names a Single that cannot answer staleness as unanswerable, as a collection is", async () => {
+    // Staleness compares when each language was written, a column a translations table made
+    // before it has none of. A collection without it is named as unanswerable, with its remedy;
+    // a Single without it must be too, not left out of the stale list as if it had no stale
+    // translation.
+    const t = await boot();
+    await t.nextly.updateSingle({
+      slug: "banner",
+      locale: "en",
+      data: { headline: "Sale", _overwrite: true },
+    } as never);
+    await (
+      t.adapter as unknown as {
+        executeQuery(statement: string): Promise<unknown>;
+      }
+    ).executeQuery(
+      `ALTER TABLE "single_banner_locales" DROP COLUMN "_updated_at"`
+    );
+
+    const { meta } = await worklist("locale=de&state=stale");
+    expect(meta.unanswerable).toEqual(expect.arrayContaining(["banner"]));
+  });
 });
