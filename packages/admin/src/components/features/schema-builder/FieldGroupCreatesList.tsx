@@ -1,15 +1,19 @@
 "use client";
 
 /**
- * The field groups not saved yet that a save creates before its entity, as the
- * save's review lists them: one line each, "Create the field group Hero", in
- * the order they are created. Drawn first by every review a save can open, so
- * a field group made from the field picker is never created unseen.
+ * The entities not saved yet that a save creates before its own, as the
+ * save's review lists them: one line each, "Create the field group Hero" or
+ * "Create the collection Authors", in the order they are created. Drawn first
+ * by every review a save can open, so a field group made from the field
+ * picker, or a collection made with a template, is never created unseen.
  */
 import { type JSX, useId } from "react";
 
-/** One field group the save creates first: its name and address. */
+import { BUILDER_KIND_NOUN, type BuilderKind } from "./builder-config";
+
+/** One entity the save creates first: its kind, name and address. */
 export interface FieldGroupCreate {
+  kind: BuilderKind;
   address: string;
   label: string;
 }
@@ -24,7 +28,7 @@ export function FieldGroupCreatesList({
   return (
     <div className="space-y-1 py-2">
       <p id={headingId} className="text-sm font-medium text-foreground">
-        Field groups created first
+        Created first
       </p>
       {/* Bounded, so a long list never pushes the review's buttons off a short screen. */}
       <ul
@@ -32,8 +36,11 @@ export function FieldGroupCreatesList({
         className="max-h-40 space-y-1 overflow-y-auto text-sm"
       >
         {groups.map(group => (
-          <li key={group.address} className="text-muted-foreground">
-            {`Create the field group ${group.label}`}
+          <li
+            key={`${group.kind}:${group.address}`}
+            className="text-muted-foreground"
+          >
+            {`Create the ${BUILDER_KIND_NOUN[group.kind]} ${group.label}`}
           </li>
         ))}
       </ul>

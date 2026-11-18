@@ -15,18 +15,18 @@
 import type { BlockDocument } from "@nextlyhq/blocks-engine";
 import type { LeftPanel } from "@nextlyhq/builder";
 import type { EditorState } from "@nextlyhq/builder/shell";
-import { navigateTo, useDocumentIdentity } from "@nextlyhq/plugin-sdk/admin";
+import { navigateTo } from "@nextlyhq/plugin-sdk/admin";
 import { Popover, PopoverContent, PopoverTrigger } from "@nextlyhq/ui";
 import { AlertTriangle, ArrowRight, MousePointer2 } from "lucide-react";
 import { useState, type JSX } from "react";
 
 import { BINDINGS_TO_FIX_PAGE_HREF } from "../../bindings-report/contract";
-import { documentKeyOf } from "../../host-rewrite/contract";
 import { revealWhileSettling } from "../editor/use-open-at-section";
 import { navigateWithin } from "../plain-click";
 
 import { useBindingsToFix } from "./client";
-import { visitorsSee, whatChanged, whereBound } from "./words";
+import { usePageBindingsToFix } from "./page-rows";
+import { changeSentence, whereBound } from "./words";
 
 /** What the chip needs of the editor. */
 export interface BindingsToFixChipProps {
@@ -38,27 +38,6 @@ export interface BindingsToFixChipProps {
   readonly field: string;
   readonly canvas: HTMLElement | null;
   readonly requestPanel: (panel: LeftPanel) => void;
-}
-
-/** The open document's key in the report, or `undefined` before it is saved. */
-function useDocumentKey(): string | undefined {
-  const identity = useDocumentIdentity();
-  if (identity === null || identity === undefined) return undefined;
-  if (identity.kind === "single") {
-    return documentKeyOf({ kind: "single", slug: identity.slug });
-  }
-  return identity.documentId === undefined
-    ? undefined
-    : documentKeyOf({
-        kind: "collection",
-        slug: identity.slug,
-        id: identity.documentId,
-      });
-}
-
-/** Words as one sentence: a full stop, unless a quotation already ends in one. */
-function sentence(words: string): string {
-  return /[.!?]["”]?$/.test(words) ? words : `${words}.`;
 }
 
 /**
@@ -89,21 +68,13 @@ export function BindingsToFixChip({
   canvas,
   requestPanel,
 }: BindingsToFixChipProps): JSX.Element | null {
-  const key = useDocumentKey();
+  // This document's bindings on this canvas, the same rows Page checks
+  // lists, and, once the list is open, the whole report's count for the
+  // rest: the builder opens on one read of the report.
+  const { key, item, rows } = usePageBindingsToFix(field);
   const [open, setOpen] = useState(false);
-  // This document's bindings, and, once the list is open, the whole report's
-  // count for the rest: the builder opens on one read of the report.
-  const report = useBindingsToFix(key === undefined ? {} : { document: key });
   const everything = useBindingsToFix({}, { enabled: open });
   if (key === undefined) return null;
-  const item = report.data?.items.find(entry => entry.documentKey === key);
-  // The bindings on this canvas: in the field it is open on, in the default
-  // language it edits.
-  const rows = (item?.rows ?? []).filter(
-    row =>
-      (row.blocksField === undefined || row.blocksField === field) &&
-      row.inAnotherLanguage !== true
-  );
   if (item === undefined || rows.length === 0) return null;
   const select = (nodeId: string): void => {
     setOpen(false);
@@ -152,9 +123,7 @@ export function BindingsToFixChip({
                   {whereBound(row)}
                 </div>
                 <div className="text-[13px] leading-snug text-muted-foreground">
-                  {sentence(
-                    `${whatChanged(row, item.collectionLabel)}. Visitors see ${visitorsSee(row)}`
-                  )}
+                  {changeSentence(row, item.collectionLabel)}
                 </div>
               </div>
               {row.nodeId === "" ? null : (

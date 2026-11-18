@@ -156,6 +156,12 @@ function collectionOf(item: unknown): LoopCollectionItem | undefined {
       typeof name === "string" ? name : undefined
     ),
     readable: eachOf(record.readable, readableOf),
+    ...(typeof record.titleField === "string"
+      ? { titleField: record.titleField }
+      : {}),
+    ...(typeof record.entriesHavePages === "boolean"
+      ? { entriesHavePages: record.entriesHavePages }
+      : {}),
   };
 }
 
@@ -211,6 +217,9 @@ function readableOf(value: unknown): LoopReadableField | undefined {
     // Both decide a field's kind for a list, as the save reads them.
     ...(record.timeOnly === true ? { timeOnly: true as const } : {}),
     ...(isStoragePrimitive(storage) ? { storage } : {}),
+    ...(typeof record.takesImages === "boolean"
+      ? { takesImages: record.takesImages }
+      : {}),
   };
 }
 

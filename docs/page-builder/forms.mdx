@@ -14,6 +14,30 @@ A Form works with JavaScript off. A visitor fills it in and presses the button; 
 posts the answers to the page builder, and comes back to the same page with the answer in
 place of the form, or a message above it. The block adds no script to the page.
 
+### Picking a form from the Forms plugin
+
+With the Forms plugin installed (or another plugin that offers forms), the Form block's first
+setting is **Form**: pick one of the site's forms from the list. A draft form is marked
+"(Draft)" and a closed one "(Closed)". Once a form is picked, the panel says "Fields, emails,
+spam protection and saved responses come from Forms.", and **Edit this form ↗** opens the
+form in the admin, in a new tab. The block's own fields, its button and **Send to** are put
+away while a form is picked; **or use a simple form** brings them back as they were.
+
+The canvas draws a picked form as a visitor will see it once it's published, read with your
+own access, so you see a draft form too. Over the block it says:
+
+- "Draft form: visitors can't send it until it's published", over a draft;
+- "This form is closed. Visitors see its closed message.", with **Pick another form**, over a
+  closed form;
+- "This form was deleted.", with **Pick another form**, where the form is gone or you can no
+  longer read it. The live page shows nothing there.
+
+Without a forms plugin, the block edits its own fields, as below, with the hint "Want saved
+responses, emails and spam protection? Install the Forms plugin. This block will then let
+you pick a form."
+
+### The block's own fields
+
 A new Form starts with **Name** and **Email**, both required, then **Message**, and a
 **Send** button. In the block's **Fields**, **+ Add field** adds a field, the handle beside
 each one drags it into a new order (or moves it with the arrow keys), and opening a field
@@ -34,6 +58,11 @@ In the **After sending** section, **Then** chooses what a visitor sees once a se
 - **Show a message**: the form is replaced by the message, "Thanks, we got your message."
   unless you write another. The message takes the keyboard and screen reader focus.
 - **Go to a page**: the visitor is sent to a page of the site, or to an address you write.
+
+A simple form sends its answers to the address in **Send to**. While that's empty, the canvas
+says "Answers have nowhere to go yet: add an address, or install the Forms plugin to save
+them", and the page's checks list it under Content and data as "Form answers have nowhere to
+go", opening **Send to** when you pick it.
 
 When the server refuses a send, the visitor comes back to the form with one message above
 it: "Some answers weren't accepted. Please check them and send again.", "This form isn't
@@ -178,6 +207,12 @@ export const acmeForms = definePlugin({
   },
 });
 ```
+
+In the builder, `list` fills the Form block's **Form** list, read as the signed-in author,
+and `label` is the name in "Fields … come from Forms.". Give each listing an `editHref` (the
+form's page in the admin) for **Edit this form ↗**. The canvas reads a picked form through
+`describe` as the author, so a draft is drawn too, and through `describe` as the public to
+learn whether visitors would find it closed.
 
 `id` is stored in every block that picks one of the provider's forms, so keep it stable.
 It is 1 to 64 lower case letters, digits and dashes; `simple` is the page builder's own.

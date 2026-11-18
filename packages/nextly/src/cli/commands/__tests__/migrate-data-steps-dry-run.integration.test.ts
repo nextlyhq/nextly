@@ -1,10 +1,11 @@
 /**
- * `nextly upgrade --dry-run` counts each step's pending work and changes
- * nothing, on every dialect: with a password an earlier release stored as
- * given, it names the step that hashes it with the count the real upgrade then
- * reports, and every table and the row stay as they were (no lock table is
- * made either). Where nobody can be asked about a backup, it names the real
- * run's refusal; given `--confirm-backed-up`, it names none.
+ * The dry run of the steps `nextly migrate` runs over data an earlier release
+ * stored counts each step's pending work and changes nothing, on every
+ * dialect: with a password stored as given, it names the step that hashes it
+ * with the count the real run then reports, and every table and the row stay
+ * as they were (no lock table is made either). Where nobody can be asked
+ * about a backup, it names the real run's refusal; given
+ * `--backup-confirmed`, it names none.
  */
 
 // Set before the harness boots (env validation reads it once).
@@ -22,14 +23,17 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
-import { previewUpgrade, runUpgrade, type UpgradeAdapter } from "../upgrade";
+import { previewDataSteps, type DataStepsDeps } from "../data-steps";
+import { MIGRATE_DATA_STEPS } from "../upgrade-steps";
+
+import { runMigrateDataSteps } from "./helpers/run-migrate-data-steps";
 
 type Doc = Record<string, unknown>;
 
 const STEP = "hash passwords stored before this release";
 
 describe.each(getConfiguredTestDialects())(
-  "nextly upgrade --dry-run (%s)",
+  "the dry run of nextly migrate's data steps (%s)",
   (dialect: TestDialect) => {
     let t: TestNextly;
     let id: string;
@@ -65,7 +69,17 @@ describe.each(getConfiguredTestDialects())(
       await t?.destroy();
     });
 
-    const adapter = () => t.adapter as unknown as UpgradeAdapter;
+    /** The plan as `nextly migrate --dry-run` reads it, with nobody to ask. */
+    const preview = (backupConfirmed: boolean) =>
+      previewDataSteps({
+        adapter: t.adapter as unknown as DataStepsDeps["adapter"],
+        command: "nextly migrate",
+        steps: MIGRATE_DATA_STEPS,
+        backupConfirmed,
+        interactive: false,
+        log: () => {},
+        warn: () => {},
+      });
 
     /** Every table, and the seeded row. */
     async function state(): Promise<{ tables: string[]; row: Doc[] }> {
@@ -80,16 +94,12 @@ describe.each(getConfiguredTestDialects())(
     it("names each step's pending work, refuses as the real run would, and changes nothing", async () => {
       const before = await state();
 
-      const unconfirmed = await previewUpgrade(
-        {},
-        { adapter: adapter(), isTTY: false }
+      const unconfirmed = await preview(false);
+      expect(unconfirmed.refusals?.join("\n")).toContain(
+        "`nextly migrate --backup-confirmed`"
       );
-      expect(unconfirmed.refusals?.join("\n")).toMatch(/confirmed backup/);
 
-      const plan = await previewUpgrade(
-        { confirmBackedUp: true },
-        { adapter: adapter(), isTTY: false }
-      );
+      const plan = await preview(true);
       expect(plan.refusals ?? []).toEqual([]);
       const named = plan.changes.find(change =>
         `${change.action} ${change.target}`.startsWith(`${STEP}:`)
@@ -97,15 +107,11 @@ describe.each(getConfiguredTestDialects())(
       expect(named, JSON.stringify(plan)).toBeDefined();
       expect(await state()).toEqual(before);
 
-      // The real upgrade changes what the dry run named, by the count it named.
+      // The real run changes what the dry run named, by the count it named.
       const lines: string[] = [];
-      await runUpgrade(
-        { confirmBackedUp: true },
-        {
-          adapter: adapter(),
-          logger: { info: line => lines.push(line), warn: () => {} },
-        }
-      );
+      await runMigrateDataSteps(t.adapter, {
+        log: line => lines.push(line),
+      });
       expect(lines).toContain(`${named!.action} ${named!.target}`);
       expect((await state()).row).not.toEqual(before.row);
     });
