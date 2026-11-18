@@ -1010,7 +1010,7 @@ A document whose collection or Single has no workflow attached answers `200` wit
 
 `POST /admin/api/workflows/steps/bulk` takes one step across several documents: `{ step, comment?, documents: [{ document, parts, seen }] }`.
 
-- Each document moves on its own if it may. The answer is a [bulk envelope](#bulk): each document moved in `items`, and each refusal in `errors` as `{ id, code, message }`, `id` being the document's id.
+- Each document moves on its own if it may. The answer is a [bulk envelope](#bulk): each document moved in `items`, and each refusal in `errors` as `{ id, code, message }`, `id` being the document's id. A refused Single is named by its slug alone, `{ single, code, message }`, so a refusal never tells you its stored id.
 - An approval over several documents is refused before anything moves (`WORKFLOW_BULK_APPROVAL`). An approval is given for the one version a reviewer was shown.
 
 #### Assignments

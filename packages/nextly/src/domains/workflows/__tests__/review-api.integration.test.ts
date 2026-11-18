@@ -324,8 +324,9 @@ const DIRECT: Door = {
     );
     return {
       moved: answer.moved.map(each => each.document.entryId),
+      // The document as the refusal names it: an entry's id, or a Single's slug.
       refused: answer.refused.map(each => ({
-        id: each.document.entryId,
+        ...(each.document as unknown as Doc),
         code: each.code,
         message: each.message,
       })),
@@ -339,7 +340,7 @@ const DIRECT: Door = {
     return {
       assigned: answer.assigned.map(each => each.entryId),
       refused: answer.refused.map(each => ({
-        id: each.document.entryId,
+        ...(each.document as unknown as Doc),
         code: each.code,
         message: each.message,
       })),
@@ -1119,6 +1120,37 @@ describe.each(getConfiguredTestDialects())(
           to: "hold",
           comment: "Waiting on photos",
         });
+      });
+
+      it("names a Single it refuses over several documents by the slug the caller named, never its id", async () => {
+        current = await bootSteps(dialect);
+        await people();
+        await app().nextly.updateSingle({
+          slug: "banner" as never,
+          data: { title: "Hello", _overwrite: true },
+        } as never);
+        const banner = (await app().nextly.findSingle({
+          slug: "banner" as never,
+          status: "all",
+        } as never)) as Doc;
+
+        // Alice may read Pages, not the Banner.
+        const answer = await door.stepMany(ALICE, {
+          step: "send",
+          documents: [
+            {
+              document: { single: "banner" },
+              parts: [null],
+              seen: [{ part: null, revision: 0, version: String(banner._rev) }],
+            },
+          ],
+        });
+
+        expect(answer.moved).toEqual([]);
+        expect(answer.refused).toEqual([
+          expect.objectContaining({ single: "banner", code: "NOT_FOUND" }),
+        ]);
+        expect(JSON.stringify(answer.refused)).not.toContain(String(banner.id));
       });
 
       it("names no last move for a part that never moved, though another part did", async () => {

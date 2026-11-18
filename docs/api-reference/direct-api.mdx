@@ -850,7 +850,7 @@ await nextly.workflows.settings.update({
 });
 ```
 
-`stepMany` and `assignMany` answer `{ moved, refused }` and `{ assigned, refused }`, each refusal naming its `document`, `code` and `message`. The other shapes and refusals are those of the REST routes; see [Workflows](/docs/api-reference/rest-api#workflows-experimental).
+`stepMany` and `assignMany` answer `{ moved, refused }` and `{ assigned, refused }`, each refusal naming its `document` as you named it (`{ collection, id }`, or a Single's `{ single }` alone), its `code` and its `message`. The other shapes and refusals are those of the REST routes; see [Workflows](/docs/api-reference/rest-api#workflows-experimental).
 
 ## Other namespaces
 

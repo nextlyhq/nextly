@@ -14,9 +14,9 @@
  * @experimental
  */
 import type { PaginationMeta } from "../../api/response-shapes";
+import type { NamedRefusal } from "../../api/workflows";
 import type {
   DocumentReview,
-  ManyRefusal,
   WaitingPart,
 } from "../../domains/workflows/review-api";
 import type { ReviewDocument } from "../../domains/workflows/review-state-repository";
@@ -86,12 +86,13 @@ export interface WorkflowsNamespace {
     }
   ): Promise<{
     moved: { document: ReviewDocument; result: TakeStepResult }[];
-    refused: ManyRefusal[];
+    /** Each document refused, named as the call named it: a Single by its slug alone. */
+    refused: NamedRefusal[];
   }>;
   /** Assignments over several documents, each document's made or refused on its own. */
   assignMany(
     args: WorkflowCallArgs & { assignments: WorkflowAssignmentInput[] }
-  ): Promise<{ assigned: ReviewDocument[]; refused: ManyRefusal[] }>;
+  ): Promise<{ assigned: ReviewDocument[]; refused: NamedRefusal[] }>;
   /** What waits for the caller, a page at a time. A checked call only: it names who waits. */
   waiting(
     args: WorkflowCallArgs & { page?: number; limit?: number }

@@ -44,6 +44,7 @@ import {
   reviewStateOf,
   stepMany,
   waitingFor,
+  type ManyRefusal,
 } from "../domains/workflows/review-api";
 import type { ReviewDocument } from "../domains/workflows/review-state-repository";
 import {
@@ -78,6 +79,42 @@ import {
 } from "./versions-access";
 import { withErrorHandler } from "./with-error-handler";
 import { nextlyValidationFromZod } from "./zod-to-nextly-error";
+
+/**
+ * A document as a request names it: an entry of a collection by its id, or a Single by its slug.
+ *
+ * @experimental
+ */
+export type NamedDocument =
+  | { collection: string; id: string }
+  | { single: string };
+
+/**
+ * A document of a move over several that was refused, named as the request named it: a Single by
+ * its slug alone, so a refusal (one for a Single the caller may not read included) never tells
+ * the caller its stored id.
+ *
+ * @experimental
+ */
+export interface NamedRefusal {
+  document: NamedDocument;
+  code: string;
+  message: string;
+}
+
+/** A document as review state keys it, named as a request names it. */
+const namedDocument = (document: ReviewDocument): NamedDocument =>
+  document.scopeKind === "single"
+    ? { single: document.scopeSlug }
+    : { collection: document.scopeSlug, id: document.entryId };
+
+/** Refusals of a move over several, each document named as the request named it. */
+const namedRefusals = (refused: readonly ManyRefusal[]): NamedRefusal[] =>
+  refused.map(({ document, code, message }) => ({
+    document: namedDocument(document),
+    code,
+    message,
+  }));
 
 /** A document as a request names it: an entry of a collection, or a Single. */
 const DocumentRef = z.union([
@@ -470,23 +507,25 @@ export const workflowOperations = {
         seen: each.seen,
       });
     }
-    return stepMany(adapter(), {
+    const { moved, refused } = await stepMany(adapter(), {
       documents,
       step: body.step,
       comment: body.comment ?? null,
       caller: callerOf(asker),
       readable: (document, parts) => readableBy(asker, document, parts),
     });
+    return { moved, refused: namedRefusals(refused) };
   },
 
   /** Assignments over several documents, each refusal named. */
   async assignMany(asker: WorkflowAsker, input: unknown) {
     const body = parse(AssignBody, input);
-    return assignMany(adapter(), {
+    const { assigned, refused } = await assignMany(adapter(), {
       assignments: await assignmentsOf(asker, body, false),
       caller: callerOf(asker),
       readable: (document, parts) => readableBy(asker, document, parts),
     });
+    return { assigned, refused: namedRefusals(refused) };
   },
 
   /** The registered workflows, each with its stages, steps and attachments. */
@@ -656,11 +695,11 @@ const ROUTES: Record<
         id: document.entryId,
         ...result,
       })),
-      refused.map(({ document, code, message }) => ({
-        id: document.entryId,
-        code,
-        message,
-      }))
+      refused.map(({ document, code, message }) =>
+        "single" in document
+          ? { single: document.single, code, message }
+          : { id: document.id, code, message }
+      )
     );
   },
 
@@ -672,11 +711,11 @@ const ROUTES: Record<
     return respondBulk(
       `${assigned.length} assigned; ${refused.length} refused.`,
       assigned.map(document => ({ id: document.entryId })),
-      refused.map(({ document, code, message }) => ({
-        id: document.entryId,
-        code,
-        message,
-      }))
+      refused.map(({ document, code, message }) =>
+        "single" in document
+          ? { single: document.single, code, message }
+          : { id: document.id, code, message }
+      )
     );
   },
 
