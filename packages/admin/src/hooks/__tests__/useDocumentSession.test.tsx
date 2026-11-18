@@ -19,7 +19,9 @@ const api = vi.hoisted(() => ({
   update: vi.fn(),
   getSchema: vi.fn(),
   saveAutosave: vi.fn(),
+  getAutosave: vi.fn(),
   can: vi.fn(),
+  localized: { enabled: false },
 }));
 
 vi.mock("@admin/lib/api/protectedApi", () => ({
@@ -46,9 +48,12 @@ vi.mock("@admin/services/collectionApi", async importOriginal => {
   };
 });
 vi.mock("@admin/services/versionApi", () => ({
-  versionApi: { saveAutosave: api.saveAutosave },
+  versionApi: { saveAutosave: api.saveAutosave, getAutosave: api.getAutosave },
 }));
 vi.mock("@admin/hooks/useCan", () => ({ useCan: api.can }));
+vi.mock("@admin/hooks/useLocalization", () => ({
+  useLocalization: () => api.localized,
+}));
 
 import { parseApiError } from "@admin/lib/api/parseApiError";
 
@@ -141,6 +146,10 @@ beforeEach(() => {
     updatedAt: "2026-11-18T09:00:00.000Z",
     locale: null,
   });
+  api.localized = { enabled: false };
+  api.getAutosave.mockImplementation(async () => ({
+    snapshot: api.saveAutosave.mock.calls.at(-1)?.[1] ?? null,
+  }));
   api.can.mockImplementation(
     (permission: string) => permission === "publish-components"
   );
@@ -154,12 +163,12 @@ describe("useDocumentSession: open", () => {
   it("reads the latest version, the working draft in place of the live row", async () => {
     const { result } = await openSession();
 
-    expect(api.findByID).toHaveBeenCalledWith(
-      "components",
-      "h1",
-      expect.objectContaining({ draft: true }),
-      expect.anything()
-    );
+    // As stored, related items by id: one the person may not read is kept
+    // by a save or a recovery rather than dropped.
+    expect(api.findByID).toHaveBeenCalledWith("components", "h1", {
+      depth: 0,
+      draft: true,
+    });
     expect(result.current.open).toEqual({
       status: "ready",
       values: STORED,
@@ -167,6 +176,18 @@ describe("useDocumentSession: open", () => {
       unpublishedChanges: true,
       changedAt: "2026-11-17T09:30:00.000Z",
       draftable: true,
+    });
+  });
+
+  it("reads a language alone, never another language's words in its place", async () => {
+    api.localized = { enabled: true };
+    await openSession({ ...HEADER, locale: "de" });
+
+    expect(api.findByID).toHaveBeenCalledWith("components", "h1", {
+      depth: 0,
+      draft: true,
+      locale: "de",
+      fallbackLocale: "none",
     });
   });
 
@@ -258,6 +279,23 @@ describe("useDocumentSession: save as draft and publish", () => {
       undefined
     );
     expect(outcome).toMatchObject({ ok: true });
+  });
+
+  it("never lets the changes name a status or a version of their own", async () => {
+    // A caller handing over the document's values whole, status and all,
+    // still saves a working draft: a status here would publish it.
+    const { result } = await heldSession();
+
+    await act(async () => {
+      await result.current.saveDraft({
+        title: "x",
+        status: "published",
+        _rev: "v0",
+        _overwrite: true,
+      });
+    });
+
+    expect(api.update.mock.calls[0]?.[2]).toEqual({ title: "x", _rev: "v1" });
   });
 
   it("stores a document never published as a draft", async () => {
@@ -458,6 +496,79 @@ describe("useDocumentSession: recovery point", () => {
     await act(async () => void vi.advanceTimersByTime(DEBOUNCE_WAIT));
 
     expect(api.saveAutosave).not.toHaveBeenCalled();
+  });
+
+  it("still records an edit made while a save was on its way", async () => {
+    let finish: (value: unknown) => void = () => undefined;
+    api.update.mockImplementationOnce(
+      () => new Promise(resolve => (finish = resolve))
+    );
+    const { result } = await heldSession();
+
+    let saving: Promise<unknown> = Promise.resolve();
+    act(() => {
+      saving = result.current.saveDraft({ title: "First" });
+    });
+    await waitFor(() => expect(api.update).toHaveBeenCalledTimes(1));
+    act(() => result.current.record({ title: "Second" }));
+    await act(async () => {
+      finish({ item: { ...STORED, title: "First", _rev: "v2" }, warnings: [] });
+      await saving;
+    });
+    await act(async () => void vi.advanceTimersByTime(DEBOUNCE_WAIT));
+
+    await waitFor(() => expect(api.saveAutosave).toHaveBeenCalledTimes(1));
+    expect(api.saveAutosave.mock.calls[0]?.[1]).toMatchObject({
+      title: "Second",
+    });
+  });
+
+  it("keeps a write that lands after the caller moved on out of the next document", async () => {
+    let finish: (value: unknown) => void = () => undefined;
+    api.update.mockImplementationOnce(
+      () => new Promise(resolve => (finish = resolve))
+    );
+    api.findByID.mockImplementation(async (_slug: string, id: string) =>
+      id === "f1" ? { ...STORED, id: "f1", _rev: "f-v1" } : STORED
+    );
+    const view = await heldSession();
+
+    let saving: Promise<unknown> = Promise.resolve();
+    act(() => {
+      saving = view.result.current.publish({ title: "Header" });
+    });
+    await waitFor(() => expect(api.update).toHaveBeenCalledTimes(1));
+    view.rerender({ named: { collection: "components", id: "f1" } });
+    await waitFor(() =>
+      expect(view.result.current.open).toMatchObject({
+        values: expect.objectContaining({ id: "f1" }),
+      })
+    );
+    await act(async () => {
+      finish({ item: { ...STORED, _rev: "v2" }, warnings: [] });
+      await saving;
+    });
+    await waitFor(() => expect(view.result.current.lock.status).toBe("held"));
+    await act(async () => {
+      await view.result.current.saveDraft({ title: "Footer" });
+    });
+
+    // The footer's own version, not the header's answer.
+    expect(api.update.mock.calls[1]?.[2]).toMatchObject({ _rev: "f-v1" });
+  });
+
+  it("leaves a point another tab recorded over when the changes are discarded", async () => {
+    const { result } = await heldSession();
+    act(() => result.current.record({ title: "Mine" }));
+    await act(async () => void vi.advanceTimersByTime(DEBOUNCE_WAIT));
+    await waitFor(() => expect(api.saveAutosave).toHaveBeenCalledTimes(1));
+    api.getAutosave.mockResolvedValue({ snapshot: { title: "Other tab" } });
+
+    await act(async () => {
+      await result.current.discard();
+    });
+
+    expect(api.saveAutosave).toHaveBeenCalledTimes(1);
   });
 
   it("empties the point it recorded when the changes are discarded", async () => {

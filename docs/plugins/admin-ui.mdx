@@ -1103,7 +1103,8 @@ same for the other one. `target` names an entry, `{ collection, id }`, with an
 optional `locale`. Pass `null` when you stop editing it.
 
 - `open` is the document as its own editor reads it: its working draft in
-  place of the live row where the collection keeps drafts. Once `status` is
+  place of the live row where the collection keeps drafts, related items by
+  id, and in the `locale` named alone. Once `status` is
   `"ready"` it has the stored `values`, `published`, `unpublishedChanges`,
   `changedAt` (when the version read last changed), and `draftable`. Use the
   last one to tell whether a draft can be saved without changing what is live.
@@ -1112,7 +1113,8 @@ optional `locale`. Pass `null` when you stop editing it.
   known). Show that instead of letting the person edit. The lock is let go
   when you pass `null`, when your view unmounts, and when the page goes away.
 - `saveDraft(changes)` and `publish(changes)` write the fields you pass,
-  through the admin's own update, as the signed-in person. Each sends the
+  through the admin's own update, as the signed-in person. The status is
+  the operation's: a `status` among the fields is ignored. Each sends the
   version your copy started from, so a save made since is refused. Saving a
   draft of a published document stores its working draft and leaves what
   visitors see. Both resolve to `{ ok: true, values }` once stored. Otherwise
