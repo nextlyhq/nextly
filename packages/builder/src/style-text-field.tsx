@@ -183,7 +183,7 @@ function useDraftCommit({
   return () => {
     // Written or not, the text is no longer mid-edit.
     setTyping(false);
-    const commit = () =>
+    const commit = (settling: boolean) =>
       commitDraft({
         draft,
         stored,
@@ -193,9 +193,16 @@ function useDraftCommit({
         mode,
         onCommit,
         setDraft,
+        settling,
       });
-    if (live === undefined) return commit();
-    if (settles || !live.written(draft)) live.join(commit);
+    if (live === undefined) return commit(false);
+    // Typed live, the text left in the field is usually the stored value
+    // already. A field whose end-of-edit write does more (a colour joining
+    // Recent colours) still makes it, once; one that only re-wrote the same
+    // text writes nothing more.
+    const typedLive = live.written(draft);
+    if (!typedLive) live.join(() => commit(false));
+    else if (settles) live.join(() => commit(true));
     live.end();
   };
 }
@@ -261,6 +268,7 @@ export function commitDraft({
   mode,
   onCommit,
   setDraft,
+  settling = false,
 }: {
   draft: string;
   stored: StyleValue | undefined;
@@ -273,8 +281,13 @@ export function commitDraft({
   mode: TokenMode;
   onCommit: (value: StyleValue | null) => CommitOutcome;
   setDraft: (value: string) => void;
+  /**
+   * The end-of-edit write of text already written live: made even though the
+   * document holds the text, for what the commit does beyond writing it.
+   */
+  settling?: boolean;
 }): void {
-  if (draft === storedText(stored)) return;
+  if (!settling && draft === storedText(stored)) return;
   const outcome = onCommit(draftValue(kind, leaf, tokens, mode, draft));
   // The document did not move because it already holds this value in another
   // spelling: `01`, `+1` and `1e0` all commit as the `1` that is stored. The

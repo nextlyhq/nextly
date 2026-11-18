@@ -26,7 +26,7 @@ import {
 import * as React from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
-import type { EditorState } from "./editor-state";
+import { useEditorState, type EditorState } from "./editor-state";
 import { RecentColoursStore } from "./recent-colours";
 import type { PreferenceStore } from "./shell-state";
 import { StyleInspectorPanel } from "./style-inspector-panel";
@@ -209,6 +209,48 @@ describe("a block's colour picker", () => {
     expect(store.value).toBeNull();
     fireEvent.blur(field);
 
+    expect(JSON.parse(store.value ?? "[]")).toEqual(["#ff0000"]);
+  });
+
+  it("remembers a colour typed live once, over a real editor whose stored value follows the typing", () => {
+    // With the document moving on every keystroke, the colour left in the
+    // field is already the stored one when the field is left: it still joins
+    // Recent colours, once.
+    const store = memory();
+    mount(store, "#3b82f6");
+    cleanup();
+    function Live(): React.JSX.Element {
+      const editor = useEditorState({
+        initialDocument: {
+          formatVersion: 1,
+          kind: "page",
+          nodes: [
+            {
+              id: "a",
+              type: "acme/box",
+              version: 1,
+              props: {},
+              styles: { base: { base: { color: "#3b82f6" } } },
+            },
+          ],
+        } as unknown as BlockDocument,
+      });
+      React.useEffect(() => editor.select("a"), []);
+      return <StyleInspectorPanel editor={editor} tokens={TOKENS} />;
+    }
+    render(
+      <RecentColoursStore.Provider value={store}>
+        <Live />
+      </RecentColoursStore.Provider>
+    );
+    const field = screen.getByRole("textbox", { name: "Colour" });
+    let typed = "";
+    for (const character of "#ff0000") {
+      typed += character;
+      fireEvent.change(field, { target: { value: typed } });
+    }
+    expect(store.value).toBeNull();
+    fireEvent.blur(field);
     expect(JSON.parse(store.value ?? "[]")).toEqual(["#ff0000"]);
   });
 
