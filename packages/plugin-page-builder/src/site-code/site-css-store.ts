@@ -8,7 +8,8 @@
  * - `site-css`: what is stored, by its SHA-256, its length and its number of
  *   parts, who saved it (`user:<id>`), and a mark new on every save;
  * - `site-css:000`, `site-css:001`, …: the CSS itself, in parts of at most
- *   255 characters, never splitting a character in two.
+ *   255 characters, counted in Unicode code points as MySQL counts them, so
+ *   no character is ever split in two.
  *
  * A save is one transaction: the header row is compared and set (it changes
  * only if it is still the one the save read), then the parts are replaced.
@@ -92,15 +93,13 @@ interface Header {
 
 /** The CSS in parts of at most {@link SITE_CSS_PART_CHARS}, characters kept whole. */
 export function siteCssParts(css: string): string[] {
+  // Counted in code points, as MySQL counts a `varchar`'s characters: a
+  // character outside the Basic Multilingual Plane is one character there,
+  // and two UTF-16 units here.
+  const characters = Array.from(css);
   const parts: string[] = [];
-  let start = 0;
-  while (start < css.length) {
-    let end = Math.min(start + SITE_CSS_PART_CHARS, css.length);
-    // A part never ends between the two halves of a surrogate pair.
-    const last = css.charCodeAt(end - 1);
-    if (end < css.length && last >= 0xd800 && last <= 0xdbff) end -= 1;
-    parts.push(css.slice(start, end));
-    start = end;
+  for (let at = 0; at < characters.length; at += SITE_CSS_PART_CHARS) {
+    parts.push(characters.slice(at, at + SITE_CSS_PART_CHARS).join(""));
   }
   return parts;
 }

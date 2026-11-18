@@ -23,19 +23,20 @@ const { pageBuilderCustomCss, SITE_CSS_SERVICE, siteCssReader, sitesCss } =
 const { PAGE_BUILDER_PLUGIN_NAME } = await import("./library-contract");
 const { CUSTOM_CSS_CHECKER_ID } = await import("./site-code/css-check");
 const { SITE_CSS_CACHE_PART } = await import("./site-code/site-css-store");
+const { sha256Hex } = await import("./sha256-hex");
 
 /** A stand-in for a page builder's definition, as the map keys it. */
 function definition(): PluginDefinition {
   return { name: PAGE_BUILDER_PLUGIN_NAME } as PluginDefinition;
 }
 
-/** A started copy's database holding `css` as the site's CSS. */
-function databaseHolding(css: string) {
+/** A started copy's database holding `css`, in one part, as the site's CSS. */
+async function databaseHolding(css: string) {
   const rows = [
     {
       name: "site-css",
       value: JSON.stringify({
-        sha256: "unchecked",
+        sha256: await sha256Hex(css),
         chars: css.length,
         parts: 1,
         by: null,
@@ -92,9 +93,24 @@ describe("pageBuilderCustomCss", () => {
       [SITE_CSS_SERVICE]: { read: async () => "from { the: instance; }" },
     };
     // The page builder started here, its database holding the site's CSS.
-    reader.start(databaseHolding("p { color: red; }") as never);
-    // The parts' hash is not the header's, so the store draws none of it:
-    // proof the read went to this copy's database.
+    reader.start((await databaseHolding("p { color: red; }")) as never);
+    expect(await pageBuilderCustomCss({ plugin }).readSite()).toBe(
+      "p { color: red; }"
+    );
+  });
+
+  it("draws none of stored CSS whose parts don't match the header's hash", async () => {
+    const plugin = definition();
+    const reader = siteCssReader();
+    sitesCss.set(plugin, reader);
+    const db = await databaseHolding("p { color: red; }");
+    // A part edited in the database after the save.
+    const rows = await db.select().where().all();
+    rows[1] = { name: "site-css:000", value: "p { color: blue; }" };
+    reader.start({
+      ...db,
+      select: () => ({ where: () => ({ all: async () => rows }) }),
+    } as never);
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     expect(await pageBuilderCustomCss({ plugin }).readSite()).toBeUndefined();
     expect(warn).toHaveBeenCalled();
