@@ -144,6 +144,68 @@ describe("the props a placement may make a setting of its component", () => {
     ).toEqual(["text", "picture"]);
   });
 
+  it("withholds an image's address while its picked or bound media is drawn in its place", () => {
+    // The renderer draws the media before the address, and a bound one
+    // instead of it, so a setting of the address would change nothing.
+    registerBlocks(
+      [
+        {
+          name: "acme/picture",
+          version: 1,
+          description: "A picture.",
+          example: { props: {} },
+          editor: { label: "Picture" },
+          props: {
+            mediaId: {
+              label: "Image",
+              role: "content",
+              type: "media",
+              addressProp: "src",
+            },
+            src: { label: "Image address", role: "content", type: "url" },
+            alt: { label: "Alt text", role: "content", type: "text" },
+          },
+          defaultProps: {},
+          render: () => null,
+        },
+      ] as never,
+      { source: "make-component-setting-test-picture" }
+    );
+    const offeredWith = (
+      props: Record<string, unknown>,
+      bindings?: Record<string, unknown>
+    ): string[] =>
+      settingCandidates(
+        card({
+          nodes: [
+            {
+              id: "pic",
+              type: "acme/picture",
+              version: 1,
+              props,
+              ...(bindings === undefined ? {} : { bindings }),
+            },
+          ] as ComponentDocument["nodes"],
+          exposed: [],
+        })
+      ).map(each => each.propPath);
+    // Picked media: its address is not offered.
+    expect(offeredWith({ mediaId: "m1", src: "/a.png" })).toEqual([
+      "mediaId",
+      "alt",
+    ]);
+    // Bound media: neither the media (bound already) nor the address.
+    expect(offeredWith({ src: "/a.png" }, { mediaId: { $bind: "p" } })).toEqual(
+      ["alt"]
+    );
+    // No media: the address draws, so it is offered.
+    expect(offeredWith({ mediaId: "", src: "/a.png" })).toEqual([
+      "mediaId",
+      "src",
+      "alt",
+    ]);
+  });
+
   it("carries each prop's current value", () => {
     const first = settingCandidates(card())[0];
     expect(first?.value).toBe("Card title");

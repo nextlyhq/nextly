@@ -77,31 +77,54 @@ export interface HeldComponentSetting {
 /** The held settings, one per component. */
 type Holds = ReadonlyMap<string, HeldComponentSetting>;
 
-/** Whether a node is a placement of `componentId` binding `key`. */
-function bindsHeld(node: BlockNode, componentId: string, key: string): boolean {
-  if (node.type !== COMPONENT_INSTANCE_TYPE) return false;
-  if (!isPlainRecord(node.props) || node.props.componentId !== componentId) {
-    return false;
-  }
-  return isPlainRecord(node.bindings) && Object.hasOwn(node.bindings, key);
+/** A placement's own values of its component's settings, by setting id. */
+function storedValues(node: BlockNode): Record<string, unknown> {
+  const overrides = isPlainRecord(node.props)
+    ? node.props.overrides
+    : undefined;
+  return isPlainRecord(overrides) ? overrides : {};
 }
 
-/** The placements of a held setting's component that bind it. */
-function placementsBinding(
+/**
+ * How a node uses a held setting: a placement of its component binding it,
+ * or storing a value of its own for it, as the placement panel types one
+ * once the setting is drawn. Either needs the setting written.
+ */
+function usesHeld(
+  node: BlockNode,
+  held: HeldComponentSetting
+): { readonly binds: boolean; readonly stores: boolean } | undefined {
+  if (node.type !== COMPONENT_INSTANCE_TYPE) return undefined;
+  if (
+    !isPlainRecord(node.props) ||
+    node.props.componentId !== held.componentId
+  ) {
+    return undefined;
+  }
+  const binds =
+    isPlainRecord(node.bindings) &&
+    Object.hasOwn(node.bindings, settingBindingKey(held.settingId));
+  const stores = Object.hasOwn(storedValues(node), held.settingId);
+  return binds || stores ? { binds, stores } : undefined;
+}
+
+/** The placements of a held setting's component that bind it or store it. */
+function placementsUsing(
   document: BlockDocument,
   held: HeldComponentSetting
-): BlockNode[] {
-  const key = settingBindingKey(held.settingId);
-  const found: BlockNode[] = [];
+): { readonly node: BlockNode; readonly binds: boolean }[] {
+  const found: { node: BlockNode; binds: boolean }[] = [];
   walkNodes(document.nodes, node => {
-    if (bindsHeld(node, held.componentId, key)) found.push(node);
+    const use = usesHeld(node, held);
+    if (use !== undefined) found.push({ node, binds: use.binds });
   });
   return found;
 }
 
 /**
- * The held settings the page still binds: an undo took a hold's binding off
- * with the edit that made it, and the hold goes with it.
+ * The held settings the page still uses, by a binding or a value of its own:
+ * an undo took a hold's binding off with the edit that made it, and the hold
+ * goes with it, while a value another placement typed for it keeps it.
  *
  * @experimental Settles with the editor's binding controls.
  */
@@ -110,7 +133,7 @@ export function liveSettingHolds(
   held: Holds
 ): HeldComponentSetting[] {
   return [...held.values()].filter(
-    hold => placementsBinding(document, hold).length > 0
+    hold => placementsUsing(document, hold).length > 0
   );
 }
 
@@ -137,11 +160,15 @@ function refusedHold(
   title: string,
   refused: string
 ): { words: string; reason: string; unbound: boolean } {
-  const unbound = editor.applyAll(unbindOps(editor.document, hold)) !== null;
+  const using = placementsUsing(editor.document, hold);
+  // Named as the page holds it: a binding when one placement binds it, a
+  // value when the placements only store their own.
+  const what = using.some(use => use.binds) ? "binding to it" : "value of it";
+  const unbound = editor.applyAll(unbindOps(using, hold)) !== null;
   return {
     words: unbound
-      ? `“${hold.action.label}” wasn't added to ${title}, so this page's binding to it was taken off. ${refused}`
-      : `“${hold.action.label}” wasn't added to ${title}, and this page's binding to it couldn't be taken off, as its placement is locked. ${refused} Unlock it, or take the binding off, and save again.`,
+      ? `“${hold.action.label}” wasn't added to ${title}, so this page's ${what} was taken off. ${refused}`
+      : `“${hold.action.label}” wasn't added to ${title}, and this page's ${what} couldn't be taken off, as its placement is locked. ${refused} Unlock it, or take it off, and save again.`,
     reason: refused,
     unbound,
   };
@@ -299,7 +326,7 @@ function unmadeSettingBindings(
         held.get(componentId)?.settingId !== id &&
         !written.has(writtenKey(componentId, id));
       if (unmade) dropped = true;
-      else kept[key] = binding as NonNullable<BlockNode["bindings"]>[string];
+      else kept[key] = binding;
     }
     if (!dropped) return;
     found.push({
@@ -313,19 +340,31 @@ function unmadeSettingBindings(
   return found;
 }
 
-/** The edit taking a refused hold's bindings off every placement holding one. */
+/**
+ * The edit taking a refused hold off every placement using it: its binding,
+ * and the value a placement stored for it, which nothing would read once the
+ * setting isn't made. The placement's other settings are kept. The props go
+ * whole, as an update merges them at the top level, and without `overrides`
+ * once none is left, as a placement storing none holds.
+ */
 function unbindOps(
-  document: BlockDocument,
+  using: readonly { readonly node: BlockNode }[],
   held: HeldComponentSetting
 ): BuilderOp[] {
   const key = settingBindingKey(held.settingId);
-  return placementsBinding(document, held).map(node => {
+  return using.map(({ node }) => {
     const { [key]: _gone, ...kept } = isPlainRecord(node.bindings)
       ? node.bindings
       : {};
+    const { [held.settingId]: _value, ...values } = storedValues(node);
+    const { overrides: _stored, ...rest } = isPlainRecord(node.props)
+      ? node.props
+      : {};
+    const props =
+      Object.keys(values).length === 0 ? rest : { ...rest, overrides: values };
     return Object.keys(kept).length === 0
-      ? { kind: "update", id: node.id, patch: {}, unset: ["bindings"] }
-      : { kind: "update", id: node.id, patch: { bindings: kept } };
+      ? { kind: "update", id: node.id, patch: { props }, unset: ["bindings"] }
+      : { kind: "update", id: node.id, patch: { props, bindings: kept } };
   });
 }
 

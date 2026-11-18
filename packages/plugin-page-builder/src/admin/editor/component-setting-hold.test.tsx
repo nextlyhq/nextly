@@ -218,6 +218,37 @@ describe("which held settings are live", () => {
     // Undone: the binding went, and the change to the component with it.
     expect(liveSettingHolds(pageWith(), held)).toEqual([]);
   });
+
+  it("stays live while another placement stores its own value of the new setting, unbound", () => {
+    const held = new Map([
+      [
+        "card",
+        {
+          componentId: "card",
+          settingId: "title",
+          definition: PLANNED,
+          fingerprint: "f1",
+          action: { kind: "expose" as const, ...ASK },
+        },
+      ],
+    ]);
+    const typed = (overrides: Record<string, unknown>): BlockDocument =>
+      ({
+        ...pageWith(),
+        nodes: [
+          {
+            id: "q",
+            type: COMPONENT_INSTANCE_TYPE,
+            version: 1,
+            props: { componentId: "card", overrides },
+          },
+        ],
+      }) as BlockDocument;
+    // The placement that bound it went; the other's typed value still needs it.
+    expect(liveSettingHolds(typed({ title: "Hello" }), held)).toHaveLength(1);
+    // A value of another setting is not one of this one.
+    expect(liveSettingHolds(typed({ other: "Hello" }), held)).toEqual([]);
+  });
 });
 
 describe("making a setting from the page", () => {
@@ -639,4 +670,44 @@ describe("the page's Save", () => {
       expect(form.run).toHaveBeenCalledWith("save");
     });
   }
+
+  it("takes a typed value of a refused setting off, with its binding, and lets the next Save go", async () => {
+    answers("conflict");
+    const mounted = mount(pageWith());
+    await act(async () => {
+      await mounted.hook.result.current.makeComponentSetting(ASK);
+    });
+    // The placement that bound it went; another stores its own value of it.
+    const typed = {
+      ...pageWith(),
+      nodes: [
+        {
+          id: "q",
+          type: COMPONENT_INSTANCE_TYPE,
+          version: 1,
+          props: { componentId: "card", overrides: { title: "Hi", a: "b" } },
+        },
+      ],
+    } as BlockDocument;
+    mounted.editor.document = typed;
+    mounted.hook.rerender({ doc: typed });
+    await act(async () => {
+      await form.before?.("save", settled).catch(() => undefined);
+    });
+    expect(mounted.editor.applyAll).toHaveBeenCalledTimes(1);
+    // Only the refused setting's value went, the placement's others kept.
+    expect(mounted.editor.document.nodes[0]?.props).toEqual({
+      componentId: "card",
+      overrides: { a: "b" },
+    });
+    expect(toastError.mock.calls[0]?.[0]).toContain(
+      "“Title” wasn't added to Card, so this page's value of it was taken off."
+    );
+    // Dropped: the next Save writes nothing and goes on.
+    route.sent.length = 0;
+    await act(async () => {
+      await form.before?.("save", settled);
+    });
+    expect(route.sent).toEqual([]);
+  });
 });

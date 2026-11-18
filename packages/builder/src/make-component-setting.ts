@@ -12,6 +12,8 @@
  * @module make-component-setting
  */
 import {
+  addressPropOf,
+  authoredText,
   bindablePropKind,
   ENTRY_LINK_PROPS,
   getBlock,
@@ -115,6 +117,7 @@ function offered(
     return false;
   }
   if (propPath === LINK_ADDRESS_PROP && linksToEntry(node.props)) return false;
+  if (mediaDrawnInstead(node, propPath)) return false;
   if (taken.has(`${node.id}\u0000${propPath}`)) return false;
   return !(
     isPlainRecord(node.bindings) && Object.hasOwn(node.bindings, propPath)
@@ -136,6 +139,24 @@ function linksToEntry(props: unknown): boolean {
     return typeof value === "string" && value.trim() !== "";
   };
   return named(ENTRY_LINK_PROPS.collection) && named(ENTRY_LINK_PROPS.id);
+}
+
+/**
+ * Whether `propPath` is the address a media prop of the block keeps its
+ * image by ({@link addressPropOf}), while that media prop is picked or
+ * bound: the renderer draws the media before the address, and a bound one
+ * in its place, so a setting of the address would change nothing a visitor
+ * sees. Read from the block's declared pairing, never guessed by name.
+ */
+function mediaDrawnInstead(node: BlockNode, propPath: string): boolean {
+  const declared = getBlock(node.type)?.props;
+  const props = isPlainRecord(node.props) ? node.props : {};
+  const bindings = isPlainRecord(node.bindings) ? node.bindings : {};
+  return Object.keys(declared ?? {}).some(
+    media =>
+      addressPropOf(declared, media) === propPath &&
+      (authoredText(props[media]) !== "" || Object.hasOwn(bindings, media))
+  );
 }
 
 /** One block's props a placement may make a setting, in declared order. */
