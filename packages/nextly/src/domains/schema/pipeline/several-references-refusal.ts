@@ -18,6 +18,7 @@ import { querySqlRows } from "./classifier/count-helpers";
 import type { NextlySchemaSnapshot, Operation } from "./diff/types";
 import { conversionBetweenShapes } from "./diff/types";
 import { liveTableName, renamesOf, type ApplyRenames } from "./live-uniques";
+import { EMPTY_REFERENCE_TEXTS } from "./reference-list-conversion";
 import type { DesiredSchema } from "./types";
 
 /** Each dialect's condition on a column, given its quoted identifier. */
@@ -50,23 +51,33 @@ const SEVERAL_REFERENCES: RowCondition = {
     sql`CASE WHEN json_valid(${c}) THEN json_type(${c}) = 'array' AND json_array_length(${c}) > 1 ELSE 0 END`,
 };
 
-/** An empty JSON list: a relation holding no entry. Guarded by CASE as the condition above is. */
+/** The stored empties a conversion clears to NULL (`EMPTY_REFERENCE_TEXTS`), as a SQL list. */
+const EMPTY_TEXTS = sql.join(
+  EMPTY_REFERENCE_TEXTS.map(text => sql`${text}`),
+  sql`, `
+);
+
+/**
+ * A relation holding no entry that the conversion writes as NULL: one of the stored empties, or an
+ * empty JSON list however it is spaced. Asked first, so the JSON reads below never see a blank,
+ * and guarded by CASE as the condition above is.
+ */
 const NO_REFERENCES: RowCondition = {
   postgresql: c =>
-    sql`CASE WHEN jsonb_typeof(${c}::jsonb) = 'array' THEN jsonb_array_length(${c}::jsonb) = 0 ELSE FALSE END`,
+    sql`CASE WHEN btrim(${c}::text) IN (${EMPTY_TEXTS}) THEN TRUE WHEN jsonb_typeof(${c}::jsonb) = 'array' THEN jsonb_array_length(${c}::jsonb) = 0 ELSE FALSE END`,
   mysql: c =>
-    sql`CASE WHEN JSON_VALID(${c}) THEN JSON_TYPE(${c}) = 'ARRAY' AND JSON_LENGTH(${c}) = 0 ELSE FALSE END`,
+    sql`CASE WHEN TRIM(CAST(${c} AS CHAR)) IN (${EMPTY_TEXTS}) THEN TRUE WHEN JSON_VALID(${c}) THEN JSON_TYPE(${c}) = 'ARRAY' AND JSON_LENGTH(${c}) = 0 ELSE FALSE END`,
   sqlite: c =>
-    sql`CASE WHEN json_valid(${c}) THEN json_type(${c}) = 'array' AND json_array_length(${c}) = 0 ELSE 0 END`,
+    sql`CASE WHEN trim(${c}) IN (${EMPTY_TEXTS}) THEN 1 WHEN json_valid(${c}) THEN json_type(${c}) = 'array' AND json_array_length(${c}) = 0 ELSE 0 END`,
 };
 
-/** A value: not NULL, an empty string, an empty list or JSON null. */
+/** A value: not NULL and none of the stored empties (`EMPTY_REFERENCE_TEXTS`). */
 const HOLDS_A_VALUE: RowCondition = {
   postgresql: c =>
-    sql`${c} IS NOT NULL AND btrim(${c}::text) NOT IN ('', '[]', 'null')`,
+    sql`${c} IS NOT NULL AND btrim(${c}::text) NOT IN (${EMPTY_TEXTS})`,
   mysql: c =>
-    sql`${c} IS NOT NULL AND TRIM(CAST(${c} AS CHAR)) NOT IN ('', '[]', 'null')`,
-  sqlite: c => sql`${c} IS NOT NULL AND trim(${c}) NOT IN ('', '[]', 'null')`,
+    sql`${c} IS NOT NULL AND TRIM(CAST(${c} AS CHAR)) NOT IN (${EMPTY_TEXTS})`,
+  sqlite: c => sql`${c} IS NOT NULL AND trim(${c}) NOT IN (${EMPTY_TEXTS})`,
 };
 
 /**
