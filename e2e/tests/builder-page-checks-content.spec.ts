@@ -82,8 +82,11 @@ test("lists the empty blocks and the page's data, and opens each fix", async ({
   ]);
   const list = await openChecks(page, id);
   const content = list.getByRole("region", { name: "Content and data" });
-  // The page's data, always, though nothing on it reads any yet.
-  await expect(content).toContainText(/Page data: \d+ of 500/);
+  // The page's data, always, though nothing on it reads any yet: counted
+  // once the page is drawn off screen, which a cold server takes a while to.
+  await expect(content).toContainText(/Page data: \d+ of 500/, {
+    timeout: 30_000,
+  });
   await expect(content).toContainText("Image has no picture");
   await expect(content).toContainText("Collection list has no source");
   // The Button's item opens its Link, where the fix is.
