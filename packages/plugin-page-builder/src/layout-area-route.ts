@@ -212,7 +212,7 @@ export interface LayoutAreaWrites {
 }
 
 /** Refuse a set this write would publish more than the area of. */
-function refuseUnlessPublishedAsSaved(
+export function refuseUnlessPublishedAsSaved(
   saved: Record<string, unknown>,
   area: LayoutArea
 ): void {
@@ -304,7 +304,7 @@ export async function putInArea(
 }
 
 /** The Direct API, as the caller, for the write. */
-function directLayoutAreaWrites(
+export function directLayoutAreaWrites(
   ctx: PluginRouteContext,
   store: ComponentStore
 ): LayoutAreaWrites {
