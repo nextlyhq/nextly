@@ -29,7 +29,10 @@ vi.mock("@nextlyhq/plugin-sdk/client", () => ({
   useCan: (permission: string) => permission === "update-site-style",
 }));
 
-vi.mock("../site-style-client", () => ({
+vi.mock("../site-style-client", async () => ({
+  // Outside an editor: no history, and nothing drawn over the read.
+  SiteStyleHistoryContext: (await import("react")).createContext(null),
+  SiteStylePreviewContext: (await import("react")).createContext(new Map()),
   useSaveSiteStyle: () => ({
     save: (...args: unknown[]) => {
       saves.calls.push(args);
