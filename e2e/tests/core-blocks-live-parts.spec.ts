@@ -168,12 +168,16 @@ async function shortTargets(page: Page): Promise<string[]> {
     ];
     return taps
       .filter(element => {
+        // Only what a visitor can reach: a form's spam trap is out of the
+        // tab order and hidden, and nobody taps it.
+        if ((element as HTMLElement).tabIndex < 0) return false;
+        if (element.closest("[aria-hidden='true']") !== null) return false;
         const box = element.getBoundingClientRect();
         return box.width > 0 && box.height < 44;
       })
       .map(element => {
         const box = element.getBoundingClientRect();
-        return `${element.tagName.toLowerCase()} "${(element.getAttribute("aria-label") ?? element.textContent ?? "").trim().slice(0, 30)}" ${Math.round(box.height)}px tall`;
+        return `${element.tagName.toLowerCase()}${element.getAttribute("type") === null ? "" : `[type=${element.getAttribute("type")}]`}${element.getAttribute("name") === null ? "" : `[name=${element.getAttribute("name")}]`} "${(element.getAttribute("aria-label") ?? element.textContent ?? "").trim().slice(0, 30)}" ${Math.round(box.height)}px tall`;
       });
   });
 }

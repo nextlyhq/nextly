@@ -70,7 +70,9 @@ async function blockTiles(page: Page): Promise<string[]> {
         option => (option as HTMLElement).innerText.split("\n")[0]?.trim() ?? ""
       )
     );
-  return names.filter(name => name !== "");
+  // The suite's own fixture blocks, which only a test setup registers, are
+  // not core blocks.
+  return names.filter(name => name !== "" && !name.startsWith("Test fixture"));
 }
 
 test("every core block starts at a visible size, real or with its next step, and fails no request", async ({
@@ -112,20 +114,58 @@ test("every core block starts at a visible size, real or with its next step, and
       await page.keyboard.press("Escape");
     }
     const before = failed.length;
-    await page.getByRole("option", { name, exact: true }).first().click();
-    await expect.poll(async () => (await selection(page)).length).toBe(1);
-    const [added] = await selection(page);
+    const tile = page.getByRole("option", { name, exact: true }).first();
+    await tile.click();
+    // A block that only goes inside another (a Column, an accordion's item)
+    // adds nothing on its own; its tile says where it goes instead.
+    const added = await expect
+      .poll(async () => (await selection(page))[0], { timeout: 3_000 })
+      .not.toBeUndefined()
+      .then(async () => (await selection(page))[0])
+      .catch(() => undefined);
     if (added === undefined) {
-      problems.push(`${name}: nothing was added`);
+      const said = (await tile.getAttribute("aria-describedby")) ?? "";
+      const description =
+        said === ""
+          ? ""
+          : await page.evaluate(
+              ids =>
+                ids
+                  .split(" ")
+                  .map(each => document.getElementById(each)?.textContent ?? "")
+                  .join(" "),
+              said
+            );
+      if (!/goes inside/i.test(`${description} ${await tile.innerText()}`)) {
+        problems.push(
+          `${name}: nothing was added, and the tile says nothing of where it goes`
+        );
+      }
       continue;
     }
     const block = canvasBlock(page, added).first();
     await expect(block).toBeVisible();
     const box = await block.boundingBox();
-    if (box === null || box.height < 16 || box.width < 16) {
+    // Visible: never 0px either way. A Divider is rightly a 1px line.
+    if (box === null || box.height < 1 || box.width < 1) {
       problems.push(
         `${name}: drawn at ${Math.round(box?.width ?? 0)}x${Math.round(box?.height ?? 0)}px`
       );
+    }
+    // The blocks that start with parts of their own, as the spec counts them.
+    const parts: Readonly<Record<string, [string, number]>> = {
+      Accordion: ["summary", 3],
+      Form: ["input, textarea, select", 3],
+    };
+    const counted = parts[name];
+    if (counted !== undefined) {
+      const found = await block.locator(counted[0]).count();
+      if (found < counted[1]) {
+        problems.push(`${name}: starts with ${found}, not ${counted[1]}`);
+      }
+    }
+    if (name === "Quote" && (await block.innerText()).trim() === "") {
+      problems.push("Quote: starts with no words");
     }
     for (const words of STARTS_WITH[name] ?? []) {
       if (!(await block.innerText()).includes(words)) {

@@ -522,7 +522,17 @@ describe("a table of contents' settings", () => {
       await drawn(page(contents({ title: "In this post" }), ...body))
     );
     expect(nav).toMatch(
-      /^<nav class="[^"]*" aria-label="In this post"><details open=""><summary class="[^"]*"><span class="nx-pb-disclosure-icon" aria-hidden="true"><\/span><span class="nx-pb-disclosure-title">In this post<\/span><\/summary><ol role="list"/
+      /^<nav class="[^"]*" aria-label="In this post"><details open=""><summary class="[^"]*" data-nx-toc-toggle=""><span class="nx-pb-disclosure-icon" aria-hidden="true"><\/span><span class="nx-pb-disclosure-title">In this post<\/span><\/summary><ol role="list"/
+    );
+  });
+
+  it("makes its folding title a target at least 44px tall, which an author's own height outweighs", async () => {
+    const html = await drawn(page(contents({}), ...body));
+    expect(navOf(html)).toContain("<summary");
+    // Under `:where`, so the rule weighs nothing against a height an author
+    // sets on the title.
+    expect(contentsRules(html)).toContain(
+      ":where([data-nx-toc-toggle]){min-height:44px}"
     );
   });
 
