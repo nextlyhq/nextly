@@ -31,6 +31,7 @@ import { isTextEntry, modalIsOpen } from "./canvas/canvas-escape";
 import { useCanvasFrame } from "./canvas/canvas-frame-context";
 import { isElement } from "./dom-kind";
 import { BUILDER_CHROME_CLASS } from "./shell-state";
+import { useShellIsActive } from "./shell/shell-active";
 
 /**
  * The keys, as Help lists them.
@@ -116,13 +117,17 @@ export function BlockClipboardEvents({
   readonly enabled: boolean;
 }): null {
   const canvasDocument = useCanvasFrame().document;
+  // A shell hidden for a too-narrow window keeps its selection mounted but
+  // takes no edits, and `inert` does not stop a document's own listeners.
+  const active = useShellIsActive();
+  const listening = enabled && active;
   // The newest verbs, read when an event lands, so listeners are added once
   // per document rather than on every render.
   const latest = React.useRef(verbs);
   latest.current = verbs;
 
   useIsomorphicLayoutEffect(() => {
-    if (!enabled || typeof document === "undefined") return;
+    if (!listening || typeof document === "undefined") return;
     const editorDocument = document;
     const documents = new Set<Document>([editorDocument]);
     if (canvasDocument !== null) documents.add(canvasDocument);
@@ -157,7 +162,7 @@ export function BlockClipboardEvents({
         doc.removeEventListener("paste", onPaste);
       }
     };
-  }, [enabled, canvasDocument]);
+  }, [listening, canvasDocument]);
 
   return null;
 }

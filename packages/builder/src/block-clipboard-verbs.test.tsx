@@ -25,6 +25,7 @@ import {
   BlockClipboardEvents,
   blocksTakeClipboardEvent,
 } from "./block-clipboard-events";
+import { ShellActiveContext } from "./shell/shell-active";
 import {
   useBlockClipboardVerbs,
   type BlockClipboardVerbs,
@@ -490,5 +491,31 @@ describe("which clipboard events are the blocks'", () => {
     const other = clipboardEvent("paste", { "text/plain": "words" });
     button.dispatchEvent(other.event);
     expect(other.event.defaultPrevented).toBe(false);
+  });
+  it("takes nothing while the shell is hidden for a narrow window", () => {
+    // The editor stays mounted with its selection under the narrow-window
+    // notice; a cut or paste there would change a page nobody can see.
+    const button = document.createElement("button");
+    chrome().append(button);
+    const verbs: BlockClipboardVerbs = {
+      copy: vi.fn(() => true),
+      cut: vi.fn(() => true),
+      paste: vi.fn(),
+      pasteText: vi.fn(() => true),
+    };
+    render(
+      <ShellActiveContext.Provider value={false}>
+        <BlockClipboardEvents verbs={verbs} enabled />
+      </ShellActiveContext.Provider>
+    );
+    for (const type of ["copy", "cut"]) {
+      button.dispatchEvent(clipboardEvent(type).event);
+    }
+    const paste = clipboardEvent("paste", { "text/plain": "copied" });
+    button.dispatchEvent(paste.event);
+    expect(verbs.copy).not.toHaveBeenCalled();
+    expect(verbs.cut).not.toHaveBeenCalled();
+    expect(verbs.pasteText).not.toHaveBeenCalled();
+    expect(paste.event.defaultPrevented).toBe(false);
   });
 });

@@ -45,11 +45,17 @@ function idsIn(nodes: BlockNode[]): string[] {
   return out;
 }
 
-/** The forest with every node id blanked, to compare what else was kept. */
+/**
+ * The forest with each block's own id blanked, to compare what else was kept.
+ * Only block ids: a reference that happens to be called `id` (a media item's,
+ * inside props) is compared as stored, so a copy that rewrote it fails.
+ */
 function withoutIds(nodes: readonly BlockNode[]): unknown {
-  return JSON.parse(
-    JSON.stringify(nodes, (key, value: unknown) => (key === "id" ? "*" : value))
-  ) as unknown;
+  const copy = JSON.parse(JSON.stringify(nodes)) as BlockNode[];
+  walkNodes(copy, each => {
+    (each as { id: string }).id = "*";
+  });
+  return copy;
 }
 
 /** Apply a plan's ops, or fail the test with the refusal. */
