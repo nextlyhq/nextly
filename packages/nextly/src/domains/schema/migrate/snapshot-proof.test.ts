@@ -11,6 +11,7 @@ import { NextlyError } from "../../../errors/nextly-error";
 import type { SchemaEventRow } from "../events/schema-events-repository";
 import type { NextlySchemaSnapshot } from "../pipeline/diff/types";
 import { generateStatements } from "../pipeline/sql-templates";
+import { schemaVersionStoreSql } from "../schema-version";
 
 import {
   danglingOnAddedKeys,
@@ -397,6 +398,40 @@ describe("statementsShownBySnapshot: what passes the first condition", () => {
         `UPDATE "dynamic_collections" SET "label" = 'Pages' WHERE "slug" = 'pages'`
       )
     ).toBe(false);
+  });
+
+  it("the stored schema version moved after the file's registry rows, as the generator writes it", () => {
+    const row = `UPDATE "dynamic_collections" SET "label" = 'Posts' WHERE "slug" = 'posts'`;
+    for (const dialect of ["postgresql", "mysql", "sqlite"] as const) {
+      const version = schemaVersionStoreSql(dialect);
+      const statuses = (statements: string[]) =>
+        statementsShownBySnapshot(statements, dialect, sides).map(
+          proof => proof.status
+        );
+      const ownRow = dialect === "mysql" ? row.replace(/"/g, "`") : row;
+      expect(statuses([ownRow, version]), dialect).toEqual(["shown", "shown"]);
+      // As the splitter hands it over, without its closing semicolon.
+      expect(statuses([ownRow, version.replace(/;$/, "")]), dialect).toEqual([
+        "shown",
+        "shown",
+      ]);
+      // Alone, before the row, or beside another entity's row, it is a write the snapshot does
+      // not show: only a file's own registry rows bring it.
+      expect(statuses([version]), dialect).toEqual(["unshown"]);
+      expect(statuses([version, ownRow]), dialect).toEqual([
+        "unshown",
+        "shown",
+      ]);
+      expect(
+        statuses([ownRow.replace(/posts/g, "pages"), version]),
+        dialect
+      ).toEqual(["unshown", "unshown"]);
+      // Any other write to the same table is not it.
+      expect(
+        statuses([ownRow, version.replace("+ 1", "+ 2")]),
+        dialect
+      ).toEqual(["shown", "unshown"]);
+    }
   });
 
   it("a SQLite table rebuild, its guard and its sequence carry, as the generator writes them", () => {

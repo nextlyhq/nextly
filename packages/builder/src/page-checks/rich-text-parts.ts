@@ -49,10 +49,18 @@ export function eachRichTextNode(
   node: BlockNode,
   visit: (part: RichTextNode) => void
 ): void {
-  for (const value of Object.values(node.props)) {
+  // A table of contents reads its passage's headings and draws its own list,
+  // never the passage, so nothing in it is on the page.
+  if (node.type === TABLE_OF_CONTENTS) return;
+  for (const [prop, value] of Object.entries(node.props)) {
+    // A passage bound to a field is drawn from the entry, not as stored.
+    if (node.bindings?.[prop] !== undefined) continue;
     if (isRichTextValue(value)) walkRichText(value.root.children, visit);
   }
 }
+
+/** The block that lists a passage's headings rather than drawing it. */
+const TABLE_OF_CONTENTS = "core/table-of-contents";
 
 /**
  * The words a rich text node holds, its children's joined in order, an

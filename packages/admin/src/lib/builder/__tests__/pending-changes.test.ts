@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 
 import type { BuilderField } from "@admin/components/features/schema-builder/types";
 
+import { followRename } from "../condition-identity";
 import { pendingChanges, rowMarks } from "../pending-changes";
 
 const text = (id: string, overrides: Partial<BuilderField> = {}) =>
@@ -162,6 +163,40 @@ describe("pending changes", () => {
     });
   });
 
+  // A rename the same save makes required cannot keep its values in one save (the save converts the
+  // pair as a rename, without the new not-null), so the rename says so for the save to refuse.
+  it("a rename says whether the same save changes the field's Required", () => {
+    const current = structuredClone(saved);
+    current[1] = text("summary", {
+      name: "excerpt",
+      validation: { required: true },
+    });
+    const renamed = pendingChanges(saved, current).find(
+      change => change.kind === "renamed"
+    );
+    expect(renamed).toMatchObject({
+      previousName: "summary",
+      requiredChanged: true,
+    });
+
+    // Turned off as well as on: the save keeps the column's not-null as it was either way.
+    const requiredBefore = structuredClone(saved);
+    requiredBefore[1] = text("summary", { validation: { required: true } });
+    const madeOptional = structuredClone(saved);
+    madeOptional[1] = text("summary", { name: "excerpt" });
+    expect(
+      pendingChanges(requiredBefore, madeOptional).find(
+        change => change.kind === "renamed"
+      )
+    ).toMatchObject({ requiredChanged: true });
+
+    const alone = structuredClone(saved);
+    alone[1] = text("summary", { name: "excerpt" });
+    expect(
+      pendingChanges(saved, alone).find(change => change.kind === "renamed")
+    ).toMatchObject({ requiredChanged: false });
+  });
+
   it("a type change is a type change, with the type it had", () => {
     const current = structuredClone(saved);
     current[1] = text("summary", { type: "textarea" });
@@ -297,5 +332,43 @@ describe("row marks", () => {
     for (const id of ["address", "street", "city", "zip"]) {
       expect([...(marks.get(id) ?? [])]).toEqual(["deleted"]);
     }
+  });
+});
+
+// A rename carries the conditions that read the field (`followRename`), so the condition it
+// rewrites is part of the rename: one change, not a rename and a changed field beside it.
+describe("a rename and the conditions it carries", () => {
+  const gated = (id: string, source: string) =>
+    text(id, {
+      admin: { condition: { field: source, operator: "isNotEmpty" } },
+    });
+  const before = [text("summary"), gated("teaser", "summary")];
+  /** `before` with `summary` renamed to `abstract` and its readers followed. */
+  const renamed = () =>
+    followRename(
+      [text("summary", { name: "abstract" }), gated("teaser", "summary")],
+      "summary",
+      "summary"
+    );
+
+  it("counts the condition it rewrites as part of the rename", () => {
+    expect(summary(before, renamed())).toEqual(["renamed summary"]);
+  });
+
+  it("still counts a condition changed by hand beside a rename", () => {
+    const fields = renamed().map(each =>
+      each.id === "teaser"
+        ? {
+            ...each,
+            admin: {
+              condition: { field: "abstract", operator: "isEmpty" as const },
+            },
+          }
+        : each
+    );
+    expect(summary(before, fields)).toEqual([
+      "renamed summary",
+      "settings teaser",
+    ]);
   });
 });
