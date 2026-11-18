@@ -7,7 +7,7 @@
  *
  * @module @nextlyhq/plugin-page-builder/admin/editor/editor-top-bar
  */
-import { BreakpointSwitcher } from "@nextlyhq/builder/shell";
+import { BreakpointSwitcher, PageChecksChip } from "@nextlyhq/builder/shell";
 import { DocumentSaveAndPublish } from "@nextlyhq/plugin-sdk/admin";
 
 import { BindingsToFixChip } from "../bindings-report/BindingsToFixChip";
@@ -160,6 +160,12 @@ export function editorTopBar(
           blocks, the page, other pages and commands, also on ⌘K. */}
         <SearchButton onOpen={() => view.search.setOpen(true)} />
         <PreviewButton visitor={page.visitor} />
+        {/* Beside Publish, on a page: how many of the draft's checks need
+          attention, opening the list. Never a reason to hold Save or
+          Publish back, which read nothing of it. */}
+        {editor.document.kind === "page" ? (
+          <PageChecksChip editor={editor} canvas={page.canvas} />
+        ) : null}
         {/* Last, at the bar's far end where the header kept them: Save and
           Publish, which say themselves whether the work is saved and
           whether the live page is behind, so nothing else in the bar says

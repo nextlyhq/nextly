@@ -2293,3 +2293,33 @@ describe("a list's sort, asked for from its canvas note", () => {
     expect(result.current.canUndo).toBe(false);
   });
 });
+
+describe("a block's setting, asked for from a page check", () => {
+  it("selects the block and counts each ask with its setting, outside the history", () => {
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: doc([node("a"), node("img")]) })
+    );
+    expect(result.current.settingAsked).toBeUndefined();
+    act(() =>
+      result.current.askSetting?.("img", { tab: "content", id: "alt" })
+    );
+    expect(result.current.selectedId).toBe("img");
+    expect(result.current.settingAsked).toEqual({
+      id: "img",
+      tab: "content",
+      setting: "alt",
+      seq: 1,
+    });
+    // A second press asks again, though the block is already selected.
+    act(() =>
+      result.current.askSetting?.("img", { tab: "advanced", id: "anchor" })
+    );
+    expect(result.current.settingAsked).toEqual({
+      id: "img",
+      tab: "advanced",
+      setting: "anchor",
+      seq: 2,
+    });
+    expect(result.current.canUndo).toBe(false);
+  });
+});

@@ -46,6 +46,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@nextlyhq/ui";
 import * as React from "react";
 
+import { useAskedSetting } from "./asked-setting";
 import { BlockCard, type CardVerbs } from "./block-card";
 import {
   blockLookGroups,
@@ -123,6 +124,7 @@ import {
 import {
   changedElsewhere,
   filtering,
+  type SettingEntry,
   type SettingsFilter,
   type StoredStyles,
 } from "./settings-index";
@@ -660,6 +662,26 @@ function SelectionInspector({
   const reasonId = React.useId();
   // The component's own view, when the document is a component.
   const fields = React.useContext(ComponentFieldsContext);
+  // Where the panel reads a block's settings from, for the filter and for a
+  // setting asked for from outside the panel alike.
+  const reading: MatchReading = {
+    state: styleState?.state,
+    breakpoint,
+    breakpoints: styleOnly.breakpoints,
+    reportedStyle,
+    orientation: canvas.orientation,
+    editor,
+    library: styleOnly.classLibrary,
+  };
+  // The panel's root, where a setting asked for from a page check is found.
+  const root = React.useRef<HTMLDivElement>(null);
+  useAskedSetting({
+    asked: editor.settingAsked,
+    nodeId: inspection?.nodeId,
+    choose,
+    entries: () => entriesOf(editor.document, inspection, reading),
+    root,
+  });
 
   const surface = surfaceFor(
     editor,
@@ -682,21 +704,12 @@ function SelectionInspector({
   }
   const block = surface.block;
   const tabs = inspectorTabsOf(block);
-  const match = blockMatch(editor.document, block, filter, {
-    state: styleState?.state,
-    breakpoint,
-    breakpoints: styleOnly.breakpoints,
-    reported:
-      reportedStyle?.nodeId === block.nodeId ? reportedStyle : undefined,
-    // Which way the block's lines run, as the canvas measured it: what
-    // Inside its parent's Width and Height are sized by.
-    flow: {
-      writingMode: canvas.orientation?.writingMode ?? "horizontal-tb",
-      rtl: canvas.orientation?.direction === "rtl",
-    },
-    editor,
-    library: styleOnly.classLibrary,
-  });
+  const match = blockMatch(
+    editor.document,
+    block,
+    filter,
+    matchAtFor(block, reading)
+  );
 
   // Where the block is hidden, at the top of every tab; "Change" goes to
   // Hide on from the tabs it is not on.
@@ -708,7 +721,7 @@ function SelectionInspector({
 
   return (
     // The "/" shortcut is the panel's: from anywhere in it but a text field.
-    <div className="nx-inspector" onKeyDown={find.onKeyDown}>
+    <div className="nx-inspector" onKeyDown={find.onKeyDown} ref={root}>
       <SelectedBlockCard
         // Keyed by node, so a rename half-typed for one block does not carry
         // to the next.
@@ -900,29 +913,77 @@ function blockMatch(
   at: MatchAt
 ): SettingsMatch {
   if (!filtering(filter)) return settingsMatch([], filter);
+  return settingsMatch(blockEntries(document, block, at), filter);
+}
+
+/**
+ * The selected block's settings on every tab, read from the same inspections
+ * the tabs draw: what the filter keeps from, and where a setting asked for
+ * from outside the panel is drawn.
+ */
+function blockEntries(
+  document: BlockDocument,
+  block: BlockInspection,
+  at: MatchAt
+): SettingEntry[] {
   const { sections, parent } = styleOfBlock(document, block, at);
   const node = findNode(document.nodes, block.nodeId);
-  return settingsMatch(
-    [
-      ...contentEntries(block, node, at.breakpoints),
-      ...styleEntries(
-        sections,
-        block,
-        shortcutsAt(node, at),
-        parent,
-        at.flow,
-        // Whether Arrange owns the space rows, as the open Style tab reads it.
-        at.reported?.arranges
-      ),
-      ...advancedEntries(block, node),
-      // The Block style section, drawn above the Style tab's bar.
-      ...blockStyleEntries(at.editor, at.library),
-    ],
-    filter
-  );
+  return [
+    ...contentEntries(block, node, at.breakpoints),
+    ...styleEntries(
+      sections,
+      block,
+      shortcutsAt(node, at),
+      parent,
+      at.flow,
+      // Whether Arrange owns the space rows, as the open Style tab reads it.
+      at.reported?.arranges
+    ),
+    ...advancedEntries(block, node),
+    // The Block style section, drawn above the Style tab's bar.
+    ...blockStyleEntries(at.editor, at.library),
+  ];
 }
 
 /** Where the selected block is edited, for what the filter keeps of it. */
+/** What the panel holds that a block's settings are read against. */
+interface MatchReading
+  extends Pick<
+    MatchAt,
+    "state" | "breakpoint" | "breakpoints" | "editor" | "library"
+  > {
+  /** What the Style tab reported drawing, for whichever block it was. */
+  reportedStyle: ReportedStyle | undefined;
+  /** Which way the block's lines run, as the canvas measured it. */
+  orientation: ReturnType<typeof useCanvasReading>["orientation"];
+}
+
+/** Where the panel reads a block's settings from, for the filter and an ask alike. */
+function matchAtFor(block: BlockInspection, reading: MatchReading): MatchAt {
+  const { reportedStyle, orientation, ...at } = reading;
+  return {
+    ...at,
+    reported:
+      reportedStyle?.nodeId === block.nodeId ? reportedStyle : undefined,
+    // What Inside its parent's Width and Height are sized by.
+    flow: {
+      writingMode: orientation?.writingMode ?? "horizontal-tb",
+      rtl: orientation?.direction === "rtl",
+    },
+  };
+}
+
+/** The shown block's settings on every tab, or none while it shows none. */
+function entriesOf(
+  document: BlockDocument,
+  block: BlockInspection | null,
+  reading: MatchReading
+): SettingEntry[] {
+  return block === null
+    ? []
+    : blockEntries(document, block, matchAtFor(block, reading));
+}
+
 interface MatchAt {
   state: StyleState | undefined;
   breakpoint: BreakpointId | undefined;
