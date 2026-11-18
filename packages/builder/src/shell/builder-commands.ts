@@ -27,6 +27,7 @@
 
 import type { ToolbarAction, ToolbarActionId } from "../canvas/toolbar-actions";
 import { CONVERSION_WORDS } from "../editor-words";
+import { TURN_INTO_TARGETS } from "../turn-into-verb";
 
 import type { BuilderCommand } from "./command-palette";
 
@@ -76,6 +77,12 @@ export interface CommandVerbs {
   readonly updatePattern?: () => void;
   /** Begin saving the block's look as a shared style; the host owns the form. */
   readonly saveAsSharedStyle?: () => void;
+  /**
+   * Turn the selected block into another type (`"core/heading"`), as one undo
+   * step, saying what it removes. Optional, so a host built before it keeps
+   * compiling; absent, the verb does nothing.
+   */
+  readonly turnInto?: (to: string) => void;
 }
 
 /** Everything the command list is built from. */
@@ -142,6 +149,20 @@ const BLOCK_COMMAND_COPY: Record<
   paste: {
     label: "Paste blocks",
     keywords: ["paste", "clipboard", "insert"],
+  },
+  // Changing which of the three text blocks it is, kept apart in words from
+  // turning a selection into a component.
+  "turn-into-text": {
+    label: "Turn block into Text",
+    keywords: ["turn into", "convert", "change", "text", "paragraph"],
+  },
+  "turn-into-rich-text": {
+    label: "Turn block into Rich text",
+    keywords: ["turn into", "convert", "change", "rich text", "formatted"],
+  },
+  "turn-into-heading": {
+    label: "Turn block into Heading",
+    keywords: ["turn into", "convert", "change", "heading", "title"],
   },
   // The conversions are named with the bar's own words, so the palette and
   // the menus offer one verb for each.
@@ -239,6 +260,12 @@ export function blockActionRunners(
     copy: verbs.copy,
     cut: verbs.cut,
     paste: verbs.paste,
+    "turn-into-text": () =>
+      verbs.turnInto?.(TURN_INTO_TARGETS["turn-into-text"]),
+    "turn-into-rich-text": () =>
+      verbs.turnInto?.(TURN_INTO_TARGETS["turn-into-rich-text"]),
+    "turn-into-heading": () =>
+      verbs.turnInto?.(TURN_INTO_TARGETS["turn-into-heading"]),
     "save-as-pattern": verbs.saveAsPattern,
     "save-as-shared-style": () => verbs.saveAsSharedStyle?.(),
     "edit-component": () => verbs.editComponent?.(),
