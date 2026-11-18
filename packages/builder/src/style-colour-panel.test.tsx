@@ -408,9 +408,20 @@ describe("a colour leaf draws a colour control", () => {
     const field = screen.getByRole("textbox", { name: "Colour" });
     fireEvent.change(field, { target: { value: "#ff0000" } });
     expect(editor.applyAll).toHaveBeenCalledTimes(1);
-    expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).toContain(
-      '"#ff0000"'
-    );
+    // The selected block's text colour, not merely some write of the value.
+    expect(editor.applyAll.mock.calls[0]?.[0]).toEqual([
+      expect.objectContaining({
+        kind: "update",
+        id: "a",
+        patch: expect.objectContaining({
+          styles: expect.objectContaining({
+            base: expect.objectContaining({
+              base: expect.objectContaining({ color: "#ff0000" }),
+            }),
+          }),
+        }),
+      }),
+    ]);
   });
 
   it("CLEARS rather than storing an empty colour", () => {

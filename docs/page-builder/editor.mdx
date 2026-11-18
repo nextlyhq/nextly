@@ -407,11 +407,13 @@ Hover already chosen, it opens on Style.
 
 ### Editing a field
 
-The canvas follows what you type in the settings panel, letter by letter, without
-waiting for you to leave the field. While a value isn't complete yet, such as `12p` on
-the way to `12px` or half a hex colour, the canvas keeps the last value that worked and
-the field says what's wrong. A shared style is the exception: it changes every page that
-uses it, so its fields save when you leave them.
+The canvas follows what you type in the **Content** and **Style** fields, letter by
+letter, without waiting for you to leave the field. While a value isn't complete yet,
+such as `12p` on the way to `12px`, half a hex colour or an emptied number, the canvas
+keeps the last value that worked. A Style field says what's wrong; a Content number
+quietly goes back to its last value when you leave it. Some fields save only when you
+leave them or press Enter: the **Advanced** tab's, such as **Anchor (ID)**, and a shared
+style's, because a shared style changes every page that uses it.
 
 One edit to a field is one step to undo, however many keys it takes: a sentence typed
 into a Text's words, or a value dragged on a number field's label, comes back whole with

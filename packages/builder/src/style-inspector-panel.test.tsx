@@ -3214,9 +3214,25 @@ describe("a length field's unit", () => {
     fireEvent.click(trigger);
     fireEvent.click(screen.getByRole("option", { name: "rem" }));
     expect(editor.applyAll).toHaveBeenCalledTimes(2);
-    expect(JSON.stringify(editor.applyAll.mock.calls[1]?.[0])).toContain(
-      '"width":"20rem"'
-    );
+    // Both writes are the block's width, in order: the number as typed, then
+    // the unit chosen for it.
+    const widthWritten = (call: number) =>
+      editor.applyAll.mock.calls[call]?.[0];
+    const widthOp = (value: string) => [
+      expect.objectContaining({
+        kind: "update",
+        id: "a",
+        patch: expect.objectContaining({
+          styles: expect.objectContaining({
+            base: expect.objectContaining({
+              base: expect.objectContaining({ width: value }),
+            }),
+          }),
+        }),
+      }),
+    ];
+    expect(widthWritten(0)).toEqual(widthOp("20px"));
+    expect(widthWritten(1)).toEqual(widthOp("20rem"));
   });
 
   it("still writes the typed number when the menu closes with no choice", () => {

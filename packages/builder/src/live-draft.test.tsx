@@ -97,7 +97,17 @@ describe("a live draft", () => {
 
   it("writes nothing for a value its write refuses, and shows it as typed", () => {
     const { result } = renderHook(() => useLiveDraft("24px"));
-    act(() => result.current.type("24p", () => false));
+    const offered: string[] = [];
+    act(() =>
+      result.current.type("24p", text => {
+        offered.push(text);
+        return false;
+      })
+    );
+    // The keystroke reached the writer, which refused it: not recorded as
+    // written, so leaving the field still has it to settle.
+    expect(offered).toEqual(["24p"]);
+    expect(result.current.written("24p")).toBe(false);
     expect(result.current.draft).toBe("24p");
   });
 

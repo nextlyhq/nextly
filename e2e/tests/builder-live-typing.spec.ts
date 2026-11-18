@@ -101,7 +101,12 @@ test("a Heading's text follows typing before blur, and one Undo takes the edit b
   await field.click();
   await field.press("End");
   const heading = await block(page, HEADING);
-  await field.pressSequentially(" and new", { delay: 40 });
+  // Read part way through as well, so a field that wrote only once at the
+  // end of the typing would not pass.
+  await field.pressSequentially(" and", { delay: 40 });
+  await expect(field).toBeFocused();
+  await expect(heading).toHaveText("Old words and");
+  await field.pressSequentially(" new", { delay: 40 });
   // Still in the field: nothing has blurred it.
   await expect(field).toBeFocused();
   await expect(heading).toHaveText("Old words and new");

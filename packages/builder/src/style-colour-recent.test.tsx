@@ -263,16 +263,33 @@ describe("a block's colour picker", () => {
     // field is already the stored one when the field is left: it still joins
     // Recent colours, once.
     const store = memory();
-    mountLive(store);
+    const writes: string[] = [];
+    const counted: PreferenceStore = {
+      read: store.read,
+      write: next => {
+        writes.push(next);
+        store.write(next);
+      },
+    };
+    const live = mountLive(counted);
     const field = screen.getByRole("textbox", { name: "Colour" });
     let typed = "";
     for (const character of "#ff0000") {
       typed += character;
       fireEvent.change(field, { target: { value: typed } });
     }
-    expect(store.value).toBeNull();
+    // The document already holds the colour, so leaving the field finds the
+    // draft equal to what is stored, and nothing is remembered yet.
+    const color = (
+      live.editor?.document.nodes[0]?.styles as
+        | { base?: { base?: { color?: unknown } } }
+        | undefined
+    )?.base?.base?.color;
+    expect(color).toBe("#ff0000");
+    expect(writes).toEqual([]);
     fireEvent.blur(field);
-    expect(JSON.parse(store.value ?? "[]")).toEqual(["#ff0000"]);
+    // Exactly one write: a list deduplicated on write would hide a second.
+    expect(writes).toEqual(['["#ff0000"]']);
   });
 
   it("keeps the field while a variable's name is typed, and picks it when the field is left", () => {
