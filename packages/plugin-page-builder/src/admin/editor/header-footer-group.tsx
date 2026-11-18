@@ -9,7 +9,8 @@
  *
  * A set's row opens the set in the builder, its own screen, loading it as
  * another page is opened, with a way back to the page it was opened from.
- * "+ New header & footer" opens the admin's form for a new set in a new tab.
+ * "+ New header & footer" asks for a name and a start, then opens the new set
+ * there in the same way.
  *
  * Hidden from an author who may not read sets: the read is refused, and the
  * group is not drawn at all rather than drawn empty.
@@ -55,6 +56,7 @@ import { useAskChoicesAgain } from "../page-layout";
 import { useRefreshOnReturn } from "../refresh-on-return";
 import { useRemoveLayout } from "../RemoveLayoutAction";
 
+import { NewSetDialog } from "./new-set-dialog";
 import { RenameField } from "./rename-field";
 import { setBuilderAddress } from "./set-address";
 
@@ -94,11 +96,6 @@ function setNote(
 /** Whether a failed read was the author being refused the sets. */
 function refused(error: unknown): boolean {
   return (error as { status?: unknown } | null)?.status === 403;
-}
-
-/** Where a new set's admin form opens. */
-function newSetHref(collection: string): string {
-  return `/admin/collections/${encodeURIComponent(collection)}/create`;
 }
 
 /**
@@ -216,6 +213,8 @@ function GroupBody({
   // The list's own Make site default flow, its question included, so both
   // places ask the same and write the same; the panel reads its sets again.
   const makeDefault = useMakeDefaultFlow({ published: reread, made: reread });
+  // "+ New header & footer": its dialog, open or not.
+  const [creating, setCreating] = React.useState(false);
   if (read.error !== null) {
     return (
       <div className="grid justify-items-start gap-2 text-sm text-muted-foreground">
@@ -279,19 +278,29 @@ function GroupBody({
             </a>
           </li>
         ) : null}
-        <li>
-          <a
-            href={newSetHref(meta.layoutsCollection)}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-center gap-2 rounded-md px-1.5 py-1 text-sm text-muted-foreground hover:bg-[color:var(--nx-builder-hover)] hover:text-[color:var(--nx-builder-text)]"
-          >
-            <Plus aria-hidden="true" className="size-3.5" />
-            New header & footer
-            <span className="sr-only"> (opens in a new tab)</span>
-          </a>
-        </li>
+        {meta.canCreateLayouts === true ? (
+          <li>
+            <button
+              type="button"
+              onClick={() => setCreating(true)}
+              className="flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-sm text-muted-foreground hover:bg-[color:var(--nx-builder-hover)] hover:text-[color:var(--nx-builder-text)]"
+            >
+              <Plus aria-hidden="true" className="size-3.5" />
+              New header & footer
+            </button>
+          </li>
+        ) : null}
       </ul>
+      <NewSetDialog
+        open={creating}
+        onOpenChange={setCreating}
+        facts={{
+          collection: meta.layoutsCollection,
+          defaultTitle:
+            items.find(item => item.id === meta.defaultLayout)?.title ?? null,
+          here,
+        }}
+      />
     </>
   );
 }
