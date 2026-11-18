@@ -568,6 +568,62 @@ describe("a field's value as a picture, or as nothing", () => {
     expect(named(fields, "cover")?.preview).toBeUndefined();
   });
 
+  it("gives a picture inside a group, stored by its id, its media's thumbnail", async () => {
+    const base = withPictures();
+    const media: readonly BindingFieldShape[] = [
+      { name: "url", type: "text" },
+      { name: "thumbnailUrl", type: "text" },
+      { name: "mimeType", type: "text" },
+    ];
+    const shapes: readonly BindingFieldShape[] = [
+      {
+        name: "seo",
+        type: "group",
+        fields: [{ name: "ogImage", type: "upload", relationTo: "media" }],
+      },
+    ];
+    const record = {
+      id: "m4",
+      url: "/uploads/og.jpg",
+      thumbnailUrl: "/uploads/og-thumb.jpg",
+      mimeType: "image/jpeg",
+    };
+    const row = { seo: { ogImage: "m4" } };
+    const byRef = (ref: FieldsRef) => {
+      if (rowKey(ref) === "media:m4") return record;
+      return rowKey(ref) === "posts:p1" ? row : null;
+    };
+    const fields = fieldsOf(
+      await readBindingFields(
+        { source: { kind: "collection", slug: "posts", id: "p1" } },
+        {
+          ...base,
+          declared: async ref => {
+            if (keyOf(ref) === "collection:media") return media;
+            return keyOf(ref) === "collection:posts"
+              ? shapes
+              : base.declared(ref);
+          },
+          publicShapes: async ref => {
+            if (keyOf(ref) === "collection:media") return media;
+            return keyOf(ref) === "collection:posts"
+              ? shapes
+              : base.publicShapes(ref);
+          },
+          asEditor: vi.fn(async (ref: FieldsRef) => byRef(ref)),
+          published: async ref => byRef(ref),
+        }
+      ),
+      "Post"
+    );
+    const og = named(named(fields, "seo")?.fields ?? [], "ogImage");
+    expect(og).toMatchObject({
+      public: true,
+      thumbnail: "/uploads/og-thumb.jpg",
+    });
+    expect(og?.preview).toBeUndefined();
+  });
+
   it("gives no thumbnail for a picture visitors can't read", async () => {
     expect(named(await post(), "brief")?.thumbnail).toBeUndefined();
   });
