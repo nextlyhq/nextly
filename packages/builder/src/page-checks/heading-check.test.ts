@@ -228,6 +228,46 @@ describe("the headings check", () => {
     expect(found.findings).toEqual([]);
   });
 
+  it("keeps a heading the page puts in a component's slot as the page's own", () => {
+    // A frame component whose Box takes the page's own blocks in its slot.
+    const frame = {
+      formatVersion: 1,
+      kind: "component",
+      nodes: [
+        {
+          id: "d1",
+          type: "core/box",
+          version: 1,
+          props: {},
+          slots: { children: [] },
+        },
+      ],
+      slots: { body: { label: "Body", nodeId: "d1", slot: "children" } },
+    } as unknown as BlockDocument;
+    const placed: BlockNode = {
+      id: "p1",
+      type: "nextly/component-instance",
+      version: 1,
+      props: { componentId: "frame" },
+      slots: { body: [heading("slot-h1", "h1")] },
+    };
+    const found = runPageChecks(
+      {
+        document: page(heading("a", "h1"), placed),
+        definitions: new Map([["frame", frame]]),
+      },
+      [HEADING_CHECK]
+    ).findings;
+    // The page's second Heading 1 is its own block, with its Level to fix.
+    expect(found).toEqual([
+      expect.objectContaining({
+        nodeId: "slot-h1",
+        what: "More than one main heading (H1)",
+        fix: { tab: "content", id: "level" },
+      }),
+    ]);
+  });
+
   it("counts a Heading 1 whose words come from a field", () => {
     const bound: BlockNode = {
       id: "title",

@@ -12,16 +12,7 @@
  *
  * @module page-checks/heading-check
  */
-import {
-  COMPONENT_INSTANCE_TYPE,
-  MAX_DEPTH,
-  MAX_NODES,
-  resolveComponentInstances,
-  walkNodes,
-  type BlockNode,
-  type DefinitionsById,
-  type WorkAllowance,
-} from "@nextlyhq/blocks-engine";
+import { MAX_DEPTH, type BlockNode } from "@nextlyhq/blocks-engine";
 import {
   pageOutline,
   type OutlineHeading,
@@ -32,13 +23,6 @@ import type { PageCheck, PageCheckResult, ResolvedPage } from "./page-checks";
 
 /** The Heading block's type, whose Level setting holds its level. */
 const HEADING_TYPE = "core/heading";
-
-/** The page's nodes as drawn, and the placement each drawn node comes from. */
-interface DrawnPage {
-  readonly nodes: BlockNode[];
-  /** A node drawn from a component, by id, to the page's placement of it. */
-  readonly placementOf: ReadonlyMap<string, string>;
-}
 
 /** What a heading whose words come from a field is read with here. */
 const BOUND_WORDS = "Bound heading";
@@ -60,66 +44,32 @@ function withBoundWords(node: BlockNode): BlockNode {
   return { ...node, props: { ...node.props, text: BOUND_WORDS } };
 }
 
-/**
- * The page's blocks with each of its component placements drawn as the
- * component's blocks, recording which placement each drawn block is from.
- * Placements are drawn one at a time so each is known by its own id, under
- * one allowance for the whole page, so many placements of a large component
- * do no more work together than one page may.
- */
-function drawnPage(
-  nodes: readonly BlockNode[],
-  definitions: DefinitionsById | undefined
-): DrawnPage {
-  const placementOf = new Map<string, string>();
-  const work: WorkAllowance = { left: MAX_NODES };
-  // `expand` is false inside what a placement drew: the resolver has drawn
-  // every placement it could there, and one it kept (missing, gated or over
-  // the allowance) stays a placement rather than being asked for again.
-  const draw = (
-    list: readonly BlockNode[],
-    depth: number,
-    expand = true
-  ): BlockNode[] =>
-    list.flatMap((stored): BlockNode[] => {
-      const node = withBoundWords(stored);
-      if (node.type === COMPONENT_INSTANCE_TYPE) {
-        if (!expand || definitions === undefined) return [node];
-        const drawn = resolveComponentInstances(
-          { formatVersion: 1, kind: "page", nodes: [node] },
-          definitions,
-          { work }
-        ).document.nodes;
-        walkNodes(drawn, inner => placementOf.set(inner.id, node.id));
-        return draw(drawn, depth + 1, false);
-      }
-      if (node.slots === undefined || depth >= MAX_DEPTH) return [node];
-      const slots = Object.fromEntries(
-        Object.entries(node.slots).map(([slot, children]) => [
-          slot,
-          Array.isArray(children)
-            ? draw(children, depth + 1, expand)
-            : children,
-        ])
-      );
-      return [{ ...node, slots }];
-    });
-  return { nodes: draw(nodes, 0), placementOf };
+/** The drawn blocks, each bound Heading read with words, down the tree. */
+function withBoundHeadings(list: readonly BlockNode[], depth = 0): BlockNode[] {
+  return list.map(stored => {
+    const node = withBoundWords(stored);
+    if (node.slots === undefined || depth >= MAX_DEPTH) return node;
+    const slots = Object.fromEntries(
+      Object.entries(node.slots).map(([slot, children]) => [
+        slot,
+        Array.isArray(children)
+          ? withBoundHeadings(children, depth + 1)
+          : children,
+      ])
+    );
+    return { ...node, slots };
+  });
 }
 
 /** Where a heading is, as a finding names it and points to it. */
-function placeOf(
-  heading: OutlineHeading,
-  placementOf: ReadonlyMap<string, string>
-): {
+function placeOf(heading: OutlineHeading): {
   readonly where: string;
   readonly at: Pick<PageCheckResult, "nodeId" | "fix">;
 } {
   if (heading.area !== "content") {
     return { where: ` in the site ${heading.area}`, at: {} };
   }
-  const placement = placementOf.get(heading.node.id);
-  if (placement !== undefined) return { where: "", at: { nodeId: placement } };
+  // One a component drew is moved to its placement by the runner.
   return {
     where: "",
     at: {
@@ -160,14 +110,14 @@ function skipped(
 
 /** The page's heading problems, page-wide first, then in reading order. */
 function headingFindings(page: ResolvedPage): PageCheckResult[] {
-  const drawn = drawnPage(page.document.nodes, page.definitions);
+  const drawn = withBoundHeadings(page.drawn);
   const part = (area: "header" | "footer"): OutlinePart[] =>
     page.regions
       .filter(region => region.area === area)
       .map(region => ({ area, nodes: region.document.nodes }));
   const { headings } = pageOutline([
     ...part("header"),
-    { area: "content", nodes: drawn.nodes },
+    { area: "content", nodes: drawn },
     ...part("footer"),
   ]);
   const found: PageCheckResult[] = [];
@@ -181,7 +131,7 @@ function headingFindings(page: ResolvedPage): PageCheckResult[] {
   }
   let mainSeen = false;
   headings.forEach((heading, index) => {
-    const place = placeOf(heading, drawn.placementOf);
+    const place = placeOf(heading);
     if (heading.level === 1) {
       if (mainSeen) found.push(secondMain(place));
       mainSeen = true;
