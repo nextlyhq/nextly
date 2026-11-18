@@ -620,11 +620,26 @@ export interface RegionCardFacts {
   readonly note?: string;
 }
 
+/**
+ * An area of the site's default set that shows nothing, on a page that
+ * follows the default: where the canvas draws its "No header yet" band.
+ */
+export interface EmptyDefaultArea {
+  readonly area: RegionArea;
+  /** The default set, by id: where a header made or chosen here goes. */
+  readonly setId: string;
+  readonly setTitle: string;
+}
+
 /** The regions drawn around the page, their Layers rows and their cards. */
 export interface PageLayoutRegions {
   readonly canvas: readonly CanvasRegion[];
   readonly layers: readonly LayersRegionRow[];
   readonly cards: readonly RegionCardFacts[];
+  /** The default's empty areas, while the page follows the default. */
+  readonly empty: readonly EmptyDefaultArea[];
+  /** Whether the page follows the site default: names no set, not off. */
+  readonly followsDefault: boolean;
 }
 
 /** What a header or footer is called in the editor. */
@@ -673,7 +688,48 @@ export function usePageLayoutRegions<T extends FieldValues>(
 }
 
 /** What is drawn before any answer has arrived. */
-const NOTHING_DRAWN: PageLayoutRegions = { canvas: [], layers: [], cards: [] };
+const NOTHING_DRAWN: PageLayoutRegions = {
+  canvas: [],
+  layers: [],
+  cards: [],
+  empty: [],
+  followsDefault: false,
+};
+
+/** Whether a page follows the site default: it names no set, and is not off. */
+function followsDefaultOf(stored: {
+  layout: unknown;
+  noHeaderFooter: boolean;
+}): boolean {
+  return layoutRelationId(stored.layout) === null && !stored.noHeaderFooter;
+}
+
+/** The areas a set has, header first. */
+const AREAS: readonly RegionArea[] = ["header", "footer"];
+
+/**
+ * The default's areas that show nothing, for a page that follows the
+ * default: one naming no set and not switched off. Asked of the PUBLISHED
+ * areas the set fills, the ones a visitor gets, so a header still loading is
+ * never taken for none. Nothing for a default that is not published or is
+ * being removed: no page is drawn inside it.
+ */
+function emptyDefaultAreasOf(
+  stored: { layout: unknown; noHeaderFooter: boolean },
+  choices: LayoutChoicesResponse
+): readonly EmptyDefaultArea[] {
+  if (!followsDefaultOf(stored)) return [];
+  const { defaultLayout } = choices.meta;
+  const set = choices.items.find(item => item.id === defaultLayout);
+  if (set === undefined || !set.published || set.removal !== undefined) {
+    return [];
+  }
+  return AREAS.filter(area => !set.areasFilled.includes(area)).map(area => ({
+    area,
+    setId: set.id,
+    setTitle: set.title,
+  }));
+}
 
 /** The regions to draw for `stored`, their Layers rows and their cards. */
 function regionsOf(
@@ -682,9 +738,11 @@ function regionsOf(
   canvasRoot: HTMLElement | null
 ): PageLayoutRegions {
   if (stored === undefined || state.kind !== "ready") return NOTHING_DRAWN;
+  const empty = emptyDefaultAreasOf(stored, state.choices);
+  const followsDefault = followsDefaultOf(stored);
   const effective = layoutPickerView(stored, state).effective;
   if (effective === null || effective.regions.length === 0) {
-    return NOTHING_DRAWN;
+    return { ...NOTHING_DRAWN, empty, followsDefault };
   }
   const { meta } = state.choices;
   const definitions = new Map<string, BlockDocument>(
@@ -724,7 +782,7 @@ function regionsOf(
       ...noteOf(effective, region, meta),
     })
   );
-  return { canvas, layers, cards };
+  return { canvas, layers, cards, empty, followsDefault };
 }
 
 /** The area the region's component is the untouched starter for, if any. */
@@ -745,19 +803,35 @@ function regionWords(
   region: EffectiveLayout["regions"][number],
   meta: LayoutChoicesResponse["meta"]
 ): Pick<CanvasRegion, "label" | "badge" | "name"> {
-  const from = `from the ${effective.title} header & footer`;
-  const starter = starterOf(region, meta);
-  if (starter === region.area) {
+  return regionNaming(
+    effective.title,
+    region.area,
+    starterOf(region, meta) === region.area
+  );
+}
+
+/**
+ * What a region of set `setTitle` is called on the canvas and in Layers:
+ * where it comes from, or, while it shows the site's starter as seeded, that
+ * it is the starter, so an author knows it is theirs to edit or replace.
+ */
+export function regionNaming(
+  setTitle: string,
+  area: RegionArea,
+  starter: boolean
+): Pick<CanvasRegion, "label" | "badge" | "name"> {
+  const from = `from the ${setTitle} header & footer`;
+  if (starter) {
     return {
-      label: `${STARTER_NAMES[starter]}, ${from}`,
-      badge: STARTER_BADGES[starter],
-      name: STARTER_NAMES[starter],
+      label: `${STARTER_NAMES[area]}, ${from}`,
+      badge: STARTER_BADGES[area],
+      name: STARTER_NAMES[area],
     };
   }
-  const name = siteRegionName(region.area);
+  const name = siteRegionName(area);
   return {
     label: `${name}, ${from}`,
-    badge: `${name} · ${effective.title}`,
+    badge: `${name} · ${setTitle}`,
     name,
   };
 }

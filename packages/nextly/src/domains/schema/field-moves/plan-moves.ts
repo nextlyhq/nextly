@@ -35,6 +35,7 @@ import {
   type FieldMoveRequest,
   type PlannedMove,
 } from "./check-move";
+import { fieldsThatLeft } from "./move-candidates";
 import { moveDataStatements, type MoveColumn } from "./move-statements";
 
 /** Statements for the start and the end of one direction of a migration file. */
@@ -60,6 +61,8 @@ export interface EntityMoves {
     field: string;
     /** Whether the field is required, so every entry needs a value to move. */
     required: boolean;
+    /** The column's kind, which says what a value from the group must be to be read into it. */
+    kind: MoveColumn["kind"];
     /** Where the values come from: the group's column and the keys inside it. */
     source: { column: string; keys: readonly string[] };
   }[];
@@ -149,6 +152,39 @@ function refuseSameNames(moves: readonly FieldMoveRequest[]): void {
       );
     }
     seen.add(name);
+  }
+}
+
+/**
+ * Refuses a move whose field's name another field also leaves its place with, in a save that
+ * gives that field no move of its own: which of the two moved is not known from the definitions,
+ * and the other's values would stay at a place nothing reads.
+ */
+function refuseUnpairedNames(
+  given: {
+    before: readonly FieldDefinition[];
+    after: readonly FieldDefinition[];
+    moves: readonly FieldMoveRequest[];
+  },
+  renames: readonly { from: string; to: string }[]
+): void {
+  // A field the save renames left its place under another name, which no move takes.
+  const renamed = new Set(renames.map(r => toSnakeCase(r.from)));
+  const left = fieldsThatLeft(given.before, given.after).filter(
+    each => !(each.path.length === 1 && renamed.has(toSnakeCase(each.path[0])))
+  );
+  const moved = new Set(given.moves.map(request => request.from.join(".")));
+  for (const request of given.moves) {
+    if (samePath(request.from, request.to)) continue;
+    const name = request.from.at(-1) ?? "";
+    const rival = left.find(
+      each => each.path.at(-1) === name && !moved.has(each.path.join("."))
+    );
+    if (rival === undefined) continue;
+    throw refused(
+      request,
+      `Another field named ${name} (${rival.path.join(".")}) also leaves its place in this save, so which one moves here is not certain. Move ${name} in a save of its own.`
+    );
   }
 }
 
@@ -421,6 +457,7 @@ export function planEntityMoves(given: {
   };
   refuseOverlapping(args.moves);
   refuseSameNames(args.moves);
+  refuseUnpairedNames(args, args.renames ?? []);
   for (const request of args.moves) {
     // A field that keeps its path (moved into or out of a group with no name) keeps its place.
     if (samePath(request.from, request.to)) continue;
@@ -439,15 +476,18 @@ export function planEntityMoves(given: {
     refuseUnplaceable(request, move, columns);
     // A field moving between places on one level (a group with no name) keeps its column.
     if (move.from.kind === "column" && move.to.kind === "column") continue;
-    const statements = placed(
+    const target = moveColumn(
       move,
-      moveColumn(move, args.table, args.dialect, args.builtBy ?? "collection")
+      args.table,
+      args.dialect,
+      args.builtBy ?? "collection"
     );
+    const statements = placed(move, target);
     for (const way of ["up", "down"] as const) {
       result[way].first.push(...statements[way].first);
       result[way].last.push(...statements[way].last);
     }
-    recordColumns(result, move, request, args.table);
+    recordColumns(result, move, request, target);
   }
   return result;
 }
@@ -478,8 +518,9 @@ function recordColumns(
   result: EntityMoves,
   move: PlannedMove,
   request: FieldMoveRequest,
-  table: string
+  target: MoveColumn
 ): void {
+  const { table } = target;
   const { from, to } = move;
   if (from.kind === "json" && to.kind === "column") {
     result.refilledColumns.push({
@@ -487,6 +528,7 @@ function recordColumns(
       column: to.column,
       field: request.to.join("."),
       required: (move.field as { required?: unknown }).required === true,
+      kind: target.kind,
       source: { column: from.column, keys: from.keys },
     });
   }

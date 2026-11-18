@@ -54,6 +54,7 @@ import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { AddressKind } from "../../../shared/address-rule";
 import { builderColumnIsUnique } from "../../dynamic-collections/services/dynamic-collection-schema-service";
+import { statedMoment } from "../../dynamic-collections/services/stated-default";
 import { appLanguageOrder } from "../../i18n/configured-locales";
 import { joinRetries } from "../../i18n/migration/archive-preflight";
 import {
@@ -66,7 +67,11 @@ import { boundedStopRecord } from "../busy-table/stopped-record";
 import { unresolvedAttempts } from "../events/migration-state";
 import { SchemaEventsRepository } from "../events/schema-events-repository";
 import type { FieldMoveRequest } from "../field-moves/check-move";
-import { holdsValueAt } from "../field-moves/move-statements";
+import {
+  heldValueAt,
+  holdsValueAt,
+  movesAsTheSameDate,
+} from "../field-moves/move-statements";
 import { movedColumnSentences } from "../field-moves/moved-column-facts";
 import { planEntityMoves, type EntityMoves } from "../field-moves/plan-moves";
 import { checksumOf } from "../migrate/applied-checksums";
@@ -220,6 +225,13 @@ export interface CollectionSave {
     | { column: string; kind: "fill"; value: unknown }
     | { column: string; kind: "delete_nonconforming" }
   >;
+  /**
+   * A Single's one row given the default each field new to its table states (`singleRowFills`):
+   * written into the change's file as a fill, and the column left as its field declares it.
+   * Accepted for a Single alone, whose table holds one row; a collection's rows are settled only
+   * by the person's own answer (`resolutions`).
+   */
+  rowFills?: ReadonlyArray<{ column: string; value: unknown }>;
   /**
    * The other collections deleted with this one: gone from the definition
    * the save writes, so the links between them do not hold this one's delete
@@ -453,10 +465,9 @@ async function writeSave(
   refuseUnconfirmedConversions(plan, save);
   refuseUnenforceableUniques(deps, save, plan.table);
   // A move that cannot keep its values is refused here, before the definition is written.
-  await refuseEmptyRequiredRefills(
-    deps,
-    plannedMovesOf(deps, save, plan.table)
-  );
+  const planned = plannedMovesOf(deps, save, plan.table);
+  await refuseEmptyRequiredRefills(deps, planned);
+  await refuseUnreadableDates(deps, planned);
   await settledRows(deps, save, plan.table);
 
   const definitionPath = resolve(deps.projectRoot, deps.config.db.uiSchemaFile);
@@ -601,6 +612,7 @@ export async function previewCollectionSave(
     const conversions = plan.adoption?.conversions ?? [];
     const planned = plannedMovesOf(deps, save, plan.table);
     await refuseEmptyRequiredRefills(deps, planned);
+    await refuseUnreadableDates(deps, planned);
     const moved = await moveSentencesOf(deps, planned);
     return {
       adopts: plan.adoption !== null,
@@ -886,6 +898,100 @@ function answeredField(
   );
 }
 
+/**
+ * Refuses a save's row fills that are not a Single's fields new to its table, each with a value
+ * the field takes, before anything is written. A row fill is the default a field states, given to
+ * a Single's one row; a collection, whose rows only the person's answer settles, is refused one
+ * whoever passes it, and a column the table already has keeps the values it holds.
+ */
+async function refuseRowFillsOutsideSingle(
+  save: CollectionSave,
+  live: TableSpec | undefined
+): Promise<void> {
+  const refusal = (path: string, code: string, message: string) =>
+    NextlyError.validation({ errors: [{ path, code, message }] });
+  for (const fill of save.rowFills ?? []) {
+    if (save.kind !== "single") {
+      throw refusal(
+        fill.column,
+        "ROW_FILL_NOT_SINGLE",
+        "Only a Single's row is filled with a field's default; a collection's rows are settled by the answer given for them."
+      );
+    }
+    const field = answeredField(save, fill.column);
+    if (field === undefined) {
+      throw refusal(
+        fill.column,
+        "RESOLUTION_FIELD_UNKNOWN",
+        `${fill.column} is not a field of the saved Single.`
+      );
+    }
+    const column = toSnakeCase(fill.column);
+    if (live?.columns.some(c => c.name === column) === true) {
+      throw refusal(
+        fill.column,
+        "ROW_FILL_NOT_NEW",
+        `${fill.column} is already a column of the Single, so its value is kept rather than filled.`
+      );
+    }
+    // Judged by the entry validator every write of the Single answers to, as a Single's PATCH
+    // judges the default it fills: a value its own rules refuse would be refused by every write.
+    const { validateEntryData } = await import(
+      "../../../shared/lib/entry-validation"
+    );
+    const issues = await validateEntryData(
+      { [fill.column]: fill.value },
+      [field],
+      { mode: "create" }
+    );
+    if (issues.length > 0) {
+      throw refusal(
+        `fields.${fill.column}`,
+        "DEFAULT_FAILS_FIELD_RULES",
+        `The default "${fill.column}" states would fill the entry this Single already holds, ` +
+          `but the field's own rules refuse it. ${issues[0]?.message ?? ""} Change the default or the ` +
+          `rule, then save again.`
+      );
+    }
+  }
+}
+
+/**
+ * The fills and deletes a save's file writes between a column's creation and its NOT NULL: the
+ * person's answers, and a Single's row fills (`CollectionSave.rowFills`) as fills, each a column
+ * of `table`. A structured value (a JSON, chips or plugin JSON field's) is written as the JSON
+ * text its column stores.
+ */
+function fileResolutions(
+  save: CollectionSave,
+  table: string
+): { resolutions?: ColumnResolution[] } {
+  const answers = [
+    ...(save.resolutions ?? []),
+    ...(save.rowFills ?? []).map(fill => ({
+      column: fill.column,
+      kind: "fill" as const,
+      // A date is written as the moment it names, which the fill stores in the dialect's form
+      // (`storedDateValue`), as the PATCH road's fill does; never the text it was stated in.
+      value:
+        answeredField(save, fill.column)?.type === "date"
+          ? (statedMoment(fill.value) ?? fill.value)
+          : fill.value,
+    })),
+  ];
+  if (answers.length === 0) return {};
+  return {
+    resolutions: answers.map(r => ({
+      ...r,
+      tableName: table,
+      columnName: toSnakeCase(r.column),
+      ...(r.kind === "fill" && storesJson(save, r.column)
+        ? { json: true }
+        : {}),
+    })),
+  };
+}
+
 async function settledRows(
   deps: CollectionSaveDeps,
   save: CollectionSave,
@@ -897,6 +1003,7 @@ async function settledRows(
   const live = exists
     ? (await introspectLiveSnapshot(db, dialect, [table])).tables[0]
     : undefined;
+  await refuseRowFillsOutsideSingle(save, live);
   const settled: SettledRows[] = [];
   for (const resolution of save.resolutions ?? []) {
     const field = answeredField(save, resolution.column);
@@ -977,7 +1084,8 @@ async function settledRows(
 
 /** Whether field `name` of the saved collection keeps its value as JSON. */
 function storesJson(save: CollectionSave, name: string): boolean {
-  const field = save.entity?.fields.find(f => f.name === name);
+  // Found as the answer it serializes was: among the row's fields, inside a group with no name too.
+  const field = answeredField(save, name);
   return (
     field !== undefined &&
     classifyFieldKind(field as FieldDefinition, kindOf(save).builtBy) === "json"
@@ -1192,20 +1300,7 @@ async function writeFiles(
     table: plan.table,
     now: new Date(now.getTime() + offset),
     ...(await movesOf(deps, save, plan.table)),
-    ...(save.resolutions === undefined
-      ? {}
-      : {
-          resolutions: save.resolutions.map(r => ({
-            ...r,
-            tableName: plan.table,
-            columnName: toSnakeCase(r.column),
-            // A structured value (a JSON, chips or plugin JSON field's) is
-            // written as the JSON text its column stores.
-            ...(r.kind === "fill" && storesJson(save, r.column)
-              ? { json: true }
-              : {}),
-          })),
-        }),
+    ...fileResolutions(save, plan.table),
     ...(save.keys === undefined
       ? {}
       : { newTableKeys: new Map([[plan.table, save.keys.after]]) }),
@@ -1386,6 +1481,24 @@ async function needsAdopting(
   return deps.adapter.tableExists(table);
 }
 
+type MovesFacts = Pick<
+  GenerateArgs,
+  "valueMoves" | "refilledColumns" | "valuesMovedIn"
+>;
+
+/** The facts of a save's moves the generator takes, each left out where the moves have none. */
+function movesFacts(args: MovesFacts): MovesFacts {
+  const facts: MovesFacts = {};
+  if ((args.valueMoves?.length ?? 0) > 0) facts.valueMoves = args.valueMoves;
+  if ((args.refilledColumns?.length ?? 0) > 0) {
+    facts.refilledColumns = args.refilledColumns;
+  }
+  if ((args.valuesMovedIn?.length ?? 0) > 0) {
+    facts.valuesMovedIn = args.valuesMovedIn;
+  }
+  return facts;
+}
+
 /**
  * Generate the collection's migration from `manifest` into the folder, and
  * name every file the run wrote (its main file and any companion beside it),
@@ -1470,15 +1583,7 @@ async function generateFor(
     ...(args.appended === undefined
       ? {}
       : { appendedStatements: args.appended }),
-    ...(args.valueMoves === undefined || args.valueMoves.length === 0
-      ? {}
-      : { valueMoves: args.valueMoves }),
-    ...(args.refilledColumns === undefined || args.refilledColumns.length === 0
-      ? {}
-      : { refilledColumns: args.refilledColumns }),
-    ...(args.valuesMovedIn === undefined || args.valuesMovedIn.length === 0
-      ? {}
-      : { valuesMovedIn: args.valuesMovedIn }),
+    ...movesFacts(args),
     ...(args.newTableKeys === undefined
       ? {}
       : { foreignKeysOfNewTables: args.newTableKeys }),
@@ -1684,6 +1789,96 @@ async function refuseEmptyRequiredRefills(
       logContext: { table: refill.table, column: refill.column, empty },
     });
   }
+}
+
+/** How many entries a date check reads at a time. */
+const DATE_CHECK_PAGE = 500;
+
+/** How many of the entries holding an unreadable date a refusal names. */
+const NAMED_ENTRIES = 3;
+
+/**
+ * Refuses a date moved out of a group while some entry's group holds it in a form the copy would
+ * not read as the same instant (`movesAsTheSameDate`), naming the field and the entries, read
+ * before anything is written. The copy would otherwise write nothing for that entry on SQLite,
+ * and leave the value only in a key the saved fields no longer read.
+ */
+async function refuseUnreadableDates(
+  deps: CollectionSaveDeps,
+  planned: EntityMoves
+): Promise<void> {
+  for (const refill of planned.refilledColumns) {
+    if (refill.kind !== "timestamp") continue;
+    // Read on the table the field moves in, as the required count is.
+    const unreadable = await unreadableDates(deps, refill.table, refill.source);
+    if (unreadable.length === 0) continue;
+    const count = unreadable.length;
+    const named = unreadable.slice(0, NAMED_ENTRIES).join(", ");
+    const more =
+      count > NAMED_ENTRIES ? ` and ${count - NAMED_ENTRIES} more` : "";
+    const each = count === 1 ? "it" : "each";
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: refill.field,
+          code: "FIELD_MOVE_REFUSED",
+          message: `${count} ${count === 1 ? "entry holds" : "entries hold"} a date for ${refill.field} in a form its own column would not read as the same date (${named}${more}). Write ${each} as an ISO date, such as 2026-07-17 or 2026-07-17T10:00:00Z, then move the field.`,
+        },
+      ],
+      logContext: {
+        table: refill.table,
+        column: refill.column,
+        unreadable: count,
+      },
+    });
+  }
+}
+
+/**
+ * The ids of the entries whose group holds a value at `source` that is not a date the copy reads
+ * as the same instant, read a page at a time in id order.
+ */
+async function unreadableDates(
+  deps: CollectionSaveDeps,
+  table: string,
+  source: { column: string; keys: readonly string[] }
+): Promise<string[]> {
+  const dialect = deps.adapter.getCapabilities().dialect;
+  const held = holdsValueAt(source.column, source.keys, dialect);
+  const value = heldValueAt(source.column, source.keys, dialect);
+  const id = sql.identifier("id");
+  const unreadable: string[] = [];
+  // The last id read, as the driver gave it, so the next page starts past it whatever its type.
+  let after: unknown;
+  for (;;) {
+    const past = after === undefined ? sql`` : sql` AND ${id} > ${after}`;
+    const rows = await querySqlRows<{
+      id: unknown;
+      type: unknown;
+      text: unknown;
+    }>(
+      deps.adapter.getDrizzle(),
+      dialect,
+      sql`SELECT ${id} AS id, ${sql.raw(value.type)} AS type, ${sql.raw(value.text)} AS text FROM ${sql.identifier(table)} WHERE ${sql.raw(held)}${past} ORDER BY ${id} LIMIT ${DATE_CHECK_PAGE}`
+    );
+    for (const row of rows) {
+      if (!readsAsTheSameDate(row, dialect)) unreadable.push(String(row.id));
+    }
+    if (rows.length < DATE_CHECK_PAGE) return unreadable;
+    after = rows[rows.length - 1].id;
+  }
+}
+
+/** Whether a value read out of a group is a string the copy reads as the same date. */
+function readsAsTheSameDate(
+  row: { type: unknown; text: unknown },
+  dialect: SupportedDialect
+): boolean {
+  const type = String(row.type).toLowerCase();
+  return (
+    (type === "string" || type === "text") &&
+    movesAsTheSameDate(String(row.text), dialect)
+  );
 }
 
 /**

@@ -246,6 +246,99 @@ export function holdsValueAt(
 }
 
 /**
+ * Each dialect's reading of the value at `keys`: the name of its JSON type (a string's is `string`
+ * or `text`), and its text, a string unquoted.
+ */
+const HELD_VALUE: Record<
+  SupportedDialect,
+  (column: string, keys: readonly string[]) => { type: string; text: string }
+> = {
+  postgresql: (c, k) => ({
+    type: `jsonb_typeof(${c} #> ${pgPath(k)})`,
+    text: `${c} #>> ${pgPath(k)}`,
+  }),
+  mysql: (c, k) => ({
+    type: `JSON_TYPE(JSON_EXTRACT(${c}, ${dollarPath(k)}))`,
+    text: `JSON_UNQUOTE(JSON_EXTRACT(${c}, ${dollarPath(k)}))`,
+  }),
+  sqlite: (c, k) => ({
+    type: `json_type(${c}, ${dollarPath(k)})`,
+    text: `json_extract(${c}, ${dollarPath(k)})`,
+  }),
+};
+
+/**
+ * The type and the text of the value each entry's group holds at `keys` of `column`, as select
+ * expressions: what a check reads before a value is copied out of the group.
+ */
+export function heldValueAt(
+  column: string,
+  keys: readonly string[],
+  dialect: SupportedDialect
+): { type: string; text: string } {
+  return HELD_VALUE[dialect](quoteIdent(column, dialect), keys);
+}
+
+/** An ISO date, alone or with a time and the offset it was written at. */
+const ISO_DATE =
+  /^(?<year>\d{4})-(?<month>\d{2})-(?<day>\d{2})(?:T(?<hour>\d{2}):(?<minute>\d{2})(?::(?<second>\d{2})(?:\.\d{1,3})?)?(?:Z|(?<sign>[+-])(?<offsetHour>\d{2}):(?<offsetMinute>\d{2})))?$/;
+
+/** The years a date column holds on each dialect: MySQL's DATETIME starts at the year 1000. */
+const FIRST_YEAR: Record<SupportedDialect, number> = {
+  postgresql: 0,
+  mysql: 1000,
+  sqlite: 0,
+};
+
+/**
+ * Whether a date a group holds is copied into a date column as the same instant the entry reads:
+ * an ISO date, or an ISO date and time with its offset, naming a day and time that exist. The
+ * other forms an entry may hold read differently on each side: a time with no offset is read in
+ * the server's zone by JavaScript and at UTC by the copy, a day past the month's end rolls into
+ * the next month in JavaScript and is refused or read as nothing by a database, and a form such
+ * as `July 17, 2026` is one SQLite cannot read at all. A move refuses those rather than guess.
+ */
+export function movesAsTheSameDate(
+  value: string,
+  dialect: SupportedDialect
+): boolean {
+  const written = ISO_DATE.exec(value)?.groups;
+  if (written === undefined) return false;
+  const at = (name: string) => Number(written[name] ?? 0);
+  if (!dayExists(at("year"), at("month"), at("day"))) return false;
+  if (at("hour") > 23 || at("minute") > 59 || at("second") > 59) return false;
+  if (!offsetReadable(written.sign, at("offsetHour"), at("offsetMinute"))) {
+    return false;
+  }
+  const instant = Date.parse(value);
+  if (Number.isNaN(instant)) return false;
+  const year = new Date(instant).getUTCFullYear();
+  return year >= FIRST_YEAR[dialect] && year <= 9999;
+}
+
+/** Whether a day is on the calendar: JavaScript would roll the 30th of February into March. */
+function dayExists(year: number, month: number, day: number): boolean {
+  const calendar = new Date(Date.UTC(2000, month - 1, day));
+  calendar.setUTCFullYear(year);
+  return (
+    calendar.getUTCFullYear() === year &&
+    calendar.getUTCMonth() === month - 1 &&
+    calendar.getUTCDate() === day
+  );
+}
+
+/** Whether MySQL's CONVERT_TZ reads an offset; the range it takes holds every zone in use. */
+function offsetReadable(
+  sign: string | undefined,
+  hours: number,
+  minutes: number
+): boolean {
+  if (sign === undefined) return true;
+  const offset = (sign === "-" ? -1 : 1) * (hours * 60 + minutes);
+  return minutes < 60 && offset >= -(13 * 60 + 59) && offset <= 14 * 60;
+}
+
+/**
  * Statements making each container above `keys` an object where an entry is about to get a value
  * there, keeping what one already holds: a key two levels down needs the group between.
  */

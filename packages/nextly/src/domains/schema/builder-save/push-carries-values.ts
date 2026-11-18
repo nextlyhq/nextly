@@ -12,10 +12,11 @@ import type { FieldRename } from "../../i18n/migration/reconcile-companion";
 import type { TableSpec } from "../pipeline/diff/types";
 import { reachesRelationStorage } from "../pipeline/recorded-shapes";
 import {
-  fieldsStoredOnRow,
   toSnakeCase,
   type ColumnDescriptor,
 } from "../services/field-column-descriptor";
+
+import { fieldsNewToSingleTable, namedOnRow } from "./single-row-fills";
 
 /**
  * Whether the save carries values across its change, which the dialog's push does and the file,
@@ -128,19 +129,6 @@ function movedOntoRow(moved: readonly MovedField[] | undefined): Set<string> {
   );
 }
 
-/**
- * The named fields a row stores: the top-level ones and those a group with no name lays out
- * (`fieldsStoredOnRow`), which holds no value and has no column of its own.
- */
-function namedOnRow(
-  fields: readonly FieldDefinition[]
-): (FieldDefinition & { name: string })[] {
-  return fieldsStoredOnRow(fields).filter(
-    (field): field is FieldDefinition & { name: string } =>
-      typeof field.name === "string" && field.name !== ""
-  );
-}
-
 /** Whether a field kept by the save, under its name or its rename, gets a column of another type. */
 function columnTypeChanges(args: {
   oldFields: readonly FieldDefinition[];
@@ -181,14 +169,14 @@ async function fillsSingleRow(
   row: NonNullable<Parameters<typeof pushCarriesValues>[0]["singleRow"]>
 ): Promise<boolean> {
   // A field a move brings out of a group takes its values from there, not a fill.
-  const kept = new Set([
-    ...namedOnRow(args.oldFields).map(field => toSnakeCase(field.name)),
-    ...row.renamedTo,
-    ...movedOntoRow(args.moved),
-  ]);
-  const filled = namedOnRow(args.newFields).some(
-    field => !kept.has(toSnakeCase(field.name)) && row.fills(field)
-  );
+  const movedOn = movedOntoRow(args.moved);
+  const filled = fieldsNewToSingleTable({
+    oldFields: args.oldFields,
+    newFields: args.newFields,
+    renamedTo: row.renamedTo,
+  })
+    .filter(field => !movedOn.has(toSnakeCase(field.name)))
+    .some(row.fills);
   return filled && (await row.holdsRow());
 }
 

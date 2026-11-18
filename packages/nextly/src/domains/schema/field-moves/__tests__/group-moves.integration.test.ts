@@ -871,6 +871,57 @@ describe.each(getConfiguredTestDialects())(
         );
       });
 
+      it("a date out of a group held in a form its column would not read as the same date, naming the entry", async () => {
+        const t = await boot(dialect);
+        await createPosts(t, SLUG, { fields: INSIDE });
+        // Entry validation takes any date JavaScript can parse; SQLite's copy reads only ISO.
+        const { item } = await t.nextly.create({
+          collection: SLUG,
+          data: {
+            title: "Spelled",
+            slug: "spelled",
+            meta: { published: "July 17, 2026" },
+          },
+        });
+        await t.nextly.create({
+          collection: SLUG,
+          data: {
+            title: "Iso",
+            slug: "iso",
+            meta: { published: "2026-07-17T00:00:00.000Z" },
+          },
+        });
+        const before = await readAll(t);
+        await expectRefused(
+          t,
+          OUTSIDE,
+          OUT,
+          `1 entry holds a date for published in a form its own column would not read as the same date (${String((item as { id: unknown }).id)})`
+        );
+        expect(await readAll(t)).toEqual(before);
+      });
+
+      // Which save this refuses is the plan's own judgement, the same on every dialect.
+      it.runIf(dialect === "sqlite")(
+        "a field moved that also changes type",
+        async () => {
+          const t = await boot(dialect);
+          await createPosts(t);
+          await seed(t);
+          const before = await readAll(t);
+          await expectRefused(
+            t,
+            [
+              ...MOVED_FIELDS.filter(field => field.name !== "views"),
+              group("meta", [NOTE, { name: "views", type: "text" }]),
+            ],
+            [{ from: ["views"], to: ["meta", "views"] }],
+            "views is moved and changes type, or how its values are stored, in the same save. Move it and make that change in separate saves."
+          );
+          expect(await readAll(t)).toEqual(before);
+        }
+      );
+
       // Every save of a translated collection is applied by the push today (`pushReasonOf`
       // answers "translated"), which would drop a moved column without copying it. Once saves
       // whose values only the push carries are the only ones it applies, this collection's move

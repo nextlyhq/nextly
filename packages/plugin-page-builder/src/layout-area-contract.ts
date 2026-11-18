@@ -35,6 +35,17 @@ export const MAX_AREA_COMPONENTS = 50;
 /** Where a set's area is given a component. */
 export const LAYOUT_AREA_ROUTE_PATH = "/layouts/:id/areas/:area";
 
+/**
+ * Where a header or footer is created for the site default's empty area: the
+ * starter's design copied into a new component, published, and put there.
+ */
+export const DEFAULT_AREA_ROUTE_PATH = "/default-layout/areas/:area";
+
+/** The path a header or footer is created for the default's `area` at. */
+export function defaultAreaPath(area: LayoutArea): string {
+  return DEFAULT_AREA_ROUTE_PATH.replace(":area", area);
+}
+
 /** The path the components marked for `area` are read from. */
 export function areaComponentsPath(
   area: LayoutArea,

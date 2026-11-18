@@ -43,15 +43,15 @@ export interface PageGeneralProps {
   address: SettingsAddress | null;
   open: boolean;
   /**
-   * Whether the page adds code of its own this reader may not see: said in
-   * one line, never shown.
+   * Whether the page adds code or CSS of its own this reader may not see:
+   * said in one line, never shown.
    */
   holdsHiddenCode?: boolean;
 }
 
-/** What General says of a page's own code to someone who may not see it. */
+/** What General says of a page's own code or CSS to someone who may not see it. */
 const PAGE_CODE_HIDDEN_LINE =
-  "This page adds its own code. Only people who can change site settings can see or edit it.";
+  "This page adds its own code or CSS. Only people who can change site settings can see or edit it.";
 
 /** General on a page: Title, Address, Header & footer, then sharing. */
 export function PageGeneral({

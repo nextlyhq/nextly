@@ -230,27 +230,90 @@ export function HeaderFooterMenu({
   const current = view.options.find(option => option.value === view.value);
   const listId = `${id}-list`;
   return (
+    <PictureMenuPopover
+      open={open}
+      onOpenChange={onOpenChange}
+      listRoot={listRoot}
+      trigger={{
+        id,
+        disabled: disabled || pending,
+        controls: listId,
+        describedBy,
+        invalid,
+      }}
+      face={
+        <TriggerFace current={current} pending={pending} picture={picture} />
+      }
+    >
+      <MenuList
+        listRoot={listRoot}
+        listId={listId}
+        view={view}
+        picture={picture}
+        search={search}
+        manageHref={manageHref}
+        onChoose={value => {
+          onChoose(value);
+          onOpenChange(false);
+        }}
+        onLeave={() => onOpenChange(false)}
+      />
+    </PictureMenuPopover>
+  );
+}
+
+/**
+ * A menu with pictures as it opens from its field: a full-width trigger
+ * showing the current choice, and the list under it, as wide as the trigger,
+ * taking the focus as it opens. Shared by the page's "Header & footer" menu
+ * and a set's Header and Footer pickers, so both read and move the same.
+ */
+export function PictureMenuPopover({
+  open,
+  onOpenChange,
+  listRoot,
+  trigger,
+  face,
+  children,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  /** The list's root, which takes the focus as the menu opens. */
+  listRoot: RefObject<HTMLDivElement | null>;
+  trigger: {
+    readonly id: string;
+    readonly disabled: boolean;
+    /** The list's id, named while it is open. */
+    readonly controls?: string;
+    readonly describedBy?: string;
+    readonly invalid?: boolean;
+  };
+  /** What the trigger shows: the current choice. */
+  face: ReactNode;
+  children: ReactNode;
+}): JSX.Element {
+  return (
     <Popover open={open} onOpenChange={onOpenChange}>
       <PopoverTrigger asChild>
         <Button
-          id={id}
+          id={trigger.id}
           type="button"
           variant="outline"
           role="combobox"
           aria-haspopup="listbox"
           aria-expanded={open}
-          aria-controls={open ? listId : undefined}
-          aria-describedby={describedBy}
-          aria-invalid={invalid ? true : undefined}
-          disabled={disabled || pending}
+          aria-controls={
+            open && trigger.controls !== undefined
+              ? trigger.controls
+              : undefined
+          }
+          aria-describedby={trigger.describedBy}
+          aria-invalid={trigger.invalid === true ? true : undefined}
+          disabled={trigger.disabled}
           className="h-auto min-h-9 w-full justify-between gap-2 px-2 py-1.5 font-normal"
         >
           <span className="flex min-w-0 flex-1 items-center gap-2.5">
-            <TriggerFace
-              current={current}
-              pending={pending}
-              picture={picture}
-            />
+            {face}
           </span>
           <ChevronDown
             aria-hidden="true"
@@ -272,19 +335,7 @@ export function HeaderFooterMenu({
           (input ?? root)?.focus();
         }}
       >
-        <MenuList
-          listRoot={listRoot}
-          listId={listId}
-          view={view}
-          picture={picture}
-          search={search}
-          manageHref={manageHref}
-          onChoose={value => {
-            onChoose(value);
-            onOpenChange(false);
-          }}
-          onLeave={() => onOpenChange(false)}
-        />
+        {children}
       </PopoverContent>
     </Popover>
   );
