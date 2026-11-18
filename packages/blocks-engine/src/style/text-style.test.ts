@@ -12,6 +12,8 @@ import type { BlockDocument, NodeStyles } from "../document";
 import { FIXTURE_BREAKPOINTS } from "../validation.fixtures";
 
 import { compilePageCss } from "./compile-page";
+import { compileSiteSheet } from "./site-sheet";
+import { resolveSiteTokens } from "./site-tokens";
 import type { NamedClass } from "./named-class";
 import {
   classNameOf,
@@ -153,5 +155,40 @@ describe("the text style tier sits between block styles and shared styles", () =
   it("leaves a library with no text styles as it was", () => {
     const before = compile(doc({ classes: [card.id] }), [card]);
     expect(before.css).not.toContain("nx-t-");
+  });
+});
+
+describe("a text style built on a variable", () => {
+  const bodyOn = (size: string): string =>
+    compileSiteSheet(
+      {
+        breakpoints: FIXTURE_BREAKPOINTS,
+        tokens: resolveSiteTokens({
+          tokens: [
+            {
+              name: "font-size.small",
+              kind: "dimension",
+              values: { light: size },
+            },
+          ],
+        }),
+      },
+      {}
+    ).css;
+
+  it("changes with the variable, with no write to the text style", () => {
+    const small: NamedClass = {
+      ...eyebrow,
+      styles: styles({ fontSize: { $token: "font-size.small" } }),
+    };
+    const { css } = compile(doc({ classes: [small.id] }), [small]);
+    // The block's rule reads the variable, so it is the same rule whatever
+    // the variable holds...
+    expect(css).toMatch(
+      /\.nx-t-eyebrow[^{]*\{[^}]*font-size: var\(--site-font-size-small\)/
+    );
+    // ...and changing the type size changes what that rule draws.
+    expect(bodyOn("12px")).toMatch(/--site-font-size-small:\s*12px/);
+    expect(bodyOn("14px")).toMatch(/--site-font-size-small:\s*14px/);
   });
 });

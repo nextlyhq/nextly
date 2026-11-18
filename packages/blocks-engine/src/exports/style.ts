@@ -407,6 +407,14 @@ export {
   namedClassesRead,
   NAMED_CLASS_PREFIX,
   NAMED_CLASS_SLUG_RE,
+  // Text styles: typography-only classes in their own tier, between block
+  // styles and shared styles. `@experimental` until the Type tab that makes
+  // them and the block picker that applies them ship.
+  isTextStyle,
+  nonTypographyProperties,
+  TEXT_STYLE_CLASS_PREFIX,
+  TEXT_STYLE_PROPERTIES,
+  textStylesOf,
 } from "../style/named-class";
 /**
  * @experimental A block type's looks (its named variants: a button's Outline), as the shared

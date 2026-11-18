@@ -459,6 +459,24 @@ export function classNameOf(
 }
 
 /**
+ * A site's text styles as the compiler writes them: the usable ones among the
+ * classes it reads, in the order they override one another. Empty for a
+ * library that holds none, or for stored data that is not a library at all.
+ *
+ * The one reading of "this site's text styles", so the Type tab listing them,
+ * the block picker offering them and a site text row following one see the
+ * same list the stylesheet is written from.
+ *
+ * @experimental
+ */
+export function textStylesOf(library: unknown): NamedClass[] {
+  if (!Array.isArray(library)) return [];
+  return usableNamedClasses(
+    namedClassesRead(library as readonly NamedClass[])
+  ).filter(isTextStyle);
+}
+
+/**
  * A class's tier in the order classes override one another: a look, then a
  * text style, then a shared style.
  */
