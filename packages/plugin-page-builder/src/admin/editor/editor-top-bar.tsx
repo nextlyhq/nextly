@@ -23,6 +23,7 @@ import { HistoryButtons } from "./history-buttons";
 import { PageReadMeter, type PageDataCount } from "./page-read-meter";
 import { PageTitleSwitcher } from "./page-title-switcher";
 import { PreviewButton, type VisitorPreview } from "./preview-button";
+import { RegionSaveAndPublish } from "./region-done-dialog";
 import { siteStyleStatus } from "./site-style-studios";
 
 /**
@@ -126,7 +127,7 @@ export function editorTopBar(
         {/* The page's bindings that no longer fit, beside its status: shown
             only when it has one. */}
         <BindingsToFixChip
-          editor={editor}
+          editor={view.page}
           field={page.field}
           canvas={page.canvas}
           requestPanel={view.requestPanel}
@@ -210,7 +211,13 @@ export function editorTopBar(
           it again. Publish's arrow keeps the other ways to publish, which
           the builder's taking the window would otherwise leave reachable
           only from the keyboard. */}
-        <DocumentSaveAndPublish />
+        {/* While a header or footer is edited in place, they act on it:
+          "Save header" and "Publish header". */}
+        {view.regionEditing.topBar === undefined ? (
+          <DocumentSaveAndPublish />
+        ) : (
+          <RegionSaveAndPublish bar={view.regionEditing.topBar} />
+        )}
         {/* After them, as the entry page's own ⋯ follows its Publish: the
           form and the pin, which a page that opens here would otherwise
           leave out of reach. */}

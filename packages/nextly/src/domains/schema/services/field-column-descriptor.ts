@@ -26,7 +26,6 @@
  * lockstep automatically.
  */
 
-import { isVirtualField } from "../../../collections/fields/virtual";
 import { NextlyError } from "../../../errors/nextly-error";
 import {
   MIGRATE_STEP_COLUMN_NAMES,
@@ -41,8 +40,8 @@ import {
 import { isBuiltInFieldType } from "../../../schemas/_zod/ui-schema";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { addressableFields } from "../../../shared/addressable-fields";
-import { isFieldGroupFieldType } from "../../field-groups/storage/field-group-field-type";
 import {
+  fieldProducesColumn,
   relationHoldsReferenceList,
   toSnakeCase,
   usesJunctionTable,
@@ -178,7 +177,13 @@ export function columnsThatMayHoldNull(
 export { toSnakeCase } from "../field-rules";
 // Whether a relation holds a list, and whether it is junction-backed: rules the Builder asks too,
 // so they live in the browser-safe field rules, re-exported for this module's callers.
-export { relationHoldsReferenceList, usesJunctionTable } from "../field-rules";
+// Whether a field becomes a column lives with the field rules the admin also reads; asked here as
+// the descriptor's own question, and re-exported for the modules that ask it of the descriptor.
+export {
+  fieldProducesColumn,
+  relationHoldsReferenceList,
+  usesJunctionTable,
+} from "../field-rules";
 
 /**
  * The fields whose columns sit on one row: those at the top of `fields`, and those inside a group
@@ -226,39 +231,6 @@ export function columnsDeclaredBy(
     columns.add(toSnakeCase(field.name));
   }
   return columns;
-}
-
-/**
- * Whether a field becomes a column of the table it is declared on.
- *
- * The single answer to that question: `classifyFieldKind` and `getColumnDescriptor` both defer to
- * it, so a rule that only applies to columns cannot disagree with the generator about which fields
- * have one.
- *
- * Dialect-free by construction — a component and a many-to-many relationship keep their values in
- * their own tables on every dialect. Structural rather than typed because config validation asks
- * this before the field has been parsed. Anything unrecognised counts as a column, matching the
- * text fallback below, so a field type whose plugin has not registered yet is still held to the
- * rules that columns carry rather than quietly escaping them.
- */
-export function fieldProducesColumn(field: {
-  type?: unknown;
-  options?: unknown;
-  /** The root-level `virtual` flag every field type accepts. */
-  virtual?: unknown;
-}): boolean {
-  if (typeof field.type !== "string") return true;
-  // A virtual field stores nothing: no column, no insert, no select. Both
-  // spellings of the flag are read by the one predicate the localization
-  // classifier also asks.
-  if (isVirtualField(field)) return false;
-  // Field-group and component values live in their own dedicated tables (fg_{slug} or
-  // comp_{slug}) and are stripped from the parent row on write, so the parent needs no column.
-  if (isFieldGroupFieldType(field.type)) return false;
-  // A many-to-many relationship stores its links in a dedicated junction table, not on the parent
-  // row. Every other relationship shape does get a column.
-  if (usesJunctionTable(field)) return false;
-  return true;
 }
 
 /**

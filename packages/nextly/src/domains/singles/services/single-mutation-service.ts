@@ -39,6 +39,7 @@ import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
 import { NextlyError } from "../../../errors/nextly-error";
 import { rethrowIfRuleCouldNotRun } from "../../../errors/rule-could-not-run";
 import {
+  settleWriteParts,
   type SharedPartOf,
   withWriteParts,
   writeMovesSharedPart,
@@ -335,6 +336,7 @@ import {
   recordSingleSaveActivity,
 } from "../../webhooks/record-mutation-event";
 import { isOutboxRecordingActive } from "../../webhooks/recording-activation";
+import { componentRowPaths } from "../../webhooks/sensitive-fields";
 import type { WebhookResource } from "../../webhooks/types";
 import { workflowAttachedTo } from "../../workflows/registry";
 import { closeReviewOnDiscard } from "../../workflows/review-state-cleanup";
@@ -2471,21 +2473,37 @@ export class SingleMutationService extends BaseService {
       slug,
       this.logger
     );
-    const shared =
+    return withWriteParts(
+      { shared: this.movesSharedPart(meta, data, rawOptions.locale) },
+      () => this.updateInParts(slug, data, rawOptions)
+    );
+  }
+
+  /**
+   * Whether an update of `body` in `locale` moves the Single's shared part:
+   * asked of the body as sent before the hooks run (`update`), and of the
+   * payload as persisted once they have (`settleWriteParts`). The whole
+   * document where the Single is gone.
+   */
+  private movesSharedPart(
+    meta: DynamicSingleRecord | null | undefined,
+    body: Record<string, unknown>,
+    locale: string | undefined
+  ): boolean {
+    return (
       meta === null ||
       meta === undefined ||
       writeMovesSharedPart(
         {
+          hasLifecycle: hasLifecycle(meta),
           fields: (meta.fields ?? []) as unknown as SharedPartOf["fields"],
           localized: meta.localized === true,
           publishesPerLanguage: publishesPerLanguage(meta),
           defaultLocale: this.localization?.defaultLocale,
         },
-        data,
-        rawOptions.locale
-      );
-    return withWriteParts({ shared }, () =>
-      this.updateInParts(slug, data, rawOptions)
+        body,
+        locale
+      )
     );
   }
 
@@ -4231,6 +4249,9 @@ export class SingleMutationService extends BaseService {
             enforceLocalizedRequired,
           };
           let promotedDraft = false;
+          // The values of the pending change this publish puts live, as the
+          // change holds them; none when it promotes nothing.
+          let promotedValues: Record<string, unknown> = {};
           // Whether the request that promoted also carried content of its
           // own, which no earlier save recorded: the trail reads that
           // publish as a save too.
@@ -4433,9 +4454,24 @@ export class SingleMutationService extends BaseService {
                 delete mainPayload.status;
               }
               promotedDraft = true;
+              promotedValues = pendingDocument;
               promotionCarriesContent = callerCarriesContent;
             }
           }
+          // The payload is final once a pending change it publishes is
+          // folded in: the hooks after the write and its events are told what
+          // it moves, a field a hook added or the promoted change carries
+          // included, where the hooks before it were told what the body sent.
+          // Settled on every attempt, so a retry that promotes nothing is not
+          // told what a lost attempt promoted. The caller's component values
+          // left `currentData` for the component save, so they are put back.
+          settleWriteParts({
+            shared: this.movesSharedPart(
+              singleMeta,
+              { ...promotedValues, ...currentData, ...attemptComponentFields },
+              options.locale
+            ),
+          });
           // A publish with nothing pending puts the live row itself live: a
           // first publication, a republish after an unpublish, or a Single
           // that keeps no drafts. The validation before this transaction saw
@@ -6112,7 +6148,13 @@ export class SingleMutationService extends BaseService {
             // Compared for the fields the save changed only when both were
             // assembled; the raw row stands in otherwise, and names none.
             ...(assembleDocuments
-              ? { data: dataDoc, previous: previousDoc }
+              ? {
+                  data: dataDoc,
+                  previous: previousDoc,
+                  // The component rows of the field tree the event strips by,
+                  // so the trail and the event name the same fields changed.
+                  componentRows: componentRowPaths(webhookFields),
+                }
               : {}),
             // This language's own statuses, as the transitions above read
             // them, and whether the save promoted the pending edits, which
@@ -7515,6 +7557,8 @@ export class SingleMutationService extends BaseService {
       actor,
       data,
       previous,
+      // The Single's component rows, whose own stamps are not a change.
+      componentRows: componentRowPaths(singleMeta.fields),
       publication: {
         statusAfter: undefined,
         statusBefore: undefined,

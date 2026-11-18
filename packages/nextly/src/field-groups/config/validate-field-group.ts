@@ -94,6 +94,8 @@ export type FieldGroupValidationErrorCode =
   | "FIELDS_EMPTY"
   | "FIELD_NAME_REQUIRED"
   | "FIELD_NAME_INVALID_FORMAT"
+  // A name longer than any field name may be (`MAX_FIELD_NAME_LENGTH`).
+  | "FIELD_NAME_TOO_LONG"
   | "FIELD_NAME_SQL_KEYWORD"
   | "FIELD_NEVER_TRANSLATABLE"
   // `unique` on a relation holding a list, which no dialect keeps (`uniqueOnListError`).

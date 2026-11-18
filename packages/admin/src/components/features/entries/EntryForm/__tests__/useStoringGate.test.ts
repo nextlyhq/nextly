@@ -247,3 +247,59 @@ describe("useStoringGate", () => {
     expect(outcome).toMatchObject({ ok: false, reason: "busy" });
   });
 });
+
+describe("useStoringGate: the tracked writes alone", () => {
+  // What a second document stored from inside this editor waits for: the
+  // same writes the editor's own store waits for, with nothing readied.
+  it("waits for a tracked write on its way, then answers that all landed", async () => {
+    const { result } = renderGate();
+    let land: () => void = () => {};
+    act(() => {
+      result.current.trackWrite(
+        "Site colours",
+        new Promise<void>(resolve => {
+          land = resolve;
+        })
+      );
+    });
+
+    let answered = false;
+    let verdict: unknown = "unanswered";
+    const settling = result.current.settleWrites().then(answer => {
+      answered = true;
+      verdict = answer;
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(answered).toBe(false);
+
+    await act(async () => {
+      land();
+      await settling;
+    });
+    expect(verdict).toBeNull();
+  });
+
+  it("names a tracked write whose latest attempt failed", async () => {
+    const { result } = renderGate();
+    await act(async () => {
+      result.current.trackWrite(
+        "Site colours",
+        Promise.reject(new Error("The server is down."))
+      );
+      await Promise.resolve();
+    });
+
+    let verdict: unknown;
+    await act(async () => {
+      verdict = await result.current.settleWrites();
+    });
+
+    expect(verdict).toEqual({
+      kind: "failed",
+      label: "Site colours",
+      message: "The server is down.",
+    });
+  });
+});
