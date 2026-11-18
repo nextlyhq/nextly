@@ -81,6 +81,17 @@ const localisationDraftsStep: UpgradeStep = {
     (await import("./localisation-drafts")).draftsSplitReport(context),
 };
 
+/** Dating every translation with no stamp from its language's version history. */
+const localisationStampsStep: UpgradeStep = {
+  title: "date translations from their version history",
+  pending: async context =>
+    (await import("./localisation-stamps")).entitiesToStamp(context),
+  run: async context =>
+    (await import("./localisation-stamps")).stampTranslations(context),
+  report: async context =>
+    (await import("./localisation-stamps")).stampsReport(context),
+};
+
 /** Listing the archived translations no entity can be found for: nothing to change, only to check. */
 const localisationArchiveStep: UpgradeStep = {
   title: "list archived translations of no known entity",
@@ -100,5 +111,6 @@ export const UPGRADE_STEPS: readonly UpgradeStep[] = [
   localisationKeysStep,
   localisationValuesStep,
   localisationDraftsStep,
+  localisationStampsStep,
   localisationArchiveStep,
 ];
