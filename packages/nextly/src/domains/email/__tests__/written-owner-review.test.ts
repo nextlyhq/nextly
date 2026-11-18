@@ -132,6 +132,14 @@ describe("blocks in plain words, for a change only in how they look", () => {
       },
       "Image: Logo (https://cdn.example/logo.png, 300px wide)",
     ],
+    [
+      "text that looks like a mark or a variable, as written",
+      {
+        type: "text",
+        text: [{ type: "text", text: "**Pay** [now] _soon_" }],
+      },
+      "Text: \\*\\*Pay\\*\\* \\[now\\] \\_soon\\_",
+    ],
   ])("show %s", (_case, block, line) => {
     expect(describeBlocks([block])).toEqual([line]);
   });
@@ -395,6 +403,24 @@ describe("a block moved on either side is never sent twice or lost", () => {
       expect(apply({ "blocks:0": { use: "mine" } })).toEqual(mine);
     }
   );
+
+  it("keeps a site's edit outside the moves it can't keep apart as the site's", () => {
+    const E = heading("E");
+    const { changes, apply } = review(
+      doc(A, B, C, D, E),
+      doc(A, C, B, D, E),
+      doc(C, A, B, D, heading("E2"))
+    );
+    expect(changes).toEqual([
+      expect.objectContaining({ id: "blocks:0", conflict: true }),
+    ]);
+    expect(apply({ "blocks:0": { use: "theirs" } })).toEqual(
+      doc(A, C, B, D, heading("E2"))
+    );
+    expect(apply({ "blocks:0": { use: "mine" } })).toEqual(
+      doc(C, A, B, D, heading("E2"))
+    );
+  });
 
   it("keeps the site's move apart from the owner's change to another block", () => {
     const { changes, apply } = review(

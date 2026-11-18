@@ -536,17 +536,45 @@ function movedOn(base: string[], side: string[]): Map<string, number> {
 }
 
 /**
- * Whether every block either side moved has its old place and its new one in
- * the same choice, or in none the owner changed. Decided apart, the two
- * places of a move send the block twice or lose it.
+ * The owner's moves among the offered regions: a region that removes blocks
+ * paired with one that adds the same blocks elsewhere, by index both ways.
  */
-function movesKeptWhole(
+function pairMoves(
+  base: string[],
+  regions: BlockRegion[]
+): Map<number, number> {
+  const offered = regions.flatMap((r, i) => (r.offered ? [i] : []));
+  const partner = new Map<number, number>();
+  for (const out of offered) {
+    if (blockChangeKind(regions[out]) !== "delete") continue;
+    const removed = base.slice(regions[out].bStart, regions[out].bEnd);
+    const into = offered.find(
+      i =>
+        !partner.has(i) &&
+        blockChangeKind(regions[i]) === "insert" &&
+        sameItems(regions[i].theirs, removed)
+    );
+    if (into !== undefined) {
+      partner.set(out, into);
+      partner.set(into, out);
+    }
+  }
+  return partner;
+}
+
+/**
+ * The regions, by first and last index, that a block either side moved would
+ * have decided apart, or null when every move's old place and new one are in
+ * the same choice, or in none the owner changed. Decided apart, the two places
+ * of a move send the block twice or lose it.
+ */
+function splitMove(
   base: string[],
   theirs: string[],
   mine: string[],
   regions: BlockRegion[],
   partner: ReadonlyMap<number, number>
-): boolean {
+): [number, number] | null {
   const unit = (i: number) => Math.min(i, partner.get(i) ?? i);
   const holding = (at: number) =>
     regions.findIndex(r => r.bStart <= at && at < r.bEnd);
@@ -563,10 +591,46 @@ function movesKeptWhole(
         (from !== -1 && regions[from].offered) ||
         (to !== -1 && regions[to].offered);
       if (!touched) continue;
-      if (from === -1 || to === -1 || unit(from) !== unit(to)) return false;
+      // A place not found is not expected; the whole sequence is then one.
+      if (from === -1 || to === -1) return [0, regions.length - 1];
+      if (unit(from) === unit(to)) continue;
+      const ends = [from, to].flatMap(i => [i, partner.get(i) ?? i]);
+      return [Math.min(...ends), Math.max(...ends)];
     }
   }
-  return true;
+  return null;
+}
+
+/**
+ * Regions `first` to `last` joined into one, with the blocks between them that
+ * neither side changed, so a move across them is decided once and every
+ * region outside stays its own choice.
+ */
+function joinRegions(
+  base: string[],
+  regions: BlockRegion[],
+  first: number,
+  last: number
+): BlockRegion {
+  const parts = regions.slice(first, last + 1);
+  const theirs: string[] = [];
+  const mine: string[] = [];
+  let at = parts[0].bStart;
+  for (const part of parts) {
+    const between = base.slice(at, part.bStart);
+    theirs.push(...between, ...part.theirs);
+    mine.push(...between, ...part.mine);
+    at = part.bEnd;
+  }
+  const covered = base.slice(parts[0].bStart, at);
+  return {
+    bStart: parts[0].bStart,
+    bEnd: at,
+    theirs,
+    mine,
+    offered: !sameItems(theirs, covered) && !sameItems(theirs, mine),
+    siteChanged: !sameItems(mine, covered),
+  };
 }
 
 /**
@@ -586,43 +650,30 @@ function mergeBlocks(
   const myKeys = blockKeys(mine);
   const merge = mergeSequence(blockKeys(base), theirKeys, myKeys);
   let regions = blockRegions(merge);
-  let offered = regions.flatMap((r, i) => (r.offered ? [i] : []));
+  let partner = pairMoves(merge.base, regions);
+  // A block moved on either side whose two places would be decided apart is
+  // the case region by region review can't keep whole: the regions from one
+  // place to the other are joined into one choice, the site's or the owner's,
+  // and every region outside stays its own. Each join leaves fewer regions,
+  // so this ends.
+  for (
+    let split = splitMove(merge.base, theirKeys, myKeys, regions, partner);
+    split;
+    split = splitMove(merge.base, theirKeys, myKeys, regions, partner)
+  ) {
+    const [first, last] = split;
+    // One region already holds both places: there is nothing left to join.
+    if (last <= first) break;
+    regions = [
+      ...regions.slice(0, first),
+      joinRegions(merge.base, regions, first, last),
+      ...regions.slice(last + 1),
+    ];
+    partner = pairMoves(merge.base, regions);
+  }
+  const offered = regions.flatMap((r, i) => (r.offered ? [i] : []));
   const removed = (i: number) =>
     merge.base.slice(regions[i].bStart, regions[i].bEnd);
-
-  let partner = new Map<number, number>();
-  for (const out of offered) {
-    if (blockChangeKind(regions[out]) !== "delete") continue;
-    const into = offered.find(
-      i =>
-        !partner.has(i) &&
-        blockChangeKind(regions[i]) === "insert" &&
-        sameItems(regions[i].theirs, removed(out))
-    );
-    if (into !== undefined) {
-      partner.set(out, into);
-      partner.set(into, out);
-    }
-  }
-
-  // A block moved on either side whose two places would be decided apart is
-  // the case region by region review can't keep whole: the blocks are then
-  // offered as one change, the site's or the owner's.
-  if (!movesKeptWhole(merge.base, theirKeys, myKeys, regions, partner)) {
-    regions = [
-      {
-        bStart: 0,
-        bEnd: merge.base.length,
-        theirs: theirKeys,
-        mine: myKeys,
-        offered:
-          !sameItems(theirKeys, merge.base) && !sameItems(theirKeys, myKeys),
-        siteChanged: !sameItems(myKeys, merge.base),
-      },
-    ];
-    offered = regions[0].offered ? [0] : [];
-    partner = new Map();
-  }
 
   const changeOf = new Map<number, OwnerChange>();
   const changes: OwnerChange[] = [];

@@ -21,12 +21,21 @@ function chip(c: Chip): string {
   return c.fallback ? `[${c.variable}, or "${c.fallback}"]` : `[${c.variable}]`;
 }
 
+/** The characters a description gives meaning to: marks, variables, breaks. */
+const MARKUP = /[\\*_[\]↵]/g;
+
 /**
  * A run's text or variable as written: spaces kept and a line break shown as
- * `↵`, so a change only to either still reads as a change, on one line.
+ * `↵`, so a change only to either still reads as a change, on one line. Text
+ * that looks like a mark, a variable or a break is escaped with a backslash,
+ * so literal `**Pay**` never reads the same as bold `Pay`.
  */
 function shown(part: PlainInline | Inline): string {
-  return (part.type === "text" ? part.text : chip(part)).replace(/\r?\n/g, "↵");
+  const text =
+    part.type === "text"
+      ? part.text.replace(MARKUP, char => `\\${char}`)
+      : chip(part);
+  return text.replace(/\r?\n/g, "↵");
 }
 
 /** Plain text with its variables: a heading, a button's label, alt text. */
