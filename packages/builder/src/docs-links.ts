@@ -41,3 +41,10 @@ export const BACKGROUND_JOBS_DOCS_HREF: string = `${DOCS_BASE}/jobs#running-the-
  * Policy: the link beside what Settings says to add to that policy.
  */
 export const SITE_CODE_POLICY_DOCS_HREF: string = `${DOCS_BASE}/page-builder/site-code#your-content-security-policy`;
+
+/**
+ * Where the docs explain how a site's text is set: Site text, type sizes,
+ * fluid sizes, text styles, the Body and Headings fonts and where fonts are
+ * kept. Linked from the Design panel's Type tab, where those are set.
+ */
+export const HOW_TEXT_WORKS_DOCS_HREF: string = `${DOCS_BASE}/page-builder/how-text-works`;

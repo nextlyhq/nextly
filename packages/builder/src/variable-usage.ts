@@ -78,6 +78,21 @@ export interface VariablesUsage {
 }
 
 /**
+ * How many documents some variables are used in together, each document
+ * once however many of them it names: the host's own count, numbers alone.
+ *
+ * @experimental Settles with the Variables tab's usage.
+ */
+export interface VariablesTogether {
+  /** How many documents use any of the variables. */
+  readonly documents: number;
+  /** The same documents, by kind. */
+  readonly byKind: Readonly<Record<SharedStyleKind, number>>;
+  /** False makes `documents`, and so the places, a floor: "at least". */
+  readonly complete: boolean;
+}
+
+/**
  * Which kind of place a variable is used in: a document's kind, a shared
  * style, or a block type's default style.
  *
@@ -137,6 +152,16 @@ export interface VariablesAccess {
     identities: readonly string[],
     signal: AbortSignal
   ) => Promise<VariablesUsage>;
+  /**
+   * How many documents each group of variables is used in together, each
+   * document once, answered in the order asked: at most fifty groups, naming
+   * at most fifty variables in all, per read. Optional: without it, or while
+   * it fails, a group's documents are its variables' added up.
+   */
+  readonly usageTogether?: (
+    groups: readonly (readonly string[])[],
+    signal: AbortSignal
+  ) => Promise<readonly VariablesTogether[]>;
   /** One page, from 1, of the places a variable is used. */
   readonly uses: (
     identity: string,
@@ -194,6 +219,25 @@ export function combinedReach(
     sharedStyles: [...new Set(read.flatMap(reach => reach.sharedStyles))],
     blockDefaults: [...new Set(read.flatMap(reach => reach.blockDefaults))],
     complete: read.every(reach => reach.complete),
+  };
+}
+
+/**
+ * One reach for variables counted together: {@link combinedReach}, with the
+ * documents the host counted for them together, each once, in place of
+ * their sum. The sum where the host gave no count of its own.
+ */
+export function reachTogether(
+  reaches: readonly (VariableReach | undefined)[],
+  together: VariablesTogether | undefined
+): VariableReach | undefined {
+  const combined = combinedReach(reaches);
+  if (combined === undefined || together === undefined) return combined;
+  return {
+    ...combined,
+    documents: together.documents,
+    byKind: together.byKind,
+    complete: together.complete,
   };
 }
 

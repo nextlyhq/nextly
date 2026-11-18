@@ -49,7 +49,6 @@ import {
 import { isPlainRecord } from "./plain-record";
 import { exposureTypeForProp } from "./prop-exposure";
 import type { RetiredExposures } from "./retired-exposures";
-import { boundedOwnKeys } from "./safe-record";
 import { settingBindingIssues } from "./setting-bindings";
 import { withSettingDefaults } from "./setting-defaults";
 import { contentPropsOf } from "./slot-lock";
@@ -59,6 +58,7 @@ import {
   isErrorIssue,
   type ValidationIssue,
 } from "./validation";
+import { variantPrunes } from "./variant-prune";
 
 /**
  * The prop path a `visibility` exposure stores.
@@ -579,27 +579,25 @@ function mintId(label: string, taken: ReadonlySet<string>): string {
   }
 }
 
-/** Take a field's value out of every variant, saying which lost one. */
+/**
+ * Take a field's value out of every variant of the draft, saying which lost
+ * one, as `variantPrunes` states it for every removal of a field.
+ */
 function pruneVariants(
   definition: ComponentDocument,
   id: string
 ): PrunedVariant[] {
   const variants = definition.variants;
-  if (!isPlainRecord(variants)) return [];
-  const pruned: PrunedVariant[] = [];
-  for (const key of boundedOwnKeys(variants, MAX_ENVELOPE_ENTRIES) ?? []) {
-    const variant: unknown = variants[key];
-    if (!isPlainRecord(variant) || !isPlainRecord(variant.overrides)) continue;
-    const overrides = variant.overrides;
-    if (!Object.hasOwn(overrides, id)) continue;
-    delete overrides[id];
-    pruned.push({
-      variant: key,
-      label: typeof variant.label === "string" ? variant.label : key,
-      emptied: boundedOwnKeys(overrides, 0) !== null,
-    });
-  }
-  return pruned;
+  if (variants === undefined) return [];
+  return variantPrunes(variants, new Set([id])).map(prune => {
+    const variant = variants[prune.variant];
+    if (variant !== undefined) variant.overrides = prune.overrides;
+    return {
+      variant: prune.variant,
+      label: prune.label,
+      emptied: prune.emptied,
+    };
+  });
 }
 
 /**

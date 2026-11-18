@@ -200,6 +200,7 @@ export function FontCatalogueView({
   onBack,
   initialQuery = "",
   onSite,
+  onAdded,
 }: {
   catalogue: FontCatalogue;
   /** Back to the site's fonts. */
@@ -208,6 +209,11 @@ export function FontCatalogueView({
   initialQuery?: string;
   /** The families already on the site. */
   onSite: readonly SiteFamily[];
+  /**
+   * Told the family and its category once one finishes adding, so the
+   * screen can ask how to use it.
+   */
+  onAdded?: (family: string, category: string) => void;
 }): React.JSX.Element {
   const { load, retry } = useCatalogue(catalogue);
   const [query, setQuery] = React.useState(initialQuery);
@@ -342,6 +348,7 @@ export function FontCatalogueView({
                 site={onSite.find(
                   each => each.key === family.family.toLowerCase()
                 )}
+                onAdded={onAdded}
               />
             ))}
           </ul>
@@ -414,11 +421,13 @@ function CatalogueRow({
   catalogue,
   sample,
   site,
+  onAdded,
 }: {
   family: CatalogueFamilyView;
   catalogue: FontCatalogue;
   sample: string;
   site: SiteFamily | undefined;
+  onAdded: ((family: string, category: string) => void) | undefined;
 }): React.JSX.Element {
   const [open, setOpen] = React.useState(false);
   const [element, setElement] = React.useState<HTMLButtonElement | null>(null);
@@ -472,6 +481,7 @@ function CatalogueRow({
             onAdded={() => {
               setOpen(false);
               element?.focus();
+              onAdded?.(family.family, family.category);
             }}
           />
         </PopoverContent>

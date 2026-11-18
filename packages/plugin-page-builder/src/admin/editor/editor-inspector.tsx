@@ -236,6 +236,7 @@ export function setSettingsOf<TFieldValues extends FieldValues>(
     <SetSettingsPanel
       set={set}
       control={control as unknown as Control<FieldValues>}
+      onEditArea={view.regionEditing.requestEdit}
     />
   );
 }

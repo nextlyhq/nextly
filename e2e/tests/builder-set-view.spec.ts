@@ -237,7 +237,8 @@ test("shows each control of the set's settings with nothing selected", async ({
   ).toBeVisible();
 
   // The header picker: marked components first, then the others, then None,
-  // each with its picture.
+  // each with its picture, and last, for someone who may make one,
+  // "+ Create a header".
   await panel.getByLabel("Header").click();
   const list = page.getByRole("listbox");
   await expect(
@@ -253,7 +254,8 @@ test("shows each control of the set's settings with nothing selected", async ({
   const otherAt = names.findIndex(name => name.includes(`Banner ${STAMP}`));
   expect(markedAt).toBeGreaterThan(-1);
   expect(markedAt).toBeLessThan(otherAt);
-  expect(names.at(-1)).toContain("None");
+  expect(names.at(-2)).toContain("None");
+  expect(names.at(-1)).toContain("+ Create a header");
   await expect(list.locator(".nx-pb-hf-picture").first()).toBeVisible();
   await page.keyboard.press("Escape");
 
