@@ -47,6 +47,7 @@ function verbs(): CommandVerbs & Record<string, ReturnType<typeof vi.fn>> {
     duplicateComponent: vi.fn(),
     updatePattern: vi.fn(),
     saveAsSharedStyle: vi.fn(),
+    turnInto: vi.fn(),
   } as unknown as CommandVerbs & Record<string, ReturnType<typeof vi.fn>>;
 }
 
@@ -305,5 +306,33 @@ describe("the palette asks the question the toolbar asks", () => {
         offered: c.bar,
       });
     }
+  });
+});
+
+describe("Turn into, in the palette", () => {
+  it("names each turn with its block and runs the one verb with the type", () => {
+    const actions = toolbarActions(documentOf([node("a")]), "a").concat([
+      {
+        id: "turn-into-heading",
+        label: "Turn into Heading",
+        enabled: true,
+        inMenu: true,
+      },
+    ]);
+    const handed = verbs();
+    const commands = builderCommands({
+      actions,
+      verbs: handed,
+      undo: vi.fn(),
+      redo: vi.fn(),
+      canUndo: false,
+      canRedo: false,
+    });
+    const command = commands.find(c => c.id === "block.turn-into-heading");
+    expect(command?.label).toBe("Turn block into Heading");
+    command?.run();
+    expect(handed.turnInto).toHaveBeenCalledWith("core/heading");
+    blockActionRunners(handed)["turn-into-rich-text"]();
+    expect(handed.turnInto).toHaveBeenLastCalledWith("core/rich-text");
   });
 });

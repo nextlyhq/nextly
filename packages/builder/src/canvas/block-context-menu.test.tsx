@@ -41,6 +41,7 @@ import type { EditorState } from "../editor-state";
 import { BlockKeyboardActions } from "../keyboard-actions";
 import { depthMoveActions, toolbarActions } from "./toolbar-actions";
 import { NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
+import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 
 afterEach(() => {
   cleanup();
@@ -504,5 +505,81 @@ describe("the canvas's right-click menu", () => {
     const moveIn = screen.getByRole("menuitem", { name: /^Move in/ });
     expect(moveIn.getAttribute("data-disabled")).not.toBeNull();
     expect(moveIn.textContent).toContain("Leaf can't hold blocks.");
+  });
+});
+
+describe("Turn into, in the right-click menu", () => {
+  /** A Text with a bold word, beside another block. */
+  function textPage(): BlockDocument {
+    return {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "a",
+          type: "core/text",
+          version: 2,
+          props: {
+            text: {
+              root: {
+                type: "root",
+                children: [
+                  {
+                    type: "paragraph",
+                    children: [
+                      { type: "text", text: "Hello ", format: 0 },
+                      { type: "text", text: "there", format: 1 },
+                    ],
+                  },
+                ],
+              },
+            },
+          },
+        },
+        { id: "b", type: "core/divider", version: 1, props: {} },
+      ],
+    } as BlockDocument;
+  }
+
+  it("offers Rich text and Heading in a group of their own, saying what Heading removes", () => {
+    registerBlocks(coreBlocks as never, { source: "core" });
+    const { container } = mount(editorSpy(textPage(), "a"));
+    fireEvent.contextMenu(blockElement(container));
+
+    const menu = screen.getByRole("menu");
+    const toRichText = screen.getByRole("menuitem", {
+      name: /^Turn into Rich text/,
+    });
+    const toHeading = screen.getByRole("menuitem", {
+      name: /^Turn into Heading/,
+    });
+    expect(toHeading.textContent).toContain("Bold and links are removed");
+    expect(toRichText.textContent).toBe("Turn into Rich text");
+
+    // A separator before the group and after it: the two read apart from
+    // the verbs around them, "Turn into component…" among them.
+    const children = [...menu.children];
+    const first = children.indexOf(toRichText);
+    const last = children.indexOf(toHeading);
+    expect(last).toBe(first + 1);
+    expect(children[first - 1]?.getAttribute("role")).toBe("separator");
+    expect(children[last + 1]?.getAttribute("role")).toBe("separator");
+  });
+
+  it("turns the block with one op when chosen", () => {
+    registerBlocks(coreBlocks as never, { source: "core" });
+    const editor = editorSpy(textPage(), "a");
+    const { container } = mount(editor);
+    fireEvent.contextMenu(blockElement(container));
+    fireEvent.pointerUp(
+      screen.getByRole("menuitem", { name: /^Turn into Heading/ }),
+      { pointerType: "mouse", button: 0 }
+    );
+    expect(editor.apply).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(editor.apply).mock.calls[0]?.[0]).toMatchObject({
+      kind: "turnInto",
+      id: "a",
+      node: { type: "core/heading", props: { text: "Hello there" } },
+    });
   });
 });

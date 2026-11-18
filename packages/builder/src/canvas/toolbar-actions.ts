@@ -86,6 +86,7 @@ import {
   saveAsSharedStyleRefusal,
   type SharedStyleOffer,
 } from "../shared-style-target";
+import { turnIntoOffers, type TurnIntoActionId } from "../turn-into-verb";
 
 import type { RefusalWording } from "./drag-refusal";
 
@@ -123,6 +124,7 @@ export type ToolbarActionId =
   | "move-up"
   | "move-down"
   | "duplicate"
+  | TurnIntoActionId
   | "save-as-pattern"
   | "save-as-shared-style"
   | "edit-component"
@@ -160,6 +162,37 @@ export interface ToolbarAction {
    * them, so the bar stays one short row however many verbs the host adds.
    */
   readonly inMenu?: true;
+  /**
+   * What the verb removes, said beside it before it is chosen: "Turn into
+   * Heading" removes bold and links. Visible text under the label, as a
+   * reason is.
+   */
+  readonly note?: string;
+}
+
+/**
+ * "Turn into Text", "Turn into Rich text" and "Turn into Heading" for one
+ * selected block that can become them, from the one offer every surface
+ * reads (`turnIntoOffers`); nothing for any other block. Menu verbs, kept in
+ * a group of their own, apart from "Turn into component…".
+ */
+function turnIntoActions(
+  document: BlockDocument,
+  selectedId: string,
+  ask: LockQuestion | undefined,
+  planned: boolean
+): ToolbarAction[] {
+  return turnIntoOffers(document, selectedId, {
+    ...(ask === undefined ? {} : { ask }),
+    planned,
+  }).map(offer => ({
+    id: offer.id,
+    label: offer.label,
+    enabled: offer.enabled,
+    inMenu: true,
+    ...(offer.reason === undefined ? {} : { reason: offer.reason }),
+    ...(offer.note === undefined ? {} : { note: offer.note }),
+  }));
 }
 
 /**
@@ -925,6 +958,7 @@ export function toolbarActions(
       lockRefusalFor,
       duplication?.ops
     ),
+    ...turnIntoActions(document, selectedId, lockRefusalFor, planned),
     saveAction(document, ids, rules, mayCreatePattern, planned),
     ...sharedStyleActions(document, ids, sharedStyles),
     ...editComponentAction(document, selectedId, offersEditComponent),

@@ -25,7 +25,10 @@
  * @module keyboard-actions
  */
 
-import { registryNestingSource } from "@nextlyhq/blocks-engine";
+import {
+  registryNestingSource,
+  type NestingSource,
+} from "@nextlyhq/blocks-engine";
 import { useIsomorphicLayoutEffect, useShortcuts } from "@nextlyhq/ui";
 import * as React from "react";
 
@@ -88,6 +91,7 @@ import {
   selectionMove,
 } from "./selection-ops";
 import { blockActionRunners } from "./shell/builder-commands";
+import { runTurnInto } from "./turn-into-verb";
 
 // The keys and what is announced, the contexts the toolbar and menus read,
 // and what the hook takes and returns live in modules of their own beside
@@ -895,6 +899,7 @@ export function useBlockKeyboardActions({
     onSaveAsSharedStyle?.();
   }, [selectionActions, onSaveAsSharedStyle, announce]);
   const editSelectedComponent = useEditComponentVerb(editor, onEditComponent);
+  const turnSelectedInto = useTurnIntoVerb(editor, nestingSource, announce);
 
   const actions = React.useMemo<BlockActions>(
     () => ({
@@ -909,9 +914,11 @@ export function useBlockKeyboardActions({
       duplicateComponent: () => runComponentVerb("duplicate-component"),
       updatePattern: () => runComponentVerb("update-pattern"),
       saveAsSharedStyle,
+      turnInto: turnSelectedInto,
     }),
     [
       saveAsSharedStyle,
+      turnSelectedInto,
       moveSelected,
       deleteSelected,
       duplicateSelected,
@@ -950,6 +957,32 @@ function CanvasFrameReader({ into }: { into: CanvasFrameSlot }): null {
     };
   }, [into, frame]);
   return null;
+}
+
+/**
+ * The "Turn into" verb: turns the one selected block into another type as one
+ * undo step, saying what it removed or why it could not (`runTurnInto`).
+ * Silent for a selection of more than one block, which is offered no turn.
+ */
+function useTurnIntoVerb(
+  editor: EditorState,
+  nesting: NestingSource,
+  announce: (words: string) => void
+): (to: string) => void {
+  const { document, selectedId, selection, apply, lockRefusalFor } = editor;
+  return React.useCallback(
+    (to: string) => {
+      if (selectedId === null || selection.ids.length !== 1) return;
+      runTurnInto(
+        { document, apply, lockRefusalFor },
+        selectedId,
+        to,
+        announce,
+        { nesting }
+      );
+    },
+    [document, selectedId, selection.ids, apply, lockRefusalFor, nesting, announce]
+  );
 }
 
 /**

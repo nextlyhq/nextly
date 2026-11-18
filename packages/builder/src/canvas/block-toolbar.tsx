@@ -52,6 +52,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@nextlyhq/ui";
 import {
@@ -62,6 +63,8 @@ import {
   CopyPlus,
   CornerLeftUp,
   Ellipsis,
+  FileText,
+  Heading,
   LayoutTemplate,
   Lock,
   LockOpen,
@@ -69,6 +72,7 @@ import {
   RefreshCw,
   SquarePen,
   Trash2,
+  Type,
   Unlink,
   type LucideIcon,
 } from "lucide-react";
@@ -93,6 +97,7 @@ import { refusalAnnouncement } from "../move-refusal";
 import { layerLabel, pathTo } from "../panels/layers/layers";
 import { useSelectionActions } from "../selection-actions";
 import { blockActionRunners } from "../shell/builder-commands";
+import { isTurnIntoAction } from "../turn-into-verb";
 
 import {
   CANVAS_ROOT_CLASS,
@@ -467,6 +472,11 @@ const ICONS: Record<ToolbarActionId, LucideIcon> = {
   "move-up": ArrowUp,
   "move-down": ArrowDown,
   duplicate: Copy,
+  // The marks the Add panel draws for the three blocks, so a verb shows what
+  // the block becomes.
+  "turn-into-text": Type,
+  "turn-into-rich-text": FileText,
+  "turn-into-heading": Heading,
   // A page outline rather than a bookmark or a star: what is stored is a piece
   // of layout, and the same glyph names the Patterns tier in the insert panel.
   "save-as-pattern": LayoutTemplate,
@@ -1133,25 +1143,32 @@ function MoreMenuItems({
   );
   return (
     <>
-      {items.map(action => {
+      {items.map((action, index) => {
         const Icon = ICONS[action.id];
+        // "Turn into" Text, Rich text or Heading, drawn as a group of their
+        // own so they read apart from "Turn into component…".
+        const after = items[index - 1];
+        const parted =
+          after !== undefined &&
+          isTurnIntoAction(after.id) !== isTurnIntoAction(action.id);
+        const said = action.reason ?? action.note;
         return (
-          <DropdownMenuItem
-            key={action.id}
-            disabled={!action.enabled}
-            className="nx-block-toolbar__menu-item"
-            onSelect={() => run(action)}
-          >
-            <Icon size={16} aria-hidden="true" />
-            <span className="nx-block-toolbar__menu-text">
-              <span>{action.label}</span>
-              {action.reason === undefined ? null : (
-                <span className="nx-block-toolbar__menu-reason">
-                  {action.reason}
-                </span>
-              )}
-            </span>
-          </DropdownMenuItem>
+          <React.Fragment key={action.id}>
+            {parted ? <DropdownMenuSeparator /> : null}
+            <DropdownMenuItem
+              disabled={!action.enabled}
+              className="nx-block-toolbar__menu-item"
+              onSelect={() => run(action)}
+            >
+              <Icon size={16} aria-hidden="true" />
+              <span className="nx-block-toolbar__menu-text">
+                <span>{action.label}</span>
+                {said === undefined ? null : (
+                  <span className="nx-block-toolbar__menu-reason">{said}</span>
+                )}
+              </span>
+            </DropdownMenuItem>
+          </React.Fragment>
         );
       })}
     </>

@@ -17,12 +17,15 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { CANVAS_ROOT_CLASS } from "./canvas";
 import { FORMAT_BAR_WORDS, FormatBar } from "./format-bar";
+import type { TurnIntoOffer } from "../turn-into-verb";
+
 import {
   createFormatBarStore,
   formatBar,
   formatBarShown,
   TEXT_FORMAT_ACTIONS,
   type FormatTarget,
+  type FormatTurnInto,
 } from "./format-bar-state";
 
 afterEach(() => {
@@ -101,11 +104,11 @@ describe("the bar a Text is offered", () => {
   });
 
   it("draws Turn into once the host can turn the block into another", () => {
-    const turnInto = vi.fn();
-    serve({ turnInto });
+    serve({ turnInto: turning().turnInto });
     drawBar();
-    fireEvent.click(screen.getByRole("button", { name: "Turn into" }));
-    expect(turnInto).toHaveBeenCalled();
+    const button = screen.getByRole("button", { name: "Turn into" });
+    expect(button.getAttribute("aria-haspopup")).toBe("menu");
+    expect(button.getAttribute("aria-expanded")).toBe("false");
   });
 
   it("presses the editor's own bold and italic, and says which are on", () => {
@@ -301,6 +304,79 @@ describe("the keyboard", () => {
   });
 });
 
+
+/** A host's "Turn into": Rich text open, Heading open and saying what goes. */
+function turning(
+  heading: Partial<TurnIntoOffer> = {}
+): { turnInto: FormatTurnInto; run: ReturnType<typeof vi.fn> } {
+  const run = vi.fn();
+  const offers: TurnIntoOffer[] = [
+    {
+      id: "turn-into-rich-text",
+      to: "core/rich-text",
+      name: "Rich text",
+      label: "Turn into Rich text",
+      enabled: true,
+    },
+    {
+      id: "turn-into-heading",
+      to: "core/heading",
+      name: "Heading",
+      label: "Turn into Heading",
+      enabled: true,
+      note: "Bold and links are removed",
+      ...heading,
+    },
+  ];
+  return { turnInto: { choices: () => offers, run }, run };
+}
+
+describe("Turn into, in the bar", () => {
+  it("opens the choices, each saying what it removes", () => {
+    serve({ turnInto: turning().turnInto });
+    drawBar();
+    fireEvent.click(screen.getByRole("button", { name: "Turn into" }));
+    const menu = screen.getByRole("menu", { name: "Turn into" });
+    const items = [...menu.querySelectorAll("[role='menuitem']")].map(
+      item => item.textContent
+    );
+    expect(items).toEqual(["Rich text", "HeadingBold and links are removed"]);
+  });
+
+  it("turns the block into the choice pressed, and closes the choices", () => {
+    const { turnInto, run } = turning();
+    serve({ turnInto });
+    drawBar();
+    fireEvent.click(screen.getByRole("button", { name: "Turn into" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /^Heading/ }));
+    expect(run).toHaveBeenCalledWith("core/heading");
+    expect(formatBar.get().turning).toBe(false);
+  });
+
+  it("dims a choice that is not open, and says why", () => {
+    serve({
+      turnInto: turning({
+        enabled: false,
+        reason: "Intro is locked, so nothing about it may change.",
+      }).turnInto,
+    });
+    drawBar();
+    fireEvent.click(screen.getByRole("button", { name: "Turn into" }));
+    const heading = screen.getByRole("menuitem", { name: /^Heading/ });
+    expect((heading as HTMLButtonElement).disabled).toBe(true);
+    expect(heading.textContent).toContain("Intro is locked");
+  });
+
+  it("goes back to the words on Escape", () => {
+    const { session } = serve({ turnInto: turning().turnInto });
+    drawBar();
+    fireEvent.click(screen.getByRole("button", { name: "Turn into" }));
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(session.focus).toHaveBeenCalled();
+  });
+});
+
 describe("the notice a paste leaves", () => {
   it("says what a Text keeps, in one line, and goes when dismissed", () => {
     serve();
@@ -319,15 +395,15 @@ describe("the notice a paste leaves", () => {
     expect(screen.queryByRole("status")).toBeNull();
   });
 
-  it("offers Turn into Rich text once the host can", () => {
-    const turnInto = vi.fn();
+  it("offers Turn into Rich text once the host can, and turns the block", () => {
+    const { turnInto, run } = turning();
     serve({ turnInto });
     drawBar();
     act(() => formatBar.setDropped(true));
     fireEvent.click(
       screen.getByRole("button", { name: "Turn into Rich text" })
     );
-    expect(turnInto).toHaveBeenCalled();
+    expect(run).toHaveBeenCalledWith("core/rich-text");
   });
 });
 

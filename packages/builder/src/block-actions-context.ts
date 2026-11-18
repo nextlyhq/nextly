@@ -81,6 +81,12 @@ export interface BlockActions {
   readonly detachComponent?: () => void;
   readonly duplicateComponent?: () => void;
   readonly updatePattern?: () => void;
+  /**
+   * Turn the selected block into another type (`"core/heading"`), as one undo
+   * step, saying what it removes or why it cannot. Optional, so a host built
+   * before it keeps compiling.
+   */
+  readonly turnInto?: (to: string) => void;
 }
 
 /**

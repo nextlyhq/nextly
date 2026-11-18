@@ -41,6 +41,8 @@ import {
   type BlockNode,
 } from "@nextlyhq/blocks-engine";
 
+import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
+
 import { BlockToolbar } from "./block-toolbar";
 import { Canvas } from "./canvas";
 import { useEditorState, type EditorState } from "../editor-state";
@@ -1716,5 +1718,69 @@ describe("the rules the bar judges a save by", () => {
     const save = screen.getByLabelText("Save as section…");
     expect(save.getAttribute("aria-disabled")).toBeNull();
     expect(save.getAttribute("title")).toBe("Save as section…");
+  });
+});
+
+describe("Turn into, in the bar's More menu", () => {
+  it("lists Rich text and Heading apart from the component verbs, saying what Heading removes", () => {
+    registerBlocks(coreBlocks as never, { source: "core" });
+    const editor = editorSpy(
+      documentOf([
+        {
+          id: "a",
+          type: "core/text",
+          version: 2,
+          props: {
+            text: {
+              root: {
+                type: "root",
+                children: [
+                  {
+                    type: "paragraph",
+                    children: [{ type: "text", text: "Hi", format: 1 }],
+                  },
+                ],
+              },
+            },
+          },
+        } as BlockNode,
+      ]),
+      "a"
+    );
+    render(
+      <ShortcutProvider>
+        <BlockKeyboardActions
+          onSaveAsPattern={() => undefined}
+          editor={editor}
+          components={{ mayCreate: true, onTurnIntoComponent: () => {} }}
+        >
+          <Canvas
+            document={editor.document}
+            siteStyles={{ css: "", classes: {} } as never}
+            selectedId={editor.selectedId}
+            onSelect={editor.select}
+            overlay={<BlockToolbar editor={editor} />}
+          />
+        </BlockKeyboardActions>
+      </ShortcutProvider>
+    );
+    fireEvent.keyDown(screen.getByRole("button", { name: "More actions" }), {
+      key: "Enter",
+    });
+    const menu = screen.getByRole("menu");
+    const rows = [...menu.children].map(child =>
+      child.getAttribute("role") === "separator"
+        ? "—"
+        : (child.querySelector("span span")?.textContent ?? "")
+    );
+    expect(rows.slice(0, 4)).toEqual([
+      "Turn into Rich text",
+      "Turn into Heading",
+      "—",
+      "Turn into component…",
+    ]);
+    expect(
+      screen.getByRole("menuitem", { name: /^Turn into Heading/ }).textContent
+    ).toContain("Bold and links are removed");
   });
 });

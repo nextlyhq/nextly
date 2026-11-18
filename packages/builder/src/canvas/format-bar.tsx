@@ -11,6 +11,12 @@
  * "Turn into". The verbs are the editor's own — the same ⌘B and ⌘I the keys
  * press — so a button and its shortcut cannot disagree.
  *
+ * ## "Turn into" opens its choices in the bar
+ *
+ * The types the block can become, each with what it would remove, or dimmed
+ * with why not, read from the same offer the block menu reads. Choosing one
+ * finishes the edit, so the words typed are what is turned.
+ *
  * ## It never takes the caret away by pointer
  *
  * A press on the bar keeps the focus in the passage (`mousedown` is not
@@ -34,6 +40,7 @@ import * as React from "react";
 
 import { isElement, isHTMLElement } from "../dom-kind";
 import type { Rect } from "../geometry";
+import { TURN_INTO_TARGETS } from "../turn-into-verb";
 
 import { CANVAS_ROOT_CLASS, CHROME_ATTRIBUTE } from "./canvas";
 import { BLOCK_TOOLBAR_CLASS } from "./canvas-chrome";
@@ -162,6 +169,83 @@ function linkTo(
   if (!isLinkableUrl(url)) return false;
   target.session.link(url, { newTab });
   return true;
+}
+
+/** Arrow keys move between the "Turn into" choices, wrapping. */
+function moveAmongChoices(event: React.KeyboardEvent): void {
+  if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+  const list = event.currentTarget;
+  const items = [
+    ...list.querySelectorAll<HTMLElement>("[role='menuitem']:not([disabled])"),
+  ];
+  if (items.length === 0) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const at = items.indexOf(list.ownerDocument.activeElement as HTMLElement);
+  const step = event.key === "ArrowDown" ? 1 : -1;
+  items[(at + step + items.length) % items.length]?.focus();
+}
+
+/**
+ * The "Turn into" choices: each type the block can become, with what it would
+ * remove, or dimmed with why not. Choosing one turns the block; Escape goes
+ * back to the words.
+ */
+function TurnChoices({
+  target,
+}: {
+  target: FormatTarget;
+}): React.JSX.Element {
+  const choices = React.useMemo(
+    () => target.turnInto?.choices() ?? [],
+    [target]
+  );
+  const list = React.useRef<HTMLDivElement>(null);
+  React.useEffect(() => {
+    formatBar.setHoldsFocus(true);
+    list.current
+      ?.querySelector<HTMLElement>("[role='menuitem']:not([disabled])")
+      ?.focus();
+  }, []);
+  const close = (): void => {
+    formatBar.setTurning(false);
+    backToWords(target);
+  };
+  return (
+    <div
+      ref={list}
+      role="menu"
+      aria-label={FORMAT_BAR_WORDS.turnInto}
+      className={`${FORMAT_BAR_CLASS}__choices`}
+      onKeyDown={event => {
+        escapeCloses(event, close);
+        moveAmongChoices(event);
+      }}
+    >
+      {choices.map(choice => {
+        const said = choice.reason ?? choice.note;
+        return (
+          <button
+            key={choice.to}
+            type="button"
+            role="menuitem"
+            className={`${FORMAT_BAR_CLASS}__choice`}
+            disabled={!choice.enabled}
+            onMouseDown={keepFocus}
+            onClick={() => {
+              formatBar.setTurning(false);
+              target.turnInto?.run(choice.to);
+            }}
+          >
+            <span>{choice.name}</span>
+            {said === undefined ? null : (
+              <span className={`${FORMAT_BAR_CLASS}__choice-note`}>{said}</span>
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
 }
 
 /** Escape in the address field closes it, and goes no further. */
@@ -351,7 +435,8 @@ function ActionButton(props: ButtonProps): React.JSX.Element {
     <button
       {...commonOf(props)}
       aria-haspopup="menu"
-      onClick={() => target.turnInto?.()}
+      aria-expanded={props.state.turning}
+      onClick={() => formatBar.setTurning(true)}
     >
       {FORMAT_BAR_WORDS.turnInto}
     </button>
@@ -379,7 +464,9 @@ function DroppedNotice({
         <button
           type="button"
           className={`${FORMAT_NOTICE_CLASS}__action`}
-          onClick={() => target.turnInto?.()}
+          onClick={() =>
+            target.turnInto?.run(TURN_INTO_TARGETS["turn-into-rich-text"])
+          }
         >
           {FORMAT_BAR_WORDS.toRichText}
         </button>
@@ -581,7 +668,7 @@ function OpenBar({
   }, [wanted, placed]);
 
   const onKeyDown = (event: React.KeyboardEvent): void => {
-    if (state.linking) return;
+    if (state.linking || state.turning) return;
     if (event.key === "Escape") {
       event.preventDefault();
       event.stopPropagation();
@@ -620,6 +707,8 @@ function OpenBar({
     >
       {state.linking ? (
         <LinkField state={state} target={target} />
+      ) : state.turning ? (
+        <TurnChoices target={target} />
       ) : (
         actions.map((action, index) => (
           <ActionButton
