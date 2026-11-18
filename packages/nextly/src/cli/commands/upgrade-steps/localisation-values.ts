@@ -13,29 +13,79 @@
  * @module cli/commands/upgrade-steps/localisation-values
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import { sql } from "drizzle-orm";
 
 import { applyCompanionTransition } from "../../../domains/i18n/migration/held-leaving-drops";
 import {
   buildCompanionTransitionStatements,
   type CompanionFieldLike,
 } from "../../../domains/i18n/migration/reconcile-companion";
+import { resolveTransitionStore } from "../../../domains/i18n/migration/transition-recorder";
+import { readI18nTransitionState } from "../../../domains/i18n/migration/transition-state";
 import {
   valuesKeptOnMain,
   type LaidOutEntity,
 } from "../../../domains/i18n/per-language-storage-layout";
 import { liveCompanionShape } from "../../../domains/i18n/runtime/companion-io";
+import { runStatement } from "../../../domains/schema/pipeline/_internal/run-statement";
+import { NextlyError } from "../../../errors/nextly-error";
 import type { UpgradeReport, UpgradeStepContext } from "../upgrade-step";
 
 import { builtByOf, siteEntities, siteLanguages } from "./localisation-site";
 
-/** Each entity with translatable values still on its main table, and those columns. */
-async function entitiesToMove(
-  context: UpgradeStepContext
-): Promise<{ entity: LaidOutEntity; onMain: string[] }[]> {
-  return valuesKeptOnMain(
-    context.adapter as unknown as DrizzleAdapter,
-    await siteEntities(context)
-  );
+/** An entity with translatable values still on its main table, and what the move does with them. */
+interface ToMove {
+  entity: LaidOutEntity;
+  onMain: string[];
+  /**
+   * `copy`: no translations table yet, so the values move into it. `drop`: the copy across was
+   * recorded as finished, so the main table's columns are leftovers nothing reads, and go.
+   */
+  how: "copy" | "drop";
+}
+
+/**
+ * Each entity with translatable values still on its main table, and how they move. An entity whose
+ * translations table is already there is moved only where its transition record says the copy
+ * finished; with any other record (none, an unfinished copy, a disable the table outlived) nothing
+ * says which copy is current, and the upgrade refuses, naming the one-time recovery.
+ */
+async function entitiesToMove(context: UpgradeStepContext): Promise<ToMove[]> {
+  const adapter = context.adapter as unknown as DrizzleAdapter;
+  const found = await valuesKeptOnMain(adapter, await siteEntities(context));
+  const toMove: ToMove[] = [];
+  const unresolved: string[] = [];
+  let store: Awaited<ReturnType<typeof resolveTransitionStore>> | undefined;
+  for (const { entity, onMain } of found) {
+    if (!(await adapter.tableExists(`${entity.tableName}_locales`))) {
+      toMove.push({ entity, onMain, how: "copy" });
+      continue;
+    }
+    store ??= await resolveTransitionStore(adapter);
+    const recorded = await readI18nTransitionState(
+      store,
+      transitionKindOf(entity),
+      entity.slug
+    );
+    if (recorded.status === "seeded") {
+      toMove.push({ entity, onMain, how: "drop" });
+    } else {
+      unresolved.push(
+        `the ${entity.kind} "${entity.slug}" (${onMain.join(", ")})`
+      );
+    }
+  }
+  if (unresolved.length > 0) {
+    throw new NextlyError({
+      code: "NEXTLY_UPGRADE_LOCALISATION_UNRESOLVED",
+      publicMessage:
+        `The translatable values of ${unresolved.join("; ")} are both on the main table and in ` +
+        `its translations table, and nothing records which is current. Run ` +
+        `\`nextly migrate --repair-localization\` once, then the upgrade again. Nothing was changed.`,
+      logContext: { entities: unresolved },
+    });
+  }
+  return toMove;
 }
 
 /** How many entities have translatable values to move. */
@@ -59,7 +109,19 @@ export async function moveValuesPerLanguage(
   const adapter = context.adapter as unknown as DrizzleAdapter;
   const languages = await siteLanguages(context);
   const found = await entitiesToMove(context);
-  for (const { entity } of found) {
+  for (const { entity, onMain, how } of found) {
+    if (how === "drop") {
+      // The copy finished: the values are read from the translations table, so the main table's
+      // columns only stand in the way of a single layout.
+      for (const column of onMain) {
+        await runStatement(
+          adapter.getDrizzle(),
+          adapter.dialect,
+          sql`ALTER TABLE ${sql.identifier(entity.tableName)} DROP COLUMN ${sql.identifier(column)}`
+        );
+      }
+      continue;
+    }
     const fields = entity.fields as CompanionFieldLike[];
     const builtBy = builtByOf(entity);
     const companionExists = await adapter.tableExists(
@@ -108,9 +170,10 @@ export async function valuesMoveReport(
 ): Promise<UpgradeReport> {
   const { defaultLocale } = await siteLanguages(context);
   return {
-    move: (await entitiesToMove(context)).map(
-      ({ entity, onMain }) =>
-        `the ${entity.kind} "${entity.slug}": ${onMain.join(", ")} to its per-language table, as each document's "${defaultLocale}" values`
+    move: (await entitiesToMove(context)).map(({ entity, onMain, how }) =>
+      how === "copy"
+        ? `the ${entity.kind} "${entity.slug}": ${onMain.join(", ")} to its per-language table, as each document's "${defaultLocale}" values`
+        : `the ${entity.kind} "${entity.slug}": ${onMain.join(", ")} left on its main table after its values were copied across, removed`
     ),
     conflicts: [],
     check: [],

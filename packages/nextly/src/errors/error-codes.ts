@@ -308,6 +308,10 @@ export const NEXTLY_ERROR_STATUS = {
   // stores rows under it: the start refuses until `nextly upgrade` has moved them to the standard
   // code they are read as. 500: the remedy is a command the developer runs.
   NEXTLY_LANGUAGE_CODES_NOT_UPGRADED: 500,
+  // `nextly upgrade` found a translated entity whose values are both on its main table and in its
+  // translations table, with no record saying the copy across finished: which copy is current
+  // cannot be told, so it changes nothing until `nextly migrate --repair-localization` has run.
+  NEXTLY_UPGRADE_LOCALISATION_UNRESOLVED: 500,
   // `db.postgres.schema` names a schema holding no installation while another
   // schema of the database holds one: the setting moved on an existing site.
   // 500 for the same reason as the mismatch above: a boot-time refusal of the
