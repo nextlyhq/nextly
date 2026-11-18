@@ -95,6 +95,31 @@ describe("the ignore file survives packing", () => {
     }
   });
 
+  // `.nextly/` holds what the app writes for one machine: its logs, and the record of a Builder
+  // save in progress, which names the host and database it was made on. Judged by git as above,
+  // with the migrations folder, which is part of the code, as the control a broad pattern would
+  // also catch.
+  it("lists the app's own .nextly folder, and not the migrations, in the project's ignore file", () => {
+    const repo = mkdtempSync(join(tmpdir(), "nextly-ignore-"));
+    try {
+      copyFileSync(
+        join(templates, "base", "gitignore"),
+        join(repo, ".gitignore")
+      );
+      const git = (...args: string[]) =>
+        spawnSync("git", args, { cwd: repo, encoding: "utf8" });
+      expect(git("init", "-q").status).toBe(0);
+      const ignored = (path: string) => git("check-ignore", "-q", path).status;
+      expect(ignored(".nextly/save-in-progress/collection-posts.json")).toBe(0);
+      expect(ignored(".nextly/logs/migrations.log")).toBe(0);
+      expect(
+        ignored("src/db/migrations/20260101_000000_000_posts_create.sql")
+      ).toBe(1);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
   // A control on the two assertions above. Both would also pass if `templates` resolved to a
   // directory that does not exist — `existsSync` would answer false for the dotted name for the
   // wrong reason, and the first assertion's failure is the only thing separating them.

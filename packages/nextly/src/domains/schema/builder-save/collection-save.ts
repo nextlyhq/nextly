@@ -125,6 +125,13 @@ import {
   refuseFieldTypeChanges,
 } from "../value-conversion/type-change/field-type-changes";
 
+import {
+  openSaveRecords,
+  recordSaveStarted,
+  withSaveRecords,
+  type StartedSave,
+} from "./save-in-progress";
+
 /** What the writer works with: the app's database, config and folders. */
 export interface CollectionSaveDeps {
   adapter: DrizzleAdapter;
@@ -317,33 +324,40 @@ export async function writeCollectionSave(
     appliedAfter?: () => Promise<void | "partly-applied">;
   } = {}
 ): Promise<CollectionSaveResult> {
-  const bounds = boundsFor(deps);
-  const written = await writeSave(deps, save, options);
-  // Once a push has run, the database changed outside the files: they stay.
-  let pushed = false;
-  try {
-    if (deps.applies && options.appliedBy !== undefined) {
-      const applied = await options.appliedBy();
-      pushed = true;
-      if (applied === "partly-applied") {
-        return { files: [...written.names], applied: false };
+  // The save's record that it is in progress is cleared when this scope ends, or the caller's
+  // where one is open around it (`withSaveRecords`), as its outcome allows.
+  return withSaveRecords(async () => {
+    const bounds = boundsFor(deps);
+    const written = await writeSave(deps, save, options);
+    // Once a push has run, the database changed outside the files: they stay.
+    let pushed = false;
+    try {
+      if (deps.applies && options.appliedBy !== undefined) {
+        const applied = await options.appliedBy();
+        pushed = true;
+        if (applied === "partly-applied") {
+          // Kept recorded applied nowhere: nothing says what committed, so the record stays.
+          written.started.left();
+          return { files: [...written.names], applied: false };
+        }
+        await recordWhatWasPushed(deps, written.files, written.table);
+      } else if (deps.applies) {
+        await runWritten(deps, written.files, written.table, bounds);
+      } else if (options.appliedAfter !== undefined) {
+        const applied = await options.appliedAfter();
+        pushed = true;
+        if (applied === "partly-applied") written.started.left();
       }
-      await recordWhatWasPushed(deps, written.files, written.table);
-    } else if (deps.applies) {
-      await runWritten(deps, written.files, written.table, bounds);
-    } else if (options.appliedAfter !== undefined) {
-      await options.appliedAfter();
-      pushed = true;
+      return { files: [...written.names], applied: deps.applies };
+    } catch (error) {
+      if (!pushed) {
+        await undoThenThrow(error, [
+          { files: written.names, undo: () => written.undo(error) },
+        ]);
+      }
+      throw error;
     }
-    return { files: [...written.names], applied: deps.applies };
-  } catch (error) {
-    if (!pushed) {
-      await undoThenThrow(error, [
-        { files: written.names, undo: () => written.undo(error) },
-      ]);
-    }
-    throw error;
-  }
+  }, deps.logger);
 }
 
 /**
@@ -408,15 +422,28 @@ export async function prepareCollectionSave(
   // Read before anything is written, and so before the caller's own work between the two (a
   // delete's teardown): a bound out of range refuses the save while it still changes nothing.
   const bounds = boundsFor(deps);
-  const written = await writeSave(deps, save, options);
+  // The save ends after this returns, once the caller runs or withdraws it: its record is
+  // cleared then, or by the caller's scope where one is open around it.
+  const records = openSaveRecords(deps.logger);
+  let written: Awaited<ReturnType<typeof writeSave>>;
+  try {
+    written = await records.run(() => writeSave(deps, save, options));
+  } catch (error) {
+    await records.end(false);
+    throw error;
+  }
   return {
     files: [...written.names],
     run: async () => {
       if (deps.applies) {
         await runWritten(deps, written.files, written.table, bounds);
       }
+      await records.end(true);
     },
-    withdraw: () => written.undo(undefined),
+    withdraw: async () => {
+      await written.undo(undefined);
+      await records.end(false);
+    },
   };
 }
 
@@ -435,6 +462,8 @@ async function writeSave(
   names: readonly string[];
   table: string;
   undo(error: unknown): Promise<void>;
+  /** The save's record that it is in progress, told how the save ended. */
+  started: StartedSave;
 }> {
   if (options.historyChecked !== true) await checkSaveHistory(deps);
   const plan = await planSave(deps, save);
@@ -447,16 +476,33 @@ async function writeSave(
 
   const definitionPath = resolve(deps.projectRoot, deps.config.db.uiSchemaFile);
   const before = await readIfPresent(definitionPath);
+  // Recorded before the first write, so a process stopped at any write after it leaves a record
+  // of the save and of the definition it started from.
+  const started = await recordSaveStarted({
+    adapter: deps.adapter,
+    projectRoot: deps.projectRoot,
+    kind: kindOf(save).kind,
+    slug: save.slug,
+    definitionFile: definitionPath,
+    definitionBefore: before,
+  });
   await writeAtomically(definitionPath, serializeUiSchema(plan.next));
 
   const names: string[] = [];
-  const undo = (error: unknown) =>
-    undoUnapplied(deps, names, before, definitionPath, error);
+  const undo = async (error: unknown) => {
+    // Only a save that withdrew everything it wrote has nothing left to settle.
+    if (
+      (await undoUnapplied(deps, names, before, definitionPath, error)) ===
+      "withdrawn"
+    ) {
+      started.withdrawn();
+    }
+  };
   try {
     const files = await writeFiles(deps, save, plan, written =>
       names.push(...written)
     );
-    return { files, names, table: plan.table, undo };
+    return { files, names, table: plan.table, undo, started };
   } catch (error) {
     return undoThenThrow(error, [{ files: names, undo: () => undo(error) }]);
   }
@@ -2099,12 +2145,12 @@ async function undoUnapplied(
   definition: string | undefined,
   definitionPath: string,
   error: unknown
-): Promise<void> {
+): Promise<"withdrawn" | "kept"> {
   if (partlyApplied(error)) {
     deps.logger.error(
       "The save's migration failed part-way, so its files stay for `nextly migrate:resolve`."
     );
-    return;
+    return "kept";
   }
   const repo = new SchemaEventsRepository(
     deps.adapter.getDrizzle(),
@@ -2125,7 +2171,7 @@ async function undoUnapplied(
     deps.logger.error(
       `${applied.join(", ")} applied before the save failed, so the save's files and its definition stay: \`nextly migrate\` runs the rest once the cause is fixed.`
     );
-    return;
+    return "kept";
   }
   for (const filename of written) {
     await settleAttempts(deps, repo, filename);
@@ -2141,6 +2187,7 @@ async function undoUnapplied(
   }
   if (definition === undefined) await rm(definitionPath, { force: true });
   else await writeAtomically(definitionPath, definition);
+  return "withdrawn";
 }
 
 /**

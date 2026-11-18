@@ -30,6 +30,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { dispatchCollections } from "../../../../dispatcher/handlers/collection-dispatcher";
 import { dispatchSingles } from "../../../../dispatcher/handlers/single-dispatcher";
+import { NextlyError } from "../../../../errors/nextly-error";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -40,6 +41,10 @@ import type { ServiceContainer } from "../../../../services";
 import { consoleLogger } from "../../../../shared/types";
 import { MetaService } from "../../../meta/services/meta-service";
 import { SchemaEventsRepository } from "../../events/schema-events-repository";
+import {
+  refuseWhileSaveInProgress,
+  refuseWhileSaveLeftPartWay,
+} from "../save-in-progress";
 
 /** Where the save is stopped, and how to let it go. Shared with the module mocks below. */
 const kill = vi.hoisted(() => ({
@@ -333,6 +338,24 @@ function writeMarker(path: SavePath, record: Record<string, unknown>): void {
   );
 }
 
+/** The code `check` refused with, or "none" where it passed. */
+async function refusal(check: Promise<void>): Promise<string> {
+  try {
+    await check;
+    return "none";
+  } catch (error) {
+    return NextlyError.is(error) ? error.code : String(error);
+  }
+}
+
+/** The marker check the commands with no database make, over this project. */
+function markersRefuse(notices: string[] = []): Promise<void> {
+  return refuseWhileSaveLeftPartWay({
+    projectRoot: basePath,
+    notice: line => notices.push(line),
+  });
+}
+
 /** The definition file's text, or null where there is none yet. */
 function definitionText(): string | null {
   const file = join(basePath, DEFINITION);
@@ -436,6 +459,13 @@ describe.each(getConfiguredTestDialects())(
           });
           // The database by a hash of where it is, never the URL that reaches it.
           expect(row?.database).toMatch(/^[0-9a-f]{16,64}$/);
+
+          // Both readers refuse: `nextly migrate` by the row, the commands with no database by
+          // the marker, which this host and this database wrote.
+          expect(await refusal(refuseWhileSaveInProgress(t.adapter))).toBe(
+            "CONFLICT"
+          );
+          expect(await refusal(markersRefuse())).toBe("CONFLICT");
         },
         300_000
       );
@@ -450,6 +480,10 @@ describe.each(getConfiguredTestDialects())(
         expect(answer instanceof Response ? answer.ok : true).toBe(true);
         expect(await recordRow(t, path)).toBeUndefined();
         expect(recordMarker(path)).toBeUndefined();
+        expect(await refusal(refuseWhileSaveInProgress(t.adapter))).toBe(
+          "none"
+        );
+        expect(await refusal(markersRefuse())).toBe("none");
       }, 300_000);
 
       it("a save refused at its statement, withdrawn whole, leaves neither the row nor the marker", async () => {
@@ -562,6 +596,10 @@ describe.each(getConfiguredTestDialects())(
         );
         expect(recordMarker(path)).toEqual(theirs);
         expect(await recordRow(t, path)).toBeUndefined();
+        // Another machine's save is a line of notice here, never a refusal.
+        const notices: string[] = [];
+        expect(await refusal(markersRefuse(notices))).toBe("none");
+        expect(notices).toEqual([expect.stringContaining("another-machine")]);
       }, 300_000);
     });
   }
