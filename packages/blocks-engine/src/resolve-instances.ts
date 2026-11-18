@@ -101,6 +101,7 @@ export { readableDefinition } from "./resolve-instances-expand";
 export {
   boundSettingId,
   instanceExposure,
+  keepsItsListWhenMoved,
   settingBindingKey,
   variantPreview,
 } from "./resolve-instances-exposures";

@@ -86,6 +86,7 @@ import { MakeSettingSection } from "./make-component-setting-section";
 import {
   resetOverrideOp,
   setOverrideOp,
+  withPlacementLists,
   type ExposedRow,
   type InstanceInspection,
   type OrphanedOverride,
@@ -521,8 +522,10 @@ function useSettingBinding(
     () => settingServices(contentServices),
     [contentServices]
   );
+  // Each list item binding a setting row writes names its list.
   const onApply = React.useCallback(
-    (op: BuilderOp) => editor.apply(op) !== null,
+    (op: BuilderOp) =>
+      editor.apply(withPlacementLists(editor.document, op)) !== null,
     [editor]
   );
   return {

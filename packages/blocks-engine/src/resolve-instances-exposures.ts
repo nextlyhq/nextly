@@ -780,14 +780,30 @@ export function settingBindingKey(id: string): string {
 
 /**
  * The setting a placement's binding key names, or `undefined` for a key that
- * is not `overrides.<id>` with one non-empty id.
+ * is not `overrides.<id>` with a non-empty id. The id is the rest of the key
+ * as it is, dots included: a setting's id may hold one, and a placement's
+ * keys name nothing but its settings.
  *
  * @experimental Settles with the editor's binding controls.
  */
 export function boundSettingId(key: string): string | undefined {
   if (!key.startsWith(SETTING_BINDING_PREFIX)) return undefined;
   const id = key.slice(SETTING_BINDING_PREFIX.length);
-  return id === "" || id.includes(".") ? undefined : id;
+  return id === "" ? undefined : id;
+}
+
+/**
+ * Whether a placement's binding reads what it read where the placement sits,
+ * once it is moved onto the component's block: a list item binding names the
+ * list it reads, since the block may sit in a list of the component's own,
+ * which a binding naming none would read instead.
+ *
+ * @experimental Settles with the editor's binding controls.
+ */
+export function keepsItsListWhenMoved(binding: unknown): boolean {
+  if (!isPlainRecord(binding)) return false;
+  if (binding.source !== "item") return true;
+  return typeof binding.list === "string" && binding.list !== "";
 }
 
 /**
@@ -816,7 +832,10 @@ function planBoundSettings(
   }
 }
 
-/** A placement's stored bindings, by the setting each binds; records only. */
+/**
+ * A placement's stored bindings, by the setting each binds: records only, and
+ * a list item binding only where it names its list.
+ */
 function boundSettings(bindings: unknown): ReadonlyMap<string, unknown> {
   const bound = new Map<string, unknown>();
   if (!isPlainRecord(bindings)) return bound;
@@ -824,7 +843,9 @@ function boundSettings(bindings: unknown): ReadonlyMap<string, unknown> {
   for (const key of keys) {
     const id = boundSettingId(key);
     const binding = ownEntry(bindings, key);
-    if (id !== undefined && isPlainRecord(binding)) bound.set(id, binding);
+    if (id !== undefined && keepsItsListWhenMoved(binding)) {
+      bound.set(id, binding);
+    }
   }
   return bound;
 }

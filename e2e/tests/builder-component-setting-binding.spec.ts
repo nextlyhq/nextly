@@ -173,6 +173,7 @@ test.describe("a placement's setting bound to data", () => {
     const { slug, posts } = await seed(page.request, mark, {
       $bind: "title",
       source: "item",
+      list: LIST,
       fallback: "No post",
     });
     await page.goto(`/${slug}`);

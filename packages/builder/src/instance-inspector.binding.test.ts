@@ -111,12 +111,19 @@ const CARD: ComponentDocument = {
   ],
 } as ComponentDocument;
 
-function inspect(bindings?: Record<string, unknown>) {
+function inspect(
+  bindings?: Record<string, unknown>,
+  overrides?: Record<string, unknown>,
+  definitions: Record<string, ComponentDocument> = { card: CARD }
+) {
   const placement = {
     id: "p",
     type: COMPONENT_INSTANCE_TYPE,
     version: 1,
-    props: { componentId: "card" },
+    props: {
+      componentId: "card",
+      ...(overrides === undefined ? {} : { overrides }),
+    },
     ...(bindings === undefined ? {} : { bindings }),
   } as BlockNode;
   const page = {
@@ -124,7 +131,7 @@ function inspect(bindings?: Record<string, unknown>) {
     kind: "page",
     nodes: [placement],
   } as BlockDocument;
-  return inspectInstance(page, "p", new Map([["card", CARD]]), []);
+  return inspectInstance(page, "p", new Map(Object.entries(definitions)), []);
 }
 
 describe("a placement's settings, bound to data", () => {
@@ -145,11 +152,16 @@ describe("a placement's settings, bound to data", () => {
   });
 
   it("carries the binding the placement stores for a setting", () => {
-    const byTitle = { $bind: "title", source: "item" };
+    const byTitle = { $bind: "title", source: "item", list: "l" };
     const rows =
-      inspect({ "overrides.title": byTitle, "overrides.tone": byTitle })
-        ?.rows ?? [];
+      inspect({
+        "overrides.title": byTitle,
+        "overrides.tone": byTitle,
+        // Composing applies no list item binding that names no list.
+        "overrides.pic": { $bind: "cover", source: "item" },
+      })?.rows ?? [];
     expect(rows.find(row => row.id === "title")?.binding).toEqual(byTitle);
+    expect(rows.find(row => row.id === "pic")?.binding).toBeUndefined();
     // A setting no field fills is not shown as bound, whatever is stored.
     expect(rows.find(row => row.id === "tone")?.binding).toBeUndefined();
     expect(rows.find(row => row.id === "goes")?.binding).toBeUndefined();
@@ -158,5 +170,87 @@ describe("a placement's settings, bound to data", () => {
   it("reads a stored binding that is not a record as none", () => {
     const rows = inspect({ "overrides.title": "title" })?.rows ?? [];
     expect(rows.find(row => row.id === "title")?.binding).toBeUndefined();
+  });
+
+  it("shows a bound setting as what the page shows, over another's typed value on the same prop", () => {
+    const twice: ComponentDocument = {
+      ...CARD,
+      exposed: [
+        {
+          id: "a",
+          label: "First",
+          nodeId: "t",
+          propPath: "text",
+          type: "text",
+        },
+        {
+          id: "b",
+          label: "Second",
+          nodeId: "t",
+          propPath: "text",
+          type: "text",
+        },
+      ],
+    } as ComponentDocument;
+    const bound = { $bind: "title", source: "item", list: "l" };
+    const rows =
+      inspect({ "overrides.a": bound }, { b: "Typed" }, { card: twice })
+        ?.rows ?? [];
+    const [first, second] = rows;
+    // The binding fills the prop whatever is typed, so the bound row keeps
+    // its controls and the typed one says what the page shows instead.
+    expect(first?.binding).toEqual(bound);
+    expect(first?.shadowedBy).toBeUndefined();
+    expect(second?.shadowedBy).toEqual({ id: "a", label: "First" });
+  });
+
+  it("follows a setting that feeds a component inside the component to its block's prop", () => {
+    const inner: ComponentDocument = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "component",
+      nodes: [
+        {
+          id: "label",
+          type: "acme/card-title",
+          version: 1,
+          props: { text: "Inner" },
+        },
+      ],
+      exposed: [
+        {
+          id: "caption",
+          label: "Caption",
+          nodeId: "label",
+          propPath: "text",
+          type: "text",
+        },
+      ],
+    } as ComponentDocument;
+    const outer: ComponentDocument = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "component",
+      nodes: [
+        {
+          id: "nested",
+          type: COMPONENT_INSTANCE_TYPE,
+          version: 1,
+          props: { componentId: "inner" },
+        },
+      ],
+      exposed: [
+        {
+          id: "headline",
+          label: "Headline",
+          nodeId: "nested",
+          propPath: "overrides.caption",
+          type: "text",
+        },
+      ],
+    } as ComponentDocument;
+    const rows = inspect(undefined, undefined, { card: outer, inner })?.rows;
+    expect(rows?.[0]?.bindable).toMatchObject({
+      type: "text",
+      label: "Headline",
+    });
   });
 });

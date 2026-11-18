@@ -107,7 +107,8 @@ const CARD = component(
   ]
 );
 
-const byItemTitle: Binding = { $bind: "title", source: "item" };
+/** Each post's title, from the list the placement sits in, named. */
+const byItemTitle: Binding = { $bind: "title", source: "item", list: "posts" };
 
 function compose(
   document: BlockDocument,
@@ -173,6 +174,60 @@ describe("a placement's setting bound to data", () => {
     expect(composedOf(nodes, "title")?.bindings).toEqual({
       text: byItemTitle,
       level,
+    });
+  });
+
+  it("reads the placement's list in a block inside the component's own list", () => {
+    // The Card lists its tags; its title sits inside that list, so a binding
+    // with no list named would read a tag there.
+    const tagged = component(
+      [list("tags", [heading("title")])],
+      [exposure("headline", "title", "text")]
+    );
+    const nodes = compose(
+      page([
+        list("posts", [
+          placement("p1", "card", {}, { "overrides.headline": byItemTitle }),
+        ]),
+      ]),
+      { card: tagged }
+    );
+    expect(composedOf(nodes, "title")?.bindings).toEqual({
+      text: byItemTitle,
+    });
+  });
+
+  it("writes nothing for a list item binding that names no list", () => {
+    const nodes = compose(
+      page([
+        list("posts", [
+          placement(
+            "p1",
+            "card",
+            {},
+            { "overrides.headline": { $bind: "title", source: "item" } }
+          ),
+        ]),
+      ])
+    );
+    expect(composedOf(nodes, "title")?.bindings).toBeUndefined();
+  });
+
+  it("binds a setting whose id holds a dot", () => {
+    const dotted = component(
+      [heading("title")],
+      [exposure("hero.title", "title", "text")]
+    );
+    const nodes = compose(
+      page([
+        list("posts", [
+          placement("p1", "card", {}, { "overrides.hero.title": byItemTitle }),
+        ]),
+      ]),
+      { card: dotted }
+    );
+    expect(composedOf(nodes, "title")?.bindings).toEqual({
+      text: byItemTitle,
     });
   });
 
