@@ -202,6 +202,19 @@ describe("FieldPicker", () => {
     );
   });
 
+  // A name is judged for the type it is picked for: one that makes no column (a field-group field)
+  // is not held to a column's length.
+  it("judges a derived name for the type it was picked for", async () => {
+    const nameProblem = vi.fn((): string | null => null);
+    const { user } = renderPicker({ config: { ...CONFIG, nameProblem } });
+    await user.click(screen.getByRole("option", { name: /Long text/ }));
+    await user.type(
+      screen.getByRole("textbox", { name: "Label" }),
+      "Sub Title"
+    );
+    expect(nameProblem).toHaveBeenLastCalledWith("sub_title", "textarea");
+  });
+
   it("Enter in the label adds the field", async () => {
     const { user, onAdd } = renderPicker();
     await user.click(screen.getByRole("option", { name: /^Text/ }));
@@ -646,5 +659,29 @@ describe("the Schema Builder's field picker", () => {
       "Banner (Field group, slug: banner) · not saved yet",
       "Hero (Field group, slug: hero) · not saved yet",
     ]);
+  });
+  // A field-group field keeps its values in the group's own table, so no column carries its name
+  // and a long one is not refused for a column's length; a text field's still is.
+  it("lets a new field-group field take a name too long for a column", async () => {
+    savedFieldGroups = [{ slug: "seo", label: "SEO" }];
+    const long = "a".repeat(64);
+    const { user } = renderBuilderPicker();
+    await user.click(screen.getByRole("option", { name: /Field group/ }));
+    await user.click(screen.getByRole("option", { name: /SEO/ }));
+    const label = screen.getByRole("textbox", { name: "Label" });
+    await user.clear(label);
+    await user.type(label, long);
+    expect(screen.queryByText(/Too long/)).toBeNull();
+    expect(screen.getByRole("button", { name: "Add field" })).toBeEnabled();
+  });
+
+  it("refuses a new text field's name too long for its column", async () => {
+    const { user } = renderBuilderPicker();
+    await user.type(search(), "text{Enter}");
+    await user.type(
+      screen.getByRole("textbox", { name: "Label" }),
+      "a".repeat(64)
+    );
+    expect(screen.getByText(/Too long/)).toBeInTheDocument();
   });
 });

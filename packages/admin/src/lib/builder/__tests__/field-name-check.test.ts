@@ -58,6 +58,17 @@ describe("nameRuleProblem", () => {
     });
     expect(nameRuleProblem("body", TOP)).toBeNull();
   });
+
+  // A field that makes no column (a field-group reference) carries its name in no column, so the
+  // column's length does not reach it, as the save judges it.
+  it("holds a name to the column's length only where the field makes a column", () => {
+    const long = "a".repeat(64);
+    expect(nameRuleProblem(long, TOP)?.kind).toBe("column-too-long");
+    expect(
+      nameRuleProblem(long, { ...TOP, producesColumn: true })?.kind
+    ).toBe("column-too-long");
+    expect(nameRuleProblem(long, { ...TOP, producesColumn: false })).toBeNull();
+  });
 });
 
 describe("a copy of a plugin's camelCase field", () => {
