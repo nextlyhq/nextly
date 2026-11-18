@@ -102,12 +102,12 @@ export interface DocumentsUsing {
     readonly collection: string;
     readonly documents: readonly (string | null)[];
     /**
-     * How many blocks reference it in each document, in `documents`' order,
-     * where the read could count them: `null` for a document whose rows hold
-     * no count (stored before the count was kept). Absent from a listing the
-     * grouped read made, which sees documents and not rows.
+     * Each document's rows as shares of its blocks, in `documents`' order,
+     * where the read could count them: what {@link documentBlocks} counts a
+     * document's blocks from. Absent from a listing the grouped read made,
+     * which sees documents and not rows.
      */
-    readonly blocks?: readonly (number | null)[];
+    readonly shares?: readonly (readonly BlockShare[])[];
     /**
      * Set when `collection` names a Single rather than a collection: its one
      * document is listed with no id, and is read through the Single API.
@@ -132,16 +132,23 @@ interface FoundReference {
   readonly document: string | null;
   /** Whether the row is filed under a Single rather than a collection. */
   readonly single?: boolean;
-  /**
-   * The row's own share of the document's blocks, where the row read it:
-   * which stored copy (language and form) and field it describes, and its
-   * count, `null` when it holds none.
-   */
-  readonly share?: {
-    readonly copy: string;
-    readonly field: string;
-    readonly blocks: number | null;
-  };
+  /** The row's own share of the document's blocks, where the row read it. */
+  readonly share?: BlockShare;
+}
+
+/**
+ * One row's share of its document's blocks: the stored copy it describes (its
+ * language and form) and the field, and how many of that field's blocks
+ * reference the thing there; `null` when the row holds no count (stored
+ * before the count was kept).
+ */
+export interface BlockShare {
+  /** The row's language, or empty for a field shared by every language. */
+  readonly locale: string;
+  /** The row's stored form: `published` or `draft`. */
+  readonly variant: string;
+  readonly field: string;
+  readonly blocks: number | null;
 }
 
 /** Where a reference's documents are grouped: a Single apart from a collection of its name. */
@@ -173,7 +180,7 @@ function listingFrom(
           collection: string;
           single: boolean;
           documents: Set<string | null>;
-          shares: Map<string | null, FoundReference["share"][]>;
+          shares: Map<string | null, (BlockShare | undefined)[]>;
         }
       >;
       placeable: boolean;
@@ -195,7 +202,7 @@ function listingFrom(
       collection,
       single: reference.single === true,
       documents: new Set<string | null>(),
-      shares: new Map<string | null, FoundReference["share"][]>(),
+      shares: new Map<string | null, (BlockShare | undefined)[]>(),
     };
     group.documents.add(reference.document);
     const shares = group.shares.get(reference.document) ?? [];
@@ -209,16 +216,16 @@ function listingFrom(
     listings.set(id, {
       collections: [...entry.collections.values()].map(group => {
         const documents = [...group.documents];
-        const blocks = documents.map(document =>
-          blocksInDocument(group.shares.get(document) ?? [])
+        const shares = documents.map(document =>
+          sharesRead(group.shares.get(document) ?? [])
         );
         return {
           collection: group.collection,
           documents,
           // Only where every document's rows were read: the grouped read
           // finds documents without their rows.
-          ...(blocks.every(count => count !== undefined)
-            ? { blocks: blocks.map(count => count ?? null) }
+          ...(shares.every(read => read !== undefined)
+            ? { shares: shares as BlockShare[][] }
             : {}),
           ...(group.single ? { single: true as const } : {}),
         };
@@ -229,23 +236,128 @@ function listingFrom(
   return listings;
 }
 
-/**
- * How many blocks of one document reference something, from its rows: the
- * fields of one stored copy add up, since each is part of the same page, and
- * the copies (a draft beside the published page, another language) are the
- * same blocks again, so the largest copy is the page's. `null` when some row
- * holds no count, and `undefined` when the rows were not read.
- */
-function blocksInDocument(
-  shares: readonly FoundReference["share"][]
-): number | null | undefined {
-  const byCopy = new Map<string, number>();
+/** A document's shares, or `undefined` when any of its rows was read without one. */
+function sharesRead(
+  shares: readonly (BlockShare | undefined)[]
+): BlockShare[] | undefined {
+  const read: BlockShare[] = [];
   for (const share of shares) {
     if (share === undefined) return undefined;
-    if (share.blocks === null) return null;
-    byCopy.set(share.copy, (byCopy.get(share.copy) ?? 0) + share.blocks);
+    read.push(share);
   }
-  return byCopy.size === 0 ? undefined : Math.max(...byCopy.values());
+  return read;
+}
+
+/** The language of a field every language shares: the index's empty locale. */
+const SHARED_LOCALE = "";
+
+/** One stored copy of a document: its form, and its language or none. */
+export interface StoredCopy {
+  readonly variant: string;
+  readonly locale: string;
+}
+
+/**
+ * One document's rows, field by field in each copy: one value per field, the
+ * larger where two rows describe the same field of the same copy (a save's
+ * new row before its old one is removed, or two saves at once), since they
+ * are the same blocks again and never more of them. `null` holds over a count.
+ */
+function fieldsByCopy(
+  shares: readonly BlockShare[]
+): Map<string, Map<string, Map<string, number | null>>> {
+  const byVariant = new Map<string, Map<string, Map<string, number | null>>>();
+  for (const share of shares) {
+    const locales = byVariant.get(share.variant) ?? new Map();
+    const fields = locales.get(share.locale) ?? new Map<string, number | null>();
+    const before = fields.get(share.field);
+    fields.set(
+      share.field,
+      before === undefined
+        ? share.blocks
+        : before === null || share.blocks === null
+          ? null
+          : Math.max(before, share.blocks)
+    );
+    locales.set(share.locale, fields);
+    byVariant.set(share.variant, locales);
+  }
+  return byVariant;
+}
+
+/** The sum of some fields' counts, `null` when any is unknown. */
+function sumOf(counts: Iterable<number | null>): number | null {
+  let sum = 0;
+  for (const count of counts) {
+    if (count === null) return null;
+    sum += count;
+  }
+  return sum;
+}
+
+/** One document's rows, read field by field in each copy. */
+type CopyFields = ReturnType<typeof fieldsByCopy>;
+
+/**
+ * Every stored copy one document's rows describe: in each form, one copy per
+ * language its rows name, or the one copy every language shares where they
+ * name none.
+ */
+export function copiesOf(shares: readonly BlockShare[]): StoredCopy[] {
+  return copiesIn(fieldsByCopy(shares));
+}
+
+function copiesIn(byVariant: CopyFields): StoredCopy[] {
+  const copies: StoredCopy[] = [];
+  for (const [variant, locales] of byVariant) {
+    const languages = [...locales.keys()].filter(l => l !== SHARED_LOCALE);
+    for (const locale of languages.length > 0 ? languages : [SHARED_LOCALE]) {
+      copies.push({ variant, locale });
+    }
+  }
+  return copies;
+}
+
+/**
+ * How many of one document's blocks reference something in one stored copy:
+ * the copy's fields added up, since each is part of the same page, with the
+ * fields every language shares counted in each language's copy. `null` when
+ * any of those fields' counts is unknown; 0 for a copy the rows do not name.
+ */
+export function copyBlocks(
+  shares: readonly BlockShare[],
+  copy: StoredCopy
+): number | null {
+  return copyBlocksIn(fieldsByCopy(shares), copy);
+}
+
+function copyBlocksIn(byVariant: CopyFields, copy: StoredCopy): number | null {
+  const locales = byVariant.get(copy.variant);
+  if (locales === undefined) return 0;
+  const shared = locales.get(SHARED_LOCALE)?.values() ?? [];
+  const own =
+    copy.locale === SHARED_LOCALE
+      ? []
+      : (locales.get(copy.locale)?.values() ?? []);
+  return sumOf([...shared, ...own]);
+}
+
+/**
+ * How many of one document's blocks reference something: THE one statement
+ * of it. Each stored copy's blocks ({@link copyBlocks}); the copies (a draft
+ * beside the published page, another language) are the same page again, so
+ * the largest copy is the page's. `null` when any copy's count is unknown,
+ * and 0 for a document with no rows.
+ */
+export function documentBlocks(shares: readonly BlockShare[]): number | null {
+  const byVariant = fieldsByCopy(shares);
+  let largest = 0;
+  for (const copy of copiesIn(byVariant)) {
+    const blocks = copyBlocksIn(byVariant, copy);
+    if (blocks === null) return null;
+    largest = Math.max(largest, blocks);
+  }
+  return largest;
 }
 
 /**
@@ -414,7 +526,8 @@ function shareOf<TRow extends UsageSubject>(
   if (blocks === undefined) return {};
   return {
     share: {
-      copy: `${String(row.locale)}\u0000${String(row.variant)}`,
+      locale: String(row.locale),
+      variant: String(row.variant),
       field: String(row.field),
       blocks,
     },
@@ -433,8 +546,9 @@ export function blockCountOf(
   let blocks = 0;
   let known = found.complete;
   for (const entry of found.collections) {
-    if (entry.blocks === undefined) return undefined;
-    for (const count of entry.blocks) {
+    if (entry.shares === undefined) return undefined;
+    for (const shares of entry.shares) {
+      const count = documentBlocks(shares);
       if (count === null) known = false;
       else blocks += count;
     }

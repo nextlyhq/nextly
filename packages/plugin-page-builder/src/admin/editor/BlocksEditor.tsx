@@ -108,6 +108,7 @@ import {
   useCanvasInputs,
   useSiteStyleInputs,
 } from "./use-render-inputs";
+import { UsageHereField } from "./usage-here";
 import {
   drawnNodesOf,
   useFollowApplied,
@@ -212,6 +213,12 @@ export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>(
           */}
             <CanvasFrameProvider>
               {/*
+                The field the editor is bound to, which the shared-style
+                usage reads name, so the site's counts take this field's
+                live blocks in place of its saved ones.
+              */}
+              <UsageHereField.Provider value={props.name}>
+              {/*
                 A template is drawn with an entry of the collection it names,
                 chosen in the strip above its canvas: read around the editor,
                 so the canvas, the inspector and the strip all read the one
@@ -224,6 +231,7 @@ export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>(
               ) : (
                 <EditorBody {...props} place={fieldPlace(props)} />
               )}
+              </UsageHereField.Provider>
             </CanvasFrameProvider>
           </ConnectStyleHistoryContext.Provider>
         </StyleRevisionContext.Provider>

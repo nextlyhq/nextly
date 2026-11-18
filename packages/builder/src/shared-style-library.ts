@@ -45,14 +45,32 @@ export interface SharedStyleReach {
    */
   readonly blocks?: number;
   /**
-   * What the open document contributes as saved, when the host could name it:
-   * its blocks wearing the style and its kind. The sentence counts that
-   * document from the open page instead, so an unsaved edit counts at once.
-   * Absent while the open document is saved nowhere yet.
+   * What the open document contributes as saved, when the host could name it,
+   * in the parts the sentence needs to count the open field from its live
+   * copy instead, so an unsaved edit counts at once. Absent while the open
+   * document is saved nowhere yet.
    */
-  readonly here?: { readonly blocks: number; readonly kind: SharedStyleKind };
+  readonly here?: SharedStyleHereParts;
   /** False makes every number a floor: "at least". */
   readonly complete: boolean;
+}
+
+/**
+ * The open document's saved blocks wearing a style, in parts. With the open
+ * field's saved rows set aside: `alongside` is the largest saved copy the
+ * open field is part of (its language, or each language for a field they
+ * all share), `elsewhere` the largest of the document's other copies (its
+ * other languages, its other stored form), so with the field's live blocks
+ * the document counts `max(alongside + live, elsewhere)`. `saved` is what
+ * the document adds to `SharedStyleReach.blocks` as saved, 0 when it holds
+ * none. `null` where a count is not known.
+ */
+export interface SharedStyleHereParts {
+  readonly saved: number | null;
+  readonly alongside: number | null;
+  readonly elsewhere: number | null;
+  /** The kind of document it is, which its place is counted under. */
+  readonly kind: SharedStyleKind;
 }
 
 /** One read of how widely some shared styles are used. */
@@ -709,7 +727,7 @@ function placesIn(byKind: Readonly<Record<SharedStyleKind, number>>): string[] {
 
 /**
  * The site-wide sentence, from a host that counts blocks: the saved counts
- * with the open document's saved share swapped for the open page's live one.
+ * with the open document counted from the open page's live field.
  */
 function siteWideSentence(
   live: BlocksOnThisPage | undefined,
@@ -717,25 +735,66 @@ function siteWideSentence(
   /** The blocks the site's saved documents hold: `reach.blocks`, present. */
   saved: number
 ): string {
+  const counts = reachWithLivePage(live, reach, saved);
+  const kinds = placesIn(counts.byKind);
+  if (counts.blocks <= 0 || kinds.length === 0) {
+    return counts.complete ? "Not used anywhere" : "No uses counted yet";
+  }
+  const many = counted(counts.blocks, ["block", "blocks"]);
+  const floor = counts.complete ? "" : "at least ";
+  return `Used on ${floor}${many} on ${listedWords(kinds)}`;
+}
+
+/** A style's site-wide counts, with the open page counted as it stands. */
+interface ReachCounts {
+  readonly blocks: number;
+  readonly byKind: Readonly<Record<SharedStyleKind, number>>;
+  /** False makes every number a floor. */
+  readonly complete: boolean;
+}
+
+/**
+ * The site's saved counts with the open document counted once, from the open
+ * page's live field: its saved count swapped for `max(alongside + live,
+ * elsewhere)`, and its place counted while that is above 0. A document saved
+ * nowhere yet (no `here`) is added as a page. Where any part is unknown, the
+ * saved counts stand as a floor: the document is in them already, so it is
+ * neither added again nor taken away.
+ */
+function reachWithLivePage(
+  live: BlocksOnThisPage | undefined,
+  reach: SharedStyleReach,
+  /** The blocks the site's saved documents hold: `reach.blocks`. */
+  saved: number
+): ReachCounts {
+  const counts: ReachCounts = {
+    blocks: saved,
+    byKind: reach.byKind,
+    complete: reach.complete && (live?.complete ?? true),
+  };
   // Without the open page's live count (a caller that has none), the saved
   // counts stand as they are.
-  const here = live === undefined ? undefined : reach.here;
-  // The open page counted live where the host could name its saved copy, and
-  // where it is saved nowhere yet (no `here`), live as well: either way it is
-  // counted once.
-  const liveCount = live?.count ?? 0;
-  const savedHere = here?.blocks ?? 0;
-  const blocks = saved - savedHere + liveCount;
-  const byKind = { ...reach.byKind };
-  const kind = here?.kind ?? "pages";
-  byKind[kind] += (liveCount > 0 ? 1 : 0) - (savedHere > 0 ? 1 : 0);
-  const complete = reach.complete && (live?.complete ?? true);
-  const kinds = placesIn(byKind);
-  if (blocks <= 0 || kinds.length === 0) {
-    return complete ? "Not used anywhere" : "No uses counted yet";
+  if (live === undefined) return counts;
+  const here = reach.here;
+  if (here === undefined) return swapped(counts, "pages", 0, live.count);
+  const { saved: was, alongside, elsewhere } = here;
+  if (was === null || alongside === null || elsewhere === null) {
+    return { ...counts, complete: false };
   }
-  const many = counted(blocks, ["block", "blocks"]);
-  return `Used on ${complete ? "" : "at least "}${many} on ${listedWords(kinds)}`;
+  const now = Math.max(alongside + live.count, elsewhere);
+  return swapped(counts, here.kind, was, now);
+}
+
+/** The counts with one document's blocks `was` replaced by `now`. */
+function swapped(
+  counts: ReachCounts,
+  kind: SharedStyleKind,
+  was: number,
+  now: number
+): ReachCounts {
+  const byKind = { ...counts.byKind };
+  byKind[kind] += (now > 0 ? 1 : 0) - (was > 0 ? 1 : 0);
+  return { ...counts, blocks: counts.blocks - was + now, byKind };
 }
 
 /** A row's count in words, and whether it is a zero not counted yet. */

@@ -168,8 +168,9 @@ export async function countSiteUsage(): Promise<SharedStylesCount> {
  */
 export function useSharedStylesClient(
   /**
-   * The document open in the editor, whose saved share of each style's usage
-   * the route reports apart, so its live copy can be counted instead.
+   * What the editor has open (document, field, language and form), whose
+   * saved share of each style's usage the route reports apart, so the open
+   * field's live copy can be counted instead.
    */
   here?: SharedStyleUsageHere
 ): SharedStylesAccess {

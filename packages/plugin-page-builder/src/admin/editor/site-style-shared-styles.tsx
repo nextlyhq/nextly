@@ -23,6 +23,7 @@ import { useSharedStylesClient } from "../shared-styles-client";
 import { useDesignBrowse } from "./design-panel";
 import type { ClassSurface } from "./site-style-class-surface";
 import { useStyleToOpen } from "./site-style-tokens-studio";
+import { useUsageHere } from "./usage-here";
 
 /**
  * The Styles tab, with the class surface's rename and whole-list edits (the
@@ -52,7 +53,9 @@ export function SharedStylesStudio({
   looks?: React.ComponentProps<typeof SharedStylesPanel>["looks"];
 }): React.JSX.Element {
   const mayChange = useCan("update-site-style");
-  const access = useSharedStylesClient();
+  // Named with what the editor has open, as the inspector's read is: the
+  // rows count the open page from `pageBlocks`, in place of its saved share.
+  const access = useSharedStylesClient(useUsageHere());
   const initialOpenId = useStyleToOpen();
   const { search, setSearch, searchRef, folds } = useDesignBrowse();
   // The Design panel's one search, across its tabs, and its box, where focus

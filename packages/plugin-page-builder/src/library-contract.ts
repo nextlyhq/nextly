@@ -1053,15 +1053,11 @@ export interface SharedStyleUsage {
    */
   readonly blocks?: number;
   /**
-   * What the document named by {@link SHARED_STYLE_HERE_PARAM} contributes as
-   * saved: its blocks wearing the style (0 when it holds none) and its kind,
-   * so the editor can count that document from its live copy instead.
-   * Absent when no document was named.
+   * The open document's saved blocks, in the parts the editor needs to count
+   * it from its live field instead: see {@link SharedStyleUsageHereParts}.
+   * Absent when no document was named, or the caller may not read it.
    */
-  readonly here?: {
-    readonly blocks: number;
-    readonly kind: SharedStyleUsageKind;
-  };
+  readonly here?: SharedStyleUsageHereParts;
   /** False makes every number a floor: "at least". */
   readonly complete: boolean;
 }
@@ -1130,24 +1126,61 @@ export const SHARED_STYLE_PAGE_PARAM = "page";
 export const SHARED_STYLE_WHERE_USED_PAGES_MAX = 250;
 
 /**
- * The query parameter naming the document open in the editor, as
- * `<collection>/<id>` or `single:<slug>`, whose saved share of each style's
- * usage the route reports apart (`SharedStyleUsage.here`).
+ * The query parameters naming what the editor has open, whose saved share of
+ * each style's usage the route reports apart (`SharedStyleUsage.here`): the
+ * document as `<collection>/<id>` or `single:<slug>`, the blocks field, the
+ * language by code (absent for the site's default), and the stored form the
+ * editor edits.
  */
 export const SHARED_STYLE_HERE_PARAM = "here";
+export const SHARED_STYLE_HERE_FIELD_PARAM = "hereField";
+export const SHARED_STYLE_HERE_LOCALE_PARAM = "hereLocale";
+export const SHARED_STYLE_HERE_VARIANT_PARAM = "hereVariant";
+
+/** The stored forms of a document: its main row, and a pending working draft. */
+export type SharedStyleUsageVariant = "published" | "draft";
 
 /**
- * The saved document open in the editor, as the usage route is told of it:
- * an entry of a collection by its id, or a Single, which has one document.
+ * What the editor has open, as the usage route is told of it: a saved
+ * document (an entry of a collection by its id, or a Single, which has one),
+ * the blocks field the editor is bound to, the language and the stored form.
  */
-export type SharedStyleUsageHere =
-  | { readonly collection: string; readonly id: string }
-  | { readonly single: string };
+export interface SharedStyleUsageHere {
+  readonly document:
+    | { readonly collection: string; readonly id: string }
+    | { readonly single: string };
+  readonly field: string;
+  /** The language by code; absent for the site's default language. */
+  readonly locale?: string;
+  /**
+   * `draft` while the editor holds a published document's pending working
+   * draft, which is stored apart; `published` for the main row.
+   */
+  readonly variant: SharedStyleUsageVariant;
+}
+
+/**
+ * The open document's saved blocks wearing a style, in the parts the editor
+ * replaces with its live field: with the open field's rows set aside,
+ * `alongside` is the largest copy the open field is part of (the language
+ * being edited, or each language for a field they all share) and `elsewhere`
+ * the largest of the document's other copies, so the document counts
+ * `max(alongside + live, elsewhere)`. `saved` is what the document adds to
+ * `SharedStyleUsage.blocks`, 0 when it holds none. `null` where a count is
+ * unknown (a row stored before counts were kept, or a field whose place
+ * among the copies the rows cannot say).
+ */
+export interface SharedStyleUsageHereParts {
+  readonly saved: number | null;
+  readonly alongside: number | null;
+  readonly elsewhere: number | null;
+  readonly kind: SharedStyleUsageKind;
+}
 
 /**
  * The usage route's path for some shared styles, each named by its own `id`
- * parameter, so the browser asks in the shape the route reads; with the open
- * document named, when there is one.
+ * parameter, so the browser asks in the shape the route reads; with what the
+ * editor has open named, when it has a saved document open.
  */
 export function sharedStyleUsagePath(
   ids: readonly string[],
@@ -1156,12 +1189,18 @@ export function sharedStyleUsagePath(
   const params = new URLSearchParams();
   for (const id of ids) params.append(SHARED_STYLE_ID_PARAM, id);
   if (here !== undefined) {
+    const { document } = here;
     params.set(
       SHARED_STYLE_HERE_PARAM,
-      "single" in here
-        ? `single:${here.single}`
-        : `${here.collection}/${here.id}`
+      "single" in document
+        ? `single:${document.single}`
+        : `${document.collection}/${document.id}`
     );
+    params.set(SHARED_STYLE_HERE_FIELD_PARAM, here.field);
+    if (here.locale !== undefined) {
+      params.set(SHARED_STYLE_HERE_LOCALE_PARAM, here.locale);
+    }
+    params.set(SHARED_STYLE_HERE_VARIANT_PARAM, here.variant);
   }
   return `${SHARED_STYLE_USAGE_ROUTE_PATH}?${params.toString()}`;
 }

@@ -1,0 +1,48 @@
+"use client";
+
+/**
+ * What the editor has open, as the shared-style usage read names it: the
+ * saved document, the blocks field the editor is bound to, the language and
+ * the stored form. The route reports that field's saved share of each
+ * style's blocks apart, so the open page is counted from its live copy.
+ *
+ * @module @nextlyhq/plugin-page-builder/admin/editor/usage-here
+ */
+import {
+  useDocumentIdentity,
+  useDocumentLocale,
+  useDocumentStatus,
+} from "@nextlyhq/plugin-sdk/admin";
+import { createContext, useContext } from "react";
+
+import type { SharedStyleUsageHere } from "../../library-contract";
+
+/** The blocks field the editor is bound to, provided around the editor. */
+export const UsageHereField = createContext<string | undefined>(undefined);
+
+/**
+ * What the editor has open, or `undefined` outside an editor or before the
+ * document is saved once, when no saved count holds it yet. The form is the
+ * pending working draft where the document has one, since that is what the
+ * editor opens and saves; else the main row.
+ */
+export function useUsageHere(): SharedStyleUsageHere | undefined {
+  const identity = useDocumentIdentity();
+  const locale = useDocumentLocale()?.code ?? undefined;
+  const drafting = useDocumentStatus()?.hasWorkingDraft === true;
+  const field = useContext(UsageHereField);
+  if (identity === null || field === undefined) return undefined;
+  const document =
+    identity.kind === "single"
+      ? { single: identity.slug }
+      : identity.documentId === undefined
+        ? undefined
+        : { collection: identity.slug, id: identity.documentId };
+  if (document === undefined) return undefined;
+  return {
+    document,
+    field,
+    ...(locale === undefined ? {} : { locale }),
+    variant: drafting ? "draft" : "published",
+  };
+}
