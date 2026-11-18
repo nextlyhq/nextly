@@ -1,8 +1,8 @@
 /**
  * A translated collection deleted in the Schema Builder is deleted on a
  * deployed database by `nextly migrate`, as the Builder deleted it in
- * development: its tables, its translations table among them, and every row
- * it owned elsewhere.
+ * development: its tables, its translations table among them, under the
+ * data-loss consent that names the collection's table.
  *
  * Two databases, each the commands reach through `DATABASE_URL` as an app's
  * would: the Builder's, where the collection is created and deleted in
@@ -20,6 +20,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createScratchDatabase } from "../../../../__tests__/helpers/fresh-database";
 import { runMigrate } from "../../../../cli/commands/migrate";
 import type { CommandContext } from "../../../../cli/program";
+import type { AcceptDataLossOption } from "../../../../cli/utils/data-loss-consent";
 import { createLogger } from "../../../../cli/utils/logger";
 import { defineConfig, fieldGroup, text } from "../../../../config";
 import { createAdapter } from "../../../../database/factory";
@@ -37,6 +38,7 @@ import { _resetEnvCache } from "../../../../shared/lib/env";
 import { clearRegistryRowCache } from "../../../dynamic-collections/services/collection-row-cache";
 import { ensureI18nArchive } from "../../../i18n/migration/ensure-archive";
 import { resolveComponentTableName } from "../../utils/resolve-table-name";
+import { setNonInteractive } from "../can-prompt";
 
 /** The configuration the commands load. */
 const loaded = vi.hoisted(() => ({ config: undefined as unknown }));
@@ -67,9 +69,12 @@ let closers: Array<() => Promise<void>> = [];
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "nextly-deployed-delete-"));
   mkdirSync(join(dir, "migrations"));
+  // As a deploy runs it: a consent that does not cover a deletion is refused at once, never asked.
+  setNonInteractive(true);
 });
 
 afterEach(async () => {
+  setNonInteractive(false);
   await shutdownServices().catch(() => {});
   for (const close of closers.splice(0)) await close();
   vi.unstubAllEnvs();
@@ -119,8 +124,10 @@ async function start(adapter: DrizzleAdapter): Promise<TestNextly> {
   });
 }
 
-/** `nextly migrate` over the project, with the data-loss consent: its exit code and what it said. */
-async function migrate(): Promise<{ code: number | undefined; said: string }> {
+/** `nextly migrate` over the project, with `consent` to losing data: its exit code and what it said. */
+async function migrate(
+  consent: AcceptDataLossOption = true
+): Promise<{ code: number | undefined; said: string }> {
   loaded.config = PROJECT;
   const said: string[] = [];
   const capture = (message: string) => {
@@ -146,7 +153,7 @@ async function migrate(): Promise<{ code: number | undefined; said: string }> {
   });
   try {
     await runMigrate(
-      { cwd: dir, acceptDataLoss: true } as Parameters<typeof runMigrate>[0],
+      { cwd: dir, acceptDataLoss: consent } as Parameters<typeof runMigrate>[0],
       context
     );
     return { code: undefined, said: said.join("\n") };
@@ -205,9 +212,12 @@ describe.each(getConfiguredTestDialects())(
     /**
      * Create NOTES in the Builder, apply it to the deployed database with an
      * entry there, delete NOTES in the Builder, and apply the delete to the
-     * deployed database: what that run answered, and what it left.
+     * deployed database with `consent`: what that run answered, and what it
+     * left.
      */
-    async function deleteOnTheDeployedDatabase() {
+    async function deleteOnTheDeployedDatabase(
+      consent: AcceptDataLossOption = true
+    ) {
       const own = await openDatabase(dialect, "builder");
       const deployed = await openDatabase(dialect, "deployed");
 
@@ -279,7 +289,7 @@ describe.each(getConfiguredTestDialects())(
       // The deploy of the delete.
       reach(dialect, deployed.url);
       await start(deployed.adapter);
-      const deleted = await migrate();
+      const deleted = await migrate(consent);
       const after = await leftOf(deployed.adapter, dialect);
       return { before, deleted, after };
     }
@@ -300,22 +310,34 @@ describe.each(getConfiguredTestDialects())(
       ).toEqual({ table: false, translationsTable: false });
     }, 180_000);
 
-    it("leaves nothing else it owned", async () => {
-      const { before, deleted, after } = await deleteOnTheDeployedDatabase();
-      // Positive control: the deployed database held each of them.
-      expect(before.registryRow).toBe(1);
-      expect(before.fieldGroupValues).toBeGreaterThan(0);
-      expect(before.archiveRows).toBe(1);
+    it("takes the translations table under a consent naming the collection's table", async () => {
+      // The translations table is part of the collection's storage: naming
+      // the collection's table consents to losing both.
+      const { before, deleted, after } =
+        await deleteOnTheDeployedDatabase(NOTES_TABLE);
+      expect(before).toMatchObject({ table: true, translationsTable: true });
       const seen = JSON.stringify({ code: deleted.code, before, after });
 
+      expect(deleted.code, `${seen}\n${deleted.said}`).toBeUndefined();
       expect(
-        {
-          registryRow: after.registryRow,
-          fieldGroupValues: after.fieldGroupValues,
-          archiveRows: after.archiveRows,
-        },
-        `${seen}\n${deleted.said}`
-      ).toEqual({ registryRow: 0, fieldGroupValues: 0, archiveRows: 0 });
+        { table: after.table, translationsTable: after.translationsTable },
+        seen
+      ).toEqual({ table: false, translationsTable: false });
+    }, 180_000);
+
+    it("refuses the delete, changing nothing, under a consent that names another table", async () => {
+      const { before, deleted, after } =
+        await deleteOnTheDeployedDatabase("dpl_another");
+      const seen = JSON.stringify({ code: deleted.code, before, after });
+
+      expect(deleted.code, `${seen}\n${deleted.said}`).not.toBeUndefined();
+      // Refused before anything runs: the collection, its translations and
+      // every row stand as they were.
+      expect(after, seen).toEqual(before);
+      // Refused by the consent, naming what it does not cover, not by a
+      // failure of the file.
+      expect(deleted.said).toContain("The consent given does not cover");
+      expect(deleted.said).toContain(NOTES_TABLE);
     }, 180_000);
   }
 );
