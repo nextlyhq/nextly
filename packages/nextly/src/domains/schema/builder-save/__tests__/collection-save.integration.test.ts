@@ -24,7 +24,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { defineConfig } from "../../../../config";
 import { createAdapter } from "../../../../database/factory";
@@ -66,7 +66,45 @@ beforeEach(() => {
   previousUrl = process.env.DATABASE_URL;
 });
 
+/**
+ * A database that refuses part of a save, for the tests that need a later file to fail after an
+ * earlier one applied. Each file the writer runs is counted (`seen`); where `pick` answers for one,
+ * only that many of its statements run, and the database refuses the next. A failure planted in the
+ * database itself would now be refused as drift before any file runs.
+ */
+const fault = vi.hoisted(() => ({
+  seen: 0,
+  pick: undefined as
+    | ((statements: readonly string[], nth: number) => number | undefined)
+    | undefined,
+}));
+
+vi.mock("../../busy-table/run-unit", async original => {
+  const actual = await original<typeof import("../../busy-table/run-unit")>();
+  return {
+    ...actual,
+    runUnitInTries: async (
+      ...args: Parameters<typeof actual.runUnitInTries>
+    ) => {
+      const [adapter, statements, unit, after, run] = args;
+      fault.seen += 1;
+      const keep = fault.pick?.(statements, fault.seen);
+      if (keep === undefined) return actual.runUnitInTries(...args);
+      return actual.runUnitInTries(
+        adapter,
+        statements.slice(0, keep),
+        unit,
+        () =>
+          Promise.reject(new Error("the database refused the next statement")),
+        run
+      );
+    },
+  };
+});
+
 afterEach(async () => {
+  fault.seen = 0;
+  fault.pick = undefined;
   await instance?.destroy();
   instance = undefined;
   if (previousDialect === undefined) delete process.env.DB_DIALECT;
@@ -1303,13 +1341,10 @@ describe.each(getConfiguredTestDialects())(
       await adapter.executeQuery(
         "INSERT INTO dc_posts (id, title, slug, created_at, updated_at) VALUES ('p1', 'Hello', 'p1', '2026-11-06 00:00:00', '2026-11-06 00:00:00')"
       );
-      // A translations table of another shape: the file's CREATE ... IF NOT EXISTS keeps it, and
-      // its copy of the rows into it fails, after the main file applied.
-      const key = dialect === "mysql" ? "VARCHAR(36)" : "TEXT";
-      await adapter.executeQuery(
-        `CREATE TABLE dc_posts_locales (_parent ${key} NOT NULL, _locale VARCHAR(20) NOT NULL)`
-      );
+      // The save's second file refused, after its first applied.
       const before = migrationFiles();
+      fault.seen = 0;
+      fault.pick = (_statements, nth) => (nth === 2 ? 0 : undefined);
 
       await expect(
         writeCollectionSave(translatedDeps(), enableTitle)
@@ -1337,11 +1372,16 @@ describe.each(getConfiguredTestDialects())(
           entity: translated([text("title", { localized: true })]),
           change: "create",
         });
-        // A column the save's second addition collides with, after its first has committed.
-        await adapter.executeQuery(
-          "ALTER TABLE dc_posts_locales ADD COLUMN b TEXT NULL"
-        );
+        // The translations file's second addition refused, after its first has committed.
         const before = migrationFiles();
+        fault.pick = statements => {
+          const first = statements.findIndex(
+            statement =>
+              /ADD COLUMN/i.test(statement) &&
+              statement.includes("dc_posts_locales")
+          );
+          return first === -1 ? undefined : first + 1;
+        };
 
         await expect(
           writeCollectionSave(translatedDeps(), {
