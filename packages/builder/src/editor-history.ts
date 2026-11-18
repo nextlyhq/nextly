@@ -302,3 +302,19 @@ export function replayStep(
     }
   );
 }
+
+/**
+ * Run `restart` in the render that sees `session` change, never on the
+ * first: for each piece of editor state that belongs to one editing session
+ * (its document, its history, what the author asked of it), so a new session
+ * starts with none of the old one's. Its updates are the calling component's
+ * own state, so React drops that render and renders again at once with them.
+ * The session is held through a function, so one named by a function is
+ * stored as it is rather than called.
+ */
+export function useRestartOn(session: unknown, restart: () => void): void {
+  const [held, setHeld] = useState(() => session);
+  if (Object.is(held, session)) return;
+  setHeld(() => session);
+  restart();
+}

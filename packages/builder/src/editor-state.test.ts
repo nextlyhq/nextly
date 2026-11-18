@@ -2450,3 +2450,31 @@ describe("a new session, and what the one before it left pending", () => {
     expect(other).not.toHaveBeenCalled();
   });
 });
+
+describe("what a session shows and asks, besides its document", () => {
+  it("starts a new session with no list shown empty, none tagged and nothing asked", () => {
+    const { result, rerender } = renderHook(
+      ({ session }: { session: object }) =>
+        useEditorState({ initialDocument: doc([node("list")]), session }),
+      { initialProps: { session: {} } }
+    );
+    act(() => result.current.showListEmpty?.("list", true));
+    act(() =>
+      result.current.tagListStillShowing?.("list", "Still showing Events")
+    );
+    act(() => result.current.askSortField?.("list"));
+    act(() => result.current.askSetting?.("list", { tab: "content", id: "x" }));
+    // The control: all four are held within the session.
+    expect(result.current.listsShowingEmpty?.has("list")).toBe(true);
+    expect(result.current.listsStillShowing?.get("list")).toBeDefined();
+    expect(result.current.sortFieldAsked).toBeDefined();
+    expect(result.current.settingAsked).toBeDefined();
+
+    // Another document, whose list happens to have the same id.
+    rerender({ session: {} });
+    expect(result.current.listsShowingEmpty?.size).toBe(0);
+    expect(result.current.listsStillShowing?.size).toBe(0);
+    expect(result.current.sortFieldAsked).toBeUndefined();
+    expect(result.current.settingAsked).toBeUndefined();
+  });
+});

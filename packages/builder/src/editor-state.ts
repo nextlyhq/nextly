@@ -64,6 +64,7 @@ import {
 import {
   replayStep,
   useHistoryStacks,
+  useRestartOn,
   type HistoryEntry,
   type HistoryStep,
 } from "./editor-history";
@@ -885,13 +886,14 @@ function heldKey(lock: NonNullable<CompositionFault["lock"]>): string {
  * only when one changes, so the canvas, which draws per set, draws again only
  * then.
  */
-function useListsShowingEmpty(): {
+function useListsShowingEmpty(session: unknown): {
   listsShowingEmpty: ReadonlySet<string>;
   showListEmpty: (id: string, empty: boolean) => void;
 } {
   const [listsShowingEmpty, setListsShowingEmpty] = useState<
     ReadonlySet<string>
   >(() => new Set());
+  useRestartOn(session, () => setListsShowingEmpty(new Set()));
   const showListEmpty = useCallback((id: string, empty: boolean) => {
     setListsShowingEmpty(current => toggled(current, id, empty));
   }, []);
@@ -902,13 +904,14 @@ function useListsShowingEmpty(): {
  * Which lists the canvas tags as still showing what they store, and the way
  * to change it: a new map only when one changes, as for the empty state.
  */
-function useListsStillShowing(): {
+function useListsStillShowing(session: unknown): {
   listsStillShowing: ReadonlyMap<string, string>;
   tagListStillShowing: (id: string, words: string | undefined) => void;
 } {
   const [listsStillShowing, setListsStillShowing] = useState<
     ReadonlyMap<string, string>
   >(() => new Map());
+  useRestartOn(session, () => setListsStillShowing(new Map()));
   const tagListStillShowing = useCallback(
     (id: string, words: string | undefined) => {
       setListsStillShowing(current => {
@@ -945,10 +948,16 @@ function toggled(
 export function useEditorState(args: UseEditorStateArgs): EditorState {
   // With the step that holds a block just added while it asks for a choice.
   const state = useFirstAdd(useDocumentState(args));
-  const { listsShowingEmpty, showListEmpty } = useListsShowingEmpty();
-  const { listsStillShowing, tagListStillShowing } = useListsStillShowing();
+  // Each of these belongs to the session's document, so a new session starts
+  // with none of them (`session`).
+  const { listsShowingEmpty, showListEmpty } = useListsShowingEmpty(
+    args.session
+  );
+  const { listsStillShowing, tagListStillShowing } = useListsStillShowing(
+    args.session
+  );
   // What the author asked the inspector to take them to (`editor-asks`).
-  const asks = useEditorAsks(state.select);
+  const asks = useEditorAsks(state.select, args.session);
   return useMemo(
     () => ({
       ...state,
@@ -983,15 +992,11 @@ function useSessionDocument(
 ) {
   const [document, setDocument] = useState<BlockDocument>(initialDocument);
   const [selection, setSelection] = useState<BlockSelection>(EMPTY_SELECTION);
-  // Held through functions, so a session named by a function is stored as
-  // it is rather than called as an initializer or an updater.
-  const [held, setHeld] = useState(() => session);
-  if (!Object.is(held, session)) {
-    setHeld(() => session);
+  useRestartOn(session, () => {
     setDocument(initialDocument);
     setSelection(EMPTY_SELECTION);
     clearHistory();
-  }
+  });
   return { document, setDocument, selection, setSelection };
 }
 
