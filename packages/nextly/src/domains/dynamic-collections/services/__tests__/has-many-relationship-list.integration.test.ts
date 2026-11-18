@@ -636,6 +636,63 @@ for (const dialect of getConfiguredTestDialects()) {
       ).toMatchObject({ hasMany: true });
     });
 
+    // Made required in the save that switches it: the conversion writes the row holding none as
+    // NULL, which the column then refuses, so the switch names that row before anything changes.
+    it("refuses switching a relationship to one and making it required while a row holds none", async () => {
+      const t = await boot();
+      const { a } = await postsWithAuthors(t, true);
+      await t.nextly.create({
+        collection: "posts",
+        data: { title: "P1", author: [a] },
+      });
+      await t.nextly.create({
+        collection: "posts",
+        data: { title: "P2", author: [] },
+      });
+
+      const outcome = await switchAuthor(database.adapter, {
+        relationTo: "authors",
+        required: true,
+      });
+      expect(outcome).toEqual({
+        refused: expect.stringContaining("is required") as unknown as string,
+      });
+      expect((outcome as { refused: string }).refused).toContain(
+        "1 row holds none"
+      );
+      expect(
+        (await storedPosts(database.adapter)).fields.find(
+          f => f.name === "author"
+        )
+      ).toMatchObject({ hasMany: true });
+    });
+
+    it("refuses switching a relationship to several collections and making it required while a row holds none", async () => {
+      const t = await boot();
+      await postsWithAuthors(t, true);
+      await t.nextly.create({
+        collection: "posts",
+        data: { title: "P1", author: [] },
+      });
+
+      const outcome = await switchAuthor(database.adapter, {
+        relationTo: ["authors", "tags"],
+        hasMany: true,
+        required: true,
+      });
+      expect(outcome).toEqual({
+        refused: expect.stringContaining("is required") as unknown as string,
+      });
+      expect((outcome as { refused: string }).refused).toContain(
+        "1 row holds none"
+      );
+      expect(
+        (await storedPosts(database.adapter)).fields.find(
+          f => f.name === "author"
+        )
+      ).toMatchObject({ relationTo: "authors" });
+    });
+
     it("adds a required hasMany relationship over rows, filling each with an empty list before requiring it", async () => {
       const t = await boot();
       await postsWithAuthors(t, false);

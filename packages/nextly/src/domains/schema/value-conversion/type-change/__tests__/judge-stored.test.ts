@@ -429,6 +429,40 @@ describe("a type change collected over its stored values", () => {
     }
   });
 
+  it("reads a list's legacy one-link writing as the link the many-to-one conversion writes", async () => {
+    // A list column can hold one link as a JSON string (`"p1"`), which the conversion unquotes to
+    // `p1`: a unique field then holds it twice beside a row whose list is `["p1"]`.
+    const result = await collectTypeChange(
+      typeOf("postgresql", "relationship", {
+        relationTo: "people",
+        hasMany: true,
+      }),
+      typeOf("postgresql", "relationship", { relationTo: "people" }),
+      stored('["p1"]', '"p1"'),
+      undefined,
+      { unique: true }
+    );
+    expect(result.judgement.reasons).toEqual([
+      expect.objectContaining({
+        kind: "repeated",
+        rows: { first: [{ id: "1" }, { id: "2" }], count: 2 },
+      }),
+    ]);
+  });
+
+  it("reads a stored empty with the database's trimming, which takes spaces and no tab", async () => {
+    const judged = (text: string) =>
+      collectTypeChange(
+        typeOf("postgresql", "relationship", { relationTo: "people" }),
+        typeOf("postgresql", "relationship", {
+          relationTo: ["people", "teams"],
+        }),
+        stored(text)
+      );
+    expect((await judged(" null ")).judgement.class).toBe("safe");
+    expect((await judged("\tnull\t")).judgement.class).toBe("blocked");
+  });
+
   it("blocks a relationship's change of collections where a row holds a link, counting its rows", async () => {
     // To one reference naming its collection, or to a list of them.
     for (const to of [
