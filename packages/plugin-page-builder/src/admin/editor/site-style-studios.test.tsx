@@ -52,7 +52,7 @@ import {
   useCanvasPreviewMode,
 } from "./canvas-preview-mode";
 import { DesignPanel } from "./design-panel";
-import { FontsPanelWithUpload } from "./site-style-fonts";
+import { SiteFontsScreen } from "./site-style-fonts";
 import { TokensStudio, VariablesTab } from "./site-style-studios";
 
 afterEach(() => {
@@ -372,7 +372,7 @@ describe("the canvas previewed in the mode the top bar's switch picks", () => {
 describe("the Fonts tab", () => {
   function renderFonts(): void {
     render(
-      <FontsPanelWithUpload
+      <SiteFontsScreen
         faces={[]}
         tokens={{ tokens: [] }}
         storedFaces={[]}

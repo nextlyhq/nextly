@@ -47,6 +47,7 @@ describe("a passage held to one paragraph", () => {
       bold: false,
       italic: false,
       link: null,
+      block: "paragraph",
     });
     session.detach();
     // A superseded session answers nothing.

@@ -32,7 +32,9 @@ import {
   embedLinkOp,
 } from "./canvas/embed-states-model";
 import { embedSectionBodies } from "./embed-sections";
-import { formSectionBodies } from "./form-sections";
+import { FORM_BLOCK } from "./form-picked";
+import { formSectionBodies, formSourceSections } from "./form-sections";
+import { useFormSources } from "./form-source-control";
 import { galleryContentSections } from "./gallery-fields";
 import {
   blockIsReadOnly,
@@ -300,17 +302,24 @@ function ContentSurface({
   );
   // The Form's Fields and After sending, which the builder draws in place
   // of their generated rows.
+  const stored =
+    findNode(editor.document.nodes, inspection.nodeId)?.props ?? {};
+  const formWritable = (name: string) =>
+    propIsWritable(
+      editor.document,
+      inspection.nodeId,
+      name,
+      lockViewOf(editor)
+    );
+  // Where a Form's form comes from, read only while a Form is inspected.
+  const formSources = useFormSources(
+    inspection.blockName === FORM_BLOCK ? services?.listForms : undefined
+  );
   const formBodies = formSectionBodies({
     inspection,
-    stored: findNode(editor.document.nodes, inspection.nodeId)?.props ?? {},
+    stored,
     services,
-    writable: name =>
-      propIsWritable(
-        editor.document,
-        inspection.nodeId,
-        name,
-        lockViewOf(editor)
-      ),
+    writable: formWritable,
     onCommit: (name, value) => {
       onCommit(name, value);
     },
@@ -352,16 +361,36 @@ function ContentSurface({
   // with none draws the fields' own note that there is nothing to set.
   const sections = [
     ...joinedSections(
-      builderSectionsOf(inspection, editor, around, reasonId, services),
-      inspection.sections.content.map(section => ({
-        key: section.label,
-        label: section.label,
-        holdsValue: rowsHoldValue(section.rows),
-        body:
-          formBodies?.get(section.label) ??
-          embedBodies?.get(section.label) ??
-          fieldsFor(section.rows),
-      }))
+      [
+        ...formSourceSections({
+          inspection,
+          stored,
+          sources: formSources,
+          writable: formWritable,
+          onCommit: (name, value) => {
+            onCommit(name, value);
+          },
+        }),
+        ...builderSectionsOf(inspection, editor, around, reasonId, services),
+      ],
+      // A section the builder draws as `null` is one the block has no use
+      // for as it stands: a picked form's own fields.
+      inspection.sections.content.flatMap(section => {
+        const body =
+          formBodies?.has(section.label) === true
+            ? formBodies.get(section.label)
+            : (embedBodies?.get(section.label) ?? fieldsFor(section.rows));
+        return body === null || body === undefined
+          ? []
+          : [
+              {
+                key: section.label,
+                label: section.label,
+                holdsValue: rowsHoldValue(section.rows),
+                body,
+              },
+            ];
+      })
     ),
     // An Accordion's Icon, after its Behaviour: what the questions show,
     // read after how they open. Held by a design lock, as it writes styles.

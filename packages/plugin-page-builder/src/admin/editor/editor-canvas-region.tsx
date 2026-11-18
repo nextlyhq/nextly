@@ -29,9 +29,12 @@ import {
 import { Button } from "@nextlyhq/ui";
 
 import { siteSheet } from "../../site-style";
+import { loopCollectionsIn } from "../loop-collections-client";
+import { canvasNamedQueriesIn } from "../named-queries-client";
 import type { LibraryReadState } from "../pattern-library-client";
 
 import { CanvasFirstAddChoosers } from "./canvas-first-add-choosers";
+import { CanvasFormStates } from "./canvas-form-states";
 import { CanvasImageStates } from "./canvas-image-states";
 import { previewedCanvas } from "./canvas-preview-mode";
 import { DoubleHeaderNotice } from "./double-header-notice";
@@ -281,6 +284,13 @@ export function editorCanvasRegion(view: EditorView): React.JSX.Element {
                       })}
                   dragging={dragging}
                 />
+                {/* A picked form that is a draft, closed or deleted, and a
+                    simple form with nowhere to send answers. */}
+                <CanvasFormStates
+                  editor={editor}
+                  locale={locale}
+                  hidden={dragging}
+                />
                 {/* An Embed with no link: "Paste a YouTube, Vimeo or other
                     link", stored with the provider's shape. */}
                 <EmbedStates editor={editor} dragging={dragging} />
@@ -405,7 +415,22 @@ export function editorCanvasRegion(view: EditorView): React.JSX.Element {
                     author picks or skips. Last, so it covers the "+" of the
                     block's own empty columns; hidden mid-drag. A store
                     of the page ends it. */}
-                <CanvasFirstAddChoosers editor={editor} hidden={dragging} />
+                <CanvasFirstAddChoosers
+                  editor={editor}
+                  hidden={dragging}
+                  // A Collection list's first step lists what this author
+                  // may show, read as they would read it.
+                  services={{
+                    listLoopCollections: loopCollectionsIn(
+                      view.locale,
+                      view.userId
+                    ),
+                    listCustomSources: canvasNamedQueriesIn(
+                      view.locale,
+                      view.userId
+                    ).sources,
+                  }}
+                />
                 {/* "+ Add a question" under a selected Accordion: it adds the
                     next question, opens it and puts the cursor in its title.
                     Hidden mid-drag, as the other controls are. */}

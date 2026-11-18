@@ -231,6 +231,28 @@ test("says the page shows two headers and two footers, naming the set", async ({
   );
 });
 
+test("lists both in Page checks, and selects the page's own header from there", async ({
+  page,
+}) => {
+  const { ownBlocks } = await seed(page);
+  await openBuilder(page, ownBlocks);
+  await page
+    .locator('[data-topbar="end"]')
+    .getByRole("button", { name: /^(\d+ checks?|Checks)\b/ })
+    .click();
+  const content = page
+    .getByRole("dialog", { name: "Page checks" })
+    .getByRole("region", { name: "Content and data" });
+  // In the notice's own words, whether or not the notice is dismissed.
+  await expect(content).toContainText("Two headers on this page");
+  await expect(content).toContainText(HEADER_WORDS);
+  await expect(content).toContainText("Two footers on this page");
+  await content
+    .getByRole("button", { name: /^Two headers on this page/ })
+    .click();
+  await expect.poll(() => selection(page)).toEqual(["own-header"]);
+});
+
 test("selects the page's own header block", async ({ page }) => {
   const { ownBlocks } = await seed(page);
   await openBuilder(page, ownBlocks);

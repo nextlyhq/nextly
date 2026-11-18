@@ -1082,9 +1082,11 @@ export interface PageContext {
   /**
    * Where this page's forms post, and the forms a provider describes: what
    * a Form block needs to be sent, with no script, through the page
-   * builder's receiver. Absent where a form cannot be sent from the page,
-   * such as the editor's canvas; a Form then draws its fields with nowhere
-   * to post them.
+   * builder's receiver. The editor's canvas passes one that describes a
+   * picked form as the person editing reads it, naming no document, so
+   * nothing is sent from there. Absent where a form cannot be read or sent
+   * at all; a Form then draws its own fields with nowhere to post them, and
+   * a picked form not at all.
    *
    * @experimental Settles with the form provider contract.
    */

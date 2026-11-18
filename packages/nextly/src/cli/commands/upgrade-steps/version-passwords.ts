@@ -1,5 +1,5 @@
 /**
- * Upgrade step: remove passwords kept in version history.
+ * Data step of `nextly migrate`: remove passwords kept in version history.
  *
  * A version's snapshot never keeps a password, yet one an earlier release
  * captured could still hold one inside a container. This step strips every

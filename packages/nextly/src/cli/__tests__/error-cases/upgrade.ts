@@ -1,30 +1,56 @@
 /**
- * Cases for `nextly upgrade` and its steps, and for the move of an earlier
- * release's migration records that `nextly migrate` makes.
+ * Cases for `nextly upgrade`, for the steps over data an earlier release
+ * stored, and for the move of an earlier release's migration records that
+ * `nextly migrate` makes.
  *
  * @module cli/__tests__/error-cases/upgrade
  */
 import { NextlyError } from "../../../errors/nextly-error";
+import { upgradeWorkMoved } from "../../commands/upgrade";
 import { CliError } from "../../errors";
 
 import type { ErrorCases } from "./types";
 
 export const UPGRADE_CASES = {
-  // As `confirmBackup` in `cli/commands/upgrade.ts` throws it for a "no" at the prompt.
+  // Retired: as `nextly upgrade` ended with it for a "no" at its backup prompt.
   UPGRADE_CANCELLED: () =>
-    new NextlyError({
-      code: "NEXTLY_UPGRADE_IN_PROGRESS",
-      publicMessage: "Upgrade cancelled by operator.",
-      logContext: { reason: "cancelled" },
+    new CliError("UPGRADE_CANCELLED", {
+      what: "Upgrade cancelled by operator.",
+      why: "The upgrade asks for a backup before its first step that changes anything, and the answer was no. Nothing was changed.",
+      next: "Back up the database, then run `nextly upgrade` again and answer yes.",
     }),
-  // As the same function throws it with no terminal to ask.
+  // Retired: as `nextly upgrade` ended with it with no terminal to ask.
   UPGRADE_BACKUP_NOT_CONFIRMED: () =>
+    new CliError("UPGRADE_BACKUP_NOT_CONFIRMED", {
+      what: "Refusing to upgrade without a confirmed backup.",
+      why: "No terminal is attached to ask whether the database is backed up, and `--confirm-backed-up` was not passed. Nothing was changed.",
+      next: "Re-run with `--confirm-backed-up` (CI/non-TTY) after backing up your database.",
+    }),
+  // As `upgradeAction` ends a run for the database work the command used to do.
+  UPGRADE_WORK_MOVED: () => upgradeWorkMoved(),
+  // As `backupNotConfirmed` in `cli/commands/data-steps.ts` throws it with no terminal to ask.
+  DATA_STEPS_BACKUP_NOT_CONFIRMED: () =>
     new NextlyError({
       code: "NEXTLY_UPGRADE_IN_PROGRESS",
       publicMessage:
-        "Refusing to upgrade without a confirmed backup. Re-run with " +
-        "`--confirm-backed-up` (CI/non-TTY) after backing up your database.",
-      logContext: { reason: "backup-not-confirmed" },
+        "`nextly migrate` would change data an earlier Nextly release stored (hash passwords stored before this release: 3), and does so only once a backup is confirmed. " +
+        "Back up the database, then run `nextly migrate --backup-confirmed`.",
+      logContext: {
+        reason: "data-steps-backup-not-confirmed",
+        command: "nextly migrate",
+      },
+    }),
+  // As `backupDeclined` in the same module throws it for a "no" at the prompt.
+  DATA_STEPS_BACKUP_DECLINED: () =>
+    new NextlyError({
+      code: "NEXTLY_UPGRADE_IN_PROGRESS",
+      publicMessage:
+        "The data an earlier Nextly release stored was left as it is (hash passwords stored before this release: 3): the backup question was answered no. " +
+        "Back up the database, then run `nextly migrate` again and answer yes, or pass `--backup-confirmed`.",
+      logContext: {
+        reason: "data-steps-backup-declined",
+        command: "nextly migrate",
+      },
     }),
   // As `backupNotConfirmed` in `cli/commands/legacy-bookkeeping.ts` throws it with no terminal to ask.
   MIGRATE_BACKUP_NOT_CONFIRMED: () =>
