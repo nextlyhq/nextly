@@ -510,8 +510,10 @@
   inline-size: 100%;
 }
 
+/* As wide as the band's content, stated: the bars are sized by it. */
 .nx-look-tile__row {
   display: block;
+  inline-size: 100%;
   line-height: 0;
 }
 
