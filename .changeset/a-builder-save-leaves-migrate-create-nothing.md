@@ -29,4 +29,6 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-After a Schema Builder save, `nextly migrate:create` no longer writes a migration that only changes permissions. The save's snapshot now records the permissions the configuration declares, as `migrate:create` records them, including the built-in ones of a collection or Single the save made or removed.
+After a Schema Builder save, `nextly migrate:create` no longer writes a migration that only changes permissions. The save's snapshot now records the permissions the configuration declares, as `migrate:create` records them, including the built-in ones of a collection or Single the save made or removed. This includes the app's own custom permissions (`permissions` in `nextly.config.ts`).
+
+`createTestNextly` from `nextly/testing` takes a new `permissions` option: the app's own custom permissions, as `nextly.config.ts` declares them.
