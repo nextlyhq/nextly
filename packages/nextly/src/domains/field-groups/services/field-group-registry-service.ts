@@ -858,7 +858,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
       await writeEntityDelete(
         deps,
         { kind: "fieldGroup", slug, stored: fieldGroupEntity(existing) },
-        () => this.removeComponent(slug, existing.tableName),
+        committed => this.removeComponent(slug, existing.tableName, committed),
         // A failure undone whole changed nothing, so the delete's files are withdrawn with it.
         { rollsBackWhole: this.dialect !== "mysql" }
       );
@@ -886,7 +886,9 @@ export class FieldGroupRegistryService extends BaseRegistryService<
    */
   private async removeComponent(
     slug: string,
-    tableName: string
+    tableName: string,
+    // Called once the delete's one transaction has committed: where it runs in one.
+    committed: () => void = () => undefined
   ): Promise<void> {
     const table = await this.resolveRegistryTableName();
     if (this.dialect === "mysql") {
@@ -912,6 +914,8 @@ export class FieldGroupRegistryService extends BaseRegistryService<
         // The stored schema version's count, on the same transaction.
         await this.countWriteOn(tx);
       });
+      // The delete is the database's from here: a failure of what follows it no longer undoes it.
+      committed();
       // Committed: this process serves the new version at once rather than after its read
       // interval, as a registry write's commit does (`writeRegistryRows`).
       bumpSchemaVersion();

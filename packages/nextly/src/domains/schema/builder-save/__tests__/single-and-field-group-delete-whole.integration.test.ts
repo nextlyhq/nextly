@@ -33,10 +33,42 @@ import {
   isCompanionReady,
 } from "../../../i18n/runtime/companion-readiness";
 import { resolveSingleTableName } from "../../../singles/services/resolve-single-table-name";
+import { SchemaEventsRepository } from "../../events/schema-events-repository";
 import { resolveComponentTableName } from "../../utils/resolve-table-name";
+
+// A step after the delete's commit made to fail: forgetting the dropped translations table on the
+// adapter itself, which only that step does. The teardown inside the transaction forgets it on the
+// transaction's own adapter, a different object, and runs as it always does.
+const afterCommitFails = vi.hoisted(() => ({
+  on: undefined as object | undefined,
+  thrown: 0,
+}));
+vi.mock("../../../i18n/runtime/companion-readiness", async importOriginal => {
+  const real =
+    await importOriginal<
+      typeof import("../../../i18n/runtime/companion-readiness")
+    >();
+  return {
+    ...real,
+    forgetCompanionReadiness: (
+      ...args: Parameters<typeof real.forgetCompanionReadiness>
+    ) => {
+      if (
+        afterCommitFails.on !== undefined &&
+        args[0] === afterCommitFails.on
+      ) {
+        afterCommitFails.thrown += 1;
+        throw new Error("the work after the delete's commit failed");
+      }
+      real.forgetCompanionReadiness(...args);
+    },
+  };
+});
 
 let instance: TestNextly | undefined;
 afterEach(async () => {
+  afterCommitFails.on = undefined;
+  afterCommitFails.thrown = 0;
   vi.unstubAllEnvs();
   resetSessionStandingForTests();
   await instance?.destroy();
@@ -233,5 +265,58 @@ describe.each(getConfiguredTestDialects())(
       const t = await boot();
       await failsThenFinishes(t, await aFieldGroup(t));
     });
+
+    /** The migration files the ledger records applied, by name. */
+    async function appliedFiles(t: TestNextly): Promise<string[]> {
+      const repo = new SchemaEventsRepository(
+        t.adapter.getDrizzle() as never,
+        t.adapter.getCapabilities().dialect
+      );
+      return (await repo.listFileApplies())
+        .filter(row => row.status === "applied")
+        .map(row => String(row.filename));
+    }
+
+    /**
+     * A failure after the delete's commit, on the dialects that delete in one transaction: the
+     * delete is the database's, so its file is kept and recorded applied, and the failure is still
+     * told. Withdrawing the file would leave a database that no migration says lost the tables.
+     */
+    async function failsAfterItsCommit(
+      t: TestNextly,
+      entity: Deleted
+    ): Promise<void> {
+      afterCommitFails.on = t.adapter;
+
+      // Told, whatever words the dispatcher gives it; and it is the step after the commit that failed.
+      await expect(remove(entity)).rejects.toBeDefined();
+      expect(afterCommitFails.thrown).toBe(1);
+
+      expect(await t.adapter.tableExists(entity.table)).toBe(false);
+      expect(await t.adapter.tableExists(`${entity.table}_locales`)).toBe(
+        false
+      );
+      expect(await registryRowCount(t, entity)).toBe(0);
+      const [file, ...more] = deleteFile(t, entity);
+      expect(file).toBeDefined();
+      expect(more).toEqual([]);
+      expect(await appliedFiles(t)).toContain(file);
+    }
+
+    it.skipIf(dialect === "mysql")(
+      "a Single's, failing after its commit, keeps its file recorded applied",
+      async () => {
+        const t = await boot();
+        await failsAfterItsCommit(t, await aSingle());
+      }
+    );
+
+    it.skipIf(dialect === "mysql")(
+      "a field group's, failing after its commit, keeps its file recorded applied",
+      async () => {
+        const t = await boot();
+        await failsAfterItsCommit(t, await aFieldGroup(t));
+      }
+    );
   }
 );

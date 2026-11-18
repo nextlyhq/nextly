@@ -123,19 +123,26 @@ export async function writeEntityDelete(
     junctions?: NonNullable<CollectionSave["junctions"]>;
     keys?: NonNullable<CollectionSave["keys"]>;
   },
-  apply: () => Promise<unknown>,
+  /**
+   * Removes the entity. Where it runs in one transaction (`rollsBackWhole`),
+   * it calls `committed` once that transaction has committed, before any work
+   * that follows it.
+   */
+  apply: (committed: () => void) => Promise<unknown>,
   options: {
     /**
      * Whether `apply` runs in one transaction that a failure undoes whole, as
      * a Single's or a field group's delete does on PostgreSQL and SQLite: a
-     * failure then changed nothing, so the files are withdrawn as a refused
-     * save's are, rather than kept for a delete that never ran.
+     * failure before its commit changed nothing, so the files are withdrawn
+     * as a refused save's are, rather than kept for a delete that never ran.
+     * A failure after its commit (`committed`) comes after a delete the
+     * database holds: the files are recorded applied, and the failure thrown.
      */
     rollsBackWhole?: boolean;
   } = {}
 ): Promise<void> {
   if (deps === undefined) {
-    await apply();
+    await apply(() => undefined);
     return;
   }
   // Otherwise a delete tears down in steps that cannot be rolled back (MySQL
@@ -163,14 +170,24 @@ export async function writeEntityDelete(
       ...(removed.keys === undefined ? {} : { keys: removed.keys }),
     },
     async () => {
-      // Thrown through where it undid everything, so the writer withdraws the
-      // files; kept as part-way otherwise.
       if (options.rollsBackWhole === true) {
-        await apply();
+        let committed = false;
+        try {
+          await apply(() => {
+            committed = true;
+          });
+        } catch (error) {
+          // Before the commit it undid everything, so it is thrown through and
+          // the writer withdraws the files.
+          if (!committed) throw error;
+          // After it, the delete stands: its files are recorded applied as
+          // any applied save's, and the failure is thrown once they are.
+          failed.error = error;
+        }
         return undefined;
       }
       try {
-        await apply();
+        await apply(() => undefined);
         return undefined;
       } catch (error) {
         failed.error = error;

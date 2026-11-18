@@ -674,8 +674,9 @@ export class SingleMetadataService {
       });
     }
 
-    const remove = (): Promise<void> =>
-      this.removeSingle(slug, tableName, current);
+    // `committed` marks the moment the delete is the database's, where it runs in one transaction.
+    const remove = (committed: () => void = () => undefined): Promise<void> =>
+      this.removeSingle(slug, tableName, current, committed);
 
     // Where a Builder save writer is set up, the delete is written as the Single's migration,
     // inside this same exclusion, with its junction tables and relationship keys, so no snapshot
@@ -732,12 +733,13 @@ export class SingleMetadataService {
   private removeSingle(
     slug: string,
     tableName: string | undefined,
-    stored: { fields?: readonly unknown[] } | null | undefined
+    stored: { fields?: readonly unknown[] } | null | undefined,
+    committed: () => void
   ): Promise<void> {
     const fields = stored?.fields ?? [];
     const whole = this.wholeDeleteAdapter();
     return whole !== undefined
-      ? this.removeSingleWhole(whole, slug, tableName, fields)
+      ? this.removeSingleWhole(whole, slug, tableName, fields, committed)
       : this.removeSingleInSteps(this.adapter, slug, tableName, fields);
   }
 
@@ -785,7 +787,8 @@ export class SingleMetadataService {
     adapter: DrizzleAdapter,
     slug: string,
     tableName: string | undefined,
-    fields: readonly unknown[]
+    fields: readonly unknown[],
+    committed: () => void
   ): Promise<void> {
     const [{ teardownAdapterIn }, { forgetCompanionReadiness }] =
       await Promise.all([
@@ -811,6 +814,8 @@ export class SingleMetadataService {
         toDbError(adapter.getCapabilities().dialect, error)
       );
     }
+    // The delete is the database's from here: a failure of what follows it no longer undoes it.
+    committed();
     // Committed: this process serves the new version at once rather than after its read interval,
     // as a registry write's commit does (`writeRegistryRows`).
     bumpSchemaVersion();
