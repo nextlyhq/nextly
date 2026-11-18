@@ -50,6 +50,7 @@ const CLASS_OF: Record<ConversionReasonKind, ConversionClass> = {
   "several-items": "blocked",
   "item-not-held": "blocked",
   "pair-blocked": "blocked",
+  repeated: "blocked",
   // A value stored in the new type's form loses nothing: it is counted, never consented to.
   "new-form": "safe",
 };

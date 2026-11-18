@@ -2,8 +2,8 @@
  * The one judgement of a save's field type changes, which every road that changes a schema asks:
  * the fields whose type a save changes (`fieldTypeChangesOf`), each judged over the values its
  * column holds (`judgeFieldTypeChanges`), and the refusal a blocked change, or a lossy one the
- * owner has not consented to, gives (`typeChangeRefusals`). The push asks it through its classifier;
- * a road that runs its own statements asks it as a precondition, before any of them.
+ * owner has not consented to, gives (`typeChangeRefusals`). Every road asks it as a precondition,
+ * before its first statement: the push (`pipeline/ui-type-changes`), the writer and a Single's save.
  *
  * @module domains/schema/value-conversion/type-change/field-type-changes
  */
@@ -14,6 +14,7 @@ import { storesPerLanguage } from "../../../i18n/per-language-storage";
 import { introspectLiveSnapshot } from "../../pipeline/diff/introspect-live";
 import {
   type ColumnOrigin,
+  fieldsStoredOnRow,
   getColumnDescriptor,
   type SupportedDialect,
 } from "../../services/field-column-descriptor";
@@ -47,9 +48,18 @@ function sameType(a: FieldTypeOnDialect, b: FieldTypeOnDialect): boolean {
     a.family === b.family &&
     a.type === b.type &&
     JSON.stringify(a.number) === JSON.stringify(b.number) &&
-    a.item?.family === b.item?.family &&
+    sameItem(a.item, b.item) &&
     a.relation?.kept === b.relation?.kept
   );
+}
+
+/** A list's item type read by the same rule as the field's own: none on either side, or the same. */
+function sameItem(
+  a: FieldTypeOnDialect | undefined,
+  b: FieldTypeOnDialect | undefined
+): boolean {
+  if (a === undefined || b === undefined) return a === b;
+  return sameType(a, b);
 }
 
 /**
@@ -74,9 +84,12 @@ export function fieldTypeChangesOf(args: {
       from,
     ])
   );
-  const byName = new Map(args.previous.map(field => [field.name, field]));
+  // The fields kept on the row: a field inside a group with no name is one of them, by its own name.
+  const byName = new Map(
+    fieldsStoredOnRow(args.previous).map(field => [field.name, field])
+  );
   const changes: FieldTypeChange[] = [];
-  for (const to of args.next) {
+  for (const to of fieldsStoredOnRow(args.next)) {
     const from = byName.get(oldNameOf.get(to.name) ?? to.name);
     if (from === undefined) continue;
     if (
@@ -144,6 +157,8 @@ export async function judgeFieldTypeChanges(args: {
       from: change.fromType,
       to: change.toType,
       accepts: fieldAccepts(change.toType, change.to),
+      // A unique field holds each value once: two that read as one value of the new type block.
+      unique: change.to.unique === true,
     });
     judged.push({ ...change, table, column, result });
   }
@@ -263,7 +278,9 @@ export function perLanguageBefore(
   if (!storesPerLanguage(entity)) return {};
   return {
     translationsTable: `${table}_locales`,
-    translatedBefore: new Set(resolveLocalizedFieldNames([...previous], true)),
+    translatedBefore: new Set(
+      resolveLocalizedFieldNames(fieldsStoredOnRow(previous), true)
+    ),
   };
 }
 

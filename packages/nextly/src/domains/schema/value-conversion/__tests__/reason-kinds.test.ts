@@ -79,6 +79,11 @@ const TYPE_CHANGE: [ConversionReasonKind, ConversionClass, string][] = [
     "no value of the old type could ever be held by the new one",
   ],
   [
+    "repeated",
+    "blocked",
+    "values that become one value of the new type, which a unique field holds once",
+  ],
+  [
     "new-form",
     "safe",
     "values stored in the new type's form, nothing of them lost",

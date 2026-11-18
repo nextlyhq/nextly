@@ -145,6 +145,11 @@ export type ConversionReasonKind =
   | "several-items"
   /** A list holding an item the new list cannot hold; a list is never cut. */
   | "item-not-held"
+  /**
+   * Values that read as one value of the new type, which a unique field holds only once: the
+   * change would break the field's uniqueness.
+   */
+  | "repeated"
   /** No value of the old type could ever be held by the new one. */
   | "pair-blocked"
   /** A value is stored in the new type's form, nothing of it lost. */

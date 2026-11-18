@@ -251,11 +251,15 @@ async function syncVerdict(target: Target, table: string, parity: ParityCase) {
     components: {},
   };
   let judged: ConversionJudgement | undefined;
+  // What the classifier was handed, so a verdict of no type change is read from the operations
+  // themselves, never from an apply that failed before it reached the classifier.
+  let received: Operation[] | undefined;
   const result = await new PushSchemaPipeline({
     executor: new DrizzleStatementExecutor(target.dialect, target.db),
     renameDetector: noopRenameDetector,
     classifier: {
       classify: async (args: { operations: Operation[] }) => {
+        received = args.operations;
         const judge = (args as { judgeConversion?: TypeChangeJudge })
           .judgeConversion;
         for (const op of args.operations) {
@@ -280,8 +284,18 @@ async function syncVerdict(target: Target, table: string, parity: ParityCase) {
       ? { databaseName: target.databaseName }
       : {}),
   });
-  expect(result.success).toBe(false);
-  return judged === undefined ? null : verdictOf(judged);
+  // Stopped by the classifier, having been handed the plan, and by nothing earlier.
+  expect(result.error?.message).toBe("captured");
+  expect(received).toBeDefined();
+  if (judged === undefined) {
+    expect(
+      (received ?? []).filter(
+        op => op.type === "change_column_type" && op.columnName === "value"
+      )
+    ).toEqual([]);
+    return null;
+  }
+  return verdictOf(judged);
 }
 
 /** Each case, given a fresh table holding its values and the database it is on. */

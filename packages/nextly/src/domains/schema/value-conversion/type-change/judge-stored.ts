@@ -41,11 +41,18 @@ export interface StoredTypeChangeJudgement {
   cleared: RowKey[];
   /** How many values each outcome holds, for a review that names the changed ones too. */
   counts: Record<ValueOutcome, number>;
+}
+
+/** What a collection is asked besides the class, reasons and rows. */
+export interface CollectOptions {
   /**
-   * Each kept or changed value as the new type reads it, with its row: what a unique field's
-   * repeats are counted by, per language where the field is translated.
+   * The new field is unique: two values that read as one value of the new type block the change
+   * (`repeated`), counted within each language where the field is translated. Only then are the
+   * values kept as the scan goes, each distinct one once.
    */
-  readings: { key: RowKey; readsAs: string }[];
+  unique?: boolean;
+  /** Each kept or changed value, as the new type reads it, handed over as it is judged. */
+  onReading?: (key: RowKey, readsAs: string) => void;
 }
 
 /**
@@ -85,7 +92,8 @@ export async function collectTypeChange(
   from: FieldTypeOnDialect,
   to: FieldTypeOnDialect,
   values: AsyncIterable<Pick<StoredValue, "key" | "text" | "exactReal">>,
-  accepts?: (readsAs: string) => Promise<boolean>
+  accepts?: (readsAs: string) => Promise<boolean>,
+  options: CollectOptions = {}
 ): Promise<StoredTypeChangeJudgement> {
   const counts: Record<ValueOutcome, number> = {
     kept: 0,
@@ -98,7 +106,16 @@ export async function collectTypeChange(
     { count: number; first: RowKey[] }
   >();
   const cleared: RowKey[] = [];
-  const readings: { key: RowKey; readsAs: string }[] = [];
+  // A unique field's values as the new type reads them, each distinct one with its language once,
+  // with the row that holds it until a second row repeats it (both are then named).
+  const firstHolder =
+    options.unique === true ? new Map<string, RowKey | null>() : undefined;
+  const note = (kind: ConversionReasonKind, key: RowKey) => {
+    const seen = byReason.get(kind) ?? { count: 0, first: [] };
+    seen.count += 1;
+    if (seen.first.length < FIRST_KEYS) seen.first.push(key);
+    byReason.set(kind, seen);
+  };
   // A pair blocked whatever its values hold is one reason of the types, with no rows.
   const pair = pairBlocked(from, to);
   for await (const value of values) {
@@ -107,17 +124,28 @@ export async function collectTypeChange(
       judgeValue(from, to, decodeStored(from, value)),
       accepts
     );
-    counts[verdict.outcome] += 1;
     if (verdict.readsAs !== undefined) {
-      readings.push({ key: value.key, readsAs: verdict.readsAs });
+      options.onReading?.(value.key, verdict.readsAs);
+      if (firstHolder !== undefined) {
+        // A value another row in its language already reads as: the unique field cannot hold both.
+        const held = JSON.stringify([languageOf(value.key), verdict.readsAs]);
+        if (firstHolder.has(held)) {
+          const first = firstHolder.get(held);
+          if (first !== null && first !== undefined) {
+            note("repeated", first);
+            firstHolder.set(held, null);
+          }
+          counts.blocked += 1;
+          note("repeated", value.key);
+          continue;
+        }
+        firstHolder.set(held, value.key);
+      }
     }
+    counts[verdict.outcome] += 1;
     if (verdict.outcome === "lost") cleared.push(value.key);
     if (verdict.reason === "same-value" || verdict.reason === "empty") continue;
-    const kind = REPORTED_AS[verdict.reason];
-    const seen = byReason.get(kind) ?? { count: 0, first: [] };
-    seen.count += 1;
-    if (seen.first.length < FIRST_KEYS) seen.first.push(value.key);
-    byReason.set(kind, seen);
+    note(REPORTED_AS[verdict.reason], value.key);
   }
   const reasons: ConversionReason[] =
     pair !== null
@@ -139,8 +167,12 @@ export async function collectTypeChange(
     },
     cleared,
     counts,
-    readings,
   };
+}
+
+/** The language a row's value is in: a translation's locale, or none for the entity's own row. */
+function languageOf(key: RowKey): string {
+  return "locale" in key ? key.locale : "";
 }
 
 /**
@@ -202,17 +234,19 @@ function valueOf(to: FieldTypeOnDialect, readsAs: string): unknown {
  * A field's type change judged over every value `column` of `table` holds, read a page at a time
  * and keyed as the table keys its rows.
  */
-export function judgeStoredTypeChange(args: {
-  db: unknown;
-  dialect: SupportedDialect;
-  table: string;
-  column: string;
-  keyedBy: KeyedBy;
-  from: FieldTypeOnDialect;
-  to: FieldTypeOnDialect;
-  /** The new field's own validation, asked of each kept or changed value (`fieldAccepts`). */
-  accepts?: (readsAs: string) => Promise<boolean>;
-}): Promise<StoredTypeChangeJudgement> {
+export function judgeStoredTypeChange(
+  args: {
+    db: unknown;
+    dialect: SupportedDialect;
+    table: string;
+    column: string;
+    keyedBy: KeyedBy;
+    from: FieldTypeOnDialect;
+    to: FieldTypeOnDialect;
+    /** The new field's own validation, asked of each kept or changed value (`fieldAccepts`). */
+    accepts?: (readsAs: string) => Promise<boolean>;
+  } & CollectOptions
+): Promise<StoredTypeChangeJudgement> {
   return collectTypeChange(
     args.from,
     args.to,
@@ -222,6 +256,10 @@ export function judgeStoredTypeChange(args: {
       keyedBy: args.keyedBy,
       toJson: false,
     }),
-    args.accepts
+    args.accepts,
+    {
+      ...(args.unique !== undefined ? { unique: args.unique } : {}),
+      ...(args.onReading !== undefined ? { onReading: args.onReading } : {}),
+    }
   );
 }

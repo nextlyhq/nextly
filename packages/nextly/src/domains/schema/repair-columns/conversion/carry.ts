@@ -135,6 +135,8 @@ const REFUSAL_WORDS: Record<ConversionReasonKind, string> = {
   "several-items": "is a list of several items",
   "item-not-held": "holds an item the new list cannot hold",
   "pair-blocked": "could never be held by the new type",
+  repeated:
+    "reads as a value another row holds, which a unique field holds once",
   "new-form": "would be stored in the new type's form",
 };
 

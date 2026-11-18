@@ -171,13 +171,6 @@ export interface CollectionSave {
    */
   acknowledgedConversions?: readonly string[];
   /**
-   * The fields, by name, whose type change the person consented to clearing values for, where a
-   * value cannot be read as the new type. A lossy type change of any other field is refused, naming
-   * its rows (`refuseFieldTypeChanges`). A separate list from `acknowledgedConversions`, which
-   * answers a column brought up to date, not a field's type changed.
-   */
-  acknowledgedTypeChanges?: readonly string[];
-  /**
    * The registry row's migration status before the save, where the caller read the row: a field
    * type change while the definition still awaits its migration is refused, since the columns do
    * not hold what the definition says yet. Absent, the history checks are what stand for it.
@@ -489,8 +482,9 @@ async function refuseSaveTypeChanges(
       ...(save.migrationStatus !== undefined
         ? { migrationStatus: save.migrationStatus }
         : {}),
+      // No consent is taken here: a lossy type change is refused until the save clears the
+      // consented values before it converts the column.
       builtBy: kind.builtBy,
-      acknowledged: new Set(save.acknowledgedTypeChanges ?? []),
     }
   );
 }

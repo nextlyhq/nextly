@@ -53,6 +53,8 @@ const REASON_TEXT: Record<ConversionReasonKind, string> = {
   "item-not-held":
     "lists holding an item the new list cannot hold, and a list is never cut",
   "pair-blocked": "no value of the old type could ever be held by the new one",
+  repeated:
+    "values that become one value of the new type, which a unique field holds once",
   "new-form": "values stored in the new type's form, nothing of them lost",
 };
 
@@ -139,6 +141,8 @@ const REASON_OWNER_CAN: Record<BlockingReasonKind, string | null> = {
   "item-not-held":
     "correct or remove, in the named rows, the items the new list cannot hold",
   "pair-blocked": null,
+  repeated:
+    "make the named values distinct, or turn off Unique, before the change",
 };
 
 /** Whether `kind` blocks a column, whatever a consent names. */

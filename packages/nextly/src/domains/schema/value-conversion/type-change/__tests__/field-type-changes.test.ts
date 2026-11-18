@@ -48,6 +48,35 @@ describe("the fields whose type a save changes", () => {
     ]);
   });
 
+  it("finds a list's item type changing, as a number list's fractions becoming whole numbers", () => {
+    const changes = fieldTypeChangesOf({
+      previous: [
+        f("scores", "number", {
+          hasMany: true,
+          options: { format: "float" },
+        }),
+      ],
+      next: [f("scores", "number", { hasMany: true })],
+      dialect: "postgresql",
+      builtBy: "collection",
+    });
+    expect(changes.map(c => c.to.name)).toEqual(["scores"]);
+  });
+
+  it("finds a type change of a field kept on the row inside a group with no name", () => {
+    const group = (type: string) =>
+      f("", "group", { name: undefined, fields: [f("heading", type)] });
+    const changes = fieldTypeChangesOf({
+      previous: [group("text")],
+      next: [group("number")],
+      dialect: "postgresql",
+      builtBy: "collection",
+    });
+    expect(changes.map(c => [c.from.type, c.to.name, c.to.type])).toEqual([
+      ["text", "heading", "number"],
+    ]);
+  });
+
   it("leaves a field that loses or gains its column to the save's drop or add", () => {
     // A relationship turned many-to-many keeps its links in a junction table: its column is
     // dropped, not converted. The reverse adds one. A text turned into a number keeps its column.
@@ -99,7 +128,6 @@ const judged = (
     },
     cleared: [],
     counts: { kept: 0, changed: 0, lost: 0, blocked: 0 },
-    readings: [],
   },
 });
 

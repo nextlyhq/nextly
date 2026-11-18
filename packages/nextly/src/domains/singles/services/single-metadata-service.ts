@@ -93,7 +93,6 @@ import type {
 import { entitySaveDeps } from "../../schema/builder-save/entity-save-deps";
 import { entityRelations } from "../../schema/builder-save/single-relations";
 import { singleEntity } from "../../schema/builder-save/stored-entity";
-import { builtByFor } from "../../schema/pipeline/registered-collections";
 import { refuseRenamedFieldOntoTakenColumn } from "../../schema/rename-target";
 import { writeRegistryRowsWith } from "../../schema/schema-version";
 import {
@@ -105,12 +104,6 @@ import {
 import { withSchemaChangeExcluded } from "../../schema/services/schema-change-exclusion";
 import { calculateSchemaHash } from "../../schema/services/schema-hash";
 import { assertNoNewSiblingClashes } from "../../schema/sibling-fields";
-import {
-  entityLabel,
-  fieldTypeChangeRefusals,
-  perLanguageBefore,
-  typeChangeError,
-} from "../../schema/value-conversion/type-change/field-type-changes";
 
 import { singleTableFamiliesCollide } from "./resolve-single-table-name";
 import type { SingleRegistryService } from "./single-registry-service";
@@ -1749,7 +1742,20 @@ export class SingleMetadataService {
     );
     const dialect = adapter.getCapabilities().dialect;
     // Each field whose type the save changes, judged over the value it holds (in each language,
-    // for a translated one), as every road that changes a field's type judges it.
+    // for a translated one), as every road that changes a field's type judges it. Loaded here, as
+    // the save preconditions are, so the schema machinery stays out of the service's boot.
+    const [
+      {
+        entityLabel,
+        fieldTypeChangeRefusals,
+        perLanguageBefore,
+        typeChangeError,
+      },
+      { builtByFor },
+    ] = await Promise.all([
+      import("../../schema/value-conversion/type-change/field-type-changes"),
+      import("../../schema/pipeline/registered-collections"),
+    ]);
     const rename = schemaService.detectFieldRename(
       change.previousFields,
       change.fields

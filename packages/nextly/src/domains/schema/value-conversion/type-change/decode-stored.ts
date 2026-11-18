@@ -38,9 +38,20 @@ const DECODE_BY_FAMILY: Partial<
   json: (_from, text) => jsonOf(text),
   richText: (_from, text) => documentOf(text),
   list: (from, text) => listOf(from, text),
-  relationship: (from, text) =>
-    from.relation?.kept === "one" ? { kind: "text", text } : jsonOf(text),
+  relationship: (from, text) => relationOf(from, text),
 };
+
+/**
+ * A relationship's stored links as the way it keeps them reads them: one id as a text, a list of
+ * links (`list`, `targetList`) as a list, each link an item, and one `{ relationTo, value }`
+ * reference as JSON.
+ */
+function relationOf(from: FieldTypeOnDialect, text: string): OldValue {
+  const kept = from.relation?.kept;
+  if (kept === "one") return { kind: "text", text };
+  if (kept === "list" || kept === "targetList") return listOf(from, text);
+  return jsonOf(text);
+}
 
 function numberOf(text: string): OldValue {
   const number = readNumber(text);

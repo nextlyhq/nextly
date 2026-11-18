@@ -2180,8 +2180,9 @@ export class PushSchemaPipeline {
       };
 
       // A Schema Builder save's field type changes are judged over the values their columns hold
-      // before anything is planned or run: a blocked change, or a lossy one not consented to, refuses
-      // the save here, once for every try, naming each field (`refuseUiTypeChanges`).
+      // before anything is planned or run: a blocked or lossy change refuses the save here, naming
+      // each field (`refuseUiTypeChanges`). Asked once, before the first try; a value written
+      // between this read and the statement that converts its column is not judged again here.
       if (source === "ui") {
         await refuseUiTypeChanges(args.desired, db, dialect);
       }

@@ -107,7 +107,84 @@ describe("a type change collected over its stored values", () => {
       "not-a-number": [{ id: "2" }],
       rounded: [{ id: "3" }],
     });
-    expect(result.readings).toEqual([{ key: { id: "1" }, readsAs: "1" }]);
+  });
+
+  it("hands each kept or changed value, as the new type reads it, to the caller that asks", async () => {
+    const seen: { key: unknown; readsAs: string }[] = [];
+    await collectTypeChange(
+      typeOf("postgresql", "text"),
+      typeOf("postgresql", "number"),
+      stored("01", "abc"),
+      undefined,
+      { onReading: (key, readsAs) => seen.push({ key, readsAs }) }
+    );
+    expect(seen).toEqual([{ key: { id: "1" }, readsAs: "1" }]);
+  });
+
+  it("blocks a unique field's change where two values read as one value of the new type", async () => {
+    const result = await collectTypeChange(
+      typeOf("postgresql", "text"),
+      typeOf("postgresql", "number"),
+      stored("1", "2", "01", null, null),
+      undefined,
+      { unique: true }
+    );
+    expect(result.judgement.class).toBe("blocked");
+    expect(result.judgement.reasons.find(r => r.kind === "repeated")).toEqual({
+      kind: "repeated",
+      class: "blocked",
+      rows: { first: [{ id: "1" }, { id: "3" }], count: 2 },
+    });
+    // A field that is not unique holds the same value twice.
+    const plain = await collectTypeChange(
+      typeOf("postgresql", "text"),
+      typeOf("postgresql", "number"),
+      stored("1", "01")
+    );
+    expect(plain.judgement.class).toBe("safe");
+  });
+
+  it("counts a unique translated field's repeats within each language", async () => {
+    async function* perLanguage(): AsyncGenerator<StoredValue> {
+      yield { key: { parent: "a", locale: "en" }, text: "1" };
+      yield { key: { parent: "a", locale: "fr" }, text: "01" };
+      yield { key: { parent: "b", locale: "fr" }, text: "1" };
+    }
+    const result = await collectTypeChange(
+      typeOf("postgresql", "text"),
+      typeOf("postgresql", "number"),
+      perLanguage(),
+      undefined,
+      { unique: true }
+    );
+    expect(
+      result.judgement.reasons.find(r => r.kind === "repeated")?.rows
+    ).toEqual({
+      first: [
+        { parent: "a", locale: "fr" },
+        { parent: "b", locale: "fr" },
+      ],
+      count: 2,
+    });
+  });
+
+  it("blocks a relationship kept as a list becoming one link, where a row holds several", async () => {
+    const list = typeOf("postgresql", "relationship", {
+      relationTo: "people",
+      hasMany: true,
+    });
+    const one = typeOf("postgresql", "relationship", { relationTo: "people" });
+    expect([list.relation?.kept, one.relation?.kept]).toEqual(["list", "one"]);
+    const result = await collectTypeChange(
+      list,
+      one,
+      stored('["p1","p2"]', '["p3"]', "[]")
+    );
+    expect(result.judgement.class).toBe("blocked");
+    expect(
+      result.judgement.reasons.find(r => r.kind === "several-items")?.rows
+    ).toEqual({ first: [{ id: "1" }], count: 1 });
+    expect(result.counts).toMatchObject({ changed: 1, blocked: 1, kept: 1 });
   });
 
   it("loses a value the new field's own validation refuses, though the rules would keep it", async () => {

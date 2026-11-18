@@ -12,10 +12,8 @@ import {
   type TestNextly,
 } from "../../../../../plugins/test-nextly";
 import type { FieldDefinition } from "../../../../../schemas/dynamic-collections";
-import {
-  fieldTypeChangesOf,
-  judgeFieldTypeChanges,
-} from "../field-type-changes";
+import { fieldTypeChangesOf } from "../field-type-changes";
+import { judgeStoredTypeChange } from "../judge-stored";
 
 interface CollectionsHandler {
   createCollection(
@@ -66,16 +64,22 @@ describeEachDialect("a stored date read for a type change", dialect => {
       dialect,
       builtBy: "collection",
     });
-    const [judged] = await judgeFieldTypeChanges({
+    const [change] = changes;
+    if (change === undefined) throw new Error("no type change found");
+    const readsAs: string[] = [];
+    const result = await judgeStoredTypeChange({
       db: current.adapter.getDrizzle(),
       dialect,
-      builtBy: "collection",
       table: "dc_events",
-      changes,
+      column: "at",
+      keyedBy: "id",
+      from: change.fromType,
+      to: change.toType,
+      onReading: (_key, reading) => readsAs.push(reading),
     });
 
-    expect(judged?.result.judgement.class).not.toBe("blocked");
-    expect(judged?.result.readings.map(r => r.readsAs)).toEqual([
+    expect(result.judgement.class).not.toBe("blocked");
+    expect(readsAs).toEqual([
       expect.stringMatching(/^2024-01-02T03:04:05(\.0+)?Z$/),
     ]);
   }, 120_000);
