@@ -449,14 +449,18 @@ export function buildLocalizationDownStatements(
   const alreadyPresent = new Set(options.existingMainColumns ?? []);
   for (const c of onMain) {
     if (alreadyPresent.has(c.name)) continue;
+    // The column the main table's snapshot records (`restoredAs`), where a migration file is
+    // written against one. Otherwise what the column the values come from carries
+    // (`carriedDefinition`): its type where it is wider than the field's own, else the widest type
+    // the values could need (`restoreTargetType`), and its default, which the restored column
+    // takes back.
+    const type =
+      c.restoredAs?.type ?? c.carried?.type ?? restoreTargetType(c, dialect);
+    const def =
+      c.restoredAs === undefined ? c.carried?.default : c.restoredAs.default;
     stmts.push(
-      // What the column the values come from carries (`carriedDefinition`): its type where it is
-      // wider than the field's own, else the widest type the values could need
-      // (`restoreTargetType`), and its default, which the restored column takes back.
-      `ALTER TABLE ${q(mainTable, dialect)} ADD COLUMN ${q(c.name, dialect)} ${c.carried?.type ?? restoreTargetType(c, dialect)}` +
-        (c.carried?.default === undefined
-          ? ""
-          : ` DEFAULT ${c.carried.default}`)
+      `ALTER TABLE ${q(mainTable, dialect)} ADD COLUMN ${q(c.name, dialect)} ${type}` +
+        (def === undefined ? "" : ` DEFAULT ${def}`)
     );
   }
 

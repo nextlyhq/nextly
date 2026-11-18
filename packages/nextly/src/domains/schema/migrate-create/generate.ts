@@ -116,6 +116,7 @@ import { builtByFor } from "../pipeline/registered-collections";
 import { conversionForRename } from "../pipeline/rename-conversion";
 import { RegexRenameDetector } from "../pipeline/rename-detector";
 import { refuseSwitchesWithRename } from "../pipeline/several-references-refusal";
+import { renderedType } from "../pipeline/sql-templates/create-table-body";
 import { quoteIdent } from "../pipeline/sql-templates/identifier-quoting";
 import { generateStatements } from "../pipeline/sql-templates/index";
 import {
@@ -939,7 +940,8 @@ export async function generateMigration(
     args.defaultLocale ?? "en",
     companionHistory,
     companionRenames,
-    args.languageOrder
+    args.languageOrder,
+    desiredSnapshot
   );
 
   // 3. Diff.
@@ -2146,7 +2148,9 @@ function planCompanionMigrations(
   history: TranslationRecords,
   renames: ReadonlyMap<string, readonly CompanionRename[]> = new Map(),
   /** The site's languages in order, which decides the value a disable keeps (`copyLiveness`). */
-  languageOrder?: readonly string[]
+  languageOrder?: readonly string[],
+  /** The snapshot this run writes, whose main tables a disable puts its columns back as. */
+  desiredSnapshot?: NextlySchemaSnapshot
 ): CompanionPlanEntry[] {
   const entries: CompanionPlanEntry[] = [];
   for (const { entity: c, kind: entityKind } of entities) {
@@ -2176,7 +2180,8 @@ function planCompanionMigrations(
         previousSnapshot,
         dialect,
         defaultLocale,
-        languageOrder
+        languageOrder,
+        desiredSnapshot
       );
       if (disable) entries.push(disable);
       continue;
@@ -2260,6 +2265,27 @@ function planCompanionMigrations(
 }
 
 /**
+ * `column` with the main-table column a snapshot records for it (`restoredAs`): its type as the
+ * main file renders it (`renderedType`) and its default. A disable that puts the values back on the
+ * main table then leaves the column the runner checks the next main file against, where a wider
+ * one (LONGTEXT for MySQL's `text`) left the table at neither end of it. Unchanged where the
+ * snapshot records no such column.
+ */
+function withRestoredAs(
+  column: LocalizedColumnSpec,
+  main: ColumnSpec | undefined
+): LocalizedColumnSpec {
+  if (main === undefined) return column;
+  return {
+    ...column,
+    restoredAs: {
+      type: renderedType(main),
+      ...(main.default === undefined ? {} : { default: main.default }),
+    },
+  };
+}
+
+/**
  * The `disable` file of an entity whose translation is turned off (localized `true → false`).
  *
  * Detection is gated on the previous snapshot's explicit `localized: true` marker rather
@@ -2277,7 +2303,8 @@ function disableEntryFor(
   previousSnapshot: NextlySchemaSnapshot,
   dialect: SupportedDialect,
   defaultLocale: string,
-  languageOrder?: readonly string[]
+  languageOrder?: readonly string[],
+  desiredSnapshot?: NextlySchemaSnapshot
 ): CompanionPlanEntry | undefined {
   const prevMain = previousSnapshot.tables.find(t => t.name === mainTable);
   if (prevMain?.localized !== true) return undefined;
@@ -2317,6 +2344,15 @@ function disableEntryFor(
     defaultLocale
   );
   if (!disableSpec) return undefined;
+  // Each column goes back to the main table as this run's snapshot records it, since the main file
+  // that follows is checked against that table (`withRestoredAs`).
+  const desiredMain = desiredSnapshot?.tables.find(t => t.name === mainTable);
+  disableSpec.columns = disableSpec.columns.map(col =>
+    withRestoredAs(
+      col,
+      desiredMain?.columns.find(m => m.name === col.name)
+    )
+  );
   // Each entry keeps the value its readers saw, as the runtime disable keeps it.
   disableSpec.liveness = copyLiveness(
     languageOrder,
