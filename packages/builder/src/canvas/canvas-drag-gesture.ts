@@ -313,15 +313,18 @@ export function drawnSubject(drag: Gesture): {
 }
 
 /**
- * Every rendered node's rectangle, read once.
+ * The element standing for each rendered block, by the block's address: the
+ * one place that answers which element a block is measured by. The drag
+ * measures every one at once (`snapshotRects`); the Add panel's insertion
+ * line measures only those it asks for.
  *
- * Compared in JavaScript rather than matched with a selector built from an id:
- * a node id reaches this from stored data, and interpolating it into
+ * Compared in JavaScript rather than matched with a selector built from an
+ * id: a node id reaches this from stored data, and interpolating it into
  * `querySelector` makes any character CSS treats specially either throw or,
  * worse, match a different element.
  */
-export function snapshotRects(root: HTMLElement): RectSource {
-  const measured = new Map<string, Rect>();
+export function blockElements(root: HTMLElement): Map<string, Element> {
+  const found = new Map<string, Element>();
   // `forEach` rather than `for…of`: a `NodeList` is only iterable under a lib
   // that declares its iterator, and this package compiles without one.
   root.querySelectorAll(`[${NODE_ID_ATTRIBUTE}]`).forEach(element => {
@@ -342,8 +345,17 @@ export function snapshotRects(root: HTMLElement): RectSource {
     // rendered more than once still measures every copy, because sibling copies
     // are each outermost — the last one wins there exactly as it did before.
     if (id !== null && isOutermostForAddress(element, id, root)) {
-      measured.set(id, canvasContentRect(element, root));
+      found.set(id, element);
     }
+  });
+  return found;
+}
+
+/** Every rendered node's rectangle, read once. */
+export function snapshotRects(root: HTMLElement): RectSource {
+  const measured = new Map<string, Rect>();
+  blockElements(root).forEach((element, id) => {
+    measured.set(id, canvasContentRect(element, root));
   });
   // The canvas's own box, measured through the SAME reader as the blocks
   // inside it. `scrollWidth`/`scrollHeight` describe the whole content rather

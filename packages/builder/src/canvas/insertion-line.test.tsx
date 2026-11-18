@@ -426,6 +426,35 @@ describe("the line where a highlighted tile would land", () => {
     expect(revealed()).toEqual([["two", { block: "end", inline: "end" }]]);
   });
 
+  it("keeps a row line's label on its right where the screen is narrow but the left has less room", async () => {
+    // A 320px screen with a row starting at its left edge: the label fits
+    // nowhere whole, and the right has the room.
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+      function boxOf(this: Element) {
+        if (this.hasAttribute("data-scroller")) {
+          return new DOMRect(0, 0, 320, 500);
+        }
+        switch (this.getAttribute(NODE_ID_ATTRIBUTE)) {
+          case "hero":
+            return new DOMRect(0, 0, 320, 100);
+          case "one":
+            return new DOMRect(0, 0, 100, 100);
+          case "two":
+            return new DOMRect(150, 0, 100, 100);
+          default:
+            return new DOMRect(0, 0, 320, 2000);
+        }
+      }
+    );
+    const { container } = drawWith({
+      at: { parentId: "hero", slot: "children", index: 0 },
+      words: "Text goes inside Hero, first",
+    });
+    await act(async () => undefined);
+    expect(lineIn(container)?.getAttribute("data-axis")).toBe("x");
+    expect(labelIn(container)?.hasAttribute("data-before")).toBe(false);
+  });
+
   it("anchors the label to the part of its line on screen", async () => {
     // A zoomed canvas panned right: the screen shows 300px to 1300px, and the
     // line across Hero starts at 0, off its left.

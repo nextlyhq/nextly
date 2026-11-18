@@ -23,18 +23,14 @@
  * @module insertion-line
  */
 import type { BlockDocument } from "@nextlyhq/blocks-engine";
-import { NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
 import { useIsomorphicLayoutEffect } from "@nextlyhq/ui";
 import * as React from "react";
 
 import type { Rect } from "../geometry";
 
-import {
-  CANVAS_ROOT_CLASS,
-  isOutermostForAddress,
-  nodeAddressOf,
-} from "./canvas";
+import { CANVAS_ROOT_CLASS } from "./canvas";
 import { CHROME_ATTRIBUTE } from "./canvas-chrome";
+import { blockElements } from "./canvas-drag-gesture";
 import { useCanvasFrame } from "./canvas-frame-context";
 import {
   OVERLAY_OUTPUT_ATTRIBUTE,
@@ -117,20 +113,13 @@ export const EDGE_HOLD_MS = 1500;
  * The rectangles of a canvas's blocks, each measured only when asked for, so
  * the place's region is measured and the rest of the page is not.
  *
- * Found by comparing each element's address in JavaScript rather than with a
- * selector built from an id, which reaches this from stored data. The
- * outermost element stands for a block, as a drag measures it.
+ * The element that stands for each block is the drag's own answer
+ * (`blockElements`), so the preview and a drag measure the same box.
  */
 function lazyRects(
   root: HTMLElement
 ): RectSource & { elementOf: (id: string) => Element | undefined } {
-  const elements = new Map<string, Element>();
-  root.querySelectorAll(`[${NODE_ID_ATTRIBUTE}]`).forEach(element => {
-    const id = nodeAddressOf(element);
-    if (id !== null && isOutermostForAddress(element, id, root)) {
-      elements.set(id, element);
-    }
-  });
+  const elements = blockElements(root);
   // Each block read once per measure, however often the geometry asks.
   const measured = new Map<string, Rect | undefined>();
   return {
@@ -190,6 +179,16 @@ function edgeLabelFor(
   };
 }
 
+/**
+ * Whether a row line's label goes on its left: only where its widest size
+ * does not fit on the right, and the left has more room than the right.
+ */
+function goesLeft(x: number, screen: Rect): boolean {
+  const right = screen.x + screen.width - x;
+  const left = x - screen.x;
+  return right < LABEL_WIDEST && left > right;
+}
+
 /** The preview's drawing, measured from the layer it is drawn in. */
 function drawnFor(
   layer: HTMLElement,
@@ -229,7 +228,7 @@ function drawnFor(
       y: within(drawnAt.y, screen.y, screen.y + screen.height),
     },
     labelBelow: drawnAt.y - LABEL_ROOM < screen.y,
-    labelBefore: drawnAt.x + LABEL_WIDEST > screen.x + screen.width,
+    labelBefore: goesLeft(drawnAt.x, screen),
   };
 }
 
