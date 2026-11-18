@@ -528,29 +528,34 @@ describe("a placement's setting bound to data", () => {
     });
 
     it("maps nothing where a setting the host does not feed is bound over it", () => {
-      const nodes = resolveComponentInstances(
-        page([placement("p1", "outer")]),
-        new Map([
-          ["inner", inner],
-          [
-            "outer",
-            outer(
-              placement(
-                "nested",
-                "inner",
-                {},
-                {
-                  "overrides.caption.two": byItemTitle,
-                }
-              )
-            ),
-          ],
-        ]),
-        { exposures: true }
-      ).document.nodes as ResolvedBlockNode[];
+      // One-segment ids, which the relay follows, so the host's setting
+      // does map the block until the other setting is bound.
+      const twoSettings = component(
+        [heading("label")],
+        [exposure("one", "label", "text"), exposure("two", "label", "text")]
+      );
+      const mappedWith = (bindings?: Record<string, unknown>) =>
+        composedOf(
+          resolveComponentInstances(
+            page([placement("p1", "outer")]),
+            new Map([
+              ["inner", twoSettings],
+              [
+                "outer",
+                component(
+                  [placement("nested", "inner", {}, bindings)],
+                  [exposure("headline", "nested", "overrides.one")]
+                ),
+              ],
+            ]),
+            { exposures: true }
+          ).document.nodes as ResolvedBlockNode[],
+          "label"
+        )?.exposedProps;
+      expect(mappedWith()?.text?.id).toBe("headline");
       // The nested placement's own binding fills the prop, which no host
       // setting can change.
-      expect(composedOf(nodes, "label")?.exposedProps).toBeUndefined();
+      expect(mappedWith({ "overrides.two": byItemTitle })).toBeUndefined();
     });
   });
 });
