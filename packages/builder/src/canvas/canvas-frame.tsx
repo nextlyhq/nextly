@@ -1036,8 +1036,8 @@ function stateAttribute(
 }
 
 /**
- * The admin's tokens the chrome drawn INSIDE the page reads: a Layout region's
- * badge and tag, which are the admin's words on the site's page, and the
+ * The admin's tokens the chrome drawn INSIDE the page reads: a header or
+ * footer's tag, which holds the admin's words on the site's page, its outline, and the
  * region's own edge and faded content.
  *
  * The frame's document loads none of the admin's stylesheets, so these are
@@ -1053,8 +1053,17 @@ const PAGE_CHROME_TOKENS: readonly {
   readonly tokens: readonly string[];
 }[] = [
   {
+    // A header or footer's edge, and its outline and tag, which take the
+    // select hue for the page's ground as the block marks do.
     selector: ".nx-canvas-region",
-    tokens: ["--nx-builder-border", "--nx-builder-accent"],
+    tokens: [
+      "--nx-builder-border",
+      "--nx-builder-select-on-light",
+      "--nx-builder-select-on-dark",
+      "--nx-builder-select-text-on-light",
+      "--nx-builder-select-text-on-dark",
+      "--nx-builder-halo",
+    ],
   },
   {
     selector: `.nx-canvas-region__content, [${SITE_CHROME_ATTRIBUTE}]`,
@@ -1091,18 +1100,9 @@ const PAGE_CHROME_TOKENS: readonly {
     tokens: ["--nx-builder-select", "--nx-builder-select-text"],
   },
   {
-    selector: ".nx-canvas-region__mark",
-    tokens: [
-      "--nx-builder-border",
-      "--nx-builder-surface-raised",
-      "--nx-builder-text",
-      "--nx-builder-text-muted",
-      "--nx-builder-accent",
-      "--nx-builder-scheme",
-      "--radius-sm",
-      "--text-xs",
-      "--font-sans",
-    ],
+    // Its tag holds the admin's words alone, so it takes the admin's face.
+    selector: ".nx-canvas-region__tag",
+    tokens: ["--font-sans"],
   },
 ];
 

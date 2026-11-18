@@ -837,6 +837,18 @@ export interface PageContext {
    */
   itemPosition?: string;
   /**
+   * What a click on a picture does when the picture says nothing itself: the
+   * "When clicked" of the gallery it sits in, set by the gallery beside its
+   * pictures. A render is handed no parent, and a server render has no React
+   * context, so the gallery's choice reaches its pictures this way, as a
+   * list's entry reaches its blocks.
+   *
+   * Absent outside a gallery.
+   *
+   * @experimental
+   */
+  galleryWhenClicked?: "nothing" | "enlarge";
+  /**
    * The collection {@link item} comes from, set by the repeater beside it, so
    * a binding to the item is checked against that collection's fields.
    *

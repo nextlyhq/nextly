@@ -31,8 +31,15 @@ import {
   PopoverTrigger,
 } from "@nextlyhq/ui";
 import { Check, ChevronDown } from "lucide-react";
-import { useRef, type JSX, type ReactNode, type RefObject } from "react";
+import {
+  useContext,
+  useRef,
+  type JSX,
+  type ReactNode,
+  type RefObject,
+} from "react";
 
+import { ManageSetsContext } from "./editor/manage-sets";
 import {
   SITE_DEFAULT_VALUE,
   type LayoutPickerView,
@@ -143,8 +150,12 @@ function SearchNote({ search }: { search: MenuSearch }): JSX.Element {
   );
 }
 
-/** One option's row: its face, and a check on the current choice. */
-function OptionRow({
+/**
+ * One option's row: its face, and a check on the current choice. Shared with
+ * the starter's "Use a component ▾" menu, so a choice with a picture reads
+ * the same in both.
+ */
+export function OptionRow({
   option,
   current,
   picture,
@@ -349,7 +360,11 @@ function MenuList({
   );
 }
 
-/** "Manage headers & footers ↗", after a separator: the list of sets. */
+/**
+ * "Manage headers & footers", after a separator: the list of sets. Inside the
+ * builder it is the Pages panel's Header & footer group, in this window;
+ * elsewhere the admin's list, in a new tab.
+ */
 function ManageRow({
   href,
   onLeave,
@@ -357,6 +372,7 @@ function ManageRow({
   href: string;
   onLeave: () => void;
 }): JSX.Element {
+  const openSets = useContext(ManageSetsContext);
   return (
     <>
       <CommandSeparator className="my-1" />
@@ -364,12 +380,19 @@ function ManageRow({
         value={MANAGE_VALUE}
         onSelect={() => {
           onLeave();
-          window.open(href, "_blank", "noopener");
+          if (openSets !== null) openSets();
+          else window.open(href, "_blank", "noopener");
         }}
         className="px-2 py-1.5 text-sm"
       >
-        Manage headers & footers ↗
-        <span className="sr-only">(opens in a new tab)</span>
+        {openSets !== null ? (
+          "Manage headers & footers"
+        ) : (
+          <>
+            Manage headers & footers ↗
+            <span className="sr-only">(opens in a new tab)</span>
+          </>
+        )}
       </CommandItem>
     </>
   );

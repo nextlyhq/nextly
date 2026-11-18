@@ -208,15 +208,17 @@ export const LIGHTBOX_PARTS = {
 
 /**
  * An address as a CSS `url()` string. The address is content, so a quote or
- * a backslash in it is escaped, and a line break written as its code, rather
- * than ending the string and letting the rest read as more CSS.
+ * a backslash in it is escaped, and a line break or a form feed written as
+ * its code, rather than ending the string and letting the rest read as more
+ * CSS.
  */
-function cssUrl(address: string): string {
+export function cssUrl(address: string): string {
   const escaped = address
     .replaceAll("\\", "\\\\")
     .replaceAll('"', '\\"')
     .replaceAll("\n", "\\a ")
-    .replaceAll("\r", "\\d ");
+    .replaceAll("\r", "\\d ")
+    .replaceAll("\f", "\\c ");
   return `url("${escaped}")`;
 }
 

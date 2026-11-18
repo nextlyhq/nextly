@@ -49,8 +49,16 @@
  */
 
 import { cn } from "@nextlyhq/ui/utils";
-import { type JSX, useCallback, useEffect, useMemo, useRef } from "react";
+import {
+  type DragEvent,
+  type JSX,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+} from "react";
 
+import { isElement } from "../dom-kind";
 import { usePreviewedCollection } from "../previewed-entry";
 import { CANVAS_ROOT_CLASS } from "../shell-state";
 
@@ -127,6 +135,19 @@ export {
 } from "./canvas-entry-content-inert";
 export { contextMenuTargetOf } from "./canvas-pointer";
 export type { CanvasProps } from "./canvas-props";
+
+/**
+ * Refuse the browser's own drag of a picture or a link on the page, which
+ * would take the pointer from the canvas's block drag; text being edited
+ * keeps it, where dragging selected words moves them.
+ */
+function refuseNativeDrag(event: DragEvent<HTMLElement>): void {
+  const target = event.target;
+  if (!isElement(target)) return;
+  const editing = '[contenteditable="true"], [contenteditable=""]';
+  if (target.closest(editing) !== null) return;
+  if (target.closest("img, a, picture, svg") !== null) event.preventDefault();
+}
 
 /**
  * The canvas root's style, with the scale the page is painted at published as
@@ -263,6 +284,8 @@ export function Canvas({
   conditionsUnchecked,
   conditionsApplied,
   composed,
+  // The selected region and the way to select one, for the regions alone.
+  ...regionSelection
 }: CanvasProps): JSX.Element {
   const root = useRef<HTMLDivElement | null>(null);
   usePublishedRoot(root, rootRef, onRoot);
@@ -439,6 +462,10 @@ export function Canvas({
       // over the top, drag first so its behaviour is exactly what it was.
       {...dragHandlers}
       onPointerDown={pointerDown}
+      // A picture or a link pressed and moved would start the browser's own
+      // drag of it, which cancels the pointer the canvas's block drag follows,
+      // so a picture in a gallery could not be dragged to a new place.
+      onDragStart={refuseNativeDrag}
       onPointerMove={hover.onPointerMove}
       onPointerLeave={hover.onPointerLeave}
     >
@@ -446,7 +473,7 @@ export function Canvas({
         drawn={drawn}
         rendered={render}
         environment={environment}
-        selection={marked}
+        selection={regionSelection}
       >
         {page}
       </RegionsAround>

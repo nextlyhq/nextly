@@ -1,0 +1,50 @@
+/*
+ * The Colours tab's usage filter: "All", "Unused" and "Used on this page" as
+ * pills above the list, the chosen one filled. Each pill is a 24px target.
+ */
+.nx-usage-filter {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  margin: 0 0 0.5rem;
+}
+
+.nx-usage-filter__choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+.nx-usage-filter__choice {
+  min-height: 24px;
+  padding: 0 0.5rem;
+  border: 1px solid var(--nx-border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--nx-muted-foreground);
+  font: inherit;
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.nx-usage-filter__choice:hover {
+  color: var(--nx-foreground);
+}
+
+.nx-usage-filter__choice[aria-checked="true"] {
+  border-color: var(--nx-foreground);
+  background: var(--nx-foreground);
+  color: var(--nx-background);
+}
+
+.nx-usage-filter__choice:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 1px;
+}
+
+.nx-usage-filter__note {
+  margin: 0;
+  color: var(--nx-muted-foreground);
+  font-size: var(--text-xs);
+}

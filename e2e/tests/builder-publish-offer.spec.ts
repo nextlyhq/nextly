@@ -393,22 +393,31 @@ test("makes a set the site default from the Header & footer list, asking first a
     ).toHaveCount(0);
     await page.keyboard.press("Escape");
 
-    // Settings → Site names it, and chooses nothing itself.
+    // Site settings names it, and chooses nothing itself.
     await openBuilder(page, pageId);
     await page
       .getByRole("navigation", { name: "Editor panels" })
       .getByRole("button", { name: "Settings" })
       .click();
-    const settings = page.getByRole("dialog", { name: "Settings" });
-    await settings.getByRole("tab", { name: "Site" }).click();
+    await page
+      .getByRole("dialog", { name: /^Page settings · / })
+      .getByRole("button", { name: "Site settings" })
+      .click();
+    const settings = page.getByRole("dialog", { name: "Site settings" });
     const line = settings.getByRole("region", {
       name: "Site default header & footer",
     });
     await expect(line).toContainText(`Site default header & footer: Site ${s}`);
-    await expect(
-      line.getByRole("link", { name: /Change in Pages ▸ Header & footer/ })
-    ).toHaveAttribute("href", "/admin/collections/layouts");
     await expect(settings.getByRole("combobox")).toHaveCount(0);
+    // In the editor, the way to change it is the Pages panel, in this
+    // window: Settings closes and the panel shows its Header & footer sets.
+    await line
+      .getByRole("button", { name: "Change in Pages ▸ Header & footer" })
+      .click();
+    await expect(settings).toBeHidden();
+    await expect(
+      page.getByRole("list", { name: "Header & footer sets" })
+    ).toBeVisible();
   } finally {
     if (previous !== null) {
       const csrf = (await (await api.get(`${API}/auth/csrf`)).json()) as {

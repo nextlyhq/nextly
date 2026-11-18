@@ -212,6 +212,12 @@ export interface LayoutChoicesResponse {
      */
     readonly canUpdateAnyLayout?: boolean;
     /**
+     * Whether the caller may delete ANY set, a rule over set rows included,
+     * which offers a set's "Delete…" in the builder's Pages panel: the
+     * removal's own checks and its final write judge the set. Optional.
+     */
+    readonly canDeleteAnyLayout?: boolean;
+    /**
      * Whether more Layouts match than the list holds: the picker then offers
      * a search, since the rest are reachable by title.
      */

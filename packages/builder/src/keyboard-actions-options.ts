@@ -136,6 +136,13 @@ export interface BlockKeyboardActionsOptions {
    */
   onEscapeWithoutSelection?: () => void;
   /**
+   * The header or footer selected on the canvas, while one is: Delete and
+   * Backspace then remove nothing and announce `refusal`, the host's words
+   * for where it is changed ("The site header isn't part of this page.
+   * Change it in Page settings."). The other block keys have no subject.
+   */
+  selectedRegion?: { readonly refusal: string };
+  /**
    * "/" pressed with a block selected, or with nothing selected, while no
    * text is being typed: the host opens its in-place picker there, adding
    * by the placement rule. Absent, "/" is left to the browser and Help does

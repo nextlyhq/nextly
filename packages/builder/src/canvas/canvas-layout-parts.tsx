@@ -8,6 +8,7 @@
  * @module canvas-layout-parts
  */
 
+import type { RegionArea } from "@nextlyhq/blocks-engine";
 import {
   layoutPartSheets,
   type PagePart,
@@ -122,8 +123,11 @@ export function RegionsAround({
   drawn: LayoutParts | undefined;
   rendered: Omit<PageRendererProps, "document" | "siteStyles"> | undefined;
   environment: BlockEnvironment | undefined;
-  /** The canvas's selection: a region's open tag closes when it changes. */
-  selection: readonly string[];
+  /** The region selected, and the way to select one; absent, none is. */
+  selection: {
+    readonly selectedRegion?: RegionArea | null;
+    readonly onSelectRegion?: (area: RegionArea) => void;
+  };
   children: React.ReactNode;
 }): React.JSX.Element {
   const frame = (part: DrawnRegion | undefined) =>
@@ -133,7 +137,8 @@ export function RegionsAround({
           region={part.region}
           rendered={rendered}
           sheet={part.sheet}
-          selection={selection}
+          selected={selection.selectedRegion === part.region.area}
+          onSelect={selection.onSelectRegion}
         />
       </BlockEnvironmentProvider>
     );

@@ -479,9 +479,11 @@ describe("the strip pinned above the canvas", () => {
     expect(
       strip.compareDocumentPosition(region) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();
-    // The page keeps its whole gutter under the strip, the top included, so
-    // what is drawn just above the first block is not cut off.
-    expect(region.style.padding).toBe("16px");
+    // The page meets the region's edges under the strip as well: no gutter
+    // on any side, and none on the strip's slot.
+    expect(region.style.padding).toBe("");
+    const slot = strip.closest<HTMLElement>(".nx-canvas-strip-slot");
+    expect(slot?.getAttribute("style") ?? "").toBe("");
   });
 
   it.each([
@@ -495,15 +497,15 @@ describe("the strip pinned above the canvas", () => {
       // is not drawn at all, as with no strip.
       expect(document.querySelector(".nx-canvas-strip-slot")).toBeNull();
       const region = screen.getByRole("region", { name: "Canvas" });
-      expect(region.style.padding).toBe("16px");
+      expect(region.style.padding).toBe("");
     }
   );
 
-  it("draws none where the host gives none, with the same gutter (the control)", () => {
+  it("draws none where the host gives none, the page still meeting the region's edges (the control)", () => {
     renderShell({ children: <p>canvas content</p> });
     const region = screen.getByRole("region", { name: "Canvas" });
     expect(document.querySelector(".nx-canvas-strip-slot")).toBeNull();
-    expect(region.style.padding).toBe("16px");
+    expect(region.style.padding).toBe("");
   });
 });
 

@@ -43,6 +43,7 @@ import {
 
 import { ComponentActionPrompt } from "../ComponentActionPrompt";
 import { ComponentFromSelectionPrompt } from "../ComponentFromSelectionPrompt";
+import { useFilledDefaultNotice } from "../filled-default-notice";
 import { SavePatternPrompt } from "../SavePatternPrompt";
 import {
   SiteStyleHistoryContext,
@@ -81,13 +82,16 @@ import {
 import { usePageDataCount } from "./page-read-meter";
 import { useReadBack } from "./read-back";
 import { recentColoursStore } from "./recent-colours-store";
+import { regionRefusal } from "./region-card";
 import { useReveal } from "./reveal-hidden";
+import type { SelectedRegion } from "./selected-region";
 import { useSettingsPlace } from "./settings-place";
 import {
   ConnectStyleHistoryContext,
   StyleRevisionContext,
   useSiteStyleHistory,
 } from "./site-style-history";
+import { offerableTokens } from "./site-style-studios";
 import { documentFrom } from "./stored-document";
 import {
   TemplatePreviewScope,
@@ -401,9 +405,14 @@ function EditorBody<TFieldValues extends FieldValues>({
   // inputs, which read them, and set by "Preview as visitor" below.
   const listsAsVisitor = useListsAsVisitor();
   const canvas = useCanvasInputs(mount, style, listsAsVisitor.lists);
-  const panels = useEditorPanels(mount, name, {
+  const panels = useEditorPanels(mount, {
     control,
     canvasRoot: canvas.canvasElement,
+    siteTokens: offerableTokens(
+      style.canvasSiteStyle,
+      style.siteStylePending,
+      style.siteStyleError
+    ),
   });
   // The Settings dialog's place for other plugins' tabs, for a page or a
   // design: what is being edited, and its own metadata as one undoable edit.
@@ -453,6 +462,8 @@ function EditorBody<TFieldValues extends FieldValues>({
     mount.initialDocument.kind === "component",
     canvas.pageDataLimit
   );
+  // A component published as the first header or footer: said once.
+  useFilledDefaultNotice(mount.initialDocument.kind, panels);
   // The "Part of" toast offers the same Edit component the panel does.
   useOfferedEditComponent(
     mount.offerEditComponent,
@@ -698,7 +709,13 @@ function EditorBody<TFieldValues extends FieldValues>({
           // the visitor's view while it is on.
           canvasStrip={editorStrip(templatePreview, conditions)}
           openSettingsRequest={view.pages.settingsRequest}
-          renderSettings={editorSettings(view, page, settingsPlace)}
+          renderSettings={editorSettings(view, page, settingsPlace, {
+            kind: mount.initialDocument.kind,
+            fieldName: name,
+            control: control as unknown as Control<FieldValues>,
+            // At the bottom of Page settings, as in the ⋯ menu.
+            openAsForm: shellExit(componentView, done),
+          })}
           // The shell owns the region; this fills it. Rendered unconditionally
           // rather than only when something is selected, because with nothing
           // selected the panel shows the document's own settings: a region
@@ -746,8 +763,12 @@ function EditorBody<TFieldValues extends FieldValues>({
         */}
           <BlockKeyboardActions
             editor={editor}
-            // Esc with no block selected leaves a look edited on its own.
-            onEscapeWithoutSelection={panels.lookEditing.exit}
+            // Esc with no block selected clears a selected header or footer,
+            // or else leaves a look edited on its own.
+            onEscapeWithoutSelection={escapeWithoutSelection(panels)}
+            // A selected header or footer: Delete removes nothing, and says
+            // where it is changed.
+            {...selectedRegionKeys(panels.selectedRegion)}
             onEditText={componentView.preview.onEditText}
             onSaveAsPattern={savePattern.open}
             /*
@@ -843,6 +864,27 @@ function EditorBody<TFieldValues extends FieldValues>({
       </VisitorUnreadableProvider>
     </EditorFrame>
   );
+}
+
+/**
+ * What Escape with no block selected runs: clear the header or footer
+ * selected, the innermost thing, or else leave a look edited on its own.
+ */
+function escapeWithoutSelection(
+  panels: Pick<EditorPanels, "selectedRegion" | "lookEditing">
+): () => void {
+  const { selection } = panels.selectedRegion;
+  return selection.area === null ? panels.lookEditing.exit : selection.clear;
+}
+
+/** What the block keys are told of a selected header or footer. */
+function selectedRegionKeys(region: SelectedRegion): {
+  selectedRegion?: { readonly refusal: string };
+} {
+  const area = region.selection.area;
+  return area === null
+    ? {}
+    : { selectedRegion: { refusal: regionRefusal(area) } };
 }
 
 /**

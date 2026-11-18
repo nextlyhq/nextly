@@ -37,6 +37,7 @@ const header: CanvasRegion = {
   document: regionDocument([{ area: "header", componentId: "hdr" }]),
   label: "Header, from Layout Main",
   badge: "Header · from Layout",
+  name: "Header",
   edit: {
     href: "/admin/layouts/main",
     text: "Edit Layout ↗",

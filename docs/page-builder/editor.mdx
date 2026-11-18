@@ -180,11 +180,17 @@ refused instead of replacing it.
 Hiding a side gives the canvas its room. The left panel you had open comes back when
 you use the rail again. The editor remembers which sides you hid, for you.
 
-The device buttons show Desktop and the site's two widest breakpoints. A site with more
-puts the rest in a menu beside them, under **More devices**. While you style one of those,
-the menu's button shows its name and width. The buttons never change places.
+The device buttons show Desktop and the site's two widest breakpoints, each as an icon.
+Point at one, or move to it with the keyboard, and its tooltip gives the device's name,
+width and the widths it styles, for example "Desktop · 1280px · styles for 1024px and
+wider". The width you are styling is always shown as text beside the buttons ("1280px").
+A site with more breakpoints puts the rest in a menu beside them, under **More devices**.
+While you style one of those, the menu's button shows its icon. The buttons never change
+places.
 
-When the bar is narrow, the device buttons drop their label first and keep their icons.
+The canvas draws the page at the real width of the device you are styling, scaled to fit
+between the panels, edge to edge: no margin and no shadow around it. A device narrower
+than the space, such as a phone, is centred with a thin line along its edge.
 
 ## From the entry's form
 
@@ -277,6 +283,9 @@ greyed out with the reason under it. While a shared style is chosen, a line unde
 chips says where it's used and that changes there change all of them. While a state
 other than Normal is chosen, the settings below are tinted and say which look you're
 editing. This line and the tabs stay in view as you scroll the panel.
+
+A Divider's **Border** section names its line as a line: **Line colour**,
+**Thickness** and **Line style**, since the line is the divider's top border.
 
 A Spacer's **Size** section offers your spacing variables as **Presets** over its
 **Height**, smallest first, as a side of the spacing box does: pick one, and the space
@@ -407,7 +416,7 @@ has no item at all, so nothing on the rail opens an empty panel.
 | **Layers**   | The page as a tree. Select, expand, move, hide, lock and rename blocks here. See [Working with a block's row in Layers](#working-with-a-blocks-row-in-layers).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | **Pages**    | The site's pages, with search. Open, add, duplicate, rename or delete one without leaving the editor. See [Pages](#pages).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | **Design**   | The site's look, in three tabs: **Variables** (named colours, type sizes and spacing, each with a light and a dark value), **Shared styles** and **Fonts** (see [Fonts](#fonts)). A variable's dark value applies when a visitor's device prefers dark. The Variables tab imports and exports DTCG files, including one file per mode for Figma. A variable that a page, a component, a shared style or a block's default style still uses can't be removed: change those uses first. Some pages are never fully counted: a page too large to read in full, or one that keeps its blocks in a field under a named group. Before removing a variable, the editor reads those pages for it. If one of them uses the variable, or can't be read in time, the removal is refused and that page is named, or counted instead when you can't open it or its title can't be looked up in time. |
-| **Settings** | A dialog with **This page** and **Site**. See [Settings](#settings).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| **Settings** | **Page settings**, with **Site settings** beside its tabs. See [Settings](#settings).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | **Help**     | The keyboard shortcuts in effect, and links to these pages.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 
 Add, Layers and Design sit at the top. Settings and Help sit at the bottom.
@@ -444,6 +453,13 @@ it: "Adding inside Hero, at the end", "Adding after Heading, inside Hero" or "Ad
 the end of the page". Each tile tells a screen reader where it goes, and after an insert
 a screen reader hears what was added and where ("Heading added inside Hero, at the
 end"). The new block is selected, so the next one goes after it.
+
+While you point at a tile, or move to it with the arrow keys, the line names that tile's
+own place ("Heading goes inside Hero, at the end") and the canvas draws a blue line at
+exactly that place, with the same words beside it. The line doesn't move the page or
+scroll it. When the place is off screen, its words show at the top or bottom edge of the
+canvas with an arrow; press them to scroll the place into view. When the block would go
+inside an empty container, that container lights up instead.
 
 ### Columns ask for a layout
 
@@ -524,11 +540,47 @@ With an Image selected, its **Content** tab holds:
   colour are set in **Style**, under **Text**.
 
 In **Advanced**, **Load right away** fetches the picture as the page opens rather than
-as it nears the screen: turn it on for an image near the top of the page.
+as it nears the screen: turn it on for an image near the top of the page. In **Style**,
+**Effects** has a **Shadow**, which falls on the picture in its own shape: round on a
+Circle, never around the caption.
 
 The shapes **Square**, **Rounded** and **Circle** are block styles, at the top of the
 **Style** tab. **Circle** crops the picture to a square first, so a wide picture is a
 circle, never an oval.
+
+## Adding pictures to a gallery
+
+A new Gallery starts empty: on the canvas it reads **Add images**, with **Upload** and
+**Media library**, and **or drop files here**. Each picture becomes an Image inside the
+gallery, so every picture keeps its own alt text, caption and settings.
+
+- **Upload** opens your computer's file chooser, where you can choose several files.
+- **Media library** opens the library to pick several pictures. They are added in the
+  order you pick them.
+- **Dropping files** on a gallery, empty or not, uploads them and adds them after the
+  pictures it already holds, in the order they were dropped. Several files dropped on one
+  of its pictures go to the gallery too; one file dropped on a picture replaces it. A file
+  that isn't a picture is left out with **That file isn't an image**.
+
+With the gallery selected, its **Content** tab holds:
+
+- **Pictures**: **Add images** opens the media library to pick several more.
+- **Layout**: **Columns** (**2**, **3** or **4**) and **On mobile** (**1** or **2**), how
+  many pictures sit side by side. A gallery you have not set shows three across and one on
+  a phone. Choosing **Columns** also sets **On mobile** to **1** while it is unset, so a
+  phone never shows three or four across. **On mobile** applies at your site's widest
+  device at a phone's width (640px or narrower), and is not offered when the site has
+  none.
+- **When clicked**: **Nothing** or **Enlarge**, for every picture in the gallery that says
+  nothing itself and has no link. A picture's own **When clicked** then reads **Same as
+  the gallery (Enlarge)**; choose another option to set that picture alone, or **Same as
+  the gallery** again to follow the gallery. A picture with a link follows its link, so
+  its **When clicked** offers **Nothing**, **Link** and **Enlarge** only.
+
+Adding several pictures at once is one step: one **Undo** takes them all away. Drag a
+picture on the canvas or in **Layers** to change its place. With a picture selected, the
+inspector names it by its place, **Picture 2 · in Gallery**, and **← Back to the
+gallery** selects the gallery.
 
 ## Bold, italic and links in a Text
 
@@ -590,10 +642,32 @@ pages show it: **Site default · 11 pages** for the default, **1 page**, **4 pag
 apply. Choose a set to open its form in a new tab; **New header & footer** opens a new
 one. You see this group only if you may read header & footer sets.
 
-Each set's **⋯** menu offers **Open**, **Rename**, in place (<kbd>Enter</kbd> keeps the
-new name, <kbd>Escape</kbd> leaves it), and **Duplicate**, which makes a draft copy,
-"Copy of …". Rename needs the right to change header & footer sets, and Duplicate the
-right to make them; without it, the item isn't shown.
+Each set's **⋯** menu offers:
+
+- **Open**, its form in a new tab.
+- **Make site default**, as the Header & footer list does: a set whose header or footer
+  uses components that aren't published asks first. A set that isn't published offers
+  **Publish it, then make default** instead. Shown if you may choose the site default.
+- **Rename**, in place: <kbd>Enter</kbd> keeps the new name, <kbd>Escape</kbd> leaves it.
+- **Duplicate**, which makes a draft copy, "Copy of …".
+- **Delete…**, which opens the same checks as **Remove header & footer set…** on the
+  set's form: pages that use it are moved to the site default first. The site default
+  itself can't be deleted: make another set the default first.
+
+Each item is shown only if you have the right it needs.
+
+### Collection templates
+
+Below the header & footer sets, **Collection templates** lists the site's collection
+templates. Each shows a small picture of its published design, its collection's name
+(**Blog post**) and how many entries it draws: **Used by 10 entries**, counting the
+collection's entries that don't have a design of their own, with **Draft** where it
+isn't published. Choose one to open it in the editor.
+
+**New collection template** lists the collections that have no template yet. Choose one
+to make its template and open it. You see it only if you may make templates, and only
+while some collection has none. With no template yet, the group says what one is for.
+You see this group only if you may read templates.
 
 Each group folds from its heading, and stays folded for you the next time you open the
 editor on this site.
@@ -648,6 +722,24 @@ pageBuilder({
   },
 });
 ```
+
+## Text colour and type in a container
+
+Section, Box, Columns, Column, Card, Accordion, an accordion's Question, Gallery and
+Collection list have **Style → Text**: a text colour and typography set once on the
+container, which every block inside takes unless it sets its own. A dark Section with
+white text makes its headings, text, lists and links white.
+
+- **Headings** take the container's colour and font. Each keeps the size and line
+  height its row in Site text gives it.
+- **Links** take the container's colour while the **Links** row in Site text sets no
+  colour. Once it sets one, that colour wins in every container.
+- **A block's own value wins**, and so does a heading colour from a block style (the
+  ★ default included) or a shared style.
+- **A link outside any coloured container** keeps the browser's link colour.
+
+A stylesheet of your own that colours `a` beats a container's colour on its links, as
+it beats Site text.
 
 ## Spacing
 
@@ -739,6 +831,10 @@ A block hidden on a device still counts as a block above the next one. When ever
 block above it is hidden, the first block shown in a normal-flow container keeps the
 gap above it; give that block a top margin of 0 on that device to remove it.
 
+A new Section's padding comes from the site: its sides read `space.section-y` and
+`space.gutter`, and **Style → Spacing** says so under the box, "Site default: Section
+spacing", with each side named by its variable. A new Box has no padding.
+
 ### Setting margin and padding
 
 **Style → Spacing** draws a block's margin and padding as one box: margin is the outer
@@ -789,24 +885,42 @@ to the block holding it, and <kbd>Ctrl</kbd>+<kbd>K</kbd> (<kbd>⌘</kbd>+
 
 ## Settings
 
-**Settings** at the bottom of the rail opens a dialog with two tabs.
+**Settings** at the bottom of the rail opens **Page settings · <the page's title>**, with one
+row of tabs that stays in view while a tab scrolls. Everything in it saves with the page, from
+**Save** or **Publish** in the top bar, as the line at the bottom of every tab says, beside
+**Open as form**, which opens the page's form with your unsaved changes. Pressing Enter in a
+field never saves the page, and closing the dialog keeps your changes unsaved. Move between the
+tabs with the arrow keys.
 
-**This page** holds the entry's own fields, such as its title and address, as the
-entry's page draws them. Where a plugin adds a tab of its own, such as the
-[SEO plugin](/docs/plugins/seo#in-the-page-builder), these sit under **General**, with
-the plugin's tab beside them. They save with the page, from **Save** or **Publish** in the top
-bar. Below them, a preview shows roughly how a link to the page looks when it is shared.
-It uses the SEO fields where the page has them, then the page's first text and image, and
-the page's title. A heading never sets the title. Your site's own metadata may differ. Pressing Enter in a field
-never saves the page.
+- **General** holds the page's **Title**; its **Address**, the site's address and the page's
+  part, with buttons to copy it and to edit it in place (Enter keeps the edit, Escape puts it
+  back, and on a published page it says that changing it retires the old address); and its
+  **Header & footer**. Below them, a preview shows roughly how a link to the page looks when it
+  is shared. It uses the SEO fields where the page has them, then the page's first text and
+  image, and the page's title. A heading never sets the title. Your site's own metadata may
+  differ.
+- **Fields** holds every other field of the page, drawn as the entry's form draws them, with
+  the same rules: a field you add to the collection appears here with no change to the
+  builder. Another field the builder edits is a line with **Open in builder** for it. Where
+  nothing is left, there is no Fields tab.
+- Tabs other plugins add, such as the [SEO plugin](/docs/plugins/seo#in-the-page-builder)'s,
+  follow, in the order the plugins declare them.
 
-**Site** applies to the live site as soon as you change it. You see it only if your role
-may manage the page builder's site settings.
+If a **Save** or **Publish** is refused for a field shown in Page settings, the message names
+the field with **Show me**, which opens Page settings on that field's tab with the field
+focused. While you can't change the page, every tab is read-only, and a line at the top says so.
+
+A component or a template keeps its own fields on **General**, with the tabs plugins add beside
+it.
+
+**Site settings**, at the right of the tab row, opens the site's own settings in a dialog of
+their own. They apply to the live site as soon as you change them, and the dialog says so. You
+see it only if your role may manage the page builder's site settings.
 
 - **Breakpoints** lists the site's devices, in the same words as the device buttons.
   **Edit breakpoints** opens the editor in place. **Save breakpoints** stores the whole
   set at once, after checking it, and **Cancel** leaves it as it was. If you close
-  Settings with an edit open, it asks before throwing the edit away.
+  Site settings with an edit open, it asks before throwing the edit away.
 - **Site default header & footer** names the header & footer set pages without one of their own
   are shown in. **Change in Pages ▸ Header & footer** opens the list of sets in a new tab, where
   **Make site default** chooses another (see
@@ -817,7 +931,7 @@ any other way, through the API or the site style's own form, is refused.
 
 ### A plugin's tab in Settings
 
-A plugin adds a tab to the Settings dialog at the Page Builder's admin place
+A plugin adds a tab to Page settings, in the same row as General and Fields, at the Page Builder's admin place
 `nextlyhq-plugin-page-builder.settings`, which takes tabs (`@experimental`). Name the Page
 Builder in your plugin's `dependsOn`, or in `optionalDependsOn` so a site without it still
 starts, with your tab left out:
