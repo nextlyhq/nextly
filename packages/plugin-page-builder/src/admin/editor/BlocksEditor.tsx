@@ -481,7 +481,11 @@ function EditorBody<TFieldValues extends FieldValues>({
     canvas: canvas.canvasElement,
     requestLayers: () => panels.requestPanel("layers"),
     sets: panels,
-    rereadRegions: panels.rereadRegions,
+    page: {
+      rereadRegions: panels.rereadRegions,
+      // A setting made on a placement in the header is made by its Save.
+      writeHeldSettings: mount.writeHeldSettings,
+    },
   });
   const { done, publishOffer, removalHold } = useHostCommit({
     name,
@@ -960,6 +964,9 @@ function EditorBody<TFieldValues extends FieldValues>({
                 // As for a new component: the saved section keeps the
                 // selection's bindings, so a held setting is written first.
                 beforeSave={mount.writeHeldSettings}
+                // A refusal takes its binding off this, not off the snapshot,
+                // so a retry stores it.
+                currentDocument={() => editor.document}
               />
               <ComponentFromSelectionPrompt
                 request={makeComponent.request}
@@ -971,6 +978,9 @@ function EditorBody<TFieldValues extends FieldValues>({
                 // new component keeps the binding, and the page, past a
                 // convert, no placement holding the setting.
                 beforeCreate={mount.writeHeldSettings}
+                // A refusal takes its binding off this, not off the request,
+                // so the form takes it in the request's place.
+                currentDocument={() => editor.document}
               />
               <ComponentActionPrompt
                 request={makeComponent.request}

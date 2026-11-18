@@ -17,7 +17,10 @@ import {
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const save = vi.hoisted(() => vi.fn(async () => ({ warnings: [] })));
+// It takes what is saved, the document first, which a test reads back.
+const save = vi.hoisted(() =>
+  vi.fn(async (..._saved: unknown[]) => ({ warnings: [] }))
+);
 vi.mock("./save-pattern-client", () => ({
   useSavePattern: () => ({ save, error: undefined }),
 }));
@@ -70,6 +73,43 @@ describe("saving a section with held component settings", () => {
     await pressSave(beforeSave);
     expect(beforeSave).toHaveBeenCalledTimes(1);
     expect(save).not.toHaveBeenCalled();
+  });
+
+  it("stores the editor's document on a retry after a refusal, not the binding taken off", async () => {
+    // The refusal takes the binding to the setting never made off the
+    // editor's document; the snapshot taken at the gesture still has it.
+    const bound = {
+      ...PAGE,
+      nodes: [
+        {
+          ...PAGE.nodes[0],
+          bindings: { text: { $bind: "title", source: "setting" } },
+        },
+      ],
+    } as BlockDocument;
+    const beforeSave = vi
+      .fn<() => Promise<boolean>>()
+      .mockResolvedValueOnce(false)
+      .mockResolvedValue(true);
+    render(
+      <SavePatternPrompt
+        document={bound}
+        selectedIds={["h"]}
+        onClose={() => undefined}
+        beforeSave={beforeSave}
+        currentDocument={() => PAGE}
+      />
+    );
+    const press = async () => {
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Save section" }));
+      });
+    };
+    await press();
+    expect(save).not.toHaveBeenCalled();
+    await press();
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(save.mock.calls[0]?.[0]).toBe(PAGE);
   });
 
   it("stores the section once the held settings are written", async () => {

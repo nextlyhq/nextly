@@ -26,7 +26,7 @@ import {
 import * as React from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
-import type { EditorState } from "./editor-state";
+import { useEditorState, type EditorState } from "./editor-state";
 import { RecentColoursStore } from "./recent-colours";
 import type { PreferenceStore } from "./shell-state";
 import { StyleInspectorPanel } from "./style-inspector-panel";
@@ -125,6 +125,52 @@ function mount(store: PreferenceStore, stored?: unknown) {
   return editor;
 }
 
+/** The panel over a real editor, whose stored value follows every write. */
+function mountLive(store: PreferenceStore, tokens: SiteTokenSet = TOKENS) {
+  registerBlocks(
+    [
+      {
+        name: "acme/box",
+        version: 1,
+        description: "A box.",
+        example: { props: {} },
+        editor: { label: "Box" },
+        props: { text: { type: "text" } },
+        supports: { color: { text: true } },
+        render: () => null,
+      },
+    ] as never,
+    { source: "style-colour-recent-test" }
+  );
+  const live: { editor?: EditorState } = {};
+  function Live(): React.JSX.Element {
+    const editor = useEditorState({
+      initialDocument: {
+        formatVersion: 1,
+        kind: "page",
+        nodes: [
+          {
+            id: "a",
+            type: "acme/box",
+            version: 1,
+            props: {},
+            styles: { base: { base: { color: "#3b82f6" } } },
+          },
+        ],
+      } as unknown as BlockDocument,
+    });
+    live.editor = editor;
+    React.useEffect(() => editor.select("a"), []);
+    return <StyleInspectorPanel editor={editor} tokens={tokens} />;
+  }
+  render(
+    <RecentColoursStore.Provider value={store}>
+      <Live />
+    </RecentColoursStore.Provider>
+  );
+  return live;
+}
+
 const openPicker = (): void => {
   fireEvent.click(screen.getByRole("button", { name: /^Colour for Colour/ }));
 };
@@ -193,6 +239,88 @@ describe("a block's colour picker", () => {
     fireEvent.blur(field);
 
     expect(JSON.parse(store.value ?? "[]")).toEqual(["rgb(0 0 255)"]);
+  });
+
+  it("remembers a colour typed live once, when the field is left", () => {
+    // Written as it is typed, "#ff0" and "#ff00" are colours on the way to
+    // "#ff0000": only the colour the author settled on joins the list.
+    const store = memory();
+    mount(store, "#3b82f6");
+    const field = screen.getByRole("textbox", { name: "Colour" });
+    let typed = "";
+    for (const character of "#ff0000") {
+      typed += character;
+      fireEvent.change(field, { target: { value: typed } });
+    }
+    expect(store.value).toBeNull();
+    fireEvent.blur(field);
+
+    expect(JSON.parse(store.value ?? "[]")).toEqual(["#ff0000"]);
+  });
+
+  it("remembers a colour typed live once, over a real editor whose stored value follows the typing", () => {
+    // With the document moving on every keystroke, the colour left in the
+    // field is already the stored one when the field is left: it still joins
+    // Recent colours, once.
+    const store = memory();
+    const writes: string[] = [];
+    const counted: PreferenceStore = {
+      read: store.read,
+      write: next => {
+        writes.push(next);
+        store.write(next);
+      },
+    };
+    const live = mountLive(counted);
+    const field = screen.getByRole("textbox", { name: "Colour" });
+    let typed = "";
+    for (const character of "#ff0000") {
+      typed += character;
+      fireEvent.change(field, { target: { value: typed } });
+    }
+    // The document already holds the colour, so leaving the field finds the
+    // draft equal to what is stored, and nothing is remembered yet.
+    const color = (
+      live.editor?.document.nodes[0]?.styles as
+        | { base?: { base?: { color?: unknown } } }
+        | undefined
+    )?.base?.base?.color;
+    expect(color).toBe("#ff0000");
+    expect(writes).toEqual([]);
+    fireEvent.blur(field);
+    // Exactly one write: a list deduplicated on write would hide a second.
+    expect(writes).toEqual(['["#ff0000"]']);
+  });
+
+  it("keeps the field while a variable's name is typed, and picks it when the field is left", () => {
+    // "color.brand" is a whole name on the way to "color.brand.dark": written
+    // live, it would make the field a variable chip mid-word and lose the rest.
+    const live = mountLive(memory(), {
+      tokens: [
+        ...TOKENS.tokens,
+        {
+          name: "color.brand.dark",
+          kind: "color",
+          values: { light: "#0b1336" },
+        },
+      ],
+    });
+    let typed = "";
+    for (const character of "color.brand.dark") {
+      typed += character;
+      const field = screen.getByRole("textbox", { name: "Colour" });
+      field.focus();
+      fireEvent.change(field, { target: { value: typed } });
+    }
+    const field = screen.getByRole("textbox", { name: "Colour" });
+    expect((field as HTMLInputElement).value).toBe("color.brand.dark");
+    fireEvent.blur(field);
+    const color = (
+      live.editor?.document.nodes[0]?.styles as
+        | { base?: { base?: { color?: unknown } } }
+        | undefined
+    )?.base?.base?.color;
+    expect(color).toEqual({ $token: "color.brand.dark" });
   });
 
   it("does not remember a variable chosen from the list", () => {

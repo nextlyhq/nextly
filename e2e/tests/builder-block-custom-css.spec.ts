@@ -19,6 +19,7 @@ import { canvasLayer } from "./support/canvas-frame";
 import { signInAsLimitedUser, type LimitedUser } from "./support/limited-user";
 import { storedPageNodes } from "./support/stored-page";
 import { fileAccount, test } from "./support/test";
+import { includingHidden } from "./support/visible";
 
 const ENTRIES = "/admin/api/collections/pages/entries";
 const STYLED = "00000000-0000-4000-8000-00000000c561";
@@ -104,7 +105,8 @@ test("an editor is told the block has custom CSS, and never shown it", async () 
   await expect(advanced.getByText("Custom CSS", { exact: true })).toHaveCount(
     0
   );
-  await expect(page.getByText("4px solid")).toHaveCount(0);
+  // Absence sees hidden elements too, so a hidden copy can't pass it.
+  await expect(includingHidden(page).getByText("4px solid")).toHaveCount(0);
 
   await openLayers(page);
   await expect(layerRow(page, STYLED).getByTitle("Has custom CSS")).toHaveCount(
