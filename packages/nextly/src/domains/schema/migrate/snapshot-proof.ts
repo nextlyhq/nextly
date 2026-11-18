@@ -133,48 +133,56 @@ export async function proveStatements(args: {
     args.sides,
     judged
   );
-  for (const [at, proof] of proofs.entries()) {
-    if (proof.status !== "shown") continue;
-    const later = statements.slice(at + 1);
-    if (
-      !inlineConstraintsUsable(
-        statements[at],
-        dialect,
-        args.sides,
-        live.schema
-      ) ||
-      !generatedKeysAssigned(statements[at], later, dialect, live.schema)
-    ) {
-      proofs[at] = { ...proof, status: "not-done" };
-      continue;
-    }
-    const restated = restatedColumnsStand(
-      statements[at],
-      later,
-      dialect,
-      live.schema
-    );
-    if (restated !== "as-left") proofs[at] = { ...proof, status: restated };
-  }
   const filled = columnsFilledBy(statements, dialect);
   for (const [at, proof] of proofs.entries()) {
     if (proof.status !== "shown") continue;
-    for (const column of filled[at]) {
-      // Counted where the rest of the file leaves the column; one it drops has no rows to count.
-      const end = whereItEnds(
-        column,
-        statements.slice(at + 1),
-        dialect,
-        "rows"
-      );
-      if (end === undefined) continue;
-      if ((await live.nullsIn(end.table, end.column)) > 0) {
-        proofs[at] = { ...proof, status: "unfilled" };
-        break;
-      }
-    }
+    const later = statements.slice(at + 1);
+    const status =
+      liveStatusOf(statements[at], later, args) ??
+      (await unfilledStatusOf(filled[at], later, args));
+    if (status !== undefined) proofs[at] = { ...proof, status };
   }
   return proofs;
+}
+
+/** What `proveStatements` is given, as its parts read it. */
+type ProofArgs = Parameters<typeof proveStatements>[0];
+
+/**
+ * The status the live schema gives a statement the snapshot shows, where it is not `shown`: a
+ * constraint or a key the database does not hold as the statement leaves it, or a restated column
+ * that keeps a setting or cannot be read.
+ */
+function liveStatusOf(
+  statement: string,
+  later: readonly string[],
+  { dialect, sides, live }: ProofArgs
+): StatementProof["status"] | undefined {
+  if (
+    !inlineConstraintsUsable(statement, dialect, sides, live.schema) ||
+    !generatedKeysAssigned(statement, later, dialect, live.schema)
+  ) {
+    return "not-done";
+  }
+  const restated = restatedColumnsStand(statement, later, dialect, live.schema);
+  return restated === "as-left" ? undefined : restated;
+}
+
+/**
+ * `unfilled` where a column the statement fills with its default still holds NULL in some row,
+ * counted where the rest of the file leaves the column; one it drops has no rows to count.
+ */
+async function unfilledStatusOf(
+  filled: readonly FilledColumn[],
+  later: readonly string[],
+  { dialect, live }: ProofArgs
+): Promise<"unfilled" | undefined> {
+  for (const column of filled) {
+    const end = whereItEnds(column, later, dialect, "rows");
+    if (end === undefined) continue;
+    if ((await live.nullsIn(end.table, end.column)) > 0) return "unfilled";
+  }
+  return undefined;
 }
 
 /**
@@ -373,18 +381,35 @@ function nameStepsOf(statement: string, dialect: SupportedDialect): NameStep[] {
   if (dropped.length > 0) {
     return dropped.map(table => ({ table, to: undefined }));
   }
+  const altered = alteredTableOf(statement, dialect);
+  if (altered === undefined) return [];
+  return altered.clauses.flatMap(clause =>
+    columnStepOf(clause, altered.table, dialect)
+  );
+}
+
+/**
+ * The table an `ALTER TABLE [IF EXISTS] [ONLY] t ...` alters and each of its clauses, ready to
+ * read; undefined for any other statement. The one reading of that opening.
+ */
+function alteredTableOf(
+  statement: string,
+  dialect: SupportedDialect
+): { table: string; clauses: StatementCursor[] } | undefined {
   const cursor = cursorOf(statement, dialect, EXACT);
-  if (!cursor.accept("ALTER", "TABLE")) return [];
+  if (!cursor.accept("ALTER", "TABLE")) return undefined;
   cursor.acceptCondition();
   if (dialect === "postgresql") cursor.accept("ONLY");
   const table = cursor.name();
-  if (table === undefined) return [];
-  return cursor
-    .clauses()
-    .flatMap(tokens =>
-      columnStepOf(new StatementCursor(tokens), table, dialect)
-    );
+  if (table === undefined) return undefined;
+  return {
+    table,
+    clauses: cursor.clauses().map(tokens => new StatementCursor(tokens)),
+  };
 }
+
+/** The words an `ALTER TABLE` clause that may move or settle a column opens with. */
+const COLUMN_STEP_VERBS = ["DROP", "RENAME", "CHANGE", "MODIFY", "ALTER"];
 
 /** The step one `ALTER TABLE` clause takes on a column of `table`, where it takes one. */
 function columnStepOf(
@@ -392,9 +417,7 @@ function columnStepOf(
   table: string,
   dialect: SupportedDialect
 ): NameStep[] {
-  const verb = ["DROP", "RENAME", "CHANGE", "MODIFY", "ALTER"].find(word =>
-    clause.accept(word)
-  );
+  const verb = COLUMN_STEP_VERBS.find(word => clause.accept(word));
   if (verb === undefined) return [];
   // A constraint, index or key dropped or renamed is not a column.
   if (!clause.accept("COLUMN") && addsAnotherElement(clause, dialect)) {
@@ -403,21 +426,63 @@ function columnStepOf(
   clause.acceptCondition();
   const column = clause.name();
   if (column === undefined) return [];
-  if (verb === "DROP") return [{ table, column, ends: "dropped" }];
+  const step = stepAfter(verb, clause, column, dialect);
+  return step === undefined ? [] : [{ table, column, ...step }];
+}
+
+/** What a clause does to the column it names, read after the column: its new name, what it ends. */
+function stepAfter(
+  verb: string,
+  clause: StatementCursor,
+  column: string,
+  dialect: SupportedDialect
+): { to?: string; ends?: "dropped" | "restated" | "plain" } | undefined {
+  if (verb === "DROP") return { ends: "dropped" };
   if (verb === "RENAME") {
     clause.accept("TO");
     const to = clause.name();
-    return to === undefined ? [] : [{ table, column, to }];
+    return to === undefined ? undefined : { to };
   }
   if (verb === "ALTER") {
-    return dialect === "postgresql" &&
-      KEY_CHANGES.some(words => clause.accept(...words))
-      ? [{ table, column, ends: "plain" }]
-      : [];
+    const plain =
+      dialect === "postgresql" &&
+      KEY_CHANGES.some(words => clause.accept(...words));
+    return plain ? { ends: "plain" } : undefined;
   }
-  if (dialect !== "mysql") return [];
+  if (dialect !== "mysql") return undefined;
   const to = verb === "CHANGE" ? clause.name() : column;
-  return to === undefined ? [] : [{ table, column, to, ends: "restated" }];
+  return to === undefined ? undefined : { to, ends: "restated" };
+}
+
+/** A question the proof asks of a column: each is ended by different later statements. */
+type ColumnQuestion = "key" | "settings" | "rows";
+
+/** Whether a step that ends something ends this question (see `NameStep.ends`). */
+function endsQuestion(
+  ends: "dropped" | "restated" | "plain" | undefined,
+  asking: ColumnQuestion
+): boolean {
+  if (ends === "dropped") return true;
+  if (ends === "restated") return asking !== "rows";
+  return ends === "plain" && asking === "key";
+}
+
+/**
+ * Where a column stands after one step, or undefined where the step ends the question: a step on
+ * another table or column leaves it where it was.
+ */
+function afterStep(
+  at: FilledColumn,
+  step: NameStep,
+  asking: ColumnQuestion
+): FilledColumn | undefined {
+  if (step.table !== at.table) return at;
+  if (step.column === undefined) {
+    return step.to === undefined ? undefined : { ...at, table: step.to };
+  }
+  if (step.column !== at.column) return at;
+  if (endsQuestion(step.ends, asking)) return undefined;
+  return { ...at, column: step.to ?? at.column };
 }
 
 /**
@@ -432,24 +497,17 @@ function whereItEnds(
   start: FilledColumn,
   later: readonly string[],
   dialect: SupportedDialect,
-  asking: "key" | "settings" | "rows"
+  asking: ColumnQuestion
 ): FilledColumn | undefined {
-  let table = start.table.toLowerCase();
-  let column = start.column.toLowerCase();
+  let at: FilledColumn | undefined = {
+    table: start.table.toLowerCase(),
+    column: start.column.toLowerCase(),
+  };
   for (const step of later.flatMap(each => nameStepsOf(each, dialect))) {
-    if (step.table !== table) continue;
-    if (step.column === undefined) {
-      if (step.to === undefined) return undefined;
-      table = step.to;
-      continue;
-    }
-    if (step.column !== column) continue;
-    if (step.ends === "dropped") return undefined;
-    if (step.ends === "restated" && asking !== "rows") return undefined;
-    if (step.ends === "plain" && asking === "key") return undefined;
-    column = step.to ?? column;
+    at = afterStep(at, step, asking);
+    if (at === undefined) return undefined;
   }
-  return { table, column };
+  return at;
 }
 
 /**
@@ -460,14 +518,10 @@ function restatedColumns(
   statement: string,
   dialect: SupportedDialect
 ): FilledColumn[] {
-  if (dialect !== "mysql") return [];
-  const cursor = cursorOf(statement, dialect, EXACT);
-  if (!cursor.accept("ALTER", "TABLE")) return [];
-  cursor.acceptCondition();
-  const table = cursor.name();
-  if (table === undefined) return [];
-  return cursor.clauses().flatMap(tokens => {
-    const clause = new StatementCursor(tokens);
+  const altered = dialect === "mysql" && alteredTableOf(statement, dialect);
+  if (altered === false || altered === undefined) return [];
+  const { table } = altered;
+  return altered.clauses.flatMap(clause => {
     const renames = clause.accept("CHANGE");
     if (!renames && !clause.accept("MODIFY")) return [];
     clause.accept("COLUMN");
@@ -588,14 +642,10 @@ function columnsAdded(
   statement: string,
   dialect: SupportedDialect
 ): Array<[string, string, StatementToken[]]> {
-  const cursor = cursorOf(statement, dialect, EXACT);
-  if (!cursor.accept("ALTER", "TABLE")) return [];
-  cursor.acceptCondition();
-  if (dialect === "postgresql") cursor.accept("ONLY");
-  const table = cursor.name();
-  if (table === undefined) return [];
-  return cursor.clauses().flatMap(tokens => {
-    const clause = new StatementCursor(tokens);
+  const altered = alteredTableOf(statement, dialect);
+  if (altered === undefined) return [];
+  const { table } = altered;
+  return altered.clauses.flatMap(clause => {
     if (!clause.accept("ADD")) return [];
     // A constraint, index or key added is not a column, whatever it is named.
     if (!clause.accept("COLUMN") && addsAnotherElement(clause, dialect)) {
@@ -1208,15 +1258,19 @@ function statesOnlyWhatSnapshotRecords(
   const [type, ...after] = declared;
   if (typeof type !== "string" || TYPES_BEYOND_SNAPSHOT.has(type)) return false;
   const rest = new StatementCursor(after);
-  // The type's size and the words that belong to it: `decimal(10,2) unsigned`.
-  while (rest.accept(GROUP) || nextIn(rest, TYPE_WORDS)) {
-    if (nextIn(rest, TYPE_WORDS)) rest.at += 1;
-  }
+  typeTailRead(rest);
   while (!rest.done()) {
     if (rest.accept("NOT", "NULL") || rest.accept("NULL")) continue;
     if (!rest.accept("DEFAULT") || !defaultValueRead(rest)) return false;
   }
   return true;
+}
+
+/** Reads past a type's size and the words that belong to it: `decimal(10,2) unsigned`. */
+function typeTailRead(rest: StatementCursor): void {
+  while (rest.accept(GROUP) || nextIn(rest, TYPE_WORDS)) {
+    if (nextIn(rest, TYPE_WORDS)) rest.at += 1;
+  }
 }
 
 /**
