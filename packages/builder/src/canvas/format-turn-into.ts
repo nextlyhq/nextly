@@ -59,7 +59,8 @@ function pageAsTyped(editor: EditorState, typed: TypedPassage | null) {
   );
   if (op === null) return editor.document;
   try {
-    return applyOp(editor.document, op).document;
+    // Judged by the editor's own limits, as writing the words will be.
+    return applyOp(editor.document, op, editor.limits).document;
   } catch {
     return editor.document;
   }

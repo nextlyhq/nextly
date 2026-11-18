@@ -376,11 +376,13 @@ describe("a block style, which belongs to one block type", () => {
     );
     if ("refused" in plan) throw new Error(plan.refused);
     expect(plan.op.node.styles).toEqual({
+      // The shared style's colour beat the look's hover colour too: a
+      // state's rule has no more weight than the base's, and the class came
+      // later.
       base: { desktop: { fontSize: "3rem" } },
-      hover: { desktop: { color: "#f00" } },
     });
     expect(plan.op.node.classes).toEqual(["shared-brand"]);
-    expect(plan.lookTrimmed).toBeUndefined();
+    expect(plan.lookTrimmed).toBe(true);
   });
 
   it("gives way to a shared style that sets the same thing at another width, and says so", () => {
@@ -402,8 +404,10 @@ describe("a block style, which belongs to one block type", () => {
     );
     if ("refused" in plan) throw new Error(plan.refused);
     expect(plan.op.node.styles).toEqual({
+      // The shared style's colour beat the look's hover colour too: a
+      // state's rule has no more weight than the base's, and the class came
+      // later.
       base: { desktop: { fontSize: "3rem" } },
-      hover: { desktop: { color: "#f00" } },
     });
     expect(plan.lookTrimmed).toBe(true);
   });
@@ -484,6 +488,31 @@ describe("a block style, which belongs to one block type", () => {
     if ("refused" in plan) throw new Error(plan.refused);
     expect(plan.op.node.styles).toEqual({
       base: { desktop: { fontSize: "1rem" } },
+    });
+    expect(plan.lookTrimmed).toBe(true);
+  });
+
+  it("gives way to the block's own value in another state, and says so", () => {
+    // The block's own colour won over the look's hover colour even while
+    // hovered; in one tier the hover colour would win, so it goes.
+    const hovered: NamedClass = {
+      id: "look-hovered",
+      slug: "hovered",
+      orderIndex: 0,
+      blockType: "test/words",
+      styles: { hover: { desktop: { color: "#f00" } } },
+    };
+    const own = {
+      ...WORDS,
+      classes: ["look-hovered"],
+      styles: { base: { desktop: { color: "#c00" } } },
+    };
+    const plan = planTurnInto(page(own), "w1", "test/passage", lookup, [
+      hovered,
+    ]);
+    if ("refused" in plan) throw new Error(plan.refused);
+    expect(plan.op.node.styles).toEqual({
+      base: { desktop: { color: "#c00" } },
     });
     expect(plan.lookTrimmed).toBe(true);
   });

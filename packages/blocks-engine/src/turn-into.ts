@@ -215,12 +215,12 @@ function offeredToPlacements(document: BlockDocument, id: string): boolean {
  * Folding moves the look into the block's own tier, which every class and
  * every width of the block's own values used to beat. So each look value is
  * kept only where nothing that beat it sets the same thing:
- * - a value a kept class (a shared style) or the block itself sets at
- *   ANOTHER width goes, since one tier orders widths differently from two;
- *   `trimmed` then says part of the look gave way, as it may have shown
- *   where those did not apply;
- * - at the same width, a kept class's sides are taken out of it (the class
- *   still beats it), and the block's own are laid over it.
+ * - a value a kept class (a shared style) or the block itself sets in
+ *   ANOTHER state or at another width goes, since one tier orders states and
+ *   widths differently from two; `trimmed` then says part of the look gave
+ *   way, as it may have shown where those did not apply;
+ * - in the same state and width, a kept class's sides are taken out of it
+ *   (the class still beats it), and the block's own are laid over it.
  */
 function lookOf(
   node: BlockNode,
@@ -246,22 +246,33 @@ function lookOf(
   };
 }
 
-/** Each width's value of `property` in `state`, as an envelope sets it. */
-function widthsOf(
+/**
+ * Every state and width an envelope sets `property` at, with its value. Read
+ * across states because a state's rule has no more weight than the base's:
+ * what decides between two tiers is their order, whatever the state.
+ */
+function placesOf(
   styles: NodeStyles | undefined,
-  state: string,
   property: string
 ): Map<string, StyleValue> {
   const out = new Map<string, StyleValue>();
-  const byWidth = (
-    styles as Record<string, Record<string, object>> | undefined
-  )?.[state];
-  for (const [width, values] of Object.entries(byWidth ?? {})) {
-    if (values !== undefined && Object.hasOwn(values, property)) {
-      out.set(width, (values as Record<string, StyleValue>)[property]);
+  const byState = (styles ?? {}) as Record<string, Record<string, object>>;
+  for (const [state, byWidth] of Object.entries(byState)) {
+    for (const [width, values] of Object.entries(byWidth ?? {})) {
+      if (values !== undefined && Object.hasOwn(values, property)) {
+        out.set(
+          placeKey(state, width),
+          (values as Record<string, StyleValue>)[property]
+        );
+      }
     }
   }
   return out;
+}
+
+/** One state and width, as a key. */
+function placeKey(state: string, width: string): string {
+  return `${state} ${width}`;
 }
 
 /** `value` without what `taken` sets: the sides of a composite, or all. */
@@ -278,16 +289,16 @@ function minus(value: StyleValue, taken: StyleValue): StyleValue | undefined {
 /** What is left of one look value once what beat it is taken out. */
 function leftOf(
   value: StyleValue,
-  width: string,
+  place: string,
   setters: readonly Map<string, StyleValue>[],
   classSetters: readonly Map<string, StyleValue>[]
 ): { value?: StyleValue; trimmed: boolean } {
-  if (setters.some(set => [...set.keys()].some(other => other !== width))) {
+  if (setters.some(set => [...set.keys()].some(other => other !== place))) {
     return { trimmed: true };
   }
   let left: StyleValue | undefined = value;
   for (const set of classSetters) {
-    const taken = set.get(width);
+    const taken = set.get(place);
     if (left !== undefined && taken !== undefined) left = minus(left, taken);
   }
   return left === undefined
@@ -303,21 +314,33 @@ function beatenOut(
 ): { styles: NodeStyles; trimmed: boolean } {
   const out: Record<string, Record<string, Record<string, StyleValue>>> = {};
   let trimmed = false;
-  for (const [state, widths] of Object.entries(look)) {
+  for (const [state, width, property, value] of lookValues(look)) {
+    const classSetters = kept.map(cls => placesOf(cls, property));
+    const setters = [...classSetters, placesOf(own, property)];
+    const place = placeKey(state, width);
+    const left = leftOf(value, place, setters, classSetters);
+    trimmed ||= left.trimmed;
+    if (left.value === undefined) continue;
+    out[state] ??= {};
+    out[state][width] ??= {};
+    out[state][width][property] = structuredClone(left.value);
+  }
+  return { styles: out, trimmed };
+}
+
+/** Every value an envelope sets, with its state, width and property. */
+function lookValues(
+  styles: NodeStyles
+): [string, string, string, StyleValue][] {
+  const out: [string, string, string, StyleValue][] = [];
+  for (const [state, widths] of Object.entries(styles)) {
     for (const [width, values] of Object.entries(widths ?? {})) {
       for (const [property, value] of Object.entries(values ?? {})) {
-        const classSetters = kept.map(cls => widthsOf(cls, state, property));
-        const setters = [...classSetters, widthsOf(own, state, property)];
-        const left = leftOf(value, width, setters, classSetters);
-        trimmed ||= left.trimmed;
-        if (left.value === undefined) continue;
-        out[state] ??= {};
-        out[state][width] ??= {};
-        out[state][width][property] = structuredClone(left.value);
+        out.push([state, width, property, value]);
       }
     }
   }
-  return { styles: out, trimmed };
+  return out;
 }
 
 /** Whether any of the block's slots holds a block. */
@@ -348,22 +371,32 @@ function carriedBindings(
   const bindings: NonNullable<BlockNode["bindings"]> = {};
   const unbound: string[] = [];
   for (const [prop, binding] of Object.entries(node.bindings ?? {})) {
-    const into = Object.hasOwn(carries, prop) ? carries[prop] : undefined;
-    // One binding per target prop: a second carried onto the same one would
-    // replace the first, so it is removed and named instead.
-    if (
-      into !== undefined &&
-      !Object.hasOwn(bindings, into) &&
-      showsTheSame(from.props?.[prop], target.props?.[into])
-    ) {
-      bindings[into] = structuredClone(binding);
-    } else {
-      unbound.push(prop);
-    }
+    const into = landing(prop, carries, bindings, from, target);
+    if (into === undefined) unbound.push(prop);
+    else bindings[into] = structuredClone(binding);
   }
   return Object.keys(bindings).length === 0
     ? { unbound }
     : { bindings, unbound };
+}
+
+/**
+ * The target prop a binding on `prop` moves to, or `undefined` when it
+ * cannot: the converter does not carry it, the target prop already took
+ * another (a second would replace the first), or it takes other values.
+ */
+function landing(
+  prop: string,
+  carries: Readonly<Record<string, string>>,
+  taken: Readonly<Record<string, unknown>>,
+  from: AnyBlockDefinition,
+  target: AnyBlockDefinition
+): string | undefined {
+  const into = Object.hasOwn(carries, prop) ? carries[prop] : undefined;
+  if (into === undefined || Object.hasOwn(taken, into)) return undefined;
+  return showsTheSame(from.props?.[prop], target.props?.[into])
+    ? into
+    : undefined;
 }
 
 /**

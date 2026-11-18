@@ -14,11 +14,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   applyOp,
   clearBlocks,
+  DEFAULT_LIMITS,
   registerBlocks,
   TEXT_FORMAT,
   type BlockDocument,
   type BlockNode,
   type BuilderOp,
+  type DocumentLimits,
 } from "@nextlyhq/blocks-engine";
 import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 
@@ -44,15 +46,16 @@ function pageOf(node: BlockNode): BlockDocument {
 }
 
 /** An editor state that applies what it is handed, in order. */
-function liveEditor(start: BlockDocument) {
+function liveEditor(start: BlockDocument, limits?: DocumentLimits) {
   const applied: BuilderOp[] = [];
   const editor = {
     document: start,
+    limits,
     selectedId: "t",
     lockRefusalFor: () => undefined,
     apply: vi.fn((op: BuilderOp) => {
       applied.push(op);
-      editor.document = applyOp(editor.document, op).document;
+      editor.document = applyOp(editor.document, op, limits).document;
       return editor.document;
     }),
   };
@@ -63,7 +66,12 @@ function liveEditor(start: BlockDocument) {
  * A Text on the canvas, opened on its stored "Hello", then its words typed as
  * `typed`.
  */
-async function openText(type: string, typed: unknown, version = 2) {
+async function openText(
+  type: string,
+  typed: unknown,
+  version = 2,
+  more: { readonly limits?: DocumentLimits; readonly beside?: BlockNode } = {}
+) {
   let words_: unknown = paragraph(words("Hello"));
   document.body.innerHTML = `<div data-nx-node="t"><p data-nx-prop="text">Hello</p></div>`;
   const live = {
@@ -88,7 +96,8 @@ async function openText(type: string, typed: unknown, version = 2) {
     version,
     props: { text: paragraph(words("Hello")) },
   });
-  const { editor, applied } = liveEditor(stored);
+  if (more.beside !== undefined) stored.nodes.push(more.beside);
+  const { editor, applied } = liveEditor(stored, more.limits);
   const hook = renderHook(() => useInlineEditing(editor, load as never));
   const element = document.querySelector<HTMLElement>("[data-nx-prop]");
   await act(async () => {
@@ -115,6 +124,27 @@ describe("the format bar's Turn into, for a Text", () => {
       ["Rich text", undefined],
       ["Heading", "Bold and links are removed"],
     ]);
+  });
+
+  it("judges the words typed on a page the editor's own limits allow", async () => {
+    registerBlocks(coreBlocks as never, { source: "core" });
+    // A page past the default size cap, which this editor's limits allow.
+    const big: BlockNode = {
+      id: "big",
+      type: "core/text",
+      version: 2,
+      props: { text: "x".repeat(2_200_000) },
+    };
+    // Longer than the stored words, so the trial edit grows the page.
+    const longer = paragraph(
+      words("Hello, and a good deal more", TEXT_FORMAT.BOLD)
+    );
+    await openText("core/text", longer, 2, {
+      limits: { ...DEFAULT_LIMITS, maxBytes: 8 * 1024 * 1024 },
+      beside: big,
+    });
+    const typed = formatBar.get().target?.turnInto?.typedPage();
+    expect(typed?.nodes[0]?.props.text).toEqual(longer);
   });
 
   it("finishes by writing the words typed, and the turn after it is a step of its own", async () => {

@@ -195,6 +195,27 @@ describe("turnIntoOffers", () => {
     expect(unjudged?.enabled).toBe(true);
   });
 
+  it("judges the placement rule over the whole of a page the editor's limits allow", () => {
+    // More blocks than the default count, with the Text-only region last.
+    const many = Array.from({ length: DEFAULT_LIMITS.maxNodes + 10 }, (_, i) =>
+      text({ id: `x${i}`, props: { text: "x" } })
+    );
+    const notes: BlockNode = {
+      id: "n1",
+      type: "acme/notes",
+      version: 1,
+      props: {},
+      slots: { children: [text()] },
+    };
+    const document = page(...many, notes);
+    const host = { ...DEFAULT_LIMITS, maxNodes: DEFAULT_LIMITS.maxNodes * 4 };
+    const [toRichText] = turnIntoOffers(document, "t1", {
+      planned: true,
+      limits: host,
+    });
+    expect(toRichText?.enabled).toBe(false);
+  });
+
   it("dims every turn of a locked block, with the lock's words", () => {
     const offers = turnIntoOffers(
       page(text({ locked: true, name: "Intro" })),

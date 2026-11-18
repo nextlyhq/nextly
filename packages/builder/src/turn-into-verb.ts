@@ -149,10 +149,12 @@ function placementReason(
     // editor's own apply, with the host's limits, decides when it runs.
     return undefined;
   }
-  const found = placementRefusal(document, after, {
-    nesting,
-    definitions: registryBlockSource(),
-  });
+  const found = placementRefusal(
+    document,
+    after,
+    { nesting, definitions: registryBlockSource() },
+    limits
+  );
   if (found === undefined) return undefined;
   const parent =
     found.parentId === undefined
