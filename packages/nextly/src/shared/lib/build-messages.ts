@@ -82,22 +82,81 @@ const EXCERPT_REACH = 60;
 /** A quoted string on a line: single, double or backtick quotes, a quote escaped inside it kept. */
 const STRING_LITERAL = /(["'`])(?:\\.|(?!\1)[^\\])*\1/g;
 
+/** A quote with nothing closing it before the line ends: a string the line does not finish. */
+const UNFINISHED_STRING = /(["'`])[^"'`]*$/;
+
 /**
- * The line a message points at, as it is shown: at most `EXCERPT_REACH` characters either side of
- * the place, marked with `…` where it was cut, since a generated file's single line can run to
- * thousands. Every string on it is masked, and what is left redacted (`redactCredentialsInText`):
- * a configuration may hold a credential under any name, on a line that does not say what it is,
- * and a syntax error is about the code's shape, which the masked line still shows.
+ * Whether `code` is a C0 or C1 control character, or DEL: each acts on a terminal or a log rather
+ * than showing. A tab is not among them: it shows, and no line holds a newline.
+ */
+function isControlCharacter(code: number): boolean {
+  return (
+    code <= 0x08 ||
+    (code >= 0x0b && code <= 0x1f) ||
+    (code >= 0x7f && code <= 0x9f)
+  );
+}
+
+/** `text` with each control character (`isControlCharacter`) written as its `\xNN` escape. */
+function withControlCharactersEscaped(text: string): string {
+  return Array.from(text, character => {
+    const code = character.codePointAt(0) ?? 0;
+    return isControlCharacter(code)
+      ? `\\x${code.toString(16).padStart(2, "0")}`
+      : character;
+  }).join("");
+}
+
+/**
+ * `lineText` with every string on it masked as `"…"`, and where the place at `index` (from 0) lies
+ * in the masked line. Masked on the whole line, before any excerpt is cut: a string the cut
+ * reached into would lose its opening quote and no longer read as one.
+ */
+function maskedStrings(
+  lineText: string,
+  index: number
+): { masked: string; index: number } {
+  let masked = "";
+  let last = 0;
+  let shrunk = 0;
+  let inside: number | undefined;
+  for (const match of lineText.matchAll(STRING_LITERAL)) {
+    const start = match.index;
+    const end = start + match[0].length;
+    const replacement = `${match[1]}…${match[1]}`;
+    masked += lineText.slice(last, start) + replacement;
+    if (end <= index) shrunk += match[0].length - replacement.length;
+    else if (start < index) inside = start - shrunk + 1;
+    last = end;
+  }
+  // Only the text after the last whole string can open one the line does not finish: a masked
+  // string's own closing quote is not an opening one.
+  masked += lineText
+    .slice(last)
+    .replace(UNFINISHED_STRING, (_, quote: string) => `${quote}…`);
+  return {
+    masked,
+    index: Math.min(masked.length, inside ?? index - shrunk),
+  };
+}
+
+/**
+ * The line a message points at, as it is shown. Every string on it is masked, on the whole line
+ * (`maskedStrings`), and what is left redacted (`redactCredentialsInText`): a configuration may
+ * hold a credential under any name, on a line that does not say what it is, and a syntax error
+ * is about the code's shape, which the masked line still shows. Then at most `EXCERPT_REACH`
+ * characters either side of the place are kept, marked with `…` where it was cut, since a
+ * generated file's single line can run to thousands; and each control character is shown
+ * escaped, so the line cannot act on the terminal or the log it is written to.
  */
 function shownLine(lineText: string, column: number): string {
-  const from = Math.max(0, column - 1 - EXCERPT_REACH);
-  const to = Math.min(lineText.length, column - 1 + EXCERPT_REACH);
-  const excerpt = `${from > 0 ? "…" : ""}${lineText.slice(from, to)}${
-    to < lineText.length ? "…" : ""
+  const { masked, index } = maskedStrings(lineText, column - 1);
+  const from = Math.max(0, index - EXCERPT_REACH);
+  const to = Math.min(masked.length, index + EXCERPT_REACH);
+  const excerpt = `${from > 0 ? "…" : ""}${masked.slice(from, to)}${
+    to < masked.length ? "…" : ""
   }`;
-  return redactCredentialsInText(
-    excerpt.replace(STRING_LITERAL, (_, quote: string) => `${quote}…${quote}`)
-  );
+  return withControlCharactersEscaped(redactCredentialsInText(excerpt));
 }
 
 /**

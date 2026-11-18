@@ -87,6 +87,64 @@ describe("the offending line of a configuration that does not parse", () => {
     expect(report, report).not.toContain("Xq9-not-a-real-one");
   });
 
+  // A string longer than the excerpt reaches, before the error: cut first, its opening quote would
+  // fall outside the excerpt and its tail would no longer read as a string. No part of it shows.
+  it("masks a string the excerpt cuts into, so no part of a long credential is printed", async () => {
+    const secret = "Zk7" + "q".repeat(40) + "Wm4" + "r".repeat(40) + "Tx2";
+    const report = await reportFor(
+      [
+        `export const value = "${secret}" broken;`,
+        "export default {};",
+        "",
+      ].join("\n")
+    );
+
+    expect(report, report).toContain("broken");
+    for (const part of ["Zk7", "Wm4", "Tx2", "q".repeat(10), "r".repeat(10)]) {
+      expect(report, report).not.toContain(part);
+    }
+  });
+
+  // The error is the credential itself: a string the line opens and never closes, on the line
+  // after its key. It is masked to the line's end.
+  it("masks a string the line never closes", async () => {
+    const report = await reportFor(
+      [
+        "export default {",
+        "  db: {",
+        "    password:",
+        '      "Pv8-not-a-real-one',
+        "  },",
+        "};",
+        "",
+      ].join("\n")
+    );
+
+    expect(report, report).toContain("nextly.config.ts:4:");
+    expect(report, report).not.toContain("Pv8-not-a-real-one");
+  });
+
+  // A control character on the line would act on the terminal or the CI log it is written to
+  // (an escape sequence can clear the screen); it is shown escaped, as text.
+  it("shows a control character on the line escaped, never raw", async () => {
+    const report = await reportFor(
+      ["export default { a: 1 b: 2 }; // \u001b[2J\u0007", ""].join("\n")
+    );
+
+    expect(report, report).toContain("nextly.config.ts:1:");
+    // No control character reaches the report raw: C0 and C1 controls, and DEL.
+    const raw = Array.from(report).filter(character => {
+      const code = character.codePointAt(0) ?? 0;
+      return (
+        code <= 0x08 ||
+        (code >= 0x0b && code <= 0x1f) ||
+        (code >= 0x7f && code <= 0x9f)
+      );
+    });
+    expect(raw, report).toEqual([]);
+    expect(report, report).toContain("\\x1b[2J");
+  });
+
   // A generated file can hold one very long line; the report shows a bounded excerpt around the
   // place, marked where it was cut, rather than the whole line.
   it("is shown as a bounded excerpt around the place on a very long line", async () => {
