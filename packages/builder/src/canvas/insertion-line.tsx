@@ -26,7 +26,6 @@ import type { BlockDocument } from "@nextlyhq/blocks-engine";
 import { useIsomorphicLayoutEffect } from "@nextlyhq/ui";
 import * as React from "react";
 
-import { isHTMLElement } from "../dom-kind";
 import type { Rect } from "../geometry";
 
 import { CANVAS_ROOT_CLASS } from "./canvas";
@@ -50,6 +49,7 @@ import {
   useInsertionPreview,
   type InsertionPreview,
 } from "./insertion-preview";
+import { styleCapable } from "./spacing-response";
 
 export interface InsertionLineProps {
   /** The page the place is in, as the panel judged it. */
@@ -314,13 +314,39 @@ function revealPlace(
   const rects = lazyRects(space.root);
   const element = rects.elementOf(near.id);
   const block = rects.rectOf(near.id);
-  if (!isHTMLElement(element) || block === undefined) return;
+  // Any element with an inline style: a block drawn as an SVG root has one,
+  // and scrolls into view as any element does.
+  if (element === undefined || !styleCapable(element) || block === undefined) {
+    return;
+  }
   const align = ALIGN[near.side];
-  const kept = element.style.scrollMargin;
-  element.style.scrollMargin = revealMargin(near, block, place);
+  // Each side as the block had it, with its priority: the shorthand reads
+  // empty where only one side is set, so restoring it would drop that side.
+  const kept = SCROLL_MARGIN_SIDES.map(side => ({
+    side,
+    value: element.style.getPropertyValue(side),
+    priority: element.style.getPropertyPriority(side),
+  }));
+  // Side by side, as they are put back.
+  revealMargin(near, block, place)
+    .split(" ")
+    .forEach((value, index) => {
+      element.style.setProperty(SCROLL_MARGIN_SIDES[index] ?? "", value);
+    });
   element.scrollIntoView({ block: align, inline: align });
-  element.style.scrollMargin = kept;
+  for (const { side, value, priority } of kept) {
+    if (value === "") element.style.removeProperty(side);
+    else element.style.setProperty(side, value, priority);
+  }
 }
+
+/** The longhands of `scroll-margin`, each kept and put back on its own. */
+const SCROLL_MARGIN_SIDES = [
+  "scroll-margin-top",
+  "scroll-margin-right",
+  "scroll-margin-bottom",
+  "scroll-margin-left",
+] as const;
 
 /**
  * The preview to draw: the panel's, or the one an edge label is holding on

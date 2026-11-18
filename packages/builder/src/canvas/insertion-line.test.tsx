@@ -62,6 +62,14 @@ beforeAll(() => {
           createElement("div", { className }),
       },
       {
+        name: "acme/glyph",
+        version: 1,
+        description: "A block drawn as an SVG root.",
+        example: { props: {} },
+        render: ({ className }: { className: string }) =>
+          createElement("svg", { className }),
+      },
+      {
         name: "acme/nothing",
         version: 1,
         description: "A block that draws nothing.",
@@ -532,7 +540,16 @@ describe("the line where a highlighted tile would land", () => {
     );
     const margins: string[] = [];
     Element.prototype.scrollIntoView = function reveal(this: HTMLElement) {
-      margins.push(this.style.scrollMargin);
+      margins.push(
+        [
+          "scroll-margin-top",
+          "scroll-margin-right",
+          "scroll-margin-bottom",
+          "scroll-margin-left",
+        ]
+          .map(side => this.style.getPropertyValue(side))
+          .join(" ")
+      );
     };
     const { container } = drawWith({
       at: { parentId: "hero", slot: "children", index: 1 },
@@ -549,7 +566,7 @@ describe("the line where a highlighted tile would land", () => {
     const one = container.querySelector<HTMLElement>(
       `[${NODE_ID_ATTRIBUTE}="one"]`
     );
-    expect(one?.style.scrollMargin).toBe("");
+    expect(one?.style.getPropertyValue("scroll-margin-bottom")).toBe("");
   });
 
   it("limits a label to the room on its side of the line", async () => {
@@ -581,6 +598,108 @@ describe("the line where a highlighted tile would land", () => {
     expect(label?.hasAttribute("data-before")).toBe(true);
     // 200px to the screen's left edge, less the gap it keeps from it.
     expect(label?.style.maxWidth).toBe("192px");
+  });
+
+  it("puts back a block's own scroll margins after revealing a place beside it", async () => {
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+      function boxOf(this: Element) {
+        if (this.hasAttribute("data-scroller")) {
+          return new DOMRect(0, 0, 1000, 500);
+        }
+        switch (this.getAttribute(NODE_ID_ATTRIBUTE)) {
+          case "hero":
+            return new DOMRect(0, 900, 1000, 240);
+          case "one":
+            return new DOMRect(0, 900, 1000, 100);
+          case "two":
+            return new DOMRect(0, 1020, 1000, 100);
+          default:
+            return new DOMRect(0, 0, 1000, 2000);
+        }
+      }
+    );
+    Element.prototype.scrollIntoView = () => undefined;
+    const { container } = drawWith({
+      at: { parentId: "hero", slot: "children", index: 1 },
+      words: "Text goes after One, inside Hero",
+    });
+    await act(async () => undefined);
+    const one = container.querySelector<HTMLElement>(
+      `[${NODE_ID_ATTRIBUTE}="one"]`
+    );
+    if (one === null) throw new Error("no block");
+    // An author's own margin on one side, with its priority.
+    one.style.setProperty("scroll-margin-top", "5px", "important");
+    const edge = edgeIn(container);
+    if (edge === null) throw new Error("no edge label");
+    fireEvent.click(edge);
+    // Its own side as it was (jsdom keeps no priority for these properties,
+    // so only the value can be read back here), and no side added.
+    expect(one.style.getPropertyValue("scroll-margin-top")).toBe("5px");
+    expect(one.style.getPropertyValue("scroll-margin-bottom")).toBe("");
+  });
+
+  it("reveals a place beside a block drawn as an SVG", async () => {
+    layOut();
+    const revealed = revealSpy();
+    const ending: BlockDocument = {
+      ...page,
+      nodes: [
+        ...page.nodes,
+        { id: "glyph", type: "acme/glyph", version: 1, props: {} },
+      ],
+    };
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+      function boxOf(this: Element) {
+        if (this.hasAttribute("data-scroller")) {
+          return new DOMRect(0, 0, 1000, 500);
+        }
+        return this.getAttribute(NODE_ID_ATTRIBUTE) === "glyph"
+          ? new DOMRect(0, 1200, 48, 48)
+          : new DOMRect(0, 0, 1000, 100);
+      }
+    );
+    const { container } = drawWith(
+      { at: { index: 4 }, words: "Text goes at the end of the page" },
+      ending
+    );
+    await act(async () => undefined);
+    const edge = edgeIn(container);
+    if (edge === null) throw new Error("no edge label");
+    fireEvent.click(edge);
+    expect(revealed()).toEqual([["glyph", { block: "end", inline: "end" }]]);
+  });
+
+  it("puts a horizontal line's label on its left where it starts near the screen's right edge", async () => {
+    // Hero starts at 950px of a 1000px screen, its blocks stacked: the line
+    // across it starts there, with 50px to the right.
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+      function boxOf(this: Element) {
+        if (this.hasAttribute("data-scroller")) {
+          return new DOMRect(0, 0, 1000, 500);
+        }
+        switch (this.getAttribute(NODE_ID_ATTRIBUTE)) {
+          case "hero":
+            return new DOMRect(950, 0, 1000, 300);
+          case "one":
+            return new DOMRect(950, 0, 1000, 100);
+          case "two":
+            return new DOMRect(950, 120, 1000, 100);
+          default:
+            return new DOMRect(0, 0, 2000, 2000);
+        }
+      }
+    );
+    const { container } = drawWith({
+      at: { parentId: "hero", slot: "children", index: 1 },
+      words: "Text goes after One, inside Hero",
+    });
+    await act(async () => undefined);
+    const label = labelIn(container);
+    expect(label?.getAttribute("data-axis")).toBe("y");
+    expect(label?.hasAttribute("data-before")).toBe(true);
+    // The 950px to the screen's left edge, less its gap.
+    expect(label?.style.maxWidth).toBe("942px");
   });
 
   it("anchors the label to the part of its line on screen", async () => {

@@ -351,8 +351,36 @@ test.describe("the line where a highlighted tile would land", () => {
       { steps: 40 }
     );
     await page.waitForTimeout(400);
+    // The block revealed is a neighbour of the place last pointed at, Hero or
+    // its heading by the pointer's path. Each one's own scroll margin on one
+    // side, with its priority, is left as it was.
+    const neighbours = [
+      canvasBlock(page, HERO),
+      canvasBlock(page, HERO_HEADING),
+    ];
+    for (const neighbour of neighbours) {
+      await neighbour.evaluate(element => {
+        (element as HTMLElement).style.setProperty(
+          "scroll-margin-top",
+          "7px",
+          "important"
+        );
+      });
+    }
     await edge.click();
     await expect.poll(() => scrolledBy(page)).toBeLessThan(before - 500);
+    for (const neighbour of neighbours) {
+      expect(
+        await neighbour.evaluate(element => {
+          const style = (element as HTMLElement).style;
+          return {
+            top: style.getPropertyValue("scroll-margin-top"),
+            priority: style.getPropertyPriority("scroll-margin-top"),
+            bottom: style.getPropertyValue("scroll-margin-bottom"),
+          };
+        })
+      ).toEqual({ top: "7px", priority: "important", bottom: "" });
+    }
   });
 
   test("lights an empty Box it would go inside, and draws no line", async ({
