@@ -27,4 +27,10 @@ describe("the builder's document view", () => {
       openLabel: "Open in builder",
     });
   });
+
+  it("opens the New page dialog from '+ New' on such a collection's list", () => {
+    expect(views[0]?.createDialog).toBe(
+      "@nextlyhq/plugin-page-builder/admin#NewPageCreateDialog"
+    );
+  });
 });
