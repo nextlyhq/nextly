@@ -40,7 +40,11 @@ import { PLUGIN_SETTINGS_ACTIVITY_COLLECTION } from "../plugins/settings-activit
 
 import { holderAnswer, holderAnswerOnceGranted, namesOf } from "./holders";
 import { BUILT_IN_ACTIONS, WORKFLOW_PERMISSION_GROUP } from "./permissions";
-import { registeredWorkflows, type RegisteredWorkflow } from "./registry";
+import {
+  registeredWorkflows,
+  workflowAttachedTo,
+  type RegisteredWorkflow,
+} from "./registry";
 import type { ReviewAssignee, ReviewStatesDb } from "./review-state-repository";
 import { primaryAction } from "./steps";
 import type { Workflow, WorkflowStepKind } from "./types";
@@ -218,29 +222,80 @@ const attachedTo = (registered: RegisteredWorkflow): string[] => [
 
 /** Every registered workflow, with its stages, steps and attachments. @experimental */
 export function listWorkflowSummaries(): WorkflowSummary[] {
-  return registeredWorkflows().map(({ workflow, collections, singles }) => {
-    const grantable = grantableActions(workflow);
-    return {
-      slug: workflow.slug,
-      label: workflow.label,
-      stages: workflow.stages.map(stage => ({
-        name: stage.name,
-        label: stage.label,
-        allowsPublish: stage.allowsPublish,
-      })),
-      steps: workflow.steps.map(step => ({
-        name: step.name,
-        label: step.label,
-        kind: step.kind,
-        from: [...step.from],
-        to: step.to,
-        primary: step.primary,
-        grantable: grantable.has(step.name),
-      })),
-      collections: [...collections],
-      singles: [...singles],
-    };
-  });
+  return registeredWorkflows().map(summaryOf);
+}
+
+/** One registered workflow, with its stages, steps and attachments. */
+function summaryOf({
+  workflow,
+  collections,
+  singles,
+}: RegisteredWorkflow): WorkflowSummary {
+  const grantable = grantableActions(workflow);
+  return {
+    slug: workflow.slug,
+    label: workflow.label,
+    stages: workflow.stages.map(stage => ({
+      name: stage.name,
+      label: stage.label,
+      allowsPublish: stage.allowsPublish,
+    })),
+    steps: workflow.steps.map(step => ({
+      name: step.name,
+      label: step.label,
+      kind: step.kind,
+      from: [...step.from],
+      to: step.to,
+      primary: step.primary,
+      grantable: grantable.has(step.name),
+    })),
+    collections: [...collections],
+    singles: [...singles],
+  };
+}
+
+/**
+ * A workflow as a reader of one collection or Single is told it: its name, stages and steps as
+ * the code defines them. Not its settings (who holds a step, default reviewers, label overrides,
+ * emails) and not the other collections and Singles it is attached to, which a reader of this one
+ * may not be allowed to know of.
+ *
+ * @experimental
+ */
+export interface WorkflowDefinition {
+  slug: string;
+  label: string;
+  stages: WorkflowSummary["stages"];
+  steps: Omit<WorkflowSummary["steps"][number], "grantable">[];
+}
+
+/**
+ * The definition of the workflow attached to the collection or Single `slug`, or null where none
+ * is. Narrowed from the workflow's summary, so the two tell one definition alike. Whether the
+ * caller may read the collection or Single is the caller's door to ask first.
+ *
+ * @experimental
+ */
+export function workflowDefinitionOf(
+  kind: "collection" | "single",
+  slug: string
+): WorkflowDefinition | null {
+  const registered = workflowAttachedTo(kind, slug);
+  if (!registered) return null;
+  const summary = summaryOf(registered);
+  return {
+    slug: summary.slug,
+    label: summary.label,
+    stages: summary.stages,
+    steps: summary.steps.map(step => ({
+      name: step.name,
+      label: step.label,
+      kind: step.kind,
+      from: step.from,
+      to: step.to,
+      primary: step.primary,
+    })),
+  };
 }
 
 /** The registered workflow `slug`, or not found. */

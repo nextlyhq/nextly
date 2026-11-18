@@ -163,6 +163,10 @@ import {
   pluginVersionWrites,
   type PluginVersionWrites,
 } from "./plugin-versions";
+import {
+  pluginWorkflowsService,
+  type PluginWorkflowsService,
+} from "./plugin-workflows";
 import { createPluginPrincipals } from "./principals/api";
 import type { PluginPrincipalsApi, PrincipalRef } from "./principals/types";
 import type { PluginReceivedWebhooks } from "./security/inbound-webhooks";
@@ -901,6 +905,12 @@ export interface PluginContext {
      * later stages.
      */
     versions: PluginVersionsService;
+    /**
+     * @experimental Review state for the person or API key the plugin acts
+     * for: a document's review state and a workflow's definition, judged as
+     * the REST routes judge that caller. Never as the plugin itself.
+     */
+    workflows: PluginWorkflowsService;
     /**
      * @experimental Read-only registry access to the app's Singles: which are
      * declared, and what fields they have.
@@ -2723,9 +2733,7 @@ export function createPluginContext(
         fieldType: string,
         target: PluginStoredValuesTarget
       ): Promise<ReadonlyMap<string, PluginStoredValue>> =>
-        tracked(
-          open(fieldType).then(reads => reads.readOf(fieldType, target))
-        ),
+        tracked(open(fieldType).then(reads => reads.readOf(fieldType, target))),
       fieldPaths: (fieldType: string): Promise<readonly string[]> =>
         tracked(
           open(fieldType).then(reads =>
@@ -3210,6 +3218,11 @@ export function createPluginContext(
           ...pluginVersionWrites(() => versions, pluginName),
           listEvents: readEventsForPlugin,
         });
+      },
+      // Built per access like `users` above; it holds nothing of its own and
+      // loads the workflow operations only when a method is first called.
+      get workflows() {
+        return pluginWorkflowsService();
       },
       // Lazy for the same reason as `versions` directly above: this module is
       // exported, so a context built by a caller that never asks about Singles

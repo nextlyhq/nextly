@@ -13,6 +13,8 @@
  * @packageDocumentation
  */
 
+import type { PluginContext } from "nextly";
+
 /** @public The plugin entry point — wraps a definition for `defineConfig({ plugins })`. */
 export { definePlugin } from "nextly";
 
@@ -819,6 +821,33 @@ export type {
   SubjectEventsQuery,
   ContentEventRecord,
 } from "nextly";
+
+/**
+ * @experimental Review state for the person or API key a plugin acts for:
+ * `ctx.services.workflows` (`PluginWorkflowsService`), reading a document's review state
+ * (`PluginWorkflowReview`) and the definition of the workflow attached to a collection or Single
+ * (`PluginWorkflowDefinition`), each document or entity named as `PluginWorkflowDocumentRef` or
+ * `PluginWorkflowEntityRef` names it. Each is read off the service's own signature, so the names
+ * here cannot drift from what the service takes and returns. Experimental until review through
+ * plugins is finished: its shape may still change.
+ */
+export type PluginWorkflowsService = PluginContext["services"]["workflows"];
+/** @experimental A collection or a Single, as `definitionOf` names it. */
+export type PluginWorkflowEntityRef = Parameters<
+  PluginWorkflowsService["definitionOf"]
+>[0];
+/** @experimental A document, as `reviewState` names it. */
+export type PluginWorkflowDocumentRef = Parameters<
+  PluginWorkflowsService["reviewState"]
+>[0]["document"];
+/** @experimental A workflow's stages and steps, as `definitionOf` tells them. */
+export type PluginWorkflowDefinition = NonNullable<
+  Awaited<ReturnType<PluginWorkflowsService["definitionOf"]>>["workflow"]
+>;
+/** @experimental A document's review state, part by part, as `reviewState` tells it. */
+export type PluginWorkflowReview = Awaited<
+  ReturnType<PluginWorkflowsService["reviewState"]>
+>;
 
 /**
  * @experimental Read-only registry access to the app's Singles.

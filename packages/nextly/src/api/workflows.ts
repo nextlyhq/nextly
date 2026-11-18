@@ -59,6 +59,7 @@ import {
   readWorkflowSettingsView,
   refuseDefinitionKeys,
   updateWorkflowSettings,
+  workflowDefinitionOf,
 } from "../domains/workflows/workflow-settings-api";
 import { NextlyError } from "../errors";
 import { getCachedNextly } from "../init";
@@ -119,6 +120,12 @@ const namedRefusals = (refused: readonly ManyRefusal[]): NamedRefusal[] =>
 /** A document as a request names it: an entry of a collection, or a Single. */
 const DocumentRef = z.union([
   z.object({ collection: z.string().min(1), id: z.string().min(1) }).strict(),
+  z.object({ single: z.string().min(1) }).strict(),
+]);
+
+/** A collection or a Single, by its slug alone. */
+const EntityRef = z.union([
+  z.object({ collection: z.string().min(1) }).strict(),
   z.object({ single: z.string().min(1) }).strict(),
 ]);
 
@@ -229,6 +236,14 @@ const SettingsChangeBody = z
       .optional(),
   })
   .strict();
+
+/**
+ * The shapes a document, a collection or Single, a part and what was seen of it are named in, for
+ * another door that parses its own, stricter input from them, so every door names them alike.
+ *
+ * @experimental
+ */
+export const workflowInputShapes = { DocumentRef, EntityRef, Part, Seen };
 
 /** Parsed at the boundary: a body or query that does not fit is the client's mistake. */
 function parse<T>(schema: z.ZodType<T>, value: unknown): T {
@@ -355,6 +370,36 @@ async function documentOf(
 }
 
 /**
+ * Throws not found unless the asker may read the collection or Single `slug` at all, as a read
+ * route authorizes before it runs: the first half of every read check here, and the whole of a
+ * definition's. Not found rather than forbidden, so a caller who may not read it is not told it
+ * exists. Trusted code is not asked.
+ */
+async function assertEntityReadable(
+  asker: WorkflowAsker,
+  scopeKind: "collection" | "single",
+  scopeSlug: string
+): Promise<void> {
+  if (asker === null) return;
+  const readsEntity = await canReadEntity(
+    scopeSlug,
+    readAccessCaller({
+      user: asker.user,
+      ...(asker.scope === undefined ? {} : { authenticatedScope: asker.scope }),
+    })
+  );
+  if (!readsEntity) {
+    throw NextlyError.notFound({
+      logContext: {
+        reason: "workflow-entity-not-readable",
+        scopeKind,
+        scopeSlug,
+      },
+    });
+  }
+}
+
+/**
  * Throws not found unless the asker may read `document` in every part named: first the collection
  * or Single at all, as a read route authorizes before it runs, then the document itself, in each
  * language named. Not found rather than forbidden either way, so a caller who may not read it is
@@ -368,22 +413,7 @@ async function assertReadable(
   parts: "all" | readonly (string | null)[] = []
 ): Promise<void> {
   if (asker === null) return;
-  const readsEntity = await canReadEntity(
-    document.scopeSlug,
-    readAccessCaller({
-      user: asker.user,
-      ...(asker.scope === undefined ? {} : { authenticatedScope: asker.scope }),
-    })
-  );
-  if (!readsEntity) {
-    throw NextlyError.notFound({
-      logContext: {
-        reason: "workflow-entity-not-readable",
-        scopeKind: document.scopeKind,
-        scopeSlug: document.scopeSlug,
-      },
-    });
-  }
+  await assertEntityReadable(asker, document.scopeKind, document.scopeSlug);
   // Each language named is asked about in its own right: one the caller may not read refuses the
   // whole move.
   await assertVersionDocumentReadable(
@@ -470,6 +500,20 @@ export const workflowOperations = {
         each => each.part === null || languages.has(each.part)
       ),
     };
+  },
+
+  /**
+   * The definition of the workflow attached to a collection or Single: its stages and steps, none
+   * of its settings, and null where none is attached. Asked only of a caller who may read the
+   * collection or Single; one who may not, or names one that does not exist, is told it is not
+   * found, so the answer does not tell them which.
+   */
+  async definitionOf(asker: WorkflowAsker, input: unknown) {
+    const ref = parse(EntityRef, input);
+    const kind = "collection" in ref ? "collection" : "single";
+    const slug = "collection" in ref ? ref.collection : ref.single;
+    await assertEntityReadable(asker, kind, slug);
+    return { workflow: workflowDefinitionOf(kind, slug) };
   },
 
   /** One step on one document, as the caller saw it. */
