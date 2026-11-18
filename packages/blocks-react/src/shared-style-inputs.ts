@@ -187,8 +187,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * compiler writes a zero-specificity rule making the links inside inherit it.
  * A sheet stored before has none, and its links keep the browser's colour in
  * a dark section: refused, not served.
+ *
+ * `v13`: a disclosure icon stored as "browser" draws the plus in the title
+ * row, as the Accordion's default now does, where it restored the browser's
+ * own marker. A sheet stored before (a shared style holding it) keeps the
+ * marker: refused, not served.
  */
-const ENCODING = "v12";
+const ENCODING = "v13";
 
 /**
  * Whether a stored stamp was written under the current {@link ENCODING}.
