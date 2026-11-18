@@ -38,6 +38,7 @@ import type { PageRendererProps } from "@nextlyhq/blocks-react";
 import { offeredTiers } from "@nextlyhq/builder/shell";
 
 import { readRemotePatterns } from "../host-policy";
+import { customCssPolicy } from "../site-code/css-check";
 import { siteBreakpoints, type SiteStyleData } from "../site-style";
 
 /**
@@ -103,6 +104,12 @@ export interface PageRenderInputsOptions {
    * would let it paint a hover appearance no visitor is seeing.
    */
   previewStates?: boolean;
+  /**
+   * The site's own custom CSS, where the surface has read it: drawn before the
+   * page's own, as on the live page. Absent draws the page's and the blocks'
+   * CSS without it.
+   */
+  siteCss?: string;
   /** The site's document caps, already read from the config. */
   limits: DocumentLimits;
   /**
@@ -128,6 +135,7 @@ export function pageRenderInputs({
   previewStates,
   limits,
   definitions,
+  siteCss,
 }: PageRenderInputsOptions): PageRenderInputs {
   /*
    * ONE read of the breakpoints, feeding both the compile and the decision
@@ -152,6 +160,14 @@ export function pageRenderInputs({
         ? {}
         : { previewContainer }),
       ...(previewStates === true ? { previewStates: true } : {}),
+      /*
+       * Custom CSS through the page builder's one checker, the same one the
+       * published route and the server use, so the canvas and every preview
+       * draw exactly what goes live: what it refuses is drawn nowhere. The
+       * canvas draws the page in a frame of its own, so CSS styling `body`
+       * reaches the page and never the builder around it.
+       */
+      customCss: customCssPolicy(siteCss),
     },
     /*
      * ABSENT is not the same as empty here, and the difference is the whole
