@@ -48,7 +48,12 @@ import {
 } from "../../site-style-record";
 import { sameStoredValue } from "../../stored-json";
 import { conflictWords } from "../conflict-words";
-import { useHeldSiteStyle, useSaveSiteStyle } from "../site-style-client";
+import {
+  SiteStyleHistoryContext,
+  SiteStylePreviewContext,
+  useHeldSiteStyle,
+  useSaveSiteStyle,
+} from "../site-style-client";
 import { useShown } from "../use-shown";
 import {
   cleanUpUnused,
@@ -143,6 +148,7 @@ export function TokensStudio({
     editable,
     supplied
   );
+  const preview = useTokenPreview(baseline);
 
   /*
    * The set as it is at the moment an import needs it, rather than the one
@@ -175,6 +181,7 @@ export function TokensStudio({
     absence: absenceOf(pending),
     readOnly: !mayChange,
     onChange: commit,
+    onPreview: preview,
     onActivity: held.extend,
     onSettle: () => void held.release(),
     currentTokens,
@@ -210,6 +217,52 @@ function resolvedTiers(
   return {
     editable: merged === undefined ? undefined : resolveSiteTokens(merged),
     baseline: resolveSiteTokens(supplied),
+  };
+}
+
+/**
+ * A variable's value drawn on the canvas while it is typed or picked, before
+ * its edit ends: through the editor's held-value preview, which draws over
+ * the stored read and stores nothing. The edit is written once, when it ends,
+ * by the commit every edit goes through.
+ *
+ * An edit ending with nothing to write takes its drawing back, and draws
+ * again what was drawn before it began: an earlier edit still waiting for its
+ * write, the same value, so that write's answer still finds it. Marked stored
+ * as well, so a value whose write had already answered gives way once the
+ * read moves on, rather than standing over the read for good. The panel ends
+ * a preview before the edit's commit, so this never draws over that commit.
+ */
+function useTokenPreview(
+  baseline: SiteTokenSet
+): (next: SiteTokenSet | null) => void {
+  const history = useContext(SiteStyleHistoryContext);
+  const drawn = useContext(SiteStylePreviewContext);
+  const drawnNow = useRef(drawn);
+  drawnNow.current = drawn;
+  // What this preview draws, and what was drawn before it began.
+  const under = useRef<{ shown: unknown; before: unknown } | null>(null);
+  return next => {
+    const preview = history?.preview;
+    if (preview === undefined) return;
+    if (next !== null) {
+      const shown = tokenOverrideOf(baseline, next);
+      const before =
+        under.current === null
+          ? drawnNow.current.get("tokens")
+          : under.current.before;
+      under.current = { shown, before };
+      preview("tokens", shown, "held");
+      return;
+    }
+    const ended = under.current;
+    under.current = null;
+    if (ended === null) return;
+    preview("tokens", ended.shown, "dropped");
+    if (ended.before !== undefined) {
+      preview("tokens", ended.before, "held");
+      preview("tokens", ended.before, "stored");
+    }
   };
 }
 
