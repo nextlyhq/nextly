@@ -130,6 +130,40 @@ describe("plugin-sdk public export surface", () => {
     expect(exportedNames("testing/admin.ts")).toMatchSnapshot();
   });
 
+  it("publishes the second-document session as experimental", () => {
+    // The session is a deliberate widening of the admin surface for a second
+    // document, held experimental until editing in place settles. Its names
+    // are pinned here with the tag the block declaring them carries, so the
+    // tag is not dropped in silence when the block is edited: the snapshot
+    // above records names and kinds only.
+    const source = readFileSync(path.join(SRC, "admin.ts"), "utf8");
+    const declared = [
+      ...source.matchAll(
+        /\/\*\*((?:(?!\*\/)[\s\S])*)\*\/\s*export\s*\{([^}]*)\}/g
+      ),
+    ].find(([, , names]) => /\buseDocumentSession\b/.test(names ?? ""));
+    expect(declared).toBeDefined();
+    const [, doc = "", names = ""] = declared ?? [];
+    expect(doc).toContain("@experimental");
+    expect(
+      names
+        .split(",")
+        .map(name => name.trim().replace(/^type\s+/, ""))
+        .filter(Boolean)
+        .map(name => `${name} (experimental)`)
+    ).toMatchInlineSnapshot(`
+      [
+        "useDocumentSession (experimental)",
+        "DocumentSession (experimental)",
+        "DocumentSessionLock (experimental)",
+        "DocumentSessionOpen (experimental)",
+        "DocumentSessionOutcome (experimental)",
+        "DocumentSessionRefusal (experimental)",
+        "DocumentSessionTarget (experimental)",
+      ]
+    `);
+  });
+
   it("publishes no other way to add, change or remove a widget or a source", () => {
     // Held by name as well as by the snapshots, because a snapshot is updated
     // with one flag: a widget reaches the dashboard only through

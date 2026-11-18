@@ -1091,6 +1091,72 @@ let it offer what that menu offers and word its way out:
   and run it with `run(id)`, so the pin, its words, its toast and its Undo are
   the admin's own, and any reason it can't run now comes with it.
 
+#### Editing a second document in place
+
+> **Experimental.** `useDocumentSession` may change before it is marked stable.
+
+A view sometimes edits another document while its own stays open: the page
+builder edits a site header right on the page it sits on. The admin holds the
+lock, saving and recovery for your view's own document only, so
+`useDocumentSession(target)` from `@nextlyhq/plugin-sdk/admin` gives you the
+same for the other one. `target` names an entry, `{ collection, id }`, with an
+optional `locale`. Pass `null` when you stop editing it.
+
+- `open` is the document as its own editor reads it: its working draft in
+  place of the live row where the collection keeps drafts. Once `status` is
+  `"ready"` it has the stored `values`, `published`, `unpublishedChanges`,
+  `changedAt` (when the version read last changed), and `draftable`. Use the
+  last one to tell whether a draft can be saved without changing what is live.
+- `lock` is the admin's soft lock on it. `"held"` means you hold it, and
+  `"held-by-other"` comes with the `holder`'s name (or `null` when it isn't
+  known). Show that instead of letting the person edit. The lock is let go
+  when you pass `null`, when your view unmounts, and when the page goes away.
+- `saveDraft(changes)` and `publish(changes)` write the fields you pass,
+  through the admin's own update, as the signed-in person. Each sends the
+  version your copy started from, so a save made since is refused. Saving a
+  draft of a published document stores its working draft and leaves what
+  visitors see. Both resolve to `{ ok: true, values }` once stored. Otherwise
+  they resolve to `ok: false` with the server's `message` and a `reason`:
+  - `"stale"`, with `changedBy`: someone saved a newer version;
+  - `"locked"`: you don't hold the lock;
+  - `"no-drafts"`: the collection keeps no drafts for a published document;
+  - `"unread"`: the document hasn't been read yet;
+  - `"refused"`: the server refused it, in its own words.
+- `mayPublish` is whether the person may publish documents of that
+  collection, as the admin's Publish button decides it.
+- `record(changes)` records the whole document with your changes over it as
+  the person's recovery point, once the editing pauses. After a crash, that
+  document's own editor offers it, as it offers any recovery point.
+  `discard()` empties the point again when the changes are thrown away.
+
+```tsx
+import { useDocumentSession } from "@nextlyhq/plugin-sdk/admin";
+
+export function HeaderSession({
+  headerId,
+  edited,
+}: {
+  headerId: string | null;
+  edited: unknown;
+}) {
+  const session = useDocumentSession(
+    headerId === null ? null : { collection: "components", id: headerId }
+  );
+  if (session.lock.status === "held-by-other") {
+    // Say who has it, and don't start editing.
+    return <p>{`${session.lock.holder ?? "Someone"} is editing this.`}</p>;
+  }
+  return (
+    <button
+      type="button"
+      onClick={() => void session.publish({ definition: edited })}
+    >
+      Publish
+    </button>
+  );
+}
+```
+
 ### Document actions and panel sections
 
 > **Experimental.** `documentActions`, `panelSections` and the props below may
