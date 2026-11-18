@@ -30,13 +30,13 @@ import type {
   WorkflowSummary,
 } from "../../domains/workflows/workflow-settings-api";
 import { NextlyError } from "../../errors";
-import type { DirectAPIConfig } from "../types/shared";
+import type { DirectAPIConfig, RunAsPrincipal } from "../types/shared";
 
 import type { NextlyContext } from "./context";
 import { checkedCaller, runAsCaller } from "./helpers";
 
 /** Who a call is made for, beyond the Direct API's own options. @experimental */
-export interface WorkflowCallArgs extends DirectAPIConfig {
+export interface WorkflowCallArgs extends DirectAPIConfig, RunAsPrincipal {
   /** The API key a checked call is made for, by its id, where it is made for one. */
   apiKeyId?: string;
 }
@@ -120,27 +120,52 @@ export interface WorkflowSettingsNamespace {
 }
 
 /**
- * The options a call is made with rather than the change it asks for: everything else in a
- * settings update's arguments is the change, passed on whole so a part the change may not name is
- * refused rather than dropped.
+ * Every option a call is made with rather than the change it asks for, by name: one entry for each
+ * key of `WorkflowCallArgs`, which the type requires, so an option the call gains and this leaves
+ * out fails to compile. Everything else in a settings update's arguments is the change, passed on
+ * whole so a part the change may not name is refused rather than dropped.
  */
-const CALL_OPTIONS: ReadonlySet<string> = new Set([
-  "overrideAccess",
-  "trusted",
-  "enforceFieldAccess",
-  "fieldAccessUser",
-  "user",
-  "actor",
-  "req",
-  "context",
-  "request",
-  "showHiddenFields",
-  "disableErrors",
-  "locale",
-  "fallbackLocale",
-  "principal",
-  "apiKeyId",
-]);
+const CALL_OPTION_KEYS = {
+  overrideAccess: true,
+  trusted: true,
+  enforceFieldAccess: true,
+  fieldAccessUser: true,
+  user: true,
+  actor: true,
+  req: true,
+  context: true,
+  request: true,
+  showHiddenFields: true,
+  disableErrors: true,
+  disableTransaction: true,
+  depth: true,
+  richTextFormat: true,
+  richTextStyles: true,
+  overrideLock: true,
+  forms: true,
+  locale: true,
+  fallbackLocale: true,
+  principal: true,
+  apiKeyId: true,
+} as const satisfies Record<keyof WorkflowCallArgs, true>;
+
+const CALL_OPTIONS: ReadonlySet<string> = new Set(
+  Object.keys(CALL_OPTION_KEYS)
+);
+
+/**
+ * A settings update's arguments without the options the call is made with: the change it asks
+ * for, passed on whole.
+ *
+ * @experimental
+ */
+export function settingsChangeOf(
+  args: Readonly<Record<string, unknown>>
+): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(args).filter(([key]) => !CALL_OPTIONS.has(key))
+  );
+}
 
 /** One assignment, as a call names it. @experimental */
 export interface WorkflowAssignmentInput {
@@ -240,10 +265,7 @@ export function createWorkflowsNamespace(
       update: args =>
         runAsCaller(defaultConfig, args, async a => {
           const { operations, asker } = await prepared(a);
-          const change = Object.fromEntries(
-            Object.entries(a).filter(([key]) => !CALL_OPTIONS.has(key))
-          );
-          return operations.updateSettings(asker, change);
+          return operations.updateSettings(asker, settingsChangeOf(a));
         }),
     },
   };
