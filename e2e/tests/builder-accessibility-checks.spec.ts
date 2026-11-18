@@ -196,7 +196,11 @@ test("lists text with too little contrast, and text over an image as not checked
               version: 1,
               props: { as: "section", contained: true },
               styles: {
-                base: { base: { background: { image: "/hero.jpg" } } },
+                base: {
+                  base: {
+                    backgroundGradient: "linear-gradient(#1f2937, #f9fafb)",
+                  },
+                },
               },
               slots: {
                 children: [
