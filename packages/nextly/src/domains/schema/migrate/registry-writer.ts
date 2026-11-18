@@ -72,6 +72,7 @@ import {
 } from "./registry-history";
 import { removeRegistryRow } from "./registry-row-removal";
 import type { RegistrySource } from "./registry-source";
+import { topLevelFieldNames } from "./top-level-field-names";
 
 export interface RegistryWriteDeps {
   adapter: DrizzleAdapter;
@@ -198,18 +199,6 @@ export async function rowsBehindSource(
     });
   }
   return { behind, failed };
-}
-
-/** The top-level field names of a field list, as a record or a row holds it. */
-function fieldNamesOf(fields: unknown): string[] {
-  if (!Array.isArray(fields)) return [];
-  return fields.flatMap(field => {
-    const name =
-      typeof field === "object" && field !== null
-        ? (field as { name?: unknown }).name
-        : undefined;
-    return typeof name === "string" && name !== "" ? [name] : [];
-  });
 }
 
 /** Registry rows by slug for each kind, as a registry record keeps them. */
@@ -444,11 +433,11 @@ async function recordedRows(
     stored: ReadonlyMap<string, unknown> | undefined,
     slug: string
   ) => ({
-    recordedFields: fieldNamesOf(recorded.settings.fields),
+    recordedFields: topLevelFieldNames(recorded.settings.fields),
     storedFields:
       stored === undefined
         ? undefined
-        : fieldNamesOf(
+        : topLevelFieldNames(
             (stored.get(slug) as { fields?: unknown } | undefined)?.fields
           ),
   });

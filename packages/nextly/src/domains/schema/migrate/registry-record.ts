@@ -147,53 +147,81 @@ function isOwnedPermissions(value: unknown): value is BaselinePermission[] {
   );
 }
 
-/** The record a stored value holds, or undefined for anything else. */
-function decodeRecord(raw: unknown): RegistryRecord | undefined {
-  let value: unknown = raw;
-  if (typeof raw === "string") {
-    try {
-      value = JSON.parse(raw);
-    } catch {
-      return undefined;
-    }
-  }
-  if (typeof value !== "object" || value === null) return undefined;
-  const { point, baseline, ownedPermissions } = value as Record<
-    string,
-    unknown
-  >;
-  if (point !== null && typeof point !== "string") return undefined;
-  if (baseline === undefined) {
-    if (ownedPermissions === undefined) return { point };
-    return isOwnedPermissions(ownedPermissions)
-      ? { point, ownedPermissions }
-      : undefined;
-  }
-  if (typeof baseline !== "object" || baseline === null) return undefined;
-  const b = baseline as Record<string, unknown>;
-  if (
-    !isRowsBySlug(b.collections) ||
-    !isRowsBySlug(b.singles) ||
-    !isRowsBySlug(b.fieldGroups) ||
-    !Array.isArray(b.permissions) ||
-    !b.permissions.every(slug => typeof slug === "string") ||
-    (b.ownedPermissions !== undefined &&
-      !isOwnedPermissions(b.ownedPermissions))
-  ) {
+/** Whether `value` is a list of slugs. */
+const isSlugList = (value: unknown): value is string[] =>
+  Array.isArray(value) && value.every(slug => typeof slug === "string");
+
+/** Whether `value` is an object, its fields not yet known. */
+const isObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null;
+
+/** What each field of a stored baseline must hold for the baseline to be read. */
+const BASELINE_FIELDS: Record<
+  keyof RegistryBaseline,
+  (value: unknown) => boolean
+> = {
+  collections: isRowsBySlug,
+  singles: isRowsBySlug,
+  fieldGroups: isRowsBySlug,
+  permissions: isSlugList,
+  ownedPermissions: value => value === undefined || isOwnedPermissions(value),
+};
+
+/** A stored value as an object: text is parsed, and text that is no JSON is nothing. */
+function storedValue(raw: unknown): unknown {
+  if (typeof raw !== "string") return raw;
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch {
     return undefined;
   }
+}
+
+/** The baseline `value` holds, or undefined where a field is not of its stored type. */
+function decodeBaseline(value: unknown): RegistryBaseline | undefined {
+  if (!isObject(value)) return undefined;
+  const fields = Object.entries(BASELINE_FIELDS);
+  if (!fields.every(([field, holds]) => holds(value[field]))) return undefined;
+  const { collections, singles, fieldGroups, permissions, ownedPermissions } =
+    value as unknown as RegistryBaseline;
   return {
-    point,
-    baseline: {
-      collections: b.collections,
-      singles: b.singles,
-      fieldGroups: b.fieldGroups,
-      permissions: b.permissions,
-      ...(b.ownedPermissions === undefined
-        ? {}
-        : { ownedPermissions: b.ownedPermissions }),
-    },
+    collections,
+    singles,
+    fieldGroups,
+    permissions,
+    ...(ownedPermissions === undefined ? {} : { ownedPermissions }),
   };
+}
+
+/** The record at `point` that keeps a baseline, or undefined where the baseline cannot be read. */
+function recordWithBaseline(
+  point: string | null,
+  stored: unknown
+): RegistryRecord | undefined {
+  const baseline = decodeBaseline(stored);
+  return baseline === undefined ? undefined : { point, baseline };
+}
+
+/** The record at `point` that keeps no baseline: the point alone, or with the owned permissions kept beside it. */
+function recordWithoutBaseline(
+  point: string | null,
+  ownedPermissions: unknown
+): RegistryRecord | undefined {
+  if (ownedPermissions === undefined) return { point };
+  return isOwnedPermissions(ownedPermissions)
+    ? { point, ownedPermissions }
+    : undefined;
+}
+
+/** The record a stored value holds, or undefined for anything else. */
+function decodeRecord(raw: unknown): RegistryRecord | undefined {
+  const value = storedValue(raw);
+  if (!isObject(value)) return undefined;
+  const { point, baseline, ownedPermissions } = value;
+  if (!isTextOrNull(point)) return undefined;
+  return baseline === undefined
+    ? recordWithoutBaseline(point, ownedPermissions)
+    : recordWithBaseline(point, baseline);
 }
 
 /**
