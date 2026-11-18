@@ -503,6 +503,15 @@ export type { ImageStatesProps } from "./canvas/image-states";
 export { FirstAddChoosers } from "./canvas/first-add-choosers";
 export type { FirstAddChoosersProps } from "./canvas/first-add-choosers";
 /**
+ * "+ Add a question" under a selected Accordion's last question, drawn over
+ * the canvas: it adds the next numbered question, opens it and types its
+ * title, through the host's way into a block's text.
+ *
+ * @experimental
+ */
+export { AccordionAddQuestion } from "./canvas/accordion-add-question";
+export type { AccordionAddQuestionProps } from "./canvas/accordion-add-question";
+/**
  * The badge on a block whose bound value a visitor will not see, drawn in the
  * canvas's overlay from the host's `visitorUnreadableBindings` answer.
  */

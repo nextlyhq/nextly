@@ -40,7 +40,11 @@ import { CANVAS_ROOT_CLASS } from "../shell-state";
 
 import { APPEAR_REPLAY_RULES } from "./appear-replay";
 import { DEVICE_HIDDEN_ATTRIBUTE } from "./canvas-device-hidden";
-import { EMPTY_CONTAINER_SELECTOR, EMPTY_TEXT_SELECTOR } from "./empty-slot";
+import {
+  EMPTY_CONTAINER_SELECTOR,
+  EMPTY_DISCLOSURE_SELECTOR,
+  EMPTY_TEXT_SELECTOR,
+} from "./empty-slot";
 
 const ROOT = `.${CANVAS_ROOT_CLASS}`;
 
@@ -239,6 +243,18 @@ ${EMPTY_TEXT_SELECTOR} { min-height: 1lh; }
 }
 ${EMPTY_CONTAINER_SELECTOR} {
   display: block;
+  outline: 1px dashed color-mix(in srgb, currentColor 45%, transparent);
+  outline-offset: -1px;
+}
+/* An open Question emptied of its answer has the same start under its
+   title: the box an empty container draws, after the summary, where the
+   answer's blocks go. Drawn by the editor only (see
+   EMPTY_DISCLOSURE_SELECTOR); the published page draws nothing there. */
+${EMPTY_DISCLOSURE_SELECTOR}::after {
+  content: "";
+  display: block;
+  min-height: 2.75rem;
+  margin-block-start: 0.5rem;
   outline: 1px dashed color-mix(in srgb, currentColor 45%, transparent);
   outline-offset: -1px;
 }
