@@ -1,6 +1,7 @@
 /**
  * A collection made in the Schema Builder leaves nothing a migration does not record: right
- * after its create, `migrate:check` and `nextly migrate` both find the project up to date.
+ * after its create, `migrate:check` and `nextly migrate` both find the project up to date, and
+ * after its create and a change `migrate:create` finds nothing to write.
  *
  * The create goes through the dispatcher as the Builder's dialog sends it, with no `admin`
  * settings of its own. A settings comparison that read the definition the Builder wrote apart
@@ -16,6 +17,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { runMigrate } from "../../../../cli/commands/migrate";
 import { runMigrateCheck } from "../../../../cli/commands/migrate-check";
+import { runMigrateCreate } from "../../../../cli/commands/migrate-create";
 import type { CommandContext } from "../../../../cli/program";
 import { createLogger } from "../../../../cli/utils/logger";
 import { defineConfig } from "../../../../config";
@@ -27,6 +29,7 @@ import {
 } from "../../../../plugins/test-nextly";
 import type { ServiceContainer } from "../../../../services";
 import { _resetEnvCache } from "../../../../shared/lib/env";
+import { setNonInteractive } from "../../migrate/can-prompt";
 
 const loaded = vi.hoisted(() => ({ config: undefined as unknown }));
 // `cli/program` imports every command; the commands driven here are handed their context.
@@ -118,21 +121,56 @@ async function command(
   }
 }
 
-// SQLite over a file, which the commands' own connection opens as the instance's.
+/** The instance, on SQLite over a file, which the commands' own connection opens as its own. */
+async function boot(): Promise<void> {
+  const url = `file:${join(basePath, "test.db")}`;
+  process.env.DB_DIALECT = "sqlite";
+  process.env.DATABASE_URL = url;
+  _resetEnvCache();
+  const adapter = await createAdapter({ type: "sqlite", url } as Parameters<
+    typeof createAdapter
+  >[0]);
+  instance = await createTestNextly({
+    adapter,
+    basePath,
+    db: { migrationsDir: MIGRATIONS, uiSchemaFile: DEFINITION },
+  });
+}
+
+/** The migration files in the project's history folder, by name. */
+const migrationFiles = (): string[] => {
+  const dir = join(basePath, "database", "history");
+  return existsSync(dir)
+    ? readdirSync(dir)
+        .filter(f => f.endsWith(".sql"))
+        .sort()
+    : [];
+};
+
+/** `migrate:create` over the project as the saves left it writes no migration. */
+async function nothingLeftToCreate(): Promise<void> {
+  const filesBefore = migrationFiles();
+  const created = await command(context => {
+    // As `--non-interactive` does: no rename is asked about.
+    setNonInteractive(true);
+    return runMigrateCreate("after", { cwd: basePath }, context).finally(() =>
+      setNonInteractive(false)
+    );
+  });
+  expect(created.code, created.said.join("\n")).toBeUndefined();
+  // A file written here is a change the saves left unrecorded; its text says which.
+  const written = migrationFiles().filter(f => !filesBefore.includes(f));
+  expect(
+    written,
+    written
+      .map(f => readFileSync(join(basePath, "database", "history", f), "utf-8"))
+      .join("\n")
+  ).toEqual([]);
+}
+
 describe("a collection made in the Schema Builder (sqlite)", () => {
   it("leaves migrate:check and nextly migrate nothing to name after its create", async () => {
-    const url = `file:${join(basePath, "test.db")}`;
-    process.env.DB_DIALECT = "sqlite";
-    process.env.DATABASE_URL = url;
-    _resetEnvCache();
-    const adapter = await createAdapter({ type: "sqlite", url } as Parameters<
-      typeof createAdapter
-    >[0]);
-    instance = await createTestNextly({
-      adapter,
-      basePath,
-      db: { migrationsDir: MIGRATIONS, uiSchemaFile: DEFINITION },
-    });
+    await boot();
 
     // As the Builder's new-collection dialog sends it: no admin settings of its own.
     await dispatchCollections(
@@ -180,5 +218,38 @@ describe("a collection made in the Schema Builder (sqlite)", () => {
     expect(migrated.said.join("\n")).toContain(
       "Nothing to migrate. Database is up to date."
     );
+  }, 60_000);
+
+  it("leaves migrate:create nothing to write after its create and a change", async () => {
+    await boot();
+    const fields = [{ name: "name", type: "text" }];
+    await dispatchCollections(
+      {} as ServiceContainer,
+      "createCollection",
+      {},
+      { name: "authors", label: "Author", fields }
+    );
+    await nothingLeftToCreate();
+
+    const changed = [...fields, { name: "bio", type: "text" }];
+    const preview = (await (
+      (await dispatchCollections(
+        {} as ServiceContainer,
+        "previewSchemaChanges",
+        { collectionName: "authors" },
+        { fields: changed }
+      )) as Response
+    ).json()) as { schemaVersion?: number; data?: { schemaVersion: number } };
+    await dispatchCollections(
+      {} as ServiceContainer,
+      "applySchemaChanges",
+      { collectionName: "authors" },
+      {
+        fields: changed,
+        confirmed: true,
+        schemaVersion: preview.data?.schemaVersion ?? preview.schemaVersion,
+      }
+    );
+    await nothingLeftToCreate();
   }, 60_000);
 });

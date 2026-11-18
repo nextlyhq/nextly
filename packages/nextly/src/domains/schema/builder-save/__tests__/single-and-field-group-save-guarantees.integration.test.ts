@@ -3,7 +3,7 @@
  * beyond writing its migration: the commands that read the project find nothing left to do, a save
  * that cannot write its migration or its definition changes nothing, a save over a history the
  * commands would refuse is refused the same way, a save over a busy table changes nothing, and the
- * definition file holds what the registry holds. Known gaps are skipped where they stand.
+ * definition file holds what the registry holds.
  *
  * Each case runs for a Single and a field group, through the services every Builder entry point
  * reaches, on every configured dialect.
@@ -505,8 +505,7 @@ describe.each(getConfiguredTestDialects())(
         await nothingLeftToDo(t);
       }, 60_000);
 
-      // Known gap: after any Builder save, migrate:create writes a permissions-only empty migration.
-      it.skip("leaves nothing for migrate:create to write after its create, change and delete", async () => {
+      it("leaves nothing for migrate:create to write after its create, change and delete", async () => {
         const t = await boot();
 
         await kind.create([text("heading")]);
@@ -810,23 +809,18 @@ describe.each(getConfiguredTestDialects())(
           await nothingLeftToDo(t);
         }, 60_000);
 
-        // Known gap: on SQLite the shared schema lock stops first, as a raw SQLITE_BUSY, no tries.
-        it.skipIf(dialect === "sqlite")(
-          "waits in tries, then stops as table busy",
-          async () => {
-            const t = await boot();
-            await kind.create([text("heading")]);
-            await holdTheTable(t);
+        it("waits in tries, then stops as table busy", async () => {
+          const t = await boot();
+          await kind.create([text("heading")]);
+          await holdTheTable(t);
 
-            await expect(
-              kind.change(t, [text("heading"), text("body")])
-            ).rejects.toMatchObject({
-              code: "NEXTLY_TABLE_BUSY",
-              statusCode: 409,
-            });
-          },
-          30_000
-        );
+          await expect(
+            kind.change(t, [text("heading"), text("body")])
+          ).rejects.toMatchObject({
+            code: "NEXTLY_TABLE_BUSY",
+            statusCode: 409,
+          });
+        }, 30_000);
 
         // A column type change keeps the push, which waits in tries of its own. Its stop says
         // nothing ran, so the files the save wrote are withdrawn, on MySQL as anywhere else.
