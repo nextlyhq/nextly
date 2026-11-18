@@ -75,6 +75,15 @@ describeEachDialect("upgrading a Single's translation stamps", dialect => {
         .getDrizzle<{ execute(q: unknown): Promise<unknown> }>()
         .execute(clear);
     }
+    // Its history as such an installation kept it: each language's own last version, a day apart,
+    // in place of the versions this release's saves just recorded.
+    await database.adapter.delete(VERSIONS_TABLE, {
+      and: [
+        { column: "scopeKind", op: "=", value: "single" },
+        { column: "scopeSlug", op: "=", value: BANNER },
+        { column: "versionNo", op: "IS NOT NULL" },
+      ],
+    });
     // Each language's own history, a day apart.
     const versionIn = async (locale: string, at: string, versionNo: number) =>
       database!.adapter.insert(
