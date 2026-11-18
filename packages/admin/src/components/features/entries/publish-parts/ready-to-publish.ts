@@ -23,7 +23,7 @@ import { waitingForWords } from "../review/review-words";
 import { SHARED_PATH, type PartsChoice } from "./publish-parts-choice";
 
 /** The code the publish gate refuses a part with while it holds no current approval. */
-export const NOT_APPROVED = "NOT_APPROVED";
+const NOT_APPROVED = "NOT_APPROVED";
 
 /** One thing that holds Publish, and how it is resolved. */
 export interface ReadyProblem {

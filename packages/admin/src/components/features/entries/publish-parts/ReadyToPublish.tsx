@@ -21,7 +21,7 @@ import type { ReleaseDocumentRef } from "@admin/types/releases";
 import type { ReadyProblem } from "./ready-to-publish";
 
 /** The longest reason the publish route takes, as its body schema bounds it. */
-export const WITHOUT_REVIEW_REASON_MAX = 2000;
+const WITHOUT_REVIEW_REASON_MAX = 2000;
 
 /** What holds Publish, each with its fix or who can unblock it. Nothing where nothing does. */
 export function ReadyToPublish({

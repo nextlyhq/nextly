@@ -560,7 +560,7 @@ export function documentActions(
 }
 
 /** The id a workflow step is offered under, apart from every built-in. */
-export const REVIEW_STEP_ACTION_PREFIX = "review-step:";
+const REVIEW_STEP_ACTION_PREFIX = "review-step:";
 
 /** The action id of the workflow step `name`. */
 export function reviewStepActionId(name: string): string {
@@ -631,7 +631,7 @@ function publishLabel(state: DocumentActionState): string {
  * Why a held Publish cannot run: the stage it waits in, and who it waits for
  * where the review state names anyone.
  */
-export function needsApprovalReason(review: ReviewActionState): string {
+function needsApprovalReason(review: ReviewActionState): string {
   return review.waitingFor === null
     ? `Needs approval: ${review.stageLabel}`
     : `Needs approval: ${review.stageLabel}, waiting for ${review.waitingFor}`;
