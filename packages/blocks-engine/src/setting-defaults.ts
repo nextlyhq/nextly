@@ -74,7 +74,11 @@ function filledNode(
   if (fills === undefined) return node;
   const props = editedProps(
     node.props,
-    fills.map(fill => ({ path: fill.prop, value: fill.value, unset: fill.unset }))
+    fills.map(fill => ({
+      path: fill.prop,
+      value: fill.value,
+      unset: fill.unset,
+    }))
   );
   const bindings: Record<string, unknown> = { ...node.bindings };
   for (const fill of fills) {

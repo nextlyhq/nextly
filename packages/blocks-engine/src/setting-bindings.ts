@@ -96,7 +96,12 @@ function eachFollower(
     const slots = ownEntry(node, "slots");
     if (!isPlainRecord(slots)) continue;
     for (const name of ownKeys(slots)) {
-      eachFollower(ownEntry(slots, name), pointer(`${at}/slots`, name), visit, budget);
+      eachFollower(
+        ownEntry(slots, name),
+        pointer(`${at}/slots`, name),
+        visit,
+        budget
+      );
     }
   }
 }
@@ -263,7 +268,8 @@ function fillFrom(
   const target = targetOf(block.id, path);
   const value =
     target.edit === undefined ? propAt(block.props, path) : target.edit.value;
-  const unset = target.edit === undefined ? value === undefined : target.edit.unset;
+  const unset =
+    target.edit === undefined ? value === undefined : target.edit.unset;
   const own = isPlainRecord(block.bindings)
     ? ownEntry(block.bindings, path)
     : undefined;

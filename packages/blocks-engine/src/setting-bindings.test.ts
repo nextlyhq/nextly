@@ -133,7 +133,10 @@ describe("a block following its component's setting, composed", () => {
   });
 
   it("shows the setting's default when the placement sets nothing", () => {
-    const echo = copyOf(composed(page([placement("p", "card")]), DEFS), "card-echo");
+    const echo = copyOf(
+      composed(page([placement("p", "card")]), DEFS),
+      "card-echo"
+    );
     expect(echo?.props.text).toBe("Plain title");
     expect(echo?.bindings).toBeUndefined();
   });
@@ -174,7 +177,10 @@ describe("a block following its component's setting, composed", () => {
         ),
       ],
     ]);
-    const echo = copyOf(composed(page([placement("p", "card")]), defs), "card-echo");
+    const echo = copyOf(
+      composed(page([placement("p", "card")]), defs),
+      "card-echo"
+    );
     expect(echo?.bindings?.text).toEqual(fromSite);
   });
 
@@ -189,7 +195,9 @@ describe("a block following its component's setting, composed", () => {
     );
     const echo = copyOf(
       composed(
-        page([placement("p", "card", { overrides: { "hero-title": "Typed" } })]),
+        page([
+          placement("p", "card", { overrides: { "hero-title": "Typed" } }),
+        ]),
         new Map<string, BlockDocument>([["card", card]])
       ),
       "card-echo"
@@ -210,9 +218,14 @@ describe("a block following its component's setting, composed", () => {
     const card = component(
       [
         heading("card-title", "Plain title"),
-        placement("card-badge", "badge", {}, {
-          "overrides.label": follows("title"),
-        }),
+        placement(
+          "card-badge",
+          "badge",
+          {},
+          {
+            "overrides.label": follows("title"),
+          }
+        ),
       ],
       [exposure("title", "card-title", "text")]
     );
@@ -228,7 +241,9 @@ describe("a block following its component's setting, composed", () => {
   });
 
   it("keeps what it showed when the placement is detached", () => {
-    const host = page([placement("p", "card", { overrides: { title: "Typed" } })]);
+    const host = page([
+      placement("p", "card", { overrides: { title: "Typed" } }),
+    ]);
     const plan = planDetach(host, "p", DEFS, { parentsOf: () => undefined });
     if (plan.pageOps === undefined) throw new Error(String(plan.problem));
     const detached = flatten(
@@ -251,9 +266,9 @@ describe("a block following a setting, outside composition", () => {
     },
   });
   const textOf = (document: BlockDocument, id: string): unknown =>
-    flatten(bindDocument(document, run).document.nodes as ResolvedBlockNode[]).find(
-      entry => entry.id === id
-    )?.props.text;
+    flatten(
+      bindDocument(document, run).document.nodes as ResolvedBlockNode[]
+    ).find(entry => entry.id === id)?.props.text;
 
   it("shows the setting's default in the component shown alone", () => {
     expect(textOf(CARD, "card-echo")).toBe("Plain title");
@@ -262,7 +277,9 @@ describe("a block following a setting, outside composition", () => {
   it("shows the default's own binding in the component shown alone", () => {
     const card = component(
       [
-        heading("card-title", "Plain title", { text: { $bind: "name", source: "site" } }),
+        heading("card-title", "Plain title", {
+          text: { $bind: "name", source: "site" },
+        }),
         heading("card-echo", "Stored echo", { text: follows("title") }),
       ],
       [exposure("title", "card-title", "text")]
@@ -322,7 +339,10 @@ describe("where a setting binding may be saved", () => {
 
   it("is judged by the document's own validation", () => {
     const judged = (doc: BlockDocument) =>
-      validateDocument(doc, { breakpoints: FIXTURE_BREAKPOINTS, mode: "strict" })
+      validateDocument(doc, {
+        breakpoints: FIXTURE_BREAKPOINTS,
+        mode: "strict",
+      })
         .issues.filter(issue => issue.path.includes("/bindings"))
         .map(issue => [issue.path, issue.code, issue.severity]);
     const card = component(
