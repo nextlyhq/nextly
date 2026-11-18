@@ -181,7 +181,7 @@ expectTypeOf<StyleState>().toEqualTypeOf<
 // the types are derived from them, so pinning the TYPE here pins the value: a
 // source added to `BINDING_SOURCES` widens `BindingSource` and stops this line.
 expectTypeOf<BindingSource>().toEqualTypeOf<
-  "entry" | "item" | "single" | "site"
+  "entry" | "item" | "single" | "site" | "setting"
 >();
 expectTypeOf<BindingFormatType>().toEqualTypeOf<
   "date" | "number" | "currency" | "relativeTime" | "list"
