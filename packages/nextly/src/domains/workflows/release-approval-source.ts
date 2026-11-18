@@ -3,23 +3,24 @@
  * and a reader shown a due release, to the same answer.
  *
  * A member going live is held when any part its run would publish is not approved by the publish
- * gate's own per-part decision (`partApproval`), asked of each part and never decided here. The
+ * gate's own per-part decision (`partApproved`), asked of each part and never decided here. The
  * parts a run publishes are those a document-wide publish moves: each language kept with a status
  * of its own that holds something (stored, or a pending draft), and the shared part; a part with
  * nothing to publish (live, with no pending draft) is not asked about, as `partStage` puts it in
  * no stage. A member coming down, and a document no workflow is attached to, is never held.
  *
  * What it reads, for a batch: each member's review states (one indexed read per member); each
- * scope's stored statuses and pending drafts once for the whole batch; and a workflow's settings
- * once, only where a held part has no one assigned. Liveness is the stored status, not a due release's projection of
- * it: the run judges a document as it is stored before it writes it, and the projection asks this
- * hold, so reading through it would ask the hold again.
+ * scope's stored statuses and pending drafts once for the whole batch; for a Single's part that is
+ * otherwise approved, the content it shows, since a Single's save leaves an approval in place; and
+ * for a member held, whom its parts wait for. Liveness is the stored status, not a due release's
+ * projection of it: the run judges a document as it is stored before it writes it, and the
+ * projection asks this hold, so reading through it would ask the hold again.
  *
- * A finding names, for each held part, its stage and whom it waits for: the part's assignee in
- * that stage, else the stage's default reviewer from the workflow's settings, else the permission
- * of the stage's primary step (`user:<id>`, `role:<id>`, `permission:<slug>`; `none` for a stage
- * with no step out of it). Parts are named by language, and the shared part as `shared`, as a
- * publish's refusal names them.
+ * A finding names, for each held part, its stage and whom it waits for, as the review read names
+ * them (`partsWaitingFor`): `user:<id>` for a person, `roles:<id>,<id>` for anyone holding one of
+ * those roles (a role assigned or a stage's default reviewer, else the roles that may take the
+ * stage's primary step), and `none` for a stage with no step out of it. Parts are named by language, and the shared part as
+ * `shared`, as a publish's refusal names them.
  *
  * @module domains/workflows/release-approval-source
  */
@@ -42,7 +43,9 @@ import {
 import { VersionsRepository } from "../versions/versions-repository";
 
 import { entityOf, partStage } from "./implicit-stage";
-import { partApproval } from "./part-approval";
+import { partApproved } from "./part-approval";
+import { documentTableOn, type DocumentTable } from "./part-versions";
+import { partsWaitingFor, type PartWaitingFor } from "./part-waits-for";
 import { workflowAttachedTo, type RegisteredWorkflow } from "./registry";
 import { keepReleaseRecheck } from "./release-recheck-signal";
 import {
@@ -50,11 +53,7 @@ import {
   type ReviewDocument,
   type ReviewState,
 } from "./review-state-repository";
-import { assigneePermission } from "./steps";
-import {
-  readWorkflowSettings,
-  type StoredWorkflowSettings,
-} from "./workflow-settings-repository";
+import { stillApprovedOn } from "./workflow-publish-gate";
 
 /** The one code this check reports. */
 type NotApproved = "NOT_APPROVED";
@@ -66,8 +65,14 @@ const SHARED_PART = "shared";
 interface HeldPart {
   part: string | null;
   stage: string;
-  /** Whom it waits for, as `<kind>:<id>`; see the module. */
-  waitsFor: string;
+  state: ReviewState | null;
+}
+
+/** A document held back, with the parts held and the workflow they are held by. */
+interface HeldDocument {
+  registered: RegisteredWorkflow;
+  document: ReviewDocument;
+  parts: HeldPart[];
 }
 
 /** What one part of a document holds: whether it is live, and whether a draft is pending. */
@@ -82,12 +87,11 @@ interface ScopeContent {
   languages: readonly string[];
   /** What the part holds, or null for a language with nothing stored or pending. */
   of(entryId: string, part: string | null): PartContent | null;
-}
-
-/** Reads shared by every document of one call: each workflow's settings, read at most once. */
-interface BatchReads {
-  adapter: DrizzleAdapter;
-  settings: Map<string, Promise<StoredWorkflowSettings | null>>;
+  /**
+   * Where a Single's content is read from, for comparing a part's content with its approval; null
+   * for a collection, whose save withdraws an approval its content moved off.
+   */
+  table: DocumentTable | null;
 }
 
 /**
@@ -145,6 +149,7 @@ async function scopeContent(
     adapter
   ).findPendingChangeLocales(scope.scopeKind, scope.scopeSlug, ids);
   return {
+    table: scope.scopeKind === "single" ? await documentTableOn(scope) : null,
     languages: perLanguage
       ? (localization?.locales.map(locale => locale.code) ?? [])
       : [],
@@ -174,43 +179,21 @@ async function scopeContent(
   };
 }
 
-/** Whom a held part waits for: see the module. */
-async function waitsFor(
-  reads: BatchReads,
-  registered: RegisteredWorkflow,
-  document: ReviewDocument,
-  state: ReviewState | null,
-  stage: string
-): Promise<string> {
-  // An assignee belongs to the stage they were assigned in; a stranded part reads as the first
-  // stage, where nobody assigned it.
-  if (state?.assignee && state.stage === stage) {
-    return `${state.assignee.kind}:${state.assignee.id}`;
-  }
-  const slug = registered.workflow.slug;
-  let settings = reads.settings.get(slug);
-  if (settings === undefined) {
-    settings = readWorkflowSettings(reads.adapter, slug);
-    reads.settings.set(slug, settings);
-  }
-  const reviewer = (await settings)?.settings.defaultReviewers?.[stage];
-  if (reviewer) return `${reviewer.kind}:${reviewer.id}`;
-  const permission = assigneePermission(
-    registered.workflow,
-    stage,
-    document.scopeSlug
-  );
-  return permission === null ? "none" : `permission:${permission}`;
+/** Whom a part waits for, as a finding spells it: see the module. */
+function waitsForOf(waiting: PartWaitingFor | null): string {
+  if (waiting === null) return "none";
+  if (waiting.kind === "user") return `user:${waiting.id}`;
+  return `roles:${waiting.roles.map(role => role.id).join(",")}`;
 }
 
 /** The parts of one document going live that its workflow holds back, in publishing order. */
 async function heldPartsOf(
-  reads: BatchReads,
+  adapter: DrizzleAdapter,
   registered: RegisteredWorkflow,
   document: ReviewDocument,
   content: ScopeContent
 ): Promise<HeldPart[]> {
-  const states = await readDocumentReviewStates(reads.adapter, document);
+  const states = await readDocumentReviewStates(adapter, document);
   const held: HeldPart[] = [];
   for (const part of [...content.languages, null]) {
     const holds = content.of(document.entryId, part);
@@ -218,21 +201,30 @@ async function heldPartsOf(
     const state = states.find(candidate => candidate.part === part) ?? null;
     const stage = partStage(registered.workflow, state, holds);
     if (stage === null) continue;
-    const approved = await partApproval().approved({
+    const table = content.table;
+    const approved = await partApproved({
       registered,
       document,
       part,
       state,
       content: holds,
-      stage,
+      // A Single's save leaves an approval in place, so its content is compared with it.
+      ...(table !== null && state !== null
+        ? {
+            approvedNow: () =>
+              stillApprovedOn(
+                adapter,
+                registered,
+                document,
+                table,
+                part,
+                state,
+                "pool"
+              ),
+          }
+        : {}),
     });
-    if (!approved) {
-      held.push({
-        part,
-        stage,
-        waitsFor: await waitsFor(reads, registered, document, state, stage),
-      });
-    }
+    if (!approved) held.push({ part, stage, state });
   }
   return held;
 }
@@ -274,9 +266,8 @@ function attachedScopes(
 async function heldForApproval(
   adapter: DrizzleAdapter,
   documents: readonly GoingLiveDocument[]
-): Promise<Map<string, HeldPart[]>> {
-  const held = new Map<string, HeldPart[]>();
-  const reads: BatchReads = { adapter, settings: new Map() };
+): Promise<Map<string, HeldDocument>> {
+  const held = new Map<string, HeldDocument>();
   for (const { registered, scope, documents: inScope } of attachedScopes(
     documents
   )) {
@@ -289,24 +280,37 @@ async function heldForApproval(
     // checks name it as removed.
     if (content === null) continue;
     for (const document of inScope) {
-      const parts = await heldPartsOf(
-        reads,
-        registered,
-        { ...scope, entryId: document.entryId },
-        content
-      );
-      if (parts.length > 0) held.set(document.id, parts);
+      const reviewed = { ...scope, entryId: document.entryId };
+      const parts = await heldPartsOf(adapter, registered, reviewed, content);
+      if (parts.length > 0) {
+        held.set(document.id, { registered, document: reviewed, parts });
+      }
     }
   }
   return held;
 }
 
-/** A finding's detail: each held part, its stage and whom it waits for, in step. */
-function detailOf(parts: readonly HeldPart[]) {
+/**
+ * A finding's detail: each held part, its stage and whom it waits for, in step. Who a part waits
+ * for is read here, for a finding alone: the run and a reader's projection need only whether a
+ * document is held.
+ */
+async function detailOf(adapter: DrizzleAdapter, held: HeldDocument) {
+  const waiting = await partsWaitingFor(
+    adapter,
+    held.registered,
+    held.document.scopeSlug,
+    held.parts.map(entry => ({
+      stage: entry.stage,
+      assignee: entry.state?.assignee ?? null,
+    }))
+  );
   return {
-    parts: parts.map(held => held.part ?? SHARED_PART),
-    stages: parts.map(held => held.stage),
-    waitsFor: parts.map(held => held.waitsFor),
+    parts: held.parts.map(entry => entry.part ?? SHARED_PART),
+    stages: held.parts.map(entry => entry.stage),
+    waitsFor: held.parts.map((_entry, index) =>
+      waitsForOf(waiting[index] ?? null)
+    ),
   };
 }
 
@@ -326,18 +330,17 @@ export function releaseApprovalSource(
       // A member coming down is never blocked.
       const goingLive = batch.filter(member => member.action === "publish");
       const held = await heldForApproval(adapter, goingLive);
-      return goingLive.flatMap((member): ReleaseCheckFinding<NotApproved>[] => {
-        const parts = held.get(member.id);
-        return parts === undefined
-          ? []
-          : [
-              {
-                memberId: member.id,
-                code: "NOT_APPROVED",
-                detail: detailOf(parts),
-              },
-            ];
-      });
+      const findings: ReleaseCheckFinding<NotApproved>[] = [];
+      for (const member of goingLive) {
+        const document = held.get(member.id);
+        if (document === undefined) continue;
+        findings.push({
+          memberId: member.id,
+          code: "NOT_APPROVED",
+          detail: await detailOf(adapter, document),
+        });
+      }
+      return findings;
     },
     signal: keepReleaseRecheck,
   });

@@ -123,8 +123,7 @@ describe.each(getConfiguredTestDialects().filter(d => d === "sqlite"))(
       );
       expect(await hardCodes(first, arranged.releaseId)).toEqual([]);
 
-      // The publish gate does not judge a Single yet, so a Single is judged by the stand-in.
-      const t = await boot(dialect, { adapter: first.adapter, standIn: true });
+      const t = await boot(dialect, { adapter: first.adapter });
 
       expect(await releaseState(t, arranged.releaseId)).toBe("blocked");
       expect(await stoppedNotices(t, arranged)).toBe(1);

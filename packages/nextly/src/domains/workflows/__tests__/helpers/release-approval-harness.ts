@@ -5,18 +5,13 @@
  * Pages (one part) and Posts (translated, with a shared field) on `editorial`, and the Single
  * Banner on it too, in English and Spanish. Each table carries this harness's own prefix, so files
  * sharing these slugs never share a table. A release's parts are judged by the publish gate's own
- * decision; a boot asked for `standIn` registers the Single stand-in (`test-part-approval`) instead,
- * from a plugin's start, so the checks a server's start makes already ask it.
+ * per-part decision, the one a publish meets.
  *
  * Releases are arranged through the repository, as the releases suites arrange them, so an
  * instant already past can be set and a member added whatever the checks would say of it.
  */
-import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-
 import { grantTo } from "../../../../__tests__/fixtures/permission-holders";
 import { defineCollection, defineSingle, text } from "../../../../config";
-import { container } from "../../../../di/container";
-import { definePlugin } from "../../../../plugins/plugin-context";
 import {
   createTestNextly,
   type TestDialect,
@@ -54,7 +49,6 @@ import {
   versionOf,
 } from "./step-harness";
 import { editorial } from "./step-workflows";
-import { registerTestPartApproval } from "./test-part-approval";
 
 /** The definition hash of `editorial`, which every seeded review state is written under. */
 export const HASH = workflowDefinitionHash(editorial);
@@ -64,17 +58,6 @@ export const PAST = new Date("2020-01-01T00:00:00Z");
 
 /** An instant far ahead: a release scheduled for it waits for its moment. */
 export const LATER = new Date("2099-01-01T00:00:00Z");
-
-/** Registers the decision's stand-in as the boot starts its plugins. */
-const approvalStandIn = definePlugin({
-  name: "test-part-approval",
-  version: "1.0.0",
-  nextly: ">=0.0.1",
-  init: () => {
-    // The adapter the boot under way registered, which the stand-in reads through.
-    registerTestPartApproval(container.get<DrizzleAdapter>("adapter"));
-  },
-});
 
 /** Every operation a Single has, open to all. A Single has no `delete`. */
 const SINGLE_OPEN = {
@@ -96,8 +79,6 @@ export async function bootApprovals(
     workflow?: Workflow | null;
     adapter?: TestNextly["adapter"];
     seedPublic?: boolean;
-    /** Judge parts by the Single stand-in rather than the publish gate's decision. */
-    standIn?: boolean;
   } = {}
 ): Promise<TestNextly> {
   const attached =
@@ -106,7 +87,6 @@ export async function bootApprovals(
       : { workflow: options.workflow ?? editorial };
   const t = await createTestNextly({
     ...(options.adapter ? { adapter: options.adapter } : { dialect }),
-    ...(options.standIn === true ? { plugins: [approvalStandIn] } : {}),
     // A visitor's read is judged by the Public role a real boot makes, which reads everything
     // here by its rule.
     seedPublic: options.seedPublic ?? true,

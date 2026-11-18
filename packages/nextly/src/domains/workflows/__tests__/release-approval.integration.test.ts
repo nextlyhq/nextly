@@ -2,8 +2,7 @@
  * A release waits for approval, and stops when approval is withdrawn.
  *
  * Workflows' "Not approved" check judges each member going live by the publish gate's own
- * per-part decision; a Single, which the gate does not judge yet, by a stand-in
- * (`helpers/test-part-approval`). The cases cover what a release does with that answer:
+ * per-part decision, the one a publish meets. The cases cover what a release does with that answer:
  * its readiness, the events that stop it before its moment, its run asking again, Publish now,
  * what a reader is shown while it is due, and what the check reads.
  *
@@ -57,6 +56,7 @@ import {
 } from "./helpers/release-approval-harness";
 import {
   partOf,
+  role,
   saveIn,
   seedState,
   stateDb,
@@ -113,8 +113,11 @@ describe.each(getConfiguredTestDialects())(
     it("reports each unapproved member going live, with its stage and whom it waits for, and never one coming down", async () => {
       const t = await boot(dialect);
       // An approved page; one in legal assigned to carol; one never put in review, whose first
-      // stage has a default reviewer; one in legal with no one assigned and no default reviewer;
-      // and a published page in review coming down.
+      // stage has a default reviewer; one in legal with no one assigned and no default reviewer,
+      // which waits for the roles that may sign it off; and a published page in review coming
+      // down.
+      const editors = await role(t, "editors", [["update", "pages"]]);
+      const signers = await role(t, "signers", [["sign-off", "pages"]]);
       const approved = await doc(t, "pages");
       await approve(t, "pages", approved);
       const assigned = await doc(t, "pages");
@@ -127,7 +130,7 @@ describe.each(getConfiguredTestDialects())(
       await writeWorkflowSettings(
         t.adapter,
         "editorial",
-        { defaultReviewers: { writing: { kind: "role", id: "editors" } } },
+        { defaultReviewers: { writing: { kind: "role", id: editors } } },
         null,
         null
       );
@@ -174,7 +177,7 @@ describe.each(getConfiguredTestDialects())(
             detail: {
               parts: ["shared"],
               stages: ["writing"],
-              waitsFor: ["role:editors"],
+              waitsFor: [`roles:${editors}`],
             },
           },
           {
@@ -183,7 +186,9 @@ describe.each(getConfiguredTestDialects())(
             detail: {
               parts: ["shared"],
               stages: ["legal"],
-              waitsFor: ["permission:sign-off-pages"],
+              waitsFor: [
+                expect.stringMatching(new RegExp(`^roles:.*${signers}`)),
+              ],
             },
           },
         ])
@@ -220,7 +225,7 @@ describe.each(getConfiguredTestDialects())(
           detail: {
             parts: ["es"],
             stages: ["writing"],
-            waitsFor: ["permission:update-posts"],
+            waitsFor: [expect.stringMatching(/^roles:./)],
           },
         },
       ]);
@@ -266,9 +271,7 @@ describe.each(getConfiguredTestDialects())(
       });
 
       it("by an edit to an approved Single, whose save leaves its approval in place", async () => {
-        // The publish gate does not judge a Single yet, so a Single is judged by the stand-in.
         const t = await boot(dialect);
-        registerTestPartApproval(t.adapter);
         const banner = await saveBanner(t, "Approved");
         await approveBanner(t, banner);
         const arranged = await arrange(
