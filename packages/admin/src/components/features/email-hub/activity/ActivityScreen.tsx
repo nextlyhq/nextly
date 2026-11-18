@@ -84,12 +84,7 @@ export function ActivityScreen(): JSX.Element {
           filter.provider
         )}
       />
-      {filter.provider && (
-        <p className="text-xs text-muted-foreground">
-          Queued email waiting for its first attempt has no provider yet, so it
-          isn’t listed while a provider is chosen.
-        </p>
-      )}
+      <ProviderFilterNote provider={filter.provider} />
       <ActivityCount
         shown={activity.rows.length}
         more={activity.hasMore}
@@ -105,6 +100,21 @@ export function ActivityScreen(): JSX.Element {
         filtered={filtered}
       />
     </div>
+  );
+}
+
+/** Shown while a provider is chosen: what that choice leaves out of the list. */
+export function ProviderFilterNote({
+  provider,
+}: {
+  provider: ActivityFilter["provider"];
+}): JSX.Element | null {
+  if (!provider) return null;
+  return (
+    <p className="text-xs text-muted-foreground">
+      No queued email is listed while a provider is chosen: queued email can’t
+      be narrowed by provider yet, so only the delivery log is.
+    </p>
   );
 }
 

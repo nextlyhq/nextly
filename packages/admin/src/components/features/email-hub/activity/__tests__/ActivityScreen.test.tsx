@@ -12,7 +12,7 @@ import { describe, expect, it, vi } from "vitest";
 import { useEmailActivity } from "@admin/hooks/queries/useEmailActivity";
 
 import { deliveryRow } from "../activity-model";
-import { ActivityScreen } from "../ActivityScreen";
+import { ActivityScreen, ProviderFilterNote } from "../ActivityScreen";
 
 vi.mock("@admin/hooks/queries/useEmailActivity", () => ({
   useEmailActivity: vi.fn(),
@@ -70,5 +70,19 @@ describe("the Activity screen when a read fails", () => {
     activity({ rows: [], isError: true, error: new Error("Network down") });
     render(<ActivityScreen />);
     expect(screen.getByText(/Activity couldn.t be loaded/)).toBeTruthy();
+  });
+});
+
+describe("the note shown while a provider is chosen", () => {
+  it("says every queued email is left out, not only those waiting for a first attempt", () => {
+    render(<ProviderFilterNote provider={{ type: "smtp" }} />);
+    const note = screen.getByText(/queued email/i);
+    expect(note.textContent).toMatch(/no queued email is listed/i);
+    expect(note.textContent).not.toMatch(/waiting for its first attempt/i);
+  });
+
+  it("is not shown while no provider is chosen", () => {
+    const { container } = render(<ProviderFilterNote provider={undefined} />);
+    expect(container.textContent).toBe("");
   });
 });
