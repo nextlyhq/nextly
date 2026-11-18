@@ -71,6 +71,115 @@ describe("documentFrom", () => {
   });
 });
 
+describe("documentFrom, on blocks stored at an older version", () => {
+  /** A page holding a Quote, a Form and a Text as version 1 stored them. */
+  const stored = (): BlockDocument =>
+    ({
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [
+        {
+          id: "quote",
+          type: "core/quote",
+          version: 1,
+          props: {
+            text: "The book is the thing.",
+            source: "Ada",
+            citeUrl: "https://example.com/talk",
+          },
+          bindings: { citeUrl: { source: "entry", field: "website" } },
+        },
+        {
+          id: "form",
+          type: "core/form",
+          version: 1,
+          props: {
+            fields: [{ label: "Email", type: "email" }],
+            submitText: "",
+            method: "post",
+          },
+        },
+        {
+          id: "box",
+          type: "core/box",
+          version: 1,
+          props: {},
+          slots: {
+            children: [
+              {
+                id: "text",
+                type: "core/text",
+                version: 1,
+                props: { text: "Line one" },
+              },
+            ],
+          },
+        },
+      ],
+    }) as unknown as BlockDocument;
+
+  /** The node with this id, wherever in the page it sits. */
+  const byId = (doc: BlockDocument, id: string): BlockNode | undefined => {
+    const walk = (nodes: readonly BlockNode[]): BlockNode | undefined => {
+      for (const node of nodes) {
+        if (node.id === id) return node;
+        for (const children of Object.values(node.slots ?? {})) {
+          const found = walk(children);
+          if (found) return found;
+        }
+      }
+      return undefined;
+    };
+    return walk(doc.nodes);
+  };
+
+  it("hands each block over at its block's current version", () => {
+    // The editor writes whatever it holds when the author edits, so a block
+    // held at the version it was stored at is saved under a version stamp its
+    // props no longer match, and the renderer's own upgrade then reads the
+    // edited props as old ones.
+    const doc = documentFrom(stored());
+    expect(byId(doc, "quote")?.version).toBe(2);
+    expect(byId(doc, "form")?.version).toBe(2);
+    expect(byId(doc, "text")?.version).toBe(2);
+  });
+
+  it("moves an old prop, and the value bound to it, to its new name", () => {
+    const quote = byId(documentFrom(stored()), "quote");
+    expect(quote?.props).toMatchObject({ href: "https://example.com/talk" });
+    expect(quote?.props).not.toHaveProperty("citeUrl");
+    expect(quote?.bindings).toEqual({
+      href: { source: "entry", field: "website" },
+    });
+  });
+
+  it("runs each block's own step: the Form's and the Text's too", () => {
+    const doc = documentFrom(stored());
+    expect(byId(doc, "form")?.props).toMatchObject({
+      fields: [{ label: "Email", type: "email", name: "field-0" }],
+      submitText: "Submit",
+    });
+    expect(byId(doc, "form")?.props).not.toHaveProperty("method");
+    // Version 2 holds the words as a rich paragraph, not as a string.
+    expect(typeof byId(doc, "text")?.props.text).not.toBe("string");
+  });
+
+  it("leaves the stored value as it was", () => {
+    const value = stored();
+    const before = JSON.stringify(value);
+    documentFrom(value);
+    expect(JSON.stringify(value)).toBe(before);
+  });
+
+  it("keeps a document with nothing to upgrade as the very object stored", () => {
+    // A new object for every read would be a new document to every reader
+    // that compares by identity, and the editor plans and draws again for
+    // each one.
+    const current = documentFrom(stored());
+    expect(documentFrom(current)).toBe(current);
+  });
+});
+
 describe("canEditBlocks", () => {
   /*
    * The rule that decides whether a way INTO the editor is offered at all.
