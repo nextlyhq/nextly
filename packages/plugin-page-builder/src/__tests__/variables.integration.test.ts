@@ -20,6 +20,8 @@ import {
   DEFAULT_LIMITS,
   DOCUMENT_FORMAT_VERSION,
   dtcgToTokens,
+  NEXTLY_EXTENSION,
+  tokensToDtcg,
 } from "@nextlyhq/blocks-engine";
 import { getCachedNextly, type PluginDefinition } from "@nextlyhq/plugin-sdk";
 import {
@@ -1065,6 +1067,55 @@ describe.each(getConfiguredTestDialects())(
       expect(
         stored.tokens.find(token => token.name === "shadow.raised")?.values
       ).toEqual({ light: "0px 1px 2px 0px #336699" });
+    });
+
+    it("stores the usable text styles of a file whose other text style holds a value the site refuses", async () => {
+      const { t } = await boot();
+      const designer = await holding(t, ...DESIGN);
+      const style = (id: string, size: string) => ({
+        id,
+        slug: id,
+        label: id,
+        orderIndex: 0,
+        role: "text",
+        styles: { base: { base: { fontSize: size } } },
+      });
+      const file = tokensToDtcg(
+        { tokens: [] },
+        { textStyles: [style("good", "1.25rem"), style("odd", "2rem")] }
+      ).document;
+      // The file as another copy left it: one style's size is no size.
+      const own = (file.$extensions as Record<string, Record<string, unknown>>)[
+        NEXTLY_EXTENSION
+      ] as { textStyles: { styles: unknown }[] };
+      (own.textStyles[1] as { styles: unknown }).styles = {
+        base: { base: { fontSize: "none" } },
+      };
+      const read = dtcgToTokens(JSON.parse(JSON.stringify(file)));
+      const doc = (await t.nextly.findSingle({
+        slug: SITE_STYLE_SLUG,
+        overrideAccess: true,
+      })) as Record<string, unknown> | null;
+      const raw = doc?.classes;
+      const classes = ((typeof raw === "string" ? JSON.parse(raw) : raw) ??
+        []) as unknown[];
+      const written = await call("PATCH", SINGLE, designer, {
+        classes: [...classes, ...(read.textStyles ?? [])],
+        _overwrite: true,
+      });
+      expect(written.status).toBe(200);
+      const after = await t.nextly.findSingle({
+        slug: SITE_STYLE_SLUG,
+        overrideAccess: true,
+      });
+      const stored = (after as Record<string, unknown> | null)?.classes;
+      const ids = (
+        (typeof stored === "string" ? JSON.parse(stored) : stored) as {
+          id: string;
+        }[]
+      ).map(entry => entry.id);
+      expect(ids).toContain("good");
+      expect(ids).not.toContain("odd");
     });
 
     it("refuses a design token import's writes to a role that may read Design but not change it", async () => {

@@ -160,6 +160,18 @@ describe("a text style in the design-token file", () => {
     );
   });
 
+  it("skips a text style holding a value the site won't store, naming it, and reads the rest", () => {
+    const { file } = exported([eyebrow, small]);
+    const kept = rootData(file).textStyles as DtcgNode[];
+    // A size the site's own check refuses: the class save would refuse it.
+    (kept[1] as DtcgNode).styles = { base: { base: { fontSize: "none" } } };
+    const read = dtcgToTokens(file);
+    expect(read.textStyles).toEqual([eyebrow]);
+    expect(read.issues.map(entry => entry.message)).toContain(
+      '"Small print" is not a text style this site can use, so it was skipped.'
+    );
+  });
+
   it("reads no text styles from a file that has none", () => {
     const { file } = exported([]);
     expect(dtcgToTokens(file).textStyles).toBeUndefined();

@@ -466,6 +466,27 @@ describe("an import carrying the site's own design data", () => {
     ).toEqual(["ts-b"]);
   });
 
+  it("plans a large file into a site with another prefix without slowing with its size", () => {
+    // Each variable's value is remapped through one table built per import,
+    // not one per variable.
+    const tokens = Array.from({ length: 3000 }, (_, at) => ({
+      name: `color.c${String(at)}`,
+      kind: "color" as const,
+      values: { light: "#123456" },
+    }));
+    const started = performance.now();
+    ready(
+      planImport(
+        files({ tokens }, []),
+        { tokens: [], prefix: "--brand-" },
+        {
+          textStyles: [],
+        }
+      )
+    );
+    expect(performance.now() - started).toBeLessThan(2500);
+  });
+
   it("follows only the whole custom property of a merged variable, never one it begins", () => {
     const mine: SiteTokenSet = {
       tokens: [
