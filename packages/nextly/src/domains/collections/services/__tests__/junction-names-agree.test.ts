@@ -124,6 +124,16 @@ describe("many-to-many junction names: runtime agrees with the DDL", () => {
     }
   );
 
+  // A Single's table carries no `dc_` prefix, so its link column is the whole
+  // table name. Its saves and reads take these names from the same helper.
+  it("names a Single's junction from its table", () => {
+    expect(ddlNames("single_hero", "tags")).toEqual({
+      table: "dc_tags_single_hero_tags",
+      sourceColumn: "single_hero_id",
+      targetColumn: "tags_id",
+    });
+  });
+
   it("names the hyphenated source's junction from its table", () => {
     expect(runtimeNames("my-posts", "tags")).toEqual({
       table: "dc_my_posts_dc_tags_tags",

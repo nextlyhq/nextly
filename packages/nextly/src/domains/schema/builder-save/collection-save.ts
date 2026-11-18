@@ -54,15 +54,27 @@ import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { AddressKind } from "../../../shared/address-rule";
 import { builderColumnIsUnique } from "../../dynamic-collections/services/dynamic-collection-schema-service";
 import { statedMoment } from "../../dynamic-collections/services/stated-default";
+import {
+  COMPANION_LOCALE_COLUMN,
+  COMPANION_STRUCTURAL_COLUMNS,
+} from "../../i18n/companion-columns";
 import { appLanguageOrder } from "../../i18n/configured-locales";
 import { joinRetries } from "../../i18n/migration/archive-preflight";
+import { companionUniqueIndexName } from "../../i18n/migration/companion-unique-indexes";
+import { ensureI18nArchive } from "../../i18n/migration/ensure-archive";
 import { mainTableFields } from "../../i18n/per-language-storage";
+import {
+  companionColumnNames,
+  companionTableExists,
+  liveColumnsOf,
+} from "../../i18n/runtime/companion-io";
 import { busyTableBounds, type BusyTableBounds } from "../busy-table/bounds";
 import { runUnitInTries } from "../busy-table/run-unit";
 import { boundedStopRecord } from "../busy-table/stopped-record";
 import { unresolvedAttempts } from "../events/migration-state";
 import { SchemaEventsRepository } from "../events/schema-events-repository";
 import { checksumOf } from "../migrate/applied-checksums";
+import { migrationDriftError, type DriftItem } from "../migrate/drift-error";
 import {
   reconcileFile,
   recordAlreadyApplied,
@@ -96,6 +108,11 @@ import type {
   Operation,
   TableSpec,
 } from "../pipeline/diff/types";
+import {
+  readIndexColumns,
+  readIndexUniqueness,
+  uniqueIndexNames,
+} from "../pipeline/live-table-facts";
 import { assertDeleteWithinThreshold } from "../pipeline/pre-cleanup/executor";
 import { validateDefaultValue } from "../pipeline/pre-cleanup/validate-default";
 import type { RenameCandidate } from "../pipeline/pushschema-pipeline-interfaces";
@@ -103,6 +120,7 @@ import { builtByFor } from "../pipeline/registered-collections";
 import { generateStatements } from "../pipeline/sql-templates/index";
 import { plainMysqlEquivalents } from "../pipeline/sql-templates/mysql-live-restate";
 import type { ColumnResolution } from "../pipeline/sql-templates/resolution-statements";
+import { identifierKey } from "../rename-target";
 import {
   classifyFieldKind,
   fieldsStoredOnRow,
@@ -334,7 +352,13 @@ export async function writeCollectionSave(
   // where one is open around it (`withSaveRecords`), as its outcome allows.
   return withSaveRecords(async () => {
     const bounds = boundsFor(deps);
-    const written = await writeSave(deps, save, options);
+    const written = await writeSave(deps, save, {
+      ...options,
+      // The file runs here, planned from the history: a translations table
+      // the history does not describe would meet statements written for
+      // another one.
+      runsFile: deps.applies && options.appliedBy === undefined,
+    });
     // Once a push has run, the database changed outside the files: they stay.
     let pushed = false;
     try {
@@ -348,6 +372,15 @@ export async function writeCollectionSave(
         }
         await recordWhatWasPushed(deps, written.files, written.table);
       } else if (deps.applies) {
+        // A translated entity's file archives the languages it takes out of translation into
+        // `nextly_i18n_archive`, which a database `nextly migrate` has not prepared lacks. Made
+        // ready here, under the schema lock the file's statements run under.
+        if (save.previous?.localized === true) {
+          await ensureI18nArchive(
+            deps.adapter,
+            deps.adapter.getCapabilities().dialect
+          );
+        }
         await runWritten(deps, written.files, written.table, bounds);
       } else if (options.appliedAfter !== undefined) {
         const applied = await options.appliedAfter();
@@ -462,7 +495,7 @@ export async function prepareCollectionSave(
 async function writeSave(
   deps: CollectionSaveDeps,
   save: CollectionSave,
-  options: { historyChecked?: boolean }
+  options: { historyChecked?: boolean; runsFile?: boolean }
 ): Promise<{
   files: SaveFiles;
   names: readonly string[];
@@ -479,6 +512,9 @@ async function writeSave(
   refuseUnconfirmedConversions(plan, save);
   refuseUnenforceableUniques(deps, save, plan.table);
   await settledRows(deps, save, plan.table);
+  if (options.runsFile === true) {
+    await refuseCompanionDrift(deps, save, plan.table);
+  }
 
   const definitionPath = resolve(deps.projectRoot, deps.config.db.uiSchemaFile);
   const before = await readIfPresent(definitionPath);
@@ -1496,6 +1532,201 @@ function collectionOf(save: CollectionSave): UiSchemaEntity {
     });
   }
   return entity;
+}
+
+/**
+ * Where the translations table of `table`, and the main table's translated columns, differ from
+ * what the newest snapshot records of them (`recordedTable`), for `refuseCompanionDrift`.
+ *
+ * The table's presence is a fact of its own: one holding only its structural columns has no
+ * translated column to tell it from a missing one, and a file planned from a history that records
+ * none creates it again. Names are compared as the dialect compares them (`identifierKey`), since
+ * MySQL and SQLite take `TITLE` and `title` for one column, and the file's statements would too.
+ */
+async function companionDriftItems(
+  deps: CollectionSaveDeps,
+  table: string,
+  recordedTable: TableSpec
+): Promise<DriftItem[]> {
+  const dialect = deps.adapter.getCapabilities().dialect;
+  const key = (name: string) => identifierKey(dialect, name);
+  const companion = `${table}_locales`;
+  // The snapshot records a translations table as a list of its translated columns, empty where it
+  // holds none, and an untranslated table as none. A translated table recorded without the list
+  // has none too, or, in a snapshot from before empty lists were written, may have one the
+  // migration files made; `migrate:create` asks those files then, so its presence is not judged.
+  const recordedExists =
+    recordedTable.localized !== true
+      ? false
+      : recordedTable.localizedColumns !== undefined || undefined;
+  const liveExists = await companionTableExists(deps.adapter, companion);
+  if (recordedExists !== undefined && recordedExists !== liveExists) {
+    return [
+      {
+        kind: liveExists ? "+" : "-",
+        detail: `${companion} ${liveExists ? "present in" : "absent from"} DB`,
+      },
+    ];
+  }
+  if (!liveExists) return [];
+
+  const recorded = recordedTable.localizedColumns ?? [];
+  const recordedKeys = new Set(recorded.map(key));
+  // The structural columns by the same key, so `_LOCALE` is the structural `_locale` where the
+  // dialect compares without case.
+  const structural = new Set([...COMPANION_STRUCTURAL_COLUMNS].map(key));
+  const live = (await companionColumnNames(deps.adapter, table)).filter(
+    column => !structural.has(key(column))
+  );
+  const liveKeys = new Set(live.map(key));
+  // A translated column the main table holds too, where the history records it on the
+  // translations table alone: turning translation off would add it to the main table again.
+  const recordedOnMain = new Set(recordedTable.columns.map(c => key(c.name)));
+  const onMain =
+    recorded.length === 0
+      ? []
+      : (await liveColumnsOf(deps.adapter, table))
+          .map(c => c.name)
+          .filter(
+            column =>
+              recordedKeys.has(key(column)) && !recordedOnMain.has(key(column))
+          );
+  return [
+    ...live
+      .filter(column => !recordedKeys.has(key(column)))
+      .map(column => ({
+        kind: "+" as const,
+        detail: `${companion}.${column} present in DB`,
+      })),
+    ...recorded
+      .filter(column => !liveKeys.has(key(column)))
+      .map(column => ({
+        kind: "-" as const,
+        detail: `${companion}.${column} absent from DB`,
+      })),
+    ...onMain.map(column => ({
+      kind: "+" as const,
+      detail: `${table}.${column} present in DB`,
+    })),
+    ...(await companionIndexDriftItems(deps, companion, recordedTable)),
+  ];
+}
+
+/**
+ * The per-language unique indexes of the translated columns the history records, where the
+ * database holds another set: a recorded one missing, not unique, or standing on whole columns
+ * other than its column and the language (`-`), or one under a translated column's index name the
+ * history does not record (`+`). An index of that name on `(title, _parent)` lets a title repeat
+ * within a language, and the file, which drops it by name and creates the right one, could fail
+ * on the create after its earlier statements committed. A text column's index is an expression
+ * (PostgreSQL, MySQL) or partial (SQLite), whose column the catalog does not name, so one of
+ * those under the name is taken as the per-language index. The file drops and creates
+ * these indexes by name, without asking the database first, so it would fail part way over either.
+ * Only the translated columns' own index names are judged: the table's structural indexes are not
+ * the history's to record here.
+ */
+async function companionIndexDriftItems(
+  deps: CollectionSaveDeps,
+  companion: string,
+  recordedTable: TableSpec
+): Promise<DriftItem[]> {
+  const dialect = deps.adapter.getCapabilities().dialect;
+  const key = (name: string) => identifierKey(dialect, name);
+  const db = deps.adapter.getDrizzle();
+  const indexes = await readIndexUniqueness(db, dialect, companion);
+  const liveAny = new Set([...indexes.keys()].map(key));
+  const liveUnique = new Set([...uniqueIndexNames(indexes)].map(key));
+  // What each index stands on, where it stands on whole columns, by the same keys. An expression
+  // or partial index is not among them.
+  const keysOf = new Map(
+    [...(await readIndexColumns(db, dialect, companion))].map(
+      ([name, columns]) => [key(name), columns.map(key).sort()] as const
+    )
+  );
+  const perLanguage = (name: string, column: string): boolean => {
+    if (!liveUnique.has(key(name))) return false;
+    const keys = keysOf.get(key(name));
+    return (
+      keys === undefined ||
+      keys.join("\u0000") ===
+        [key(column), key(COMPANION_LOCALE_COLUMN)].sort().join("\u0000")
+    );
+  };
+  const recordedUnique = new Set(
+    (recordedTable.uniqueLocalizedColumns ?? []).map(entry =>
+      key(typeof entry === "string" ? entry : entry.column)
+    )
+  );
+  return (recordedTable.localizedColumns ?? []).flatMap(
+    (column): DriftItem[] => {
+      const name = companionUniqueIndexName(companion, column);
+      if (recordedUnique.has(key(column))) {
+        return perLanguage(name, column)
+          ? []
+          : [
+              {
+                kind: "-" as const,
+                detail: `${companion} index ${name} absent from DB`,
+              },
+            ];
+      }
+      return liveAny.has(key(name))
+        ? [
+            {
+              kind: "+" as const,
+              detail: `${companion} index ${name} present in DB`,
+            },
+          ]
+        : [];
+    }
+  );
+}
+
+/**
+ * Refuse a save whose translations table (`<table>_locales`) is not, in the
+ * database, what the migration history records of it, before anything is
+ * written: the save's file is planned from that record, and run over another
+ * table it would fail part way or translate the wrong columns. The refusal is
+ * the one `nextly migrate` gives a database that matches neither end of a
+ * migration (`NEXTLY_MIGRATION_DRIFT`), naming each column the database has
+ * that the history does not (`+`) and each it lacks (`-`). A translated
+ * column the main table holds as well, which the history records on the
+ * translations table alone, is drift too: turning translation off would add
+ * it to the main table again. So are a translations table there or missing
+ * against the history, and a per-language unique index that is
+ * (`companionDriftItems`).
+ *
+ * Judged only for a save that is translated before or after, and only where
+ * the newest snapshot records the table and says which of its tables were
+ * translated: a table no snapshot records is adopted from the database, and a
+ * snapshot from before that record says nothing of its translations table.
+ */
+async function refuseCompanionDrift(
+  deps: CollectionSaveDeps,
+  save: CollectionSave,
+  table: string
+): Promise<void> {
+  if (save.previous?.localized !== true && save.entity?.localized !== true) {
+    return;
+  }
+  const latest = await loadLatestSnapshot(join(deps.migrationsDir, "meta"));
+  const recordedTable = latest?.data.snapshot.tables.find(
+    t => t.name === table
+  );
+  if (latest === null || recordedTable === undefined) return;
+  const recordsTranslations =
+    latest.data.translatedFieldsRecorded === true ||
+    latest.data.snapshot.tables.some(t => t.localized === true);
+  if (!recordsTranslations) return;
+
+  const driftItems = await companionDriftItems(deps, table, recordedTable);
+  if (driftItems.length === 0) return;
+  const migration = latest.filename.replace(/\.snapshot\.json$/, "");
+  throw migrationDriftError({
+    migration,
+    file: join(deps.migrationsDir, `${migration}.sql`),
+    driftItems,
+  });
 }
 
 /** A slug as a migration name spells it. */

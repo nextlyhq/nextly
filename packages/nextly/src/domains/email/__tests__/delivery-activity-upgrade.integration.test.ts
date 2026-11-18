@@ -22,6 +22,8 @@ const TEMPLATE_INDEX = "email_deliveries_template_idx";
 const QUEUE_INDEXES = {
   email_queue_created_idx: ["created_at", "id"],
   email_queue_template_idx: ["template_slug", "created_at"],
+  email_queue_provider_type_idx: ["provider_type", "created_at"],
+  email_queue_provider_origin_idx: ["provider_origin", "created_at"],
 };
 const DELIVERY_ID = "00000000-0000-4000-8000-0000000000d1";
 const QUEUED_ID = "00000000-0000-4000-8000-0000000000q1";
@@ -31,11 +33,22 @@ const DELIVERY_INDEXES = {
   [TEMPLATE_INDEX]: ["template_slug", "status", "created_at"],
   email_deliveries_provider_type_idx: ["provider_type", "created_at"],
   email_deliveries_queued_idx: ["queued_id"],
+  email_deliveries_provider_origin_idx: ["provider_origin", "created_at"],
   email_deliveries_template_created_idx: ["template_slug", "created_at", "id"],
 };
 
 /** The delivery log's columns this change adds, none of them required. */
+/** The queued email's columns this change adds, none of them required. */
+const QUEUE_COLUMNS = [
+  "message_kind",
+  "recipient_kinds",
+  "provider_type",
+  "provider_id",
+  "provider_origin",
+];
+
 const DELIVERY_COLUMNS = [
+  "provider_origin",
   "queued_id",
   "template_owner",
   "template_overridden",
@@ -61,6 +74,9 @@ async function removeActivitySchema(fresh: FreshDatabase): Promise<void> {
     );
   }
   await fresh.exec(`ALTER TABLE email_queue DROP COLUMN template_slug`);
+  for (const column of QUEUE_COLUMNS) {
+    await fresh.exec(`ALTER TABLE email_queue DROP COLUMN ${column}`);
+  }
   for (const column of DELIVERY_COLUMNS) {
     await fresh.exec(`ALTER TABLE email_deliveries DROP COLUMN ${column}`);
   }
@@ -105,6 +121,9 @@ describe.each(availableDialects())(
           await fresh.indexColumnsOf("email_deliveries", TEMPLATE_INDEX)
         ).toEqual(["template_slug", "status", "created_at"]);
         expect(await fresh.columnsOf("email_queue")).toContain("template_slug");
+        expect(await fresh.columnsOf("email_queue")).toEqual(
+          expect.arrayContaining(QUEUE_COLUMNS)
+        );
         expect(await fresh.columnsOf("email_deliveries")).toEqual(
           expect.arrayContaining(DELIVERY_COLUMNS)
         );

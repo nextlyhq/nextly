@@ -627,7 +627,7 @@ function movePicker(): void {
 }
 
 describe("a picker gesture is ONE editor operation", () => {
-  it("does not write while the picker is being moved, and writes once on close", async () => {
+  it("writes the gesture once on close when no frame came between its moves", async () => {
     // The UI picker fires `onColorChange` on every pointer event, so committing
     // each one turns a single drag into dozens of undo entries — and
     // `MAX_HISTORY` is 100, so one drag can evict unrelated earlier edits and
@@ -650,7 +650,9 @@ describe("a picker gesture is ONE editor operation", () => {
     movePicker();
     movePicker();
 
-    // Three moves, no writes.
+    // Three moves and no frame between them, so no write yet. A frame writes
+    // the latest move in the gesture's one run
+    // (`inspector-panel.live-typing.test`).
     expect(editor.applyAll).not.toHaveBeenCalled();
 
     // Closing ends the gesture and writes once.

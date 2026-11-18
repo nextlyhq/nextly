@@ -16,6 +16,7 @@ import { describe, expect, it } from "vitest";
 
 import { VARIABLE_LOSS_WORDS } from "./editor-words";
 import {
+  reachTogether,
   sharedStyleSets,
   usageState,
   variableCountWords,
@@ -294,5 +295,35 @@ describe("what a shared style sets with a variable", () => {
       },
     };
     expect(sharedStyleSets([odd], "c-odd", "color.brand")).toBe("uses it");
+  });
+});
+
+describe("some variables' usage as one count", () => {
+  it("takes the host's count of their documents together, and joins the rest", () => {
+    // A page naming both is one document, as the host counted it.
+    expect(
+      reachTogether([reach(9, ["c-card"]), reach(2, ["c-card", "c-hero"])], {
+        documents: 10,
+        byKind: { ...NONE, pages: 8, components: 2 },
+        complete: false,
+      })
+    ).toEqual({
+      documents: 10,
+      byKind: { ...NONE, pages: 8, components: 2 },
+      sharedStyles: ["c-card", "c-hero"],
+      blockDefaults: [],
+      complete: false,
+    });
+  });
+
+  it("adds the documents up without the host's count, and is unread until every part is", () => {
+    expect(reachTogether([reach(9), reach(2)], undefined)?.documents).toBe(11);
+    expect(
+      reachTogether([reach(9), undefined], {
+        documents: 9,
+        byKind: { ...NONE, pages: 9 },
+        complete: true,
+      })
+    ).toBeUndefined();
   });
 });
