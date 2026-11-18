@@ -14,6 +14,7 @@ import type {
 } from "@admin/components/features/schema-builder/types";
 import type { FieldDefinition } from "@admin/types/collection";
 
+import { SYSTEM_FIELD_NAMES } from "./constants";
 import { insertField } from "./insert-field";
 
 /**
@@ -555,11 +556,16 @@ function storedRelationTargetOf(field: FieldDefinition): string | undefined {
  *   rows) or a field group, rather than at the entity's top level. Only a
  *   top-level `title` or `slug` is one of the entity's own built-in fields; a
  *   field of that name anywhere else is an ordinary field of its container.
+ * @param builtInNames - The names the entity's kind holds as built-in fields
+ *   (`builtInFieldNamesOf`): a collection's and a Single's title and slug, by
+ *   default; none for a field group, whose top-level fields of those names are
+ *   its own.
  */
 export function convertToBuilderField(
   field: FieldDefinition,
   index: number | string,
-  nested = false
+  nested = false,
+  builtInNames: readonly string[] = SYSTEM_FIELD_NAMES
 ): BuilderField {
   const id = generateFieldId();
 
@@ -568,7 +574,7 @@ export function convertToBuilderField(
     name: field.name,
     label: field.label || field.name,
     type: field.type,
-    isSystem: !nested && (field.name === "title" || field.name === "slug"),
+    isSystem: !nested && builtInNames.includes(field.name),
     // Provenance (P8): carry the plugin tag through so the Builder renders a
     // plugin-contributed field locked + badged instead of as an editable field.
     source: field.source,

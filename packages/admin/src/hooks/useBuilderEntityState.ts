@@ -21,11 +21,8 @@ import type {
   BuilderField,
   BuilderFieldsApi,
 } from "@admin/components/features/schema-builder/types";
-import {
-  convertToBuilderField,
-  DEFAULT_SYSTEM_FIELDS,
-  SYSTEM_FIELD_NAMES,
-} from "@admin/lib/builder";
+import { convertToBuilderField } from "@admin/lib/builder";
+import { builtInFieldsOf } from "@admin/lib/builder/constants";
 import { collectFieldIds } from "@admin/lib/builder/field-placement";
 import {
   describeStep,
@@ -34,6 +31,7 @@ import {
   type RowMark,
   rowMarks,
 } from "@admin/lib/builder/pending-changes";
+import type { SchemaTemplateKind } from "@admin/lib/builder/schema-templates";
 import {
   type SettingChange,
   settingChanges,
@@ -43,6 +41,12 @@ import type { FieldDefinition } from "@admin/types/collection";
 import type { BuilderSnapshot } from "./useFieldBuilder";
 
 export interface UseBuilderEntityStateOptions<TEntity> {
+  /**
+   * Which kind of entity this is, which decides the built-in fields shown above its own
+   * (`builtInFieldsOf`): a collection's and a Single's title and slug, none for a field group,
+   * whose fields of those names are its own.
+   */
+  kind: SchemaTemplateKind;
   /** The loaded entity, or undefined while the query is in flight. */
   entity: TEntity | undefined;
   builder: BuilderFieldsApi;
@@ -174,6 +178,7 @@ function writtenBefore(
 }
 
 export function useBuilderEntityState<TEntity>({
+  kind,
   entity,
   builder,
   toFields,
@@ -209,12 +214,19 @@ export function useBuilderEntityState<TEntity>({
 
     onLoad(entity);
 
+    // The kind's built-in fields first (none for a field group), and the entity's own after:
+    // a field of a built-in's name is left out only where the kind holds that built-in, so a
+    // field group's own `title` or `slug` is shown, and saved, as any other field.
+    const builtIn = builtInFieldsOf(kind);
+    const builtInNames = builtIn.map(field => field.name);
     const userFields = toFields(entity).filter(
-      f => !SYSTEM_FIELD_NAMES.includes(f.name)
+      f => !builtInNames.includes(f.name)
     );
     const allFields = [
-      ...DEFAULT_SYSTEM_FIELDS,
-      ...userFields.map((field, index) => convertToBuilderField(field, index)),
+      ...builtIn,
+      ...userFields.map((field, index) =>
+        convertToBuilderField(field, index, false, builtInNames)
+      ),
     ];
     // A load is no edit: the fields and settings arrive with no history to
     // undo into.
@@ -226,6 +238,7 @@ export function useBuilderEntityState<TEntity>({
 
     setLoadedKey(currentKey);
   }, [
+    kind,
     entity,
     currentKey,
     loadedKey,
