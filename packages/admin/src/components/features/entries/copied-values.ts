@@ -38,12 +38,20 @@ export interface CopiedValues {
     sourceLocale: string,
     sourceRevision?: string
   ) => void;
-  /** Each field still holding its copied value, and the language it came from. */
-  provenanceForSave: (
-    current: Record<string, unknown>
-  ) => Record<string, CopyClaim> | undefined;
-  /** The save is made: what it said is stored, and nothing is claimed again. */
-  saved: () => void;
+  /**
+   * A save beginning from `current`: each field still holding its copied value, and the language
+   * it came from (`claims`); and, once it is stored (`saved`), the copies it began with forgotten.
+   * A copy made while the save was on its way is not in it, so the next save still claims it.
+   */
+  beginSave: (current: Record<string, unknown>) => {
+    claims: Record<string, CopyClaim> | undefined;
+    saved: () => void;
+  };
+  /**
+   * Forgets every copy: the form now holds another document or language, or was discarded, and a
+   * copy kept would be claimed by a save of a document it was never made in.
+   */
+  clear: () => void;
 }
 
 const byForm = new WeakMap<object, CopiedValues>();
@@ -61,17 +69,18 @@ export function copiedValuesFor(control: object): CopiedValues {
 function createCopiedValues(): CopiedValues {
   // Each field's latest copy: the value put in, the language it came from, and the version of
   // that language it was read at.
-  const copied = new Map<
-    string,
-    { value: unknown; sourceLocale: string; sourceRevision?: string }
-  >();
+  type Copy = { value: unknown; sourceLocale: string; sourceRevision?: string };
+  const copied = new Map<string, Copy>();
   return {
     record(values, sourceLocale, sourceRevision) {
       for (const [name, value] of Object.entries(values)) {
         copied.set(name, { value, sourceLocale, sourceRevision });
       }
     },
-    provenanceForSave(current) {
+    beginSave(current) {
+      // The copies this save begins with, each as it was then: a copy of the field made later
+      // replaces the entry, so it outlives this save's `saved`.
+      const began = new Map(copied);
       const claims: Record<string, CopyClaim> = {};
       for (const [name, entry] of copied) {
         // A value edited again since its copy is the person's own.
@@ -85,9 +94,16 @@ function createCopiedValues(): CopiedValues {
           };
         }
       }
-      return Object.keys(claims).length > 0 ? claims : undefined;
+      return {
+        claims: Object.keys(claims).length > 0 ? claims : undefined,
+        saved() {
+          for (const [name, entry] of began) {
+            if (copied.get(name) === entry) copied.delete(name);
+          }
+        },
+      };
     },
-    saved() {
+    clear() {
       copied.clear();
     },
   };

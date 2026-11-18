@@ -28,6 +28,7 @@ import { useEffect, useMemo, useCallback, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 
+import { copiedValuesFor } from "@admin/components/features/entries/copied-values";
 import { CopyFromLanguageScope } from "@admin/components/features/entries/CopyFromLanguageScope";
 import { singleSourceFetcher } from "@admin/components/features/entries/entry-locale-source";
 import { pluginDocumentLock } from "@admin/components/features/entries/EntryForm/document-lock-affordances";
@@ -860,6 +861,9 @@ export function SingleForm({
       lastResetPlaceRef.current = place;
       adoptRead(document);
       form.reset(defaultValuesRef.current);
+      // The refused edits are kept as a recovery point; the form itself starts afresh, holding
+      // nothing a copy put into it.
+      copiedValuesFor(form.control).clear();
       return;
     } else if (versionPinned()) {
       // A refused save holds the form: the newer version that follows the
@@ -891,6 +895,9 @@ export function SingleForm({
     // echo of this author's own save keeps the version that save answered.
     if (!echoOfOwnSave) adoptRead(document);
     form.reset(defaultValuesRef.current, { keepDirtyValues: echoOfOwnSave });
+    // Another document or language, or a version not this author's, starts afresh: nothing a
+    // copy put into the form is in it any more. An echo of their own save keeps unsaved work.
+    if (!echoOfOwnSave) copiedValuesFor(form.control).clear();
   }, [
     document,
     locale,
@@ -1408,6 +1415,7 @@ export function SingleForm({
         version.release();
         version.adoptRead(current);
         form.reset(defaultValuesRef.current);
+        copiedValuesFor(form.control).clear();
         return;
       }
       // The read that brings the current version is still on its way.
