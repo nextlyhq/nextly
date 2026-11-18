@@ -48,6 +48,17 @@ const localisationCodesStep: UpgradeStep = {
     (await import("./localisation-codes")).codesReport(context),
 };
 
+/** Giving every pending change its key, keeping the later of two saves in one language. */
+const localisationKeysStep: UpgradeStep = {
+  title: "give every pending change its key",
+  pending: async context =>
+    (await import("./localisation-keys")).draftsToKey(context),
+  run: async context =>
+    (await import("./localisation-keys")).keyPendingChanges(context),
+  report: async context =>
+    (await import("./localisation-keys")).draftKeysReport(context),
+};
+
 /** Storing every entity's translatable values per language. */
 const localisationValuesStep: UpgradeStep = {
   title: "store translatable values per language",
@@ -77,6 +88,7 @@ export const UPGRADE_STEPS: readonly UpgradeStep[] = [
   retiredManageStep,
   zonedDatesStep,
   localisationCodesStep,
+  localisationKeysStep,
   localisationValuesStep,
   localisationDraftsStep,
 ];
