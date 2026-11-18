@@ -184,6 +184,35 @@ test("a drag passing near a ruler mark snaps to it", async ({ page }) => {
   await expect(page.locator("[data-nx-active-width]")).toHaveText("1024px");
 });
 
+test("at a zoom that overflows the canvas, the dragged edge follows the pointer", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await openBuilder(page, await createPage(page.request, "Overflowing"));
+  await page.getByRole("button", { name: /^Canvas zoom:/ }).click();
+  await page.getByRole("menuitemradio", { name: "100%" }).click();
+  await expect.poll(() => paintedScale(page)).toBeCloseTo(1, 2);
+  // Scrolled to the page's right edge, which is then on screen.
+  const region = page.getByRole("region", { name: "Canvas" });
+  await region.evaluate(element => {
+    element.scrollLeft = element.scrollWidth;
+  });
+  const grip = handle(page, "right");
+  await grip.hover({ timeout: 15_000 });
+  const box = await grip.boundingBox();
+  if (box === null) throw new Error("[e2e] no handle drawn");
+  const x = box.x + box.width / 2;
+  const y = box.y + box.height / 2;
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  // The frame starts at the region's left edge, so its right edge moves by
+  // the pointer's travel alone: 100 screen pixels at 100% is 100px.
+  await page.mouse.move(x - 100, y, { steps: 8 });
+  await page.mouse.up();
+  await expect.poll(() => layoutWidth(page)).toBeGreaterThanOrEqual(1179);
+  expect(await layoutWidth(page)).toBeLessThanOrEqual(1181);
+});
+
 test("a font size changed at 900px is stored for Desktop, and none for Tablet", async ({
   page,
 }) => {
@@ -228,9 +257,14 @@ test("a font size changed at 900px is stored for Desktop, and none for Tablet", 
   await pressSave(page);
   await saved;
   // Stored under Desktop (the base breakpoint) alone: nothing for Tablet.
-  const [heading] = await storedPageNodes(page.request, ENTRIES, id);
-  const styles = heading?.styles ?? {};
-  expect(styles).toEqual({ base: { base: { fontSize: "41px" } } });
+  // Asked again while the dev server answers its first read of the entry,
+  // which it can drop while compiling the route.
+  await expect(async () => {
+    const [heading] = await storedPageNodes(page.request, ENTRIES, id);
+    expect(heading?.styles ?? {}).toEqual({
+      base: { base: { fontSize: "41px" } },
+    });
+  }).toPass({ timeout: 30_000 });
 });
 
 test("a device press, a page switch and a reload each show the device's own width", async ({
