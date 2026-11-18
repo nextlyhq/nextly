@@ -294,8 +294,9 @@ describe("the description limit, counted as a person counts it", () => {
       />
     );
     expect(screen.getByText("256/255")).toBeInTheDocument();
-    expect(
-      screen.getByText(/Keep the description to 255/i)
-    ).toBeInTheDocument();
+    // An alert, so the crossing is announced as the message appears.
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      /Keep the description to 255/i
+    );
   });
 });

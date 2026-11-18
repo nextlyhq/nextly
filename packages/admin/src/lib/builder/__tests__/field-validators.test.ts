@@ -167,11 +167,12 @@ describe("builderFieldErrors", () => {
   it("holds a save on a minimum above its maximum, rows included", () => {
     // Why: core refuses a lower bound above its upper one for lengths and
     // values, but not for rows — the builder's own gate is the only refusal a
-    // row bound gets.
+    // row bound gets. A textarea is where rows are offered.
     const fields: BuilderField[] = [
       baseField({
         id: "f1",
         name: "tags",
+        type: "textarea",
         validation: { minRows: 5, maxRows: 2 },
       }),
     ];
@@ -202,8 +203,36 @@ describe("builderFieldErrors", () => {
         name: "title",
         validation: { minLength: 2, maxLength: 10 },
       }),
-      baseField({ id: "f2", name: "count", validation: { min: 0, max: 5 } }),
+      baseField({
+        id: "f2",
+        name: "count",
+        type: "number",
+        validation: { min: 0, max: 5 },
+      }),
       baseField({ id: "f3", name: "body" }),
+    ];
+    expect(validateBuilderFields(fields)).toEqual({ valid: true });
+    expect(builderFieldErrors(fields).size).toBe(0);
+  });
+
+  it("does not judge a stored bound the field's type does not offer", () => {
+    // Why: the loader keeps a stored validation object as it was, so a bound
+    // from another life of the field — an icon's length, a text field's rows
+    // — can arrive with a type that no longer offers it. Refusing it would
+    // hold the save about a control the Validation tab never shows, with no
+    // way to fix it there.
+    const fields: BuilderField[] = [
+      baseField({
+        id: "f1",
+        name: "favicon",
+        type: "icon",
+        validation: { maxLength: 0 },
+      }),
+      baseField({
+        id: "f2",
+        name: "title",
+        validation: { minRows: 5, maxRows: 2 },
+      }),
     ];
     expect(validateBuilderFields(fields)).toEqual({ valid: true });
     expect(builderFieldErrors(fields).size).toBe(0);

@@ -1,3 +1,4 @@
+import { validationRulesForFieldType } from "nextly/field-catalog";
 import {
   extractFieldGroupReferences,
   isFieldGroupFieldType,
@@ -140,11 +141,23 @@ const needsInnerField: FieldCheck = field =>
  * min above its max outlived a refusal core makes only for lengths and
  * values, not rows. The message after the colon is the panel's own, so a held
  * row says what its bound already says.
+ *
+ * Asked only of the rules the field's TYPE offers
+ * (`validationRulesForFieldType`, the same answer the Validation tab draws
+ * its controls from): a stored bound the type does not offer — an icon's
+ * length, a text field's rows — is not this save's to judge, and refusing it
+ * would hold the save with a message about a control the panel never shows,
+ * with no way to fix it there. A plugin-contributed type is answered by
+ * core's fallback for a type with no declared primitive (only what every
+ * field has), so this gate never strands one; its panel still says an
+ * unsound bound inline.
  */
 const needsSoundBounds: FieldCheck = field => {
   const validation = field.validation;
   if (validation === undefined) return null;
+  const offered = validationRulesForFieldType(field.type);
   for (const rule of NUMERIC_BOUND_RULES) {
+    if (!offered.includes(rule)) continue;
     const problem = boundProblem(rule, validation);
     if (problem) {
       return {

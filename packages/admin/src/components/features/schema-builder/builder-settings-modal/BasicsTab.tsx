@@ -351,9 +351,12 @@ export function DescriptionField({
       />
       <div className="flex items-start justify-between gap-2 text-xs">
         {/* In the error text colour the form messages use, which reads at
-            4.5:1 in both schemes. */}
+            4.5:1 in both schemes. An alert, as the panel's bound problem is,
+            so crossing the limit is announced as the message appears rather
+            than only when the box is read again — and never per keystroke,
+            for the message mounts only on that crossing. */}
         {over ? (
-          <p id={errorId} className="text-danger-text">
+          <p id={errorId} role="alert" className="text-danger-text">
             Keep the description to {DESCRIPTION_MAX_LENGTH} characters or
             fewer.
           </p>
