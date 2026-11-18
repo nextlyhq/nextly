@@ -2099,6 +2099,8 @@ const EMAIL_DELIVERY_READS: Record<string, string> = {
  * - GET /api/email-deliveries/queued → queued emails, newest first, filtered
  * - GET /api/email-deliveries/last-sent → when each template was last sent
  * - GET /api/email-deliveries/overdue → whether queued email is overdue
+ * - GET /api/email-deliveries/[id] → one delivery's detail and timeline
+ * - GET /api/email-deliveries/queued/[id] → one queued email's detail
  */
 function parseEmailDeliveryRoutes(
   id: string | undefined,
@@ -2106,15 +2108,27 @@ function parseEmailDeliveryRoutes(
   httpMethod: string,
   routeParams: Record<string, string>
 ): ParsedRoute | null {
-  if (httpMethod !== "GET" || subresource) return null;
-  const method = id === undefined ? "listDeliveries" : EMAIL_DELIVERY_READS[id];
-  if (!method) return null;
-  return {
+  if (httpMethod !== "GET") return null;
+  const read = (operation: OperationType, method: string): ParsedRoute => ({
     service: "email",
-    operation: id === undefined ? "list" : "single",
+    operation,
     method,
     routeParams,
-  };
+  });
+  if (id === undefined) return read("list", "listDeliveries");
+  // GET /api/email-deliveries/queued/[id] → one queued email's detail
+  if (id === "queued" && subresource) {
+    routeParams.queuedId = subresource;
+    return read("single", "findQueuedEmail");
+  }
+  if (subresource) return null;
+  const named = EMAIL_DELIVERY_READS[id];
+  if (named)
+    return read(named === "listQueuedEmails" ? "list" : "single", named);
+  // GET /api/email-deliveries/[id] → one delivery's detail. After the named
+  // reads, which are routes rather than ids.
+  routeParams.deliveryId = id;
+  return read("single", "findDelivery");
 }
 
 // ============================================================================

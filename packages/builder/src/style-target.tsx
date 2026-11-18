@@ -223,9 +223,10 @@ export function useLookTarget(
  * before the first is read back is a change to the field (and so a write)
  * rather than a match with the stale read. A new read replaces them. A
  * refused edit stays shown, with its refusal beside the field, as a refused
- * block edit keeps the author's draft, until the next read.
+ * block edit keeps the author's draft, until the next read. Design's text
+ * styles are edited through it too.
  */
-function useQueuedStyles(
+export function useQueuedStyles(
   read: SharedStyleRow | undefined,
   host: SharedStylesHost | undefined
 ):

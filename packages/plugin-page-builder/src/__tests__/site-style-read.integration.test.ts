@@ -224,6 +224,15 @@ describe.each(getConfiguredTestDialects())(
       expect(answer.body.tokens).toEqual(TOKENS);
     });
 
+    it("lets a role that may change Design, without its read, read it", async () => {
+      const t = await boot();
+      // What the admin's Fonts page asks of whoever opens it.
+      const designer = await holding(t, "update-site-style");
+      const answer = await read(designer);
+      expect(answer.status).toBe(200);
+      expect(answer.body.tokens).toEqual(TOKENS);
+    });
+
     it("refuses a caller who is not signed in", async () => {
       await boot();
       const answer = await read(null);

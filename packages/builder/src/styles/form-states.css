@@ -1,0 +1,79 @@
+/*
+ * What the canvas says over a Form block (`canvas/form-states.tsx`), in the
+ * editor's own colours.
+ *
+ * A layer over the canvas root's content box that takes no presses itself,
+ * like `.nx-image-states`, whose rule it shares in `canvas.css`. Each
+ * notice's place is the block's measured rectangle: a tag sits on the
+ * block's top edge, at its right, so the form beneath stays in view and the
+ * block toolbar at its left is not covered; a deleted form's plate fills the
+ * room its box is given.
+ *
+ * Amber words on an amber-tinted plate of the editor's raised surface
+ * (`--nx-builder-warning-*`), which hold their contrast in both themes.
+ */
+.nx-form-states__place {
+  position: absolute;
+  pointer-events: none;
+}
+
+.nx-form-states__tag,
+.nx-form-states__plate {
+  box-sizing: border-box;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem 0.5rem;
+  pointer-events: auto;
+  border: 1px solid
+    color-mix(in oklch, var(--nx-warning) 50%, var(--nx-builder-border));
+  background: var(--nx-builder-warning-ground);
+  color: var(--nx-builder-warning-text);
+  font:
+    500 0.75rem/1.35 var(--font-sans, system-ui),
+    sans-serif;
+  cursor: default;
+}
+
+.nx-form-states__tag {
+  position: absolute;
+  inset-block-end: 100%;
+  inset-inline-end: 0;
+  max-inline-size: min(22rem, 100%);
+  padding: 0.25rem 0.5rem;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+}
+
+.nx-form-states__plate {
+  position: absolute;
+  inset: 0;
+  justify-content: center;
+  padding: 0.75rem;
+  border-style: dashed;
+  border-radius: var(--radius-md);
+  text-align: center;
+}
+
+/* The picker's presses stop here, so they don't select the Form. */
+.nx-form-states__picker {
+  display: contents;
+}
+
+.nx-form-states__pick {
+  inline-size: auto;
+  block-size: 1.5rem;
+  padding-inline: 0.5rem;
+  border-color: color-mix(
+    in oklch,
+    var(--nx-warning) 50%,
+    var(--nx-builder-border)
+  );
+  background: var(--nx-builder-surface-raised);
+  color: var(--nx-builder-text);
+  font-size: var(--text-xs);
+}
+
+.nx-form-states__pick:focus-visible {
+  outline: 2px solid var(--nx-builder-select);
+  outline-offset: 2px;
+}
