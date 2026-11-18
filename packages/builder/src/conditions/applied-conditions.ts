@@ -532,6 +532,41 @@ function judgedBlocks(
 }
 
 /**
+ * The definitions a page reaches, the components it places and those they
+ * place, with each one's conditions lifted so the canvas draws its
+ * conditioned blocks; every other definition as it is. The reached ones are
+ * those the resolver reads composing the page as the canvas does, so a
+ * component a variant or an override selects, at any depth and through any
+ * setting a placement rewrites, is lifted exactly when it is drawn. Only
+ * those are walked, so a large component library costs nothing on a page
+ * that places none of it.
+ *
+ * Exported so a surface that reads the page as the canvas draws it composes
+ * it from these same definitions.
+ *
+ * @experimental
+ */
+export function revealedDefinitions(
+  document: BlockDocument,
+  definitions: DefinitionsById,
+  limits: DocumentLimits | undefined
+): DefinitionsById {
+  const reached = new Set(
+    resolveComponentInstances(document, definitions, {
+      conditioned: "carry",
+      ...(limits === undefined ? {} : { limits }),
+    }).referenced
+  );
+  if (reached.size === 0) return definitions;
+  const next = new Map(definitions);
+  for (const id of reached) {
+    const definition = definitions.get(id);
+    if (definition !== undefined) next.set(id, revealConditioned(definition));
+  }
+  return next;
+}
+
+/**
  * The page as the canvas draws it: every conditioned block drawn, its
  * conditions lifted, but, while a list's entries are judged (`byEntry`),
  * a block a list's entry decides, which keeps its conditions for the
