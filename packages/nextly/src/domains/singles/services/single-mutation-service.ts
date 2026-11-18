@@ -187,6 +187,7 @@ import {
 } from "../../i18n/per-language-storage";
 import {
   assertClaimsAllowed,
+  assertCopySources,
   provenanceClaimsOf,
   type ProvenanceClaims,
 } from "../../i18n/provenance/provenance-claims";
@@ -2452,6 +2453,14 @@ export class SingleMutationService extends BaseService {
         provenanceClaims,
         actorForWrite(rawOptions.actor, rawOptions.user)
       );
+      // A copy's source must be another of the site's languages, as for a collection's save.
+      assertCopySources(provenanceClaims, {
+        configured: this.localization?.locales.map(l => l.code) ?? [],
+        target:
+          rawOptions.locale === EVERY_LOCALE
+            ? null
+            : (rawOptions.locale ?? this.localization?.defaultLocale ?? null),
+      });
     } catch (error) {
       return buildSingleErrorResult(error, "Failed to update Single document");
     }
@@ -4931,6 +4940,7 @@ export class SingleMutationService extends BaseService {
               locale: writeLocale,
               values: companionData,
               localizedFields: companion.localizedFields,
+              languagesTable: companion.companionTableName,
               savedBy,
               claims: provenanceClaims,
               promotesDraft: promotedDraft,
@@ -5049,6 +5059,7 @@ export class SingleMutationService extends BaseService {
                 locale: singleDraftLocale,
                 values: companionData,
                 localizedFields: companion.localizedFields,
+                languagesTable: companion.companionTableName,
                 savedBy,
                 claims: provenanceClaims,
                 partState: "draft",
@@ -7128,6 +7139,7 @@ export class SingleMutationService extends BaseService {
       locale: translatedIn,
       values: translation,
       localizedFields: companion.localizedFields,
+      languagesTable: companion.companionTableName,
       savedBy: args.actor,
     });
   }

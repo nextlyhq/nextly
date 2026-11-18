@@ -204,6 +204,25 @@ export {
   type AutosaveStatus,
 } from "../hooks/useDocumentCheckpoint";
 
+/**
+ * A session on a second document, opened from inside the view of another:
+ * its latest version, its lock, a draft save, a publish, a recovery point and
+ * letting it go, each the admin's own. Exported for the plugin surface: a
+ * view that edits another document in place (a site header from a page) has
+ * no other way to lock, save or publish it.
+ *
+ * @experimental Settles with editing a second document in place.
+ */
+export {
+  useDocumentSession,
+  type DocumentSession,
+  type DocumentSessionLock,
+  type DocumentSessionOpen,
+  type DocumentSessionOutcome,
+  type DocumentSessionRefusal,
+  type DocumentSessionTarget,
+} from "../hooks/useDocumentSession";
+
 export type { DocumentLockGates } from "../components/features/entries/EntryForm/document-lock-affordances";
 
 /**

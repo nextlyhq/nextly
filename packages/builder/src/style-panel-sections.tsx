@@ -63,6 +63,7 @@ import type { InspectedStyleProperty, StyleSection } from "./style-inspector";
 import { StylePropertyFields } from "./style-property-fields";
 import type { StyleProvenance } from "./style-provenance";
 import type { StyleTarget } from "./style-target";
+import { TextStylePicker } from "./text-style-picker";
 
 /**
  * The panel's sections, each folding on its own and remembered as the author
@@ -443,6 +444,10 @@ function SectionLead({
   }
   if (sectionKey === "inside-parent") {
     return <InsideParentFields surroundings={surroundings} />;
+  }
+  // The block's text style first: the whole look its other fields adjust.
+  if (sectionKey === "typography") {
+    return <TextStylePicker surroundings={surroundings} />;
   }
   if (sectionKey === "spacing") {
     return (
