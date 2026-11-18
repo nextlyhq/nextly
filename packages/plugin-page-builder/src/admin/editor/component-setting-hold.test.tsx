@@ -516,6 +516,37 @@ describe("leaving the editor for the form", () => {
     return mounted;
   }
 
+  it("shares one write between two leaves and the Save while it is out", async () => {
+    // Two clicks of the exit, then a Save, while the write is slow: one
+    // write, each told it was written, and the binding kept.
+    const { hook, editor } = await heldAndBound("ok");
+    const planned = route.answer;
+    let release: () => void = () => undefined;
+    const slow = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    route.answer = body => slow.then(() => planned(body));
+    let first: unknown;
+    let second: unknown;
+    let saving: Promise<unknown> = Promise.resolve();
+    await act(async () => {
+      first = hook.result.current.writeHeldSettings();
+      second = hook.result.current.writeHeldSettings();
+      saving = Promise.resolve(form.before?.("save", settled));
+      await Promise.resolve();
+    });
+    release();
+    let answers: unknown[] = [];
+    await act(async () => {
+      answers = await Promise.all([first, second, saving]);
+    });
+    expect(answers.slice(0, 2)).toEqual([true, true]);
+    expect(route.sent.filter(sent => sent.body.dryRun !== true)).toHaveLength(
+      1
+    );
+    expect(editor.document.nodes[0]?.bindings).toEqual(BOUND);
+  });
+
   it("writes each held setting to its component's draft first, and lets the editor close", async () => {
     // The form saves the page; the editor holding the setting is gone by then.
     const { hook, retry } = await heldAndBound("ok");

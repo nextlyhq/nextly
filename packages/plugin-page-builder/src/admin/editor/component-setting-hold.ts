@@ -599,15 +599,34 @@ export function useComponentSettingHold(
     []
   );
 
+  // One drain of the held settings at a time, shared by every leave and
+  // Save asked while it is out: a second would write a hold the first is
+  // writing, and its refusal, against the fingerprint the first moved,
+  // would take off the binding the first just wrote.
+  const draining = useRef<ReturnType<typeof writeEachLive> | undefined>(
+    undefined
+  );
+  const drain = useCallback((): ReturnType<typeof writeEachLive> => {
+    const running = draining.current;
+    if (running !== undefined) return running;
+    const started = writeEachLive(now, drop, kept.current.written).finally(
+      () => {
+        if (draining.current === started) draining.current = undefined;
+      }
+    );
+    draining.current = started;
+    return started;
+  }, [drop]);
+
   const writeHeldSettings = useCallback((): true | Promise<boolean> => {
     const { editor: shown, held: holds } = now.current;
     if (liveSettingHolds(shown.document, holds).length === 0) return true;
-    return writeEachLive(now, drop, kept.current.written).then(refused => {
+    return drain().then(refused => {
       if (refused === undefined) return true;
       toast.error(refused.words, { duration: REFUSED_TOAST_MS });
       return false;
     });
-  }, [drop]);
+  }, [drain]);
 
   useBeforeDocumentAction(async (action, store) => {
     // A binding of a setting its component doesn't have, which no hold here
@@ -618,10 +637,7 @@ export function useComponentSettingHold(
     // A tracked write that failed refuses the Save anyway; the component is
     // written only with a page that will be stored.
     if (!(await store.writesSettled())) return;
-    refuseSave(
-      await writeEachLive(now, drop, kept.current.written),
-      () => void at.current.run?.(action)
-    );
+    refuseSave(await drain(), () => void at.current.run?.(action));
   });
 
   return { library: drawn, makeComponentSetting, writeHeldSettings };

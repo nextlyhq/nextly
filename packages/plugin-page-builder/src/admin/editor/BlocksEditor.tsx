@@ -917,6 +917,9 @@ function EditorBody<TFieldValues extends FieldValues>({
                 selectedIds={editor.selection.ids}
                 onClose={savePattern.close}
                 returnFocusTo={savePattern.returnFocusTo}
+                // As for a new component: the saved section keeps the
+                // selection's bindings, so a held setting is written first.
+                beforeSave={mount.writeHeldSettings}
               />
               <ComponentFromSelectionPrompt
                 request={makeComponent.request}
