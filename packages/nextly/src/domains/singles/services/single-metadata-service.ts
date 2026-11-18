@@ -273,6 +273,23 @@ function withoutRefusedSettings<F extends { name: string }>(
 }
 
 /**
+ * The registry columns an update writes, as the row recorded them before it: what puts the row
+ * back when the update's change landed but its files could not be recorded applied. A column the
+ * row held no value in is written empty, so no requested value stays behind.
+ */
+function recordedRowOf(
+  input: UpdateSingleSchemaInput
+): Partial<DynamicSingleInsert> {
+  const existing = input.existing as unknown as Record<string, unknown>;
+  return Object.fromEntries(
+    [...Object.keys(input.updateData), "migrationStatus"].map(key => [
+      key,
+      existing[key] ?? null,
+    ])
+  ) as Partial<DynamicSingleInsert>;
+}
+
+/**
  * The schema work an update has to do, decided before any statement runs.
  *
  * One plan covers both shapes of update. A field change renders statements; a save that only flips
@@ -1011,10 +1028,11 @@ export class SingleMetadataService {
    * the schema writes its settings-only migration, as a collection's does.
    *
    * A failure before the apply, or in its main migration, is thrown as before, with nothing
-   * written. Past the main migration the apply reports rather than throws, and so does this: where
+   * written. Past the main migration the apply reports rather than throws, and so does this. Where
    * the writer then refuses to record the files applied (the database does not stand as their
-   * snapshot says), the files are kept and the outcome is recorded as a failed migration, so the
-   * registry row is still written.
+   * snapshot says), the change has landed and its files are kept: the row is put back as it was
+   * recorded and the writer's refusal is thrown, naming the files and the steps that finish the
+   * change, the last of them a `nextly migrate` that brings the row in step with the files.
    */
   private async writeUpdate(
     deps: CollectionSaveDeps,
@@ -1072,11 +1090,14 @@ export class SingleMetadataService {
           error instanceof Error ? error.message : String(error)
         }`
       );
-      return this.recordUpdate(
-        input,
-        { refused: [], ...ran.outcome, status: "failed" },
-        leaving
+      // The row the step wrote describes the requested shape, which no applied file records: it
+      // goes back to what was recorded, and the steps the refusal names bring it forward.
+      await writeRegistryRowsWith(this.adapter, () =>
+        this.registry.updateSingle(input.slug, recordedRowOf(input), {
+          source: "ui",
+        })
       );
+      throw error;
     }
     if ("rowError" in ran) throw ran.rowError;
     if (plan && leaving.length > 0 && ran.outcome?.status !== "failed") {

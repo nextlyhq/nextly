@@ -221,7 +221,7 @@ function withKeptFiles(
  * applied snapshot on every run, with no file left to apply. Reversed, the files run again from
  * the start, by the same command.
  */
-function nextSteps(keptFiles: readonly string[]): string {
+export function nextSteps(keptFiles: readonly string[]): string {
   const last = keptFiles[keptFiles.length - 1];
   const record =
     keptFiles.length === 1
