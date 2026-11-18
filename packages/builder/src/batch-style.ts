@@ -32,8 +32,8 @@ import {
   getBlock,
   isLook,
   isTextStyle,
-  STYLE_CATALOG,
   stylePropertiesForSupports,
+  supportedStylesOf,
   TEXT_STYLE_PROPERTIES,
   type AnyBlockDefinition,
   type BlockNode,
@@ -378,11 +378,6 @@ export interface BatchStylePaste {
   readonly skipped: readonly SkippedSettings[];
 }
 
-/** Every property the catalog knows, so another kind of entry is carried. */
-const CATALOG_PROPERTIES: ReadonlySet<string> = new Set(
-  STYLE_CATALOG.map(entry => entry.property)
-);
-
 /**
  * The ops that give each block the source's look: the source's own values in
  * place of the block's, and the source's classes in place of the ones it
@@ -391,10 +386,11 @@ const CATALOG_PROPERTIES: ReadonlySet<string> = new Set(
  * Each op updates a block's own `styles` and `classes` and nothing else, so a
  * paste never writes into a shared style, whatever the editing bar targets.
  *
- * A block keeps only what it can show, as "Turn into" does: a value its type
- * does not support, a block style of another type, and a text style on a
- * block with no text settings are skipped and counted, one per value at each
- * state and device, so the author can be told how many.
+ * A block keeps only what it can show: a value its type does not support
+ * (read by `supportedStylesOf`, as "Turn into" reads it), a block style of
+ * another type, and a text style on a block with no text settings are
+ * skipped and counted, one per value at each state and device, so the
+ * author can be told how many.
  */
 export function batchStylePasteOps(
   nodes: readonly BlockNode[],
@@ -405,12 +401,11 @@ export function batchStylePasteOps(
   const ops: BuilderOp[] = [];
   const skipped: SkippedSettings[] = [];
   for (const node of nodes) {
+    const supports = definitionOf(node.type)?.supports;
     const supported = new Set(
-      stylePropertiesForSupports(definitionOf(node.type)?.supports).map(
-        entry => entry.property
-      )
+      stylePropertiesForSupports(supports).map(entry => entry.property)
     );
-    const styles = keptStyles(source.styles, supported);
+    const styles = supportedStylesOf(source.styles, supports);
     const classes = keptClasses(
       source.classes,
       node.type,
@@ -419,57 +414,10 @@ export function batchStylePasteOps(
     );
     const count = styles.skipped + classes.skipped;
     if (count > 0) skipped.push({ nodeId: node.id, type: node.type, count });
-    const op = pasteOp(node, styles.kept, classes.kept);
+    const op = pasteOp(node, styles.styles, classes.kept);
     if (op !== null) ops.push(op);
   }
   return { ops, skipped };
-}
-
-/**
- * The source's values a block can take, and how many it can't: a catalog
- * property its type does not support is left out at every state and device.
- * A state or device left empty goes with it.
- */
-function keptStyles(
-  styles: NodeStyles | undefined,
-  supported: ReadonlySet<string>
-): { kept: NodeStyles | undefined; skipped: number } {
-  if (styles === undefined) return { kept: undefined, skipped: 0 };
-  const kept: Record<string, Record<string, Record<string, unknown>>> = {};
-  let skipped = 0;
-  for (const [state, byDevice] of Object.entries(styles)) {
-    const keptDevices: Record<string, Record<string, unknown>> = {};
-    for (const [device, values] of Object.entries(byDevice ?? {})) {
-      const taken = keptValues(values, supported);
-      skipped += taken.skipped;
-      if (taken.kept !== undefined) keptDevices[device] = taken.kept;
-    }
-    if (Object.keys(keptDevices).length > 0) kept[state] = keptDevices;
-  }
-  return {
-    kept: Object.keys(kept).length === 0 ? undefined : kept,
-    skipped,
-  };
-}
-
-/** One state and device's values a block can take, copied, and how many it can't. */
-function keptValues(
-  values: Readonly<Record<string, unknown>> | undefined,
-  supported: ReadonlySet<string>
-): { kept: Record<string, unknown> | undefined; skipped: number } {
-  const kept: Record<string, unknown> = {};
-  let skipped = 0;
-  for (const [property, value] of Object.entries(values ?? {})) {
-    if (CATALOG_PROPERTIES.has(property) && !supported.has(property)) {
-      skipped += 1;
-    } else {
-      kept[property] = structuredClone(value);
-    }
-  }
-  return {
-    kept: Object.keys(kept).length === 0 ? undefined : kept,
-    skipped,
-  };
 }
 
 /**
