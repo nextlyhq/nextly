@@ -23,7 +23,7 @@
  *
  * @module cli/commands/migrate-baseline
  */
-import { mkdir, rm } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
@@ -84,7 +84,7 @@ import {
   writeSnapshot,
 } from "../../domains/schema/migrate-create/snapshot-io";
 import {
-  assertWriterHold,
+  publishHeld,
   withMigrationWriterHold,
   writeWhole,
 } from "../../domains/schema/migrate-create/writer-hold";
@@ -1034,27 +1034,26 @@ async function adopt(deps: BaselineCoreDeps): Promise<BaselineCoreResult> {
       if (planned.kind !== "adopt") return planned;
       const { baseName, sqlContent, sqlPath } = planned;
 
-      // A run that stalled while another writer went ahead writes neither file.
-      await assertWriterHold(migrationsDir);
-      await mkdir(migrationsDir, { recursive: true });
-      // The snapshot first, each file whole, as `migrate:create` writes them.
-      const snapshotPath = await writeSnapshot(
-        planned.metaDir,
-        baseName,
-        planned.snapshot,
-        sqlContent,
-        // What the app contributed to other owners' tables, as every snapshot
-        // writer records it, so the next diff can tell the app's elements from
-        // the owner's own after this file becomes the latest snapshot.
-        planned.contributions
-      );
-      try {
+      // Where `writeSnapshot` puts it, by the writer's own rule.
+      const snapshotPath = snapshotPathOf(planned.metaDir, baseName);
+      // As the folder's holder, checked before the files and again after
+      // them: a run that lost its hold on the way withdraws both, the file
+      // first, and records nothing.
+      await publishHeld(migrationsDir, [sqlPath, snapshotPath], async () => {
+        await mkdir(migrationsDir, { recursive: true });
+        // The snapshot first, each file whole, as `migrate:create` writes them.
+        await writeSnapshot(
+          planned.metaDir,
+          baseName,
+          planned.snapshot,
+          sqlContent,
+          // What the app contributed to other owners' tables, as every snapshot
+          // writer records it, so the next diff can tell the app's elements from
+          // the owner's own after this file becomes the latest snapshot.
+          planned.contributions
+        );
         await writeWhole(sqlPath, sqlContent);
-      } catch (error) {
-        // No baseline was written, so its snapshot is withdrawn with it.
-        await rm(snapshotPath, { force: true });
-        throw error;
-      }
+      });
 
       // The ledger is bootstrapped out of band by `migrate`, which has never
       // run on a database managed by `db:sync` — so this command is the first

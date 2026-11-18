@@ -235,33 +235,45 @@ async function filesIn(dir: string): Promise<string[]> {
 }
 
 /**
- * The newest snapshot file's name in `metaDir`, by the same order
- * `loadLatestSnapshot` reads; undefined where the folder is absent or holds
- * none.
+ * The snapshot files in `metaDir` that record a written migration, oldest
+ * first; none where the folder is absent. The one listing every reader of
+ * snapshots starts from.
  *
  * A snapshot counts only once its migration file is beside the folder: the
  * snapshot is written first, so one whose writer stopped between the two
- * files describes a migration that was never written, and read as the newest
- * it would hide that change from the next `migrate:create`. Its `.sql`, or a
- * dialect's variant of it (`<name>.<dialect>.sql`), is what says the
+ * files describes a migration that was never written. Read as the newest it
+ * would hide that change from the next `migrate:create`, and read by
+ * `nextly migrate` it would stand for entities no migration made. Its `.sql`,
+ * or a dialect's variant of it (`<name>.<dialect>.sql`), is what says the
  * migration exists.
  */
-export async function newestSnapshotName(
+export async function recordedSnapshotNames(
   metaDir: string
-): Promise<string | undefined> {
+): Promise<string[]> {
   const snapshots = (await filesIn(metaDir))
     .filter(f => f.endsWith(".snapshot.json"))
     .sort();
-  if (snapshots.length === 0) return undefined;
+  if (snapshots.length === 0) return [];
   const migrations = (await filesIn(dirname(metaDir))).filter(f =>
     f.endsWith(".sql")
   );
-  return snapshots.findLast(snapshot => {
+  return snapshots.filter(snapshot => {
     const base = snapshot.slice(0, -".snapshot.json".length);
     return migrations.some(
       file => file === `${base}.sql` || file.startsWith(`${base}.`)
     );
   });
+}
+
+/**
+ * The newest snapshot file's name in `metaDir`, by the same order
+ * `loadLatestSnapshot` reads; undefined where the folder is absent or holds
+ * none that records a written migration (`recordedSnapshotNames`).
+ */
+export async function newestSnapshotName(
+  metaDir: string
+): Promise<string | undefined> {
+  return (await recordedSnapshotNames(metaDir)).at(-1);
 }
 
 /**

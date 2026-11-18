@@ -596,6 +596,40 @@ describe.each(getConfiguredTestDialects())(
       expect(await adapter.tableExists(table(PAGES))).toBe(true);
     }, 120_000);
 
+    it("a writer suspended between its check and its files, past its lease, leaves none of them", async () => {
+      restoreBounds();
+      restoreBounds = setWriterHoldBounds({
+        waitMs: 30_000,
+        leaseSeconds: 1,
+        // Never inside the case: the first writer is stopped, not renewing.
+        renewMs: 600_000,
+      });
+      let second: Ended | undefined;
+      let looks = 0;
+      // The first writer has checked its hold and is about to write its
+      // snapshot. Stopped there past its lease, it resumes after a second
+      // writer has taken the folder and written.
+      stops.aroundSnapshot = async () => {
+        looks += 1;
+        if (looks > 1) return;
+        await pause(1_200);
+        second = await migrateCreate(WITH_PAGES, "second");
+      };
+
+      const first = await migrateCreate(WITH_PAGES, "first");
+
+      expect(second?.code, second?.said).toBeUndefined();
+      // It wrote its files and then found the folder no longer its own: both
+      // are withdrawn, and it ends as a writer another overtook.
+      expect(first.code, first.said).toBe(1);
+      expect(printed.join("\n")).toMatch(/MIGRATIONS_WRITER_OVERTAKEN/);
+      expect(sqlFiles().map(f => f.replace(/^[\d_]+/, ""))).toEqual([
+        "base.sql",
+        "second.sql",
+      ]);
+      expect(oneLine()).toEqual([[table(POSTS)], [table(PAGES)]]);
+    }, 120_000);
+
     it("a migration appears to nextly migrate with both its files or not at all", async () => {
       /** The files with no snapshot beside them, at a look. */
       const withoutSnapshot: string[][] = [];

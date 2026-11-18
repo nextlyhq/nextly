@@ -22,7 +22,7 @@
 // The CLI then says "No schema changes detected" and exits 0, since nothing
 // to do is a finished run; a failure exits 1.
 
-import { mkdir, rm } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
@@ -186,6 +186,7 @@ import {
 } from "./snapshot-io";
 import {
   assertWriterHold,
+  publishHeld,
   startMovedError,
   underWriterHold,
   writeWhole,
@@ -835,27 +836,43 @@ export async function generateMigration(
     async () => {
       // A run that stalled while another took the folder stops here, before it plans.
       await assertWriterHold(requested.migrationsDir);
-      await refuseMovedStart(requested);
+      // A starting point the caller read before it held the folder; one read
+      // below, under the hold, is the newest by its reading.
+      if (requested.previous !== undefined) {
+        await refuseMovedFrom(
+          requested.migrationsDir,
+          startOf(requested.previous)
+        );
+      }
       return generateHeld(requested);
     }
   );
 }
 
 /**
- * Refuses where the caller read its starting snapshot before it held the
- * folder and another writer has written one since: the migration would be a
- * second written from the snapshot it read. Asked under the hold, so the
- * answer stands until the files are written.
+ * The snapshot file a run starts from, as the checks of it read it: its name,
+ * undefined where it starts from none, and null where the caller gave a
+ * starting point without saying which file it is, which cannot be checked.
  */
-async function refuseMovedStart(requested: GenerateArgs): Promise<void> {
-  const { previous } = requested;
-  // Read here, under the hold, or by a caller that does not say which file.
-  if (previous === undefined) return;
-  if (previous !== null && previous.filename === undefined) return;
-  const newest = await newestSnapshotName(
-    resolve(requested.migrationsDir, "meta")
-  );
-  if (newest !== previous?.filename) throw startMovedError(newest);
+function startOf(
+  previous: NonNullable<GenerateArgs["previous"]> | null
+): string | undefined | null {
+  return previous === null ? undefined : (previous.filename ?? null);
+}
+
+/**
+ * Refuses where the newest snapshot in the folder is no longer `startedFrom`,
+ * the one this run reads as its starting point: another writer has written a
+ * migration since, and this run's would be a second from the snapshot it
+ * read. Asked under the hold, when the run begins and again as it writes.
+ */
+async function refuseMovedFrom(
+  migrationsDir: string,
+  startedFrom: string | undefined | null
+): Promise<void> {
+  if (startedFrom === null) return;
+  const newest = await newestSnapshotName(resolve(migrationsDir, "meta"));
+  if (newest !== startedFrom) throw startMovedError(newest);
 }
 
 /** `generateMigration`, with the folder held where the run writes. */
@@ -1061,6 +1078,7 @@ async function generateHeld(
     ],
     hasSettingsChanges: changesBeyondTables,
     record: {
+      startedFrom: startOf(previous),
       written,
       contributions: stream.contributions,
       entities: settingsRecord,
@@ -1498,6 +1516,7 @@ async function generateHeld(
   });
 
   const { sqlPath, snapshotPath } = await writeMigrationPair(args, {
+    startedFrom: startOf(previous),
     metaDir,
     now,
     sqlContent,
@@ -1792,6 +1811,8 @@ async function recordSnapshot(
 
 /** A migration's `.sql` content and what its paired snapshot records. */
 interface MigrationPair {
+  /** The snapshot file the run started from (`startOf`), checked again as it writes. */
+  startedFrom: string | undefined | null;
   sqlContent: string;
   written: NextlySchemaSnapshot;
   contributions: Parameters<typeof writeSnapshot>[4];
@@ -1812,32 +1833,30 @@ async function writeMigrationPair(
 ): Promise<{ sqlPath: string; snapshotPath: string }> {
   const baseName = `${formatTimestamp(pair.now)}_${slugify(args.name)}`;
   const sqlPath = resolve(args.migrationsDir, `${baseName}.sql`);
-  if (args.dryRun === true) {
-    // Where `writeSnapshot` would put it, by the writer's own rule.
-    return { sqlPath, snapshotPath: snapshotPathOf(pair.metaDir, baseName) };
-  }
-  // A writer that stalled while another went ahead writes neither file.
-  await assertWriterHold(args.migrationsDir);
-  await mkdir(args.migrationsDir, { recursive: true });
-  // The snapshot first, each file whole: a reader counts a migration from
-  // its `.sql`, so it never finds one whose snapshot is still to come.
-  const snapshotPath = await writeSnapshot(
-    pair.metaDir,
-    baseName,
-    pair.written,
-    pair.sqlContent,
-    pair.contributions,
-    pair.entities,
-    pair.permissions
-  );
-  try {
+  // Where `writeSnapshot` puts it, by the writer's own rule.
+  const snapshotPath = snapshotPathOf(pair.metaDir, baseName);
+  if (args.dryRun === true) return { sqlPath, snapshotPath };
+  // As the folder's holder, checked before the files and again after them: a
+  // run that lost its hold on the way withdraws both, the file first, since
+  // a snapshot counts only while its file is there.
+  await publishHeld(args.migrationsDir, [sqlPath, snapshotPath], async () => {
+    // Still from the newest snapshot: one written since would make this a
+    // second migration from the one it started at.
+    await refuseMovedFrom(args.migrationsDir, pair.startedFrom);
+    await mkdir(args.migrationsDir, { recursive: true });
+    // The snapshot first, each file whole: a reader counts a migration from
+    // its `.sql`, so it never finds one whose snapshot is still to come.
+    await writeSnapshot(
+      pair.metaDir,
+      baseName,
+      pair.written,
+      pair.sqlContent,
+      pair.contributions,
+      pair.entities,
+      pair.permissions
+    );
     await writeWhole(sqlPath, pair.sqlContent);
-  } catch (error) {
-    // No migration was written, so its snapshot is withdrawn: left, it would
-    // describe a migration that does not exist.
-    await rm(snapshotPath, { force: true });
-    throw error;
-  }
+  });
   return { sqlPath, snapshotPath };
 }
 

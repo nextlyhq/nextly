@@ -454,6 +454,12 @@ export async function previewCollectionSave(
     const meta = join(deps.migrationsDir, "meta");
     if (existsSync(meta)) {
       await cp(meta, join(scratch, "meta"), { recursive: true });
+      // And each snapshot's migration file beside it: a snapshot counts as
+      // written only with its file there (`recordedSnapshotNames`), so
+      // without them the preview would start from no snapshot at all.
+      for (const file of await sqlFiles(deps.migrationsDir)) {
+        await cp(join(deps.migrationsDir, file), join(scratch, file));
+      }
     }
     const files = await writeFiles(
       { ...deps, migrationsDir: scratch },

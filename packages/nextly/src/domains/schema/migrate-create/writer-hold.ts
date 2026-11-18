@@ -26,7 +26,7 @@
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
-import { readFileSync, rmSync } from "node:fs";
+import { linkSync, readFileSync, renameSync, rmSync } from "node:fs";
 import {
   link,
   mkdir,
@@ -223,18 +223,19 @@ function alreadyThere(error: unknown): boolean {
 }
 
 /**
- * Sets a lapsed hold aside so the folder can be taken, and answers whether it
- * did. The file is moved, never deleted in place: of two writers that both
- * read it lapsed, one moves it and the other finds nothing to move.
- *
- * What was moved is then read again, as the one file it is: it is set aside
- * only if it is still the hold that was read and still lapsed. A holder that
- * renewed it between the read and the move (`renewOwn`), or another writer's
- * hold taken in that time, is put back where it was, unless the folder was
- * taken again meanwhile; its holder then finds its hold gone before it writes.
+ * Takes the hold's file from its path where `wanted` says it is the one to
+ * take, and answers whether it did. The file is moved to a name of its own
+ * first and judged there, as the one file it is: judged at its path, another
+ * could be in its place by the time it was removed. Of two that both mean to
+ * take it, one moves it and the other finds nothing to move. A file that is
+ * not the one wanted is put back, unless the folder was taken again
+ * meanwhile; its holder then finds its hold gone before it writes.
  */
-async function setLapsedAside(path: string, lapsed: HoldReading) {
-  const aside = `${path}.${randomUUID()}.lapsed`;
+async function takeFromPath(
+  path: string,
+  wanted: (moved: HoldReading) => boolean
+): Promise<boolean> {
+  const aside = `${path}.${randomUUID()}.aside`;
   try {
     await rename(path, aside);
   } catch (error) {
@@ -242,17 +243,28 @@ async function setLapsedAside(path: string, lapsed: HoldReading) {
     throw error;
   }
   const moved = await readHold(aside);
-  const stillLapsed =
-    moved !== undefined &&
-    moved.record?.token === lapsed.record?.token &&
-    moved.lapsesAt <= Date.now();
-  if (!stillLapsed) {
+  const take = moved !== undefined && wanted(moved);
+  if (!take) {
     await link(aside, path).catch((error: unknown) => {
       if (!alreadyThere(error)) throw error;
     });
   }
   await rm(aside, { force: true });
-  return stillLapsed;
+  return take;
+}
+
+/**
+ * Sets a lapsed hold aside so the folder can be taken: only the hold that
+ * was read, and only if it is still lapsed once moved. One its holder renewed
+ * between the read and the move (`renewOwn`) stays its holder's.
+ */
+function setLapsedAside(path: string, lapsed: HoldReading): Promise<boolean> {
+  return takeFromPath(
+    path,
+    moved =>
+      moved.record?.token === lapsed.record?.token &&
+      moved.lapsesAt <= Date.now()
+  );
 }
 
 /**
@@ -397,13 +409,18 @@ function releaseOnExit(): void {
   exitHookSet = true;
   process.on("exit", () => {
     for (const { path, token } of held.values()) {
+      // As `takeFromPath`, in the calls an exit handler may make: moved to a
+      // name of its own, judged there, and put back where it is another's.
+      const aside = `${path}.${randomUUID()}.aside`;
       try {
-        if (recordOf(readFileSync(path, "utf-8"))?.token === token) {
-          rmSync(path, { force: true });
+        renameSync(path, aside);
+        if (recordOf(readFileSync(aside, "utf-8"))?.token !== token) {
+          linkSync(aside, path);
         }
       } catch {
-        // Gone already, or unreadable: the lease ends it.
+        // Gone already, unreadable, or taken again: the lease ends it.
       }
+      rmSync(aside, { force: true });
     }
   });
 }
@@ -493,8 +510,8 @@ export async function acquireWriterHold(args: {
     release: async () => {
       clearInterval(renewal);
       held.delete(key);
-      const now = await readHold(path).catch(() => undefined);
-      if (now?.record?.token === record.token) await rm(path, { force: true });
+      // Only this taking's file: after a stall, the path may name another's.
+      await takeFromPath(path, moved => moved.record?.token === record.token);
       // A folder made only to hold the file goes with it, where nothing was written.
       if (createdFolder) await rmdir(migrationsDir).catch(() => undefined);
     },
@@ -655,6 +672,34 @@ export function startMovedError(newest: string | undefined): NextlyError {
  */
 export async function assertWriterHold(migrationsDir: string): Promise<void> {
   await scope.getStore()?.holds.get(resolve(migrationsDir))?.assertHeld();
+}
+
+/**
+ * Publish a migration's files, `write`, as the writer that holds
+ * `migrationsDir`: the hold is checked before anything is written, and again
+ * once the files are in place. A writer that stopped past its lease between
+ * the two (a suspended process, a paused machine) may have written beside
+ * another that took the folder meanwhile, so where the hold is no longer its
+ * own, or the write failed part-way, `files` are withdrawn in the order
+ * given and the refusal travels: nothing of the run is left for a reader.
+ *
+ * The check after cannot undo what another writer read in between; that
+ * writer finds the newest snapshot changed before it publishes
+ * (`startMovedError`), and writes nothing either.
+ */
+export async function publishHeld(
+  migrationsDir: string,
+  files: readonly string[],
+  write: () => Promise<void>
+): Promise<void> {
+  await assertWriterHold(migrationsDir);
+  try {
+    await write();
+    await assertWriterHold(migrationsDir);
+  } catch (error) {
+    for (const file of files) await rm(file, { force: true });
+    throw error;
+  }
 }
 
 /**

@@ -90,7 +90,7 @@ import {
 } from "../../domains/schema/migrate-create/generate-plugin";
 import { PromptCancelledError } from "../../domains/schema/migrate-create/prompt-renames";
 import {
-  assertWriterHold,
+  publishHeld,
   withMigrationWriterHold,
   writeWhole,
 } from "../../domains/schema/migrate-create/writer-hold";
@@ -982,10 +982,12 @@ async function runBlankPath(
     reportDryRun(logger, { changes: [{ action: "write", target: sqlFile }] });
     return;
   }
-  // Under the command's hold, and whole or not at all for a reader.
-  await assertWriterHold(migrationsDir);
-  await mkdir(migrationsDir, { recursive: true });
-  await writeWhole(sqlPath, content);
+  // As the folder's holder, checked before the file and again after it, and
+  // whole or not at all for a reader.
+  await publishHeld(migrationsDir, [sqlPath], async () => {
+    await mkdir(migrationsDir, { recursive: true });
+    await writeWhole(sqlPath, content);
+  });
 
   // F11 PR 3: blank migrations don't get a paired snapshot file. The
   // operator-authored SQL has no schema diff to capture; the next

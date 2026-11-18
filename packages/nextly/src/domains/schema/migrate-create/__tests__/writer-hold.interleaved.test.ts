@@ -8,7 +8,14 @@
  * two of them. Each interleaving is one an implementation that checks a path
  * and then acts on it gets wrong.
  */
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { utimes } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -20,7 +27,9 @@ import {
   acquireWriterHold,
   isWriterHoldHeld,
   isWriterHoldLost,
+  publishHeld,
   setWriterHoldBounds,
+  withMigrationWriterHold,
   writeWhole,
   type WriterHold,
 } from "../writer-hold";
@@ -29,7 +38,7 @@ import {
 const between = vi.hoisted(() => ({
   /** After a file's text has been read, before the reader acts on it. */
   afterRead: undefined as (() => Promise<void>) | undefined,
-  /** Before a file is moved to a name ending `.lapsed`. */
+  /** Before a hold's file is moved aside (to a name ending `.aside`). */
   beforeSetAside: undefined as (() => Promise<void>) | undefined,
   /** Before any file is moved, given where it goes. */
   beforeMove: undefined as ((to: string) => void) | undefined,
@@ -73,7 +82,7 @@ vi.mock("node:fs/promises", async importOriginal => {
         text: await real.readFile(from, "utf-8"),
       });
       between.beforeMove?.(to);
-      if (to.endsWith(".lapsed")) {
+      if (to.endsWith(".aside")) {
         const step = between.beforeSetAside;
         between.beforeSetAside = undefined;
         await step?.();
@@ -166,6 +175,87 @@ describe("a holder checking its hold while another writer takes the folder", () 
     ).toBe("migrate:create");
     await stalled.release();
     expect(existsSync(lockFile())).toBe(false);
+  });
+});
+
+describe("a holder letting go while another writer takes the folder", () => {
+  it("leaves the other writer's hold alone when the folder is taken between its check and its removal", async () => {
+    const stalled = await take("migrate:create");
+    await lapse();
+    let other: WriterHold | undefined;
+    // The stalled holder is letting go: it has read the hold as its own.
+    // Before it removes anything, the lapsed hold is set aside and the
+    // folder taken.
+    between.afterRead = async () => {
+      other = await take("migrate:baseline");
+    };
+
+    await stalled.release();
+
+    // What it removed was its own file, never the one now at the path.
+    expect(other).toBeDefined();
+    await other!.assertHeld();
+    expect(
+      (JSON.parse(readFileSync(lockFile(), "utf-8")) as { command: string })
+        .command
+    ).toBe("migrate:baseline");
+    await other!.release();
+  });
+});
+
+describe("a writer publishing its files", () => {
+  it("withdraws them and refuses where it lost the folder between its check and its files", async () => {
+    restore();
+    restore = setWriterHoldBounds({
+      waitMs: 5_000,
+      leaseSeconds: 30,
+      renewMs: 600_000,
+    });
+    const snapshot = join(dir, "meta", "20260101_000000_000_one.snapshot.json");
+    const file = join(dir, "20260101_000000_000_one.sql");
+    let other: WriterHold | undefined;
+
+    const lost = await thrownBy(() =>
+      withMigrationWriterHold(
+        { migrationsDir: dir, command: "migrate:create" },
+        () =>
+          publishHeld(dir, [file, snapshot], async () => {
+            // Checked, and then stopped past its lease: another writer takes
+            // the folder before this one's files are in place.
+            await lapse();
+            other = await take("migrate:baseline");
+            mkdirSync(join(dir, "meta"), { recursive: true });
+            writeFileSync(snapshot, "{}");
+            writeFileSync(file, "CREATE TABLE one (id integer);\n");
+          })
+      )
+    );
+
+    expect(isWriterHoldLost(lost)).toBe(true);
+    expect(existsSync(file)).toBe(false);
+    expect(existsSync(snapshot)).toBe(false);
+    await other!.assertHeld();
+    await other!.release();
+  });
+
+  it("withdraws what a write that failed part-way had put in place", async () => {
+    const snapshot = join(dir, "meta", "20260101_000000_000_one.snapshot.json");
+    const file = join(dir, "20260101_000000_000_one.sql");
+
+    const failed = await thrownBy(() =>
+      withMigrationWriterHold(
+        { migrationsDir: dir, command: "migrate:create" },
+        () =>
+          publishHeld(dir, [file, snapshot], async () => {
+            mkdirSync(join(dir, "meta"), { recursive: true });
+            writeFileSync(snapshot, "{}");
+            throw new Error("no space left on device");
+          })
+      )
+    );
+
+    expect((failed as Error).message).toBe("no space left on device");
+    expect(existsSync(snapshot)).toBe(false);
   });
 });
 
