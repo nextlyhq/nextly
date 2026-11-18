@@ -3147,18 +3147,6 @@ export class CollectionQueryService extends BaseService {
     // documented against the configured value.
     decodeJsonFieldValues(rows, fields, params.locale);
 
-    // Every language's values beside each row are kept off it while its hooks
-    // and its own field rules run, and put back only to be judged language by
-    // language below: no hook is handed a value before it is judged, so none
-    // can copy a withheld one into a field it may show.
-    const besideRows = new Map<unknown, unknown>();
-    for (const row of rows) {
-      if (ALL_LOCALES_KEY in row) {
-        besideRows.set(row.id, row[ALL_LOCALES_KEY]);
-        delete row[ALL_LOCALES_KEY];
-      }
-    }
-
     // (3) One state for the whole batch — see the docblock on sharing.
     const nestedState = this.relationshipService.createNestedHookState();
     const nestedAccess = {
@@ -3188,6 +3176,21 @@ export class CollectionQueryService extends BaseService {
       nestedState,
       nestedAccess
     );
+
+    // Every language's values beside each row are kept off it while its hooks
+    // and its own field rules run, and put back only to be judged language by
+    // language below: no hook is handed a value before it is judged, so none
+    // can copy a withheld one into a field it may show. Set aside only after
+    // the walk above, which answers the related rows inside each language's
+    // values by their own collections' field hooks, as it does the row's: those
+    // hooks are handed the related row alone, never this row.
+    const besideRows = new Map<unknown, unknown>();
+    for (const row of rows) {
+      if (ALL_LOCALES_KEY in row) {
+        besideRows.set(row.id, row[ALL_LOCALES_KEY]);
+        delete row[ALL_LOCALES_KEY];
+      }
+    }
 
     // What an afterRead handler is handed, and what it may hand back.
     //
