@@ -25,6 +25,7 @@ import { useMemo, useState, type JSX } from "react";
 import { useSharedStylesClient } from "../shared-styles-client";
 
 import type { ClassSurface } from "./site-style-studios";
+import { useUsageHere, useUsageReadKey } from "./usage-here";
 
 /** What {@link useSharedStyleVerb} hands the editor. */
 export interface SharedStyleVerb {
@@ -48,7 +49,10 @@ export function useSharedStyleVerb({
   // Asked of the session's grants, which the server enforces on the write
   // anyway; a role without it sees shared styles read-only.
   const mayChange = useCan("update-site-style");
-  const access = useSharedStylesClient();
+  // What the editor has open, whose saved blocks the site count swaps for
+  // the open page's live ones. A never-saved entry is in no count yet.
+  const here = useUsageHere();
+  const access = useSharedStylesClient(here, useUsageReadKey(here));
   // The block being saved, held from the moment the verb ran, so the
   // dialog saves the block it was opened for.
   const [saving, setSaving] = useState<string | null>(null);
