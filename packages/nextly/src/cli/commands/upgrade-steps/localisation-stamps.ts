@@ -37,6 +37,8 @@ interface ToDate {
 async function entitiesToDate(context: UpgradeStepContext): Promise<ToDate[]> {
   const adapter = context.adapter as unknown as DrizzleAdapter;
   const found: ToDate[] = [];
+  // No version history, nothing to date a translation from.
+  if (!(await adapter.tableExists(VERSIONS_TABLE))) return found;
   for (const entity of await siteEntities(context)) {
     if (entity.kind === "component") continue;
     const table = `${entity.tableName}_locales`;
