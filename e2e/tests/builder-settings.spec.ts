@@ -1,6 +1,6 @@
 /**
  * Settings, in a browser: the rail opens Page settings, the page's own fields
- * and a share preview are on General, Enter in a field saves nothing, and the
+ * and its search and sharing are on General, Enter in a field saves nothing, and the
  * site's breakpoints are edited in Site settings, opened from Page settings,
  * where a breakpoint added shows as a device at once. The top bar no longer
  * edits breakpoints.
@@ -220,7 +220,7 @@ async function storedTextStyles(
 }
 
 test.describe("Settings", () => {
-  test("holds the page's fields and a share preview, and Enter saves nothing", async ({
+  test("holds the page's fields and its search and sharing, and Enter saves nothing", async ({
     page,
   }) => {
     const { id } = await createPage(page.request);
@@ -233,12 +233,14 @@ test.describe("Settings", () => {
     ).toHaveCount(0);
 
     await expect(dialog.getByRole("tab", { name: "General" })).toBeVisible();
+    // The playground's SEO plugin leaves Pages out: General says SEO is
+    // turned off for them, and draws no preview of its own beside it.
+    await expect(
+      dialog.getByText("SEO is turned off for Pages.")
+    ).toBeVisible();
     await expect(
       dialog.getByRole("figure", { name: "Share preview" })
-    ).toContainText("Settings ");
-    await expect(
-      dialog.getByText("Approximate: your site's metadata may differ.")
-    ).toBeVisible();
+    ).toHaveCount(0);
 
     let wrote = false;
     page.on("request", request => {
