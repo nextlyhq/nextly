@@ -115,11 +115,12 @@ export interface JudgedFieldTypeChange extends FieldTypeChange {
 }
 
 /**
- * Each change judged over its column: on the entity's table, or on its translations table for a
- * field translated before the save, where each language's value is its own row. Each kept or
- * changed value is asked of the new field's own validation too. A change whose old column the
- * table does not have holds no value to judge, as where a save refused part-way already took it
- * (SQLite rebuilds a table to change a column), and is left out.
+ * Each change judged over its column: on the entity's table, or on its translations table, where
+ * each language's value is its own row. The table the old definition keeps the value in is asked
+ * first and the other after, so a save that also turns translation on or off reads each value where
+ * it is. Each kept or changed value is asked of the new field's own validation too. A change whose
+ * old column neither table has holds no value to judge, as where a save refused part-way already
+ * took it (SQLite rebuilds a table to change a column), and is left out.
  *
  * @param translated the names of the fields kept per language before the save
  */
@@ -141,13 +142,24 @@ export async function judgeFieldTypeChanges(args: {
       args.builtBy
     )?.name;
     if (column === undefined) continue;
-    const perLanguage =
+    // Where the old definition keeps the value first, then the other table: a save that turns
+    // translation on or off has each value where it was, which the column's presence tells.
+    const translated =
       args.translationsTable !== undefined &&
       args.translated?.has(change.from.name) === true;
-    const table = perLanguage
-      ? (args.translationsTable ?? args.table)
-      : args.table;
-    if (!(await columnsOf(table)).has(column.toLowerCase())) continue;
+    const candidates = [args.table, args.translationsTable].filter(
+      (t): t is string => t !== undefined
+    );
+    if (translated) candidates.reverse();
+    let table: string | undefined;
+    for (const candidate of candidates) {
+      if ((await columnsOf(candidate)).has(column.toLowerCase())) {
+        table = candidate;
+        break;
+      }
+    }
+    if (table === undefined) continue;
+    const perLanguage = table === args.translationsTable;
     const result = await judgeStoredTypeChange({
       db: args.db,
       dialect: args.dialect,

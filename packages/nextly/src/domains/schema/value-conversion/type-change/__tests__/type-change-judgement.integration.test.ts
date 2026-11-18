@@ -12,7 +12,10 @@ import {
   type TestNextly,
 } from "../../../../../plugins/test-nextly";
 import type { FieldDefinition } from "../../../../../schemas/dynamic-collections";
-import { fieldTypeChangesOf } from "../field-type-changes";
+import {
+  fieldTypeChangesOf,
+  judgeFieldTypeChanges,
+} from "../field-type-changes";
 import { judgeStoredTypeChange } from "../judge-stored";
 
 interface CollectionsHandler {
@@ -81,6 +84,46 @@ describeEachDialect("a stored date read for a type change", dialect => {
 
     expect(readsAs).toEqual([
       expect.stringMatching(/^2024-01-02T03:04:05(\.0+)?Z$/),
+    ]);
+  }, 120_000);
+
+  it("reads a value from the table that holds its column, when the save also turns translation on", async () => {
+    // The desired definition says the field is translated, so its companion is asked first; the
+    // companion does not exist yet, and the value is still on the main table, where it is judged.
+    const handler = current.getService(
+      "collectionsHandler"
+    ) as unknown as CollectionsHandler;
+    const created = await handler.createCollection({
+      name: "items",
+      label: "Item",
+      fields: [{ name: "score", type: "text" }],
+    });
+    expect(created.success, JSON.stringify(created)).toBe(true);
+    const entry = await handler
+      .getEntryService()
+      .createEntry(
+        { collectionName: "items", overrideAccess: true },
+        { title: "I", score: "xyz" }
+      );
+    expect(entry.success, JSON.stringify(entry)).toBe(true);
+
+    const judged = await judgeFieldTypeChanges({
+      db: current.adapter.getDrizzle(),
+      dialect,
+      builtBy: "collection",
+      table: "dc_items",
+      translationsTable: "dc_items_locales",
+      translated: new Set(["score"]),
+      changes: fieldTypeChangesOf({
+        previous: [{ name: "score", type: "text" }] as FieldDefinition[],
+        next: [{ name: "score", type: "number" }] as FieldDefinition[],
+        dialect,
+        builtBy: "collection",
+      }),
+    });
+
+    expect(judged.map(j => [j.table, j.result.judgement.class])).toEqual([
+      ["dc_items", "lossy"],
     ]);
   }, 120_000);
 });

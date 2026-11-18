@@ -13,6 +13,7 @@
  */
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import {
+  fieldsStoredOnRow,
   getColumnDescriptor,
   type SupportedDialect,
 } from "../services/field-column-descriptor";
@@ -80,7 +81,11 @@ function entityInput(
   return {
     label: entityLabel(kind, entity.slug),
     table: entity.tableName,
-    // A field translated before the save keeps each language's value in the companion table.
+    // A field translated before the save keeps each language's value in the companion table. The
+    // desired entity says whether it is translated after the save; a save that turns translation
+    // on or off has the values where they were, so the companion is always named and each value is
+    // read from whichever of the two tables holds its column.
+    translationsTable: `${entity.tableName}_locales`,
     ...perLanguageBefore(entity, entity.tableName, previous),
     builtBy: builtByFor(kind, entity.builderOwned),
   };
@@ -142,26 +147,49 @@ export async function refuseRenamedUiTypeChanges(
         t.toLowerCase()
       )
     );
-    const renamed = new Map<string, string>();
-    for (const rename of renames) {
-      if (!tables.has(rename.tableName.toLowerCase())) continue;
-      const from = saved.previous.find(
-        f => columnOf(f) === rename.fromColumn.toLowerCase()
-      );
-      const to = saved.next.find(
-        f => columnOf(f) === rename.toColumn.toLowerCase()
-      );
-      if (from !== undefined && to !== undefined && from.name !== to.name) {
-        renamed.set(from.name, to.name);
-      }
-    }
+    const previous = fieldsStoredOnRow(saved.previous);
+    const next = fieldsStoredOnRow(saved.next);
+    const renamed = renamedFieldsOf(previous, next, renames, tables, columnOf);
     if (renamed.size === 0) continue;
     const newNames = new Set(renamed.values());
     await refuseFieldTypeChanges(db, dialect, {
       ...input,
-      previous: saved.previous.filter(f => renamed.has(f.name)),
-      next: saved.next.filter(f => newNames.has(f.name)),
+      previous: previous.filter(f => renamed.has(f.name)),
+      next: next.filter(f => newNames.has(f.name)),
       renamed,
     });
   }
+}
+
+/**
+ * The fields the confirmed renames name, old name to new, among the fields kept on the row: a field
+ * a group with no name holds is one of them by its own name. A rename on another table, or one that
+ * names no field on either side, names none.
+ *
+ * @param tables the tables, lower-cased, whose renames are this entity's
+ * @param columnOf a field's column name, lower-cased
+ */
+export function renamedFieldsOf(
+  previous: readonly FieldDefinition[],
+  next: readonly FieldDefinition[],
+  renames: readonly ConfirmedColumnRename[],
+  tables: ReadonlySet<string>,
+  columnOf: (field: FieldDefinition) => string | undefined
+): Map<string, string> {
+  const renamed = new Map<string, string>();
+  const previousOnRow = fieldsStoredOnRow(previous);
+  const nextOnRow = fieldsStoredOnRow(next);
+  for (const rename of renames) {
+    if (!tables.has(rename.tableName.toLowerCase())) continue;
+    const from = previousOnRow.find(
+      f => columnOf(f) === rename.fromColumn.toLowerCase()
+    );
+    const to = nextOnRow.find(
+      f => columnOf(f) === rename.toColumn.toLowerCase()
+    );
+    if (from !== undefined && to !== undefined && from.name !== to.name) {
+      renamed.set(from.name, to.name);
+    }
+  }
+  return renamed;
 }

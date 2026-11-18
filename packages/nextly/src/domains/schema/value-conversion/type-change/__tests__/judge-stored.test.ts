@@ -233,6 +233,51 @@ describe("a type change collected over its stored values", () => {
     expect(result.counts.kept + result.counts.changed).toBe(1);
   });
 
+  it("blocks a kept value whose stored form is not its reading, as a text kept as a JSON string", async () => {
+    // "foo" read as the JSON string "foo" is stored unquoted: PostgreSQL's cast refuses it, and a
+    // stored "1" would become the number 1.
+    const json = await collectTypeChange(
+      typeOf("postgresql", "text"),
+      typeOf("postgresql", "json"),
+      stored("foo", "1")
+    );
+    expect(json.judgement.reasons).toEqual([
+      {
+        kind: "needs-rewrite",
+        class: "blocked",
+        rows: { first: [{ id: "1" }, { id: "2" }], count: 2 },
+      },
+    ]);
+    // A number kept from one number column to another is the same number, however written.
+    const numbers = await collectTypeChange(
+      typeOf("postgresql", "number", { options: { format: "float" } }),
+      typeOf("postgresql", "number", { dbType: "decimal" }),
+      stored("2", "2.50")
+    );
+    expect(numbers.judgement.class).toBe("safe");
+  });
+
+  it("blocks a stored empty list becoming a single value, and keeps it becoming another list", async () => {
+    const scalar = await collectTypeChange(
+      typeOf("postgresql", "text", { hasMany: true }),
+      typeOf("postgresql", "text"),
+      stored("[]", null)
+    );
+    expect(scalar.judgement.reasons).toEqual([
+      {
+        kind: "needs-rewrite",
+        class: "blocked",
+        rows: { first: [{ id: "1" }], count: 1 },
+      },
+    ]);
+    const list = await collectTypeChange(
+      typeOf("postgresql", "text", { hasMany: true }),
+      typeOf("postgresql", "number", { hasMany: true }),
+      stored("[]", null)
+    );
+    expect(list.judgement.class).toBe("safe");
+  });
+
   it("blocks a relationship kept as a list becoming one link, where a row holds several", async () => {
     const list = typeOf("postgresql", "relationship", {
       relationTo: "people",
@@ -249,11 +294,12 @@ describe("a type change collected over its stored values", () => {
     expect(
       result.judgement.reasons.find(r => r.kind === "several-items")?.rows
     ).toEqual({ first: [{ id: "1" }], count: 1 });
-    // The one-link list read as its link is a new form no save writes yet (`needs-rewrite`).
+    // The one-link list read as its link is a new form no save writes yet, and the empty list is
+    // stored as `[]`, which one link's column would keep as that text (`needs-rewrite`).
     expect(
       result.judgement.reasons.find(r => r.kind === "needs-rewrite")?.rows
-    ).toEqual({ first: [{ id: "2" }], count: 1 });
-    expect(result.counts).toMatchObject({ changed: 0, blocked: 2, kept: 1 });
+    ).toEqual({ first: [{ id: "2" }, { id: "3" }], count: 2 });
+    expect(result.counts).toMatchObject({ changed: 0, blocked: 3, kept: 0 });
   });
 
   it("loses a value the new field's own validation refuses, though the rules would keep it", async () => {

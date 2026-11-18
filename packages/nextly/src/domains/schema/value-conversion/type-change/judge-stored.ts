@@ -29,6 +29,7 @@ import {
   pairBlocked,
   type ValueOutcome,
 } from "./judge";
+import { type StoredAsRead, storedAsRead } from "./stored-as-read";
 
 /** How many keys a reason names before it gives only the count. */
 const FIRST_KEYS = 20;
@@ -119,39 +120,6 @@ export async function collectTypeChange(
   return tally.result();
 }
 
-/**
- * Whether a value the rules read in a new form is already stored as the new type reads it, so the
- * save's own conversion reaches that reading with nothing rewritten:
- *
- * - into a number, a stored text that is the number's canonical writing ("5", not "01" or "5.0"),
- *   which every database's cast reads as that number;
- * - into a text, a value whose stored text (the database's own text of it, which its cast to text
- *   writes) is the reading itself: a number's "4", not a MySQL checkbox's "1" read as "true";
- * - a relationship's one link becoming a list of links, which every road's reference-list
- *   conversion writes.
- *
- * No other new form is written by a save yet, so its values block the change (`needs-rewrite`).
- */
-function storedAsRead(
-  from: FieldTypeOnDialect,
-  to: FieldTypeOnDialect
-): (stored: string | null, readsAs: string) => boolean {
-  if (
-    from.relation?.kept === "one" &&
-    (to.relation?.kept === "list" || to.relation?.kept === "targetList")
-  ) {
-    return () => true;
-  }
-  if (to.item !== undefined) return () => false;
-  if (to.family === "number") {
-    return (stored, readsAs) => stored !== null && stored.trim() === readsAs;
-  }
-  if (to.family === "text") {
-    return (stored, readsAs) => stored === readsAs;
-  }
-  return () => false;
-}
-
 /** The values of one type change counted as they are judged: by outcome, by reason, and cleared. */
 class TypeChangeTally {
   private readonly counts: Record<ValueOutcome, number> = {
@@ -171,16 +139,23 @@ class TypeChangeTally {
 
   constructor(
     private readonly options: CollectOptions,
-    private readonly storedAsRead: (
-      stored: string | null,
-      readsAs: string
-    ) => boolean
+    private readonly read: StoredAsRead
   ) {
     this.repeatsOf = options.unique === true ? uniqueValues() : undefined;
   }
 
   /** One value's verdict, counted, with the text the database stores it as. */
   add(key: RowKey, verdict: ValueVerdict, stored: string | null): void {
+    // An empty list is stored as `[]`: empty to the new type only where it keeps a list.
+    if (
+      verdict.reason === "empty" &&
+      stored !== null &&
+      !(this.read.emptyListHeld && stored.trim() === "[]")
+    ) {
+      this.counts.blocked += 1;
+      this.note("needs-rewrite", key);
+      return;
+    }
     if (
       verdict.readsAs !== undefined &&
       this.blocks(key, verdict.outcome, verdict.readsAs, stored)
@@ -216,7 +191,7 @@ class TypeChangeTally {
   /**
    * Whether a value the rules keep or change blocks the change all the same, noting why: one
    * another row in its language already reads as, which a unique field cannot hold twice; or one
-   * read in a new form no save writes yet (`needs-rewrite`).
+   * whose stored form is not its reading, which no save rewrites yet (`needs-rewrite`).
    */
   private blocks(
     key: RowKey,
@@ -230,7 +205,7 @@ class TypeChangeTally {
       for (const row of repeated) this.note("repeated", row);
       return true;
     }
-    if (outcome === "changed" && !this.storedAsRead(stored, readsAs)) {
+    if (!this.read.value(stored, readsAs, outcome)) {
       this.note("needs-rewrite", key);
       return true;
     }
