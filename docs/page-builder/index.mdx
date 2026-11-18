@@ -893,6 +893,20 @@ its own entry's fields. A binding with no value shows its fallback, or the text 
 was given in the editor. See [Block document
 format](/docs/api-reference/block-document-format).
 
+### A quote
+
+The **Quote** block (stored as `core/quote`) holds the quoted words, **Who said it**
+and the **Source** it comes from. Its **Source link** is the same link every block
+uses: an address, or a page or entry of your site, opened in a new tab if you like,
+with its relationship in Advanced. On the page, the link becomes the quotation's
+`cite` and links the source's title. The dash before the person's name is drawn by
+the page's styles, so it is never part of the words a reader copies.
+
+A Quote has three block styles: **Line**, its own, a line beside the words in your
+site's accent colour; **Plain**, with no line; and **Large**, bigger centred words.
+They look the same in the editor and on the live page. A Quote saved before its source
+was a link keeps that address as its Source link.
+
 ### A table of contents
 
 The **Table of contents** block (stored as `core/table-of-contents`) lists the headings

@@ -331,14 +331,15 @@ describe("runTurnInto", () => {
 });
 
 describe("the block menu", () => {
-  it("lists the turns after Duplicate, as menu verbs, apart from Turn into component", () => {
+  it("lists the turns after the copy verbs, as menu verbs, before the conversions", () => {
     const actions = toolbarActions(page(text()), "t1");
     const ids = actions.map(action => action.id);
     const at = ids.indexOf("turn-into-rich-text");
-    expect(ids.slice(at - 1, at + 2)).toEqual([
-      "duplicate",
+    expect(ids.slice(at - 1, at + 3)).toEqual([
+      "paste",
       "turn-into-rich-text",
       "turn-into-heading",
+      "save-as-pattern",
     ]);
     const heading = actions.find(action => action.id === "turn-into-heading");
     expect(heading).toMatchObject({

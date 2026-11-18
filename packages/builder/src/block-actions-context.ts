@@ -43,6 +43,12 @@ export interface BlockActions {
   readonly delete: () => void;
   /** Copy the selection in beside itself and select the copy. */
   readonly duplicate: () => void;
+  /** Put the selection on the clipboard, to paste on this page or another. */
+  readonly copy: () => void;
+  /** Put the selection on the clipboard and remove it, lock permitting. */
+  readonly cut: () => void;
+  /** Paste copied blocks where a clicked block would land. */
+  readonly paste: () => void;
   /** Select the container holding the selection. */
   readonly selectParent: () => void;
   /**

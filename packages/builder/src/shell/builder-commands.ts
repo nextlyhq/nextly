@@ -36,6 +36,10 @@ export interface CommandVerbs {
   readonly move: (direction: "up" | "down") => void;
   readonly delete: () => void;
   readonly duplicate: () => void;
+  /** Copy, Cut and Paste of blocks, through the clipboard. */
+  readonly copy: () => void;
+  readonly cut: () => void;
+  readonly paste: () => void;
   readonly selectParent: () => void;
   /**
    * Begin storing the selection in the pattern library.
@@ -131,6 +135,20 @@ const BLOCK_COMMAND_COPY: Record<
   duplicate: {
     label: "Duplicate block",
     keywords: ["duplicate", "copy", "clone", "repeat"],
+  },
+  // "Copy" and "Cut" put blocks on the clipboard; "Paste" places them where
+  // a clicked block would land, on this page or another.
+  copy: {
+    label: "Copy block",
+    keywords: ["copy", "clipboard"],
+  },
+  cut: {
+    label: "Cut block",
+    keywords: ["cut", "clipboard", "move"],
+  },
+  paste: {
+    label: "Paste blocks",
+    keywords: ["paste", "clipboard", "insert"],
   },
   // Changing which of the three text blocks it is, kept apart in words from
   // turning a selection into a component.
@@ -239,6 +257,9 @@ export function blockActionRunners(
     "move-up": () => verbs.move("up"),
     "move-down": () => verbs.move("down"),
     duplicate: verbs.duplicate,
+    copy: verbs.copy,
+    cut: verbs.cut,
+    paste: verbs.paste,
     "turn-into-text": () =>
       verbs.turnInto?.(TURN_INTO_TARGETS["turn-into-text"]),
     "turn-into-rich-text": () =>
@@ -276,8 +297,11 @@ export function builderCommands({
 }: BuilderCommandsInput): BuilderCommand[] {
   const run = blockActionRunners(verbs);
 
+  // Paste is offered whatever is selected, since with nothing selected it
+  // lands at the end of the page; so it is added once, below, and not taken
+  // from the selection's verbs.
   const blockCommands = actions
-    .filter(action => action.enabled)
+    .filter(action => action.enabled && action.id !== "paste")
     .map(action => {
       const copy = BLOCK_COMMAND_COPY[action.id];
       return {
@@ -288,6 +312,14 @@ export function builderCommands({
         run: run[action.id],
       };
     });
+
+  blockCommands.push({
+    id: "block.paste",
+    label: BLOCK_COMMAND_COPY.paste.label,
+    group: BLOCK_GROUP,
+    keywords: BLOCK_COMMAND_COPY.paste.keywords,
+    run: run.paste,
+  });
 
   const history: BuilderCommand[] = [];
   if (canUndo) {

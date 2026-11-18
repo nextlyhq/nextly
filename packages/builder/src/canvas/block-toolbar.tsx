@@ -58,6 +58,8 @@ import {
 import {
   ArrowDown,
   ArrowUp,
+  ClipboardCopy,
+  ClipboardPaste,
   Component,
   Copy,
   CopyPlus,
@@ -70,6 +72,7 @@ import {
   LockOpen,
   Palette,
   RefreshCw,
+  Scissors,
   SquarePen,
   Trash2,
   Type,
@@ -472,6 +475,10 @@ const ICONS: Record<ToolbarActionId, LucideIcon> = {
   "move-up": ArrowUp,
   "move-down": ArrowDown,
   duplicate: Copy,
+  // The clipboard's own glyphs, as every editor's Edit menu draws them.
+  copy: ClipboardCopy,
+  cut: Scissors,
+  paste: ClipboardPaste,
   // The marks the Add panel draws for the three blocks, so a verb shows what
   // the block becomes.
   "turn-into-text": Type,

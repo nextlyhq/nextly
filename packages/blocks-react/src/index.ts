@@ -512,6 +512,8 @@ export type {
   MayFetchUrl,
   MigrateFn,
   MigrationMap,
+  // A migration step's renames, reachable from `BlockDefinition`.
+  MigrationRenames,
   MigrationSource,
   NamedClass,
   NodeStyles,

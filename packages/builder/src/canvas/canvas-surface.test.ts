@@ -164,6 +164,33 @@ describe("the canvas's frame as a sheet on the editor's surface", () => {
   });
 });
 
+describe("the insertion line's label", () => {
+  it("moves to the left of its line wherever it is marked to, for a line across or down", () => {
+    // The label is told to go left where the right has no room for it; a
+    // marking with no rule to move it would leave it cut off at the edge.
+    expect(
+      declared(
+        ruleFor('.nx-insertion-line__label[data-axis="x"][data-before]'),
+        "transform"
+      )
+    ).toBe("translateX(calc(-100% - 4px))");
+    expect(
+      declared(
+        ruleFor('.nx-insertion-line__label[data-axis="y"][data-before]'),
+        "transform"
+      )
+    ).toBe("translate(-100%, calc(-100% - 3px))");
+    expect(
+      declared(
+        ruleFor(
+          '.nx-insertion-line__label[data-axis="y"][data-below][data-before]'
+        ),
+        "transform"
+      )
+    ).toBe("translate(-100%, 3px)");
+  });
+});
+
 describe("the canvas surface is the site's, not the admin's", () => {
   it("starts from a plain base, with no browser margin around the page", () => {
     expect(

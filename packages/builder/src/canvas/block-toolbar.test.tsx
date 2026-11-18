@@ -276,11 +276,21 @@ describe("BlockToolbar", () => {
     const editor = editorSpy(pair(), "a");
     mount(editor);
 
-    const expected = toolbarActions(
+    const offered = toolbarActions(
       editor.document,
       editor.selectedId,
       editor.selection.ids
-    ).map(action => action.label);
+    );
+    // The verbs kept in the menu sit behind one "More actions" button, which
+    // comes last; the rest are buttons of their own, in the model's order.
+    const expected = [
+      ...offered
+        .filter(action => action.inMenu !== true)
+        .map(action => action.label),
+      ...(offered.some(action => action.inMenu === true)
+        ? ["More actions"]
+        : []),
+    ];
 
     // The control: an empty model would make the comparison vacuous.
     expect(expected.length).toBeGreaterThan(1);
@@ -1773,12 +1783,16 @@ describe("Turn into, in the bar's More menu", () => {
         ? "—"
         : (child.querySelector("span span")?.textContent ?? "")
     );
-    expect(rows.slice(0, 4)).toEqual([
+    // A group of their own, with a separator on each side: apart from the
+    // copy verbs before them and "Turn into component…" after.
+    const at = rows.indexOf("Turn into Rich text");
+    expect(rows.slice(at - 1, at + 3)).toEqual([
+      "—",
       "Turn into Rich text",
       "Turn into Heading",
       "—",
-      "Turn into component…",
     ]);
+    expect(rows.indexOf("Turn into component…")).toBeGreaterThan(at + 2);
     expect(
       screen.getByRole("menuitem", { name: /^Turn into Heading/ }).textContent
     ).toContain("Bold and links are removed");

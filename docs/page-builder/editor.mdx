@@ -494,6 +494,44 @@ were.
 
 While you are typing in a block's text, <kbd>/</kbd> is just a character.
 
+## Copy, cut and paste
+
+Select one or more blocks and press <kbd>Ctrl</kbd>+<kbd>C</kbd> to copy them, or
+<kbd>Ctrl</kbd>+<kbd>X</kbd> to cut them, then <kbd>Ctrl</kbd>+<kbd>V</kbd> to paste. On
+a Mac, use <kbd>⌘</kbd>. **Copy**, **Cut** and **Paste** are also in the block's
+toolbar under **More actions**, in its right-click menu and in search
+(<kbd>Ctrl</kbd>+<kbd>K</kbd>).
+
+- Blocks are copied with their content, styles and the blocks inside them.
+- A paste lands where a clicked block would (see
+  [Where a clicked block lands](#where-a-clicked-block-lands)). Content blocks
+  (Heading, Text, Image…) go inside a selected container at the end, and after a
+  selected block that holds none. Layout blocks (Box, Columns, Card) go after a selected
+  container, and a Section goes after the top-level block holding the selection. With
+  nothing selected, the paste goes at the end of the page. The pasted blocks are
+  selected, and one undo takes the whole paste back.
+- You can paste on the same page, on another page, or in another browser tab of the
+  same site. Pasted blocks keep using the site's shared styles, block styles, variables,
+  components and media.
+- Cut copies the blocks, then removes them, as one undo step. A block locked in Layers
+  can't be cut, as it can't be deleted.
+- If that place can't take the blocks, the paste tries the next one, as a clicked block
+  does: after the selected block, then after each block around it, out to the page. Only
+  when no place takes them (a Column belongs only inside Columns, say) is the paste
+  refused, with the reason, and nothing changes. A paste that would make the page larger
+  or deeper than the site allows is refused too, though the editor doesn't say why yet.
+- A block bound to a list item's field keeps its binding when pasted outside a
+  Collection list, though there is no list item for it to read there.
+- Blocks copied on another site can't be pasted here: they use that site's styles,
+  components and media. Save them as a section, then use **Export** and **Import** on
+  the Saved sections list instead.
+
+While you are typing in a text field, or in a block's text on the canvas, the keys copy,
+cut and paste the text, as usual. The same goes for text you have highlighted.
+
+The first time you use **Paste** from a menu, the browser may ask to let the site see
+what you copied. The keys never ask.
+
 ## Adding an image
 
 A new Image starts empty: on the canvas it is a box, 16:9 unless you set its own
@@ -1039,6 +1077,14 @@ the fields that fit, grouped by where they come from, with each one's value as y
 it. A field visitors can't read says **Not public**, and one whose value is only in a
 draft says **Draft**.
 
+**Nearest first.** For a block inside a Collection list, the list's own entries come
+first, named for them: **Each project in the list**. Then come **This page**, then the
+Singles and the site, which start folded into one row each under **Singles · Site**
+while a list's entries are listed. Choose a row to open it, or type in **Find a field**
+to search all of them. Each list field shows its value in the entry you clicked on the
+canvas, or the first entry if you selected the block another way. A picture shows as a
+small thumbnail, and a field with nothing in it says **(empty)**.
+
 Once bound, the prop shows a chip naming the field and where it comes from, with its
 **Fallback** under it: what visitors see when the field is empty or they can't read it.
 The chip's menu has:
@@ -1243,6 +1289,8 @@ On a Mac, <kbd>⌘</kbd> replaces <kbd>Ctrl</kbd>.
 | <kbd>Ctrl</kbd>+<kbd>Z</kbd>                                                                | Undo the last change                                                                                                              |
 | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> or <kbd>Ctrl</kbd>+<kbd>Y</kbd>               | Redo the last undone change                                                                                                       |
 | <kbd>Ctrl</kbd>+<kbd>D</kbd>                                                                | Duplicate the selected block                                                                                                      |
+| <kbd>Ctrl</kbd>+<kbd>C</kbd> / <kbd>Ctrl</kbd>+<kbd>X</kbd>                                 | Copy or cut the selected blocks                                                                                                   |
+| <kbd>Ctrl</kbd>+<kbd>V</kbd>                                                                | Paste copied blocks where a clicked block would land                                                                              |
 | <kbd>Delete</kbd> or <kbd>Backspace</kbd>                                                   | Delete the selected block                                                                                                         |
 | <kbd>Enter</kbd>                                                                            | Edit the selected block's text                                                                                                    |
 | <kbd>Ctrl</kbd>+<kbd>B</kbd> / <kbd>Ctrl</kbd>+<kbd>I</kbd>                                 | While editing a Text, make the selected words bold or italic                                                                      |
