@@ -420,6 +420,108 @@ describe("planEntityMoves", () => {
     );
   });
 
+  it("refuses two moved fields of one name, whose places a swap could exchange", () => {
+    expect(() =>
+      planEntityMoves({
+        ...base,
+        before: [
+          group("a", [text("title")]),
+          group("b", [text("title")]),
+          group("c", []),
+          group("d", []),
+        ],
+        after: [
+          group("a", []),
+          group("b", []),
+          group("c", [text("title")]),
+          group("d", [text("title")]),
+        ],
+        moves: [
+          { from: ["a", "title"], to: ["d", "title"] },
+          { from: ["b", "title"], to: ["c", "title"] },
+        ],
+      })
+    ).toThrow(
+      expect.objectContaining({
+        publicData: {
+          errors: [
+            expect.objectContaining({
+              code: "FIELD_MOVE_REFUSED",
+              message: expect.stringContaining("Two fields named title"),
+            }),
+          ],
+        },
+      })
+    );
+  });
+
+  it("refuses a move into a nested group that was another kind of field before this save", () => {
+    const json = (name: string) =>
+      ({ name, label: name, type: "json" }) as FieldDefinition;
+    expect(() =>
+      planEntityMoves({
+        ...base,
+        before: [text("title"), group("g", [json("meta")])],
+        after: [group("g", [group("meta", [text("title")])])],
+        moves: [{ from: ["title"], to: ["g", "meta", "title"] }],
+      })
+    ).toThrow(
+      expect.objectContaining({
+        publicData: {
+          errors: [
+            expect.objectContaining({
+              code: "FIELD_MOVE_REFUSED",
+              message: expect.stringContaining(
+                "g.meta was not a group before this save"
+              ),
+            }),
+          ],
+        },
+      })
+    );
+  });
+
+  it("does not refuse a move between groups beside a rename of an unrelated column of its field's name", () => {
+    const planned = planEntityMoves({
+      ...base,
+      before: [
+        text("title"),
+        group("meta", [text("title")]),
+        group("extra", []),
+      ],
+      after: [
+        text("subtitle"),
+        group("meta", []),
+        group("extra", [text("title")]),
+      ],
+      moves: [{ from: ["meta", "title"], to: ["extra", "title"] }],
+      renames: [{ from: "title", to: "subtitle" }],
+    });
+    expect(planned.up.first.join("\n")).toContain(`"extra"`);
+  });
+
+  it("refuses an optional field made required as it moves into a group", () => {
+    expect(() =>
+      planEntityMoves({
+        ...base,
+        before: [text("title"), group("meta", [])],
+        after: [group("meta", [text("title", { required: true })])],
+        moves: [{ from: ["title"], to: ["meta", "title"] }],
+      })
+    ).toThrow(
+      expect.objectContaining({
+        publicData: {
+          errors: [
+            expect.objectContaining({
+              code: "FIELD_MOVE_REFUSED",
+              message: expect.stringContaining("made required as it moves"),
+            }),
+          ],
+        },
+      })
+    );
+  });
+
   it("plans nothing for a save that moves nothing", () => {
     expect(
       planEntityMoves({
