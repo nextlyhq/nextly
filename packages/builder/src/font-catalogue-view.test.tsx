@@ -93,6 +93,7 @@ function view(
     onBack?: () => void;
     onSite?: FontFaceDef[];
     initialQuery?: string;
+    onAdded?: (family: string, category: string) => void;
   } = {}
 ): ReturnType<typeof render> {
   return render(
@@ -101,6 +102,7 @@ function view(
       onBack={props.onBack ?? (() => undefined)}
       onSite={siteFamilies(props.onSite ?? [], [])}
       initialQuery={props.initialQuery}
+      onAdded={props.onAdded}
     />
   );
 }
@@ -433,6 +435,30 @@ describe("adding a family", () => {
     });
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(toasts.success).toHaveBeenCalledWith("Inter is now on this site.");
+  });
+
+  it("tells the screen which family finished adding, and its kind", async () => {
+    const onAdded = vi.fn();
+    view(catalogue(), { onAdded });
+    const editor = await openAdd(/^Inter/);
+    await act(async () => {
+      fireEvent.click(
+        within(editor).getByRole("button", { name: /^Add Inter/ })
+      );
+    });
+    expect(onAdded).toHaveBeenCalledWith("Inter", INTER.category);
+  });
+
+  it("tells nothing of an add that was refused", async () => {
+    const onAdded = vi.fn();
+    view(catalogue({ add: async () => "Refused." }), { onAdded });
+    const editor = await openAdd(/^Inter/);
+    await act(async () => {
+      fireEvent.click(
+        within(editor).getByRole("button", { name: /^Add Inter/ })
+      );
+    });
+    expect(onAdded).not.toHaveBeenCalled();
   });
 
   it("holds the styles a family already has, and counts only the new ones", async () => {

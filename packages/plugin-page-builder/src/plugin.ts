@@ -592,6 +592,8 @@ export const pageBuilder = (
         layouts.fillNotices,
         ...layouts.layoutWrites,
         ...layouts.layoutArea,
+        layouts.setAreaChoices,
+        layouts.areaComponent,
         layouts.createInArea,
         pages.pageCollection,
         breakpoints.siteSettings,

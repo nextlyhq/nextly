@@ -697,3 +697,166 @@ describe("a removal the preview cannot count, and where it counts", () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// A many-to-many made something else drops its link table: the preview counts the links there and
+// names what the field becomes.
+
+describe("a many-to-many leaving its link table", () => {
+  const manyToMany = (options: Record<string, unknown> = {}) =>
+    ({
+      name: "tags",
+      type: "relationship",
+      relationTo: "tags",
+      options: { target: "tags", relationType: "manyToMany", ...options },
+    }) as FieldDefinition;
+  const singleLink = {
+    name: "tags",
+    type: "relationship",
+    relationTo: "tags",
+  } as FieldDefinition;
+
+  /** A SQLite double answering every count with `answer`, recording each query. */
+  function linkCountDb(answer: number | Error) {
+    const queries: string[] = [];
+    const db = {
+      all: vi.fn().mockImplementation((query: unknown) => {
+        queries.push(JSON.stringify(query));
+        if (answer instanceof Error) throw answer;
+        return [{ count: answer }];
+      }),
+    };
+    return { db, queries };
+  }
+
+  async function leaving(
+    before: FieldDefinition,
+    after: FieldDefinition,
+    db: unknown
+  ) {
+    return translatePipelinePreviewToLegacy(emptyPreview, {
+      tableName: "dc_posts",
+      currentFields: [before],
+      newFields: [after],
+      db,
+      dialect: "sqlite",
+    });
+  }
+
+  it("counts the links in a link table whose name the database must quote", async () => {
+    const { db, queries } = linkCountDb(2);
+    const result = await leaving(
+      manyToMany({ junctionTable: "post-tag-links" }),
+      singleLink,
+      db
+    );
+    expect(queries.some(query => query.includes("post-tag-links"))).toBe(true);
+    expect(result.changes.changed[0]).toMatchObject({
+      rowCount: 2,
+      classification: "destructive",
+    });
+    expect(result.changes.changed[0]).not.toHaveProperty("rowCountUnknown");
+  });
+
+  it("keeps a link count it could not read unknown on the changed row", async () => {
+    const { db } = linkCountDb(new Error("locked"));
+    const result = await leaving(manyToMany(), singleLink, db);
+    expect(result.changes.changed[0]).toMatchObject({
+      rowCount: 0,
+      rowCountUnknown: true,
+      classification: "destructive",
+    });
+    expect(result.warnings).toContain(
+      "Changing 'tags' from many-to-many to a single link drops its link table and every link it holds: could not count them."
+    );
+  });
+
+  // The save drops a single link's column and makes an empty link table: its links go with the
+  // column, so the change is destructive, counted where the column holds them.
+  it("calls a single link made a many-to-many destructive, counting the links its column drops", async () => {
+    const { db } = countingDb({ dc_posts: { rows: 5, nulls: { tags: 2 } } });
+    const result = await leaving(singleLink, manyToMany(), db);
+    expect(result.changes.changed[0]).toMatchObject({
+      reason: "relation_changed",
+      rowCount: 3,
+      classification: "destructive",
+    });
+    expect(result.warnings).toContain(
+      "Changing 'tags' from a single link to many-to-many drops the column holding its 3 links; its new link table starts empty."
+    );
+  });
+
+  // A field group's many-to-many keeps its ids in its own row, with no link table to drop.
+  it("applies no link table to a field group's many-to-many", async () => {
+    const { db, queries } = linkCountDb(2);
+    const result = await translatePipelinePreviewToLegacy(emptyPreview, {
+      tableName: "comp_meta",
+      currentFields: [manyToMany()],
+      newFields: [singleLink],
+      db,
+      dialect: "sqlite",
+      builtBy: "fieldGroup",
+    });
+    expect(queries).toEqual([]);
+    expect(result.changes.changed[0]).not.toHaveProperty("rowCountUnknown");
+    expect(
+      result.warnings.some(warning => warning.includes("link table"))
+    ).toBe(false);
+  });
+
+  // Kept a many-to-many but pointed at another collection: the save drops the old link table and
+  // starts an empty one for the new target, so the links go.
+  it("calls a many-to-many pointed at another collection destructive, counting the links it drops", async () => {
+    const { db } = linkCountDb(4);
+    const result = await leaving(
+      manyToMany(),
+      {
+        name: "tags",
+        type: "relationship",
+        relationTo: "topics",
+        options: { target: "topics", relationType: "manyToMany" },
+      } as FieldDefinition,
+      db
+    );
+    expect(result.changes.changed[0]).toMatchObject({
+      rowCount: 4,
+      classification: "destructive",
+    });
+    expect(result.warnings).toContain(
+      "Changing 'tags' to link to 'topics' instead drops its link table and the 4 links it holds; its new link table starts empty."
+    );
+  });
+
+  // A list of links kept in its column holds several links in each entry, so the warning names
+  // the entries whose links it drops rather than counting them as links.
+  it("names the entries whose list of links goes when the list becomes a many-to-many", async () => {
+    const { db } = countingDb({ dc_posts: { rows: 5, nulls: { tags: 3 } } });
+    const result = await leaving(
+      { ...singleLink, hasMany: true } as FieldDefinition,
+      manyToMany(),
+      db
+    );
+    expect(result.changes.changed[0]).toMatchObject({
+      rowCount: 2,
+      classification: "destructive",
+    });
+    expect(result.warnings).toContain(
+      "Changing 'tags' from a list of links to many-to-many drops the column holding the links of its 2 entries; its new link table starts empty."
+    );
+  });
+
+  it("names what the field becomes when it is no longer a link", async () => {
+    const { db } = linkCountDb(2);
+    const result = await leaving(
+      manyToMany(),
+      { name: "tags", type: "text" } as FieldDefinition,
+      db
+    );
+    expect(result.warnings).toContain(
+      "Changing 'tags' from many-to-many to a text field drops its link table and the 2 links it holds."
+    );
+    expect(
+      result.warnings.some(warning => warning.includes("a single link"))
+    ).toBe(false);
+  });
+});

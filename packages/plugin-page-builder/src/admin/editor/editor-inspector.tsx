@@ -23,6 +23,7 @@ import { pageAddressOf, type PageFacts } from "./editor-settings";
 import type { CardVerbs, EditorView } from "./editor-view";
 import { PageReadMeter, type PageDataCount } from "./page-read-meter";
 import { SelectedRegionCard } from "./region-card";
+import { SetSettingsPanel } from "./set-settings-panel";
 import { inspectedVariantsOf } from "./region-editing";
 import type { SettingsPlace } from "./settings-place";
 import {
@@ -198,19 +199,44 @@ export function editorInspector<TFieldValues extends FieldValues>(
       {...regionCardOf(view)}
       // With nothing selected: the open document's own settings, editing
       // the entry's form as Settings does, saved with the page's draft.
-      documentSettings={own => (
-        <DocumentSettingsPanel
-          kind={view.initialDocument.kind}
-          own={own}
-          control={form.control as unknown as Control<FieldValues>}
-          onOpenSettings={view.pages.openSettings}
-          address={pageAddressOf(view, form.page)}
-          // The same place Settings' General draws the search result at.
-          place={form.place}
-          // The page's data at every level, so it can always be found.
-          pageData={<PageReadMeter count={form.pageData} place="settings" />}
-        />
-      )}
+      documentSettings={own =>
+        view.set !== undefined ? (
+          setSettingsOf(view, view.set, own, form.control)
+        ) : (
+          <DocumentSettingsPanel
+            kind={view.initialDocument.kind}
+            own={own}
+            control={form.control as unknown as Control<FieldValues>}
+            onOpenSettings={view.pages.openSettings}
+            address={pageAddressOf(view, form.page)}
+            // The same place Settings' General draws the search result at.
+            place={form.place}
+            // The page's data at every level, so it can always be found.
+            pageData={<PageReadMeter count={form.pageData} place="settings" />}
+          />
+        )
+      }
+    />
+  );
+}
+
+/**
+ * With nothing selected on a set's screen: the set's settings, or while its
+ * header or footer is edited in place, that component's own, as the
+ * builder draws them, never the set's around it.
+ */
+export function setSettingsOf<TFieldValues extends FieldValues>(
+  view: Pick<EditorView, "regionEditing">,
+  set: NonNullable<EditorView["set"]>,
+  own: React.ReactNode | null,
+  control: Control<TFieldValues>
+): React.ReactNode {
+  if (view.regionEditing.area !== undefined) return own;
+  return (
+    <SetSettingsPanel
+      set={set}
+      control={control as unknown as Control<FieldValues>}
+      onEditArea={view.regionEditing.requestEdit}
     />
   );
 }
@@ -233,6 +259,13 @@ function regionCardOf(view: EditorView): { regionCard?: React.ReactNode } {
           requestEdit === undefined ? undefined : () => requestEdit(facts.area)
         }
         onOpenSettings={view.pages.openSettings}
+        // On a set's own screen the header is chosen in the set's settings,
+        // which clearing the selection shows.
+        onShowSetSettings={
+          view.set === undefined
+            ? undefined
+            : view.selectedRegion.selection.clear
+        }
       />
     ),
   };
