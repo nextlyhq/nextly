@@ -320,27 +320,22 @@ function revealPlace(
     return;
   }
   const align = ALIGN[near.side];
-  // Each side as the block had it, with its priority: the shorthand reads
-  // empty where only one side is set, so restoring it would drop that side.
-  const kept = SCROLL_MARGIN_SIDES.map(side => ({
-    side,
-    value: element.style.getPropertyValue(side),
-    priority: element.style.getPropertyPriority(side),
-  }));
-  // Side by side, as they are put back.
+  // The block's inline style exactly as it was, put back whole afterwards:
+  // read side by side, a shorthand through a variable reads empty and a
+  // side's priority can be lost, so only the attribute keeps everything.
+  const kept = element.getAttribute("style");
+  // Side by side, so no side the block has is read through a shorthand.
   revealMargin(near, block, place)
     .split(" ")
     .forEach((value, index) => {
       element.style.setProperty(SCROLL_MARGIN_SIDES[index] ?? "", value);
     });
   element.scrollIntoView({ block: align, inline: align });
-  for (const { side, value, priority } of kept) {
-    if (value === "") element.style.removeProperty(side);
-    else element.style.setProperty(side, value, priority);
-  }
+  if (kept === null) element.removeAttribute("style");
+  else element.setAttribute("style", kept);
 }
 
-/** The longhands of `scroll-margin`, each kept and put back on its own. */
+/** The longhands of `scroll-margin`, which the temporary margin is written to. */
 const SCROLL_MARGIN_SIDES = [
   "scroll-margin-top",
   "scroll-margin-right",

@@ -352,35 +352,33 @@ test.describe("the line where a highlighted tile would land", () => {
     );
     await page.waitForTimeout(400);
     // The block revealed is a neighbour of the place last pointed at, Hero or
-    // its heading by the pointer's path. Each one's own scroll margin on one
-    // side, with its priority, is left as it was.
+    // its heading by the pointer's path. Each one's own inline scroll margins
+    // are left exactly as they were: a shorthand through a variable, whose
+    // sides read empty until it is substituted, and one side with a priority.
     const neighbours = [
       canvasBlock(page, HERO),
       canvasBlock(page, HERO_HEADING),
     ];
+    const styled =
+      "--gap: 9px; scroll-margin: var(--gap); scroll-margin-top: 7px !important;";
+    const stylesBefore: (string | null)[] = [];
     for (const neighbour of neighbours) {
-      await neighbour.evaluate(element => {
-        (element as HTMLElement).style.setProperty(
-          "scroll-margin-top",
-          "7px",
-          "important"
-        );
-      });
+      stylesBefore.push(
+        await neighbour.evaluate((element, style) => {
+          element.setAttribute("style", style);
+          return element.getAttribute("style");
+        }, styled)
+      );
     }
     await edge.click();
     await expect.poll(() => scrolledBy(page)).toBeLessThan(before - 500);
+    const stylesAfter: (string | null)[] = [];
     for (const neighbour of neighbours) {
-      expect(
-        await neighbour.evaluate(element => {
-          const style = (element as HTMLElement).style;
-          return {
-            top: style.getPropertyValue("scroll-margin-top"),
-            priority: style.getPropertyPriority("scroll-margin-top"),
-            bottom: style.getPropertyValue("scroll-margin-bottom"),
-          };
-        })
-      ).toEqual({ top: "7px", priority: "important", bottom: "" });
+      stylesAfter.push(
+        await neighbour.evaluate(element => element.getAttribute("style"))
+      );
     }
+    expect(stylesAfter).toEqual(stylesBefore);
   });
 
   test("lights an empty Box it would go inside, and draws no line", async ({
