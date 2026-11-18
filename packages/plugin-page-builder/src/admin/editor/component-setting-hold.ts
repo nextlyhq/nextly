@@ -32,12 +32,12 @@ import {
   type ComponentDocument,
   type DefinitionsById,
 } from "@nextlyhq/blocks-engine";
-import type { EditorState } from "@nextlyhq/builder/shell";
 import type {
   ComponentSettingAnswer,
   ComponentSettingAsk,
   DefinitionAction,
 } from "@nextlyhq/builder/ops";
+import type { EditorState } from "@nextlyhq/builder/shell";
 import {
   useBeforeDocumentAction,
   useDocumentActions,

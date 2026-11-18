@@ -82,7 +82,6 @@ import {
 import type { EditorState } from "./editor-state";
 import { HeldByLock, HeldHere } from "./held-by-lock";
 import { lockOp, lockStatusOf, lockViewOf, renameOp } from "./inspector";
-import { MakeSettingSection } from "./make-component-setting-section";
 import {
   resetOverrideOp,
   setOverrideOp,
@@ -91,6 +90,7 @@ import {
   type InstanceInspection,
   type OrphanedOverride,
 } from "./instance-inspector";
+import { MakeSettingSection } from "./make-component-setting-section";
 import { refusalAnnouncement } from "./move-refusal";
 import { useStoredDraft } from "./stored-draft";
 import { VariantPicker } from "./variant-picker";

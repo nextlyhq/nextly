@@ -55,6 +55,7 @@ import type { OpenAt } from "./builder-address";
 import { useCanvasEntryIdentity } from "./canvas-entry";
 import { listEntryCollectionOf } from "./canvas-page-context";
 import { useDropKeptReadsOnSave } from "./canvas-source-check";
+import { useHeldComponentSettings } from "./component-setting-hold";
 import { useConditionedPage } from "./conditioned-page";
 import { editorCanvasRegion } from "./editor-canvas-region";
 import {
@@ -99,7 +100,6 @@ import {
   useTemplatePreviewState,
 } from "./template-preview-strip";
 import { useComponentView, type ComponentView } from "./use-component-view";
-import { useHeldComponentSettings } from "./component-setting-hold";
 import { useEditorMount, type EditorMount } from "./use-editor-mount";
 import {
   hasUnsavedWork,
