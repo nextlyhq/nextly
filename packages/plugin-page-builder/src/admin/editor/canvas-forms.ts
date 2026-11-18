@@ -24,7 +24,7 @@ import { readEditorForm } from "../editor-forms-client";
 const CANVAS_FORM_ACTION = "#";
 
 /** The drawing the block takes for one answer of the describe route. */
-export function canvasDrawingOf(
+function canvasDrawingOf(
   answer: EditorFormResponse
 ): FormDrawing | FormUnavailableDrawing {
   switch (answer.state) {

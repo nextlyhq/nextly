@@ -71,7 +71,7 @@
   );
   background: var(--nx-builder-surface-raised);
   color: var(--nx-builder-text);
-  font-size: 0.75rem;
+  font-size: var(--text-xs);
 }
 
 .nx-form-states__pick:focus-visible {

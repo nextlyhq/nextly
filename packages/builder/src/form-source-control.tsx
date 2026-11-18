@@ -69,7 +69,7 @@ export function useFormSources(
 }
 
 /** A picked form as a choice's value: both halves, never confused. */
-export function formChoiceValue(form: PickedForm): string {
+function formChoiceValue(form: PickedForm): string {
   return JSON.stringify([form.provider, form.ref]);
 }
 
@@ -143,7 +143,7 @@ function listedOf(
 }
 
 /** The id of the picker's trigger for a block, so another part can focus it. */
-export function formPickerId(nodeId: string): string {
+function formPickerId(nodeId: string): string {
   return `${nodeId}-form-pick`;
 }
 

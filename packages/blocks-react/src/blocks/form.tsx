@@ -299,7 +299,7 @@ function providerSentMessage(props: FormProps, drawing: FormDrawing): string {
  * The attribute on the box a picked form that is gone draws where an author
  * is looking, so the editor can say so over it.
  */
-export const FORM_UNAVAILABLE_ATTRIBUTE = "data-nx-form-unavailable";
+const FORM_UNAVAILABLE_ATTRIBUTE = "data-nx-form-unavailable";
 
 /**
  * What a picked form that is gone draws: nothing on a page a visitor is
