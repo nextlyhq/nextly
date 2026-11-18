@@ -1,6 +1,7 @@
 /**
  * The Pages panel's writes: create a page, duplicate one, rename one, delete
- * one, without leaving the editor.
+ * one, without leaving the editor; and the New page dialog's read of what a
+ * new page would get before it is made.
  *
  * ## Which collections they write
  *
@@ -23,11 +24,13 @@
  *
  * ## What a new page holds
  *
- * Its title; a slug made from the title where the collection stores one, made
- * unique where the collection requires it; the Draft status where the
- * collection has the lifecycle; and the Page Builder field's own empty
- * document (`emptyBlockDocument`, the value the field type seeds an entry
- * with), so the editor opens on a document its field accepts.
+ * Its title; the address the author typed, refused when another page holds
+ * it, or else a slug made from the title, made unique where the collection
+ * requires it; the Draft status where the collection has the lifecycle; the
+ * header & footer choice and other fields the author gave; and the Page
+ * Builder field's own empty document (`emptyBlockDocument`, the value the
+ * field type seeds an entry with) or a starter page's, so the editor opens on
+ * a document its field accepts.
  *
  * @module pages-write-route
  */
@@ -37,7 +40,7 @@ import {
   type PluginRouteContext,
 } from "@nextlyhq/plugin-sdk";
 import { slugify } from "nextly";
-import { requireNextly } from "nextly/runtime";
+import { readPublicSiteSettings, requireNextly } from "nextly/runtime";
 import { z } from "nextly/zod";
 
 import { readBodyWith } from "./composition-route-kit";
@@ -54,7 +57,10 @@ import {
   readingAsUser,
   type ComponentStore,
 } from "./library-route";
+import { pageCollections } from "./pages-search-collections";
 import type { PageItem, PageReference } from "./pages-search-contract";
+import { directPagesSearchReads } from "./pages-search-handler";
+import { pathOf } from "./pages-search-items";
 import {
   findPageCollection,
   pageItemOf,
@@ -62,14 +68,24 @@ import {
   type PageCollectionsContext,
 } from "./pages-search-route";
 import {
+  NEW_PAGE_PARAMS,
+  NEW_PAGE_ROUTE_PATH,
   PAGE_DUPLICATE_ROUTE_PATH,
   PAGE_ROUTE_PATH,
+  PAGE_SLUG_BASE_MAX,
+  PAGE_SLUG_MAX,
   PAGE_TITLE_MAX,
   PAGES_ROUTE_PATH,
+  UNTITLED_PAGE_SLUG,
+  type CreatedPageItem,
   type CreatePageRequest,
+  type NewPageAddress,
+  type NewPageCollection,
+  type NewPageFacts,
+  type NewPageStarter,
   type RenamePageRequest,
 } from "./pages-write-contract";
-import { parseRouteParams } from "./route-query";
+import { optionalText, parseRouteParams, parseRouteQuery } from "./route-query";
 
 /** The status a new or duplicated page starts in, where the collection has the lifecycle. */
 const DRAFT = "draft";
@@ -78,10 +94,10 @@ const DRAFT = "draft";
 const COPY_PREFIX = "Copy of ";
 
 /** The slug a title that holds no letter or digit is given. */
-const UNTITLED_SLUG = "page";
+const UNTITLED_SLUG = UNTITLED_PAGE_SLUG;
 
 /** The longest slug made from a title, before any `-2` suffix. */
-const SLUG_BASE_MAX = 80;
+const SLUG_BASE_MAX = PAGE_SLUG_BASE_MAX;
 
 /** How many slugs, the base and `-2` up to this, one write considers. */
 const SLUG_CANDIDATES = 20;
@@ -102,7 +118,26 @@ const name = z.string().trim().min(1).max(NAME_MAX);
 /** A title as a page may be given it: trimmed, not empty, bounded. */
 const title = z.string().trim().min(1).max(PAGE_TITLE_MAX);
 
-const CreateBody = z.strictObject({ collection: name, title });
+/** The most other fields one create may fill. */
+const FIELDS_MAX = 50;
+
+/** A top-level field's name: no path, no dot, nothing a key could hide. */
+const FIELD_NAME = /^[A-Za-z_$][\w$]{0,63}$/;
+
+const CreateBody = z.strictObject({
+  collection: name,
+  title,
+  slug: z.string().trim().min(1).max(PAGE_SLUG_MAX).optional(),
+  layout: z.string().min(1).max(NAME_MAX).nullable().optional(),
+  noHeaderFooter: z.boolean().optional(),
+  starter: name.optional(),
+  fields: z
+    .record(z.string().regex(FIELD_NAME), z.unknown())
+    .refine(fields => Object.keys(fields).length <= FIELDS_MAX, {
+      message: `At most ${FIELDS_MAX} fields.`,
+    })
+    .optional(),
+});
 const RenameBody = z.strictObject({ title, rev: z.string().min(1).optional() });
 const PageParams = z.object({ collection: name, id: name });
 
@@ -147,6 +182,16 @@ export interface PagesWrites {
     data: Record<string, unknown>
   ): Promise<unknown>;
   remove(collection: string, id: string): Promise<void>;
+  /** Whether the caller may `action` entries of `collection`, as core judges it. */
+  may(action: "create" | "update", collection: string): Promise<boolean>;
+  /**
+   * The document the starter page `id` gives a new page of `source`, or
+   * `undefined` where none is offered under that id.
+   */
+  starter(
+    source: PageCollection,
+    id: string
+  ): Promise<{ readonly document: unknown } | undefined>;
 }
 
 /**
@@ -203,6 +248,21 @@ function textTitleOf(source: PageCollection): string | undefined {
 export function slugBaseOf(text: string): string {
   const base = slugify(text).slice(0, SLUG_BASE_MAX).replace(/-+$/, "");
   return base === "" ? UNTITLED_SLUG : base;
+}
+
+/**
+ * A typed address as it is stored: each `/`-separated part by core's
+ * `slugify`, empty parts dropped, bounded by the address column. The same
+ * answers as the dialog's `pageSlugOfTyped`, which a test holds them to.
+ */
+export function typedSlugOf(typed: string): string {
+  return typed
+    .split("/")
+    .map(part => slugify(part))
+    .filter(part => part !== "")
+    .join("/")
+    .slice(0, SLUG_PATH_MAX)
+    .replace(/[-/]+$/, "");
 }
 
 /** The slugs a write considers, in the order it tries them: `base`, `base-2`, … */
@@ -362,32 +422,303 @@ function draftOf(source: PageCollection): Record<string, unknown> {
   return source.lifecycle ? { status: DRAFT } : {};
 }
 
+/** The words a taken address is refused with, naming its page where it may. */
+function addressTaken(holder: string | undefined): NextlyError {
+  return NextlyError.validation({
+    errors: [
+      {
+        path: "slug",
+        code: "TAKEN",
+        message: `That address is used by ${holder ?? "another page"}`,
+      },
+    ],
+  });
+}
+
 /**
- * Create a page: a draft, titled, with a slug made from its title and the
- * Page Builder field's own empty document.
+ * The title of the page holding `slug` in `source`, where the caller may
+ * read it; `undefined` where no page they can read holds it. Core's unique
+ * rule still refuses an address held by a page they can't read.
+ */
+async function holderOf(
+  source: PageCollection,
+  field: string,
+  slug: string,
+  writes: Pick<PagesWrites, "find">
+): Promise<string | undefined> {
+  const titleName = textTitleOf(source);
+  try {
+    const read = await writes.find({
+      collection: source.slug,
+      where: { [field]: { equals: slug } },
+      select: {
+        id: true,
+        [field]: true,
+        ...(titleName === undefined ? {} : { [titleName]: true }),
+      },
+      limit: 1,
+    });
+    const row = read.items[0];
+    if (row === undefined) return undefined;
+    return entryOf(row, titleName)?.title ?? "another page";
+  } catch (error) {
+    if (NextlyError.isForbidden(error) || NextlyError.isValidation(error)) {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+/**
+ * Write an entry at the address the author typed: refused, naming the page,
+ * where a page they can read holds it, and refused as "another page" where
+ * core's unique rule finds one they can't. Never moved on to a free one: a
+ * typed address is a choice.
+ */
+async function writeAtTyped(
+  source: PageCollection,
+  typed: string,
+  writes: Pick<PagesWrites, "find">,
+  write: (slug: Record<string, unknown>) => Promise<unknown>
+): Promise<unknown> {
+  const field = source.slugField;
+  if (field === undefined) return write({});
+  if (field.unique) {
+    const holder = await holderOf(source, field.name, typed, writes);
+    if (holder !== undefined) throw addressTaken(holder);
+  }
+  try {
+    return await write({ [field.name]: typed });
+  } catch (error) {
+    if (NextlyError.isCode(error, "DUPLICATE")) throw addressTaken(undefined);
+    throw error;
+  }
+}
+
+/** The document a new page starts with: a starter's, or the field's own empty one. */
+async function startingDocument(
+  source: PageCollection,
+  starter: string | undefined,
+  writes: Pick<PagesWrites, "starter">
+): Promise<unknown> {
+  if (starter === undefined) return emptyBlockDocument(source.kinds);
+  const offered = await writes.starter(source, starter);
+  if (offered === undefined) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "starter",
+          code: "INVALID",
+          message: "That starter page isn't offered here any more.",
+        },
+      ],
+    });
+  }
+  return offered.document;
+}
+
+/** The header & footer choice as the page stores it, where one was sent. */
+function headerFooterOf(request: CreatePageRequest): Record<string, unknown> {
+  return {
+    ...(request.layout === undefined ? {} : { layout: request.layout }),
+    ...(request.noHeaderFooter === undefined
+      ? {}
+      : { noHeaderFooter: request.noHeaderFooter }),
+  };
+}
+
+/**
+ * Create a page: titled, a draft where the collection has the lifecycle,
+ * with the Page Builder field's own empty document or a starter's, and the
+ * header & footer choice and other fields the author gave.
+ *
+ * Its address is the one typed, refused when taken; else one made from the
+ * title, moved on to the first free one. Everything else is core's to
+ * judge, as the caller: a required field left empty is refused by core,
+ * whose refusal names the field, so the dialog can ask for it.
  */
 export async function createPage(
   request: CreatePageRequest,
   writes: PagesWrites
-): Promise<PageItem> {
+): Promise<CreatedPageItem> {
   const source = await pageSource(writes, request.collection);
-  // Refused before writing, in words the panel can show: core would refuse
-  // the create anyway, for a value only the entry's own form can supply.
-  if (source.needsMore !== undefined) {
-    throw cannot(
-      "Pages of this kind need more than a title. Add one from its own list in the admin."
-    );
-  }
   const titleName = textTitleOf(source);
-  const row = await writeWithSlug(source, request.title, writes, slug =>
+  const document = await startingDocument(source, request.starter, writes);
+  const write = (slug: Record<string, unknown>) =>
     writes.create(source.slug, {
+      // The other fields first, so a name the route writes itself is the
+      // route's: the title, the address, the status and the page.
+      ...request.fields,
+      ...headerFooterOf(request),
       ...(titleName === undefined ? {} : { [titleName]: request.title }),
       ...slug,
       ...draftOf(source),
-      ...atPath(source.field, emptyBlockDocument(source.kinds)),
-    })
+      ...atPath(source.field, document),
+    });
+  const typed =
+    request.slug === undefined ? undefined : typedSlugOf(request.slug);
+  const row =
+    typed === undefined || typed === ""
+      ? await writeWithSlug(source, request.title, writes, write)
+      : await writeAtTyped(source, typed, writes, write);
+  return {
+    ...writtenItem(row, source),
+    mayUpdate: await writes.may("update", source.slug),
+  };
+}
+
+/** What the New page read is asked: a collection, and a title and typed address to check. */
+export interface NewPageRequest {
+  readonly collection: string;
+  readonly title?: string;
+  readonly slug?: string;
+}
+
+const newPageQuerySchema = z.object({
+  [NEW_PAGE_PARAMS.collection]: name,
+  [NEW_PAGE_PARAMS.title]: optionalText(PAGE_TITLE_MAX),
+  [NEW_PAGE_PARAMS.slug]: optionalText(PAGE_SLUG_MAX),
+});
+
+/** The New page read's query, or a refusal naming the parameter. */
+export function parseNewPageQuery(url: string | URL): NewPageRequest {
+  const query = parseRouteQuery(
+    url,
+    Object.values(NEW_PAGE_PARAMS),
+    newPageQuerySchema,
+    "new page"
   );
-  return writtenItem(row, source);
+  const { title: asked, slug } = {
+    title: query[NEW_PAGE_PARAMS.title],
+    slug: query[NEW_PAGE_PARAMS.slug],
+  };
+  return {
+    collection: query[NEW_PAGE_PARAMS.collection],
+    ...(asked === undefined ? {} : { title: asked }),
+    ...(slug === undefined ? {} : { slug }),
+  };
+}
+
+/** What the New page read reads beyond the writes'. */
+export interface NewPageReads extends PagesWrites {
+  /** Every collection that holds pages, by the search's reading. */
+  pageCollections(): Promise<readonly PageCollection[]>;
+  /** The plugin's own Pages, as the site resolved its slug. */
+  pagesCollection(): string;
+  /** Where the plugin's own Pages are served (`/{slug}`), if the host said. */
+  pagePath(): string | undefined;
+  /** The site's address, or null while it is unset. */
+  site(): Promise<string | null>;
+  /** The starter pages a new page of `source` may start from. */
+  starters(source: PageCollection): Promise<readonly NewPageStarter[]>;
+}
+
+/** A page collection as the dialog names it. */
+function namedCollection(source: PageCollection): NewPageCollection {
+  return { slug: source.slug, label: source.label };
+}
+
+/** Stands in for the address while the path is filled, to find what is around it. */
+const ADDRESS_MARK = "nextlynewpagemark";
+
+/**
+ * The path either side of a page's own address: the plugin's own Pages
+ * through where the host serves them, any other collection's left empty,
+ * since its path is the host's own code.
+ */
+function aroundAddress(
+  source: PageCollection,
+  reads: Pick<NewPageReads, "pagesCollection" | "pagePath">
+): { before: string; after: string } {
+  const template = reads.pagePath();
+  if (template === undefined || source.slug !== reads.pagesCollection()) {
+    return { before: "", after: "" };
+  }
+  const field = source.slugField?.name ?? "slug";
+  const path = pathOf(
+    { [field]: ADDRESS_MARK },
+    { ...source, pathTemplate: template }
+  ).path;
+  const at = path?.indexOf(ADDRESS_MARK) ?? -1;
+  if (path === undefined || at < 0) return { before: "", after: "" };
+  return {
+    before: path.slice(0, at),
+    after: path.slice(at + ADDRESS_MARK.length),
+  };
+}
+
+/** The address part of the New page read's answer. */
+async function newPageAddress(
+  source: PageCollection,
+  request: NewPageRequest,
+  reads: NewPageReads
+): Promise<NewPageAddress | null> {
+  const field = source.slugField;
+  if (field === undefined) return null;
+  const around = { site: await reads.site(), ...aroundAddress(source, reads) };
+  const typed = request.slug === undefined ? "" : typedSlugOf(request.slug);
+  if (typed !== "") {
+    const holder = field.unique
+      ? await holderOf(source, field.name, typed, reads)
+      : undefined;
+    return {
+      ...around,
+      slug: typed,
+      ...(holder === undefined ? {} : { takenBy: holder }),
+    };
+  }
+  if (request.title === undefined) return { ...around, slug: "" };
+  const wanted = slugBaseOf(request.title);
+  const slug = field.unique
+    ? ((await freeSlugs(source, field.name, wanted, reads))[0] ?? wanted)
+    : wanted;
+  return { ...around, slug, ...(slug === wanted ? {} : { wanted }) };
+}
+
+/**
+ * What a new page in a collection would get, for the New page dialog: its
+ * name, whether it is a draft, whether it has the header & footer choice,
+ * whether the author may change it once made, the starters offered, and
+ * the address it would take, every read as the caller. Never a promise that
+ * the address is free: the create decides.
+ */
+export async function readNewPageFacts(
+  request: NewPageRequest,
+  reads: NewPageReads
+): Promise<NewPageFacts> {
+  const source = await pageSource(reads, request.collection);
+  const all = await reads.pageCollections();
+  const creatable = await Promise.all(
+    all.map(async candidate =>
+      (await reads.may("create", candidate.slug)) ? [candidate] : []
+    )
+  );
+  return {
+    collection: namedCollection(source),
+    collections: creatable.flat().map(namedCollection),
+    drafts: source.lifecycle,
+    headerFooter: source.slug === reads.pagesCollection(),
+    mayUpdate: await reads.may("update", source.slug),
+    starters: await reads.starters(source),
+    address: await newPageAddress(source, request, reads),
+  };
+}
+
+/**
+ * The site's address as a link can use it, from the site's public settings,
+ * or null while it is unset or is no web address.
+ */
+async function siteAddress(): Promise<string | null> {
+  const configured = (await readPublicSiteSettings()).siteUrl?.trim();
+  if (!configured) return null;
+  try {
+    const url = new URL(configured);
+    return url.protocol === "https:" || url.protocol === "http:"
+      ? url.toString()
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -526,19 +857,42 @@ function directPagesWrites(
     remove: async (collection, id) => {
       await requireNextly().delete({ collection, id, ...(await asUser()) });
     },
+    may: async (action, collection) =>
+      (await ctx.caller?.can(action, collection)) === true,
+    // No starter pages are offered yet: one asked for by id is refused.
+    starter: () => Promise.resolve(undefined),
+  };
+}
+
+/** The New page read's reads: the writes', the search's collections, and the site's address. */
+function directNewPageReads(
+  ctx: PluginRouteContext,
+  store: ComponentStore,
+  pagePath: string | undefined
+): NewPageReads {
+  const search = directPagesSearchReads(ctx, store, pagePath);
+  return {
+    ...directPagesWrites(ctx, store),
+    pageCollections: async () =>
+      pageCollections(await search.collections(), search.stores()),
+    pagesCollection: () => search.pagesCollection(),
+    pagePath: () => pagePath,
+    site: siteAddress,
+    starters: () => Promise.resolve([]),
   };
 }
 
 /** One of the routes, as the plugin declares it. */
 interface PagesWriteRoute {
-  method: "POST" | "PATCH" | "DELETE";
+  method: "GET" | "POST" | "PATCH" | "DELETE";
   checksAccess?: true;
   path: string;
   handler: (req: Request, ctx: PluginRouteContext) => Promise<Response>;
 }
 
 /**
- * The four route declarations, thin on purpose. No `public`, which makes each
+ * The route declarations, thin on purpose: the New page read, then the four
+ * writes. No `public`, which makes each
  * authenticated, and no `requiredPermission`: the permission is core's to
  * judge on the write itself, per collection.
  *
@@ -546,16 +900,30 @@ interface PagesWriteRoute {
  * plugin at is never written as a page, as the search never lists it.
  */
 export function pagesWriteRoutes(
-  store: ComponentStore = DEFAULT_COMPONENT_STORE
+  store: ComponentStore = DEFAULT_COMPONENT_STORE,
+  /** Where the plugin's own pages are served (`pagePreviewPath`), if stated. */
+  pagePath?: string
 ): PagesWriteRoute[] {
   const writesFor = (ctx: PluginRouteContext) => directPagesWrites(ctx, store);
   return [
+    {
+      method: "GET",
+      path: NEW_PAGE_ROUTE_PATH,
+      checksAccess: true, // The handler judges each caller.
+      handler: async (req, ctx) =>
+        Response.json(
+          await readNewPageFacts(
+            parseNewPageQuery(req.url),
+            directNewPageReads(ctx, store, pagePath)
+          )
+        ),
+    },
     {
       method: "POST",
       path: PAGES_ROUTE_PATH,
       checksAccess: true, // The handler judges each caller.
       handler: async (req, ctx) =>
-        respondMutation<PageItem>(
+        respondMutation<CreatedPageItem>(
           "The page was created.",
           await createPage(await readCreateBody(req), writesFor(ctx))
         ),

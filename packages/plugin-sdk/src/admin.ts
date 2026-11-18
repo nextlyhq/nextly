@@ -262,6 +262,19 @@ export {
 export { useReportUnsavedWork } from "@nextlyhq/admin/kit/document";
 
 /**
+ * Let the next move leave the document without the unsaved-changes guard
+ * asking (@experimental).
+ *
+ * For a surface that has just asked the author itself, such as "Save changes
+ * to this page first?" answered with Discard: being asked the same thing again
+ * reads as a warning, not as the answer they gave. Call it immediately before
+ * the move; it lapses on its own within a moment, so it can never let a later
+ * leave the author didn't choose go unasked. It does nothing outside a
+ * document's editor.
+ */
+export { useLeaveWithoutWarning } from "@nextlyhq/admin/kit/document";
+
+/**
  * The document's actions, from inside its editor (@experimental).
  *
  * For a document view, which replaces the form body and the header with it:

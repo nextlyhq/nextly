@@ -32,6 +32,7 @@ import {
   DELETE_COMPONENT_REPLACEMENT_COMPONENT,
   ENTRY_DESIGN_SECTION_COMPONENT,
   LAYOUT_LIST_TOOLS_COMPONENT,
+  NEW_PAGE_DIALOG_COMPONENT,
   SINGLE_SHOWN_ON_SECTION_COMPONENT,
   OVERVIEW_PAGE_COMPONENT,
   REMOVE_LAYOUT_ACTION_COMPONENT,
@@ -55,6 +56,7 @@ import { registerEntryDesignColumn } from "./entry-design-column";
 import type { EntryDesignSection as EntryDesignSectionPart } from "./EntryDesignSection";
 import { lazyPart, preloadPart, withEditorStylesheet } from "./lazy-part";
 import type { LayoutListTools as LayoutListToolsPart } from "./make-default-action";
+import type { NewPageCreateDialog as NewPageCreateDialogPart } from "./new-page/new-page-dialog";
 import type { PageBuilderOverview as PageBuilderOverviewPart } from "./overview/PageBuilderOverview";
 import { PUBLISHING_ACTIONS } from "./publishing-actions";
 import type { RemoveLayoutToolbarSlot as RemoveLayoutToolbarSlotPart } from "./RemoveLayoutAction";
@@ -107,6 +109,9 @@ const EntryDesignSection: typeof EntryDesignSectionPart = lazyPart(() =>
 );
 const ShownOnSection: typeof ShownOnSectionPart = lazyPart(() =>
   import("./shown-on/ShownOnSection").then(m => m.ShownOnSection)
+);
+const NewPageCreateDialog: typeof NewPageCreateDialogPart = lazyPart(() =>
+  import("./new-page/new-page-dialog").then(m => m.NewPageCreateDialog)
 );
 const PageBuilderOverview: typeof PageBuilderOverviewPart = lazyPart(() =>
   import("./overview/PageBuilderOverview").then(m => m.PageBuilderOverview)
@@ -171,6 +176,9 @@ const COMPONENTS = {
   // The editor itself, drawn by the admin as a view of the document at the
   // address the blocks field's card links to.
   [BUILDER_VIEW_COMPONENT]: PageBuilderView,
+  // The New page dialog's body, opened from "+ New" on a list whose
+  // entries open in the builder.
+  [NEW_PAGE_DIALOG_COMPONENT]: NewPageCreateDialog,
   // "Remove Layout…" in a Layout's document bar.
   [REMOVE_LAYOUT_ACTION_COMPONENT]: RemoveLayoutToolbarSlot,
   // The overview the rail item opens.
@@ -233,6 +241,7 @@ export {
   DeleteComponentReplacement,
   EntryDesignSection,
   LayoutListTools,
+  NewPageCreateDialog,
   PageBuilderOverview,
   PageBuilderView,
   RemoveLayoutToolbarSlot,

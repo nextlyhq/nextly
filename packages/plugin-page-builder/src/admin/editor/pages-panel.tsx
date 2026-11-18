@@ -50,12 +50,8 @@ import {
   type PageReference,
   type PagesSearchResponse,
 } from "../../pages-search-contract";
-import {
-  createPage,
-  deletePage,
-  duplicatePage,
-  renamePage,
-} from "../pages-client";
+import { useNewPageDialog } from "../new-page/new-page-dialog";
+import { deletePage, duplicatePage, renamePage } from "../pages-client";
 
 import { builderAddress } from "./builder-address";
 import { CollectionTemplatesGroup } from "./collection-templates-group";
@@ -213,6 +209,11 @@ function PagesPanel({
   const pagesOpen = !folds.folded.has(PAGES_GROUP);
   const setsRef = React.useRef<HTMLDivElement>(null);
   useRevealSets(reveal, folds, setsRef);
+  const newPage = useNewPageDialog({
+    unsavedWork,
+    title:
+      list.items.find(item => isCurrent(item, current))?.title ?? "this page",
+  });
 
   return (
     // In the builder's panel text; the surface is the panel region's own.
@@ -232,7 +233,7 @@ function PagesPanel({
             // unfiltered list showed: never whatever a search happens to rank
             // first, which would move where a new page goes as the author types.
             collection={current?.collection ?? list.firstCollection}
-            onCreate={act.create}
+            onOpen={newPage.open}
           />
         </div>
         {pagesOpen ? (
@@ -270,6 +271,7 @@ function PagesPanel({
         <HeaderFooterGroup folds={folds} currentPageId={current?.id ?? null} />
       </div>
       <CollectionTemplatesGroup folds={folds} />
+      {newPage.dialog}
       <DeletePageDialog
         page={deleting}
         onCancel={() => setDeleting(null)}
@@ -399,7 +401,6 @@ function useActions({
   onOpenSettings: () => void;
   report: (problem: string | null) => void;
 }): Omit<RowActions, "remove"> & {
-  create: (collection: string, title: string) => Promise<void>;
   remove: (page: PageItem) => Promise<void>;
 } {
   const attempt = async (what: string, work: () => Promise<void>) => {
@@ -424,10 +425,6 @@ function useActions({
     duplicate: page =>
       attempt(`duplicate "${page.title}"`, async () => {
         openPage(await duplicatePage(page));
-      }),
-    create: (collection, title) =>
-      attempt("add the page", async () => {
-        openPage(await createPage({ collection, title }));
       }),
     remove: page =>
       attempt(`delete "${page.title}"`, async () => {
@@ -820,30 +817,24 @@ function NotedItem({
   );
 }
 
-/** Adds a page: a title, then the new draft opens in the editor. */
+/**
+ * "New page": opens the New page dialog, which asks for a title and makes
+ * the page only when its button is pressed.
+ */
 function NewPageButton({
   collection,
-  onCreate,
+  onOpen,
 }: {
   collection: string | undefined;
-  onCreate: (collection: string, title: string) => Promise<void>;
+  onOpen: (collection: string) => void;
 }): React.JSX.Element | null {
-  const [naming, setNaming] = React.useState(false);
   if (collection === undefined) return null;
-  return naming ? (
-    <RenameField
-      title=""
-      onDone={title => {
-        setNaming(false);
-        if (title !== null) void onCreate(collection, title);
-      }}
-    />
-  ) : (
+  return (
     <Button
       type="button"
       size="sm"
       variant="outline"
-      onClick={() => setNaming(true)}
+      onClick={() => onOpen(collection)}
     >
       <Plus aria-hidden="true" className="size-3.5" />
       New page

@@ -108,6 +108,13 @@ export {
 export { useReportUnsavedWork } from "../components/features/entries/EntryForm/UnsavedWorkContext";
 
 /**
+ * Says the next leave is deliberate, so the unsaved-changes guard lets it go
+ * without asking: for a surface that has just asked the author itself.
+ * Exported for the plugin surface.
+ */
+export { useLeaveWithoutWarning } from "../components/features/entries/EntryForm/UnsavedChangesGuard";
+
+/**
  * The document's actions, for a surface drawn inside its editor: the actions
  * the header draws and running one with a true answer, the one save state,
  * committing work a surface holds before a save, and counting a write the

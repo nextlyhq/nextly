@@ -79,6 +79,8 @@ function writesOver(
       })
     ),
     remove: vi.fn(async () => undefined),
+    may: vi.fn(async () => true),
+    starter: vi.fn(async () => undefined),
     ...over,
   };
   return writes;
@@ -223,6 +225,7 @@ describe("creating a page", () => {
       field: "content",
       title: "About Us",
       status: "draft",
+      mayUpdate: true,
     });
   });
 
@@ -393,17 +396,6 @@ describe("renaming a page", () => {
       title: "New name",
       _rev: "6",
     });
-  });
-
-  it("refuses, writing nothing, a new page a title alone cannot make", async () => {
-    // A required field with no default: only the entry's own form can fill it.
-    const writes = writesOver([{ ...PAGES, needsMore: ["seoTitle"] }]);
-    const error = await refused(() =>
-      createPage({ collection: "pages", title: "About" }, writes)
-    );
-    expect(error.code).toBe("VALIDATION_ERROR");
-    expect(JSON.stringify(error)).toContain("need more than a title");
-    expect(writes.create).not.toHaveBeenCalled();
   });
 
   it("refuses, writing nothing, to copy a page that holds another unique value", async () => {
