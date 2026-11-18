@@ -54,6 +54,7 @@ import {
   readHiddenCode,
   readMysqlOtherCharsets,
   readPgDescendants,
+  readForeignKeyTargets,
   readReferencingKeys,
   readUserFunctions,
   type HiddenCode,
@@ -106,6 +107,13 @@ export interface DeletionFacts {
    * adopted rather than run, so the table is not the run's own. Undefined when unreadable.
    */
   liveTable(table: string): boolean | undefined;
+  /**
+   * Each column of `table` that carries a foreign key, with the tables (lower-cased) its keys
+   * reference. Undefined when unreadable; a fact source without it reads every table so.
+   */
+  keyTargets?(
+    table: string
+  ): ReadonlyMap<string, readonly string[]> | undefined;
   /**
    * The functions a SELECT may call that run code the statement does not show: lower-cased names
    * of the user-defined functions (outside the system catalogs). Undefined when unreadable, when
@@ -160,6 +168,7 @@ interface FactSource {
   mayDeleteThrough(name: string): boolean;
   unseenRebuild: "drop" | "deferred";
   liveColumns(table: string): ReadonlySet<string> | undefined;
+  keyTargets(table: string): ReadonlyMap<string, readonly string[]> | undefined;
   liveType(table: string, column: string): string | undefined;
   /** MySQL: whether `column` has its table's default character set; undefined when unread. */
   keepsCharacterSet(table: string, column: string): boolean | undefined;
@@ -1788,10 +1797,10 @@ class FileWalk {
 
   /**
    * `{ translates: X }` where `table` is the translations table of `X`: named
-   * `<X>_locales` and, where it stands, holding `_parent` and `_locale`, the
-   * key only a translations table has, since a field's column never starts
-   * with `_`. A name alone proves nothing of a table that stands: an entity's
-   * own table may be named so. One the database does not have holds nothing,
+   * `<X>_locales` and, where it stands, holding `_locale` with `_parent` a
+   * foreign key to `X`, as every translations table is made. Neither a name
+   * nor two column names prove it of a table that stands: an entity's own
+   * table, or one a plugin made, may be named and laid out so. One the database does not have holds nothing,
    * so its drop (a delete file's `DROP TABLE IF EXISTS`) loses nothing however
    * it is named, and goes with the table it would translate.
    */
@@ -1801,7 +1810,10 @@ class FileWalk {
     const owner = table.slice(0, -suffix.length);
     if (this.facts.liveTable(table) === false) return { translates: owner };
     const live = this.facts.liveColumns(table);
-    if (live?.has("_parent") !== true || !live.has("_locale")) return {};
+    const parent = this.facts.keyTargets(table)?.get("_parent");
+    if (live?.has("_locale") !== true || parent?.includes(owner) !== true) {
+      return {};
+    }
     return { translates: owner };
   }
 
@@ -2531,6 +2543,7 @@ function factSource(facts: DeletionFacts): FactSource {
     mayDeleteThrough: name => mayDeleteThrough(name, facts.userFunctions),
     unseenRebuild: facts.unseenRebuild ?? "drop",
     liveColumns: table => facts.liveColumns.get(table),
+    keyTargets: table => facts.keyTargets?.(table),
     liveType: (table, column) => facts.liveColumnTypes?.get(table)?.get(column),
     keepsCharacterSet: (table, column) => {
       const other = facts.otherCharsets?.get(table);
@@ -2679,6 +2692,8 @@ interface Questions {
   descendants: Set<string>;
   /** Tables the list creates, asked whether they exist already. */
   live: Set<string>;
+  /** Tables asked what their foreign keys reference. */
+  keys: Set<string>;
   calls: boolean;
 }
 
@@ -2693,6 +2708,7 @@ function answered(asked: Questions): boolean {
       asked.hidden,
       asked.descendants,
       asked.live,
+      asked.keys,
     ].every(set => set.size === 0)
   );
 }
@@ -2718,6 +2734,10 @@ class FactReading {
   private readonly truncates = new Map<string, readonly string[] | undefined>();
   private readonly hidden = new Map<string, HiddenCode | undefined>();
   private readonly liveTables = new Map<string, boolean | undefined>();
+  private readonly keyTargets = new Map<
+    string,
+    ReadonlyMap<string, readonly string[]> | undefined
+  >();
   /** Set once the tables could not be read: whether one exists is then unknown. */
   private spellFailed = false;
   private readonly descendants = new Map<
@@ -2756,6 +2776,7 @@ class FactReading {
       hidden: new Set(),
       descendants: new Set(),
       live: new Set(),
+      keys: new Set(),
       calls: false,
     };
     walk(statements, this.dialect, this.answering(asked));
@@ -2798,6 +2819,7 @@ class FactReading {
         return false;
       },
       unseenRebuild: "drop",
+      keyTargets: table => lookup(this.keyTargets, table, asked.keys)?.value,
       liveColumns: table => {
         const known = lookup(this.columnTypes, table, asked.rebuilt);
         return known?.value === undefined
@@ -2827,7 +2849,11 @@ class FactReading {
       ...asked.descendants,
       ...asked.live,
       ...asked.hidden,
+      ...asked.keys,
     ]);
+    for (const table of asked.keys) {
+      this.keyTargets.set(table, await this.readKeyTargets(table));
+    }
     for (const table of asked.live) {
       this.liveTables.set(
         table,
@@ -2891,6 +2917,16 @@ class FactReading {
     return live === undefined
       ? undefined
       : await settle(() => reachedFrom(this.db, dialect, live, false));
+  }
+
+  private async readKeyTargets(
+    table: string
+  ): Promise<ReadonlyMap<string, readonly string[]> | undefined> {
+    const live = this.live(table);
+    const dialect = this.dialect;
+    return live === undefined
+      ? undefined
+      : await settle(() => readForeignKeyTargets(this.db, dialect, live));
   }
 
   private async readTruncate(
@@ -3006,6 +3042,7 @@ class FactReading {
       hiddenCode: (table, on) => this.hidden.get(table.toLowerCase())?.[on],
       descendantsOf: table => this.descendants.get(table.toLowerCase()),
       liveTable: table => this.liveTables.get(table.toLowerCase()),
+      keyTargets: table => this.keyTargets.get(table.toLowerCase()),
       ...(userFunctions === undefined ? {} : { userFunctions }),
       liveColumns,
       liveColumnTypes,
