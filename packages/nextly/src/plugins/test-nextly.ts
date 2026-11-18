@@ -329,10 +329,11 @@ export interface CreateTestNextlyOptions {
     schema?: { extend?: SchemaHook[] };
   };
   /**
-   * Keep every translatable field per language from the start, as a config's
-   * `experimental.perLanguageStorage` does. Off by default.
+   * The configuration's `experimental.perLanguageStorage`, which chooses no layout any longer:
+   * every installation keeps its translatable fields per language. Set, the start warns that it
+   * is deprecated. A test standing in for an earlier release uses `setPerLanguageStorage` instead.
    *
-   * @experimental
+   * @deprecated Has no effect but the warning.
    */
   perLanguageStorage?: boolean;
   /** Override the adapter (defaults to a fresh in-memory SQLite adapter). */
@@ -948,7 +949,11 @@ async function bootServices(
       // off. Passed through the config (not set after) so it is published before
       // plugin init() runs, and boot-time plugin events are recorded too.
       webhookAuditEnabled: true,
-      perLanguageStorage: opts.perLanguageStorage === true,
+      // Passed only where a test sets it: the setting chooses no layout, and a site that sets it
+      // is told it is deprecated, which a test of that warning reads.
+      ...(opts.perLanguageStorage === undefined
+        ? {}
+        : { perLanguageStorage: opts.perLanguageStorage }),
     });
   } catch (error) {
     throw namingTestConsentOption(error, opts.pluginConsent);

@@ -37,6 +37,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { LoadConfigResult } from "../cli/utils/config-loader";
 import type { SchemaRegistry } from "../database/schema-registry";
+import { perLanguageStorageEnabled } from "../domains/i18n/per-language-storage";
 import type { ExtensionSchema } from "../domains/schema/extension/build-extension-schema";
 import type {
   PluginMigrationSet,
@@ -803,7 +804,8 @@ async function startFingerprints(
   const salt = await fingerprintOf([
     getCoreVersion(),
     dialect,
-    config.perLanguageStorage === true,
+    // The layout every installation keeps (a test may stand in for an earlier release's).
+    perLanguageStorageEnabled(),
     config.localization ?? null,
     builds.extensionFingerprint,
     allFieldTypes()
