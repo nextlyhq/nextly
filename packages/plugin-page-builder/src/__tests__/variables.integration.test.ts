@@ -831,6 +831,98 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
+    it("cleans up unused colours, keeping one a page started using since the list was read, naming where", async () => {
+      const { t } = await boot();
+      const designer = await holding(t, ...DESIGN);
+      // CONTROL: the panel lists both as unused when the clean-up opens.
+      const listed = await call(
+        "GET",
+        `${route("usage")}?id=t-spare&id=t-accent`,
+        designer
+      );
+      expect(listed.body).toMatchObject({
+        variables: {
+          "t-spare": { documents: 0 },
+          "t-accent": { documents: 0 },
+        },
+      });
+      // Then a page starts using Accent, before the author confirms.
+      await t.nextly.create({
+        collection: "pages",
+        data: { title: "Home", slug: "home", content: pageUsing("t-accent") },
+        overrideAccess: true,
+      });
+
+      const cleaned = await call("POST", route("clean-up"), designer, {
+        ids: ["t-spare", "t-accent"],
+      });
+      expect(cleaned.status).toBe(200);
+      // Counted first in the request, as no scheduler counted the page.
+      expect(cleaned.body).toMatchObject({
+        item: {
+          removed: ["t-spare"],
+          kept: [
+            {
+              id: "t-accent",
+              name: "Accent",
+              reason: "Accent is used on 1 document.",
+            },
+          ],
+        },
+      });
+      expect(await storedIds(t)).toEqual(["t-accent", "t-styled"]);
+    });
+
+    it("never leaves a page using a colour the clean-up removed, when the two race", async () => {
+      const { t } = await boot();
+      const designer = await holding(t, ...DESIGN);
+      const [cleaned, page] = await Promise.allSettled([
+        call("POST", route("clean-up"), designer, {
+          ids: ["t-spare", "t-accent"],
+        }),
+        t.nextly.create({
+          collection: "pages",
+          data: { title: "Home", slug: "home", content: pageUsing("t-accent") },
+          overrideAccess: true,
+        }),
+      ]);
+      expect(cleaned.status).toBe("fulfilled");
+      const answer =
+        cleaned.status === "fulfilled" ? cleaned.value : { status: 0, body: {} };
+      expect(answer.status).toBe(200);
+      const stored = await storedIds(t);
+      // Spare goes whichever wins: Accent's refusal never rolls it back.
+      expect(stored).not.toContain("t-spare");
+      if (page.status === "fulfilled") {
+        // The page first: Accent is kept, named as in use.
+        expect(stored).toContain("t-accent");
+        expect(answer.body).toMatchObject({
+          item: { removed: ["t-spare"], kept: [{ id: "t-accent" }] },
+        });
+      } else {
+        // The clean-up first: the page is refused its use of what is gone.
+        expect(page.reason).toMatchObject({ code: "VALIDATION_ERROR" });
+        expect(stored).not.toContain("t-accent");
+        expect(answer.body).toMatchObject({
+          item: { removed: ["t-spare", "t-accent"], kept: [] },
+        });
+      }
+    });
+
+    it("refuses the clean-up to a role that may read Design but not change it", async () => {
+      const { t } = await boot();
+      const reader = await holding(t, "read-site-style");
+      const designer = await holding(t, ...DESIGN);
+      const body = { ids: ["t-spare"] };
+      const refused = await call("POST", route("clean-up"), reader, body);
+      expect(refused.status).toBe(403);
+      expect(await storedIds(t)).toEqual(["t-accent", "t-styled", "t-spare"]);
+      // CONTROL: the same clean-up by a Design manager goes ahead.
+      const cleaned = await call("POST", route("clean-up"), designer, body);
+      expect(cleaned.status).toBe(200);
+      expect(await storedIds(t)).toEqual(["t-accent", "t-styled"]);
+    });
+
     it("refuses removing a variable a stored page still uses though the index counts none", async () => {
       const { t, tick } = await boot();
       await t.nextly.create({

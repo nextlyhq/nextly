@@ -69,6 +69,7 @@ import { z } from "nextly/zod";
 
 import { documentVersionOf, withVersionFrom } from "./document-version";
 import {
+  VARIABLE_CLEAN_UP_ROUTE_PATH,
   VARIABLE_ID_PARAM,
   VARIABLE_PAGE_PARAM,
   VARIABLE_REMOVE_ROUTE_PATH,
@@ -142,6 +143,7 @@ import {
 } from "./uncovered-pages";
 import type { DocumentsUsing } from "./usage-count";
 import { indexIsWhole, indexStillCounting } from "./usage-index-health";
+import { cleanUpVariables, type CleanUpEach } from "./variables-clean-up";
 
 /** A variable's identity, as the engine bounds one it can write. */
 const IDENTITY = z.string().min(1).max(MAX_TOKEN_NAME_LENGTH);
@@ -677,7 +679,11 @@ export interface VariableStore {
   ): Promise<VariableRead>;
 }
 
-/** The section without the entries whose identity is among `gone`. */
+/**
+ * The section without the entries whose identity is among `gone`, and with
+ * their places in the colour order, as the panel's own removal leaves it: a
+ * later colour given a removed one's free name is not listed where it was.
+ */
 function withoutVariables(
   section: Record<string, unknown>,
   gone: ReadonlySet<string>
@@ -691,6 +697,13 @@ function withoutVariables(
       const id = storedVariableIdentity(entry);
       return id === undefined || !gone.has(id);
     }),
+    ...(Array.isArray(section.order)
+      ? {
+          order: section.order.filter(
+            (id: unknown) => typeof id !== "string" || !gone.has(id)
+          ),
+        }
+      : {}),
   };
 }
 
@@ -728,7 +741,8 @@ function storedRefusals(
 /**
  * Remove variables the site added that nothing uses: every check on what the
  * server reads just before the write, never on what the panel showed. One
- * refusal refuses the whole request, so nothing is half removed.
+ * refusal refuses the whole request, so nothing is half removed; the
+ * clean-up asks it one variable at a time (`variables-clean-up`).
  *
  * The write itself reads the stored documents once more, inside its own
  * transaction and under the composition graph lock
@@ -758,6 +772,25 @@ export async function removeVariables(
   const ids = [
     ...new Set(parsed.data.ids),
   ] satisfies VariableRemoveRequest["ids"];
+  await removeStoredVariables(ids, store, supplied, checks);
+  return respondMutation(
+    ids.length === 1
+      ? "The variable was removed."
+      : `${ids.length} variables were removed.`,
+    { ids }
+  );
+}
+
+/**
+ * The removal itself, of every variable in `ids` or none, as
+ * {@link removeVariables} describes it; throws the refusal.
+ */
+export async function removeStoredVariables(
+  ids: readonly string[],
+  store: VariableStore,
+  supplied: ReadonlySet<string>,
+  checks: Pick<VariableRemovalChecks, "inUse">
+): Promise<void> {
   const gone = new Set(ids);
   await retryOnStale(
     () => store.read(),
@@ -786,12 +819,6 @@ export async function removeVariables(
       await checks.inUse(removable, read.classes, merged);
       await store.write(after, read);
     }
-  );
-  return respondMutation(
-    ids.length === 1
-      ? "The variable was removed."
-      : `${ids.length} variables were removed.`,
-    { ids }
   );
 }
 
@@ -982,7 +1009,46 @@ export function variableRoutes(setup: VariableRouteSetup): {
           setup.inUse(ctx, namedDocumentsReader(ctx))
         ),
     },
+    {
+      method: "POST",
+      path: VARIABLE_CLEAN_UP_ROUTE_PATH,
+      requiredPermission: siteStylePermission("update"),
+      handler: async (req, ctx) =>
+        cleanUpVariables(
+          req,
+          cleanUpEach(
+            siteStyleVariableStore(
+              ctx,
+              await getCachedNextly(),
+              setup.defaults
+            ),
+            suppliedVariableIds(setup.defaults),
+            setup.inUse(ctx, namedDocumentsReader(ctx))
+          )
+        ),
+    },
   ];
+}
+
+/**
+ * The clean-up's removal of one variable: the remove route's own, asked for
+ * that variable alone, so its refusal is its own and its write a transaction
+ * of its own. Names are read once, from the stored section.
+ */
+function cleanUpEach(
+  store: VariableStore,
+  supplied: ReadonlySet<string>,
+  checks: Pick<VariableRemovalChecks, "inUse">
+): CleanUpEach {
+  return {
+    names: async () =>
+      new Map(
+        [...storedVariables((await store.read()).section)].map(
+          ([id, variable]) => [id, variable.name]
+        )
+      ),
+    remove: id => removeStoredVariables([id], store, supplied, checks),
+  };
 }
 
 /**
