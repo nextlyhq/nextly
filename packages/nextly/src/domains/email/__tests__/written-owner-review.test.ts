@@ -86,6 +86,57 @@ describe("blocks in plain words", () => {
   });
 });
 
+describe("blocks in plain words, for a change only in how they look", () => {
+  it.each<[string, WrittenBlock, string]>([
+    [
+      "bold and italic runs",
+      {
+        type: "text",
+        text: [
+          { type: "text", text: "Pay " },
+          { type: "text", text: "now", bold: true },
+          { type: "text", text: " or " },
+          { type: "chip", variable: "when", italic: true },
+          { type: "text", text: " both", bold: true, italic: true },
+        ],
+      },
+      "Text: Pay **now** or _[when]_**_ both_**",
+    ],
+    [
+      "each link after its own run",
+      {
+        type: "text",
+        text: [
+          { type: "text", text: "Track", link: { url: "https://a.example" } },
+          { type: "text", text: " or " },
+          { type: "text", text: "cancel", link: { url: "https://b.example" } },
+        ],
+      },
+      "Text: Track (links to https://a.example) or cancel (links to https://b.example)",
+    ],
+    [
+      "spaces and line breaks as written",
+      {
+        type: "text",
+        text: [{ type: "text", text: "Line  one\nLine two " }],
+      },
+      "Text: Line  one↵Line two ",
+    ],
+    [
+      "an image's width",
+      {
+        type: "image",
+        src: { url: "https://cdn.example/logo.png" },
+        alt: [{ type: "text", text: "Logo" }],
+        width: 300,
+      },
+      "Image: Logo (https://cdn.example/logo.png, 300px wide)",
+    ],
+  ])("show %s", (_case, block, line) => {
+    expect(describeBlocks([block])).toEqual([line]);
+  });
+});
+
 describe("an owner's changes to written blocks", () => {
   const changes = (
     theirs: WrittenDocument,
@@ -133,6 +184,29 @@ describe("an owner's changes to written blocks", () => {
       conflict: false,
     });
   });
+
+  it.each([
+    ["edited the moved block", doc(A, B, heading("C3")), ["Heading: C3"]],
+    [
+      "added a block where it moves to",
+      doc(heading("X"), A, B, C),
+      ["Heading: X", "Heading: C"],
+    ],
+  ] as const)(
+    "offers a block the owner moved as one conflicted change when the site %s",
+    (_case, mine, mineLines) => {
+      expect(changes(doc(C, A, B), mine)).toEqual([
+        expect.objectContaining({
+          id: "blocks:0",
+          kind: "move",
+          conflict: true,
+          base: ["Heading: C"],
+          theirs: ["Heading: C"],
+          mine: mineLines,
+        }),
+      ]);
+    }
+  );
 
   it("offers both sides where the site edited the same block", () => {
     expect(changes(doc(A, heading("B2"), C), doc(A, heading("B3"), C))).toEqual(
@@ -222,6 +296,16 @@ describe("the site's written version with the choices applied", () => {
     );
   });
 
+  it("moves a block the site edited in both places, or in neither, never sending it twice", () => {
+    const edited = doc(A, B, heading("C3"));
+    expect(
+      apply(doc(C, A, B), { "blocks:0": { use: "theirs" } }, edited).blocks
+    ).toEqual(doc(C, A, B));
+    expect(
+      apply(doc(C, A, B), { "blocks:0": { use: "mine" } }, edited).blocks
+    ).toEqual(edited);
+  });
+
   it.each([
     ["the owner's", "theirs", "B2"],
     ["the site's", "mine", "B3"],
@@ -254,6 +338,89 @@ describe("the site's written version with the choices applied", () => {
           errors: expect.arrayContaining([expect.objectContaining({ code })]),
         },
       })
+    );
+  });
+});
+
+describe("a block moved on either side is never sent twice or lost", () => {
+  const D = heading("D");
+  const divider: WrittenBlock = { type: "divider" };
+  const review = (
+    base: WrittenDocument,
+    theirs: WrittenDocument,
+    mine: WrittenDocument
+  ) => ({
+    changes: writtenOwnerChanges(version(), version(), version(), {
+      base,
+      theirs,
+      mine,
+    }),
+    apply: (choices: Record<string, OwnerChangeChoice>) =>
+      applyWrittenChoices(
+        version(),
+        version(),
+        version(),
+        { base, theirs, mine },
+        choices
+      ).blocks,
+  });
+
+  it.each([
+    [
+      "the site edited every block the owner reordered",
+      doc(A, B, C, D),
+      doc(A, C, B, D),
+      doc(heading("A3"), heading("B3"), heading("C3"), heading("D3")),
+    ],
+    [
+      "both moved the same block to different places",
+      doc(A, B, C, D),
+      doc(A, C, B, D),
+      doc(C, A, B, D),
+    ],
+    [
+      "the site moved a block the owner edited",
+      doc(A, B, C),
+      doc(heading("A2"), B, C),
+      doc(B, C, A),
+    ],
+  ] as const)(
+    "offers one change, taken or kept whole, when %s",
+    (_case, base, theirs, mine) => {
+      const { changes, apply } = review(base, theirs, mine);
+      expect(changes).toEqual([
+        expect.objectContaining({ id: "blocks:0", conflict: true }),
+      ]);
+      expect(apply({ "blocks:0": { use: "theirs" } })).toEqual(theirs);
+      expect(apply({ "blocks:0": { use: "mine" } })).toEqual(mine);
+    }
+  );
+
+  it("keeps the site's move apart from the owner's change to another block", () => {
+    const { changes, apply } = review(
+      doc(A, B, C, D),
+      doc(A, B, C, heading("D2")),
+      doc(B, C, A, D)
+    );
+    expect(changes).toEqual([
+      expect.objectContaining({ kind: "change", conflict: false }),
+    ]);
+    expect(apply({ "blocks:0": { use: "theirs" } })).toEqual(
+      doc(B, C, A, heading("D2"))
+    );
+  });
+
+  it("reads a second divider the owner added as an addition, not a move", () => {
+    const { changes, apply } = review(
+      doc(A, divider, B),
+      doc(A, divider, B, divider),
+      doc(heading("A2"), divider, B)
+    );
+    expect(changes).toEqual([
+      expect.objectContaining({ kind: "insert", conflict: false }),
+    ]);
+    expect(apply({ "blocks:0": { use: "theirs" } })).toEqual(
+      doc(heading("A2"), divider, B, divider)
     );
   });
 });

@@ -452,15 +452,24 @@ interface BlockRegion {
  * The merge's regions, block for block where it can be: a region where the
  * base, the owner and the site have the same number of blocks is one region
  * per block, so a block only the site changed is never offered beside one
- * the owner changed next to it.
+ * the owner changed next to it. Not where either side reordered blocks within
+ * the region: split by position, the halves of a reorder could be decided
+ * apart, sending one block twice and losing another.
  */
 function blockRegions(merge: SequenceMerge): BlockRegion[] {
   return merge.regions.flatMap(({ region, theirs, mine, offered }) => {
     const base = merge.base.slice(region.bStart, region.bEnd);
+    const reordered = (side: string[]) =>
+      side.some((key, k) => {
+        const at = base.indexOf(key);
+        return at !== -1 && at !== k;
+      });
     if (
       base.length > 1 &&
       theirs.length === base.length &&
-      mine.length === base.length
+      mine.length === base.length &&
+      !reordered(theirs) &&
+      !reordered(mine)
     ) {
       return base.map((block, k) => ({
         bStart: region.bStart + k,
@@ -500,45 +509,119 @@ function blockChangeKind(
 }
 
 /**
+ * The blocks one side moved, each by its place in the base: a block found
+ * once in the base and once on that side, whose place the diff couldn't
+ * keep. A block repeated in either (a second divider) is new content, not a
+ * move.
+ */
+function movedOn(base: string[], side: string[]): Map<string, number> {
+  const count = (list: string[]) => {
+    const counts = new Map<string, number>();
+    for (const key of list) counts.set(key, (counts.get(key) ?? 0) + 1);
+    return counts;
+  };
+  const inBase = count(base);
+  const onSide = count(side);
+  const replaced = new Set<number>();
+  for (const h of hunks(base, side)) {
+    for (let at = h.bStart; at < h.bEnd; at++) replaced.add(at);
+  }
+  const moved = new Map<string, number>();
+  base.forEach((key, at) => {
+    if (replaced.has(at) && inBase.get(key) === 1 && onSide.get(key) === 1) {
+      moved.set(key, at);
+    }
+  });
+  return moved;
+}
+
+/**
+ * Whether every block either side moved has its old place and its new one in
+ * the same choice, or in none the owner changed. Decided apart, the two
+ * places of a move send the block twice or lose it.
+ */
+function movesKeptWhole(
+  base: string[],
+  theirs: string[],
+  mine: string[],
+  regions: BlockRegion[],
+  partner: ReadonlyMap<number, number>
+): boolean {
+  const unit = (i: number) => Math.min(i, partner.get(i) ?? i);
+  const holding = (at: number) =>
+    regions.findIndex(r => r.bStart <= at && at < r.bEnd);
+  const sides = [
+    ["theirs", movedOn(base, theirs)],
+    ["mine", movedOn(base, mine)],
+  ] as const;
+  for (const [side, moved] of sides) {
+    for (const [key, at] of moved) {
+      const from = holding(at);
+      const to = regions.findIndex(r => r[side].includes(key));
+      if (from === to) continue;
+      const touched =
+        (from !== -1 && regions[from].offered) ||
+        (to !== -1 && regions[to].offered);
+      if (!touched) continue;
+      if (from === -1 || to === -1 || unit(from) !== unit(to)) return false;
+    }
+  }
+  return true;
+}
+
+/**
  * The owner's changes to the blocks, one per region it changed. A block it
- * moved (removed in one place, the same block added in another, the site
- * having touched neither) is one change for both places, so taking half of
- * it can neither drop the block nor send it twice.
+ * moved (removed in one place, the same block added in another) is one change
+ * for both places, so taking half of it can neither drop the block nor send
+ * it twice. That holds whatever the site did in either place: an edit to the
+ * moved block, or a block of its own where it moves to, makes the move a
+ * conflict, decided whole.
  */
 function mergeBlocks(
   base: ReadonlyArray<WrittenBlock>,
   theirs: ReadonlyArray<WrittenBlock>,
   mine: ReadonlyArray<WrittenBlock>
 ): BlockMerge {
-  const merge = mergeSequence(
-    blockKeys(base),
-    blockKeys(theirs),
-    blockKeys(mine)
-  );
-  const regions = blockRegions(merge);
-  const offered = regions.flatMap((r, i) => (r.offered ? [i] : []));
+  const theirKeys = blockKeys(theirs);
+  const myKeys = blockKeys(mine);
+  const merge = mergeSequence(blockKeys(base), theirKeys, myKeys);
+  let regions = blockRegions(merge);
+  let offered = regions.flatMap((r, i) => (r.offered ? [i] : []));
   const removed = (i: number) =>
     merge.base.slice(regions[i].bStart, regions[i].bEnd);
 
-  const partner = new Map<number, number>();
+  let partner = new Map<number, number>();
   for (const out of offered) {
-    if (
-      blockChangeKind(regions[out]) !== "delete" ||
-      regions[out].siteChanged
-    ) {
-      continue;
-    }
+    if (blockChangeKind(regions[out]) !== "delete") continue;
     const into = offered.find(
       i =>
         !partner.has(i) &&
         blockChangeKind(regions[i]) === "insert" &&
-        !regions[i].siteChanged &&
         sameItems(regions[i].theirs, removed(out))
     );
     if (into !== undefined) {
       partner.set(out, into);
       partner.set(into, out);
     }
+  }
+
+  // A block moved on either side whose two places would be decided apart is
+  // the case region by region review can't keep whole: the blocks are then
+  // offered as one change, the site's or the owner's.
+  if (!movesKeptWhole(merge.base, theirKeys, myKeys, regions, partner)) {
+    regions = [
+      {
+        bStart: 0,
+        bEnd: merge.base.length,
+        theirs: theirKeys,
+        mine: myKeys,
+        offered:
+          !sameItems(theirKeys, merge.base) && !sameItems(theirKeys, myKeys),
+        siteChanged: !sameItems(myKeys, merge.base),
+      },
+    ];
+    offered = regions[0].offered ? [0] : [];
+    partner = new Map();
   }
 
   const changeOf = new Map<number, OwnerChange>();
@@ -558,13 +641,20 @@ function mergeBlocks(
       const moved = blocksOf(
         blockChangeKind(r) === "delete" ? removed(i) : r.theirs
       );
-      sides = { base: moved, theirs: moved, mine: moved };
+      // The site's blocks at both places, in the order they are sent.
+      const [first, second] = [i, other].sort((x, y) => x - y);
+      sides = {
+        base: moved,
+        theirs: moved,
+        mine: blocksOf([...regions[first].mine, ...regions[second].mine]),
+      };
     }
     const change: OwnerChange = {
       id: `blocks:${changes.length}`,
       field: "blocks",
       kind: other === undefined ? blockChangeKind(r) : "move",
-      conflict: other === undefined && r.siteChanged,
+      conflict:
+        r.siteChanged || (other !== undefined && regions[other].siteChanged),
       base: describeBlocks(sides.base),
       theirs: describeBlocks(sides.theirs),
       mine: describeBlocks(sides.mine),

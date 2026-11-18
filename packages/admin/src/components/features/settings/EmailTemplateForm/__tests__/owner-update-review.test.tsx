@@ -320,4 +320,28 @@ describe("an owner's update to written blocks", () => {
       within(card(0)).queryByRole("button", { name: "Edit the result" })
     ).toBeNull();
   });
+  it("keeps the coded side's plain text beside a written one, since taking either replaces it", async () => {
+    api.compareTemplate.mockResolvedValue({
+      ...written,
+      mine: { ...version, plainTextContent: "Hi there, in plain text" },
+      theirs: { ...version, subject: "Welcome aboard" },
+      changes: [
+        {
+          id: "template",
+          field: "template",
+          conflict: true,
+          base: ["Subject: Welcome"],
+          theirs: ["Subject: Welcome aboard"],
+          mine: ["Subject: Welcome"],
+        },
+      ],
+      inWords: { base: null, theirs: ["Heading: Welcome aboard"], mine: null },
+    } satisfies EmailTemplateComparison);
+    mount();
+    await screen.findByText("Change 1 of 1 · Whole template");
+    fireEvent.click(screen.getByRole("button", { name: "Side by side" }));
+
+    expect(screen.getByText("Plain text")).toBeDefined();
+    expect(screen.getByText("Hi there, in plain text")).toBeDefined();
+  });
 });

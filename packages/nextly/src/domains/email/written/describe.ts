@@ -21,13 +21,33 @@ function chip(c: Chip): string {
   return c.fallback ? `[${c.variable}, or "${c.fallback}"]` : `[${c.variable}]`;
 }
 
-/** Text with its variables, on one line. */
-function words(parts: ReadonlyArray<PlainInline | Inline>): string {
+/**
+ * A run's text or variable as written: spaces kept and a line break shown as
+ * `↵`, so a change only to either still reads as a change, on one line.
+ */
+function shown(part: PlainInline | Inline): string {
+  return (part.type === "text" ? part.text : chip(part)).replace(/\r?\n/g, "↵");
+}
+
+/** Plain text with its variables: a heading, a button's label, alt text. */
+function words(parts: ReadonlyArray<PlainInline>): string {
+  return parts.map(shown).join("");
+}
+
+/**
+ * Rich text with its variables, each run with its marks as they are written
+ * by hand (`**bold**`, `_italic_`) and each link right after its run, so a
+ * change only to a mark or a link reads as one.
+ */
+function richWords(parts: ReadonlyArray<Inline>): string {
   return parts
-    .map(part => (part.type === "text" ? part.text : chip(part)))
-    .join("")
-    .replace(/\s+/g, " ")
-    .trim();
+    .map(part => {
+      let run = shown(part);
+      if (part.italic) run = `_${run}_`;
+      if (part.bold) run = `**${run}**`;
+      return part.link ? `${run} (links to ${address(part.link)})` : run;
+    })
+    .join("");
 }
 
 function address(link: WrittenLink): string {
@@ -49,18 +69,14 @@ function contentLine(block: ContentBlock): string {
   switch (block.type) {
     case "heading":
       return `Heading: ${words(block.text)}`;
-    case "text": {
-      const links = block.text.flatMap(part =>
-        part.link ? [address(part.link)] : []
-      );
-      const linked = links.length > 0 ? ` (links to ${links.join(", ")})` : "";
-      return `Text: ${words(block.text)}${linked}`;
-    }
+    case "text":
+      return `Text: ${richWords(block.text)}`;
     case "button":
       return `Button: ${words(block.label)} → ${address(block.link)}`;
     case "image": {
       const src = "url" in block.src ? block.src.url : chip(block.src.chip);
-      return `Image: ${words(block.alt) || "no alt text"} (${src})`;
+      const width = block.width ? `, ${block.width}px wide` : "";
+      return `Image: ${words(block.alt) || "no alt text"} (${src}${width})`;
     }
     case "divider":
       return "Divider";
@@ -70,7 +86,7 @@ function contentLine(block: ContentBlock): string {
 }
 
 /** One block in plain words: a line, or for a list a line and each of its blocks. */
-export function describeBlock(block: WrittenBlock): string[] {
+function describeBlock(block: WrittenBlock): string[] {
   if (block.type === "list") {
     return [
       `For each item in ${block.variable}:${shownWhen(block.show)}`,

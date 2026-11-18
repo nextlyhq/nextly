@@ -249,6 +249,9 @@ function SideBySide({
   // A template written in blocks on either side reads as its blocks in plain
   // words, in place of the HTML and plain text written from them.
   const written = !!inWords && (!!inWords.mine || !!inWords.theirs);
+  // Plain text is only the blocks again when both sides are written; a coded
+  // side's own plain text is part of what a whole-template choice replaces.
+  const bothWritten = !!inWords?.mine && !!inWords.theirs;
   const text = (
     side: "mine" | "theirs",
     field: (typeof VERSION_FIELDS)[number]
@@ -263,7 +266,7 @@ function SideBySide({
   };
   const fields = VERSION_FIELDS.filter(
     field =>
-      !(written && field === "plainTextContent") &&
+      !(bothWritten && field === "plainTextContent") &&
       text("mine", field) !== text("theirs", field)
   );
   return (
