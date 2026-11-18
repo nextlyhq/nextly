@@ -72,9 +72,15 @@ describe("a run of typing's step", () => {
     });
     expect(entry).toEqual({
       kind: "ops",
+      // One update of the node: an inverse of the new field alone could
+      // change nothing, which the op layer refuses.
       ops: [
-        { kind: "update", id: "t", patch: {}, unset: ["styles"] },
-        { kind: "update", id: "t", patch: { props: { label: "A" } } },
+        {
+          kind: "update",
+          id: "t",
+          patch: { props: { label: "A" } },
+          unset: ["styles"],
+        },
       ],
     });
   });

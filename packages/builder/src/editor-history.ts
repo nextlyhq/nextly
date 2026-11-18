@@ -299,11 +299,11 @@ function beganTyping(
 /**
  * The run's step after a later write of it. That write may change what the
  * first did not, as a recognised embed link sets a style, so its inverse
- * joins the step's, applied first, for the fields the step does not already
- * put back: undo then restores every property the run touched, each to its
- * value from before the run, without replaying every keystroke. A write of
- * fields already covered leaves the step as it is, so a long edit is still
- * one small step. The step stays the newest entry, replaced in place.
+ * joins the step's for the fields the step does not already put back: undo
+ * then restores every property the run touched, each to its value from before
+ * the run, without replaying every keystroke. A write of fields already
+ * covered leaves the step as it is, so a long edit is still one small step.
+ * The step stays the newest entry, replaced in place.
  */
 function widenedTyping(
   held: TypingHeld | null,
@@ -313,34 +313,73 @@ function widenedTyping(
   if (held === null || entry.kind !== "ops" || held.entry.kind !== "ops") {
     return held;
   }
-  const added = uncoveredInverse(held.entry.ops, entry.ops);
-  if (added.length === 0) return held;
-  const joined: HistoryEntry = {
-    kind: "ops",
-    ops: [...added, ...held.entry.ops],
-  };
+  const ops = joinedInverse(held.entry.ops, entry.ops);
+  if (ops === held.entry.ops) return held;
+  const joined: HistoryEntry = { kind: "ops", ops };
   undo[undo.length - 1] = joined;
   return { ...held, entry: joined };
 }
 
 /**
- * The part of a later inverse the step's own does not already restore. An
- * update replaces each field it names whole, set or removed (`unset`), so a
- * field the step's inverse names is put back by it, to its earlier value;
- * only the fields it does not name are kept. Any op but an update is kept as
- * it is, since what it restores is not a field of one node.
+ * The step's inverse with a later one's uncovered fields joined in, or the
+ * step's own when there are none. An update replaces each field it names
+ * whole, set or removed (`unset`), so a field the step's inverse names is put
+ * back by it, to its earlier value. A field for a node the step already
+ * updates joins THAT update rather than standing alone: a later write can name
+ * a field it leaves as it was (a link's look that stays the same), and an
+ * inverse of only that field would change nothing, which the op layer refuses,
+ * failing the whole undo. Any op but an update is kept as it is, ahead of the
+ * step's, since what it restores is not a field of one node.
  */
-function uncoveredInverse(
+function joinedInverse(
   step: readonly BuilderOp[],
   later: readonly BuilderOp[]
-): BuilderOp[] {
+): readonly BuilderOp[] {
   const covered = coveredFields(step);
-  const kept: BuilderOp[] = [];
+  const merged = [...step];
+  const ahead: BuilderOp[] = [];
   for (const op of later) {
     const part = op.kind === "update" ? uncoveredPart(op, covered) : op;
-    if (part !== null) kept.push(part);
+    if (part !== null) placePart(part, merged, ahead);
   }
-  return kept;
+  const changed = ahead.length > 0 || merged.some((op, at) => op !== step[at]);
+  return changed ? [...ahead, ...merged] : step;
+}
+
+/**
+ * Put a later inverse's part in the step: into the step's update of the same
+ * node where there is one, otherwise ahead of the step's own ops.
+ */
+function placePart(
+  part: BuilderOp,
+  merged: BuilderOp[],
+  ahead: BuilderOp[]
+): void {
+  if (part.kind === "update") {
+    const at = merged.findIndex(
+      held => held.kind === "update" && held.id === part.id
+    );
+    const into = merged[at];
+    if (into?.kind === "update") {
+      merged[at] = mergedUpdate(into, part);
+      return;
+    }
+  }
+  ahead.push(part);
+}
+
+/** Two updates of one node, over different fields, as one. */
+function mergedUpdate(
+  held: Extract<BuilderOp, { kind: "update" }>,
+  part: Extract<BuilderOp, { kind: "update" }>
+): BuilderOp {
+  const unset = [...(held.unset ?? []), ...(part.unset ?? [])];
+  return {
+    kind: "update",
+    id: held.id,
+    patch: { ...held.patch, ...part.patch },
+    ...(unset.length > 0 ? { unset } : {}),
+  };
 }
 
 /** Each node's fields the step's updates already put back. */
@@ -361,7 +400,7 @@ function coveredFields(
 function uncoveredPart(
   op: Extract<BuilderOp, { kind: "update" }>,
   covered: ReadonlyMap<string, ReadonlySet<string>>
-): BuilderOp | null {
+): Extract<BuilderOp, { kind: "update" }> | null {
   const fields = covered.get(op.id);
   const fresh = (field: string) => fields?.has(field) !== true;
   const patch = Object.fromEntries(

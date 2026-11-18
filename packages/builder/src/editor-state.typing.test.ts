@@ -316,6 +316,35 @@ describe("a run whose later write changes more than its first", () => {
     ).toBe("red");
   });
 
+  it("undoes a run whose later write names a field it leaves as it was", () => {
+    // A recognised embed link writes its look along with the link, and the
+    // look can be the one already there: undo must still take the link back.
+    const look = { base: { base: { color: "red" } } };
+    const { result } = renderHook(() =>
+      useEditorState({
+        initialDocument: page({ ...text("A"), styles: look } as BlockNode),
+      })
+    );
+    const run = {};
+    act(() => {
+      joinTyping(run, () => result.current.apply(write("AB")));
+    });
+    act(() => {
+      joinTyping(run, () =>
+        result.current.apply({
+          kind: "update",
+          id: "t",
+          patch: { props: { label: "ABC" }, styles: look },
+        })
+      );
+    });
+    act(() => {
+      void result.current.undo();
+    });
+    expect(label(result.current.document)).toBe("A");
+    expect(result.current.document.nodes[0]?.styles).toEqual(look);
+  });
+
   it("cancelling the run takes back the properties a later write first changed", () => {
     const { result } = renderHook(() =>
       useEditorState({ initialDocument: page(text("A")) })
