@@ -164,8 +164,10 @@ export default function SingleBuilderEditPage({
     resolver: zodResolver(singleFormSchema),
     defaultValues: { singularName: "" },
   });
-  const { handleDuplicateField, getValidatedFields } =
-    useBuilderFieldActions(builder);
+  const { handleDuplicateField, getValidatedFields } = useBuilderFieldActions(
+    builder,
+    "single"
+  );
 
   const [active, setActive] = useState<ActiveOverlay>({ kind: "none" });
   const confirmation = useSchemaChangeConfirmation();
@@ -186,6 +188,7 @@ export default function SingleBuilderEditPage({
     pinSettings,
     moveAddress,
   } = useBuilderEntityState({
+    kind: "single",
     entity: single,
     builder,
     toFields: loaded => loaded.fields ?? [],
