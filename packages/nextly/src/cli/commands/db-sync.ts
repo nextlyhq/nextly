@@ -66,7 +66,10 @@ import type { Command } from "commander";
 import { getDialectTables } from "../../database/index";
 import { SchemaRegistry } from "../../database/schema-registry";
 import { loadBuilderEntities } from "../../di/load-dynamic-tables";
-import { withMigrationExcluded } from "../../domains/field-groups/migration/sync-guard";
+import {
+  assertNoMigrationInFlight,
+  withMigrationExcluded,
+} from "../../domains/field-groups/migration/sync-guard";
 import { registerComponentSchemas } from "../../domains/field-groups/services/register-field-group-schemas";
 import { getFieldGroupRegistryAliases } from "../../domains/field-groups/storage/registry-schemas";
 import {
@@ -81,7 +84,7 @@ import {
 import { assertConfiguredSiblingFields } from "../../domains/schema/sibling-fields";
 import { assertConfiguredAddresses } from "../../shared/address-rule";
 import { assertPluginFieldDeclarations } from "../../shared/lib/assert-plugin-field-declarations";
-import { reportDryRun, type DryRunPlan } from "../dry-run";
+import { reportDryRun } from "../dry-run";
 import { exitWithError } from "../errors";
 import { CliError } from "../errors/cli-error";
 import {
@@ -114,7 +117,7 @@ import {
   syncUserFields,
 } from "./dev-build";
 import { ensureCoreTables, productionSyncRefusal } from "./dev-server";
-import { storedDataOfRun } from "./stored-data-of-run";
+import { planWithStoredData, storedDataOfRun } from "./stored-data-of-run";
 import { createDebouncedSync } from "./dev-watcher";
 import { syncSchemaInOrder } from "./sync-schema";
 
@@ -346,6 +349,16 @@ export async function runDbSync(
     // The sync goes on registering tables in the registry it installed.
     restoreResolver: () =>
       (adapter as unknown as DrizzleAdapter).setTableResolver(schemaRegistry),
+    // The steps take the schema lock once the sync has let it go, and a
+    // field-group storage migration may have taken it between the two and
+    // stopped part-way. Its marker is read under the steps' lock, as the
+    // sync reads it under its own, so no step reads half-renamed tables.
+    underLock: () =>
+      assertNoMigrationInFlight({
+        adapter: adapter as unknown as DrizzleAdapter,
+        logger,
+        action: "db:sync's steps over data an earlier release stored",
+      }),
     logger,
     backupConfirmed: options.backupConfirmed === true,
     lockTtlSeconds: configResult.config.db.migrateLockTtlSeconds,
@@ -551,32 +564,6 @@ function installStaticSchemaRegistry(
 }
 
 /**
- * The sync's dry-run plan with the data steps a real run takes after it. They
- * are left out where a real run would not reach them: under `--no-auto-sync`,
- * where the sync itself would refuse, and where no step has work or refuses
- * (a count that cannot be read, on a database the sync has yet to set up,
- * says nothing here). A backup the real run would refuse for is named first,
- * since that run refuses before it syncs.
- */
-function withStoredData(
-  plan: DryRunPlan,
-  stored: DryRunPlan,
-  options: ResolvedDevOptions
-): DryRunPlan {
-  const syncRefusals = plan.refusals ?? [];
-  const storedRefusals = stored.refusals ?? [];
-  const nothingStored = stored.changes.length + storedRefusals.length === 0;
-  if (options.autoSync === false || syncRefusals.length > 0 || nothingStored) {
-    return plan;
-  }
-  return {
-    changes: [...plan.changes, ...stored.changes],
-    refusals: [...storedRefusals, ...syncRefusals],
-    notes: [...(plan.notes ?? []), ...(stored.notes ?? [])],
-  };
-}
-
-/**
  * The dry run of a sync: the database opened read-only (one that is not there has been said, and
  * ends the run), the schema registry set up in memory as a real run sets it up, and the plan
  * reported. Nothing is locked, asked or written.
@@ -614,7 +601,13 @@ async function reportSyncDryRun(
         lockTtlSeconds: undefined,
       }).plan()
     );
-    reportDryRun(logger, withStoredData(plan, stored, options));
+    reportDryRun(
+      logger,
+      // `--no-auto-sync` takes no data step.
+      planWithStoredData(plan, stored, {
+        takesSteps: options.autoSync !== false,
+      })
+    );
   } finally {
     await adapter.disconnect();
     clearConfigCache();

@@ -9,10 +9,12 @@ A command would change data an earlier Nextly release stored, and its backup que
 
 `nextly migrate`, `nextly db:sync` and `nextly i18n:convert-zoned-dates` rewrite values an earlier release stored, in place, so each asks whether the database is backed up before it changes anything. At the prompt the answer was no, so nothing was changed.
 
+The one exception is a run that could not see the work before it changed the schema: `nextly migrate --step`, or work on a table the migrations or the sync create. That run asks after its schema changes have applied. A no then leaves those changes applied and the stored data as it was, and the message says so: the database has this release's schema, and the data steps have not run.
+
 ## Fix
 
 - Back up the database.
-- Run the command again and answer yes, or pass `--backup-confirmed`.
+- Run the command again and answer yes, or pass `--backup-confirmed`. Where the schema changes had applied, the second run has nothing left to migrate or sync and takes only the data steps.
 
 ## Example
 

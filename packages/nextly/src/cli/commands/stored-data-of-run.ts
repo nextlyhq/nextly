@@ -100,6 +100,42 @@ function reportPlan(
   for (const note of notes) logger.info(`  ${note}`);
 }
 
+/**
+ * A command's dry-run plan with the data steps it takes after its schema
+ * changes. A backup the real run would refuse for is named first, since that
+ * run refuses before it changes the schema, and stays named beside a refusal
+ * of the schema change itself. The steps' work is left out where the real
+ * run never reaches it: where the schema change would be refused, and where
+ * the command takes no data step. A plan of the steps holding neither work
+ * nor a refusal (a count that cannot be read yet says only that) adds
+ * nothing.
+ */
+export function planWithStoredData(
+  plan: DryRunPlan,
+  stored: DryRunPlan,
+  options: { takesSteps: boolean }
+): DryRunPlan {
+  const planRefusals = plan.refusals ?? [];
+  const storedRefusals = stored.refusals ?? [];
+  if (
+    !options.takesSteps ||
+    stored.changes.length + storedRefusals.length === 0
+  ) {
+    return plan;
+  }
+  const reached = planRefusals.length === 0;
+  const refusals = [...storedRefusals, ...planRefusals];
+  const notes = [
+    ...(plan.notes ?? []),
+    ...(reached ? (stored.notes ?? []) : []),
+  ];
+  return {
+    changes: reached ? [...plan.changes, ...stored.changes] : plan.changes,
+    ...(refusals.length > 0 ? { refusals } : {}),
+    ...(notes.length > 0 ? { notes } : {}),
+  };
+}
+
 export function storedDataOfRun(args: {
   adapter: DrizzleAdapter;
   /** The command, as a refusal and the schema lock's holder name it: "nextly migrate". */
@@ -111,6 +147,8 @@ export function storedDataOfRun(args: {
    * registry resolver is installed.
    */
   restoreResolver?: () => void;
+  /** As `DataStepsDeps.underLock`: the command's own precondition for the steps. */
+  underLock?: () => Promise<void>;
   logger: StoredDataLogger;
   /** The operator's `--backup-confirmed`. */
   backupConfirmed: boolean;
@@ -140,6 +178,7 @@ export function storedDataOfRun(args: {
     askBackedUp,
     log: message => logger.info(message),
     warn: message => logger.warn(message),
+    ...(args.underLock !== undefined ? { underLock: args.underLock } : {}),
     ...(args.lockTtlSeconds !== undefined
       ? { lockTtlSeconds: args.lockTtlSeconds }
       : {}),
