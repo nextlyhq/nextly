@@ -137,19 +137,12 @@ export function useHistoryStacks(): {
       // A later write of a run of typing keeps the run's one step, whose
       // inverse puts back what was there before the author started.
       const run = into === "new" ? typingRunNow() : null;
-      const held = typing.current;
-      if (held !== null && joinsTyping(held, undoStack.current.at(-1), run)) {
-        // A later write may change what the first one did not, as a
-        // recognised embed link sets a style: its inverse joins the step's,
-        // applied first, so undo puts back every property the run touched.
-        if (entry.kind === "ops" && held.entry.kind === "ops") {
-          const joined: HistoryEntry = {
-            kind: "ops",
-            ops: [...entry.ops, ...held.entry.ops],
-          };
-          undoStack.current[undoStack.current.length - 1] = joined;
-          typing.current = { ...held, entry: joined };
-        }
+      if (joinsTyping(typing.current, undoStack.current.at(-1), run)) {
+        typing.current = widenedTyping(
+          typing.current,
+          entry,
+          undoStack.current
+        );
         return;
       }
       // Read before this push changes them; the redo stack is replaced, never
@@ -301,6 +294,28 @@ function beganTyping(
   before: TypingBefore
 ): TypingHeld | null {
   return run === null ? null : { run, entry, before, epoch: typingEpoch() };
+}
+
+/**
+ * The run's step after a later write of it: that write may change what the
+ * first did not, as a recognised embed link sets a style, so its inverse
+ * joins the step's, applied first, and undo puts back every property the run
+ * touched. The step stays the newest entry, replaced in place.
+ */
+function widenedTyping(
+  held: TypingHeld | null,
+  entry: HistoryEntry,
+  undo: HistoryEntry[]
+): TypingHeld | null {
+  if (held === null || entry.kind !== "ops" || held.entry.kind !== "ops") {
+    return held;
+  }
+  const joined: HistoryEntry = {
+    kind: "ops",
+    ops: [...entry.ops, ...held.entry.ops],
+  };
+  undo[undo.length - 1] = joined;
+  return { ...held, entry: joined };
 }
 
 /** The history's stacks and runs, as `takeTypingBack` reads and resets them. */
