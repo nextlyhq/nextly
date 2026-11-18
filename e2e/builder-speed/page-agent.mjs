@@ -113,6 +113,12 @@ export function pageChecks() {
         "[data-content-control] input, [data-content-control] textarea"
       ))
         if (field.value === text) return true;
+      // A Text's words are edited in a rich field: a text box that holds them
+      // as text, editable once the shared editor attaches.
+      for (const field of root.querySelectorAll(
+        '[data-content-control] [role="textbox"]'
+      ))
+        if (field.textContent?.trim() === text) return true;
       return false;
     },
     /** The selection outline lies over block `id`. */
@@ -193,9 +199,11 @@ export function pageChecks() {
       const state = document.querySelector(
         '[data-testid="save-state-indicator"]'
       );
+      // The button says it has nothing left to do by `aria-disabled`, kept
+      // focusable to explain why, rather than by `disabled`.
       return (
         button instanceof HTMLButtonElement &&
-        button.disabled &&
+        (button.disabled || button.getAttribute("aria-disabled") === "true") &&
         state?.getAttribute("data-tone") === "saved"
       );
     },
