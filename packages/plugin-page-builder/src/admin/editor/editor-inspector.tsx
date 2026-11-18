@@ -16,12 +16,14 @@ import type { Control, FieldValues } from "react-hook-form";
 
 import { contributedInspector } from "../contributed-blocks";
 
+import { FONTS_SCREEN_VIEW } from "./design-panel";
 import { DocumentSettingsPanel } from "./document-settings-panel";
-import { servicesFor } from "./editor-services";
+import { servicesFor, withSettingMaker } from "./editor-services";
 import { pageAddressOf, type PageFacts } from "./editor-settings";
 import type { CardVerbs, EditorView } from "./editor-view";
 import { PageReadMeter, type PageDataCount } from "./page-read-meter";
 import { SelectedRegionCard } from "./region-card";
+import { inspectedVariantsOf } from "./region-editing";
 import type { SettingsPlace } from "./settings-place";
 import {
   offerableFaces,
@@ -69,6 +71,11 @@ export function editorInspector<TFieldValues extends FieldValues>(
   return (
     <InspectorPanel
       editor={editor}
+      // While a header or footer is edited in place, its blocks are said to
+      // be in it: "Navigation · in Site header".
+      {...(view.editing.target.kind === "region"
+        ? { editingIn: view.editing.target.label }
+        : {})}
       // The SAME ref the canvas publishes its root through, so the style
       // tab reads the element a node is actually drawn as rather than
       // inferring one from the document. Two refs would let the panel
@@ -87,21 +94,26 @@ export function editorInspector<TFieldValues extends FieldValues>(
       // handed out of it because the inspector is drawn beside the canvas
       // rather than under it.
       verbs={verbs}
-      contentServices={servicesFor(
-        view.passages,
-        view.locale,
-        view.readMedia,
-        view.searchMedia,
-        view.entryCollection,
-        view.userId,
-        {
-          entry: view.bindingEntry,
-          page: view.editedDocument,
-          canvas: view.canvasEntry,
-        },
-        // The language the canvas's binding pass is given, its context's, as
-        // the published page's is its route's.
-        canvasRender.context?.locale
+      contentServices={withSettingMaker(
+        servicesFor(
+          view.passages,
+          view.locale,
+          view.readMedia,
+          view.searchMedia,
+          view.entryCollection,
+          view.userId,
+          {
+            entry: view.bindingEntry,
+            page: view.editedDocument,
+            canvas: view.canvasEntry,
+          },
+          // The language the canvas's binding pass is given, its context's,
+          // as the published page's is its route's.
+          canvasRender.context?.locale
+        ),
+        // A placement's "Make this a setting of the component", held for
+        // the page's Save.
+        view.makeComponentSetting
       )}
       // A placement's exposed passage the canvas is editing in place: its
       // field in the placement panel is held meanwhile, as one editor serves
@@ -147,7 +159,7 @@ export function editorInspector<TFieldValues extends FieldValues>(
       )}
       // The Font control lists only what the site can draw: the faces the
       // canvas loads, of which those from the site's code cannot be removed,
-      // and a way to Design's fonts to add one.
+      // and a way to the Fonts screen, over the left side, to add one.
       fonts={{
         faces: offerableFaces(
           canvasSiteStyle,
@@ -155,18 +167,32 @@ export function editorInspector<TFieldValues extends FieldValues>(
           siteStyleError
         ),
         fromCode: configSiteStyle.fonts ?? [],
-        onManageFonts: () => requestPanel("design", "type"),
+        onManageFonts: () => requestPanel("design", FONTS_SCREEN_VIEW),
       }}
       // "Edit block styles" under the Block style tiles: Design's Styles tab,
       // at the block's type.
       onEditBlockStyles={view.openBlockStyles}
+      // A block's own custom CSS: lent only to a person who may change site
+      // code; without it the panel draws no Custom CSS section.
+      {...(view.blockCustomCss === undefined
+        ? {}
+        : { customCss: view.blockCustomCss })}
       // In a component's own view: the ids its live definition holds, which a
       // new field must never reuse, how far a removal reaches, and its name
       // for the card heading the view, which is the open document's title.
-      componentFields={namedFacts(componentFacts, view.pageTitle)}
+      // In a header or footer edited in place, its component's own.
+      componentFields={
+        view.regionEditing.area === undefined
+          ? namedFacts(componentFacts, view.pageTitle)
+          : view.regionEditing.componentFacts
+      }
       // And how many placements chose a variant, for its delete dialog, and
-      // the open variant, which the canvas previews.
-      componentVariants={previewingHost(componentVariants, view.preview)}
+      // the open variant, which the canvas previews. A header or footer
+      // edited in place keeps its variants to its own view.
+      componentVariants={inspectedVariantsOf(
+        view.regionEditing.area,
+        previewingHost(componentVariants, view.preview)
+      )}
       // A header or footer selected on the canvas: what it is, where it
       // comes from and how to change it, in place of the page's settings.
       {...regionCardOf(view)}
@@ -195,13 +221,17 @@ export function editorInspector<TFieldValues extends FieldValues>(
  */
 function regionCardOf(view: EditorView): { regionCard?: React.ReactNode } {
   const facts = view.selectedRegion.card;
-  if (facts === undefined) return {};
+  // While it is edited, the inspector edits its blocks instead.
+  if (facts === undefined || view.regionEditing.area !== undefined) return {};
+  const { requestEdit } = view.regionEditing;
   return {
     regionCard: (
       <SelectedRegionCard
         key={`${facts.area}:${facts.componentId}`}
         facts={facts}
-        onEditComponent={view.componentView.onEditComponent}
+        onEdit={
+          requestEdit === undefined ? undefined : () => requestEdit(facts.area)
+        }
         onOpenSettings={view.pages.openSettings}
       />
     ),

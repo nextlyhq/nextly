@@ -252,7 +252,7 @@ const SYSTEM_PERMISSIONS: SystemPermissionDef[] = [
   // No `manage-` permission is seeded on media, settings, email providers or
   // email templates: each is retired in favour of the plain read, create,
   // update and delete below. An install that seeded one keeps its row, so
-  // `nextly upgrade` can still find the roles holding it and convert them.
+  // `nextly migrate` can still find the roles holding it and convert them.
   {
     name: "Create Media",
     slug: "create-media",

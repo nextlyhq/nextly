@@ -112,6 +112,9 @@ describe("which tier shows without being asked", () => {
     expect([...tiers].sort()).toEqual([
       "common",
       "common-on-media",
+      // An Accordion's icon, chosen in its Content tab: a tab, not an
+      // answer to whether it applies.
+      "content",
       "focus-state",
       "icon-drawn",
       "more",

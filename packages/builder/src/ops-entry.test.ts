@@ -80,9 +80,25 @@ describe("the ops module stays server-safe", () => {
       "./binding-services",
       "./composition-actions",
       "./conditions/condition-ops",
+      "./make-component-setting",
       "./op-vocabulary",
       "./prop-label",
       "./template-actions",
+      "@nextlyhq/blocks-engine",
+    ]);
+  });
+
+  it("reaches through a new setting's ask only the engine and the prop labels", () => {
+    // Its types are re-exported for the host that answers the ask.
+    const specifiers = [
+      ...importedSpecifiers(
+        read("src/make-component-setting.ts"),
+        "make-component-setting.ts"
+      ),
+    ];
+
+    expect([...new Set(specifiers)].sort()).toEqual([
+      "./prop-label",
       "@nextlyhq/blocks-engine",
     ]);
   });

@@ -220,6 +220,65 @@ describe("converting from the editor", () => {
     );
   });
 
+  it("writes the page's held component settings before creating, and creates nothing when one is refused", async () => {
+    // The selection may bind a setting planned for the page's next Save;
+    // the new component would keep that binding, and the page, past the
+    // convert, no placement of it.
+    stubWriter();
+    const refused = mount({
+      beforeCreate: vi.fn(() => Promise.resolve(false)),
+    });
+    await confirm();
+    expect(refused.props.beforeCreate).toHaveBeenCalledTimes(1);
+    expect(writer.current.create).not.toHaveBeenCalled();
+    expect(refused.applyAll).not.toHaveBeenCalled();
+    cleanup();
+
+    stubWriter();
+    const written = mount({ beforeCreate: vi.fn(() => Promise.resolve(true)) });
+    await confirm();
+    expect(written.props.beforeCreate).toHaveBeenCalledTimes(1);
+    expect(writer.current.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("creates from the editor's document on a retry after a refusal, not the binding taken off", async () => {
+    // The refusal takes the binding to the setting never made off the
+    // editor's document; the request snapshotted at the gesture still has it.
+    stubWriter();
+    const bound: BlockDocument = {
+      ...PAGE,
+      nodes: [
+        {
+          id: "h",
+          type: "core/heading",
+          version: 1,
+          props: {},
+          bindings: { text: { $bind: "title", source: "setting" } },
+        },
+      ],
+    };
+    const beforeCreate = vi
+      .fn<() => Promise<boolean>>()
+      .mockResolvedValueOnce(false)
+      .mockResolvedValue(true);
+    mount({
+      request: { action: "convert", document: bound },
+      beforeCreate,
+      currentDocument: () => PAGE,
+    });
+    await confirm();
+    expect(writer.current.create).not.toHaveBeenCalled();
+    await confirm();
+    expect(writer.current.create).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(writer.current.create).mock.calls[0]?.[0].document).toBe(
+      PAGE
+    );
+    // The dry run is asked again of what will be created.
+    expect(
+      vi.mocked(writer.current.preview).mock.calls.at(-1)?.[0].document
+    ).toBe(PAGE);
+  });
+
   it("refuses to convert when the dry run refused, before anything is created", async () => {
     stubWriter({
       preview: vi.fn(() => Promise.resolve(undefined)),

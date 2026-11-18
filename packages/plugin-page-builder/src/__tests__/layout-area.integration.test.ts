@@ -10,6 +10,11 @@
  * left as it was, and that the list holds only the published components
  * marked for the area.
  *
+ * "Create a header" on the canvas's band is pinned here too: it creates the
+ * header as the caller and puts it in the site default's empty area, and it
+ * refuses, creating nothing, a caller who may not change sets or create a
+ * published component, and a default whose area is not empty.
+ *
  * @module __tests__/layout-area.integration.test
  */
 
@@ -29,8 +34,15 @@ import { createDynamicHandlers } from "nextly/runtime";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { LAYOUTS_SLUG } from "../collections/layouts";
+import { PAGE_BUILDER_SETTINGS_SLUG } from "../default-layout/settings-single";
+import {
+  readLayoutSettings,
+  writeLayoutSettings,
+  type DefaultLayoutDirectApi,
+} from "../default-layout/store";
 import {
   areaComponentsPath,
+  defaultAreaPath,
   layoutAreaPath,
   type AreaComponentsResponse,
   type WrittenArea,
@@ -97,7 +109,7 @@ interface ApiKeys {
 
 /** One request to a plugin route through core's handler, as `key`. */
 async function ask(
-  method: "GET" | "PATCH",
+  method: "GET" | "PATCH" | "POST",
   path: string,
   key: string,
   body?: unknown
@@ -131,6 +143,11 @@ let rolesMade = 0;
 const idOf = (created: { item: { id: string | number } }) =>
   String(created.item.id);
 
+const SLUGS = {
+  layouts: LAYOUTS_SLUG,
+  settings: PAGE_BUILDER_SETTINGS_SLUG,
+} as const;
+
 describe.each(getConfiguredTestDialects())(
   "the header & footer area routes (%s)",
   (dialect: TestDialect) => {
@@ -144,6 +161,12 @@ describe.each(getConfiguredTestDialects())(
     let noUpdate = "";
     /** May update and publish sets, and read them, but not components. */
     let noComponents = "";
+    /** The chooser's rights, and creating and publishing components. */
+    let creator = "";
+    /** The creator's rights except publishing sets. */
+    let creatorNoSetPublish = "";
+    /** The creator's rights except publishing components. */
+    let creatorNoComponentPublish = "";
     const ids = {
       starterHeader: "",
       starterFooter: "",
@@ -152,6 +175,8 @@ describe.each(getConfiguredTestDialects())(
       anywhere: "",
       footerOnly: "",
     };
+    /** The seed's own starter header and footer, which every list holds. */
+    const seedStarters = new Set<string>();
 
     async function component(
       slug: string,
@@ -192,6 +217,43 @@ describe.each(getConfiguredTestDialects())(
       );
     }
 
+    /** The Direct API as the default's settings are read and written. */
+    const settingsApi = () => t.nextly as unknown as DefaultLayoutDirectApi;
+
+    /** A published set showing only the starter footer, made the default. */
+    async function defaultWithoutHeader(slug: string): Promise<string> {
+      const id = idOf(
+        await direct.create({
+          collection: LAYOUTS_SLUG,
+          data: {
+            title: slug,
+            slug,
+            areas: [{ area: "footer", component: ids.starterFooter }],
+            status: "published",
+          },
+          overrideAccess: true,
+        })
+      );
+      await writeLayoutSettings(
+        settingsApi(),
+        SLUGS,
+        await readLayoutSettings(settingsApi(), SLUGS),
+        { defaultLayout: id }
+      );
+      return id;
+    }
+
+    /** Every component's id, whatever its state. */
+    async function componentIds(): Promise<string[]> {
+      const found = await direct.find({
+        collection: "components",
+        status: "all",
+        depth: 0,
+        overrideAccess: true,
+      });
+      return found.items.map(row => String(row.id)).sort();
+    }
+
     /** The areas a set names, by area: its published version, or as saved. */
     async function areasOf(
       id: string,
@@ -227,6 +289,7 @@ describe.each(getConfiguredTestDialects())(
     beforeAll(async () => {
       t = await createTestNextly({
         ...(dialect === "sqlite" ? {} : { dialect }),
+        seedPublic: true,
         plugins: [pageBuilder()],
       });
       direct = t.nextly as unknown as Direct;
@@ -284,6 +347,24 @@ describe.each(getConfiguredTestDialects())(
         "update-layouts",
         "publish-layouts",
       ]);
+      const components = ["create-components", "publish-components"];
+      creator = await keyHolding([
+        ...reads,
+        "update-layouts",
+        "publish-layouts",
+        ...components,
+      ]);
+      creatorNoSetPublish = await keyHolding([
+        ...reads,
+        "update-layouts",
+        ...components,
+      ]);
+      creatorNoComponentPublish = await keyHolding([
+        ...reads,
+        "update-layouts",
+        "publish-layouts",
+        "create-components",
+      ]);
 
       ids.starterHeader = await component("starter-h", "header", "published");
       ids.starterFooter = await component("starter-f", "footer", "published");
@@ -291,6 +372,21 @@ describe.each(getConfiguredTestDialects())(
       ids.unpublished = await component("unfinished", "header", "draft");
       ids.anywhere = await component("anywhere", null, "published");
       ids.footerOnly = await component("plain-f", "footer", "published");
+
+      // The boot seeds a default without awaiting it; wait for it, so a
+      // default these cases choose is never overwritten by the seed.
+      for (let tries = 0; tries < 120; tries += 1) {
+        if ((await readLayoutSettings(settingsApi(), SLUGS)).defaultLayout) {
+          break;
+        }
+        await new Promise(resolve => setTimeout(resolve, 250));
+      }
+      const { seededLayout } = await readLayoutSettings(settingsApi(), SLUGS);
+      if (seededLayout !== null) {
+        for (const id of Object.values(await areasOf(seededLayout))) {
+          seedStarters.add(id);
+        }
+      }
     }, 180_000);
 
     afterAll(async () => {
@@ -407,20 +503,24 @@ describe.each(getConfiguredTestDialects())(
         );
         expect(response.status, await response.clone().text()).toBe(200);
         const body = (await response.json()) as AreaComponentsResponse;
-        expect(body.items).toEqual([
+        const own = (items: AreaComponentsResponse["items"]) =>
+          items.filter(item => !seedStarters.has(item.id));
+        expect(own(body.items)).toEqual([
           { id: ids.ridgeline, title: "ridgeline" },
           { id: ids.starterHeader, title: "starter-h" },
         ]);
         expect(body.meta.mayChoose).toBe(true);
         expect(body.meta.more).toBe(false);
-        expect(Object.keys(body.meta.definitions).sort()).toEqual(
-          [ids.ridgeline, ids.starterHeader].sort()
-        );
+        expect(
+          Object.keys(body.meta.definitions)
+            .filter(id => !seedStarters.has(id))
+            .sort()
+        ).toEqual([ids.ridgeline, ids.starterHeader].sort());
 
         const footers = (await (
           await ask("GET", areaComponentsPath("footer"), chooser)
         ).json()) as AreaComponentsResponse;
-        expect(footers.items.map(item => item.title)).toEqual([
+        expect(own(footers.items).map(item => item.title)).toEqual([
           "plain-f",
           "starter-f",
         ]);
@@ -447,6 +547,84 @@ describe.each(getConfiguredTestDialects())(
           noComponents
         );
         expect(response.status).toBe(403);
+      });
+    });
+    describe("creating a header for the default's empty area", () => {
+      it("creates the header as the caller, published and marked for the area, and puts it in the default's PUBLISHED version", async () => {
+        const main = await defaultWithoutHeader("band-create");
+        const before = await componentIds();
+        const response = await ask("POST", defaultAreaPath("header"), creator);
+        expect(response.status, await response.clone().text()).toBe(200);
+        const body = (await response.json()) as {
+          message: string;
+          item: WrittenArea;
+        };
+        const created = body.item.component.id;
+        expect(body.item).toEqual({
+          set: { id: main, title: "band-create" },
+          area: "header",
+          component: { id: created, title: "Header" },
+        });
+        expect(body.message).toBe(
+          "Header was created. It is now the header of every page that uses the band-create header & footer."
+        );
+        expect(before).not.toContain(created);
+        expect(await areasOf(main)).toEqual({
+          header: created,
+          footer: ids.starterFooter,
+        });
+        const row = await direct.findByID({
+          collection: "components",
+          id: created,
+          status: "published",
+          depth: 0,
+          overrideAccess: true,
+        });
+        expect(row).toMatchObject({ area: "header", status: "published" });
+        // The starter's design: a header with something in it, not empty.
+        const content = (
+          typeof row?.content === "string"
+            ? JSON.parse(row.content)
+            : row?.content
+        ) as { kind?: string; nodes?: unknown[] };
+        expect(content.kind).toBe("component");
+        expect(content.nodes?.length ?? 0).toBeGreaterThan(0);
+      });
+
+      it("refuses an area that already shows a component, creating nothing", async () => {
+        await defaultWithoutHeader("band-filled");
+        const before = await componentIds();
+        const response = await ask("POST", defaultAreaPath("footer"), creator);
+        expect(response.status, await response.clone().text()).toBe(409);
+        expect(await componentIds()).toEqual(before);
+      });
+
+      it("refuses a caller who may not publish sets before creating anything", async () => {
+        const main = await defaultWithoutHeader("band-no-set-publish");
+        const before = await componentIds();
+        const response = await ask(
+          "POST",
+          defaultAreaPath("header"),
+          creatorNoSetPublish
+        );
+        expect(response.status, await response.clone().text()).toBe(403);
+        expect(await componentIds()).toEqual(before);
+        expect(await areasOf(main, "saved")).toEqual({
+          footer: ids.starterFooter,
+        });
+      });
+
+      it("refuses a caller who may not create components, and one who may not publish them, leaving no component and the default as it was", async () => {
+        const main = await defaultWithoutHeader("band-no-component");
+        const before = await componentIds();
+        for (const key of [chooser, creatorNoComponentPublish]) {
+          const response = await ask("POST", defaultAreaPath("header"), key);
+          expect(response.ok, await response.clone().text()).toBe(false);
+        }
+        expect(await componentIds()).toEqual(before);
+        expect(await areasOf(main, "saved")).toEqual({
+          footer: ids.starterFooter,
+        });
       });
     });
   }

@@ -20,7 +20,6 @@ import type {
 import {
   type UseBuilderChecklistResult,
   ComponentsPanel,
-  EDITOR_WORDS,
   InsertPanel,
   InsertPicker,
   LayersPanel,
@@ -63,20 +62,25 @@ import {
 } from "./canvas-preview-mode";
 import {
   DesignFonts,
-  DesignGroup,
   DesignPanel,
   DesignReveal,
+  FONTS_SCREEN_VIEW,
   ReportStylesMatches,
-  SITE_FONTS_GROUP,
   type DesignRevealRequest,
   type DesignView,
 } from "./design-panel";
+import { readSiteHeaderFooter } from "./double-header-notice";
 import {
   checklistStoreFor,
   designFoldsStoreFor,
 } from "./editor-preference-stores";
+import {
+  useEmptyRegionBands,
+  type EmptyRegionBands,
+} from "./empty-region-bands";
 import { useLookEditing, type LookEditingState } from "./look-editing";
 import {
+  offeredSelfOf,
   withoutSelf,
   withoutSelfPatterns,
   type ComponentGraph,
@@ -88,7 +92,7 @@ import {
 } from "./section-pictures";
 import { usePageRegions, type SelectedRegion } from "./selected-region";
 import type { FontRolesTab as FontRolesTabPart } from "./site-font-roles-tab";
-import type { FontsPanelWithUpload as FontsPanelWithUploadPart } from "./site-style-fonts";
+import type { SiteFontsScreen as SiteFontsScreenPart } from "./site-style-fonts";
 import {
   offerableFaces,
   ColoursTab,
@@ -104,12 +108,12 @@ import type { EditorMount } from "./use-editor-mount";
 import type { CanvasInputs, SiteStyleInputs } from "./use-render-inputs";
 
 /**
- * The site's fonts panel, fetched when the Design panel's Fonts tab first
- * draws it rather than with the editor: the upload and the font catalogue
- * are of no use to an author who never opens the tab.
+ * The Fonts screen, fetched when it first opens over the Design panel rather
+ * than with the editor: the upload and the font catalogue are of no use to an
+ * author who never opens it.
  */
-const FontsPanelWithUpload: typeof FontsPanelWithUploadPart = lazyPart(() =>
-  import("./site-style-fonts").then(m => m.FontsPanelWithUpload)
+const SiteFontsScreen: typeof SiteFontsScreenPart = lazyPart(() =>
+  import("./site-style-fonts").then(m => m.SiteFontsScreen)
 );
 
 /**
@@ -279,14 +283,19 @@ type OfferedLibrary = {
 };
 
 /** The library the insert panel may offer, for the field being edited. */
-function useOfferedLibrary({
-  componentLibrary,
-  documentLimits,
-  initialDocument,
-}: Pick<
-  EditorMount,
-  "componentLibrary" | "documentLimits" | "initialDocument"
->): OfferedLibrary {
+function useOfferedLibrary(
+  {
+    componentLibrary,
+    documentLimits,
+    initialDocument: opened,
+    editing,
+  }: Pick<
+    EditorMount,
+    "componentLibrary" | "documentLimits" | "initialDocument" | "editing"
+  >,
+  /** The regions around the page, with the component filling each. */
+  cards: readonly RegionCardFacts[]
+): OfferedLibrary {
   /*
    * The rows the panel may OFFER: the library without the definition this very
    * field is editing, when it is editing one. The MAP stays whole — the
@@ -296,7 +305,14 @@ function useOfferedLibrary({
   // Judged on the document the editor OPENED with: a document's kind does not
   // change while it is edited, and the opening document is the one this
   // field's own value described.
-  const identity = useDocumentIdentity();
+  // While a header or footer is edited in place, the one judged is its
+  // component, so the header is never offered inside itself.
+  const opener = useDocumentIdentity();
+  const { target } = editing;
+  const { document: initialDocument, identity } = useMemo(
+    () => offeredSelfOf(target, cards, { document: opened, identity: opener }),
+    [target, cards, opened, opener]
+  );
   /*
    * Built once and asked by BOTH tiers: the components filter below and the
    * patterns filter the panel runs on the rows it reads for itself. One
@@ -388,7 +404,8 @@ type PanelRequests = {
  */
 interface RequestPanel {
   (panel: LeftPanel): void;
-  (panel: "design", view?: DesignView): void;
+  // A tab, or the Fonts screen opened over the panel.
+  (panel: "design", view?: DesignView | typeof FONTS_SCREEN_VIEW): void;
   (panel: Exclude<LeftPanel, "design">, view?: string): void;
 }
 
@@ -592,10 +609,12 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
   const pageLayout = usePageLayoutSettings(page.control);
   // From the form's unsaved values, so a change of Layout redraws at once,
   // with the header or footer selected on the canvas or in Layers.
+  // The region selection follows the PAGE's blocks: a block chosen inside a
+  // header being edited leaves the header chosen, to come back to at Done.
   const layoutRegions = usePageRegions(
     page.control,
     page.canvasRoot,
-    editor,
+    { page: mount.page, active: editor },
     useLookEditing(editor)
   );
 
@@ -617,7 +636,7 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
   );
   const identity = useDocumentIdentity();
   const checklist = useBuilderChecklist({
-    document: editor.document,
+    document: mount.page.document,
     documentKey: identityKey(identity),
     // Not until the author is known: their own dismissal is the one to read,
     // and a card drawn before it arrives would flash for an author who
@@ -626,7 +645,7 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
     ...(checklistStore === undefined ? {} : { store: checklistStore }),
   });
 
-  const library = useOfferedLibrary(mount);
+  const library = useOfferedLibrary(mount, layoutRegions.cards);
   const requests = useEditorRequests(editor);
   // Whether the editor's search is open: ⌘K opens it, and so does the top
   // bar's button, so the state sits above both.
@@ -651,10 +670,19 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
     availablePanels: AVAILABLE_PANELS,
     pageLayout,
     canvasRegions: layoutRegions.canvas,
+    // Where the site default shows no header or footer, the canvas's band
+    // saying so, with its ways to fill it.
+    emptyRegionBands: useEmptyRegionBands({
+      empty: layoutRegions.empty,
+      siteHeaderFooter: readSiteHeaderFooter(clientConfig),
+      followsDefault: layoutRegions.followsDefault,
+      reread: layoutRegions.reread,
+    }),
     siteTokens: page.siteTokens,
     layersRegions: layoutRegions.selectedRegion.layers,
     selectedRegion: layoutRegions.selectedRegion,
     regionCards: layoutRegions.cards,
+    rereadRegions: layoutRegions.reread,
     ...library,
     ...requests,
   };
@@ -816,6 +844,8 @@ export type EditorPanels = OfferedLibrary &
     pageLayout: ReactNode | null;
     /** The regions of the page's Layout, drawn locked around the page. */
     canvasRegions: readonly CanvasRegion[];
+    /** The bands where the site default shows no header or footer. */
+    emptyRegionBands: EmptyRegionBands;
     /** The site's variables as the panels offer them, once they are read. */
     siteTokens: SiteTokenSet | undefined;
     /** The same regions, as rows in Layers that select them. */
@@ -824,6 +854,8 @@ export type EditorPanels = OfferedLibrary &
     selectedRegion: SelectedRegion;
     /** What each region drawn around the page is, and the set it is from. */
     regionCards: readonly RegionCardFacts[];
+    /** Read the regions again, after the header is published or saved. */
+    rereadRegions: () => void;
     availablePanels: typeof AVAILABLE_PANELS;
     search: { open: boolean; setOpen: (open: boolean) => void };
     pages: PagesPanelMount;
@@ -852,6 +884,7 @@ export type EditorPanels = OfferedLibrary &
  */
 export function editorPanelRenderer({
   editor,
+  editing,
   documentLimits,
   componentLibrary,
   componentVerbs,
@@ -890,7 +923,11 @@ export function editorPanelRenderer({
   pictureSession,
 }: Pick<
   EditorMount,
-  "editor" | "componentLibrary" | "componentVerbs" | "documentLimits"
+  | "editor"
+  | "editing"
+  | "componentLibrary"
+  | "componentVerbs"
+  | "documentLimits"
 > & {
   /** The look edited on its own, which the Design panel's Block looks choose. */
   lookEditing?: LookEditingState;
@@ -1035,6 +1072,11 @@ export function editorPanelRenderer({
           moveHints
           definitions={offered.definitions}
           regions={layersRegions}
+          // While a header or footer is edited in place: its blocks, under
+          // "Layers · Site header".
+          {...(editing.target.kind === "region"
+            ? { editedRegion: editing.target }
+            : {})}
           // Its titles come with the read, so a placement of a component
           // the panel does not offer (the one being edited) is still named.
           componentTitle={offered.titleOf}
@@ -1093,7 +1135,8 @@ export function editorPanelRenderer({
                   siteStyleError
                 )}
                 fromCode={configSiteStyle?.fonts ?? []}
-                onManageFonts={() => view.choose("type")}
+                // Every Font control's "Manage fonts…" opens the Fonts screen.
+                onManageFonts={() => view.choose(FONTS_SCREEN_VIEW)}
               >
                 <TokensStudio
                   merged={offerableTokens(
@@ -1127,6 +1170,38 @@ export function editorPanelRenderer({
               </DesignFonts>
             </>
           )}
+          // The one Fonts screen, over the panel: the site's fonts with the
+          // same writers the admin's Fonts page has.
+          fonts={close => (
+            <DesignReveal>
+              {reveal => (
+                <SiteFontsScreen
+                  faces={offerableFaces(
+                    canvasSiteStyle,
+                    siteStylePending,
+                    siteStyleError
+                  )}
+                  codeFaces={configSiteStyle?.fonts}
+                  tokens={renderedTokens(
+                    canvasSiteStyle,
+                    siteStylePending,
+                    siteStyleError
+                  )}
+                  absence={siteStyleError !== null ? "failed" : "pending"}
+                  onClose={close}
+                  // A font variable is changed in the Type tab's variables:
+                  // the screen closes onto it, its group opened and in view.
+                  onOpenTokens={() => {
+                    view.choose("type");
+                    reveal("fonts");
+                  }}
+                  storedFaces={storedSiteStyle?.fonts}
+                  storedPending={siteStylePending}
+                  unreadableFonts={unreadableStoredFonts}
+                />
+              )}
+            </DesignReveal>
+          )}
           tabs={{
             colours: () => (
               <ColoursTab
@@ -1136,55 +1211,20 @@ export function editorPanelRenderer({
                 limits={documentLimits}
               />
             ),
-            // Type: the Body and Headings fonts, the site's fonts, then the
-            // type sizes and the font and weight variables.
+            // Type: the Body and Headings fonts, the way to the Fonts screen,
+            // then the type sizes and the font and weight variables.
             type: () => (
               <>
                 <FontRolesTab />
-                <DesignGroup
-                  id={SITE_FONTS_GROUP}
-                  heading={EDITOR_WORDS.fonts}
-                  count={
-                    offerableFaces(
-                      canvasSiteStyle,
-                      siteStylePending,
-                      siteStyleError
-                    )?.length
-                  }
+                <button
+                  type="button"
+                  className="nx-vars__link nx-fonts-manage"
+                  onClick={() => view.choose(FONTS_SCREEN_VIEW)}
+                  // Where focus returns when the screen closes.
+                  data-fonts-manage=""
                 >
-                  <DesignReveal>
-                    {reveal => (
-                      <FontsPanelWithUpload
-                        faces={offerableFaces(
-                          canvasSiteStyle,
-                          siteStylePending,
-                          siteStyleError
-                        )}
-                        codeFaces={configSiteStyle?.fonts}
-                        tokens={renderedTokens(
-                          canvasSiteStyle,
-                          siteStylePending,
-                          siteStyleError
-                        )}
-                        absence={siteStyleError !== null ? "failed" : "pending"}
-                        /*
-                          The fix for a token naming a family this site does not provide
-                          is to edit that token, and editing belongs to the studio. This
-                          shell offers one, so the jump is wired: without the callback
-                          the panel suppresses the action and an author is left to find
-                          the right panel and the right row themselves.
-                        */
-                        // The font variables are in this same tab: their group
-                        // is opened and brought into view, rather than the tab
-                        // asked for again.
-                        onOpenTokens={() => reveal("fonts")}
-                        storedFaces={storedSiteStyle?.fonts}
-                        storedPending={siteStylePending}
-                        unreadableFonts={unreadableStoredFonts}
-                      />
-                    )}
-                  </DesignReveal>
-                </DesignGroup>
+                  Manage fonts…
+                </button>
                 <VariablesTab tab="type" />
                 {/* After the type sizes they are built on. */}
                 <TextStylesTab

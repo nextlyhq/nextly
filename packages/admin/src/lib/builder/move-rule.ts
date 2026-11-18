@@ -23,7 +23,11 @@
  *
  * @module lib/builder/move-rule
  */
-import { builderColumnIsUnique, siblingNameClash } from "nextly/config";
+import {
+  builderColumnIsUnique,
+  fieldProducesColumn,
+  siblingNameClash,
+} from "nextly/config";
 import type { FieldNameSurface } from "nextly/config";
 import { isFieldGroupFieldType } from "nextly/field-group-type";
 
@@ -444,6 +448,8 @@ function nameRefusal(
     surface: ctx.surface,
     nested: container !== null,
     lifecycleEnabled: ctx.lifecycleEnabled === true,
+    // A field that makes no column (a field-group field) is not held to a column's length.
+    producesColumn: fieldProducesColumn(field),
   });
   return (
     siblingClashRefusal(field, container, siblings) ??

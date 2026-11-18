@@ -14,15 +14,28 @@ export function registerUpgradeCommand(program: Command): void {
     program
       .command("upgrade")
       .description(
-        "Bring an existing database up to date: hash passwords stored before this release, and remove passwords kept in version history"
+        "Reconcile drifted core schema with --reconcile-core. Its other database work is now part of `nextly migrate`"
       )
   )
-    .option(
-      "--confirm-backed-up",
-      "Confirm a backup exists (required in CI/non-TTY)",
-      false
+    // They confirmed the backup for the work `nextly migrate` now does: still
+    // accepted, so a run with one ends naming that command rather than as an
+    // unknown option, and kept out of the help.
+    .addOption(
+      new Option(
+        "--confirm-backed-up",
+        "No longer does anything: `nextly migrate` does the work it confirmed"
+      )
+        .default(false)
+        .hideHelp()
     )
-    .option("-f, --force", "Skip the interactive backup prompt", false)
+    .addOption(
+      new Option(
+        "-f, --force",
+        "No longer does anything: `nextly migrate` does the work it confirmed"
+      )
+        .default(false)
+        .hideHelp()
+    )
     // It named another table for the migration records, which `nextly
     // migrate` now moves: still accepted, answered with a notice, and kept
     // out of the help.
