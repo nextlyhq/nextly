@@ -28,8 +28,18 @@
  *    file the snapshot describes.
  * 3. It has no unresolved attempt.
  *
+ * The live database is asked what the snapshot comparison cannot see (`proveStatements`): an
+ * index or constraint it cannot use, rows a default would have filled, a key the file has the
+ * database assign, and a MySQL column a statement restates that holds a setting the statement
+ * would put back.
+ *
  * Otherwise the run refuses before changing anything (`notProvenError`), naming the file, every
  * statement it would have skipped, and the next step.
+ *
+ * What the proof does not reach is the values rows hold. A column whose type the file changes with
+ * a plain cast of itself, already at that type, is recorded with the values it has, however they
+ * were converted: the file's cast could not run on it again. A column the file adds with a default
+ * is recorded with the values its rows hold, where none is NULL: rows written since hold others.
  *
  * @module domains/schema/migrate/snapshot-proof
  */
@@ -203,10 +213,11 @@ function declaresGeneratedKey(
 }
 
 /**
- * Whether every key a `CREATE TABLE` of a table the target snapshot holds has the database assign
- * is one the live table assigns. The snapshot comparison reads such a key as its storage type, so a
- * table made by hand with a plain integer key stands where the file ends, and every insert that
- * leaves the key out fails there. True for any other statement.
+ * Whether every key the statement has the database assign is one the live table assigns: on a
+ * table it creates that the target snapshot holds, or in a column it adds to a table. The snapshot
+ * comparison reads such a key as its storage type, so a table made by hand with a plain integer
+ * key stands where the file ends, and every insert that leaves the key out fails there. True for
+ * any other statement.
  */
 function generatedKeysAssigned(
   statement: string,
@@ -214,14 +225,30 @@ function generatedKeysAssigned(
   sides: { target: NextlySchemaSnapshot },
   schema: LiveSchemaWithColumnFacts
 ): boolean {
-  const name = createdTable(statement, dialect);
-  const table = sides.target.tables.find(
-    each => each.name.toLowerCase() === name
+  return generatedKeysOf(statement, dialect, sides).every(({ table, column }) =>
+    schema.generatesKey(table, column)
   );
-  if (table === undefined) return true;
-  return columnDefinitions(statement, dialect)
-    .filter(([, tail]) => declaresGeneratedKey(tail, dialect))
-    .every(([column]) => schema.generatesKey(table.name, column));
+}
+
+/** The columns a statement declares with a key the database assigns (`declaresGeneratedKey`). */
+function generatedKeysOf(
+  statement: string,
+  dialect: SupportedDialect,
+  sides: { target: NextlySchemaSnapshot }
+): FilledColumn[] {
+  const name = createdTable(statement, dialect);
+  if (name !== undefined) {
+    const table = sides.target.tables.find(
+      each => each.name.toLowerCase() === name
+    );
+    if (table === undefined) return [];
+    return columnDefinitions(statement, dialect)
+      .filter(([, tail]) => declaresGeneratedKey(tail, dialect))
+      .map(([column]) => ({ table: table.name, column }));
+  }
+  return columnsAdded(statement, dialect)
+    .filter(([, , tail]) => declaresGeneratedKey(tail, dialect))
+    .map(([table, column]) => ({ table, column }));
 }
 
 /**
@@ -334,6 +361,19 @@ function columnsAddedWithDefault(
   statement: string,
   dialect: SupportedDialect
 ): FilledColumn[] {
+  return columnsAdded(statement, dialect)
+    .filter(([, , tail]) => fillsWithDefault(tail))
+    .map(([table, column]) => ({ table, column }));
+}
+
+/**
+ * Each column an `ALTER TABLE t ADD [COLUMN] [IF NOT EXISTS] c ...` adds: its table, its name and
+ * the tokens after its name. None for any other statement.
+ */
+function columnsAdded(
+  statement: string,
+  dialect: SupportedDialect
+): Array<[string, string, StatementToken[]]> {
   const cursor = cursorOf(statement, dialect, EXACT);
   if (!cursor.accept("ALTER", "TABLE")) return [];
   cursor.acceptCondition();
@@ -346,9 +386,7 @@ function columnsAddedWithDefault(
     clause.accept("COLUMN");
     clause.acceptCondition();
     const column = clause.name();
-    return column !== undefined && fillsWithDefault(clause.rest())
-      ? [{ table, column }]
-      : [];
+    return column === undefined ? [] : [[table, column, clause.rest()]];
   });
 }
 

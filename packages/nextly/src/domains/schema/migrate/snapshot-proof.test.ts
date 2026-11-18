@@ -843,6 +843,30 @@ describe("a key the database assigns, on a table the file creates", () => {
     }
   });
 
+  it("asks the same of a key a file adds to a table it changes", async () => {
+    const ADDS: Array<[SupportedDialect, string]> = [
+      ["postgresql", 'ALTER TABLE "dc_posts" ADD COLUMN "position" serial'],
+      [
+        "mysql",
+        "ALTER TABLE `dc_posts` ADD COLUMN `position` int NOT NULL AUTO_INCREMENT UNIQUE",
+      ],
+    ];
+    for (const [dialect, add] of ADDS) {
+      expect(
+        await statusesAgainst(
+          [add],
+          dialect,
+          liveWith({ generatesKey: false })
+        ),
+        add
+      ).toEqual(["not-done"]);
+      expect(
+        await statusesAgainst([add], dialect, liveWith({ generatesKey: true })),
+        add
+      ).toEqual(["shown"]);
+    }
+  });
+
   it("asks nothing of a key the file leaves plain, or of SQLite's rowid key", async () => {
     const never = liveWith({ generatesKey: false });
     expect(
