@@ -305,10 +305,12 @@ describe("a save over a standing record that cannot be read", () => {
   it("is refused naming the one row to remove and when", async () => {
     const save = withSaveRecords(() =>
       recordSaveStarted({
-        // Only asked for its handle and dialect, which the mocked version read takes.
+        // Asked for its handle and dialect, which the mocked version read takes, and for SQLite's
+        // busy timeout, which each try of the record's insert sets and puts back.
         adapter: {
           getDrizzle: () => ({}),
           getCapabilities: () => ({ dialect: "sqlite" }),
+          executeQuery: () => Promise.resolve([{ timeout: 0 }]),
         } as unknown as DrizzleAdapter,
         projectRoot,
         kind: "collection",
