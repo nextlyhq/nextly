@@ -28,6 +28,7 @@ import type {
 import { revealNode } from "../canvas/reveal-node";
 import { ShowInspectorContext } from "../shell/show-inspector";
 
+import { IMAGE_ALT_CHECK } from "./image-alt-check";
 import { PageChecksChip, type PageChecksChipProps } from "./page-checks-chip";
 
 vi.mock("../canvas/reveal-node", () => ({ revealNode: vi.fn(() => true) }));
@@ -86,6 +87,9 @@ function mount(document: BlockDocument) {
     editor: { ...editor, document: next },
     canvas,
     blocks,
+    // The chip's behaviour, with one check whose findings the pages set;
+    // the builder's other checks have their own tests.
+    checks: [IMAGE_ALT_CHECK],
   });
   const view = render(<PageChecksChip {...props(document)} />);
   return {

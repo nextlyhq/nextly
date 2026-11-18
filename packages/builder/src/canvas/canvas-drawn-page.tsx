@@ -9,13 +9,7 @@
  * @module canvas-drawn-page
  */
 
-import {
-  resolveComponentInstances,
-  revealConditioned,
-  type BlockDocument,
-  type DefinitionsById,
-  type DocumentLimits,
-} from "@nextlyhq/blocks-engine";
+import type { BlockDocument } from "@nextlyhq/blocks-engine";
 import {
   PageRenderer,
   registeredBlocks,
@@ -28,6 +22,7 @@ import {
 import { useEffect, useMemo, useState } from "react";
 
 import {
+  revealedDefinitions,
   revealedForCanvas,
   type AppliedConditions,
 } from "../conditions/applied-conditions";
@@ -36,40 +31,9 @@ import { withConditionHiddenBlock } from "../conditions/condition-hidden-block";
 import { useLayoutParts, type LayoutParts } from "./canvas-layout-parts";
 import type { CanvasRegion } from "./canvas-regions";
 
-/**
- * The definitions a page reaches, the components it places and those they
- * place, with each one's conditions lifted so the canvas draws its
- * conditioned blocks; every other definition as it is. The reached ones are
- * those the resolver reads composing the page as the canvas does, so a
- * component a variant or an override selects, at any depth and through any
- * setting a placement rewrites, is lifted exactly when it is drawn. Only
- * those are walked, so a large component library costs nothing on a page
- * that places none of it.
- *
- * Exported so a surface that reads the page as the canvas draws it composes
- * it from these same definitions.
- *
- * @experimental
- */
-export function revealedDefinitions(
-  document: BlockDocument,
-  definitions: DefinitionsById,
-  limits: DocumentLimits | undefined
-): DefinitionsById {
-  const reached = new Set(
-    resolveComponentInstances(document, definitions, {
-      conditioned: "carry",
-      ...(limits === undefined ? {} : { limits }),
-    }).referenced
-  );
-  if (reached.size === 0) return definitions;
-  const next = new Map(definitions);
-  for (const id of reached) {
-    const definition = definitions.get(id);
-    if (definition !== undefined) next.set(id, revealConditioned(definition));
-  }
-  return next;
-}
+// Moved beside `revealedForCanvas`, so a reader with no React (the page
+// checks) composes the page from the same definitions; kept importable here.
+export { revealedDefinitions } from "../conditions/applied-conditions";
 
 /**
  * The document and window the canvas draws in, held where nothing walking an
