@@ -22071,16 +22071,35 @@ export class CollectionMutationService extends BaseService {
         );
       writeRow = collection as Record<string, unknown>;
 
-      // The publish gate's early answer to a create that publishes, before any hook runs, as the
-      // create door asks it: a create the gate holds back runs no hook. Asked on the caller's
-      // transaction, with no entry yet, so it reads nothing from outside it; only its refusal is
-      // kept, and the verdict after the insert is the one the create settles.
-      await this.judgeCreateOnTx(
-        tx,
-        { ...params, entryId: "" },
-        { status: body.status, locale: undefined, withoutReview },
-        collection
-      );
+      // Authorization is resolved once by the batch caller before this shared
+      // transaction (or here when called directly), so no permission read runs
+      // inside the transaction; see the transition check after the hooks.
+      const transitionAuth =
+        params.transitionAuth ??
+        (await this.resolveTransitionAuthorization({
+          collectionName: params.collectionName,
+          accessUser: params.overrideAccess ? undefined : params.user,
+          overrideAccess: params.overrideAccess,
+          // This fallback fires only for a direct caller-owned-tx write (the bulk
+          // paths always pre-resolve and pass transitionAuth), so bind the reads
+          // to this transaction's connection rather than re-entering the pool.
+          executor: tx.getDrizzle(),
+        }));
+      if (body.status === "published") {
+        // A caller who may not publish is told only that, before the publish gate is asked: what
+        // the workflow holds of an entry is not theirs to learn.
+        if (transitionAuth.publishDenied) return transitionAuth.publishDenied;
+        // The publish gate's early answer to a create that publishes, before any hook runs, as
+        // the create door asks it: a create the gate holds back runs no hook. Asked on the
+        // caller's transaction, with no entry yet, so it reads nothing from outside it; only its
+        // refusal is kept, and the verdict after the insert is the one the create settles.
+        await this.judgeCreateOnTx(
+          tx,
+          { ...params, entryId: "" },
+          { status: body.status, locale: undefined, withoutReview },
+          collection
+        );
+      }
 
       // The transaction API has always shaped the caller's own object in place;
       // the batch worker shapes a copy. Both are preserved so neither caller's
@@ -22377,20 +22396,7 @@ export class CollectionMutationService extends BaseService {
       // (hooks run unless skipped); a create has no prior status, and a trusted
       // server write bypasses via overrideAccess.
       //
-      // Authorization is resolved once by the batch caller before this shared
-      // transaction (or here on the pooled connection when called directly), so no
-      // permission read runs inside the transaction.
-      const transitionAuth =
-        params.transitionAuth ??
-        (await this.resolveTransitionAuthorization({
-          collectionName: params.collectionName,
-          accessUser: params.overrideAccess ? undefined : params.user,
-          overrideAccess: params.overrideAccess,
-          // This fallback fires only for a direct caller-owned-tx write (the bulk
-          // paths always pre-resolve and pass transitionAuth), so bind the reads
-          // to this transaction's connection rather than re-entering the pool.
-          executor: tx.getDrizzle(),
-        }));
+      // Authorization was resolved once, before the hooks (`transitionAuth`).
       const transitionDenied = await this.enforceTransitionUnderLock(tx, {
         tableName,
         nextStatus: finalData.status,
