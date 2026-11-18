@@ -1,0 +1,23 @@
+---
+title: TYPE_CHANGE_BLOCKED
+description: "A field's type change was refused before anything ran: a value the field holds, or every value its old type could hold, cannot be kept by the new type."
+---
+
+## Cause
+
+A field's type change was refused before anything ran: a value the field holds, or every value its old type could hold, cannot be kept by the new type.
+
+Before a field's type changes, Nextly reads every value the field holds and judges whether the new type keeps it. Some values can't be kept without losing part of them: a number rounded to fit a whole-number field, a text longer than the new column, a date with no time or no offset, a list of several items becoming one value, or a value in a form the new type reads only once it is rewritten. Some pairs of types can never hold each other's values (a password and a text, a date and a list of numbers), whatever the values are. Either way, nothing is changed: the table, its values and the field's definition stay as they were. The error names each field, both types, the reasons, and the rows by their key, never the value.
+
+## Fix
+
+Keep the field as it is and add a field of the new type beside it, then copy the values across in a way that suits them. Or change the values the error names so the new type holds each one (round the number, shorten the text, give the date a time and an offset), then run the command again.
+
+## Example
+
+```text
+✗ A field's type change was refused: a value it holds can't be kept by the new type.
+  Why:  Collection 'posts': field 'score' cannot change from text to number (blocked: values the new type holds only rounded (1 row: id p2)). A new field of the new type keeps the old values beside the new ones.
+  Next: Keep the field's type and add a field of the new type beside it, or change the values named above so the new type reads each, then run the command again.
+  Docs: https://nextlyhq.com/docs/cli/errors/type-change-blocked  (TYPE_CHANGE_BLOCKED)
+```

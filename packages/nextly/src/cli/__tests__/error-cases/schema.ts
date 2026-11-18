@@ -143,4 +143,30 @@ export const SCHEMA_CASES = {
         "dc_posts was made by an earlier Nextly version. This save brings it up to date: changes body from text to varchar(255). Review the save and confirm the conversion to write it.",
       logContext: { columns: ["body"] },
     }),
+  // As `refuseFieldTypeChanges` throws it for a change a value blocks: by field, never the value.
+  TYPE_CHANGE_BLOCKED: () =>
+    NextlyError.validation({
+      errors: [
+        {
+          path: "fields.score",
+          code: "TYPE_CHANGE_BLOCKED",
+          message:
+            "Collection 'posts': field 'score' cannot change from text to number (blocked: values the new type holds only rounded (1 row: id p2)). A new field of the new type keeps the old values beside the new ones.",
+        },
+      ],
+      logContext: { entity: "Collection 'posts'", fields: ["score"] },
+    }),
+  // As `refuseFieldTypeChanges` throws it for a change that would clear a value.
+  TYPE_CHANGE_LOSES_VALUES: () =>
+    NextlyError.validation({
+      errors: [
+        {
+          path: "fields.heading",
+          code: "TYPE_CHANGE_LOSES_VALUES",
+          message:
+            "Collection 'posts': field 'heading' cannot change from text to select (lossy: values that are not one of the field's options would be cleared (1 row: id p1)). A new field of the new type keeps the old values beside the new ones.",
+        },
+      ],
+      logContext: { entity: "Collection 'posts'", fields: ["heading"] },
+    }),
 } satisfies ErrorCases;

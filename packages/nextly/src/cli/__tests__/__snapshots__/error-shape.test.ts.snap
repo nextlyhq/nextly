@@ -1966,6 +1966,20 @@ exports[`each code, as a command ends with it > TRANSLATIONS_UNRECORDED 1`] = `
   Docs: https://nextlyhq.com/docs/cli/errors/translations-unrecorded  (TRANSLATIONS_UNRECORDED)"
 `;
 
+exports[`each code, as a command ends with it > TYPE_CHANGE_BLOCKED 1`] = `
+"✗ A field's type change was refused: a value it holds can't be kept by the new type.
+  Why:  Collection 'posts': field 'score' cannot change from text to number (blocked: values the new type holds only rounded (1 row: id p2)). A new field of the new type keeps the old values beside the new ones.
+  Next: Keep the field's type and add a field of the new type beside it, or change the values named above so the new type reads each, then run the command again.
+  Docs: https://nextlyhq.com/docs/cli/errors/type-change-blocked  (TYPE_CHANGE_BLOCKED)"
+`;
+
+exports[`each code, as a command ends with it > TYPE_CHANGE_LOSES_VALUES 1`] = `
+"✗ A field's type change was refused: it would clear values the new type can't read.
+  Why:  Collection 'posts': field 'heading' cannot change from text to select (lossy: values that are not one of the field's options would be cleared (1 row: id p1)). A new field of the new type keeps the old values beside the new ones.
+  Next: Keep the field's type and add a field of the new type beside it, or change the values named above so the new type reads each, then run the command again.
+  Docs: https://nextlyhq.com/docs/cli/errors/type-change-loses-values  (TYPE_CHANGE_LOSES_VALUES)"
+`;
+
 exports[`each code, as a command ends with it > UI_SCHEMA_INVALID 1`] = `
 "✗ \`ui-schema.json\` failed validation.
   Why:  collections.0.slug: slug must match ^[a-z][a-z0-9_-]*$

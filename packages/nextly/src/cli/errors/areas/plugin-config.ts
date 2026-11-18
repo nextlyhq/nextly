@@ -24,6 +24,7 @@ import {
   contextNames,
   contextNumber,
   contextString,
+  issueMessages,
   sentences,
 } from "../messages";
 
@@ -41,16 +42,6 @@ function count(error: NextlyError, key: string): string {
 /** The strings the error's log context lists under `key`. */
 function names(error: NextlyError, key: string): string[] {
   return contextNames(error, key);
-}
-
-/** The message of each issue of `code` a validation error lists, in its order. */
-function issueMessages(error: NextlyError, code: string): string[] {
-  const data = error.publicData as
-    | { errors?: Array<{ code?: unknown; message?: unknown }> }
-    | undefined;
-  return (data?.errors ?? [])
-    .filter(issue => issue.code === code)
-    .map(issue => (typeof issue.message === "string" ? issue.message : ""));
 }
 
 /** The sentence the throw site wrote for whoever fixes it; the public message is generic. */

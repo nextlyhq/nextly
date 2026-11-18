@@ -223,5 +223,7 @@
   "MIGRATE_EVENTS_TABLE_TAKEN": "A table of another shape already has the name `nextly migrate` moves the migration records of an earlier Nextly release into.",
   "UPGRADE_WORK_MOVED": "`nextly upgrade` was run for the database work it used to do, which `nextly migrate` and `nextly i18n:convert-zoned-dates` now do, so it changed nothing.",
   "DATA_STEPS_BACKUP_NOT_CONFIRMED": "A command would change data an earlier Nextly release stored, and no backup was confirmed, with no terminal attached to ask.",
-  "DATA_STEPS_BACKUP_DECLINED": "A command would change data an earlier Nextly release stored, and its backup question was answered no."
+  "DATA_STEPS_BACKUP_DECLINED": "A command would change data an earlier Nextly release stored, and its backup question was answered no.",
+  "TYPE_CHANGE_BLOCKED": "A field's type change was refused before anything ran: a value the field holds, or every value its old type could hold, cannot be kept by the new type.",
+  "TYPE_CHANGE_LOSES_VALUES": "A field's type change was refused before anything ran: it would clear values the new type cannot read, and clearing them is not offered."
 }

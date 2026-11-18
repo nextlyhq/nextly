@@ -212,6 +212,8 @@
     "sync-confirmation-required",
     "table-busy",
     "translations-unrecorded",
+    "type-change-blocked",
+    "type-change-loses-values",
     "ui-schema-invalid",
     "ui-schema-not-json",
     "ui-schema-unreadable",

@@ -1,0 +1,23 @@
+---
+title: TYPE_CHANGE_LOSES_VALUES
+description: "A field's type change was refused before anything ran: it would clear values the new type cannot read, and clearing them is not offered."
+---
+
+## Cause
+
+A field's type change was refused before anything ran: it would clear values the new type cannot read, and clearing them is not offered.
+
+Before a field's type changes, Nextly reads every value the field holds and judges whether the new type can read it. A value the new type can't read at all would be cleared: a text that isn't a number becoming a number field, a value that isn't one of a select's options, a text that isn't a date. Clearing values on a type change isn't offered yet, so the change is refused and nothing is changed. The error names each field, both types, the reasons, and the rows by their key, never the value.
+
+## Fix
+
+Keep the field as it is and add a field of the new type beside it, then copy across the values the new type can read. Or change the values the error names so the new type reads each one (a number written as a number, an option the select offers), then run the command again.
+
+## Example
+
+```text
+✗ A field's type change was refused: it would clear values the new type can't read.
+  Why:  Collection 'posts': field 'heading' cannot change from text to select (lossy: values that are not one of the field's options would be cleared (1 row: id p1)). A new field of the new type keeps the old values beside the new ones.
+  Next: Keep the field's type and add a field of the new type beside it, or change the values named above so the new type reads each, then run the command again.
+  Docs: https://nextlyhq.com/docs/cli/errors/type-change-loses-values  (TYPE_CHANGE_LOSES_VALUES)
+```

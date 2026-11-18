@@ -87,3 +87,13 @@ export function contextNames(error: NextlyError, key: string): string[] {
     ? value.filter((item): item is string => typeof item === "string")
     : [];
 }
+
+/** The message of each issue of `code` a validation error lists, in its order. */
+export function issueMessages(error: NextlyError, code: string): string[] {
+  const data = error.publicData as
+    | { errors?: Array<{ code?: unknown; message?: unknown }> }
+    | undefined;
+  return (data?.errors ?? [])
+    .filter(issue => issue.code === code)
+    .map(issue => (typeof issue.message === "string" ? issue.message : ""));
+}

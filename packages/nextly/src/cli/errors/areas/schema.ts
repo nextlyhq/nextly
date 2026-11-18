@@ -11,7 +11,12 @@
 import type { NextlyError } from "../../../errors/nextly-error";
 import type { CliErrorParts } from "../cli-error";
 import { defineCodes } from "../define";
-import { asSentence, contextString, sentences } from "../messages";
+import {
+  asSentence,
+  contextString,
+  issueMessages,
+  sentences,
+} from "../messages";
 
 /**
  * The refusal of a start whose configured schema holds no installation while another schema of
@@ -133,6 +138,34 @@ function lockCommand(error: NextlyError): string {
 function commandSubject(error: NextlyError): string {
   const command = lockCommand(error);
   return command === "The command" ? command : `\`${command}\``;
+}
+
+/**
+ * A refused field type change as its three parts: how many fields, each refusal as the judgement
+ * wrote it (field, both types, reasons and rows by key, never a value), and the two ways forward.
+ * Every refusal of the change is listed, whichever code the worst of them names the error.
+ */
+function typeChangeRefused(
+  error: NextlyError,
+  worst: "blocked" | "loses"
+): CliErrorParts {
+  const refusals = [
+    ...issueMessages(error, "TYPE_CHANGE_BLOCKED"),
+    ...issueMessages(error, "TYPE_CHANGE_LOSES_VALUES"),
+  ];
+  const count = refusals.length;
+  return {
+    what:
+      worst === "blocked"
+        ? count === 1
+          ? "A field's type change was refused: a value it holds can't be kept by the new type."
+          : `${count} fields' type changes were refused: values they hold can't be kept by the new types.`
+        : count === 1
+          ? "A field's type change was refused: it would clear values the new type can't read."
+          : `${count} fields' type changes were refused: they would clear values the new types can't read.`,
+    why: refusals.join("\n"),
+    next: "Keep the field's type and add a field of the new type beside it, or change the values named above so the new type reads each, then run the command again.",
+  };
 }
 
 export const SCHEMA_CODES = defineCodes({
@@ -361,6 +394,28 @@ export const SCHEMA_CODES = defineCodes({
           why: "The column's type differs from what its field makes now, and a save converts only the columns its review showed.",
           next: "Review the save in the Schema Builder and confirm the conversion, or pass the column in `acknowledgedConversions`.",
         }),
+      },
+    ],
+  },
+  TYPE_CHANGE_BLOCKED: {
+    cause:
+      "A field's type change was refused before anything ran: a value the field holds, or every value its old type could hold, cannot be kept by the new type.",
+    from: [
+      {
+        code: "VALIDATION_ERROR",
+        issue: "TYPE_CHANGE_BLOCKED",
+        describe: error => typeChangeRefused(error, "blocked"),
+      },
+    ],
+  },
+  TYPE_CHANGE_LOSES_VALUES: {
+    cause:
+      "A field's type change was refused before anything ran: it would clear values the new type cannot read, and clearing them is not offered.",
+    from: [
+      {
+        code: "VALIDATION_ERROR",
+        issue: "TYPE_CHANGE_LOSES_VALUES",
+        describe: error => typeChangeRefused(error, "loses"),
       },
     ],
   },
