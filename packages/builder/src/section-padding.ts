@@ -38,7 +38,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /** Whether any device of any state of these styles holds its own padding. */
-export function holdsOwnPadding(styles: NodeStyles | undefined): boolean {
+function holdsOwnPadding(styles: NodeStyles | undefined): boolean {
   if (!isRecord(styles)) return false;
   return Object.values(styles).some(
     byBreakpoint =>
