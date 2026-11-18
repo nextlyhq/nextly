@@ -37,6 +37,7 @@ import {
 } from "./default-layout/install";
 import { embedThumbnailRoute } from "./embed-thumbnail/route";
 import { blocksFieldType } from "./fields/blocksField";
+import { editorFormsRoutes } from "./forms/editor-forms-route";
 import {
   createFormProviders,
   FORM_SERVICE,
@@ -104,6 +105,11 @@ import {
   installSiteStyleLocks,
   routesForSiteStyle,
 } from "./plugin-definition/site-style";
+import {
+  installStarterPages,
+  routesForStarterPages,
+  starterPagesOf,
+} from "./plugin-definition/starter-pages";
 import { routesForStartup } from "./plugin-definition/startup";
 import { createDefinition } from "./plugin-definition/state";
 import {
@@ -167,6 +173,8 @@ export const pageBuilder = (
   const def = createDefinition(opts);
   // The form providers other plugins register, read by the form receiver.
   const formProviders = createFormProviders();
+  // The Form block's picker and the canvas's picked form, read as the author.
+  const editorForms = editorFormsRoutes(formProviders);
   // The page check providers other plugins register, run by the
   // provided-checks route for the editor's Page checks list.
   const pageCheckProviders = createPageCheckProviders();
@@ -188,7 +196,11 @@ export const pageBuilder = (
     breakpointRemovalParts(def);
   // Each area's routes by name, listed below in the order the plugin
   // declares them.
-  const pages = routesForPages(def);
+  // The starter pages a new page may start from: one source for the New
+  // page read, the create and the empty page's list.
+  const starters = starterPagesOf(def);
+  const pages = routesForPages(def, starters);
+  const starterPages = routesForStarterPages(starters);
   const components = routesForComponents(def, {
     countPlacements,
     readRetiredFor,
@@ -315,6 +327,9 @@ export const pageBuilder = (
       // The site's named queries and the ones plugins declare, into a
       // registry emptied for this boot.
       state.namedQueries = registerNamedQueriesAtBoot(ctx, opts.namedQueries);
+      // The starter pages, judged once every block is known, so one naming
+      // a block another plugin declares is judged by it.
+      installStarterPages(ctx, def);
       // Every registered block is known now, other plugins' among them, so
       // the code tier takes all their looks.
       refreshCodeTier(
@@ -567,6 +582,8 @@ export const pageBuilder = (
         pages.pageAddress,
         pages.addressWaiting,
         ...pages.pagesWrite,
+        // The starter pages an empty page offers.
+        starterPages.starterPages,
         layouts.makeDefault,
         layouts.removeLayout,
         ...components.componentDelete,
@@ -590,6 +607,8 @@ export const pageBuilder = (
         ...siteStyle.sharedStyles,
         ...siteStyle.variables,
         startup.builderStartup,
+        editorForms.list,
+        editorForms.describe,
         // The Embed's "Use the video's thumbnail": copies a video's picture
         // from its provider's fixed host into the media library.
         embedThumbnailRoute(),

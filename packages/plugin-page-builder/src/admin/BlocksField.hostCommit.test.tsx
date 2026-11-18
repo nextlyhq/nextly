@@ -212,6 +212,9 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
 vi.mock("./publish-offer", () => ({
   usePublishOffer: () => null,
   useFormPublishOffer: () => null,
+  // Page checks asks which parts aren't published; answered as unknown, so
+  // it lists none and these tests stay on what they test.
+  askReadiness: async () => null,
 }));
 vi.mock("./removal-hold-client", () => ({
   useRemovalHold: () => null,
@@ -231,6 +234,9 @@ vi.mock("./site-style-read", () => ({
 }));
 
 vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
+  // The empty page's starter pages read, offering none: no case here starts
+  // a page from one.
+  readPluginRoute: async () => ({ items: [] }),
   // Where the page opens and the pin's id, which the top bar reads; no
   // collection is named here, so the exit goes to the form.
   useDocumentOpensIn: () => null,

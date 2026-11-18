@@ -115,6 +115,8 @@ export function editorTopBar(
                 }
           }
           userId={view.userId}
+          // "+ New page…" asks about it before leaving the page.
+          unsavedWork={view.documentDirty}
           onAllPages={() => view.requestPanel("pages")}
         />
         {page.location === undefined ? null : (

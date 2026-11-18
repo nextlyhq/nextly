@@ -234,9 +234,10 @@ export function siteLocales(config: LocalizedConfig): string[] {
 /**
  * Whether this caller may read the stored site style through the editor.
  *
- * Asked in order of how often it answers: Design's read, then the plugin's
- * own pages and components, which need no listing; only a caller refused all
- * of those has the registry walked for the other documents the builder opens.
+ * Asked in order of how often it answers: Design's read and Design's
+ * update, then the plugin's own pages and components, which need no listing;
+ * only a caller refused all of those has the registry walked for the other
+ * documents the builder opens.
  * Each question stops at the first yes.
  */
 export async function mayReadSiteStyle(
@@ -249,6 +250,9 @@ export async function mayReadSiteStyle(
   if (caller === null) return false;
   const style = ctx.self.singles[SITE_STYLE_SLUG] ?? SITE_STYLE_SLUG;
   if (await caller.can("read", style)) return true;
+  // Whoever may change the site's design may read what they change: the
+  // admin's Fonts page admits on that permission and reads through here.
+  if (await caller.can("update", style)) return true;
   const known = [
     ctx.self.collections[PAGES_SLUG] ?? PAGES_SLUG,
     store.collection ??

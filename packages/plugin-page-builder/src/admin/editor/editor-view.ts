@@ -6,6 +6,7 @@
  * @module @nextlyhq/plugin-page-builder/admin/editor/editor-view
  */
 import type { BlockDocument } from "@nextlyhq/blocks-engine";
+import type { BlockCustomCssAccess } from "@nextlyhq/builder";
 import type {
   AppliedConditions,
   InspectorPanel,
@@ -85,6 +86,11 @@ export type EditorView = EditorMount &
      * the inspector's read of the site's time zone is asked for.
      */
     canvasEntry: DocumentIdentity | null;
+    /**
+     * A block's own custom CSS, lent to the inspector only while the site
+     * settings read says this person may change the site's code.
+     */
+    blockCustomCss: BlockCustomCssAccess | undefined;
   };
 
 /** The block verbs the inspector's card offers, as the verbs provider shares them. */
