@@ -553,6 +553,31 @@ describe("where a setting binding may be saved", () => {
     ]);
   });
 
+  it("takes a follower of a setting whose id holds a dot, as the component takes the id", () => {
+    // The id is matched whole, as the component's own check and the fill
+    // read it, never as a field path.
+    const card = component(
+      [heading("a", "A"), heading("b", "B", { text: follows("hero.title") })],
+      [exposure("hero.title", "a", "text")]
+    );
+    const issues = validateDocument(card, {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "strict",
+    }).issues.filter(issue => issue.severity === "error");
+    expect(issues).toEqual([]);
+    // Composed, the follower shows what the placement typed for it.
+    const echo = copyOf(
+      composed(
+        page([
+          placement("p", "card", { overrides: { "hero.title": "Typed" } }),
+        ]),
+        new Map<string, BlockDocument>([["card", card]])
+      ),
+      "b"
+    );
+    expect(echo?.props.text).toBe("Typed");
+  });
+
   it("refuses a follower whose prop the setting's type doesn't fit", () => {
     const judged = (doc: BlockDocument) =>
       validateDocument(doc, {

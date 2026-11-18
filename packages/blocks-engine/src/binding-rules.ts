@@ -71,27 +71,22 @@ export function isBindPath(value: unknown): value is string {
   return typeof value === "string" && BIND_PATH_RE.test(value);
 }
 
-/** The longest setting id a binding following a setting may name. */
-const MAX_SETTING_REF_LENGTH = 512;
-
 /**
- * Whether a value is what a binding following a setting names in `$bind`:
- * one of the component's setting ids, which are minted from labels
- * (`hero-title`) and are no field path. One segment, as no setting has
- * fields of its own.
+ * Whether a value is a setting id: what a component may declare a setting
+ * under, and what a binding following one names in `$bind`. Any non-empty
+ * string, matched whole and never read as a field path, so an id minted from
+ * a label (`hero-title`) or one holding a dot (`hero.title`) is taken alike.
+ * The one rule for both, so a follower can name every id a component holds.
+ *
+ * @experimental Settles with the editor's binding controls.
  */
-function isSettingRef(value: unknown): value is string {
-  return (
-    typeof value === "string" &&
-    value !== "" &&
-    value.length <= MAX_SETTING_REF_LENGTH &&
-    !value.includes(".")
-  );
+export function isSettingId(value: unknown): value is string {
+  return typeof value === "string" && value !== "";
 }
 
 /** Whether `$bind` is a path its source can name. */
 export function bindPathFits(source: unknown, path: unknown): path is string {
-  return source === "setting" ? isSettingRef(path) : isBindPath(path);
+  return source === "setting" ? isSettingId(path) : isBindPath(path);
 }
 
 /**
