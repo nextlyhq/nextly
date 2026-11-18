@@ -194,6 +194,22 @@ describe("tables dropped", () => {
     }
   );
 
+  it("names a dropped translations table the database does not have the table it would translate, by its name", () => {
+    // Absent, it holds nothing: the drop of a delete file's `IF EXISTS` loses nothing, however named.
+    expect(
+      read(
+        "postgresql",
+        ["DROP TABLE IF EXISTS posts_locales", "DROP TABLE posts"],
+        {
+          columns: { posts: { id: "text" } },
+        }
+      )
+    ).toEqual([
+      { kind: "table", table: "posts_locales", translates: "posts" },
+      table("posts"),
+    ]);
+  });
+
   it("counts a table created IF NOT EXISTS as live: it may have been there", () => {
     expect(
       read("postgresql", [

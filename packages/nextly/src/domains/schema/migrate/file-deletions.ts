@@ -1787,17 +1787,22 @@ class FileWalk {
   }
 
   /**
-   * `{ translates: X }` where live `table` is the translations table of `X`:
-   * named `<X>_locales` and holding `_parent` and `_locale`, the key only a
-   * translations table has, since a field's column never starts with `_`. A
-   * name alone proves nothing: an entity's own table may be named so.
+   * `{ translates: X }` where `table` is the translations table of `X`: named
+   * `<X>_locales` and, where it stands, holding `_parent` and `_locale`, the
+   * key only a translations table has, since a field's column never starts
+   * with `_`. A name alone proves nothing of a table that stands: an entity's
+   * own table may be named so. One the database does not have holds nothing,
+   * so its drop (a delete file's `DROP TABLE IF EXISTS`) loses nothing however
+   * it is named, and goes with the table it would translate.
    */
   private translationsTableOf(table: string): { translates?: string } {
     const suffix = "_locales";
     if (!table.endsWith(suffix) || table.length <= suffix.length) return {};
+    const owner = table.slice(0, -suffix.length);
+    if (this.facts.liveTable(table) === false) return { translates: owner };
     const live = this.facts.liveColumns(table);
     if (live?.has("_parent") !== true || !live.has("_locale")) return {};
-    return { translates: table.slice(0, -suffix.length) };
+    return { translates: owner };
   }
 
   private changeColumn(step: Extract<Step, { kind: "column" }>): void {

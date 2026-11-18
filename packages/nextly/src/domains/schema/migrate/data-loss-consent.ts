@@ -6,9 +6,11 @@
  * deletion of the run, and the run prints each one before deleting it. Given
  * a comma-separated list (`--accept-data-loss=posts,pages.summary`) it covers
  * only those tables and columns: a named table covers every deletion in it —
- * dropping it, dropping any of its columns, removing its rows — and in its
- * translations table (`<table>_locales`), which holds the same entries' values
- * in each language, and a named `table.column` covers dropping that column.
+ * dropping it, dropping any of its columns, removing its rows — and the drop
+ * of its translations table (`<table>_locales`, where the command proved it
+ * one: `translates`), which goes with a translated entity's delete; a named
+ * `table.column` covers dropping that column. A column or rows of a
+ * translations table are covered by its own name.
  * Anything it does not cover is refused, named, before anything changes.
  *
  * Without consent an interactive run lists every deletion, with its count

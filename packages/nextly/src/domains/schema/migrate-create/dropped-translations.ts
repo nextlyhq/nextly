@@ -123,13 +123,22 @@ function recordedEntityOf(
   return undefined;
 }
 
-/** The table a recorded entity's declaration names, by the rule `nextly migrate` reads it by. */
+/**
+ * The table a recorded entity's declaration names, by the rule `nextly migrate`
+ * reads it by. A field group's is the table its record names where it names
+ * one (`tableName`, or `dbName`): one made under a name its author chose keeps
+ * it, which its slug alone does not give.
+ */
 function tableOf(
   kind: I18nTransitionKind,
   slug: string,
   entry: RecordedEntitySettings
 ): string {
-  const dbName = entry.settings.dbName;
+  const { tableName, dbName } = entry.settings;
+  if (kind === "fieldGroup") {
+    if (typeof tableName === "string") return tableName;
+    if (typeof dbName === "string") return dbName;
+  }
   const named = typeof dbName === "string" ? { slug, dbName } : { slug };
   switch (kind) {
     case "collection":
