@@ -27,6 +27,7 @@
 import { trimCssWhitespace } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
+import { useFieldEdit, useTypedFieldEdit } from "./field-edit";
 import { joinTyping } from "./typing-run";
 
 /** A field's draft over the stored value, written as it is typed. */
@@ -60,60 +61,104 @@ export interface LiveDraft {
 }
 
 /**
+ * Put back what a run of typing wrote, recording nothing: the editor's
+ * `cancelTyping`, provided where the fields are drawn over an editor. Escape
+ * in a field being typed uses it; without it, Escape puts back the field's
+ * text alone.
+ */
+export const TypingCancel: React.Context<
+  ((run: object) => boolean) | undefined
+> = React.createContext<((run: object) => boolean) | undefined>(undefined);
+
+/** What one stretch of typing holds between its keystrokes. */
+interface Stretch {
+  /** The run it writes in, from its first keystroke. */
+  run: object | null;
+  /** The stored text before its first keystroke, which Escape puts back. */
+  before: string;
+  /** Whether the stored value is about to move for a keystroke's own write. */
+  own: boolean;
+  /** The text the last keystroke wrote, while the document still holds it. */
+  wrote: string | null;
+  /** The stored spelling that text came back as, once it has. */
+  answered: string | null;
+}
+
+/** A stretch with nothing typed. */
+function idle(stretch: Stretch): void {
+  stretch.run = null;
+  stretch.own = false;
+  stretch.wrote = null;
+  stretch.answered = null;
+}
+
+/**
  * @param stored - the value the document holds, as the field shows it
  * @returns the draft, reset whenever `stored` moves for any reason but the
- *   field's own typing
+ *   field's own typing. A draft set away from `stored` without typing, and a
+ *   stretch of typing, are both an edit Escape puts back (`field-edit.ts`).
  */
 export function useLiveDraft(stored: string): LiveDraft {
-  const [draft, setDraft] = React.useState(stored);
-  // The run this stretch of typing writes in, from its first keystroke.
-  const run = React.useRef<object | null>(null);
-  // Whether the stored value is about to move for a keystroke's own write.
-  const own = React.useRef(false);
-  // The text the last keystroke wrote, while the document still holds it,
-  // and the stored spelling it came back as, once it has.
-  const wrote = React.useRef<string | null>(null);
-  const answered = React.useRef<string | null>(null);
+  const [draft, show] = React.useState(stored);
+  // Set without typing: a draft over the stored value, as every field's is.
+  const setDraft = useFieldEdit(stored, show);
+  const edit = useTypedFieldEdit();
+  const cancelTyping = React.useContext(TypingCancel);
+  const stretch = React.useRef<Stretch>({
+    run: null,
+    before: stored,
+    own: false,
+    wrote: null,
+    answered: null,
+  }).current;
   React.useEffect(() => {
-    if (own.current) {
-      own.current = false;
-      answered.current = stored;
+    if (stretch.own) {
+      stretch.own = false;
+      stretch.answered = stored;
       return;
     }
     // Moved underneath the field, so what it was typing no longer applies.
-    run.current = null;
-    wrote.current = null;
-    answered.current = null;
-    setDraft(stored);
-  }, [stored]);
-  return React.useMemo(
-    () => ({
+    idle(stretch);
+    edit.end();
+    show(stored);
+  }, [stored, stretch, edit]);
+  return React.useMemo(() => {
+    // Escape mid-stretch: the document as it was before the first keystroke,
+    // with nothing recorded, and the field showing it again.
+    const putBack = () => {
+      const { run, before } = stretch;
+      idle(stretch);
+      if (run !== null) cancelTyping?.(run);
+      show(before);
+    };
+    return {
       draft,
       setDraft,
       type: (next, write) => {
-        setDraft(next);
-        run.current ??= {};
-        if (joinTyping(run.current, () => write(next))) {
-          own.current = true;
-          wrote.current = next;
-          answered.current = null;
+        show(next);
+        if (stretch.run === null) {
+          stretch.run = {};
+          stretch.before = stored;
+        }
+        edit.begin(putBack);
+        if (joinTyping(stretch.run, () => write(next))) {
+          stretch.own = true;
+          stretch.wrote = next;
+          stretch.answered = null;
         }
       },
       join: write =>
-        run.current === null ? write() : joinTyping(run.current, write),
-      written: text => wrote.current === text,
+        stretch.run === null ? write() : joinTyping(stretch.run, write),
+      written: text => stretch.wrote === text,
       end: () => {
-        if (wrote.current === draft && answered.current !== null) {
-          setDraft(answered.current);
+        if (stretch.wrote === draft && stretch.answered !== null) {
+          show(stretch.answered);
         }
-        run.current = null;
-        own.current = false;
-        wrote.current = null;
-        answered.current = null;
+        idle(stretch);
+        edit.end();
       },
-    }),
-    [draft]
-  );
+    };
+  }, [draft, setDraft, stored, stretch, edit, cancelTyping]);
 }
 
 /**

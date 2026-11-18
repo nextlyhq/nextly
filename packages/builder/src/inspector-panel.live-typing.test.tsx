@@ -39,6 +39,7 @@ import {
 } from "vitest";
 
 import { useEditorState, type EditorState } from "./editor-state";
+import { escapeFieldEdit } from "./field-edit";
 import { InspectorPanel } from "./inspector-panel";
 
 beforeAll(() => {
@@ -182,6 +183,41 @@ describe("the Content tab's typed fields", () => {
     });
     expect(card().props.title).toBe("Old title");
     expect((field as HTMLInputElement).value).toBe("Old title");
+  });
+
+  it("puts the old text back on Escape, on the canvas too, and records nothing", () => {
+    mount();
+    const field = screen.getByLabelText("Title") as HTMLInputElement;
+    typeInto(field, " half typed", "Old title");
+    expect(card().props.title).toBe("Old title half typed");
+
+    // What the keyboard layer asks of the field Escape is pressed in.
+    let outcome: string | undefined;
+    act(() => {
+      outcome = escapeFieldEdit(field);
+    });
+    expect(outcome).toBe("put-back");
+    expect(card().props.title).toBe("Old title");
+    expect(field.value).toBe("Old title");
+    expect(editor().canUndo).toBe(false);
+    // The next Escape leaves the field, as for any field.
+    expect(escapeFieldEdit(field)).toBe("leave-field");
+  });
+
+  it("puts a Style value back on Escape, as it was before the edit", () => {
+    mount();
+    openStyle();
+    const field = row("padding").getByLabelText(
+      "Block start"
+    ) as HTMLInputElement;
+    fireEvent.change(field, { target: { value: "" } });
+    typeInto(field, "24");
+    expect(styleOf("padding")).toEqual({ blockStart: "24px" });
+    act(() => {
+      escapeFieldEdit(field);
+    });
+    expect(styleOf("padding")).toEqual({ blockStart: "8px" });
+    expect(editor().canUndo).toBe(false);
   });
 
   it("is the control: a second edit after blur is a step of its own", () => {

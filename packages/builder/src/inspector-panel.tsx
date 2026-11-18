@@ -97,6 +97,7 @@ import { openingTabFor, shownTab } from "./inspector-style-state";
 import { StyleTab } from "./inspector-style-tab";
 import { inspectInstance, type InstanceInspection } from "./instance-inspector";
 import { InstanceInspectorPanel } from "./instance-inspector-panel";
+import { TypingCancel } from "./live-draft";
 import { LookInspector } from "./look-inspector";
 import { blockStyleEntries } from "./look-tiles-view";
 import { ManyBlocksPanel } from "./many-blocks-panel";
@@ -359,7 +360,10 @@ export function InspectorPanel({
           <PanelFoldsProvider>
             <CssNamesProvider>
               <SettingsFilterProvider>
-                <SelectionInspector {...panel} />
+                {/* Escape in a field being typed puts its writes back. */}
+                <TypingCancel.Provider value={panel.editor.cancelTyping}>
+                  <SelectionInspector {...panel} />
+                </TypingCancel.Provider>
               </SettingsFilterProvider>
             </CssNamesProvider>
           </PanelFoldsProvider>
