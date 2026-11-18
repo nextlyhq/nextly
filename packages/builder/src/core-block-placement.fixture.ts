@@ -320,13 +320,6 @@ export const CORE_SETTING_PLACES: readonly SettingPlace[] = [
   },
   {
     block: "core/table-of-contents",
-    setting: "content",
-    tab: "content",
-    section: "Table of contents",
-    label: "Content",
-  },
-  {
-    block: "core/table-of-contents",
     setting: "title",
     tab: "content",
     section: "Table of contents",
@@ -341,10 +334,24 @@ export const CORE_SETTING_PLACES: readonly SettingPlace[] = [
   },
   {
     block: "core/table-of-contents",
+    setting: "marker",
+    tab: "content",
+    section: "Table of contents",
+    label: "List as",
+  },
+  {
+    block: "core/table-of-contents",
     setting: "collapsible",
     tab: "content",
     section: "Table of contents",
     label: "Can be folded",
+  },
+  {
+    block: "core/table-of-contents",
+    setting: "highlight",
+    tab: "content",
+    section: "Table of contents",
+    label: "Highlight the section being read",
   },
   {
     block: "core/list",

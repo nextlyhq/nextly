@@ -46,6 +46,7 @@
  * @module outline
  */
 import {
+  BASE_BREAKPOINT,
   renderedDomId,
   walkNodes,
   type BlockNode,
@@ -84,6 +85,12 @@ export interface OutlineHeading {
   readonly leftOut: boolean;
   /** The types of the blocks it sits inside, outermost first. */
   readonly within: readonly string[];
+  /**
+   * Whether a table of contents lists it: a heading of the page's own
+   * content, not inside a Collection list or an accordion, not left out by
+   * its author, and not hidden on every device. See `listedHere`.
+   */
+  readonly listed: boolean;
 }
 
 /** Every heading a page draws, in page order. @experimental */
@@ -102,6 +109,51 @@ const RICH_TEXT_BLOCK = "core/rich-text";
 const COLLECTION_LIST_BLOCK = "core/collection-loop";
 
 const NONE: readonly string[] = Object.freeze([]);
+
+/**
+ * The blocks whose headings a table of contents never lists: a Collection
+ * list draws its headings once per entry, and a link into a closed accordion
+ * question does not open it in every browser.
+ */
+const UNLISTED_WITHIN: ReadonlySet<string> = new Set([
+  COLLECTION_LIST_BLOCK,
+  "core/accordion",
+  "core/accordion-item",
+]);
+
+/**
+ * Whether a block is hidden on every device: hidden from the widest down,
+ * with no narrower device showing it again. Read from what it stores, so it
+ * holds whatever breakpoints the site defines: a `false` at the base hides
+ * the block everywhere (`style/visibility-cascade`) until a narrower
+ * breakpoint stores `true`, and a block with no `true` stored has none that
+ * does.
+ */
+function hiddenOnEveryDevice(node: BlockNode): boolean {
+  const devices: unknown = node.visibility?.devices;
+  if (typeof devices !== "object" || devices === null) return false;
+  const stored = devices as Readonly<Record<string, unknown>>;
+  return (
+    Object.hasOwn(stored, BASE_BREAKPOINT) &&
+    stored[BASE_BREAKPOINT] === false &&
+    !Object.values(stored).includes(true)
+  );
+}
+
+/** Whether a heading with these facts is one a table of contents lists. */
+function listedHere(
+  area: OutlineArea,
+  within: readonly string[],
+  leftOut: boolean,
+  hidden: boolean
+): boolean {
+  return (
+    area === "content" &&
+    !leftOut &&
+    !hidden &&
+    !within.some(type => UNLISTED_WITHIN.has(type))
+  );
+}
 
 /** A heading a block draws, before it is given its anchor. */
 interface Found {
@@ -152,6 +204,56 @@ function authorIds(parts: readonly OutlinePart[]): Set<string> {
   return taken;
 }
 
+/** Where a block sits in its part. */
+interface NodePlace {
+  /** The types of the blocks around it, outermost first. */
+  readonly within: readonly string[];
+  /** Whether it, or a block around it, is hidden on every device. */
+  readonly hidden: boolean;
+  /** The nearest Collection list holding it, if any. */
+  readonly list: BlockNode | undefined;
+}
+
+/**
+ * Reads each block's place from its parent's, for a walk that visits a
+ * parent before its children.
+ */
+function placeReader(): (
+  node: BlockNode,
+  parent: BlockNode | undefined
+) => NodePlace {
+  const places = new Map<BlockNode, NodePlace>();
+  return (node, parent) => {
+    const around = parent === undefined ? undefined : places.get(parent);
+    const place: NodePlace =
+      parent === undefined
+        ? { within: NONE, hidden: hiddenOnEveryDevice(node), list: undefined }
+        : {
+            within: [...(around?.within ?? NONE), parent.type],
+            hidden: (around?.hidden ?? false) || hiddenOnEveryDevice(node),
+            list: parent.type === COLLECTION_LIST_BLOCK ? parent : around?.list,
+          };
+    places.set(node, place);
+    return place;
+  };
+}
+
+/**
+ * Numbers a Heading or Rich text block inside a Collection list among every
+ * such block on the page, the first time it is met. Counted over the whole
+ * page, not per list: two lists' entries share their places (`0`, `1`), so
+ * only this tells them apart.
+ */
+function countEntryPassage(
+  passageInList: Map<string, number>,
+  area: OutlineArea,
+  node: BlockNode
+): void {
+  if (node.type !== RICH_TEXT_BLOCK && node.type !== HEADING_BLOCK) return;
+  const key = passageKey(area, node.id);
+  if (!passageInList.has(key)) passageInList.set(key, passageInList.size + 1);
+}
+
 /** What an outline keeps beside its headings, for this module alone. */
 interface OutlineRecord {
   /** Each part's blocks' anchors, by node id: ids are unique within a part. */
@@ -197,36 +299,12 @@ export function pageOutline(parts: readonly OutlinePart[]): PageOutline {
   const firstById = new Map<string, string[]>();
   const passageInList = new Map<string, number>();
   for (const part of parts) {
-    // The nearest Collection list holding each node, if any.
-    const listOf = new Map<BlockNode, BlockNode>();
     const byNode = byPart.get(part.area) ?? new Map<string, string[]>();
     byPart.set(part.area, byNode);
-    const withinOf = new Map<BlockNode, readonly string[]>();
+    const placeOf = placeReader();
     walkNodes([...part.nodes], (node, parent) => {
-      const within =
-        parent === undefined
-          ? NONE
-          : [...(withinOf.get(parent) ?? NONE), parent.type];
-      withinOf.set(node, within);
-      const list =
-        parent === undefined
-          ? undefined
-          : parent.type === COLLECTION_LIST_BLOCK
-            ? parent
-            : listOf.get(parent);
-      if (list !== undefined) listOf.set(node, list);
-      if (
-        list !== undefined &&
-        (node.type === RICH_TEXT_BLOCK || node.type === HEADING_BLOCK) &&
-        !passageInList.has(passageKey(part.area, node.id))
-      ) {
-        // Counted over the whole page, not per list: two lists' entries
-        // share their places (`0`, `1`), so only this tells them apart.
-        passageInList.set(
-          passageKey(part.area, node.id),
-          passageInList.size + 1
-        );
-      }
+      const { within, hidden, list } = placeOf(node, parent);
+      if (list !== undefined) countEntryPassage(passageInList, part.area, node);
       const found = headingsOfBlock(node);
       if (found.length === 0) return;
       const anchors: string[] = [];
@@ -243,6 +321,7 @@ export function pageOutline(parts: readonly OutlinePart[]): PageOutline {
           area: part.area,
           leftOut: heading.leftOut,
           within,
+          listed: listedHere(part.area, within, heading.leftOut, hidden),
         });
       }
     });

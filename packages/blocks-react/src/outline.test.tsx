@@ -933,3 +933,105 @@ describe("pageOutline", () => {
     expect(outline.headings.map(entry => entry.level)).toEqual([1, 2]);
   });
 });
+
+describe("which headings a table of contents lists", () => {
+  const listedOf = (...list: [OutlinePart["area"], BlockNode[]][]) =>
+    pageOutline(list.map(([area, nodes]) => ({ area, nodes }))).headings.map(
+      ({ text, listed }) => [text, listed]
+    );
+
+  const holding = (type: string, children: BlockNode[]): BlockNode => ({
+    id: nextId("c"),
+    type,
+    version: 1,
+    props: {},
+    slots: { children },
+  });
+
+  /** Stored per-device visibility, as the Layers panel writes it. */
+  const shownOn = (devices: Record<string, boolean>) => ({
+    visibility: { devices },
+  });
+
+  it("lists the page's own headings, in the Heading blocks and in Rich text", () => {
+    expect(
+      listedOf([
+        "content",
+        [heading("Intro"), richText(passage(["h3", "Deeper"]))],
+      ])
+    ).toEqual([
+      ["Intro", true],
+      ["Deeper", true],
+    ]);
+  });
+
+  it("leaves out the header's and the footer's headings", () => {
+    expect(
+      listedOf(
+        ["header", [heading("Site")]],
+        ["content", [heading("Page")]],
+        ["footer", [heading("Footer")]]
+      )
+    ).toEqual([
+      ["Site", false],
+      ["Page", true],
+      ["Footer", false],
+    ]);
+  });
+
+  it("leaves out headings inside a Collection list or an accordion, however deep", () => {
+    expect(
+      listedOf([
+        "content",
+        [
+          holding("core/collection-loop", [box([heading("In a list")])]),
+          holding("core/accordion", [
+            holding("core/accordion-item", [
+              richText(passage(["h2", "In a question"])),
+            ]),
+          ]),
+          box([heading("In a box")]),
+        ],
+      ])
+    ).toEqual([
+      ["In a list", false],
+      ["In a question", false],
+      ["In a box", true],
+    ]);
+  });
+
+  it("leaves out a heading its author left out", () => {
+    expect(
+      listedOf([
+        "content",
+        [heading("Out", { props: { tocExclude: true } }), heading("In")],
+      ])
+    ).toEqual([
+      ["Out", false],
+      ["In", true],
+    ]);
+  });
+
+  it("leaves out a heading hidden on every device, or inside a block that is", () => {
+    expect(
+      listedOf([
+        "content",
+        [
+          heading("Hidden", shownOn({ base: false })),
+          box([heading("Inside hidden")], shownOn({ base: false })),
+          // Hidden from the widest device down, shown again on phones.
+          heading("Phones only", shownOn({ base: false, mobile: true })),
+          // Hidden on phones only: still read on every other device.
+          heading("Not on phones", shownOn({ mobile: false })),
+          heading("Shown", shownOn({ base: true })),
+        ],
+      ])
+    ).toEqual([
+      ["Hidden", false],
+      ["Inside hidden", false],
+      ["Phones only", true],
+      ["Not on phones", true],
+      ["Shown", true],
+    ]);
+  });
+});
