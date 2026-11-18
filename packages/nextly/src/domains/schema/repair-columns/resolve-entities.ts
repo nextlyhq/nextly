@@ -267,6 +267,48 @@ function withOverrides<D extends EntityDefinition>(
   return { ...definition, columnOverrides: overrides };
 }
 
+/** The table each side of an entity names, where it names one. */
+interface EntityTables {
+  /** Where the database holds the entity. */
+  table: string;
+  /** The table the configured side names, where the entity is configured. */
+  configuredTable: string | undefined;
+}
+
+/**
+ * Where the database holds the entity, and the table its configured side names: the applied
+ * side's table, or, where nothing was applied, the one the next migration would create. Null where
+ * nothing names a table: every source that records an entity names one, and the reader refuses a
+ * registry row that does not, so that is only a guard.
+ */
+function entityTables(
+  sources: EntitySources,
+  appliedSide: AppliedDefinition | null,
+  configuredSide: EntityDefinition | null
+): EntityTables | null {
+  const configuredTable =
+    configuredSide === null ? undefined : configuredTableOf(sources);
+  const appliedTable =
+    appliedSide === null ? undefined : appliedTableOf(appliedSide, sources);
+  const table = appliedTable ?? configuredTable;
+  return table === undefined ? null : { table, configuredTable };
+}
+
+/** The table the next migration moves the entity to, named only where it is another. */
+function renameOf({ table, configuredTable }: EntityTables): {
+  renamedTo?: string;
+} {
+  return configuredTable !== undefined && configuredTable !== table
+    ? { renamedTo: configuredTable }
+    : {};
+}
+
+/** The plugin that owns the entity, as an entity carries it: absent where none does. */
+function ownerOf(sources: EntitySources): { plugin?: string } {
+  const plugin = owningPlugin(sources);
+  return plugin !== undefined ? { plugin } : {};
+}
+
 /** One entity, from what each source records of it, or null where it cannot be compared. */
 function resolveEntity(
   sources: EntitySources,
@@ -280,39 +322,25 @@ function resolveEntity(
   // A row waiting for a migration that nothing declares any more: nothing says what was applied
   // or what will be, so there is nothing to compare its columns with.
   if (appliedSide === null && configuredSide === null) return null;
-
-  const configuredTable =
-    configuredSide === null ? undefined : configuredTableOf(sources);
-  // The entity is where the database holds it: at the applied side's table, or, where nothing was
-  // applied, at the one the next migration would create.
-  const table =
-    (appliedSide === null ? undefined : appliedTableOf(appliedSide, sources)) ??
-    configuredTable;
-  // An entity whose table nothing names cannot be compared; every source that records one names
-  // it, and the reader refuses a registry row that does not, so this is only a guard.
-  if (table === undefined) return null;
+  const tables = entityTables(sources, appliedSide, configuredSide);
+  if (tables === null) return null;
 
   // The app declares an override by the table it configures, which a rename has already moved.
-  const declared = overrides?.byTable.get(configuredTable ?? table) ?? [];
-  const applied = withAppliedStorage(
-    appliedSide,
-    sources,
-    declared,
-    configuredSide !== null
-  );
-  const configured = withOverrides(configuredSide, declared);
-  const plugin = owningPlugin(sources);
+  const declared =
+    overrides?.byTable.get(tables.configuredTable ?? tables.table) ?? [];
   return {
     kind: identity.kind,
     slug: identity.slug,
-    table,
-    // Named only where the next migration moves the entity to another table.
-    ...(configuredTable !== undefined && configuredTable !== table
-      ? { renamedTo: configuredTable }
-      : {}),
-    applied,
-    configured,
-    ...(plugin !== undefined ? { plugin } : {}),
+    table: tables.table,
+    ...renameOf(tables),
+    applied: withAppliedStorage(
+      appliedSide,
+      sources,
+      declared,
+      configuredSide !== null
+    ),
+    configured: withOverrides(configuredSide, declared),
+    ...ownerOf(sources),
   };
 }
 

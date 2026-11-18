@@ -34,13 +34,6 @@ function emptyManifest(): UiSchemaManifest {
   return uiSchemaManifest.parse({});
 }
 
-/** A manifest as one read found it, and whether the file was there to read. */
-export interface ReadUiSchema {
-  manifest: UiSchemaManifest;
-  /** False where the file is absent, and `manifest` is the empty one standing in for it. */
-  exists: boolean;
-}
-
 /** The manifest alone, for a caller that does not ask whether the file exists. */
 export async function loadUiSchema(
   args: LoadUiSchemaArgs
@@ -53,9 +46,11 @@ export async function loadUiSchema(
  * parse alike, so a caller that treats them differently asks here rather than check the file a
  * second time, which could see it in another state.
  */
-export async function readUiSchema(
-  args: LoadUiSchemaArgs
-): Promise<ReadUiSchema> {
+export async function readUiSchema(args: LoadUiSchemaArgs): Promise<{
+  manifest: UiSchemaManifest;
+  /** False where the file is absent, and `manifest` is the empty one standing in for it. */
+  exists: boolean;
+}> {
   const path = resolve(args.projectRoot, args.uiSchemaFile);
 
   let raw: string;

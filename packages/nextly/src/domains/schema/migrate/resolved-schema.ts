@@ -164,6 +164,25 @@ export interface ResolveSchemaArgs {
 }
 
 /**
+ * The Builder manifest to merge: the one the caller already read, else the file's, or null where
+ * reading it reports the file absent.
+ */
+async function manifestOf(
+  args: ResolveSchemaArgs
+): Promise<Awaited<ReturnType<typeof loadUiSchema>> | null> {
+  if (args.manifest !== undefined) return args.manifest;
+  try {
+    return await loadUiSchema({
+      projectRoot: args.projectRoot,
+      uiSchemaFile: args.config.db.uiSchemaFile,
+    });
+  } catch (error) {
+    if ((error as { code?: string }).code !== "ENOENT") throw error;
+    return null;
+  }
+}
+
+/**
  * Merge code-first config with the Builder manifest.
  *
  * Code-first wins on a slug collision, matching generation. Order matters
@@ -197,18 +216,7 @@ export async function resolveDeclaredSchema(
     ),
   ];
 
-  let manifest: Awaited<ReturnType<typeof loadUiSchema>> | null =
-    args.manifest ?? null;
-  if (manifest === null) {
-    try {
-      manifest = await loadUiSchema({
-        projectRoot: args.projectRoot,
-        uiSchemaFile: args.config.db.uiSchemaFile,
-      });
-    } catch (error) {
-      if ((error as { code?: string }).code !== "ENOENT") throw error;
-    }
-  }
+  const manifest = await manifestOf(args);
 
   let builder: DeclaredEntity[] = [];
   let builderJunctions: string[] = [];

@@ -45,7 +45,7 @@ import { withColumnOverride } from "../services/runtime-schema-generator";
 import { keyedByOf, type KeyedBy } from "../value-conversion/read-values";
 
 import { classifyDifference, planDifference } from "./classify";
-import { compareColumn } from "./column-comparison";
+import { compareColumn, type ColumnAspects } from "./column-comparison";
 import type { ColumnConversionPlan } from "./conversion/types";
 import { differenceCause } from "./difference-cause";
 import type { TableLockFacts } from "./outcome";
@@ -711,39 +711,18 @@ function judgeAppliedColumn(
   dialect: SupportedDialect
 ): ColumnFinding | null {
   const found = liveColumnAt(live, column.location);
-  if (found === undefined) {
-    return {
-      kind: "not-migrated",
-      location: column.location,
-      ...ownedBy(entity.plugin),
-      missing: live.has(column.location.table.toLowerCase())
-        ? "column"
-        : "table",
-      expected: column.expected,
-    };
-  }
+  if (found === undefined) return notMigrated(entity, column, live);
   const state = stateOf(found);
-  const aspects = compareColumn(state, column.expected);
-  if (aspects === null) return null;
-  // An override reaches only the entity's own table. Where no record says which were applied, a
-  // column there of another type may be as its override made it: judging it against the field's
-  // own storage would report, and convert, a column that is as applied. An override keeps the
-  // field's nullability, so that is still judged, with the type left as the database holds it.
-  const typeUnknown =
-    aspects.type &&
-    entity.applied?.storageUnknown === true &&
-    !column.location.translation;
-  if (typeUnknown && !aspects.nullability) return null;
-  const expected = typeUnknown
-    ? { ...state, nullable: column.expected.nullable }
-    : column.expected;
+  const difference = judgedDifference(entity, column, state);
+  if (difference === null) return null;
+  const { expected, aspects } = difference;
   return {
     kind: "differs",
     location: column.location,
     ...ownedBy(entity.plugin),
     expected,
     live: state,
-    aspects: typeUnknown ? { type: false, nullability: true } : aspects,
+    aspects,
     judgement: null,
     conversion: null,
     rowsRewritten: null,
@@ -756,6 +735,49 @@ function judgeAppliedColumn(
       live: state,
       expected,
     }),
+  };
+}
+
+/** An applied column the database does not hold: its whole table is missing, or the column alone. */
+function notMigrated(
+  entity: RepairEntity,
+  column: NamedColumn,
+  live: LiveTables
+): ColumnFinding {
+  return {
+    kind: "not-migrated",
+    location: column.location,
+    ...ownedBy(entity.plugin),
+    missing: live.has(column.location.table.toLowerCase()) ? "column" : "table",
+    expected: column.expected,
+  };
+}
+
+/**
+ * How a live column differs from what its applied definition expects, and the column it is judged
+ * against, or null where it does not differ.
+ *
+ * An override reaches only the entity's own table. Where no record says which were applied, a
+ * column there of another type may be as its override made it: judging it against the field's own
+ * storage would report, and convert, a column that is as applied. An override keeps the field's
+ * nullability, so that is still judged, with the type left as the database holds it.
+ */
+function judgedDifference(
+  entity: RepairEntity,
+  column: NamedColumn,
+  state: ColumnState
+): { expected: ColumnState; aspects: ColumnAspects } | null {
+  const aspects = compareColumn(state, column.expected);
+  if (aspects === null) return null;
+  const typeUnknown =
+    aspects.type &&
+    entity.applied?.storageUnknown === true &&
+    !column.location.translation;
+  if (!typeUnknown) return { expected: column.expected, aspects };
+  if (!aspects.nullability) return null;
+  return {
+    expected: { ...state, nullable: column.expected.nullable },
+    aspects: { type: false, nullability: true },
   };
 }
 
@@ -832,23 +854,33 @@ function pendingChanges(
   const changes: { pair: ColumnPair; finding: ColumnFinding }[] = [];
   for (const pair of pairColumns(applied, configured)) {
     if (isUnchanged(pair)) continue;
-    const location = locationOf(pair);
-    if (location === undefined) continue;
-    const renamedFrom = movedFrom(pair);
-    changes.push({
-      pair,
-      finding: {
-        kind: "pending-migration",
-        location,
-        ...ownedBy(plugin),
-        ...(renamedFrom !== undefined ? { renamedFrom } : {}),
-        applied: pair.applied?.expected ?? null,
-        configured: pair.configured?.expected ?? null,
-        live: liveStateOf(
-          liveColumnAt(live, pair.applied?.location ?? location)
-        ),
-      },
-    });
+    const finding = pendingFinding(pair, live, plugin);
+    if (finding !== null) changes.push({ pair, finding });
   }
   return changes;
+}
+
+/** The pending record of one changed pair, or null for a pair neither side names. */
+function pendingFinding(
+  pair: ColumnPair,
+  live: LiveTables,
+  plugin: string | undefined
+): ColumnFinding | null {
+  const location = locationOf(pair);
+  if (location === undefined) return null;
+  const renamedFrom = movedFrom(pair);
+  return {
+    kind: "pending-migration",
+    location,
+    ...ownedBy(plugin),
+    ...(renamedFrom !== undefined ? { renamedFrom } : {}),
+    applied: expectedOf(pair.applied),
+    configured: expectedOf(pair.configured),
+    live: liveStateOf(liveColumnAt(live, pair.applied?.location ?? location)),
+  };
+}
+
+/** The column a side expects, or null where that side does not name it. */
+function expectedOf(column: NamedColumn | undefined): ColumnState | null {
+  return column === undefined ? null : column.expected;
 }
