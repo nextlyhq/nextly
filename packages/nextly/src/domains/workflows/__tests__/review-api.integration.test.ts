@@ -48,6 +48,7 @@ import {
 import { defineCollection, text } from "../../../config";
 import { createDynamicHandlers } from "../../../routeHandler";
 import { ServiceContainer } from "../../../services/index";
+import { listRoleSlugsForUserOrRefuse } from "../../../services/lib/permissions";
 import type { ApiKeyService } from "../../auth/services/api-key-service";
 import { defineWorkflow } from "../define-workflow";
 import { workflowDefinitionHash } from "../hash";
@@ -153,8 +154,10 @@ type Who =
       kind: "key";
       owner: string;
       grants: readonly Grant[];
-      /** A key scoped to this one role of its owner's; absent, a full-access key. */
+      /** A key scoped to this one role of its owner's, by id; absent, a full-access key. */
       role?: string;
+      /** That role's slug, which a scope names it by. */
+      roleSlug?: string;
     };
 
 /** One door: each operation, made for `who`, answering or throwing a {@link Refusal}. */
@@ -305,7 +308,11 @@ async function direct<T>(
               action,
               resource,
             })),
-            who.role === undefined ? undefined : [who.role]
+            // A scope names its roles by slug, as authentication resolves a key: a key scoped to
+            // a role names that role, a full-access key its owner's roles.
+            who.role === undefined
+              ? await listRoleSlugsForUserOrRefuse(who.owner)
+              : [who.roleSlug ?? who.role]
           ),
           apiKeyId: "key-1",
         };
@@ -1363,6 +1370,7 @@ describe.each(getConfiguredTestDialects())(
           kind: "key",
           owner: "olga",
           role: deskA,
+          roleSlug: "desk-a",
           grants: [
             ["read", PAGES],
             ["update", PAGES],
@@ -1374,6 +1382,47 @@ describe.each(getConfiguredTestDialects())(
           waiting.items.map(item => (item.document as Doc).entryId)
         ).toEqual([toA]);
         expect(waiting.meta).toMatchObject({ total: 1 });
+      });
+
+      it("lists for a key its owner's roles' work, never the owner's own", async () => {
+        // A key, even a full-access one, stands for its roles and never for its owner in person:
+        // work assigned to the owner by name waits for the owner, signed in, not for their key.
+        current = await bootSteps(dialect);
+        await people();
+        await person(app(), "olga", []);
+        const desk = await role(app(), "desk-o", [
+          ["read", PAGES],
+          ["update", PAGES],
+        ]);
+        await giveRole(app(), "olga", desk);
+        const toDesk = await entry(app(), PAGES);
+        const toOlga = await entry(app(), PAGES);
+        for (const [id, assignee] of [
+          [toDesk, { kind: "role", id: desk }],
+          [toOlga, { kind: "user", id: "olga" }],
+        ] as const) {
+          await seedState(app(), partOf(PAGES, id, null), "writing", {
+            definitionHash: HASH,
+            assignee,
+          });
+        }
+        const ids = async (who: Who) =>
+          (await door.waiting(who, { page: 1, limit: 10 })).items
+            .map(item => (item.document as Doc).entryId)
+            .sort();
+        const key: Who = {
+          kind: "key",
+          owner: "olga",
+          grants: [
+            ["read", PAGES],
+            ["update", PAGES],
+          ],
+        };
+
+        expect(await ids(key)).toEqual([toDesk]);
+        expect(await ids({ kind: "person", id: "olga" })).toEqual(
+          [toDesk, toOlga].sort()
+        );
       });
 
       it("names no one for a part in a stage with no step out of it", async () => {

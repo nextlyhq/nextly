@@ -93,6 +93,24 @@ function logger(): Logger {
     : consoleLogger;
 }
 
+/**
+ * The ids of the roles `slugs` name, as a caller's scope names its roles (a scope speaks in slugs,
+ * the way role rules read it), in the spelling assignments store (ids). A slug naming no role is
+ * left out.
+ *
+ * @experimental
+ */
+export async function roleIdsOfSlugs(
+  adapter: DrizzleAdapter,
+  slugs: readonly string[]
+): Promise<string[]> {
+  const roles = new RoleService(adapter, logger());
+  const found = await Promise.all(
+    slugs.map(slug => roles.findRoleIdBySlug(slug))
+  );
+  return found.flatMap(role => (role ? [role.id] : []));
+}
+
 /** The stored permission for `action` on `resource`, or undefined when there is none. */
 async function permissionFor(
   adapter: DrizzleAdapter,

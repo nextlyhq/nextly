@@ -19,7 +19,7 @@ import { resolveUserRoles } from "../../services/lib/permissions";
 import { configuredLocales } from "../i18n/configured-locales";
 
 import { primaryStep } from "./define-workflow";
-import { holderAnswer } from "./holders";
+import { holderAnswer, roleIdsOfSlugs } from "./holders";
 import { livePartsOf, partStage, pendingPartsOn } from "./implicit-stage";
 import { lastMovesOn, type LastMove } from "./last-moves";
 import { documentTableOn, partVersionOn } from "./part-versions";
@@ -353,7 +353,7 @@ export async function waitingFor(
     takeable.push(scoped);
   }
   if (takeable.length === 0) return { items: [], total: 0 };
-  const mine = await holdersOf(query.caller);
+  const mine = await holdersOf(adapter, query.caller);
   const terms = await waitingTerms(adapter, takeable, mine);
   const candidates = await readWaitingReviewStates(
     adapter,
@@ -392,15 +392,22 @@ export async function waitingFor(
 
 /**
  * Whom the caller stands for when work is assigned: a person, as themselves and every role they
- * hold now (inherited ones included); a key scoped to roles, as those roles alone, never its
- * owner nor the owner's other roles, as its permissions are those roles' alone; a key without a
- * role scope, as its owner does.
+ * hold now (inherited ones included). A key, full-access or scoped, as its roles alone, never as
+ * its owner in person: work assigned to the owner by name is the owner's to see, as an approval is
+ * a person's to give. Its roles are those its scope names, or, where it names none, its owner's,
+ * as its permissions are judged.
  */
 async function holdersOf(
+  adapter: DrizzleAdapter,
   caller: WaitingQuery["caller"]
 ): Promise<ReviewAssignee[]> {
-  if (caller.kind === "key" && caller.scope.roles !== undefined) {
-    return caller.scope.roles.map(id => ({ kind: "role" as const, id }));
+  if (caller.kind === "key") {
+    // A scope names its roles by slug; work is assigned to a role by id.
+    const ids =
+      caller.scope.roles !== undefined
+        ? await roleIdsOfSlugs(adapter, caller.scope.roles)
+        : [...(await resolveUserRoles(caller.userId)).roleIds];
+    return ids.map(id => ({ kind: "role" as const, id }));
   }
   const { roleIds } = await resolveUserRoles(caller.userId);
   return [
