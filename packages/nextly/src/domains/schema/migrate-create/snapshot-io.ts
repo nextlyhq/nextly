@@ -20,8 +20,8 @@
 // canonical store for `migrate:check`'s offline integrity verification.
 
 import { createHash } from "node:crypto";
-import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { mkdir, readdir, readFile } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
 
 import { normalizeContributions } from "../pipeline/diff/contributions";
 import type {
@@ -37,6 +37,7 @@ import {
   isEntitySettingsRecord,
   type EntitySettingsRecord,
 } from "./entity-settings";
+import { prepareWhole, type PreparedFile } from "./writer-hold";
 
 export interface SnapshotFile {
   version: 1;
@@ -223,6 +224,58 @@ export type TemplateStart = (
   template: TemplateEntities
 ) => NextlySchemaSnapshot;
 
+/** A folder's file names, or none where there is no such folder. */
+async function filesIn(dir: string): Promise<string[]> {
+  try {
+    return await readdir(dir);
+  } catch (err) {
+    if ((err as { code?: string }).code === "ENOENT") return [];
+    throw err;
+  }
+}
+
+/**
+ * The snapshot files in `metaDir` that record a written migration, oldest
+ * first; none where the folder is absent. The one listing every reader of
+ * snapshots starts from.
+ *
+ * A snapshot counts only once its migration file is beside the folder: the
+ * snapshot is written first, so one whose writer stopped between the two
+ * files describes a migration that was never written. Read as the newest it
+ * would hide that change from the next `migrate:create`, and read by
+ * `nextly migrate` it would stand for entities no migration made. Its `.sql`,
+ * or a dialect's variant of it (`<name>.<dialect>.sql`), is what says the
+ * migration exists.
+ */
+export async function recordedSnapshotNames(
+  metaDir: string
+): Promise<string[]> {
+  const snapshots = (await filesIn(metaDir))
+    .filter(f => f.endsWith(".snapshot.json"))
+    .sort();
+  if (snapshots.length === 0) return [];
+  const migrations = (await filesIn(dirname(metaDir))).filter(f =>
+    f.endsWith(".sql")
+  );
+  return snapshots.filter(snapshot => {
+    const base = snapshot.slice(0, -".snapshot.json".length);
+    return migrations.some(
+      file => file === `${base}.sql` || file.startsWith(`${base}.`)
+    );
+  });
+}
+
+/**
+ * The newest snapshot file's name in `metaDir`, by the same order
+ * `loadLatestSnapshot` reads; undefined where the folder is absent or holds
+ * none that records a written migration (`recordedSnapshotNames`).
+ */
+export async function newestSnapshotName(
+  metaDir: string
+): Promise<string | undefined> {
+  return (await recordedSnapshotNames(metaDir)).at(-1);
+}
+
 /**
  * Read the latest snapshot file from `migrations/meta/`.
  *
@@ -246,16 +299,8 @@ export async function loadLatestSnapshot(
   metaDir: string,
   templateStart?: TemplateStart
 ): Promise<LatestSnapshot | null> {
-  let files: string[] = [];
-  try {
-    files = await readdir(metaDir);
-  } catch (err) {
-    if ((err as { code?: string }).code === "ENOENT") return null;
-    throw err;
-  }
-  const snapshots = files.filter(f => f.endsWith(".snapshot.json")).sort();
-  if (snapshots.length === 0) return null;
-  const latest = snapshots[snapshots.length - 1];
+  const latest = await newestSnapshotName(metaDir);
+  if (latest === undefined) return null;
   const content = await readFile(resolve(metaDir, latest), "utf-8");
   if (templateStart !== undefined) {
     let parsed: unknown;
@@ -387,6 +432,25 @@ export function snapshotPathOf(metaDir: string, baseName: string): string {
  * `migrate:check` can verify integrity offline (no DB connection).
  */
 export async function writeSnapshot(
+  ...args: Parameters<typeof prepareSnapshot>
+): Promise<string> {
+  const file = await prepareSnapshot(...args);
+  try {
+    // Whole or not at all: a reader of the folder never finds half a snapshot.
+    await file.place();
+  } catch (error) {
+    await file.discard();
+    throw error;
+  }
+  return file.path;
+}
+
+/**
+ * `writeSnapshot`, stopped before the file is put at its name: written in
+ * full beside it, for a writer that places it with its migration file once
+ * it has made its last check (`publishHeld`).
+ */
+export async function prepareSnapshot(
   metaDir: string,
   baseName: string,
   snapshot: NextlySchemaSnapshot,
@@ -396,7 +460,7 @@ export async function writeSnapshot(
   entities?: EntitySettingsRecord,
   /** Every declared permission, by owner; omitted only by a caller that knows none. */
   permissions?: PermissionRecord
-): Promise<string> {
+): Promise<PreparedFile> {
   await mkdir(metaDir, { recursive: true });
   const byName = (a: { name: string }, b: { name: string }) =>
     a.name.localeCompare(b.name);
@@ -476,9 +540,7 @@ export async function writeSnapshot(
     },
   };
   const json = JSON.stringify(file, sortedKeysReplacer, 2);
-  const path = snapshotPathOf(metaDir, baseName);
-  await writeFile(path, json + "\n", "utf-8");
-  return path;
+  return prepareWhole(snapshotPathOf(metaDir, baseName), json + "\n");
 }
 
 /** Structural check of a snapshot file's `contributions`. */

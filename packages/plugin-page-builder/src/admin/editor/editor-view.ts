@@ -14,11 +14,13 @@ import type {
 import type { DocumentIdentity } from "@nextlyhq/plugin-sdk/admin";
 import type { ComponentProps } from "react";
 
+import type { useComponentSettingHold } from "./component-setting-hold";
 import type { EditorPanels } from "./editor-panels";
 import type {
   ReadMediaSummary,
   SearchMediaSummaries,
 } from "./media-summary-reader";
+import type { RegionEditingHost } from "./region-editing";
 import type { Reveal } from "./reveal-hidden";
 import type { ComponentView } from "./use-component-view";
 import type { EditorMount } from "./use-editor-mount";
@@ -42,8 +44,14 @@ export type EditorView = EditorMount &
     >["visitorUnreadable"];
     documentDirty: boolean;
     pageTitle: string | undefined;
+    /** A header or footer edited in place, and the way into it. */
+    regionEditing: RegionEditingHost;
     /** "Edit component", and the banner over a component's own view. */
     componentView: ComponentView;
+    /** Plan a setting of a placed component, held for the page's Save. */
+    makeComponentSetting: ReturnType<
+      typeof useComponentSettingHold
+    >["makeComponentSetting"];
     /** The block verbs shared for the surfaces drawn outside the provider. */
     layerVerbs: CardVerbs;
     /** What the canvas draws: the document, with selected hidden blocks shown. */

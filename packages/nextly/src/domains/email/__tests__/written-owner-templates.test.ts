@@ -98,6 +98,14 @@ describe("a plugin's written template in the registry", () => {
     ],
     ["neither", paid({ blocks: undefined }), "gives neither HTML nor blocks"],
     [
+      "HTML that is null, from a plugin built without types",
+      paid({
+        blocks: undefined,
+        htmlContent: null as unknown as string,
+      }),
+      "gives HTML that isn't text",
+    ],
+    [
       "blocks that don't pass the written rules",
       paid({ blocks: { version: 2 } as unknown as WrittenDocument }),
       "blocks that don't pass the written rules",

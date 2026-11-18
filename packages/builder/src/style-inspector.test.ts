@@ -674,8 +674,13 @@ describe("every label fits the Style tab's label column", () => {
     // The control: without it, a block that offered half the catalog would
     // check half the labels and pass.
     const shown = new Set(everyRow().map(row => row.property));
+    // But the ones chosen in the Content tab, which Style draws only for a
+    // value held at another device (`accordion-question-settings.test.tsx`).
+    const inContent = new Set(["disclosureIcon"]);
     expect([...shown].sort()).toEqual(
-      STYLE_CATALOG.map(entry => entry.property).sort()
+      STYLE_CATALOG.map(entry => entry.property)
+        .filter(property => !inContent.has(property))
+        .sort()
     );
   });
 
