@@ -22,6 +22,7 @@
  *
  * @module domains/schema/value-conversion/type-change/judge
  */
+import { canonicalJson } from "../../../../shared/lib/canonical-json";
 import { EMAIL_RE } from "../../../../shared/lib/entry-validation";
 import { readExactIsoInstant } from "../../../../shared/lib/iso-instant";
 import type { ConversionClass } from "../types";
@@ -884,17 +885,13 @@ function scalarJsonWriting(
     : JSON.stringify(textOf(value));
 }
 
-/** JSON with every object's keys in order, so two values that parse alike have one writing. */
+/**
+ * JSON with every object's keys in order, so two values that parse alike have one writing: the one
+ * canonical writing (`canonicalJson`). Every value here was parsed from JSON, so it has a writing;
+ * one that had none would be written as `null`.
+ */
 function stableJson(value: unknown): string {
-  return JSON.stringify(value, (_key, inner: unknown) =>
-    inner !== null && typeof inner === "object" && !Array.isArray(inner)
-      ? Object.fromEntries(
-          Object.entries(inner as Record<string, unknown>).sort(([a], [b]) =>
-            a < b ? -1 : a > b ? 1 : 0
-          )
-        )
-      : inner
-  );
+  return canonicalJson(value) ?? "null";
 }
 
 /** Whether a text column holds `text` whole: by its characters, or by its UTF-8 bytes. */

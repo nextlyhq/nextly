@@ -124,12 +124,14 @@ export interface ConfirmedColumnRename {
  *   one
  */
 export async function refuseRenamedUiTypeChanges(
+  source: "ui" | "code",
   desired: DesiredSchema,
   renames: readonly ConfirmedColumnRename[],
   db: unknown,
   dialect: SupportedDialect
 ): Promise<void> {
-  if (renames.length === 0) return;
+  // A code-first apply's type changes are judged by its own rule, in the classifier.
+  if (source !== "ui" || renames.length === 0) return;
   for (const saved of builderSaved(desired)) {
     const input = entityInput(saved);
     const columnOf = (field: FieldDefinition) =>

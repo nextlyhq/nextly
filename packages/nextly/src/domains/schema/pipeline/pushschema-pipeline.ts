@@ -1266,14 +1266,13 @@ export class PushSchemaPipeline {
         );
         // A Schema Builder field renamed and retyped in one save: its old column's values reach the
         // new type through the rename the answers confirmed, judged here, before anything runs.
-        if (source === "ui") {
-          await refuseRenamedUiTypeChanges(
-            args.desired,
-            dispatchResult.confirmedRenames,
-            db,
-            dialect
-          );
-        }
+        await refuseRenamedUiTypeChanges(
+          source,
+          args.desired,
+          dispatchResult.confirmedRenames,
+          db,
+          dialect
+        );
         // A relationship switched to or from naming several target collections, while a row holds a
         // value no conversion can carry across; then one switched from many related entries to one,
         // while a row holds several.

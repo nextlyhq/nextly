@@ -14,7 +14,6 @@ import type { KeyedBy } from "../read-values";
 import { readStoredValues } from "../read-values";
 import type {
   ConversionJudgement,
-  ConversionReason,
   ConversionReasonKind,
   RowKey,
   StoredValue,
@@ -95,78 +94,116 @@ export async function collectTypeChange(
   accepts?: (readsAs: string) => Promise<boolean>,
   options: CollectOptions = {}
 ): Promise<StoredTypeChangeJudgement> {
-  const counts: Record<ValueOutcome, number> = {
+  // A pair blocked whatever its values hold is one reason of the types, with no rows.
+  if (pairBlocked(from, to) !== null) {
+    return {
+      judgement: {
+        class: "blocked",
+        reasons: [{ kind: "pair-blocked", class: "blocked" }],
+      },
+      cleared: [],
+      counts: { kept: 0, changed: 0, lost: 0, blocked: 0 },
+    };
+  }
+  const tally = new TypeChangeTally(options);
+  for await (const value of values) {
+    tally.add(
+      value.key,
+      await withFieldRule(
+        judgeValue(from, to, decodeStored(from, value)),
+        accepts
+      )
+    );
+  }
+  return tally.result();
+}
+
+/** The values of one type change counted as they are judged: by outcome, by reason, and cleared. */
+class TypeChangeTally {
+  private readonly counts: Record<ValueOutcome, number> = {
     kept: 0,
     changed: 0,
     lost: 0,
     blocked: 0,
   };
-  const byReason = new Map<
+  private readonly byReason = new Map<
     ConversionReasonKind,
     { count: number; first: RowKey[] }
   >();
-  const cleared: RowKey[] = [];
-  // A unique field's values as the new type reads them, each distinct one with its language once,
-  // with the row that holds it until a second row repeats it (both are then named).
-  const firstHolder =
-    options.unique === true ? new Map<string, RowKey | null>() : undefined;
-  const note = (kind: ConversionReasonKind, key: RowKey) => {
-    const seen = byReason.get(kind) ?? { count: 0, first: [] };
-    seen.count += 1;
-    if (seen.first.length < FIRST_KEYS) seen.first.push(key);
-    byReason.set(kind, seen);
-  };
-  // A pair blocked whatever its values hold is one reason of the types, with no rows.
-  const pair = pairBlocked(from, to);
-  for await (const value of values) {
-    if (pair !== null) break;
-    const verdict = await withFieldRule(
-      judgeValue(from, to, decodeStored(from, value)),
-      accepts
-    );
+  private readonly cleared: RowKey[] = [];
+  private readonly repeatsOf:
+    | ((key: RowKey, readsAs: string) => RowKey[] | undefined)
+    | undefined;
+
+  constructor(private readonly options: CollectOptions) {
+    this.repeatsOf = options.unique === true ? uniqueValues() : undefined;
+  }
+
+  /** One value's verdict, counted. */
+  add(key: RowKey, verdict: ValueVerdict): void {
     if (verdict.readsAs !== undefined) {
-      options.onReading?.(value.key, verdict.readsAs);
-      if (firstHolder !== undefined) {
-        // A value another row in its language already reads as: the unique field cannot hold both.
-        const held = JSON.stringify([languageOf(value.key), verdict.readsAs]);
-        if (firstHolder.has(held)) {
-          const first = firstHolder.get(held);
-          if (first !== null && first !== undefined) {
-            note("repeated", first);
-            firstHolder.set(held, null);
-          }
-          counts.blocked += 1;
-          note("repeated", value.key);
-          continue;
-        }
-        firstHolder.set(held, value.key);
+      this.options.onReading?.(key, verdict.readsAs);
+      // A value another row in its language already reads as: the unique field cannot hold both.
+      const repeated = this.repeatsOf?.(key, verdict.readsAs);
+      if (repeated !== undefined) {
+        this.counts.blocked += 1;
+        for (const row of repeated) this.note("repeated", row);
+        return;
       }
     }
-    counts[verdict.outcome] += 1;
-    if (verdict.outcome === "lost") cleared.push(value.key);
-    if (verdict.reason === "same-value" || verdict.reason === "empty") continue;
-    note(REPORTED_AS[verdict.reason], value.key);
+    this.counts[verdict.outcome] += 1;
+    if (verdict.outcome === "lost") this.cleared.push(key);
+    if (verdict.reason === "same-value" || verdict.reason === "empty") return;
+    this.note(REPORTED_AS[verdict.reason], key);
   }
-  const reasons: ConversionReason[] =
-    pair !== null
-      ? [{ kind: "pair-blocked", class: "blocked" }]
-      : [...byReason].map(([kind, rows]) => ({
+
+  /** The class the worst value gives, every reason with its rows, and the rows to clear. */
+  result(): StoredTypeChangeJudgement {
+    const outcomes = (Object.keys(this.counts) as ValueOutcome[]).filter(
+      o => this.counts[o] > 0
+    );
+    return {
+      judgement: {
+        class: classOf(outcomes),
+        reasons: [...this.byReason].map(([kind, rows]) => ({
           kind,
           class: reasonClass(kind),
           rows: { first: rows.first, count: rows.count },
-        }));
-  return {
-    judgement: {
-      class:
-        pair !== null
-          ? "blocked"
-          : classOf(
-              (Object.keys(counts) as ValueOutcome[]).filter(o => counts[o] > 0)
-            ),
-      reasons,
-    },
-    cleared,
-    counts,
+        })),
+      },
+      cleared: this.cleared,
+      counts: this.counts,
+    };
+  }
+
+  private note(kind: ConversionReasonKind, key: RowKey): void {
+    const seen = this.byReason.get(kind) ?? { count: 0, first: [] };
+    seen.count += 1;
+    if (seen.first.length < FIRST_KEYS) seen.first.push(key);
+    this.byReason.set(kind, seen);
+  }
+}
+
+/**
+ * A unique field's values as the new type reads them, each distinct one with its language once. A
+ * value no row in its language read as before gives undefined; one that repeats gives the rows to
+ * name for it: the first row that held it, the first time it is repeated, and this one. Holds the
+ * distinct values, which counting a unique field's repeats needs, and nothing for any other field.
+ */
+function uniqueValues(): (
+  key: RowKey,
+  readsAs: string
+) => RowKey[] | undefined {
+  const holder = new Map<string, RowKey | null>();
+  return (key, readsAs) => {
+    const held = JSON.stringify([languageOf(key), readsAs]);
+    if (!holder.has(held)) {
+      holder.set(held, key);
+      return undefined;
+    }
+    const first = holder.get(held) ?? null;
+    holder.set(held, null);
+    return first === null ? [key] : [first, key];
   };
 }
 
