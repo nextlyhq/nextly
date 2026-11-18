@@ -761,50 +761,6 @@ function storedPerLanguage(change: CollectionSchemaChange): {
   return { wasLocalized: layout.wasStored, isLocalized: layout.isStored };
 }
 
-/**
- * Whether the schema dialog's push applies a collection's change rather than the save's own
- * migration file: the one answer the dialog asks.
- *
- * A collection translated before or after the change keeps the push, as every such save did: the
- * push judges its companion against the companion as it stands, which the file road cannot yet.
- * Any other change asks the rule a Single's and a field group's saves follow
- * (`pushCarriesValues`): a column type change, which the push judges against the stored values,
- * and a change reaching a relation's storage keep the push; the rest run the file.
- */
-export async function collectionChangeCarriesValues(
-  change: CollectionSchemaChange
-): Promise<boolean> {
-  if (change.wasLocalized || change.isLocalized) return true;
-  const { adapter } = requireSchemaChangeDeps(change.slug);
-  const dialect = adapter.dialect;
-  const { tableName } = change.collection;
-  const oldFields = (change.collection.fields ?? []) as FieldDefinition[];
-  const [
-    { pushCarriesValues },
-    { renamedFieldsOf },
-    { introspectLiveSnapshot },
-    { getColumnDescriptor },
-  ] = await Promise.all([
-    import("../builder-save/push-carries-values"),
-    import("../builder-save/schema-change-save"),
-    import("../pipeline/diff/introspect-live"),
-    import("./field-column-descriptor"),
-  ]);
-  return pushCarriesValues({
-    oldFields,
-    newFields: change.fields,
-    // Not translated before or after: nothing is stored per language.
-    wasStored: false,
-    isStored: false,
-    renamed: null,
-    liveTable: async () =>
-      (await introspectLiveSnapshot(adapter.getDrizzle(), dialect, [tableName]))
-        .tables[0],
-    columnOf: field => getColumnDescriptor(field, dialect, "collection"),
-    renames: renamedFieldsOf(change.renameResolutions),
-  });
-}
-
 /** `applyCollectionSchemaChange`'s work, run while this context holds the schema lock. */
 async function applyHoldingSchemaLock(
   change: CollectionSchemaChange
