@@ -18,11 +18,16 @@
  */
 import {
   type BlockNode,
+  type NodeStyles,
   type SiteTokenSet,
   type StyleValue,
 } from "@nextlyhq/blocks-engine";
 
-import { contrastObscuredIn, contrastOf, contrastRatioText } from "../style-colour";
+import {
+  contrastObscuringIn,
+  contrastOf,
+  contrastRatioText,
+} from "../style-colour";
 
 import type { PageCheck, PageCheckResult, ResolvedPage } from "./page-checks";
 
@@ -41,7 +46,9 @@ const LARGE_TEXT = "core/heading";
 
 /** The site's text and background, where nothing on the page sets them. */
 const SITE_TEXT: StyleValue = { $token: "color.text" } as StyleValue;
-const SITE_BACKGROUND: StyleValue = { $token: "color.background" } as StyleValue;
+const SITE_BACKGROUND: StyleValue = {
+  $token: "color.background",
+} as StyleValue;
 
 /** What a block's text is drawn with, read down from the page. */
 interface Painted {
@@ -49,18 +56,26 @@ interface Painted {
   readonly background?: StyleValue;
   /** Whether the author set either colour here or on a container. */
   readonly chosen: boolean;
-  /** Whether something stands over or between the colours. */
-  readonly obscured: boolean;
+  /**
+   * Whether an image, gradient or shadow is painted behind the text, which
+   * an opaque background in front of it covers.
+   */
+  readonly backdrop: boolean;
+  /** Whether opacity, a filter or a blend alters everything inside. */
+  readonly subtree: boolean;
   /** Whether a colour comes from somewhere this check can't read. */
   readonly unknown: boolean;
 }
 
-/** The node's own colours at its base state and width. */
-function ownColours(node: BlockNode): {
+/** A node's text colour and background at its base state and width. */
+interface Colours {
   readonly color?: StyleValue;
   readonly background?: StyleValue;
-} {
-  const values = node.styles?.base?.base as
+}
+
+/** The colours set in one node's styles, at its base state and width. */
+function coloursIn(styles: NodeStyles | undefined): Colours {
+  const values = styles?.base?.base as
     | Readonly<Record<string, StyleValue | undefined>>
     | undefined;
   return {
@@ -71,20 +86,28 @@ function ownColours(node: BlockNode): {
   };
 }
 
-/** What the node's text is drawn with, from its container's and its own. */
-function paintedBy(node: BlockNode, around: Painted): Painted {
-  const own = ownColours(node);
+/** What the node's text is drawn with: its own, its type's, its container's. */
+function paintedBy(
+  node: BlockNode,
+  around: Painted,
+  blocks: ResolvedPage["blocks"]
+): Painted {
+  const own = coloursIn(node.styles);
+  // The block type's own look (a Button's blue), under the node's own.
+  const type = coloursIn(blocks(node.type)?.baseStyles);
+  const color = own.color ?? type.color ?? around.color;
+  const background = own.background ?? type.background ?? around.background;
+  const obscuring = contrastObscuringIn(node.styles);
+  const opaque = (own.background ?? type.background) !== undefined;
   const look = node.props.look;
   return {
-    ...(own.color ?? around.color) === undefined
-      ? {}
-      : { color: own.color ?? around.color },
-    ...(own.background ?? around.background) === undefined
-      ? {}
-      : { background: own.background ?? around.background },
+    ...(color === undefined ? {} : { color }),
+    ...(background === undefined ? {} : { background }),
     chosen:
       around.chosen || own.color !== undefined || own.background !== undefined,
-    obscured: around.obscured || contrastObscuredIn(node.styles) !== undefined,
+    // A background of its own covers what its container paints behind it.
+    backdrop: obscuring.local !== undefined || (!opaque && around.backdrop),
+    subtree: around.subtree || obscuring.subtree !== undefined,
     unknown:
       around.unknown ||
       (node.classes?.length ?? 0) > 0 ||
@@ -92,9 +115,45 @@ function paintedBy(node: BlockNode, around: Painted): Painted {
   };
 }
 
+/** Text this many px or more is large, as WCAG counts it (18pt). */
+const LARGE_PX = 24;
+
+/** A font size in px, where the stored value says it plainly. */
+function fontSizePx(value: unknown): number | undefined {
+  if (typeof value === "string") {
+    const match = /^(\d+(?:\.\d+)?)(px|rem)$/.exec(value.trim());
+    if (match === null) return undefined;
+    return Number(match[1]) * (match[2] === "rem" ? 16 : 1);
+  }
+  if (typeof value === "object" && value !== null) {
+    const { value: size, unit } = value as { value?: unknown; unit?: unknown };
+    if (typeof size !== "number") return undefined;
+    if (unit === "px") return size;
+    return unit === "rem" ? size * 16 : undefined;
+  }
+  return undefined;
+}
+
+/**
+ * Whether the block's text is large, held to 3:1: a size of its own that
+ * reaches 24px, or, with none, a Heading at level 1 or 2, which the site's
+ * type sizes draw large. A size it sets that can't be read isn't large.
+ */
+function isLargeText(node: BlockNode): boolean {
+  const values = node.styles?.base?.base as
+    | Readonly<Record<string, unknown>>
+    | undefined;
+  if (values?.fontSize !== undefined) {
+    const px = fontSizePx(values.fontSize);
+    return px !== undefined && px >= LARGE_PX;
+  }
+  const level = node.props.level;
+  return node.type === LARGE_TEXT && (level === "h1" || level === "h2");
+}
+
 /** The ratio a block's text needs. */
 function threshold(node: BlockNode): number {
-  return node.type === LARGE_TEXT ? 3 : 4.5;
+  return isLargeText(node) ? 3 : 4.5;
 }
 
 const WHY =
@@ -107,7 +166,7 @@ function contrastFinding(
   tokens: SiteTokenSet | undefined
 ): PageCheckResult | undefined {
   if (painted.unknown) return undefined;
-  if (painted.obscured) {
+  if (painted.backdrop || painted.subtree) {
     return {
       nodeId: node.id,
       part: "skipped",
@@ -147,7 +206,12 @@ function contrastFinding(
 /** Every text block whose contrast is too low, or which couldn't be judged. */
 function contrastFindings(page: ResolvedPage): PageCheckResult[] {
   const found: PageCheckResult[] = [];
-  const start: Painted = { chosen: false, obscured: false, unknown: false };
+  const start: Painted = {
+    chosen: false,
+    backdrop: false,
+    subtree: false,
+    unknown: false,
+  };
   const stack: { node: unknown; around: Painted }[] = [...page.drawn]
     .reverse()
     .map(node => ({ node, around: start }));
@@ -160,7 +224,7 @@ function contrastFindings(page: ResolvedPage): PageCheckResult[] {
     if (typeof block.type !== "string" || typeof block.props !== "object") {
       continue;
     }
-    const painted = paintedBy(block, around);
+    const painted = paintedBy(block, around, page.blocks);
     if (TEXT_BLOCKS.has(block.type)) {
       const finding = contrastFinding(block, painted, page.tokens);
       if (finding !== undefined) found.push(finding);
