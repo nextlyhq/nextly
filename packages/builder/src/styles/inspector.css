@@ -151,6 +151,28 @@
   color: var(--nx-muted-foreground);
 }
 
+/* A picture's way back to its gallery: a quiet text button under the
+   title, in the panel's own colours, so it reads as a step back rather
+   than one more setting. */
+.nx-block-card__back {
+  align-self: flex-start;
+  padding: 0.125rem 0.25rem;
+  margin-inline-start: -0.25rem;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--nx-muted-foreground);
+  font: inherit;
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.nx-block-card__back:hover,
+.nx-block-card__back:focus-visible {
+  color: var(--nx-foreground);
+  background: var(--nx-accent);
+}
+
 .nx-block-card__menu {
   display: inline-flex;
   align-items: center;
@@ -263,20 +285,70 @@
 }
 
 /*
- * The Style tab's "Look" row: one tile per look of the selected block's type,
- * each drawn as the block would be, its own look first. Two to a row, three
- * when there are three, so a tile is wide enough to draw its specimen.
+ * The Style tab's "Block style" section, above the editing bar: one tile per
+ * block style of the selected block's type, each drawn as the block would be,
+ * its own style first. Two to a row, three when there are three, so a tile is
+ * wide enough to draw its specimen. The section's own space under it parts it
+ * from the bar, as the bar's own space parts it from the sections below.
  */
+.nx-block-style {
+  margin-block-end: 0.5rem;
+}
+
+/*
+ * The section opens and closes as the Style sections under the bar do, and
+ * an open one shows its overflow, so a tile's focus ring is not cut off at
+ * the section's edge; clipped only while it moves.
+ */
+.nx-block-style [data-section] > [data-slot="accordion-content"][data-state] {
+  animation: nx-section-close 150ms ease-out;
+}
+
+.nx-block-style
+  [data-section]
+  > [data-slot="accordion-content"][data-state="open"] {
+  overflow: visible;
+  animation-name: nx-section-open;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nx-block-style [data-section] > [data-slot="accordion-content"][data-state] {
+    animation: none;
+  }
+}
+
 .nx-look-tiles {
   display: grid;
   gap: 0.5rem;
-  margin-block-end: 0.75rem;
 }
 
-.nx-look-tiles__label {
+/* What a block style is, under the tiles, and the way to edit them. */
+.nx-block-style__line {
+  margin: 0;
+  color: var(--nx-muted-foreground);
   font-size: var(--text-xs);
-  font-weight: 600;
+  line-height: 1.4;
+}
+
+/* A link in the panel's own manner: the text's colour, underlined. */
+.nx-block-style__edit {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.125rem;
+  padding: 0;
+  border: 0;
+  background: none;
   color: var(--nx-foreground);
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.nx-block-style__edit:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
 }
 
 .nx-look-tiles__grid {
@@ -359,19 +431,124 @@
   padding: 0.375rem 0.625rem;
 }
 
-.nx-look-tile__specimen[data-kind="image"] {
-  /* The height follows the proportion, so a look's own (a circle's 1 / 1)
-     shows. */
-  inline-size: 2.5rem;
-  aspect-ratio: 4 / 3;
-  background: linear-gradient(135deg, var(--nx-chart-2), var(--nx-chart-3));
+/* A sample of the block: drawn at the page's own sizes (16px type, a
+   picture 6rem wide, a section's padding) inside a frame that stands for the
+   page's screen, then scaled down whole by `zoom`, so its proportions are the
+   page's. The frame fills the stage and is a size container, which the
+   sample's screen lengths are read against (`cqh` for `vh`). A row in Design,
+   a smaller stage, scales it further by `--nx-look-sample-zoom`. */
+.nx-look-tile__frame {
+  --nx-look-sample-scale: 0.5;
+  display: grid;
+  place-items: center;
+  inline-size: 100%;
+  block-size: 100%;
+  overflow: hidden;
+  container-type: size;
+  zoom: calc(var(--nx-look-sample-scale) * var(--nx-look-sample-zoom, 1));
+  font-size: 1rem;
+  font-weight: 400;
+  line-height: 1.4;
+  white-space: normal;
 }
 
+/* A section is as wide as the page, so its sample is drawn at a page's
+   width and scaled further. */
+.nx-look-tile__frame[data-kind="band"] {
+  --nx-look-sample-scale: 0.25;
+  place-items: start stretch;
+}
+
+.nx-look-tile__frame .nx-look-tile__specimen {
+  box-sizing: border-box;
+  display: block;
+  font-size: inherit;
+  font-weight: inherit;
+  line-height: inherit;
+  white-space: inherit;
+}
+
+/* The picture's box: a 4 / 3 picture unless the style gives its own
+   proportion (a circle's 1 / 1), clipped to the style's corners. */
+.nx-look-tile__specimen[data-kind="image"] {
+  inline-size: 6rem;
+  aspect-ratio: 4 / 3;
+  overflow: hidden;
+}
+
+/* Its fit is set on it inline, as the style fits it. */
+.nx-look-tile__picture {
+  display: block;
+  inline-size: 100%;
+  block-size: 100%;
+}
+
+/* No picture yet: a picture's outline in the page's own text colour, faint,
+   as an empty Image is drawn on the canvas. */
+.nx-look-tile__placeholder {
+  display: grid;
+  place-items: center;
+  inline-size: 100%;
+  block-size: 100%;
+  background: color-mix(in oklab, currentColor 10%, transparent);
+  color: color-mix(in oklab, currentColor 55%, transparent);
+}
+
+/* A quote sits low in its stage, a little smaller, so the chosen tile's
+   tick in the corner never covers its words. */
+.nx-look-tile__frame[data-kind="quote"] {
+  --nx-look-sample-scale: 0.42;
+  place-items: end center;
+  padding-block-end: 0.5rem;
+}
+
+/* A quote's words, two lines at most. */
+.nx-look-tile__specimen[data-kind="quote"] {
+  inline-size: 9rem;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+
+/* A section's band, as wide as the page, holding a heading and two lines of
+   text drawn as bars in the page's text colour. Each bar sits on a line of
+   its own, so it follows the band's alignment as words would. */
 .nx-look-tile__specimen[data-kind="band"] {
-  inline-size: 4.375rem;
-  block-size: 2.375rem;
-  border: 1px dashed var(--nx-border);
-  font-size: var(--text-xs);
+  inline-size: 100%;
+}
+
+/* As wide as the band's content, stated: the bars are sized by it. */
+.nx-look-tile__row {
+  display: block;
+  inline-size: 100%;
+  line-height: 0;
+}
+
+.nx-look-tile__row + .nx-look-tile__row {
+  margin-block-start: 0.75rem;
+}
+
+.nx-look-tile__line {
+  display: inline-block;
+  block-size: 0.75rem;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: 0.35;
+}
+
+.nx-look-tile__line[data-line="heading"] {
+  inline-size: 55%;
+  block-size: 1.5rem;
+  opacity: 0.8;
+}
+
+.nx-look-tile__line[data-line="text"] {
+  inline-size: 80%;
+}
+
+.nx-look-tile__line[data-line="short"] {
+  inline-size: 60%;
 }
 
 .nx-look-tile__name {

@@ -26,6 +26,7 @@ import {
   getBlock,
   isComponentInstance,
   isRichTextValue,
+  oneParagraphLines,
   registryBlockSource,
   type BlockDocument,
   type BlockNode,
@@ -150,9 +151,10 @@ export function composedTextAt(
   }
   // The text the page draws for this value, through the projection every
   // reader shares, so an untouched edit compares equal and writes nothing.
-  const shown = authoredText(
-    (node.props as Record<string, unknown> | undefined)?.[prop]
-  );
+  // A one-paragraph value is drawn with its marks and line breaks, and read
+  // back as the element's text, which holds its words and no breaks.
+  const own = (node.props as Record<string, unknown> | undefined)?.[prop];
+  const shown = kind === "line" ? oneParagraphLines(own) : authoredText(own);
   return {
     kind: "exposed",
     target: {

@@ -1046,6 +1046,29 @@ describeEachDialect("a translated field that is renamed", dialect => {
     });
   });
 
+  it("keeps where each language's value came from under the renamed field", async () => {
+    // Each language's record of where its value came from is kept by field name. Renamed, the
+    // field keeps its records under the new name: left under the old one, every value would read
+    // as of unknown origin, and a translation could no longer be found out of date.
+    const id = await seedShortHeading();
+    const pathsOf = async () =>
+      (
+        await query<{ locale: string; field_path: string }>(
+          `SELECT ${quote(dialect, "locale")} AS locale, ${quote(dialect, "field_path")} AS field_path FROM ${quote(dialect, "nextly_translation_provenance")} WHERE ${quote(dialect, "scope_slug")} = 'posts' AND ${quote(dialect, "entry_id")} = '${id}'`
+        )
+      )
+        .map(row => `${row.locale}:${row.field_path}`)
+        .sort();
+    expect(await pathsOf()).toEqual(["en:heading", "es:heading"]);
+
+    const saved = await handler().updateCollection(
+      { collectionName: "posts" },
+      { fields: [shortText("title2", 64)] }
+    );
+    expect(saved.success, JSON.stringify(saved)).toBe(true);
+    expect(await pathsOf()).toEqual(["en:title2", "es:title2"]);
+  });
+
   it("keeps every language through the rename and then the storage change, saved one after the other", async () => {
     const id = await seedShortHeading();
 

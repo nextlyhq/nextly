@@ -7,6 +7,8 @@ description: "`nextly upgrade` found a `nextly_migrations` table holding records
 
 `nextly upgrade` found a `nextly_migrations` table holding records it cannot read, so it moved none of them.
 
+This code is retired. `nextly upgrade` no longer moves the migration records of an earlier release: `nextly migrate` does, and a `nextly_migrations` table it cannot read ends it as `MIGRATE_LEDGER_UNREADABLE`. No command ends with it any more; it is kept so a script or a log search that names it still reads correctly. Releases before the change ended `nextly upgrade` with it:
+
 An earlier release kept its migration records in `nextly_migrations`. `nextly upgrade` moves them into `nextly_schema_events` and reads every record before writing any. It reads the two shapes `nextly migrate` and `nextly db:sync` kept the table in. This table has a record it cannot read: one with a status no release wrote, one naming no migration file, or a table of another shape that holds rows, such as the one the adapters' migration helper kept, whose records name a label rather than a migration file. So the upgrade stopped before changing anything.
 
 ## Fix

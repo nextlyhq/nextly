@@ -33,6 +33,8 @@ import { Button, Input, Label } from "@nextlyhq/ui";
 import { Plus } from "lucide-react";
 import * as React from "react";
 
+import { SettingSlot } from "./settings-filter";
+
 import { BUILT_IN_WRITES } from "./code-hints";
 import { CssHint } from "./css-hint";
 import {
@@ -434,41 +436,44 @@ export function AdvancedPanel({
           {refusal}
         </p>
       )}
-      <div className="nx-inspector__field">
-        <Label htmlFor="nx-block-css-id">Anchor (ID)</Label>
-        {/* What it writes: the root element's `id`. */}
-        <CssHint writes={BUILT_IN_WRITES.anchor}>
-          <Input
-            id="nx-block-css-id"
-            value={draft.id}
-            placeholder="none"
-            aria-describedby={
-              idProblem === undefined ? undefined : "nx-css-id-problem"
-            }
-            aria-invalid={idProblem === undefined ? undefined : true}
-            onChange={event =>
-              setDraft(current => ({ ...current, id: event.target.value }))
-            }
-            onBlur={() => settle(latest.current)}
-            onKeyDown={event => {
-              if (event.key !== "Enter") return;
-              event.preventDefault();
-              settle(latest.current);
-            }}
-          />
-        </CssHint>
-        {idProblem === undefined ? (
-          <p className="nx-inspector__hint">Lets a link jump here: #your-id</p>
-        ) : (
-          <p
-            className="nx-attributes__problem"
-            id="nx-css-id-problem"
-            role="alert"
-          >
-            {idProblem}
-          </p>
-        )}
-        {/*
+      <SettingSlot ids={["anchor"]}>
+        <div className="nx-inspector__field">
+          <Label htmlFor="nx-block-css-id">Anchor (ID)</Label>
+          {/* What it writes: the root element's `id`. */}
+          <CssHint writes={BUILT_IN_WRITES.anchor}>
+            <Input
+              id="nx-block-css-id"
+              value={draft.id}
+              placeholder="none"
+              aria-describedby={
+                idProblem === undefined ? undefined : "nx-css-id-problem"
+              }
+              aria-invalid={idProblem === undefined ? undefined : true}
+              onChange={event =>
+                setDraft(current => ({ ...current, id: event.target.value }))
+              }
+              onBlur={() => settle(latest.current)}
+              onKeyDown={event => {
+                if (event.key !== "Enter") return;
+                event.preventDefault();
+                settle(latest.current);
+              }}
+            />
+          </CssHint>
+          {idProblem === undefined ? (
+            <p className="nx-inspector__hint">
+              Lets a link jump here: #your-id
+            </p>
+          ) : (
+            <p
+              className="nx-attributes__problem"
+              id="nx-css-id-problem"
+              role="alert"
+            >
+              {idProblem}
+            </p>
+          )}
+          {/*
           The EMPTY-BUT-PRESENT id, which the box above cannot express.
 
           A field holding `""` shadows any `id` in the bag below and renders
@@ -483,39 +488,43 @@ export function AdvancedPanel({
           removing the modelled field UNSHADOWS the bag's `id`, so it has to be
           the author's decision and has to say what it does.
         */}
-        {cssId !== "" ? null : (
-          <p className="nx-inspector__note" role="status">
-            This block has an empty id set, so it renders no id at all
-            {emptyIdShadows
-              ? " and the id in the attributes below is ignored"
-              : ""}
-            .{" "}
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={() => removeEmptyId()}
-            >
-              Remove the empty id
-            </Button>
-          </p>
-        )}
-      </div>
+          {cssId !== "" ? null : (
+            <p className="nx-inspector__note" role="status">
+              This block has an empty id set, so it renders no id at all
+              {emptyIdShadows
+                ? " and the id in the attributes below is ignored"
+                : ""}
+              .{" "}
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => removeEmptyId()}
+              >
+                Remove the empty id
+              </Button>
+            </p>
+          )}
+        </div>
+      </SettingSlot>
 
-      <CssClassesField
-        nodeId={nodeId}
-        stored={storedClassesOf(editor, nodeId)}
-        editor={editor}
-        active={active}
-      />
+      <SettingSlot ids={["cssClasses"]}>
+        <CssClassesField
+          nodeId={nodeId}
+          stored={storedClassesOf(editor, nodeId)}
+          editor={editor}
+          active={active}
+        />
+      </SettingSlot>
 
-      <fieldset className="nx-attributes">
-        <legend className="nx-attributes__legend">Attributes</legend>
-        {draft.rows.length === 0 ? (
-          <p className="nx-inspector__note">No attributes on this block.</p>
-        ) : (
-          <>
-            {/*
+      <SettingSlot ids={["attributes"]}>
+        <fieldset className="nx-attributes">
+          <legend className="nx-attributes__legend">Attributes</legend>
+          {draft.rows.length === 0 ? (
+            <p className="nx-inspector__note">No attributes on this block.</p>
+          ) : (
+            <>
+              {/*
               Column headings, shown ONCE. Repeating "Name" and "Value" against
               every row is noise to look at, and worse to listen to: each
               repetition is another control announced with a word that already
@@ -525,46 +534,47 @@ export function AdvancedPanel({
               own accessible name, which is unique per row and still contains
               the word written here.
             */}
-            <div className="nx-attributes__head" aria-hidden="true">
-              <span>Name</span>
-              <span>Value</span>
-            </div>
-            <ul className="nx-attributes__rows">
-              {draft.rows.map((row, index) => (
-                <AttributeRowFields
-                  // Keyed by POSITION, not by name: a name is what the author is
-                  // editing, so keying on it would remount the input on every
-                  // keystroke and lose the caret.
-                  key={`${nodeId}:${String(index)}`}
-                  row={row}
-                  index={index}
-                  problem={problemOf(settled, problems, index, draft)}
-                  onChange={change}
-                  onCommit={() => settle(latest.current)}
-                  onRemove={() => remove(index)}
-                />
-              ))}
-            </ul>
-          </>
-        )}
-        {/* A button that looks like one, with an edge: a ghost button here
+              <div className="nx-attributes__head" aria-hidden="true">
+                <span>Name</span>
+                <span>Value</span>
+              </div>
+              <ul className="nx-attributes__rows">
+                {draft.rows.map((row, index) => (
+                  <AttributeRowFields
+                    // Keyed by POSITION, not by name: a name is what the author is
+                    // editing, so keying on it would remount the input on every
+                    // keystroke and lose the caret.
+                    key={`${nodeId}:${String(index)}`}
+                    row={row}
+                    index={index}
+                    problem={problemOf(settled, problems, index, draft)}
+                    onChange={change}
+                    onCommit={() => settle(latest.current)}
+                    onRemove={() => remove(index)}
+                  />
+                ))}
+              </ul>
+            </>
+          )}
+          {/* A button that looks like one, with an edge: a ghost button here
             read as indented text. */}
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="nx-attributes__add"
-          onClick={() =>
-            setDraft(current => ({
-              ...current,
-              rows: [...current.rows, { name: "", value: "" }],
-            }))
-          }
-        >
-          <Plus aria-hidden="true" size={14} />
-          Add attribute
-        </Button>
-      </fieldset>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="nx-attributes__add"
+            onClick={() =>
+              setDraft(current => ({
+                ...current,
+                rows: [...current.rows, { name: "", value: "" }],
+              }))
+            }
+          >
+            <Plus aria-hidden="true" size={14} />
+            Add attribute
+          </Button>
+        </fieldset>
+      </SettingSlot>
     </div>
   );
 }

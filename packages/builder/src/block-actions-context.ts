@@ -13,12 +13,14 @@
 
 import {
   registryNestingSource,
+  type BlockDocument,
   type NestingSource,
 } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
 import type { MoveDirection } from "./keyboard-move";
 import type { SelectionOffer } from "./selection-offer";
+import type { TurnIntoOffer } from "./turn-into-verb";
 
 /**
  * The structural verbs, as callables.
@@ -41,6 +43,12 @@ export interface BlockActions {
   readonly delete: () => void;
   /** Copy the selection in beside itself and select the copy. */
   readonly duplicate: () => void;
+  /** Put the selection on the clipboard, to paste on this page or another. */
+  readonly copy: () => void;
+  /** Put the selection on the clipboard and remove it, lock permitting. */
+  readonly cut: () => void;
+  /** Paste copied blocks where a clicked block would land. */
+  readonly paste: () => void;
   /** Select the container holding the selection. */
   readonly selectParent: () => void;
   /**
@@ -81,6 +89,25 @@ export interface BlockActions {
   readonly detachComponent?: () => void;
   readonly duplicateComponent?: () => void;
   readonly updatePattern?: () => void;
+  /**
+   * Turn the selected block into another type (`"core/heading"`), as one undo
+   * step, saying what it removes or why it cannot. Optional, so a host built
+   * before it keeps compiling.
+   */
+  readonly turnInto?: (to: string) => void;
+  /**
+   * "Turn into" for a block in a page the caller holds rather than the
+   * selection: the format bar's, which writes the words typed first and turns
+   * the block in the page that left. The same judging and words as
+   * {@link turnInto}.
+   */
+  readonly turnIntoIn?: {
+    readonly choices: (
+      document: BlockDocument,
+      id: string
+    ) => readonly TurnIntoOffer[];
+    readonly run: (document: BlockDocument, id: string, to: string) => void;
+  };
 }
 
 /**

@@ -32,6 +32,7 @@ import { useNoticeQueue, useNoticeSink } from "./builder-notices";
 import { BuilderShell, type SettingsDialogState } from "./builder-shell";
 import { CanvasFrameProvider } from "../canvas/canvas-frame-context";
 import { CommandPalette } from "./command-palette";
+import { ShowInspectorContext } from "./show-inspector";
 import { EMPTY_CONTAINER_SELECTOR } from "../canvas/empty-slot";
 import {
   DEFAULT_PREFERENCES,
@@ -479,9 +480,11 @@ describe("the strip pinned above the canvas", () => {
     expect(
       strip.compareDocumentPosition(region) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();
-    // The page keeps its whole gutter under the strip, the top included, so
-    // what is drawn just above the first block is not cut off.
-    expect(region.style.padding).toBe("16px");
+    // The page meets the region's edges under the strip as well: no gutter
+    // on any side, and none on the strip's slot.
+    expect(region.style.padding).toBe("");
+    const slot = strip.closest<HTMLElement>(".nx-canvas-strip-slot");
+    expect(slot?.getAttribute("style") ?? "").toBe("");
   });
 
   it.each([
@@ -495,15 +498,15 @@ describe("the strip pinned above the canvas", () => {
       // is not drawn at all, as with no strip.
       expect(document.querySelector(".nx-canvas-strip-slot")).toBeNull();
       const region = screen.getByRole("region", { name: "Canvas" });
-      expect(region.style.padding).toBe("16px");
+      expect(region.style.padding).toBe("");
     }
   );
 
-  it("draws none where the host gives none, with the same gutter (the control)", () => {
+  it("draws none where the host gives none, the page still meeting the region's edges (the control)", () => {
     renderShell({ children: <p>canvas content</p> });
     const region = screen.getByRole("region", { name: "Canvas" });
     expect(document.querySelector(".nx-canvas-strip-slot")).toBeNull();
-    expect(region.style.padding).toBe("16px");
+    expect(region.style.padding).toBe("");
   });
 });
 
@@ -515,6 +518,20 @@ describe("leaving the editor", () => {
     const { onExit } = renderShell();
 
     const exit = screen.getByRole("button", { name: "Exit editor" });
+    fireEvent.click(exit);
+    expect(onExit).toHaveBeenCalledTimes(1);
+  });
+
+  it("names the exit where the host says it goes, and says nothing of 'Exit editor' then", () => {
+    // A host whose exit leaves for a list rather than the document names that
+    // place. Asserting the old name is gone too: a bar that kept "Exit editor"
+    // as the name and showed the new words only in a tooltip would tell a
+    // screen reader the arrow returns to the document.
+    const { onExit } = renderShell({ exitLabel: "Back to Pages" });
+
+    const exit = screen.getByRole("button", { name: "Back to Pages" });
+    expect(exit.getAttribute("title")).toBe("Back to Pages");
+    expect(screen.queryByRole("button", { name: "Exit editor" })).toBeNull();
     fireEvent.click(exit);
     expect(onExit).toHaveBeenCalledTimes(1);
   });
@@ -1728,6 +1745,25 @@ describe("a viewport too narrow for the shell", () => {
     expect(onExit).toHaveBeenCalledTimes(1);
   });
 
+  it("words the way out as the top bar's arrow does, where the host names it", () => {
+    // The notice's button and the arrow are the same way out; worded apart,
+    // one of them would promise a place the exit doesn't go.
+    stubContainerFits(false);
+    const onExit = vi.fn();
+    render(
+      <BuilderShell
+        onExit={onExit}
+        exitLabel="Back to Pages"
+        store={memoryStore()}
+      />
+    );
+
+    expect(
+      screen.getAllByRole("button", { name: "Back to Pages" }).length
+    ).toBeGreaterThan(0);
+    expect(screen.queryByRole("button", { name: "Exit editor" })).toBeNull();
+  });
+
   it("drops the escape sentence WITH the button when no host can be exited to", () => {
     // The copy and the control are one unit. Keeping the sentence while dropping
     // the button instructs the author to go somewhere and offers nothing to get
@@ -2526,6 +2562,33 @@ describe("hiding the side panels", () => {
     expect(stored(store).inspectorHidden).toBe(true);
   });
 
+  it("shows a hidden inspector for a control in the top bar that asks", () => {
+    stubContainerFits(true);
+    const store = memoryStore(
+      JSON.stringify({ ...DEFAULT_PREFERENCES, inspectorHidden: true })
+    );
+    function AsksForInspector(): React.JSX.Element {
+      const show = React.useContext(ShowInspectorContext);
+      return (
+        <button type="button" onClick={() => show?.()}>
+          Go to a setting
+        </button>
+      );
+    }
+    render(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={store}
+        inspector={<p>inspector body</p>}
+        topBarEnd={<AsksForInspector />}
+      />
+    );
+    expect(screen.queryByText("inspector body")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Go to a setting" }));
+    expect(screen.getByText("inspector body")).toBeTruthy();
+    expect(stored(store).inspectorHidden).toBe(false);
+  });
+
   it("restores a hidden inspector when nothing else differs from the defaults", () => {
     sidesShell({ inspectorHidden: true });
     expect(screen.queryByText("inspector body")).toBeNull();
@@ -2545,6 +2608,39 @@ describe("hiding the side panels", () => {
 
     fireEvent.click(toggle(/^Left panel$/));
     expect(screen.getByText("layers panel")).toBeTruthy();
+  });
+
+  /** The shell over a stored record, asked by the editor itself to open Add. */
+  function askedForAdd(stored: Record<string, unknown>) {
+    stubContainerFits(true);
+    const store = memoryStore(
+      JSON.stringify({ ...DEFAULT_PREFERENCES, ...stored })
+    );
+    render(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={store}
+        availablePanels={["add", "layers"]}
+        renderPanel={panel => <p>{panel} panel</p>}
+        inspector={<p>inspector body</p>}
+        openPanelRequest={{ panel: "add", count: 1, unlessHidden: true }}
+      />
+    );
+    return store;
+  }
+
+  it("opens Add for the editor's own request, over the panel last open", () => {
+    // An empty page opens on Add, whichever left panel was last open.
+    askedForAdd({ leftPanel: "layers" });
+    expect(screen.getByText("add panel")).toBeTruthy();
+    expect(screen.queryByText("layers panel")).toBeNull();
+  });
+
+  it("leaves a left side the author hid hidden, for the editor's own request", () => {
+    const store = askedForAdd({ leftPanel: "layers", leftPanelHidden: true });
+    expect(screen.queryByText("add panel")).toBeNull();
+    expect(screen.queryByText("layers panel")).toBeNull();
+    expect(stored(store)).toMatchObject({ leftPanelHidden: true });
   });
 
   it("opens Add when the left panel is shown with none chosen", () => {

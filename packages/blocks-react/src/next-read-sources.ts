@@ -12,6 +12,7 @@
 import {
   bindingDemand,
   safeTimeZone,
+  siteComputedValues,
   type BindingDemand,
   type BindingFieldShape,
   type BlockDocument,
@@ -46,6 +47,7 @@ import type {
   BlocksFieldShapes,
   BlocksPublicReader,
   BlocksSiteSettings,
+  BlocksSiteValues,
   NamedQueryLookup,
   PageBindings,
   ListBatchReads,
@@ -630,7 +632,7 @@ async function siteAndZone(
     | "window"
   >,
   demand: BindingDemand
-): Promise<{ site?: BlocksSiteSettings; timeZone?: string }> {
+): Promise<{ site?: BlocksSiteValues; timeZone?: string }> {
   const needsZone = demand.formatsDates && args.timeZone === undefined;
   const site =
     demand.site || needsZone
@@ -646,9 +648,33 @@ async function siteAndZone(
     slug: args.page,
   });
   return {
-    ...(site === undefined ? {} : { site }),
+    ...(site === undefined
+      ? {}
+      : { site: { ...site, currentYear: await yearIn(timeZone) } }),
     ...(timeZone === undefined ? {} : { timeZone }),
   };
+}
+
+/** How long a cached current year may live before it is asked again, in seconds. */
+const YEAR_LIFETIME = 60;
+
+/**
+ * The year it is now in `zone` (UTC when none, or one the runtime does not
+ * know), worked out INSIDE a cached read: a prerender under Cache Components
+ * refuses the current time outside the cache. Tagged with the site settings,
+ * whose time zone it is worked out in, and kept briefly, so a page shows the
+ * new year within a minute of it starting.
+ */
+async function yearIn(zone: string | undefined): Promise<string> {
+  const safe = safeTimeZone(zone).zone;
+  return await cachedFind(
+    () => Promise.resolve(siteComputedValues(new Date(), safe).currentYear),
+    {
+      tags: nextlySiteSettingsTags(),
+      keyParts: ["nextly-site-current-year", safe],
+      revalidate: YEAR_LIFETIME,
+    }
+  );
 }
 
 /** What a route draws its pages under, beyond what they read. */

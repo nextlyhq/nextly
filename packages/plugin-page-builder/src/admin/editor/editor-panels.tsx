@@ -7,6 +7,7 @@
  *
  * @module @nextlyhq/plugin-page-builder/admin/editor/editor-panels
  */
+import type { SiteTokenSet } from "@nextlyhq/blocks-engine";
 import {
   CORE_CATEGORIES,
   CORE_PALETTE_ORDER,
@@ -34,16 +35,14 @@ import {
   type LibraryTierState,
   type MiniatureSession,
   useMiniatureSession,
-  type VariablesPreview,
+  blockStyleFoldId,
 } from "@nextlyhq/builder/shell";
-import {
-  useDocumentIdentity,
-  useEntryFieldsPanel,
-} from "@nextlyhq/plugin-sdk/admin";
+import { useDocumentIdentity } from "@nextlyhq/plugin-sdk/admin";
 import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -51,7 +50,7 @@ import type { Control, FieldValues } from "react-hook-form";
 
 import type { ComponentLibraryRead } from "../component-library-client";
 import { lazyPart } from "../lazy-part";
-import { usePageLayoutRegions, usePageLayoutSettings } from "../page-layout";
+import { usePageLayoutSettings, type RegionCardFacts } from "../page-layout";
 import {
   usePatternLibrary,
   type LibraryReadState,
@@ -69,6 +68,7 @@ import {
   DesignReveal,
   ReportStylesMatches,
   SITE_FONTS_GROUP,
+  type DesignRevealRequest,
   type DesignView,
 } from "./design-panel";
 import {
@@ -86,9 +86,12 @@ import {
   useSectionPictures,
   type SectionPictureInputs,
 } from "./section-pictures";
+import { usePageRegions, type SelectedRegion } from "./selected-region";
+import type { FontRolesTab as FontRolesTabPart } from "./site-font-roles-tab";
 import type { FontsPanelWithUpload as FontsPanelWithUploadPart } from "./site-style-fonts";
 import {
   offerableFaces,
+  ColoursTab,
   offerableTokens,
   renderedTokens,
   SharedStylesStudio,
@@ -106,6 +109,14 @@ import type { CanvasInputs, SiteStyleInputs } from "./use-render-inputs";
  */
 const FontsPanelWithUpload: typeof FontsPanelWithUploadPart = lazyPart(() =>
   import("./site-style-fonts").then(m => m.FontsPanelWithUpload)
+);
+
+/**
+ * The Type tab's Body and Headings fonts, fetched with the fonts panel: they
+ * read the font catalogue for "Add Bold".
+ */
+const FontRolesTab: typeof FontRolesTabPart = lazyPart(() =>
+  import("./site-font-roles-tab").then(m => m.FontRolesTab)
 );
 
 /** A key for the document the editor has open, from its identity. */
@@ -319,7 +330,7 @@ function useOfferedLibrary({
 /** What `usePanelRequests` returns. */
 type PanelRequests = {
   openPanelRequest:
-    | { panel: LeftPanel; view?: string; count: number }
+    | { panel: LeftPanel; view?: string; count: number; unlessHidden?: boolean }
     | undefined;
   requestPanel: RequestPanel;
   /**
@@ -327,7 +338,14 @@ type PanelRequests = {
    * a container (its empty-container "+"), or in the gap right after a block
    * (the "+" between sections). Neither is what selecting the block implies.
    */
-  openInsertPanel: (place?: InsertPlaceRequest) => void;
+  openInsertPanel: (place?: InsertPlaceRequest, tab?: AddTab) => void;
+  /** The tab the press Add has yet to answer asks for, if it names one. */
+  addSummonTab: AddTab | undefined;
+  /**
+   * Opens Add as the editor's own request, on an empty page: shown in the
+   * left side unless the author hid that side themselves.
+   */
+  openAddUnlessHidden: () => void;
   /** The container the last "+" chose to add inside, if any. */
   insertInside: string | undefined;
   /** The block the last gap's "+" chose to add right after, if any. */
@@ -343,6 +361,15 @@ type PanelRequests = {
   addSummon: number | undefined;
   /** Told by Add each press it has answered. */
   onAddSummoned: (count: number) => void;
+  /**
+   * Opens Design on its Styles tab with one block type's Block styles opened
+   * and brought into view: the block panel's "Edit block styles".
+   */
+  openBlockStyles: (blockType: string) => void;
+  /** The group Design has yet to reveal, or `undefined` once it has. */
+  designReveal: DesignRevealRequest | undefined;
+  /** Told by Design each reveal request it has answered. */
+  onDesignRevealed: (count: number) => void;
 };
 
 /**
@@ -355,6 +382,9 @@ interface RequestPanel {
   (panel: "design", view?: DesignView): void;
   (panel: Exclude<LeftPanel, "design">, view?: string): void;
 }
+
+/** A tab of the Add panel a press can ask for. */
+type AddTab = "blocks" | "sections";
 
 /** A position in the page, as the in-place picker names one. */
 type InsertPosition = Extract<InsertPlace, { at: unknown }>["at"];
@@ -411,7 +441,8 @@ function usePanelRequests(selectedId: string | null): PanelRequests {
    * variables to fix a typeface the site does not provide.
    */
   const [openPanelRequest, setOpenPanelRequest] = useState<
-    { panel: LeftPanel; view?: string; count: number } | undefined
+    | { panel: LeftPanel; view?: string; count: number; unlessHidden?: boolean }
+    | undefined
   >(undefined);
   const requestPanel = useCallback((panel: LeftPanel, view?: string): void => {
     setOpenPanelRequest(current => ({
@@ -431,14 +462,24 @@ function usePanelRequests(selectedId: string | null): PanelRequests {
    */
   const [addPresses, setAddPresses] = useState(0);
   const [answeredPress, setAnsweredPress] = useState(0);
+  const [pressTab, setPressTab] = useState<AddTab | undefined>(undefined);
+  const reveals = useDesignReveals(requestPanel);
   const openInsertPanel = useCallback(
-    (place?: InsertPlaceRequest): void => {
+    (place?: InsertPlaceRequest, tab?: AddTab): void => {
       setPlaceRequest(place);
+      setPressTab(tab);
       setAddPresses(count => count + 1);
       requestPanel("add");
     },
     [requestPanel]
   );
+  const openAddUnlessHidden = useCallback((): void => {
+    setOpenPanelRequest(current => ({
+      panel: "add",
+      count: (current?.count ?? 0) + 1,
+      unlessHidden: true,
+    }));
+  }, []);
   /*
    * A "+"'s choice lasts while its block stays selected. Selecting anything
    * else, the block just added included, ends it, so selecting the block
@@ -458,23 +499,61 @@ function usePanelRequests(selectedId: string | null): PanelRequests {
     openInsertPanel,
     ...heldPlaces(held),
     addSummon: addPresses > answeredPress ? addPresses : undefined,
+    addSummonTab: addPresses > answeredPress ? pressTab : undefined,
     onAddSummoned: setAnsweredPress,
+    openAddUnlessHidden,
+    ...reveals,
+  };
+}
+
+/**
+ * "Edit block styles": Design asked for its Styles tab, and the type's group
+ * asked to be revealed there. Counted, as Add's presses are, and answered by
+ * the panel once its tab is open, so the panel opened later from the rail
+ * replays nothing.
+ */
+function useDesignReveals(
+  requestPanel: RequestPanel
+): Pick<
+  PanelRequests,
+  "openBlockStyles" | "designReveal" | "onDesignRevealed"
+> {
+  const [asked, setAsked] = useState<DesignRevealRequest | undefined>(
+    undefined
+  );
+  const [answered, setAnswered] = useState(0);
+  const openBlockStyles = useCallback(
+    (blockType: string): void => {
+      setAsked(current => ({
+        view: "styles",
+        group: blockStyleFoldId(blockType),
+        count: (current?.count ?? 0) + 1,
+      }));
+      requestPanel("design", "styles");
+    },
+    [requestPanel]
+  );
+  return {
+    openBlockStyles,
+    designReveal:
+      asked !== undefined && asked.count > answered ? asked : undefined,
+    onDesignRevealed: setAnswered,
   };
 }
 
 /**
  * What the canvas and the pictures are drawn in, held above the panels so
- * both outlast them: the site mode the canvas is previewed in (picked in the
- * Design panel; plain state, never stored, so a reload draws the page's own
- * mode again) and the editor's picture session (what pictures' async blocks
- * drew, and which sections were already seen).
+ * both outlast them: the site mode the canvas is previewed in (picked on the
+ * top bar's switch, which the site's variables decide is offered; kept for
+ * the session only) and the editor's picture session (what pictures' async
+ * blocks drew, and which sections were already seen).
  */
-function useDrawnLook(): {
+function useDrawnLook(siteTokens: SiteTokenSet | undefined): {
   readonly previewMode: CanvasPreviewMode;
   readonly pictureSession: MiniatureSession;
 } {
   return {
-    previewMode: useCanvasPreviewMode(),
+    previewMode: useCanvasPreviewMode(siteTokens),
     pictureSession: useMiniatureSession(usePictureContext()),
   };
 }
@@ -485,35 +564,31 @@ function useDrawnLook(): {
  */
 export function useEditorPanels<TFieldValues extends FieldValues>(
   mount: EditorMount,
-  name: string,
   /**
    * The entry's form, and the canvas the Layout's regions are scrolled to.
    * The page's Layout regions are rows in Layers, drawn on the canvas beside
-   * them; its section is handed to the Settings dialog.
+   * them; its section is handed to the Settings dialog. And the site's
+   * variables as the canvas draws with them, or `undefined` while they are
+   * read, which decide whether the light and dark preview is offered.
    */
   page: {
     control: Control<TFieldValues>;
     canvasRoot: HTMLElement | null;
+    siteTokens: SiteTokenSet | undefined;
   }
 ): EditorPanels {
   const { editor, clientConfig } = mount;
-  // The Layout section for the Settings dialog's "This page" tab, or null for
-  // a form that is not a page's.
+  // The page's header & footer section, or null for a form that is not a
+  // page's: Page settings draws its menu on General where it is not null.
   const pageLayout = usePageLayoutSettings(page.control);
-  // From the form's unsaved values, so a change of Layout redraws at once.
-  const layoutRegions = usePageLayoutRegions(page.control, page.canvasRoot);
-  /*
-   * The entry's other fields, ALREADY DRAWN, or null when there are none.
-   *
-   * One value feeds both the rail's availability and the panel's body below,
-   * so the two cannot disagree about whether there is anything to show. Asking
-   * separately is what put an empty Settings panel on the rail: every entry
-   * form has a renderer, so a gate on the renderer's existence is true even for
-   * a collection whose only fields are its title, its slug and this one.
-   */
-  // Flat, for the Settings dialog that frames them: no section cards, the
-  // slug read as the page's address.
-  const entryFields = useEntryFieldsPanel(name, { presentation: "dialog" });
+  // From the form's unsaved values, so a change of Layout redraws at once,
+  // with the header or footer selected on the canvas or in Layers.
+  const layoutRegions = usePageRegions(
+    page.control,
+    page.canvasRoot,
+    editor,
+    useLookEditing(editor)
+  );
 
   /*
    * The getting-started card, and the host's switch for it.
@@ -550,11 +625,11 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
   // The Pages panel, and the request its rows send to open Settings.
   const pages = usePagesPanel(mount.initialDocument.kind === "page");
   // Which look the inspector edits on its own: chosen in the Design panel,
-  // left by selecting a block, by the bar's Back, or by Esc.
-  const lookEditing = useLookEditing(editor);
-  const { previewMode, pictureSession } = useDrawnLook();
+  // left by selecting a block or a header or footer, by the bar's Back, or
+  // by Esc. Choosing one leaves a selected header or footer.
+  const { lookEditing } = layoutRegions;
+  const { previewMode, pictureSession } = useDrawnLook(page.siteTokens);
   return {
-    entryFields,
     lookEditing,
     previewMode,
     pictureSession,
@@ -562,12 +637,14 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
     pages,
     checklist,
     designFolds,
-    // Settings is a dialog, not a panel: the entry's fields are drawn in its
-    // "This page" tab.
+    // Settings is a dialog, not a panel: the entry's fields are drawn in Page
+    // settings' General and Fields tabs.
     availablePanels: AVAILABLE_PANELS,
     pageLayout,
     canvasRegions: layoutRegions.canvas,
-    layersRegions: layoutRegions.layers,
+    layersRegions: layoutRegions.selectedRegion.layers,
+    selectedRegion: layoutRegions.selectedRegion,
+    regionCards: layoutRegions.cards,
     ...library,
     ...requests,
   };
@@ -582,7 +659,23 @@ function useEditorRequests(
 ): PanelRequests & Pick<EditorPanels, "insertPicker" | "browseAll"> {
   const requests = usePanelRequests(editor.selectedId);
   const picker = usePickerPanel(editor, requests.openInsertPanel);
+  useAddOnEmptyOpen(
+    editor.document.nodes.length === 0,
+    requests.openAddUnlessHidden
+  );
   return { ...requests, ...picker };
+}
+
+/**
+ * An editor that opens on a document holding no blocks opens Add, which is
+ * what an empty page needs first, unless the author hid the left side; asked
+ * once, when the editor opens, and never again as blocks come and go.
+ */
+function useAddOnEmptyOpen(empty: boolean, openAdd: () => void): void {
+  const openedEmpty = useRef(empty);
+  useEffect(() => {
+    if (openedEmpty.current) openAdd();
+  }, [openAdd]);
 }
 
 /** The in-place picker's state, and "Browse all" carrying its target on. */
@@ -706,7 +799,6 @@ function PickerPatternRead({
  */
 export type EditorPanels = OfferedLibrary &
   PanelRequests & {
-    entryFields: ReactNode;
     checklist: UseBuilderChecklistResult;
     /** Where the author's folded Design groups are kept, once they are known. */
     designFolds: PreferenceStore | undefined;
@@ -714,8 +806,12 @@ export type EditorPanels = OfferedLibrary &
     pageLayout: ReactNode | null;
     /** The regions of the page's Layout, drawn locked around the page. */
     canvasRegions: readonly CanvasRegion[];
-    /** The same regions, as read-only rows in Layers. */
+    /** The same regions, as rows in Layers that select them. */
     layersRegions: readonly LayersRegionRow[];
+    /** The header or footer selected, and what reads it. */
+    selectedRegion: SelectedRegion;
+    /** What each region drawn around the page is, and the set it is from. */
+    regionCards: readonly RegionCardFacts[];
     availablePanels: typeof AVAILABLE_PANELS;
     search: { open: boolean; setOpen: (open: boolean) => void };
     pages: PagesPanelMount;
@@ -726,9 +822,9 @@ export type EditorPanels = OfferedLibrary &
     /** "Browse all" from the picker: Add, with the picker's target carried. */
     browseAll: (target: InsertPickerTarget) => void;
     /**
-     * The site mode the author picked to preview the canvas in, for this
-     * editing session only: the Design panel's switch picks it, the frame is
-     * drawn in it, and the tag over the canvas clears it.
+     * The site mode the canvas is previewed in, for this session only: the
+     * top bar's switch picks it, and the frame, its pictures and the Design
+     * panel's swatches are drawn in it.
      */
     previewMode: CanvasPreviewMode;
     /** What the editor's pictures share for as long as it is open. */
@@ -744,10 +840,12 @@ export type EditorPanels = OfferedLibrary &
  */
 export function editorPanelRenderer({
   editor,
+  documentLimits,
   componentLibrary,
   componentVerbs,
   componentView,
   layersRegions,
+  canvasRegions,
   drag,
   offered,
   offerablePatterns,
@@ -764,6 +862,7 @@ export function editorPanelRenderer({
   insertAfter,
   insertAt,
   addSummon,
+  addSummonTab,
   onAddSummoned,
   pages,
   canvasRender,
@@ -774,15 +873,21 @@ export function editorPanelRenderer({
   lookEditing,
   previewMode,
   designFolds,
+  designReveal,
+  onDesignRevealed,
   pictureSession,
-}: Pick<EditorMount, "editor" | "componentLibrary" | "componentVerbs"> & {
+}: Pick<
+  EditorMount,
+  "editor" | "componentLibrary" | "componentVerbs" | "documentLimits"
+> & {
   /** The look edited on its own, which the Design panel's Block looks choose. */
   lookEditing?: LookEditingState;
   /**
    * The site mode the canvas is previewed in, which the Design panel's
-   * preview switch picks. Absent, the switch previews the swatches alone.
+   * swatches and the section pictures show too. Absent, they show the mode
+   * the canvas draws by itself.
    */
-  previewMode?: VariablesPreview;
+  previewMode?: CanvasPreviewMode;
   /** Whether the editor holds work not yet saved, for the Pages panel's copy note. */
   documentDirty: boolean;
   /** The regions of the page's Layout, as read-only rows in Layers. */
@@ -822,10 +927,15 @@ export function editorPanelRenderer({
     | "insertAfter"
     | "insertAt"
     | "addSummon"
+    | "addSummonTab"
     | "onAddSummoned"
     | "pages"
     | "designFolds"
     | "pictureSession"
+    | "canvasRegions"
+  > &
+  Partial<
+    Pick<EditorPanels, "designReveal" | "onDesignRevealed">
   >): React.ComponentProps<typeof BuilderShell>["renderPanel"] {
   return (panel, view) => {
     /*
@@ -854,10 +964,11 @@ export function editorPanelRenderer({
           // A canvas press still to answer, whether Add opened for it or
           // was already open.
           summoned={addSummon}
+          {...(addSummonTab === undefined ? {} : { summonedTab: addSummonTab })}
           onSummoned={onAddSummoned}
           pictures={{
             siteStyle: canvasSiteStyle,
-            mode: previewMode?.picked,
+            mode: previewMode?.mode,
             session: pictureSession,
           }}
         />
@@ -943,6 +1054,14 @@ export function editorPanelRenderer({
         <DesignPanel
           view={view}
           {...(designFolds === undefined ? {} : { foldStore: designFolds })}
+          // A block type's styles asked for by "Edit block styles", shown
+          // once the Styles tab is open.
+          {...(designReveal === undefined
+            ? {}
+            : { revealRequest: designReveal })}
+          {...(onDesignRevealed === undefined
+            ? {}
+            : { onRevealed: onDesignRevealed })}
           // The studio surrounds every tab, so the header it draws stays the
           // same whichever is open.
           frame={designTabs => (
@@ -985,9 +1104,11 @@ export function editorPanelRenderer({
                       ? {}
                       : { look: lookEditing.edit }),
                   }}
-                  // The switch in the panel's header picks the mode the canvas is
-                  // drawn in, held by the editor so it outlasts the panel.
-                  preview={previewMode}
+                  // The mode the canvas is previewed in, picked in the top
+                  // bar, so the swatches show what the canvas shows.
+                  {...(previewMode === undefined
+                    ? {}
+                    : { mode: previewMode.mode })}
                 >
                   {designTabs}
                 </TokensStudio>
@@ -995,11 +1116,19 @@ export function editorPanelRenderer({
             </>
           )}
           tabs={{
-            colours: () => <VariablesTab tab="colours" />,
-            // Type: the site's fonts, then the type sizes and the font and
-            // weight variables.
+            colours: () => (
+              <ColoursTab
+                document={editor.document}
+                components={componentLibrary.definitions}
+                regions={canvasRegions}
+                limits={documentLimits}
+              />
+            ),
+            // Type: the Body and Headings fonts, the site's fonts, then the
+            // type sizes and the font and weight variables.
             type: () => (
               <>
+                <FontRolesTab />
                 <DesignGroup
                   id={SITE_FONTS_GROUP}
                   heading={EDITOR_WORDS.fonts}

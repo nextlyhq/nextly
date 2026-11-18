@@ -7,6 +7,8 @@ description: "A table of another shape already has the name `nextly upgrade` mov
 
 A table of another shape already has the name `nextly upgrade` moves the migration records into.
 
+This code is retired. `nextly upgrade` no longer moves the migration records of an earlier release: `nextly migrate` does, and a table of another shape under the events table's name ends it as `MIGRATE_EVENTS_TABLE_TAKEN`. No command ends with it any more; it is kept so a script or a log search that names it still reads correctly. Releases before the change ended `nextly upgrade` with it:
+
 `nextly upgrade` moves the migration records into `nextly_schema_events`. A table of that name already exists without the columns the upgrade writes, so it stopped before writing anything.
 
 ## Fix

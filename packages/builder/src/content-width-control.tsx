@@ -33,7 +33,11 @@ import { CssHint } from "./css-hint";
 import { arrowTo } from "./segment-choices";
 import { variablesFor, type SiteVariable } from "./style-colour";
 import { variableValueText } from "./style-variables";
-import { VariableChip, VariableChoice } from "./variable-choice";
+import {
+  focusAfterUnlink,
+  VariableChip,
+  VariableChoice,
+} from "./variable-choice";
 
 /** The site token that holds the site's content width. */
 const SITE_WIDTH_TOKEN = "content.width";
@@ -117,10 +121,13 @@ export interface ContentWidthControlProps {
   readonly onWidth: (width: StoredWidth | undefined) => void;
 }
 
-const CHOICES = [
+/** Content width's two choices, by the words drawn on them. */
+export const CONTENT_WIDTH_CHOICES = [
   { contained: true, label: "Boxed" },
   { contained: false, label: "Full width" },
 ] as const;
+
+const CHOICES = CONTENT_WIDTH_CHOICES;
 
 /** Boxed and Full width, as a radio group of picture buttons. */
 function WidthChoices({
@@ -233,8 +240,18 @@ function OwnWidthField({
           tokens={tokens}
           identity={width.$token}
           label="Width"
-          onClear={() => onWidth(undefined)}
           onPick={pick}
+          // The width the variable gives now, kept as the container's own
+          // through the rule a typed width meets; "Use site default" above is
+          // what removes it.
+          onUnlink={value => {
+            const kept =
+              typeof value === "string" ? typedWidth(value) : undefined;
+            if (kept === undefined) return;
+            onWidth(kept);
+            // The typed field takes the chip's place, holding the width.
+            focusAfterUnlink(() => document.getElementById(id));
+          }}
         />
       ) : (
         <span className="nx-content-width__entry">
@@ -258,8 +275,6 @@ function OwnWidthField({
             <VariableChoice
               leaf={WIDTH_LEAF}
               tokens={tokens}
-              bound={false}
-              empty={draft === ""}
               current={undefined}
               label="Width"
               onPick={pick}

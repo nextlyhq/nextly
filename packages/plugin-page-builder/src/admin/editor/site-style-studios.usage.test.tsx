@@ -186,6 +186,7 @@ const SURFACE: ClassSurface = {
   pendingNames: {},
   currentRenameAttempt: () => 0,
   rename: async () => ({ ok: true }),
+  edit: async () => undefined,
 };
 
 /**
@@ -297,7 +298,12 @@ describe("the Variables studio's usage", () => {
     expect(await screen.findByRole("dialog", { name: "Card" })).toBeTruthy();
     // The search was put away for the trip, so the list shows whole.
     expect(
-      (screen.getByRole("searchbox", { name: /^Search/, hidden: true }) as HTMLInputElement).value
+      (
+        screen.getByRole("searchbox", {
+          name: /^Search/,
+          hidden: true,
+        }) as HTMLInputElement
+      ).value
     ).toBe("");
   });
 

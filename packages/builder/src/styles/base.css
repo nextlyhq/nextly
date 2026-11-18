@@ -285,6 +285,19 @@
   --nx-builder-ink: #15171c; /* design-lint-ok: the action bar's fixed dark ink */
   --nx-builder-ink-text: #f8f9fa; /* design-lint-ok: text on the fixed dark ink */
   /*
+   * A header or footer edited in place: the bar above the canvas in the
+   * component purple, its words and Done in the text that reads on it (7.3:1
+   * here, 8.2:1 in dark), and the dim over the rest of the page, the well
+   * made see-through and drawn by the chrome, so the page keeps its colours.
+   */
+  --nx-builder-region-bar: var(--nx-builder-component-on-light);
+  --nx-builder-region-bar-text: var(--nx-builder-component-text-on-light);
+  --nx-builder-region-dim: color-mix(
+    in oklch,
+    var(--nx-builder-well) 72%,
+    transparent
+  );
+  /*
    * The editor's ONE density scale, for the top bar, the panels and the
    * inspector alike, so every control in the editor is one size:
    * - a control (button, field, select, icon button) is 28px high, above the
@@ -382,6 +395,9 @@
   --nx-builder-component-text: var(--nx-builder-component-text-on-dark);
   --nx-builder-select-text: var(--nx-builder-select-text-on-dark);
   --nx-builder-ink: #0b0c0f; /* design-lint-ok: the action bar's fixed dark ink */
+  /* The region bar's pair for the dark theme; the dim follows the dark well. */
+  --nx-builder-region-bar: var(--nx-builder-component-on-dark);
+  --nx-builder-region-bar-text: var(--nx-builder-component-text-on-dark);
   /* The admin's destructive pair in the dark theme: the solid red, on a
      ground tinted from the editor's raised surface. */
   --nx-builder-destructive-text: var(--nx-destructive-solid);

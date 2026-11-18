@@ -14,14 +14,21 @@ import type {
   StyleOrigin,
   StyleTraceEntry,
 } from "@nextlyhq/blocks-engine";
+import {
+  DEFAULT_TOKEN_PREFIX,
+  SITE_TEXT_LABELS,
+  siteTextRoleOf,
+} from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
 import { fieldLabel } from "./inspector";
 import type { SharedStyleRow } from "./shared-style-library";
+import { siteDefaultSource } from "./site-default-source";
 import { stateLabel } from "./state-switcher";
-import type {
-  ProvenanceAnswer,
-  EditedAddress,
+import {
+  TokenPrefixContext,
+  type ProvenanceAnswer,
+  type EditedAddress,
 } from "./style-field-surroundings";
 import {
   breakpointSource,
@@ -166,7 +173,13 @@ export function ProvenanceDot({
   /** The control's own descendant selector, to tell its rules from a sibling's. */
   descendant: string | undefined;
 }): React.JSX.Element | null {
-  const described = describeProvenance(answer?.provenance, editing, descendant);
+  const tokenPrefix = React.useContext(TokenPrefixContext);
+  const described = describeProvenance(
+    answer?.provenance,
+    editing,
+    descendant,
+    tokenPrefix
+  );
   if (described === null) return null;
   return (
     <>
@@ -235,7 +248,9 @@ export function ProvenanceDot({
 export function describeProvenance(
   provenance: StyleProvenance | undefined,
   editing: EditedAddress,
-  controlDescendant?: string
+  controlDescendant?: string,
+  /** The prefix the compile wrote variables under, to name a site default. */
+  tokenPrefix: string = DEFAULT_TOKEN_PREFIX
 ):
   | { kind: "authored"; text: string }
   | { kind: "inherited"; text: string; source: string }
@@ -246,6 +261,19 @@ export function describeProvenance(
   }
   if (provenance.kind !== "inherited") return null;
   const { from, entry } = provenance;
+  // A Site text row is named as the row: "From Site text: Heading 2", in the
+  // sentence and the caption alike, since the row is where it is changed.
+  const row = siteTextRowOf(from, entry);
+  if (row !== undefined) {
+    const words = `From Site text: ${row}`;
+    return { kind: "inherited", text: words, source: words };
+  }
+  // A block default reading a site setting is named as the setting: "Site
+  // default: Section spacing", and "Site default" in brief.
+  const siteDefault = siteDefaultSource(from, entry, tokenPrefix);
+  if (siteDefault !== undefined) {
+    return { kind: "inherited", text: siteDefault, source: "Site default" };
+  }
   // A shared style is named as the source the author chose for the block,
   // "From Card"; every other tier is inherited.
   const lead = from.kind === "class" ? "From" : "Inherited from";
@@ -254,6 +282,20 @@ export function describeProvenance(
     text: `${lead} ${originName(from, entry, editing, controlDescendant)}`,
     source: `From ${originBrief(from, entry, editing, controlDescendant)}`,
   };
+}
+
+/**
+ * The Site text row a declaration came from, by its label ("Heading 2"), or
+ * `undefined` for any other: the element tier writes a row's values and its
+ * own defaults (a margin, a heading's weight), and only the first are a row's.
+ */
+function siteTextRowOf(
+  origin: StyleOrigin,
+  entry: StyleTraceEntry
+): string | undefined {
+  if (origin.kind !== "element") return undefined;
+  const role = siteTextRoleOf(origin.tag, entry.property);
+  return role === undefined ? undefined : SITE_TEXT_LABELS[role];
 }
 
 /**

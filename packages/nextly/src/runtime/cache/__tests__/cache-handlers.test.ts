@@ -192,6 +192,8 @@ describe("the incremental cache handler", () => {
     const { ledger, recordElsewhere } = memoryLedger(60_000);
     publishTagExpiryLedger(ledger);
     const handler = new IncrementalHandler();
+    // A miss, then its fill: the read dates the fill.
+    expect(await handler.get("k")).toBeNull();
     await handler.set("k", page(1), { tags: ["posts"] });
 
     // Thirty seconds BEFORE the entry was stored, on the ledger's clock; on
@@ -344,6 +346,8 @@ describe("the incremental cache handler", () => {
     vi.advanceTimersByTime(1);
     recordElsewhere("posts");
     vi.advanceTimersByTime(1);
+    // A miss after the expiry, then its fill, which the read dates after it.
+    expect(await handler.get("new")).toBeNull();
     await handler.set("new", page(2), { tags: ["posts"] });
     // Learned here: posts expired after "old" was stored.
     expect(await handler.get("new")).not.toBeNull();
