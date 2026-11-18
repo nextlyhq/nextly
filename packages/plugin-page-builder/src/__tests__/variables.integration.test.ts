@@ -965,6 +965,68 @@ describe.each(getConfiguredTestDialects())(
       );
     });
 
+    it("refuses a design token import's writes to a role that may read Design but not change it", async () => {
+      const { t } = await boot();
+      const reader = await holding(t, "read-site-style");
+      const designer = await holding(t, ...DESIGN);
+      // The two writes an import makes: the variables merged with the
+      // site's own design data, and the class list with the file's text
+      // styles.
+      const tokens = {
+        tokens: [
+          { ...accent, group: "Brand" },
+          styled,
+          spare,
+          {
+            id: "t-roomy",
+            name: "space.roomy",
+            kind: "dimension",
+            fluid: { small: 16, large: 24 },
+            values: { light: "clamp(1rem, 0.6087rem + 1.7391vw, 1.5rem)" },
+          },
+        ],
+        siteText: { body: { fontSize: "1.0625rem" } },
+        order: ["t-accent"],
+        fluidRange: { min: 320, max: 1440 },
+        builtInColoursShown: false,
+      };
+      const textStyle = {
+        id: "ts-eyebrow",
+        slug: "eyebrow",
+        label: "Eyebrow",
+        orderIndex: 0,
+        role: "text",
+        styles: { base: { base: { fontSize: "0.75rem" } } },
+      };
+      const storedClasses = async () => {
+        const doc = (await t.nextly.findSingle({
+          slug: SITE_STYLE_SLUG,
+          overrideAccess: true,
+        })) as Record<string, unknown> | null;
+        const raw = doc?.classes;
+        return JSON.stringify(typeof raw === "string" ? JSON.parse(raw) : raw);
+      };
+      const writes = [
+        { tokens, _overwrite: true },
+        // Composed against the site's classes, as the class writer does.
+        { classes: [card, textStyle], _overwrite: true },
+      ];
+      for (const body of writes) {
+        const before = [await storedSection(t), await storedClasses()];
+        const refused = await call("PATCH", SINGLE, reader, body);
+        expect(refused.status).toBe(403);
+        expect([await storedSection(t), await storedClasses()]).toEqual(before);
+        // CONTROL: the same write by a Design manager is stored.
+        const accepted = await call("PATCH", SINGLE, designer, body);
+        expect(accepted.status).toBe(200);
+      }
+      expect(JSON.parse(await storedSection(t))).toMatchObject(tokens);
+      expect(JSON.parse(await storedClasses())).toMatchObject([
+        card,
+        textStyle,
+      ]);
+    });
+
     it("refuses the clean-up to a role that may read Design but not change it", async () => {
       const { t } = await boot();
       const reader = await holding(t, "read-site-style");
