@@ -1,8 +1,13 @@
 /**
- * A Single's schema save (`updateSingleSchema`) whose table statements fail answers that it failed,
- * with the reason, and records nothing of the shape it asked for: the registry row keeps the fields
- * and the status it had. It used to record the requested fields with the status "failed" and answer
- * that the migration was pending, which neither was.
+ * A Single's schema save (`updateSingleSchema`) that fails answers that it failed, with the reason,
+ * and records nothing of the shape it asked for: the registry row keeps the fields and the status it
+ * had. It used to record the requested fields with the status "failed" and answer that the
+ * migration was pending, which neither was.
+ *
+ * - Where nothing landed, it fails with nothing kept.
+ * - Where the change landed but its migration could not be recorded applied, it fails naming the
+ *   kept file and the steps that finish it: `nextly migrate:resolve --applied`, then
+ *   `nextly migrate`, which brings the registry in step with the recorded file.
  *
  * The change adds a required field stating a default to a Single holding its row, which fills that
  * row and so carries values: the save runs the service's own statements rather than its migration
@@ -15,7 +20,7 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -65,6 +70,38 @@ describeEachDialect("a Single schema save whose statements fail", dialect => {
     vi.unstubAllEnvs();
     await rm(basePath, { recursive: true, force: true });
   });
+
+  /** The migration files in the project's folder, sorted. */
+  async function migrationFiles(): Promise<string[]> {
+    try {
+      return (await readdir(join(basePath, "migrations")))
+        .filter(name => name.endsWith(".sql"))
+        .sort();
+    } catch {
+      return [];
+    }
+  }
+
+  /** The save of `fields`, as what it threw or what it answered. */
+  async function attempt(
+    fields: unknown[]
+  ): Promise<{ thrown?: unknown; said: string }> {
+    try {
+      const answer = await dispatchSingles(
+        "updateSingleSchema",
+        { slug: SLUG },
+        { fields }
+      );
+      return {
+        said:
+          answer instanceof Response
+            ? JSON.stringify(await answer.json())
+            : JSON.stringify(answer),
+      };
+    } catch (error) {
+      return { thrown: error, said: "" };
+    }
+  }
 
   /** The registry row's fields and status, as stored. */
   async function recorded() {
@@ -176,4 +213,38 @@ describeEachDialect("a Single schema save whose statements fail", dialect => {
     ).not.toMatch(/pending/i);
     expect(await recorded(), "the registry row").toEqual(before);
   });
+
+  // On SQLite the service's statements leave a field's type as it was, so the change lands without
+  // its file's shape and the writer will not record the file applied. PostgreSQL and MySQL change
+  // the type, so the case does not arise there.
+  it.skipIf(dialect !== "sqlite")(
+    "answers that it failed, naming the kept file and the steps that finish it, when the change landed but could not be recorded applied",
+    async () => {
+      const before = await recorded();
+      const folderBefore = await migrationFiles();
+
+      const { thrown, said } = await attempt([
+        { name: "count", type: "number" },
+      ]);
+
+      expect(
+        thrown,
+        `the save answered instead of failing: ${said}`
+      ).toBeDefined();
+      const message = String((thrown as Error).message);
+      expect(message, "the failure says pending").not.toMatch(/pending/i);
+      const kept = (await migrationFiles()).filter(
+        name => !folderBefore.includes(name)
+      );
+      expect(kept.length, "the change's file is kept").toBeGreaterThan(0);
+      for (const file of kept) {
+        expect(message, `the failure names ${file}`).toContain(file);
+      }
+      expect(message).toContain("nextly migrate:resolve --applied");
+      expect(message, "the step that brings the registry in step").toMatch(
+        /then run `nextly migrate`/
+      );
+      expect(await recorded(), "the registry row").toEqual(before);
+    }
+  );
 });
