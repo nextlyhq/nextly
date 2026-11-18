@@ -15,7 +15,7 @@
  */
 import { expect, type Page } from "@playwright/test";
 
-import { block, clickBlock } from "./canvas/editor-driver";
+import { block, layerRow, openLayers } from "./canvas/editor-driver";
 import { gotoAdmin } from "./support/admin";
 import { test } from "./support/test";
 
@@ -135,6 +135,11 @@ async function publishedHeadingIds(
   );
 }
 
+/** Select a block from its row in Layers. */
+async function select(page: Page, id: string): Promise<void> {
+  await layerRow(page, id).locator(`[data-nx-layer="${id}"]`).first().click();
+}
+
 function entryWrite(page: Page, id: string) {
   return page.waitForResponse(
     response =>
@@ -169,9 +174,10 @@ test("every heading has a page-unique id, and a left-out heading keeps its id", 
   await page.setViewportSize({ width: 1440, height: 900 });
   await gotoAdmin(page, `/collections/pages/${id}/builder?field=content`);
   await expect(await block(page, LEFT_OUT)).toBeVisible({ timeout: 60_000 });
+  await openLayers(page);
 
   // A selected Table of contents says where a heading is left out.
-  await clickBlock(page, CONTENTS);
+  await select(page, CONTENTS);
   await expect(
     page.getByText(
       "Any heading can be left out: Heading → Advanced → Leave out of table of contents",
@@ -180,7 +186,7 @@ test("every heading has a page-unique id, and a left-out heading keeps its id", 
   ).toBeVisible();
 
   // The setting is in the Heading's Advanced settings, off.
-  await clickBlock(page, LEFT_OUT);
+  await select(page, LEFT_OUT);
   await page.getByRole("tab", { name: "Advanced" }).click();
   const leaveOut = page
     .getByRole("tabpanel", { name: "Advanced" })
