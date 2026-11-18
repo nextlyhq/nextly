@@ -873,6 +873,21 @@ A new Section's padding comes from the site: its sides read `space.section-y` an
 `space.gutter`, and **Style → Spacing** says so under the box, "Site default: Section
 spacing", with each side named by its variable. A new Box has no padding.
 
+A Section's **Padding** sits above the box: **Compact**, **Normal** or **Roomy**. Normal is
+the padding above, and a Section left at Normal stores nothing. Compact and Roomy pad the
+Section from their own pair of site variables, `space.section-y-compact` and
+`space.gutter-compact`, or `space.section-y-roomy` and `space.gutter-roomy`. **Design →
+Spacing** lists them next to "Section padding" as "Section padding, compact (top and
+bottom)", "Section padding, compact (sides)", "Section padding, roomy (top and bottom)" and
+"Section padding, roomy (sides)". They start at 24–40px and 72–120px above and below, and
+at the same 16–32px as Normal at the sides. Change one there and every Section using that
+preset follows.
+
+A side you give a value of its own in the box wins over the preset, and Padding then reads
+**Custom**. Choosing a preset again clears the Section's own padding on every device, as
+one step that a single undo brings back. A block style that sets padding also wins over
+the preset.
+
 ### Setting margin and padding
 
 **Style → Spacing** draws a block's margin and padding as one box: margin is the outer
