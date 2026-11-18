@@ -297,7 +297,7 @@ export function planRetargetExposure(
   const fresh = mintId(current.label, takenIds(exposed, sources.retired));
   // A new type is a new setting, which a block following the old one may not
   // fit: each keeps what it showed, and follows nothing.
-  draft.nodes = withSettingDefaults(draft, id).nodes;
+  draft.nodes = withSettingDefaults(draft, id, limits.maxNodes).nodes;
   exposed[at] = { id: fresh, label: current.label, ...pointed };
   draft.exposed = exposed;
   return retiring(draft, fresh, id, limits);
@@ -322,7 +322,7 @@ export function planRemoveExposure(
   if (at === undefined) return { problem: "unknown-exposure" };
 
   // Each block following it keeps what it showed, and follows nothing.
-  draft.nodes = withSettingDefaults(draft, id).nodes;
+  draft.nodes = withSettingDefaults(draft, id, limits.maxNodes).nodes;
   draft.exposed = (draft.exposed ?? []).filter((_, i) => i !== at);
   return retiring(draft, id, id, limits);
 }

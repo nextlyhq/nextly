@@ -52,6 +52,7 @@ import {
 } from "./limits";
 import { boundedLimit } from "./measure-bytes";
 import { isPlainRecord } from "./plain-record";
+import { withSettingDefaults } from "./setting-defaults";
 import type {
   ComponentLookup,
   ComponentUnresolvedReason,
@@ -124,10 +125,19 @@ export {
  * @param definitions the definitions to inline, at the posture the caller chose
  */
 export function resolveComponentInstances(
-  document: BlockDocument,
+  stored: BlockDocument,
   definitions: ComponentLookup,
   options: ResolveComponentOptions = {}
 ): ResolvedComposition {
+  // A component composed on its own, as its editor and preview draw it,
+  // shows each setting's default where a block follows one, and so where a
+  // placement inside it feeds a setting from one: filled before its own
+  // placements are expanded, which would otherwise take that binding
+  // unfilled. A page's placements are filled as each is composed.
+  const document =
+    isPlainRecord(stored) && stored.kind === "component"
+      ? withSettingDefaults(stored, undefined, options.limits?.maxNodes)
+      : stored;
   const unchanged: ResolvedComposition = {
     document,
     referenced: [],

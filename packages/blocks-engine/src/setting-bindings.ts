@@ -14,6 +14,7 @@
  */
 import type { BlockDocument, BlockNode, ExposedProperty } from "./document";
 import { pointer } from "./issue-text";
+import { COLLECTION_LIST_TYPE } from "./list-query-contract";
 import { DEFAULT_LIMITS, MAX_ENVELOPE_ENTRIES } from "./limits";
 import { isPlainRecord } from "./plain-record";
 import { defineEntry, ownEntry, ownKeys } from "./safe-record";
@@ -132,13 +133,20 @@ function followersOn(
  */
 export function settingBindingIssues(
   doc: BlockDocument,
-  maxNodes: number = DEFAULT_LIMITS.maxNodes
+  maxNodes: number = DEFAULT_LIMITS.maxNodes,
+  /**
+   * The setting type a block's prop takes, where its block is known; a prop
+   * a setting of another type would fill is refused. Unknown, it is not
+   * judged.
+   */
+  propTypeOf?: (node: BlockNode, prop: string) => string | undefined
 ): ValidationIssue[] {
   if (!isPlainRecord(doc)) return [];
   const issues: ValidationIssue[] = [];
   const component = doc.kind === "component";
-  const settings = followableSettings(ownEntry(doc, "exposed"));
-  const named = namedSettings(ownEntry(doc, "exposed"));
+  const exposed = ownEntry(doc, "exposed");
+  const settings = followableSettings(exposed);
+  const named = namedSettings(exposed);
   eachFollower(
     ownEntry(doc, "nodes"),
     "/nodes",
@@ -153,30 +161,53 @@ export function settingBindingIssues(
         });
         return;
       }
-      const setting = settings.get(id);
-      if (setting === undefined) {
+      const refusal = followerRefusal(node, prop, id, {
+        settings,
+        named,
+        propTypeOf,
+      });
+      if (refusal !== undefined) {
         issues.push({
           path,
           code: "invalid-binding",
           severity: "error",
-          message: named.has(id)
-            ? `The setting "${id}" shows or hides its block, so a block can't follow it.`
-            : `This binding follows the setting "${id}", which this component doesn't have.`,
-        });
-        return;
-      }
-      if (holdsSetting(settings, node.id, prop)) {
-        issues.push({
-          path,
-          code: "invalid-binding",
-          severity: "error",
-          message: `This is the value of a setting, which its followers show, so it can't follow the setting "${id}".`,
+          message: refusal,
         });
       }
     },
     { left: maxNodes }
   );
   return issues;
+}
+
+/** Why a component's block may not follow setting `id` from `prop`, if it may not. */
+function followerRefusal(
+  node: BlockNode,
+  prop: string,
+  id: string,
+  component: {
+    readonly settings: ReadonlyMap<string, ExposedProperty>;
+    readonly named: ReadonlySet<string>;
+    readonly propTypeOf:
+      | ((node: BlockNode, prop: string) => string | undefined)
+      | undefined;
+  }
+): string | undefined {
+  const setting = component.settings.get(id);
+  if (setting === undefined) {
+    return component.named.has(id)
+      ? `The setting "${id}" shows or hides its block, so a block can't follow it.`
+      : `This binding follows the setting "${id}", which this component doesn't have.`;
+  }
+  if (holdsSetting(component.settings, node.id, prop)) {
+    return `This is the value of a setting, which its followers show, so it can't follow the setting "${id}".`;
+  }
+  // Its value is copied into the prop, so it must be a value the prop holds.
+  const takes = component.propTypeOf?.(node, prop);
+  if (takes !== undefined && takes !== setting.type) {
+    return `The setting "${id}" holds ${setting.type}, and this prop holds ${takes}, so it can't follow it.`;
+  }
+  return undefined;
 }
 
 /** Every setting id a component declares, whatever it holds. */
@@ -236,6 +267,10 @@ export function followerFills(
   if (settings.size === 0) return [];
   const nodes = ownEntry(definition, "nodes");
   const index = nodesById(nodes, maxNodes);
+  const at = (block: BlockNode) => ({
+    block,
+    list: index.listOf.get(block.id),
+  });
   const fills: FollowerFill[] = [];
   eachFollower(
     nodes,
@@ -245,10 +280,10 @@ export function followerFills(
       if (setting === undefined || holdsSetting(settings, node.id, prop)) {
         return;
       }
-      const block = index.get(setting.nodeId);
+      const block = index.nodes.get(setting.nodeId);
       if (block === undefined) return;
       fills.push({
-        ...fillFrom(node.id, prop, block, setting.propPath, targetOf),
+        ...fillFrom(node.id, prop, at(block), setting.propPath, targetOf),
         settingId: id,
       });
     },
@@ -261,18 +296,20 @@ export function followerFills(
 function fillFrom(
   nodeId: string,
   prop: string,
-  block: BlockNode,
+  setting: { readonly block: BlockNode; readonly list: string | undefined },
   path: string,
   targetOf: (nodeId: string, path: string) => SettingTarget
 ): Omit<FollowerFill, "settingId"> {
+  const { block } = setting;
   const target = targetOf(block.id, path);
   const value =
     target.edit === undefined ? propAt(block.props, path) : target.edit.value;
   const unset =
     target.edit === undefined ? value === undefined : target.edit.unset;
-  const own = isPlainRecord(block.bindings)
-    ? ownEntry(block.bindings, path)
-    : undefined;
+  const own = withItsList(
+    isPlainRecord(block.bindings) ? ownEntry(block.bindings, path) : undefined,
+    setting.list
+  );
   return {
     nodeId,
     prop,
@@ -281,6 +318,18 @@ function fillFrom(
     ...(target.given === undefined ? {} : { given: target.given }),
     ...(target.given === undefined && own !== undefined ? { own } : {}),
   };
+}
+
+/**
+ * A setting's block's own binding as its follower reads it: a list item
+ * binding naming no list reads the list nearest the setting's block, which
+ * a follower in another list would not, so that list is named.
+ */
+function withItsList(binding: unknown, list: string | undefined): unknown {
+  if (!isPlainRecord(binding) || list === undefined) return binding;
+  if (ownEntry(binding, "source") !== "item") return binding;
+  if (ownEntry(binding, "list") !== undefined) return binding;
+  return { ...binding, list };
 }
 
 /** The value at a dot path of a block's props. */
@@ -293,24 +342,38 @@ function propAt(props: unknown, path: string): unknown {
   return current;
 }
 
-/** The blocks of a forest, slot content included, by id, over at most `maxNodes`. */
-function nodesById(nodes: unknown, maxNodes: number): Map<string, BlockNode> {
+/**
+ * The blocks of a forest, slot content included, by id, with the Collection
+ * list nearest each, over at most `maxNodes`.
+ */
+function nodesById(
+  nodes: unknown,
+  maxNodes: number
+): {
+  nodes: Map<string, BlockNode>;
+  listOf: Map<string, string | undefined>;
+} {
   const index = new Map<string, BlockNode>();
+  const listOf = new Map<string, string | undefined>();
   const budget = { left: maxNodes };
-  const visit = (forest: unknown): void => {
+  const visit = (forest: unknown, list: string | undefined): void => {
     if (!Array.isArray(forest)) return;
     for (const node of forest as unknown[]) {
       if (budget.left <= 0) return;
       if (!isPlainRecord(node) || typeof node.id !== "string") continue;
       budget.left -= 1;
-      if (!index.has(node.id)) index.set(node.id, node as unknown as BlockNode);
+      if (!index.has(node.id)) {
+        index.set(node.id, node as unknown as BlockNode);
+        listOf.set(node.id, list);
+      }
       const slots = ownEntry(node, "slots");
       if (!isPlainRecord(slots)) continue;
-      for (const name of ownKeys(slots)) visit(ownEntry(slots, name));
+      const inner = node.type === COLLECTION_LIST_TYPE ? node.id : list;
+      for (const name of ownKeys(slots)) visit(ownEntry(slots, name), inner);
     }
   };
-  visit(nodes);
-  return index;
+  visit(nodes, undefined);
+  return { nodes: index, listOf };
 }
 
 /**

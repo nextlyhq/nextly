@@ -9,11 +9,7 @@ import type { BlockDocument, BlockNode } from "./document";
 import { isPlainRecord } from "./plain-record";
 import { editedProps } from "./resolve-instances-exposures";
 import { defineEntry, ownEntry, ownKeys } from "./safe-record";
-import {
-  followerFills,
-  type FollowerFill,
-  withoutSettingBindings,
-} from "./setting-bindings";
+import { followerFills, type FollowerFill } from "./setting-bindings";
 
 /**
  * The component with each follower filled from its setting's default, or
@@ -27,11 +23,12 @@ import {
  */
 export function withSettingDefaults<D extends BlockDocument>(
   document: D,
-  only?: string
+  only?: string,
+  maxNodes?: number
 ): D {
   if (document.kind !== "component") return document;
   // Nothing is done to a setting's block when no placement is there.
-  const fills = followerFills(document, () => ({})).filter(
+  const fills = followerFills(document, () => ({}), maxNodes).filter(
     fill => only === undefined || fill.settingId === only
   );
   if (fills.length === 0) return document;
@@ -80,13 +77,20 @@ function filledNode(
       unset: fill.unset,
     }))
   );
-  const bindings: Record<string, unknown> = { ...node.bindings };
-  for (const fill of fills) {
-    if (fill.own !== undefined) defineEntry(bindings, fill.prop, fill.own);
+  // Only the filled props: another binding of the block, following another
+  // setting, is left as it is.
+  const bindings: Record<string, unknown> = {};
+  const filled = new Map(fills.map(fill => [fill.prop, fill]));
+  const stored: Record<string, unknown> = isPlainRecord(node.bindings)
+    ? node.bindings
+    : {};
+  for (const key of ownKeys(stored)) {
+    const fill = filled.get(key);
+    const kept = fill === undefined ? ownEntry(stored, key) : fill.own;
+    if (kept !== undefined) defineEntry(bindings, key, kept);
   }
-  const kept = withoutSettingBindings(bindings);
   const { bindings: _stored, ...rest } = node;
-  return kept === undefined
+  return ownKeys(bindings).length === 0
     ? { ...rest, props }
-    : { ...rest, props, bindings: kept as BlockNode["bindings"] };
+    : { ...rest, props, bindings: bindings as BlockNode["bindings"] };
 }

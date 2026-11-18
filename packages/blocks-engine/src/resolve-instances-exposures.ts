@@ -86,7 +86,9 @@ export function planEdits(
   definition: ComponentDocument,
   instance: ResolvedBlockNode,
   supplied: Record<string, ResolvedBlockNode[]> | undefined,
-  composed: boolean
+  composed: boolean,
+  /** The node cap the definition is read under, for its followers. */
+  maxNodes?: number
 ): Map<string, NodePlan> {
   const plans = new Map<string, NodePlan>();
   const values = effectiveOverrides(definition, instance);
@@ -94,7 +96,7 @@ export function planEdits(
   planBoundSettings(definition.exposed, instance.bindings, plans);
   // After both: a block following a setting shows what the setting's own
   // block ends up with.
-  planFollowers(definition, plans);
+  planFollowers(definition, plans, maxNodes);
   if (supplied !== undefined) {
     planSlots(definition.slots, supplied, plans, composed);
   }
@@ -910,26 +912,33 @@ function planBoundSettings(
  */
 function planFollowers(
   definition: ComponentDocument,
-  plans: Map<string, NodePlan>
+  plans: Map<string, NodePlan>,
+  maxNodes: number | undefined
 ): void {
-  const fills = followerFills(definition, (nodeId, path) => {
-    const plan = plans.get(nodeId);
-    const edit = plan?.props.filter(entry => entry.path === path).at(-1);
-    const binding =
-      plan?.bindings === undefined ? undefined : ownEntry(plan.bindings, path);
-    const key =
-      plan?.bindingKeys === undefined
-        ? undefined
-        : ownEntry(plan.bindingKeys, path);
-    return {
-      ...(edit === undefined
-        ? {}
-        : { edit: { value: edit.value, unset: edit.unset } }),
-      ...(binding === undefined
-        ? {}
-        : { given: { binding, ...(key === undefined ? {} : { key }) } }),
-    };
-  });
+  const fills = followerFills(
+    definition,
+    (nodeId, path) => {
+      const plan = plans.get(nodeId);
+      const edit = plan?.props.filter(entry => entry.path === path).at(-1);
+      const binding =
+        plan?.bindings === undefined
+          ? undefined
+          : ownEntry(plan.bindings, path);
+      const key =
+        plan?.bindingKeys === undefined
+          ? undefined
+          : ownEntry(plan.bindingKeys, path);
+      return {
+        ...(edit === undefined
+          ? {}
+          : { edit: { value: edit.value, unset: edit.unset } }),
+        ...(binding === undefined
+          ? {}
+          : { given: { binding, ...(key === undefined ? {} : { key }) } }),
+      };
+    },
+    maxNodes
+  );
   for (const fill of fills) {
     const plan = planFor(plans, fill.nodeId);
     plan.props.push({ path: fill.prop, value: fill.value, unset: fill.unset });

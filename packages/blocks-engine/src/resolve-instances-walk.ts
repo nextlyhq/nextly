@@ -321,7 +321,7 @@ function inlinedDefinition(
   const supplied = owned
     ? suppliedSlots(instance, definition, run)
     : presupplied;
-  const plans = planEdits(definition, instance, supplied, !owned);
+  const plans = planEdits(definition, instance, supplied, !owned, run.maxNodes);
   // The host placement's own exposures, and a nested instance's only where a
   // host exposure drives them: its fields are reached through the host
   // component's, so its nodes carry the HOST exposure's id or none.

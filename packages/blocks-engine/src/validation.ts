@@ -27,6 +27,7 @@ import { DEFAULT_LIMITS } from "./limits";
 import { type ListFieldSource, listQueryIssues } from "./list-query";
 import { surveyDocument } from "./measure-bytes";
 import { definitelyNotARecord, isPlainRecord } from "./plain-record";
+import { exposureTypeForProp } from "./prop-exposure";
 import { settingBindingIssues } from "./setting-bindings";
 import { validateDocumentCode } from "./validation-code";
 import { validateComponentEnvelope } from "./validation-components";
@@ -219,7 +220,11 @@ export function validateDocument(
   // Where a block following a component's setting may stand, in a component
   // and anywhere a copy of one lands, against the settings it has.
   if (!overLimits) {
-    issues.push(...settingBindingIssues(doc, survey.limits.maxNodes));
+    issues.push(
+      ...settingBindingIssues(doc, survey.limits.maxNodes, (node, prop) =>
+        exposureTypeForProp(ctx.definitions?.get(node.type)?.props?.[prop])
+      )
+    );
   }
 
   const state = nodeCheckState(ctx, issues, knownBreakpoints, unknownSeverity, {

@@ -17,6 +17,8 @@ import {
   type ExposedProperty,
 } from "./document";
 import { planDetach } from "./composition-planners";
+import { planRemoveExposure } from "./exposure-planners";
+import { withSettingDefaults } from "./setting-defaults";
 import { COLLECTION_LIST_TYPE, LIST_ENTRY_SLOT } from "./list-query";
 import { applyOps } from "./ops";
 import { bindDocument, createBindingRun } from "./resolve-bindings";
@@ -255,6 +257,131 @@ describe("a block following its component's setting, composed", () => {
   });
 });
 
+describe("a block following a setting, its edges", () => {
+  it("keeps the list of the setting's item binding when its follower sits in another list", () => {
+    // The Title setting's heading reads each post; its follower sits in a
+    // Comments list inside, and must still read the post, not the comment.
+    const list = (id: string, children: BlockNode[]): BlockNode => ({
+      id,
+      type: COLLECTION_LIST_TYPE,
+      version: 1,
+      props: { query: { collection: id } },
+      slots: { [LIST_ENTRY_SLOT]: children },
+    });
+    const card = component(
+      [
+        list("posts", [
+          heading("card-title", "Plain title", {
+            text: { $bind: "title", source: "item" },
+          }),
+          list("comments", [
+            heading("card-echo", "Stored echo", { text: follows("title") }),
+          ]),
+        ]),
+      ],
+      [exposure("title", "card-title", "text")]
+    );
+    const echo = copyOf(
+      composed(
+        page([placement("p", "card")]),
+        new Map<string, BlockDocument>([["card", card]])
+      ),
+      "card-echo"
+    );
+    const posts = copyOf(
+      composed(
+        page([placement("p", "card")]),
+        new Map<string, BlockDocument>([["card", card]])
+      ),
+      "card-title"
+    );
+    expect(echo?.bindings?.text).toMatchObject({
+      $bind: "title",
+      source: "item",
+    });
+    // Named, and named as the composed Posts list is.
+    const named = (echo?.bindings?.text as { list?: string } | undefined)?.list;
+    expect(named).toBeDefined();
+    expect(named).not.toBe("comments");
+    expect(posts).toBeDefined();
+  });
+
+  it("shows the setting's default in a component placed inside the one shown alone", () => {
+    const badge = component(
+      [heading("badge-label", "Badge label")],
+      [exposure("label", "badge-label", "text")]
+    );
+    const card = component(
+      [
+        heading("card-title", "Plain title"),
+        placement(
+          "card-badge",
+          "badge",
+          {},
+          {
+            "overrides.label": follows("title"),
+          }
+        ),
+      ],
+      [exposure("title", "card-title", "text")]
+    );
+    const nodes = flatten(
+      resolveComponentInstances(card, new Map([["badge", badge]])).document
+        .nodes as ResolvedBlockNode[]
+    );
+    expect(copyOf(nodes, "badge-label")?.props.text).toBe("Plain title");
+  });
+
+  it("settles only the bindings following the setting taken away", () => {
+    const card = component(
+      [
+        heading("a", "Default title"),
+        {
+          ...heading("b", "Stored", {
+            text: follows("title"),
+            href: follows("link"),
+          }),
+        },
+      ],
+      [exposure("title", "a", "text"), exposure("link", "a", "level", "link")]
+    );
+    const settled = withSettingDefaults(card, "title");
+    expect(settled.nodes[1]?.props.text).toBe("Default title");
+    expect(settled.nodes[1]?.bindings).toEqual({ href: follows("link") });
+    const removed = planRemoveExposure(card, "title");
+    if ("problem" in removed) throw new Error(removed.problem);
+    expect(removed.document.nodes[1]?.bindings).toEqual({
+      href: follows("link"),
+    });
+  });
+
+  it("fills a follower past the default node budget when the limits allow it", () => {
+    const filler = Array.from({ length: 5001 }, (_, i) =>
+      heading(`f${String(i)}`, "x")
+    );
+    const card = component(
+      [
+        heading("card-title", "Plain title"),
+        ...filler,
+        heading("card-echo", "Stored echo", { text: follows("title") }),
+      ],
+      [exposure("title", "card-title", "text")]
+    );
+    const limits = { maxDepth: 12, maxNodes: 20_000, maxBytes: 50_000_000 };
+    const echo = flatten(
+      resolveComponentInstances(
+        page([placement("p", "card")]),
+        new Map<string, BlockDocument>([["card", card]]),
+        { limits }
+      ).document.nodes as ResolvedBlockNode[]
+    ).find(
+      entry =>
+        entry.instanceOf !== undefined && entry.props.level === "card-echo"
+    );
+    expect(echo?.props.text).toBe("Plain title");
+  });
+});
+
 describe("a block following a setting, outside composition", () => {
   const run = createBindingRun({
     sources: { site: { name: "Acme" } },
@@ -356,6 +483,42 @@ describe("where a setting binding may be saved", () => {
     // A minted id is no field path, and is taken as one of the component's.
     expect(judged(card)).toEqual([
       ["/nodes/2/bindings/text", "invalid-binding", "error"],
+    ]);
+  });
+
+  it("refuses a follower whose prop the setting's type doesn't fit", () => {
+    const judged = (doc: BlockDocument) =>
+      validateDocument(doc, {
+        breakpoints: FIXTURE_BREAKPOINTS,
+        mode: "strict",
+        definitions: {
+          get: type =>
+            type === "core/heading"
+              ? {
+                  version: 1,
+                  props: {
+                    text: { type: "text", role: "content" },
+                    level: { type: "text" },
+                  },
+                }
+              : undefined,
+        },
+      })
+        .issues.filter(issue => issue.path.includes("/bindings"))
+        .map(issue => [issue.path, issue.code, issue.severity]);
+    const card = component(
+      [
+        heading("a", "A"),
+        heading("b", "B", { text: follows("body") }),
+        heading("c", "C", { text: follows("title") }),
+      ],
+      [
+        exposure("body", "a", "level", "richText"),
+        exposure("title", "a", "text", "text"),
+      ]
+    );
+    expect(judged(card)).toEqual([
+      ["/nodes/1/bindings/text", "invalid-binding", "error"],
     ]);
   });
 
