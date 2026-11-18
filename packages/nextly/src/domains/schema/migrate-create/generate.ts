@@ -2060,6 +2060,12 @@ interface CompanionPlanEntry {
    * for this companion is keyed by kind as well as slug.
    */
   entity: I18nTransitionKind;
+  /**
+   * A DISABLE's unique indexes on the restored columns, which it creates itself once the values
+   * are back (`settingsAfterRestore`): the main migration's `add_index` for each is left out, as
+   * its `add_column` is (`stripRelocatedDrops`).
+   */
+  restoredIndexes?: readonly string[];
 }
 
 /**
@@ -2265,27 +2271,30 @@ function planCompanionMigrations(
 }
 
 /**
- * The statements that make each restored column Required where the main table's snapshot records
- * it so (`nullable: false`), run by a disable once the values are back: added empty, the column
- * could not take NOT NULL before the copy, and the main file that follows does not add it (its
- * `add_column` is the disable's, `stripRelocatedDrops`), so without them the main table is at
- * neither end of that file. Rendered as a field leaving translation renders them
- * (`settingsAfterCopy`), against the main table as the disable leaves it: the previous one with the
- * restored columns, which a SQLite rebuild recreates, and nothing the main file adds after. The
- * runner refuses the setting over an entry left without a value, naming the field
- * (`requiredColumnCheckpoint`). Unique indexes stay the main file's.
+ * The statements that give each restored column the settings the main table's snapshot records of
+ * it, run by a disable once the values are back: Required (`nullable: false`), which a column added
+ * empty could not take before the copy, and the unique indexes standing on it. The main file that
+ * follows does not add the column (its `add_column` is the disable's, `stripRelocatedDrops`), and
+ * the runner records it as applied only where the main table already is its target, so without
+ * them the table is at neither end of that file. Rendered as a field leaving translation renders
+ * them (`settingsAfterCopy`), against the main table as the disable leaves it: the previous one with
+ * the restored columns and their unique indexes, which a SQLite rebuild recreates, and nothing the
+ * main file adds after. The runner refuses Required over an entry left without a value, naming the
+ * field (`requiredColumnCheckpoint`), and the database a unique index over repeated values.
  */
-function requiredAfterRestore(
+function settingsAfterRestore(
   prevMain: TableSpec,
   desiredMain: TableSpec | undefined,
   restored: readonly string[],
   dialect: SupportedDialect
-): string[] | undefined {
-  const held = {
-    ...heldSettingsOf(prevMain.name, restored, desiredMain),
-    uniqueIndexes: [],
-  };
-  if (desiredMain === undefined || held.required.size === 0) return undefined;
+): { up: string[]; down: string[]; indexes: string[] } | undefined {
+  const held = heldSettingsOf(prevMain.name, restored, desiredMain);
+  if (
+    desiredMain === undefined ||
+    (held.required.size === 0 && held.uniqueIndexes.length === 0)
+  ) {
+    return undefined;
+  }
   const names = new Set(restored);
   const kept = new Set(prevMain.columns.map(c => c.name));
   // The previous table without its translation record, which describes the companion the disable
@@ -2304,8 +2313,12 @@ function requiredAfterRestore(
         c => names.has(c.name) && !kept.has(c.name)
       ),
     ],
+    indexes: [...(prevMain.indexes ?? []), ...held.uniqueIndexes],
   };
-  return settingsAfterCopy(held, afterDisable, dialect, [afterDisable]).up;
+  return {
+    ...settingsAfterCopy(held, afterDisable, dialect, [afterDisable]),
+    indexes: held.uniqueIndexes.map(index => index.name),
+  };
 }
 
 /**
@@ -2403,22 +2416,30 @@ function disableEntryFor(
     // A disable turns off translation for an entity that was translated.
     companionHadStatus(previousSnapshot, mainTable, true)
   );
+  const settings = settingsAfterRestore(
+    prevMain,
+    desiredMain,
+    disableSpec.columns.map(col => col.name),
+    dialect
+  );
   const plan = planCompanionMigration({
     spec: disableSpec,
     prevMainColumnNames: [],
     companionExisted: false,
     localized: false,
     previouslyLocalized: true,
-    afterRestore: requiredAfterRestore(
-      prevMain,
-      desiredMain,
-      disableSpec.columns.map(col => col.name),
-      dialect
-    ),
+    ...(settings === undefined ? {} : { afterRestore: settings }),
   });
   return plan.kind === "none"
     ? undefined
-    : { spec: disableSpec, plan, entity: entityKind };
+    : {
+        spec: disableSpec,
+        plan,
+        entity: entityKind,
+        ...(settings === undefined || settings.indexes.length === 0
+          ? {}
+          : { restoredIndexes: settings.indexes }),
+      };
 }
 
 /**
@@ -3415,7 +3436,9 @@ function withLocalizedMarker(
  *
  * The DISABLE transition is the mirror image: its SQL re-adds the columns to the main table
  * itself, so the diff's `add_column` ops for those same columns are stripped too (otherwise
- * the column is added twice and the second ALTER fails).
+ * the column is added twice and the second ALTER fails), and so are the `add_index` ops of the
+ * unique indexes on them, which it creates once the values are back (`restoredIndexes`). The main
+ * file's snapshot still records them: the table the disable leaves is that file's target.
  */
 function stripRelocatedDrops(
   operations: Operation[],
@@ -3423,7 +3446,8 @@ function stripRelocatedDrops(
 ): Operation[] {
   const relocated = new Set<string>();
   const restored = new Set<string>();
-  for (const { spec, plan } of companionPlans) {
+  const restoredIndexes = new Set<string>();
+  for (const { spec, plan, restoredIndexes: indexes } of companionPlans) {
     // create-only has no main-table drops
     if (plan.kind === "enable") {
       for (const col of spec.columns) {
@@ -3433,6 +3457,10 @@ function stripRelocatedDrops(
       // The disable SQL re-adds these columns itself (step 1 of buildLocalizationDownSql).
       for (const col of spec.columns) {
         restored.add(`${spec.mainTable}::${col.name}`);
+      }
+      // So are the unique indexes on them, once the values are back (`settingsAfterRestore`).
+      for (const name of indexes ?? []) {
+        restoredIndexes.add(`${spec.mainTable}::${name}`);
       }
     }
   }
@@ -3447,6 +3475,12 @@ function stripRelocatedDrops(
     if (
       op.type === "add_column" &&
       restored.has(`${op.tableName}::${op.column.name}`)
+    ) {
+      return false;
+    }
+    if (
+      op.type === "add_index" &&
+      restoredIndexes.has(`${op.tableName}::${op.index.name}`)
     ) {
       return false;
     }

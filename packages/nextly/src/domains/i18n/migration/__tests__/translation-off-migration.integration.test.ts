@@ -264,6 +264,47 @@ for (const entry of DIALECTS) {
       await expect(migrate()).resolves.toBe(0);
     });
 
+    // A Unique field's index goes back with it, as the main table's snapshot records it: the
+    // runner checks the next main file against that table, index included.
+    it.each([
+      { shape: "Unique", settings: { unique: true } },
+      {
+        shape: "Required and Unique",
+        settings: { unique: true, required: true },
+      },
+    ])(
+      "applies the files that turn translation off for a $shape field, its index put back",
+      async ({ settings }) => {
+        const constrained = (
+          entity: MinimalConfigEntity
+        ): MinimalConfigEntity => ({
+          ...entity,
+          fields: entity.fields.map(f =>
+            f.name === "label" ? { ...f, ...settings } : f
+          ),
+        });
+        await migrateCreate(constrained(translated));
+        await migrate();
+        await adapter.executeQuery(
+          `INSERT INTO ${q(table)} (${q("id")}, ${q("title")}, ${q("slug")}) VALUES ('e1', 'One', 'one'), ('e2', 'Two', 'two')`
+        );
+        await adapter.executeQuery(
+          `INSERT INTO ${q(`${table}_locales`)} (${q("_parent")}, ${q("_locale")}, ${q("body")}, ${q("label")}) ` +
+            `VALUES ('e1', 'en', 'Hello', 'Hi'), ('e2', 'en', 'Bye', 'Ciao')`
+        );
+
+        await migrateCreate(constrained(untranslated));
+        await migrate();
+
+        await expect(
+          adapter.executeQuery(
+            `UPDATE ${q(table)} SET ${q("label")} = 'Hi' WHERE ${q("id")} = 'e2'`
+          )
+        ).rejects.toThrow();
+        await expect(migrate()).resolves.toBe(0);
+      }
+    );
+
     // An entry whose language the copy keeps has no value: the column cannot be required over it.
     // The runner refuses before the setting, naming the field, and the translations stay.
     it("refuses to turn translation off for a Required field an entry holds no value of", async () => {

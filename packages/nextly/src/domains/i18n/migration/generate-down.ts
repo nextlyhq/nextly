@@ -58,8 +58,9 @@ export interface LocalizationDownOptions {
   /**
    * Statements to run once the values are back on the main table, before anything is archived or
    * the companion dropped: the settings the main table's snapshot records of the restored columns
-   * (a Required field's NOT NULL), which a column added empty could not take before the copy. A
-   * value the setting refuses then stops the run with every translation still in place.
+   * (a Required field's NOT NULL, a Unique field's index), which a column added empty could not
+   * take before the copy. A value the setting refuses then stops the run with every translation
+   * still in place.
    */
   afterRestore?: readonly string[];
   /**
