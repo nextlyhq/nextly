@@ -212,6 +212,15 @@ export interface SiteTokenSet {
    * colour picker list colours in this order, and nothing is emitted from it.
    */
   order?: readonly string[];
+  /**
+   * Whether the Design panel and every colour picker list the built-in
+   * colours the site does not use. Shown where unset. Display-only, like
+   * `order`: every built-in colour is still a token, and still
+   * written, whatever this says, because core blocks read them.
+   *
+   * @experimental
+   */
+  builtInColoursShown?: boolean;
 }
 
 /**
@@ -709,6 +718,10 @@ export function resolveSiteTokens(override?: SiteTokenSet): SiteTokenSet {
       : { siteText: override.siteText }),
     // Site-wide as well: the order the site's colours are listed in.
     ...(override?.order === undefined ? {} : { order: override.order }),
+    // And whether the built-in colours it does not use are listed.
+    ...(override?.builtInColoursShown === undefined
+      ? {}
+      : { builtInColoursShown: override.builtInColoursShown }),
   };
 }
 
