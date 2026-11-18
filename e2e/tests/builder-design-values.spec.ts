@@ -188,8 +188,11 @@ test("a font variable is picked from the site's and the system's fonts, and a we
     await editor.getByRole("button", { name: /^Font, / }).click();
     const list = page.getByRole("listbox");
     await expect(list.getByRole("group", { name: "System" })).toBeVisible();
+    // The picker's own way to the site's fonts, at the foot of its list.
     await expect(
-      page.getByRole("button", { name: "Manage fonts…" })
+      page
+        .locator(".nx-font-pick__footer")
+        .getByRole("button", { name: "Manage fonts…" })
     ).toBeVisible();
     // Picked by name, and stored as that family exactly.
     await list
