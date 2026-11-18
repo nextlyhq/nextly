@@ -38,8 +38,16 @@ import type { EditClasses } from "./block-style-actions";
 import { BlockStyleNameField, RowMenuFrame } from "./block-style-row-menu";
 import { EDITOR_WORDS } from "./editor-words";
 import { removeSharedStylesThrough } from "./shared-style-details";
-import { sharedStyleRows, type SharedStyleRow } from "./shared-style-library";
-import type { SharedStylesAccess } from "./shared-styles-types";
+import {
+  heldByThisPage,
+  sharedStyleRows,
+  USED_ON_THIS_PAGE_REMOVAL,
+  type SharedStyleRow,
+} from "./shared-style-library";
+import type {
+  PageClassBlocks,
+  SharedStylesAccess,
+} from "./shared-styles-types";
 import { PopupRow } from "./site-text-panel";
 import { useQueuedStyles, type SharedStylesHost } from "./style-target";
 import { textStyleOptions, type TextStyleOption } from "./text-style-choice";
@@ -70,6 +78,11 @@ export interface TextStylesSectionProps {
   readonly host?: SharedStylesHost | undefined;
   /** The shared styles' routes: lock and remove. */
   readonly access?: SharedStylesAccess | undefined;
+  /**
+   * The blocks on the open page wearing each style. A removal is refused while
+   * one does, since the route reads only saved documents. Absent: read as worn.
+   */
+  readonly pageBlocks?: PageClassBlocks | undefined;
   /** Change the site's variables, for the fluid range a fluid size sets. */
   readonly onTokens?: ((tokens: SiteTokenSet) => void) | undefined;
 }
@@ -381,6 +394,22 @@ function rowActions({
       const access = panel.access;
       if (access === undefined) {
         said(NO_WRITE);
+        return;
+      }
+      // The open page first: a block wearing it there may not be saved yet,
+      // which no saved count holds.
+      const here = panel.pageBlocks;
+      if (
+        heldByThisPage(
+          here === undefined
+            ? undefined
+            : {
+                count: here.counts.get(row.id) ?? 0,
+                complete: here.complete,
+              }
+        )
+      ) {
+        said(USED_ON_THIS_PAGE_REMOVAL);
         return;
       }
       // The route refuses a text style a block or a Site text row uses, and

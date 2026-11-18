@@ -1190,6 +1190,7 @@ export function editorPanelRenderer({
                 <TextStylesTab
                   classes={classes}
                   breakpoints={classSummaryContext.breakpoints}
+                  pageBlocks={pageClassBlocks}
                 />
               </>
             ),

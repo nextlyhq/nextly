@@ -16,7 +16,6 @@
  */
 import {
   isTokenRef,
-  STYLE_CATALOG,
   tokenRef,
   fluidValue,
   type NodeStyles,
@@ -41,6 +40,7 @@ import {
 } from "./shared-style-target";
 import { roleFamilies } from "./site-font-roles-model";
 import { fontWeightOptions, lineHeightFromText } from "./style-folded";
+import { propertyVariableLeaf } from "./style-value-fields";
 import {
   fontChoiceOf,
   fontValueOf,
@@ -77,17 +77,16 @@ export interface TextStyleEditorProps {
   readonly onTokens?: ((tokens: SiteTokenSet) => void) | undefined;
 }
 
-/** The catalog's leaf for a property, which decides the variables offered. */
-function leafOf(property: string): StyleLeaf | undefined {
-  const shape = STYLE_CATALOG.find(entry => entry.property === property)?.shape;
-  return shape !== undefined && "cssProperty" in shape ? shape : undefined;
-}
-
+/**
+ * The leaf each part's variables are offered for, from the one reading the
+ * style panel uses: line height and weight are unions, so each takes the
+ * folded leaf over its forms, not none.
+ */
 const LEAVES = {
-  fontSize: leafOf("fontSize"),
-  lineHeight: leafOf("lineHeight"),
-  fontWeight: leafOf("fontWeight"),
-  letterSpacing: leafOf("letterSpacing"),
+  fontSize: propertyVariableLeaf("fontSize"),
+  lineHeight: propertyVariableLeaf("lineHeight"),
+  fontWeight: propertyVariableLeaf("fontWeight"),
+  letterSpacing: propertyVariableLeaf("letterSpacing"),
 } as const;
 
 /** A plain value as a field shows it. */
@@ -325,6 +324,10 @@ function FontPart({
   if (current !== "" && !options.some(([key]) => key === current)) {
     options.push([current, current]);
   }
+  // A style that sets no font says so, rather than showing Body font as
+  // chosen: it keeps the font of what it is laid on, and Body font has to be
+  // a choice the author can make.
+  if (current === "") options.unshift([UNSET_PART, "Not set"]);
   return (
     <div className="nx-vars-editor__field nx-text-styles__part">
       <label className="nx-vars-editor__label" htmlFor={id}>
@@ -333,10 +336,12 @@ function FontPart({
       <PartSelect
         id={id}
         label="Font"
-        value={current === "" ? "body" : current}
+        value={current === "" ? UNSET_PART : current}
         options={options}
         disabled={readOnly}
-        onChange={choice => onValue(fontValueOf(choice))}
+        onChange={choice => {
+          if (choice !== UNSET_PART) onValue(fontValueOf(choice));
+        }}
       />
     </div>
   );
@@ -407,8 +412,9 @@ function SizePart({
   );
 }
 
-/** The select key of a weight the style leaves unset, apart from every weight. */
-const UNSET_WEIGHT = "unset";
+/** The select key of a part the style leaves unset, apart from every value. */
+const UNSET_PART = "unset";
+const UNSET_WEIGHT = UNSET_PART;
 
 /** The weight, by name: "Semibold 600". */
 function WeightPart({
@@ -498,7 +504,9 @@ function CasePart({
   onValue: (value: StyleValue) => void;
 }): React.JSX.Element {
   const name = React.useId();
-  const current = typeof value === "string" ? value : "none";
+  // A style that sets no case checks none: "As typed" writes `none`, which
+  // overrides a case the block gets from elsewhere, so it must be choosable.
+  const current = typeof value === "string" ? value : undefined;
   return (
     <fieldset className="nx-site-text__sizes nx-text-styles__case">
       <legend className="nx-vars-editor__label">Case</legend>

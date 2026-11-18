@@ -26,7 +26,10 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { ClassListEdit } from "./block-style-actions";
 import type { SharedStyleChange } from "./shared-style-target";
-import type { SharedStylesAccess } from "./shared-styles-types";
+import type {
+  PageClassBlocks,
+  SharedStylesAccess,
+} from "./shared-styles-types";
 import { TextStylesSection } from "./text-styles-section";
 
 afterEach(cleanup);
@@ -85,6 +88,7 @@ function mount(
   options: {
     library?: NamedClass[];
     tokens?: SiteTokenSet;
+    pageBlocks?: PageClassBlocks;
     readOnly?: boolean;
     access?: Partial<SharedStylesAccess>;
   } = {}
@@ -111,6 +115,7 @@ function mount(
     <TextStylesSection
       library={library}
       tokens={options.tokens ?? { tokens: [] }}
+      pageBlocks={options.pageBlocks ?? { counts: new Map(), complete: true }}
       mode="light"
       breakpoints={breakpoints}
       readOnly={options.readOnly ?? false}
@@ -240,6 +245,27 @@ describe("a row's keys and menu", () => {
       fireEvent.click(within(again).getByRole("menuitem", { name: "Remove" }));
     });
     expect(second.access.remove).toHaveBeenCalledWith(["t-eyebrow"]);
+  });
+
+  it("refuses removing a text style a block on the open page wears, before asking the site", async () => {
+    for (const pageBlocks of [
+      { counts: new Map([["t-eyebrow", 1]]), complete: true },
+      // A page read only in part may hold one: unknown reads as used.
+      { counts: new Map<string, number>(), complete: false },
+    ]) {
+      const { access } = mount({ pageBlocks });
+      const menu = menuOf();
+      await act(async () => {
+        fireEvent.click(within(menu).getByRole("menuitem", { name: "Remove" }));
+      });
+      expect(access.remove).not.toHaveBeenCalled();
+      expect(
+        await screen.findByText(
+          "Used on this page, so it can’t be removed. Take it off the blocks that use it first."
+        )
+      ).toBeDefined();
+      cleanup();
+    }
   });
 
   it("says where a text style is used when its removal is refused", async () => {
@@ -434,6 +460,75 @@ describe("a part's own value", () => {
     ).toMatchObject({
       fontSize: "16px",
     });
+  });
+
+  it("says Font is not set on a style that sets none, so Body font can be picked", async () => {
+    const { writeStyles } = mount();
+    fireEvent.click(row(/^Text styles: Eyebrow/));
+    const trigger = screen.getByRole("combobox", { name: /^Font, / });
+    expect(trigger.getAttribute("aria-label")).toBe("Font, Not set");
+    fireEvent.pointerDown(trigger, {
+      button: 0,
+      ctrlKey: false,
+      pointerType: "mouse",
+    });
+    fireEvent.click(await screen.findByRole("option", { name: "Body font" }));
+    expect(written(writeStyles)?.base?.[BASE_BREAKPOINT]).toMatchObject({
+      fontFamily: { $token: "font.body" },
+    });
+  });
+
+  it("checks no case on a style that sets none, so As typed can be picked", () => {
+    const uncased: NamedClass = {
+      ...eyebrow,
+      styles: {
+        base: { [BASE_BREAKPOINT]: { fontSize: "12px" } },
+      } as NodeStyles,
+    };
+    const { writeStyles } = mount({ library: [card, uncased] });
+    fireEvent.click(row(/^Text styles: Eyebrow/));
+    const typed = screen.getByRole("radio", {
+      name: "As typed",
+    }) as HTMLInputElement;
+    expect(typed.checked).toBe(false);
+    fireEvent.click(typed);
+    expect(
+      written(writeStyles, uncased.styles)?.base?.[BASE_BREAKPOINT]
+    ).toMatchObject({
+      textTransform: "none",
+    });
+  });
+
+  it("shows a variable a line height or weight holds, and unlinks it", () => {
+    const linked: NamedClass = {
+      ...eyebrow,
+      styles: {
+        base: {
+          [BASE_BREAKPOINT]: {
+            fontSize: "12px",
+            lineHeight: { $token: "leading.tight" },
+            fontWeight: { $token: "weight.bold" },
+          },
+        },
+      } as unknown as NodeStyles,
+    };
+    const { writeStyles } = mount({
+      library: [card, linked],
+      tokens: {
+        tokens: [
+          { name: "leading.tight", kind: "number", values: { light: "1.2" } },
+          { name: "weight.bold", kind: "fontWeight", values: { light: "700" } },
+        ],
+      },
+    });
+    fireEvent.click(row(/^Text styles: Eyebrow/));
+    fireEvent.click(screen.getByRole("button", { name: "Unlink Line height" }));
+    expect(
+      written(writeStyles, linked.styles)?.base?.[BASE_BREAKPOINT]
+    ).toMatchObject({
+      lineHeight: 1.2,
+    });
+    expect(screen.getByRole("button", { name: "Unlink Weight" })).toBeDefined();
   });
 
   it("offers no Reset for a part the style leaves unset", () => {

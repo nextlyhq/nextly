@@ -16,6 +16,7 @@
 import type { BreakpointSet } from "@nextlyhq/blocks-engine";
 import {
   TextStylesSection,
+  type PageClassBlocks,
   type SharedStylesHost,
 } from "@nextlyhq/builder/shell";
 import { useCan } from "@nextlyhq/plugin-sdk/client";
@@ -31,10 +32,16 @@ import { useUsageHere, useUsageReadKey } from "./usage-here";
 export function TextStylesTab({
   classes,
   breakpoints,
+  pageBlocks,
 }: {
   classes: ClassSurface;
   /** The site's devices, which a text style's size is set for. */
   breakpoints: BreakpointSet | undefined;
+  /**
+   * The blocks on the open page wearing each style, unsaved edits included,
+   * so a text style one of them wears is not removed from under it.
+   */
+  pageBlocks: PageClassBlocks;
 }): JSX.Element | null {
   const studio = useVariablesStudio();
   const mayChange = useCan("update-site-style");
@@ -56,6 +63,7 @@ export function TextStylesTab({
       onEditClasses={classes.edit}
       host={host}
       access={access}
+      pageBlocks={pageBlocks}
       onTokens={studio.onChange}
     />
   );
