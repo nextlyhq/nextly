@@ -1051,18 +1051,15 @@ describe("which headings a table of contents lists", () => {
     ]);
   });
 
-  it("reads hiding by the breakpoints the page is drawn with", () => {
-    // With none stated, the page is compiled for the base device alone, so
-    // a `true` stored for a phone shows nothing there and the heading is
-    // hidden everywhere it is drawn.
-    const phonesOnly = heading(
-      "Phones only",
-      shownOn({ base: false, mobile: true })
-    );
-    expect(
-      pageOutline([{ area: "content", nodes: [phonesOnly] }]).headings.map(
-        ({ listed }) => listed
-      )
-    ).toEqual([false]);
+  it("reads hiding from what a block stores when no breakpoints are given", () => {
+    // Shown again on phones and, with no breakpoints to say otherwise, read
+    // as the stored `true` says; a hide with no show anywhere is still read.
+    const listed = (devices: Record<string, boolean>) =>
+      pageOutline([
+        { area: "content", nodes: [heading("Words", shownOn(devices))] },
+      ]).headings.map(entry => entry.listed);
+    expect(listed({ base: false, mobile: true })).toEqual([true]);
+    expect(listed({ base: false })).toEqual([false]);
+    expect(listed({ mobile: false })).toEqual([true]);
   });
 });

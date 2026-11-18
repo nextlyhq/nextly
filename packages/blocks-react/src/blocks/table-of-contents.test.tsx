@@ -240,6 +240,12 @@ describe("the contents of a page", () => {
 });
 
 describe("headings a table of contents leaves out", () => {
+  /** A site with a phone breakpoint and a card-sized container one. */
+  const CARD_BREAKPOINTS = {
+    viewport: [{ id: "mobile", label: "Mobile", maxWidth: 640 }],
+    container: [{ id: "card-wide", label: "Card wide", maxWidth: 480 }],
+  };
+
   it("leaves out the headings inside a Collection list and an accordion", async () => {
     const find = () =>
       Promise.resolve({ items: [{ id: "a" }, { id: "b" }], total: 2 });
@@ -296,41 +302,31 @@ describe("headings a table of contents leaves out", () => {
   });
 
   it("reads a heading's devices by the breakpoints the page is drawn with", async () => {
-    // Hidden from the widest device down and shown again on phones: listed
-    // where the page knows the phone breakpoint, as the page then draws it.
-    const breakpoints = {
-      viewport: [{ id: "mobile", label: "Mobile", maxWidth: 640 }],
-      container: [],
-    };
+    // Hidden on every device; the `true` is stored for a container
+    // breakpoint, which answers about a box and shows nothing again on a
+    // device. Only the page's breakpoints can say which one it is.
     const html = await settled(
       <PageRenderer
         document={page(
           contents(),
-          heading("Phones only", "h2", {
-            visibility: { devices: { base: false, mobile: true } },
+          heading("Never on a device", "h2", {
+            visibility: { devices: { base: false, "card-wide": true } },
           }),
           heading("Everywhere")
         )}
         blocks={resolver}
         context={createStandaloneContext({})}
-        styleContext={{ breakpoints, namedClasses: [] }}
+        styleContext={{ breakpoints: CARD_BREAKPOINTS, namedClasses: [] }}
       />
     );
-    expect(links(html)).toEqual([
-      ["phones-only", "Phones only"],
-      ["everywhere", "Everywhere"],
-    ]);
+    expect(links(html)).toEqual([["everywhere", "Everywhere"]]);
   });
 
   it("reads devices by the breakpoints a page drawn inside its Layout is drawn with", async () => {
-    const breakpoints = {
-      viewport: [{ id: "mobile", label: "Mobile", maxWidth: 640 }],
-      container: [],
-    };
     const shared = {
       context: createStandaloneContext({}),
       blocks: resolver,
-      styleContext: { breakpoints, namedClasses: [] },
+      styleContext: { breakpoints: CARD_BREAKPOINTS, namedClasses: [] },
     };
     const html = await settled(
       <>
@@ -340,9 +336,10 @@ describe("headings a table of contents leaves out", () => {
             ...shared,
             document: page(
               contents(),
-              heading("Phones only", "h2", {
-                visibility: { devices: { base: false, mobile: true } },
-              })
+              heading("Never on a device", "h2", {
+                visibility: { devices: { base: false, "card-wide": true } },
+              }),
+              heading("Everywhere")
             ),
           },
           shared,
@@ -351,7 +348,7 @@ describe("headings a table of contents leaves out", () => {
         })}
       </>
     );
-    expect(links(html)).toEqual([["phones-only", "Phones only"]]);
+    expect(links(html)).toEqual([["everywhere", "Everywhere"]]);
   });
 
   it("leaves out the Layout's header and footer, listing the page's own", async () => {

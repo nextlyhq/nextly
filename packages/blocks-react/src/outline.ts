@@ -46,6 +46,7 @@
  * @module outline
  */
 import {
+  BASE_BREAKPOINT,
   deviceVisibility,
   renderedDomId,
   walkNodes,
@@ -72,8 +73,8 @@ export interface OutlinePart {
   readonly nodes: readonly BlockNode[];
   /**
    * The breakpoints the part's styles are compiled under, which decide on
-   * which devices a block is hidden. Absent, the base one alone, as the
-   * compiler reads it then.
+   * which devices a block is hidden. Absent, that is read from what each
+   * block stores.
    */
   readonly breakpoints?: BreakpointSet;
 }
@@ -129,20 +130,34 @@ const UNLISTED_WITHIN: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Whether a block is hidden on every device: at every viewport breakpoint
- * the part's styles are compiled under, read through the engine's one
- * statement of the cascade (`deviceVisibility`), as the compiler and the
- * Layers panel read it. Container breakpoints answer about a box, not a
- * device, so they neither hide a block everywhere nor show one again.
+ * Whether a block is hidden on every device.
+ *
+ * Given the breakpoints its part is compiled under: at every viewport
+ * breakpoint, read through the engine's one statement of the cascade
+ * (`deviceVisibility`), as the compiler and the Layers panel read it.
+ * Container breakpoints answer about a box, not a device, so they neither
+ * hide a block everywhere nor show one again.
+ *
+ * Given none, from what the block stores: hidden from the widest device
+ * down (`base`), with no breakpoint storing a show.
  */
 function hiddenOnEveryDevice(
   node: BlockNode,
   breakpoints: BreakpointSet | undefined
 ): boolean {
-  if (node.visibility?.devices === undefined) return false;
-  return deviceVisibility(node.visibility, breakpoints)
-    .filter(device => device.axis === "viewport")
-    .every(device => !device.visible);
+  const devices: unknown = node.visibility?.devices;
+  if (typeof devices !== "object" || devices === null) return false;
+  if (breakpoints !== undefined) {
+    return deviceVisibility(node.visibility, breakpoints)
+      .filter(device => device.axis === "viewport")
+      .every(device => !device.visible);
+  }
+  const stored = devices as Readonly<Record<string, unknown>>;
+  return (
+    Object.hasOwn(stored, BASE_BREAKPOINT) &&
+    stored[BASE_BREAKPOINT] === false &&
+    !Object.values(stored).includes(true)
+  );
 }
 
 /** Whether a heading with these facts is one a table of contents lists. */
