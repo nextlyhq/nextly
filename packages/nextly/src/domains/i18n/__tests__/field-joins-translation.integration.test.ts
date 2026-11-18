@@ -906,8 +906,18 @@ describeEachDialect("a shared field that becomes translated", dialect => {
     }
   );
 
-  // The Builder's saves move a joining field's values on the live database, so the companion
-  // column they add takes what the live main column carries, as the code-first apply's does.
+  /**
+   * Whether a save of `table`'s entity runs the migration file it writes, planned from the
+   * migration history: a Single's and a field group's do; a collection's is still applied by its
+   * push.
+   */
+  const runsItsFile = (table: string) => !table.startsWith("dc_");
+
+  // A collection's save moves a joining field's values on the live database, so the companion
+  // column it adds takes what the live main column carries, as the code-first apply's does. A
+  // Single's and a field group's run their migration file, planned from the history: a default
+  // given to the main column outside it is drift, refused as `nextly migrate` refuses it, before
+  // anything changes.
   it.skipIf(dialect === "sqlite").each(PATHS)(
     "gives the companion column the main column's default, or refuses where it cannot take it, when $path",
     async ({ table, seed, change }) => {
@@ -922,6 +932,14 @@ describeEachDialect("a shared field that becomes translated", dialect => {
         () => undefined,
         (error: unknown) => error
       );
+
+      // MySQL refuses it first, as below, before the file is planned.
+      if (runsItsFile(table) && dialect !== "mysql") {
+        expect(refusal).toMatchObject({ code: "NEXTLY_MIGRATION_DRIFT" });
+        expect(await mainHeading(table, id)).toBe("Hello");
+        expect(await columnsOf(`${table}_locales`)).not.toContain("heading");
+        return;
+      }
 
       // MySQL gives the field's TEXT companion column no literal default, so there the move is
       // refused before anything runs and the value stays where it was.
