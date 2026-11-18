@@ -153,9 +153,10 @@ function refuseSameNames(moves: readonly FieldMoveRequest[]): void {
 }
 
 /**
- * Refuses a move whose field's name another field also leaves its place with, in a save that
- * gives that field no move of its own: which of the two moved is not known from the definitions,
- * and the other's values would stay at a place nothing reads.
+ * Refuses a move whose field's name another field also leaves its place with, or also arrives
+ * with, in a save that gives that field no move of its own: which field moved where is not known
+ * from the definitions. A rival that left would keep its values at a place nothing reads; a rival
+ * that arrived could be handed values that belong to the field the move names.
  */
 function refuseUnpairedNames(
   given: {
@@ -165,23 +166,45 @@ function refuseUnpairedNames(
   },
   renames: readonly { from: string; to: string }[]
 ): void {
-  // A field the save renames left its place under another name, which no move takes.
-  const renamed = new Set(renames.map(r => toSnakeCase(r.from)));
-  const left = fieldsThatLeft(given.before, given.after).filter(
-    each => !(each.path.length === 1 && renamed.has(toSnakeCase(each.path[0])))
-  );
-  const moved = new Set(given.moves.map(request => request.from.join(".")));
+  // A field the save renames leaves its place under one name and arrives under another, at the
+  // top of the entity; no move takes either.
+  const unrenamed = (side: "from" | "to") => {
+    const names = new Set(renames.map(r => toSnakeCase(r[side])));
+    return (each: { path: readonly string[] }) =>
+      !(each.path.length === 1 && names.has(toSnakeCase(each.path[0])));
+  };
+  const sides = [
+    {
+      verb: "leaves its place",
+      unpaired: fieldsThatLeft(given.before, given.after).filter(
+        unrenamed("from")
+      ),
+      paired: new Set(given.moves.map(request => request.from.join("."))),
+    },
+    {
+      verb: "arrives",
+      unpaired: fieldsThatLeft(given.after, given.before).filter(
+        unrenamed("to")
+      ),
+      paired: new Set(given.moves.map(request => request.to.join("."))),
+    },
+  ];
   for (const request of given.moves) {
     if (samePath(request.from, request.to)) continue;
     const name = request.from.at(-1) ?? "";
-    const rival = left.find(
-      each => each.path.at(-1) === name && !moved.has(each.path.join("."))
-    );
-    if (rival === undefined) continue;
-    throw refused(
-      request,
-      `Another field named ${name} (${rival.path.join(".")}) also leaves its place in this save, so which one moves here is not certain. Move ${name} in a save of its own.`
-    );
+    // A move that changes the name is refused on its own (`checkMove`), with that reason.
+    if (request.to.at(-1) !== name) continue;
+    for (const side of sides) {
+      const rival = side.unpaired.find(
+        each =>
+          each.path.at(-1) === name && !side.paired.has(each.path.join("."))
+      );
+      if (rival === undefined) continue;
+      throw refused(
+        request,
+        `Another field named ${name} (${rival.path.join(".")}) also ${side.verb} in this save, so which one moves here is not certain. Move ${name} in a save of its own.`
+      );
+    }
   }
 }
 
