@@ -578,11 +578,18 @@ function useSessionRecording(
   // same point.
   const storedRef = useRef<Record<string, unknown> | null>(null);
   const edits = useEditGenerations();
-  // Writes on their way, and how many have landed or failed: counted apart,
-  // so a write that fails at once still asks for the recording it put off.
-  const [writes, setWrites] = useState({ pending: 0, landed: 0 });
+  const writes = useWritesOnTheirWay();
+  const identity = recordingIdentity(document, locale);
+  // Another document, or language, named: what was recorded and counted for
+  // the one before is not this one's, so none of it can be recorded here.
+  useStartAfreshOn(identity, () => {
+    writes.clear();
+    snapshotRef.current = {};
+    storedRef.current = null;
+    edits.reset();
+  });
   const { schedule, cancel, lastSent } = useSnapshotAutosave({
-    identity: recordingIdentity(document, locale),
+    identity,
     document,
     save: () => recordSnapshot(scope, snapshotRef.current, locale, storedRef),
     enabled: held && writes.pending === 0,
@@ -603,18 +610,7 @@ function useSessionRecording(
     },
     [edits, schedule]
   );
-  const pause = useCallback(
-    () => setWrites(now => ({ ...now, pending: now.pending + 1 })),
-    []
-  );
-  const resume = useCallback(
-    () =>
-      setWrites(now => ({
-        pending: Math.max(0, now.pending - 1),
-        landed: now.landed + 1,
-      })),
-    []
-  );
+  const { pause, resume } = writes;
   const discard = useCallback(async () => {
     edits.settle(edits.generation());
     cancel();
@@ -646,6 +642,46 @@ function useSessionRecording(
   );
 }
 
+/**
+ * Run `reset` in the render that first sees a new `identity`, so nothing
+ * held for the one before outlives the change by a render.
+ */
+function useStartAfreshOn(identity: string | null, reset: () => void): void {
+  const [current, setCurrent] = useState(identity);
+  if (current !== identity) {
+    setCurrent(identity);
+    reset();
+  }
+}
+
+/**
+ * Writes on their way, and how many have landed or failed: counted apart, so
+ * a write that fails at once still asks for the recording it put off.
+ */
+function useWritesOnTheirWay(): {
+  readonly pending: number;
+  readonly landed: number;
+  readonly pause: () => void;
+  readonly resume: () => void;
+  readonly clear: () => void;
+} {
+  const [writes, setWrites] = useState({ pending: 0, landed: 0 });
+  const pause = useCallback(
+    () => setWrites(now => ({ ...now, pending: now.pending + 1 })),
+    []
+  );
+  const resume = useCallback(
+    () =>
+      setWrites(now => ({
+        pending: Math.max(0, now.pending - 1),
+        landed: now.landed + 1,
+      })),
+    []
+  );
+  const clear = useCallback(() => setWrites({ pending: 0, landed: 0 }), []);
+  return { ...writes, pause, resume, clear };
+}
+
 /** What a recording of `document` in `locale` is keyed by, as the form's is. */
 function recordingIdentity(
   document: string | null,
@@ -664,11 +700,17 @@ function useEditGenerations(): {
   readonly generation: () => number;
   readonly settle: (upTo: number) => void;
   readonly unsettled: () => boolean;
+  /** Another document is named: none of its edits are this one's. */
+  readonly reset: () => void;
 } {
   const generationRef = useRef(0);
   const settledRef = useRef(0);
   return useMemo(
     () => ({
+      reset: () => {
+        generationRef.current = 0;
+        settledRef.current = 0;
+      },
       bump: () => {
         generationRef.current += 1;
       },
@@ -784,7 +826,9 @@ function useSessionWrite(
       } catch (error) {
         return refusalOf(error);
       } finally {
-        recording.resume();
+        // A write the caller moved away from leaves the next document's
+        // recording alone: its own bookkeeping was started afresh.
+        if (!moved()) recording.resume();
       }
     },
     [read, held, recording, versionRef, mutateAsync]
@@ -842,11 +886,19 @@ export function useDocumentSession(
   );
   const { document } = read;
   const { record: recordDocument, discard } = recording;
+  // Stamped with the version the edits began from, which writes send too:
+  // a recovery point restored later must be judged against that version, not
+  // the newer one a refresh read since.
   const record = useCallback(
     (changes: Readonly<Record<string, unknown>>) => {
-      if (document !== undefined) recordDocument(document, changes);
+      if (document === undefined) return;
+      const version = versionRef.current;
+      recordDocument(document, {
+        ...changes,
+        ...(version === undefined ? {} : { [DOCUMENT_VERSION_KEY]: version }),
+      });
     },
-    [document, recordDocument]
+    [document, recordDocument, versionRef]
   );
 
   return useMemo(
