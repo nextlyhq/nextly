@@ -61,6 +61,7 @@ import {
 import { useUnsavedDiscard } from "@admin/hooks/useUnsavedDiscard";
 import { createPreview } from "@admin/lib/builder/create-preview";
 import { fieldGroupCreatePayload } from "@admin/lib/builder/create-request";
+import { draftRenamesOf } from "@admin/lib/builder/rename-answers";
 import { fieldGroupEntityFromSettings } from "@admin/lib/builder/settings-to-manifest";
 import {
   removeUnsavedEntity,
@@ -375,6 +376,8 @@ export default function FieldGroupBuilderEditPage({
     // Judged against the fields as last saved, so a draft that changes a
     // saved field's storage level is refused before it can lose values.
     getValidatedFields: () => getValidatedFields(pending.saved),
+    // Its renames of saved fields are the save's to answer, as renames.
+    pendingChanges: pending.changes,
     // The i18n flag, as for the other kinds: the preview reports what a field
     // leaving translation moves to the archive, which depends on it. An
     // unsaved field group's review is its create, built here.
@@ -526,6 +529,7 @@ export default function FieldGroupBuilderEditPage({
       />
 
       <BuilderSchemaChangeDialogs
+        draftRenames={draftRenamesOf(pending.changes)}
         confirmation={confirmation}
         kind={FIELD_GROUP_BUILDER_CONFIG.kind}
         entityName={slug}

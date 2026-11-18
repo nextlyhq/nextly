@@ -12,6 +12,11 @@
  */
 import type { JSX } from "react";
 
+import {
+  previewWithDecidedRenames,
+  renameAnswers,
+  type DraftRename,
+} from "@admin/lib/builder/rename-answers";
 import type { SettingChange } from "@admin/lib/builder/settings-changes";
 import type {
   FieldResolution,
@@ -47,6 +52,8 @@ type Props = {
    * review says what will be created, rather than judging a change.
    */
   creating?: boolean;
+  /** The saved fields the draft renamed, which the save answers as renames itself. */
+  draftRenames?: readonly DraftRename[];
   /** The entity's settings the save changes, each reviewed with it. */
   settingChanges?: readonly SettingChange[];
   /**
@@ -85,12 +92,30 @@ export function BuilderSchemaChangeDialogs({
   entityName,
   onConfirm,
   creating = false,
+  draftRenames = [],
   settingChanges = [],
   fieldGroupCreates = [],
 }: Props): JSX.Element | null {
-  const { preview, previewId, isOpen, isApplying, setOpen } = confirmation;
+  const {
+    preview: previewed,
+    previewId,
+    isOpen,
+    isApplying,
+    setOpen,
+  } = confirmation;
 
-  if (!preview) return null;
+  if (!previewed) return null;
+  // The Builder's own renames are decided, not asked: shown as renames whose values are kept.
+  const { decided, sameColumn } = renameAnswers(
+    draftRenames,
+    previewed.renamed ?? []
+  );
+  const preview = previewWithDecidedRenames(previewed, decided, sameColumn);
+  // Each rename the save keeps, by its columns, and one that keeps its column by its names.
+  const keptRenames = [
+    ...decided,
+    ...sameColumn.map(r => ({ from: r.previousName, to: r.name })),
+  ];
 
   if (creating) {
     return (
@@ -130,7 +155,7 @@ export function BuilderSchemaChangeDialogs({
     );
   }
 
-  if (isSafeChange(preview)) {
+  if (isSafeChange(preview) && keptRenames.length === 0) {
     return (
       <SafeChangeConfirmDialog
         key={previewId}
@@ -158,6 +183,7 @@ export function BuilderSchemaChangeDialogs({
       classification={preview.classification}
       changes={preview.changes}
       renamed={preview.renamed}
+      decidedRenames={keptRenames}
       warnings={preview.warnings}
       interactiveFields={preview.interactiveFields}
       leavingTranslation={preview.leavingTranslation}

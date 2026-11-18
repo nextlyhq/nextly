@@ -88,8 +88,9 @@ export interface FieldSettingsSurface {
   /**
    * @experimental Why a name the field is given cannot be saved on this surface, in words for the
    * person, or `null` when it can. Asked of the name as it is typed and as the label derives it,
-   * and shown beside it. A surface whose rule depends on where the field sits builds this for the
-   * field it shows. Absent, names are not checked here.
+   * and of a name the surface fixes, and shown beside it; a name the surface keeps where it is
+   * saved is the check's to let pass. A surface whose rule depends on where the field sits builds
+   * this for the field it shows. Absent, names are not checked here.
    */
   checkName?: (name: string) => string | null;
   /** Settings the surface fixes. */
