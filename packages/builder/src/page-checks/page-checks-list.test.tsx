@@ -103,6 +103,30 @@ describe("the list", () => {
     ).not.toContain("Page data");
   });
 
+  it("draws an item whose fix is in another editor as a link there", () => {
+    const onFix = vi.fn();
+    const linked: PageFinding = {
+      ...finding("h", "content"),
+      nodeId: undefined,
+      block: undefined,
+      fix: undefined,
+      what: "Over the page data limit in Site header",
+      opens: {
+        href: "/admin/layouts/main",
+        text: "Edit header & footer",
+        name: "Edit the Main header & footer, in a new tab",
+      },
+    };
+    draw([linked], { onFix });
+    const link = screen.getByRole("link", {
+      name: "Over the page data limit in Site header. Edit the Main header & footer, in a new tab",
+    });
+    expect(link.getAttribute("href")).toBe("/admin/layouts/main");
+    expect(link.getAttribute("target")).toBe("_blank");
+    fireEvent.click(link);
+    expect(onFix).not.toHaveBeenCalled();
+  });
+
   it("says, in each item, what is wrong, on which block, why it matters and what to do", () => {
     draw([finding("a")]);
     const item = screen.getByRole("button", { name: "Problem a: Block a" });

@@ -155,6 +155,65 @@ describe("page data", () => {
     expect(findings[0]?.why).toContain("Page data: 500 of 500");
   });
 
+  it("names a header's block with its region, linking to where it is changed", () => {
+    const header: BlockDocument = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        node("nav-list", "core/collection-loop", { collection: "posts" }),
+      ],
+    };
+    const edit = {
+      href: "/admin/layouts/main",
+      text: "Edit header & footer",
+      name: "Edit the Main header & footer, in a new tab",
+    };
+    const over = report({
+      used: 500,
+      refused: 2,
+      unread: [
+        { nodeId: "nav-list", what: "entries" },
+        { nodeId: "undone", what: "image" },
+      ],
+    });
+    const document: BlockDocument = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: NODES,
+    };
+    const { findings } = runPageChecks(
+      {
+        document,
+        regions: [
+          {
+            area: "header",
+            document: header,
+            label: "Site header · Main",
+            edit,
+          },
+        ],
+        facts: { pageData: { state: "counted", report: over } },
+      },
+      [PAGE_DATA_CHECK]
+    );
+    expect(
+      findings.map(({ nodeId, what, opens }) => ({ nodeId, what, opens }))
+    ).toEqual([
+      {
+        nodeId: undefined,
+        // Named as Layers names it; with no registry here, by its type.
+        what: "Over the page data limit in Site header · Main: Collection loop",
+        opens: edit,
+      },
+      // Undone since the count: on neither, so the page's item, selecting nothing.
+      {
+        nodeId: undefined,
+        what: "Over the page data limit: Its image doesn't load",
+        opens: undefined,
+      },
+    ]);
+  });
+
   it("is one item for the page where reads were refused with no block to name", () => {
     const over = report({ used: 500, refused: 1 });
     expect(

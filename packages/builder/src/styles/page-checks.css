@@ -170,6 +170,9 @@
   border-radius: 0.5rem;
   color: inherit;
   text-align: start;
+  /* An item that links out (a header block, changed in its own editor) reads
+     as the others do. */
+  text-decoration: none;
 }
 
 .nx-page-checks__item:hover {

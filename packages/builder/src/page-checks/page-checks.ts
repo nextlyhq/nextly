@@ -78,15 +78,40 @@ export interface PageRegionDocument {
    * blocks the component draws, not the one placement.
    */
   readonly definitions?: DefinitionsById;
+  /** What the editor calls it, such as "Site header · Main", where known. */
+  readonly label?: string;
+  /** Where it is changed, where the caller can say: its editor's address. */
+  readonly edit?: PageCheckLink;
+}
+
+/** A link out of the editor, as a finding offers one: its address and words. */
+export interface PageCheckLink {
+  readonly href: string;
+  /** What the link says. */
+  readonly text: string;
+  /** Its accessible name, saying where it goes. */
+  readonly name: string;
+}
+
+/** A region as the checks read it, and as it is stored. */
+export interface ResolvedRegion extends PageRegionDocument {
+  /**
+   * The region as stored, its placements unresolved: what a read names, a
+   * component placement among them, where `document` draws its blocks.
+   */
+  readonly stored: BlockDocument;
 }
 
 /** A region as the checks read it: its placements drawn as their blocks. */
-function composedRegion(region: PageRegionDocument): PageRegionDocument {
-  if (region.definitions === undefined) return region;
+function composedRegion(region: PageRegionDocument): ResolvedRegion {
+  if (region.definitions === undefined) {
+    return { ...region, stored: region.document };
+  }
+  const { definitions, ...rest } = region;
   return {
-    area: region.area,
-    document: resolveComponentInstances(region.document, region.definitions)
-      .document,
+    ...rest,
+    document: resolveComponentInstances(region.document, definitions).document,
+    stored: region.document,
   };
 }
 
@@ -138,7 +163,7 @@ export interface ResolvedPage {
   readonly drawn: readonly BlockNode[];
   readonly blocks: (type: string) => AnyBlockDefinition | undefined;
   /** The header and footer drawn around it; none where none is known. */
-  readonly regions: readonly PageRegionDocument[];
+  readonly regions: readonly ResolvedRegion[];
   /** The page's component definitions, where the caller knows them. */
   readonly definitions?: DefinitionsById;
   /** The site's variables, where the caller knows them. */
@@ -171,6 +196,11 @@ export interface PageCheckResult {
    * the fix is there rather than on a block (a plugin's tab of Page settings).
    */
   readonly settingsTab?: string;
+  /**
+   * Where the fix is outside this editor, as a link the item is instead,
+   * for a block it cannot select (a header's, changed in its own editor).
+   */
+  readonly opens?: PageCheckLink;
 }
 
 /** One check: an id, the group it reports in, and what it finds. */

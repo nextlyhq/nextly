@@ -13,13 +13,16 @@ import {
   type BlockNode,
 } from "@nextlyhq/blocks-engine";
 
+import { blockNameOf } from "../panels/layers/layers";
 import {
   pageDataCount,
   readBudgetStanding,
   READ_KIND_WORDS,
   unreadBlocks,
   type PageReadReport,
+  type ReadKind,
 } from "../shell/read-budget";
+import { regionHolding } from "../shell/unread-places";
 
 import type { PageCheck, PageCheckResult, ResolvedPage } from "./page-checks";
 import type { UnpublishedPart } from "./page-facts";
@@ -48,12 +51,53 @@ function pageDataNote(page: ResolvedPage): string | undefined {
 }
 
 /** What a block over the limit misses, in the meter's words, as one line. */
-function missedWords(what: readonly (keyof typeof READ_KIND_WORDS)[]): string {
+function missedWords(what: readonly ReadKind[]): string {
   return what.map(kind => READ_KIND_WORDS[kind].unread).join(". ");
 }
 
+/**
+ * One block the page's data ran out before, as the meter places it: a
+ * page's block is selected; a header's or footer's, which this editor
+ * cannot select, is named with its region and links to where it is
+ * changed; one on neither (undone since the count) is the page's item.
+ */
+function overLimitItem(
+  page: ResolvedPage,
+  row: { readonly nodeId: string; readonly what: readonly ReadKind[] },
+  words: { readonly why: string; readonly todo: string }
+): PageCheckResult {
+  const missed = missedWords(row.what);
+  if (blockNameOf(page.document, row.nodeId) !== undefined) {
+    return {
+      nodeId: row.nodeId,
+      what: `Over the page data limit: ${missed}`,
+      ...words,
+    };
+  }
+  const held = regionHolding(page.regions, row.nodeId, region => region.stored);
+  if (held === undefined) {
+    return {
+      part: row.nodeId,
+      what: `Over the page data limit: ${missed}`,
+      ...words,
+    };
+  }
+  const { region, name } = held;
+  const where = region.label ?? `the site ${region.area}`;
+  return {
+    part: row.nodeId,
+    what: `Over the page data limit in ${where}: ${name}`,
+    why: `${missed}. ${words.why}`,
+    todo: `Show fewer entries in ${where}, or move some blocks to another page.`,
+    ...(region.edit === undefined ? {} : { opens: region.edit }),
+  };
+}
+
 /** The blocks the page's data runs out before, each named. */
-function overLimit(report: PageReadReport): PageCheckResult[] {
+function overLimit(
+  page: ResolvedPage,
+  report: PageReadReport
+): PageCheckResult[] {
   const why = `The page reads more data than the site allows (${pageDataCount(report)}), so on the live page this block shows empty.`;
   const todo =
     "Show fewer entries in a list, or move some blocks to another page.";
@@ -62,12 +106,7 @@ function overLimit(report: PageReadReport): PageCheckResult[] {
   if (rows.length === 0) {
     return [{ what: "Page data over the limit", why, todo }];
   }
-  return rows.map(row => ({
-    nodeId: row.nodeId,
-    what: `Over the page data limit: ${missedWords(row.what)}`,
-    why,
-    todo,
-  }));
+  return rows.map(row => overLimitItem(page, row, { why, todo }));
 }
 
 /**
@@ -88,7 +127,7 @@ export const PAGE_DATA_CHECK: PageCheck = {
     const { report } = fact;
     const missed = report.refused > 0 || report.unread.length > 0;
     return missed && readBudgetStanding(report) === "over"
-      ? overLimit(report)
+      ? overLimit(page, report)
       : [];
   },
 };
