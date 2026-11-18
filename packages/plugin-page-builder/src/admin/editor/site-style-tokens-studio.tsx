@@ -556,6 +556,14 @@ function absenceOf(pending: boolean): "pending" | "failed" {
 /** The tokens studio's state, for the Variables tab inside it. */
 const VariablesStudio = createContext<TokensPanelProps | null>(null);
 
+/**
+ * The studio's state, for a tab drawn inside its frame that edits the same
+ * variables: `null` outside one.
+ */
+export function useVariablesStudio(): TokensPanelProps | null {
+  return useContext(VariablesStudio);
+}
+
 /** The Variables tab: the studio's variables, in the panel its frame holds. */
 export function VariablesTab({
   tab,

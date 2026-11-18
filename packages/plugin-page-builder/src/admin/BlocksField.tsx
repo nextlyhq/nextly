@@ -52,6 +52,7 @@ import {
   claimBuilderReturn,
 } from "./editor/builder-return";
 import { documentFrom, PLUGIN_SOURCE } from "./editor/stored-document";
+import { useFilledDefaultNotice } from "./filled-default-notice";
 import {
   PageLayoutPicker,
   usePageLayoutAsk,
@@ -201,6 +202,8 @@ export function BlocksField<TFieldValues extends FieldValues = FieldValues>({
     ...usePageLayoutAsk(control),
     subject: restingDocument.kind === "component" ? "component" : "page",
   });
+  // A component published as the first header or footer: said once.
+  useFilledDefaultNotice(restingDocument.kind);
 
   return (
     <div ref={returnedTo}>

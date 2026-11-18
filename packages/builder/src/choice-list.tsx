@@ -48,7 +48,7 @@ export interface ChoiceListProps<C extends ListedChoice> {
   readonly noMatch: string;
   /**
    * The headings of the groups, in the order they are listed. Without them
-   * the list is one run of entries.
+   * the list is one run of entries. An empty heading draws none.
    */
   readonly groups?: ReadonlyArray<{ group: string; heading: string }>;
   /** What an entry draws: its label unless said otherwise. */
@@ -235,15 +235,19 @@ export function ChoiceList<C extends ListedChoice>({
               if (members.length === 0) return null;
               return (
                 <li key={group} role="presentation">
-                  <span
-                    className="nx-vars__group-name nx-font-pick__heading"
-                    aria-hidden="true"
-                  >
-                    {heading}
-                  </span>
+                  {/* A group with no heading leads the list unnamed: one
+                      entry standing apart from the groups under it. */}
+                  {heading === "" ? null : (
+                    <span
+                      className="nx-vars__group-name nx-font-pick__heading"
+                      aria-hidden="true"
+                    >
+                      {heading}
+                    </span>
+                  )}
                   <ul
                     role="group"
-                    aria-label={heading}
+                    aria-label={heading === "" ? undefined : heading}
                     className="nx-font-pick__group"
                   >
                     {members.map(option)}
