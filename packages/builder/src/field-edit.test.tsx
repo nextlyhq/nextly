@@ -17,6 +17,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { escapeFieldEdit } from "./field-edit";
 import { useStoredDraft } from "./stored-draft";
+import { useDraft } from "./style-text-field";
 
 afterEach(cleanup);
 
@@ -107,5 +108,52 @@ describe("Escape in a field being edited", () => {
     typeInto(field, "Sam");
     fireEvent.change(field, { target: { value: "Same" } });
     expect(escapeFieldEdit(field)).toBe("none");
+  });
+
+  it("puts back an edit again after another field's edit displaced it", () => {
+    // A field whose write was refused keeps its draft, the stored value
+    // unchanged, as a field holding an invalid link does.
+    render(
+      <>
+        <Field label="Refused" stored="Before" onCommit={() => undefined} />
+        <Field label="Other" stored="Other" onCommit={() => undefined} />
+      </>
+    );
+    const refused = screen.getByLabelText<HTMLInputElement>("Refused");
+    typeInto(refused, "Kept draft");
+    typeInto(screen.getByLabelText<HTMLInputElement>("Other"), "Other edit");
+    typeInto(refused, "Kept draft, more");
+    let outcome = "";
+    act(() => {
+      outcome = escapeFieldEdit(refused);
+    });
+    expect(outcome).toBe("put-back");
+    expect(refused.value).toBe("Before");
+  });
+});
+
+/** A Style tab field, holding its draft as the Style tab's text fields do. */
+function StyleField(): React.JSX.Element {
+  const { draft, setDraft } = useDraft("16px");
+  return (
+    <input
+      aria-label="Font size"
+      value={draft}
+      onChange={event => setDraft(event.target.value)}
+    />
+  );
+}
+
+describe("Escape in a Style field being edited", () => {
+  it("puts back the stored value, as in a Content field", () => {
+    render(<StyleField />);
+    const field = screen.getByLabelText<HTMLInputElement>("Font size");
+    typeInto(field, "24px");
+    let outcome = "";
+    act(() => {
+      outcome = escapeFieldEdit(field);
+    });
+    expect(outcome).toBe("put-back");
+    expect(field.value).toBe("16px");
   });
 });

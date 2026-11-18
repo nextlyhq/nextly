@@ -19,56 +19,22 @@
 
 import * as React from "react";
 
-import { beginFieldEdit } from "./field-edit";
+import { useFieldEdit } from "./field-edit";
 
 /**
  * @param stored - the value the document holds, as the field shows it
  * @returns the draft and its setter, the draft reset whenever `stored` moves
  *
- * A draft that differs from `stored` is an edit in progress: Escape in the
- * field puts `stored` back and the field then writes nothing when it is
- * left (`field-edit.ts`). The edit begins in the element focus is in when
- * the draft first moves, which is the field being typed into.
+ * A draft that differs from `stored` is an edit in progress, which Escape in
+ * the field puts back (`field-edit.ts`).
  */
 export function useStoredDraft(
   stored: string
 ): [string, (next: string) => void] {
   const [draft, setDraftState] = React.useState(stored);
-  // Read when Escape lands, so the value put back is the one stored now.
-  const latestStored = React.useRef(stored);
-  latestStored.current = stored;
-  // Ends the edit in progress, or `null` while there is none.
-  const endEdit = React.useRef<(() => void) | null>(null);
-  const end = React.useCallback(() => {
-    endEdit.current?.();
-    endEdit.current = null;
-  }, []);
   React.useEffect(() => {
     setDraftState(stored);
-    // A value stored underneath the field ends its edit: the draft was
-    // written, or an undo or another surface replaced it.
-    end();
-  }, [stored, end]);
-  // A field gone takes its edit with it.
-  React.useEffect(() => end, [end]);
-  const setDraft = React.useCallback(
-    (next: string) => {
-      setDraftState(next);
-      if (next === latestStored.current) {
-        end();
-        return;
-      }
-      if (endEdit.current !== null) return;
-      endEdit.current = beginFieldEdit({
-        element:
-          typeof document === "undefined" ? null : document.activeElement,
-        cancel: () => {
-          endEdit.current = null;
-          setDraftState(latestStored.current);
-        },
-      });
-    },
-    [end]
-  );
+  }, [stored]);
+  const setDraft = useFieldEdit(stored, setDraftState);
   return [draft, setDraft];
 }

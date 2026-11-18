@@ -22,6 +22,8 @@
  * @module field-edit
  */
 
+import * as React from "react";
+
 /** An edit in progress: where it is, and how to put it back. */
 interface FieldEdit {
   /** The field it is in: the element focus was in when it began. */
@@ -36,16 +38,72 @@ let current: FieldEdit | null = null;
 /** Fields an edit has been put back in, which the next Escape leaves. */
 const putBack = new WeakSet<Element>();
 
-/**
- * Begin an edit, answering the function that ends it without putting
- * anything back: the field's value was stored, or the field is gone.
- */
-export function beginFieldEdit(edit: FieldEdit): () => void {
+/** A field's hold on the edit in progress. */
+interface FieldEditHandle {
+  /** End the edit without putting anything back: stored, or the field gone. */
+  readonly end: () => void;
+  /** Whether this is still the edit in progress: another field's displaces it. */
+  readonly held: () => boolean;
+}
+
+/** Begin an edit, displacing any other field's. */
+function beginFieldEdit(edit: FieldEdit): FieldEditHandle {
   current = edit;
   if (edit.element !== null) putBack.delete(edit.element);
-  return () => {
-    if (current === edit) current = null;
+  return {
+    end: () => {
+      if (current === edit) current = null;
+    },
+    held: () => current === edit,
   };
+}
+
+/**
+ * A draft field's edit in progress, kept with its draft: the one rule every
+ * field that holds a draft over a stored value follows, so each has the same
+ * Escape.
+ *
+ * Answers the draft's setter. A draft set away from `stored` begins an edit
+ * in the element focus is in (the field being typed into), unless this field
+ * already holds the edit in progress; one displaced by another field's begins
+ * again. The edit ends when `stored` moves (the draft was written, or an undo
+ * or another surface replaced it), when the draft comes back to `stored`, and
+ * when the field goes. Escape's put-back sets the draft to `stored`, so the
+ * field then writes nothing when it is left.
+ */
+export function useFieldEdit(
+  stored: string,
+  setDraft: (next: string) => void
+): (next: string) => void {
+  // Read when Escape lands, so the value put back is the one stored now.
+  const latestStored = React.useRef(stored);
+  latestStored.current = stored;
+  const handle = React.useRef<FieldEditHandle | null>(null);
+  const end = React.useCallback(() => {
+    handle.current?.end();
+    handle.current = null;
+  }, []);
+  React.useEffect(end, [stored, end]);
+  React.useEffect(() => end, [end]);
+  return React.useCallback(
+    (next: string) => {
+      setDraft(next);
+      if (next === latestStored.current) {
+        end();
+        return;
+      }
+      if (handle.current?.held() === true) return;
+      handle.current = beginFieldEdit({
+        element:
+          typeof document === "undefined" ? null : document.activeElement,
+        cancel: () => {
+          handle.current = null;
+          setDraft(latestStored.current);
+        },
+      });
+    },
+    [setDraft, end]
+  );
 }
 
 /** Whether `edit` was begun in `origin`, or in a field holding it. */
