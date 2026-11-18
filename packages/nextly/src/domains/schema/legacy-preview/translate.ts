@@ -29,8 +29,10 @@ import {
   countRows as countRowsHelper,
 } from "../pipeline/classifier/count-helpers";
 import type { PipelinePreviewResult } from "../pipeline/preview";
+import { usesJunctionTable } from "../field-rules";
 import {
   fieldProducesColumn,
+  junctionTableNameFor,
   toSnakeCase,
 } from "../services/field-column-descriptor";
 import { computeFieldDiff } from "../services/field-diff";
@@ -193,12 +195,26 @@ export async function translatePipelinePreviewToLegacy(
     };
   });
 
+  // The links each relationship leaving its link table drops with that table, counted there.
+  const droppedLinks = await countLinksDropped(
+    db,
+    dialect,
+    tableName,
+    currentFields,
+    newFields
+  );
+
   const changed: ChangedField[] = diff.changed.map(change => {
-    const rowCount = fieldRowCounts[change.name]?.rowCount ?? 0;
+    const dropped = droppedLinks.get(change.name);
+    const rowCount =
+      dropped?.rowCount ?? fieldRowCounts[change.name]?.rowCount ?? 0;
     let classification: "safe" | "destructive" | "interactive" = "safe";
     if (togglesHasMany(change.name, currentFields, newFields)) {
       // One related entry or many is stored differently, so switching between
       // them can lose values, whatever else changed on the field with it.
+      classification = "destructive";
+    } else if (dropped !== undefined) {
+      // A many-to-many made a single link: its link table goes, and every link in it.
       classification = "destructive";
     } else if (change.reason === "constraint_changed") {
       const matchedEvent = preview.events.find(
@@ -254,6 +270,7 @@ export async function translatePipelinePreviewToLegacy(
   // A change can do both, so each says its own part: one warning for the
   // switch between one and many, one for a change of type.
   const changedWarnings = changed.flatMap(c => [
+    ...linkTableWarnings(c.name, droppedLinks),
     ...(togglesHasMany(c.name, currentFields, newFields)
       ? [
           `Changing '${c.name}' between one and many related entries changes how its values are stored; values may be lost.`,
@@ -318,6 +335,53 @@ function togglesHasMany(
   const after = newFields.find(f => f.name === name);
   if (!before || !after) return false;
   return (before.hasMany === true) !== (after.hasMany === true);
+}
+
+/**
+ * The links each kept relationship leaving its link table drops with it, by field name: one that
+ * keeps its links in a link table of its own now (`usesJunctionTable`) and will not after the save,
+ * counted in that table (`junctionTableNameFor`, the name its DROP uses). A count that cannot be
+ * read is unknown, never 0, and the change still drops the table.
+ */
+async function countLinksDropped(
+  db: unknown,
+  dialect: SupportedDialect,
+  tableName: string,
+  currentFields: FieldDefinition[],
+  newFields: FieldDefinition[]
+): Promise<Map<string, RemovedCount>> {
+  const after = new Map(newFields.map(field => [field.name, field]));
+  const counts = new Map<string, RemovedCount>();
+  for (const before of currentFields) {
+    const kept = after.get(before.name);
+    if (kept === undefined || !usesJunctionTable(before)) continue;
+    if (usesJunctionTable(kept)) continue;
+    try {
+      const rowCount = await countRowsHelper(
+        db,
+        dialect,
+        junctionTableNameFor(tableName, before)
+      );
+      counts.set(before.name, { rowCount, unknown: false });
+    } catch {
+      counts.set(before.name, UNCOUNTED);
+    }
+  }
+  return counts;
+}
+
+/** The warning for a relationship whose link table the save drops, with the links it holds. */
+function linkTableWarnings(
+  name: string,
+  dropped: ReadonlyMap<string, RemovedCount>
+): string[] {
+  const count = dropped.get(name);
+  if (count === undefined) return [];
+  return [
+    count.unknown
+      ? `Changing '${name}' from many-to-many to a single link drops its link table and every link it holds: could not count them.`
+      : `Changing '${name}' from many-to-many to a single link drops its link table and the ${count.rowCount.toLocaleString()} links it holds.`,
+  ];
 }
 
 /**
