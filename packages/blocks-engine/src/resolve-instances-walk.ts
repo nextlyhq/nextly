@@ -332,6 +332,7 @@ function inlinedDefinition(
     owner: owner ?? instance.id,
     domIds: new Map<string, string>(),
     nodeIds: new Map<string, string>(),
+    pageBound: new Map<string, ReadonlySet<string>>(),
     plans,
     scope: {
       depth: scope.depth + 1,

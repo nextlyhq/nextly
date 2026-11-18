@@ -247,6 +247,29 @@ function relinked(
   };
 }
 
+/**
+ * A definition node's bindings with fragment fallbacks re-pointed at this
+ * composition's ids, leaving those the placement gave it (`pageOwned`): they
+ * are the page's, and a fallback naming a page id keeps naming it.
+ */
+function remapOwnBindings(
+  bindings: unknown,
+  domIds: InlineContext["domIds"],
+  pageOwned: ReadonlySet<string> | undefined
+): unknown {
+  if (pageOwned === undefined || !isPlainRecord(bindings)) {
+    return remapFragmentBindings(bindings, domIds);
+  }
+  const own: Record<string, unknown> = {};
+  const page: Record<string, unknown> = {};
+  for (const key of Object.keys(bindings)) {
+    defineEntry(pageOwned.has(key) ? page : own, key, ownEntry(bindings, key));
+  }
+  const remapped = remapFragmentBindings(own, domIds);
+  if (remapped === own) return bindings;
+  return { ...(remapped as Record<string, unknown>), ...page };
+}
+
 export function withRemappedIdReferences(
   roots: ResolvedBlockNode[] | null,
   ctx: InlineContext
@@ -272,9 +295,10 @@ export function withRemappedIdReferences(
       // The BOUND form of the same field, for the same reason: a bound `href`
       // renders `bindings.href.fallback` when its source is empty, so a
       // fallback left behind points at an id this composition has re-minted.
-      const bindings = remapFragmentBindings(
+      const bindings = remapOwnBindings(
         node.bindings,
-        ctx.domIds
+        ctx.domIds,
+        ctx.pageBound.get(node.id)
       ) as ResolvedBlockNode["bindings"];
       const slots = isPlainRecord(node.slots)
         ? rewriteSlots(node.slots)
