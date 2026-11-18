@@ -454,6 +454,15 @@ The catch-all dispatches every URL under `/admin/api/` to one of these endpoint 
 | `GET`           | `/admin/api/schema/journal`                            | Schema migration journal (super-admin only).                                                                                                                                                         | Cookie + super admin                                            |
 | `GET` / `PATCH` | `/admin/api/general-settings`                          | Project-wide settings.                                                                                                                                                                               | `read-settings` to read, `update-settings` to change            |
 | `GET`           | `/admin/api/translations`                              | One language's translation worklist across every localized collection: `?locale=es&state=missing&limit=50`. See [Languages](#languages).                                                             | Signed in; which rows come back is each collection's read rule  |
+| `GET`           | `/admin/api/workflows/review-state`                    | **Experimental.** A document's review state, part by part: `?collection=…&id=…` or `?single=…`. See [Workflows](#workflows-experimental).                                                            | Cookie / API key                                                |
+| `POST`          | `/admin/api/workflows/steps`                           | **Experimental.** Take one step on one document's parts.                                                                                                                                             | Cookie / API key                                                |
+| `POST`          | `/admin/api/workflows/steps/bulk`                      | **Experimental.** Take one step on several documents, each refusal named.                                                                                                                            | Cookie / API key                                                |
+| `POST`          | `/admin/api/workflows/assignments`                     | **Experimental.** Assign parts, all or nothing.                                                                                                                                                      | Cookie / API key                                                |
+| `POST`          | `/admin/api/workflows/assignments/bulk`                | **Experimental.** Assign parts on several documents, each refusal named.                                                                                                                             | Cookie / API key                                                |
+| `GET`           | `/admin/api/workflows/waiting?page=…&limit=…`          | **Experimental.** What waits for the caller, a page at a time.                                                                                                                                       | Cookie / API key                                                |
+| `GET`           | `/admin/api/workflows`                                 | **Experimental.** The registered workflows and what each is attached to.                                                                                                                             | `read-settings` or `update-settings`                            |
+| `GET`           | `/admin/api/workflows/{slug}/settings`                 | **Experimental.** A workflow's settings.                                                                                                                                                             | `read-settings` or `update-settings`                            |
+| `PATCH`         | `/admin/api/workflows/{slug}/settings`                 | **Experimental.** Change a workflow's settings; changing `grants` also needs `update-roles`.                                                                                                         | `update-settings`                                               |
 
 The slug-based permissions use the pattern `{action}-{slug}` so a `posts` collection requires `read-posts`, `create-posts`, etc.
 
@@ -898,6 +907,160 @@ These responses are private to the caller (`Cache-Control: private, no-store`).
 The permission reaches every key, the caller's or anyone else's. `update-api-keys` renames any key, and `delete-api-keys` (or `update-api-keys`) revokes any key. Creating a key is only ever for yourself.
 
 `GET /admin/api/api-keys/abilities` is **experimental**: its shape may change while the key form that uses it does. It answers from the same resolution a key's own requests use, so the summary is the permissions the key gets. A collection's or Single's access rule written in code can still refuse a request those permissions allow, and may depend on the entry, so it is not reflected here. A read-only or full-access key follows its creator's permissions, so its answer changes as theirs do.
+
+### Workflows (experimental)
+
+These routes read and move review state for collections and Singles that have a workflow attached. The routes and their shapes may change while the review screens that use them are finished.
+
+**Naming the document.** Each route names its document as `{ collection, id }` or `{ single }`: in the query for a read, in the body for a write. One route serves collections and Singles alike.
+
+**Read access.** A caller who may not read the document is answered `404 NOT_FOUND`, exactly as if it did not exist, even where they hold a step's permission. Parts in a language the caller may not read the document in are left out.
+
+#### Review state
+
+`GET /admin/api/workflows/review-state?collection=posts&id=…` returns the document's review state as the body itself:
+
+```json
+{
+  "workflow": { "slug": "editorial", "label": "Editorial" },
+  "parts": [
+    {
+      "part": "es",
+      "stage": "legal",
+      "stageLabel": "Legal check",
+      "publishable": false,
+      "enteredAt": "2026-11-17T09:00:00.000Z",
+      "enteredBy": "alice",
+      "assignee": { "kind": "user", "id": "rita" },
+      "dueAt": null,
+      "approval": null,
+      "revision": 3,
+      "version": "…",
+      "steps": [
+        {
+          "name": "clear",
+          "label": "Clear",
+          "kind": "approve",
+          "to": "cleared",
+          "mayTake": true,
+          "primary": true
+        },
+        {
+          "name": "bounce",
+          "label": "Bounce",
+          "kind": "request-changes",
+          "to": "writing",
+          "mayTake": true,
+          "primary": false
+        },
+        {
+          "name": "park",
+          "label": "Park",
+          "kind": "move",
+          "to": "hold",
+          "mayTake": false,
+          "primary": false
+        }
+      ],
+      "waitingFor": { "kind": "user", "id": "rita", "name": "Rita" },
+      "lastMove": {
+        "kind": "workflow-submit",
+        "actor": { "kind": "person", "id": "alice", "name": "Alice" },
+        "at": "2026-11-17T09:00:00.000Z",
+        "from": "writing",
+        "to": "legal",
+        "comment": "Ready for legal"
+      }
+    }
+  ]
+}
+```
+
+What the fields mean:
+
+- **`part`:** a language code, or `null` for the shared part. A document that is not translated has only the shared part.
+- **`stage`:** `null` for a live part with nothing waiting to go live.
+- **`approval`:** `{ versionNo, by, at }` where the part holds an approval, else `null`.
+- **`revision` and `version`:** what a step sends back as what it saw.
+- **`steps`:** the steps out of the part's stage.
+  - **`mayTake`:** whether the caller may take the step on this part. The server judges it with the same checks the step itself makes of who takes it: the step's permission (or the right to edit or publish, where it names none), a signed-in person for an approval or a request for changes (so an API key's is always `false`), and no self-approval where the step refuses it. A step can still be refused when taken, for what the caller saw being out of date, a missing comment, or fields the approver cannot read. Approvals are made by people: trusted server code may take every other step, and sees `mayTake: false` for an approval or a request for changes.
+  - **`primary`:** `true` on the stage's primary step (its only step out, or the one marked `primary`), `false` on the others.
+- **`waitingFor`:** in order, the part's assignee; else its stage's default reviewer, where they may take the stage's primary step; else the roles that may take it (`{ "kind": "roles", "roles": [{ "id", "name" }] }`). It is `null` in a stage with no step out of it.
+- **`lastMove`:** the part's latest workflow event other than an assignment; `null` for a part that never moved.
+
+A document whose collection or Single has no workflow attached answers `200` with `{ "workflow": null, "parts": [] }`. The read check runs first, so a missing document, or one the caller may not read, is still `404 NOT_FOUND` whether or not a workflow is attached. Taking a step or assigning on such a document is refused with `WORKFLOW_NOT_ATTACHED`.
+
+#### Steps
+
+`POST /admin/api/workflows/steps` takes one step, and answers `{ message, item }`:
+
+```json
+{
+  "document": { "collection": "posts", "id": "…" },
+  "step": "send",
+  "parts": ["es"],
+  "seen": [{ "part": "es", "revision": 3, "version": "…" }],
+  "comment": "Ready for legal"
+}
+```
+
+- **`parts`:** a list, or `"all"`.
+- **`seen`:** the revision and version the caller read for each part. A part that moved since is refused with `409`.
+- **API keys:** a key may never approve or request changes, whatever it holds.
+- **Unknown documents and parts:** a document that does not exist is `404 NOT_FOUND`. A part the document cannot have (a language the site does not have, or any language on a document that is not translated) is refused with `WORKFLOW_UNKNOWN_PART`. The same holds for assignments, and for each document of a bulk request.
+
+`POST /admin/api/workflows/steps/bulk` takes one step across several documents: `{ step, comment?, documents: [{ document, parts, seen }] }`.
+
+- Each document moves on its own if it may. The answer is a [bulk envelope](#bulk): each document moved in `items`, and each refusal in `errors` as `{ id, code, message }`, `id` being the document's id. A refused Single is named by its slug alone, `{ single, code, message }`, so a refusal never tells you its stored id.
+- An approval over several documents is refused before anything moves (`WORKFLOW_BULK_APPROVAL`). An approval is given for the one version a reviewer was shown.
+
+#### Assignments
+
+`POST /admin/api/workflows/assignments` assigns parts, all or nothing: `{ assignments: [{ document, part, revision, assignee: { kind: "user" | "role", id } | null, dueAt? }] }`.
+
+- The assignee must be able to take the stage's primary step. Otherwise the request is refused with `WORKFLOW_ASSIGNEE_LACKS_STEP`.
+- `/assignments/bulk` takes the same body, applies each assignment it may, and names each refusal in a bulk envelope.
+
+#### What waits for you
+
+`GET /admin/api/workflows/waiting?page=1&limit=20` lists the parts assigned to the caller, or to a role they hold, in stages whose primary step they may take, as a [list envelope](#list). Each item names its document and part. A document the caller may not read is left out of its page.
+
+#### Settings
+
+`GET /admin/api/workflows` lists the registered workflows: each one's stages, steps (with whether each is `grantable`), and the collections and Singles it is attached to.
+
+`GET /admin/api/workflows/{slug}/settings` returns:
+
+```json
+{
+  "workflow": "editorial",
+  "revision": 1,
+  "defaultReviewers": { "legal": { "kind": "user", "id": "nina" } },
+  "labels": { "legal": { "label": "Lawyers", "colour": "#aa3300" } },
+  "emails": { "assigned": true, "approved": false, "changesRequested": true },
+  "grants": { "clear": ["<roleId>"], "bounce": ["<roleId>"] },
+  "grantableSteps": {
+    "clear": {
+      "permission": "sign-off",
+      "partialRoles": [{ "id": "<roleId>", "name": "old-desk" }],
+      "sharesPermissionWith": ["bounce"]
+    }
+  }
+}
+```
+
+`PATCH /admin/api/workflows/{slug}/settings` changes them, and answers `{ message, item }` with the settings as they now read. The body names the `revision` it read, plus any of `defaultReviewers`, `labels`, `emails` and `grants`.
+
+- **Merging:** each part is merged into what is stored, and `null` clears a stage's entry.
+- **Stale writes:** a stale `revision` is refused with `409`.
+- **Grants are an exact set.** Saving a step leaves exactly the listed roles holding its permission, on every attached collection and Single. A role listed in `partialRoles` (holding it on only some of them) that is not named loses it.
+- **Grants need more permission.** Changing `grants` also requires `update-roles`.
+- **Grantable steps:** only steps naming a permission of their own can be granted.
+- **Shared permissions:** steps that share a permission (`sharesPermissionWith`) always hold the same roles. Naming them with different roles is refused with `WORKFLOW_CONFLICTING_GRANTS`.
+- **Default reviewers:** a default reviewer must be able to take the stage's primary step on every attached collection and Single, counting the grants in the same request. Otherwise the write is refused with `WORKFLOW_INELIGIBLE_REVIEWER`, and nothing is written.
+- **Read-only definition:** the definition itself (stages, steps and their rules) lives in code. Naming any of it is refused with `WORKFLOW_DEFINITION_READ_ONLY`.
+
+Changes are recorded in the settings history.
 
 ## Query parameters
 

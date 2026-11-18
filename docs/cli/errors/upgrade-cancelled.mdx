@@ -7,12 +7,14 @@ description: "The backup prompt of `nextly upgrade` was answered no, so the upgr
 
 The backup prompt of `nextly upgrade` was answered no, so the upgrade did not run.
 
+This code is retired. `nextly upgrade` no longer changes stored data: `nextly migrate` and `nextly i18n:convert-zoned-dates` do, and a no at their backup question ends them as `DATA_STEPS_BACKUP_DECLINED`. No command ends with it any more; it is kept so a script or a log search that names it still reads correctly. Releases before the change ended `nextly upgrade` with it:
+
 `nextly upgrade` asks for a backup before its first step that changes anything. At the prompt the answer was no, so no step ran.
 
 ## Fix
 
 - Back up the database.
-- Run `nextly upgrade` again and answer yes, or pass `--confirm-backed-up`.
+- Run `nextly migrate --backup-confirmed`, which now does this work once its migrations have applied.
 
 ## Example
 
