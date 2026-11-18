@@ -1116,7 +1116,8 @@ optional `locale`. Pass `null` when you stop editing it.
   through the admin's own update, as the signed-in person. The status is
   the operation's, judged by the language's own state: a `status` among the
   fields is ignored. Each sends the
-  version your copy started from, so a save made since is refused. Saving a
+  version your copy started from (the first read's, then each of your own
+  writes'), so a save made since is refused, even after a refresh. Saving a
   draft of a published document stores its working draft and leaves what
   visitors see. Both resolve to `{ ok: true, values }` once stored. Otherwise
   they resolve to `ok: false` with the server's `message` and a `reason`:
@@ -1127,7 +1128,8 @@ optional `locale`. Pass `null` when you stop editing it.
   - `"moved"`: you named another document before it was sent;
   - `"refused"`: the server refused it, in its own words.
 - `mayPublish` is whether the person may publish documents of that
-  collection, as the admin's Publish button decides it.
+  collection, as the admin's Publish button decides it. It is `false` for a
+  `locale` other than the one on screen, whose grants the admin doesn't know.
 - `record(changes)` records the whole document with your changes over it as
   the person's recovery point, once the editing pauses. After a crash, that
   document's own editor offers it, as it offers any recovery point.
