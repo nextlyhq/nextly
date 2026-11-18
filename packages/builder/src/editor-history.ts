@@ -334,6 +334,19 @@ function uncoveredInverse(
   step: readonly BuilderOp[],
   later: readonly BuilderOp[]
 ): BuilderOp[] {
+  const covered = coveredFields(step);
+  const kept: BuilderOp[] = [];
+  for (const op of later) {
+    const part = op.kind === "update" ? uncoveredPart(op, covered) : op;
+    if (part !== null) kept.push(part);
+  }
+  return kept;
+}
+
+/** Each node's fields the step's updates already put back. */
+function coveredFields(
+  step: readonly BuilderOp[]
+): ReadonlyMap<string, ReadonlySet<string>> {
   const covered = new Map<string, Set<string>>();
   for (const op of step) {
     if (op.kind !== "update") continue;
@@ -341,27 +354,27 @@ function uncoveredInverse(
     for (const field of updatedFields(op)) fields.add(field);
     covered.set(op.id, fields);
   }
-  const kept: BuilderOp[] = [];
-  for (const op of later) {
-    if (op.kind !== "update") {
-      kept.push(op);
-      continue;
-    }
-    const fields = covered.get(op.id);
-    const fresh = (field: string) => fields?.has(field) !== true;
-    const patch = Object.fromEntries(
-      Object.entries(op.patch).filter(([field]) => fresh(field))
-    );
-    const unset = (op.unset ?? []).filter(fresh);
-    if (Object.keys(patch).length === 0 && unset.length === 0) continue;
-    kept.push({
-      kind: "update",
-      id: op.id,
-      patch,
-      ...(unset.length > 0 ? { unset } : {}),
-    });
-  }
-  return kept;
+  return covered;
+}
+
+/** An update cut to the fields not covered yet, or `null` when none are. */
+function uncoveredPart(
+  op: Extract<BuilderOp, { kind: "update" }>,
+  covered: ReadonlyMap<string, ReadonlySet<string>>
+): BuilderOp | null {
+  const fields = covered.get(op.id);
+  const fresh = (field: string) => fields?.has(field) !== true;
+  const patch = Object.fromEntries(
+    Object.entries(op.patch).filter(([field]) => fresh(field))
+  );
+  const unset = (op.unset ?? []).filter(fresh);
+  if (Object.keys(patch).length === 0 && unset.length === 0) return null;
+  return {
+    kind: "update",
+    id: op.id,
+    patch,
+    ...(unset.length > 0 ? { unset } : {}),
+  };
 }
 
 /** The fields an update writes or removes. */
