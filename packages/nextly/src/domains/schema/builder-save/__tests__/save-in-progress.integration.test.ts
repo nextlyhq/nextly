@@ -43,6 +43,7 @@ import type { ServiceContainer } from "../../../../services";
 import { consoleLogger } from "../../../../shared/types";
 import { MetaService } from "../../../meta/services/meta-service";
 import { SchemaEventsRepository } from "../../events/schema-events-repository";
+import { introspectLiveSnapshot } from "../../pipeline/diff/introspect-live";
 import {
   refuseWhileSaveInProgress,
   refuseWhileSaveLeftPartWay,
@@ -62,6 +63,8 @@ const kill = vi.hoisted(() => ({
   refuseRemoving: undefined as undefined | ((path: string) => boolean),
   /** Whether the next registry write is refused before it commits, as a lost connection would. */
   failRegistry: false,
+  /** Whether a rename that has just been made reports a failure all the same. */
+  failAfter: undefined as undefined | ((point: string) => boolean),
 }));
 
 /**
@@ -88,6 +91,10 @@ vi.mock("node:fs/promises", async importOriginal => {
       });
     }
     await real.rename(from, to);
+    if (kill.failAfter?.(`file:${String(to)}`) === true) {
+      kill.failAfter = undefined;
+      throw Object.assign(new Error("input/output error"), { code: "EIO" });
+    }
     await stopHere(`file:${String(to)}`);
   };
   const rm: typeof real.rm = async (path, options) => {
@@ -148,6 +155,7 @@ afterEach(async () => {
   kill.refuse = undefined;
   kill.refuseRemoving = undefined;
   kill.failRegistry = false;
+  kill.failAfter = undefined;
   await stopped;
   stopped = undefined;
   vi.restoreAllMocks();
@@ -178,6 +186,8 @@ interface SavePath {
   /** The kind the record names. */
   kind: "collection" | "single";
   slug: string;
+  /** The entity's table. */
+  table: string;
   create(fields: BuilderField[]): Promise<unknown>;
   save(t: TestNextly, fields: BuilderField[]): Promise<unknown>;
 }
@@ -187,6 +197,7 @@ const PATHS: readonly SavePath[] = [
     name: "a collection's Builder apply",
     kind: "collection",
     slug: "sip_posts",
+    table: "dc_sip_posts",
     create: fields =>
       dispatchCollections(
         {} as ServiceContainer,
@@ -210,6 +221,7 @@ const PATHS: readonly SavePath[] = [
     name: "a Single's Builder apply",
     kind: "single",
     slug: "sip_hero",
+    table: "single_sip_hero",
     create: fields =>
       dispatchSingles(
         "createSingle",
@@ -323,11 +335,12 @@ function stopAtLedger(
 async function recordRow(
   t: TestNextly,
   path: SavePath
-): Promise<Record<string, unknown> | undefined> {
+): Promise<Record<string, unknown> | null | undefined> {
   const entry = await new MetaService(t.adapter, consoleLogger).getEntry<
     Record<string, unknown>
   >(`${RECORD_KEY_PREFIX}${path.kind}:${path.slug}`);
-  return entry.present ? (entry.value ?? undefined) : undefined;
+  // A present row holding null is not a missing one: it answers null, which no case takes for none.
+  return entry.present ? (entry.value ?? null) : undefined;
 }
 
 const MARKERS = () => join(basePath, ".nextly", "save-in-progress");
@@ -400,10 +413,59 @@ function markersRefuse(notices: string[] = []): Promise<void> {
   });
 }
 
+/** Every file below `dir`, relative to it. */
+function filesBelow(dir: string): string[] {
+  const found: string[] = [];
+  const walk = (at: string, prefix: string) => {
+    if (!existsSync(at)) return;
+    for (const entry of readdirSync(at, { withFileTypes: true })) {
+      if (entry.isDirectory())
+        walk(join(at, entry.name), `${prefix}${entry.name}/`);
+      else found.push(`${prefix}${entry.name}`);
+    }
+  };
+  walk(dir, "");
+  return found.sort();
+}
+
+/** The columns `table` has in the database `t` runs on. */
+async function liveColumns(t: TestNextly, table: string): Promise<string[]> {
+  const live = await introspectLiveSnapshot(
+    t.adapter.getDrizzle(),
+    t.adapter.dialect,
+    [table]
+  );
+  return (live.tables.find(each => each.name === table)?.columns ?? [])
+    .map(column => column.name)
+    .sort();
+}
+
 /** The definition file's text, or null where there is none yet. */
 function definitionText(): string | null {
   const file = join(basePath, DEFINITION);
   return existsSync(file) ? readFileSync(file, "utf-8") : null;
+}
+
+/**
+ * Whether the stopped save reached its kill point: "reached", or how it ended first, or a time out.
+ * A save that ends before its kill point is reported at once, with what it answered.
+ */
+async function reachedKill(reached: Promise<void>): Promise<string> {
+  let timer: NodeJS.Timeout | undefined;
+  const late = new Promise<string>(resolve => {
+    timer = setTimeout(() => resolve("timed out"), 120_000);
+  });
+  try {
+    return await Promise.race([
+      reached.then(() => "reached"),
+      (stopped ?? new Promise<never>(() => undefined)).then(
+        answer => `the save ended first: ${String(answer)}`
+      ),
+      late,
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** Whether `promise` settles within `ms`. */
@@ -485,9 +547,9 @@ describe.each(getConfiguredTestDialects())(
             .catch((error: unknown) => error);
 
           expect(
-            await within(reached, 120_000),
+            await reachedKill(reached),
             "the save never reached the kill point"
-          ).toBe(true);
+          ).toBe("reached");
 
           const row = await recordRow(t, path);
           const marker = recordMarker(path);
@@ -521,8 +583,14 @@ describe.each(getConfiguredTestDialects())(
         expect(await recordRow(t, path), "after the create").toBeUndefined();
         expect(recordMarker(path), "after the create").toBeUndefined();
 
+        expect(definitionText(), "alpha before the save").not.toContain(
+          '"alpha"'
+        );
         const answer = await path.save(t, [text("heading"), text("alpha")]);
         expect(answer instanceof Response ? answer.ok : true).toBe(true);
+        // The save did what it was asked: its definition names the new field, and its table has it.
+        expect(definitionText(), "alpha after the save").toContain('"alpha"');
+        expect(await liveColumns(t, path.table)).toContain("alpha");
         expect(await recordRow(t, path)).toBeUndefined();
         expect(recordMarker(path)).toBeUndefined();
         expect(await refusal(refuseWhileSaveInProgress(t.adapter))).toBe(
@@ -655,6 +723,44 @@ describe.each(getConfiguredTestDialects())(
         expect(definitionText()).toBe(definitionBefore);
       }, 300_000);
 
+      // A migration file put in place whose writing then fails, which its generation takes back
+      // no further, is in the folder though the save never named it: the record stays.
+      it("a failed write that leaves a migration file behind keeps the record", async () => {
+        const t = await boot();
+        await path.create([text("heading")]);
+        const sqlBefore = filesBelow(join(basePath, HISTORY)).filter(f =>
+          f.endsWith(".sql")
+        );
+        let failed = 0;
+        kill.failAfter = point => {
+          if (
+            !point.startsWith(`file:${join(basePath, HISTORY)}`) ||
+            !point.endsWith(".sql")
+          )
+            return false;
+          failed += 1;
+          return true;
+        };
+
+        const answer = await path
+          .save(t, [text("heading"), text("alpha")])
+          .catch((error: unknown) => error);
+        expect(failed, "no migration file was put in place").toBe(1);
+        expect(
+          answer instanceof Response ? answer.ok : !(answer instanceof Error),
+          "the save was not refused"
+        ).toBe(false);
+        const left = filesBelow(join(basePath, HISTORY)).filter(
+          f => f.endsWith(".sql") && !sqlBefore.includes(f)
+        );
+        expect(left, "the file left in the folder").toHaveLength(1);
+
+        expect(await refusal(refuseWhileSaveInProgress(t.adapter))).toBe(
+          "CONFLICT"
+        );
+        expect(recordMarker(path), "the record's marker").toBeDefined();
+      }, 300_000);
+
       // MySQL commits each statement as it runs, so a save refused at its second addition keeps
       // the first, and its files are kept recorded applied nowhere: nothing records what committed,
       // so the record stays for the next start to settle.
@@ -674,6 +780,11 @@ describe.each(getConfiguredTestDialects())(
             answer instanceof Response ? answer.ok : !(answer instanceof Error),
             "the save was not refused"
           ).toBe(false);
+
+          // The stop came after a committed change: alpha is in the table, beta is not.
+          const live = await liveColumns(t, path.table);
+          expect(live, "alpha committed before beta failed").toContain("alpha");
+          expect(live, "beta never added").not.toContain("beta");
 
           const row = await recordRow(t, path);
           expect(row, "the record's row").toBeDefined();
@@ -703,9 +814,9 @@ describe.each(getConfiguredTestDialects())(
             .catch((error: unknown) => error);
 
           expect(
-            await within(reached, 120_000),
+            await reachedKill(reached),
             "the save never recorded its failure in the ledger"
-          ).toBe(true);
+          ).toBe("reached");
           expect(refused(), "no statement adding `beta` was met").toBe(1);
           const row = await recordRow(t, path);
           expect(row, "the record's row").toBeDefined();
@@ -770,9 +881,9 @@ describe.each(getConfiguredTestDialects())(
           .save(t, [text("heading"), text("alpha")])
           .catch((error: unknown) => error);
         expect(
-          await within(reached, 120_000),
+          await reachedKill(reached),
           "the save never reached the kill point"
-        ).toBe(true);
+        ).toBe("reached");
 
         const row = await recordRow(t, path);
         expect(row, "the record's row").toBeDefined();

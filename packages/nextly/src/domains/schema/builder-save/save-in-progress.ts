@@ -75,7 +75,10 @@ const savedRecord = z.object({
   /** The host the save ran on. */
   host: z.string(),
   /** The database it wrote to, as `savedDatabase` names it: a hash, or `unknown`. */
-  database: z.string(),
+  database: z.union([
+    z.literal(UNKNOWN_DATABASE),
+    z.string().regex(/^[0-9a-f]{32}$/),
+  ]),
   /** The definition file, relative to the project root. */
   definitionFile: z.string(),
   /** The definition file's text before the save; null where there was none. */
@@ -192,7 +195,7 @@ async function registryWritten(
     );
   } catch (error) {
     logger.warn(
-      `Whether the save of ${entry.record.kind} "${entry.record.slug}" recorded its registry row could not be read (${error instanceof Error ? error.message : String(error)}); its record that it was in progress stays for the next development start to settle.`
+      `Whether the save of ${entry.record.kind} "${entry.record.slug}" recorded its registry row could not be read (${error instanceof Error ? error.message : String(error)}), so its record that it was in progress stays. ${clearByHand(entry.projectRoot, entry.record)}`
     );
     return false;
   }
@@ -412,10 +415,18 @@ async function clearRecords(
       await removeMarker(markerPath(projectRoot, record), record);
     } catch (error) {
       logger.warn(
-        `The record that the save of ${record.kind} "${record.slug}" was in progress could not be cleared (${error instanceof Error ? error.message : String(error)}); the next development start settles it.`
+        `The save of ${record.kind} "${record.slug}" ended, but its record that it was in progress could not be cleared (${error instanceof Error ? error.message : String(error)}). ${clearByHand(projectRoot, record)}`
       );
     }
   }
+}
+
+/**
+ * The way out of a record left by a save that ended, which nothing clears by itself yet: the row
+ * and the marker, removed by hand once the save is known to have finished.
+ */
+function clearByHand(projectRoot: string, record: SaveInProgress): string {
+  return `Once you have checked that the save finished and no Builder save is running, remove the row "${saveInProgressKey(record.kind, record.slug)}" from the nextly_meta table and the file ${relative(projectRoot, markerPath(projectRoot, record))}.`;
 }
 
 /** A marker as read: the record, or why it could not be read. */

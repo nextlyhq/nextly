@@ -503,11 +503,17 @@ async function writeSave(
   }
 
   const names: string[] = [];
+  // The migration files there before the save: one the save left that is not among them, and not
+  // named as written (a file its generation could not take back), keeps the record.
+  const sqlBefore = await sqlFiles(deps.migrationsDir);
   const undo = async (error: unknown) => {
     // Only a save that withdrew everything it wrote has nothing left to settle.
     if (
       (await undoUnapplied(deps, names, before, definitionPath, error)) ===
-      "withdrawn"
+        "withdrawn" &&
+      (await sqlFiles(deps.migrationsDir)).every(file =>
+        sqlBefore.includes(file)
+      )
     ) {
       started.withdrawn();
     }

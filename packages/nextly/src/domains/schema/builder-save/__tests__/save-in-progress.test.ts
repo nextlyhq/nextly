@@ -209,6 +209,8 @@ describe("refuseWhileSaveLeftPartWay", () => {
         host: undefined,
       }),
     ],
+    // An empty database names no place: never another database's notice.
+    ["a record naming no database", markerOf("posts", hostname(), "")],
   ])(
     "refuses a marker holding %s, which names no save",
     async (_what, text) => {
@@ -303,7 +305,11 @@ describe("a save over a standing record that cannot be read", () => {
   it("is refused naming the one row to remove and when", async () => {
     const save = withSaveRecords(() =>
       recordSaveStarted({
-        adapter: {} as DrizzleAdapter,
+        // Only asked for its handle and dialect, which the mocked version read takes.
+        adapter: {
+          getDrizzle: () => ({}),
+          getCapabilities: () => ({ dialect: "sqlite" }),
+        } as unknown as DrizzleAdapter,
         projectRoot,
         kind: "collection",
         slug: "posts",

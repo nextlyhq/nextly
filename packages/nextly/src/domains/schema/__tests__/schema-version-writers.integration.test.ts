@@ -539,8 +539,12 @@ describe.each(getConfiguredTestDialects())(
             "ALTER TABLE nextly_meta_away RENAME TO nextly_meta"
           );
         }
-        // Read before the spy is restored, which clears what it recorded.
-        logged = warned.mock.calls.map(call => call.map(String).join(" "));
+        // Read before the spy is restored, which clears what it recorded. The save's record that it
+        // is in progress cannot be cleared while the table is away, and its warning says so naming
+        // the table: left in, it alone would answer for the version's write.
+        logged = warned.mock.calls
+          .map(call => call.map(String).join(" "))
+          .filter(line => !line.includes("its record that it was in progress"));
         warned.mockRestore();
       }
       expect(away, "the save never recorded that it was in progress").toBe(
