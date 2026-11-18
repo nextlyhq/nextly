@@ -404,6 +404,11 @@ export interface BuilderField extends FieldConfig {
    */
   storedHasMany?: true;
   /**
+   * Whether a relationship was stored with Unique on (`unique: true`). A stored one-to-one stops
+   * being one only when the person turns that control off (`relationshipOptionsToSave`).
+   */
+  storedUnique?: true;
+  /**
    * Maximum depth for populating related documents
    */
   maxDepth?: number;

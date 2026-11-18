@@ -580,43 +580,85 @@ function builderMaxDepthOf(field: FieldDefinition): number | undefined {
 
 /**
  * What the Builder keeps of how a relationship is stored, for its save to write back: its stored
- * options (`storedRelationOptionsOf`) and whether Allow multiple was stored on (`storedHasMany`).
+ * options (`storedRelationOptionsOf`), and whether Allow multiple (`storedHasMany`) and Unique
+ * (`storedUnique`) were stored on.
  */
 function storedRelationStateOf(
   field: FieldDefinition
-): Pick<BuilderField, "storedRelationOptions" | "storedHasMany"> {
+): Pick<
+  BuilderField,
+  "storedRelationOptions" | "storedHasMany" | "storedUnique"
+> {
+  const relationship = field.type === "relationship";
   return {
     storedRelationOptions: storedRelationOptionsOf(field),
-    ...(field.type === "relationship" && field.hasMany === true
+    ...(relationship && field.hasMany === true
       ? { storedHasMany: true as const }
+      : {}),
+    ...(relationship && field.unique === true
+      ? { storedUnique: true as const }
       : {}),
   };
 }
 
 /**
- * The `options` a relationship's save writes: the stored ones, with `target` following the
- * collection the person picked (`relationTo`, one collection), so a many-to-many stays one and
- * links to what the field now names. Allow multiple turned off, on a field stored with it on
- * (`storedHasMany`), makes a many-to-many link one entry (`manyToOne`), with no link table, so the
- * stored relation type never outlives the control the person changed. One stored with it off keeps
- * its relation type, since nothing was changed. Undefined where none were stored.
+ * The `options` a relationship's save writes: the stored ones, with `target` following the one
+ * collection the person picked (`onlyCollection`), so a many-to-many stays one and links to what
+ * the field now names, and with the relation type the person's controls leave it
+ * (`withCardinalityAsSet`). Undefined where none were stored.
  */
 function relationshipOptionsToSave(
   field: BuilderField
 ): Readonly<Record<string, unknown>> | undefined {
   const stored = field.storedRelationOptions;
   if (stored === undefined) return undefined;
-  const picked = field.relationTo;
-  const targeted =
-    typeof picked === "string" && picked !== ""
-      ? { ...stored, target: picked }
-      : stored;
-  const turnedOff = field.storedHasMany === true && field.hasMany === false;
-  if (!turnedOff || targeted.relationType !== "manyToMany") {
-    return targeted;
+  const picked = onlyCollection(field.relationTo);
+  return withCardinalityAsSet(
+    field,
+    picked === undefined ? stored : { ...stored, target: picked }
+  );
+}
+
+/** The one collection a relationship names, whether the picker holds it alone or in a list. */
+function onlyCollection(
+  relationTo: BuilderField["relationTo"]
+): string | undefined {
+  const only =
+    Array.isArray(relationTo) && relationTo.length === 1
+      ? relationTo[0]
+      : relationTo;
+  return typeof only === "string" && only !== "" ? only : undefined;
+}
+
+/**
+ * A relationship's stored relation type, as the controls the person turned off leave it, so it
+ * never outlives the control that says otherwise:
+ * - Allow multiple turned off on a field stored with it on (`storedHasMany`) makes a many-to-many
+ *   link one entry (`manyToOne`), with no link table;
+ * - Unique turned off on one stored with it on (`storedUnique`) makes a one-to-one `manyToOne`,
+ *   which the database no longer holds unique.
+ * One stored with the control off keeps its relation type, since nothing was changed.
+ */
+function withCardinalityAsSet(
+  field: BuilderField,
+  options: Readonly<Record<string, unknown>>
+): Readonly<Record<string, unknown>> {
+  if (
+    options.relationType === "manyToMany" &&
+    field.storedHasMany === true &&
+    field.hasMany !== true
+  ) {
+    const { junctionTable: _linkTable, ...single } = options;
+    return { ...single, relationType: "manyToOne" };
   }
-  const { junctionTable: _linkTable, ...single } = targeted;
-  return { ...single, relationType: "manyToOne" };
+  if (
+    options.relationType === "oneToOne" &&
+    field.storedUnique === true &&
+    field.advanced?.unique !== true
+  ) {
+    return { ...options, relationType: "manyToOne" };
+  }
+  return options;
 }
 
 /**
