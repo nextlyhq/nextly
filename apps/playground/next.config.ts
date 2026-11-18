@@ -94,7 +94,9 @@ const nextConfig: NextConfig = {
   // on, and the block fixture's must, since the editor offers every block it
   // is handed, declared or not.
   // Read as the config reads it, so anything but "1" is off. Fixed when the
-  // build runs: a production build follows the switch as it was set then.
+  // build runs, in the server code Next.js compiles as well as the browser's:
+  // a production build follows the switch as it was set then, so build and
+  // start it with the same value.
   env: {
     NEXTLY_E2E_STYLE_FIXTURE:
       process.env.NEXTLY_E2E_STYLE_FIXTURE === "1" ? "1" : "",

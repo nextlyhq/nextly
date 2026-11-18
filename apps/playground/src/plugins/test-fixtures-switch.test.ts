@@ -7,6 +7,12 @@
  * Posts) exist for the browser suite. Loaded against the real
  * `nextly.config.ts`: a plain run registers none of them, and the switch the
  * suite's own server sets (`NEXTLY_E2E_STYLE_FIXTURE=1`) registers all three.
+ *
+ * The browser half reads the same switch: each fixture's admin module
+ * registers only with it on, and `next.config.ts` hands it to the bundle. That
+ * hand-over is held here too, because a bundle handed "1" in a plain run would
+ * offer the block fixture's blocks in the Add panel though the server declares
+ * none.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -104,6 +110,43 @@ describe("the playground's test fixtures", () => {
           "Fixture: excerpt",
         ])
       );
+    },
+    LOAD_TIMEOUT
+  );
+});
+
+/** The switch `next.config.ts` hands the bundle with the shell's set to `value`. */
+async function bundledSwitchWith(value: string | undefined) {
+  vi.resetModules();
+  if (value === undefined) delete process.env.NEXTLY_E2E_STYLE_FIXTURE;
+  else vi.stubEnv("NEXTLY_E2E_STYLE_FIXTURE", value);
+  const config = (await import("../../next.config")).default;
+  return config.env?.NEXTLY_E2E_STYLE_FIXTURE;
+}
+
+describe("the switch the browser bundle is built with", () => {
+  it(
+    "is off when the shell leaves it unset",
+    async () => {
+      vi.stubEnv("NEXTLY_E2E_STYLE_FIXTURE", "");
+      expect(await bundledSwitchWith(undefined)).toBe("");
+    },
+    LOAD_TIMEOUT
+  );
+
+  it(
+    "is off for anything but 1, as the config reads it",
+    async () => {
+      expect(await bundledSwitchWith("0")).toBe("");
+      expect(await bundledSwitchWith("true")).toBe("");
+    },
+    LOAD_TIMEOUT
+  );
+
+  it(
+    "is on with the switch the suite's server sets",
+    async () => {
+      expect(await bundledSwitchWith("1")).toBe("1");
     },
     LOAD_TIMEOUT
   );
