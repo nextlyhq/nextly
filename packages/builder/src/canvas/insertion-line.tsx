@@ -26,7 +26,6 @@ import type { BlockDocument } from "@nextlyhq/blocks-engine";
 import { useIsomorphicLayoutEffect } from "@nextlyhq/ui";
 import * as React from "react";
 
-import { isHTMLElement } from "../dom-kind";
 import type { Rect } from "../geometry";
 
 import { CANVAS_ROOT_CLASS } from "./canvas";
@@ -50,6 +49,7 @@ import {
   useInsertionPreview,
   type InsertionPreview,
 } from "./insertion-preview";
+import { styleCapable } from "./spacing-response";
 
 export interface InsertionLineProps {
   /** The page the place is in, as the panel judged it. */
@@ -274,11 +274,12 @@ const REVEAL_ROOM = 24;
 /**
  * How far past the neighbour's side the place lies, plus room for its label,
  * as a CSS `scroll-margin`: the line sits in the middle of the gap after a
- * block, not on its edge. Along the line's own axis only; none for a place
- * inside an empty container, which is centred.
+ * block, not on its edge. Along the line's own axis only; every side zero for
+ * a place inside an empty container, which is centred.
  */
 function revealMargin(near: Neighbour, block: Rect, place: Rect): string {
-  if (near.side === "inside") return "";
+  // Centred with every side zero, so none of the block's own margins skews it.
+  if (near.side === "inside") return "0px 0px 0px 0px";
   const down = place.height === 0;
   const past =
     near.side === "after"
@@ -314,13 +315,34 @@ function revealPlace(
   const rects = lazyRects(space.root);
   const element = rects.elementOf(near.id);
   const block = rects.rectOf(near.id);
-  if (!isHTMLElement(element) || block === undefined) return;
+  // Any element with an inline style: a block drawn as an SVG root has one,
+  // and scrolls into view as any element does.
+  if (element === undefined || !styleCapable(element) || block === undefined) {
+    return;
+  }
   const align = ALIGN[near.side];
-  const kept = element.style.scrollMargin;
-  element.style.scrollMargin = revealMargin(near, block, place);
+  // The block's inline style exactly as it was, put back whole afterwards:
+  // read side by side, a shorthand through a variable reads empty and a
+  // side's priority can be lost, so only the attribute keeps everything.
+  const kept = element.getAttribute("style");
+  // Side by side, so no side the block has is read through a shorthand.
+  revealMargin(near, block, place)
+    .split(" ")
+    .forEach((value, index) => {
+      element.style.setProperty(SCROLL_MARGIN_SIDES[index] ?? "", value);
+    });
   element.scrollIntoView({ block: align, inline: align });
-  element.style.scrollMargin = kept;
+  if (kept === null) element.removeAttribute("style");
+  else element.setAttribute("style", kept);
 }
+
+/** The longhands of `scroll-margin`, which the temporary margin is written to. */
+const SCROLL_MARGIN_SIDES = [
+  "scroll-margin-top",
+  "scroll-margin-right",
+  "scroll-margin-bottom",
+  "scroll-margin-left",
+] as const;
 
 /**
  * The preview to draw: the panel's, or the one an edge label is holding on
