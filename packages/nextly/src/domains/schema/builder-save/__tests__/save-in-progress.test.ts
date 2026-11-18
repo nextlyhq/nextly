@@ -88,6 +88,16 @@ describe("databaseIdentity", () => {
     );
   });
 
+  // `db.postgres.schema` puts an installation in a schema of its own, which the URL does not name.
+  it("names two PostgreSQL schemas of one database differently, and public as no schema", () => {
+    expect(databaseIdentity(URL_HERE, "tenant_a")).not.toBe(
+      databaseIdentity(URL_HERE, "tenant_b")
+    );
+    expect(databaseIdentity(URL_HERE, "public")).toBe(
+      databaseIdentity(URL_HERE)
+    );
+  });
+
   it("names another host, port or database differently", () => {
     const named = databaseIdentity(URL_HERE);
     for (const other of [
@@ -222,6 +232,29 @@ describe("refuseWhileSaveLeftPartWay", () => {
     expect(await checked()).toEqual({
       notices: [expect.stringContaining("a-teammates-laptop")],
     });
+  });
+
+  it("judges a marker's database with the PostgreSQL schema the command would use", async () => {
+    leaveMarker(
+      "collection-posts-a.json",
+      markerOf("posts", hostname(), databaseIdentity(URL_HERE, "tenant_a"))
+    );
+    const check = async (postgresSchema: string) => {
+      const notices: string[] = [];
+      try {
+        await refuseWhileSaveLeftPartWay({
+          projectRoot,
+          databaseUrl: URL_HERE,
+          postgresSchema,
+          notice: line => notices.push(line),
+        });
+        return notices.length === 1 ? "notice" : "passed";
+      } catch {
+        return "refused";
+      }
+    };
+    expect(await check("tenant_a")).toBe("refused");
+    expect(await check("tenant_b")).toBe("notice");
   });
 
   it("refuses a marker that cannot be read, naming the file", async () => {

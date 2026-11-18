@@ -242,6 +242,9 @@ function builderSaveSetup(ctx: RegistrationContext): BuilderSaveSetup {
     migrationsDir: resolve(ctx.basePath, db.migrationsDir),
     // The database a save's record names: the one `DATABASE_URL` reaches, which the adapter is
     // built from, or unknown where an adapter was handed in and its address is its own.
-    database: savedDatabase(ctx.config.adapter !== undefined),
+    database: savedDatabase(
+      ctx.config.adapter !== undefined,
+      ctx.config.db?.postgres?.schema
+    ),
   };
 }

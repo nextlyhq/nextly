@@ -227,8 +227,26 @@ export async function recordSaveStarted(args: {
   const key = saveInProgressKey(args.kind, args.slug);
   await meta.insertIfAbsent(key, record);
   // Read back, since the insert does not say whether it wrote: a record that stood already is kept.
-  const standing = await meta.get<SaveInProgress>(key);
-  if (standing?.id !== record.id) return NO_RECORD;
+  const standing = await meta.get<unknown>(key);
+  const stood = savedRecord.safeParse(standing);
+  if (!stood.success) {
+    // A record that cannot be read names no save to keep a marker for: the save is refused, so
+    // nothing more is written over a part-way state that cannot be told.
+    throw NextlyError.conflict({
+      reason: "state",
+      message: `A Builder save of this ${args.kind === "fieldGroup" ? "field group" : args.kind} was left part-way, and its record cannot be read. To settle it, ${SETTLES}.`,
+      logContext: { reason: "builder-save-record-unreadable", key },
+    });
+  }
+  if (stood.data.id !== record.id) {
+    // The record of a save whose process stopped: its marker stays in place, put back where it
+    // went missing (the row written, the process stopped before the marker), so the commands
+    // with no database see it while this save runs.
+    await placeMarker(markerPath(args.projectRoot, stood.data), stood.data, {
+      kept: true,
+    });
+    return NO_RECORD;
+  }
   const entry: MadeRecord = {
     adapter: args.adapter,
     projectRoot: args.projectRoot,
@@ -240,8 +258,10 @@ export async function recordSaveStarted(args: {
     await placeMarker(markerPath(args.projectRoot, record), record);
   } catch (error) {
     // Nothing of the save is written yet: without its marker, the row alone would stand for a
-    // save the commands with no database cannot see, so it goes too and the save is refused.
+    // save the commands with no database cannot see, so it goes too and the save is refused. A
+    // marker the failure came after (its temporary copy not removed, say) goes first.
     made.splice(made.indexOf(entry), 1);
+    await removeMarker(markerPath(args.projectRoot, record), record);
     await meta.delete(key);
     throw error;
   }
@@ -261,7 +281,11 @@ export async function recordSaveStarted(args: {
  */
 async function placeMarker(
   path: string,
-  record: SaveInProgress
+  record: SaveInProgress,
+  options: {
+    /** Putting back a standing record's marker: one already there is that record's, and stays. */
+    kept?: boolean;
+  } = {}
 ): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
   const temporary = `${path}.${randomUUID()}.tmp`;
@@ -271,6 +295,15 @@ async function placeMarker(
       flag: "wx",
     });
     await link(temporary, path);
+  } catch (error) {
+    if (
+      !(
+        options.kept === true &&
+        (error as NodeJS.ErrnoException).code === "EEXIST"
+      )
+    ) {
+      throw error;
+    }
   } finally {
     await rm(temporary, { force: true });
   }
@@ -377,10 +410,12 @@ export async function refuseWhileSaveLeftPartWay(args: {
   projectRoot: string;
   /** The URL the command would reach; `DATABASE_URL` where not given. */
   databaseUrl?: string;
+  /** `db.postgres.schema`, which the URL does not carry. */
+  postgresSchema?: string;
   notice(line: string): void;
 }): Promise<void> {
   const here = hostname();
-  const database = databaseIdentity(args.databaseUrl);
+  const database = databaseIdentity(args.databaseUrl, args.postgresSchema);
   const left: string[] = [];
   for (const marker of await readSaveMarkers(args.projectRoot)) {
     if ("unreadable" in marker) {
@@ -418,7 +453,9 @@ export async function refuseWhileSaveLeftPartWay(args: {
 interface RecordRows {
   select(fields: Record<string, unknown>): {
     from(table: unknown): {
-      where(condition: SQL): PromiseLike<Array<{ value: unknown }>>;
+      where(
+        condition: SQL
+      ): PromiseLike<Array<{ key: string; value: unknown }>>;
     };
   };
 }
@@ -429,19 +466,35 @@ interface RecordRows {
  */
 async function readSavesInProgress(
   adapter: DrizzleAdapter
-): Promise<SaveInProgress[]> {
+): Promise<ReadRow[]> {
   const table = loadedDialect(adapter.getCapabilities().dialect).tables
     .nextlyMeta;
   const rows = await adapter
     .getDrizzle<RecordRows>()
-    .select({ value: table.value })
+    .select({ key: table.key, value: table.value })
     .from(table)
     .where(like(table.key, `${KEY_PREFIX}%`));
-  return rows.map(
-    ({ value }) =>
-      (typeof value === "string" ? JSON.parse(value) : value) as SaveInProgress
-  );
+  return rows.map(({ key, value }) => {
+    try {
+      const parsed = savedRecord.safeParse(
+        typeof value === "string" ? JSON.parse(value) : value
+      );
+      return parsed.success
+        ? { key, record: parsed.data }
+        : { key, unreadable: "it is not a save's record" };
+    } catch (error) {
+      return {
+        key,
+        unreadable: error instanceof Error ? error.message : String(error),
+      };
+    }
+  });
 }
+
+/** A record's row as read: the record, or why it could not be read, by its key. */
+type ReadRow =
+  | { key: string; record: SaveInProgress }
+  | { key: string; unreadable: string };
 
 /**
  * Refuse while the database records a Builder save left part-way, for `nextly migrate`, which
@@ -452,14 +505,20 @@ async function readSavesInProgress(
 export async function refuseWhileSaveInProgress(
   adapter: DrizzleAdapter
 ): Promise<void> {
-  const records = await readSavesInProgress(adapter);
-  if (records.length === 0) return;
+  const rows = await readSavesInProgress(adapter);
+  if (rows.length === 0) return;
+  // A row that cannot be read still stands for a save: it refuses, named by its key.
+  const named = rows.map(row =>
+    "record" in row
+      ? described(row.record)
+      : `the record ${row.key}, which could not be read`
+  );
   throw NextlyError.conflict({
     reason: "state",
-    message: `A Builder save was left part-way, so the database does not match its migrations yet: ${records.map(described).join("; ")}. To settle it, ${SETTLES}.`,
+    message: `A Builder save was left part-way, so the database does not match its migrations yet: ${named.join("; ")}. To settle it, ${SETTLES}.`,
     logContext: {
       reason: "builder-save-left-part-way",
-      saves: records.map(record => saveInProgressKey(record.kind, record.slug)),
+      saves: rows.map(row => row.key),
     },
   });
 }

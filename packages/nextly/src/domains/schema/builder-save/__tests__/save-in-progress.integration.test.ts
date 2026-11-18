@@ -57,6 +57,8 @@ const kill = vi.hoisted(() => ({
   release: undefined as undefined | (() => void),
   /** Whether a rename about to be made is one to refuse, as a full disk would. */
   refuse: undefined as undefined | ((point: string) => boolean),
+  /** Whether a removal about to be made is one to refuse, as a file the process may not touch. */
+  refuseRemoving: undefined as undefined | ((path: string) => boolean),
 }));
 
 /**
@@ -85,7 +87,15 @@ vi.mock("node:fs/promises", async importOriginal => {
     await real.rename(from, to);
     await stopHere(`file:${String(to)}`);
   };
-  return { ...real, rename, default: { ...real, rename } };
+  const rm: typeof real.rm = async (path, options) => {
+    if (kill.refuseRemoving?.(String(path)) === true) {
+      throw Object.assign(new Error("operation not permitted"), {
+        code: "EPERM",
+      });
+    }
+    await real.rm(path, options);
+  };
+  return { ...real, rename, rm, default: { ...real, rename, rm } };
 });
 
 // Every registry write of a save goes through these.
@@ -129,6 +139,7 @@ afterEach(async () => {
   kill.release?.();
   kill.release = undefined;
   kill.refuse = undefined;
+  kill.refuseRemoving = undefined;
   await stopped;
   stopped = undefined;
   vi.restoreAllMocks();
@@ -548,6 +559,86 @@ describe.each(getConfiguredTestDialects())(
         expect(definitionText()).toBe(definitionBefore);
         expect(await recordRow(t, path)).toBeUndefined();
         expect(recordMarker(path)).toBeUndefined();
+      }, 300_000);
+
+      // A marker linked in place whose temporary copy then cannot be removed: the placing failed,
+      // so the marker goes again with the row, and nothing of the save stands.
+      it("a marker whose temporary copy cannot be removed is taken back with its row", async () => {
+        const t = await boot();
+        await path.create([text("heading")]);
+        const definitionBefore = definitionText();
+        let refused = 0;
+        kill.refuseRemoving = target => {
+          if (!target.startsWith(MARKERS()) || !target.endsWith(".tmp"))
+            return false;
+          refused += 1;
+          return true;
+        };
+
+        const answer = await path
+          .save(t, [text("heading"), text("alpha")])
+          .catch((error: unknown) => error);
+        kill.refuseRemoving = undefined;
+        expect(refused, "no temporary marker copy was removed").toBeGreaterThan(
+          0
+        );
+        expect(
+          answer instanceof Response ? answer.ok : !(answer instanceof Error),
+          "the save was not refused"
+        ).toBe(false);
+        expect(definitionText()).toBe(definitionBefore);
+        expect(await recordRow(t, path)).toBeUndefined();
+        expect(entityMarkers(path)).toEqual([]);
+      }, 300_000);
+
+      // A row of a stopped save whose process stopped before its marker: the next save puts the
+      // marker back before it goes on, so the commands with no database see the part-way save.
+      it("a standing record without its marker gets it back before a later save goes on", async () => {
+        const t = await boot();
+        await path.create([text("heading")]);
+        // Left on this host, by an app handed its adapter as this one is: the marker refuses here.
+        const left = {
+          ...stoppedRecord(path, "a-stopped-host"),
+          host: hostname(),
+          database: "unknown",
+        };
+        await new MetaService(t.adapter, consoleLogger).set(
+          `${RECORD_KEY_PREFIX}${path.kind}:${path.slug}`,
+          left
+        );
+        expect(entityMarkers(path), "a marker before the save").toEqual([]);
+
+        const answer = await path.save(t, [text("heading"), text("alpha")]);
+        expect(answer instanceof Response ? answer.ok : true, "the save").toBe(
+          true
+        );
+        expect(await recordRow(t, path)).toEqual(left);
+        expect(entityMarkers(path)).toEqual([left]);
+        expect(await refusal(markersRefuse())).toBe("CONFLICT");
+      }, 300_000);
+
+      // A row that is not a save's record still stands for one: both readers refuse, and a save of
+      // the entity is refused rather than written over a state no one can tell.
+      it("a standing record that cannot be read refuses the database check and a later save", async () => {
+        const t = await boot();
+        await path.create([text("heading")]);
+        await new MetaService(t.adapter, consoleLogger).set(
+          `${RECORD_KEY_PREFIX}${path.kind}:${path.slug}`,
+          null
+        );
+
+        expect(await refusal(refuseWhileSaveInProgress(t.adapter))).toBe(
+          "CONFLICT"
+        );
+        const definitionBefore = definitionText();
+        const answer = await path
+          .save(t, [text("heading"), text("alpha")])
+          .catch((error: unknown) => error);
+        expect(
+          answer instanceof Response ? answer.ok : !(answer instanceof Error),
+          "the save was not refused"
+        ).toBe(false);
+        expect(definitionText()).toBe(definitionBefore);
       }, 300_000);
 
       // MySQL commits each statement as it runs, so a save refused at its second addition keeps
