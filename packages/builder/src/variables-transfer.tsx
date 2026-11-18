@@ -226,7 +226,13 @@ export function useVariablesTransfer({
             duration: WITH_LIST_MS,
             action: {
               label: WORDS.notExported,
-              onClick: () => setNotExported({ gaps, from: kind.from }),
+              onClick: () => {
+                // Focus back on the menu first. The toaster returns focus to
+                // where it came from as focus leaves it, and would otherwise
+                // do so after the list has taken it, out from under the list.
+                trigger.current?.focus();
+                setNotExported({ gaps, from: kind.from });
+              },
             },
           };
     if (written.length === 0) {

@@ -69,6 +69,23 @@ async function choose(page: Page, item: string): Promise<void> {
   await page.getByRole("menuitem", { name: item }).click();
 }
 
+/**
+ * axe cannot parse a colour with a missing component, such as the canvas's
+ * `oklch(0.95 0 none)`, which Chromium keeps in the computed value and draws
+ * as zero; it then gives up on every text whose backdrop holds one, and a
+ * dialog over the canvas has one. Each is restated with the zero it is drawn
+ * with, which changes no pixel, so the scan measures the dialog.
+ */
+async function spellMissingColourComponents(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    for (const element of document.querySelectorAll<HTMLElement>("*")) {
+      const colour = getComputedStyle(element).backgroundColor;
+      if (!/\bnone\b/.test(colour)) continue;
+      element.style.backgroundColor = colour.replace(/\bnone\b/g, "0");
+    }
+  });
+}
+
 function toastSaying(page: Page, text: string | RegExp) {
   return page.locator("[data-sonner-toast]").filter({ hasText: text });
 }
@@ -152,6 +169,7 @@ test("an export for Figma lists the shadow it left out, and why", async ({
     await expect(row).toContainText(
       "Figma keeps shadows as effect styles, not variables."
     );
+    await spellMissingColourComponents(page);
     await expectNoAxeViolations(page, { include: ".nx-design-gaps" });
 
     // Escape closes it, and focus is back on the menu it came from.

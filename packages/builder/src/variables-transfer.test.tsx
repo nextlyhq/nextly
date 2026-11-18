@@ -315,17 +315,29 @@ describe("What wasn't exported", () => {
     ).toBeDefined();
   });
 
-  it("closes with Escape and hands focus back to the ⋯ button", async () => {
+  it("takes focus when opened from the toast, and closes with Escape back to the ⋯ button", async () => {
     render(<Host tokens={WITH_SHADOW} />);
     await choose("Export for Figma");
     const toast = await toastSaying(/Exported for Figma/);
-    fireEvent.click(
-      within(toast).getByRole("button", { name: "What wasn't exported" })
-    );
+    // Pressed as a browser presses it: the button takes focus first. The
+    // toaster hands focus back to where it came from when focus leaves it,
+    // which must not pull it out of the list just opened.
+    const link = within(toast).getByRole("button", {
+      name: "What wasn't exported",
+    });
+    act(() => {
+      link.focus();
+    });
+    fireEvent.click(link);
     const list = await screen.findByRole("dialog", {
       name: "What wasn't exported",
     });
-    fireEvent.keyDown(list, { key: "Escape" });
+    await waitFor(() =>
+      expect(list.contains(document.activeElement)).toBe(true)
+    );
+    await new Promise(resolve => setTimeout(resolve, 300));
+    expect(list.contains(document.activeElement)).toBe(true);
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: "Escape" });
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(document.activeElement).toBe(
       screen.getByRole("button", { name: MORE })
