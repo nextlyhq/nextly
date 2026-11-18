@@ -142,6 +142,43 @@ describe("a known provider, when played", () => {
     expect(poster.querySelector("img")?.getAttribute("alt")).toBe("");
   });
 
+  it("draws a poster bound to an address from that address, without asking the library", async () => {
+    const asked: string[] = [];
+    const ctx = context({
+      resolveMedia: id => {
+        asked.push(id);
+        return Promise.resolve(null);
+      },
+    });
+    const element = await renderEmbed({
+      ...args({ src: WATCH, load: "click", poster: "https://site.example/covers/launch.jpg" }, ctx),
+      bound: { poster: { kind: "image", holds: "address", from: "value" } },
+    } as BlockRenderArgs<EmbedProps>);
+    const poster = posterOf(frameOf(element === null ? "" : renderToStaticMarkup(element)));
+    expect(poster.querySelector("img")?.getAttribute("src")).toBe(
+      "https://site.example/covers/launch.jpg"
+    );
+    expect(asked).toEqual([]);
+  });
+
+  it("draws the binding's fallback where the bound value draws nothing", async () => {
+    const element = await renderEmbed({
+      ...args({ src: WATCH, load: "click", poster: "javascript:alert(1)" }),
+      bound: {
+        poster: {
+          kind: "image",
+          holds: "address",
+          from: "value",
+          fallback: { holds: "address", value: "https://site.example/fallback.jpg" },
+        },
+      },
+    } as BlockRenderArgs<EmbedProps>);
+    const poster = posterOf(frameOf(element === null ? "" : renderToStaticMarkup(element)));
+    expect(poster.querySelector("img")?.getAttribute("src")).toBe(
+      "https://site.example/fallback.jpg"
+    );
+  });
+
   it("draws the plain poster for a missing picture or one the site does not load", async () => {
     const missing = context({ resolveMedia: () => Promise.resolve(null) });
     expect(posterOf(frameOf(await html({ src: WATCH, load: "click", poster: "gone" }, missing))).querySelector("img")).toBeNull();

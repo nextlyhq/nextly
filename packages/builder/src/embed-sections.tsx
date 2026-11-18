@@ -150,12 +150,15 @@ function ThumbnailCopy({
   const store = React.useRef(onCopied);
   store.current = onCopied;
   const shown = React.useRef(true);
-  React.useEffect(
-    () => () => {
+  // Set on every setup as well as cleared on every cleanup: React may run
+  // the pair twice for one mount (Strict Mode), and a flag only cleared
+  // would stay down for the copy that is still shown.
+  React.useEffect(() => {
+    shown.current = true;
+    return () => {
       shown.current = false;
-    },
-    []
-  );
+    };
+  }, []);
   if (copy === undefined) return null;
   return (
     <div className="nx-inspector__field">

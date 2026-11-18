@@ -44,6 +44,8 @@ import type { BlockRenderArgs, PageContext } from "../context";
 import { MEDIA } from "./categories";
 import { detectEmbed, isPlayerOf, type EmbedMatch } from "./embed-providers";
 import {
+  boundImage,
+  type BoundImage,
   fetchableUrl,
   flag,
   isTrustedOrigin,
@@ -127,6 +129,7 @@ export async function renderEmbed({
   hostPolicy,
   ctx,
   node,
+  bound,
 }: BlockRenderArgs<EmbedProps>): Promise<ReactElement | null> {
   const src = url(props.src);
   // No source means no frame. An iframe with an empty `src` loads the current
@@ -145,6 +148,7 @@ export async function renderEmbed({
       ctx,
       hostPolicy,
       claimant: node,
+      boundPoster: boundImage(bound?.poster),
     });
     if (known !== null) return known;
   }
@@ -230,6 +234,8 @@ interface ProviderFrameArgs {
   readonly ctx: PageContext | undefined;
   readonly hostPolicy: BlockRenderArgs<EmbedProps>["hostPolicy"];
   readonly claimant: BlockRenderArgs<EmbedProps>["node"];
+  /** What a binding filled the poster with: a media id or an address. */
+  readonly boundPoster: BoundImage | undefined;
 }
 
 /**
@@ -241,7 +247,15 @@ interface ProviderFrameArgs {
  */
 async function providerFrame(
   match: EmbedMatch,
-  { props, className, allowFullscreen, ctx, hostPolicy, claimant }: ProviderFrameArgs
+  {
+    props,
+    className,
+    allowFullscreen,
+    ctx,
+    hostPolicy,
+    claimant,
+    boundPoster,
+  }: ProviderFrameArgs
 ): Promise<ReactElement | null> {
   const privacy = match.privacyMode && flag(props.privacy, true);
   const load = oneOf(props.load, EMBED_LOADS, "page");
@@ -262,6 +276,7 @@ async function providerFrame(
     ctx,
     hostPolicy,
     claimant,
+    boundPoster,
   });
   return frame(
     base,
@@ -280,9 +295,14 @@ async function providerFrame(
 }
 
 /**
- * The poster's picture: the media library file it names, by an address this
- * site may load; `undefined` for none, a missing file or one the site does
- * not load, which draws the plain poster rather than a broken picture.
+ * The poster's picture, by an address this site may load; `undefined` for
+ * none, a missing file or one the site does not load, which draws the plain
+ * poster rather than a broken picture.
+ *
+ * Unbound, the poster names a media library file. Bound, it holds what its
+ * field gave, a media id or an address, as the binding says, and then the
+ * binding's fallback; the first one that draws is the poster, as an Image's
+ * picture is chosen.
  */
 async function posterPicture(
   poster: unknown,
@@ -290,14 +310,41 @@ async function posterPicture(
     ctx,
     hostPolicy,
     claimant,
+    boundPoster,
+  }: Pick<ProviderFrameArgs, "ctx" | "hostPolicy" | "claimant" | "boundPoster">
+): Promise<string | undefined> {
+  const value = text(poster);
+  const candidates: { readonly holds: "media" | "address"; readonly value: unknown }[] = [
+    ...(value === ""
+      ? []
+      : [{ holds: boundPoster?.holds ?? ("media" as const), value }]),
+    ...(boundPoster?.fallback === undefined ? [] : [boundPoster.fallback]),
+  ];
+  for (const candidate of candidates) {
+    const address =
+      candidate.holds === "address"
+        ? fetchableUrl(candidate.value, hostPolicy?.remotePatterns)
+        : await mediaAddress(candidate.value, { ctx, hostPolicy, claimant });
+    if (address !== undefined) return address;
+  }
+  return undefined;
+}
+
+/** A media library file's address this site may load, or `undefined`. */
+async function mediaAddress(
+  id: unknown,
+  {
+    ctx,
+    hostPolicy,
+    claimant,
   }: Pick<ProviderFrameArgs, "ctx" | "hostPolicy" | "claimant">
 ): Promise<string | undefined> {
-  const id = text(poster);
-  if (id === "" || ctx === undefined) return undefined;
+  const mediaId = text(id);
+  if (mediaId === "" || ctx === undefined) return undefined;
   // A resolver that throws must not take the page with it: one unreachable
   // picture is not a reason to lose the embed around it.
   const record = await ctx
-    .resolveMedia(id, readClaimOf(claimant))
+    .resolveMedia(mediaId, readClaimOf(claimant))
     .catch(() => null);
   return fetchableUrl(record?.url, hostPolicy?.remotePatterns);
 }

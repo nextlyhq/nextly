@@ -20,6 +20,7 @@ import {
   render,
   screen,
 } from "@testing-library/react";
+import * as React from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { ContentServices } from "./content-controls";
@@ -227,5 +228,48 @@ describe("a thumbnail copy pending when the link changes", () => {
       JSON.stringify(call[0]).includes("\"poster\":\"old\"")
     );
     expect(posters).toEqual([]);
+  });
+});
+
+describe("a thumbnail copy under Strict Mode", () => {
+  it("still stores the poster when React mounts the copy twice", async () => {
+    if (!hasBlock(embed.name)) {
+      registerBlocks([embed] as never, { source: "embed-sections-test" });
+    }
+    const document = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [{ id: "e", type: "core/embed", version: 1, props: { ...NEW_EMBED, src: WATCH } } as BlockNode],
+    } as BlockDocument;
+    const editor = {
+      document,
+      selectedId: "e",
+      selection: { ids: ["e"], primary: "e" },
+      applyAll: vi.fn(() => document),
+      select: vi.fn(),
+      apply: vi.fn(() => document),
+      undo: vi.fn(),
+      redo: vi.fn(),
+      canUndo: false,
+      canRedo: false,
+      undoDepth: 0,
+      lockRefusalFor: () => undefined,
+      composed: () => undefined,
+    } as unknown as EditorState & { apply: ReturnType<typeof vi.fn> };
+    const copyEmbedThumbnail = vi.fn(() => Promise.resolve({ id: "m9" }));
+    render(
+      <React.StrictMode>
+        <InspectorPanel
+          editor={editor}
+          contentServices={{ copyEmbedThumbnail } as unknown as ContentServices}
+        />
+      </React.StrictMode>
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Use the video's thumbnail" }));
+      await Promise.resolve();
+    });
+    const op = editor.apply.mock.calls.at(-1)?.[0] as { patch: { props: Record<string, unknown> } };
+    expect(op.patch.props.poster).toBe("m9");
   });
 });
