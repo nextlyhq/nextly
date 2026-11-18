@@ -1125,25 +1125,22 @@ describe.each(getConfiguredTestDialects())(
       const designer = await holding(t, ...DESIGN);
       const variables = [
         {
-          id: "t-brand",
           name: "color.brand",
           kind: "color",
           values: { light: "#336699", dark: "#99bbdd" },
         },
         {
-          id: "t-ink",
           name: "color.ink",
           kind: "color",
           values: { light: "#111111", dark: "#eeeeee" },
         },
         {
-          id: "t-raised",
           name: "shadow.raised",
           kind: "shadow",
           values: {
             light:
-              "0 1px 2px var(--site-t-brand), inset 0 4px 8px 1px var(--site-t-ink)",
-            dark: "0 2px 4px var(--site-t-ink), 0 8px 16px var(--site-t-brand)",
+              "0 1px 2px var(--site-color-brand), inset 0 4px 8px 1px var(--site-color-ink)",
+            dark: "0 2px 4px var(--site-color-ink), 0 8px 16px var(--site-color-brand)",
           },
         },
       ];
@@ -1170,10 +1167,10 @@ describe.each(getConfiguredTestDialects())(
       });
       expect(written.status).toBe(200);
       const stored = JSON.parse(await storedSection(t)) as {
-        tokens: { id?: string; values: unknown }[];
+        tokens: { name: string; values: unknown }[];
       };
       expect(
-        stored.tokens.find(token => token.id === "t-raised")?.values
+        stored.tokens.find(token => token.name === "shadow.raised")?.values
       ).toEqual(variables[2]?.values);
     });
 
