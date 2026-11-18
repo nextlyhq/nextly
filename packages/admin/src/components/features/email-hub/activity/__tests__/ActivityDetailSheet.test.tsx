@@ -7,7 +7,7 @@
  *
  * @module components/features/email-hub/activity/__tests__/ActivityDetailSheet.test
  */
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -83,12 +83,13 @@ function showing(data: ActivityDetail) {
 
 function renderSheet(
   fixTemplateHref: (slug: string) => string | undefined = slug =>
-    `/edit/${slug}`
+    `/edit/${slug}`,
+  onClose: () => void = vi.fn()
 ) {
   render(
     <ActivityDetailSheet
       open={{ source: "queued", id: "q1" }}
-      onClose={vi.fn()}
+      onClose={onClose}
       names={{ template: () => undefined, provider: () => undefined }}
       now={NOW}
       fixTemplateHref={fixTemplateHref}
@@ -183,6 +184,14 @@ describe("the detail sheet", () => {
     const sheet = screen.getByRole("dialog");
     expect(sheet.className).toContain("w-full");
     expect(sheet.className).toContain("sm:w-[480px]");
+  });
+
+  it("closes from a button of its own, since on a phone it covers the overlay", () => {
+    showing(queuedDetail());
+    const onClose = vi.fn();
+    renderSheet(undefined, onClose);
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it("keeps what loaded, and says so, when a later refresh fails", () => {

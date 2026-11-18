@@ -7,6 +7,7 @@ import {
   Badge,
   Button,
   Sheet,
+  SheetClose,
   SheetContent,
   SheetDescription,
   SheetHeader,
@@ -15,6 +16,7 @@ import {
 } from "@nextlyhq/ui";
 import type { JSX, ReactNode } from "react";
 
+import { X } from "@admin/components/icons";
 import { Link } from "@admin/components/ui/link";
 import {
   useActivityDetail,
@@ -313,7 +315,19 @@ export function ActivityDetailSheet({
         side="right"
         className="flex w-full flex-col gap-0 overflow-hidden p-0 sm:w-[480px] sm:max-w-[480px]"
       >
-        <SheetHeader className="shrink-0 space-y-0.5 border-b border-border px-5 py-4 text-left">
+        <SheetHeader className="relative shrink-0 space-y-0.5 border-b border-border px-5 py-4 pr-14 text-left">
+          {/* On a phone the sheet covers the whole screen, overlay included,
+              so this is the only way back to the list without a keyboard. */}
+          <SheetClose asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label="Close"
+              className="absolute right-3 top-3"
+            >
+              <X className="size-4" aria-hidden />
+            </Button>
+          </SheetClose>
           <SheetTitle className="break-words text-base">
             {slug ? (names.template(slug) ?? slug) : "Email"}
           </SheetTitle>
