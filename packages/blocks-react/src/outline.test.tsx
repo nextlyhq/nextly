@@ -23,7 +23,13 @@ import {
   type PageContext,
   type PageBindings,
 } from "./context";
-import { pageOutline, type OutlinePart, type PageOutline } from "./outline";
+import { BlockList } from "./block-boundary";
+import {
+  anchorsWithin,
+  pageOutline,
+  type OutlinePart,
+  type PageOutline,
+} from "./outline";
 import { PageRenderer } from "./page-renderer";
 import { drawWithRegions } from "./page-read-stages";
 import { createBlockResolver } from "./resolver";
@@ -269,6 +275,26 @@ describe("the page outline's anchors, as the page draws them", () => {
       context: createStandaloneContext(),
     });
     expect(outlineSeen()?.headings.map(entry => entry.anchor)).toEqual(["one"]);
+  });
+});
+
+describe("blocks drawn with no page outline", () => {
+  it("anchor their headings as the block alone would be", async () => {
+    // `BlockList` is public, and a host drawing blocks with it makes no
+    // outline: each block is then outlined by itself.
+    const html = await renderToHtml(
+      <BlockList
+        nodes={[
+          heading("Notes"),
+          heading("Own words", { cssId: "own" }),
+          richText(passage(["h2", "Notes"], ["h3", "Notes"])),
+        ]}
+        context={createStandaloneContext()}
+        blocks={resolver}
+        classes={{}}
+      />
+    );
+    expect(headingIds(html)).toEqual(["notes", "own", "notes", "notes-2"]);
   });
 });
 
@@ -691,6 +717,24 @@ describe("pageOutline", () => {
     expect(outline.anchorsOf(single.id)).toEqual(["a"]);
     expect(outline.anchorsOf(passageNode.id)).toEqual(["a-2", "a-3", "b"]);
     expect(outline.anchorsOf("no-such-block")).toEqual([]);
+  });
+
+  it("changes what an editor keeps a list's output by when a list put before it renumbers its passages", () => {
+    // An entry's own passage is numbered among the Rich text blocks inside
+    // lists on the page; the editor keeps a list's output by `anchorsWithin`.
+    const list = (id: string): BlockNode => ({
+      id,
+      type: "core/collection-loop",
+      version: 1,
+      props: { collection: "posts" },
+      slots: { children: [richText(passage(), `${id}-text`)] },
+    });
+    const last = list("last");
+    const within = (...nodes: BlockNode[]) =>
+      anchorsWithin({ outline: pageOutline(parts(["content", nodes])) }, last);
+    expect(within(list("first"), last)).not.toEqual(
+      within(list("first"), list("middle"), last)
+    );
   });
 
   it("reads a heading's level as the block draws it", () => {

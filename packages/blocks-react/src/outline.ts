@@ -323,9 +323,13 @@ export function passageAnchors(
 ): readonly string[] {
   const place = ctx.itemPosition;
   const outline = ctx.outline;
-  if (place === undefined || outline === undefined) {
-    return outlineAnchors(ctx, nodeId);
+  // Drawn with no page outline (a host drawing blocks with `BlockList`):
+  // the passage is outlined by itself.
+  if (outline === undefined) {
+    const alone = anchorAllocator();
+    return headingsDrawn(passage).map(heading => alone.take(heading.text));
   }
+  if (place === undefined) return outlineAnchors(ctx, nodeId);
   const drawn = headingsDrawn(passage);
   const read = outline.headings.filter(heading => heading.node.id === nodeId);
   const asRead =
@@ -342,6 +346,21 @@ export function passageAnchors(
 }
 
 /**
+ * The anchors a Heading block is drawn with: the page outline's
+ * (`outlineAnchors`), or, drawn with no outline (a host drawing blocks with
+ * `BlockList`), those of the block outlined by itself.
+ *
+ * @experimental
+ */
+export function headingAnchors(
+  ctx: Pick<PageContext, "outline" | "itemPosition">,
+  node: BlockNode
+): readonly string[] {
+  if (ctx.outline !== undefined) return outlineAnchors(ctx, node.id);
+  return pageOutline([{ area: "content", nodes: [node] }]).anchorsOf(node.id);
+}
+
+/**
  * The anchors of every block in a subtree, in order: what a container's
  * output depends on through the headings inside it. An editor keeps an async
  * block's output by it, so a list whose inner heading is renumbered by a
@@ -354,9 +373,14 @@ export function anchorsWithin(
   node: BlockNode
 ): readonly string[] {
   if (ctx.outline === undefined) return NONE;
+  const passages = RECORDS.get(ctx.outline)?.passageInList;
   const anchors: string[] = [];
   walkNodes([node], each => {
     anchors.push(...outlineAnchors(ctx, each.id));
+    // A passage an entry gives a Rich text is anchored with its block's
+    // place among such blocks, which a list put before it moves.
+    const passage = passages?.get(each.id);
+    if (passage !== undefined) anchors.push(`p${passage}`);
   });
   return anchors;
 }

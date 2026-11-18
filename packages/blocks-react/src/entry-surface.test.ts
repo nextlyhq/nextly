@@ -135,6 +135,7 @@ const SOURCE_MODULES: ReadonlyArray<{
     internal: [
       "anchorsWithin",
       "contextBeforeOutline",
+      "headingAnchors",
       "outlineAnchors",
       "outlineForPart",
       "pageOutline",
