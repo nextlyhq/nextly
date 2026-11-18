@@ -456,6 +456,35 @@ function afterSendAddressing(
   };
 }
 
+/**
+ * The version of a stored template a send records: the version as saved,
+ * never what it rendered to, and for a test of the editor's unsaved fields a
+ * draft with no digest. Undefined, recorded as not recorded, when the record
+ * cannot be read for it: the version is a note on the delivery, and reading
+ * it must never fail the send.
+ */
+function sentVersion(
+  template: EmailTemplateRecord,
+  draft: TemplateTestDraft | undefined
+): DeliveryTemplateVersion | undefined {
+  try {
+    return {
+      owner: ownerName(template.owner),
+      overridden: template.overridden === true,
+      digest:
+        draft !== undefined
+          ? null
+          : storedVersionDigest(
+              versionOf(template),
+              storedFormat(template).blocks
+            ),
+      ...(draft !== undefined ? { draft: true as const } : {}),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 /** A template's owner as the delivery log names it. */
 function ownerName(owner: EmailTemplateRecord["owner"]): string {
   return owner.kind === "plugin" ? `plugin:${owner.name}` : owner.kind;
@@ -684,7 +713,9 @@ export class EmailService extends BaseService {
   }
 
   /** This service, recording `version` as the template version it sends. */
-  private sendingTemplate(version: DeliveryTemplateVersion): EmailService {
+  private sendingTemplate(
+    version: DeliveryTemplateVersion | undefined
+  ): EmailService {
     const view = Object.create(this) as EmailService;
     view.sendingVersion = version;
     return view;
@@ -814,7 +845,7 @@ export class EmailService extends BaseService {
     // every send does.
     const deliver = (
       message: Parameters<EmailService["send"]>[0],
-      version: DeliveryTemplateVersion
+      version: DeliveryTemplateVersion | undefined
     ) => {
       const sender = this.sendingTemplate(version);
       return observe ? sender.send(message, observe) : sender.send(message);
@@ -925,20 +956,7 @@ export class EmailService extends BaseService {
           idempotencyKey: options?.idempotencyKey,
           excludeRecipients: options?.excludeRecipients,
         },
-        // The version as saved, never what it rendered to. A test of the
-        // editor's unsaved fields sent no saved version, and says so.
-        {
-          owner: ownerName(dbTemplate.owner),
-          overridden: dbTemplate.overridden,
-          digest:
-            draft !== undefined
-              ? null
-              : storedVersionDigest(
-                  versionOf(dbTemplate),
-                  storedFormat(dbTemplate).blocks
-                ),
-          ...(draft !== undefined ? { draft: true as const } : {}),
-        }
+        sentVersion(dbTemplate, draft)
       );
     }
 
