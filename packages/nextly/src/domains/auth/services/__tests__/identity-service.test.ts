@@ -24,6 +24,7 @@ import {
 import { loadDialectTables } from "../../../../database/dialect-tables";
 import { NextlyError } from "../../../../errors/nextly-error";
 import type { PluginDefinition } from "../../../../plugins/plugin-context";
+import { externalIdentityKeyDigest } from "../../../../schemas/external-identities";
 
 import {
   IdentityService,
@@ -183,6 +184,13 @@ async function plantIdentity(row: {
     providerKey: row.providerKey,
     issuer: row.issuer,
     subject: row.subject,
+    // The digest the unique index holds, derived exactly as the service
+    // derives the ones it looks rows up by.
+    keyDigest: externalIdentityKeyDigest(
+      row.providerKey,
+      row.issuer,
+      row.subject
+    ),
     address: row.address ?? null,
     userId: row.userId,
     createdAt: new Date("2020-01-01T00:00:00Z"),
@@ -210,6 +218,30 @@ async function refusalOf(work: Promise<unknown>): Promise<NextlyError> {
 }
 
 describe("the sign-in hand-off intake", () => {
+  // The payload itself is the first thing parsed: a plugin that calls with
+  // no object at all gets the same intake refusal a malformed field gets,
+  // not a TypeError from the first field read.
+  for (const [named, payload] of [
+    ["null", null],
+    ["undefined", undefined],
+    ["a string", "acme-auth:google"],
+  ] as const) {
+    it(`refuses a hand-off that is ${named}, as validation rather than a crash`, async () => {
+      const error = await refusalOf(
+        service({ linkingPolicy: policyEnabling() }).resolveSignInIdentity(
+          pluginIdentityBinding(ACME),
+          payload as unknown as ExternalIdentityHandOff
+        )
+      );
+
+      expect(error.code).toBe("VALIDATION_ERROR");
+      expect(error.logContext).toMatchObject({
+        reason: "identity-handoff-malformed",
+      });
+      expect(seen).toEqual({ selects: 0, inserts: 0 });
+    });
+  }
+
   it("resolves a linked identity to its user", async () => {
     // The control the refusal tests lean on: a planted row, handed over by
     // the plugin whose name is stamped on it, resolves to its account.
@@ -452,6 +484,39 @@ describe("the sign-in hand-off intake", () => {
     ).toEqual({ userId: "owner" });
   });
 
+  it("resolves no identity for a case-variant of a stored subject", async () => {
+    // The lookup is by the digest of the key's exact bytes, never by the
+    // text columns: `User42` and `user42` are different subjects however a
+    // database's collation compares the columns themselves (MySQL's default
+    // folds them, which is why the digest exists — the integration suite
+    // proves it against that collation for real).
+    await plantUser("owner");
+    await plantIdentity({
+      providerKey: "acme-auth:google",
+      issuer: GOOGLE_ISSUER,
+      subject: "user42",
+      userId: "owner",
+    });
+
+    const resolver = service({
+      linkingPolicy: policyEnabling("acme-auth:google"),
+    });
+    expect(
+      await resolver.resolveSignInIdentity(
+        pluginIdentityBinding(ACME),
+        handOff({ subject: "User42" })
+      )
+    ).toEqual({ userId: null });
+
+    // The control: the subject exactly as stored still resolves its account.
+    expect(
+      await resolver.resolveSignInIdentity(
+        pluginIdentityBinding(ACME),
+        handOff({ subject: "user42" })
+      )
+    ).toEqual({ userId: "owner" });
+  });
+
   it("never attaches its identity to whoever is signed in at the time", async () => {
     // The person operating the browser is signed in as `bystander`; the
     // hand-off is for an identity nobody holds. The hand-off resolves no
@@ -523,6 +588,34 @@ describe("the explicit link operation", () => {
       userId: "linker",
     });
     expect(seen).toEqual({ selects: 1, inserts: 1 });
+  });
+
+  it("returns the standing row when the same user links the same identity again", async () => {
+    // A repeated link by the same account is neither an error nor a second
+    // row: the link already stands, and the answer is the row exactly as it
+    // is stored. (A different account holding the identity stays the
+    // conflict the suite names separately.)
+    await plantUser("linker");
+
+    const asLinker = {
+      linkingPolicy: policyEnabling(),
+      sessionOf: sessionReading({ userId: "linker", sessionJti: "token-a" }),
+    };
+    const first = await service(asLinker).completeExplicitLink(
+      pluginIdentityBinding(ACME),
+      linkInput({ userId: "linker", sessionJti: "token-a" })
+    );
+
+    seen = { selects: 0, inserts: 0 };
+    const again = await service(asLinker).completeExplicitLink(
+      pluginIdentityBinding(ACME),
+      linkInput({ userId: "linker", sessionJti: "token-a" })
+    );
+
+    expect(again).toEqual(first);
+    // One read to find the standing row, and no write of a second one.
+    expect(seen).toEqual({ selects: 1, inserts: 0 });
+    expect(await identitiesOf("linker")).toBe(1);
   });
 
   it("attaches without matching addresses", async () => {

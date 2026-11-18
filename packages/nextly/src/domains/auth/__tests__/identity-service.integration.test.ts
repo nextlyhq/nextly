@@ -1,8 +1,10 @@
 /**
  * The identity service over each configured dialect, as the table's first
  * real reader and writer: a linked identity resolving to its account, the
- * explicit link attaching its row through a real completing session, and a
- * refused hand-off leaving the table exactly as it was.
+ * explicit link attaching its row through a real completing session, a
+ * refused hand-off leaving the table exactly as it was, a case-variant
+ * subject resolving nothing under each dialect's real collation, and a
+ * repeated link answering with the standing row.
  *
  * The linking policy is the port, answered here by a fake that enables
  * every key: the policy's own matrix is another change's, and what these
@@ -33,6 +35,7 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { externalIdentityKeyDigest } from "../../../schemas/external-identities";
 import {
   IdentityService,
   pluginIdentityBinding,
@@ -103,6 +106,13 @@ async function insertIdentity(
     providerKey: row.providerKey,
     issuer: row.issuer,
     subject: row.subject,
+    // The digest the unique index holds, derived exactly as the service
+    // derives the ones it looks rows up by.
+    keyDigest: externalIdentityKeyDigest(
+      row.providerKey,
+      row.issuer,
+      row.subject
+    ),
     ...(row.address !== undefined ? { address: row.address } : {}),
     userId: row.userId,
     createdAt: new Date("2020-01-01T00:00:00Z"),
@@ -211,7 +221,87 @@ describe.each(getConfiguredTestDialects())(
         providerKey: "acme-auth:google",
         subject: "link-subject",
         userId: "linker",
+        // The digest the link stamped the row's uniqueness by, derived from
+        // exactly the facts it handed over.
+        keyDigest: externalIdentityKeyDigest(
+          "acme-auth:google",
+          "https://accounts.google.com",
+          "link-subject"
+        ),
       });
+    });
+
+    it("resolves no identity for a case-variant of a stored subject", async () => {
+      // The proof the digest exists for, against a real collation: MySQL's
+      // default folds `User42` into `user42` in the text columns, so a
+      // lookup over those would hand the variant an account the provider
+      // never named it by. The digest compares bytewise everywhere.
+      current = await createTestNextly({ dialect });
+      const handle = current;
+
+      await handle.adapter.insert("users", {
+        id: "owner",
+        email: "owner@example.com",
+        isActive: true,
+      });
+      await insertIdentity(handle, {
+        providerKey: "acme-auth:google",
+        issuer: "https://accounts.google.com",
+        subject: "user42",
+        userId: "owner",
+      });
+
+      const service = serviceOn(handle);
+      expect(
+        await service.resolveSignInIdentity(
+          pluginIdentityBinding(ACME),
+          handOff({ subject: "User42" })
+        )
+      ).toEqual({ userId: null });
+
+      // The control: the subject exactly as stored still resolves.
+      expect(
+        await service.resolveSignInIdentity(
+          pluginIdentityBinding(ACME),
+          handOff({ subject: "user42" })
+        )
+      ).toEqual({ userId: "owner" });
+    });
+
+    it("answers a repeated link by the same user with the standing row", async () => {
+      current = await createTestNextly({ dialect });
+      const handle = current;
+
+      await handle.adapter.insert("users", {
+        id: "linker",
+        email: "linker@example.com",
+        isActive: true,
+      });
+      const { request, sessionJti } = await signedInAs(handle, "linker");
+
+      const service = serviceOn(handle);
+      const link = {
+        identity: handOff({ subject: "link-subject" }),
+        context: { userId: "linker" as const, sessionJti },
+        completingRequest: request,
+      };
+      const first = await service.completeExplicitLink(
+        pluginIdentityBinding(ACME),
+        link
+      );
+      const again = await service.completeExplicitLink(
+        pluginIdentityBinding(ACME),
+        link
+      );
+
+      // The same row answered twice — its own id, not a fresh one — and the
+      // table still holds exactly one row for the identity.
+      expect(again).toEqual(first);
+      const rows = (await identityRows(handle)) as Array<
+        Record<string, unknown>
+      >;
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ id: first.identity.id });
     });
 
     it("writes nothing when the hand-off refuses", async () => {
