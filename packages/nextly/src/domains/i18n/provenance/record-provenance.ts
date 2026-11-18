@@ -310,50 +310,10 @@ async function recordTranslationProvenance(
       fieldOrigin(write, ownEntry(write.claims, field)),
     ])
   );
-  // Each source language's fingerprints, read once for every field made from it.
-  const sources = new Map<string, Map<string, string>>();
-  for (const { sourceLocale } of origins.values()) {
-    if (sourceLocale !== null && !sources.has(sourceLocale)) {
-      sources.set(
-        sourceLocale,
-        await liveFingerprints(db, write, sourceLocale)
-      );
-    }
-  }
-  const existing = new Map(
-    (
-      await db.select<{ id: string; fieldPath: string }>(
-        TRANSLATION_PROVENANCE_TABLE,
-        {
-          columns: ["id", "fieldPath"],
-          where: documentWhere(write, write.locale, write.partState),
-        }
-      )
-    ).map(row => [row.fieldPath, row.id])
-  );
+  const sources = await sourceFingerprints(db, write, origins);
+  const existing = await recordedPaths(db, write);
+  const upsert = upsertInto(db, write, existing);
   const writtenAt = write.now ?? new Date();
-  const upsert = async (
-    fieldPath: string,
-    values: Record<string, unknown>
-  ): Promise<void> => {
-    const id = existing.get(fieldPath);
-    if (id !== undefined) {
-      await db.updateCount(TRANSLATION_PROVENANCE_TABLE, values, {
-        and: [{ column: "id", op: "=", value: id }],
-      });
-      return;
-    }
-    await db.insert(TRANSLATION_PROVENANCE_TABLE, {
-      id: randomUUID(),
-      scopeKind: write.scopeKind,
-      scopeSlug: write.scopeSlug,
-      entryId: write.entryId,
-      locale: write.locale,
-      partState: write.partState,
-      fieldPath,
-      ...values,
-    });
-  };
   for (const [field, origin] of origins) {
     // A translation cleared has no value of its own: its language reads the field from another,
     // so it keeps no record that could put the language out of date. The default language keeps
@@ -362,15 +322,7 @@ async function recordTranslationProvenance(
       write.locale !== write.defaultLocale &&
       isBlankValue(write.values[field])
     ) {
-      const prefix = `${field}${ROW_PATH_SEPARATOR}`;
-      const cleared = [...existing]
-        .filter(([path]) => path === field || path.startsWith(prefix))
-        .map(([, id]) => id);
-      if (cleared.length > 0) {
-        await db.delete(TRANSLATION_PROVENANCE_TABLE, {
-          and: [{ column: "id", op: "IN", value: cleared }],
-        });
-      }
+      await forgetField(db, field, existing);
       continue;
     }
     const values = {
@@ -396,6 +348,85 @@ async function recordTranslationProvenance(
       upsert,
     });
   }
+}
+
+/** Each source language's live fingerprints, read once for every field made from it. */
+async function sourceFingerprints(
+  db: ProvenanceDb,
+  write: ProvenanceWrite,
+  origins: ReadonlyMap<string, FieldOrigin>
+): Promise<Map<string, Map<string, string>>> {
+  const sources = new Map<string, Map<string, string>>();
+  for (const { sourceLocale } of origins.values()) {
+    if (sourceLocale !== null && !sources.has(sourceLocale)) {
+      sources.set(
+        sourceLocale,
+        await liveFingerprints(db, write, sourceLocale)
+      );
+    }
+  }
+  return sources;
+}
+
+/** The records the write's language and part already has, each one's id by its path. */
+async function recordedPaths(
+  db: ProvenanceDb,
+  write: ProvenanceWrite
+): Promise<Map<string, string>> {
+  const rows = await db.select<{ id: string; fieldPath: string }>(
+    TRANSLATION_PROVENANCE_TABLE,
+    {
+      columns: ["id", "fieldPath"],
+      where: documentWhere(write, write.locale, write.partState),
+    }
+  );
+  return new Map(rows.map(row => [row.fieldPath, row.id]));
+}
+
+/**
+ * Writes one record of `write`'s language and part: over the one `existing` names for its path,
+ * or as a new one.
+ */
+function upsertInto(
+  db: ProvenanceDb,
+  write: ProvenanceWrite,
+  existing: ReadonlyMap<string, string>
+): (fieldPath: string, values: Record<string, unknown>) => Promise<void> {
+  return async (fieldPath, values) => {
+    const id = existing.get(fieldPath);
+    if (id !== undefined) {
+      await db.updateCount(TRANSLATION_PROVENANCE_TABLE, values, {
+        and: [{ column: "id", op: "=", value: id }],
+      });
+      return;
+    }
+    await db.insert(TRANSLATION_PROVENANCE_TABLE, {
+      id: randomUUID(),
+      scopeKind: write.scopeKind,
+      scopeSlug: write.scopeSlug,
+      entryId: write.entryId,
+      locale: write.locale,
+      partState: write.partState,
+      fieldPath,
+      ...values,
+    });
+  };
+}
+
+/** Removes `field`'s record and its rows' records, of those `existing` names. */
+async function forgetField(
+  db: ProvenanceDb,
+  field: string,
+  existing: ReadonlyMap<string, string>
+): Promise<void> {
+  const prefix = `${field}${ROW_PATH_SEPARATOR}`;
+  const forgotten = [...existing]
+    .filter(([path]) => path === field || path.startsWith(prefix))
+    .map(([, id]) => id);
+  if (forgotten.length === 0) return;
+  await db.delete(TRANSLATION_PROVENANCE_TABLE, {
+    and: [{ column: "id", op: "IN", value: forgotten }],
+  });
 }
 
 /**
