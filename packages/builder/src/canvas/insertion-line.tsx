@@ -42,7 +42,11 @@ import {
   watchScreenBand,
 } from "./canvas-geometry-watch";
 import { DropIndicator } from "./drop-indicator";
-import type { DropTarget, RectSource } from "./drop-targets";
+import {
+  targetLineRect,
+  type DropTarget,
+  type RectSource,
+} from "./drop-targets";
 import { canvasContentRect, onScreenOf, overlaySpaceOf } from "./geometry-dom";
 import { insertionMarkOf, type Neighbour } from "./insertion-line-geometry";
 import {
@@ -145,23 +149,6 @@ function lazyRects(
   };
 }
 
-/** The line's rectangle in the canvas's content coordinates. */
-function lineRectOf(target: DropTarget): Rect {
-  return target.axis === "y"
-    ? {
-        x: target.from,
-        y: target.line,
-        width: target.to - target.from,
-        height: 0,
-      }
-    : {
-        x: target.line,
-        y: target.from,
-        width: 0,
-        height: target.to - target.from,
-      };
-}
-
 /** Which edge of the screen a place lies past, or `undefined` for none. */
 function edgePast(drawnAt: Rect, screen: Rect): Edge | undefined {
   if (drawnAt.y + drawnAt.height < screen.y) return "top";
@@ -219,7 +206,7 @@ function drawnFor(
   const place =
     mark.kind === "empty"
       ? rects.rectOf(mark.containerId)
-      : lineRectOf(mark.target);
+      : targetLineRect(mark.target);
   if (place === undefined) return null;
   const drawnAt = space.place(place);
   const screen = onScreenOf(space);
@@ -235,7 +222,12 @@ function drawnFor(
   return {
     kind: "line",
     target: mark.target,
-    start: { x: drawnAt.x, y: drawnAt.y },
+    // At the start of the part of the line on screen: a zoomed canvas can
+    // show a line whose own start is off to a side, or above.
+    start: {
+      x: within(drawnAt.x, screen.x, screen.x + screen.width),
+      y: within(drawnAt.y, screen.y, screen.y + screen.height),
+    },
     labelBelow: drawnAt.y - LABEL_ROOM < screen.y,
     labelBefore: drawnAt.x + LABEL_WIDEST > screen.x + screen.width,
   };

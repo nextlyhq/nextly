@@ -426,6 +426,35 @@ describe("the line where a highlighted tile would land", () => {
     expect(revealed()).toEqual([["two", { block: "end", inline: "end" }]]);
   });
 
+  it("anchors the label to the part of its line on screen", async () => {
+    // A zoomed canvas panned right: the screen shows 300px to 1300px, and the
+    // line across Hero starts at 0, off its left.
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+      function boxOf(this: Element) {
+        if (this.hasAttribute("data-scroller")) {
+          return new DOMRect(300, 0, 1000, 500);
+        }
+        switch (this.getAttribute(NODE_ID_ATTRIBUTE)) {
+          case "hero":
+            return new DOMRect(0, 0, 1000, 300);
+          case "one":
+            return new DOMRect(0, 0, 1000, 100);
+          case "two":
+            return new DOMRect(0, 120, 1000, 100);
+          default:
+            return new DOMRect(0, 0, 1000, 2000);
+        }
+      }
+    );
+    const { container } = drawWith({
+      at: { parentId: "hero", slot: "children", index: 1 },
+      words: "Text goes after One, inside Hero",
+    });
+    await act(async () => undefined);
+    expect(lineIn(container)?.style.left).toBe("0px");
+    expect(labelIn(container)?.style.left).toBe("300px");
+  });
+
   it("reveals the rendered block nearest a place off screen, not one that draws nothing", async () => {
     layOut();
     const revealed = revealSpy();

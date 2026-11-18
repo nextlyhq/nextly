@@ -528,6 +528,19 @@ export function targetsInRegion(
   return targets;
 }
 
+/**
+ * A target's line as a rectangle in the canvas's content coordinates: across
+ * the region at `line` for a vertical flow, down it for a row, with no
+ * thickness. One conversion for everything drawn from a target: the drag's
+ * line, and the Add panel's preview of a place, its label and edge label.
+ */
+export function targetLineRect(target: DropTarget): Rect {
+  const span = target.to - target.from;
+  return target.axis === "y"
+    ? { x: target.from, y: target.line, width: span, height: 0 }
+    : { x: target.line, y: target.from, width: 0, height: span };
+}
+
 /** Ids of a node and everything under it. */
 function subtreeIds(node: BlockNode, into: Set<string>): void {
   into.add(node.id);

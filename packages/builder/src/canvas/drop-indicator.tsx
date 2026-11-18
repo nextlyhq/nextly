@@ -11,11 +11,9 @@
 import { useIsomorphicLayoutEffect } from "@nextlyhq/ui";
 import * as React from "react";
 
-import type { Rect } from "../geometry";
-
 import { CANVAS_ROOT_CLASS } from "./canvas";
 import { useCanvasFrame } from "./canvas-frame-context";
-import type { DropTarget } from "./drop-targets";
+import { targetLineRect, type DropTarget } from "./drop-targets";
 import { overlaySpaceOf } from "./geometry-dom";
 
 export interface DropIndicatorProps {
@@ -56,11 +54,7 @@ export function DropIndicator({
     // The line is drawn ACROSS the axis children are separated along: a
     // region stacking its children downward gets a horizontal rule, a row
     // gets a vertical one.
-    const span = target.to - target.from;
-    const rect: Rect =
-      target.axis === "y"
-        ? { x: target.from, y: target.line, width: span, height: 0 }
-        : { x: target.line, y: target.from, width: 0, height: span };
+    const rect = targetLineRect(target);
     const space = overlaySpaceOf(element, CANVAS_ROOT_CLASS);
     const at = space === null ? rect : space.place(rect);
     element.style.left = `${String(at.x)}px`;
