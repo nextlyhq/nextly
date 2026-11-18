@@ -23,6 +23,13 @@ import { sql } from "drizzle-orm";
 import { querySqlRows } from "../pipeline/classifier/count-helpers";
 import { introspectTableNames } from "../pipeline/diff/introspect-live";
 import { collectionOwnTables } from "../services/field-column-descriptor";
+import { readIdentifierCaseRules } from "../utils/read-identifier-case";
+import {
+  indexCatalog,
+  resolveCatalogName,
+  type CatalogIndex,
+  type IdentifierCase,
+} from "../utils/resolve-catalog-name";
 
 import type { Deletion, EntityRef } from "./data-loss-consent";
 
@@ -88,20 +95,22 @@ export interface EntityOwners {
 }
 
 /**
- * Whose each of `entities`' tables is, by its physical name: exactly as
- * spelled, so on a server that keeps the case of table names (PostgreSQL's
- * quoted names, MySQL on a case-sensitive file system) a table differing only
- * in case is another table, owned by nobody; and without regard to case only
- * where the server folds it (`foldsCase`, SQLite's names). A table more than
- * one entity claims, or one that is any entity's main table, has no owner
- * besides itself; and a main table more than one entity names is no entity's.
+ * Whose each of `entities`' tables is, by its physical name, under the
+ * server's rule for comparing table names (`identifierCase`, from
+ * `identifierCaseRules`): an exact spelling always, and one differing only in
+ * case only where the server folds it, through the catalog's own lookup
+ * (`resolveCatalogName`). On a server that keeps case (PostgreSQL, MySQL with
+ * `lower_case_table_names=0`) a table differing only in case is another table,
+ * owned by nobody. Without a rule, names are compared exactly, which can only
+ * refuse more. A table more than one entity claims, or one that is any
+ * entity's main table, has no owner besides itself; and a main table more
+ * than one entity names is no entity's.
  */
 export function entityOwners(
   entities: readonly CoveredEntity[],
-  options: { foldsCase?: boolean } = {}
+  options: { identifierCase?: IdentifierCase } = {}
 ): EntityOwners {
-  const keyOf = (table: string) =>
-    options.foldsCase === true ? table.toLowerCase() : table;
+  const keyOf = tableKey(entities, options.identifierCase ?? "preserve");
   // A main table more than one registry row names belongs to none of them, so a drop of it is
   // covered only where it is named, and lists no entity's shared rows on another's behalf.
   const named = new Map<string, CoveredEntity[]>();
@@ -129,6 +138,47 @@ export function entityOwners(
       return claimed?.length === 1 ? claimed[0] : undefined;
     },
   };
+}
+
+/**
+ * The one spelling each name of `entities`' tables is known by: the name itself
+ * where the server keeps case, and where it folds, the first of the entities'
+ * spellings that folds to the same name, resolved as the catalog resolves it.
+ * A name none of them folds to is its own key, so it matches nothing.
+ */
+function tableKey(
+  entities: readonly CoveredEntity[],
+  identifierCase: IdentifierCase
+): (table: string) => string {
+  if (identifierCase === "preserve") return table => table;
+  const catalog = indexCatalog(
+    entities.flatMap(entity => entity.tables),
+    identifierCase
+  );
+  // Resolved by the fold alone, so two of the entities' own spellings of one table share a key.
+  const byFold: CatalogIndex = { ...catalog, exact: new Set() };
+  return table => resolveCatalogName(byFold, table) ?? table;
+}
+
+/**
+ * How a server compares table names, for `entityOwners`: read from the server
+ * where its configuration decides (MySQL's `lower_case_table_names`), and
+ * compared exactly when it cannot be read, which can only refuse more.
+ */
+export async function tableIdentifierCase(
+  db: unknown,
+  dialect: SupportedDialect
+): Promise<IdentifierCase> {
+  try {
+    return (
+      await readIdentifierCaseRules({
+        dialect,
+        getDrizzle: <T>() => db as T,
+      })
+    ).tables;
+  } catch {
+    return "preserve";
+  }
 }
 
 /**

@@ -11,6 +11,7 @@ import {
   resolveDataLossConsent,
   type Deletion,
 } from "../data-loss-consent";
+import { identifierCaseRules } from "../../utils/resolve-catalog-name";
 import {
   coveredEntity,
   entityOwners,
@@ -117,7 +118,9 @@ describe("what an entity owns", () => {
 describe("whose a dropped table is", () => {
   it("gives a table the entity owns its main table as owner, and the main table none", () => {
     // On a server that folds the case of table names, as SQLite does.
-    const owners = entityOwners([posts, home], { foldsCase: true });
+    const owners = entityOwners([posts, home], {
+      identifierCase: identifierCaseRules({ dialect: "sqlite" }).tables,
+    });
     expect(
       withOwners(
         [
@@ -467,5 +470,54 @@ describe("counting an entity's rows in each shared table", () => {
     expect(
       await countEntityRows([archive, autosaves], { db, dialect: "sqlite" })
     ).toEqual([archive, autosaves]);
+  });
+});
+
+describe("the server's rule for comparing table names", () => {
+  it.each([
+    ["PostgreSQL", identifierCaseRules({ dialect: "postgresql" }), false],
+    ["SQLite", identifierCaseRules({ dialect: "sqlite" }), true],
+    [
+      "MySQL with lower_case_table_names=0",
+      identifierCaseRules({ dialect: "mysql", lowerCaseTableNames: 0 }),
+      false,
+    ],
+    [
+      "MySQL with lower_case_table_names=1",
+      identifierCaseRules({ dialect: "mysql", lowerCaseTableNames: 1 }),
+      true,
+    ],
+    [
+      "MySQL with lower_case_table_names=2",
+      identifierCaseRules({ dialect: "mysql", lowerCaseTableNames: 2 }),
+      true,
+    ],
+  ])(
+    "on %s, a table differing only in case is the entity's only where the server folds case",
+    (_server, rules, folds) => {
+      const owners = entityOwners([posts], { identifierCase: rules.tables });
+      expect(owners.ownerOf("DC_POSTS_LOCALES")?.table).toBe(
+        folds ? "dc_posts" : undefined
+      );
+      expect(owners.mainOf("DC_POSTS")?.slug).toBe(folds ? "posts" : undefined);
+    }
+  );
+
+  it("gives a main table two rows spell in different case to neither, where the server folds case", () => {
+    const shouting = coveredEntity({
+      kind: "collection",
+      slug: "shouting",
+      tableName: "DC_POSTS",
+      source: "code",
+      fields: [],
+    }) as CoveredEntity;
+    const owners = entityOwners([posts, shouting], {
+      identifierCase: identifierCaseRules({
+        dialect: "mysql",
+        lowerCaseTableNames: 1,
+      }).tables,
+    });
+    expect(owners.mainOf("dc_posts")).toBeUndefined();
+    expect(owners.mainOf("DC_POSTS")).toBeUndefined();
   });
 });

@@ -28,6 +28,7 @@ import { offlineDeletionFacts } from "../migrate/offline-deletion-facts";
 import { splitSqlStatements } from "../migrate/split-sql";
 import type { NextlySchemaSnapshot, Operation } from "../pipeline/diff/types";
 import type { ColumnResolution } from "../pipeline/sql-templates/resolution-statements";
+import { identifierCaseRules } from "../utils/resolve-catalog-name";
 
 /** A rename the person (or a run that cannot ask) declined: its pair stays a drop and an add. */
 export interface DeclinedRename {
@@ -106,8 +107,13 @@ export function judgedDeletions(args: {
   const removed = args.plan.removedEntities ?? [];
   const perFile = coverRunDeletions(
     read,
+    // Read from no server: the dialect's own rule, and exact names on MySQL, whose rule is the
+    // server's setting. Exact names can only ask for more consent, never less.
     entityOwners(args.plan.entities ?? [], {
-      foldsCase: args.dialect === "sqlite",
+      identifierCase:
+        args.dialect === "mysql"
+          ? "preserve"
+          : identifierCaseRules({ dialect: args.dialect }).tables,
     }),
     entity =>
       removed.some(

@@ -40,6 +40,7 @@ import type { Deletion, EntityRef } from "./data-loss-consent";
 import {
   entityOwners,
   readCoveredEntities,
+  tableIdentifierCase,
   withOwners,
   type CoveredEntity,
   type EntityOwners,
@@ -247,9 +248,13 @@ export async function withEntityCoverage(
     (await within(readCoveredEntities(reader.db, reader.dialect), deadline)) ??
     [];
   if (entities.length === 0) return perUnit.map(list => [...list]);
-  // SQLite's table names are case-insensitive; elsewhere a table is named exactly.
+  // Tables are matched by the server's own rule for comparing their names.
   const owners = entityOwners(entities, {
-    foldsCase: reader.dialect === "sqlite",
+    identifierCase:
+      (await within(
+        tableIdentifierCase(reader.db, reader.dialect),
+        deadline
+      )) ?? "preserve",
   });
   const covered = coverRunDeletions(perUnit, owners, reader.retires);
   const counted: Deletion[][] = [];
