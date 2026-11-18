@@ -178,7 +178,13 @@ export interface LoopCollection {
     readonly timeOnly?: boolean;
     /** The primitive a plugin's field type is stored as, which gives its kind. */
     readonly storage?: FieldStoragePrimitive;
+    /** For an upload field: whether it takes images, where it says. */
+    readonly takesImages?: boolean;
   }[];
+  /** The field the admin titles its entries by, where visitors may read it. */
+  readonly titleField?: string;
+  /** Whether its entries are served as pages of their own. */
+  readonly entriesHavePages?: boolean;
 }
 
 /** A list's matching entries, and how many of them it shows. */

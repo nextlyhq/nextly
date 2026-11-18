@@ -13,11 +13,14 @@ import {
   richTextToPlainText,
   toOneParagraph,
   type BlockDocument,
+  type RichTextValue,
 } from "@nextlyhq/blocks-engine";
+import { Button } from "@nextlyhq/ui";
 import * as React from "react";
 
 import type { ContentControlProps, ContentServices } from "./content-services";
 import { propLabel } from "./inspector";
+import { FULL_EDITOR_WORDS, RichTextFullEditor } from "./rich-text-full-editor";
 import { joinTyping } from "./typing-run";
 
 /** The live attachment of the shared editor to this field, while focused. */
@@ -111,7 +114,13 @@ function writeRead(
   return joinTyping(run, () => write(toOneParagraph(read).value));
 }
 
-/** The Content tab's rich-text prop: its name, and the passage under it. */
+/**
+ * The Content tab's rich-text prop: its name, and the passage under it.
+ *
+ * A whole passage (a Rich text's) also says where it is best edited, on the
+ * canvas with the format bar, and offers "Open the full editor" for longer
+ * work, where the host has an editor to open.
+ */
 export function RichTextControl({
   id,
   prop,
@@ -119,25 +128,109 @@ export function RichTextControl({
   onCommit,
   services,
 }: ContentControlProps): React.JSX.Element {
+  const oneParagraph = isOneParagraphProp(prop.schema);
+  const label = propLabel(prop.name, prop.schema);
+  const write = (value: unknown) => onCommit(prop.name, value);
   return (
     <div
       className="nx-inspector__field"
       data-content-control={prop.schema.type}
     >
       <p className="nx-inspector__field-name" id={`${id}-label`}>
-        {propLabel(prop.name, prop.schema)}
+        {label}
       </p>
       <RichTextField
         id={id}
         labelledBy={`${id}-label`}
         value={prop.value}
         disabled={disabled}
-        onCommit={value => onCommit(prop.name, value)}
+        onCommit={write}
         services={services}
-        oneParagraph={isOneParagraphProp(prop.schema)}
+        oneParagraph={oneParagraph}
       />
+      {oneParagraph || services?.loadRichTextEditor === undefined ? null : (
+        <FullEditorEntry
+          label={label}
+          value={prop.value}
+          disabled={disabled}
+          onCommit={write}
+          services={services}
+        />
+      )}
     </div>
   );
+}
+
+/**
+ * The panel's line on where a Rich text is edited, and the button that opens
+ * the full editor; closing it puts the focus back on the button, beside the
+ * block still selected.
+ */
+function FullEditorEntry({
+  label,
+  value,
+  disabled,
+  onCommit,
+  services,
+}: {
+  label: string;
+  value: unknown;
+  disabled: boolean;
+  onCommit: (value: unknown) => BlockDocument | null | void;
+  services: ContentServices;
+}): React.JSX.Element {
+  const [open, setOpen] = React.useState(false);
+  const button = React.useRef<HTMLButtonElement>(null);
+  return (
+    <>
+      <p className="nx-inspector__note">{FULL_EDITOR_WORDS.line}</p>
+      <Button
+        ref={button}
+        type="button"
+        size="sm"
+        variant="outline"
+        className="nx-inspector__full-editor"
+        disabled={disabled}
+        aria-haspopup="dialog"
+        onClick={() => setOpen(true)}
+      >
+        {FULL_EDITOR_WORDS.open}
+      </Button>
+      {open ? (
+        <RichTextFullEditor
+          label={label}
+          value={value}
+          onCommit={onCommit}
+          services={services}
+          onClose={() => setOpen(false)}
+          returnFocus={() => button.current}
+        />
+      ) : null}
+    </>
+  );
+}
+
+/**
+ * A passage's words for the field while no editor is attached: one line per
+ * block, and one per item of a list, as the editor will lay them out, so the
+ * field is as tall before it is focused as after.
+ */
+export function passagePreview(passage: RichTextValue): string {
+  const lines: string[] = [];
+  for (const block of passage.root.children) {
+    const items =
+      block.type === "list" && Array.isArray(block.children)
+        ? block.children
+        : [block];
+    for (const item of items) {
+      lines.push(
+        richTextToPlainText({
+          root: { ...passage.root, children: [item] },
+        }).trim()
+      );
+    }
+  }
+  return lines.join("\n");
 }
 
 /**
@@ -291,7 +384,7 @@ export function RichTextField({
   // While no editor is attached, the field shows the passage's words, set on
   // the element rather than rendered as children: the editor takes the
   // element's contents over once attached, and React must not own them.
-  const preview = isRichTextValue(passage) ? richTextToPlainText(passage) : "";
+  const preview = isRichTextValue(passage) ? passagePreview(passage) : "";
   // A stored passage that changes under words the document refused (a Reset,
   // an undo) is what the page now holds: the refused draft is let go and the
   // field shows the stored one, rather than the draft and its notice sitting
