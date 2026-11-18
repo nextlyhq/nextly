@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { cleanUpCandidates } from "./colour-usage";
+import { cleanUpCandidates, hiddenColours } from "./colour-usage";
 import type { UsageState } from "./variable-usage";
 
 const STATES: Readonly<Record<string, UsageState>> = {
@@ -64,5 +64,42 @@ describe("the colours a clean-up lists", () => {
         stateOf: () => "counting",
       }).counting
     ).toBe(false);
+  });
+});
+
+describe("the built-in colours a site hiding them leaves out", () => {
+  const builtIns = {
+    stateOf: (identity: string): UsageState => STATES[identity] ?? "counting",
+    builtIn: (identity: string) => identity !== "spare",
+    onPage: new Set(["on-page"]),
+  };
+  const identities = Object.keys(STATES);
+
+  it("hides none while the built-in colours are shown", () => {
+    expect([
+      ...hiddenColours(identities, { ...builtIns, shown: true }),
+    ]).toEqual([]);
+  });
+
+  it("hides each built-in colour the count has shown unused and the open page does not use", () => {
+    // Used, still counting and on the page are kept; Spare is the site's own.
+    expect([
+      ...hiddenColours(identities, { ...builtIns, shown: false }),
+    ]).toEqual(["primary", "extra"]);
+  });
+
+  it("lists one again once something uses it", () => {
+    const used = {
+      ...builtIns,
+      shown: false,
+      stateOf: (identity: string): UsageState =>
+        identity === "primary" ? "used" : builtIns.stateOf(identity),
+    };
+    expect([...hiddenColours(identities, used)]).toEqual(["extra"]);
+    const placed = { ...builtIns, shown: false, onPage: new Set(["extra"]) };
+    expect([...hiddenColours(identities, placed)]).toEqual([
+      "primary",
+      "on-page",
+    ]);
   });
 });

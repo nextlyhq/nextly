@@ -599,6 +599,13 @@ export interface SiteCodeFacts {
    * the loader builds is trusted through it. Optional, as `unnonceable` is.
    */
   readonly loader?: string;
+  /**
+   * Every loader's hash where more than one starts the code (a page's own
+   * code, whose end of body has a loader of its own): each is an inline
+   * script a policy must allow, and under `'strict-dynamic'` each is trusted
+   * as `loader` is. Absent, `loader` is the only one.
+   */
+  readonly loaders?: readonly string[];
   /** Every resource it loads, each once, as written. */
   readonly loads: readonly SiteCodeLoad[];
 }
@@ -606,7 +613,12 @@ export interface SiteCodeFacts {
 /** What site code needs of a policy: its inline hashes and what it loads. */
 export async function siteCodeFacts(
   entries: readonly SiteCodeEntry[],
-  siteOrigin: string
+  siteOrigin: string,
+  /**
+   * The loaders that start the gated entries, by their text: site code's
+   * own where not said. A page's own code names its two.
+   */
+  loaderTexts: readonly string[] = [SITE_CODE_BOOTSTRAP]
 ): Promise<SiteCodeFacts> {
   const hashes: Record<SiteCodeInlineKind, Set<string>> = {
     script: new Set(),
@@ -633,10 +645,11 @@ export async function siteCodeFacts(
     }
   }
   // The loader that starts gated code is an inline script of its own.
-  const loader = entries.some(isGatedSiteCode)
-    ? await cspHash(SITE_CODE_BOOTSTRAP)
-    : undefined;
-  if (loader !== undefined) hashes.script.add(loader);
+  const loaders = entries.some(isGatedSiteCode)
+    ? await Promise.all([...new Set(loaderTexts)].map(text => cspHash(text)))
+    : [];
+  for (const hash of loaders) hashes.script.add(hash);
+  const loader = loaders[0];
   return {
     siteOrigin,
     hashes: {
@@ -646,6 +659,7 @@ export async function siteCodeFacts(
     },
     unnonceable: [...unnonceable],
     ...(loader === undefined ? {} : { loader }),
+    ...(loaders.length > 1 ? { loaders } : {}),
     loads: [...loads.values()],
   };
 }
@@ -680,6 +694,11 @@ export interface CspCheckInput {
    * nonce the policy names (a placeholder for the per-request one).
    */
   readonly siteNonce?: boolean | string;
+  /**
+   * The loader that starts each place's gated code, by its text: site
+   * code's own where not said. A page's own end of body names its own.
+   */
+  readonly loaders?: Partial<Record<SiteCodeSlot, string>>;
 }
 
 /** One way an entry would be blocked: the directive, and why. */
@@ -852,6 +871,7 @@ export async function checkSiteCodeAgainstCsp(
   const context = {
     siteOrigin: input.siteOrigin,
     nonce: elementNonce(input.siteNonce, policies),
+    loaders: input.loaders ?? {},
   };
   // Every policy the header carries is enforced, so each is checked; a block
   // two policies make alike is said once.
@@ -868,7 +888,9 @@ export async function checkSiteCodeAgainstCsp(
 async function policyFindings(
   policy: CspPolicy,
   slots: Readonly<Record<SiteCodeSlot, readonly SiteCodeEntry[]>>,
-  context: LoadContext,
+  context: LoadContext & {
+    readonly loaders: Partial<Record<SiteCodeSlot, string>>;
+  },
   level: CspFinding["level"]
 ): Promise<CspFinding[]> {
   const found: CspFinding[] = [];
@@ -881,7 +903,7 @@ async function policyFindings(
   }
   return [
     ...found,
-    ...toldOnce(firstGated(slots), await loaderBlocked(policy, context), level),
+    ...(await loaderFindings(policy, slots, context, level)),
     ...toldOnce(
       firstGated(slots, entry => entry.tag === "script"),
       trustedTypesBlocked(policy),
@@ -936,20 +958,52 @@ function trustedTypesBlocked(policy: CspPolicy): Blocked | undefined {
   };
 }
 
-/** How a policy blocks the loader that starts gated code, if it does. */
+/**
+ * How a policy blocks the loaders that start gated code: told once per
+ * loader, on the first entry it starts. Site code has one loader for both
+ * places; a page's own code has its own for the end of the body.
+ */
+async function loaderFindings(
+  policy: CspPolicy,
+  slots: Readonly<Record<SiteCodeSlot, readonly SiteCodeEntry[]>>,
+  context: LoadContext & {
+    readonly loaders: Partial<Record<SiteCodeSlot, string>>;
+  },
+  level: CspFinding["level"]
+): Promise<CspFinding[]> {
+  const told = new Set<string>();
+  const found: CspFinding[] = [];
+  for (const slot of ["head", "body"] as const) {
+    const loader = context.loaders[slot] ?? SITE_CODE_BOOTSTRAP;
+    if (told.has(loader)) continue;
+    const at = firstGated({ head: [], body: [], [slot]: slots[slot] });
+    if (at === undefined) continue;
+    told.add(loader);
+    found.push(
+      ...toldOnce(at, await loaderBlocked(policy, context, loader), level)
+    );
+  }
+  return found;
+}
+
+/** How a policy blocks the loader `text`, if it does. */
 async function loaderBlocked(
   policy: CspPolicy,
-  context: LoadContext
+  context: LoadContext,
+  text: string
 ): Promise<Blocked | undefined> {
   const rule = governing(policy, "script");
   if (rule === undefined) return undefined;
-  const hash = await cspHash(SITE_CODE_BOOTSTRAP);
+  const hash = await cspHash(text);
   if (allowsInline(rule.sources, hash, context.nonce, "script")) {
     return undefined;
   }
   return {
     directive: rule.directive,
-    message: `the loader that starts site code is blocked: add its hash ('${hash}'), or pass the site's nonce to <SiteCode>`,
+    message:
+      text === SITE_CODE_BOOTSTRAP
+        ? `the loader that starts site code is blocked: add its hash ('${hash}'), or pass the site's nonce to <SiteCode>`
+        : `the loader that starts this page's end-of-body code is blocked: add its hash ('${hash}'), or pass the site's nonce to <PageCode>`,
   };
 }
 
@@ -1021,7 +1075,11 @@ function inlineNeeds(
     holds(rule.sources, "'strict-dynamic'");
   const blocked = facts.hashes[kind].filter(
     hash =>
-      !(throughLoader && hash !== facts.loader) &&
+      !(
+        throughLoader &&
+        hash !== facts.loader &&
+        !(facts.loaders ?? []).includes(hash)
+      ) &&
       !allowsInline(
         rule.sources,
         hash,

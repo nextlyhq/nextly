@@ -98,6 +98,7 @@ import {
   TokensStudio,
   VariablesTab,
 } from "./site-style-studios";
+import type { TextStylesTab as TextStylesTabPart } from "./site-text-styles-tab";
 import type { ComponentView } from "./use-component-view";
 import type { EditorMount } from "./use-editor-mount";
 import type { CanvasInputs, SiteStyleInputs } from "./use-render-inputs";
@@ -117,6 +118,14 @@ const FontsPanelWithUpload: typeof FontsPanelWithUploadPart = lazyPart(() =>
  */
 const FontRolesTab: typeof FontRolesTabPart = lazyPart(() =>
   import("./site-font-roles-tab").then(m => m.FontRolesTab)
+);
+
+/**
+ * The Type tab's text styles, fetched when the tab first draws them, as the
+ * Body and Headings fonts are.
+ */
+const TextStylesTab: typeof TextStylesTabPart = lazyPart(() =>
+  import("./site-text-styles-tab").then(m => m.TextStylesTab)
 );
 
 /** A key for the document the editor has open, from its identity. */
@@ -642,6 +651,7 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
     availablePanels: AVAILABLE_PANELS,
     pageLayout,
     canvasRegions: layoutRegions.canvas,
+    siteTokens: page.siteTokens,
     layersRegions: layoutRegions.selectedRegion.layers,
     selectedRegion: layoutRegions.selectedRegion,
     regionCards: layoutRegions.cards,
@@ -806,6 +816,8 @@ export type EditorPanels = OfferedLibrary &
     pageLayout: ReactNode | null;
     /** The regions of the page's Layout, drawn locked around the page. */
     canvasRegions: readonly CanvasRegion[];
+    /** The site's variables as the panels offer them, once they are read. */
+    siteTokens: SiteTokenSet | undefined;
     /** The same regions, as rows in Layers that select them. */
     layersRegions: readonly LayersRegionRow[];
     /** The header or footer selected, and what reads it. */
@@ -1174,6 +1186,12 @@ export function editorPanelRenderer({
                   </DesignReveal>
                 </DesignGroup>
                 <VariablesTab tab="type" />
+                {/* After the type sizes they are built on. */}
+                <TextStylesTab
+                  classes={classes}
+                  breakpoints={classSummaryContext.breakpoints}
+                  pageBlocks={pageClassBlocks}
+                />
               </>
             ),
             spacing: () => <VariablesTab tab="spacing" />,

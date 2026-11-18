@@ -37,7 +37,8 @@ export type LateQueuedEmailLogger = Logger;
 
 /**
  * How many queued emails are more than `LATE_QUEUED_EMAIL_MS` past due, up
- * to `LATE_QUEUED_EMAIL_COUNTED`.
+ * to one past `LATE_QUEUED_EMAIL_COUNTED`: a count above the ceiling means
+ * there are more than it, and one at it is exact.
  */
 export async function lateQueuedEmails(
   adapter: DrizzleAdapter,
@@ -47,7 +48,7 @@ export async function lateQueuedEmails(
   const due = await new JobsRepository(adapter).findDue({
     now: since,
     createdBy: since,
-    limit: LATE_QUEUED_EMAIL_COUNTED,
+    limit: LATE_QUEUED_EMAIL_COUNTED + 1,
     slug: QUEUED_EMAIL_JOB,
   });
   return due.length;
@@ -72,7 +73,7 @@ export async function warnAboutLateQueuedEmail(
   }
   if (late === 0) return;
   const count =
-    late >= LATE_QUEUED_EMAIL_COUNTED
+    late > LATE_QUEUED_EMAIL_COUNTED
       ? `${LATE_QUEUED_EMAIL_COUNTED} or more`
       : String(late);
   warnQuietly(

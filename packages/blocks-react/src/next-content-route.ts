@@ -193,11 +193,17 @@ export function buildContentRoute(
   // collection's address. Cached on a public route, under the store's tags.
   // Drawn only to a target the public may read, as the route serves it: a
   // restricted entry's address is never published in a link.
-  const pages: BlocksPageConfig =
-    config.pages.resolveEntryPath !== undefined || entryPath === undefined
+  // What the provider draws around every page and entry (the page
+  // builder's page code), unless the site set its own for its pages.
+  const ownPages: BlocksPageConfig =
+    config.around === undefined || config.pages.around !== undefined
       ? config.pages
+      : { ...config.pages, around: config.around };
+  const pages: BlocksPageConfig =
+    ownPages.resolveEntryPath !== undefined || entryPath === undefined
+      ? ownPages
       : {
-          ...config.pages,
+          ...ownPages,
           resolveEntryPath: async (collection, id, drawnIn) => {
             // Read in the language the page is drawn in: a target is
             // published, and holds its address, per language.
