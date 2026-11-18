@@ -187,6 +187,9 @@ describeEachDialect(
         }
       );
       expect((await row()).tagline).toBe("Mine");
+      // The person's answer for a required column is filled and the column made NOT NULL, as
+      // every answered fill was before a fill could leave an optional column nullable.
+      expect(await nullable("tagline")).toBe(false);
     });
 
     it("fills a unique field's default, which one row cannot repeat", async () => {
