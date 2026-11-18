@@ -51,7 +51,6 @@ import { createAdminAction } from "../commands/create-admin";
 import { runDemote } from "../commands/db-sync-demote";
 import { runPromote } from "../commands/db-sync-promote";
 import { i18nConvertZonedDatesAction } from "../commands/i18n-convert-zoned-dates";
-import { upgradeAction } from "../commands/upgrade";
 import type { CommandContext } from "../program";
 
 import { NEXTLY_RUN_TIMEOUT, runNextly } from "./helpers/run-nextly";
@@ -335,16 +334,6 @@ describe("--non-interactive at a terminal", () => {
     expect(printedError()).toContain(
       "nextly i18n:convert-zoned-dates --backup-confirmed"
     );
-  });
-
-  it("upgrade --reconcile-core does not ask, changes nothing, and names the consent that would cover it", async () => {
-    await upgradeAction({ reconcileCore: true }, new Command());
-    expect(seen.createInterface).not.toHaveBeenCalled();
-    expect(seen.reconciled).not.toHaveBeenCalled();
-    expect(process.exitCode).toBe(1);
-    expect(printedError()).toContain("--accept-data-loss=nextly_users.legacy");
-    // Its own code, not the one a "no" typed at the prompt ends with.
-    expect(printedError()).toContain("(DATA_LOSS_CONSENT_REQUIRED)");
   });
 
   it("the schema push's terminal prompts are not shown, and a terminal is asked for", async () => {
@@ -662,15 +651,16 @@ describe("a command run with no terminal", () => {
   );
 
   it(
-    "upgrade, run for the database work it used to do, changes nothing and names nextly migrate",
+    "upgrade, run with a flag of the database work it used to do, changes nothing and names nextly migrate",
     async () => {
       await appliedPosts();
       giveARoleARetiredManagePermission();
-      await expectRefusal(["upgrade"], "(UPGRADE_WORK_MOVED)");
+      // Each flag of that work ends the run before a package or a table is read.
       await expectRefusal(
         ["upgrade", "--confirm-backed-up"],
-        "`nextly migrate`"
+        "(UPGRADE_WORK_MOVED)"
       );
+      await expectRefusal(["upgrade", "--reconcile-core"], "`nextly migrate`");
     },
     NEXTLY_RUN_TIMEOUT
   );

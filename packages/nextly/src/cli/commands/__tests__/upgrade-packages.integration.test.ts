@@ -280,7 +280,11 @@ describe("nextly upgrade with no version follows the installed release's channel
   it(
     "does the same where the packages are not installed",
     async () => {
-      const app = await project({ manager: "npm", versions: OLDEST, install: false });
+      const app = await project({
+        manager: "npm",
+        versions: OLDEST,
+        install: false,
+      });
       const before = app.files();
 
       const run = await app.nextly(["upgrade"]);
@@ -314,7 +318,11 @@ describe("nextly upgrade with no version follows the installed release's channel
   it.each([`9.0.0-beta.9`, "not-a-version"])(
     "refuses %s with every tag where the packages are not installed",
     async given => {
-      const app = await project({ manager: "npm", versions: OLDEST, install: false });
+      const app = await project({
+        manager: "npm",
+        versions: OLDEST,
+        install: false,
+      });
       const before = app.files();
 
       const run = await app.nextly(["upgrade", given]);

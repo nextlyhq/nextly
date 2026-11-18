@@ -8,7 +8,7 @@ import { describe, it, expect } from "vitest";
 import { registerUpgradeCommand } from "../upgrade";
 
 describe("registerUpgradeCommand", () => {
-  it("registers the upgrade command with the documented flags", () => {
+  it("registers the upgrade command, taking a release and still parsing the flags of the work it used to do", () => {
     const program = new Command();
     registerUpgradeCommand(program);
 
@@ -20,5 +20,12 @@ describe("registerUpgradeCommand", () => {
     expect(longFlags).toContain("--force");
     expect(longFlags).toContain("--target-table-name");
     expect(longFlags).toContain("--reconcile-core");
+    expect(longFlags).toContain("--force-unlock");
+    expect(longFlags).toContain("--accept-data-loss");
+    expect(longFlags).toContain("--dry-run");
+    // The release is the command's one argument, and optional.
+    expect(
+      upgrade!.registeredArguments.map(a => [a.name(), a.required])
+    ).toEqual([["version", false]]);
   });
 });

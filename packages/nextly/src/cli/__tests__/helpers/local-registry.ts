@@ -114,7 +114,11 @@ export async function startLocalRegistry(
         send(500, "the registry could not serve this file", "text/plain");
         return;
       }
-      send(200, tarballOf(manifestOf(pkg, version)), "application/octet-stream");
+      send(
+        200,
+        tarballOf(manifestOf(pkg, version)),
+        "application/octet-stream"
+      );
       return;
     }
 

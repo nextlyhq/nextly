@@ -10,7 +10,6 @@
 import { spawn, spawnSync } from "node:child_process";
 import {
   existsSync,
-  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -56,11 +55,18 @@ export function startNextlyRegistry(): Promise<LocalRegistry> {
   );
 }
 
-/** The environment a package manager and the CLI run with: nothing of the runner's own registry settings. */
+/**
+ * The environment a package manager and the CLI run with: none of the
+ * settings the test runner's own package manager exports (its registry, its
+ * cache, its user agent), so each project is configured by its own files
+ * alone.
+ */
 const ENV: Record<string, string | undefined> = {
-  npm_config_registry: undefined,
-  NPM_CONFIG_REGISTRY: undefined,
-  npm_config_user_agent: undefined,
+  ...Object.fromEntries(
+    Object.keys(process.env)
+      .filter(name => /^npm_(config|package|lifecycle)_/i.test(name))
+      .map(name => [name, undefined])
+  ),
   COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
   // A lockfile changing is the point of these tests.
   CI: undefined,
@@ -171,7 +177,12 @@ export async function createProject(args: {
   );
   // npm, pnpm and bun read the registry from `.npmrc`; Yarn from its own file,
   // where a plain-HTTP registry also has to be allowed by name.
-  writeFileSync(join(dir, ".npmrc"), `registry=${registry.url}/\n`);
+  // npm also keeps its download cache in the project, so a test can tell
+  // that an install fetched a release from one that found it cached.
+  writeFileSync(
+    join(dir, ".npmrc"),
+    `registry=${registry.url}/\ncache=${join(dir, ".cache", "npm")}\n`
+  );
   if (manager === "yarn") {
     writeFileSync(
       join(dir, ".yarnrc.yml"),
@@ -186,9 +197,6 @@ export async function createProject(args: {
       ].join("\n")
     );
   }
-  // A folder of its own for anything a manager caches, so no project reads
-  // a tarball another one downloaded.
-  mkdirSync(join(dir, ".cache"));
 
   const project: UpgradeProject = {
     dir,
