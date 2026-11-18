@@ -576,7 +576,7 @@ const DRIFT_ITEMS: DriftItemOf = {
  * a refusal tells the operator which column, index, check or foreign key to
  * look at rather than only the kind of change.
  */
-function toDriftItem(op: Operation): DriftItem {
+export function toDriftItem(op: Operation): DriftItem {
   // The table's key and its operation's type are the same member of the
   // union; TypeScript can't correlate the two through an index, so the
   // formatter is widened to the union it is only ever called with.
