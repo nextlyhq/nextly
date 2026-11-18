@@ -29,7 +29,7 @@ The migration refused is not always the plugin's own: one refusal stops the whol
 ## Fix
 
 - Run `nextly migrate` to apply the plugin's pending migrations, or `nextly plugins install <name>`.
-- Where the error lists deletions, read them first. To let them run, start again with `NEXTLY_ACCEPT_DATA_LOSS` set to the value the error names, or run `nextly migrate --accept-data-loss=<value>` before the start. To keep the data, take the deletion out of the migration the error lists, which may be the app's own or another plugin's.
+- Where the error lists deletions, read them first. To let them run, start again with `NEXTLY_ACCEPT_DATA_LOSS` set to the value the error names, or run `nextly migrate --accept-data-loss=<value>` before the start. To keep the data, do not edit the migration the error lists: another database may already have applied it, and a migration changed after it was applied stops that database's next run. Ask its owner (the plugin's author, or your own app for an app migration) for a release with a new migration that keeps the data.
 
 ## Example
 
