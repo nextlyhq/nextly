@@ -21,6 +21,11 @@ export function withListEntry(entry: PageContext, listId: string): PageContext {
     item,
     ...(entry.itemSource === undefined ? {} : { itemSource: entry.itemSource }),
     ...(entry.itemQuery === undefined ? {} : { itemQuery: entry.itemQuery }),
+    // What the list read ahead for the entry, so a binding naming the list
+    // reads through a relation as one in its own template does.
+    ...(entry.itemFollowed === undefined
+      ? {}
+      : { followed: entry.itemFollowed }),
   };
   return {
     ...entry,

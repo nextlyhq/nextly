@@ -3,12 +3,13 @@
  * relations its item bindings follow and its links to entries, and nothing
  * inside a list nested in it.
  */
-import type { BlockNode } from "@nextlyhq/blocks-engine";
+import { createBindingRun, type BlockNode } from "@nextlyhq/blocks-engine";
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
 
 import { createStandaloneContext, type ListBatchReads } from "../context";
 
-import { itemReadDemand, readListAhead } from "./list-batch";
+import { fillItemBindings, itemReadDemand, readListAhead } from "./list-batch";
+import { withListEntry } from "./list-entries";
 
 const node = (
   id: string,
@@ -252,5 +253,134 @@ describe("a host's own list reads", () => {
     await ahead(withMedia);
     expect(withMedia.media).toHaveBeenCalledOnce();
     expect(withMedia.related).toHaveBeenCalledOnce();
+  });
+});
+
+describe("a binding naming the list it reads, through a relation", () => {
+  /** A heading reading `path` of the entry of the list `list`. */
+  const named = (id: string, path: string, list: string) =>
+    node(
+      id,
+      "core/heading",
+      { text: "Own text" },
+      { bindings: { text: { $bind: path, source: "item", list } } }
+    );
+  /** The outer list's template: a nested list holding `inner`. */
+  const outerTemplate = (inner: BlockNode[]): BlockNode[] => [
+    node("own", "core/heading", { text: "" }, {}),
+    node(
+      "posts",
+      "core/collection-loop",
+      { collection: "posts" },
+      { slots: { children: inner } }
+    ),
+  ];
+
+  it("is read ahead by the list it names, from inside a list nested in it", () => {
+    const template = outerTemplate([
+      named("by-category", "lead.name", "categories"),
+      named("by-other", "editor.name", "elsewhere"),
+    ]);
+    // Read ahead by the list the binding names, and by no other.
+    expect([
+      ...itemReadDemand(template, undefined, "categories").follows,
+    ]).toEqual([["lead", new Set(["name"])]]);
+    // CONTROL: a list that is not named reads nothing for either.
+    expect([...itemReadDemand(template).follows]).toEqual([]);
+  });
+
+  it("has its relation read ahead by the list it names, once for all its entries", async () => {
+    const template = outerTemplate([
+      named("by-category", "lead.name", "categories"),
+    ]);
+    const items = [
+      { id: "c1", lead: "a1" },
+      { id: "c2", lead: "a2" },
+    ];
+    const ahead = async (id?: string) => {
+      const reads: ListBatchReads = {
+        related: vi.fn(
+          async () => new Map([["a1", { id: "a1", name: "Ada" }]])
+        ),
+        entryPaths: vi.fn(async () => undefined),
+      };
+      const followed = await readListAhead(
+        items,
+        template,
+        createStandaloneContext({ listReads: reads }),
+        {
+          nodeId: "categories",
+          ...(id === undefined ? {} : { id }),
+          collection: "categories",
+          contextOf: item =>
+            createStandaloneContext({ listReads: reads, item }),
+        }
+      );
+      return { reads, followed };
+    };
+    const { reads, followed } = await ahead("categories");
+    expect(reads.related).toHaveBeenCalledOnce();
+    expect(reads.related).toHaveBeenCalledWith(
+      "categories",
+      "lead",
+      ["a1", "a2"],
+      ["name"],
+      { nodeId: "categories" }
+    );
+    expect(followed.get(items[0] as Record<string, unknown>)).toEqual({
+      lead: { id: "a1", name: "Ada" },
+    });
+    // CONTROL: a list not told its own id cannot know the binding names it.
+    expect((await ahead()).reads.related).not.toHaveBeenCalled();
+  });
+
+  it("is read ahead by the list it names from that list's own template", () => {
+    const template = [named("direct", "lead.name", "categories")];
+    expect([
+      ...itemReadDemand(template, undefined, "categories").follows,
+    ]).toEqual([["lead", new Set(["name"])]]);
+    // CONTROL: naming another list, it is not this list's to read.
+    expect([...itemReadDemand(template, undefined, "posts").follows]).toEqual(
+      []
+    );
+  });
+
+  it("reads the related entry its list read ahead, and the stored id for the field itself", () => {
+    const run = createBindingRun({
+      sources: {},
+      props: {
+        get: type =>
+          type === "core/heading"
+            ? { props: { text: { type: "text" } } }
+            : undefined,
+      },
+    });
+    // The category's entry as its list draws it, with what it read ahead,
+    // and a post of the list inside it drawn within that.
+    const { itemFollowed: _category, ...category } = withListEntry(
+      createStandaloneContext({
+        item: { id: "c1", name: "Surveys", lead: "a1" },
+        itemSource: "categories",
+        itemFollowed: { lead: { id: "a1", name: "Ada" } },
+      }),
+      "categories"
+    );
+    const context = {
+      ...category,
+      item: { id: "p1", title: "Post" },
+      itemSource: "posts",
+    };
+    const through = fillItemBindings(
+      named("h", "lead.name", "categories"),
+      context,
+      run
+    );
+    expect(through.props.text).toBe("Ada");
+    const itself = fillItemBindings(
+      named("h", "lead", "categories"),
+      context,
+      run
+    );
+    expect(itself.props.text).toBe("a1");
   });
 });

@@ -67,23 +67,47 @@ export interface ItemReadDemand {
 const LINK_COLLECTION_PROP = "entryCollection";
 const LINK_ID_PROP = "entryId";
 
-/** A binding's path, when it is a well-formed one to the list item. */
-function itemPath(binding: unknown): readonly string[] | undefined {
+/**
+ * A binding's path, when it is a well-formed one to a list's entry, whichever
+ * list it reads: the nearest, or the one it names (`list`).
+ */
+function itemBindPath(binding: unknown): readonly string[] | undefined {
   if (!isPlainRecord(binding)) return undefined;
   const source = Object.hasOwn(binding, "source")
     ? binding.source
     : DEFAULT_BINDING_SOURCE;
   const path = Object.hasOwn(binding, "$bind") ? binding.$bind : undefined;
   if (source !== "item" || !isBindPath(path)) return undefined;
-  // One naming the list it reads reads that list's entry, as it stores it,
-  // never the entry this list reads ahead for.
-  if (Object.hasOwn(binding, "list")) return undefined;
   const segments = path.split(".");
   // One hop at most, as every binding path; a deeper one falls back where it
   // is resolved, so nothing is read for it.
   return segments.length <= 2 && !segments.includes("__proto__")
     ? segments
     : undefined;
+}
+
+/** The list a binding names (`list`), when it names one. */
+function namedListOf(binding: unknown): unknown {
+  return isPlainRecord(binding) && Object.hasOwn(binding, "list")
+    ? binding.list
+    : undefined;
+}
+
+/**
+ * A binding's path, when it is a well-formed one to the entry of the list
+ * `listId`, as a block directly in that list's template reads it: unnamed,
+ * the nearest list's, or naming that list. One naming another list reads
+ * that list's entry, never the one this list reads ahead for.
+ */
+function itemPath(
+  binding: unknown,
+  listId?: string
+): readonly string[] | undefined {
+  const named = namedListOf(binding);
+  if (named !== undefined && (listId === undefined || named !== listId)) {
+    return undefined;
+  }
+  return itemBindPath(binding);
 }
 
 /** Where a node's prop comes from, when it comes from anywhere. */
@@ -112,7 +136,8 @@ function valueSource(node: BlockNode, prop: string): ValueSource | undefined {
  */
 export function itemReadDemand(
   template: readonly BlockNode[],
-  drawn: (node: BlockNode) => boolean = () => true
+  drawn: (node: BlockNode) => boolean = () => true,
+  listId?: string
 ): ItemReadDemand {
   const follows = new Map<string, Set<string>>();
   const links: BlockNode[] = [];
@@ -121,30 +146,57 @@ export function itemReadDemand(
   // ahead is asked in the order the page draws it.
   const stack: BlockNode[] = [...template].reverse();
   for (let node = stack.pop(); node !== undefined; node = stack.pop()) {
-    // A list inside the template draws entries of its own, and a block the
-    // entry's conditions leave out draws nothing to read for.
-    if (
-      !isPlainRecord(node) ||
-      node.type === COLLECTION_LIST_TYPE ||
-      !drawn(node)
-    ) {
+    // A block the entry's conditions leave out draws nothing to read for.
+    if (!isPlainRecord(node) || !drawn(node)) continue;
+    // A list inside the template draws entries of its own: only a binding
+    // inside it naming this list (`listId`) reads this list's entry.
+    if (node.type === COLLECTION_LIST_TYPE) {
+      if (listId !== undefined) addNamedFollows(node, listId, follows);
       continue;
     }
     nodes.push(node);
-    addFollows(node, follows);
+    addFollows(node, follows, binding => itemPath(binding, listId));
     if (linksToAnEntry(node)) links.push(node);
     stack.push(...childrenOf(node).reverse());
   }
   return { follows, links, drawn: nodes };
 }
 
-/** Each relation a node's item bindings follow, with the field read there. */
-function addFollows(node: BlockNode, follows: Map<string, Set<string>>): void {
+/**
+ * Each relation a node's item bindings follow, with the field read there:
+ * the path `pathOf` gives each binding the list reads ahead for.
+ */
+function addFollows(
+  node: BlockNode,
+  follows: Map<string, Set<string>>,
+  pathOf: (binding: unknown) => readonly string[] | undefined
+): void {
   if (!isPlainRecord(node.bindings)) return;
   for (const binding of Object.values(node.bindings)) {
-    const [field, inner] = itemPath(binding) ?? [];
+    const [field, inner] = pathOf(binding) ?? [];
     if (field === undefined || inner === undefined) continue;
     follows.set(field, (follows.get(field) ?? new Set()).add(inner));
+  }
+}
+
+/**
+ * Each relation the bindings inside a list nested in this one's template
+ * follow through this list's entry, naming it (`listId`), at any depth. Its
+ * blocks are drawn per entry of the nested list, whose conditions this
+ * entry cannot judge, so every one of them is asked.
+ */
+function addNamedFollows(
+  nested: BlockNode,
+  listId: string,
+  follows: Map<string, Set<string>>
+): void {
+  const naming = (binding: unknown) =>
+    namedListOf(binding) === listId ? itemBindPath(binding) : undefined;
+  const stack: BlockNode[] = childrenOf(nested);
+  for (let node = stack.pop(); node !== undefined; node = stack.pop()) {
+    if (!isPlainRecord(node)) continue;
+    addFollows(node, follows, naming);
+    stack.push(...childrenOf(node));
   }
 }
 
@@ -239,6 +291,9 @@ export async function withReadAhead<
     {
       // Named as the list's own reads are: by its placement, inside one.
       nodeId: readClaimOf(list)?.nodeId ?? list.id,
+      // What a binding naming this list spells it as: the id it is drawn
+      // with, which each entry is recorded under.
+      id: list.id,
       collection,
       contextOf: read.itemContext,
     }
@@ -257,7 +312,7 @@ export async function withReadAhead<
 }
 
 /** The related entries read for one item, by the relation field followed. */
-type FollowedRows = Readonly<Record<string, Readonly<Record<string, unknown>>>>;
+type FollowedRows = NonNullable<PageContext["itemFollowed"]>;
 
 /**
  * What a list's template asks of its entries, read ahead: each relation the
@@ -281,6 +336,8 @@ export async function readListAhead(
   ctx: PageContext,
   list: {
     readonly nodeId: string;
+    /** The list's own id, which a binding naming it spells. */
+    readonly id?: string;
     readonly collection: string | undefined;
     readonly contextOf: (item: Record<string, unknown>) => PageContext;
   }
@@ -289,12 +346,15 @@ export async function readListAhead(
   if (reads === undefined || items.length === 0) return new Map();
   const held = ctx.heldConditions;
   const demands = items.map(item =>
-    itemReadDemand(template, node =>
-      conditionAllows(
-        node,
-        list.contextOf(item),
-        held === undefined ? {} : { held }
-      )
+    itemReadDemand(
+      template,
+      node =>
+        conditionAllows(
+          node,
+          list.contextOf(item),
+          held === undefined ? {} : { held }
+        ),
+      list.id
     )
   );
   const claim = { nodeId: list.nodeId };
@@ -304,6 +364,7 @@ export async function readListAhead(
     claim,
     contextOf: list.contextOf,
     queries: ctx.queries,
+    ...(list.id === undefined ? {} : { listId: list.id }),
   });
 }
 
@@ -319,10 +380,13 @@ type Ask =
   | { readonly kind: "related"; readonly field: string }
   | { readonly kind: "link" | "image"; readonly node: BlockNode };
 
-/** The asks one block makes: its relations, then its link and its image. */
-function asksOf(node: BlockNode): Ask[] {
+/**
+ * The asks one block makes: its relations, then its link and its image. A
+ * binding naming the list `listId` is that list's, as one naming none.
+ */
+function asksOf(node: BlockNode, listId: string | undefined): Ask[] {
   const follows = new Map<string, Set<string>>();
-  addFollows(node, follows);
+  addFollows(node, follows, binding => itemPath(binding, listId));
   return [
     ...[...follows.keys()].map(field => ({ kind: "related" as const, field })),
     ...(linksToAnEntry(node) ? [{ kind: "link" as const, node }] : []),
@@ -365,12 +429,14 @@ async function scheduleReads(
     readonly claim: { readonly nodeId: string };
     readonly contextOf: (item: Record<string, unknown>) => PageContext;
     readonly queries: PageContext["queries"];
+    /** The list's own id, which a binding naming it spells. */
+    readonly listId?: string;
   }
 ): Promise<Map<Record<string, unknown>, FollowedRows>> {
   const rows = new Map<Record<string, unknown>, FollowedRows>();
   // Stopped once a read ahead stops for want of reads: the reads left are
   // the earlier blocks', which they make as they are drawn, in page order.
-  for (const step of readSteps(demands, how.collection)) {
+  for (const step of readSteps(demands, how.collection, how.listId)) {
     const going =
       step.kind === "related"
         ? await readRelation(items, demands, rows, step.field, {
@@ -401,12 +467,23 @@ type ReadStep =
  */
 function readSteps(
   demands: readonly ItemReadDemand[],
-  collection: string | undefined
+  collection: string | undefined,
+  listId: string | undefined
 ): ReadStep[] {
   const steps: ReadStep[] = [];
   const read = new Set<string>();
   for (const node of inPageOrder(demands)) {
-    for (const ask of asksOf(node)) addStep(steps, ask, read, collection);
+    for (const ask of asksOf(node, listId)) {
+      addStep(steps, ask, read, collection);
+    }
+  }
+  // A relation only a list nested in the entries follows, by a binding
+  // naming this list, after the entries' own blocks: its blocks are drawn
+  // inside that list, so none of them is among the blocks walked above.
+  for (const demand of demands) {
+    for (const field of demand.follows.keys()) {
+      addStep(steps, { kind: "related", field }, read, collection);
+    }
   }
   return steps;
 }
@@ -612,45 +689,81 @@ function placeRows(
   }
 }
 
+/** The entries of the lists around a node, as the lists draw them. */
+type DrawnLists = PageContext["listEntries"];
+
 /**
- * Which of a node's item bindings read through a relation the list read
- * ahead (`author.name`, with `author` among `followed`), and which read the
- * item itself. One test, `itemPath`'s, for the read-ahead and the render.
+ * Which of a node's item bindings read through a relation their list read
+ * ahead (`author.name`, with `author` among what that list followed), and
+ * which read the entry itself: the nearest list's rows (`followed`), or the
+ * named list's, as it recorded them (`lists`). One test, `itemBindPath`'s,
+ * for the read-ahead and the render.
  */
-function readsThrough(binding: unknown, followed: FollowedRows): boolean {
-  const [field, inner] = itemPath(binding) ?? [];
-  return (
-    field !== undefined && inner !== undefined && Object.hasOwn(followed, field)
-  );
+function readsThrough(
+  binding: unknown,
+  followed: FollowedRows | undefined,
+  lists: DrawnLists
+): boolean {
+  const [field, inner] = itemBindPath(binding) ?? [];
+  if (field === undefined || inner === undefined) return false;
+  const named = namedListOf(binding);
+  const rows =
+    named === undefined
+      ? followed
+      : typeof named === "string"
+        ? lists?.get(named)?.followed
+        : undefined;
+  return rows !== undefined && Object.hasOwn(rows, field);
+}
+
+/** Each list's entry with the rows it read ahead in place of their ids. */
+function listsReadThrough(lists: DrawnLists): DrawnLists {
+  if (lists === undefined) return undefined;
+  const through = new Map(lists);
+  for (const [id, entry] of lists) {
+    if (entry.followed === undefined) continue;
+    through.set(id, { ...entry, item: { ...entry.item, ...entry.followed } });
+  }
+  return through;
+}
+
+/** One pass of a node's item bindings: which bindings, and what they read. */
+interface ItemBindingPass<N extends BlockNode> {
+  readonly node: N;
+  readonly item: Readonly<Record<string, unknown>> | undefined;
+  readonly lists: DrawnLists;
 }
 
 /**
- * The passes a node's item bindings are filled in when its list read
- * relations ahead: the bindings to the item itself against the item as it
- * is stored, then those through a relation against the item with each read
- * entry in place of its id. One pass, the stored item, otherwise.
+ * The passes a node's item bindings are filled in when a list around it read
+ * relations ahead: the bindings to an entry itself against the entries as
+ * they are stored, then those through a relation against the entries with
+ * each read entry in place of its id. One pass, the stored entries,
+ * otherwise.
  */
 function itemBindingPasses<N extends BlockNode>(
   node: N,
-  item: Readonly<Record<string, unknown>> | undefined,
-  followed: FollowedRows | undefined
-): readonly { readonly node: N; readonly item: typeof item }[] {
+  context: Pick<ItemPlacement, "item" | "itemFollowed" | "listEntries">
+): readonly ItemBindingPass<N>[] {
+  const { item, itemFollowed: followed, listEntries: lists } = context;
   const bindings = isPlainRecord(node.bindings) ? node.bindings : undefined;
-  if (item === undefined || followed === undefined || bindings === undefined) {
-    return [{ node, item }];
-  }
+  if (bindings === undefined) return [{ node, item, lists }];
   const through = Object.entries(bindings).filter(([, binding]) =>
-    readsThrough(binding, followed)
+    readsThrough(binding, followed, lists)
   );
-  if (through.length === 0) return [{ node, item }];
+  if (through.length === 0) return [{ node, item, lists }];
   const own = Object.entries(bindings).filter(
-    ([, binding]) => !readsThrough(binding, followed)
+    ([, binding]) => !readsThrough(binding, followed, lists)
   );
   return [
-    { node: { ...node, bindings: Object.fromEntries(own) }, item },
+    { node: { ...node, bindings: Object.fromEntries(own) }, item, lists },
     {
       node: { ...node, bindings: Object.fromEntries(through) },
-      item: { ...item, ...followed },
+      item:
+        item === undefined || followed === undefined
+          ? item
+          : { ...item, ...followed },
+      lists: listsReadThrough(lists),
     },
   ];
 }
@@ -719,15 +832,11 @@ export function fillItemBindings<N extends BlockNode>(
   readonly issues: readonly BindingIssue[];
 } {
   const itemRef = itemRefOf(context);
-  const lists = enclosingListEntries(context);
   let props = node.props;
   let bound: BoundValues | undefined;
   const issues: BindingIssue[] = [];
-  for (const pass of itemBindingPasses(
-    node,
-    context.item,
-    context.itemFollowed
-  )) {
+  for (const pass of itemBindingPasses(node, context)) {
+    const lists = enclosingListEntries({ listEntries: pass.lists });
     const result = resolveNodeBindings({ ...pass.node, props }, run, {
       phase: "item",
       ...(pass.item === undefined ? {} : { item: pass.item }),
@@ -854,7 +963,8 @@ export function itemFollowsIn(
     if (!isPlainRecord(node)) continue;
     if (node.type === COLLECTION_LIST_TYPE) {
       const template = node.slots?.[LIST_ENTRY_SLOT] ?? [];
-      for (const field of itemReadDemand(template).follows.keys()) {
+      const demand = itemReadDemand(template, undefined, node.id);
+      for (const field of demand.follows.keys()) {
         fields.add(field);
       }
     }

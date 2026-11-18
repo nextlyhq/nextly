@@ -703,13 +703,6 @@ export interface ResolvedIcon {
 }
 
 /**
- * The context every block render receives.
- *
- * Resolver functions rather than raw maps: a host that resolves media through a
- * CDN, a signed URL, or a local folder differs only in the function it passes,
- * and none of that reaches a block author.
- */
-/**
  * One list's entry as the list draws it: the entry as stored, and the
  * collection or named query it is a row of.
  *
@@ -719,8 +712,23 @@ export interface DrawnListEntry {
   readonly item: Record<string, unknown>;
   readonly itemSource?: string;
   readonly itemQuery?: string;
+  /**
+   * The related entries the list read ahead for this entry, by the relation
+   * field followed, as `itemFollowed` holds them for the nearest list: what
+   * a binding naming the list reads through a relation.
+   */
+  readonly followed?: Readonly<
+    Record<string, Readonly<Record<string, unknown>>>
+  >;
 }
 
+/**
+ * The context every block render receives.
+ *
+ * Resolver functions rather than raw maps: a host that resolves media through a
+ * CDN, a signed URL, or a local folder differs only in the function it passes,
+ * and none of that reaches a block author.
+ */
 export interface PageContext {
   /**
    * The entry the page renders, when there is one. `null` in standalone use,
