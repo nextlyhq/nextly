@@ -43,6 +43,8 @@ import { NO_CONSENT } from "../../../domains/schema/migrate/data-loss-consent";
 import { resolveMigration } from "../../../domains/schema/migrate/resolve";
 import { introspectLiveSnapshot } from "../../../domains/schema/pipeline/diff/introspect-live";
 import type { NextlySchemaSnapshot } from "../../../domains/schema/pipeline/diff/types";
+import { schemaVersionStoreSql } from "../../../domains/schema/schema-version";
+import { buildCollectionMetadataUpsert } from "../../../domains/schema/ui-schema/metadata-sql";
 import { NextlyError } from "../../../errors/nextly-error";
 import { clearCachedSnapshot } from "../../../init/schema-snapshot-cache";
 import {
@@ -263,6 +265,32 @@ describe.each(getConfiguredTestDialects())(
 
     it("records a generated, unedited file the database already stands at the end of without running it", async () => {
       await dbSync(true);
+      await migrate();
+      expect(await ledger(two)).toEqual([
+        { status: "applied", statementsExecuted: 0 },
+      ]);
+    });
+
+    it("records a file that writes its collection's registry row and moves the stored schema version after it, as migrate:create writes one for a collection made in the admin", async () => {
+      // What `registryRowsFor` adds to the UP of a file whose entity was made in the admin: its
+      // registry row, then the statement moving the stored schema version.
+      const row = buildCollectionMetadataUpsert(
+        {
+          slug: SLUG,
+          labels: { singular: "Note", plural: "Notes" },
+          fields: [
+            { name: "title", type: "text" },
+            { name: "summary", type: "text", index: true },
+          ],
+        } as never,
+        dialect
+      ).replace(/;\s*$/, "");
+      const version = schemaVersionStoreSql(dialect).replace(/;\s*$/, "");
+      const text = await withUp(two, [row, version]);
+      await writeFile(sqlPath(two), text);
+      await rehash(two, text);
+      await dbSync(true);
+
       await migrate();
       expect(await ledger(two)).toEqual([
         { status: "applied", statementsExecuted: 0 },
