@@ -199,19 +199,17 @@ function storedForm(
  * Save for an answer the default already gives. The review's verdict is `interactive` only while a
  * field is still asked about.
  */
-export function reviewWithRowFillsSettled<
-  P extends {
-    classification: string;
-    hasDestructiveChanges?: boolean;
-    interactiveFields: readonly { name: string }[];
-  },
->(preview: P, filled: ReadonlySet<string>): P {
-  const interactiveFields = preview.interactiveFields.filter(
-    field => !filled.has(field.name)
+export function reviewWithRowFillsSettled<P extends Record<string, unknown>>(
+  preview: P,
+  filled: ReadonlySet<string>
+): P {
+  const asked = Array.isArray(preview.interactiveFields)
+    ? (preview.interactiveFields as readonly { name?: unknown }[])
+    : [];
+  const interactiveFields = asked.filter(
+    field => typeof field.name !== "string" || !filled.has(field.name)
   );
-  if (interactiveFields.length === preview.interactiveFields.length) {
-    return preview;
-  }
+  if (interactiveFields.length === asked.length) return preview;
   const settled =
     preview.classification === "interactive" && interactiveFields.length === 0;
   return {
