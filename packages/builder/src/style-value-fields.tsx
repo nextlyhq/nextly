@@ -29,6 +29,11 @@ import {
 import * as React from "react";
 
 import { AspectRatioField, drawsAspectRatio } from "./aspect-ratio-field";
+import {
+  BackgroundPositionField,
+  BackgroundSizeField,
+} from "./background-fields";
+import { BackgroundImageField } from "./background-image-control";
 import { useCanvasTokenMode } from "./canvas/prefers-dark";
 import { commitOnEnter } from "./commit-on-enter";
 import { CssHint, OptionWrites, useFieldDescription } from "./css-hint";
@@ -43,7 +48,7 @@ import {
   drawsIcons,
   type Flow,
 } from "./style-alignment-icons";
-import { foldedLeaf } from "./style-colour";
+import { foldedLeaf, type SiteVariable } from "./style-colour";
 import type { StyleControl } from "./style-controls";
 import type { CommitOutcome } from "./style-field-surroundings";
 import {
@@ -66,7 +71,13 @@ import { textNumber, UnitWords, NumericField } from "./style-numeric-field";
 import { BOX_SHADOW, drawsShadow, ShadowField } from "./style-shadow-field";
 import { useDraft, arrowStep, storedText } from "./style-text-field";
 import { tokenForTypedName } from "./style-variables";
-import { VariableChoice } from "./variable-choice";
+import {
+  focusVariableAfterPick,
+  pickedVariable,
+  useOfferedVariables,
+  VariableChoice,
+  VariableSelectItems,
+} from "./variable-choice";
 
 /**
  * The leaf a field's variables are offered for: the control's own, or, for a
@@ -207,19 +218,13 @@ function FoldedField({
   describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
-  // The site's variables for this property, at the field's end: a fold has
-  // no unit menu to hold them.
-  const variables = (
-    <VariableChoice
-      leaf={leaf}
-      tokens={tokens}
-      bound={false}
-      empty={stored === undefined}
-      current={undefined}
-      label={actionName}
-      onPick={identity => onCommit({ $token: identity })}
-    />
-  );
+  // The site's variables for this property: first in the list a weight is
+  // chosen from, and behind a menu of its own at a typed field's end, which
+  // has no unit menu to hold them.
+  const offered = useOfferedVariables(leaf, tokens);
+  const pick = (identity: string): void => {
+    onCommit({ $token: identity });
+  };
   if (fold.kind === "number-or-length") {
     return (
       <div className="nx-style-inspector__numeric">
@@ -231,7 +236,13 @@ function FoldedField({
           describedBy={describedBy}
           onCommit={onCommit}
         />
-        {variables}
+        <VariableChoice
+          leaf={leaf}
+          tokens={tokens}
+          current={undefined}
+          label={actionName}
+          onPick={pick}
+        />
       </div>
     );
   }
@@ -242,7 +253,8 @@ function FoldedField({
       stored={stored}
       describedBy={describedBy}
       onCommit={onCommit}
-      after={variables}
+      variables={offered}
+      onPickVariable={pick}
     />
   );
 }
@@ -268,15 +280,17 @@ function OptionSelect({
   stored,
   describedBy,
   onCommit,
-  after,
+  variables,
+  onPickVariable,
 }: {
   id: string;
   options: readonly FoldedOption[];
   stored: StyleValue | undefined;
   describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
-  /** What follows the list in its row: the site's variables, where offered. */
-  after?: React.ReactNode;
+  /** The site's variables the property takes, listed before the options. */
+  variables: readonly SiteVariable[];
+  onPickVariable: (identity: string) => void;
 }): React.JSX.Element {
   // The refusal, and the CSS names while they are shown.
   const described = useFieldDescription(describedBy);
@@ -289,6 +303,13 @@ function OptionSelect({
       <Select
         value={current}
         onValueChange={key => {
+          const identity = pickedVariable(key);
+          if (identity !== undefined) {
+            // The list becomes the variable's chip; focus follows to it.
+            focusVariableAfterPick(document.getElementById(id));
+            onPickVariable(identity);
+            return;
+          }
           const chosen = options.find(option => option.key === key);
           if (chosen !== undefined) onCommit(chosen.value);
         }}
@@ -301,6 +322,7 @@ function OptionSelect({
           <SelectValue placeholder={hint} />
         </SelectTrigger>
         <SelectContent>
+          <VariableSelectItems offered={variables} before />
           {options.map(option => (
             <SelectItem key={option.key} value={option.key}>
               {option.label}
@@ -308,7 +330,6 @@ function OptionSelect({
           ))}
         </SelectContent>
       </Select>
-      {after}
     </div>
   );
 }
@@ -435,6 +456,12 @@ const OWN_FIELDS: Readonly<
       ) => React.JSX.Element;
       /** Whether its tab stop is a button a label's `for` would click. */
       buttons: boolean;
+      /**
+       * The kind of value it draws, where one CSS property is written by
+       * several: `background-image` is both an image's address and a
+       * gradient, and only the address is a file to choose.
+       */
+      leaf?: StyleControl["leaf"]["kind"];
     }
   >
 > = {
@@ -461,7 +488,41 @@ const OWN_FIELDS: Readonly<
     Field: FocalPointField,
     buttons: true,
   },
+  // The background's image: the Media library, an upload or a link, rather
+  // than an address typed as CSS.
+  "background-image": {
+    draws: stored => stored === undefined || typeof stored === "string",
+    Field: BackgroundImageField,
+    buttons: false,
+    leaf: "url",
+  },
+  // Where the background image sits, as the object position does.
+  "background-position": {
+    draws: stored => stored === undefined || typeof stored === "string",
+    Field: BackgroundPositionField,
+    buttons: true,
+  },
+  // How it is sized: Cover, Fit or Tile, each with the repeat it needs, or
+  // any other size written as CSS.
+  "background-size": {
+    draws: stored => stored === undefined || typeof stored === "string",
+    Field: BackgroundSizeField,
+    buttons: true,
+  },
 };
+
+/**
+ * The field of its own a control is drawn with, if any: found by the CSS
+ * property it writes, and by the kind of value where an entry names one.
+ */
+function ownFieldFor(
+  leaf: StyleControl["leaf"]
+): (typeof OWN_FIELDS)[string] | undefined {
+  const own = OWN_FIELDS[leaf.cssProperty];
+  return own === undefined || (own.leaf !== undefined && own.leaf !== leaf.kind)
+    ? undefined
+    : own;
+}
 
 /**
  * Whether a field's label only moves focus: where the control drawn is a
@@ -473,7 +534,7 @@ export function labelFocusOnly(
   stored: StyleValue | undefined
 ): boolean {
   if (drawsIcons(leaf)) return true;
-  const own = OWN_FIELDS[leaf.cssProperty];
+  const own = ownFieldFor(leaf);
   return own !== undefined && own.buttons && own.draws(stored);
 }
 
@@ -577,7 +638,7 @@ export function ValueField({
   }
   // A property with a field of its own, where the stored value is one that
   // field can draw; any other spelling keeps the text field.
-  const own = OWN_FIELDS[control.leaf.cssProperty];
+  const own = ownFieldFor(control.leaf);
   if (own !== undefined && own.draws(stored)) {
     return (
       <own.Field

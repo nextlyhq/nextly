@@ -1,6 +1,6 @@
 /**
  * The site's surface on the canvas root: the custom properties that name the
- * site's font, ground and ink under its token prefix, whether its dark values
+ * site's ground and ink under its token prefix, whether its dark values
  * include a dark ground, and the marks written before paint for its theme and
  * whether its ground is fully opaque.
  *
@@ -35,9 +35,11 @@ import { alphaOf, computedAlphaOf, isDarkGround } from "./site-ground";
  * token still resolves: the property is built from the identity. The
  * fallbacks are the browser's own defaults, which is what a published page
  * shows where nothing paints.
+ *
+ * No font: the site's Body font is written by the page's own sheet on the
+ * page root (Site text's Body row), the same rule on every surface.
  */
 const SITE_SURFACE_TOKENS = [
-  ["--nx-canvas-site-font", "font.body", "system-ui"],
   ["--nx-canvas-site-ground", "color.background", "Canvas"],
   ["--nx-canvas-site-ink", "color.text", "CanvasText"],
 ] as const;

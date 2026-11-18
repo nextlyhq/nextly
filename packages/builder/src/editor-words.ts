@@ -30,6 +30,8 @@ export const EDITOR_WORDS = {
   sharedStyles: "Shared styles",
   blockStyles: "Block styles",
   fonts: "Fonts",
+  // The Type tab's section setting every page's text.
+  siteText: "Site text",
   sections: "Saved sections",
   content: "Content",
   style: "Style",
@@ -56,6 +58,33 @@ export const CONVERSION_WORDS = {
 } as const;
 
 /**
+ * The top bar's light and dark preview: its name for assistive technology,
+ * which stays the same pressed or not, and its tooltip, which says that
+ * nothing a visitor sees changes with it.
+ */
+export const DARK_PREVIEW_WORDS = {
+  name: "Preview in dark mode",
+  tooltip: "Preview only. Visitors see what their own device is set to.",
+} as const;
+
+/**
+ * The Type tab's two site-wide fonts: their names, what each says while it
+ * writes nothing, and the line under Headings when its font has no bold.
+ */
+export const FONT_ROLE_WORDS = {
+  body: "Body font",
+  heading: "Headings font",
+  ownFont: "Your site's own font",
+  sameAsBody: "Same as body",
+  addBold: "Add Bold",
+} as const;
+
+/** The line under Headings when its font has no bold of its own. */
+export function noBoldWords(family: string): string {
+  return `${family} has no Bold, so browsers draw a fake bold`;
+}
+
+/**
  * What a place using a variable would lose with it, by the variable's kind:
  * "they would lose this colour". The author's words for each kind, not the
  * engine's, so a dimension is a size and anything without a plainer word is
@@ -76,3 +105,21 @@ export const VARIABLE_LOSS_WORDS: Readonly<
   // code supplies: a dimension, but what the places lose is its line height.
   lineHeight: "line height",
 };
+
+/**
+ * The Design panel's ⋯ menu of site-wide actions, and the words of what an
+ * export reports. Each item says what it makes; "DTCG" is only ever the hint
+ * beside the one that writes that format.
+ */
+export const DESIGN_ACTION_WORDS = {
+  more: "More design actions",
+  importTokens: "Import design tokens…",
+  exportTokens: "Export design tokens (.json)",
+  exportTokensHint: "DTCG 2025.10",
+  exportFigma: "Export for Figma",
+  copyCss: "Copy CSS variables",
+  notExported: "What wasn't exported",
+  kept: "Kept for Nextly only",
+  leftOut: "Left out",
+  withoutData: "Exported without its extra data",
+} as const;

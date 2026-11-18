@@ -349,6 +349,8 @@ export interface StyleTargetBarProps {
   readonly breakpoints?: BreakpointSet;
   readonly state: StyleState;
   readonly stateControl?: React.ReactNode;
+  /** Opens Design's Block styles at a block type, from under the tiles. */
+  readonly onEditBlockStyles?: ((blockType: string) => void) | undefined;
 }
 
 /**
@@ -429,7 +431,10 @@ function nameOf(worn: readonly SharedStyleRow[], id: string): string {
   return worn.find(row => row.id === id)?.name ?? "This shared style";
 }
 
-/** The "what you're editing" bar, over the target this tab holds. */
+/**
+ * The Block style section, then the "what you're editing" bar under it, over
+ * the target this tab holds.
+ */
 export function StyleTargetBar({
   editor,
   target,
@@ -442,6 +447,7 @@ export function StyleTargetBar({
   breakpoints,
   tokens,
   tokenMode,
+  onEditBlockStyles,
   // The device and the state, the canvas's own, handed to the bar whole.
   ...context
 }: StyleTargetBarProps): React.JSX.Element {
@@ -462,6 +468,7 @@ export function StyleTargetBar({
         tokens={tokens}
         mode={tokenMode}
         onRefused={report}
+        onEditBlockStyles={onEditBlockStyles}
       />
       <EditingBar
         {...context}

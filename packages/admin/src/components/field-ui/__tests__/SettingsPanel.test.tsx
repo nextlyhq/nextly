@@ -1003,7 +1003,7 @@ describe("FieldSettingsPanel", () => {
 
     it("fixes both once the field is saved", () => {
       render(<Host initial={company} surface={users} saved />);
-      const name = screen.getByLabelText(/^Name$/);
+      const name = screen.getByRole("textbox", { name: "Name" });
       expect(name).toBeDisabled();
       expect(name).toHaveAccessibleDescription(
         /a user field's name is fixed once it is created/i
@@ -1015,7 +1015,7 @@ describe("FieldSettingsPanel", () => {
 
     it("leaves both open before the field is saved", () => {
       render(<Host initial={company} surface={users} saved={false} />);
-      expect(screen.getByLabelText(/^Name$/)).toBeEnabled();
+      expect(screen.getByRole("textbox", { name: "Name" })).toBeEnabled();
       expect(screen.queryByText(/is fixed once it is created/i)).toBeNull();
     });
   });

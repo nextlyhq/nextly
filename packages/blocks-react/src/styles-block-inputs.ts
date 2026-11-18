@@ -16,7 +16,9 @@ import {
   type BlockIsland,
   type BlockNode,
   type BlockPart,
+  type NamedClass,
   type NodeStyles,
+  type SiteTextMap,
   type StyleCompileContext,
   type StyleValue,
 } from "@nextlyhq/blocks-engine";
@@ -25,6 +27,7 @@ import { withTypographyDefaults } from "./blocks/typography-defaults";
 import { prepareDocumentForRead } from "./prepare-document";
 import type { PrepareDocumentArgs } from "./prepare-document";
 import type { BlockResolver } from "./resolver";
+import { withSiteTextBases, withSiteTextParts } from "./site-text-blocks";
 
 /**
  * The shared default styles for every block type the document uses.
@@ -57,15 +60,21 @@ export function blockBasesFor(
    * the order is: the definition's base, then the site's edit of it, then a
    * look, a shared style and the block's own values.
    */
-  siteDefaults?: Readonly<Record<string, NodeStyles>>
+  siteDefaults?: Readonly<Record<string, NodeStyles>>,
+  /**
+   * The site's text, whose Buttons row is laid over each base drawing a
+   * button, between the definition's base and the site's edit of it.
+   */
+  siteText?: SiteTextMap,
+  /** The site's classes, for a row that follows a text style. */
+  classes?: readonly NamedClass[]
 ): Record<string, NodeStyles> {
   // A derived default is the definition's own, a host's replacement included;
   // a stated record is the caller's own choice and is narrowed as it is.
-  const bases = perUsedType(
-    document,
-    blocks,
-    definition => definition.baseStyles,
-    stated
+  const bases = withSiteTextBases(
+    perUsedType(document, blocks, definition => definition.baseStyles, stated),
+    siteText,
+    classes
   );
   if (siteDefaults === undefined) return bases;
   const edited = perUsedType(document, blocks, () => undefined, siteDefaults);
@@ -87,9 +96,17 @@ export function blockBasesFor(
 export function blockPartsFor(
   document: BlockDocument,
   blocks: BlockResolver,
-  stated?: Readonly<Record<string, Readonly<Record<string, BlockPart>>>>
+  stated?: Readonly<Record<string, Readonly<Record<string, BlockPart>>>>,
+  /** The site's text, whose Buttons and Captions rows reach the parts drawing one. */
+  siteText?: SiteTextMap,
+  /** The site's classes, for a row that follows a text style. */
+  classes?: readonly NamedClass[]
 ): Record<string, Readonly<Record<string, BlockPart>>> {
-  return perUsedType(document, blocks, definition => definition.parts, stated);
+  return withSiteTextParts(
+    perUsedType(document, blocks, definition => definition.parts, stated),
+    siteText,
+    classes
+  );
 }
 
 /**
@@ -309,12 +326,16 @@ export function compileContextFor(
       // The site's edits to its blocks' own looks, which its class library
       // holds as default looks: read here, so every page compiled from that
       // library, canvas or published, lays them over the same bases.
-      blockDefaultsOf(styleContext.namedClasses)
+      blockDefaultsOf(styleContext.namedClasses),
+      styleContext.siteText,
+      styleContext.namedClasses
     ),
     blockParts: blockPartsFor(
       storedDocument ?? document,
       blocks,
-      styleContext.blockParts
+      styleContext.blockParts,
+      styleContext.siteText,
+      styleContext.namedClasses
     ),
     // Every container writes its gap, so the identity carries each one.
     childGaps: childGapsFor(

@@ -225,10 +225,10 @@ function slugCandidates(base: string): string[] {
  * a taken slug, and the write moves to the next.
  */
 async function freeSlugs(
-  source: PageCollection,
+  source: SlugTarget,
   field: string,
   base: string,
-  writes: PagesWrites
+  writes: Pick<PagesWrites, "find">
 ): Promise<string[]> {
   const candidates = slugCandidates(base);
   let rows: readonly unknown[] = [];
@@ -292,15 +292,25 @@ function parentOf(
 }
 
 /**
- * Write a page whose slug is made from `text`: once with the slug where the
+ * The collection a slug is made for: its slug, and its slug field where it has
+ * one. A page collection is one; so is the header & footer sets collection,
+ * whose copies are written through the same slug rule.
+ */
+export interface SlugTarget {
+  readonly slug: string;
+  readonly slugField?: { readonly name: string; readonly unique: boolean };
+}
+
+/**
+ * Write an entry whose slug is made from `text`: once with the slug where the
  * collection's slugs need not be unique, and otherwise with each free slug in
  * turn, at most {@link WRITE_ATTEMPTS} times, until core does not refuse it as
  * taken. A collection without a slug field is written without one.
  */
-async function writeWithSlug(
-  source: PageCollection,
+export async function writeWithSlug(
+  source: SlugTarget,
   text: string,
-  writes: PagesWrites,
+  writes: Pick<PagesWrites, "find">,
   write: (slug: Record<string, unknown>) => Promise<unknown>,
   /**
    * The address the page sits beneath (`docs` for `docs/install`), so a

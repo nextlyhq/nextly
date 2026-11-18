@@ -278,7 +278,11 @@ describe("a Form's After sending", () => {
   it("offers Show a message and Go to a page, a message first, with its words", () => {
     mount();
     unfold("After sending");
-    const choice = screen.getByRole("radiogroup", { name: "After sending" });
+    // Named for what it chooses, not the section's own title again.
+    expect(
+      screen.queryByRole("radiogroup", { name: "After sending" })
+    ).toBeNull();
+    const choice = screen.getByRole("radiogroup", { name: "Then" });
     expect(
       within(choice)
         .getAllByRole("radio")
@@ -324,7 +328,7 @@ describe("a Form's After sending", () => {
       provider: "acme",
       ref: "contact",
     });
-    const trigger = screen.getByRole("combobox", { name: "After sending" });
+    const trigger = screen.getByRole("combobox", { name: "Then" });
     expect(
       await within(trigger).findByText(
         "Use the form's own setting (Go to a page)"

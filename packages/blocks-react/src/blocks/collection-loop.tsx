@@ -52,6 +52,7 @@ import {
 } from "./container";
 import { htmlTagProp } from "./html-tags";
 import { withReadAhead } from "./list-batch";
+import { withListEntry } from "./list-entries";
 import { ListPages } from "./list-pages";
 import {
   listPagesOf,
@@ -586,15 +587,23 @@ function drawList(
                 anything inside the template reads its own values rather than
                 the first entry's. Its source goes with it, so an item
                 binding is checked against that source's fields. */}
-            {renderSlot("children", {
-              ...itemContext(item),
-              // Its place among the entries, after the places of the
-              // entries around it: what tells its blocks' copies apart.
-              itemPosition:
-                ctx.itemPosition === undefined
-                  ? String(index)
-                  : `${ctx.itemPosition}-${index}`,
-            })}
+            {renderSlot(
+              "children",
+              // Recorded among the entries of the lists around what it
+              // draws, for a binding inside naming this list.
+              withListEntry(
+                {
+                  ...itemContext(item),
+                  // Its place among the entries, after the places of the
+                  // entries around it: what tells its blocks' copies apart.
+                  itemPosition:
+                    ctx.itemPosition === undefined
+                      ? String(index)
+                      : `${ctx.itemPosition}-${index}`,
+                },
+                args.nodeId
+              )
+            )}
           </div>
         ));
   // The note, when an author is looking, goes above what visitors see.
@@ -686,8 +695,9 @@ const COLLECTION_LOOP_PARTS = {
     baseStyles: {
       base: {
         base: {
+          // In the text colour around it, so a pager inside a coloured
+          // container shows its gap in that colour.
           padding: { inlineStart: "0.25rem", inlineEnd: "0.25rem" },
-          color: { $token: "color.text" },
         },
       },
     },

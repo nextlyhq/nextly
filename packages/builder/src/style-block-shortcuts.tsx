@@ -6,13 +6,29 @@
  *
  * @module style-block-shortcuts
  */
+import { findNode, type StyleValue } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
-import { reachingBeneath } from "./block-shortcuts";
+import {
+  planSpacerHeight,
+  reachingBeneath,
+  SPACER_BLOCK,
+} from "./block-shortcuts";
 import {
   BlockShortcutsControl,
   MinHeightPresets,
 } from "./block-shortcuts-field";
+import { useCanvasTokenMode } from "./canvas/prefers-dark";
+import { SegmentChoices } from "./segment-choices";
+import {
+  identityOfKey,
+  NONE,
+  offeredPreset,
+  presetKey,
+  presetLabels,
+  spacingPresets,
+} from "./spacing-presets";
+import type { StyleControl } from "./style-controls";
 import {
   StyleTargetContext,
   TokenPrefixContext,
@@ -80,4 +96,59 @@ function shortcutWhere(
       })
     ),
   };
+}
+
+/**
+ * A Spacer's Height presets, over its Height field: the site's spacing
+ * variables, smallest first, as a spacing side's popover offers them, so a
+ * space between blocks is chosen from the same scale as a padding or a gap.
+ * Only for the block itself. Held, as the section's other fields are, by the
+ * fieldset a locked block's section is drawn in.
+ */
+export function SpacerHeightPresets({
+  surroundings,
+  control,
+  stored,
+}: {
+  surroundings: StyleFieldSurroundings;
+  /** The Height field's control, whose variables the presets are. */
+  control: StyleControl | undefined;
+  /** The height stored at the edited state and device. */
+  stored: StyleValue | undefined;
+}): React.JSX.Element | null {
+  const target = React.useContext(StyleTargetContext);
+  const mode = useCanvasTokenMode();
+  const id = React.useId();
+  const { editor, nodeId, state, breakpoint, tokens } = surroundings;
+  const node = findNode(editor.document.nodes, nodeId);
+  if (target.kind !== "block" || node?.type !== SPACER_BLOCK) return null;
+  if (control === undefined) return null;
+  const presets = spacingPresets(control, tokens, mode);
+  if (presets.length === 0) return null;
+  const at = { state, breakpoint };
+  const held = offeredPreset(stored, presets);
+  return (
+    <div
+      className="nx-block-shortcuts nx-spacer-presets"
+      data-control="spacer-height"
+    >
+      <span id={`${id}-presets`} className="nx-inspector__field-name">
+        Presets
+      </span>
+      <SegmentChoices
+        options={presets.map(preset => presetKey(preset.identity))}
+        // A zero height is no preset here (there is no None to mark), so
+        // it marks none and the first preset keeps the group's Tab stop.
+        on={held === NONE ? undefined : held}
+        labels={presetLabels(presets)}
+        labelId={`${id}-presets`}
+        onChoose={choice => {
+          const identity = identityOfKey(choice);
+          if (identity === undefined) return;
+          const op = planSpacerHeight(node, identity, at);
+          if (op !== null) editor.apply(op);
+        }}
+      />
+    </div>
+  );
 }

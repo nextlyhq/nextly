@@ -95,6 +95,7 @@ export type {
   BoundDocument,
   BoundValue,
   BoundValues,
+  EnclosingListEntry,
   NodeBindingResult,
   SourceDemand,
 } from "../resolve-bindings";

@@ -12,7 +12,12 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { referencesCustomProperty } from "./css-value";
+import {
+  checkCssValue,
+  customPropertiesReferenced,
+  referencesCustomProperty,
+} from "./css-value";
+import { MAX_VALUE_NESTING } from "./css-value-vocabulary";
 
 describe("a value that CSS would substitute into", () => {
   it.each([
@@ -76,5 +81,67 @@ describe("a value that CSS would substitute into", () => {
     expect(raw("var(--brand)")).toBe(referencesCustomProperty("var(--brand)"));
     expect(raw("v\\61 r(--brand)")).toBe(false);
     expect(referencesCustomProperty("v\\61 r(--brand)")).toBe(true);
+  });
+});
+
+describe("the custom properties a value reads", () => {
+  it.each([
+    ["the plain spelling", "var(--site-color-text)", ["--site-color-text"]],
+    [
+      "a hex-escaped name, read decoded",
+      "var(--site-colo\\72)",
+      ["--site-color"],
+    ],
+    ["an escaped function name", "v\\61 r(--brand)", ["--brand"]],
+    ["nested inside calc()", "calc(var(--x) * 2)", ["--x"]],
+    [
+      "nested inside a FALLBACK, which arrives as raw text",
+      "var(--a, var(--b))",
+      ["--a", "--b"],
+    ],
+    [
+      "each layer of a shadow",
+      "0 1px 2px var(--site-ink), inset 0 0 1px var(--site-paper)",
+      ["--site-ink", "--site-paper"],
+    ],
+    ["a name in capitals, kept as written", "var(--Site-Ink)", ["--Site-Ink"]],
+    ["no reference at all", "0 1px 2px rgba(0, 0, 0, 0.2)", []],
+    ["env(), which is not a custom property", "env(safe-area-inset-top)", []],
+  ])("names %s", (_label, value, names) => {
+    expect(customPropertiesReferenced(value)).toEqual(names);
+  });
+
+  it("names nothing for a var() whose head is not a custom property", () => {
+    // The browser drops it, so it reads no variable; it is still a reference
+    // to the predicate above, which is the fail-closed question.
+    expect(customPropertiesReferenced("var(red)")).toEqual([]);
+    expect(referencesCustomProperty("var(red)")).toBe(true);
+  });
+
+  it.each([")", "var(", "a; b"])(
+    "cannot read %s, which does not parse",
+    value => {
+      expect(customPropertiesReferenced(value)).toBeUndefined();
+    }
+  );
+
+  it("reads whole every value the compiler emits, at the nesting bound", () => {
+    /*
+     * The bound counts the brackets `checkCssValue` counts, so the deepest
+     * value it accepts is read whole: the name at the bottom is found. One
+     * level deeper is refused there, and read in part here. Both halves are
+     * asserted, so a walk bounded by a smaller count (the parse tree's own
+     * depth, say, which grows by three for each nested fallback) fails the
+     * first.
+     */
+    const nested = (levels: number) =>
+      `${"var(--a, ".repeat(levels - 1)}var(--deep)${")".repeat(levels - 1)}`;
+    const deepest = nested(MAX_VALUE_NESTING);
+    expect(checkCssValue(deepest)).toBeNull();
+    expect(customPropertiesReferenced(deepest)).toContain("--deep");
+    const past = nested(MAX_VALUE_NESTING + 1);
+    expect(checkCssValue(past)).toBe("too-deeply-nested");
+    expect(customPropertiesReferenced(past)).toBeUndefined();
+    expect(referencesCustomProperty(past)).toBe(true);
   });
 });

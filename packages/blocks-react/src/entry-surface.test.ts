@@ -196,9 +196,12 @@ const SOURCE_MODULES: ReadonlyArray<{
     name: "blocks/props",
     module: blockPropsModule,
     // `fetchableUrl` is public, for a caller judging what a page draws by the
-    // renderer's one filter. The rest is how a block reads its own stored
-    // props: a block author's input is the render arguments, not these.
+    // renderer's one filter, and `whenClickedOf`, for the editor's panel to
+    // show what a click does as the render reads it. The rest is how a block
+    // reads its own stored props: a block author's input is the render
+    // arguments, not these.
     internal: [
+      "addressLinkFor",
       "boundImage",
       "boundText",
       "canLink",
@@ -208,12 +211,14 @@ const SOURCE_MODULES: ReadonlyArray<{
       "isTrustedOrigin",
       "LINK_PROPS",
       "linkFor",
+      "linksToEntry",
       "number",
       "oneOf",
       "readClaimOf",
       "relFor",
       "text",
       "url",
+      "WHEN_CLICKED",
     ],
   },
   {
@@ -268,7 +273,11 @@ const SOURCE_MODULES: ReadonlyArray<{
     // and so is `passageHeadings`, the walk the table-of-contents block lists
     // a passage's headings by. `VIEWS_DRAWING_CHILDREN` is exported for the
     // test that holds every view to what it declares it draws.
+    // `RichTextParagraphContent` draws the Text block's one paragraph inside
+    // the block's own `<p>`, with the same views; a passage is drawn whole
+    // with `RichText`.
     internal: [
+      "RichTextParagraphContent",
       "drawsInteractive",
       "holdsBlockContent",
       "holdsInteractive",
@@ -624,7 +633,6 @@ describe("the root entry", () => {
       // route given no `maxQueries` renders under.
       "SITE_PAGE_DATA_LIMIT_SERVICE",
       "SLOTS_ATTRIBUTE",
-      "TYPOGRAPHY_DEFAULTS",
       "UNPREVIEWABLE_CONTAINER",
       // Added deliberately: binding sources read on a server, carried to the
       // editor's canvas and read back there, by one pair of functions.
@@ -716,6 +724,9 @@ describe("the root entry", () => {
       // rather than walking stored documents for ids the resolver never
       // requests.
       "unsuppliedComponentIds",
+      // What a click on a picture does, by the Image's one reading, which the
+      // editor's panel shows.
+      "whenClickedOf",
       "withTypographyDefaults",
     ]);
   });

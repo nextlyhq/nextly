@@ -414,7 +414,10 @@ const SCENARIOS: Readonly<Record<number, (page: Page) => Promise<void>>> = {
     // The STORED value, line break included: text that only looks right on the
     // canvas — a swallowed Enter, or words left in an element nobody wrote back
     // — does not get here.
-    await expect(stored).toHaveValue("First paragraph\nLine two");
+    // A Text holds one paragraph, so the line break is a break in it: the
+    // field shows both lines' words, and the canvas draws the break.
+    await expect(stored).toHaveText(/^First paragraph\s*Line two$/);
+    await expect(field.locator("br")).toHaveCount(1);
     // And it was one write: a single undo, pressed on the canvas rather than
     // in the inspector's own field, restores the words as they were.
     await clickBlock(page, "ea-third");

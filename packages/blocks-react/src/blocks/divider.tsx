@@ -75,9 +75,10 @@ export const divider: BlockDefinition<DividerProps, PageContext> = defineBlock({
   props: {},
   defaultProps: {},
   example: { props: {} },
+  // No colour group: a divider has no text to colour. Its line is its top
+  // border, coloured in Style › Border.
   supports: {
     border: true,
-    color: true,
     spacing: true,
     dimensions: true,
     effects: true,

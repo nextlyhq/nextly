@@ -201,6 +201,7 @@ import {
   type ReactElement,
 } from "react";
 
+import { isGallery } from "../gallery-pictures";
 import type { Rect } from "../geometry";
 import type { SlotSource } from "../panels/add/inserter";
 import { authoredName } from "../panels/layers/layers";
@@ -305,6 +306,9 @@ function emptyContainersIn(
 ): EmptyContainer[] {
   const found: EmptyContainer[] = [];
   walkNodes(document.nodes, node => {
+    // A Gallery draws its own empty state, "Add images" (`ImageStates`), so
+    // it is filled with pictures rather than with an empty Image to fill.
+    if (isGallery(node)) return;
     if (emptySlotOf(node, slots) !== null) {
       found.push({ id: node.id, label: nameOf(node, blocks) });
     }

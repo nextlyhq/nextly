@@ -76,6 +76,7 @@ import type { EditorState } from "./editor-state";
 import { FocalFrame } from "./focal-frame";
 import { FontChoicesContext, type FontChoices } from "./font-family-field";
 import { PanelFoldsProvider } from "./panel-folds-context";
+import { SpacingApplyToProvider } from "./spacing-side";
 import { layerLabel } from "./panels/layers/layers";
 import { ParentArrangementContext } from "./plain-parent-controls";
 import type { SideOrientation } from "./side-orientation";
@@ -392,6 +393,7 @@ export function StyleInspectorPanel(
     <FontChoicesContext.Provider value={props.fonts}>
       {/* The panel's own folds where nothing above lends them. */}
       <PanelFoldsProvider>
+        <SpacingApplyToProvider>
         <CssNamesProvider>
           {props.tokenMode === undefined ? (
             <StyleInspectorOwnMode {...props} />
@@ -399,6 +401,7 @@ export function StyleInspectorPanel(
             <StyleInspectorBody {...props} tokenMode={props.tokenMode} />
           )}
         </CssNamesProvider>
+        </SpacingApplyToProvider>
       </PanelFoldsProvider>
     </FontChoicesContext.Provider>
   );

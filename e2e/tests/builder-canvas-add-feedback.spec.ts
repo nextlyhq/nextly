@@ -253,11 +253,11 @@ test.describe("the Add panel's tile card", () => {
 
     // The tile beside takes the very next click: it adds its block, which
     // is then the selection the line names (inside it, when it holds
-    // blocks).
+    // blocks). The pointer still rests on that tile, so the line names it.
     const name = (await beside.getAttribute("aria-label")) ?? "";
     await beside.click();
     await expect(page.locator(".nx-insert-panel__placement")).toHaveText(
-      new RegExp(`^Adding (after ${name}|inside ${name}, at the end)$`)
+      new RegExp(`^${name} goes (after ${name}|inside ${name}, at the end)$`)
     );
   });
 });

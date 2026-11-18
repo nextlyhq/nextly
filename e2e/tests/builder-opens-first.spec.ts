@@ -7,7 +7,8 @@
  * field is a blocks field opens the same way with no restart, on its first
  * blocks field, asking nothing. In the builder, the top bar's ⋯ menu holds
  * "Open as form", which carries an unsaved edit to the form and back without
- * asking, and "Pin to dashboard", the entry page's own pin. The back arrow is
+ * asking, as the same words at the bottom of Page settings do, and "Pin to
+ * dashboard", the entry page's own pin. The back arrow is
  * "Back to Pages", asking first while work is unsaved; on a post, which opens
  * as a form, it stays "Exit editor" and returns to the form. No list row and
  * no entry header carries a pin of its own.
@@ -239,6 +240,31 @@ test.describe("the builder's ⋯ menu", () => {
     await expect(leaveQuestion(page)).toHaveCount(0);
     await expect(await block(page, FIRST)).toBeVisible();
     await expect(await block(page, SECOND)).toHaveCount(0);
+  });
+
+  test("Open as form at the bottom of Page settings does the same", async ({
+    page,
+  }) => {
+    const title = `Open as form from settings ${RUN}`;
+    const id = await savePage(page.request, title);
+    await gotoAdmin(page, `${LIST}/${id}/builder?field=content`);
+    await builderOpen(page);
+    await deleteSecondHeading(page);
+
+    await page
+      .getByRole("navigation", { name: "Editor panels" })
+      .getByRole("button", { name: "Settings" })
+      .click();
+    const settings = page.getByRole("dialog", { name: /^Page settings · / });
+    await expect(
+      settings.getByText("Saved with the page when you Save or Publish.")
+    ).toBeVisible();
+    await settings.getByRole("button", { name: "Open as form" }).click();
+    await expect(page).toHaveURL(formAt(id));
+    await expect(leaveQuestion(page)).toHaveCount(0);
+    await expect(
+      page.getByTestId("document-bar").getByText("Unsaved changes")
+    ).toBeVisible();
   });
 
   test("Pin to dashboard pins the page, with the entry page's toast and Undo, and the dashboard shows it", async ({

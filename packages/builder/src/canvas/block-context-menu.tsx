@@ -126,6 +126,7 @@ import type { EditorState } from "../editor-state";
 import { useBlockActionsContext, type BlockActions } from "../keyboard-actions";
 import { useSelectionVerbs } from "../selection-actions";
 import { blockActionRunners } from "../shell/builder-commands";
+import { isTurnIntoAction } from "../turn-into-verb";
 
 import { CANVAS_ROOT_CLASS, contextMenuTargetOf } from "./canvas";
 import { useCanvasFrame } from "./canvas-frame-context";
@@ -142,18 +143,32 @@ const TRANSPARENT_WRAPPER: React.CSSProperties = { display: "contents" };
 const DESTRUCTIVE: ReadonlySet<string> = new Set(["delete"]);
 
 /**
- * Whether the verb at `index` opens the group of menu-only verbs (the
- * component verbs), which sit apart from the structural ones above them.
+ * Which group a verb is drawn in: "Turn into" Text, Rich text or Heading on
+ * their own, so they read apart from "Turn into component…"; the other
+ * menu-only verbs (the component verbs); and the structural ones.
+ */
+function groupOf(action: {
+  readonly id: string;
+  readonly inMenu?: true;
+}): "turn-into" | "menu" | "structure" {
+  if (isTurnIntoAction(action.id)) return "turn-into";
+  return action.inMenu === true ? "menu" : "structure";
+}
+
+/**
+ * Whether the verb at `index` opens a group: the menu-only verbs after the
+ * structural ones, and the "Turn into" verbs, before and after them.
  */
 function startsMenuGroup(
-  actions: readonly { readonly inMenu?: true }[],
+  actions: readonly { readonly id: string; readonly inMenu?: true }[],
   index: number
 ): boolean {
-  return (
-    index > 0 &&
-    actions[index]?.inMenu === true &&
-    actions[index - 1]?.inMenu !== true
-  );
+  const here = actions[index];
+  const before = actions[index - 1];
+  if (here === undefined || before === undefined) return false;
+  const [now, then] = [groupOf(here), groupOf(before)];
+  if (now === then) return false;
+  return now !== "structure" || then === "turn-into";
 }
 
 export interface BlockContextMenuProps {
@@ -322,7 +337,7 @@ function BlockMenuItems({
             // Stacked once there is a reason, so the explanation sits under
             // the verb rather than running on from it.
             className={
-              action.reason === undefined
+              action.reason === undefined && action.note === undefined
                 ? undefined
                 : "flex-col items-start gap-0.5"
             }
@@ -337,6 +352,11 @@ function BlockMenuItems({
               // hoverable or focusable once disabled, so an explanation
               // carried outside the content would reach nobody.
               <span className="text-xs opacity-80">{action.reason}</span>
+            )}
+            {action.note === undefined || action.reason !== undefined ? null : (
+              // What the verb removes, said before it is chosen, where its
+              // reason would go: an open verb has no reason to show.
+              <span className="text-xs opacity-80">{action.note}</span>
             )}
           </ContextMenuItem>
         </React.Fragment>

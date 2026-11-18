@@ -953,7 +953,18 @@ With no tab sent, `PlaceTabs` draws its children alone; with one, they are the
 first tab, under `contentLabel`. `className` styles the strip and the
 contributed tabs' panels, never the children, so a page that insets its
 content can line them up with it. A plugin's place has no built-in parts, so
-the page draws its own content beside the slot.
+the page draws its own content beside the slot. `TargetSlot` takes a `fallback`,
+drawn in the place's stead while nothing contributed is drawn there (once the
+page knows its ids), and `blockProps`, handed to every block beside `context`
+(both `@experimental`).
+
+To draw something only where the admin's own page would draw a contribution,
+ask `useContributionApplies(place, id, document)` (`@experimental`): `true`
+exactly where the place's page draws it, for this reader, now. The `document`
+is `{ kind: "collection" | "single", slug }`; a tab that edits fields of the
+document is judged against the fields of the document form around the caller,
+or the `fieldNames` passed. The SEO plugin's tab in the Page Builder asks it
+about the edit page's SEO tab, so the two are never out of step.
 
 ### Entry-list filters
 
@@ -1141,7 +1152,9 @@ page also the document's handles a `panelSections` section is given
 A contributed tab's component receives `PlaceTabProps` (`@experimental`): the
 place's `context` and `entry`, and `setBadge`, which shows a count beside the
 tab's label, or none with `null`. It stays mounted while another tab is open,
-so what it holds is kept and its count stays current. On an edit page it
+so what it holds is kept and its count stays current. A tab that applies to
+some of the place's documents only calls `setLeftOut(true)` to leave the row,
+and `setLeftOut(false)` to come back; it stays mounted, hidden, meanwhile. On an edit page it
 receives `DocumentTabProps` (`@experimental`): those, the document form's
 `control`, and the `documentLock` a side panel section is told, on a saved
 entry, a new one and a Single alike. A tab reads what the author has typed and

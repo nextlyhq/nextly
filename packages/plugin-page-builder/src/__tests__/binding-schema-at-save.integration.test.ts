@@ -273,6 +273,43 @@ describe.each(getConfiguredTestDialects())(
       );
     });
 
+    it("saves an inner list's block bound to the outer list's entry, and refuses one naming a list it is not in", async () => {
+      // The articles listed inside each article's entry: the inner heading
+      // reads the OUTER list's title, by that list's id.
+      const nested = (list: string): Node => ({
+        id: "outer",
+        type: "core/collection-loop",
+        version: 1,
+        props: { collection: ARTICLES, limit: 3 },
+        slots: {
+          children: [
+            {
+              id: "inner",
+              type: "core/collection-loop",
+              version: 1,
+              props: { collection: ARTICLES, limit: 3 },
+              slots: {
+                children: [
+                  heading("bound", {
+                    $bind: "title",
+                    source: "item",
+                    list,
+                    fallback: "Untitled",
+                  }),
+                ],
+              },
+            },
+          ],
+        },
+      });
+      const id = await article();
+      expect(await refusalCodes(save(id, [nested("outer")]))).toEqual([]);
+      expect(await storedPage(id)).toContain('"list":"outer"');
+      expect(await refusalCodes(save(id, [nested("elsewhere")]))).toEqual([
+        "binding-source-unavailable",
+      ]);
+    });
+
     it("keeps a binding to a removed prop, and refuses a new one", async () => {
       await keptButNotAdded(
         id => stat(id, "subtitle", { $bind: "title" }),

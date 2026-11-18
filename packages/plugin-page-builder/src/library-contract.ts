@@ -30,7 +30,12 @@ import type { SavedComponent, SavedPattern } from "@nextlyhq/builder";
 import type { HookWarning } from "nextly/config";
 
 import type { RemovalDryRun } from "./breakpoint-removal/dry-run";
+import type { SharedStyleUsageKind } from "./shared-style-usage-contract";
 import type { CspAddition, CspCheck } from "./site-code/csp";
+
+// The shared-style usage routes' contract, kept in its own file and named
+// here, where every caller imports the plugin's contract from.
+export * from "./shared-style-usage-contract";
 
 /**
  * The name this plugin registers under, which is also how its routes are
@@ -808,7 +813,7 @@ export interface StoredSiteStyle {
 /** Where Settings' Site tab reads what it shows and what this caller may change. */
 export const SITE_SETTINGS_ROUTE_PATH = "/site/settings";
 
-/** A Layout the site's default may be, as the Site tab offers it. */
+/** The site's default Layout, as the Site tab names it. */
 export interface SiteLayoutOption {
   readonly id: string;
   readonly title: string;
@@ -826,7 +831,8 @@ export interface SiteSettingsRead {
   readonly mayManageSite: boolean;
   /**
    * Whether this caller may choose the site's default Layout, which also
-   * needs the rights to update and publish Layouts.
+   * needs the rights to update and publish Layouts: the Header & footer list
+   * then offers "Make site default".
    */
   readonly mayChooseDefaultLayout: boolean;
   /** The site's default Layout, by id, or `null` when it has none. */
@@ -838,8 +844,9 @@ export interface SiteSettingsRead {
    */
   readonly breakpoints: BreakpointSet | null;
   /**
-   * The published Layouts: every one the caller may choose from, or only the
-   * current default, to name it, for a caller who may not choose.
+   * The current default, when it is published, so the Site tab can name it;
+   * empty otherwise. Another set is made the default from the Header &
+   * footer list.
    */
   readonly layouts: readonly SiteLayoutOption[];
   /**
@@ -859,6 +866,83 @@ export interface SiteSettingsRead {
    * @experimental
    */
   readonly undoable?: SiteBreakpointUndoable | null;
+  /**
+   * The CSS variable prefix the site's variables are written under, and where
+   * it comes from. Absent for a caller who may not manage the site.
+   *
+   * @experimental
+   */
+  readonly prefix?: SiteCssPrefixRead;
+}
+
+/**
+ * Where Settings changes the CSS variable prefix the site's variables are
+ * written under, under the site permission (`manage-page-builder-site`), not
+ * Design's: a change breaks any CSS of the site's own that names the old
+ * prefix. The `site-style` Single refuses every other write that changes it.
+ *
+ * @experimental
+ */
+export const SITE_CSS_PREFIX_ROUTE_PATH = "/site/css-prefix";
+
+/**
+ * The site's CSS variable prefix: the one its pages are written under now,
+ * and the two places it can be set. A prefix saved in Settings replaces the
+ * one the site's code sets.
+ *
+ * @experimental
+ */
+export interface SiteCssPrefixRead {
+  /** The prefix the canvas and published pages are written under now. */
+  readonly current: string;
+  /** The prefix the site's code sets, as written there; absent when none. */
+  readonly code?: string;
+  /** The prefix saved in Settings; absent when none is saved. */
+  readonly stored?: string;
+}
+
+/**
+ * What Settings sends to change the prefix. A prefix equal to the one the
+ * site would use without a saved one clears the saved one.
+ *
+ * @experimental
+ */
+export interface SiteCssPrefixRequest {
+  readonly prefix: string;
+  /**
+   * Save nothing, and answer with what the change would leave behind: how
+   * many places name a variable through the current prefix in CSS text.
+   */
+  readonly dryRun?: boolean;
+}
+
+/**
+ * What a dry run answers: the places that name a variable by the current
+ * prefix in CSS text (a shadow's colour is stored that way), which lose it
+ * once the prefix changes.
+ *
+ * @experimental
+ */
+export interface SiteCssPrefixDryRun {
+  readonly dryRun: true;
+  /** The prefix asked about, as it would be written. */
+  readonly prefix: string;
+  /** Variables, shared styles and documents naming a variable that way. */
+  readonly oldPrefixUses: number;
+  /**
+   * Whether every page could be counted: false while the usage index is
+   * still being filled, so the count is a lower bound.
+   */
+  readonly usesComplete: boolean;
+}
+
+/**
+ * What a saved change answers: the prefix as it now stands.
+ *
+ * @experimental
+ */
+export interface SiteCssPrefixSaved {
+  readonly prefix: SiteCssPrefixRead;
 }
 
 /**
@@ -1015,122 +1099,6 @@ export interface SharedStyleLockRequest {
   readonly locked: boolean;
 }
 
-/**
- * Where the Design panel reads how widely its visible shared styles are used,
- * a page of rows at a time.
- *
- * @experimental Settles when the Shared styles tab ships.
- */
-export const SHARED_STYLE_USAGE_ROUTE_PATH = "/shared-styles/usage";
-
-/** The query parameter naming one shared style, by id; repeated for several. */
-export const SHARED_STYLE_ID_PARAM = "id";
-
-/** The most shared styles one usage read answers for: one page of rows. */
-export const SHARED_STYLE_USAGE_IDS_MAX = 50;
-
-/**
- * The kinds of document a shared style is counted on. Every collection with a
- * page builder field other than the composition stores holds pages.
- */
-export type SharedStyleUsageKind =
-  | "pages"
-  | "components"
-  | "patterns"
-  | "layouts";
-
-/** How widely one shared style is used, from the class usage index. */
-export interface SharedStyleUsage {
-  /** How many documents apply it, gated and hidden content included. */
-  readonly documents: number;
-  /** The same documents, by kind. */
-  readonly byKind: Readonly<Record<SharedStyleUsageKind, number>>;
-  /** False makes both numbers floors: "at least". */
-  readonly complete: boolean;
-}
-
-/**
- * The code the remove route's issue carries when a stored document still uses
- * a style, so the editor can tell that refusal from one for a lock or a count
- * no longer whole. Carried only when every reason a removal is refused for is
- * a use: a refusal any of whose reasons is not (a lock, a style the site's
- * code defines, uses that could not all be counted) is a conflict naming
- * every reason, so the code never marks one that is not a use.
- *
- * @experimental Settles when the Shared styles tab ships.
- */
-export const SHARED_STYLE_IN_USE_CODE = "IN_USE";
-
-/**
- * What the usage read answers: the index's health once for the screen, what
- * this caller may do, and the usage of each style asked about.
- *
- * NOT A SECURITY BOUNDARY: every write is judged on its own.
- */
-export interface SharedStylesUsageResponse {
-  /** Whether the usage index covers the whole site, so counts can be exact. */
-  readonly whole: boolean;
-  /**
-   * Whether counts that are not whole may still become whole: the site is
-   * still being counted. False when they are whole, and when something the
-   * index cannot reach keeps them floors for good, so there is nothing to
-   * read again for.
-   */
-  readonly counting: boolean;
-  /** Whether this caller may lock and unlock shared styles. */
-  readonly mayLock: boolean;
-  /**
-   * Whether this caller may ask for the pages to be counted now, through
-   * {@link SHARED_STYLE_COUNT_ROUTE_PATH}: whoever may change Design, the
-   * people a whole count lets remove a style.
-   */
-  readonly mayCount: boolean;
-  /** Each style asked about, by id. */
-  readonly styles: Readonly<Record<string, SharedStyleUsage>>;
-}
-
-/**
- * Where the Design panel lists the documents a shared style is used on, read
- * as the caller: documents the caller may not read are counted, not named.
- * The answer is the canonical list envelope, paged twenty at a time with
- * `?page=` from 1: `meta.total` and the pages count the documents the caller
- * may read, and `meta.hiddenCount` the ones it may not.
- *
- * @experimental Settles when the Shared styles tab ships.
- */
-export const SHARED_STYLE_WHERE_USED_ROUTE_PATH = "/shared-styles/where-used";
-
-/** The most documents one where-used answer names. */
-export const SHARED_STYLE_WHERE_USED_MAX = 20;
-
-/** The query parameter naming which page of a where-used list, from 1. */
-export const SHARED_STYLE_PAGE_PARAM = "page";
-
-/**
- * The last page a where-used read may ask for: the most documents one usage
- * listing can name, twenty to a page.
- */
-export const SHARED_STYLE_WHERE_USED_PAGES_MAX = 250;
-
-/**
- * The usage route's path for some shared styles, each named by its own `id`
- * parameter, so the browser asks in the shape the route reads.
- */
-export function sharedStyleUsagePath(ids: readonly string[]): string {
-  const params = new URLSearchParams();
-  for (const id of ids) params.append(SHARED_STYLE_ID_PARAM, id);
-  return `${SHARED_STYLE_USAGE_ROUTE_PATH}?${params.toString()}`;
-}
-
-/** The where-used route's path for one shared style and one page, from 1. */
-export function sharedStyleWhereUsedPath(id: string, page: number): string {
-  const params = new URLSearchParams({
-    [SHARED_STYLE_ID_PARAM]: id,
-    [SHARED_STYLE_PAGE_PARAM]: String(page),
-  });
-  return `${SHARED_STYLE_WHERE_USED_ROUTE_PATH}?${params.toString()}`;
-}
-
 /** One document a shared style is used on, as the where-used list names it. */
 export interface SharedStyleUseItem {
   readonly id: string;
@@ -1212,6 +1180,17 @@ export interface VariableUsage {
    * (`baseStyles`) name it, in type order.
    */
   readonly blockDefaults: readonly string[];
+  /**
+   * The site's variables whose own values name it through `var()`, by
+   * identity, in the site's order: a shadow variable keeps its colour that
+   * way. Absent from an older server.
+   */
+  readonly variables?: readonly string[];
+  /**
+   * The Site text rows using it (`link`, `h2`), by reference or through
+   * `var()`. Absent from an older server.
+   */
+  readonly siteText?: readonly string[];
   /** False makes `documents` and `byKind` floors: "at least". */
   readonly complete: boolean;
 }

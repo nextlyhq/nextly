@@ -54,6 +54,10 @@ export {
   // here than it does in a browser.
   decodeIdentifier,
   referencesCustomProperty,
+  // The custom properties a value reads through `var()`, by the same walk:
+  // what counts a site's variable as used where CSS text names it, as a
+  // shadow's colour does.
+  customPropertiesReferenced,
   // A shadow's layers and their parts, as the token check reads them: the
   // builder's shadow fields read a shadow the same way, so the fields and
   // the check agree on what a part is.
@@ -78,6 +82,19 @@ export {
   // contains stops reading where the compiler does.
   MAX_VALUE_LENGTH,
 } from "../style/css-value";
+export {
+  collectStyleProperties,
+  collectStyleTokens,
+  documentTokenUsage,
+  forEachStyleValues,
+  onlySiteProperties,
+  onlyVariableIdentities,
+  styleEnvelopeProperties,
+  styleEnvelopeTokens,
+  styleSitePropertiesIn,
+  styleVariablesIn,
+  type TokenUsage,
+} from "../style/document-token-usage";
 export type {
   CssValueRejection,
   MayFetchUrl,
@@ -286,6 +303,14 @@ export {
   CONTENT_WIDTH_PROPERTY,
   contentWidthTokenOf,
 } from "../style/content-width";
+// A Section's padding preset: the prop the page compile reads it from, the
+// variables each preset pads from, and the ones a node's preset names.
+export {
+  PADDING_PRESET_PROP,
+  PADDING_PRESETS,
+  paddingPresetTokensOf,
+} from "../style/padding-preset";
+export type { PaddingPreset } from "../style/padding-preset";
 export {
   compileStyleValues,
   scaledTokenText,
@@ -339,6 +364,7 @@ export {
 export {
   migrateDocument,
   migrateProps,
+  migrationInfoOf,
   findMigrationGaps,
   nodeAtPointer,
 } from "../migration";
@@ -349,6 +375,7 @@ export type {
   MigrateResult,
   MigrationFailure,
   MigrationMap,
+  MigrationRenames,
   MigrationSource,
   PropsMigrationResult,
 } from "../migration";
@@ -388,6 +415,14 @@ export {
   namedClassesRead,
   NAMED_CLASS_PREFIX,
   NAMED_CLASS_SLUG_RE,
+  // Text styles: typography-only classes in their own tier, between block
+  // styles and shared styles. `@experimental` until the Type tab that makes
+  // them and the block picker that applies them ship.
+  isTextStyle,
+  nonTypographyProperties,
+  TEXT_STYLE_CLASS_PREFIX,
+  TEXT_STYLE_PROPERTIES,
+  textStylesOf,
 } from "../style/named-class";
 /**
  * @experimental A block type's looks (its named variants: a button's Outline), as the shared
@@ -450,3 +485,28 @@ export {
   type FluidRangeWidths,
   type FluidSizes,
 } from "../style/fluid-value";
+
+/**
+ * Site text: the size and line height of body text, each heading level,
+ * links, buttons and captions, set once for every page of a site. Public
+ * because the block library compiles it, the plugin stores and judges it, and
+ * the editor draws its rows, and each must read one map the same way.
+ */
+export {
+  DEFAULT_SITE_TEXT,
+  resolveSiteText,
+  SITE_TEXT_LABELS,
+  SITE_TEXT_ROLES,
+  SITE_TEXT_ROOT,
+  SITE_TEXT_UNDERLINES,
+  siteTextElementBases,
+  siteTextIssues,
+  siteTextRoleOf,
+  siteTextStyles,
+  siteTextUses,
+  type ElementBaseKey,
+  type SiteTextEntry,
+  type SiteTextMap,
+  type SiteTextRole,
+  type SiteTextUnderline,
+} from "../style/site-text";
