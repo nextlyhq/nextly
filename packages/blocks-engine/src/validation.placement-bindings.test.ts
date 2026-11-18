@@ -37,7 +37,7 @@ const list = (id: string, children: unknown[]) => ({
   slots: { children, empty: [] },
 });
 
-const byTitle = { $bind: "title", source: "item" };
+const byTitle = { $bind: "title", source: "item", list: "posts" };
 
 describe("a placement's bindings, by shape", () => {
   const issuesOf = (bindings: Record<string, unknown>) => {
@@ -54,19 +54,31 @@ describe("a placement's bindings, by shape", () => {
     expect(issuesOf({ "overrides.headline": byTitle })).toEqual([]);
   });
 
+  it("takes a setting's id as it is, dots and all", () => {
+    expect(issuesOf({ "overrides.hero.title": byTitle })).toEqual([]);
+  });
+
   it("refuses a key that names no setting", () => {
     expect(
       issuesOf({
         text: byTitle,
         overrides: byTitle,
         "overrides.": byTitle,
-        "overrides.headline.more": byTitle,
       })
     ).toEqual([
       ["/nodes/0/bindings/text", "invalid-binding"],
       ["/nodes/0/bindings/overrides", "invalid-binding"],
       ["/nodes/0/bindings/overrides.", "invalid-binding"],
-      ["/nodes/0/bindings/overrides.headline.more", "invalid-binding"],
+    ]);
+  });
+
+  it("refuses a list item binding that does not name its list", () => {
+    // Composing moves the binding onto the component's block, where the
+    // nearest list may be the component's own: so the list is named.
+    expect(
+      issuesOf({ "overrides.headline": { $bind: "title", source: "item" } })
+    ).toEqual([
+      ["/nodes/0/bindings/overrides.headline/list", "invalid-binding"],
     ]);
   });
 

@@ -183,7 +183,7 @@ function mount(
 }
 
 describe("a placement's setting bound to data", () => {
-  it("binds the Title setting to each post's title, under the setting's key", async () => {
+  it("binds the Title setting to each post's title, under the setting's key, naming the list", async () => {
     const editor = mount();
     fireEvent.click(
       screen.getByRole("button", { name: "Bind Title to a field" })
@@ -203,7 +203,11 @@ describe("a placement's setting bound to data", () => {
       kind: "update",
       id: "p",
       patch: {
-        bindings: { "overrides.title": { $bind: "title", source: "item" } },
+        // The list is named: composing moves the binding onto the card's
+        // block, which may sit in a list of the card's own.
+        bindings: {
+          "overrides.title": { $bind: "title", source: "item", list: "list" },
+        },
       },
     });
   });
@@ -218,7 +222,9 @@ describe("a placement's setting bound to data", () => {
 
   it("shows a bound setting as its field, in place of its value", async () => {
     mount({
-      bindings: { "overrides.title": { $bind: "title", source: "item" } },
+      bindings: {
+        "overrides.title": { $bind: "title", source: "item", list: "list" },
+      },
     });
     expect(
       await screen.findByRole("button", {
@@ -234,7 +240,7 @@ describe("a placement's setting bound to data", () => {
     const editor = mount({
       props: { componentId: "card", overrides: { title: "Typed here" } },
       bindings: {
-        "overrides.title": { $bind: "title", source: "item" },
+        "overrides.title": { $bind: "title", source: "item", list: "list" },
       },
     });
     const chip = await screen.findByRole("button", {

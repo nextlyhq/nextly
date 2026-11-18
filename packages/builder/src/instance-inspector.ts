@@ -24,11 +24,14 @@
 
 import {
   bindablePropKind,
+  boundSettingId,
   findNode,
   getBlock,
   instanceExposure,
   isComponentInstance,
   isPlainRecord,
+  keepsItsListWhenMoved,
+  outerListOf,
   readableDefinition,
   settingBindingKey,
   type Binding,
@@ -235,10 +238,14 @@ export function inspectInstance(
     rows:
       exposure === undefined
         ? []
-        : rowsOf(exposure.properties, node, definition).map(entry => {
-            const reason = held(entry);
-            return reason === undefined ? entry : { ...entry, heldBy: reason };
-          }),
+        : rowsOf(exposure.properties, node, definition, definitions).map(
+            entry => {
+              const reason = held(entry);
+              return reason === undefined
+                ? entry
+                : { ...entry, heldBy: reason };
+            }
+          ),
     orphaned:
       exposure === undefined
         ? []
@@ -393,49 +400,168 @@ const BINDABLE_SETTING_TYPES: ReadonlySet<string> = new Set([
   "image",
 ]);
 
+/** An exposed property, as the resolver's rows carry it. */
+type Exposure = ReturnType<
+  typeof instanceExposure
+>["properties"][number]["property"];
+
+/**
+ * How many components inside components a setting is followed through to
+ * its block: the resolver's own depth is the real bound, this only stops a
+ * stored loop.
+ */
+const MOST_NESTED_SETTINGS = 16;
+
+/** Where a setting lands: a block of a component, and a prop path on it. */
+interface SettingTarget {
+  readonly definition: ComponentDocument;
+  readonly nodeId: string;
+  readonly propPath: string;
+}
+
+/** A block's declared prop, or `undefined` for one it does not declare. */
+function blockPropOf(
+  node: BlockNode,
+  propPath: string
+): PropSchema | undefined {
+  const declared = getBlock(node.type)?.props;
+  return declared === undefined || !Object.hasOwn(declared, propPath)
+    ? undefined
+    : declared[propPath];
+}
+
+/** A component's setting by its id, where it fills a prop. */
+function propSettingOf(
+  definition: ComponentDocument,
+  id: string
+): Exposure | undefined {
+  const exposed: unknown = definition.exposed;
+  if (!Array.isArray(exposed)) return undefined;
+  return (exposed as unknown[]).find(
+    (entry): entry is Exposure =>
+      isPlainRecord(entry) &&
+      entry.id === id &&
+      typeof entry.nodeId === "string" &&
+      typeof entry.propPath === "string" &&
+      entry.type !== "visibility"
+  );
+}
+
+/**
+ * The next target of a setting aimed at a component placed inside the
+ * component: that component's own setting the path names
+ * (`overrides.<id>`), or `undefined` where it has none.
+ */
+function nestedTargetOf(
+  placement: BlockNode,
+  propPath: string,
+  definitions: ComponentLookup
+): SettingTarget | undefined {
+  const id = boundSettingId(propPath);
+  if (id === undefined) return undefined;
+  const definition = readableDefinition(
+    definitions.get(storedComponentId(placement))
+  );
+  const setting =
+    definition === undefined ? undefined : propSettingOf(definition, id);
+  return definition === undefined || setting === undefined
+    ? undefined
+    : { definition, nodeId: setting.nodeId, propPath: setting.propPath };
+}
+
+/**
+ * The prop of a block a setting fills, as the block declares it: followed
+ * through a component placed inside the component, whose setting it feeds
+ * (`overrides.<id>`), to the block that setting fills in turn.
+ */
+function declaredPropOf(
+  start: SettingTarget,
+  definitions: ComponentLookup
+): PropSchema | undefined {
+  let target: SettingTarget | undefined = start;
+  for (let step = 0; step < MOST_NESTED_SETTINGS; step += 1) {
+    if (target === undefined) return undefined;
+    const node = findNode(target.definition.nodes, target.nodeId);
+    if (node === undefined) return undefined;
+    if (!isComponentInstance(node)) return blockPropOf(node, target.propPath);
+    target = nestedTargetOf(node, target.propPath, definitions);
+  }
+  return undefined;
+}
+
 /**
  * The schema of the component block's prop a setting fills, named as the
  * setting, where a field can fill it: read from the block's own declaration,
  * the prop the composed binding lands on.
  */
 function bindableSchemaOf(
-  property: ReturnType<
-    typeof instanceExposure
-  >["properties"][number]["property"],
-  definition: ComponentDocument | undefined
+  property: Exposure,
+  definition: ComponentDocument | undefined,
+  definitions: ComponentLookup
 ): PropSchema | undefined {
   if (!BINDABLE_SETTING_TYPES.has(property.type)) return undefined;
-  const target =
-    definition === undefined
-      ? undefined
-      : findNode(definition.nodes, property.nodeId);
-  if (target === undefined) return undefined;
-  const declared = getBlock(target.type)?.props;
-  const schema =
-    declared === undefined || !Object.hasOwn(declared, property.propPath)
-      ? undefined
-      : declared[property.propPath];
+  if (definition === undefined) return undefined;
+  const schema = declaredPropOf(
+    { definition, nodeId: property.nodeId, propPath: property.propPath },
+    definitions
+  );
   if (schema === undefined || bindablePropKind(schema) === undefined) {
     return undefined;
   }
   return { ...schema, label: labelOf(property) };
 }
 
-/** The placement's stored binding of one setting, where it is a record. */
+/**
+ * The placement's stored binding of one setting, where composing applies it:
+ * a record, and a list item binding only where it names its list.
+ */
 function storedBindingOf(node: BlockNode, id: string): Binding | undefined {
-  // Read as stored, which a save has not judged: a record of records only.
   const bindings = node.bindings;
   if (!isPlainRecord(bindings)) return undefined;
   const key = settingBindingKey(id);
   const binding = Object.hasOwn(bindings, key) ? bindings[key] : undefined;
-  return isPlainRecord(binding) ? binding : undefined;
+  return isPlainRecord(binding) && keepsItsListWhenMoved(binding)
+    ? binding
+    : undefined;
+}
+
+/**
+ * The rows with what a binding decides: a bound setting fills its prop
+ * whatever another setting aimed at that prop holds, the last declared where
+ * two are bound, as composing writes them. So the bound row is what the page
+ * shows, and every other row aimed at its prop is shadowed by it.
+ */
+function withBoundTargets(
+  rows: readonly ExposedRow[],
+  properties: readonly { readonly property: Exposure }[]
+): ExposedRow[] {
+  const targetOf = (index: number): string => {
+    const property = properties[index]?.property;
+    return property === undefined
+      ? ""
+      : `${property.nodeId}\u0000${property.propPath}`;
+  };
+  const bound = new Map<string, ExposedRow>();
+  rows.forEach((row, index) => {
+    if (row.binding !== undefined) bound.set(targetOf(index), row);
+  });
+  return rows.map((row, index) => {
+    const winner = bound.get(targetOf(index));
+    if (winner === undefined) return row;
+    if (winner === row) {
+      const { shadowedBy: _shown, ...rest } = row;
+      return rest;
+    }
+    return { ...row, shadowedBy: { id: winner.id, label: winner.label } };
+  });
 }
 
 /** The resolver's rows, as the panel draws them. */
 function rowsOf(
   properties: ReturnType<typeof instanceExposure>["properties"],
   node: BlockNode,
-  definition: ComponentDocument | undefined
+  definition: ComponentDocument | undefined,
+  definitions: ComponentLookup
 ): ExposedRow[] {
   const labels = new Map(
     properties.map(
@@ -445,7 +571,7 @@ function rowsOf(
   // Read off the node's own record rather than the resolver's source, which
   // is the target's and is shared by every exposure aimed at it.
   const stored = storedOverrides(node);
-  return properties.map(state => ({
+  const rows = properties.map(state => ({
     id: state.property.id,
     label: labelOf(state.property),
     type: state.property.type,
@@ -457,7 +583,7 @@ function rowsOf(
       state.property.type
     ),
     options: optionsOf(state.property.options),
-    ...bindingOf(state.property, node, definition),
+    ...bindingOf(state.property, node, definition, definitions),
     ...(state.shadowedBy === undefined
       ? {}
       : {
@@ -467,17 +593,17 @@ function rowsOf(
           },
         }),
   }));
+  return withBoundTargets(rows, properties);
 }
 
 /** A row's binding fields: its bindable schema and stored binding, if any. */
 function bindingOf(
-  property: ReturnType<
-    typeof instanceExposure
-  >["properties"][number]["property"],
+  property: Exposure,
   node: BlockNode,
-  definition: ComponentDocument | undefined
+  definition: ComponentDocument | undefined,
+  definitions: ComponentLookup
 ): Pick<ExposedRow, "bindable" | "binding"> {
-  const bindable = bindableSchemaOf(property, definition);
+  const bindable = bindableSchemaOf(property, definition, definitions);
   if (bindable === undefined) return {};
   const binding = storedBindingOf(node, property.id);
   return binding === undefined ? { bindable } : { bindable, binding };
@@ -594,6 +720,34 @@ export function setOverrideOp(
     id: node.id,
     patch: overridesPatch(node, { ...storedOverrides(node), [id]: value }),
   };
+}
+
+/**
+ * An edit of a placement's bindings with each list item binding naming the
+ * list it reads: the nearest list around the placement where it names none.
+ * Composing moves a placement's binding onto the component's block, which
+ * may sit in a list of the component's own, so a binding naming no list
+ * would read that list there; the save refuses one, and composing skips it.
+ * Any other op is handed back as it is.
+ */
+export function withPlacementLists(
+  document: BlockDocument,
+  op: BuilderOp
+): BuilderOp {
+  if (op.kind !== "update" || !isPlainRecord(op.patch.bindings)) return op;
+  const node = findNode(document.nodes, op.id);
+  if (node === undefined || !isComponentInstance(node)) return op;
+  const nearest = outerListOf(document.nodes, op.id)?.id;
+  if (nearest === undefined) return op;
+  const bindings = Object.fromEntries(
+    Object.entries(op.patch.bindings).map(([key, binding]) => [
+      key,
+      binding.source === "item" && !("list" in binding && binding.list)
+        ? { ...binding, list: nearest }
+        : binding,
+    ])
+  );
+  return { ...op, patch: { ...op.patch, bindings } };
 }
 
 /**

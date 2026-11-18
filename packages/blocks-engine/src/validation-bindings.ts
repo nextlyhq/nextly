@@ -13,7 +13,10 @@ import {
 } from "./document";
 import { describeValue, pointer } from "./issue-text";
 import { isPlainRecord } from "./plain-record";
-import { boundSettingId } from "./resolve-instances-exposures";
+import {
+  boundSettingId,
+  keepsItsListWhenMoved,
+} from "./resolve-instances-exposures";
 import type { ValidationIssue } from "./validation-contract";
 
 /**
@@ -60,7 +63,20 @@ export function validateBindings(
     // The schema-aware checks run over the whole document once the walk is
     // done (`bindingSchemaIssues`), so a problem a stored form already held
     // stays a warning.
-    validBindingShape(binding, bPath, issues);
+    const readable = validBindingShape(binding, bPath, issues);
+    if (
+      readable &&
+      node.type === COMPONENT_INSTANCE_TYPE &&
+      !keepsItsListWhenMoved(binding)
+    ) {
+      issues.push({
+        path: pointer(bPath, "list"),
+        code: "invalid-binding",
+        severity: "error",
+        message:
+          "A component placement's list item binding names the list it reads, by its id: the component's block it fills may sit in a list of its own.",
+      });
+    }
   }
 }
 
