@@ -8,18 +8,19 @@
  *
  * Each Builder save path in turn. Through its file: a collection's Builder apply, a Single's
  * Builder apply, a field group's Builder apply and the Single schema save. Through the
- * development push: a translated collection's Builder apply and a collection's update. The
- * failure is injected at one statement, by its text, after an earlier statement of the same
- * change has committed; each case first checks that the earlier one did.
+ * development push: a collection's update. The failure is injected at one statement, by its
+ * text, after an earlier statement of the same change has committed; each case first checks that
+ * the earlier one did.
  *
  * On PostgreSQL and SQLite the file runs in one transaction, and so does PostgreSQL's push, so the
  * same failure leaves nothing applied and no file: those legs guard that settling never records a
  * step that rolled back. SQLite's push keeps the statements before the one that fails, which
  * these cases do not judge.
  *
- * Not covered here: a translated field's rename stopped between its two tables, and on the push
- * roads a stop after a drop, since the push drops a column holding data only on the dialog's
- * answer for it.
+ * Not covered here: a translated field's rename stopped between its two tables; on the push a stop
+ * after a drop, since the push drops a column holding data only on the dialog's answer for it;
+ * and a translated collection's Builder apply, whose push sends its statements on a connection
+ * none of these seams reaches.
  */
 import {
   existsSync,
@@ -48,7 +49,6 @@ import {
   type TestNextly,
 } from "../../../../plugins/test-nextly";
 import type { ServiceContainer } from "../../../../services";
-import type { CollectionService } from "../../../collections/services/collection-service";
 import { clearRegistryRowCache } from "../../../dynamic-collections/services/collection-row-cache";
 import { SchemaEventsRepository } from "../../events/schema-events-repository";
 import { NO_CONSENT } from "../../migrate/data-loss-consent";
@@ -58,7 +58,6 @@ import { DrizzleStatementExecutor } from "../../services/drizzle-statement-execu
 
 const HISTORY = "./database/history";
 const DEFINITION = "./schema/builder.json";
-const LOCALIZATION = { locales: ["en", "es"], defaultLocale: "en" };
 
 let current: TestNextly | undefined;
 let basePath: string;
@@ -89,8 +88,6 @@ interface SavePath {
   registry: string;
   /** The development push applies the change, rather than the save's file. */
   push?: boolean;
-  /** The entity is translated, so the instance is booted with languages. */
-  translated?: boolean;
   create(t: TestNextly, fields: BuilderField[]): Promise<void>;
   save(t: TestNextly, fields: BuilderField[]): Promise<unknown>;
   /** Store an entry holding `values`, where the entity has entries of its own. */
@@ -228,56 +225,6 @@ const PATHS: readonly SavePath[] = [
         string,
         unknown
       >,
-  },
-  {
-    // A translated collection's change is applied by the development push. Its text fields are
-    // translated, so they are columns of its translations table, which each case reads.
-    name: "a translated collection's Builder apply (the push)",
-    slug: "sts_articles",
-    table: "dc_sts_articles_locales",
-    registry: "dynamic_collections",
-    push: true,
-    translated: true,
-    // Made translated through the collection service, which takes the collection's own setting.
-    create: async (t, fields) => {
-      await t.getService("collectionService").createCollection(
-        {
-          name: "sts_articles",
-          label: "sts_articles",
-          localized: true,
-          fields,
-        } as Parameters<CollectionService["createCollection"]>[0],
-        {}
-      );
-    },
-    save: async (t, fields) =>
-      dispatchCollections(
-        {} as ServiceContainer,
-        "applySchemaChanges",
-        { collectionName: "sts_articles" },
-        {
-          fields,
-          confirmed: true,
-          localized: true,
-          schemaVersion: await versionOf(
-            t,
-            "dynamic_collections",
-            "sts_articles"
-          ),
-        }
-      ),
-    store: async (t, values) => {
-      await t.nextly.create({
-        collection: "sts_articles",
-        data: values,
-      } as never);
-    },
-    read: async t => {
-      const found = await t.nextly.find({
-        collection: "sts_articles",
-      } as never);
-      return (found.items[0] ?? {}) as Record<string, unknown>;
-    },
   },
   {
     // The admin's update of a collection, which the development push applies.
@@ -451,14 +398,13 @@ describe.each(getConfiguredTestDialects())(
   (dialect: TestDialect) => {
     const history = () => join(basePath, HISTORY);
 
-    /** Boot in development, as the Builder runs, over the shared folder; translated where `path` is. */
-    async function boot(path: SavePath): Promise<TestNextly> {
+    /** Boot in development, as the Builder runs, over the shared folder. */
+    async function boot(): Promise<TestNextly> {
       vi.stubEnv("NODE_ENV", "development");
       current = await createTestNextly({
         dialect,
         basePath,
         db: { migrationsDir: HISTORY, uiSchemaFile: DEFINITION },
-        ...(path.translated === true ? { localization: LOCALIZATION } : {}),
       });
       return current;
     }
@@ -562,7 +508,7 @@ describe.each(getConfiguredTestDialects())(
       await current?.destroy();
       current = undefined;
       vi.unstubAllEnvs();
-      const fresh = await boot(path);
+      const fresh = await boot();
       await migrated(fresh);
       expect(
         await liveColumns(fresh, path.table),
@@ -574,7 +520,7 @@ describe.each(getConfiguredTestDialects())(
       it.runIf(dialect === "mysql")(
         "stopped at its second addition, keeps the first: one file for it, recorded applied, the definition and the registry at that shape",
         async () => {
-          const t = await boot(path);
+          const t = await boot();
           await path.create(t, [text("heading")]);
           await path.store?.(t, { heading: "Hello" });
           const folderBefore = filesBelow(history());
@@ -670,7 +616,7 @@ describe.each(getConfiguredTestDialects())(
       it.runIf(dialect === "mysql" && path.push !== true)(
         "stopped at an addition after a drop committed, stops naming the dropped field and keeps reading the rest",
         async () => {
-          const t = await boot(path);
+          const t = await boot();
           await path.create(t, [text("heading"), text("old_note")]);
           await path.store?.(t, { heading: "Hello", old_note: "Gone" });
           const folderBefore = filesBelow(history());
@@ -724,7 +670,7 @@ describe.each(getConfiguredTestDialects())(
       it.runIf(dialect === "mysql" && path.push !== true)(
         "whose second drop fails after the first committed, names that column again with its values readable",
         async () => {
-          const t = await boot(path);
+          const t = await boot();
           await path.create(t, [text("heading"), text("old_a"), text("old_b")]);
           await path.store?.(t, {
             heading: "Hello",
@@ -795,7 +741,7 @@ describe.each(getConfiguredTestDialects())(
       )(
         "stopped at its second addition, rolls back whole and records no step",
         async () => {
-          const t = await boot(path);
+          const t = await boot();
           await path.create(t, [text("heading")]);
           const folderBefore = filesBelow(history());
           const appliedBefore = await appliedFiles(t);
