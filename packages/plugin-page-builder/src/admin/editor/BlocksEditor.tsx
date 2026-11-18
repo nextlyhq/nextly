@@ -736,6 +736,7 @@ function EditorBody<TFieldValues extends FieldValues>({
             control,
             page,
             pageData,
+            place: settingsPlace,
           })}
           // Switched on the panel id rather than rendering the inserter for
           // whatever the rail reports open. The shell asks for the panel it

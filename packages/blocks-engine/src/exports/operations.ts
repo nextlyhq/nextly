@@ -120,6 +120,15 @@ export {
 // How every copy into a document keeps the Layers locks it carries.
 export { insertKeepingLocks, type Placed } from "../locked-insert";
 
+// The address of one item of a list of words typed on the canvas: the renderer
+// marks it, the editor finds and writes by it.
+export {
+  isInlineItemsProp,
+  itemOfPropName,
+  itemPropName,
+  type InlineItemAddress,
+} from "../inline-items";
+
 /**
  * The stored shape of rich text.
  *

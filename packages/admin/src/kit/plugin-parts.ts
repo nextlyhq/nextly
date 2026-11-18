@@ -110,10 +110,12 @@ export { useFoldedPanel } from "../components/layout/PanelFold";
 export {
   PlaceTabs,
   TargetSlot,
+  useContributionApplies,
   usePlaceTabs,
 } from "../components/shared/target-slot";
 
 export type {
+  ContributionDocument,
   PlaceContributionProps,
   PlaceProps,
   PlaceTabBadge,

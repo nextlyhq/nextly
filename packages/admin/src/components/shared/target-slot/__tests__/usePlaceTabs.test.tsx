@@ -67,17 +67,20 @@ function OwnRow({ known = true }: { known?: boolean }): JSX.Element {
     <Tabs defaultValue="own">
       <TabsList>
         <TabsTrigger value="own">Own</TabsTrigger>
-        {tabs.map(tab => (
-          <TabsTrigger
-            key={tab.id}
-            value={tab.id}
-            {...(tab.accessibleName === undefined
-              ? {}
-              : { "aria-label": tab.accessibleName })}
-          >
-            {tab.trigger}
-          </TabsTrigger>
-        ))}
+        {/* A tab that left the row draws no trigger. */}
+        {tabs
+          .filter(tab => tab.leftOut !== true)
+          .map(tab => (
+            <TabsTrigger
+              key={tab.id}
+              value={tab.id}
+              {...(tab.accessibleName === undefined
+                ? {}
+                : { "aria-label": tab.accessibleName })}
+            >
+              {tab.trigger}
+            </TabsTrigger>
+          ))}
       </TabsList>
       <TabsContent value="own">own body</TabsContent>
       {tabs.map(tab => (
@@ -122,6 +125,24 @@ describe("a place's tabs drawn in a page's own row", () => {
     await screen.findByText("first body", {}, { timeout: 2000 });
     act(() => handed.first?.setBadge({ count: 2, label: "2 to fix" }));
     expect(screen.getByRole("tab", { name: "First (2 to fix)" })).toBeTruthy();
+  });
+
+  it("leaves a tab out of the row while it says it does not apply, its panel kept, until it comes back", async () => {
+    render(<OwnRow />);
+    await screen.findByText("first body", {}, { timeout: 2000 });
+    act(() => handed.first?.setLeftOut?.(true));
+    expect(screen.getAllByRole("tab").map(tab => tab.textContent)).toEqual([
+      "Own",
+      "Second",
+    ]);
+    // Mounted, hidden, so it can bring itself back.
+    expect(screen.getByText("first body")).toBeTruthy();
+    act(() => handed.first?.setLeftOut?.(false));
+    expect(screen.getAllByRole("tab").map(tab => tab.textContent)).toEqual([
+      "Own",
+      "First",
+      "Second",
+    ]);
   });
 
   it("draws none while the page does not know its ids", () => {

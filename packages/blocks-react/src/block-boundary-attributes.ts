@@ -7,8 +7,11 @@
  * @module block-boundary-attributes
  */
 import {
+  isInlineItemsProp,
+  itemOfPropName,
   renderedDomId,
   type BlockNode,
+  type PropSchema,
   type ResolvedBlockNode,
 } from "@nextlyhq/blocks-engine";
 import { cloneElement, isValidElement, type ReactNode } from "react";
@@ -97,13 +100,22 @@ export function isAllowedAttribute(name: string): boolean {
  * declared gets silence rather than an editable region nobody intended.
  */
 export function propMarker(
-  definition: { props?: Record<string, { inline?: boolean } | undefined> },
+  definition: {
+    props?: Partial<Record<string, PropSchema>>;
+  },
   enabled: boolean
 ): ((name: string) => Record<string, string>) | undefined {
   if (!enabled) return undefined;
   return (name: string): Record<string, string> => {
-    if (definition.props?.[name]?.inline !== true) return {};
-    return { [PROP_ATTRIBUTE]: name };
+    // An item of a list of words (`items.2`) is marked when its ARRAY is
+    // declared inline and holds words, so a block cannot mark items of an
+    // array the editor would not know how to write back.
+    const item = itemOfPropName(name);
+    const marked =
+      item === null
+        ? definition.props?.[name]?.inline === true
+        : isInlineItemsProp(definition.props?.[item.prop]);
+    return marked ? { [PROP_ATTRIBUTE]: name } : {};
   };
 }
 

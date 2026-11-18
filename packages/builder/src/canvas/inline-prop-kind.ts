@@ -19,7 +19,9 @@
  */
 
 import {
+  isInlineItemsProp,
   isOneParagraphProp,
+  itemOfPropName,
   RICH_TEXT_PROP_TYPE,
   type PropSchema,
 } from "@nextlyhq/blocks-engine";
@@ -58,7 +60,45 @@ export function editedAsRichText(kind: InlinePropKind | null): boolean {
 export function inlinePropKind(
   schema: PropSchema | undefined
 ): InlinePropKind | null {
-  if (schema?.inline !== true) return null;
+  // An array is not a line anyone can type: a list of words offers its items
+  // one by one instead, each under its own address (`inlineSchemaAt`).
+  if (schema?.inline !== true || schema.type === "array") return null;
   if (schema.type === RICH_TEXT_PROP_TYPE) return "rich";
   return isOneParagraphProp(schema) ? "line" : "plain";
+}
+
+/**
+ * What one item of a list of words is to the canvas: a line of plain text.
+ * Its own schema, rather than the array's, so every surface that asks what a
+ * value is asks it the same way for an item as for any other value.
+ */
+const ITEM_SCHEMA: PropSchema = { type: "text", inline: true };
+
+/**
+ * The schema a canvas value goes by: the declared prop's own, or, for an item
+ * of a list of words (`items.2`), a line of text when its array is declared
+ * inline. `undefined` for a name the block does not declare.
+ *
+ * @param props - the block's declared props
+ * @param name - the value's name, as the element carrying it is marked
+ */
+export function inlineSchemaAt(
+  props: Partial<Record<string, PropSchema>> | undefined,
+  name: string
+): PropSchema | undefined {
+  const item = itemOfPropName(name);
+  if (item === null) return props?.[name];
+  return isInlineItemsProp(props?.[item.prop]) ? ITEM_SCHEMA : undefined;
+}
+
+/**
+ * The kind of in-place editing a value asks for, by its name: an ordinary
+ * prop's or an item's. Derived from {@link inlineSchemaAt} and
+ * {@link inlinePropKind}, so an item is routed as the line it is.
+ */
+export function inlinePropKindAt(
+  props: Partial<Record<string, PropSchema>> | undefined,
+  name: string
+): InlinePropKind | null {
+  return inlinePropKind(inlineSchemaAt(props, name));
 }
