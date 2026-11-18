@@ -4,8 +4,10 @@ import type {
   CreateEmailTemplatePayload,
   EmailTemplateRecord,
   EmailTemplateVariablePresentation,
+  TemplateFormat,
   TemplateTestDraft,
   UpdateEmailTemplatePayload,
+  WrittenDocument,
 } from "@admin/services/emailTemplateApi";
 
 import { ownsContent } from "./workbench-model";
@@ -44,6 +46,11 @@ export interface TemplateFormValues {
   slug: string;
   subject: string;
   preheader: string;
+  /** Written in blocks, or coded in HTML. */
+  format: TemplateFormat;
+  /** A written email's blocks; null for a coded one. */
+  blocks: WrittenDocument | null;
+  /** A coded email's HTML; a written one's is written from its blocks. */
   htmlContent: string;
   plainTextContent: string;
   useLayout: boolean;
@@ -123,6 +130,8 @@ export function templateSchemaFor(isLayoutRow: boolean): z.ZodObject<{
   name: z.ZodString;
   slug: z.ZodString;
   preheader: z.ZodUnion<[z.ZodOptional<z.ZodString>, z.ZodLiteral<"">]>;
+  format: z.ZodEnum<{ code: "code"; written: "written" }>;
+  blocks: z.ZodNullable<z.ZodCustom<WrittenDocument, WrittenDocument>>;
   htmlContent: z.ZodString;
   plainTextContent: z.ZodUnion<[z.ZodOptional<z.ZodString>, z.ZodLiteral<"">]>;
   useLayout: z.ZodBoolean;
@@ -163,11 +172,23 @@ export function templateSchemaFor(isLayoutRow: boolean): z.ZodObject<{
   bcc: z.ZodArray<z.ZodString>;
   subject: z.ZodString;
 }> {
-  return templateSchema.extend({
-    subject: isLayoutRow
-      ? z.string().max(500)
-      : z.string().min(1, "Email subject is required").max(500),
-  });
+  return templateSchema
+    .extend({
+      subject: isLayoutRow
+        ? z.string().max(500)
+        : z.string().min(1, "Email subject is required").max(500),
+    })
+    .superRefine((values, ctx) => {
+      // A coded email needs its HTML; a written one's is written from its
+      // blocks, so it has none of its own.
+      if (values.format === "code" && values.htmlContent.length === 0) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["htmlContent"],
+          message: "HTML content is required",
+        });
+      }
+    });
 }
 
 const templateSchema = z.object({
@@ -182,7 +203,11 @@ const templateSchema = z.object({
     ),
   subject: z.string().min(1, "Email subject is required").max(500),
   preheader: z.string().max(255).optional().or(z.literal("")),
-  htmlContent: z.string().min(1, "HTML content is required"),
+  format: z.enum(["code", "written"]),
+  // Checked by the server with the rules every save applies.
+  blocks: z.custom<WrittenDocument>().nullable(),
+  // Required for a coded email only: see templateSchemaFor.
+  htmlContent: z.string(),
   plainTextContent: z.string().optional().or(z.literal("")),
   useLayout: z.boolean(),
   isActive: z.boolean(),
@@ -204,6 +229,8 @@ export const DEFAULT_VALUES: TemplateFormValues = {
   slug: "",
   subject: "",
   preheader: "",
+  format: "code",
+  blocks: null,
   htmlContent: "",
   plainTextContent: "",
   useLayout: true,
@@ -247,6 +274,19 @@ function listOrNull<T>(list: T[]): T[] | null {
   return list.length > 0 ? list : null;
 }
 
+/**
+ * A written email's format and blocks, in place of HTML of its own (the
+ * server writes it from the blocks); nothing for a coded one, which is sent
+ * exactly as before blocks were.
+ */
+function formatFields(
+  values: TemplateFormValues
+): Pick<CreateEmailTemplatePayload, "format" | "blocks"> {
+  return values.format === "written"
+    ? { format: "written", blocks: values.blocks }
+    : {};
+}
+
 /** Everything a save or a create sends, but the slug. */
 function payloadFields(
   values: TemplateFormValues
@@ -255,7 +295,8 @@ function payloadFields(
     name: values.name,
     subject: values.subject,
     preheader: orNull(values.preheader),
-    htmlContent: values.htmlContent,
+    htmlContent: values.format === "written" ? "" : values.htmlContent,
+    ...formatFields(values),
     plainTextContent: orNull(values.plainTextContent),
     useLayout: values.useLayout,
     isActive: values.isActive,
@@ -313,6 +354,8 @@ const OWNER_FIELDS = [
   "subject",
   "preheader",
   "htmlContent",
+  "format",
+  "blocks",
   "plainTextContent",
   "description",
   "variables",
@@ -353,6 +396,8 @@ export function templateToFormValues(
     slug: template.slug,
     subject: template.subject,
     preheader: template.preheader ?? "",
+    format: template.format === "written" ? "written" : "code",
+    blocks: template.format === "written" ? (template.blocks ?? null) : null,
     htmlContent: template.htmlContent,
     plainTextContent: template.plainTextContent ?? "",
     useLayout: template.useLayout,
