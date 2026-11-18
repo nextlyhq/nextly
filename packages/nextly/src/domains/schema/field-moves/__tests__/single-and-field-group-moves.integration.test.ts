@@ -349,7 +349,8 @@ describe.each(getConfiguredTestDialects())(
 
     it("on a translated Single, a translated field moved into a translated group keeps each language's value", async () => {
       const t = await boot(dialect);
-      const title: Field = { name: "title", type: "text", localized: true };
+      // Not `title`, which a row keeps as its own column when no field takes the name.
+      const tagline: Field = { name: "tagline", type: "text", localized: true };
       const meta = (fields: Field[]) =>
         group("meta", fields, { localized: true });
       await dispatchSingles(
@@ -359,7 +360,7 @@ describe.each(getConfiguredTestDialects())(
           slug: "sgm_page",
           label: "Page",
           localized: true,
-          fields: [title, meta([NOTE])],
+          fields: [tagline, meta([NOTE])],
         }
       );
       for (const [locale, text] of [
@@ -368,7 +369,7 @@ describe.each(getConfiguredTestDialects())(
       ] as const) {
         await t.nextly.updateSingle({
           slug: "sgm_page" as never,
-          data: { title: text, _overwrite: true },
+          data: { tagline: text, _overwrite: true },
           locale,
           overrideAccess: true,
         });
@@ -377,8 +378,8 @@ describe.each(getConfiguredTestDialects())(
       await saveSingle(
         t,
         "sgm_page",
-        [meta([NOTE, title])],
-        [{ from: ["title"], to: ["meta", "title"] }]
+        [meta([NOTE, tagline])],
+        [{ from: ["tagline"], to: ["meta", "tagline"] }]
       );
 
       for (const [locale, text] of [
@@ -387,7 +388,7 @@ describe.each(getConfiguredTestDialects())(
       ] as const) {
         const read = await readSingle(t, "sgm_page", locale);
         expect(
-          (read.meta as Record<string, unknown> | undefined)?.title,
+          (read.meta as Record<string, unknown> | undefined)?.tagline,
           locale
         ).toBe(text);
       }
