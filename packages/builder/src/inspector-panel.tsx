@@ -804,8 +804,7 @@ function SelectionInspector({
                   editor={editor}
                   styleNode={styleNode}
                   renderedTag={canvas.tag}
-                  renderedPicture={canvas.picture}
-                  renderedPicturePosition={canvas.picturePosition}
+                  rendered={canvas}
                   sideOrientation={canvas.orientation}
                   styleState={styleState}
                   breakpoint={breakpoint}
