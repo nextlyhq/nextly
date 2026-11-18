@@ -487,6 +487,132 @@ describe("a block following a setting, its edges", () => {
     );
     expect(echo?.props.text).toBe("Plain title");
   });
+  it("reads the outer list's item for a setting's block in a nested list's empty state", () => {
+    // The Title setting's heading sits in a Comments list's empty state, which
+    // is drawn with no comment, so it reads each post; its follower beside the
+    // Comments list reads the post too, and is never pointed at a comment.
+    const card = component(
+      [
+        {
+          id: "posts",
+          type: COLLECTION_LIST_TYPE,
+          version: 1,
+          props: { query: { collection: "posts" } },
+          slots: {
+            [LIST_ENTRY_SLOT]: [
+              {
+                id: "comments",
+                type: COLLECTION_LIST_TYPE,
+                version: 1,
+                props: { query: { collection: "comments" } },
+                slots: {
+                  [LIST_ENTRY_SLOT]: [],
+                  empty: [
+                    heading("card-title", "Plain title", {
+                      text: { $bind: "title", source: "item" },
+                    }),
+                  ],
+                },
+              },
+              heading("card-echo", "Stored echo", { text: follows("title") }),
+            ],
+          },
+        },
+      ],
+      [exposure("title", "card-title", "text")]
+    );
+    const nodes = composed(
+      page([placement("p", "card")]),
+      new Map<string, BlockDocument>([["card", card]])
+    );
+    const posts = nodes.find(
+      entry =>
+        entry.type === COLLECTION_LIST_TYPE &&
+        (entry.props.query as { collection?: unknown } | undefined)
+          ?.collection === "posts"
+    )?.id;
+    expect(posts).toBeDefined();
+    const echo = copyOf(nodes, "card-echo");
+    expect(echo?.bindings?.text).toMatchObject({
+      $bind: "title",
+      source: "item",
+      list: posts,
+    });
+  });
+
+  it("clears a placed component's setting it feeds when the placement clears its own", () => {
+    // A cleared Title leaves the card's heading empty, and the badge it feeds
+    // empty too, rather than back on the badge's own default.
+    const badge = component(
+      [heading("badge-label", "Badge label")],
+      [exposure("label", "badge-label", "text")]
+    );
+    const card = component(
+      [
+        heading("card-title", "Plain title"),
+        placement(
+          "card-badge",
+          "badge",
+          {},
+          {
+            "overrides.label": follows("title"),
+          }
+        ),
+      ],
+      [exposure("title", "card-title", "text")]
+    );
+    const nodes = composed(
+      page([
+        placement("p", "card", { overrides: { title: { $unset: true } } }),
+      ]),
+      new Map<string, BlockDocument>([
+        ["card", card],
+        ["badge", badge],
+      ])
+    );
+    expect(copyOf(nodes, "card-title")?.props.text).toBeUndefined();
+    expect(copyOf(nodes, "badge-label")).toBeDefined();
+    expect(copyOf(nodes, "badge-label")?.props.text).toBeUndefined();
+  });
+
+  it("charges finding a setting's followers to the caller's work allowance", () => {
+    // Each node counts the reads of its id. With one unit of work left the
+    // placement is refused at once; preparing its followers must not first
+    // read the whole definition for free.
+    const reads = { count: 0 };
+    const counted = (node: BlockNode): BlockNode => {
+      const { id, ...rest } = node;
+      return Object.defineProperty({ ...rest }, "id", {
+        enumerable: true,
+        get: () => {
+          reads.count += 1;
+          return id;
+        },
+      }) as BlockNode;
+    };
+    const filler = Array.from({ length: 4000 }, (_, i) =>
+      counted(heading(`f${String(i)}`, "x"))
+    );
+    const readsFor = (exposed: ExposedProperty[]): number => {
+      reads.count = 0;
+      const card = component(
+        [counted(heading("card-title", "Plain title")), ...filler],
+        exposed
+      );
+      const result = resolveComponentInstances(
+        page([placement("p", "card")]),
+        new Map<string, BlockDocument>([["card", card]]),
+        { work: { left: 1 } }
+      );
+      expect(result.unresolved.some(entry => entry.reason === "budget")).toBe(
+        true
+      );
+      return reads.count;
+    };
+    const without = readsFor([]);
+    const withSetting = readsFor([exposure("title", "card-title", "text")]);
+    expect(withSetting).toBeLessThan(without + 20);
+  });
 });
 
 describe("a block following a setting, outside composition", () => {

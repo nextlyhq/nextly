@@ -24,7 +24,7 @@ import {
   type DocumentLimits,
   MAX_ENVELOPE_ENTRIES,
 } from "./limits";
-import { COLLECTION_LIST_TYPE } from "./list-query-contract";
+import { drawsItsEntry } from "./list-query-contract";
 import { isPlainRecord } from "./plain-record";
 import { defineEntry, ownEntry, ownKeys } from "./safe-record";
 import type { ValidationIssue } from "./validation-contract";
@@ -34,7 +34,22 @@ import type { ValidationIssue } from "./validation-contract";
  * document's own limits, so what a save accepts is what is filled, and a
  * stored chain past them is never walked.
  */
-export type FollowerLimits = Pick<DocumentLimits, "maxNodes" | "maxDepth">;
+export type FollowerLimits = Pick<DocumentLimits, "maxNodes" | "maxDepth"> & {
+  /**
+   * The caller's work allowance, where one bounds the whole resolution: each
+   * entry either walk reads is charged to it, and once it is spent neither
+   * reads further, as the clone stops once it is.
+   */
+  readonly work?: { left: number };
+};
+
+/** Charge one entry read to the caller's allowance, or say it is spent. */
+function spendWork(work: { left: number } | undefined): boolean {
+  if (work === undefined) return true;
+  if (work.left <= 0) return false;
+  work.left -= 1;
+  return true;
+}
 
 /** The source of a binding that follows one of its component's settings. */
 const SETTING_BINDING_SOURCE = "setting";
@@ -100,15 +115,19 @@ function eachFollower(
   nodes: unknown,
   path: string,
   visit: (node: BlockNode, prop: string, id: string, at: string) => void,
-  /** Nodes left to read, and levels left to descend: past either, nothing is. */
-  budget: { left: number; depth: number }
+  /**
+   * Nodes left to read, levels left to descend, and the caller's allowance:
+   * past any of them, nothing is.
+   */
+  budget: { left: number; depth: number; work?: { left: number } }
 ): void {
   if (!Array.isArray(nodes) || budget.depth <= 0) return;
   budget.depth -= 1;
   for (let i = 0; i < nodes.length && budget.left > 0; i += 1) {
-    const node: unknown = nodes[i];
     // Charged for every entry read, a node or not, so a forest of entries
     // that are no nodes is read only as far as the budget, as one of nodes is.
+    if (!spendWork(budget.work)) break;
+    const node: unknown = nodes[i];
     budget.left -= 1;
     if (!isPlainRecord(node)) continue;
     const at = `${path}/${i}`;
@@ -314,7 +333,7 @@ export function followerFills(
         settingId: id,
       });
     },
-    { left: limits.maxNodes, depth: limits.maxDepth }
+    { left: limits.maxNodes, depth: limits.maxDepth, work: limits.work }
   );
   return fills;
 }
@@ -371,7 +390,9 @@ function propAt(props: unknown, path: string): unknown {
 
 /**
  * The blocks of a forest, slot content included, by id, with the Collection
- * list nearest each, over at most `maxNodes`.
+ * list whose entry is the item where each sits, over at most `maxNodes`: a
+ * list's per-entry slot starts its scope, and its empty state, drawn with no
+ * entry, keeps the one around the list, as `outerListOf` answers.
  */
 function nodesById(
   nodes: unknown,
@@ -395,11 +416,12 @@ function nodesById(
       if (budget.left <= 0) return;
       // Charged before the entry is judged, a node or not, as the follower
       // walk is, so entries that are no nodes don't read past the budget.
+      if (!spendWork(limits.work)) return;
       budget.left -= 1;
-      const inner = indexed(node, list, found);
-      if (inner === null) continue;
-      for (const children of slotForests(node))
-        visit(children, inner, depth + 1);
+      if (!indexed(node, list, found)) continue;
+      for (const [name, children] of slotForests(node)) {
+        visit(children, drawsItsEntry(node, name) ? node.id : list, depth + 1);
+      }
     }
   };
   visit(nodes, undefined, 1);
@@ -407,9 +429,8 @@ function nodesById(
 }
 
 /**
- * One node into the index, first of an id kept, with the list nearest it;
- * answers the list nearest its own children, or `null` for an entry that is
- * no node.
+ * One node into the index, first of an id kept, with the list whose entry is
+ * its item; `false` for an entry that is no node.
  */
 function indexed(
   node: unknown,
@@ -418,20 +439,20 @@ function indexed(
     nodes: Map<string, BlockNode>;
     listOf: Map<string, string | undefined>;
   }
-): string | undefined | null {
-  if (!isPlainRecord(node) || typeof node.id !== "string") return null;
+): node is BlockNode {
+  if (!isPlainRecord(node) || typeof node.id !== "string") return false;
   if (!found.nodes.has(node.id)) {
     found.nodes.set(node.id, node as unknown as BlockNode);
     found.listOf.set(node.id, list);
   }
-  return node.type === COLLECTION_LIST_TYPE ? node.id : list;
+  return true;
 }
 
-/** The forests a node's slots hold. */
-function slotForests(node: unknown): unknown[] {
+/** The forests a node's slots hold, by slot name. */
+function slotForests(node: unknown): [string, unknown][] {
   const slots = isPlainRecord(node) ? ownEntry(node, "slots") : undefined;
   return isPlainRecord(slots)
-    ? ownKeys(slots).map(name => ownEntry(slots, name))
+    ? ownKeys(slots).map(name => [name, ownEntry(slots, name)])
     : [];
 }
 

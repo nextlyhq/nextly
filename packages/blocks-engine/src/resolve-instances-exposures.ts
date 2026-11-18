@@ -53,15 +53,22 @@ interface PropEdit {
  * id, which is how composition reads it. The one way both the placed and the
  * shown-alone fill write it.
  *
+ * A cleared setting clears a block's prop, and a placement's setting is
+ * cleared by its `$unset` override: removing the override would give it the
+ * placed component's default instead, which is not what the setting shows.
+ *
  * @experimental Settles with the editor's binding controls.
  */
 export function followerEdit(fill: FollowerFill): PropEdit {
   const id = fill.placement ? boundSettingId(fill.prop) : undefined;
+  if (id === undefined) {
+    return { path: fill.prop, value: fill.value, unset: fill.unset };
+  }
   return {
     path: fill.prop,
-    value: fill.value,
-    unset: fill.unset,
-    ...(id === undefined ? {} : { segments: ["overrides", id] }),
+    value: fill.unset ? { $unset: true } : fill.value,
+    unset: false,
+    segments: ["overrides", id],
   };
 }
 
@@ -114,7 +121,10 @@ export function planEdits(
   instance: ResolvedBlockNode,
   supplied: Record<string, ResolvedBlockNode[]> | undefined,
   composed: boolean,
-  /** The limits the definition is read under, for its followers. */
+  /**
+   * The limits the definition is read under, for its followers, with the
+   * caller's work allowance its follower walks are charged to.
+   */
   limits?: FollowerLimits
 ): Map<string, NodePlan> {
   const plans = new Map<string, NodePlan>();
