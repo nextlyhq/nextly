@@ -17,6 +17,7 @@ import {
   removeRuntimeCollection,
 } from "./support/runtime-collection";
 import { test } from "./support/test";
+import { includingHidden } from "./support/visible";
 
 // Creating a collection changes the schema and the dashboard's cards, as for
 // the other specs that create one.
@@ -114,10 +115,14 @@ test.describe("a condition across a rename", () => {
     await gotoAdmin(page, `/collections/${slug}/create`);
     const source = page.getByLabel("Kind", { exact: true });
     await expect(source).toBeVisible();
-    await expect(page.getByLabel("Note", { exact: true })).toHaveCount(0);
+    await expect(
+      includingHidden(page).getByLabel("Note", { exact: true })
+    ).toHaveCount(0);
     await source.fill("show");
     await expect(page.getByLabel("Note", { exact: true })).toBeVisible();
     await source.fill("hide");
-    await expect(page.getByLabel("Note", { exact: true })).toHaveCount(0);
+    await expect(
+      includingHidden(page).getByLabel("Note", { exact: true })
+    ).toHaveCount(0);
   });
 });
