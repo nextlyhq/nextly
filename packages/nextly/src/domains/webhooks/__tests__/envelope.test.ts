@@ -1,6 +1,10 @@
 import { describe, it, expect } from "vitest";
 
-import { buildEnvelope, type BuildEnvelopeInput } from "../envelope";
+import {
+  buildEnvelope,
+  computeChangedFields,
+  type BuildEnvelopeInput,
+} from "../envelope";
 
 // A fixed Date fixture so every timestamp assertion is deterministic.
 const base: BuildEnvelopeInput = {
@@ -227,5 +231,46 @@ describe("buildEnvelope", () => {
       statusChange: { from: null, to: "published" },
     });
     expect(env.statusChange).toEqual({ from: null, to: "published" });
+  });
+});
+
+// A nested row's system timestamps are rewritten with the row, so they say
+// nothing about whether its content changed. Only the physical system
+// columns are passed over: a user field called `updatedAt` is content.
+describe("computeChangedFields", () => {
+  it("does not name a component whose row was only stamped anew", () => {
+    expect(
+      computeChangedFields(
+        { profile: { id: "p1", updated_at: "t1", heading: "B" } },
+        { profile: { id: "p1", updated_at: "t2", heading: "B" } }
+      )
+    ).toEqual([]);
+  });
+
+  it("names a component whose own field changed", () => {
+    expect(
+      computeChangedFields(
+        { profile: { id: "p1", updated_at: "t1", heading: "A" } },
+        { profile: { id: "p1", updated_at: "t2", heading: "B" } }
+      )
+    ).toEqual(["profile"]);
+  });
+
+  it("names a user field called updatedAt inside a component", () => {
+    expect(
+      computeChangedFields(
+        { profile: { id: "p1", meta: { updatedAt: "a" } } },
+        { profile: { id: "p1", meta: { updatedAt: "b" } } }
+      )
+    ).toEqual(["profile"]);
+  });
+
+  it("still names the document's own top-level stamp", () => {
+    expect(
+      computeChangedFields(
+        { title: "A", updatedAt: "t1" },
+        { title: "A", updatedAt: "t2" }
+      )
+    ).toEqual(["updatedAt"]);
   });
 });

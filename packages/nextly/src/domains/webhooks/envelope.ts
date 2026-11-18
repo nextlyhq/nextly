@@ -10,6 +10,7 @@
  * @module domains/webhooks/envelope
  */
 
+import { TIMESTAMP_COLUMN_NAMES } from "../../shared/lib/case-conversion";
 import { deepEqual } from "../../shared/lib/deep-equal";
 import { defineOwnProperty } from "../../shared/lib/own-property";
 import { readFieldGroupType } from "../field-groups/storage/field-group-type-key";
@@ -105,9 +106,41 @@ export function computeChangedFields(
   const keys = new Set([...Object.keys(previous), ...Object.keys(next)]);
   const changed: string[] = [];
   for (const k of keys) {
-    if (!deepEqual(previous[k], next[k])) changed.push(k);
+    if (!deepEqual(withoutRowStamps(previous[k]), withoutRowStamps(next[k]))) {
+      changed.push(k);
+    }
   }
   return changed.sort();
+}
+
+/**
+ * The system timestamp columns a stored row carries, by their physical names: a nested row (a
+ * component instance) arrives with them as stored, and a write rewrites them whether or not its
+ * content changed. From the one system-column list, so a user field that happens to be called
+ * `updatedAt` (in a group inside a component, say) is never mistaken for one.
+ */
+const ROW_STAMPS: ReadonlySet<string> = new Set(
+  TIMESTAMP_COLUMN_NAMES.map(([column]) => column)
+);
+
+/**
+ * `value` without the system timestamp columns of the rows nested in it
+ * (a component instance, a related row). A write that rewrites a nested row
+ * stamps it anew, and where the database keeps milliseconds that stamp
+ * differs even when no field of the row did: a field is changed when its
+ * content is, not its row's stamp. The document's own top-level stamps are
+ * not nested, and stay counted.
+ */
+function withoutRowStamps(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(withoutRowStamps);
+  if (value === null || typeof value !== "object" || value instanceof Date) {
+    return value;
+  }
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .filter(([key]) => !ROW_STAMPS.has(key))
+      .map(([key, child]) => [key, withoutRowStamps(child)])
+  );
 }
 
 /**
