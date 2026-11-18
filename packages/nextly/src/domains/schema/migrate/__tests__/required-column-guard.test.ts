@@ -162,6 +162,27 @@ describe("judgeRequiredColumnTargets", () => {
     });
   });
 
+  it("names a field group's users collections first, then Singles, each by slug, whatever order the rows come back in", async () => {
+    // The order a database returns grouped rows in is its own (MySQL's varies): the Single first,
+    // then two collections out of slug order.
+    const f = facts({
+      "comp_seo.meta_title": rows(6, {
+        single_settings: 3,
+        dc_posts: 2,
+        dc_pages: 1,
+      }),
+    });
+    const [refusal] = await judgeRequiredColumnTargets(
+      [{ table: "comp_seo", column: "meta_title", required: "meta_title" }],
+      f
+    );
+    expect(refusal?.users).toEqual([
+      { kind: "collection", slug: "pages", count: 1 },
+      { kind: "collection", slug: "posts", count: 2 },
+      { kind: "single", slug: "settings", count: 3 },
+    ]);
+  });
+
   it("leaves alone a column not there, one already NOT NULL, and a zero count", async () => {
     const f = facts({});
     expect(

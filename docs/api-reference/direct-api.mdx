@@ -792,6 +792,66 @@ await nextly.verifyEmail({ token: "verification-token" });
 
 **Returns:** `{ success: true, email? }`.
 
+## Workflows (experimental)
+
+`nextly.workflows` reads and moves review state through the same code as the REST routes, so both answer one caller alike. Calls are trusted unless you pass `overrideAccess: false` with a `user`. A trusted call is never refused for access, and takes a step as the system, which may not approve or request changes. It is still refused for a document that does not exist (`NOT_FOUND`) or a part the document cannot have (`WORKFLOW_UNKNOWN_PART`).
+
+```ts
+const state = await nextly.workflows.reviewState({
+  document: { collection: "posts", id },
+});
+// state.workflow is null, and state.parts empty, where no workflow is attached.
+
+await nextly.workflows.takeStep({
+  document: { collection: "posts", id },
+  step: "send",
+  parts: ["es"],
+  seen: [
+    {
+      part: "es",
+      revision: state.parts[0].revision,
+      version: state.parts[0].version!,
+    },
+  ],
+  comment: "Ready for legal",
+});
+
+await nextly.workflows.assign({
+  assignments: [
+    /* as REST */
+  ],
+});
+await nextly.workflows.stepMany({
+  step: "send",
+  documents: [
+    /* … */
+  ],
+});
+await nextly.workflows.assignMany({
+  assignments: [
+    /* … */
+  ],
+});
+
+// What waits is read for someone, so it needs a checked call.
+const page = await nextly.workflows.waiting({
+  page: 1,
+  limit: 20,
+  overrideAccess: false,
+  user,
+});
+
+const workflows = await nextly.workflows.list();
+const settings = await nextly.workflows.settings.read({ slug: "editorial" });
+await nextly.workflows.settings.update({
+  slug: "editorial",
+  revision: settings.revision,
+  emails: { approved: false },
+});
+```
+
+`stepMany` and `assignMany` answer `{ moved, refused }` and `{ assigned, refused }`, each refusal naming its `document` as you named it (`{ collection, id }`, or a Single's `{ single }` alone), its `code` and its `message`. The other shapes and refusals are those of the REST routes; see [Workflows](/docs/api-reference/rest-api#workflows-experimental).
+
 ## Other namespaces
 
 The Direct API also exposes typed namespaces for users, media, forms, field groups, email providers + templates, RBAC, API keys, and access checks. They follow the same `find` / `findByID` / `create` / `update` / `delete` shape and use the canonical `ListResult<T>` and `MutationResult<T>` envelopes:
