@@ -62,7 +62,10 @@ import {
   type SchemaChangeAnswers,
 } from "../../domains/schema/builder-save/schema-change-save";
 import { entityRelations } from "../../domains/schema/builder-save/single-relations";
-import { dialogRowAnswers } from "../../domains/schema/builder-save/single-row-fills";
+import {
+  dialogRowAnswers,
+  reviewWithRowFillsSettled,
+} from "../../domains/schema/builder-save/single-row-fills";
 import { singleEntity } from "../../domains/schema/builder-save/stored-entity";
 import { refuseCompanionRenameSwitch } from "../../domains/schema/pipeline/companion-shape-switches";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
@@ -1347,6 +1350,24 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // What the save writes beyond the person's change, for the review to show before they
       // confirm, as a collection's does: each conversion an adoption makes, each fill and delete.
       const answers = body as SchemaChangeAnswers;
+      // The review settles, as the save will, each field the Single's row is filled for with its
+      // stated default (`dialogRowAnswers`): the dialog then asks nothing the default answers.
+      const wasLocalized =
+        (single as { localized?: boolean }).localized === true;
+      const { fileAnswers } = dialogRowAnswers({
+        single: { tableName, fields: currentFields },
+        fields: fields as FieldDefinition[],
+        renameResolutions: answers.renameResolutions,
+        resolutions: answers.resolutions,
+        eventResolutions: answers.eventResolutions,
+        dialect,
+        translatedAfter: translationLayoutChange({
+          wasLocalized,
+          isLocalized: readRequestLocalized(body) ?? wasLocalized,
+          wasStatus: single.status === true,
+          hasStatus: single.status === true,
+        }).isStored,
+      });
       const reviewDeps = builderSaveDeps();
       const review = await reviewBuilderSchemaChange(reviewDeps, {
         kind: "single",
@@ -1366,6 +1387,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           ...(answers.acknowledgedConversions === undefined
             ? {}
             : { acknowledgedConversions: answers.acknowledgedConversions }),
+          // The Single's row fills the save writes, so the file's review matches it.
+          ...fileAnswers,
         },
         ...(reviewDeps === undefined
           ? {}
@@ -1377,7 +1400,13 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
               fields as FieldDefinition[]
             )),
       });
-      return respondData({ ...preview, ...review });
+      return respondData({
+        ...reviewWithRowFillsSettled(
+          preview,
+          new Set((fileAnswers.rowFills ?? []).map(fill => fill.field))
+        ),
+        ...review,
+      });
     },
   },
 

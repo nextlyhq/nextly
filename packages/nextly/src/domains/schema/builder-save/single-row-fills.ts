@@ -13,6 +13,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { DynamicCollectionSchemaService } from "../../dynamic-collections/services/dynamic-collection-schema-service";
+import { statedMoment } from "../../dynamic-collections/services/stated-default";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import type {
   BrowserRenameResolution,
@@ -21,10 +22,12 @@ import type {
 } from "../pipeline/prompt-dispatcher/browser";
 import { parseEventId, type Resolution } from "../pipeline/resolution/types";
 import {
+  classifyFieldKind,
   fieldProducesColumn,
   fieldsStoredOnRow,
   toSnakeCase,
 } from "../services/field-column-descriptor";
+import { storedDateValue } from "../utils/backfill-default";
 
 /**
  * The named fields a row stores: the top-level ones and those a group with no name lays out
@@ -57,8 +60,9 @@ export function fieldsNewToSingleTable(args: {
       .map(field => toSnakeCase(field.name)),
     ...args.renamedTo,
   ]);
+  // A field with no column of its own (a virtual field, a many-to-many) has none to fill.
   return namedOnRow(args.newFields).filter(
-    field => !kept.has(toSnakeCase(field.name))
+    field => fieldProducesColumn(field) && !kept.has(toSnakeCase(field.name))
   );
 }
 
@@ -136,6 +140,7 @@ export function dialogRowAnswers(args: {
       !Object.hasOwn(answered, fill.field) &&
       !answeredColumns.has(toSnakeCase(fill.field))
   );
+  const byName = new Map(namedOnRow(args.fields).map(f => [f.name, f]));
   // Required fields wherever the row stores them, inside a group with no name included.
   const required = new Set(
     namedOnRow(args.fields)
@@ -148,7 +153,10 @@ export function dialogRowAnswers(args: {
         .filter(fill => required.has(fill.field))
         .map(fill => [
           fill.field,
-          { action: "provide_default" as const, value: fill.value },
+          {
+            action: "provide_default" as const,
+            value: storedForm(byName.get(fill.field), fill.value, args.dialect),
+          },
         ])
     ),
     ...answered,
@@ -159,5 +167,61 @@ export function dialogRowAnswers(args: {
       Object.keys(pushAnswers).length > 0
         ? { tableName: args.single.tableName, byFieldName: pushAnswers }
         : undefined,
+  };
+}
+
+/**
+ * `value` in the form its field's column stores, as the push binds an answer: a date as the
+ * moment it names (`storedDateValue`, epoch seconds on SQLite), a JSON field's value as its JSON
+ * text, and a boolean as 1 or 0 on SQLite, which keeps a boolean so. The file's fill writes the
+ * same forms (`resolutionStatement`).
+ */
+function storedForm(
+  field: FieldDefinition | undefined,
+  value: unknown,
+  dialect: SupportedDialect
+): unknown {
+  if (field === undefined) return value;
+  if (field.type === "date") {
+    const at = statedMoment(value);
+    return at === null ? value : storedDateValue(at, dialect);
+  }
+  if (classifyFieldKind(field, "collection") === "json") {
+    return JSON.stringify(value);
+  }
+  if (typeof value === "boolean" && dialect === "sqlite") return value ? 1 : 0;
+  return value;
+}
+
+/**
+ * The review of a Single's dialog save as the save will apply it: a field its row is filled for
+ * with the field's stated default (`dialogRowAnswers`) asks nothing, so the dialog does not hold
+ * Save for an answer the default already gives. The review's verdict is `interactive` only while a
+ * field is still asked about.
+ */
+export function reviewWithRowFillsSettled<
+  P extends {
+    classification: string;
+    hasDestructiveChanges?: boolean;
+    interactiveFields: readonly { name: string }[];
+  },
+>(preview: P, filled: ReadonlySet<string>): P {
+  const interactiveFields = preview.interactiveFields.filter(
+    field => !filled.has(field.name)
+  );
+  if (interactiveFields.length === preview.interactiveFields.length) {
+    return preview;
+  }
+  const settled =
+    preview.classification === "interactive" && interactiveFields.length === 0;
+  return {
+    ...preview,
+    interactiveFields,
+    ...(settled
+      ? {
+          classification:
+            preview.hasDestructiveChanges === true ? "destructive" : "safe",
+        }
+      : {}),
   };
 }
