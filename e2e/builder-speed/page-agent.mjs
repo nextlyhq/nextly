@@ -192,18 +192,34 @@ export function pageChecks() {
           s.url.includes("/collections/pages/entries/") &&
           !s.url.includes("/versions/")
       );
-      if (!answered) return false;
       const button = document.querySelector(
         '[data-publish-split] [data-primary="true"]'
       );
       const state = document.querySelector(
         '[data-testid="save-state-indicator"]'
       );
-      return (
+      // The button says it has nothing left to do by `aria-disabled`, kept
+      // focusable to explain why, rather than by `disabled`.
+      const finished =
         button instanceof HTMLButtonElement &&
-        button.disabled &&
-        state?.getAttribute("data-tone") === "saved"
-      );
+        (button.disabled || button.getAttribute("aria-disabled") === "true");
+      const tone = state?.getAttribute("data-tone") ?? null;
+      // What each part read last, so a measure that never sees the saved
+      // state can say which part it waited on.
+      window.__builderSpeed.savedParts = {
+        answered,
+        finished,
+        buttonKind: button?.getAttribute("data-state-kind") ?? null,
+        tone,
+      };
+      // The builder draws no separate save indicator: its buttons say the
+      // page's status themselves, and Publish reads "published" once the
+      // page is live. A surface with the indicator still waits for "saved".
+      const shown =
+        state === null
+          ? button?.getAttribute("data-state-kind") === "published"
+          : tone === "saved";
+      return answered && finished && shown;
     },
   };
 }

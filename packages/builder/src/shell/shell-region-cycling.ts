@@ -175,6 +175,20 @@ export function useRegionCycling(
           focusNextRegion(regionRefs.current);
         },
       },
+      {
+        // Back through the same regions, as the platform convention has it:
+        // from the inspector to the canvas, and from the top bar round to the
+        // inspector. Held back and passed on exactly as F6 is.
+        keys: "shift+F6",
+        when: () =>
+          enabledRef.current &&
+          shellClaimsRegionCycling(rootRef.current, shellCount()),
+        description: "Move to the previous area of the editor",
+        whenTyping: true,
+        run: () => {
+          focusNextRegion(regionRefs.current, -1);
+        },
+      },
     ],
     { name: "Builder shell" }
   );
@@ -185,13 +199,17 @@ export function useRegionCycling(
 }
 
 /**
- * Move focus to the next rendered region, wrapping around.
+ * Move focus to the next rendered region, wrapping around, or with `step` -1
+ * to the previous one (Shift+F6).
  *
  * A named function rather than the body of the binding, because TWO paths have
  * to perform this and they must not be two implementations of it — see
  * `useSeparatorRegionEscape` for why the second exists.
  */
-function focusNextRegion(map: Record<Region, HTMLElement | null> | null): void {
+function focusNextRegion(
+  map: Record<Region, HTMLElement | null> | null,
+  step: 1 | -1 = 1
+): void {
   if (!map) return;
   // Only regions that are actually rendered. The left panel is absent whenever
   // the rail has nothing open, and cycling the static list would land on it,
@@ -207,8 +225,9 @@ function focusNextRegion(map: Record<Region, HTMLElement | null> | null): void {
   );
   // From outside any region, F6 enters the first rather than doing nothing —
   // otherwise the key appears broken until focus happens to land somewhere it
-  // recognises.
-  const next = present[(currentIndex + 1) % present.length];
+  // recognises; Shift+F6 from outside enters the last.
+  const from = currentIndex < 0 && step < 0 ? 0 : currentIndex;
+  const next = present[(from + step + present.length) % present.length];
   if (next !== undefined) map[next]?.focus();
 }
 
@@ -251,7 +270,8 @@ export function useSeparatorRegionEscape(
       }
       event.preventDefault();
       event.stopPropagation();
-      focusNextRegion(regionRefs.current);
+      // Shift+F6 from a handle goes back, as it does everywhere else.
+      focusNextRegion(regionRefs.current, event.shiftKey ? -1 : 1);
     },
     [regionRefs, enabled]
   );

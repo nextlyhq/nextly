@@ -1,0 +1,150 @@
+---
+title: How text works
+description: How the Type tab sets your site's text, from the Body and Headings fonts and Site text to type sizes, fluid sizes and text styles, and where fonts are kept.
+---
+
+Your site's text is set in **Design → Type**, in two steps. **Site text** gives every
+page's body text, headings, links, buttons and captions their look. **Text styles** are
+named looks of text that any block can wear. Both are built from the same parts: the
+site's type sizes and its fonts.
+
+From the top, the Type tab holds:
+
+- **Body font** and **Headings font**, with **Manage fonts…** under them;
+- **How text works**, which opens this page;
+- **Site text**;
+- the fluid range, **Smallest screen** and **Largest screen**;
+- **Type scale**, the site's type sizes;
+- **Fonts and weights**, the site's font and weight variables;
+- **Text styles**.
+
+## The Body and Headings fonts
+
+**Body font** is the font every page's text is set in, and **Headings font** the font
+its headings are set in, on the canvas and on the live site. Choose one to pick from the
+fonts **On this site** and the **System** fonts, or search them.
+
+A new site starts with **Your site's own font** for the body, and **Same as body** for
+the headings. Neither writes anything, so the font your site's own CSS sets keeps
+working until you choose one.
+
+When the headings are set in a font that has no bold, a line under them says so, such
+as "Lora has no Bold, so browsers draw a fake bold". For a font added from Google Fonts,
+**Add Bold** adds it.
+
+## Site text
+
+**Site text** has one row each for **Body**, **Heading 1** to **Heading 6**, **Links**,
+**Buttons** and **Captions**. A row shows sample text in its look, beside its size and
+line height, "28 / 1.2" for example. Choose a row to change it, in a popup beside the
+panel. Under **Type size**, pick one of:
+
+- **Your site's own**, which writes nothing;
+- one of the site's type sizes, such as "H2 · 28 / 1.2". It sets the size and the line
+  height together, and the row follows when the type size changes;
+- **Custom size**, to type a **Size** and a **Line height** for this row only. The size
+  has a unit menu and **Fluid…** (see [Fluid sizes](#fluid-sizes));
+- **Text style:** and a text style's name, which gives the row that style's whole look.
+
+The **Links** row also has a **Colour**, a **Colour on hover**, and an **Underline**:
+**Always**, **On hover** or **Never**.
+
+On a new site, the heading rows use the built-in type sizes H1 to H6. **Body**,
+**Links**, **Buttons** and **Captions** start as **Your site's own** and write no CSS,
+so your site's own CSS for text keeps working inside the builder's pages.
+
+Site text sets the look of text only. It never adds space around a block: the space
+between blocks comes from the container holding them (see
+[Spacing](/docs/page-builder/editor#spacing)). A value you set on a block itself, in
+**Style → Text**, wins over Site text.
+
+## Type sizes
+
+**Type scale** lists the site's type sizes. Each is a size and the line height that goes
+with it, so a row reads like "28 / 1.2". The built-in sizes are H1 to H6 and Small. They
+are in `rem`, so they grow with the text size a reader sets in their browser.
+
+Choose a row to change its **Size** and **Line height**. Everything that uses it
+follows: a Site text row, a text style or a block. **+ Add type size** adds a size of
+your own.
+
+A type size something still uses can't be removed until those uses change, and the
+editor says where they are.
+
+## Fluid sizes
+
+A fluid size grows with the screen, from one size on small screens to another on large
+ones, with nothing to set per device.
+
+1. In a type size's **Size**, or a Site text row's **Custom size**, choose **Fluid…**.
+2. Type the size **On small screens** and **On large screens**, in px. The line under
+   them says what you'll get: "16px at 360px, growing to 20px at 1280px".
+3. Choose **Make fluid**.
+
+A fluid type size says so in its row: "Fluid · 16–20px".
+
+The widths a fluid size grows across are one setting for the whole site, the fluid
+range: **Smallest screen** and **Largest screen**, 360px and 1280px to start with. Change
+them under **Site text**, or from **Change range** inside **Fluid…**. Changing the range
+remakes every size made with **Fluid…**, as one step that a single undo takes back. A
+size you typed yourself, a `clamp()` for example, is left as it is.
+
+## Text styles
+
+A text style is a named look of text: its font, its size on each device, line height,
+weight, letter spacing and case. Any block can wear one, whatever it is, so a heading
+can look like "Display" and a paragraph like "Eyebrow". A new site has none.
+
+**+ Add text style**, at the end of the Type tab, makes one: type its name and press
+Enter. Choose a text style's row to set its parts in a popup beside the panel:
+
+- **Font**: **Body font**, **Headings font**, or one of the fonts on this site;
+- **Size**, one for each device;
+- **Line height**;
+- **Weight**;
+- **Letter spacing**;
+- **Case**: **As typed**, **UPPERCASE**, **lowercase** or **Capitalised**.
+
+A part left **Not set** keeps whatever the block would have without the style. A row's
+**⋯** menu holds **Rename**, **Duplicate**, **Lock** (or **Unlock**) and **Remove**. A
+text style a block or a Site text row uses can't be removed, and the editor says where
+it is used.
+
+To use one, select a block and open **Style → Text**: **Text style** is at the top.
+Pick a style, or **None** to take it away. A text style looks the same in every state,
+such as hover. Picking one is a change to the page, so anyone who can edit the page can
+do it.
+
+## How fonts are hosted
+
+Fonts are stored on your site. Visitors' browsers never contact Google.
+
+**Manage fonts…** in the Type tab opens the **Fonts** screen, the site's fonts with
+where each is used. The same screen is in the admin, as **Fonts** under **Design** in
+the Page Builder's panel, for those allowed to change the site's design. Add a font from
+**+**:
+
+- **From Google Fonts**: your server downloads the font's files into your media
+  library, and published pages load them from your site only. While you browse the
+  list, previews load from Fontsource, as the screen says: "Previews load from
+  Fontsource while you browse. Fonts you add are stored on your site." Only your
+  browser, in the editor, fetches the previews.
+- **Upload a font file**: a `.woff2` or `.woff` file of your own.
+
+Once a font is added, the screen asks "Use Lora for:" (with the font's name), with
+**Body**, **Headings**, **Both** or **Not now**.
+
+Each font says **Where it's used**: as the **Body font** or **Headings font**, and in
+how many places, "Used in 4 places" for example. The Body and Headings fonts can't be
+removed. Choose another one first. Removing a font keeps its files in your media
+library.
+
+The catalogue's hosts, and what one add may download, are set in your site's code: see
+[Fonts](/docs/page-builder/editor#fonts).
+
+## Related
+
+- [The Design panel](/docs/page-builder/design-panel): the Colours, Type, Spacing and
+  Styles tabs
+- [Using the editor](/docs/page-builder/editor): the inspector's **Style** tab, where a
+  block's own text is set

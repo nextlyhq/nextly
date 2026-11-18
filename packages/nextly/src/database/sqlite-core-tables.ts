@@ -980,6 +980,7 @@ export function generateSqliteCoreTableStatements(): string[] {
       "template_digest" TEXT,
       "failure_kind" TEXT,
       "failure_status" INTEGER,
+      "provider_origin" TEXT,
       "created_at" INTEGER NOT NULL
     )`,
     `CREATE INDEX IF NOT EXISTS "email_deliveries_created_idx"
@@ -998,6 +999,8 @@ export function generateSqliteCoreTableStatements(): string[] {
       ON "email_deliveries" ("key_digest")`,
     `CREATE INDEX IF NOT EXISTS "email_deliveries_queued_idx"
       ON "email_deliveries" ("queued_id")`,
+    `CREATE INDEX IF NOT EXISTS "email_deliveries_provider_origin_idx"
+      ON "email_deliveries" ("provider_origin", "created_at")`,
     `CREATE INDEX IF NOT EXISTS "email_deliveries_provider_type_idx"
       ON "email_deliveries" ("provider_type", "created_at")`,
     `CREATE INDEX IF NOT EXISTS "email_deliveries_template_idx"
@@ -1032,6 +1035,11 @@ export function generateSqliteCoreTableStatements(): string[] {
       "principal_id" TEXT,
       "failure" TEXT,
       "template_slug" TEXT,
+      "message_kind" TEXT,
+      "recipient_kinds" TEXT,
+      "provider_type" TEXT,
+      "provider_id" TEXT,
+      "provider_origin" TEXT,
       "created_at" INTEGER NOT NULL,
       "updated_at" INTEGER NOT NULL,
       "settled_at" INTEGER
@@ -1044,6 +1052,10 @@ export function generateSqliteCoreTableStatements(): string[] {
       ON "${EMAIL_QUEUE_TABLE}" ("created_at", "id")`,
     `CREATE INDEX IF NOT EXISTS "email_queue_template_idx"
       ON "${EMAIL_QUEUE_TABLE}" ("template_slug", "created_at")`,
+    `CREATE INDEX IF NOT EXISTS "email_queue_provider_type_idx"
+      ON "${EMAIL_QUEUE_TABLE}" ("provider_type", "created_at")`,
+    `CREATE INDEX IF NOT EXISTS "email_queue_provider_origin_idx"
+      ON "${EMAIL_QUEUE_TABLE}" ("provider_origin", "created_at")`,
     `CREATE TABLE IF NOT EXISTS "${EMAIL_QUEUE_RECIPIENTS_TABLE}" (
       "queued_id" TEXT NOT NULL,
       "recipient_hash" TEXT NOT NULL,
