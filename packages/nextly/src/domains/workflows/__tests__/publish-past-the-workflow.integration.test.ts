@@ -108,6 +108,7 @@ const PAGES = "pw_pages";
 const POSTS = "pw_posts";
 const LOOSE = "pw_loose";
 const BANNER = "pw_banner";
+const NOTICE = "pw_notice";
 const HOOKED = "pw_hooked";
 
 /** How many times Hooked's hooks ran, so a create the gate holds back can be seen to run none. */
@@ -132,7 +133,8 @@ const app = (): TestNextly => {
 
 /**
  * Pages (one shared part) and Posts (English and Spanish, with a shared code) on `gated`, Loose
- * with no workflow, and the Banner Single on `gated`.
+ * with no workflow, and on `gated` the Banner Single and the Notice Single (English and Spanish,
+ * with a shared code).
  */
 async function boot(
   dialect: TestDialect,
@@ -199,6 +201,17 @@ async function boot(
         workflow: gated,
         fields: [text({ name: "title" })],
       }),
+      defineSingle({
+        slug: NOTICE,
+        localized: true,
+        ...drafts,
+        ...visitorsRead,
+        workflow: gated,
+        fields: [
+          text({ name: "title", localized: true }),
+          text({ name: "code", localized: false }),
+        ],
+      }),
     ],
   });
   // A PostgreSQL or MySQL leg that silently booted SQLite would prove nothing about it.
@@ -260,13 +273,15 @@ async function take(
   });
 }
 
-/** People are made once per boot; the approver signs off on both collections. */
+/** People are made once per boot; the approver signs off on both collections and both Singles. */
 let approver: WorkflowCaller | undefined;
 async function approverOf(): Promise<WorkflowCaller> {
   if (approver) return approver;
   const rita = await person(app(), "rita", [
     ["sign-off", PAGES],
     ["sign-off", POSTS],
+    ["sign-off", BANNER],
+    ["sign-off", NOTICE],
   ]);
   approver = rita;
   return rita;
@@ -385,12 +400,12 @@ async function rest(
 }
 
 /**
- * Someone who may read, edit and publish Pages, Posts and the Banner, and nothing about review:
+ * Someone who may read, edit and publish Pages, Posts and both Singles, and nothing about review:
  * whom a check of the publish permission alone lets through.
  */
 async function publisher(id = "paula"): Promise<Record<string, string>> {
   await person(app(), id, [
-    ...[PAGES, POSTS, LOOSE, BANNER].flatMap(
+    ...[PAGES, POSTS, LOOSE, BANNER, NOTICE].flatMap(
       slug =>
         [
           ["read", slug],
@@ -403,6 +418,75 @@ async function publisher(id = "paula"): Promise<Record<string, string>> {
   ]);
   return sessionOf(id);
 }
+
+/** Saves `data` over a Single's document, trusted, in `locale` when given: its id. */
+async function saveSingle(
+  slug: string,
+  data: Doc,
+  locale?: string
+): Promise<string> {
+  await app().nextly.updateSingle({
+    slug: slug as never,
+    data: { ...data, _overwrite: true },
+    ...(locale ? { locale } : {}),
+  } as never);
+  const doc = (await app().nextly.findSingle({
+    slug: slug as never,
+    status: "all",
+  } as never)) as Doc;
+  if (typeof doc.id !== "string") throw new Error(`no id on ${slug}`);
+  return doc.id;
+}
+
+/** Submits and approves each of `parts` (null: the shared part) of a Single's document. */
+async function approveSingle(
+  slug: string,
+  id: string,
+  parts: (string | null)[]
+) {
+  const rita = await approverOf();
+  for (const part of parts) {
+    for (const [step, caller] of [
+      ["submit", { kind: "system" }],
+      ["approve", rita],
+    ] as const) {
+      const state = await stateOf(app(), {
+        scopeKind: "single",
+        scopeSlug: slug,
+        entryId: id,
+        part,
+      });
+      const doc = (await app().nextly.findSingle({
+        slug: slug as never,
+        status: "all",
+        ...(part !== null ? { locale: part } : {}),
+      } as never)) as Doc;
+      await takeWorkflowStep(app().adapter, {
+        document: { scopeKind: "single", scopeSlug: slug, entryId: id },
+        step,
+        parts: [part],
+        seen: [
+          {
+            part,
+            revision: state?.revision ?? 0,
+            version: String(doc._rev),
+          },
+        ],
+        caller,
+      });
+    }
+  }
+}
+
+/** A Single as a visitor reads it in `locale`, or null where nothing of it is live. */
+const liveSingle = async (slug: string, locale?: string) =>
+  (await app()
+    .nextly.findSingle({
+      slug: slug as never,
+      overrideAccess: false,
+      ...(locale ? { locale } : {}),
+    } as never)
+    .catch(() => null)) as Doc | null;
 
 /** Whether a call was refused: a thrown error, or a REST answer outside 2xx. */
 async function refusedBy(call: () => Promise<unknown>): Promise<boolean> {
@@ -1229,43 +1313,60 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
-    // A Single takes no workflow steps yet, so none can hold an approval: the gate does not judge
-    // a Single's publish until it can (`SINGLES_GOVERNED`), and one with a workflow attached
-    // publishes through every door as one without.
-    describe("Singles, not judged until they take steps", () => {
-      /** The Banner as a visitor reads it, or null where nothing of it is live. */
-      const liveBanner = async () =>
-        (await app()
-          .nextly.findSingle({
-            slug: BANNER as never,
-            overrideAccess: false,
-          } as never)
-          .catch(() => null)) as Doc | null;
-
-      it("publishes through a REST save carrying a status", async () => {
+    describe("Singles", () => {
+      it("refuses a REST save carrying a status on an unapproved Single", async () => {
         await boot(dialect);
         const session = await publisher();
-        await app().nextly.updateSingle({
-          slug: BANNER as never,
-          data: { title: "Banner draft", _overwrite: true },
-        } as never);
+        await saveSingle(BANNER, { title: "Banner draft" });
 
         const answer = await rest("PATCH", ["singles", BANNER], session, {
           status: "published",
           _overwrite: true,
         });
 
-        expect(answer.status, JSON.stringify(answer.json)).toBeLessThan(400);
-        expect((await liveBanner())?.title).toBe("Banner draft");
+        expect(answer.status).toBeGreaterThanOrEqual(400);
+        expect((await liveSingle(BANNER))?.title).not.toBe("Banner draft");
       });
 
-      it("publishes through a REST publish of every language", async () => {
+      it("refuses a REST publish of every language on an unapproved Single", async () => {
         await boot(dialect);
         const session = await publisher();
-        await app().nextly.updateSingle({
-          slug: BANNER as never,
-          data: { title: "Banner draft", _overwrite: true },
-        } as never);
+        await saveSingle(BANNER, { title: "Banner draft" });
+
+        const answer = await rest(
+          "POST",
+          ["singles", BANNER, "publish-all"],
+          session,
+          { _overwrite: true }
+        );
+
+        expect(answer.status).toBeGreaterThanOrEqual(400);
+        expect((await liveSingle(BANNER))?.title).not.toBe("Banner draft");
+      });
+
+      it("refuses the Direct API's update carrying a status on an unapproved Single, trusted", async () => {
+        await boot(dialect);
+
+        const refused = await refusedBy(() =>
+          app().nextly.updateSingle({
+            slug: BANNER as never,
+            data: {
+              title: "Banner draft",
+              status: "published",
+              _overwrite: true,
+            },
+          } as never)
+        );
+
+        expect(refused).toBe(true);
+        expect((await liveSingle(BANNER))?.title).not.toBe("Banner draft");
+      });
+
+      it("publishes an approved untranslated Single through a REST publish of every language", async () => {
+        await boot(dialect);
+        const session = await publisher();
+        const id = await saveSingle(BANNER, { title: "Banner draft" });
+        await approveSingle(BANNER, id, [null]);
 
         const answer = await rest(
           "POST",
@@ -1275,22 +1376,62 @@ describe.each(getConfiguredTestDialects())(
         );
 
         expect(answer.status, JSON.stringify(answer.json)).toBeLessThan(400);
-        expect((await liveBanner())?.title).toBe("Banner draft");
+        expect((await liveSingle(BANNER))?.title).toBe("Banner draft");
       });
 
-      it("publishes through the Direct API's update carrying a status, trusted", async () => {
-        await boot(dialect);
-
-        await app().nextly.updateSingle({
-          slug: BANNER as never,
-          data: {
-            title: "Banner draft",
-            status: "published",
+      describe("publishing every language of a translated Single", () => {
+        const publishAll = (session: Record<string, string>) =>
+          rest("POST", ["singles", NOTICE, "publish-all"], session, {
             _overwrite: true,
-          },
-        } as never);
+          });
+        const saveEveryLanguage = (session: Record<string, string>) =>
+          rest(
+            "PATCH",
+            ["singles", NOTICE],
+            session,
+            { status: "published", _overwrite: true },
+            "?locale=*"
+          );
 
-        expect((await liveBanner())?.title).toBe("Banner draft");
+        it("puts the approved parts live where a configured language holds nothing at all", async () => {
+          await boot(dialect);
+          const session = await publisher();
+          // Saved in English only: Spanish has no translation, no draft and no version.
+          const id = await saveSingle(NOTICE, { title: "Hello", code: "N-1" });
+          await approveSingle(NOTICE, id, ["en", null]);
+
+          const answer = await publishAll(session);
+
+          expect(answer.status, JSON.stringify(answer.json)).toBeLessThan(400);
+          expect((await liveSingle(NOTICE, "en"))?.title).toBe("Hello");
+        });
+
+        it("puts them live through a save of every language carrying a status", async () => {
+          await boot(dialect);
+          const session = await publisher();
+          // Saved in English only: Spanish has no translation, no draft and no version.
+          const id = await saveSingle(NOTICE, { title: "Hello", code: "N-1" });
+          await approveSingle(NOTICE, id, ["en", null]);
+
+          const answer = await saveEveryLanguage(session);
+
+          expect(answer.status, JSON.stringify(answer.json)).toBeLessThan(400);
+          expect((await liveSingle(NOTICE, "en"))?.title).toBe("Hello");
+        });
+
+        it("still refuses a language it moves that holds no approval, which is the control", async () => {
+          await boot(dialect);
+          const session = await publisher();
+          const id = await saveSingle(NOTICE, { title: "Hello", code: "N-1" });
+          await saveSingle(NOTICE, { title: "Hola" }, "es");
+          await approveSingle(NOTICE, id, ["en", null]);
+
+          const answer = await publishAll(session);
+
+          expect(answer.status).toBe(400);
+          expect(JSON.stringify(answer.json)).toContain("NOT_APPROVED");
+          expect((await liveSingle(NOTICE, "en"))?.title).not.toBe("Hello");
+        });
       });
     });
 

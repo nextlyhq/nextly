@@ -6,7 +6,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { CreateComponentPayload } from "@admin/services/fieldGroupApi";
-import type { FieldDefinition } from "@admin/types/collection";
+import type {
+  CreateCollectionPayload,
+  FieldDefinition,
+} from "@admin/types/collection";
 
 /** What the server's address check refuses, by address. */
 let refusals: Record<string, { code: string; message: string }> = {};
@@ -49,6 +52,41 @@ function group(
   };
 }
 
+/** An unsaved collection, as "Create it too" leaves one for its host. */
+function collection(
+  address: string,
+  ownedBy?: UnsavedEntity["ownedBy"]
+): UnsavedEntity {
+  const label = address.charAt(0).toUpperCase() + address.slice(1);
+  return {
+    kind: "collection",
+    address,
+    token: `token-${address}`,
+    settings: {
+      singularName: label,
+      pluralName: label,
+      slug: address,
+      icon: "Box",
+    },
+    fields: [],
+    ...(ownedBy ? { ownedBy } : {}),
+  };
+}
+
+/** Steps for each kind: the field groups' given, the collections' spies. */
+function creators(
+  create: (payload: CreateComponentPayload) => Promise<unknown>,
+  mirror: (entity: UnsavedEntity) => Promise<void> = async () => {}
+) {
+  return {
+    "field-group": { create, mirror },
+    collection: {
+      create: vi.fn(async (_payload: CreateCollectionPayload) => ({})),
+      mirror: vi.fn(async (_entity: UnsavedEntity) => {}),
+    },
+  };
+}
+
 const field = (over: Partial<FieldDefinition>): FieldDefinition =>
   ({ name: "f", type: "text", ...over }) as FieldDefinition;
 
@@ -56,6 +94,9 @@ afterEach(() => {
   refusals = {};
   for (const address of ["hero", "banner", "promo", "cards"]) {
     removeUnsavedEntity("field-group", address);
+  }
+  for (const address of ["authors", "tags", "posts"]) {
+    removeUnsavedEntity("collection", address);
   }
 });
 
@@ -133,6 +174,114 @@ describe("fieldGroupsFirst", () => {
 
     expect(unused.map(g => g.address)).toEqual(["promo"]);
   });
+
+  it("finds the unsaved collections a host's links name, beside its field groups, in field order", () => {
+    const held = [
+      group("hero", POSTS),
+      collection("authors", POSTS),
+      collection("tags"),
+    ];
+    const fields = [
+      field({ name: "author", type: "relationship", relationTo: "authors" }),
+      field({
+        name: "layout",
+        type: "group",
+        fields: [
+          field({ name: "hero", type: "component", component: "hero" }),
+          // A link to several: each unsaved one it names, in its order.
+          field({
+            name: "related",
+            type: "relationship",
+            relationTo: ["media", "tags"],
+          }),
+        ],
+      }),
+    ];
+
+    const { used } = fieldGroupsFirst(held, fields, POSTS);
+
+    expect(used.map(e => `${e.kind}:${e.address}`)).toEqual([
+      "collection:authors",
+      "field-group:hero",
+      "collection:tags",
+    ]);
+  });
+
+  it("never lists the host as created before itself, though its links name it", () => {
+    const held = [collection("posts")];
+    const fields = [
+      field({ name: "parent", type: "relationship", relationTo: "posts" }),
+    ];
+
+    expect(fieldGroupsFirst(held, fields, POSTS).used).toEqual([]);
+  });
+
+  it("does not take a field group's address named by a link, nor a collection's named by a field-group field", () => {
+    const held = [group("authors"), collection("hero")];
+    const fields = [
+      field({ name: "author", type: "relationship", relationTo: "authors" }),
+      field({ name: "hero", type: "component", component: "hero" }),
+    ];
+
+    expect(fieldGroupsFirst(held, fields, POSTS).used).toEqual([]);
+  });
+
+  it("creates what an unsaved entity needs before it, though only it is named by the host", () => {
+    const hero = {
+      ...group("hero", POSTS),
+      fields: [
+        field({ name: "by", type: "relationship", relationTo: "authors" }),
+      ],
+    };
+    const held = [hero, collection("authors", POSTS), collection("tags")];
+    const fields = [
+      field({ name: "hero", type: "component", component: "hero" }),
+    ];
+
+    const { used, unused } = fieldGroupsFirst(held, fields, POSTS);
+
+    // The collection the field group links to is created before it, and is
+    // not let go as unused: a field the save creates needs it.
+    expect(used.map(e => `${e.kind}:${e.address}`)).toEqual([
+      "collection:authors",
+      "field-group:hero",
+    ]);
+    expect(unused).toEqual([]);
+  });
+
+  it("creates each once, however many need it, and stops at a loop", () => {
+    const hero = {
+      ...group("hero"),
+      fields: [
+        field({ name: "inner", type: "component", component: "banner" }),
+      ],
+    };
+    const banner = {
+      ...group("banner"),
+      fields: [field({ name: "back", type: "component", component: "hero" })],
+    };
+    const fields = [
+      field({ name: "a", type: "component", component: "hero" }),
+      field({ name: "b", type: "component", component: "banner" }),
+    ];
+
+    const { used } = fieldGroupsFirst([hero, banner], fields, POSTS);
+
+    expect(used.map(e => e.address)).toEqual(["banner", "hero"]);
+  });
+
+  it("lets the host's own unused collections go too", () => {
+    const held = [collection("authors", POSTS), collection("tags", POSTS)];
+    const fields = [
+      field({ name: "author", type: "relationship", relationTo: "authors" }),
+    ];
+
+    const { unused } = fieldGroupsFirst(held, fields, POSTS);
+
+    expect(unused.map(e => `${e.kind}:${e.address}`)).toEqual([
+      "collection:tags",
+    ]);
+  });
 });
 
 describe("createFieldGroupsFirst", () => {
@@ -143,7 +292,7 @@ describe("createFieldGroupsFirst", () => {
 
     const refused = await createFieldGroupsFirst(
       [group("hero", POSTS), group("banner", POSTS)],
-      { create, mirror: async () => {} }
+      creators(create)
     );
 
     expect(refused).toBeNull();
@@ -171,7 +320,10 @@ describe("createFieldGroupsFirst", () => {
       expect(unsavedEntity("field-group", made.address)).toBeDefined();
     });
 
-    await createFieldGroupsFirst([group("hero", POSTS)], { create, mirror });
+    await createFieldGroupsFirst(
+      [group("hero", POSTS)],
+      creators(create, mirror)
+    );
 
     expect(order).toEqual(["create hero", "write hero"]);
     expect(unsavedEntity("field-group", "hero")).toBeUndefined();
@@ -184,10 +336,13 @@ describe("createFieldGroupsFirst", () => {
     };
     const mirror = vi.fn(async () => {});
 
-    await createFieldGroupsFirst([group("hero", POSTS)], {
-      create: vi.fn(async () => ({})),
-      mirror,
-    });
+    await createFieldGroupsFirst(
+      [group("hero", POSTS)],
+      creators(
+        vi.fn(async () => ({})),
+        mirror
+      )
+    );
 
     expect(mirror).not.toHaveBeenCalled();
   });
@@ -202,7 +357,7 @@ describe("createFieldGroupsFirst", () => {
 
     const refused = await createFieldGroupsFirst(
       [group("hero", POSTS), group("banner", POSTS)],
-      { create, mirror: async () => {} }
+      creators(create)
     );
 
     expect(refused).toBe(
@@ -219,14 +374,90 @@ describe("createFieldGroupsFirst", () => {
       throw new Error("The server is unavailable.");
     });
 
-    const refused = await createFieldGroupsFirst([group("hero", POSTS)], {
-      create,
-      mirror: async () => {},
-    });
+    const refused = await createFieldGroupsFirst(
+      [group("hero", POSTS)],
+      creators(create)
+    );
 
     expect(refused).toBe(
       "The field group “Hero” was not created: The server is unavailable."
     );
+    expect(unsavedEntity("field-group", "hero")).toBeDefined();
+  });
+
+  it("creates a collection with its own create, in turn with the field groups", async () => {
+    addUnsavedEntity(collection("authors", POSTS));
+    addUnsavedEntity(group("hero", POSTS));
+    const order: string[] = [];
+    const mirror = (entity: UnsavedEntity) => {
+      order.push(`write ${entity.kind}:${entity.address}`);
+      return Promise.resolve();
+    };
+    const create = {
+      "field-group": {
+        create: vi.fn(async (payload: CreateComponentPayload) => {
+          order.push(`field-group:${payload.slug}`);
+        }),
+        mirror,
+      },
+      collection: {
+        create: vi.fn(async (payload: CreateCollectionPayload) => {
+          order.push(`collection:${payload.name}`);
+        }),
+        mirror,
+      },
+    };
+
+    const refused = await createFieldGroupsFirst(
+      [collection("authors", POSTS), group("hero", POSTS)],
+      create
+    );
+
+    expect(refused).toBeNull();
+    // Each written by its own kind's write, after its create.
+    expect(order).toEqual([
+      "collection:authors",
+      "write collection:authors",
+      "field-group:hero",
+      "write field-group:hero",
+    ]);
+    expect(create.collection.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "authors",
+        labels: { singular: "Authors", plural: "Authors" },
+        fields: [],
+      })
+    );
+    expect(unsavedEntity("collection", "authors")).toBeUndefined();
+    expect(unsavedEntity("field-group", "hero")).toBeUndefined();
+  });
+
+  it("names a refused collection as a collection, and creates nothing after it", async () => {
+    addUnsavedEntity(collection("authors", POSTS));
+    addUnsavedEntity(group("hero", POSTS));
+    const fieldGroup = vi.fn(async (_payload: CreateComponentPayload) => ({}));
+    const collectionMirror = vi.fn(async (_entity: UnsavedEntity) => {});
+    const create = {
+      "field-group": { create: fieldGroup, mirror: async () => {} },
+      collection: {
+        create: vi.fn(async (_payload: CreateCollectionPayload) => {
+          throw new Error("The server is unavailable.");
+        }),
+        mirror: collectionMirror,
+      },
+    };
+
+    const refused = await createFieldGroupsFirst(
+      [collection("authors", POSTS), group("hero", POSTS)],
+      create
+    );
+
+    expect(refused).toBe(
+      "The collection “Authors” was not created: The server is unavailable."
+    );
+    expect(fieldGroup).not.toHaveBeenCalled();
+    expect(collectionMirror).not.toHaveBeenCalled();
+    expect(unsavedEntity("collection", "authors")).toBeDefined();
     expect(unsavedEntity("field-group", "hero")).toBeDefined();
   });
 });

@@ -273,6 +273,10 @@ import {
   sharedFieldsJudged,
   storePartDrafts,
 } from "../../versions/part-drafts";
+import {
+  languagesTold,
+  pendingChangesInSaveOrder,
+} from "../../versions/publish-all-plan";
 import { hasLifecycle } from "../../versions/recorded-status";
 import { removePendingChangeJudged } from "../../versions/remove-pending-change";
 import { resolveComponentSchemas } from "../../versions/restore-version";
@@ -849,6 +853,8 @@ export class SingleMutationService extends BaseService {
       withoutReview: { reason: string } | undefined;
       /** Whether a pending shared draft goes live with the language this save publishes. */
       sharedDraftPending: boolean;
+      /** For a save of every language that publishes, the languages it moves. */
+      languagesMoved?: readonly string[] | undefined;
       options: UpdateSingleOptions;
     }
   ): StatusSave | null {
@@ -873,7 +879,66 @@ export class SingleMutationService extends BaseService {
         ? {}
         : { withoutReview: save.withoutReview }),
       sharedDraftPending: save.sharedDraftPending,
+      ...(save.languagesMoved === undefined
+        ? {}
+        : { languagesMoved: save.languagesMoved }),
     };
+  }
+
+  /**
+   * The languages a save of every language that publishes moves, read on `reader`: on the pool for
+   * the publish gate's early answer, on the save's transaction under the row lock for its verdict.
+   * Those `languagesTold` tells: the save's sweep publishes the translations stored and never
+   * invents one, so a language holding nothing, or live with no change, is not among them, as a
+   * collection entry's save of every language is judged. Undefined for any other save, and where
+   * the translations keep no status of their own or their table is not there to read.
+   */
+  private async everyLanguageSaveMoves(
+    reader: TransactionContext | DrizzleAdapter,
+    singleMeta: DynamicSingleRecord,
+    args: {
+      entryId: string;
+      status: unknown;
+      everyLanguage: boolean;
+      /** The translations, where their table is there to read; null otherwise. */
+      companion: CompanionSchema | null;
+      readiness: CompanionReadiness | undefined;
+      /** The Single's own status as `reader` reads it. */
+      mainStatus: unknown;
+    }
+  ): Promise<string[] | undefined> {
+    if (
+      !args.everyLanguage ||
+      args.status !== "published" ||
+      args.companion?.hasStatus !== true
+    ) {
+      return undefined;
+    }
+    const prior = await readCompanionLocaleStatusAll(
+      reader.getDrizzle<Parameters<typeof readCompanionLocaleStatusAll>[0]>(),
+      args.companion.table,
+      args.entryId,
+      args.readiness
+    );
+    const pending =
+      singleMeta.versions?.drafts?.enabled === true
+        ? await pendingChangesInSaveOrder(reader, {
+            scopeKind: "single",
+            scopeSlug: singleMeta.slug,
+            entryId: args.entryId,
+          })
+        : [];
+    return languagesTold({
+      configured: new Set(this.localization?.locales.map(l => l.code) ?? []),
+      defaultLocale: this.localization?.defaultLocale ?? "",
+      prior,
+      promoted: new Set(
+        pending.flatMap(change =>
+          change.locale === null ? [] : [change.locale]
+        )
+      ),
+      mainStatus: args.mainStatus,
+    }).map(language => language.locale);
   }
 
   /**
@@ -2884,6 +2949,18 @@ export class SingleMutationService extends BaseService {
           existingDoc.id,
           data.status
         ),
+        languagesMoved: await this.everyLanguageSaveMoves(
+          this.adapter,
+          singleMeta,
+          {
+            entryId: existingDoc.id,
+            status: data.status,
+            everyLanguage: sweepAllLocales,
+            companion: companionPhysicallyExists ? companion : null,
+            readiness: companionReadiness,
+            mainStatus: (existingDoc as { status?: unknown }).status,
+          }
+        ),
         options,
       });
       if (earlySave) {
@@ -3830,6 +3907,22 @@ export class SingleMutationService extends BaseService {
               existingDoc.id,
               finalStatus
             ),
+            languagesMoved: await this.everyLanguageSaveMoves(tx, singleMeta, {
+              entryId: existingDoc.id,
+              status: finalStatus,
+              everyLanguage: sweepAllLocales,
+              companion:
+                companion && companionPhysicallyExists ? companion : null,
+              // Read, not resolved: a query against a missing relation on this transaction would
+              // abort it on PostgreSQL.
+              readiness: companion
+                ? cachedCompanionReadiness(
+                    this.adapter,
+                    companion.companionTableName
+                  )
+                : undefined,
+              mainStatus: preRowMainStatus,
+            }),
             options,
           });
           const settleGate = lockedSave

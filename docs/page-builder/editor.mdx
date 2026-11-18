@@ -139,13 +139,40 @@ Under **Accessibility**, the checks find:
   ratio can be measured there, and a block whose colours come from a shared style isn't
   judged.
 
+Under **Content and data**, the list always starts with the page's data, **Page data: 12 of
+500**: how many reads the page makes against the limit a page may make (500 unless your
+site sets `maxQueries`). The top bar shows the same count only once a page nears the
+limit. Over the limit, each block that then shows empty on the live page is listed, with
+what it misses. The checks also find:
+
+- **Bindings that no longer fit**, the same ones [Bindings to fix](#bindings-to-fix)
+  lists for the page.
+- **A page that shows two headers** (or footers): its header & footer set draws one
+  around it, and it has a header block of its own. Choosing the item selects the page's
+  own header block. It stays listed even if you dismissed the notice above the canvas.
+- **Blocks left empty**: an Image with no picture, a Button with no link (one that sends
+  or clears a form has a job, so it isn't listed), and a Collection list with no source.
+  Choosing the item opens the setting that fills it.
+- **A simple Form with nowhere to send answers**: nothing in **Send to**, listed as
+  "Form answers have nowhere to go". A form picked from the Forms plugin isn't listed
+  (see [Forms](/docs/page-builder/forms)).
+
+Under **Publishing**, the list names each component the page uses that isn't published,
+and its header & footer set when that isn't, as [Publish asks about
+them](#publishing-a-page-whose-parts-arent-published). It's asked again after each save
+and each pause in editing.
+
 Checks never stop you saving or publishing. Automatic checks catch common problems; they
 don't replace an accessibility review.
 
 The checks are plain functions over a page's content, so a script or a route gets the same
 findings the editor lists: `runPageChecks` and `CORE_PAGE_CHECKS` from
 `@nextlyhq/builder`. They read block definitions from the blocks registered in that
-process, or from the `blocks` you pass.
+process, or from the `blocks` you pass. The content, data and publishing checks also read
+`facts` you pass where you have them (`PageFacts`: the page's bindings to fix, its data
+count, its unpublished parts and a header shown twice); a check whose fact you leave out
+finds nothing. A check's line under its group, such as the data count, is in
+`report.notes`.
 
 ```ts
 import type { BlockDocument } from "@nextlyhq/blocks-engine";
@@ -377,6 +404,17 @@ which say nothing themselves, have only Style and Advanced. The tab you choose s
 chosen as you select other blocks. A block without it opens on its first tab, and the
 next block that has it opens on yours again. If the editor opens with a state such as
 Hover already chosen, it opens on Style.
+
+### Editing a field
+
+One edit to a field is one step to undo, however many keys it takes: a sentence typed
+into a Text's words, or a value dragged on a number field's label, comes back whole with
+one **Undo**. Two separate edits are two steps. An edit ends when you leave the field,
+press <kbd>Enter</kbd> or **Undo**, or change something else.
+
+Press <kbd>Escape</kbd> in a field you're editing to put back the value it had before, in
+the field and on the canvas. Nothing is recorded, so there is nothing to undo. Press
+<kbd>Escape</kbd> again to leave the field; the block stays selected.
 
 **Style** starts with **Block style** on a block whose type has saved styles: a Section's
 Plain and Hero, a Button's Primary, Secondary, Outline and Text, an Image's Square,
@@ -650,7 +688,7 @@ search (<kbd>Ctrl</kbd>+<kbd>K</kbd>).
 - A paste lands where a clicked block would (see
   [Where a clicked block lands](#where-a-clicked-block-lands)). Content blocks
   (Heading, Text, Image…) go inside a selected container at the end, and after a
-  selected block that holds none. Layout blocks (Box, Columns, Card) go after a selected
+  selected block that holds none; layout blocks (Box, Columns, Card) go after a selected
   container, and a Section goes after the top-level block holding the selection. With
   nothing selected, the paste goes at the end of the page. The pasted blocks are
   selected, and one undo takes the whole paste back.
@@ -675,6 +713,29 @@ cut and paste the text, as usual. The same goes for text you have highlighted.
 
 The first time you use **Paste** from a menu, the browser may ask to let the site see
 what you copied. The keys never ask.
+
+### Copy style and Paste style
+
+To give several blocks the look of one, pick **Copy style** on the block that looks right,
+select the blocks to change, and pick **Paste style**. Both are in the block's toolbar under
+**More actions**, in its right-click menu and in search (<kbd>Ctrl</kbd>+<kbd>K</kbd>).
+
+- Each block you paste onto gets the copied block's own settings on every device and
+  in every state (such as hover), its block style, its text style and its shared styles.
+  These replace what the block had: a block wearing the text style "Display" ends with
+  the copied block's text style, or with none when the copied block wears none.
+- Only the look is copied. Each block keeps its own text, images and links.
+- One undo takes the whole paste back, however many blocks it changed.
+- A paste always changes the blocks themselves, never a shared style, even while the
+  Style tab is editing a shared style. So it never changes blocks you didn't select, here
+  or on other pages.
+- A setting a block can't have is left out, and the builder says how many: "3 settings
+  don't apply to Image". A block style belongs to one kind of block, and a text style
+  needs a block with text.
+- **Copy style** takes one block's look, so it waits for one block to be selected. A
+  paste onto a locked block is refused, with the reason, and nothing changes.
+- The copied style is kept until you copy another, while the builder stays open. It
+  doesn't replace what you copied with <kbd>Ctrl</kbd>+<kbd>C</kbd>.
 
 ## Adding an image
 
@@ -764,6 +825,39 @@ picture on the canvas or in **Layers** to change its place. With a picture selec
 inspector names it by its place, **Picture 2 · in Gallery**, and **← Back to the
 gallery** selects the gallery.
 
+## Adding a Collection list
+
+A new Collection list asks two things on the canvas, over the list itself.
+
+1. **Show entries from** has a button for each collection visitors can read. Where your
+   site registers custom sources, **More sources…** points to the panel, where you
+   choose one under **Show entries from**.
+2. **choose a starting layout**, named for the collection (**Posts · choose a starting layout**),
+   offers three layouts:
+   - **Cards, 3 across**: a card for each entry, with its picture, its title linked to
+     the entry and a summary; three across where there is room, one on a phone.
+   - **List rows**: a small square picture beside the title and summary.
+   - **Titles only**: linked titles.
+
+   **Skip** sets the source and leaves an empty item for you to build.
+
+The list fills with the collection's real entries at once, and one **Undo** takes the
+whole list away. The item is made of ordinary blocks bound to each entry: the
+collection's title field, its first picture field, a summary field (one named like
+`excerpt`, `summary` or `description`, else its first long text), and a link to the
+entry's page when its entries have pages. Edit one item and every item follows, each
+showing its own entry's values.
+
+Both steps work from the keyboard: <kbd>Tab</kbd> and the arrow keys move between the
+choices, and <kbd>Escape</kbd> on the first step leaves a blank list, or on the second
+goes back. A list with no source asks again whenever you select it, and its panel says
+**Choose on the canvas to start.**
+
+A new list shows six entries, newest first, and its **When empty** slot starts with a
+Text reading **Nothing here yet.** While its collection has no entries, the canvas draws
+three greyed items tagged **Sample**, filled with sample values, so you can design the
+item. Visitors never see them: the live page shows **When empty** instead.
+
 ## Embedding a video or a map
 
 A new Embed starts empty: on the canvas it reads **Paste a YouTube, Vimeo or other link**,
@@ -835,6 +929,25 @@ The Text's field in the inspector edits the same words, and the canvas shows the
 type. A Text bound to a field takes a text field's words as one plain paragraph; a
 rich-text field isn't offered for it.
 
+## Headings, lists and quotes in a Rich text
+
+A Rich text is edited where it is shown too, with the same editor as every rich-text
+field in Nextly. Double-click it, or select it and press <kbd>Enter</kbd>. Selecting
+words draws the same bar, with more on it:
+
+- **B**, **I** and **Link**, as for a Text.
+- **H2** and **H3** make the line a heading, **Bullets** and **Numbers** make it a list,
+  and **Quote** a quotation. Press the same button again and the line is a paragraph
+  again. The button for the line the caret is in shows as pressed.
+- **Turn into**, as below.
+
+When a Rich text is selected, the inspector says "Edit on the canvas. Select text for
+bold, links, headings and lists." Its **Text** field is at least four lines tall and
+grows as you type. For longer work, **Open the full editor** opens a large editor with
+the same buttons. **Done** keeps your changes and **Cancel** discards them. Either one
+takes you back to the block. While you have changes, <kbd>Escape</kbd> doesn't throw
+them away: it reminds you to press **Done** or **Cancel**.
+
 ### Turn into another text block
 
 A Text, a Rich text and a Heading can each become one of the other two. Right-click the
@@ -876,12 +989,50 @@ Choose a page to open it in the editor. Each page's **⋯** menu offers:
 - **Delete…**, which asks first, naming the page. The page you're editing can't be
   deleted from here: open another page first.
 
-**New page** asks for a title, then opens the new draft.
+**New page** opens the New page dialog, described below.
 
 The page title in the top bar is a switcher too: it lists the pages you opened most
 recently, in this browser, and **All pages…** opens the Pages panel.
 
 Opening another page with work not yet saved asks first, as leaving the editor does.
+
+### New page
+
+**New page** in the Pages panel, and **+ New page** on the Pages list, open one short
+dialog, then take you straight into the builder:
+
+- **Title**, where you start typing.
+- **Address**: the site's address and the part made from the title, which follows the
+  title as you type. Press the pencil to change it; from then on it's yours and no
+  longer follows the title. Use `/` to put the page beneath another, as in
+  `docs/install`. If the address made from the title is already used by another page,
+  the dialog says which one the page will get instead (`/pricing-2`) before you create
+  it. An address you typed yourself is never changed: if another page uses it, creating
+  is refused with **That address is used by** and that page's title (or **by another
+  page**, where you can't see it), and the dialog stays open with what you typed.
+- **Header & footer**: the same menu as in the page's Settings, starting at the site's
+  default. It's shown only for pages that have this choice.
+- **Start from**: **Blank**, then the starter pages the site offers, each with a
+  picture. It's left out while the site offers none, and the page starts blank.
+- A line saying how the page is saved: **Saved as a draft.**, or, for a kind of page
+  without drafts, **Visitors can see it as soon as it is created.**
+
+**Create and open builder** makes the page and opens it with **Add** open. It stays
+disabled, saying why, until the page has a title. If you may create pages but not
+change them, the button reads **Create** and the page opens as its form. Nothing is
+created until you press it: **Cancel**, <kbd>Escape</kbd> or clicking outside the
+dialog close it with nothing made. <kbd>Enter</kbd> in **Title** or **Address**
+presses the button.
+
+Opened from the builder, the page is made in the same collection as the page you're
+editing; where more than one kind of page opens in the builder, **Type** comes first.
+If the page you're editing has unsaved changes, you're asked **Save changes to … first?**
+before anything is made: **Save** saves it, then makes the new page; **Discard** makes
+the new page and drops those changes; **Keep editing** makes nothing.
+
+If the kind of page needs another field filled in that the dialog doesn't ask for, the
+dialog names it with the reason, keeps what you typed, and offers **Open the form** to
+fill it there. Any other refusal is shown in the dialog, and nothing is made.
 
 ### Header & footer
 

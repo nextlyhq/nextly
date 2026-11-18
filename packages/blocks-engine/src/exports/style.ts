@@ -369,6 +369,7 @@ export {
   styleSupportDefinitions,
   stylePropertiesForSupports,
   supportsAllowStyleProperty,
+  supportedStylesOf,
   styleGroupKeys,
 } from "../style/supports-map";
 

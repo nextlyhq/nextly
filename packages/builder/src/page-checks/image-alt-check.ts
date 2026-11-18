@@ -23,17 +23,7 @@ import { walkNodes, type BlockNode } from "@nextlyhq/blocks-engine";
 import { altModeOf, imageGroupOf, type ImageGroup } from "../image-group";
 
 import type { PageCheck, PageCheckResult, ResolvedPage } from "./page-checks";
-
-/** A stored value with something in it. */
-function holds(value: unknown): boolean {
-  if (typeof value === "string") return value.trim() !== "";
-  return value !== undefined && value !== null;
-}
-
-/** Whether a prop is bound to a field. */
-function bound(node: BlockNode, prop: string): boolean {
-  return node.bindings?.[prop] !== undefined;
-}
+import { bound, holds } from "./stored-values";
 
 /** The props a block's image is drawn from, where it has an alt text. */
 function imageOf(

@@ -131,9 +131,10 @@ function TextValue({
  * A value field that commits on blur or Enter, and only a real change: an
  * empty field or the value it already holds writes nothing. While it holds a
  * refused value, the value it held before is committed too, since putting it
- * back is how the author answers the refusal.
+ * back is how the author answers the refusal. A text style's letter
+ * spacing is typed in one too.
  */
-function CommitInput({
+export function CommitInput({
   id,
   label,
   value,
