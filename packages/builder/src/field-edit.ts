@@ -78,16 +78,27 @@ interface FieldEditHandle {
   readonly held: () => boolean;
 }
 
-/** Begin an edit, displacing any other field's. */
+/**
+ * Begin an edit, displacing any other field's.
+ *
+ * It also ends when focus leaves the field it began in, by a blur or by
+ * {@link finishFieldEdit}: the field has written what it will on the way
+ * out. A draft whose commit wrote nothing (`2px ` trimmed back to the `2px`
+ * stored, or a value refused) moves no stored value, so without this its
+ * record would stay, and the page would report unsaved work it does not have.
+ */
 function beginFieldEdit(edit: FieldEdit): FieldEditHandle {
   setCurrent(edit);
-  if (edit.element !== null) putBack.delete(edit.element);
-  return {
-    end: () => {
-      if (current === edit) setCurrent(null);
-    },
-    held: () => current === edit,
+  const { element } = edit;
+  const end = (): void => {
+    element?.removeEventListener("focusout", end);
+    if (current === edit) setCurrent(null);
   };
+  if (element !== null) {
+    putBack.delete(element);
+    element.addEventListener("focusout", end);
+  }
+  return { end, held: () => current === edit };
 }
 
 /**

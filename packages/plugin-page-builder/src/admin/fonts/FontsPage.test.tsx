@@ -6,7 +6,13 @@
  * for a role that may not change the site's design.
  */
 import type { FontFaceDef } from "@nextlyhq/blocks-engine";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const can = vi.hoisted(() => ({ update: true }));
@@ -14,6 +20,8 @@ const read = vi.hoisted(() => ({
   pending: false,
   error: null as Error | null,
   defaults: undefined as unknown,
+  /** More of the merged site style, for a test that needs its classes. */
+  more: {} as Record<string, unknown>,
 }));
 
 const STORED: FontFaceDef = {
@@ -39,7 +47,10 @@ vi.mock("../site-style-client", () => ({
   useSiteStyle: (defaults: { fonts?: FontFaceDef[] } | undefined) => {
     read.defaults = defaults;
     return {
-      siteStyle: { fonts: [...(defaults?.fonts ?? []), STORED] },
+      siteStyle: {
+        fonts: [...(defaults?.fonts ?? []), STORED],
+        ...read.more,
+      },
       stored: { fonts: [STORED] },
       unreadableFonts: [],
       pending: read.pending,
@@ -47,6 +58,7 @@ vi.mock("../site-style-client", () => ({
       current: true,
     };
   },
+  useHeldSiteStyle: () => ({ extend: () => {}, release: async () => {} }),
   useSaveSiteStyle: () => ({
     save: vi.fn(() => Promise.resolve({ saved: true, issues: {} })),
     reread: vi.fn(),
@@ -64,6 +76,22 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async importOriginal => ({
   navigateTo: () => undefined,
 }));
 
+// The variable routes, as fakes that find no use: the page's studio reads
+// them, and these tests ask nothing of the counts.
+vi.mock("../variables-client", () => {
+  const access = {
+    usage: async () => ({ whole: true, variables: new Map() }),
+    uses: async () => ({
+      items: [],
+      total: 0,
+      hidden: 0,
+      hasNext: false,
+      complete: true,
+    }),
+  };
+  return { useVariablesClient: () => access };
+});
+
 const { FontsPage } = await import("./FontsPage");
 
 afterEach(() => {
@@ -71,6 +99,7 @@ afterEach(() => {
   can.update = true;
   read.pending = false;
   read.error = null;
+  read.more = {};
 });
 
 describe("the Fonts page", () => {
@@ -101,6 +130,30 @@ describe("the Fonts page", () => {
     ).toBeTruthy();
     // The site's code tier is what the read was handed to merge under.
     expect(read.defaults).toMatchObject({ fonts: [FROM_CODE] });
+  });
+
+  it("refuses a font a heading takes from the text style it follows", () => {
+    // Heading 1 follows Display, whose font is Stored Sans: removing it would
+    // change every heading 1.
+    read.more = {
+      tokens: { tokens: [], siteText: { h1: { textStyle: "ts-display" } } },
+      classes: [
+        {
+          id: "ts-display",
+          slug: "display",
+          orderIndex: 0,
+          role: "text",
+          styles: { base: { base: { fontFamily: '"Stored Sans", serif' } } },
+        },
+      ],
+    };
+    render(<FontsPage />);
+    fireEvent.click(screen.getByRole("button", { name: /^Stored Sans,/ }));
+    const open = screen.getByRole("dialog", { name: "Stored Sans" });
+    fireEvent.click(within(open).getByRole("button", { name: "Remove" }));
+    expect(
+      within(open).getByRole("group", { name: "Stored Sans can’t be removed" })
+    ).toBeTruthy();
   });
 
   it("offers both ways to add a font to a role that may change the design", () => {
