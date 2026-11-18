@@ -32,10 +32,18 @@
  * @experimental Settles with editing a second document in place.
  */
 
-import { useCallback, useMemo, useRef, type MutableRefObject } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MutableRefObject,
+} from "react";
 
 import { effectiveEntryStatus } from "@admin/components/features/entries/EntryForm/entry-address";
 import type { EntryData } from "@admin/components/features/entries/EntryForm/useEntryForm";
+import { LOCALE_PARAM } from "@admin/constants/search-params";
 import { useCollectionSchema } from "@admin/hooks/queries/useCollections";
 import {
   useDocumentLock,
@@ -51,6 +59,7 @@ import {
   emptyThePoint,
   holdsOwnRecording,
 } from "@admin/hooks/useDocumentAutosave";
+import { useLocaleParam } from "@admin/hooks/useLocaleParam";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import {
   lastStoredRecording,
@@ -346,11 +355,8 @@ function useStoredSessionDocument(
   const asksLanguages = useAsksTranslationStatus(slug);
   const locale = target?.locale;
   const read = useStoredEntry({
-    collectionSlug: slug,
-    entryId: target?.id ?? "",
+    ...documentScope(target, localized),
     draft: keepsDrafts,
-    ...(locale === undefined ? {} : { locale }),
-    ...(localized ? { fallbackLocale: "none" } : {}),
     translationStatus: localized && asksLanguages,
     enabled: target !== null && ready,
   });
@@ -360,6 +366,50 @@ function useStoredSessionDocument(
     [locale, language]
   );
   return { read, publishedOf };
+}
+
+/**
+ * Which document a read or a write names, and in which language: the named
+ * language alone where the site has several, so no other language's words
+ * stand in for an untranslated field.
+ */
+function documentScope(
+  target: DocumentSessionTarget | null,
+  localized: boolean
+): {
+  collectionSlug: string;
+  entryId: string;
+  locale?: string;
+  fallbackLocale?: string;
+} {
+  return {
+    collectionSlug: target?.collection ?? "",
+    entryId: target?.id ?? "",
+    ...(target?.locale === undefined ? {} : { locale: target.locale }),
+    ...(localized ? { fallbackLocale: "none" } : {}),
+  };
+}
+
+/**
+ * Reading the document again: `refresh` answers it as stored now, and
+ * `retry` asks both reads again after one failed.
+ */
+function useReadAgain(
+  refetchRead: () => Promise<{ data?: StoredDocument }>,
+  refetchSchema: () => Promise<unknown>
+): {
+  refresh: () => Promise<StoredDocument | undefined>;
+  retry: () => void;
+} {
+  const refresh = useCallback(
+    async () => (await refetchRead()).data,
+    [refetchRead]
+  );
+  const retry = useCallback(() => {
+    void refetchSchema();
+    void refetchRead();
+  }, [refetchSchema, refetchRead]);
+  return { refresh, retry };
 }
 
 /**
@@ -382,16 +432,7 @@ function useSessionRead(target: DocumentSessionTarget | null): SessionRead {
   );
   const document = target === null ? undefined : read.data;
   const failed = read.isError || schema.isError;
-  const { refetch: refetchRead } = read;
-  const { refetch: refetchSchema } = schema;
-  const refresh = useCallback(
-    async () => (await refetchRead()).data,
-    [refetchRead]
-  );
-  const retry = useCallback(() => {
-    void refetchSchema();
-    void refetchRead();
-  }, [refetchSchema, refetchRead]);
+  const { refresh, retry } = useReadAgain(read.refetch, schema.refetch);
   const published = document !== undefined && publishedOf(document);
   const draftable = isDraftable(published, hasStatus, keepsDrafts);
   const open = useMemo((): DocumentSessionOpen => {
@@ -414,19 +455,25 @@ function useSessionRead(target: DocumentSessionTarget | null): SessionRead {
 }
 
 /**
- * The version the copy started from, moved by each new read and by each of
- * the session's own writes (through the ref it hands out): the next write
- * sends it, and the lock's beats name it.
+ * The version the caller's copy started from: the first read's for each
+ * document named, then moved only by the session's own writes (through the
+ * ref it hands out). A read arriving later, a refusal's or the cache's own
+ * refresh, is not the copy the caller edits, so a write after it still sends
+ * the version the edits began from and a save made meanwhile refuses it.
  */
 function useCopyVersion(
-  document: StoredDocument | undefined
+  document: StoredDocument | undefined,
+  key: string | null
 ): MutableRefObject<string | undefined> {
   const versionRef = useRef<string | undefined>(undefined);
+  const adoptedFor = useRef<string | null>(null);
   const readVersion = versionOf(document);
-  const seenRead = useRef<string | undefined>(undefined);
-  if (readVersion !== seenRead.current) {
-    seenRead.current = readVersion;
-    versionRef.current = readVersion;
+  if (
+    key !== adoptedFor.current &&
+    (key === null || readVersion !== undefined)
+  ) {
+    adoptedFor.current = key;
+    versionRef.current = key === null ? undefined : readVersion;
   }
   return versionRef;
 }
@@ -462,7 +509,12 @@ interface SessionRecording {
   /** Edits up to `generation` were stored: nothing more to record for them. */
   readonly stored: (generation: number) => void;
   readonly cancel: () => void;
-  /** Record the edits not yet stored after all: a write that put it off failed. */
+  /**
+   * A write is on its way: nothing is recorded until it lands, since the
+   * write empties the person's point as it stores.
+   */
+  readonly pause: () => void;
+  /** The write landed or failed: the edits it did not store are recorded. */
   readonly resume: () => void;
   readonly discard: () => Promise<void>;
 }
@@ -526,13 +578,21 @@ function useSessionRecording(
   // same point.
   const storedRef = useRef<Record<string, unknown> | null>(null);
   const edits = useEditGenerations();
+  // Writes on their way, and how many have landed or failed: counted apart,
+  // so a write that fails at once still asks for the recording it put off.
+  const [writes, setWrites] = useState({ pending: 0, landed: 0 });
   const { schedule, cancel, lastSent } = useSnapshotAutosave({
     identity: recordingIdentity(document, locale),
     document,
     save: () => recordSnapshot(scope, snapshotRef.current, locale, storedRef),
-    enabled: held,
+    enabled: held && writes.pending === 0,
     stillWanted: edits.unsettled,
   });
+  // Once no write is on its way, the edits none of them stored are recorded.
+  const idle = writes.pending === 0;
+  useEffect(() => {
+    if (idle && edits.unsettled()) schedule();
+  }, [idle, writes.landed, edits, schedule]);
   const record = useCallback(
     (stored: StoredDocument, changes: Readonly<Record<string, unknown>>) => {
       // The WHOLE document, since restoring a recovery point replaces every
@@ -543,9 +603,18 @@ function useSessionRecording(
     },
     [edits, schedule]
   );
-  const resume = useCallback(() => {
-    if (edits.unsettled()) schedule();
-  }, [edits, schedule]);
+  const pause = useCallback(
+    () => setWrites(now => ({ ...now, pending: now.pending + 1 })),
+    []
+  );
+  const resume = useCallback(
+    () =>
+      setWrites(now => ({
+        pending: Math.max(0, now.pending - 1),
+        landed: now.landed + 1,
+      })),
+    []
+  );
   const discard = useCallback(async () => {
     edits.settle(edits.generation());
     cancel();
@@ -563,8 +632,17 @@ function useSessionRecording(
   }, [edits, cancel, scope, document, lastSent, locale]);
   const { generation, settle: stored } = edits;
   return useMemo(
-    () => ({ document, record, generation, stored, cancel, resume, discard }),
-    [document, record, generation, stored, cancel, resume, discard]
+    () => ({
+      document,
+      record,
+      generation,
+      stored,
+      cancel,
+      pause,
+      resume,
+      discard,
+    }),
+    [document, record, generation, stored, cancel, pause, resume, discard]
   );
 }
 
@@ -644,13 +722,9 @@ function useSessionWrite(
   recording: SessionRecording,
   versionRef: MutableRefObject<string | undefined>
 ): Pick<DocumentSession, "saveDraft" | "publish"> {
-  const slug = target?.collection ?? "";
   const { enabled: localized } = useLocalization();
   const { mutateAsync } = useUpdateEntry({
-    collectionSlug: slug,
-    entryId: target?.id ?? "",
-    ...(target?.locale === undefined ? {} : { locale: target.locale }),
-    ...(localized ? { fallbackLocale: "none" } : {}),
+    ...documentScope(target, localized),
     // The caller says what happened, in its own words, where it is working.
     showToast: false,
     // The read stays what was stored until the server says otherwise.
@@ -682,22 +756,25 @@ function useSessionWrite(
       const verdict = mayWrite(read, document, held, intent);
       if ("refused" in verdict) return refused(verdict.refused);
       const taken = recording.generation();
-      // A recording landing after the write would put the work back as a
-      // recovery point, so the ones on their way land first.
-      recording.cancel();
-      await recordingsSettled(recording.document);
-      // Taken before anything else is awaited, and only while the session
-      // still names the document it judged: the update is bound to the
-      // document named now.
-      const version = versionRef.current;
-      if (moved()) return refused("moved");
-      const payload: UpdateEntryPayload = {
-        ...changedFields(changes),
-        ...statusFor(intent, verdict.published, read.hasStatus),
-        ...(version === undefined ? {} : { [DOCUMENT_VERSION_KEY]: version }),
-      };
+      // Nothing is recorded while the write is on its way, since it empties
+      // the person's point as it stores; the edits it does not store are
+      // recorded once it has landed or failed.
+      recording.pause();
       try {
-        const result = await mutateAsync(payload);
+        // A recording landing after the write would put the work back as a
+        // recovery point, so the ones on their way land first.
+        recording.cancel();
+        await recordingsSettled(recording.document);
+        // Taken before anything else is awaited, and only while the session
+        // still names the document it judged: the update is bound to the
+        // document named now.
+        const version = versionRef.current;
+        if (moved()) return refused("moved");
+        const result = await mutateAsync({
+          ...changedFields(changes),
+          ...statusFor(intent, verdict.published, read.hasStatus),
+          ...(version === undefined ? {} : { [DOCUMENT_VERSION_KEY]: version }),
+        });
         if (!moved()) {
           versionRef.current = versionOf(result.item) ?? versionRef.current;
           recording.stored(taken);
@@ -705,10 +782,9 @@ function useSessionWrite(
         }
         return { ok: true, values: result.item };
       } catch (error) {
-        // The edits are still unsaved, so the recording the write put off is
-        // made after all.
-        if (!moved()) recording.resume();
         return refusalOf(error);
+      } finally {
+        recording.resume();
       }
     },
     [read, held, recording, versionRef, mutateAsync]
@@ -725,6 +801,24 @@ function useSessionWrite(
 }
 
 /**
+ * Whether the person may publish the named document in its language. The
+ * admin knows the person's grants for the language on screen alone (a rule
+ * may answer by language), so a document named in another language is not
+ * offered for publishing rather than offered on a guess the server refuses.
+ */
+function useMayPublishIn(target: DocumentSessionTarget | null): boolean {
+  const may = useCan(`publish-${target?.collection ?? ""}`);
+  const onScreen = useLocaleParam(LOCALE_PARAM);
+  const { enabled: localized, defaultLocale } = useLocalization();
+  const language = target?.locale;
+  const sameLanguage =
+    !localized ||
+    language === undefined ||
+    language === (onScreen ?? defaultLocale);
+  return may && sameLanguage;
+}
+
+/**
  * Open a session on `target`, or on nothing: naming none (`null`) lets go of
  * the lock and stops recording, as unmounting does.
  *
@@ -734,11 +828,11 @@ export function useDocumentSession(
   target: DocumentSessionTarget | null
 ): DocumentSession {
   const read = useSessionRead(target);
-  const versionRef = useCopyVersion(read.document);
+  const versionRef = useCopyVersion(read.document, targetKey(target));
   const lock = useSessionLock(target, versionRef);
   const held = lock.status === "held";
   const recording = useSessionRecording(target, held);
-  const mayPublish = useCan(`publish-${target?.collection ?? ""}`);
+  const mayPublish = useMayPublishIn(target);
   const { saveDraft, publish } = useSessionWrite(
     target,
     read,

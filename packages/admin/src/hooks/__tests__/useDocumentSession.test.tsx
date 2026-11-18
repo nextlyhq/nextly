@@ -22,6 +22,7 @@ const api = vi.hoisted(() => ({
   getAutosave: vi.fn(),
   can: vi.fn(),
   localized: { enabled: false, defaultLocale: "en" },
+  onScreen: undefined as string | undefined,
 }));
 
 vi.mock("@admin/lib/api/protectedApi", () => ({
@@ -53,6 +54,9 @@ vi.mock("@admin/services/versionApi", () => ({
 vi.mock("@admin/hooks/useCan", () => ({ useCan: api.can }));
 vi.mock("@admin/hooks/useLocalization", () => ({
   useLocalization: () => api.localized,
+}));
+vi.mock("@admin/hooks/useLocaleParam", () => ({
+  useLocaleParam: () => api.onScreen,
 }));
 vi.mock("@admin/hooks/useCanRequest", () => ({
   useAsksTranslationStatus: () => api.localized.enabled,
@@ -150,6 +154,7 @@ beforeEach(() => {
     locale: null,
   });
   api.localized = { enabled: false, defaultLocale: "en" };
+  api.onScreen = undefined;
   api.getAutosave.mockImplementation(async () => ({
     snapshot: api.saveAutosave.mock.calls.at(-1)?.[1] ?? null,
   }));
@@ -517,6 +522,47 @@ describe("useDocumentSession: save as draft and publish", () => {
     });
   });
 
+  it("offers no publish for a language other than the one on screen, whose grants are not known", async () => {
+    api.localized = { enabled: true, defaultLocale: "en" };
+    api.onScreen = "fr";
+    const other = await openSession({ ...HEADER, locale: "de" });
+    expect(other.result.current.mayPublish).toBe(false);
+    other.unmount();
+
+    const same = await openSession({ ...HEADER, locale: "fr" });
+    expect(same.result.current.mayPublish).toBe(true);
+  });
+
+  it("sends the version the edits began from, whatever the cache read since", async () => {
+    // A refused save reads the document again; the caller still holds the
+    // refused edits, so a retry must be refused again, not sent over the
+    // newer version.
+    const stale = parseApiError(
+      {
+        error: {
+          code: "STALE_VERSION",
+          message: "Changed since.",
+          requestId: "r",
+          data: { currentVersion: "v5" },
+        },
+      },
+      409
+    );
+    api.update.mockRejectedValue(stale);
+    const { result } = await heldSession();
+    api.findByID.mockResolvedValue({ ...STORED, _rev: "v5" });
+
+    await act(async () => {
+      await result.current.saveDraft({ title: "Mine" });
+    });
+    await waitFor(() => expect(api.findByID).toHaveBeenCalledTimes(2));
+    await act(async () => {
+      await result.current.saveDraft({ title: "Mine" });
+    });
+
+    expect(api.update.mock.calls[1]?.[2]).toMatchObject({ _rev: "v1" });
+  });
+
   it("answers whether the person may publish from the collection's publish grant", async () => {
     const { result } = await openSession();
     expect(result.current.mayPublish).toBe(true);
@@ -646,6 +692,36 @@ describe("useDocumentSession: recovery point", () => {
 
     // The footer's own version, not the header's answer.
     expect(api.update.mock.calls[1]?.[2]).toMatchObject({ _rev: "f-v1" });
+  });
+
+  it("records nothing while a save is on its way, then the edit it did not store", async () => {
+    // The save empties the person's point as it stores, so a recording made
+    // while it is on its way would be lost with it.
+    let finish: (value: unknown) => void = () => undefined;
+    api.update.mockImplementationOnce(
+      () => new Promise(resolve => (finish = resolve))
+    );
+    const { result } = await heldSession();
+
+    let saving: Promise<unknown> = Promise.resolve();
+    act(() => {
+      saving = result.current.saveDraft({ title: "First" });
+    });
+    await waitFor(() => expect(api.update).toHaveBeenCalledTimes(1));
+    act(() => result.current.record({ title: "Second" }));
+    await act(async () => void vi.advanceTimersByTime(DEBOUNCE_WAIT));
+    expect(api.saveAutosave).not.toHaveBeenCalled();
+
+    await act(async () => {
+      finish({ item: { ...STORED, title: "First", _rev: "v2" }, warnings: [] });
+      await saving;
+    });
+    await act(async () => void vi.advanceTimersByTime(DEBOUNCE_WAIT));
+
+    await waitFor(() => expect(api.saveAutosave).toHaveBeenCalledTimes(1));
+    expect(api.saveAutosave.mock.calls[0]?.[1]).toMatchObject({
+      title: "Second",
+    });
   });
 
   it("still records the work when a save that put the recording off fails", async () => {
