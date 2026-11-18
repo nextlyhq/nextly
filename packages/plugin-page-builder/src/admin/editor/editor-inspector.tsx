@@ -16,6 +16,7 @@ import type { Control, FieldValues } from "react-hook-form";
 
 import { contributedInspector } from "../contributed-blocks";
 
+import { FONTS_SCREEN_VIEW } from "./design-panel";
 import { DocumentSettingsPanel } from "./document-settings-panel";
 import { servicesFor } from "./editor-services";
 import { pageAddressOf, type PageFacts } from "./editor-settings";
@@ -147,7 +148,7 @@ export function editorInspector<TFieldValues extends FieldValues>(
       )}
       // The Font control lists only what the site can draw: the faces the
       // canvas loads, of which those from the site's code cannot be removed,
-      // and a way to Design's fonts to add one.
+      // and a way to the Fonts screen, over the left side, to add one.
       fonts={{
         faces: offerableFaces(
           canvasSiteStyle,
@@ -155,7 +156,7 @@ export function editorInspector<TFieldValues extends FieldValues>(
           siteStyleError
         ),
         fromCode: configSiteStyle.fonts ?? [],
-        onManageFonts: () => requestPanel("design", "type"),
+        onManageFonts: () => requestPanel("design", FONTS_SCREEN_VIEW),
       }}
       // "Edit block styles" under the Block style tiles: Design's Styles tab,
       // at the block's type.

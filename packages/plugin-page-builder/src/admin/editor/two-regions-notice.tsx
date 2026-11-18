@@ -144,17 +144,12 @@ function useTwoRegionsNotices({
 
   const shown = useMemo(() => {
     if (pageId === null) return [];
-    const sets = new Map(cards.map(card => [card.area, card]));
-    const found = doubledRegions(nodes, {
-      shown: new Set(sets.keys()),
-      componentArea,
-    });
-    return found.flatMap(region => {
-      const set = sets.get(region.area);
-      if (set === undefined) return [];
-      const key = doubledRegionsKey(pageId, set.setId, region);
-      return dismissed.includes(key) ? [] : [{ region, set, key }];
-    });
+    return regionsShownTwice(nodes, cards, componentArea).flatMap(
+      ({ region, set }) => {
+        const key = doubledRegionsKey(pageId, set.setId, region);
+        return dismissed.includes(key) ? [] : [{ region, set, key }];
+      }
+    );
   }, [nodes, cards, componentArea, pageId, dismissed]);
 
   if (shown.length === 0) return undefined;
@@ -185,8 +180,27 @@ function useTwoRegionsNotices({
   );
 }
 
-/** What the notice says for an area shown twice. */
-function twoRegionsWords(area: LayoutArea, setTitle: string): string {
+/**
+ * Each area the page shows twice, with the set that draws it around the
+ * page: the notice's question, and Page checks', one answer for both.
+ */
+export function regionsShownTwice(
+  nodes: readonly BlockNode[],
+  cards: readonly DrawnRegionFacts[],
+  componentArea: (componentId: string) => LayoutArea | undefined
+): { readonly region: DoubledRegion; readonly set: DrawnRegionFacts }[] {
+  const sets = new Map(cards.map(card => [card.area, card]));
+  return doubledRegions(nodes, {
+    shown: new Set(sets.keys()),
+    componentArea,
+  }).flatMap(region => {
+    const set = sets.get(region.area);
+    return set === undefined ? [] : [{ region, set }];
+  });
+}
+
+/** What the notice says for an area shown twice, and Page checks with it. */
+export function twoRegionsWords(area: LayoutArea, setTitle: string): string {
   return `This page shows two ${area}s: the site ${area} (${setTitle}) and a ${area} block on the page.`;
 }
 

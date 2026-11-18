@@ -222,5 +222,8 @@
   "MIGRATE_LEDGER_UNREADABLE": "`nextly migrate` found a `nextly_migrations` table of an earlier Nextly release holding records it cannot read, so it moved none of them.",
   "MIGRATE_EVENTS_TABLE_TAKEN": "A table of another shape already has the name `nextly migrate` moves the migration records of an earlier Nextly release into.",
   "MIGRATIONS_WRITER_BUSY": "Another run is writing this project's migration files, so the command wrote nothing.",
-  "MIGRATIONS_WRITER_OVERTAKEN": "Another run wrote a migration for this project while the command was part-way, so the command wrote no migration and no snapshot."
+  "MIGRATIONS_WRITER_OVERTAKEN": "Another run wrote a migration for this project while the command was part-way, so the command wrote no migration and no snapshot.",
+  "UPGRADE_WORK_MOVED": "`nextly upgrade` was run for the database work it used to do, which `nextly migrate` and `nextly i18n:convert-zoned-dates` now do, so it changed nothing.",
+  "DATA_STEPS_BACKUP_NOT_CONFIRMED": "A command would change data an earlier Nextly release stored, and no backup was confirmed, with no terminal attached to ask.",
+  "DATA_STEPS_BACKUP_DECLINED": "A command would change data an earlier Nextly release stored, and its backup question was answered no."
 }

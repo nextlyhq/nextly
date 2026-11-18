@@ -18,11 +18,11 @@ import {
   type PageCheck,
   type PageCheckResult,
 } from "@nextlyhq/builder";
-import type { PageCheckFinding } from "@nextlyhq/plugin-sdk/blocks";
 import {
   useDocumentActions,
   writePluginRoute,
 } from "@nextlyhq/plugin-sdk/admin";
+import type { PageCheckFinding } from "@nextlyhq/plugin-sdk/blocks";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { PAGE_BUILDER_PLUGIN_NAME } from "../../library-contract";
@@ -32,6 +32,8 @@ import {
   type ProvidedChecksItem,
   type ProvidedChecksRequest,
 } from "../../page-checks-provided-contract";
+
+import { usePaused } from "./use-paused";
 
 /** A provider's finding as the list shows it, its fix in the builder's terms. */
 export function providedResult(finding: PageCheckFinding): PageCheckResult {
@@ -56,24 +58,6 @@ export function providedCheck(item: ProvidedChecksItem): PageCheck {
 
 /** How long the author pauses editing before the providers are asked again. */
 const ASK_AFTER_PAUSE_MS = 1000;
-
-/**
- * A count that moves once `value` has stayed the same for `ms`: one ask per
- * pause in editing, never one per keystroke.
- */
-function usePaused(value: unknown, ms: number): number {
-  const [paused, setPaused] = useState(0);
-  const first = useRef(true);
-  useEffect(() => {
-    if (first.current) {
-      first.current = false;
-      return;
-    }
-    const timer = setTimeout(() => setPaused(count => count + 1), ms);
-    return () => clearTimeout(timer);
-  }, [value, ms]);
-  return paused;
-}
 
 /** The providers' answers, or none where the route could not be asked. */
 async function askProviders(

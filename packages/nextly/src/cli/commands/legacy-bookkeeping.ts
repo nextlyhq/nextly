@@ -49,6 +49,7 @@ import { quoteIdent } from "../../domains/schema/pipeline/sql-templates/identifi
 import { NextlyError } from "../../errors";
 import type { DryRunPlan } from "../dry-run";
 
+import { confirmBackup } from "./backup-confirmation";
 import type { UpgradeAdapter, UpgradeDialect } from "./upgrade-step";
 
 /** What the move is handed: the database, the run's busy-table bounds and its log. */
@@ -549,10 +550,13 @@ export async function consolidateLegacyBookkeeping(
   // starting. Nobody is asked and nothing is refused; the run carries on.
   if ((await planWhileLegacyStands(context)) === undefined) return;
 
-  if (!args.backupConfirmed) {
-    if (!args.interactive) throw backupNotConfirmed();
-    if (!(await args.askBackedUp())) throw backupDeclined();
-  }
+  await confirmBackup({
+    backupConfirmed: args.backupConfirmed,
+    interactive: args.interactive,
+    askBackedUp: args.askBackedUp,
+    notConfirmed: backupNotConfirmed,
+    declined: backupDeclined,
+  });
 
   await args.beforeLock?.();
   await withMigrateLock(

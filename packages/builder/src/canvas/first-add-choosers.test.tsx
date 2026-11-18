@@ -1,0 +1,138 @@
+// @vitest-environment jsdom
+
+/**
+ * The canvas's first-add chooser for a Collection list: asked right after
+ * the list is added and whenever a list with no source is selected, and put
+ * away by Skip until the list is selected again.
+ */
+import type { BlockDocument } from "@nextlyhq/blocks-engine";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import * as React from "react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import type { EditorState } from "../editor-state";
+import type { FirstAdd } from "../first-add";
+import { CANVAS_ROOT_CLASS } from "../shell-state";
+
+import { FirstAddChoosers } from "./first-add-choosers";
+
+afterEach(() => {
+  cleanup();
+});
+
+function documentWith(props: Record<string, unknown>): BlockDocument {
+  return {
+    formatVersion: 1,
+    kind: "page",
+    nodes: [{ id: "list", type: "core/collection-loop", version: 1, props }],
+  };
+}
+
+function editorOf(
+  document: BlockDocument,
+  firstAdd?: FirstAdd
+): EditorState {
+  return {
+    document,
+    selectedId: "list",
+    selection: { ids: ["list"], primary: "list" },
+    select: vi.fn(),
+    apply: vi.fn(() => document),
+    applyAll: vi.fn(() => document),
+    composed: () => undefined,
+    ...(firstAdd === undefined ? {} : { firstAdd }),
+  } as unknown as EditorState;
+}
+
+function Host({ editor }: { editor: EditorState }): React.JSX.Element {
+  return (
+    <div className={CANVAS_ROOT_CLASS}>
+      <div data-nx-node="list" />
+      <FirstAddChoosers
+        editor={editor}
+        services={{ listLoopCollections: () => Promise.resolve([]) }}
+      />
+    </div>
+  );
+}
+
+// The plate is hidden until the canvas lays it out, which jsdom never does,
+// so the question and its buttons are found by their words.
+const question = () => screen.queryByText("Show entries from");
+
+describe("a list with no source", () => {
+  it("asks which entries it shows whenever it is selected, and Skip puts that away", async () => {
+    render(<Host editor={editorOf(documentWith({}))} />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(question()).not.toBeNull();
+    fireEvent.click(screen.getByText("Skip"));
+    expect(question()).toBeNull();
+  });
+
+  it("asks nothing once it has a source", () => {
+    render(<Host editor={editorOf(documentWith({ collection: "posts" }))} />);
+    expect(question()).toBeNull();
+  });
+
+  it("does not ask again straight after the just-added list's question is skipped", async () => {
+    const document = documentWith({});
+    const skip = vi.fn();
+    const firstAdd: FirstAdd = {
+      nodeId: "list",
+      chooser: "collection-source",
+      choose: vi.fn(() => true),
+      skip,
+    };
+    const { rerender } = render(<Host editor={editorOf(document, firstAdd)} />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    fireEvent.click(screen.getByText("Skip"));
+    expect(skip).toHaveBeenCalledTimes(1);
+    // The editor ends its step; the list is still selected with no source.
+    rerender(<Host editor={editorOf(document)} />);
+    expect(question()).toBeNull();
+  });
+});
+
+describe("one picker per list", () => {
+  it("starts a newly selected list on its own first step", async () => {
+    const two: BlockDocument = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        { id: "a", type: "core/collection-loop", version: 1, props: {} },
+        { id: "b", type: "core/collection-loop", version: 1, props: {} },
+      ],
+    };
+    const services = {
+      listLoopCollections: () =>
+        Promise.resolve([{ slug: "posts", label: "Posts", fields: [] }]),
+    };
+    const selecting = (id: string) =>
+      ({ ...editorOf(two), selectedId: id, selection: { ids: [id], primary: id } }) as EditorState;
+    const host = (editor: EditorState) => (
+      <div className={CANVAS_ROOT_CLASS}>
+        <div data-nx-node="a" />
+        <div data-nx-node="b" />
+        <FirstAddChoosers editor={editor} services={services} />
+      </div>
+    );
+    const { rerender } = render(host(selecting("a")));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    fireEvent.click(screen.getByText("Posts"));
+    expect(screen.queryByText("Posts · choose a starting layout")).not.toBeNull();
+    rerender(host(selecting("b")));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    // List B asks its own first question, not A's layout step.
+    expect(screen.queryByText("Posts · choose a starting layout")).toBeNull();
+    expect(question()).not.toBeNull();
+  });
+});

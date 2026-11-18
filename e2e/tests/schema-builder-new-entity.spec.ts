@@ -290,7 +290,7 @@ test("creates a field group from the picker, saves the host, and finds both", as
     await page.getByRole("button", { name: "Save", exact: true }).click();
     const review = page.getByRole("alertdialog");
     await expect(
-      review.getByRole("list", { name: "Field groups created first" })
+      review.getByRole("list", { name: "Created first" })
     ).toHaveText("Create the field group Hero");
     await review.getByRole("button", { name: "Create", exact: true }).click();
     await expect(page.getByText("No unsaved changes")).toBeVisible({
