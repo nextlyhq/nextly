@@ -16,6 +16,9 @@
 import { expect, type Locator, type Page } from "@playwright/test";
 
 import { gotoAdmin } from "./support/admin";
+// Whether a computed style draws a visible focus mark, shared with its guard
+// test in scripts.
+import { focusMarkShown } from "./support/focus-mark.mjs";
 import { createEntry } from "./support/runtime-collection";
 import { test } from "./support/test";
 
@@ -61,26 +64,26 @@ async function pressUntilFocused(
 }
 
 /**
- * `target` holds focus and draws a mark of it: an outline with a width, or a
- * ring its box shadow spreads. Polled, since a ring can ease in.
+ * `target` holds focus and draws a mark of it a reader can see: an outline,
+ * or a ring its box shadow spreads, in a colour that is not transparent
+ * (`support/focus-mark.mjs`). Polled, since a ring can ease in.
  */
 async function expectFocusShown(target: Locator): Promise<void> {
   await expect(target).toBeFocused();
   await expect
     .poll(
-      () =>
-        target.evaluate(node => {
-          const style = getComputedStyle(node);
-          const outline =
-            style.outlineStyle !== "none" &&
-            Number.parseFloat(style.outlineWidth) > 0;
-          // A ring is a shadow layer with a spread (its fourth length).
-          const ring = style.boxShadow.split(/,(?![^(]*\))/).some(layer => {
-            const lengths = layer.match(/-?[\d.]+px/g) ?? [];
-            return Number.parseFloat(lengths[3] ?? "0") > 0;
-          });
-          return outline || ring;
-        }),
+      async () =>
+        focusMarkShown(
+          await target.evaluate(node => {
+            const style = getComputedStyle(node);
+            return {
+              outlineStyle: style.outlineStyle,
+              outlineWidth: style.outlineWidth,
+              outlineColor: style.outlineColor,
+              boxShadow: style.boxShadow,
+            };
+          })
+        ),
       { message: `${String(target)} shows no focus mark` }
     )
     .toBe(true);

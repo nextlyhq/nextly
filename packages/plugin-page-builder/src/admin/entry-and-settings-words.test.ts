@@ -237,32 +237,58 @@ function sourceFilesIn(at: string): string[] {
   });
 }
 
-/** Whether a string at this place in the tree is never shown to an author. */
-function notShown(node: AstNode, ancestors: readonly AstNode[]): boolean {
-  const parent = ancestors.at(-1);
-  if (
+/** A string that is a literal type (`type Kind = "slug"`), never drawn. */
+function isLiteralType(above: AstNode): boolean {
+  return above.type === "TSLiteralType";
+}
+
+/** An attribute only code reads (`className`, `data-*`, `xlink:href`). */
+function isCodeAttribute(above: AstNode): boolean {
+  if (above.type !== "JSXAttribute") return false;
+  if (above.name.type === "JSXNamespacedName") return true;
+  return (
+    above.name.type === "JSXIdentifier" && CODE_ATTRIBUTE.test(above.name.name)
+  );
+}
+
+/** The module an import or export names, which is `node` itself. */
+function isModuleSpecifier(above: AstNode, node: AstNode): boolean {
+  return (
+    (above.type === "ImportDeclaration" ||
+      above.type === "ExportNamedDeclaration" ||
+      above.type === "ExportAllDeclaration" ||
+      above.type === "ImportExpression") &&
+    above.source === node
+  );
+}
+
+/** An argument of a `console` call, read by a developer only. */
+function isConsoleCall(above: AstNode): boolean {
+  return (
+    above.type === "CallExpression" &&
+    above.callee.type === "MemberExpression" &&
+    above.callee.object.type === "Identifier" &&
+    above.callee.object.name === "console"
+  );
+}
+
+/** An object's or a type's key, which names a value rather than saying it. */
+function isKey(node: AstNode, parent: AstNode | undefined): boolean {
+  return (
     (parent?.type === "Property" || parent?.type === "TSPropertySignature") &&
     parent.key === node
-  ) {
-    return true;
-  }
+  );
+}
+
+/** Whether a string at this place in the tree is never shown to an author. */
+function notShown(node: AstNode, ancestors: readonly AstNode[]): boolean {
+  if (isKey(node, ancestors.at(-1))) return true;
   return ancestors.some(
     above =>
-      above.type === "TSLiteralType" ||
-      (above.type === "JSXAttribute" &&
-        above.name.type === "JSXIdentifier" &&
-        CODE_ATTRIBUTE.test(above.name.name)) ||
-      (above.type === "JSXAttribute" &&
-        above.name.type === "JSXNamespacedName") ||
-      ((above.type === "ImportDeclaration" ||
-        above.type === "ExportNamedDeclaration" ||
-        above.type === "ExportAllDeclaration" ||
-        above.type === "ImportExpression") &&
-        above.source === node) ||
-      (above.type === "CallExpression" &&
-        above.callee.type === "MemberExpression" &&
-        above.callee.object.type === "Identifier" &&
-        above.callee.object.name === "console")
+      isLiteralType(above) ||
+      isCodeAttribute(above) ||
+      isModuleSpecifier(above, node) ||
+      isConsoleCall(above)
   );
 }
 
@@ -283,28 +309,51 @@ function tidy(text: string): string {
   return text.replace(/\s+/g, " ").trim();
 }
 
+/** A string or template's text, `{…}` for each expression; else null. */
+function stringText(node: AstNode): string | null {
+  if (node.type === "Literal" && typeof node.value === "string") {
+    return node.value;
+  }
+  if (node.type === "TemplateLiteral") {
+    return node.quasis.map(quasi => quasi.value.cooked ?? "").join("{…}");
+  }
+  return null;
+}
+
+/** An element's own line, or null where its children are only expressions. */
+function elementLine(node: AstNode): string | null {
+  if (node.type !== "JSXElement" && node.type !== "JSXFragment") return null;
+  const line = tidy(elementText(node.children));
+  return line.replace(/\{…\}/g, "").trim() === "" ? null : line;
+}
+
+/**
+ * Whether a string's text is read by an author here: not empty, not a
+ * lower-case code name outside a shown place, and not in a place never shown.
+ */
+function readHere(
+  text: string,
+  node: AstNode,
+  ancestors: readonly AstNode[]
+): boolean {
+  if (text === "") return false;
+  if (CODE_NAME.test(text) && !inShownPlace(node, ancestors)) return false;
+  return !notShown(node, ancestors);
+}
+
 /** The texts an author could read in one source file. */
 export function shownTexts(source: string, fileName: string): string[] {
   const texts: string[] = [];
   walk(parseSource(source, fileName).program, (node, ancestors) => {
-    let text: string | null = null;
-    if (node.type === "Literal" && typeof node.value === "string") {
-      text = node.value;
-    } else if (node.type === "TemplateLiteral") {
-      text = node.quasis.map(quasi => quasi.value.cooked ?? "").join("{…}");
-    } else if (node.type === "JSXElement" || node.type === "JSXFragment") {
-      const line = tidy(elementText(node.children));
-      // An element whose children are only expressions says nothing itself.
-      if (line.replace(/\{…\}/g, "").trim() !== "") texts.push(line);
+    if (node.type === "JSXElement" || node.type === "JSXFragment") {
+      const line = elementLine(node);
+      if (line !== null) texts.push(line);
       return;
     }
-    if (text === null) return;
-    const trimmed = tidy(text);
-    if (trimmed === "") return;
-    // A lower-case code name is skipped, unless it stands where it is shown.
-    if (CODE_NAME.test(trimmed) && !inShownPlace(node, ancestors)) return;
-    if (notShown(node, ancestors)) return;
-    texts.push(trimmed);
+    const raw = stringText(node);
+    if (raw === null) return;
+    const text = tidy(raw);
+    if (readHere(text, node, ancestors)) texts.push(text);
   });
   return texts;
 }
