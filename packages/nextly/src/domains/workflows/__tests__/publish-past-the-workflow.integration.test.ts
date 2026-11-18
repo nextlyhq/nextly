@@ -132,9 +132,14 @@ const app = (): TestNextly => {
  * Pages (one shared part) and Posts (English and Spanish, with a shared code) on `gated`, Loose
  * with no workflow, and the Banner Single on `gated`.
  */
-async function boot(dialect: TestDialect): Promise<TestNextly> {
+async function boot(
+  dialect: TestDialect,
+  options: { perLanguageStorage?: boolean } = {}
+): Promise<TestNextly> {
   current = await createTestNextly({
     dialect,
+    // Drafts kept by part where a case asks for it; off, as the site default is, otherwise.
+    perLanguageStorage: options.perLanguageStorage === true,
     // A visitor's read is judged by the Public role a real boot makes, which reads these
     // collections by their rule.
     seedPublic: true,
@@ -998,6 +1003,63 @@ describe.each(getConfiguredTestDialects())(
           .map(page => page.title)
           .sort();
         expect(live).toEqual(["In a batch", "On a transaction"]);
+      });
+    });
+
+    describe("publishing every language, its parts kept apart", () => {
+      /**
+       * A live Post with every part approved once, then `edit` saved in Spanish and `approved`
+       * approved again.
+       */
+      async function liveThenSpanish(
+        session: Record<string, string>,
+        edit: Doc,
+        approved: (string | null)[]
+      ): Promise<string> {
+        expect(draftsKeptByPart()).toBe(true);
+        const id = await draftOf(POSTS, { title: "Hello", code: "C-1" });
+        await save(POSTS, id, { title: "Hola" }, "es");
+        await approve(POSTS, id, ["en", "es", null]);
+        const first = (await DOORS.find(
+          door => door.name === "REST publish of every language"
+        )!.publish(id, session)) as Answer;
+        expect(first.status, JSON.stringify(first.json)).toBeLessThan(400);
+        await save(POSTS, id, edit, "es");
+        await approve(POSTS, id, approved);
+        return id;
+      }
+
+      const publishEveryLanguage = (
+        id: string,
+        session: Record<string, string>
+      ) =>
+        DOORS.find(
+          door => door.name === "REST publish of every language"
+        )!.publish(id, session) as Promise<Answer>;
+
+      it("asks no shared approval where only a language's change is pending", async () => {
+        await boot(dialect, { perLanguageStorage: true });
+        const session = await publisher();
+        const id = await liveThenSpanish(session, { title: "Hola 2" }, ["es"]);
+
+        const answer = await publishEveryLanguage(id, session);
+
+        expect(answer.status, JSON.stringify(answer.json)).toBeLessThan(400);
+        expect((await visitorRead(POSTS, id, "es"))?.title).toBe("Hola 2");
+      });
+
+      it("still judges the shared part where a shared draft is pending, which is the control", async () => {
+        await boot(dialect, { perLanguageStorage: true });
+        const session = await publisher();
+        // A shared value saved in Spanish is kept in the shared draft, which nothing approved.
+        const id = await liveThenSpanish(session, { code: "C-2" }, []);
+
+        const answer = await publishEveryLanguage(id, session);
+
+        expect(answer.status, JSON.stringify(answer.json)).toBe(400);
+        expect(JSON.stringify(answer.json)).toContain("NOT_APPROVED");
+        expect(JSON.stringify(answer.json)).toContain('"path":"shared"');
+        expect((await visitorRead(POSTS, id, "es"))?.code).toBe("C-1");
       });
     });
 
