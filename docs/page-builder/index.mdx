@@ -331,6 +331,15 @@ before, so a single-site app keeps working. On a process serving several sites t
 another site's settings, so the route warns once per reader, in every environment, naming the
 line to add.
 
+### Hold the body in a boundary
+
+Under Cache Components, wrap your root layout's `<body>` in a `<Suspense>`, as the
+[routing guide](/docs/guides/routing-and-seo) shows. On a fresh deploy the database is
+seeded after `next build`, which expires every page the build kept, and the first visit
+draws each page again. Without a boundary above the body, a read there that isn't cached
+answers 500. React never sends a boundary that holds the body hidden, so a visitor without
+JavaScript still gets the whole page.
+
 ### Pages only some visitors may read
 
 `createPublicBlocksPage` reads trusted and pre-renders, so it reads the database during
@@ -510,7 +519,13 @@ loads:
   runtime, and whatever your layout adds. "No JavaScript of their own" is about the blocks,
   not the page.
 - **The embed block can run scripts.** It is an iframe sandboxed with `allow-scripts`, so
-  what you embed runs in the visitor's browser, inside the frame.
+  what you embed runs in the visitor's browser, inside the frame. A YouTube, Vimeo,
+  Spotify or Google Maps player also keeps its own origin, which those players need, and
+  by default it loads only when a visitor presses play on the poster: until then the
+  frame holds a small poster document with no script, written into the frame's `srcdoc`.
+  If your site sends a Content Security Policy, the poster's inline styles need
+  `style-src 'unsafe-inline'`, and the players' hosts need to be allowed in
+  `frame-src`.
 - **Your own blocks decide for themselves.** A block whose component is, or renders, a
   client component sends that component's JavaScript with every page that uses it.
 - **Styles arrive as CSS.** They are compiled on the server into `<style>` elements in the

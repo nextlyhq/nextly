@@ -58,6 +58,7 @@ import { LinkCard, LinkQuote } from "./src/field-groups/related-link-groups";
 import { Seo } from "./src/field-groups/seo";
 import { SITE_STYLE_DEFAULTS } from "./src/lib/site-style-defaults";
 import { blockFixturePlugin } from "./src/plugins/block-fixture/plugin";
+import { pageCheckFixturePlugin } from "./src/plugins/page-check-fixture/plugin";
 import { contributionsFixturePlugin } from "./src/plugins/contributions-fixture/plugin";
 import { missingWidgetFixturePlugin } from "./src/plugins/missing-widget-fixture/plugin";
 import { pageSummaryFixturePlugin } from "./src/plugins/page-summary-fixture/plugin";
@@ -420,6 +421,11 @@ export default defineConfig({
     // hands their editor modules over, as the map would.
     ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1"
       ? [blockFixturePlugin]
+      : []),
+    // A plugin's own page check, listed in the builder's Page checks, for
+    // builder-plugin-page-checks.spec.ts. Fixtures only.
+    ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1"
+      ? [pageCheckFixturePlugin]
       : []),
     // The plugin contributions fixture (the dashed card on the dashboard, its
     // pieces on Posts, its proxy header), for the contributions specs, by the

@@ -18,6 +18,7 @@ import {
   DropIndicator,
   DropRefusal,
   elementAnchor,
+  EmbedStates,
   EmptyContainerAppenders,
   PageInserters,
   RepairNotice,
@@ -27,6 +28,8 @@ import {
 import { Button } from "@nextlyhq/ui";
 
 import { siteSheet } from "../../site-style";
+import { loopCollectionsIn } from "../loop-collections-client";
+import { canvasNamedQueriesIn } from "../named-queries-client";
 import type { LibraryReadState } from "../pattern-library-client";
 
 import { CanvasFirstAddChoosers } from "./canvas-first-add-choosers";
@@ -279,6 +282,9 @@ export function editorCanvasRegion(view: EditorView): React.JSX.Element {
                       })}
                   dragging={dragging}
                 />
+                {/* An Embed with no link: "Paste a YouTube, Vimeo or other
+                    link", stored with the provider's shape. */}
+                <EmbedStates editor={editor} dragging={dragging} />
                 {/* A selected block the page hides on this device is drawn
                     anyway, and its ring says so. */}
                 <CanvasMarks
@@ -400,7 +406,22 @@ export function editorCanvasRegion(view: EditorView): React.JSX.Element {
                     author picks or skips. Last, so it covers the "+" of the
                     block's own empty columns; hidden mid-drag. A store
                     of the page ends it. */}
-                <CanvasFirstAddChoosers editor={editor} hidden={dragging} />
+                <CanvasFirstAddChoosers
+                  editor={editor}
+                  hidden={dragging}
+                  // A Collection list's first step lists what this author
+                  // may show, read as they would read it.
+                  services={{
+                    listLoopCollections: loopCollectionsIn(
+                      view.locale,
+                      view.userId
+                    ),
+                    listCustomSources: canvasNamedQueriesIn(
+                      view.locale,
+                      view.userId
+                    ).sources,
+                  }}
+                />
               </>
             }
           >

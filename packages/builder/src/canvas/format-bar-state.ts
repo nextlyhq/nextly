@@ -16,8 +16,41 @@
 
 import type { BlockDocument } from "@nextlyhq/blocks-engine";
 
+/**
+ * A block the bar makes the one the caret is in: a heading, a list or a
+ * quote, and the paragraph pressing one of them again goes back to.
+ */
+export type FormatBlock =
+  | "paragraph"
+  | "h2"
+  | "h3"
+  | "bullet"
+  | "number"
+  | "quote";
+
+/** The bar's block buttons, each making its block. */
+export type FormatBlockAction = Exclude<FormatBlock, "paragraph">;
+
 /** One thing the bar offers. */
-export type FormatAction = "bold" | "italic" | "link" | "turnInto";
+export type FormatAction =
+  | "bold"
+  | "italic"
+  | "link"
+  | FormatBlockAction
+  | "turnInto";
+
+/** Whether an action is one of the bar's block buttons. */
+export function isBlockAction(
+  action: FormatAction
+): action is FormatBlockAction {
+  return (
+    action === "h2" ||
+    action === "h3" ||
+    action === "bullet" ||
+    action === "number" ||
+    action === "quote"
+  );
+}
 
 /**
  * What the bar offers a Text: bold, italic, a link, and "Turn into".
@@ -34,18 +67,44 @@ export const TEXT_FORMAT_ACTIONS: readonly FormatAction[] = [
   "turnInto",
 ];
 
+/**
+ * What the bar offers a whole passage, as a Rich text holds: a Text's marks
+ * and link, then H2, H3, bullets, numbers and quote, then "Turn into".
+ */
+export const RICH_TEXT_FORMAT_ACTIONS: readonly FormatAction[] = [
+  "bold",
+  "italic",
+  "link",
+  "h2",
+  "h3",
+  "bullet",
+  "number",
+  "quote",
+  "turnInto",
+];
+
 /** What the selection in the passage holds. */
 export interface FormatSelection {
   readonly collapsed: boolean;
   readonly bold: boolean;
   readonly italic: boolean;
   readonly link: { readonly url: string; readonly newTab: boolean } | null;
+  /**
+   * The block the caret is in, for a whole passage; `other` for one the bar
+   * has no button for. Absent for a one-paragraph passage, which has one.
+   */
+  readonly block?: FormatBlock | "other";
 }
 
 /** The editor's hold on the passage, as the bar uses it. */
 export interface FormatSession {
   format(mark: "bold" | "italic"): void;
   link(url: string | null, options?: { readonly newTab?: boolean }): void;
+  /**
+   * Make the caret's block `kind`, or a paragraph where it already is one;
+   * offered for a whole passage only.
+   */
+  block?(kind: FormatBlockAction): void;
   selection(): FormatSelection | undefined;
   /** Put the caret back in the passage, where it was. */
   focus(): void;

@@ -35,11 +35,7 @@ import {
   type Page,
 } from "@playwright/test";
 
-import {
-  layerRow,
-  openLayers,
-  pressSave,
-} from "./canvas/editor-driver";
+import { layerRow, openLayers, pressSave } from "./canvas/editor-driver";
 import { gotoAdmin } from "./support/admin";
 import { canvasFrame } from "./support/canvas-frame";
 import { storedPageNodes } from "./support/stored-page";
@@ -133,8 +129,12 @@ async function selection(page: Page): Promise<string[]> {
       const marked = Array.from(body.querySelectorAll("[data-nx-selected]"));
       const id = (each: Element) => each.getAttribute("data-nx-node") ?? "";
       return [
-        ...marked.filter(each => each.getAttribute("data-nx-selected") === "primary"),
-        ...marked.filter(each => each.getAttribute("data-nx-selected") !== "primary"),
+        ...marked.filter(
+          each => each.getAttribute("data-nx-selected") === "primary"
+        ),
+        ...marked.filter(
+          each => each.getAttribute("data-nx-selected") !== "primary"
+        ),
       ].map(id);
     });
 }
@@ -210,8 +210,9 @@ async function pageIds(page: Page, within: string): Promise<string[]> {
     const root = element.parentElement;
     return root === null
       ? []
-      : Array.from(root.querySelectorAll("[data-nx-node]"), each =>
-          each.getAttribute("data-nx-node") ?? ""
+      : Array.from(
+          root.querySelectorAll("[data-nx-node]"),
+          each => each.getAttribute("data-nx-node") ?? ""
         );
   });
 }
@@ -236,19 +237,30 @@ async function savedTopLevel(
   }[];
 }
 
+/**
+ * Why three tests do not run on macOS: they press the browser's own text
+ * copy, paste or undo, which headless Chromium on macOS does not carry out
+ * (macOS sends those keys through the app's Edit menu, which a headless
+ * browser lacks). The block shortcuts the builder handles itself still run
+ * there; Linux, where CI runs these tests, carries out all of them.
+ */
+const NATIVE_EDITING_ON_MACOS =
+  "headless Chromium on macOS does not carry out the browser's own copy, paste or undo keys";
+
 test.describe("copying, cutting and pasting blocks", () => {
   test.describe.configure({ timeout: 240_000 });
 
   test("⌘C then ⌘V pastes inside a selected Section, selected, as one undo step", async ({
     page,
   }) => {
+    test.skip(process.platform === "darwin", NATIVE_EDITING_ON_MACOS);
     await openBuilder(page, await createPage(page.request));
 
     await selectBlock(page, HEADING);
-    await page.keyboard.press("Control+c");
+    await page.keyboard.press("ControlOrMeta+c");
 
     await selectInLayers(page, PRICING);
-    await page.keyboard.press("Control+v");
+    await page.keyboard.press("ControlOrMeta+v");
 
     await expect.poll(() => childrenOf(page, PRICING)).toHaveLength(1);
     const [copy] = await childrenOf(page, PRICING);
@@ -258,7 +270,7 @@ test.describe("copying, cutting and pasting blocks", () => {
     // The original stays where it was.
     expect(await childrenOf(page, HERO)).toEqual([HEADING]);
 
-    await page.keyboard.press("Control+z");
+    await page.keyboard.press("ControlOrMeta+z");
     await expect.poll(() => childrenOf(page, PRICING)).toEqual([]);
   });
 
@@ -269,8 +281,8 @@ test.describe("copying, cutting and pasting blocks", () => {
     await openBuilder(page, id);
 
     await selectBlock(page, HEADING);
-    await page.keyboard.press("Control+c");
-    await page.keyboard.press("Control+v");
+    await page.keyboard.press("ControlOrMeta+c");
+    await page.keyboard.press("ControlOrMeta+v");
     await expect.poll(() => childrenOf(page, HERO)).toHaveLength(2);
     expect((await childrenOf(page, HERO))[0]).toBe(HEADING);
 
@@ -278,7 +290,7 @@ test.describe("copying, cutting and pasting blocks", () => {
     await page.keyboard.press("Escape");
     await page.keyboard.press("Escape");
     await expect.poll(() => selection(page)).toEqual([]);
-    await page.keyboard.press("Control+v");
+    await page.keyboard.press("ControlOrMeta+v");
 
     // The paste selects the copy it made.
     await expect.poll(async () => (await selection(page)).length).toBe(1);
@@ -298,12 +310,12 @@ test.describe("copying, cutting and pasting blocks", () => {
   }) => {
     await openBuilder(page, await createPage(page.request));
     await selectBlock(page, HEADING);
-    await page.keyboard.press("Control+c");
+    await page.keyboard.press("ControlOrMeta+c");
 
     const other = await context.newPage();
     const otherId = await createPage(other.request, true);
     await openBuilder(other, otherId);
-    await other.keyboard.press("Control+v");
+    await other.keyboard.press("ControlOrMeta+v");
 
     await expect(
       canvasFrame(other).locator("[data-nx-node]", { hasText: "Welcome" })
@@ -344,13 +356,13 @@ test.describe("copying, cutting and pasting blocks", () => {
     await openBuilder(page, await createPage(page.request));
     // Blocks on the clipboard: a paste the editor took for blocks would add one.
     await selectBlock(page, HEADING);
-    await page.keyboard.press("Control+c");
+    await page.keyboard.press("ControlOrMeta+c");
     const before = await pageIds(page, HERO);
 
     const text = await editText(page, HEADING);
     // A caret, with nothing highlighted, so only the text rule keeps the key.
     await page.keyboard.press("End");
-    await page.keyboard.press("Control+v");
+    await page.keyboard.press("ControlOrMeta+v");
     await page.keyboard.press("Escape");
 
     await expect(text).not.toHaveAttribute("contenteditable", /.+/);
@@ -360,15 +372,16 @@ test.describe("copying, cutting and pasting blocks", () => {
   test("⌘C and ⌘V in a heading's text on the canvas copy and paste the text, not the block", async ({
     page,
   }) => {
+    test.skip(process.platform === "darwin", NATIVE_EDITING_ON_MACOS);
     await openBuilder(page, await createPage(page.request));
     const before = await pageIds(page, HERO);
 
     const text = await editText(page, HEADING);
     // The whole of the words, highlighted inside the text being edited.
     await page.keyboard.press("Control+a");
-    await page.keyboard.press("Control+c");
+    await page.keyboard.press("ControlOrMeta+c");
     await page.keyboard.press("End");
-    await page.keyboard.press("Control+v");
+    await page.keyboard.press("ControlOrMeta+v");
     await page.keyboard.press("Enter");
 
     await expect(text).not.toHaveAttribute("contenteditable", /.+/);
@@ -379,6 +392,7 @@ test.describe("copying, cutting and pasting blocks", () => {
   test("⌘C and ⌘V in the panel's text field copy and paste the text, not the block", async ({
     page,
   }) => {
+    test.skip(process.platform === "darwin", NATIVE_EDITING_ON_MACOS);
     await openBuilder(page, await createPage(page.request));
     await selectBlock(page, HEADING);
     const before = await pageIds(page, HERO);
@@ -386,16 +400,16 @@ test.describe("copying, cutting and pasting blocks", () => {
     const words = page.getByLabel("Text", { exact: true });
     await words.click();
     await page.keyboard.press("Control+a");
-    await page.keyboard.press("Control+c");
+    await page.keyboard.press("ControlOrMeta+c");
     await page.keyboard.press("End");
-    await page.keyboard.press("Control+v");
+    await page.keyboard.press("ControlOrMeta+v");
 
     await expect(words).toHaveValue("WelcomeWelcome");
     expect(await pageIds(page, HERO)).toEqual(before);
 
     // ⌘X cuts the words, not the block.
     await page.keyboard.press("Control+a");
-    await page.keyboard.press("Control+x");
+    await page.keyboard.press("ControlOrMeta+x");
     await expect(words).toHaveValue("");
     expect(await pageIds(page, HERO)).toEqual(before);
   });

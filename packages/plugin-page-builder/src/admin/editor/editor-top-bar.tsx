@@ -7,6 +7,7 @@
  *
  * @module @nextlyhq/plugin-page-builder/admin/editor/editor-top-bar
  */
+import type { PageCheck, PageFacts } from "@nextlyhq/builder";
 import { BreakpointSwitcher, PageChecksChip } from "@nextlyhq/builder/shell";
 import { DocumentSaveAndPublish } from "@nextlyhq/plugin-sdk/admin";
 
@@ -74,6 +75,12 @@ export function editorTopBar(
     visitor: VisitorPreview;
     pageData: PageDataCount | null;
     openAsForm: (() => void) | undefined;
+    /** The checks the Page checks count runs: the builder's and plugins'. */
+    pageChecks: readonly PageCheck[];
+    /** What those checks read of the page beyond its document. */
+    pageFacts: PageFacts;
+    /** Opens Page settings at a tab, for a plugin's fix found there. */
+    openSettingsTab: (tab: string) => void;
   }
 ): {
   topBar: React.JSX.Element;
@@ -173,6 +180,10 @@ export function editorTopBar(
           <PageChecksChip
             editor={editor}
             canvas={page.canvas}
+            // The builder's checks and other plugins', in their own groups.
+            checks={page.pageChecks}
+            facts={page.pageFacts}
+            onOpenSettingsTab={page.openSettingsTab}
             // The site's header and footer, read with the page, so their
             // headings count in the page's order.
             regions={view.canvasRegions}
@@ -180,6 +191,15 @@ export function editorTopBar(
             {...(canvasRender.definitions === undefined
               ? {}
               : { definitions: canvasRender.definitions })}
+            // The site's variables, light and dark, for the contrast check.
+            {...(view.siteTokens === undefined
+              ? {}
+              : { tokens: view.siteTokens })}
+            // The site's shared styles, its edits to block types' looks
+            // among them, which a block's colours are drawn with.
+            {...(canvasRender.styleContext.namedClasses === undefined
+              ? {}
+              : { namedClasses: canvasRender.styleContext.namedClasses })}
           />
         ) : null}
         {/* Last, at the bar's far end where the header kept them: Save and

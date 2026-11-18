@@ -123,7 +123,8 @@ describe("running the checks over a page", () => {
     };
     runPageChecks({ document: PAGE, regions: [header] }, [reads]);
     runPageChecks({ document: PAGE }, [reads]);
-    expect(seen).toEqual([[header], []]);
+    // As given, with the stored document a read names kept beside it.
+    expect(seen).toEqual([[{ ...header, stored: header.document }], []]);
   });
 
   it("reads a header placed as a component as its component's blocks", () => {

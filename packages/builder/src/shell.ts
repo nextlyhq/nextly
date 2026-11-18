@@ -518,6 +518,8 @@ export type { EmptyContainerAppendersProps } from "./canvas/empty-container-appe
  */
 export { ImageStates } from "./canvas/image-states";
 export type { ImageStatesProps } from "./canvas/image-states";
+export { EmbedStates } from "./canvas/embed-states";
+export type { EmbedStatesProps } from "./canvas/embed-states";
 /**
  * The chooser a block just added asks for, drawn over it on the canvas while
  * the editor's first-add step holds: the Columns layouts with Skip. A canvas
@@ -540,6 +542,12 @@ export { VisitorUnreadableProvider } from "./visitor-unreadable-context";
  * a colour variable's, reads and adds to the one list.
  */
 export { RecentColoursStore } from "./recent-colours";
+/**
+ * @experimental The colours every colour picker in the builder leaves out
+ * while the site hides its unused built-in colours, provided once around
+ * the shell, and the read a host provides it from.
+ */
+export { HiddenColours, useHiddenColoursRead } from "./built-in-colours";
 /**
  * @experimental A template's document with an entry's own blocks composed
  * into its Entry content block, as the canvas draws it, for a host asking
@@ -864,6 +872,13 @@ export { sharedStyleNameTaken } from "./shared-style-target";
 export { useNoticeQueue } from "./shell/builder-notices";
 export type { NoticeQueue, RaiseNotice } from "./shell/builder-notices";
 export { SharedStylesPanel } from "./shared-styles-panel";
+/**
+ * Design → Type → "Text styles": the site's text styles and their parts.
+ *
+ * @experimental Settles with text styles.
+ */
+export { TextStylesSection } from "./text-styles-section";
+export type { TextStylesSectionProps } from "./text-styles-section";
 // The whole-list class write the Styles tab's Block styles make, copy,
 // rename and hide block styles and move ★ through.
 export type { ClassListEdit, EditClasses } from "./block-style-actions";
@@ -917,11 +932,19 @@ export type {
  * @experimental The catalogue's shapes may change while the feature settles.
  */
 export { FontsPanel } from "./fonts-panel";
+/**
+ * The one Fonts screen around that list: what the builder opens over its
+ * Design panel and the admin draws as its Fonts page.
+ *
+ * @experimental Its props may change while the screen settles.
+ */
+export { FontsScreen } from "./fonts-panel";
 export type {
   CatalogueAddRequest,
   CatalogueFamilyView,
   FontCatalogue,
   FontsPanelProps,
+  FontsScreenProps,
   FontFaceUpload,
 } from "./fonts-panel";
 export {

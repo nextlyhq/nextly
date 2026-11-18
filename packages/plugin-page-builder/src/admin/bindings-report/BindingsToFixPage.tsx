@@ -22,13 +22,14 @@
  */
 import { Button, navigateTo } from "@nextlyhq/plugin-sdk/admin";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@nextlyhq/ui";
-import { AlertTriangle, ArrowRight, ChevronRight } from "lucide-react";
+import { AlertTriangle, ArrowRight } from "lucide-react";
 import { useEffect, useState, type JSX } from "react";
 
 import type {
   BindingsToFixItem,
   BindingsToFixRow,
 } from "../../bindings-report/contract";
+import { PageBuilderBreadcrumb } from "../page-breadcrumb";
 import { navigateWithin } from "../plain-click";
 
 import { checkedWords } from "./checked-words";
@@ -54,35 +55,6 @@ const PLACE_LABEL: Readonly<Record<string, string>> = {
   entries: "Entry",
   singles: "Single",
 };
-
-/** The page's breadcrumb, drawn as the admin draws its own. */
-function Breadcrumb(): JSX.Element {
-  return (
-    <nav aria-label="Breadcrumb" className="mb-6">
-      <ol className="flex items-center gap-2 text-sm text-muted-foreground">
-        <li className="flex items-center gap-2">
-          <a
-            href="/admin"
-            onClick={navigateWithin("/admin", navigateTo).onClick}
-            className="hover:text-foreground hover:underline"
-          >
-            Dashboard
-          </a>
-          <ChevronRight aria-hidden="true" className="h-4 w-4" />
-        </li>
-        <li className="flex items-center gap-2">
-          <span>Page Builder</span>
-          <ChevronRight aria-hidden="true" className="h-4 w-4" />
-        </li>
-        <li>
-          <span aria-current="page" className="font-medium text-foreground">
-            Bindings to fix
-          </span>
-        </li>
-      </ol>
-    </nav>
-  );
-}
 
 /** One binding's row. */
 function BindingRow({
@@ -379,7 +351,7 @@ export function BindingsToFixPage(): JSX.Element {
   }, [page, lastPage]);
   return (
     <div className="min-h-[calc(100vh-4rem)] w-full max-w-full px-4 py-6 @sm/content:px-6 @sm/content:py-8 @2xl/content:px-8">
-      <Breadcrumb />
+      <PageBuilderBreadcrumb page="Bindings to fix" />
       <div className="mb-8 flex flex-col justify-between gap-4 sm:flex-row sm:items-start">
         <div>
           <h1 className="text-xl font-semibold tracking-tight">

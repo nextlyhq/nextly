@@ -178,7 +178,13 @@ export interface LoopCollection {
     readonly timeOnly?: boolean;
     /** The primitive a plugin's field type is stored as, which gives its kind. */
     readonly storage?: FieldStoragePrimitive;
+    /** For an upload field: whether it takes images, where it says. */
+    readonly takesImages?: boolean;
   }[];
+  /** The field the admin titles its entries by, where visitors may read it. */
+  readonly titleField?: string;
+  /** Whether its entries are served as pages of their own. */
+  readonly entriesHavePages?: boolean;
 }
 
 /** A list's matching entries, and how many of them it shows. */
@@ -207,6 +213,15 @@ export interface ContentServices extends BindingServices {
    * @experimental Settles with the canvas's image empty state.
    */
   readonly uploadMedia?: UploadMedia;
+  /**
+   * Copy the picture a video's provider shows for it into the media library,
+   * once: a second copy for the same video answers the first. Given the
+   * Embed's link as stored; the host fetches only from the provider's fixed
+   * picture host. Absent, an Embed offers no "Use the video's thumbnail".
+   *
+   * @experimental Settles with the Embed's poster.
+   */
+  readonly copyEmbedThumbnail?: (link: string) => Promise<PickedMedia>;
   /** The shared rich-text editor, loaded when a passage is first focused. */
   readonly loadRichTextEditor?: InlineRichTextEditorLoader;
   /**
