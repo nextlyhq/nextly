@@ -549,8 +549,6 @@ async function singleSaveTakesPush(args: {
     newFields: args.newFields,
     wasStored: args.layout.wasStored,
     isStored: args.layout.isStored,
-    wasStatus: args.layout.wasPublishedPerLanguage,
-    status: args.layout.isPublishedPerLanguage,
     renamed: args.companionRename,
     liveTable: async () =>
       (await introspectLiveSnapshot(args.db, args.dialect, [args.tableName]))

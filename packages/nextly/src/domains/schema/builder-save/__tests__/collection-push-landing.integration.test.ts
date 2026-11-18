@@ -32,6 +32,7 @@ import type { ServiceContainer } from "../../../../services";
 import { readTableDefinition } from "../../__tests__/helpers/table-definition";
 import { SchemaEventsRepository } from "../../events/schema-events-repository";
 import { CollectionRegistryService } from "../../../collections/services/collection-registry-service";
+import type { CollectionService } from "../../../collections/services/collection-service";
 import { RealPreCleanupExecutor } from "../../pipeline/pre-cleanup/executor";
 import { PushSchemaPipeline } from "../../pipeline/pushschema-pipeline";
 import { DrizzleStatementExecutor } from "../../services/drizzle-statement-executor";
@@ -285,6 +286,63 @@ for (const dialect of getConfiguredTestDialects()) {
       expect(await standing()).toEqual(before);
     }, 60_000);
 
+    // The title every entry carries is kept out of the stored fields, so the stored list never
+    // names it: made unique, it is still a field the table already holds, whose values may repeat.
+    // On its own the change runs through the save writer; beside the switch the push applies it.
+    const titleUnique = { ...text("title"), unique: true };
+    for (const [how, fields] of [
+      ["on its own", [titleUnique, text("code"), author(false)]],
+      [
+        "beside a change the push applies",
+        [titleUnique, text("code"), author(true), text("body")],
+      ],
+    ] as const) {
+      it(`refuses a title made unique over entries that share one, ${how}, and leaves nothing`, async () => {
+        for (const code of ["one", "two"]) {
+          await t.nextly.create({
+            collection: "posts",
+            data: { title: "Same", code },
+          } as never);
+        }
+        const before = await standing();
+
+        await expect(save([...fields])).rejects.toMatchObject({
+          code: "VALIDATION_ERROR",
+          publicData: {
+            errors: [
+              expect.objectContaining({
+                path: "fields.title",
+                code: "UNIQUE_OVER_DUPLICATES",
+              }),
+            ],
+          },
+        });
+
+        expect(await standing()).toEqual(before);
+      }, 60_000);
+
+      // Titles that differ are made unique: the check refuses repeats, never the title itself.
+      it(`makes a title unique where no two entries share one, ${how}`, async () => {
+        for (const [title, code] of [
+          ["One", "one"],
+          ["Two", "two"],
+        ]) {
+          await t.nextly.create({
+            collection: "posts",
+            data: { title, code },
+          } as never);
+        }
+
+        await expect(save([...fields])).resolves.toBeDefined();
+        await expect(
+          t.nextly.create({
+            collection: "posts",
+            data: { title: "One", code: "three" },
+          } as never)
+        ).rejects.toBeDefined();
+      }, 60_000);
+    }
+
     /**
      * The test's seam on the push's statement executor, with no production hook: every statement
      * the push sends, across its calls, is noted; the first runs, which MySQL commits, SQLite's push
@@ -510,5 +568,97 @@ for (const dialect of getConfiguredTestDialects()) {
       },
       60_000
     );
+  });
+
+  // A translated collection keeps the system `title` on the shared row, whatever a text field's
+  // default: made unique as a shared field, its repeats are counted there.
+  describe(`a translated collection's title made unique (${dialect})`, () => {
+    let translated: TestNextly;
+    let translatedPath: string;
+
+    beforeEach(async () => {
+      translatedPath = await mkdtemp(
+        join(tmpdir(), "nextly-translated-title-")
+      );
+      vi.stubEnv("NODE_ENV", "development");
+      translated = await createTestNextly({
+        dialect: dialect as TestDialect,
+        basePath: translatedPath,
+        db: DB,
+        localization: { locales: ["en", "es"], defaultLocale: "en" },
+      });
+      await translated.getService("collectionService").createCollection(
+        {
+          name: "posts",
+          label: "Post",
+          localized: true,
+          fields: [{ ...text("code"), localized: false }],
+        } as Parameters<CollectionService["createCollection"]>[0],
+        {}
+      );
+    });
+
+    afterEach(async () => {
+      await translated?.destroy();
+      vi.unstubAllEnvs();
+      await rm(translatedPath, { recursive: true, force: true });
+    });
+
+    const shared = (field: Field): Field => ({ ...field, localized: false });
+    async function saveSharedTitleUnique(): Promise<unknown> {
+      const [row] = await (
+        translated.adapter as unknown as {
+          executeQuery<T>(sql: string): Promise<T[]>;
+        }
+      ).executeQuery<{ version: number | string | null }>(
+        "SELECT schema_version AS version FROM dynamic_collections WHERE slug = 'posts'"
+      );
+      return dispatchCollections(
+        {} as ServiceContainer,
+        "applySchemaChanges",
+        { collectionName: "posts" },
+        {
+          fields: [
+            shared({ ...text("title"), unique: true }),
+            shared(text("code")),
+          ],
+          confirmed: true,
+          schemaVersion: Number(row?.version ?? 1),
+          localized: true,
+        }
+      );
+    }
+    const createPost = (title: string, code: string) =>
+      translated.nextly.create({
+        collection: "posts",
+        locale: "en",
+        data: { title, code },
+      } as never);
+
+    it("refuses a shared title made unique over entries that share one", async () => {
+      await createPost("Same", "one");
+      await createPost("Same", "two");
+
+      await expect(saveSharedTitleUnique()).rejects.toMatchObject({
+        code: "VALIDATION_ERROR",
+        publicData: {
+          errors: [
+            expect.objectContaining({
+              path: "fields.title",
+              code: "UNIQUE_OVER_DUPLICATES",
+            }),
+          ],
+        },
+      });
+    }, 60_000);
+
+    // Titles that differ are made unique: the check refuses repeats, never the title itself.
+    it("makes a shared title unique where no two entries share one", async () => {
+      await createPost("One", "one");
+      await createPost("Two", "two");
+
+      await expect(saveSharedTitleUnique()).resolves.toBeDefined();
+      await expect(createPost("One", "three")).rejects.toBeDefined();
+    }, 60_000);
   });
 }

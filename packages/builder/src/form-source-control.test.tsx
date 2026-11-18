@@ -250,7 +250,7 @@ describe("the round a page's picked forms are drawn in", () => {
 
   it("goes up each time the author comes back to a page picking a form, and only then", async () => {
     const { result, rerender } = renderHook(
-      ({ doc }: { doc: BlockDocument }) => useFormsShownAgain(doc),
+      ({ doc }: { doc: BlockDocument }) => useFormsShownAgain([doc]),
       { initialProps: { doc: simpleOnly } }
     );
     expect(result.current).toBe(0);
@@ -264,5 +264,13 @@ describe("the round a page's picked forms are drawn in", () => {
     await waitFor(() => expect(result.current).toBe(1));
     rerender({ doc: picking });
     expect(result.current).toBe(1);
+  });
+
+  it("goes up for a form picked in any tree drawn, such as a header around a page picking none", async () => {
+    const { result } = renderHook(() =>
+      useFormsShownAgain([simpleOnly, picking])
+    );
+    shown();
+    await waitFor(() => expect(result.current).toBe(1));
   });
 });
