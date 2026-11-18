@@ -9430,27 +9430,12 @@ export class CollectionMutationService extends BaseService {
         // this transaction, once the entry has its id: nothing of it was live before. A part held
         // back refuses the create, and it rolls back; what the verdict started is settled before
         // the transaction commits, below.
-        const createdSave =
-          finalData.status === "published"
-            ? this.statusSaveOf(
-                { ...params, entryId: String(entry.id) },
-                {
-                  status: finalData.status,
-                  locale: params.locale,
-                  everyLanguage: false,
-                  withoutReview,
-                  // A new entry has no drafts.
-                  sharedDraftPending: false,
-                },
-                collection
-              )
-            : null;
-        const settleCreateGate = createdSave
-          ? await judgeStatusSave(tx, createdSave, {
-              languages: [],
-              shared: false,
-            })
-          : undefined;
+        const settleCreateGate = await this.judgeCreateOnTx(
+          tx,
+          { ...params, entryId: String(entry.id) },
+          { status: finalData.status, locale: params.locale, withoutReview },
+          collection
+        );
 
         // i18n M5: write the translatable values to the companion `_locales` row for the
         // write's locale (same transaction → rolls back with the main insert).
@@ -12963,6 +12948,43 @@ export class CollectionMutationService extends BaseService {
       parts: undefined,
       mainStatus: args.mainStatus,
     });
+  }
+
+  /**
+   * The publish gate's verdict on a create that puts its entry live, asked on `tx` once the entry
+   * has its id: nothing of it was live before. A part held back throws its refusal, so the create
+   * rolls back; else what the verdict started, to settle before the transaction commits. Undefined
+   * where the create publishes nothing. Every create door asks it, on whichever transaction holds
+   * the insert, so none reads the pool from inside a caller's transaction.
+   */
+  private async judgeCreateOnTx(
+    tx: TransactionContext,
+    params: Parameters<CollectionMutationService["statusSaveOf"]>[0],
+    create: {
+      status: unknown;
+      locale: string | undefined;
+      withoutReview: { reason: string } | undefined;
+    },
+    collection: unknown
+  ): Promise<(() => Promise<void>) | undefined> {
+    const createdSave =
+      create.status === "published"
+        ? this.statusSaveOf(
+            params,
+            {
+              status: create.status,
+              locale: create.locale,
+              everyLanguage: false,
+              withoutReview: create.withoutReview,
+              // A new entry has no drafts.
+              sharedDraftPending: false,
+            },
+            collection
+          )
+        : null;
+    return createdSave
+      ? judgeStatusSave(tx, createdSave, { languages: [], shared: false })
+      : undefined;
   }
 
   /**
@@ -21986,8 +22008,17 @@ export class CollectionMutationService extends BaseService {
       actorForWrite(params.actor, params.user)
     );
     if ("refused" in provenance) return provenance.refused;
+    // A publish made without review, and why, read off the body for the publish gate and never
+    // stored; see createEntry.
+    const withoutReview = withoutReviewOfBody(body);
     // A version sent with the body is the server's to decide; see updateEntry.
     body = withoutDocumentVersionKeys(body);
+    if (WITHOUT_REVIEW_KEY in body) {
+      body = { ...body };
+      delete body[WITHOUT_REVIEW_KEY];
+    }
+    // What the publish gate's verdict on this create started, settled once it is written.
+    let settleCreateGate: (() => Promise<void>) | undefined;
     // Computed right after the row is written (before response redaction can
     // strip the slug, and before the after-hooks run) and carried on every
     // post-write return, so a committed item whose after-hook then throws still
@@ -22448,6 +22479,15 @@ export class CollectionMutationService extends BaseService {
             )
           ),
         });
+        // A create that puts its entry live is a publish: the gate's verdict, on this
+        // transaction once the entry has its id. A part held back refuses the create, and the
+        // savepoint takes the row back with it.
+        settleCreateGate = await this.judgeCreateOnTx(
+          tx,
+          { ...params, entryId: String((entry as { id: unknown }).id) },
+          { status: finalData.status, locale: undefined, withoutReview },
+          collection
+        );
         return entry;
       });
 
@@ -22488,6 +22528,9 @@ export class CollectionMutationService extends BaseService {
         user: params.user,
         context: sharedContext,
       });
+      // What the gate's verdict started is settled now the create is written; a gate that throws
+      // takes the create back with the caller's transaction.
+      if (settleCreateGate) await settleCreateGate();
 
       // The collection event, held for the caller's commit. Announced whether
       // or not hooks run: it is not a hook, as the outbox event is not.
