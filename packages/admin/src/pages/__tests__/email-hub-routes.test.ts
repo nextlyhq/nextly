@@ -16,6 +16,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  EMAIL_DELIVERIES_READ_PERMISSION,
   EMAIL_HUB_PERMISSIONS,
   EMAIL_PROVIDER_CREATE_PERMISSIONS,
   EMAIL_PROVIDER_READ_PERMISSIONS,
@@ -72,6 +73,16 @@ describe("the Email hub's routes", () => {
     const resolved = resolveRoute(path, "");
     expect(resolved.Component).toBe(page);
     expect(resolved.requiredPermission).toEqual([...grants]);
+  });
+
+  it("serves Activity behind the delivery read grant", () => {
+    const activity = routeConfig[ROUTES.EMAIL_ACTIVITY];
+    expect(activity, "Activity is registered").toBeDefined();
+    const resolved = resolveRoute(ROUTES.EMAIL_ACTIVITY, "");
+    expect(resolved.Component).toBe(activity?.component);
+    expect(resolved.requiredPermission).toEqual([
+      EMAIL_DELIVERIES_READ_PERMISSION,
+    ]);
   });
 
   it("lets a reader see a tab without the grant that changes it", () => {
