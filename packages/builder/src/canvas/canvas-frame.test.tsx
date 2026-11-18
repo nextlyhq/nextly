@@ -480,6 +480,40 @@ describe("the canvas frame", () => {
   });
 });
 
+describe("previewing another width", () => {
+  it("draws the width handles in the frame's box when the host gives the control", () => {
+    const onChange = vi.fn();
+    const { container } = render(
+      <CanvasFrame
+        width={900}
+        title="Home"
+        source={TEST_SOURCE}
+        previewWidth={{
+          breakpoints: undefined,
+          edited: "base",
+          deviceWidth: 1280,
+          override: 900,
+          onChange,
+        }}
+      />
+    );
+    const box = container.querySelector("[data-nx-canvas-frame-box]");
+    const sliders = box?.querySelectorAll('[role="slider"]') ?? [];
+    expect(sliders).toHaveLength(2);
+    expect(sliders[0]?.getAttribute("aria-valuenow")).toBe("900");
+    // The control is the frame's, never a marker on the page's document.
+    const root = frameIn(container).contentDocument?.documentElement;
+    expect(root?.getAttributeNames().join(" ")).not.toMatch(/preview/i);
+  });
+
+  it("draws no handles without it", () => {
+    const { container } = render(
+      <CanvasFrame width={1280} title="Home" source={TEST_SOURCE} />
+    );
+    expect(container.querySelector('[role="slider"]')).toBeNull();
+  });
+});
+
 describe("the editor's own page source", () => {
   it("takes its own page and not the blank page a frame starts with", () => {
     const blank = document.implementation.createHTMLDocument("");

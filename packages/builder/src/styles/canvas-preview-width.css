@@ -1,0 +1,152 @@
+/*
+ * Previewing the page at another width (`canvas-preview-width-edges.tsx`):
+ * the handles at the frame's edges, the ruler of breakpoint starts over the
+ * top of the well, and the line saying which device is still being edited.
+ *
+ * All drawn inside the frame's box, out of flow, so nothing here moves the
+ * page or the well. No transitions: a width, a handle and the ruler change at
+ * once, which is also what reduced motion asks for.
+ */
+.nx-preview-width {
+  position: absolute;
+  inset: 0;
+  /* Over the chrome layer drawn in the same box. */
+  z-index: 3;
+  pointer-events: none;
+}
+
+/*
+ * A handle: a strip as tall as a grip and a little more, its grip centred in
+ * it. Beside a frame narrower than the well it sits in the well, just outside
+ * the page's edge; on a frame filling the region it sits just inside, and
+ * shows on hover or focus.
+ */
+.nx-preview-width__handle {
+  position: absolute;
+  top: 50%;
+  width: 12px;
+  height: 48px;
+  margin-top: -24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: ew-resize;
+  touch-action: none;
+  pointer-events: auto;
+  border-radius: 4px;
+}
+
+.nx-preview-width__handle[data-side="left"] {
+  left: -14px;
+}
+
+.nx-preview-width__handle[data-side="right"] {
+  right: -14px;
+}
+
+/*
+ * Inside a frame that meets the panels' dividers, kept clear of each
+ * divider's own resize strip and grip, which straddle the edge at its middle:
+ * in from the edge, and above the divider's grip, so the two never overlap
+ * and a press on either is unambiguous.
+ */
+.nx-preview-width[data-handles="inside"] .nx-preview-width__handle {
+  margin-top: -80px;
+}
+
+.nx-preview-width[data-handles="inside"]
+  .nx-preview-width__handle[data-side="left"] {
+  left: 8px;
+}
+
+.nx-preview-width[data-handles="inside"]
+  .nx-preview-width__handle[data-side="right"] {
+  right: 8px;
+}
+
+.nx-preview-width__handle:focus-visible {
+  outline: 2px solid var(--nx-builder-accent);
+  outline-offset: 1px;
+}
+
+.nx-preview-width__grip {
+  width: 4px;
+  height: 32px;
+  border-radius: 2px;
+  background-color: var(--nx-builder-text-muted);
+}
+
+.nx-preview-width[data-handles="inside"] .nx-preview-width__grip {
+  opacity: 0;
+}
+
+.nx-preview-width[data-handles="inside"]
+  .nx-preview-width__handle:is(:hover, :focus-visible)
+  .nx-preview-width__grip,
+.nx-preview-width[data-dragging] .nx-preview-width__grip {
+  opacity: 1;
+}
+
+/*
+ * The ruler: a strip over the top of the well, centred on the frame as the
+ * frame is centred in the well, a tick where an edge at each breakpoint's
+ * start would be.
+ */
+.nx-preview-width__ruler {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 20px;
+  overflow: visible;
+  pointer-events: none;
+  font-size: 10px;
+  line-height: 20px;
+  font-variant-numeric: tabular-nums;
+  color: var(--nx-builder-text-muted);
+}
+
+.nx-preview-width__tick {
+  position: absolute;
+  top: 0;
+  height: 20px;
+  border-left: 1px dashed var(--nx-builder-border);
+}
+
+.nx-preview-width__tick[data-labelled] {
+  padding-left: 3px;
+  white-space: nowrap;
+  background-color: color-mix(
+    in srgb,
+    var(--nx-builder-surface) 85%,
+    transparent
+  );
+}
+
+/* The width dragged to, at the right edge while the drag lasts. */
+.nx-preview-width__readout {
+  position: absolute;
+  top: 20px;
+  padding: 0 4px;
+  border-radius: 3px;
+  white-space: nowrap;
+  transform: translateX(-100%);
+  color: var(--nx-builder-warning-text);
+  background-color: var(--nx-builder-warning-ground);
+}
+
+/* "Previewing at 900px · still editing Desktop styles", at the foot. */
+.nx-preview-width__notice {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  margin: 0;
+  padding: 2px 8px;
+  border-radius: 999px;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--nx-builder-warning-text);
+  background-color: var(--nx-builder-warning-ground);
+  pointer-events: none;
+}

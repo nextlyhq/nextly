@@ -66,6 +66,10 @@ import {
   SITE_CHROME_ATTRIBUTE,
 } from "./canvas-frame-sheet";
 import {
+  PreviewWidthEdges,
+  type PreviewWidthControl,
+} from "./canvas-preview-width-edges";
+import {
   frameFillingRegion,
   frameFitScale,
   type FrameSize,
@@ -262,6 +266,15 @@ export interface CanvasFrameProps {
    * @experimental Settles with the canvas's preview tags.
    */
   pinned?: React.ReactNode;
+  /**
+   * Previewing the page at a width other than the device's own: the frame
+   * draws a handle at each edge, the ruler and the line saying which device
+   * is still edited, and tells the host the width settled on. The host lays
+   * the frame out at that width through `width`. Left out, no handles.
+   *
+   * @experimental Settles with the canvas's preview width.
+   */
+  previewWidth?: PreviewWidthControl;
   /** The canvas, rendered inside the frame. */
   children?: React.ReactNode;
   /** Where the frame's page comes from. The editor's blank page by default. */
@@ -327,7 +340,8 @@ function FramedCanvas({
 }: CanvasFrameProps): React.JSX.Element {
   // The chrome drawn over the frame, apart from the markers the page's own
   // document is given.
-  const { overlay, pinned, ...markers } = rest;
+  // The preview width control is the frame's own, never a page marker.
+  const { overlay, pinned, previewWidth, ...markers } = rest;
   const stage = React.useRef<HTMLDivElement | null>(null);
   const layer = React.useRef<HTMLDivElement | null>(null);
   const layerContent = React.useRef<HTMLDivElement | null>(null);
@@ -387,6 +401,9 @@ function FramedCanvas({
           overlay={overlay}
           pinned={pinned}
         />
+        {/* At the box's edges, over the layer, so the handles sit at the
+            page's edges and beside it in the well. */}
+        <PreviewWidthEdges control={previewWidth} width={width} scale={scale} />
       </div>
       <FramePage mountPoint={mountPoint}>{children}</FramePage>
     </div>
