@@ -24,7 +24,6 @@ import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { TransactionContext } from "@nextlyhq/adapter-drizzle";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import { dispatchSingles } from "../../../dispatcher/handlers/single-dispatcher";
@@ -141,9 +140,9 @@ describeEachDialect("a Single schema save whose statements fail", dialect => {
     const adapter = t.adapter;
     const executeQuery = adapter.executeQuery.bind(adapter);
     vi.spyOn(adapter, "executeQuery").mockImplementation(
-      async (statement, params) => {
-        refuse(statement);
-        return executeQuery(statement, params);
+      async (...args: Parameters<typeof executeQuery>) => {
+        refuse(args[0]);
+        return executeQuery(...args);
       }
     );
     const transaction = adapter.transaction.bind(adapter);
@@ -154,12 +153,9 @@ describeEachDialect("a Single schema save whose statements fail", dialect => {
             new Proxy(tx, {
               get(target, key) {
                 if (key === "execute") {
-                  return async (
-                    statement: string,
-                    params?: Parameters<TransactionContext["execute"]>[1]
-                  ) => {
-                    refuse(statement);
-                    return target.execute(statement, params);
+                  return async (...args: Parameters<typeof target.execute>) => {
+                    refuse(args[0]);
+                    return target.execute(...args);
                   };
                 }
                 const value: unknown = Reflect.get(target, key);

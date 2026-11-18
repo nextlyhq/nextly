@@ -286,7 +286,7 @@ function recordedRowOf(
       key,
       existing[key] ?? null,
     ])
-  ) as Partial<DynamicSingleInsert>;
+  );
 }
 
 /**
