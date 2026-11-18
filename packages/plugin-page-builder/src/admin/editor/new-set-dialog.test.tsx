@@ -132,6 +132,31 @@ describe("a new header & footer set", () => {
     expect(sdk.writePluginRoute).toHaveBeenCalledTimes(1);
   });
 
+  it("can't be closed while the set is being made, so its opening never comes after a Cancel", async () => {
+    sdk.writePluginRoute.mockImplementationOnce(() => new Promise(() => {}));
+    const onOpenChange = vi.fn();
+    render(
+      <NewSetDialog
+        open
+        onOpenChange={onOpenChange}
+        facts={{ collection: "layouts", defaultTitle: "Main", here: "Home" }}
+      />
+    );
+    const dialog = screen.getByRole("dialog", { name: "New header & footer" });
+    await userEvent.type(
+      within(dialog).getByRole("textbox", { name: "Name" }),
+      "Landing"
+    );
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Create" })
+    );
+    expect(
+      within(dialog).getByRole("button", { name: "Cancel" })
+    ).toHaveProperty("disabled", true);
+    await userEvent.keyboard("{Escape}");
+    expect(onOpenChange).not.toHaveBeenCalledWith(false);
+  });
+
   it("asks for a name before anything is made", async () => {
     const dialog = show();
     await userEvent.click(

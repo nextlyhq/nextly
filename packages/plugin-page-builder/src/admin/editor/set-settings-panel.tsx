@@ -105,6 +105,8 @@ export function SetSettingsPanel({
   const shownTitle =
     typeof title.field.value === "string" ? title.field.value : "";
   const sets = standing.choices?.items;
+  // The list of sets is bounded: past it, another set may still use a header.
+  const listCut = standing.choices?.meta.more === true;
   const usedByOf = useCallback(
     (component: string | undefined) =>
       otherSetsUsing(sets ?? [], set.id, component),
@@ -160,6 +162,7 @@ export function SetSettingsPanel({
         onChoose={chooseFor("header")}
         disabled={set.readOnly === true}
         usedByOf={usedByOf}
+        listCut={listCut}
         onEdit={onEditArea}
       />
       <AreaField
@@ -168,6 +171,7 @@ export function SetSettingsPanel({
         onChoose={chooseFor("footer")}
         disabled={set.readOnly === true}
         usedByOf={usedByOf}
+        listCut={listCut}
         onEdit={onEditArea}
       />
       <p className="text-[color:var(--nx-builder-text-muted)] m-0 text-xs">
@@ -185,6 +189,7 @@ function AreaField({
   onChoose,
   disabled,
   usedByOf,
+  listCut,
   onEdit,
 }: {
   area: RegionArea;
@@ -193,6 +198,8 @@ function AreaField({
   disabled: boolean;
   /** The other sets a component is also used by, by title. */
   usedByOf: (component: string | undefined) => readonly string[];
+  /** Whether the list of sets read was cut short. */
+  listCut: boolean;
   /** Edits the area in place, once the canvas draws what was made. */
   onEdit: ((area: RegionArea) => void) | undefined;
 }): JSX.Element {
@@ -215,6 +222,7 @@ function AreaField({
           area={area}
           componentId={value}
           usedBy={usedByOf(value)}
+          listCut={listCut}
           disabled={disabled}
           onCopied={copy => onChoose(copy.id)}
         />
@@ -234,6 +242,10 @@ function useCreateInPicker(
   onChoose: (component: string | null) => void,
   onEdit: ((area: RegionArea) => void) | undefined
 ): () => void {
+  // The edit in place as it is when the toast's action is pressed: by then
+  // the canvas draws the new header, and only the latest edit opens it.
+  const latestEdit = useRef(onEdit);
+  latestEdit.current = onEdit;
   return useCallback(() => {
     const word = area === "header" ? "header" : "footer";
     void createAreaComponent(area).then(
@@ -246,7 +258,7 @@ function useCreateInPicker(
             : {
                 action: {
                   label: word === "header" ? "Edit header" : "Edit footer",
-                  onClick: () => onEdit(area),
+                  onClick: () => latestEdit.current?.(area),
                 },
               }
         );

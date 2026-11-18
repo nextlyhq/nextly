@@ -7,6 +7,7 @@
  * default", and a ⋯ menu with Rename, Duplicate and Delete. Every choice
  * writes the set's form, which the set's own Save and Publish store.
  */
+import type { RegionArea } from "@nextlyhq/blocks-engine";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   cleanup,
@@ -493,6 +494,18 @@ describe("a set's settings", () => {
     ).toBeNull();
   });
 
+  it("keeps Make a separate copy where the list of sets is cut, since a set it leaves out may use the header", () => {
+    const cut = choicesWith("main");
+    choices = { ...cut, meta: { ...cut.meta, more: true } };
+    render();
+    expect(
+      screen.getAllByText("Other sets may use this header too.").length
+    ).toBeGreaterThan(0);
+    expect(
+      screen.getAllByRole("button", { name: "Make a separate copy" }).length
+    ).toBeGreaterThan(0);
+  });
+
   it("offers + Create a header last, which makes one and chooses it in the set's form", async () => {
     render();
     await userEvent.click(screen.getByLabelText("Header"));
@@ -542,6 +555,47 @@ describe("a set's settings", () => {
         { id: "r1", area: "header", component: "header-new" },
       ])
     );
+  });
+
+  it("opens the header just made from the toast's Edit header, with the edit the canvas has by then", async () => {
+    const before = vi.fn();
+    const after = vi.fn();
+    const client = new QueryClient();
+    function Swapped({ onEdit }: { onEdit: (area: RegionArea) => void }) {
+      const form = useForm({ defaultValues: MAIN_FORM });
+      values = form.watch();
+      return (
+        <SetSettingsPanel
+          set={{ id: "main" }}
+          control={form.control}
+          onEditArea={onEdit}
+        />
+      );
+    }
+    const view = renderPlain(
+      <QueryClientProvider client={client}>
+        <Swapped onEdit={before} />
+      </QueryClientProvider>
+    );
+    await userEvent.click(screen.getByLabelText("Header"));
+    await userEvent.click(
+      screen.getByRole("option", { name: "+ Create a header" })
+    );
+    await vi.waitFor(() =>
+      expect(values.areas).toContainEqual(
+        expect.objectContaining({ component: "header-new" })
+      )
+    );
+    // The canvas has drawn the new header, so editing in place now opens it.
+    view.rerender(
+      <QueryClientProvider client={client}>
+        <Swapped onEdit={after} />
+      </QueryClientProvider>
+    );
+    const [, options] = toasts.success.mock.calls.at(-1) ?? [];
+    (options as { action: { onClick: () => void } }).action.onClick();
+    expect(after).toHaveBeenCalledWith("header");
+    expect(before).not.toHaveBeenCalled();
   });
 
   it("words the footer's as + Create a footer", async () => {

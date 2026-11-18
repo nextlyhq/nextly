@@ -44,25 +44,37 @@ export function alsoUsedByWords(titles: readonly string[]): string {
   return `Also used by ${first} and ${String(rest.length)} other sets`;
 }
 
+/** What is said where a cut list of sets names no other set using it. */
+function mayBeSharedWords(area: RegionArea): string {
+  return `Other sets may use this ${area} too.`;
+}
+
 export function SeparateCopy({
   area,
   componentId,
   usedBy,
+  listCut,
   disabled,
   onCopied,
 }: {
   area: RegionArea;
   /** The component the area names now. */
   componentId: string;
-  /** The other sets using it, by title; none draws nothing. */
+  /** The other sets using it, by title, from the list of sets read. */
   usedBy: readonly string[];
+  /**
+   * Whether that list was cut short: a site with more sets than one read
+   * lists. A set it leaves out may use the component, so the copy is still
+   * offered where none is named. Otherwise, none drawing nothing.
+   */
+  listCut: boolean;
   disabled: boolean;
   /** Puts the copy in this set's area. */
   onCopied: (copy: { readonly id: string; readonly title: string }) => void;
 }): JSX.Element | null {
   const duplicate = useDuplicate(componentId);
   const [busy, setBusy] = useState(false);
-  if (usedBy.length === 0) return null;
+  if (usedBy.length === 0 && !listCut) return null;
   const copy = async () => {
     setBusy(true);
     try {
@@ -84,7 +96,7 @@ export function SeparateCopy({
   return (
     <div className="flex flex-wrap items-center justify-between gap-2">
       <p className="text-[color:var(--nx-builder-text-muted)] m-0 min-w-0 text-xs">
-        {alsoUsedByWords(usedBy)}
+        {usedBy.length === 0 ? mayBeSharedWords(area) : alsoUsedByWords(usedBy)}
       </p>
       {disabled ? null : (
         <Button

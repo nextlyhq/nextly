@@ -96,8 +96,17 @@ export function NewSetDialog({
   onOpenChange: (open: boolean) => void;
   facts: NewSetFacts;
 }): JSX.Element {
+  // Not closed while the set is being made: its opening would come after
+  // the author had dismissed the dialog and gone back to work.
+  const [making, setMaking] = useState(false);
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog
+      open={open}
+      onOpenChange={next => {
+        if (!next && making) return;
+        onOpenChange(next);
+      }}
+    >
       <DialogContent className="sm:max-w-[480px]" data-slot="new-set-dialog">
         <DialogTitle>New header & footer</DialogTitle>
         <DialogDescription>
@@ -105,7 +114,11 @@ export function NewSetDialog({
         </DialogDescription>
         {/* Mounted only while open, so each opening starts afresh. */}
         {open ? (
-          <NewSetForm facts={facts} onCancel={() => onOpenChange(false)} />
+          <NewSetForm
+            facts={facts}
+            onCancel={() => onOpenChange(false)}
+            onMaking={setMaking}
+          />
         ) : null}
       </DialogContent>
     </Dialog>
@@ -116,9 +129,12 @@ export function NewSetDialog({
 function NewSetForm({
   facts,
   onCancel,
+  onMaking,
 }: {
   facts: NewSetFacts;
   onCancel: () => void;
+  /** Says whether the set is being made, which the dialog can't be closed during. */
+  onMaking: (making: boolean) => void;
 }): JSX.Element {
   const nameId = useId();
   const startId = useId();
@@ -128,7 +144,11 @@ function NewSetForm({
       : ["copy-default", "starter", "empty"];
   const [title, setTitle] = useState("");
   const [start, setStart] = useState<NewLayoutStart>(starts[0] ?? "empty");
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusyState] = useState(false);
+  const setBusy = (next: boolean) => {
+    setBusyState(next);
+    onMaking(next);
+  };
   const [problem, setProblem] = useState<string | null>(null);
   // The set once made, with where it opens. Opening it may not happen: the
   // admin asks about unsaved work here first, and "Stay" keeps this page. So
@@ -206,7 +226,12 @@ function NewSetForm({
         </p>
       )}
       <DialogFooter>
-        <Button type="button" variant="outline" onClick={onCancel}>
+        <Button
+          type="button"
+          variant="outline"
+          onClick={onCancel}
+          disabled={busy}
+        >
           Cancel
         </Button>
         <Button type="submit" disabled={busy}>
