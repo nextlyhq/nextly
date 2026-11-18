@@ -262,6 +262,7 @@ export type {
   ConditionDayStart,
   ConditionDemand,
   ConditionSubject,
+  DocumentCode,
   DocumentSeo,
   EntryContentIssueCode,
   ImageValue,
@@ -580,6 +581,9 @@ export type {
   // where a block lands, and the block that lands there.
   OpPosition,
   Placed,
+  // A host's checker for custom CSS, reachable from `StyleCompileContext`.
+  CustomCssLevel,
+  CustomCssPolicy,
   StyleCompileContext,
   StyleOrigin,
   StyleState,
