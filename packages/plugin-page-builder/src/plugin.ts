@@ -26,6 +26,12 @@ import {
 } from "./blocks/registration-service";
 import { collectionReach } from "./collection-reach";
 import {
+  SITE_CSS_SERVICE,
+  siteCssReader,
+  siteCssService,
+  sitesCss,
+} from "./custom-css";
+import {
   installDefaultLayout,
   seedDefaultLayoutAtStart,
 } from "./default-layout/install";
@@ -125,6 +131,10 @@ import {
   registerPageCodeAudit,
 } from "./site-code/page-code-audit";
 import {
+  SITE_CSS_SAVED_AUDIT,
+  SITE_CSS_SAVED_METADATA,
+} from "./site-code/css-route";
+import {
   SITE_CODE_SAVED_AUDIT,
   SITE_CODE_SAVED_METADATA,
 } from "./site-code/route";
@@ -164,6 +174,9 @@ export const pageBuilder = (
     componentStore: componentStoreOf(opts),
   });
   const { state, templateAddresses, configStyle, configClassIds, fonts } = def;
+  // The site's CSS as this page builder's routes read it, once its boot has
+  // started it with the site's database.
+  const siteCss = siteCssReader();
   const { pagesCountOf, uncoveredPagesOf, usageSourceOf, countPlacements } =
     usageParts(def);
   const readRetiredFor = retiredReader(def);
@@ -279,6 +292,8 @@ export const pageBuilder = (
         ctx.self.collections
       );
       state.installed = installContext(ctx, opts);
+      // The site's CSS is read through this boot's database from now on.
+      siteCss.start(ctx.db);
       // Read per question from `ctx.config`, the declarations as every
       // plugin's contributions and extensions leave them.
       state.writeReach = collectionReach({
@@ -423,6 +438,11 @@ export const pageBuilder = (
             kind: PAGE_CODE_SAVED_AUDIT,
             metadataKeys: [...PAGE_CODE_SAVED_METADATA],
           },
+          // One per site CSS save: hashes and sizes, never the CSS.
+          {
+            kind: SITE_CSS_SAVED_AUDIT,
+            metadataKeys: [...SITE_CSS_SAVED_METADATA],
+          },
         ],
       },
       // The channel another plugin adds blocks through. Core carries no
@@ -436,6 +456,9 @@ export const pageBuilder = (
         // And `pageChecks`, the channel a plugin adds page checks through.
         [PAGE_CHECKS_SERVICE]: () => pageCheckProviders.start(),
         [SITE_FORMS_SERVICE_NAME]: () => pageForms.service(),
+        // The site's CSS, for a route whose copy of the page builder never
+        // started (`pageBuilderCustomCss({ plugin })`).
+        [SITE_CSS_SERVICE]: ctx => siteCssService(ctx.db),
       },
       // The form receiver's send limit per visitor address.
       limits: FORM_SEND_LIMITS,
@@ -608,6 +631,8 @@ export const pageBuilder = (
   });
   // And its blocks through `blocksOf`, for a process serving several sites.
   sitesBlocks.set(plugin, def.blocks);
+  // And its site's CSS through `pageBuilderCustomCss({ plugin })`.
+  sitesCss.set(plugin, siteCss);
   // A host's component store must not share a slug with the plugin's own
   // collections: refused while the config is read, before anything is keyed
   // by it. A rename is judged again in `init`, once it is known.
