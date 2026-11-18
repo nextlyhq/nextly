@@ -724,6 +724,67 @@ describe("useDocumentSession: recovery point", () => {
     });
   });
 
+  it("never records one document's edits into the next one named", async () => {
+    let finish: (value: unknown) => void = () => undefined;
+    api.update.mockImplementationOnce(
+      () => new Promise(resolve => (finish = resolve))
+    );
+    api.findByID.mockImplementation(async (_slug: string, id: string) =>
+      id === "f1" ? { ...STORED, id: "f1", _rev: "f-v1" } : STORED
+    );
+    const view = await heldSession();
+    act(() => view.result.current.record({ title: "Header edit" }));
+
+    let saving: Promise<unknown> = Promise.resolve();
+    act(() => {
+      saving = view.result.current.saveDraft({ title: "Header edit" });
+    });
+    await waitFor(() => expect(api.update).toHaveBeenCalledTimes(1));
+    view.rerender({ named: { collection: "components", id: "f1" } });
+    await waitFor(() => expect(view.result.current.lock.status).toBe("held"));
+    await act(async () => {
+      finish({ item: { ...STORED, _rev: "v2" }, warnings: [] });
+      await saving;
+    });
+    await act(async () => void vi.advanceTimersByTime(DEBOUNCE_WAIT));
+
+    expect(api.saveAutosave).not.toHaveBeenCalled();
+  });
+
+  it("stamps a recovery point with the version the edits began from", async () => {
+    // A refusal reads the document again at a newer version; the recovery
+    // point of the edits still names the one they were made on, so restoring
+    // it later is judged against that.
+    api.update.mockRejectedValue(
+      parseApiError(
+        {
+          error: {
+            code: "STALE_VERSION",
+            message: "Changed since.",
+            requestId: "r",
+            data: { currentVersion: "v5" },
+          },
+        },
+        409
+      )
+    );
+    const { result } = await heldSession();
+    api.findByID.mockResolvedValue({ ...STORED, _rev: "v5" });
+    await act(async () => {
+      await result.current.saveDraft({ title: "Mine" });
+    });
+    await waitFor(() => expect(api.findByID).toHaveBeenCalledTimes(2));
+
+    act(() => result.current.record({ title: "Mine" }));
+    await act(async () => void vi.advanceTimersByTime(DEBOUNCE_WAIT));
+
+    await waitFor(() => expect(api.saveAutosave).toHaveBeenCalled());
+    expect(api.saveAutosave.mock.calls.at(-1)?.[1]).toMatchObject({
+      title: "Mine",
+      _rev: "v1",
+    });
+  });
+
   it("still records the work when a save that put the recording off fails", async () => {
     api.update.mockRejectedValue(
       parseApiError(
