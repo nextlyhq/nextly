@@ -9,6 +9,7 @@ import { describe, expect, it } from "vitest";
 
 import type { BlockDocument, BlockNode } from "@nextlyhq/blocks-engine";
 
+import { MAX_HISTORY } from "./editor-history";
 import { useEditorState } from "./editor-state";
 import { joinTyping } from "./typing-run";
 
@@ -94,5 +95,135 @@ describe("a run of typing", () => {
       });
     }
     expect(result.current.undoDepth).toBe(3);
+  });
+});
+
+describe("a run of typing's step", () => {
+  it("is undone exactly: the document before the run, deep-equal", () => {
+    const before = page({
+      ...text("Before"),
+      props: { label: "Before", tone: "quiet" },
+    });
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: before })
+    );
+    const run = {};
+    for (const words of ["N", "Ne", "New"]) {
+      act(() => {
+        joinTyping(run, () => result.current.apply(write(words)));
+      });
+    }
+    act(() => {
+      void result.current.undo();
+    });
+    expect(result.current.document).toEqual(before);
+  });
+});
+
+describe("cancelling a run of typing", () => {
+  it("puts back the value from before the run and records nothing", () => {
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: page(text("Before")) })
+    );
+    const run = {};
+    for (const words of ["A", "Ab"]) {
+      act(() => {
+        joinTyping(run, () => result.current.apply(write(words)));
+      });
+    }
+    let cancelled = false;
+    act(() => {
+      cancelled = result.current.cancelTyping(run);
+    });
+    expect(cancelled).toBe(true);
+    expect(label(result.current.document)).toBe("Before");
+    expect(result.current.canUndo).toBe(false);
+    expect(result.current.canRedo).toBe(false);
+  });
+
+  it("leaves the history as it was before the run, redo branch included", () => {
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: page(text("One")) })
+    );
+    act(() => {
+      result.current.apply(write("Two"));
+    });
+    act(() => {
+      void result.current.undo();
+    });
+    expect(result.current.canRedo).toBe(true);
+    // The run's first write ends the redo branch, as any edit does.
+    const run = {};
+    act(() => {
+      joinTyping(run, () => result.current.apply(write("Typed")));
+    });
+    expect(result.current.canRedo).toBe(false);
+    act(() => {
+      result.current.cancelTyping(run);
+    });
+    expect(label(result.current.document)).toBe("One");
+    expect(result.current.canRedo).toBe(true);
+    act(() => {
+      void result.current.redo();
+    });
+    expect(label(result.current.document)).toBe("Two");
+  });
+
+  it("gives back the oldest step a full history dropped for the run", () => {
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: page(text("0")) })
+    );
+    for (let edit = 1; edit <= MAX_HISTORY; edit++) {
+      act(() => {
+        result.current.apply(write(String(edit)));
+      });
+    }
+    const run = {};
+    act(() => {
+      joinTyping(run, () => result.current.apply(write("typed")));
+    });
+    act(() => {
+      result.current.cancelTyping(run);
+    });
+    // Every one of the hundred edits undoes again, back to the first value.
+    for (let edit = 0; edit < MAX_HISTORY; edit++) {
+      act(() => {
+        void result.current.undo();
+      });
+    }
+    expect(label(result.current.document)).toBe("0");
+  });
+
+  it("puts nothing back once the run has ended: after another edit, or an undo", () => {
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: page(text("A")) })
+    );
+    const run = {};
+    act(() => {
+      joinTyping(run, () => result.current.apply(write("AB")));
+    });
+    act(() => {
+      result.current.apply(write("ABC"));
+    });
+    let cancelled = true;
+    act(() => {
+      cancelled = result.current.cancelTyping(run);
+    });
+    expect(cancelled).toBe(false);
+    expect(label(result.current.document)).toBe("ABC");
+    expect(result.current.undoDepth).toBe(2);
+
+    const undone = {};
+    act(() => {
+      joinTyping(undone, () => result.current.apply(write("X")));
+    });
+    act(() => {
+      void result.current.undo();
+    });
+    act(() => {
+      cancelled = result.current.cancelTyping(undone);
+    });
+    expect(cancelled).toBe(false);
+    expect(label(result.current.document)).toBe("ABC");
   });
 });
