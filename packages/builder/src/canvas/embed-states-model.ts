@@ -65,7 +65,7 @@ export function linkNote(link: unknown): string | undefined {
 }
 
 /** The Embed named `nodeId`, or `undefined` when there is no such Embed. */
-export function embedNodeOf(
+function embedNodeOf(
   document: BlockDocument,
   nodeId: string
 ): BlockNode | undefined {

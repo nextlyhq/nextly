@@ -34,7 +34,7 @@ const EMBED_BLOCK = "core/embed";
 const EMBED_SECTION = "Embed";
 
 /** The words this section adds to the block's own labels. */
-export const EMBED_SECTION_WORDS = {
+const EMBED_SECTION_WORDS = {
   thumbnail: "Use the video's thumbnail",
   copying: "Copying the thumbnail…",
   copyFailed: "The thumbnail couldn't be copied",
