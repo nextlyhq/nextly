@@ -13,11 +13,14 @@
  * where its text is held by no block of the stored forms the write changes.
  * A block placed from a saved section brings CSS someone permitted wrote
  * there, so text the section it came from holds is no change either. A
- * component placed on a page holds no CSS of its own on the page at all.
+ * component placed on a page holds no CSS of its own on the page at all, and
+ * detaching one the stored page placed brings the CSS its definition holds,
+ * which is no change either.
  *
  * @module fields/custom-css-judgement
  */
 import {
+  COMPONENT_INSTANCE_TYPE,
   DEFAULT_LIMITS,
   isPlainRecord,
   walkNodes,
@@ -34,17 +37,27 @@ import { isTopLevel, siteSettingsCallerRefusal } from "./page-code-judgement";
 /** The issue code a refused change to custom CSS carries. */
 export const CUSTOM_CSS_REFUSED = "CUSTOM_CSS_REFUSED";
 
-/** Where saved sections are kept: the collection, and its blocks field. */
-export interface PatternStore {
+/** Where documents of one kind are kept: the collection, and its blocks field. */
+export interface StoreAddress {
   readonly collection: string;
   readonly field: string;
 }
 
 /**
- * The most saved sections one write's new block CSS is looked up in. Beyond
- * it, CSS is judged as the write's own, which refuses more and never less.
+ * Where the site keeps the documents a page's blocks may come from: saved
+ * sections, and component definitions. Absent, none vouches for CSS.
  */
-const MAX_SECTIONS_READ = 20;
+export interface CssLibrary {
+  readonly patterns?: StoreAddress;
+  readonly components?: StoreAddress;
+}
+
+/**
+ * The most saved sections, or components, one write's new block CSS is
+ * looked up in. Beyond it, CSS is judged as the write's own, which refuses
+ * more and never less.
+ */
+const MAX_LIBRARY_READ = 20;
 
 /** The custom CSS one blocks value holds. */
 export interface HeldCustomCss {
@@ -52,11 +65,22 @@ export interface HeldCustomCss {
   readonly document: string | null;
   /** Each block's CSS, with the saved section its block was placed from. */
   readonly blocks: readonly { text: string; section?: string }[];
+  /** The components it places, by id. */
+  readonly placed: readonly string[];
 }
 
 /** CSS text, or none where it is empty or not text. */
 function cssText(value: unknown): string | null {
   return typeof value === "string" && value !== "" ? value : null;
+}
+
+/** The component a node places, where it is a placement. */
+function placementOf(node: BlockNode): string | undefined {
+  if (node.type !== COMPONENT_INSTANCE_TYPE) return undefined;
+  const props = (node as { props?: unknown }).props;
+  return isPlainRecord(props) && typeof props.componentId === "string"
+    ? props.componentId
+    : undefined;
 }
 
 /** The saved section a node was placed from, as its copy records it. */
@@ -78,6 +102,7 @@ export function customCssHeldBy(value: unknown): HeldCustomCss {
   );
   const nodes = record?.nodes;
   const blocks: { text: string; section?: string }[] = [];
+  const placed: string[] = [];
   if (Array.isArray(nodes)) {
     // The section each node came from: its own copy's, or its parent's.
     const placedFrom = new Map<BlockNode, string | undefined>();
@@ -88,6 +113,8 @@ export function customCssHeldBy(value: unknown): HeldCustomCss {
           sectionOf(node) ??
           (parent === undefined ? undefined : placedFrom.get(parent));
         placedFrom.set(node, section);
+        const component = placementOf(node);
+        if (component !== undefined) placed.push(component);
         const text = cssText(node.customCss);
         if (text === null) return;
         blocks.push(section === undefined ? { text } : { text, section });
@@ -95,7 +122,7 @@ export function customCssHeldBy(value: unknown): HeldCustomCss {
       { maxNodes: DEFAULT_LIMITS.maxNodes }
     );
   }
-  return { document, blocks };
+  return { document, blocks, placed };
 }
 
 /** What a write changes of the CSS the stored forms hold. */
@@ -107,20 +134,20 @@ interface CssChange {
 }
 
 /**
- * Block CSS texts held by the saved sections the blocks were placed from,
- * read in one query per form. A section that can't be read vouches for
- * nothing.
+ * Block CSS texts held by these stored documents (the saved sections blocks
+ * were placed from, or the components a page placed), read in one query per
+ * form. One that can't be read vouches for nothing.
  */
-async function sectionTexts(
+async function libraryTexts(
   write: PluginFieldWrite | undefined,
-  store: PatternStore | undefined,
-  sections: readonly string[]
+  store: StoreAddress | undefined,
+  documents: readonly string[]
 ): Promise<ReadonlySet<string>> {
   const texts = new Set<string>();
-  if (write === undefined || store === undefined || sections.length === 0) {
+  if (write === undefined || store === undefined || documents.length === 0) {
     return texts;
   }
-  const ids = sections.slice(0, MAX_SECTIONS_READ);
+  const ids = [...new Set(documents)].slice(0, MAX_LIBRARY_READ);
   for (const form of ["published", "draft"] as const) {
     let read: ReadonlyMap<string, { kind: string; value?: unknown }>;
     try {
@@ -157,7 +184,7 @@ async function cssChangedBy(
   written: HeldCustomCss,
   args: JudgedField,
   stored: () => Promise<StoredForms>,
-  store: PatternStore | undefined
+  library: CssLibrary
 ): Promise<CssChange> {
   const holdsAny = written.document !== null || written.blocks.length > 0;
   if (!holdsAny && !isTopLevel(args)) return { blocks: [] };
@@ -176,24 +203,45 @@ async function cssChangedBy(
     held.length === 0
       ? written.document !== null
       : !held.some(form => form.document === written.document);
+  const blocks = await newBlockCss(written, held, args.write, library);
+  return documentChanged ? { document: written.document, blocks } : { blocks };
+}
+
+/**
+ * The blocks' CSS texts no stored form holds, nor the saved section a block
+ * was placed from, nor a component the stored page placed (which detaching
+ * it copies into the page). Each library is read only while some CSS is
+ * still unknown.
+ */
+async function newBlockCss(
+  written: HeldCustomCss,
+  held: readonly HeldCustomCss[],
+  write: PluginFieldWrite | undefined,
+  library: CssLibrary
+): Promise<string[]> {
   const known = new Set(
     held.flatMap(form => form.blocks.map(block => block.text))
   );
   const unknown = written.blocks.filter(block => !known.has(block.text));
-  const sections = [
+  const fromSections = await libraryTexts(
+    write,
+    library.patterns,
+    unknown.flatMap(block =>
+      block.section === undefined ? [] : [block.section]
+    )
+  );
+  const left = [
     ...new Set(
-      unknown.flatMap(block =>
-        block.section === undefined ? [] : [block.section]
-      )
+      unknown.map(block => block.text).filter(text => !fromSections.has(text))
     ),
   ];
-  const placed = await sectionTexts(args.write, store, sections);
-  const blocks = [
-    ...new Set(
-      unknown.map(block => block.text).filter(text => !placed.has(text))
-    ),
-  ];
-  return documentChanged ? { document: written.document, blocks } : { blocks };
+  if (left.length === 0) return left;
+  const fromComponents = await libraryTexts(
+    write,
+    library.components,
+    held.flatMap(form => form.placed)
+  );
+  return left.filter(text => !fromComponents.has(text));
 }
 
 /** A refusal, at the field's path. */
@@ -210,14 +258,17 @@ export async function customCssIssues(
   args: JudgedField,
   label: string,
   stored: () => Promise<StoredForms>,
-  /** Where saved sections are kept; absent, no placed section vouches. */
-  sections?: PatternStore
+  /**
+   * Where saved sections and components are kept; absent, no placed section
+   * and no detached component vouches.
+   */
+  library: CssLibrary = {}
 ): Promise<PluginFieldIssue[]> {
   const change = await cssChangedBy(
     customCssHeldBy(value),
     args,
     stored,
-    sections
+    library
   );
   if (change.document === undefined && change.blocks.length === 0) return [];
   // The caller first, before anything about the CSS is read out.

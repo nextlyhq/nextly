@@ -159,7 +159,7 @@ export function useSettingsPlace<TFieldValues extends FieldValues>(
     () => ({
       value: css,
       set: (next: string | null) =>
-        apply({ kind: "code", customCss: next }) !== null,
+        apply({ kind: "customCss", customCss: next }) !== null,
     }),
     [css, apply]
   );

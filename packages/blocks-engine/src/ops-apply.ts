@@ -113,7 +113,10 @@ export interface ApplyOptions {
  * unlock.
  */
 function layersLockRefusal(
-  op: Exclude<BuilderOp, { readonly kind: "envelope" | "seo" | "code" }>,
+  op: Exclude<
+    BuilderOp,
+    { readonly kind: "envelope" | "seo" | "code" | "customCss" }
+  >,
   lockedId: string,
   where: LayersLockBreak["where"]
 ): string {
@@ -849,9 +852,10 @@ export function applyOp(
       return applySeo(document, op, limits);
 
     case "code":
-      return "customCss" in op
-        ? applyCustomCss(document, op, limits)
-        : applyCode(document, op, limits);
+      return applyCode(document, op, limits);
+
+    case "customCss":
+      return applyCustomCss(document, op, limits);
 
     case "turnInto":
       return applyTurnInto(document, op, limits, options);
@@ -1070,7 +1074,7 @@ function applySeo(
  */
 function applyCode(
   document: BlockDocument,
-  op: Extract<BuilderOp, { kind: "code"; code: unknown }>,
+  op: Extract<BuilderOp, { kind: "code" }>,
   limits: DocumentLimits
 ): AppliedOp {
   const { result, prior } = writeWholeSetting(
@@ -1089,20 +1093,14 @@ function applyCode(
 }
 
 /**
- * Apply a `code` op's CSS shape: write the document's own custom CSS whole,
- * or remove it, held exactly as its code is. An op naming both the code and
- * the CSS is refused: one edit is of one of them.
+ * Apply a `customCss` op: write the document's own custom CSS whole, or
+ * remove it, held exactly as a `code` op is.
  */
 function applyCustomCss(
   document: BlockDocument,
-  op: Extract<BuilderOp, { kind: "code"; customCss: unknown }>,
+  op: Extract<BuilderOp, { kind: "customCss" }>,
   limits: DocumentLimits
 ): AppliedOp {
-  if (Object.hasOwn(op, "code")) {
-    throw new OpError(
-      "code: an op carries one of the page's code or its CSS, not both."
-    );
-  }
   const { result, prior } = writeWholeSetting(
     document,
     CUSTOM_CSS_SETTING,
@@ -1112,7 +1110,7 @@ function applyCustomCss(
   return {
     document: result,
     inverse: {
-      kind: "code",
+      kind: "customCss",
       customCss: typeof prior === "string" ? prior : null,
     },
   };

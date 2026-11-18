@@ -71,13 +71,17 @@ function caller(
   };
 }
 
-/** The saved sections the site keeps, by id. */
+/** The saved sections, or the components, the site keeps, by id. */
 type Sections = Record<string, Record<string, unknown>>;
 
-/** The field's write, made as `who`, with these saved sections stored. */
+/**
+ * The field's write, made as `who`, with these saved sections and component
+ * definitions stored.
+ */
 function writeAs(
   who: PluginFieldWriteCaller | undefined,
-  sections: Sections = {}
+  sections: Sections = {},
+  components: Sections = {}
 ): JudgedField & { readsOfSections: string[][] } {
   const readsOfSections: string[][] = [];
   const write: PluginFieldWrite = {
@@ -87,15 +91,18 @@ function writeAs(
     inTransaction: false,
     readStored: () => Promise.reject(new Error("not read here")),
     readStoredOf: target => {
-      expect(target.collection).toBe("patterns");
-      expect(target.field).toBe("content");
+      expect(["patterns", "components"]).toContain(target.collection);
+      expect(target.field).toBe(
+        target.collection === "patterns" ? "content" : "definition"
+      );
+      const held = target.collection === "patterns" ? sections : components;
       readsOfSections.push([...target.ids]);
       return Promise.resolve(
         new Map(
           target.ids.flatMap(id =>
-            sections[id] === undefined
+            held[id] === undefined
               ? []
-              : [[id, { kind: "value" as const, value: sections[id] }]]
+              : [[id, { kind: "value" as const, value: held[id] }]]
           )
         )
       );
@@ -111,20 +118,24 @@ function stored(...forms: Record<string, unknown>[]) {
     Promise.resolve({ forms: forms as never, readable: true });
 }
 
-const PATTERNS = { collection: "patterns", field: "content" };
+const LIBRARY = {
+  patterns: { collection: "patterns", field: "content" },
+  components: { collection: "components", field: "definition" },
+};
 
 const issuesOf = (
   value: unknown,
   who: PluginFieldWriteCaller | undefined,
   forms = stored(pageWith([block("a")])),
-  sections: Sections = {}
+  sections: Sections = {},
+  components: Sections = {}
 ) =>
   customCssIssues(
     value,
-    writeAs(who, sections),
+    writeAs(who, sections, components),
     "Content",
     forms,
-    PATTERNS
+    LIBRARY
   ).then(found => {
     for (const issue of found) expect(issue.code).toBe(CUSTOM_CSS_REFUSED);
     return found.map(issue => issue.message);
@@ -249,6 +260,46 @@ describe("custom CSS, judged on every write that adds or changes it", () => {
     ).toHaveLength(1);
   });
 
+  it("lets an editor detach a component the page placed, keeping the CSS its definition holds", async () => {
+    // The stored page places component k1, whose definition carries CSS.
+    const placement = {
+      id: "c1",
+      type: "nextly/component-instance",
+      version: 1,
+      props: { componentId: "k1" },
+    };
+    const before = stored(pageWith([block("a"), placement]));
+    const components = {
+      k1: { ...pageWith([block("k-root", BLOCK_CSS)]), kind: "component" },
+    };
+    // Detached: the placement replaced by the blocks it drew, CSS and all.
+    const detached = pageWith([block("a"), block("x1", BLOCK_CSS)]);
+    expect(await issuesOf(detached, editor(), before, {}, components)).toEqual(
+      []
+    );
+    // CONTROL: CSS that the placed component's definition doesn't hold is
+    // the editor's own.
+    expect(
+      await issuesOf(
+        pageWith([block("a"), block("x1", OTHER_CSS)]),
+        editor(),
+        before,
+        {},
+        components
+      )
+    ).toHaveLength(1);
+    // CONTROL: a component the stored page never placed vouches for nothing.
+    expect(
+      await issuesOf(
+        detached,
+        editor(),
+        stored(pageWith([block("a")])),
+        {},
+        components
+      )
+    ).toHaveLength(1);
+  });
+
   it("judges every CSS a write holds where the stored value can't be read, and none where it holds none", async () => {
     const unreadable = (): Promise<StoredForms> =>
       Promise.resolve({ forms: [], readable: false });
@@ -272,7 +323,7 @@ describe("custom CSS, judged on every write that adds or changes it", () => {
           { ...writeAs(editor()), path },
           "Content",
           unreadable,
-          PATTERNS
+          LIBRARY
         )
       ).toEqual([]);
     }

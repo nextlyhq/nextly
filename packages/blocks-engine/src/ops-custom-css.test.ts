@@ -1,6 +1,6 @@
 /**
- * The `code` op's CSS shape: a document's own custom CSS
- * (`settings.customCss`), written as one undoable edit, as its code is.
+ * The `customCss` op: a document's own custom CSS (`settings.customCss`),
+ * written as one undoable edit, as `code` writes its code.
  *
  * The properties a plausible implementation gets wrong: an undo that leaves
  * an empty `settings` behind on a document that had none, an undo that keeps
@@ -32,12 +32,12 @@ function page(over: Partial<BlockDocument> = {}): BlockDocument {
 
 const CSS = "h1 { color: rebeccapurple; }";
 
-describe("the code op's CSS shape", () => {
+describe("the customCss op", () => {
   it("writes a document's CSS where it had none, and its undo leaves nothing behind", () => {
     const before = page();
-    const applied = applyOp(before, { kind: "code", customCss: CSS });
+    const applied = applyOp(before, { kind: "customCss", customCss: CSS });
     expect(applied.document.settings?.customCss).toBe(CSS);
-    expect(applied.inverse).toEqual({ kind: "code", customCss: null });
+    expect(applied.inverse).toEqual({ kind: "customCss", customCss: null });
 
     const undone = applyOp(applied.document, applied.inverse);
     expect(undone.document).toEqual(before);
@@ -47,10 +47,10 @@ describe("the code op's CSS shape", () => {
   it("replaces the CSS, keeps the other settings, and undoes to what it replaced", () => {
     const code = { head: "<!-- page -->" };
     const before = page({ settings: { code, customCss: "p { margin: 0; }" } });
-    const applied = applyOp(before, { kind: "code", customCss: CSS });
+    const applied = applyOp(before, { kind: "customCss", customCss: CSS });
     expect(applied.document.settings).toEqual({ code, customCss: CSS });
     expect(applied.inverse).toEqual({
-      kind: "code",
+      kind: "customCss",
       customCss: "p { margin: 0; }",
     });
     expect(applyOp(applied.document, applied.inverse).document).toEqual(before);
@@ -59,39 +59,31 @@ describe("the code op's CSS shape", () => {
   it("removes the CSS, keeping the other settings", () => {
     const code = { head: "<!-- page -->" };
     const before = page({ settings: { code, customCss: CSS } });
-    const applied = applyOp(before, { kind: "code", customCss: null });
+    const applied = applyOp(before, { kind: "customCss", customCss: null });
     expect(applied.document.settings).toEqual({ code });
     expect(applyOp(applied.document, applied.inverse).document).toEqual(before);
   });
 
   it("refuses a value that isn't text, empty text, and an edit that changes nothing", () => {
     expect(() =>
-      applyOp(page(), { kind: "code", customCss: { css: CSS } as never })
+      applyOp(page(), { kind: "customCss", customCss: { css: CSS } as never })
     ).toThrow(OpError);
-    expect(() => applyOp(page(), { kind: "code", customCss: "" })).toThrow(
+    expect(() => applyOp(page(), { kind: "customCss", customCss: "" })).toThrow(
       /null to remove it/
     );
     expect(() =>
       applyOp(page({ settings: { customCss: CSS } }), {
-        kind: "code",
+        kind: "customCss",
         customCss: CSS,
       })
     ).toThrow(/changes nothing/);
-    // One edit is of the code or of the CSS, never both at once.
-    expect(() =>
-      applyOp(page(), {
-        kind: "code",
-        code: null,
-        customCss: CSS,
-      } as never)
-    ).toThrow(/one of/);
   });
 
   it("is never refused by a Layers lock, and addresses no block", () => {
     // The page's only block is locked.
     expect(() =>
-      applyOp(page(), { kind: "code", customCss: CSS })
+      applyOp(page(), { kind: "customCss", customCss: CSS })
     ).not.toThrow();
-    expect(addressesNoNode({ kind: "code", customCss: CSS })).toBe(true);
+    expect(addressesNoNode({ kind: "customCss", customCss: CSS })).toBe(true);
   });
 });

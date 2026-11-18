@@ -136,7 +136,7 @@ describe("the Settings place", () => {
     ]);
   });
 
-  it("reads the page's own CSS, and applies a change of it as one code edit of its CSS", () => {
+  it("reads the page's own CSS, and applies a change of it as one customCss edit", () => {
     const { editor: e, applied } = editor("page");
     const styled = {
       ...e,
@@ -152,8 +152,8 @@ describe("the Settings place", () => {
     expect(result.current?.pageCss.set("h1 { color: red; }")).toBe(true);
     result.current?.pageCss.set(null);
     expect(applied).toEqual([
-      { kind: "code", customCss: "h1 { color: red; }" },
-      { kind: "code", customCss: null },
+      { kind: "customCss", customCss: "h1 { color: red; }" },
+      { kind: "customCss", customCss: null },
     ]);
   });
 

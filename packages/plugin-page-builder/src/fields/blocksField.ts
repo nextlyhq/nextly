@@ -639,8 +639,12 @@ function withPageCodeJudged(
           args,
           label,
           stored,
-          // Where saved sections are kept, once the setup is installed.
-          composition?.()?.patterns
+          // Where saved sections and components are kept, once the setup
+          // is installed.
+          {
+            patterns: composition?.()?.patterns,
+            components: composition?.()?.store,
+          }
         );
         return withLockIssues(verdict, [...code, ...css], args.path);
       });

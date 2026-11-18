@@ -270,15 +270,16 @@ export type BuilderOp =
     }
   | {
       /**
-       * The `code` op's second shape: an edit to the document's own custom
-       * CSS (`settings.customCss`), which the page's Code tab holds beside
-       * its code. Written whole, so one change is one undo step; `null`
+       * An edit to the document's own custom CSS (`settings.customCss`):
+       * written whole, as `code` is, so one change is one undo step; `null`
        * removes it. Judged by its shape; what the CSS may hold, and who may
-       * change it, is the save's question, as for the code.
+       * change it, is the save's question.
+       *
+       * A ninth member of a published union, as `code` is the eighth.
        *
        * @experimental Settles with page CSS.
        */
-      readonly kind: "code";
+      readonly kind: "customCss";
       readonly customCss: string | null;
     };
 
@@ -288,8 +289,16 @@ export type BuilderOp =
  */
 export function addressesNoNode(
   op: BuilderOp
-): op is Extract<BuilderOp, { readonly kind: "envelope" | "seo" | "code" }> {
-  return op.kind === "envelope" || op.kind === "seo" || op.kind === "code";
+): op is Extract<
+  BuilderOp,
+  { readonly kind: "envelope" | "seo" | "code" | "customCss" }
+> {
+  return (
+    op.kind === "envelope" ||
+    op.kind === "seo" ||
+    op.kind === "code" ||
+    op.kind === "customCss"
+  );
 }
 
 /**

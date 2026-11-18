@@ -25,7 +25,7 @@ import type { ComponentStoreAddress } from "../component-cycle-guard";
 import type { FencedComponents } from "../host-rewrite/fence";
 
 import type { DeclaredShapesReader } from "./binding-judgement";
-import type { PatternStore } from "./custom-css-judgement";
+import type { StoreAddress } from "./custom-css-judgement";
 import type { EntryBlocksFieldsReader } from "./entry-content-judgement";
 import type { ListFieldsReader, TemplateTargets } from "./list-query-judgement";
 
@@ -175,7 +175,7 @@ export interface CompositionSetup {
    * brings is known as CSS someone permitted already wrote. Absent, none is,
    * and such CSS is judged as the write's own.
    */
-  readonly patterns?: PatternStore;
+  readonly patterns?: StoreAddress;
   readonly siteDefinitions?: (
     transaction?: PluginCollectionTransaction
   ) => Promise<SiteDefinitions>;

@@ -35,10 +35,10 @@ Custom CSS for one page, and the server's checks on every save of page and block
 - **The page's CSS box.** Page settings → Code gains a **CSS** box above Head and End of body,
   for people who may change the site's settings: "CSS for this page only. Site-wide CSS lives
   in Site settings." **Check and keep CSS** checks it with the one custom CSS checker, naming
-  each refused line, and keeps it in the page's document (`settings.customCss`) through the
-  engine's `code` op, in a second shape (`{ kind: "code", customCss }`), so it is drafted,
-  published, kept in history and restored with the page. Anyone else sees General's line, now
-  "This page adds its own code or CSS. …", and never the CSS.
+  each refused line, and keeps it in the page's document (`settings.customCss`) through a new
+  engine op, `{ kind: "customCss", customCss }`, so it is drafted, published, kept in history
+  and restored with the page. Anyone else sees General's line, now "This page adds its own
+  code or CSS. …", and never the CSS.
 - **Judged on every save.** The blocks field judges every write that adds or changes a
   document's own CSS or a block's: only someone with the site settings permission may, never
   an API key, and what the checker refuses is refused by line. Moving, duplicating and
