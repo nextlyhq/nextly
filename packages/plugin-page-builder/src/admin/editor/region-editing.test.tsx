@@ -455,6 +455,28 @@ describe("saving the header", () => {
     expect(held).toHaveBeenCalledTimes(2);
   });
 
+  it("is busy while the held component settings are written, so a second Save or a Discard waits", async () => {
+    const saveDraft = vi.fn(() => Promise.resolve(STORED));
+    hoisted.session = sessionWith({ saveDraft });
+    let answer: (written: boolean) => void = () => undefined;
+    writeHeld = vi.fn(
+      () =>
+        new Promise<boolean>(resolve => {
+          answer = resolve;
+        })
+    );
+    render(<Host />);
+    await enterHeader();
+    editHeader();
+
+    act(() => current().host.topBar?.save());
+    await waitFor(() => expect(current().host.topBar?.busy).toBe(true));
+
+    await act(async () => answer(false));
+    await waitFor(() => expect(current().host.topBar?.busy).toBe(false));
+    expect(saveDraft).not.toHaveBeenCalled();
+  });
+
   it("waits for a shared style's write on its way before saving the header", async () => {
     let landed: () => void = () => undefined;
     const writesSettled = vi.fn(

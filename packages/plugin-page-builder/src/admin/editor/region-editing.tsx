@@ -549,8 +549,13 @@ function useRegionStore({
       if (!finished.mayClose) return false;
       // Stored without them, the header would bind a setting never made. A
       // refusal is said where it happened, with the binding taken off, and
-      // the header stays unsaved.
-      if (!(await writeHeldSettings())) return false;
+      // the header stays unsaved. Busy from here, so the bar's Save and
+      // Publish and Done's Discard wait for the write as for the store.
+      setBusy(true);
+      if (!(await writeHeldSettings())) {
+        setBusy(false);
+        return false;
+      }
       // Said with "Try again", which stores the header as it is then, only
       // while the opening it failed in is still the one edited.
       const refuse = (
@@ -570,7 +575,6 @@ function useRegionStore({
         });
         return false;
       };
-      setBusy(true);
       // The header is drawn with the site's shared styles: a change to one
       // still on its way, or failed, would leave what is stored unlike what
       // is edited, so it is waited for, before any part is published with it.
