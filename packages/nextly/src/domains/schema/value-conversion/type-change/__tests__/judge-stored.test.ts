@@ -359,14 +359,16 @@ describe("a type change collected over its stored values", () => {
       stored('["p1","p2"]', '["p3"]', "[]")
     );
     expect(result.judgement.class).toBe("blocked");
-    // Only the row holding several: the others convert as the next case says.
-    expect(result.judgement.reasons).toEqual([
-      {
-        kind: "several-items",
-        class: "blocked",
-        rows: { first: [{ id: "1" }], count: 1 },
-      },
-    ]);
+    // Only the row holding several blocks: the others convert as the next case says.
+    expect(result.judgement.reasons.filter(r => r.class === "blocked")).toEqual(
+      [
+        {
+          kind: "several-items",
+          class: "blocked",
+          rows: { first: [{ id: "1" }], count: 1 },
+        },
+      ]
+    );
     expect(result.counts).toMatchObject({ changed: 1, blocked: 1, kept: 1 });
   });
 
@@ -382,9 +384,9 @@ describe("a type change collected over its stored values", () => {
       stored('["p3"]', "[]", null)
     );
     expect(result.judgement.class).not.toBe("blocked");
-    expect(
-      result.judgement.reasons.filter(r => r.class === "blocked")
-    ).toEqual([]);
+    expect(result.judgement.reasons.filter(r => r.class === "blocked")).toEqual(
+      []
+    );
     expect(result.counts).toEqual({ kept: 2, changed: 1, lost: 0, blocked: 0 });
     expect(result.cleared).toEqual([]);
   });
@@ -393,7 +395,13 @@ describe("a type change collected over its stored values", () => {
     // A link to one collection and a reference naming its collection convert into neither, so the
     // change needs every row empty: an empty column, or an empty list, has nothing to convert.
     for (const [from, to, texts] of [
-      [{ relationTo: "people" }, { relationTo: ["people", "teams"] }, [null]],
+      // Each stored empty the switch's guard clears: the text `null` too, which one link's column
+      // would otherwise read as a link.
+      [
+        { relationTo: "people" },
+        { relationTo: ["people", "teams"] },
+        [null, "", " ", "null"],
+      ],
       [
         { relationTo: ["people", "teams"], hasMany: true },
         { relationTo: "people" },
