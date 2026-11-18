@@ -137,7 +137,8 @@ function roomHeight(scale: number): number {
  * canvas's content coordinates: the last row of the accordion's whole box,
  * as the frame's sheet draws it. `null` while a clipping container leaves
  * any of it, or the left edge the button starts from, out of view, so the
- * button is never drawn over a question when the room is scrolled away.
+ * button is never drawn over a question when the room is scrolled away;
+ * as wide as the part of the room in view.
  */
 export function questionRoomRow(
   full: Rect,
@@ -156,7 +157,12 @@ export function questionRoomRow(
     row.y + row.height <= visible.y + visible.height + EDGE_SLACK_PX &&
     row.x >= visible.x - EDGE_SLACK_PX &&
     row.x < visible.x + visible.width;
-  return shows ? row : null;
+  if (!shows) return null;
+  // As wide as the room shows: a container cutting the accordion's right
+  // side cuts the room too, and the button, drawn over the canvas, is
+  // never clipped by it, so it is kept to what shows.
+  const right = Math.min(row.x + row.width, visible.x + visible.width);
+  return { ...row, width: right - row.x };
 }
 
 /**

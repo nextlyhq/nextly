@@ -120,6 +120,17 @@ describe("where '+ Add a question' sits", () => {
     expect(questionRoomRow(full, left, 1)).toBeNull();
   });
 
+  it("is only as wide as a clipping container leaves the room, so the button stays inside it", () => {
+    // A container cuts the accordion's right side at x 220.
+    const cut = { x: 20, y: 100, width: 200, height: 300 };
+    expect(questionRoomRow(full, cut, 1)).toEqual({
+      x: 20,
+      y: 356,
+      width: 200,
+      height: 44,
+    });
+  });
+
   it("is the room at the canvas's zoom, which the page draws 44px over the zoom tall", () => {
     // At half zoom the room is 88 of the page's pixels.
     expect(questionRoomRow(full, full, 0.5)).toEqual({
