@@ -30,7 +30,19 @@ const QUEUED_ID = "00000000-0000-4000-8000-0000000000q1";
 const DELIVERY_INDEXES = {
   [TEMPLATE_INDEX]: ["template_slug", "status", "created_at"],
   email_deliveries_provider_type_idx: ["provider_type", "created_at"],
+  email_deliveries_queued_idx: ["queued_id"],
+  email_deliveries_template_created_idx: ["template_slug", "created_at", "id"],
 };
+
+/** The delivery log's columns this change adds, none of them required. */
+const DELIVERY_COLUMNS = [
+  "queued_id",
+  "template_owner",
+  "template_overridden",
+  "template_digest",
+  "failure_kind",
+  "failure_status",
+];
 
 /** The two tables as an installation before the Activity reads has them. */
 async function removeActivitySchema(fresh: FreshDatabase): Promise<void> {
@@ -49,6 +61,9 @@ async function removeActivitySchema(fresh: FreshDatabase): Promise<void> {
     );
   }
   await fresh.exec(`ALTER TABLE email_queue DROP COLUMN template_slug`);
+  for (const column of DELIVERY_COLUMNS) {
+    await fresh.exec(`ALTER TABLE email_deliveries DROP COLUMN ${column}`);
+  }
 }
 
 /** A delivery and a settled queued email, as an older release stored them. */
@@ -90,6 +105,9 @@ describe.each(availableDialects())(
           await fresh.indexColumnsOf("email_deliveries", TEMPLATE_INDEX)
         ).toEqual(["template_slug", "status", "created_at"]);
         expect(await fresh.columnsOf("email_queue")).toContain("template_slug");
+        expect(await fresh.columnsOf("email_deliveries")).toEqual(
+          expect.arrayContaining(DELIVERY_COLUMNS)
+        );
         for (const [index, columns] of Object.entries(DELIVERY_INDEXES)) {
           expect(await fresh.indexColumnsOf("email_deliveries", index)).toEqual(
             columns
@@ -114,6 +132,11 @@ describe.each(availableDialects())(
             id: DELIVERY_ID,
             templateSlug: "welcome",
             status: "sent",
+            // Written before versions were recorded: it reads as not
+            // recorded, with no failure and no queued email.
+            templateOwner: null,
+            failureKind: null,
+            queuedId: null,
           }),
         ]);
         const queued = await db.select().from(fresh.tables.emailQueue);

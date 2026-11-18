@@ -63,6 +63,7 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
 }));
 
 vi.mock("./words", () => ({
+  changeSentence: () => "The field is gone. Visitors see the fallback.",
   visitorsSee: () => "the fallback",
   whatChanged: () => "the field is gone",
   whereBound: () => "Heading",
