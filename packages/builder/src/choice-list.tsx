@@ -41,8 +41,19 @@ export interface ChoiceGroup {
    * it in place, under `heading`, which folded groups listed together share
    * ("Singles · Site"). A search shows a folded group's matching entries.
    */
-  readonly fold?: { readonly heading: string; readonly label: string };
+  readonly fold?: {
+    readonly heading: string;
+    readonly label: string;
+    /**
+     * What choosing the folded row does, said to a screen reader as the
+     * row's description: an option may not say it is expanded.
+     */
+    readonly hint?: string;
+  };
 }
+
+/** What a folded row's description says where its group gives none. */
+const FOLD_HINT = "Opens its entries here.";
 
 /** How many entries the list holds before it offers a search. */
 const SEARCH_FROM = 8;
@@ -267,6 +278,9 @@ export function ChoiceList<C extends ListedChoice>({
   const describedActive =
     activeRow === undefined ? undefined : rowId(activeRow);
 
+  /** The id of a folded row's description. */
+  const foldHintId = (row: DrawnRow<C>): string => `${rowId(row)}-hint`;
+
   const option = (row: DrawnRow<C>): React.JSX.Element => {
     if (row.kind === "fold") {
       const { fold } = row.group;
@@ -276,7 +290,9 @@ export function ChoiceList<C extends ListedChoice>({
           id={rowId(row)}
           role="option"
           aria-selected={row === activeRow}
-          aria-expanded="false"
+          // An option may not carry aria-expanded, so what choosing it
+          // does is its description, drawn outside the list.
+          aria-describedby={foldHintId(row)}
           className="nx-font-pick__option nx-choice-fold"
           title={`Show ${row.group.heading}`}
           onMouseMove={() => setActive(shown.indexOf(row))}
@@ -389,6 +405,19 @@ export function ChoiceList<C extends ListedChoice>({
               );
             })}
       </ul>
+      {/* Each folded row's description, outside the list, so it is read as
+          the row's description and never as a row or part of its name. */}
+      {shown.map(row =>
+        row.kind === "fold" ? (
+          <span
+            key={`${row.key}-hint`}
+            id={foldHintId(row)}
+            className="nx-sr-only"
+          >
+            {row.group.fold?.hint ?? FOLD_HINT}
+          </span>
+        ) : null
+      )}
     </>
   );
 }

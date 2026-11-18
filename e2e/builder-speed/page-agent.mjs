@@ -113,6 +113,12 @@ export function pageChecks() {
         "[data-content-control] input, [data-content-control] textarea"
       ))
         if (field.value === text) return true;
+      // A Text's words are edited in a rich field: a text box that holds them
+      // as text, editable once the shared editor attaches.
+      for (const field of root.querySelectorAll(
+        '[data-content-control] [role="textbox"]'
+      ))
+        if (field.textContent?.trim() === text) return true;
       return false;
     },
     /** The selection outline lies over block `id`. */
