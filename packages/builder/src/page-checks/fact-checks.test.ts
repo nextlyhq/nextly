@@ -256,6 +256,20 @@ describe("unpublished parts", () => {
     ]);
   });
 
+  it("says an unpublished header & footer falls back to the site's default, never that none shows", () => {
+    const { findings } = checked(
+      {
+        unpublished: [
+          { kind: "layout", id: "main", title: "Main", mayPublish: true },
+        ],
+      },
+      [UNPUBLISHED_PARTS_CHECK]
+    );
+    expect(findings[0]?.why).toBe(
+      "Until it's live, visitors don't see it: the page shows the site's default header and footer instead, or none if the site has no default."
+    );
+  });
+
   it("asks someone who can publish where the person editing can't", () => {
     const { findings } = checked(
       {

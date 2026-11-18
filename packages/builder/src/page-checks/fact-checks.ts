@@ -167,7 +167,9 @@ function unpublishedResult(
     return {
       part: `layout:${part.id}`,
       what: `Header & footer not published: ${title}`,
-      why: "Visitors see the page without this header and footer until it's live.",
+      // Until it is live the published page falls back to the site's default
+      // set where there is one, which this check doesn't know: said so.
+      why: "Until it's live, visitors don't see it: the page shows the site's default header and footer instead, or none if the site has no default.",
       todo: publishWords(part),
     };
   }
