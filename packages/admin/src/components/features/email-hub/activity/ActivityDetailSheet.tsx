@@ -24,7 +24,12 @@ import {
 import { formatDateWithAdminTimezone } from "@admin/hooks/useAdminDateFormatter";
 
 import { notStoredLabel } from "./activity-choices";
-import { attemptText, detailState, versionText } from "./activity-detail-model";
+import {
+  attemptText,
+  detailState,
+  failureKindOf,
+  versionText,
+} from "./activity-detail-model";
 import { RECIPIENT_KIND_LABELS, dueText } from "./activity-model";
 import type { ActivityNames } from "./ActivityList";
 
@@ -74,10 +79,13 @@ function stateInput(data: ActivityDetail): Parameters<typeof detailState>[0] {
   if (data.source === "delivery") {
     const d = data.detail;
     return {
-      source: "delivery",
+      // A delivery with a queued email behind it is one of its attempts, and
+      // whether another follows is that queued email's to say.
+      source: d.queuedId ? "attempt" : "delivery",
       // Only a queued email knows its failure came from its template; a
       // delivery is a provider's answer.
       templateCaused: false,
+      reachedProvider: true,
       outcome: d.outcome,
       failureKind: d.failureKind,
       failureStatus: d.failureStatus,
@@ -88,10 +96,12 @@ function stateInput(data: ActivityDetail): Parameters<typeof detailState>[0] {
   return {
     source: "queued",
     templateCaused: d.templateCaused,
+    // With no attempt recorded, nothing was asked of a provider.
+    reachedProvider: d.timeline.length > 0,
     outcome: d.state,
-    // The latest attempt's structured answer: the queued email's own failure
-    // carries no kind of its own.
-    failureKind: d.timeline.at(-1)?.failureKind ?? null,
+    // The queued email's own failure, which every way it can fail records,
+    // with or without an attempt behind it.
+    failureKind: failureKindOf(d.lastFailure),
     failureStatus: d.lastFailure?.status ?? null,
     failureReason: d.lastFailure?.reason ?? null,
   };
@@ -319,6 +329,13 @@ export function ActivityDetailSheet({
               <Skeleton className="h-16 w-full" />
               <Skeleton className="h-24 w-full" />
             </div>
+          )}
+          {detail.isError && data && (
+            // A later read failed: what loaded before stays, said to be so,
+            // since its state and advice may have moved on.
+            <p role="status" className="text-sm text-muted-foreground">
+              Couldn’t refresh, so this shows what loaded before.
+            </p>
           )}
           {detail.isError && !data && (
             <Alert variant="destructive">

@@ -51,9 +51,14 @@ const FAILURE_TODO: Record<"refused" | "unknown", string> = {
  * is never retried.
  */
 function retryableTodo(
-  source: "delivery" | "queued",
+  source: DetailSource,
   outcome: DeliveryOutcome | QueuedEmailState
 ): string {
+  if (source === "attempt") {
+    // One attempt of a queued email: whether another follows is the queued
+    // email's to say, so this never advises sending it again by hand.
+    return "This was one attempt of a queued email. Open the queued email to see whether it will be tried again.";
+  }
   if (source === "queued" && outcome === "retrying") {
     return "Usually nothing: it tries again by itself, waiting longer each time.";
   }
@@ -61,6 +66,26 @@ function retryableTodo(
     return "It won’t be tried again by itself: it ran out of attempts. Check the provider, then send it again if it still matters.";
   }
   return "A direct send isn’t retried, so send it again if it matters.";
+}
+
+/**
+ * Where a sheet's failure was recorded: a direct send's delivery, one attempt
+ * of a queued email (a delivery with a queued email behind it), or the queued
+ * email itself.
+ */
+export type DetailSource = "delivery" | "attempt" | "queued";
+
+/**
+ * A queued email's own failure as the kind the delivery log records, so a
+ * failure with no attempt behind it is still classified: one whose outcome
+ * can't be known, one worth trying again, or one refused for good.
+ */
+export function failureKindOf(
+  failure: { retryable: boolean; unknown?: true } | null
+): DeliveryFailureKind | null {
+  if (failure === null) return null;
+  if (failure.unknown) return "unknown";
+  return failure.retryable ? "retryable" : "refused";
 }
 
 /** Core's sentence, with the provider's status beside it when there is one. */
@@ -87,8 +112,14 @@ const PLAIN_STATES: Partial<Record<string, string>> = {
  * worded as the provider's, and its way out is fixing the template.
  */
 export function detailState(input: {
-  source: "delivery" | "queued";
+  source: DetailSource;
   templateCaused: boolean;
+  /**
+   * Whether any provider was asked. A queued email can fail before that for
+   * a reason that isn't its template's, such as a held message that can't be
+   * read, and that is never worded as a provider's answer.
+   */
+  reachedProvider: boolean;
   outcome: DeliveryOutcome | QueuedEmailState;
   failureKind: DeliveryFailureKind | null;
   failureStatus?: number | null;
@@ -115,6 +146,16 @@ export function detailState(input: {
       title: `${lead}: the template couldn’t be used`,
       ...why,
       todo: "Fix the template, then send it again: sending it unchanged fails the same way.",
+    };
+  }
+  if (!input.reachedProvider) {
+    return {
+      title: `${lead}: it never reached a provider`,
+      ...why,
+      todo:
+        outcome === "retrying"
+          ? "Usually nothing: it tries again by itself, waiting longer each time."
+          : "It won’t be tried again by itself. The reason above says what stopped it.",
     };
   }
   const kind = failureKind ?? "retryable";
@@ -144,7 +185,14 @@ export function versionText(version: TemplateVersion | null): {
   if (version.draft)
     return { label: "A draft test, never saved", digest: null };
   return {
-    label: version.overridden ? "The site’s version" : "Owner’s default",
+    // A template the site owns is its own; only another owner's template has
+    // a default the site can override.
+    label:
+      version.owner === "site"
+        ? "The site’s own template"
+        : version.overridden
+          ? "The site’s version"
+          : "Owner’s default",
     digest: version.digest ? version.digest.slice(0, 8) : null,
   };
 }

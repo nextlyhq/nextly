@@ -107,7 +107,7 @@ describe("the detail sheet", () => {
     expect(state.textContent).not.toMatch(/provider/i);
     expect(state.textContent).toContain("wasn't a valid address");
     expect(state.textContent).toMatch(/Fix the template/);
-    expect(screen.getByText("Owner’s default")).toBeTruthy();
+    expect(screen.getByText("The site’s own template")).toBeTruthy();
     expect(screen.getByText("Version 7aa2c510")).toBeTruthy();
     expect(screen.getByText("The form-builder plugin")).toBeTruthy();
     expect(screen.getByText("No attempt yet.")).toBeTruthy();
@@ -183,5 +183,36 @@ describe("the detail sheet", () => {
     const sheet = screen.getByRole("dialog");
     expect(sheet.className).toContain("w-full");
     expect(sheet.className).toContain("sm:w-[480px]");
+  });
+
+  it("keeps what loaded, and says so, when a later refresh fails", () => {
+    vi.mocked(useActivityDetail).mockReturnValue({
+      data: queuedDetail(),
+      isLoading: false,
+      isError: true,
+      error: new Error("Network down"),
+    } as unknown as ReturnType<typeof useActivityDetail>);
+    renderSheet();
+    expect(
+      screen.getByText("Couldn’t refresh, so this shows what loaded before.")
+    ).toBeTruthy();
+    expect(screen.getByText("The site’s own template")).toBeTruthy();
+  });
+
+  it("says a queued email that failed before any provider was asked never reached one", () => {
+    showing(
+      queuedDetail({
+        templateCaused: false,
+        timeline: [],
+        lastFailure: {
+          retryable: false,
+          reason: "The held message couldn't be read.",
+        },
+      })
+    );
+    renderSheet();
+    const state = screen.getAllByRole("status")[0];
+    expect(state.textContent).toContain("Failed: it never reached a provider");
+    expect(state.textContent).not.toMatch(/send it again/i);
   });
 });

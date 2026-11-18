@@ -12,12 +12,21 @@ import type { DeliveryAttempt } from "@admin/services/emailActivityApi";
 import {
   attemptText,
   detailState,
+  failureKindOf,
   versionText,
 } from "../activity-detail-model";
 
 describe("detailState", () => {
-  const delivery = { source: "delivery" as const, templateCaused: false };
-  const queued = { source: "queued" as const, templateCaused: false };
+  const delivery = {
+    source: "delivery" as const,
+    templateCaused: false,
+    reachedProvider: true,
+  };
+  const queued = {
+    source: "queued" as const,
+    templateCaused: false,
+    reachedProvider: true,
+  };
 
   it("says a sent email was sent, with nothing to do", () => {
     expect(
@@ -100,6 +109,33 @@ describe("detailState", () => {
     expect(state.title).not.toMatch(/provider/i);
   });
 
+  it("never calls an attempt of a queued email a direct send", () => {
+    const attempt = detailState({
+      ...delivery,
+      source: "attempt",
+      outcome: "failed",
+      failureKind: "retryable",
+      failureReason: "Resend answered 503",
+    });
+    expect(attempt.todo).not.toMatch(/direct send/i);
+    expect(attempt.todo).toMatch(/queued email/i);
+  });
+
+  it("says a queued email that failed before reaching any provider never reached one", () => {
+    // An unreadable sealed message fails before a provider is asked: no
+    // attempt, not the template's fault, and not to be retried.
+    const state = detailState({
+      ...queued,
+      reachedProvider: false,
+      outcome: "failed",
+      failureKind: "refused",
+      failureReason: "The held message couldn't be read.",
+    });
+    expect(state.title).toBe("Failed: it never reached a provider");
+    expect(state.title).not.toMatch(/provider (couldn|refused)/i);
+    expect(state.todo).not.toMatch(/send it again/i);
+  });
+
   it("puts a cancelled email's state first and keeps its last failure", () => {
     expect(
       detailState({
@@ -128,6 +164,10 @@ describe("versionText", () => {
     expect(
       versionText({ owner: "core", overridden: true, digest: "a91f3c07aa" })
     ).toEqual({ label: "The site’s version", digest: "a91f3c07" });
+    // A template the site owns is never overridden: it is the site's own.
+    expect(
+      versionText({ owner: "site", overridden: false, digest: "b0b0cafe11" })
+    ).toEqual({ label: "The site’s own template", digest: "b0b0cafe" });
     expect(
       versionText({
         owner: "site",
@@ -181,5 +221,16 @@ describe("attemptText", () => {
         })
       )
     ).toEqual({ outcome: "Sent", detail: "resend · To" });
+  });
+});
+
+describe("failureKindOf", () => {
+  it("reads a queued email's own failure: unknown, retryable or refused", () => {
+    expect(failureKindOf({ retryable: true, reason: "x", unknown: true })).toBe(
+      "unknown"
+    );
+    expect(failureKindOf({ retryable: true, reason: "x" })).toBe("retryable");
+    expect(failureKindOf({ retryable: false, reason: "x" })).toBe("refused");
+    expect(failureKindOf(null)).toBeNull();
   });
 });
