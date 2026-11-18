@@ -283,6 +283,9 @@ export function useActivityDetail(
         : { source: "queued", detail: await getQueuedEmailDetail(open.id) };
     },
     enabled: open !== null,
+    // Read afresh each time a sheet opens: a cached detail may say an email is
+    // still retrying after the list has seen it settle.
+    refetchOnMount: "always",
     refetchInterval: current => {
       const data = current.state.data;
       return data?.source === "queued" && isUnsettled(data.detail.state)

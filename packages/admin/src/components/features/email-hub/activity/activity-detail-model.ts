@@ -46,6 +46,30 @@ const FAILURE_TODO: Record<"refused" | "unknown", string> = {
 };
 
 /**
+ * What to do about one attempt of a queued email: whether another follows is
+ * the queued email's to say, so this never advises sending it again by hand.
+ */
+const ATTEMPT_TODO =
+  "This was one attempt of a queued email. Open the queued email to see whether it will be tried again.";
+
+/**
+ * What to do when the provider may have taken the email before its answer was
+ * lost. A queued email still retrying sends again by itself, so sending it by
+ * hand as well could deliver it twice; one attempt of a queued email defers
+ * to the queued email.
+ */
+function unknownTodo(
+  source: DetailSource,
+  outcome: DeliveryOutcome | QueuedEmailState
+): string {
+  if (source === "attempt") return ATTEMPT_TODO;
+  if (source === "queued" && outcome === "retrying") {
+    return "It tries again by itself, so don’t send it by hand as well. The provider may already have taken it: check the provider’s own log.";
+  }
+  return FAILURE_TODO.unknown;
+}
+
+/**
  * What to do about a failure the provider might not repeat, which depends on
  * whether anything will try again: only a queued email that is still
  * retrying will. One out of attempts has failed for good, and a direct send
@@ -55,11 +79,7 @@ function retryableTodo(
   source: DetailSource,
   outcome: DeliveryOutcome | QueuedEmailState
 ): string {
-  if (source === "attempt") {
-    // One attempt of a queued email: whether another follows is the queued
-    // email's to say, so this never advises sending it again by hand.
-    return "This was one attempt of a queued email. Open the queued email to see whether it will be tried again.";
-  }
+  if (source === "attempt") return ATTEMPT_TODO;
   if (source === "queued" && outcome === "retrying") {
     return "Usually nothing: it tries again by itself, waiting longer each time.";
   }
@@ -194,20 +214,37 @@ export function detailState(input: {
     todo:
       kind === "retryable"
         ? retryableTodo(input.source, outcome)
-        : FAILURE_TODO[kind],
+        : kind === "unknown"
+          ? unknownTodo(input.source, outcome)
+          : FAILURE_TODO[kind],
   };
 }
 
-/** Which version of its template a send used, and its digest's short form. */
-export function versionText(version: TemplateVersion | null): {
+/**
+ * Which version of its template a send used, and its digest's short form.
+ *
+ * A queued email with no version yet is "not sent yet" only while it can still
+ * be sent (`stillToSend`); one that failed or was cancelled first has none
+ * recorded, and never will.
+ */
+export function versionText(
+  version: TemplateVersion | null,
+  stillToSend = false
+): {
   label: string;
   digest: string | null;
 } {
-  if (version === null) return { label: "Not sent yet", digest: null };
+  if (version === null) {
+    return {
+      label: stillToSend ? "Not sent yet" : "No version recorded",
+      digest: null,
+    };
+  }
   if (version === "none") return { label: "No template", digest: null };
   if (version === "not-recorded") {
+    // Worded for a failed record as much as a sent one.
     return {
-      label: "Not recorded (sent before versions were kept)",
+      label: "Not recorded (from before versions were kept)",
       digest: null,
     };
   }
@@ -252,4 +289,19 @@ export function attemptText(attempt: DeliveryAttempt): {
     outcome: attempt.outcome === "sent" ? "Sent" : "Failed",
     detail: parts.join(" · "),
   };
+}
+
+/**
+ * What the timeline says when it holds no delivery. "No attempt yet" only for
+ * a queued email still waiting for its first attempt; anything else may have
+ * been attempted and had its deliveries removed by retention, or failed before
+ * a provider was asked, so it claims neither.
+ */
+export function emptyTimelineText(
+  queued: { state: QueuedEmailState; attempts: number | null } | null
+): string {
+  if (queued && queued.state === "waiting" && queued.attempts === 0) {
+    return "No attempt yet.";
+  }
+  return "No delivery is on record: none was made, or it’s no longer kept.";
 }
