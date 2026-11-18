@@ -544,9 +544,69 @@ export async function renderCollectionLoop({
   );
   return drawList(
     read,
-    { className, Tag, renderSlot, ctx, nodeId: node.id },
+    {
+      className,
+      Tag,
+      renderSlot,
+      ctx,
+      nodeId: node.id,
+      // Where an author is looking at a collection with nothing to show,
+      // the item is drawn with sample values instead, from its fields.
+      samples: sampleItems(ctx, collection),
+    },
     pages
   );
+}
+
+/** How many sample items a list with nothing to show draws for an author. */
+const SAMPLE_COUNT = 3;
+
+/** The attribute on a sample item, which the editor greys and tags. */
+export const LIST_SAMPLE_ATTRIBUTE = "data-nx-list-sample";
+
+/** A sample value for a field, by its kind, numbered for its item. */
+function sampleValue(
+  field: { readonly name: string; readonly type: string },
+  index: number
+): unknown {
+  const number = index + 1;
+  switch (field.type) {
+    case "text":
+    case "email":
+    case "url":
+      return `Sample ${field.name} ${String(number)}`;
+    case "textarea":
+      return "A few words about this entry, so the item can be designed.";
+    case "number":
+      return number;
+    case "checkbox":
+      return true;
+    case "date":
+      return new Date(Date.UTC(2026, 0, number)).toISOString();
+    default:
+      // Pictures, relations and the rest draw their own empty state.
+      return null;
+  }
+}
+
+/**
+ * The sample entries an author designs the item with while the collection
+ * shows nothing: one value per field by its kind, from the fields the page
+ * knows the collection has. Only where an author is looking; `undefined`
+ * on a page a visitor is served, which never draws a sample.
+ */
+function sampleItems(
+  ctx: PageContext,
+  collection: string
+): readonly Record<string, unknown>[] | undefined {
+  if (ctx.diagnostics !== true) return undefined;
+  const fields = ctx.fieldShapes?.fieldsOf({ collection }) ?? [];
+  return Array.from({ length: SAMPLE_COUNT }, (_, index) => ({
+    id: `sample-${String(index + 1)}`,
+    ...Object.fromEntries(
+      fields.map(field => [field.name, sampleValue(field, index)])
+    ),
+  }));
 }
 
 /**
@@ -558,11 +618,50 @@ function drawList(
   args: Pick<
     BlockRenderArgs<CollectionLoopProps>,
     "className" | "renderSlot" | "ctx"
-  > & { readonly nodeId: string; readonly Tag: ReturnType<typeof rootTagOf> },
+  > & {
+    readonly nodeId: string;
+    readonly Tag: ReturnType<typeof rootTagOf>;
+    /** Sample entries to draw, where an author sees a list with none. */
+    readonly samples?: readonly Record<string, unknown>[] | undefined;
+  },
   pages: ReactElement | null = null
 ): ReactElement {
   const { outcome, itemContext } = read;
   const { className, Tag, renderSlot, ctx } = args;
+  // A read that matched nothing, while an author is looking: the item drawn
+  // with sample values, marked so the editor greys it and tags it "Sample".
+  // A failed read shows its empty state and its note, as it always has.
+  if (
+    outcome.items.length === 0 &&
+    !outcome.failed &&
+    args.samples !== undefined
+  ) {
+    return (
+      <Tag className={className} {...tagMarks(ctx, args.nodeId)}>
+        {args.samples.map((item, index) => (
+          <div
+            key={String(item.id)}
+            className={ENTRY_CLASS}
+            {...{ [LIST_SAMPLE_ATTRIBUTE]: "" }}
+          >
+            {renderSlot(
+              "children",
+              withListEntry(
+                {
+                  ...itemContext(item),
+                  itemPosition:
+                    ctx.itemPosition === undefined
+                      ? `sample-${String(index)}`
+                      : `${ctx.itemPosition}-sample-${String(index)}`,
+                },
+                args.nodeId
+              )
+            )}
+          </div>
+        ))}
+      </Tag>
+    );
+  }
   // How many entries this list drew, told to an editor that asks, so what
   // it says of the list is of what is drawn, never of a read made again.
   reportShown(ctx, args.nodeId, outcome.items.length);
