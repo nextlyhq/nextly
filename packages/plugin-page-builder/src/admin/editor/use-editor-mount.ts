@@ -65,6 +65,7 @@ import {
 import { useEditedComponentVariants } from "../variant-use-client";
 
 import { shellPreferenceStore } from "./editor-preference-stores";
+import { useComponentSettingHold } from "./component-setting-hold";
 import { useRestorableEditorState } from "./restore-as-edit";
 import { useConnectStyleHistory } from "./site-style-history";
 import { documentFrom, PLUGIN_SOURCE } from "./stored-document";
@@ -483,6 +484,10 @@ export function useEditorMount(
   // A shared style change saved while this editor is open is a step of its
   // history, so the editor connects the history to the style writers.
   useConnectStyleHistory(editor.recordStep);
+  // A component setting made from a placement, held for the page's Save:
+  // the canvas and the inspector draw the planned component while the page
+  // binds it. The editor's own apply keeps the stored components.
+  const settingHold = useComponentSettingHold(editor, componentLibrary);
 
   /*
    * Typing a block's text on the canvas. The hook owns the caret; which values
@@ -538,7 +543,8 @@ export function useEditorMount(
     initialDocument,
     clientConfig,
     documentLimits,
-    componentLibrary,
+    componentLibrary: settingHold.library,
+    makeComponentSetting: settingHold.makeComponentSetting,
     notices,
     editor,
     inline,
@@ -584,6 +590,10 @@ export type EditorMount = {
   componentVariants: ComponentVariantsHost | undefined;
   /** Give the "Part of" toast the opener its Edit component action calls. */
   offerEditComponent: (open: OpenComponent | undefined) => void;
+  /** Plan a setting of a component a placement places, held for the Save. */
+  makeComponentSetting: ReturnType<
+    typeof useComponentSettingHold
+  >["makeComponentSetting"];
 };
 
 /**

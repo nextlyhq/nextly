@@ -166,3 +166,31 @@ function withPlanUnbind(
 ): Pick<ContentServices, "planUnbind"> {
   return planUnbind === undefined ? {} : { planUnbind };
 }
+
+/** The services with a setting maker, one object per pair, kept by both. */
+const withMaker = new WeakMap<
+  ContentServices,
+  WeakMap<NonNullable<ContentServices["makeComponentSetting"]>, ContentServices>
+>();
+
+/**
+ * The services with this editor's "Make this a setting of the component",
+ * the same object for the same two, so the panel sees no new services on a
+ * render.
+ */
+export function withSettingMaker(
+  services: ContentServices,
+  makeComponentSetting: NonNullable<ContentServices["makeComponentSetting"]>
+): ContentServices {
+  let byMaker = withMaker.get(services);
+  if (byMaker === undefined) {
+    byMaker = new WeakMap();
+    withMaker.set(services, byMaker);
+  }
+  let joined = byMaker.get(makeComponentSetting);
+  if (joined === undefined) {
+    joined = { ...services, makeComponentSetting };
+    byMaker.set(makeComponentSetting, joined);
+  }
+  return joined;
+}
