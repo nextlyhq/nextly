@@ -7,7 +7,7 @@
  */
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -78,6 +78,16 @@ describe("databaseIdentity", () => {
     expect(named).not.toContain("secret");
   });
 
+  // The SQLite adapter opens the URL with `file:` stripped, relative to the working directory.
+  it("names a SQLite file where the adapter opens it, so a relative and an absolute path differ", () => {
+    expect(databaseIdentity("file:./data/app.db")).toBe(
+      databaseIdentity(`file:${resolve("data/app.db")}`)
+    );
+    expect(databaseIdentity("file:./data/app.db")).not.toBe(
+      databaseIdentity("file:/data/app.db")
+    );
+  });
+
   it("names another host, port or database differently", () => {
     const named = databaseIdentity(URL_HERE);
     for (const other of [
@@ -135,6 +145,50 @@ describe("refuseWhileSaveLeftPartWay", () => {
 
     const outcome = await checked();
     expect(outcome).toEqual({ notices: [expect.stringContaining('"posts"')] });
+  });
+
+  it.each([
+    ["null", "null"],
+    ["an empty object", "{}"],
+    [
+      "a record missing its host",
+      JSON.stringify({
+        ...JSON.parse(markerOf("posts", "h", "d")),
+        host: undefined,
+      }),
+    ],
+  ])(
+    "refuses a marker holding %s, which names no save",
+    async (_what, text) => {
+      leaveMarker("collection-posts-unknown.json", text);
+
+      const outcome = await checked();
+      expect("refused" in outcome, "the check passed").toBe(true);
+      if (!("refused" in outcome)) return;
+      expect((outcome.refused as NextlyError).publicMessage).toContain(
+        "collection-posts-unknown.json"
+      );
+    }
+  );
+
+  // Two for one entity on this host and database: a stopped save whose row was lost, then another.
+  it("names every marker of this host and database, never one picked from them", async () => {
+    const here = databaseIdentity(URL_HERE);
+    leaveMarker(
+      "collection-posts-first.json",
+      markerOf("posts", hostname(), here)
+    );
+    leaveMarker(
+      "collection-posts-second.json",
+      markerOf("posts", hostname(), here)
+    );
+
+    const outcome = await checked();
+    expect("refused" in outcome, "the check passed").toBe(true);
+    if (!("refused" in outcome)) return;
+    const message = (outcome.refused as NextlyError).publicMessage;
+    expect(message).toContain("collection-posts-first.json");
+    expect(message).toContain("collection-posts-second.json");
   });
 
   it("refuses a marker that cannot be read, naming the file", async () => {

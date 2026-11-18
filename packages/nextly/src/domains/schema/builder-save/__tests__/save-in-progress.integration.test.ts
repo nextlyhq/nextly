@@ -18,6 +18,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -302,16 +303,27 @@ async function recordRow(
   return entry.present ? (entry.value ?? undefined) : undefined;
 }
 
-/** The record's marker in the project's `.nextly/` folder, or undefined without one. */
+const MARKERS = () => join(basePath, ".nextly", "save-in-progress");
+
+/** Every marker of the entity in the project's `.nextly/` folder, one file per record. */
+function entityMarkers(path: SavePath): Array<Record<string, unknown>> {
+  if (!existsSync(MARKERS())) return [];
+  return readdirSync(MARKERS())
+    .filter(name => name.startsWith(`${path.kind}-${path.slug}-`))
+    .map(
+      name =>
+        JSON.parse(readFileSync(join(MARKERS(), name), "utf-8")) as Record<
+          string,
+          unknown
+        >
+    );
+}
+
+/** The entity's one marker, or undefined without one; two fail the case. */
 function recordMarker(path: SavePath): Record<string, unknown> | undefined {
-  const marker = join(
-    basePath,
-    ".nextly",
-    "save-in-progress",
-    `${path.kind}-${path.slug}.json`
-  );
-  if (!existsSync(marker)) return undefined;
-  return JSON.parse(readFileSync(marker, "utf-8")) as Record<string, unknown>;
+  const markers = entityMarkers(path);
+  expect(markers.length, "markers of the entity").toBeLessThanOrEqual(1);
+  return markers[0];
 }
 
 /** A record as a process stopped on `host` would have left it. */
@@ -328,12 +340,11 @@ function stoppedRecord(path: SavePath, host: string): Record<string, unknown> {
   };
 }
 
-/** Put `record` in place as the entity's marker. */
+/** Put `record` in place as one of the entity's markers. */
 function writeMarker(path: SavePath, record: Record<string, unknown>): void {
-  const folder = join(basePath, ".nextly", "save-in-progress");
-  mkdirSync(folder, { recursive: true });
+  mkdirSync(MARKERS(), { recursive: true });
   writeFileSync(
-    join(folder, `${path.kind}-${path.slug}.json`),
+    join(MARKERS(), `${path.kind}-${path.slug}-${String(record.id)}.json`),
     JSON.stringify(record)
   );
 }
@@ -600,6 +611,66 @@ describe.each(getConfiguredTestDialects())(
         const notices: string[] = [];
         expect(await refusal(markersRefuse(notices))).toBe("none");
         expect(notices).toEqual([expect.stringContaining("another-machine")]);
+      }, 300_000);
+
+      // Another machine's marker takes no place this save needs: killed, the save leaves its own
+      // marker beside it, and the commands with no database refuse for this database.
+      it("a kill beside another machine's marker leaves this save's marker, which refuses", async () => {
+        const t = await boot();
+        await path.create([text("heading")]);
+        const theirs = stoppedRecord(path, "another-machine");
+        writeMarker(path, theirs);
+
+        const reached = new Promise<void>(resolve => {
+          kill.reached = resolve;
+        });
+        kill.at = point => point === `file:${join(basePath, DEFINITION)}`;
+        stopped = path
+          .save(t, [text("heading"), text("alpha")])
+          .catch((error: unknown) => error);
+        expect(
+          await within(reached, 120_000),
+          "the save never reached the kill point"
+        ).toBe(true);
+
+        const row = await recordRow(t, path);
+        expect(row, "the record's row").toBeDefined();
+        const markers = entityMarkers(path);
+        expect(markers).toHaveLength(2);
+        expect(markers).toEqual(expect.arrayContaining([theirs, row]));
+        const notices: string[] = [];
+        expect(await refusal(markersRefuse(notices))).toBe("CONFLICT");
+        expect(notices).toEqual([expect.stringContaining("another-machine")]);
+      }, 300_000);
+
+      // The marker is written before anything of the save: where it cannot be, the row goes too
+      // and the save is refused, so no row stands for a save the commands with no database miss.
+      it("a marker that cannot be placed takes its row with it, and the save writes nothing", async () => {
+        const t = await boot();
+        await path.create([text("heading")]);
+        const definitionBefore = definitionText();
+        // A file where the folder goes: the marker's folder cannot be made.
+        writeFileSync(join(basePath, ".nextly"), "");
+
+        const answer = await path
+          .save(t, [text("heading"), text("alpha")])
+          .catch((error: unknown) => error);
+        expect(
+          answer instanceof Response ? answer.ok : !(answer instanceof Error),
+          "the save was not refused"
+        ).toBe(false);
+        expect(await recordRow(t, path)).toBeUndefined();
+        expect(definitionText()).toBe(definitionBefore);
+
+        // With the folder possible again, the next save makes and clears its record as ever.
+        rmSync(join(basePath, ".nextly"));
+        const again = await path.save(t, [text("heading"), text("alpha")]);
+        expect(
+          again instanceof Response ? again.ok : true,
+          "the next save"
+        ).toBe(true);
+        expect(await recordRow(t, path)).toBeUndefined();
+        expect(recordMarker(path)).toBeUndefined();
       }, 300_000);
     });
   }

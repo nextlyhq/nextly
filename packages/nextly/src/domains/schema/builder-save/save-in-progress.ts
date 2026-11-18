@@ -43,10 +43,11 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { hostname } from "node:os";
-import { dirname, join, relative } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { like, type SQL } from "drizzle-orm";
+import { z } from "zod";
 
 import { loadedDialect } from "../../../database/dialect-tables";
 import { NextlyError } from "../../../errors/nextly-error";
@@ -57,23 +58,27 @@ import { MetaService } from "../../meta/services/meta-service";
 /** The kinds of entity a Builder save writes. */
 export type SaveInProgressKind = AddressKind;
 
-/** One save's record that it has started. */
-interface SaveInProgress {
+/**
+ * One save's record that it has started, as it is stored and as a marker is parsed back: a marker
+ * of any other shape is one whose save cannot be told, and is read as unreadable.
+ */
+const savedRecord = z.object({
   /** Tells this save's record from another's for the same entity. */
-  id: string;
-  kind: SaveInProgressKind;
-  slug: string;
+  id: z.string().min(1),
+  kind: z.enum(["collection", "single", "fieldGroup"] satisfies AddressKind[]),
+  slug: z.string().min(1),
   /** When the save started, as an ISO timestamp. */
-  startedAt: string;
+  startedAt: z.string(),
   /** The host the save ran on. */
-  host: string;
+  host: z.string(),
   /** The database it wrote to, as `databaseIdentity` names it. */
-  database: string;
+  database: z.string(),
   /** The definition file, relative to the project root. */
-  definitionFile: string;
+  definitionFile: z.string(),
   /** The definition file's text before the save; null where there was none. */
-  definitionBefore: string | null;
-}
+  definitionBefore: z.string().nullable(),
+});
+type SaveInProgress = z.infer<typeof savedRecord>;
 
 const KEY_PREFIX = "builder-save-in-progress:";
 
@@ -87,32 +92,47 @@ export function saveInProgressFolder(projectRoot: string): string {
   return join(projectRoot, ".nextly", "save-in-progress");
 }
 
-/** The marker file an entity's record is kept in. */
-function markerPath(
-  projectRoot: string,
-  kind: SaveInProgressKind,
-  slug: string
-): string {
-  return join(saveInProgressFolder(projectRoot), `${kind}-${slug}.json`);
+/**
+ * The marker file a record is kept in: one per record, named by its entity and its id, so no
+ * marker, another machine's included, is ever in the place of another.
+ */
+function markerPath(projectRoot: string, record: SaveInProgress): string {
+  return join(
+    saveInProgressFolder(projectRoot),
+    `${record.kind}-${record.slug}-${record.id}.json`
+  );
 }
 
 /**
- * The database `url` reaches, named by a hash of its host, port and database name (a SQLite
- * file's path): the same database gives the same name on every machine, and no user name or
- * password goes into it. `url` defaults to `DATABASE_URL`, which the app and the CLI both connect
- * with.
+ * The database `url` reaches, named by a hash of where it is (`databaseLocation`): the same
+ * database gives the same name whoever connects to it, and no user name or password goes into it.
+ * `url` defaults to `DATABASE_URL`, which the app and the CLI both connect with.
  */
 export function databaseIdentity(
   url: string | undefined = process.env.DATABASE_URL
 ): string {
-  let where = url ?? "";
-  try {
-    const parsed = new URL(where);
-    where = `${parsed.hostname}:${parsed.port}${parsed.pathname}`;
-  } catch {
-    // Not a URL (a bare SQLite path): hashed as it is, so nothing of it is kept either way.
+  return createHash("sha256")
+    .update(databaseLocation(url ?? ""))
+    .digest("hex")
+    .slice(0, 32);
+}
+
+/**
+ * Where `url` leads. A SQLite file is opened at the URL with its `file:` prefix stripped, relative
+ * to the working directory, so `file:./data/app.db` and `file:/data/app.db` are two files and
+ * name two places. A server is its host, port and database name.
+ */
+function databaseLocation(url: string): string {
+  if (url.startsWith("file:")) {
+    return `file:${resolve(url.slice("file:".length))}`;
   }
-  return createHash("sha256").update(where).digest("hex").slice(0, 32);
+  try {
+    const parsed = new URL(url);
+    return `${parsed.hostname}:${parsed.port}${parsed.pathname}`;
+  } catch {
+    // Not a URL: a bare SQLite path, opened as it is.
+    return `file:${resolve(url)}`;
+  }
 }
 
 /**
@@ -244,7 +264,15 @@ export async function recordSaveStarted(args: {
     ending: "open",
   };
   made.push(entry);
-  await placeMarker(markerPath(args.projectRoot, args.kind, args.slug), record);
+  try {
+    await placeMarker(markerPath(args.projectRoot, record), record);
+  } catch (error) {
+    // Nothing of the save is written yet: without its marker, the row alone would stand for a
+    // save the commands with no database cannot see, so it goes too and the save is refused.
+    made.splice(made.indexOf(entry), 1);
+    await meta.delete(key);
+    throw error;
+  }
   return {
     withdrawn: () => {
       if (entry.ending === "open") entry.ending = "withdrawn";
@@ -256,9 +284,8 @@ export async function recordSaveStarted(args: {
 }
 
 /**
- * Put `record` at `path` whole and only where no marker is there: written aside, then linked into
- * place, which refuses a path that exists, so a reader never sees half a marker and one already
- * there is never replaced.
+ * Put `record` at `path` whole: written aside, then linked into place, so a reader never sees half
+ * a marker, and a path already taken (a record's own id, so never another's) is never replaced.
  */
 async function placeMarker(
   path: string,
@@ -272,8 +299,6 @@ async function placeMarker(
       flag: "wx",
     });
     await link(temporary, path);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
   } finally {
     await rm(temporary, { force: true });
   }
@@ -310,10 +335,7 @@ async function clearRecords(
       await new MetaService(adapter, consoleLogger).delete(
         saveInProgressKey(record.kind, record.slug)
       );
-      await removeMarker(
-        markerPath(projectRoot, record.kind, record.slug),
-        record
-      );
+      await removeMarker(markerPath(projectRoot, record), record);
     } catch (error) {
       logger.warn(
         `The record that the save of ${record.kind} "${record.slug}" was in progress could not be cleared (${error instanceof Error ? error.message : String(error)}); the next development start settles it.`
@@ -343,10 +365,14 @@ async function readSaveMarkers(projectRoot: string): Promise<ReadMarker[]> {
   for (const name of names) {
     const file = join(folder, name);
     try {
-      read.push({
-        file,
-        record: JSON.parse(await readFile(file, "utf-8")) as SaveInProgress,
-      });
+      const parsed = savedRecord.safeParse(
+        JSON.parse(await readFile(file, "utf-8"))
+      );
+      read.push(
+        parsed.success
+          ? { file, record: parsed.data }
+          : { file, unreadable: "it is not a save's record" }
+      );
     } catch (error) {
       read.push({
         file,
@@ -392,8 +418,12 @@ export async function refuseWhileSaveLeftPartWay(args: {
       continue;
     }
     const { record } = marker;
+    // Every marker of this host and database refuses, each named with its file: two for one entity
+    // (a stopped save whose row was lost, then another) are both named, never one picked.
     if (record.host === here && record.database === database) {
-      left.push(described(record));
+      left.push(
+        `${described(record)} (${relative(args.projectRoot, marker.file)})`
+      );
     } else {
       args.notice(
         `${described(record)} is recorded in .nextly/ as left part-way; it is settled by a development start on that machine.`
