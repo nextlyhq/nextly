@@ -409,6 +409,22 @@ describe.each(getConfiguredTestDialects())(
         );
       });
 
+      it("answers a label that reads like a date exactly as it was saved, which is configuration", async () => {
+        current = await bootSteps(dialect);
+        await admin();
+        // A date with no offset: a date rewritten for the reader comes back as UTC, with one.
+        const label = "2026-11-17T09:00:00";
+
+        const saved = await door.update(SAM, "editorial", {
+          revision: 0,
+          labels: { legal: { label } },
+        });
+        const read = await door.read(SAM, "editorial");
+
+        expect(saved.labels).toEqual({ legal: { label } });
+        expect(read.labels).toEqual({ legal: { label } });
+      });
+
       it("refuses a default reviewer who cannot take the stage's primary step on every attached collection and Single", async () => {
         current = await bootSteps(dialect);
         await admin();

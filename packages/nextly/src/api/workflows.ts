@@ -65,6 +65,7 @@ import { getCachedNextly } from "../init";
 import { readCaller } from "./authenticated-read";
 import {
   privateToSession,
+  SKIP_DATE_FORMATTING_HEADER,
   respondBulk,
   respondDoc,
   respondList,
@@ -569,6 +570,17 @@ export const workflowOperations = {
   },
 };
 
+/**
+ * A response whose body is configuration, not records: the registered workflows, or a workflow's
+ * settings. Marked so its values are answered as they were defined or saved, never rewritten as
+ * dates for the reader's timezone (a stage label that reads like a date included), the update's
+ * answer as much as the read's, since a settings screen renders the one it gets back.
+ */
+function configurationResponse(response: Response): Response {
+  response.headers.set(SKIP_DATE_FORMATTING_HEADER, "1");
+  return response;
+}
+
 /** The REST routes, by the method the route parser names. */
 const ROUTES: Record<
   string,
@@ -580,25 +592,29 @@ const ROUTES: Record<
 > = {
   async listWorkflows(_request, asker) {
     const { items, meta } = await workflowOperations.list(asker);
-    return respondList(items, meta);
+    return configurationResponse(respondList(items, meta));
   },
 
   async getWorkflowSettings(_request, asker, params) {
-    return respondDoc(
-      await workflowOperations.readSettings(asker, { slug: params.slug })
+    return configurationResponse(
+      respondDoc(
+        await workflowOperations.readSettings(asker, { slug: params.slug })
+      )
     );
   },
 
   async updateWorkflowSettings(request, asker, params) {
     const body: unknown = await request.json();
-    return respondMutation(
-      "Workflow settings saved.",
-      await workflowOperations.updateSettings(
-        asker,
-        // The slug the path names, over any the body names.
-        typeof body === "object" && body !== null && !Array.isArray(body)
-          ? { ...body, slug: params.slug }
-          : body
+    return configurationResponse(
+      respondMutation(
+        "Workflow settings saved.",
+        await workflowOperations.updateSettings(
+          asker,
+          // The slug the path names, over any the body names.
+          typeof body === "object" && body !== null && !Array.isArray(body)
+            ? { ...body, slug: params.slug }
+            : body
+        )
       )
     );
   },
