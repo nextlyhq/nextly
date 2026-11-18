@@ -576,6 +576,33 @@ describeEachDialect(
       120_000
     );
 
+    // These rows are kept by kind and slug, so a collection created again
+    // under the deleted one's name would find any left behind as its own.
+    it("starts a collection created again under a deleted one's name with none of its rows", async () => {
+      const owner = await bootOwner(dialect, "collection");
+      const keptBySlug = ENTITY_OWNED_DATA.collection
+        .filter(
+          ({ data, removed }) =>
+            removed === "withTheRegistryRow" && data !== "registryRow"
+        )
+        .map(({ data }) => data);
+      const before = await countsOf(owner);
+      // Positive control: the deleted collection held each of them.
+      expect(keptBySlug.filter(data => before[data] === 0)).toEqual([]);
+
+      await builderDelete(owner);
+      vi.stubEnv("NODE_ENV", "development");
+      await makeOwner("collection");
+      vi.unstubAllEnvs();
+      clearRegistryRowCache();
+
+      // Read under the name, and the deleted collection's entry for its pins.
+      const after = await countsOf(owner);
+      expect(
+        Object.fromEntries(keptBySlug.map(data => [data, after[data]]))
+      ).toEqual(Object.fromEntries(keptBySlug.map(data => [data, 0])));
+    }, 120_000);
+
     /** Boot `kind`'s entity, then delete it with one of its drops failing. */
     async function deleteWithADropFailing(kind: OwningEntityKind) {
       const owner = await bootOwner(dialect, kind);
