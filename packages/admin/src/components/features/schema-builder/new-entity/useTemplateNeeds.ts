@@ -190,8 +190,11 @@ function heldUnsaved(
   target: Target,
   unsaved: readonly PendingAddress[]
 ): boolean {
+  // Only an unsaved entity the host's save creates first stands for a target:
+  // a collection or a field group. A Single waiting unsaved is created by its
+  // own editor only, so a link to it would name one the server lacks.
   const kinds: readonly AddressCheckKind[] =
-    target.kind === "field-group" ? ["fieldGroup"] : ["collection", "single"];
+    target.kind === "field-group" ? ["fieldGroup"] : ["collection"];
   return unsaved.some(
     each => each.address === target.address && kinds.includes(each.kind)
   );

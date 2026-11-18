@@ -90,7 +90,11 @@ vi.mock("@admin/services/fieldGroupApi", async importOriginal => {
 
 import { registerSchemaTemplates } from "@admin/lib/builder/schema-templates";
 
-import type { UnsavedEntity } from "@admin/lib/builder/unsaved-entities";
+import {
+  addUnsavedEntity,
+  removeUnsavedEntity,
+  type UnsavedEntity,
+} from "@admin/lib/builder/unsaved-entities";
 import type { FieldDefinition } from "@admin/types/collection";
 
 import type { BuilderSettingsValues } from "../../BuilderSettingsModal";
@@ -579,5 +583,34 @@ describe("what a template needs", () => {
     rerender({ address: "thing-two" });
     expect(result.current.blockedBy).toBe("Checking what the template needs…");
     await waitFor(() => expect(result.current.blockedBy).toBeNull());
+  });
+
+  it("does not take a Single waiting unsaved for a link target, since the save creates no Single first", async () => {
+    addUnsavedEntity({
+      kind: "single",
+      address: "authors",
+      settings: { singularName: "Authors", slug: "authors", icon: "User" },
+      fields: [],
+    });
+    // The Single holds the address, so a collection cannot take it.
+    refusals = {
+      "collection:authors": {
+        code: "DUPLICATE",
+        message: "Another entity already uses this address.",
+      },
+    };
+    try {
+      const { user } = renderDialog();
+      await user.type(screen.getByRole("textbox", { name: "Name" }), "Article");
+      await user.click(screen.getByRole("radio", { name: /Blog posts/ }));
+      expect(
+        await within(picked()).findByText(
+          /The collection authors cannot be made: Another entity already uses this address/
+        )
+      ).toBeInTheDocument();
+      expect(createButton()).toBeDisabled();
+    } finally {
+      removeUnsavedEntity("single", "authors");
+    }
   });
 });
