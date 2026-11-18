@@ -1192,6 +1192,151 @@ describe.each(getConfiguredTestDialects())(
         expect(moveOf(null)).toBeNull();
       });
     });
+    describe("trusted code naming a document or a part that does not exist", () => {
+      const MISSING = "00000000-0000-4000-8000-000000000000";
+      const sendOf = (
+        document: Doc,
+        part: string | null,
+        version = "1"
+      ): Doc => ({
+        document,
+        step: "send",
+        parts: [part],
+        seen: [{ part, revision: 0, version }],
+      });
+      const codeOf = (call: Promise<unknown>) =>
+        call.then(
+          () => "answered",
+          (error: { code?: string }) => error.code
+        );
+
+      it("refuses a step on a document that does not exist as not found, and writes nothing", async () => {
+        current = await bootSteps(dialect);
+
+        const code = await codeOf(
+          app().nextly.workflows.takeStep(
+            sendOf({ collection: PAGES, id: MISSING }, null) as never
+          )
+        );
+
+        expect(code).toBe("NOT_FOUND");
+        expect(await stateOf(app(), partOf(PAGES, MISSING, null))).toBeNull();
+      });
+
+      it("refuses a step naming a language the site does not have, and writes nothing", async () => {
+        current = await bootSteps(dialect);
+        const id = await entry(app(), POSTS);
+
+        const code = await codeOf(
+          app().nextly.workflows.takeStep(
+            sendOf({ collection: POSTS, id }, "xx") as never
+          )
+        );
+
+        expect(code).toBe("VALIDATION_ERROR");
+        expect(await stateOf(app(), partOf(POSTS, id, "xx"))).toBeNull();
+      });
+
+      it("refuses a step naming a language on a document kept in none, and writes nothing", async () => {
+        current = await bootSteps(dialect);
+        const id = await entry(app(), PAGES);
+
+        const code = await codeOf(
+          app().nextly.workflows.takeStep(
+            sendOf({ collection: PAGES, id }, "en") as never
+          )
+        );
+
+        expect(code).toBe("VALIDATION_ERROR");
+        expect(await stateOf(app(), partOf(PAGES, id, "en"))).toBeNull();
+      });
+
+      it("refuses an assignment on a missing document or an unknown part, and writes nothing", async () => {
+        current = await bootSteps(dialect);
+        await person(app(), "rita", [
+          ["sign-off", POSTS],
+          ["sign-off", PAGES],
+        ]);
+        const id = await entry(app(), POSTS);
+        const assign = (document: Doc, part: string | null) =>
+          codeOf(
+            app().nextly.workflows.assign({
+              assignments: [
+                {
+                  document,
+                  part,
+                  revision: 0,
+                  assignee: { kind: "user", id: "rita" },
+                },
+              ],
+            } as never)
+          );
+
+        expect(await assign({ collection: PAGES, id: MISSING }, null)).toBe(
+          "NOT_FOUND"
+        );
+        expect(await assign({ collection: POSTS, id }, "xx")).toBe(
+          "VALIDATION_ERROR"
+        );
+        expect(await stateOf(app(), partOf(PAGES, MISSING, null))).toBeNull();
+        expect(await stateOf(app(), partOf(POSTS, id, "xx"))).toBeNull();
+      });
+
+      it("refuses each such document of a move over several, and writes nothing for it", async () => {
+        current = await bootSteps(dialect);
+        await person(app(), "rita", [
+          ["sign-off", POSTS],
+          ["sign-off", PAGES],
+        ]);
+        const id = await entry(app(), POSTS);
+
+        const stepped = await app().nextly.workflows.stepMany({
+          step: "send",
+          documents: [
+            {
+              document: { collection: PAGES, id: MISSING },
+              parts: [null],
+              seen: [{ part: null, revision: 0, version: "1" }],
+            },
+            {
+              document: { collection: POSTS, id },
+              parts: ["xx"],
+              seen: [{ part: "xx", revision: 0, version: "1" }],
+            },
+          ],
+        } as never);
+        const assigned = await app().nextly.workflows.assignMany({
+          assignments: [
+            {
+              document: { collection: PAGES, id: MISSING },
+              part: null,
+              revision: 0,
+              assignee: { kind: "user", id: "rita" },
+            },
+            {
+              document: { collection: POSTS, id },
+              part: "xx",
+              revision: 0,
+              assignee: { kind: "user", id: "rita" },
+            },
+          ],
+        } as never);
+
+        expect(stepped.moved).toEqual([]);
+        expect(stepped.refused.map(each => each.code)).toEqual([
+          "NOT_FOUND",
+          "VALIDATION_ERROR",
+        ]);
+        expect(assigned.assigned).toEqual([]);
+        expect(assigned.refused.map(each => each.code)).toEqual([
+          "NOT_FOUND",
+          "VALIDATION_ERROR",
+        ]);
+        expect(await stateOf(app(), partOf(PAGES, MISSING, null))).toBeNull();
+        expect(await stateOf(app(), partOf(POSTS, id, "xx"))).toBeNull();
+      });
+    });
+
     it("tells trusted code it may take every step but an approval or a request for changes, as a step refuses those", async () => {
       current = await bootSteps(dialect);
       const id = await entry(app(), PAGES);

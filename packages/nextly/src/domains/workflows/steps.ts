@@ -228,6 +228,9 @@ const WORKFLOW_STEP_ERROR_CODES = {
   nothingToApprove: "WORKFLOW_NOTHING_TO_APPROVE",
   // A part with nothing unpublished: published content stays live, with no review to open.
   nothingToReview: "WORKFLOW_NOTHING_TO_REVIEW",
+  // A part the document cannot have: a language the site does not configure, or any language of
+  // a document kept in none.
+  unknownPart: "WORKFLOW_UNKNOWN_PART",
 } as const;
 
 /** @experimental */
@@ -602,6 +605,63 @@ export function namedParts(
   return [...(configuredLocales() ?? []), null];
 }
 
+/**
+ * Refuses each named part the document cannot have, before anything is read or written: a
+ * language the site does not configure, or any language of a document kept in none, whose only
+ * part is the shared one. Without this, a part named in error would be given a review state of
+ * its own, which no read of the document shows. `pathOf` names where each part was given.
+ */
+function refuseUnknownParts(
+  table: DocumentTable,
+  parts: readonly (string | null)[],
+  pathOf: (index: number) => string
+): void {
+  const languages = table.localized ? (configuredLocales() ?? new Set()) : null;
+  const unknown = parts.flatMap((part, index) =>
+    part !== null && (languages === null || !languages.has(part))
+      ? [{ part, index }]
+      : []
+  );
+  if (unknown.length === 0) return;
+  throw NextlyError.validation({
+    errors: unknown.map(({ part, index }) => ({
+      path: pathOf(index),
+      code: WORKFLOW_STEP_ERROR_CODES.unknownPart,
+      message:
+        languages === null
+          ? `"${part}" is not a part of this document, which is kept in no language.`
+          : `"${part}" is not a language this site has.`,
+    })),
+  });
+}
+
+/**
+ * Refuses, as not found, a document whose row is not there, read on `tx`: a step or an assignment
+ * on it would otherwise give a review state to a document that does not exist.
+ */
+async function refuseMissingDocument(
+  tx: TransactionContext,
+  dialect: SupportedDialect,
+  table: DocumentTable,
+  document: ReviewDocument,
+  forUpdate: boolean
+): Promise<void> {
+  const found = await readDocumentRevision(tx, {
+    dialect,
+    table: table.table,
+    id: document.entryId,
+    forUpdate,
+  });
+  if (found !== undefined) return;
+  throw NextlyError.notFound({
+    logContext: {
+      reason: "workflow-document-missing",
+      scopeKind: document.scopeKind,
+      scopeSlug: document.scopeSlug,
+    },
+  });
+}
+
 const partOf = (document: ReviewDocument, part: string | null): ReviewPart => ({
   ...document,
   part,
@@ -913,6 +973,7 @@ async function prepareStep(
   const table = await documentTableOf(input.document);
   const action = stepAction(workflow, step);
   const parts = namedParts(input.parts, table.localized);
+  refuseUnknownParts(table, parts, () => "parts");
   return {
     input,
     workflow,
@@ -978,18 +1039,14 @@ async function approverOf(
 /**
  * The document's own row, locked before anything is read. Every save takes this lock before it
  * writes, so a save in flight is waited for, and the version a step reads after it is the one it
- * committed rather than the one it is replacing.
+ * committed rather than the one it is replacing. A document whose row is not there is refused as
+ * not found.
  */
 async function lockDocument(
   tx: TransactionContext,
   c: StepContext
 ): Promise<void> {
-  await readDocumentRevision(tx, {
-    dialect: c.dialect,
-    table: c.table.table,
-    id: c.input.document.entryId,
-    forUpdate: true,
-  });
+  await refuseMissingDocument(tx, c.dialect, c.table, c.input.document, true);
 }
 
 /**
@@ -1739,6 +1796,8 @@ interface AssignContext {
   gated: ReadonlyMap<string, boolean>;
   /** Whether each assignment's part is live, by its index, read before the transaction. */
   live: readonly boolean[];
+  /** The table each assignment's document lives in, by its index, read before the transaction. */
+  tables: readonly DocumentTable[];
   dialect: SupportedDialect;
   /** What telling each assignee needs from the pool; null where no one can be told. */
   telling: NoticeTelling | null;
@@ -2036,6 +2095,25 @@ async function runAssignment(
   tx: TransactionContext,
   c: AssignContext
 ): Promise<AssignResult> {
+  // Each document asked once, before any part of it is read.
+  const asked = new Set<string>();
+  for (const [index, { assignment }] of c.entries.entries()) {
+    const { document } = assignment;
+    const key = JSON.stringify([
+      document.scopeKind,
+      document.scopeSlug,
+      document.entryId,
+    ]);
+    if (asked.has(key)) continue;
+    asked.add(key);
+    await refuseMissingDocument(
+      tx,
+      c.dialect,
+      c.tables[index],
+      document,
+      false
+    );
+  }
   const parts = assignableParts(await readAssignedParts(tx, c));
   checkAssigners(c, parts);
   checkAssignees(c, parts);
@@ -2069,9 +2147,20 @@ export async function assignWorkflowParts(
     assignment,
     registered: attachedWorkflow(assignment.document),
   }));
+  const tables: DocumentTable[] = [];
+  for (const [index, { assignment }] of entries.entries()) {
+    const table = await documentTableOf(assignment.document);
+    refuseUnknownParts(
+      table,
+      [assignment.part],
+      () => `assignments[${index}].part`
+    );
+    tables.push(table);
+  }
   const context: AssignContext = {
     entries,
     caller,
+    tables,
     eligibility: await assigneeEligibility(adapter, entries),
     gated: await assignerGates(entries, input.caller),
     live: await assignedLiveness(adapter, entries),

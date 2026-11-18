@@ -1007,6 +1007,7 @@ A document whose collection or Single has no workflow attached answers `200` wit
 - **`parts`:** a list, or `"all"`.
 - **`seen`:** the revision and version the caller read for each part. A part that moved since is refused with `409`.
 - **API keys:** a key may never approve or request changes, whatever it holds.
+- **Unknown documents and parts:** a document that does not exist is `404 NOT_FOUND`. A part the document cannot have (a language the site does not have, or any language on a document that is not translated) is refused with `WORKFLOW_UNKNOWN_PART`. The same holds for assignments, and for each document of a bulk request.
 
 `POST /admin/api/workflows/steps/bulk` takes one step across several documents: `{ step, comment?, documents: [{ document, parts, seen }] }`.
 
