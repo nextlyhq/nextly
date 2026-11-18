@@ -52,6 +52,12 @@ export interface ValueFieldProps {
   refusedBy?: string | undefined;
   onCommit: (value: string) => void;
   /**
+   * Draws a value on the canvas while it is typed or picked, before the one
+   * write the edit ends with; `null` once the edit ends, said before that
+   * write. Absent, a field only commits.
+   */
+  onPreview?: ((text: string | null) => void) | undefined;
+  /**
    * The CSS this value writes, shown on hover over a control that writes it
    * in other words: a number and a unit menu.
    */
@@ -86,6 +92,19 @@ export const CloseVariableEditor: React.Context<(() => void) | undefined> =
   React.createContext<(() => void) | undefined>(undefined);
 
 /**
+ * Where a variable's editor hands a value to draw on the canvas before it is
+ * written: the whole set with the value in it, or `null` to draw what is
+ * stored again. The host draws it without storing it, since a variable is
+ * read by the whole site and a write per keystroke would publish half-typed
+ * values. Absent, nothing is drawn until the value is written.
+ */
+export const VariablePreview: React.Context<
+  ((tokens: SiteTokenSet | null) => void) | undefined
+> = React.createContext<((tokens: SiteTokenSet | null) => void) | undefined>(
+  undefined
+);
+
+/**
  * What a field shows: the author's typing, until the stored value changes
  * underneath it (a reset, a refused save, an undo), which replaces it.
  *
@@ -109,6 +128,7 @@ function TextValue({
   readOnly,
   refusedBy,
   onCommit,
+  onPreview,
 }: ValueFieldProps): React.JSX.Element {
   const id = React.useId();
   return (
@@ -122,6 +142,7 @@ function TextValue({
         readOnly={readOnly}
         refusedBy={refusedBy}
         onCommit={onCommit}
+        onPreview={onPreview}
       />
     </div>
   );
@@ -133,6 +154,10 @@ function TextValue({
  * refused value, the value it held before is committed too, since putting it
  * back is how the author answers the refusal. A text style's letter
  * spacing is typed in one too.
+ *
+ * Given `onPreview`, each keystroke is offered to be drawn, and the end of
+ * the edit is said before its commit, so the host draws what is stored again
+ * when the edit writes nothing.
  */
 export function CommitInput({
   id,
@@ -142,6 +167,7 @@ export function CommitInput({
   readOnly,
   refusedBy,
   onCommit,
+  onPreview,
 }: {
   id?: string;
   /** The field's name where no visible label points at it. */
@@ -151,9 +177,11 @@ export function CommitInput({
   readOnly: boolean;
   refusedBy?: string | undefined;
   onCommit: (value: string) => void;
+  onPreview?: ((text: string | null) => void) | undefined;
 }): React.JSX.Element {
   const [draft, setDraft] = useDraft(value);
   const commit = (next: string): void => {
+    onPreview?.(null);
     if (
       !readOnly &&
       next.trim() !== "" &&
@@ -173,7 +201,10 @@ export function CommitInput({
       className="nx-vars-editor__mono"
       value={draft}
       placeholder={placeholder}
-      onChange={event => setDraft(event.currentTarget.value)}
+      onChange={event => {
+        setDraft(event.currentTarget.value);
+        if (!readOnly) onPreview?.(event.currentTarget.value);
+      }}
       readOnly={readOnly}
       onBlur={event => commit(event.currentTarget.value)}
       onKeyDown={event => {

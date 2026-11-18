@@ -176,6 +176,49 @@ describe("where a font is used", () => {
     expect(onOpenTokens).toHaveBeenCalledTimes(1);
   });
 
+  it("counts a page using two of its variables once, where the host counts them together", async () => {
+    const usageTogether = vi.fn(
+      async (groups: readonly (readonly string[])[]) =>
+        groups.map(() => ({
+          documents: 10,
+          byKind: { pages: 10, components: 0, patterns: 0, layouts: 0 },
+          complete: true,
+        }))
+    );
+    panel({
+      usage: {
+        ...access({
+          "font.display": reach(9, ["card"]),
+          "font.quote": reach(2),
+        }),
+        usageTogether,
+      },
+    });
+    const open = await details("Lora");
+    // Ten documents between them, and the shared style: not 9 + 2 + 1.
+    expect(await within(open).findByText("Used in 11 places")).toBeTruthy();
+    expect(usageTogether).toHaveBeenCalledWith(
+      [["font.display", "font.quote"]],
+      expect.anything()
+    );
+  });
+
+  it("adds the variables' documents up where the host's count together fails", async () => {
+    panel({
+      usage: {
+        ...access({
+          "font.display": reach(9, ["card"]),
+          "font.quote": reach(2),
+        }),
+        usageTogether: async () => {
+          throw new Error("offline");
+        },
+      },
+    });
+    const open = await details("Lora");
+    expect(await within(open).findByText("Used in 12 places")).toBeTruthy();
+  });
+
   it("counts the places that use the Body font's own variable", async () => {
     panel({
       tokens: withFontRole(TOKENS, "body", '"Inter", sans-serif'),
@@ -302,6 +345,24 @@ describe("removing a font in use", () => {
     expect(onRemoveFamily).not.toHaveBeenCalled();
   });
 
+  it("refuses a font the Body row draws as the fallback of a var() naming no site variable", async () => {
+    const onRemoveFamily = vi.fn(async () => undefined);
+    panel({
+      tokens: {
+        ...TOKENS,
+        siteText: { body: { fontFamily: "var(--unset, Lora), serif" } },
+      },
+      onRemoveFamily,
+    });
+    const open = await details("Lora");
+    fireEvent.click(within(open).getByRole("button", { name: "Remove" }));
+    expect(
+      within(open).getByRole("group", { name: "Lora can’t be removed" })
+        .textContent
+    ).toContain("Lora is your body font. Choose another body font first.");
+    expect(onRemoveFamily).not.toHaveBeenCalled();
+  });
+
   it("refuses a font the Body font's variable reads through another variable", async () => {
     const onRemoveFamily = vi.fn(async () => undefined);
     panel({
@@ -416,10 +477,13 @@ describe("using a font once it is added", () => {
   function Writable({
     onWrite,
     initial = TOKENS,
+    classes,
     edits,
   }: {
     onWrite: (tokens: SiteTokenSet) => void;
     initial?: SiteTokenSet;
+    /** The site's classes, where the text styles rows follow are. */
+    classes?: FontsPanelProps["classes"];
     /** Handed the way to write the variables, as another edit would. */
     edits?: (
       write: (next: (tokens: SiteTokenSet) => SiteTokenSet) => void
@@ -434,6 +498,7 @@ describe("using a font once it is added", () => {
       <FontsPanel
         faces={faces}
         tokens={tokens}
+        classes={classes}
         onAddFace={async request => {
           setFaces(current => [
             ...current,
@@ -625,6 +690,56 @@ describe("using a font once it is added", () => {
     act(() => options.action.onClick());
     const undone = onWrite.mock.lastCall?.[0] as SiteTokenSet;
     expect(fontRoleSetting(undone, "heading")).toEqual({ kind: "unset" });
+  });
+
+  it("says which rows follow a text style, so a role's font doesn't change them", async () => {
+    // Heading 1 and 2 follow Display and keep its font, as the Type tab does.
+    const display = {
+      id: "ts-display",
+      slug: "display",
+      label: "Display",
+      orderIndex: 0,
+      role: "text" as const,
+      styles: { base: { base: { fontFamily: '"Lora", serif' } } },
+    };
+    const onWrite = vi.fn();
+    render(
+      <Writable
+        onWrite={onWrite}
+        initial={{
+          ...TOKENS,
+          siteText: {
+            h1: { textStyle: "ts-display" },
+            h2: { textStyle: "ts-display" },
+          },
+        }}
+        classes={[display]}
+      />
+    );
+    await upload("Brand");
+    const note =
+      "Heading 1 and Heading 2 follow the text style “Display”, so a headings font doesn’t change them.";
+    const asked = screen.getByRole("group", { name: "Use Brand for:" });
+    expect(within(asked).getByText(note)).toBeTruthy();
+    fireEvent.click(within(asked).getByRole("button", { name: "Headings" }));
+    const [, options] = toasts.success.mock.lastCall as [
+      string,
+      { description?: string },
+    ];
+    expect(options.description).toBe(note);
+  });
+
+  it("says nothing of text styles where no row a role sets follows one", async () => {
+    render(<Writable onWrite={vi.fn()} />);
+    await upload("Brand");
+    const asked = screen.getByRole("group", { name: "Use Brand for:" });
+    expect(within(asked).queryByText(/text style/)).toBeNull();
+    fireEvent.click(within(asked).getByRole("button", { name: "Body" }));
+    const [, options] = toasts.success.mock.lastCall as [
+      string,
+      { description?: string },
+    ];
+    expect(options.description).toBeUndefined();
   });
 
   it("sets both for Both", async () => {

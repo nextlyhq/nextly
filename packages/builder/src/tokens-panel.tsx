@@ -83,15 +83,13 @@ import {
 } from "./tokens-studio";
 import { ADDS, AddRows, EmptyGroup, type OnAdd } from "./variable-adds";
 import { VariableRow } from "./variable-row";
-import {
-  combinedReach,
-  type VariableReach,
-  type VariablesAccess,
-} from "./variable-usage";
+import { useReachTogether } from "./variable-together-reads";
+import type { VariableReach, VariablesAccess } from "./variable-usage";
 import {
   useVariableUsage,
   type VariableUsageHere,
 } from "./variable-usage-view";
+import { VariablePreview } from "./variable-value-controls";
 import { useVariablesTransfer } from "./variables-transfer";
 
 /** A save's note to the author, and the way to read the variables again. */
@@ -108,6 +106,13 @@ export interface TokensPanelProps {
   tokens: SiteTokenSet | undefined;
   /** An edit. The host owns the site style and decides when to persist. */
   onChange: (tokens: SiteTokenSet) => void;
+  /**
+   * Draws a variable's value on the canvas while it is typed or picked,
+   * without storing it: the whole set with the value in it, or `null` once
+   * the edit ends, said before the edit's one `onChange`. Absent, a value is
+   * drawn once it is handed to `onChange`.
+   */
+  onPreview?: (tokens: SiteTokenSet | null) => void;
   /**
    * The author is still at work here: typing in a field before it commits.
    * For a host that waits for a pause before persisting, so a save is not
@@ -289,10 +294,16 @@ const PAGE_SIZE = 50;
 
 export function TokensPanel(props: TokensPanelProps): React.JSX.Element {
   const { header } = props;
-  if (header !== undefined) {
-    return <VariablesView {...props} header={header} placed={false} />;
-  }
-  return <OwnHeader {...props} />;
+  // The editors draw what is typed through the host's preview.
+  return (
+    <VariablePreview.Provider value={props.onPreview}>
+      {header === undefined ? (
+        <OwnHeader {...props} />
+      ) : (
+        <VariablesView {...props} header={header} placed={false} />
+      )}
+    </VariablePreview.Provider>
+  );
 }
 
 /** The view holding its header itself, where no host draws one. */
@@ -869,6 +880,12 @@ function useUsageOfRows(
   );
   const reads = useVariableUsage(access, identities);
   const { values, reread, readAgain } = reads;
+  // Each row's variables, counted together where it stands for two.
+  const rows = React.useMemo(
+    () => groups.flatMap(group => group.entries.map(rowIdentities)),
+    [groups]
+  );
+  const reachTogether = useReachTogether(access, rows, values);
   // The identities as of the latest render, read when a refusal arrives
   // rather than closed over, so the effect follows the issue alone.
   const listed = React.useRef(identities);
@@ -884,11 +901,12 @@ function useUsageOfRows(
         ? undefined
         : {
             reachOf: id => values.get(id),
+            reachTogether,
             readAgain,
             access,
             classes,
           },
-    [access, values, readAgain, classes]
+    [access, values, reachTogether, readAgain, classes]
   );
 }
 
@@ -905,7 +923,7 @@ function rowReach(
   usage: VariableUsageHere | undefined
 ): VariableReach | undefined {
   if (usage === undefined) return undefined;
-  return combinedReach(rowIdentities(entry).map(usage.reachOf));
+  return usage.reachTogether(rowIdentities(entry));
 }
 
 /** What shows while the variables are being read, or after a read failed. */

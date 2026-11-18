@@ -33,7 +33,10 @@ const panels = vi.hoisted(() => ({
 
 vi.mock("@nextlyhq/plugin-sdk/client", () => ({ useCan: () => calls.may }));
 
-vi.mock("../site-style-client", () => ({
+vi.mock("../site-style-client", async () => ({
+  // Outside an editor: no history, and nothing drawn over the read.
+  SiteStyleHistoryContext: (await import("react")).createContext(null),
+  SiteStylePreviewContext: (await import("react")).createContext(new Map()),
   // The catalogue a missing font is added from; no test here imports.
   useFontCatalogueClient: () => ({
     load: async () => ({ families: [], previewBase: "", fetchedAt: "" }),

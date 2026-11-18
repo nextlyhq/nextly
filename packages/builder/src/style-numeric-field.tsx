@@ -49,6 +49,7 @@ import {
   TextField,
   storedText,
   placeholderFor,
+  useTypesLive,
 } from "./style-text-field";
 import {
   focusVariableAfterPick,
@@ -528,8 +529,9 @@ function unlistedUnit(
 
 /**
  * The number field's value, offered to its row's label to drag: shown in the
- * field while the pointer is down, and written once on release through the
- * same commit as a typed value, so one drag is one undo step.
+ * field while the pointer is down, written as it moves where the panel writes
+ * as it is typed, and written on release through the same commit as a typed
+ * value, the whole drag one undo step.
  *
  * @returns the field's own commit for its text: a bare number given the unit
  *   the field shows ("24" is 24px), and nothing written while a drag owns the
@@ -556,6 +558,21 @@ function useNumericLabelScrub({
   const mode = useCanvasTokenMode();
   const commitText = (value: StyleValue | null): CommitOutcome =>
     onCommit(withDefaultUnit(control.leaf, value, unit));
+  const typesLive = useTypesLive();
+  const write = (value: string | number): void => {
+    commitDraft({
+      draft: String(value),
+      stored,
+      kind: control.kind,
+      leaf: control.leaf,
+      // A drag writes a quantity, never a variable's name, so no variable
+      // is matched against it.
+      tokens: undefined,
+      mode,
+      onCommit: commitText,
+      setDraft,
+    });
+  };
   const owning = useLabelScrub({
     origin: scrubOrigin(control.leaf, draft, unit, inherited),
     at: (from, delta) => scrubbedValue(control.leaf, from, delta),
@@ -569,19 +586,10 @@ function useNumericLabelScrub({
       setTyping(false);
       setDraft(storedText(stored));
     },
-    commit: value =>
-      commitDraft({
-        draft: String(value),
-        stored,
-        kind: control.kind,
-        leaf: control.leaf,
-        // A drag writes a quantity, never a variable's name, so no variable
-        // is matched against it.
-        tokens: undefined,
-        mode,
-        onCommit: commitText,
-        setDraft,
-      }),
+    commit: write,
+    // Through the same commit as the release, past the field's own writes,
+    // which wait while the drag owns the value.
+    ...(typesLive ? { preview: write } : {}),
   });
   // "refused" keeps the text on screen, which is the drag's live value.
   return value => (owning() ? "refused" : commitText(value));
