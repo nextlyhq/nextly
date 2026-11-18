@@ -47,6 +47,14 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
       }),
     ],
     singles: [
+      // A Single whose translated field has a default, written when a read first creates it.
+      defineSingle({
+        slug: "promo",
+        localized: true,
+        fields: [
+          text({ name: "tagline", localized: true, defaultValue: "Sale" }),
+        ],
+      }),
       defineSingle({
         slug: "notice",
         localized: true,
@@ -140,6 +148,248 @@ describe.each(getConfiguredTestDialects())(
       expect(retranslated.es.fields?.title).toMatchObject({
         outOfDate: false,
       });
+    });
+
+    it("marks a copy out of date when its source moved between the copy and the save", async () => {
+      // A copy names the source language's version it was read at. English moved from "Hello" to
+      // "Goodbye" after it was copied and before the copy was saved, so the copy was made from a
+      // source that is no longer the one recorded: it must read as out of date, not up to date.
+      await boot(dialect);
+      const created = (await t!.nextly.create({
+        collection: "posts",
+        locale: "en",
+        data: { title: "Hello", summary: "Short" },
+      })) as unknown as { item: { id: string } };
+      const id = created.item.id;
+      const englishRead = await handler().getEntry({
+        collectionName: "posts",
+        entryId: id,
+        locale: "en",
+        overrideAccess: true,
+      });
+      const copiedAt = (englishRead.data as Record<string, unknown>)._rev;
+      expect(typeof copiedAt).toBe("string");
+
+      // A copy saved while its source is as it was read: up to date.
+      await save(id, "fr", {
+        title: "Hello",
+        _provenance: {
+          title: {
+            origin: "copy",
+            sourceLocale: "en",
+            sourceRevision: copiedAt,
+          },
+        },
+      });
+      expect((await overviewOf(id)).fr.fields?.title).toMatchObject({
+        origin: "copy",
+        outOfDate: false,
+      });
+
+      await save(id, "en", { title: "Goodbye" });
+      await save(id, "es", {
+        title: "Hello",
+        _provenance: {
+          title: {
+            origin: "copy",
+            sourceLocale: "en",
+            sourceRevision: copiedAt,
+          },
+        },
+      });
+      const overview = await overviewOf(id);
+      expect(overview.es.fields?.title).toMatchObject({
+        origin: "copy",
+        outOfDate: true,
+      });
+      expect(overview.es.stale).toBe(true);
+
+      // Copied again from English as it now stands: up to date again.
+      const englishNow = (
+        (
+          await handler().getEntry({
+            collectionName: "posts",
+            entryId: id,
+            locale: "en",
+            overrideAccess: true,
+          })
+        ).data as Record<string, unknown>
+      )._rev;
+      await save(id, "es", {
+        title: "Goodbye",
+        _provenance: {
+          title: {
+            origin: "copy",
+            sourceLocale: "en",
+            sourceRevision: englishNow,
+          },
+        },
+      });
+      expect((await overviewOf(id)).es.fields?.title).toMatchObject({
+        origin: "copy",
+        outOfDate: false,
+      });
+
+      // A copy that doesn't say which version of its source it read can't be shown to be of the
+      // source as it is: out of date until it is copied again.
+      await save(id, "es", {
+        summary: "Short",
+        _provenance: { summary: { origin: "copy", sourceLocale: "en" } },
+      });
+      expect((await overviewOf(id)).es.fields?.summary).toMatchObject({
+        origin: "copy",
+        outOfDate: true,
+      });
+
+      // A version that is not one is refused before anything is written.
+      const refused = await handler().updateEntry(
+        {
+          collectionName: "posts",
+          entryId: id,
+          overrideAccess: true,
+          locale: "es",
+          user: { id: "ann" },
+        },
+        {
+          title: "Hola",
+          _overwrite: true,
+          _provenance: {
+            title: {
+              origin: "copy",
+              sourceLocale: "en",
+              sourceRevision: "not a version",
+            },
+          },
+        }
+      );
+      expect(refused).toMatchObject({ success: false, statusCode: 400 });
+    });
+
+    it("marks a Single's copy out of date when its source moved between the copy and the save", async () => {
+      await boot(dialect);
+      const singles = container.get<SingleEntryService>("singleEntryService");
+      await singles.update(
+        "notice",
+        { headline: "Hello", status: "published", _overwrite: true },
+        { overrideAccess: true, locale: "en" }
+      );
+      const englishRead = await singles.get("notice", {
+        overrideAccess: true,
+        locale: "en",
+      });
+      const copiedAt = (englishRead.data as Record<string, unknown>)._rev;
+      expect(typeof copiedAt).toBe("string");
+      await singles.update(
+        "notice",
+        { headline: "Goodbye", status: "published", _overwrite: true },
+        { overrideAccess: true, locale: "en" }
+      );
+      await singles.update(
+        "notice",
+        {
+          headline: "Hello",
+          status: "published",
+          _overwrite: true,
+          _provenance: {
+            headline: {
+              origin: "copy",
+              sourceLocale: "en",
+              sourceRevision: copiedAt,
+            },
+          },
+        },
+        { overrideAccess: true, locale: "es" }
+      );
+      const read = await singles.get("notice", {
+        overrideAccess: true,
+        translationStatus: true,
+      });
+      const overview = (read.data as Record<string, unknown>)
+        ._translations as Record<string, LocaleTranslationMeta>;
+      expect(overview.es.fields?.headline).toMatchObject({
+        origin: "copy",
+        outOfDate: true,
+      });
+      expect(overview.es.stale).toBe(true);
+
+      // Copied again from English as it now stands, then a copy that names no version.
+      const englishNow = (
+        (await singles.get("notice", { overrideAccess: true, locale: "en" }))
+          .data as Record<string, unknown>
+      )._rev;
+      const copyAt = async (sourceRevision: unknown) => {
+        await singles.update(
+          "notice",
+          {
+            headline: "Goodbye",
+            status: "published",
+            _overwrite: true,
+            _provenance: {
+              headline: {
+                origin: "copy",
+                sourceLocale: "en",
+                ...(sourceRevision === undefined ? {} : { sourceRevision }),
+              },
+            },
+          },
+          { overrideAccess: true, locale: "es" }
+        );
+        const again = await singles.get("notice", {
+          overrideAccess: true,
+          translationStatus: true,
+        });
+        return (
+          (again.data as Record<string, unknown>)._translations as Record<
+            string,
+            LocaleTranslationMeta
+          >
+        ).es.fields?.headline;
+      };
+      expect(await copyAt(englishNow)).toMatchObject({ outOfDate: false });
+      expect(await copyAt(undefined)).toMatchObject({ outOfDate: true });
+    });
+
+    it("marks a translation of a Single's default out of date once the default changes", async () => {
+      // A read creates the Single with its default in the default language. That value is the
+      // source a translation is made from, so it is recorded with it: changed later, the
+      // translation made from it reads out of date, field by field.
+      await boot(dialect);
+      const singles = container.get<SingleEntryService>("singleEntryService");
+      const created = await singles.get("promo", {
+        overrideAccess: true,
+        locale: "en",
+      });
+      expect((created.data as Record<string, unknown>).tagline).toBe("Sale");
+      await singles.update(
+        "promo",
+        { tagline: "Rebajas", _overwrite: true },
+        { overrideAccess: true, locale: "es" }
+      );
+      await singles.update(
+        "promo",
+        { tagline: "Big sale", _overwrite: true },
+        { overrideAccess: true, locale: "en" }
+      );
+      const read = await singles.get("promo", {
+        overrideAccess: true,
+        translationStatus: true,
+      });
+      const overview = (read.data as Record<string, unknown>)
+        ._translations as Record<string, LocaleTranslationMeta>;
+      expect(overview.es.fields?.tagline).toMatchObject({ outOfDate: true });
+    });
+
+    it("never marks a field its language has cleared", async () => {
+      // A cleared translation has no value of its own to fall out of date: the language reads the
+      // field from another one. Its source changing says nothing about the language.
+      await boot(dialect);
+      const id = await translatedPost();
+      await save(id, "es", { summary: "" });
+      await save(id, "en", { summary: "Brief" });
+      const overview = await overviewOf(id);
+      expect(overview.es.stale).toBeUndefined();
+      expect(overview.es.fields?.summary).toBeUndefined();
+      expect(overview.es.fields?.title).toMatchObject({ outOfDate: false });
     });
 
     it("never marks a value written originally in its language", async () => {

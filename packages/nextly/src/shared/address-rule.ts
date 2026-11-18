@@ -264,6 +264,20 @@ function* tableNameRefusals(
   }
 }
 
+/**
+ * Whether `value` is spelled as an address may be: a string the slug grammar
+ * takes, no longer than the product accepts. Only the spelling: an address the
+ * rule keeps for Nextly itself (`users`, say) is still spelled as one, so a
+ * reference to an existing entity may name it.
+ */
+export function isAddressSpelling(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    SLUG_PATTERN.test(value) &&
+    value.length <= MAX_SLUG_LENGTH
+  );
+}
+
 /** The rule's verdict on a new or changed address: its first refusal, or `null`. */
 export function judgeAddress(
   kind: AddressKind,

@@ -74,7 +74,15 @@ export {
 export { PageRenderer } from "./page-renderer";
 // The page outline a page's blocks read as `ctx.outline`: every heading it
 // draws, with the anchor each is drawn with.
-export type { OutlineArea, OutlineHeading, PageOutline } from "./outline";
+export type {
+  OutlineArea,
+  OutlineHeading,
+  OutlinePart,
+  PageOutline,
+} from "./outline";
+// The same reading for a caller judging a page's headings without drawing
+// it, such as the editor's page checks.
+export { pageOutline } from "./outline";
 export type { HeadingRank } from "./blocks/heading-anchors";
 // A simple form's fields with their defaults applied, their sent names among
 // them, for the editor to show the name a field's answer goes under.
@@ -176,6 +184,28 @@ export { withTypographyDefaults } from "./blocks/typography-defaults";
  * keeping what visitors see, asks the same question the image block does.
  */
 export { fetchableUrl } from "./blocks/props";
+/**
+ * Which provider an Embed's link is from, by the block's own table: exported
+ * so the editor, which says what it found as a link is pasted and sizes the
+ * block from it, and the thumbnail copy, which fetches only from the
+ * provider's fixed host, answer from the table the block renders by.
+ *
+ * @experimental
+ */
+export {
+  detectEmbed,
+  type EmbedMatch,
+  type EmbedProviderId,
+  type EmbedShape,
+  type ThumbnailSource,
+} from "./blocks/embed-providers";
+/**
+ * The attribute on the box an Embed with no link draws on the editor's
+ * canvas, which the editor draws its link field over.
+ *
+ * @experimental
+ */
+export { EMBED_EMPTY_ATTRIBUTE } from "./blocks/embed";
 /**
  * What a click on a picture does, by the Image's one reading of its props:
  * exported so the editor's panel shows the choice the render follows.

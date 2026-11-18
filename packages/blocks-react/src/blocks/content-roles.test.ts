@@ -44,7 +44,7 @@ const CONTENT: Record<string, readonly string[]> = {
     "entryId",
   ],
   "core/list": ["items"],
-  "core/embed": ["src", "title"],
+  "core/embed": ["poster", "src", "title"],
   "core/accordion-item": ["title"],
   "core/form": ["entryCollection", "entryId", "href", "message", "submitText"],
 };

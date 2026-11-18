@@ -15,12 +15,15 @@
 import { createHash, randomUUID } from "node:crypto";
 
 import type {
+  SupportedDialect,
   WhereClause,
   WhereCondition,
 } from "@nextlyhq/adapter-drizzle/types";
+import { walkNodes, type BlockNode } from "@nextlyhq/blocks-engine";
 
 import type { RequestActor } from "../../../auth/request-actor";
 import {
+  SOURCE_FINGERPRINT_MOVED,
   TRANSLATION_PROVENANCE_FIELD_PATH_LENGTH,
   TRANSLATION_PROVENANCE_ROW_SEPARATOR as ROW_PATH_SEPARATOR,
   TRANSLATION_PROVENANCE_TABLE,
@@ -34,8 +37,17 @@ import {
   type DashboardLogger,
   type TableProbe,
 } from "../../dashboard/table-presence";
+import {
+  readLanguageRevisions,
+  type SelectsRows,
+} from "../../versions/document-revision";
+import { languageCounterInVersion } from "../../versions/stale-version";
 
-import type { ProvenanceClaim, ProvenanceClaims } from "./provenance-claims";
+import {
+  ownEntry,
+  type ProvenanceClaim,
+  type ProvenanceClaims,
+} from "./provenance-claims";
 
 /** The surface of a transaction recording reads and writes through. */
 export interface ProvenanceDb {
@@ -62,6 +74,17 @@ export interface ProvenanceWrite {
   partState: ProvenancePartState;
   /** The values written, by field name. */
   values: Readonly<Record<string, unknown>>;
+  /**
+   * The fields among `values` whose storage is JSON, which some databases hand back as text: only
+   * their text is read back to the value it encodes. Any other field's text is the value.
+   */
+  jsonFields?: ReadonlySet<string>;
+  /**
+   * Each of the document's languages' counters as they stand, read on the write's transaction:
+   * what a copy's `sourceRevision` is compared with. Absent, no copy can be shown to come from
+   * the source as it is.
+   */
+  languageRevisions?: ReadonlyMap<string, number>;
   /** The site's default language: the source every other language is made from. */
   defaultLocale: string;
   savedBy?: RequestActor;
@@ -102,21 +125,26 @@ export function translationProvenancePresent(
 /**
  * A sha256 of a value as it was written, the same on every dialect. A write hands its values on
  * as the store will keep them, so each is read back to what it was first: a date as its ISO
- * string (canonical JSON would make every date `{}`), and a JSON object or array kept as text as
- * the value it encodes (so its keys are put in order, not compared as written).
+ * string (canonical JSON would make every date `{}`), and, for a field whose storage is JSON
+ * (`storedAsJson`), an object or array kept as text as the value it encodes (so its keys are put
+ * in order, not compared as written). Any other text is the value itself: a text field holding
+ * `[1, 2]` and then `[1,2]` has changed.
  */
-export function valueFingerprint(value: unknown): string {
+export function valueFingerprint(value: unknown, storedAsJson = false): string {
   return createHash("sha256")
-    .update(canonicalJson(writtenValueOf(value ?? null)) ?? "", "utf8")
+    .update(
+      canonicalJson(writtenValueOf(value ?? null, storedAsJson)) ?? "",
+      "utf8"
+    )
     .digest("hex");
 }
 
 /** A stored value read back to the value written; see {@link valueFingerprint}. */
-function writtenValueOf(value: unknown): unknown {
+function writtenValueOf(value: unknown, storedAsJson: boolean): unknown {
   if (value instanceof Date) {
     return Number.isNaN(value.getTime()) ? null : value.toISOString();
   }
-  if (typeof value === "string") {
+  if (storedAsJson && typeof value === "string") {
     const text = value.trim();
     if (text.startsWith("{") || text.startsWith("[")) {
       try {
@@ -127,6 +155,23 @@ function writtenValueOf(value: unknown): unknown {
     }
   }
   return value;
+}
+
+/**
+ * Whether a copy was made from its source language as that language now stands: it says which
+ * version of the source it read (`sourceRevision`), and the source's counter has not moved since.
+ * A copy that does not say cannot be shown to, so it is not.
+ */
+function copiedFromCurrentSource(
+  claim: Extract<ProvenanceClaim, { origin: "copy" }>,
+  write: ProvenanceWrite
+): boolean {
+  if (claim.sourceRevision === undefined) return false;
+  const now = write.languageRevisions?.get(claim.sourceLocale);
+  return (
+    now !== undefined &&
+    languageCounterInVersion(claim.sourceRevision, claim.sourceLocale) === now
+  );
 }
 
 /** The origin a write without a claim gives a value, from who wrote it. */
@@ -195,6 +240,25 @@ function fieldOrigin(
   };
 }
 
+/**
+ * The fingerprint `field`'s value was made from: its source language's live one, or, for a copy
+ * not made from the source as it now stands, {@link SOURCE_FINGERPRINT_MOVED}, which reads as out
+ * of date until the value is made again from the source as it is.
+ */
+function sourceFingerprintOf(
+  write: ProvenanceWrite,
+  field: string,
+  origin: FieldOrigin,
+  sources: ReadonlyMap<string, ReadonlyMap<string, string>>
+): string | null {
+  if (origin.sourceLocale === null) return null;
+  const claim = ownEntry(write.claims, field);
+  if (claim?.origin === "copy" && !copiedFromCurrentSource(claim, write)) {
+    return SOURCE_FINGERPRINT_MOVED;
+  }
+  return sources.get(origin.sourceLocale)?.get(field) ?? null;
+}
+
 /** The rows of one document's language and part, matched by these columns. */
 function documentWhere(
   write: Pick<ProvenanceWrite, "scopeKind" | "scopeSlug" | "entryId">,
@@ -241,9 +305,57 @@ async function recordTranslationProvenance(
   const fields = Object.keys(write.values);
   if (fields.length === 0) return;
   const origins = new Map(
-    fields.map(field => [field, fieldOrigin(write, write.claims?.[field])])
+    fields.map(field => [
+      field,
+      fieldOrigin(write, ownEntry(write.claims, field)),
+    ])
   );
-  // Each source language's fingerprints, read once for every field made from it.
+  const sources = await sourceFingerprints(db, write, origins);
+  const existing = await recordedPaths(db, write);
+  const upsert = upsertInto(db, write, existing);
+  const writtenAt = write.now ?? new Date();
+  for (const [field, origin] of origins) {
+    // A translation cleared has no value of its own: its language reads the field from another,
+    // so it keeps no record that could put the language out of date. The default language keeps
+    // its record, cleared or not: it is the source, and its translations follow it.
+    if (
+      write.locale !== write.defaultLocale &&
+      isBlankValue(write.values[field])
+    ) {
+      await forgetField(db, field, existing);
+      continue;
+    }
+    const values = {
+      valueFingerprint: valueFingerprint(
+        write.values[field],
+        write.jsonFields?.has(field) === true
+      ),
+      origin: origin.origin,
+      engine: origin.engine,
+      ...actorColumns(write.savedBy),
+      sourceLocale: origin.sourceLocale,
+      sourceFingerprint: sourceFingerprintOf(write, field, origin, sources),
+      originRowId: null,
+      writtenAt,
+    };
+    await upsert(field, values);
+    await recordRowOrigins(db, {
+      field,
+      value: write.values[field],
+      claim: ownEntry(write.claims, field),
+      fieldValues: values,
+      existing,
+      upsert,
+    });
+  }
+}
+
+/** Each source language's live fingerprints, read once for every field made from it. */
+async function sourceFingerprints(
+  db: ProvenanceDb,
+  write: ProvenanceWrite,
+  origins: ReadonlyMap<string, FieldOrigin>
+): Promise<Map<string, Map<string, string>>> {
   const sources = new Map<string, Map<string, string>>();
   for (const { sourceLocale } of origins.values()) {
     if (sourceLocale !== null && !sources.has(sourceLocale)) {
@@ -253,22 +365,34 @@ async function recordTranslationProvenance(
       );
     }
   }
-  const existing = new Map(
-    (
-      await db.select<{ id: string; fieldPath: string }>(
-        TRANSLATION_PROVENANCE_TABLE,
-        {
-          columns: ["id", "fieldPath"],
-          where: documentWhere(write, write.locale, write.partState),
-        }
-      )
-    ).map(row => [row.fieldPath, row.id])
+  return sources;
+}
+
+/** The records the write's language and part already has, each one's id by its path. */
+async function recordedPaths(
+  db: ProvenanceDb,
+  write: ProvenanceWrite
+): Promise<Map<string, string>> {
+  const rows = await db.select<{ id: string; fieldPath: string }>(
+    TRANSLATION_PROVENANCE_TABLE,
+    {
+      columns: ["id", "fieldPath"],
+      where: documentWhere(write, write.locale, write.partState),
+    }
   );
-  const writtenAt = write.now ?? new Date();
-  const upsert = async (
-    fieldPath: string,
-    values: Record<string, unknown>
-  ): Promise<void> => {
+  return new Map(rows.map(row => [row.fieldPath, row.id]));
+}
+
+/**
+ * Writes one record of `write`'s language and part: over the one `existing` names for its path,
+ * or as a new one.
+ */
+function upsertInto(
+  db: ProvenanceDb,
+  write: ProvenanceWrite,
+  existing: ReadonlyMap<string, string>
+): (fieldPath: string, values: Record<string, unknown>) => Promise<void> {
+  return async (fieldPath, values) => {
     const id = existing.get(fieldPath);
     if (id !== undefined) {
       await db.updateCount(TRANSLATION_PROVENANCE_TABLE, values, {
@@ -287,30 +411,22 @@ async function recordTranslationProvenance(
       ...values,
     });
   };
-  for (const [field, origin] of origins) {
-    const values = {
-      valueFingerprint: valueFingerprint(write.values[field]),
-      origin: origin.origin,
-      engine: origin.engine,
-      ...actorColumns(write.savedBy),
-      sourceLocale: origin.sourceLocale,
-      sourceFingerprint:
-        origin.sourceLocale === null
-          ? null
-          : (sources.get(origin.sourceLocale)?.get(field) ?? null),
-      originRowId: null,
-      writtenAt,
-    };
-    await upsert(field, values);
-    await recordRowOrigins(db, {
-      field,
-      value: write.values[field],
-      claim: write.claims?.[field],
-      fieldValues: values,
-      existing,
-      upsert,
-    });
-  }
+}
+
+/** Removes `field`'s record and its rows' records, of those `existing` names. */
+async function forgetField(
+  db: ProvenanceDb,
+  field: string,
+  existing: ReadonlyMap<string, string>
+): Promise<void> {
+  const prefix = `${field}${ROW_PATH_SEPARATOR}`;
+  const forgotten = [...existing]
+    .filter(([path]) => path === field || path.startsWith(prefix))
+    .map(([, id]) => id);
+  if (forgotten.length === 0) return;
+  await db.delete(TRANSLATION_PROVENANCE_TABLE, {
+    and: [{ column: "id", op: "IN", value: forgotten }],
+  });
 }
 
 /**
@@ -335,7 +451,8 @@ async function recordRowOrigins(
   }
 ): Promise<void> {
   const prefix = `${args.field}${ROW_PATH_SEPARATOR}`;
-  const rows = rowsOf(writtenValueOf(args.value));
+  // A structure per language is stored as JSON: its value may arrive as text.
+  const rows = rowsOf(writtenValueOf(args.value, true));
   const claimedRows =
     args.claim !== undefined && "rows" in args.claim
       ? (args.claim.rows ?? {})
@@ -344,11 +461,12 @@ async function recordRowOrigins(
     const fieldPath = `${prefix}${rowId}`;
     if (fieldPath.length > TRANSLATION_PROVENANCE_FIELD_PATH_LENGTH) continue;
     const originRowId =
-      claimedRows[rowId] ?? (args.claim?.origin === "copy" ? rowId : undefined);
+      ownEntry(claimedRows, rowId) ??
+      (args.claim?.origin === "copy" ? rowId : undefined);
     if (originRowId === undefined) continue;
     await args.upsert(fieldPath, {
       ...args.fieldValues,
-      valueFingerprint: valueFingerprint(row),
+      valueFingerprint: valueFingerprint(row, true),
       // A row's own source value is not recorded: its row is.
       sourceFingerprint: null,
       originRowId,
@@ -367,17 +485,30 @@ async function recordRowOrigins(
   }
 }
 
-/** The rows of a structured value that carry an id, by id. */
+/**
+ * The rows of a structured value that carry an id, by id: a repeater's items, or a block
+ * document's nodes, a container's nested nodes included, read with the one walk every block
+ * reader takes (`walkNodes`).
+ */
 function rowsOf(value: unknown): Map<string, unknown> {
   const rows = new Map<string, unknown>();
-  if (!Array.isArray(value)) return rows;
-  for (const row of value) {
+  const keep = (row: unknown) => {
     const id =
       typeof row === "object" && row !== null
         ? (row as { id?: unknown }).id
         : undefined;
     if (typeof id === "string" && id !== "") rows.set(id, row);
+  };
+  if (Array.isArray(value)) {
+    for (const row of value) keep(row);
+    return rows;
   }
+  const nodes =
+    typeof value === "object" && value !== null
+      ? (value as { nodes?: unknown }).nodes
+      : undefined;
+  // The walk skips an entry that is no node, as every reader of a stored document does.
+  if (Array.isArray(nodes)) walkNodes(nodes as BlockNode[], keep);
   return rows;
 }
 
@@ -392,34 +523,78 @@ export interface ProvenancePromotion {
 /**
  * Puts a language's working draft's provenance live, on `db`, the publish's own transaction: each
  * drafted field's live row gives way to the draft's, which keeps the origin the draft was saved
- * with, so a value claimed on a held save keeps its claim once it is published. Answers the fields
- * it moved: a value going live that its draft recorded nothing for is the caller's to record.
+ * with, so a value claimed on a held save keeps its claim once it is published. A value going live
+ * that no record then describes is the caller's to record.
  *
  * @experimental
  */
 async function promoteDraftProvenance(
   db: ProvenanceDb,
   promotion: ProvenancePromotion
-): Promise<ReadonlySet<string>> {
+): Promise<void> {
   const drafted = (
     await db.select<{ fieldPath: string }>(TRANSLATION_PROVENANCE_TABLE, {
       columns: ["fieldPath"],
       where: documentWhere(promotion, promotion.locale, "draft"),
     })
   ).map(row => row.fieldPath);
-  if (drafted.length === 0) return new Set();
-  await db.delete(TRANSLATION_PROVENANCE_TABLE, {
-    and: [
-      ...documentWhere(promotion, promotion.locale, "live").and,
-      { column: "fieldPath", op: "IN", value: drafted },
-    ],
-  });
+  if (drafted.length === 0) return;
+  // Each drafted field's live records give way, its rows' records included: a row the draft no
+  // longer has has no record in the draft, and its live one would outlive the row.
+  const draftedFields = new Set(
+    drafted.filter(path => !path.includes(ROW_PATH_SEPARATOR))
+  );
+  const live = await db.select<{ id: string; fieldPath: string }>(
+    TRANSLATION_PROVENANCE_TABLE,
+    {
+      columns: ["id", "fieldPath"],
+      where: documentWhere(promotion, promotion.locale, "live"),
+    }
+  );
+  const replaced = live
+    .filter(
+      row =>
+        drafted.includes(row.fieldPath) ||
+        draftedFields.has(row.fieldPath.split(ROW_PATH_SEPARATOR)[0])
+    )
+    .map(row => row.id);
+  if (replaced.length > 0) {
+    await db.delete(TRANSLATION_PROVENANCE_TABLE, {
+      and: [{ column: "id", op: "IN", value: replaced }],
+    });
+  }
   await db.updateCount(
     TRANSLATION_PROVENANCE_TABLE,
     { partState: "live" },
     documentWhere(promotion, promotion.locale, "draft")
   );
-  return new Set(drafted);
+}
+
+/**
+ * The document's languages' counters as they stand, read on `db` (the write's transaction) when a
+ * write claims a copy, for {@link ProvenanceWrite.languageRevisions}; undefined when none does, or
+ * when the document keeps no translations to count.
+ */
+export async function copySourceRevisions(
+  db: SelectsRows,
+  args: {
+    dialect: SupportedDialect;
+    languagesTable: string | null;
+    entryId: string;
+    claims: ProvenanceClaims | undefined;
+  }
+): Promise<ReadonlyMap<string, number> | undefined> {
+  const copies = Object.values(args.claims ?? {}).some(
+    claim => claim.origin === "copy"
+  );
+  if (!copies || args.languagesTable === null) return undefined;
+  const counters = await readLanguageRevisions(db, {
+    dialect: args.dialect,
+    table: args.languagesTable,
+    ids: [args.entryId],
+  });
+  // A language with no translation row yet holds no counter: it reads as 0, as a version does.
+  return counters.get(args.entryId) ?? new Map<string, number>();
 }
 
 /** A write's values and, where it puts a held draft live, that it does. */
@@ -442,40 +617,93 @@ export async function recordWrittenValues(
 ): Promise<void> {
   let values = write.values;
   if (write.promotesDraft === true) {
-    const moved = await promoteDraftProvenance(db, write);
-    // The draft's values are the whole language, untouched fields included: a field the draft
-    // recorded nothing for keeps the live record it has. Only a value with none at all (a draft
-    // held before recording began) is recorded as this write's, and a blank one never is.
-    const live = await recordedFields(db, write, "live");
+    await promoteDraftProvenance(db, write);
+    // The draft's values are the whole language, untouched fields included, and the publish may
+    // give a field a value of its own over the draft's. Read once the draft's records are live: a
+    // field keeps its live record (the draft's, with its claim, or the one it had) while its value
+    // is the one that record describes. A value no record describes (one the publish gave, or one
+    // a draft held before recording began changed) is recorded as this write's, so a live record
+    // never describes a value it replaced; a blank one never is.
+    const live = await liveFingerprints(db, write, write.locale);
     values = Object.fromEntries(
-      Object.entries(values).filter(
-        ([field, value]) =>
-          !moved.has(field) && !live.has(field) && !isBlankValue(value)
-      )
+      Object.entries(values).filter(([field, value]) => {
+        if (isBlankValue(value)) return false;
+        const recorded = live.get(field);
+        return (
+          recorded === undefined ||
+          recorded !==
+            valueFingerprint(value, write.jsonFields?.has(field) === true)
+        );
+      })
     );
   }
   await recordTranslationProvenance(db, { ...write, values });
 }
 
-/** The fields one document's language and part has a row for. */
-async function recordedFields(
-  db: ProvenanceDb,
-  write: ProvenanceWrite,
-  partState: ProvenancePartState
-): Promise<ReadonlySet<string>> {
-  const rows = await db.select<{ fieldPath: string }>(
-    TRANSLATION_PROVENANCE_TABLE,
-    {
-      columns: ["fieldPath"],
-      where: documentWhere(write, write.locale, partState),
-    }
-  );
-  return new Set(rows.map(row => row.fieldPath));
-}
-
 /** A value that holds nothing translated: absent, null or an empty string. */
 function isBlankValue(value: unknown): boolean {
   return value === undefined || value === null || value === "";
+}
+
+/**
+ * Moves one entity's records of a renamed translated field to its new name, on `db`: the field's
+ * own records, and each row's record in a field with a structure per language (`<field>#<row id>`).
+ * A record is kept by field name, so left under the old one every value of the renamed field would
+ * read as of unknown origin, and none could be found out of date. A row's record whose new path
+ * no longer fits the column is dropped, as recording skips one. Nothing is done until the table is
+ * there.
+ *
+ * @experimental
+ */
+export async function renameFieldProvenance(
+  db: ProvenanceDb & { tableExists(table: string): Promise<boolean> },
+  rename: {
+    scopeKind: ProvenanceScopeKind;
+    scopeSlug: string;
+    from: string;
+    to: string;
+  }
+): Promise<void> {
+  if (rename.from === rename.to) return;
+  if (!(await db.tableExists(TRANSLATION_PROVENANCE_TABLE))) return;
+  const scope: WhereCondition[] = [
+    { column: "scopeKind", op: "=", value: rename.scopeKind },
+    { column: "scopeSlug", op: "=", value: rename.scopeSlug },
+  ];
+  await db.updateCount(
+    TRANSLATION_PROVENANCE_TABLE,
+    { fieldPath: rename.to },
+    { and: [...scope, { column: "fieldPath", op: "=", value: rename.from }] }
+  );
+  // A row's path is the field's with the row id after it. LIKE narrows the read; the prefix is
+  // checked again here, since a field name may hold `_`, which LIKE takes as any character.
+  const prefix = `${rename.from}${ROW_PATH_SEPARATOR}`;
+  const rows = await db.select<{ id: string; fieldPath: string }>(
+    TRANSLATION_PROVENANCE_TABLE,
+    {
+      columns: ["id", "fieldPath"],
+      where: {
+        and: [
+          ...scope,
+          { column: "fieldPath", op: "LIKE", value: `${prefix}%` },
+        ],
+      },
+    }
+  );
+  for (const row of rows) {
+    if (!row.fieldPath.startsWith(prefix)) continue;
+    const moved = `${rename.to}${ROW_PATH_SEPARATOR}${row.fieldPath.slice(prefix.length)}`;
+    const where = { and: [{ column: "id", op: "=" as const, value: row.id }] };
+    if (moved.length > TRANSLATION_PROVENANCE_FIELD_PATH_LENGTH) {
+      await db.delete(TRANSLATION_PROVENANCE_TABLE, where);
+      continue;
+    }
+    await db.updateCount(
+      TRANSLATION_PROVENANCE_TABLE,
+      { fieldPath: moved },
+      where
+    );
+  }
 }
 
 /**

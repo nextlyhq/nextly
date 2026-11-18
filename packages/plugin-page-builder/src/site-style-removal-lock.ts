@@ -91,6 +91,7 @@
  *
  * @module site-style-removal-lock
  */
+import { isPlainRecord } from "@nextlyhq/blocks-engine";
 import {
   NextlyError,
   type InTransactionContext,
@@ -115,6 +116,7 @@ import {
   SITE_STYLE_SLUG,
   droppedSharedStyles,
   droppedVariables,
+  sharedStyleName,
   sharedStylesOverCode,
   siteTokensOverCode,
   undefinedSharedStyleVariables,
@@ -122,6 +124,8 @@ import {
   variableGuardsJudge,
   type NamedVariable,
 } from "./site-style-storage";
+import { textStyleReasons } from "./site-text-uses";
+import { readStoredJson } from "./stored-json";
 import { variablesAsked, type VariablesAsked } from "./token-usage";
 import { sharedStyleReasons, variableReasons } from "./variables-routes";
 import { readWithinOrRefuse, type UnreadReason } from "./within-time";
@@ -233,6 +237,10 @@ export async function refuseRemovalsInUse(
       )
     : [];
   if (variables.length === 0 && classes.length === 0) return;
+  // A Site text row the write leaves following a text style it drops, judged
+  // from the Single as this write leaves it, before the lock: no page is
+  // asked, and the remove route refuses with the same words.
+  await refuseFollowedTextStyles(classes, before?.classes, setup, section);
   // The variables asked as the Single, as this write leaves it, writes them.
   const asked = variablesAsked(
     variables,
@@ -294,6 +302,35 @@ export async function refuseRemovalsInUse(
       { uses: () => Promise.resolve(found.classes) },
       "classIds"
     );
+  }
+}
+
+/**
+ * Refuse dropping a text style a Site text row still follows, the code's
+ * rows included, naming each row. `stored` is the classes section before the
+ * write, read for the dropped styles' names.
+ */
+async function refuseFollowedTextStyles(
+  dropped: readonly string[],
+  stored: unknown,
+  setup: SiteStyleRemovalLockSetup,
+  section: SectionAfter
+): Promise<void> {
+  if (dropped.length === 0) return;
+  const read = readStoredJson(stored);
+  const entries = Array.isArray(read) ? read : [];
+  const removable = dropped.map(id => {
+    const entry: unknown = entries.find(
+      candidate => isPlainRecord(candidate) && candidate.id === id
+    );
+    return { id, name: isPlainRecord(entry) ? sharedStyleName(entry) : id };
+  });
+  const reasons = textStyleReasons(
+    removable,
+    siteTokensOverCode(setup.defaults(), await section("tokens"))
+  );
+  if (reasons.length > 0) {
+    throw removalRefusalOf(reasons, { classIds: [...dropped] });
   }
 }
 

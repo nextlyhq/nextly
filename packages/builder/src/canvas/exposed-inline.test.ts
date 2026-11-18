@@ -119,6 +119,17 @@ describe("composedTextAt", () => {
     );
   });
 
+  it("answers exposed text the placement binds to data as part of it, edited in the panel", () => {
+    const { document, composed, headingOf } = setUp(
+      placed("p1", {
+        bindings: { "overrides.title": { $bind: "title", source: "entry" } },
+      })
+    );
+    expect(composedTextAt(document, composed, headingOf("p1"), "text")).toEqual(
+      { kind: "part-of", placementId: "p1" }
+    );
+  });
+
   it("answers text the component does not expose as part of it", () => {
     const { document, composed, headingOf } = setUp(placed("p1"));
     expect(

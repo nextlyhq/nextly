@@ -72,6 +72,7 @@ import {
 } from "./registry-history";
 import { removeRegistryRow } from "./registry-row-removal";
 import type { RegistrySource } from "./registry-source";
+import { topLevelFieldNames } from "./top-level-field-names";
 
 export interface RegistryWriteDeps {
   adapter: DrizzleAdapter;
@@ -158,14 +159,20 @@ export interface RowBehindSource {
  */
 export async function rowsBehindSource(
   source: Extract<RegistrySource, { kind: "snapshot" }>,
-  deps: RegistryWriteDeps
+  deps: RegistryWriteDeps,
+  /**
+   * The rows to judge against, in place of the ones the registry holds now:
+   * the rows a registry record kept. Given, no registry table is read.
+   */
+  against?: RowsBySlug
 ): Promise<{ behind: RowBehindSource[]; failed: string[] }> {
   const chain = source.chain ?? [source.entities];
   const { rows } = await recordedRows(
     source,
     deps,
     clearedSettings(source.entities, chain.slice(0, -1)),
-    true
+    true,
+    against
   );
   const behind: RowBehindSource[] = [];
   const failed: string[] = [];
@@ -194,16 +201,11 @@ export async function rowsBehindSource(
   return { behind, failed };
 }
 
-/** The top-level field names of a field list, as a record or a row holds it. */
-function fieldNamesOf(fields: unknown): string[] {
-  if (!Array.isArray(fields)) return [];
-  return fields.flatMap(field => {
-    const name =
-      typeof field === "object" && field !== null
-        ? (field as { name?: unknown }).name
-        : undefined;
-    return typeof name === "string" && name !== "" ? [name] : [];
-  });
+/** Registry rows by slug for each kind, as a registry record keeps them. */
+export interface RowsBySlug {
+  collections: Readonly<Record<string, unknown>>;
+  singles: Readonly<Record<string, unknown>>;
+  fieldGroups: Readonly<Record<string, unknown>>;
 }
 
 /** The registry rows read once, by kind and slug; a kind absent where its table could not be read. */
@@ -372,7 +374,9 @@ async function recordedRows(
   deps: RegistryWriteDeps,
   cleared: ReadonlyMap<string, ReadonlySet<UnsaidSetting>>,
   /** Each row's `write` answers what it would do and writes nothing (`rowsBehindSource`). */
-  judgeOnly = false
+  judgeOnly = false,
+  /** Rows to judge against in place of the stored ones (`rowsBehindSource`). */
+  against?: RowsBySlug
 ): Promise<{ rows: RecordedRow[]; stored: StoredRows }> {
   const collections = new CollectionRegistryService(deps.adapter, deps.logger);
   const singles = new SingleRegistryService(deps.adapter, deps.logger);
@@ -382,15 +386,35 @@ async function recordedRows(
   const kept = ([slug]: [string, RecordedEntitySettings]) =>
     !isReservedResourceSlug(slug);
   const { entities } = source;
+  // Kept rows stand in for the stored ones as the registry's own would: a
+  // row a record kept is the row the service read, made JSON-safe.
+  const keptRows = <TRecord>(rows: Readonly<Record<string, unknown>>) =>
+    new Map(Object.entries(rows)) as ReadonlyMap<string, TRecord>;
   const [storedCollections, storedSingles, storedFieldGroups] =
-    // One after another, each its own step: a registry that cannot be read
-    // must not abort the transaction the rows are written in, and steps on
-    // one transaction run in turn.
-    [
-      await storedBySlug(deps.adapter, () => collections.getAllCollections()),
-      await storedBySlug(deps.adapter, () => singles.getAllSingles()),
-      await storedBySlug(deps.adapter, () => fieldGroups.getAllComponents()),
-    ];
+    against !== undefined
+      ? [
+          keptRows<
+            Awaited<ReturnType<typeof collections.getAllCollections>>[number]
+          >(against.collections),
+          keptRows<Awaited<ReturnType<typeof singles.getAllSingles>>[number]>(
+            against.singles
+          ),
+          keptRows<
+            Awaited<ReturnType<typeof fieldGroups.getAllComponents>>[number]
+          >(against.fieldGroups),
+        ]
+      : // One after another, each its own step: a registry that cannot be read
+        // must not abort the transaction the rows are written in, and steps on
+        // one transaction run in turn.
+        [
+          await storedBySlug(deps.adapter, () =>
+            collections.getAllCollections()
+          ),
+          await storedBySlug(deps.adapter, () => singles.getAllSingles()),
+          await storedBySlug(deps.adapter, () =>
+            fieldGroups.getAllComponents()
+          ),
+        ];
   const options = <TRecord>(
     kind: SettingsEntityKind,
     recorded: RecordedEntitySettings,
@@ -409,11 +433,11 @@ async function recordedRows(
     stored: ReadonlyMap<string, unknown> | undefined,
     slug: string
   ) => ({
-    recordedFields: fieldNamesOf(recorded.settings.fields),
+    recordedFields: topLevelFieldNames(recorded.settings.fields),
     storedFields:
       stored === undefined
         ? undefined
-        : fieldNamesOf(
+        : topLevelFieldNames(
             (stored.get(slug) as { fields?: unknown } | undefined)?.fields
           ),
   });

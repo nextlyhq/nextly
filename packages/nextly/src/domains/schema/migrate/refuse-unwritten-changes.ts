@@ -17,21 +17,18 @@
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
-import { isNull } from "drizzle-orm";
 
-import { loadedDialect } from "../../../database/dialect-tables";
 import { APP_OWNER } from "../../../plugins/permissions/collect-permissions";
 import type { EntitySettingsChange } from "../migrate-create/entity-settings";
 import type { Operation } from "../pipeline/diff/types";
 
 import { configurationRegistryRows } from "./first-run";
-import { readRegistryRecord } from "./registry-record";
-import { rowsBehindSource } from "./registry-writer";
+import { livePermissions, readRegistryRecord } from "./registry-record";
+import { rowsBehindSource, type RowsBySlug } from "./registry-writer";
 import {
   livePermissionsByOwner,
   unwrittenChangesError,
   unwrittenChangesOf,
-  type LivePermissionRow,
   type RecordedInDatabase,
   type UnwrittenChangesArgs,
 } from "./unwritten-changes";
@@ -59,7 +56,7 @@ export async function refuseUnwrittenChanges(
 ): Promise<void> {
   const changes = await unwrittenChangesOf({
     ...args,
-    recorded: () => recordedInDatabase(args),
+    recorded: (_entities, newest) => recordedInDatabase(args, newest),
   });
   const error = unwrittenChangesError(changes, {
     baselineFirst:
@@ -103,31 +100,69 @@ async function holdsAnyAddedTable(
  * this release has recorded them (the registry record exists); undefined
  * before that run, whose silence names nothing.
  *
- * - Settings: each code-first entity whose registry row the writer would
- *   rewrite from the configuration, as that first run wrote the rows from it.
- * - Permissions: the live ones not orphaned, the app's and each plugin's.
+ * Read from the record's baseline, which is written once and never changes:
+ * the live rows are rewritten by every development start and plugin install,
+ * and compared with those a change already made in development names nothing.
+ *
+ * - Settings: each code-first entity the writer would rewrite from the
+ *   configuration, judged against the row the record kept.
+ * - Permissions: the app's and each plugin's as the record kept them. A
+ *   record written before owners were kept gives its slugs alone.
+ *
+ * The record keeps the permissions of its own point. Where a migration
+ * applied since (`newest` is not that point) and its snapshot records no
+ * permissions, the run that applied it added the ones then declared, which
+ * the record cannot hold; there the live rows are read instead.
  */
 async function recordedInDatabase(
-  args: RefuseUnwrittenChangesArgs
+  args: RefuseUnwrittenChangesArgs,
+  newest: string | null
 ): Promise<RecordedInDatabase | undefined> {
   const exists = tableExistsOf(args.adapter);
   if (exists === undefined || !(await exists("nextly_meta"))) return undefined;
   const db = args.adapter.getDrizzle();
-  if ((await readRegistryRecord(db, args.dialect)) === undefined) {
-    return undefined;
+  const record = await readRegistryRecord(db, args.dialect);
+  if (record === undefined) return undefined;
+  const { baseline } = record;
+  const live = async () =>
+    livePermissionsByOwner(await livePermissions(db, args.dialect), APP_OWNER);
+  // A record with no baseline was written at a point whose snapshot carries
+  // the settings, so only permissions can be asked here: the ones the record
+  // kept, or the live ones under a record written before it kept any.
+  if (baseline === undefined) {
+    return {
+      settingsDiffer: await settingsBehindConfiguration(args),
+      permissions:
+        record.ownedPermissions === undefined || record.point !== newest
+          ? await live()
+          : livePermissionsByOwner(record.ownedPermissions, APP_OWNER),
+    };
+  }
+  const settingsDiffer = await settingsBehindConfiguration(args, baseline);
+  if (record.point !== newest) {
+    return { settingsDiffer, permissions: await live() };
   }
   return {
-    settingsDiffer: await settingsBehindConfiguration(args),
-    permissions: livePermissionsByOwner(
-      await livePermissionRows(db, args.dialect),
-      APP_OWNER
-    ),
+    settingsDiffer,
+    ...(baseline.ownedPermissions === undefined
+      ? { permissionSlugs: baseline.permissions }
+      : {
+          permissions: livePermissionsByOwner(
+            baseline.ownedPermissions,
+            APP_OWNER
+          ),
+        }),
   };
 }
 
-/** Each code-first entity whose registry row differs from what the configuration declares. */
+/**
+ * Each code-first entity whose registry row differs from what the
+ * configuration declares: the row the record kept (`kept`), or the live one
+ * where the record kept none.
+ */
 async function settingsBehindConfiguration(
-  args: RefuseUnwrittenChangesArgs
+  args: RefuseUnwrittenChangesArgs,
+  kept?: RowsBySlug
 ): Promise<EntitySettingsChange[]> {
   const { behind } = await rowsBehindSource(
     {
@@ -143,7 +178,8 @@ async function settingsBehindConfiguration(
         warn: m => args.logger.warn(m),
         error: m => args.logger.error(m),
       },
-    }
+    },
+    kept
   );
   return behind
     .filter(row => row.row === "differs")
@@ -156,31 +192,4 @@ async function settingsBehindConfiguration(
         ...row.extraFields.map(name => `fields.${name} (removed)`),
       ],
     }));
-}
-
-/** The live permissions not orphaned. */
-async function livePermissionRows(
-  db: unknown,
-  dialect: SupportedDialect
-): Promise<LivePermissionRow[]> {
-  const { permissions } = loadedDialect(dialect).tables;
-  const reader = db as {
-    select(fields: Record<string, unknown>): {
-      from(table: unknown): {
-        where(condition: unknown): Promise<LivePermissionRow[]>;
-      };
-    };
-  };
-  return reader
-    .select({
-      slug: permissions.slug,
-      action: permissions.action,
-      resource: permissions.resource,
-      name: permissions.name,
-      description: permissions.description,
-      permissionGroup: permissions.permissionGroup,
-      owner: permissions.owner,
-    })
-    .from(permissions)
-    .where(isNull(permissions.orphanedAt));
 }

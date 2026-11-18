@@ -16,9 +16,11 @@ import {
 } from "../../dashboard/table-presence";
 import type { ProvenanceClaims } from "../../i18n/provenance/provenance-claims";
 import {
+  copySourceRevisions,
   recordWrittenValues,
   translationProvenancePresent,
 } from "../../i18n/provenance/record-provenance";
+import type { SelectsRows } from "../../versions/document-revision";
 
 /** What recording needs of the service writing. */
 export interface SingleProvenanceDeps {
@@ -35,7 +37,14 @@ export interface SingleProvenanceWrite {
   locale: string;
   /** The values written, keyed by column. */
   values: Readonly<Record<string, unknown>>;
-  localizedFields: ReadonlyArray<{ name: string; column: string }>;
+  /** The Single's translated fields: each one's column, and whether its storage is JSON. */
+  localizedFields: ReadonlyArray<{
+    name: string;
+    column: string;
+    json?: boolean;
+  }>;
+  /** The Single's translation table, which holds each language's counter. */
+  languagesTable?: string;
   savedBy: RequestActor;
   claims?: ProvenanceClaims;
   partState?: "live" | "draft";
@@ -86,6 +95,19 @@ export async function recordSingleProvenance(
     locale: write.locale,
     partState: write.partState ?? "live",
     values,
+    // Each language's counter as it stands, for a copy to be judged against the version of its
+    // source it says it read.
+    languageRevisions: await copySourceRevisions(tx.getDrizzle<SelectsRows>(), {
+      dialect: deps.adapter.dialect,
+      languagesTable: write.languagesTable ?? null,
+      entryId: write.entryId,
+      claims: write.claims,
+    }),
+    jsonFields: new Set(
+      write.localizedFields
+        .filter(field => field.json === true)
+        .map(field => field.name)
+    ),
     promotesDraft: write.promotesDraft,
     defaultLocale: deps.defaultLocale,
     savedBy: write.savedBy,

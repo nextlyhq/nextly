@@ -1054,5 +1054,144 @@ describe.each(getConfiguredTestDialects())(
       });
       expect(kept.item).toMatchObject({ title: "Old, renamed" });
     });
+
+    describe("text styles", () => {
+      const eyebrow = {
+        id: "t-eyebrow",
+        slug: "eyebrow",
+        label: "Eyebrow",
+        orderIndex: 3,
+        role: "text",
+        styles: {
+          base: { base: { fontSize: "12px", textTransform: "uppercase" } },
+        },
+      };
+      const following = {
+        tokens: [],
+        siteText: { h1: { fontSize: "40px", textStyle: "t-eyebrow" } },
+      };
+
+      /** The site above, plus "Eyebrow" with Heading 1 following it. */
+      async function bootWithEyebrow() {
+        const booted = await boot();
+        await booted.t.nextly.updateSingle({
+          slug: SITE_STYLE_SLUG,
+          data: {
+            classes: [lockedCard, hero, spare, eyebrow],
+            tokens: following,
+            _overwrite: true,
+          },
+          overrideAccess: true,
+        });
+        return booted;
+      }
+
+      it("refuses removing a text style a Site text row follows, by the route and by a save, naming the row", async () => {
+        const { t, tick } = await bootWithEyebrow();
+        await tick();
+        const designer = await holding(t, ...DESIGN);
+        const byRoute = await call("POST", route("remove"), designer, {
+          ids: ["t-eyebrow"],
+        });
+        expect(byRoute.status).toBe(400);
+        expect(JSON.stringify(byRoute.body)).toContain('"code":"IN_USE"');
+        expect(JSON.stringify(byRoute.body)).toContain(
+          "Eyebrow is used by Site text: Heading 1."
+        );
+        const bySave = await call("PATCH", SINGLE, designer, {
+          classes: [lockedCard, hero, spare],
+          _overwrite: true,
+        });
+        expect(bySave.status).toBe(400);
+        expect(JSON.stringify(bySave.body)).toContain(
+          "Eyebrow is used by Site text: Heading 1."
+        );
+        expect((await stored(t)).map(entry => entry.id)).toContain("t-eyebrow");
+
+        // Pointing the row elsewhere in the same save lets it go.
+        const moved = await call("PATCH", SINGLE, designer, {
+          classes: [lockedCard, hero, spare],
+          tokens: { tokens: [], siteText: { h1: { fontSize: "40px" } } },
+          _overwrite: true,
+        });
+        expect(moved.status).toBe(200);
+        expect((await stored(t)).map(entry => entry.id)).not.toContain(
+          "t-eyebrow"
+        );
+      });
+
+      it("locks a text style as a shared style, and the lock holds it against removal", async () => {
+        const { t, tick } = await bootWithEyebrow();
+        await tick();
+        const keeper = await holding(
+          t,
+          ...DESIGN,
+          "lock-page-builder-shared-styles"
+        );
+        const lock = await call("POST", route("lock"), keeper, {
+          classId: "t-eyebrow",
+          locked: true,
+        });
+        expect(lock.status).toBe(200);
+        const removal = await call("POST", route("remove"), keeper, {
+          ids: ["t-eyebrow"],
+        });
+        expect(removal.status).toBe(409);
+        expect(JSON.stringify(removal.body)).toContain("Eyebrow is locked.");
+      });
+
+      it("refuses a role that may not manage the site's design", async () => {
+        const { t } = await bootWithEyebrow();
+        const reader = await holding(t, "read-site-style");
+        const removal = await call("POST", route("remove"), reader, {
+          ids: ["t-eyebrow"],
+        });
+        expect(removal.status).toBe(403);
+        const change = await call("PATCH", SINGLE, reader, {
+          classes: [lockedCard, hero, spare, { ...eyebrow, label: "Kicker" }],
+          _overwrite: true,
+        });
+        expect(change.status).toBe(403);
+        expect(
+          (await stored(t)).find(entry => entry.id === "t-eyebrow")
+        ).toMatchObject({
+          label: "Eyebrow",
+        });
+      });
+
+      it("keeps a text style through a save, and refuses one holding a colour", async () => {
+        const { t } = await bootWithEyebrow();
+        const designer = await holding(t, ...DESIGN);
+        const renamed = await call("PATCH", SINGLE, designer, {
+          classes: [lockedCard, hero, spare, { ...eyebrow, label: "Kicker" }],
+          _overwrite: true,
+        });
+        expect(renamed.status).toBe(200);
+        expect(
+          (await stored(t)).find(entry => entry.id === "t-eyebrow")
+        ).toMatchObject({
+          label: "Kicker",
+          role: "text",
+        });
+        const coloured = await call("PATCH", SINGLE, designer, {
+          classes: [
+            lockedCard,
+            hero,
+            spare,
+            {
+              ...eyebrow,
+              styles: {
+                base: { base: { fontSize: "12px", color: "#ff0000" } },
+              },
+            },
+          ],
+          _overwrite: true,
+        });
+        expect(coloured.status).toBe(400);
+        expect(JSON.stringify(coloured.body)).toContain(
+          '"color\\" is not typography'
+        );
+      });
+    });
   }
 );
