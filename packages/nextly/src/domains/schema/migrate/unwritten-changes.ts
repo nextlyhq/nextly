@@ -341,7 +341,9 @@ export type UnwrittenChangesArgs = Pick<
    * database), such a snapshot's silence names nothing.
    */
   recorded?: (
-    entities: DeclaredEntities
+    entities: DeclaredEntities,
+    /** The newest snapshot's migration, by base name; null where there is none. */
+    newest: string | null
   ) => Promise<RecordedInDatabase | undefined>;
   /**
    * Whether `config` carries everything a permission is declared from (the
@@ -396,7 +398,14 @@ export async function unwrittenChangesOf(
     latest,
     dialect: args.dialect,
     ...(predatesRecord && args.recorded !== undefined
-      ? { recorded: await args.recorded(entities) }
+      ? {
+          recorded: await args.recorded(
+            entities,
+            latest === null
+              ? null
+              : latest.filename.replace(/\.snapshot\.json$/, "")
+          ),
+        }
       : {}),
   });
   return args.comparePermissions === false

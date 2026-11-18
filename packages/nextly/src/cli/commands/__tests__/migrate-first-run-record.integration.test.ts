@@ -164,6 +164,31 @@ function permissionsOnly(actions: readonly string[]): unknown {
   });
 }
 
+/** The app's config with its collection and app permissions: `actions` of their own resource. */
+function withPermissions(actions: readonly string[]): unknown {
+  return defineConfig({
+    collections: [
+      defineCollection({
+        slug: SLUG,
+        fields: [text({ name: "title" }), text({ name: "summary" })],
+      }),
+    ],
+    permissions: actions.map(action => ({ action, resource: "fr-reports" })),
+    db: { migrationsDir: "./migrations" },
+  });
+}
+
+/** Rewrites `base`'s snapshot as a release between the two wrote it: the settings, no permissions. */
+function withoutRecordedPermissions(dir: string, base: string): void {
+  const path = join(dir, "migrations", "meta", `${base}.snapshot.json`);
+  const snapshot = JSON.parse(readFileSync(path, "utf-8")) as Record<
+    string,
+    unknown
+  >;
+  delete snapshot.permissions;
+  writeFileSync(path, JSON.stringify(snapshot, null, 2));
+}
+
 /** The bookkeeping a run leaves, as two databases can be compared by it. */
 interface Bookkeeping {
   rows: Record<string, string[]>;
@@ -810,31 +835,10 @@ describe.each(getConfiguredTestDialects())(
       }, 240_000);
 
       it("names a permission removed where the newest snapshot records settings and no permissions", async () => {
-        const withPermissions = (actions: readonly string[]) =>
-          defineConfig({
-            collections: [
-              defineCollection({
-                slug: SLUG,
-                fields: [text({ name: "title" }), text({ name: "summary" })],
-              }),
-            ],
-            permissions: actions.map(action => ({
-              action,
-              resource: "fr-reports",
-            })),
-            db: { migrationsDir: "./migrations" },
-          });
         const url = await scratch();
         use(url);
         const base = await migrateCreate("one", withPermissions(["export"]));
-        // As a release between the two wrote it: the settings, no permissions.
-        const path = join(dir, "migrations", "meta", `${base}.snapshot.json`);
-        const snapshot = JSON.parse(readFileSync(path, "utf-8")) as Record<
-          string,
-          unknown
-        >;
-        delete snapshot.permissions;
-        writeFileSync(path, JSON.stringify(snapshot, null, 2));
+        withoutRecordedPermissions(dir, base);
         // A database an earlier release migrated, then its first run here:
         // the point carries the settings, so the record keeps no rows, and
         // the owned permissions all the same.
@@ -941,6 +945,29 @@ describe.each(getConfiguredTestDialects())(
           expect(record?.point).toBe(earlier);
           // Nothing had written the collection's row when it was taken.
           expect(record?.baseline?.collections).toEqual({});
+        });
+      }, 240_000);
+
+      it("runs again unchanged, naming nothing, where that migration records settings and no permissions", async () => {
+        const url = await scratch();
+        use(url);
+        withoutRecordedPermissions(
+          dir,
+          await migrateCreate("one", withPermissions(["export"]))
+        );
+        // The record is taken before the migration applies and before this
+        // run adds the app's permissions, so it holds none of them.
+        await migrate(withPermissions(["export"]));
+
+        const again = await migrateRun(withPermissions(["export"]));
+
+        expect(again.failure, again.said.join("\n")).toBeUndefined();
+        // And the first run did add the permission the second was judged on.
+        await on(url, async adapter => {
+          const live = await adapter.executeQuery<{ slug: string }>(
+            `SELECT ${q}slug${q} FROM ${q}permissions${q} WHERE ${q}slug${q} = 'export-fr-reports' AND ${q}orphaned_at${q} IS NULL`
+          );
+          expect(live).toHaveLength(1);
         });
       }, 240_000);
 
