@@ -179,6 +179,17 @@ describe("a many-to-many's cardinality, as the Builder's controls set it", () =>
     );
   });
 
+  // Allow multiple turned off in the same edit: the save sends one link per entry, which may name
+  // several collections, so the refusal follows what the save will send.
+  it("is not refused with several collections picked once Allow multiple is turned off", () => {
+    const loaded = {
+      ...convertToBuilderField(MANY, 0),
+      hasMany: false,
+      relationTo: ["lm_tags", "lm_other"],
+    };
+    expect(builderFieldErrors([loaded]).get(loaded.id)).toBeUndefined();
+  });
+
   it("is not refused with one collection picked", () => {
     const loaded = {
       ...convertToBuilderField(MANY, 0),
