@@ -780,6 +780,47 @@ describe("where a setting binding may be saved", () => {
     ]);
   });
 
+  it("refuses a select follower whose prop lacks a choice the setting holds", () => {
+    const judged = (doc: BlockDocument) =>
+      validateDocument(doc, {
+        breakpoints: FIXTURE_BREAKPOINTS,
+        mode: "strict",
+        definitions: {
+          get: type =>
+            type === "core/heading"
+              ? {
+                  version: 1,
+                  props: {
+                    text: { type: "text", role: "content" },
+                    level: { type: "select", options: ["h1", "h2", "h3"] },
+                    target: { type: "select", options: ["_self", "_blank"] },
+                  },
+                }
+              : undefined,
+        },
+      })
+        .issues.filter(issue => issue.path.includes("/bindings"))
+        .map(issue => [issue.path, issue.code, issue.severity]);
+    const card = component(
+      [
+        heading("a", "A"),
+        // Both are selects, but `h1` is no target: following, the link would
+        // be given a value it can't render in place of `_blank`.
+        heading("b", "B", { target: follows("level") }),
+        heading("c", "C", { level: follows("level") }),
+      ],
+      [
+        {
+          ...exposure("level", "a", "level", "select"),
+          options: ["h1", "h2"].map(value => ({ value, label: value })),
+        },
+      ]
+    );
+    expect(judged(card)).toEqual([
+      ["/nodes/1/bindings/target", "invalid-binding", "error"],
+    ]);
+  });
+
   it("only warns on a page, where it shows the block's own value", () => {
     const stray = page([heading("h", "Own", { text: follows("title") })]);
     expect(codes(stray)).toEqual([

@@ -48,6 +48,7 @@ import {
 } from "./document";
 import { exposedValueFits } from "./placement-values";
 import { isPlainRecord } from "./plain-record";
+import { choicesFitProp, choicesOfProp } from "./prop-exposure";
 import { isRichTextNode, isRichTextValue } from "./rich-text";
 import { ownEntry } from "./safe-record";
 import {
@@ -416,20 +417,6 @@ function readStoredBinding(value: unknown): StoredBinding | undefined {
   };
 }
 
-/** The values a select prop declares, as stored strings or `{ value }` records. */
-function choicesOfProp(schema: PropSchema): readonly string[] {
-  const options: unknown = schema.options;
-  if (!Array.isArray(options)) return [];
-  const values: string[] = [];
-  for (const option of options as unknown[]) {
-    if (typeof option === "string") values.push(option);
-    else if (isPlainRecord(option) && typeof option.value === "string") {
-      values.push(option.value);
-    }
-  }
-  return values;
-}
-
 /**
  * A stored reference: an entry id, or the `{ relationTo, value }` pair a
  * reference to more than one collection stores.
@@ -588,11 +575,7 @@ function fillsUnformatted(
   if (shape === "text") return kind !== "number" && kind !== "date";
   if (shape !== "select") return true;
   if (kind !== "option") return false;
-  const allowed = choicesOfProp(schema);
-  return (
-    allowed.length === 0 ||
-    (field.options ?? []).every(option => allowed.includes(option))
-  );
+  return choicesFitProp(field.options ?? [], schema);
 }
 
 /**

@@ -12,6 +12,7 @@
  *
  * @module setting-bindings
  */
+import type { PropSchema } from "./block";
 import {
   COMPONENT_INSTANCE_TYPE,
   type BlockDocument,
@@ -26,6 +27,7 @@ import {
 } from "./limits";
 import { drawsItsEntry } from "./list-query-contract";
 import { isPlainRecord } from "./plain-record";
+import { choicesFitProp, exposureTypeForProp } from "./prop-exposure";
 import { defineEntry, ownEntry, ownKeys } from "./safe-record";
 import type { ValidationIssue } from "./validation-contract";
 
@@ -175,11 +177,11 @@ export function settingBindingIssues(
   doc: BlockDocument,
   limits: FollowerLimits = DEFAULT_LIMITS,
   /**
-   * The setting type a block's prop takes, where its block is known; a prop
-   * a setting of another type would fill is refused. Unknown, it is not
-   * judged.
+   * A block's prop's schema, where its block is known; a prop a setting of
+   * another type would fill is refused, as is a select prop lacking one of a
+   * select setting's choices. Unknown, it is not judged.
    */
-  propTypeOf?: (node: BlockNode, prop: string) => string | undefined
+  propSchemaOf?: (node: BlockNode, prop: string) => PropSchema | undefined
 ): ValidationIssue[] {
   if (!isPlainRecord(doc)) return [];
   const issues: ValidationIssue[] = [];
@@ -204,7 +206,7 @@ export function settingBindingIssues(
       const refusal = followerRefusal(node, prop, id, {
         settings,
         named,
-        propTypeOf,
+        propSchemaOf,
       });
       if (refusal !== undefined) {
         issues.push({
@@ -228,8 +230,8 @@ function followerRefusal(
   component: {
     readonly settings: ReadonlyMap<string, ExposedProperty>;
     readonly named: ReadonlySet<string>;
-    readonly propTypeOf:
-      | ((node: BlockNode, prop: string) => string | undefined)
+    readonly propSchemaOf:
+      | ((node: BlockNode, prop: string) => PropSchema | undefined)
       | undefined;
   }
 ): string | undefined {
@@ -243,11 +245,30 @@ function followerRefusal(
     return `This is the value of a setting, which its followers show, so it can't follow the setting "${id}".`;
   }
   // Its value is copied into the prop, so it must be a value the prop holds.
-  const takes = component.propTypeOf?.(node, prop);
-  if (takes !== undefined && takes !== setting.type) {
+  const schema = component.propSchemaOf?.(node, prop);
+  const takes = exposureTypeForProp(schema);
+  if (schema === undefined || takes === undefined) return undefined;
+  if (takes !== setting.type) {
     return `The setting "${id}" holds ${setting.type}, and this prop holds ${takes}, so it can't follow it.`;
   }
+  // A choice is copied as written, so one the prop lacks is one it can't draw.
+  if (takes === "select" && !choicesFitProp(settingChoices(setting), schema)) {
+    return `The setting "${id}" offers a choice this prop doesn't take, so it can't follow it.`;
+  }
   return undefined;
+}
+
+/** The values a stored select setting offers, skipping any malformed choice. */
+function settingChoices(setting: ExposedProperty): readonly string[] {
+  const options: unknown = setting.options;
+  if (!Array.isArray(options)) return [];
+  const values: string[] = [];
+  for (const option of options.slice(0, MAX_ENVELOPE_ENTRIES) as unknown[]) {
+    if (isPlainRecord(option) && typeof option.value === "string") {
+      values.push(option.value);
+    }
+  }
+  return values;
 }
 
 /** Every setting id a component declares, whatever it holds. */
@@ -311,12 +332,12 @@ export function followerFills(
   const settings = followableSettings(ownEntry(definition, "exposed"));
   if (settings.size === 0) return [];
   const nodes = ownEntry(definition, "nodes");
-  const index = nodesById(nodes, limits);
-  const at = (block: BlockNode) => ({
-    block,
-    list: index.listOf.get(block.id),
-  });
-  const fills: FollowerFill[] = [];
+  const followers: {
+    readonly node: BlockNode;
+    readonly prop: string;
+    readonly id: string;
+    readonly setting: ExposedProperty;
+  }[] = [];
   eachFollower(
     nodes,
     "/nodes",
@@ -325,16 +346,25 @@ export function followerFills(
       if (setting === undefined || holdsSetting(settings, node.id, prop)) {
         return;
       }
-      const block = index.nodes.get(setting.nodeId);
-      if (block === undefined) return;
-      fills.push({
-        ...fillFrom(node.id, prop, at(block), setting.propPath, targetOf),
-        placement: node.type === COMPONENT_INSTANCE_TYPE,
-        settingId: id,
-      });
+      followers.push({ node, prop, id, setting });
     },
     { left: limits.maxNodes, depth: limits.maxDepth, work: limits.work }
   );
+  // Most components with settings have no follower, so the second walk,
+  // which finds each setting's block, is taken only once one is found.
+  if (followers.length === 0) return [];
+  const index = nodesById(nodes, limits);
+  const fills: FollowerFill[] = [];
+  for (const { node, prop, id, setting } of followers) {
+    const block = index.nodes.get(setting.nodeId);
+    if (block === undefined) continue;
+    const at = { block, list: index.listOf.get(block.id) };
+    fills.push({
+      ...fillFrom(node.id, prop, at, setting.propPath, targetOf),
+      placement: node.type === COMPONENT_INSTANCE_TYPE,
+      settingId: id,
+    });
+  }
   return fills;
 }
 
