@@ -126,9 +126,8 @@ test("creates a page from the Pages list by keyboard alone", async ({
     dialog.getByRole("combobox", { name: "Header & footer" })
   ).toBeEnabled();
   await page.keyboard.type(title);
-  await expect(dialog.getByRole("group", { name: "Address" })).toContainText(
-    `keyboard-page-${RUN}`
-  );
+  // The address is made from the title as it is typed.
+  await expect(dialog).toContainText(`/keyboard-page-${RUN}`);
 
   const create = dialog.getByRole("button", {
     name: "Create and open builder",

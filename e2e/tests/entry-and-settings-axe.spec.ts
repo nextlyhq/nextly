@@ -58,9 +58,14 @@ function seedPost(page: Page, name: string): Promise<string> {
   });
 }
 
-/** Where a polite live region says `text`, as a screen reader hears it. */
+/**
+ * A message saying `text` inside a polite live region, as a screen reader
+ * hears it: the toast itself, since the region around it draws no box.
+ */
 function saidPolitely(page: Page, text: string): Locator {
-  return page.locator('[aria-live="polite"]').filter({ hasText: text });
+  return page
+    .locator('[aria-live="polite"] [data-sonner-toast]')
+    .filter({ hasText: text });
 }
 
 test.beforeEach(async ({ page }) => {
@@ -84,8 +89,9 @@ for (const theme of THEMES) {
     // Pages out and edits its own SEO pages, so the SEO tab is met on one.
     const pageId = await seedPage(page, "Axe settings");
     const seoId = await createEntry(page.request, "seo-pages", {
-      title: `Axe search ${RUN}`,
-      slug: `axe-search-${RUN}`,
+      title: `Axe search ${theme} ${RUN}`,
+      // One per theme, so the two runs of this test never share an address.
+      slug: `axe-search-${theme}-${RUN}`,
       excerpt: "Checked by axe.",
     });
     const visits: Array<[string, readonly (string | RegExp)[]]> = [
@@ -114,7 +120,9 @@ for (const theme of THEMES) {
         await tab.click();
         await expect(tab).toHaveAttribute("aria-selected", "true");
         await expect(dialog.getByRole("tabpanel")).toBeVisible();
-        await expectNoAxeViolations(page, { include: '[role="dialog"]' });
+        // The whole page: the builder draws Page settings where a scan
+        // scoped by selector measures none of it.
+        await expectNoAxeViolations(page);
       }
     }
   });
