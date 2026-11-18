@@ -80,6 +80,7 @@ import type { EmailService } from "./services/email-service";
 import { markHtml, TrustedHtml } from "./services/liquid-engine";
 import { toAddressList } from "./services/recipients";
 import { notAcceptedFailure } from "./services/send-failures";
+import { isTemplateCaused } from "./template-failure";
 
 /**
  * Where a queued email stands.
@@ -132,6 +133,13 @@ export type QueuedMessage =
 
 /** The longest template slug the queue records, as its column holds. */
 const TEMPLATE_SLUG_LENGTH = 255;
+
+/**
+ * The names the queue records in clear: any a template can have, but not one
+ * with whitespace or an `@`, the shape of an address passed by mistake, which
+ * is kept only sealed and recorded as no template.
+ */
+const TEMPLATE_SLUG_SHAPE = /^[^\s@]+$/;
 
 /** The queue's table for a dialect. */
 export type EmailQueueTable =
@@ -449,10 +457,12 @@ export async function storeQueuedEmail(
   // The template it is sent from, in clear for the Activity list: a slug
   // names a kind of message, never a person. A name longer than any stored
   // template's can name none, and is recorded as no template on every
-  // dialect rather than refused by the narrower columns of two.
+  // dialect rather than refused by the narrower columns of two; so is one
+  // that is not slug-shaped.
   const templateSlug =
     input.message.kind === "template" &&
-    input.message.slug.length <= TEMPLATE_SLUG_LENGTH
+    input.message.slug.length <= TEMPLATE_SLUG_LENGTH &&
+    TEMPLATE_SLUG_SHAPE.test(input.message.slug)
       ? input.message.slug
       : null;
   if (input.person && erasedAs !== undefined) {
@@ -598,7 +608,7 @@ export type QueuedEmailSender = Pick<
   EmailService,
   "send" | "sendWithTemplate" | "withTemplateCopies"
 > &
-  Partial<Pick<EmailService, "withRecipientReport">>;
+  Partial<Pick<EmailService, "withRecipientReport" | "withQueuedAttempt">>;
 
 /** What an attempt needs. */
 export interface QueuedAttemptDeps {
@@ -620,6 +630,9 @@ export function queuedEmailKey(id: string): string {
   return `queued-email:${id}`;
 }
 
+/** Failures an attempt's template caused (`thrownAttemptFailure`). */
+const TEMPLATE_FAILURES = new WeakSet<EmailFailure>();
+
 /**
  * The failure an attempt that threw is recorded with.
  *
@@ -632,6 +645,16 @@ export function queuedEmailKey(id: string): string {
  * removed.
  */
 export function thrownAttemptFailure(error: unknown): EmailFailure {
+  const failure = classifiedThrow(error);
+  // Kept beside the failure, never in it: `storedFailure` records it on the
+  // email's row for "Fix template", and the failure a plugin is told of
+  // stays as it was.
+  if (isTemplateCaused(error)) TEMPLATE_FAILURES.add(failure);
+  return failure;
+}
+
+/** The failure a thrown attempt is recorded with, before its cause is kept. */
+function classifiedThrow(error: unknown): EmailFailure {
   if (!(error instanceof NextlyError)) {
     return {
       retryable: true,
@@ -675,7 +698,10 @@ async function sendOnce(
   id: string,
   report: (recipients: FinalRecipient[]) => void
 ): Promise<EmailFailure | undefined> {
-  const reporting = sender.withRecipientReport?.(report) ?? sender;
+  // Each delivery it records names this email, so its attempts read as one
+  // timeline.
+  const attempting = sender.withQueuedAttempt?.(id) ?? sender;
+  const reporting = attempting.withRecipientReport?.(report) ?? attempting;
   try {
     const outcome =
       message.kind === "template"
@@ -702,12 +728,16 @@ async function sendOnce(
   }
 }
 
-/** A failure as the queue's row records it, with no address. */
+/**
+ * A failure as the queue's row records it, with no address, and whether
+ * the template caused it.
+ */
 function storedFailure(failure: EmailFailure): string {
   return JSON.stringify({
     retryable: failure.retryable,
     ...(failure.status !== undefined ? { status: failure.status } : {}),
     reason: storableError(failure.reason),
+    ...(TEMPLATE_FAILURES.has(failure) ? { template: true } : {}),
   });
 }
 
@@ -1282,10 +1312,84 @@ async function resealOne(
  * held message no configured secret opens, naming what to configure, and
  * nothing of the messages.
  */
+/**
+ * Retire the pending job of every cancelled queued email. A cancel retires
+ * its job as it is made (`queued-erasure`); one made before it did leaves a
+ * job a jobs run would only skip, and the overdue count would read it as
+ * waiting. Run at boot, beside the re-seal.
+ */
+export async function retireJobsOfCancelled(
+  adapter: DrizzleAdapter
+): Promise<void> {
+  const dialect = adapter.getCapabilities().dialect;
+  const tables = loadedDialect(dialect).tables;
+  const queue = tables.emailQueue;
+  const jobs = tables.nextlyJobs;
+  const db = adapter.getDrizzle<RetireDb>();
+  for (;;) {
+    const rows = (await db
+      .select({ jobId: queue.jobId })
+      .from(queue)
+      .innerJoin(jobs, eq(jobs.id, queue.jobId))
+      .where(and(eq(queue.state, "cancelled"), eq(jobs.state, "pending")))
+      .limit(RETIRE_BATCH)) as Array<{ jobId: string }>;
+    if (rows.length === 0) return;
+    await db
+      .update(jobs)
+      .set({
+        state: "done",
+        nextAttemptAt: null,
+        lastError: "The queued email was cancelled.",
+        lockedBy: null,
+        lockedUntil: null,
+        dedupeKey: null,
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          inArray(
+            jobs.id,
+            rows.map(row => row.jobId)
+          ),
+          eq(jobs.state, "pending")
+        )
+      );
+    if (rows.length < RETIRE_BATCH) return;
+  }
+}
+
+/** Jobs retired per statement at boot. */
+const RETIRE_BATCH = 500;
+
+/** The Drizzle surface the boot retirement needs. */
+interface RetireDb {
+  select(fields: Record<string, unknown>): {
+    from(table: unknown): {
+      innerJoin(
+        table: unknown,
+        on: unknown
+      ): {
+        where(condition: unknown): {
+          limit(count: number): PromiseLike<unknown[]>;
+        };
+      };
+    };
+  };
+  update(table: unknown): {
+    set(values: unknown): { where(condition: unknown): PromiseLike<unknown> };
+  };
+}
+
 export async function resealQueuedMessagesAtBoot(
   adapter: DrizzleAdapter,
   secrets: readonly string[]
 ): Promise<void> {
+  await retireJobsOfCancelled(adapter).catch(error =>
+    getNextlyLogger().error({
+      kind: "queued-email-job-retirement-failed",
+      message: error instanceof Error ? error.message : String(error),
+    })
+  );
   try {
     const { unreadable } = await resealQueuedMessages(adapter, secrets);
     if (unreadable > 0) {

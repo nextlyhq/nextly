@@ -37,6 +37,8 @@ import {
 import type { AskedSetting } from "../editor-asks";
 import { layerLabel } from "../panels/layers/layers";
 
+import type { PageFacts } from "./page-facts";
+
 /** The groups a finding is listed under. */
 export type PageCheckGroup =
   | "accessibility"
@@ -76,15 +78,40 @@ export interface PageRegionDocument {
    * blocks the component draws, not the one placement.
    */
   readonly definitions?: DefinitionsById;
+  /** What the editor calls it, such as "Site header · Main", where known. */
+  readonly label?: string;
+  /** Where it is changed, where the caller can say: its editor's address. */
+  readonly edit?: PageCheckLink;
+}
+
+/** A link out of the editor, as a finding offers one: its address and words. */
+export interface PageCheckLink {
+  readonly href: string;
+  /** What the link says. */
+  readonly text: string;
+  /** Its accessible name, saying where it goes. */
+  readonly name: string;
+}
+
+/** A region as the checks read it, and as it is stored. */
+export interface ResolvedRegion extends PageRegionDocument {
+  /**
+   * The region as stored, its placements unresolved: what a read names, a
+   * component placement among them, where `document` draws its blocks.
+   */
+  readonly stored: BlockDocument;
 }
 
 /** A region as the checks read it: its placements drawn as their blocks. */
-function composedRegion(region: PageRegionDocument): PageRegionDocument {
-  if (region.definitions === undefined) return region;
+function composedRegion(region: PageRegionDocument): ResolvedRegion {
+  if (region.definitions === undefined) {
+    return { ...region, stored: region.document };
+  }
+  const { definitions, ...rest } = region;
   return {
-    area: region.area,
-    document: resolveComponentInstances(region.document, region.definitions)
-      .document,
+    ...rest,
+    document: resolveComponentInstances(region.document, definitions).document,
+    stored: region.document,
   };
 }
 
@@ -115,6 +142,13 @@ export interface CheckedPage {
    * look, which a block is drawn with under its own values.
    */
   readonly namedClasses?: readonly NamedClass[];
+  /**
+   * What the caller knows of the page beyond its document: its bindings
+   * that no longer fit, its count of data, the parts it uses that aren't
+   * live, a header or footer it shows twice. A check of a fact the caller
+   * leaves out finds nothing.
+   */
+  readonly facts?: PageFacts;
 }
 
 /** The page as every check is handed it, its definitions resolved. */
@@ -129,13 +163,15 @@ export interface ResolvedPage {
   readonly drawn: readonly BlockNode[];
   readonly blocks: (type: string) => AnyBlockDefinition | undefined;
   /** The header and footer drawn around it; none where none is known. */
-  readonly regions: readonly PageRegionDocument[];
+  readonly regions: readonly ResolvedRegion[];
   /** The page's component definitions, where the caller knows them. */
   readonly definitions?: DefinitionsById;
   /** The site's variables, where the caller knows them. */
   readonly tokens?: SiteTokenSet;
   /** The site's edits to each block type's own look, by type. */
   readonly siteLooks: Readonly<Record<string, NodeStyles>>;
+  /** What the caller knows of the page beyond its document; none given, none. */
+  readonly facts: PageFacts;
 }
 
 /** What one check reports about one problem. */
@@ -160,6 +196,11 @@ export interface PageCheckResult {
    * the fix is there rather than on a block (a plugin's tab of Page settings).
    */
   readonly settingsTab?: string;
+  /**
+   * Where the fix is outside this editor, as a link the item is instead,
+   * for a block it cannot select (a header's, changed in its own editor).
+   */
+  readonly opens?: PageCheckLink;
 }
 
 /** One check: an id, the group it reports in, and what it finds. */
@@ -169,6 +210,18 @@ export interface PageCheck {
   readonly group: PageCheckGroup;
   /** The problems on the page, in page order. Pure: no DOM, no writes. */
   readonly run: (page: ResolvedPage) => readonly PageCheckResult[];
+  /**
+   * A line the list shows under the group's name whatever is found, such as
+   * how much data the page reads; never counted as an item. Pure, as `run`.
+   */
+  readonly note?: (page: ResolvedPage) => string | undefined;
+}
+
+/** A check's line under its group's name. */
+export interface PageCheckNote {
+  readonly check: string;
+  readonly group: PageCheckGroup;
+  readonly text: string;
 }
 
 /** One problem as the list shows it. */
@@ -188,6 +241,8 @@ export interface PageCheckReport {
   readonly findings: readonly PageFinding[];
   /** The ids of checks that threw, so the list can say they didn't run. */
   readonly notRun: readonly string[];
+  /** The checks' lines under their groups' names, in the checks' order. */
+  readonly notes: readonly PageCheckNote[];
 }
 
 /** One group of the list, with its findings. */
@@ -195,6 +250,8 @@ export interface PageCheckGroupView {
   readonly group: PageCheckGroup;
   readonly label: string;
   readonly findings: readonly PageFinding[];
+  /** The lines under its name, which are not items. */
+  readonly notes: readonly string[];
 }
 
 /**
@@ -286,6 +343,7 @@ function resolvedPageOf(page: CheckedPage): ResolvedPage {
       : { definitions: page.definitions }),
     ...(page.tokens === undefined ? {} : { tokens: page.tokens }),
     siteLooks: blockDefaultsOf(page.namedClasses ?? []),
+    facts: page.facts ?? {},
   };
 }
 
@@ -304,13 +362,19 @@ export function runPageChecks(
   const taken = new Set<string>();
   const found: PageFinding[] = [];
   const notRun: string[] = [];
+  const notes: PageCheckNote[] = [];
   for (const check of checks) {
     let results: readonly PageCheckResult[];
+    let note: string | undefined;
     try {
       results = check.run(resolved);
+      note = check.note?.(resolved);
     } catch {
       notRun.push(check.id);
       continue;
+    }
+    if (note !== undefined) {
+      notes.push({ check: check.id, group: check.group, text: note });
     }
     for (const drawnResult of results) {
       const result = onThePage(drawnResult, placementOf);
@@ -340,7 +404,7 @@ export function runPageChecks(
         a.index - b.index
     )
     .map(each => each.finding);
-  return { findings, notRun };
+  return { findings, notRun, notes };
 }
 
 /**
@@ -350,7 +414,8 @@ export function runPageChecks(
  */
 export function pageCheckGroups(
   findings: readonly PageFinding[],
-  checks: readonly Pick<PageCheck, "group">[]
+  checks: readonly Pick<PageCheck, "group">[],
+  notes: readonly PageCheckNote[] = []
 ): PageCheckGroupView[] {
   const offered = new Set(checks.map(check => check.group));
   return GROUP_ORDER.filter(
@@ -359,5 +424,6 @@ export function pageCheckGroups(
     group,
     label: GROUP_LABELS[group],
     findings: findings.filter(finding => finding.group === group),
+    notes: notes.filter(note => note.group === group).map(note => note.text),
   }));
 }

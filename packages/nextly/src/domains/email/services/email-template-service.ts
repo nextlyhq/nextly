@@ -90,8 +90,8 @@ import {
   sameVersion,
   storedOwner,
   versionDigest,
+  storedVersionDigest,
   versionOf,
-  writtenVersionDigest,
   type KeptBase,
   type OwnedTemplate,
   type RegistryInput,
@@ -348,24 +348,11 @@ function reviewToken(
     .update(
       JSON.stringify([
         ...[base, theirs, mine].map(v => versionOf(v)),
-        storedDigest(theirs, blocks.theirs),
-        storedDigest(mine, blocks.mine),
+        storedVersionDigest(theirs, blocks.theirs),
+        storedVersionDigest(mine, blocks.mine),
       ])
     )
     .digest("hex");
-}
-
-/**
- * A stored version's digest: its text, or for a written one its subject,
- * preheader and blocks, so blocks that write the same HTML are told apart.
- */
-function storedDigest(
-  version: EmailTemplateVersion,
-  blocks: WrittenDocument | null | undefined
-): string {
-  return blocks
-    ? writtenVersionDigest(version, blocks)
-    : versionDigest(version);
 }
 
 /** What an applied review replaced, so it can be undone. */
@@ -2107,7 +2094,7 @@ export class EmailTemplateService extends BaseService {
         blocks: record.blocks,
         baseDigest: row.baseDigest ?? null,
         base,
-        applied: storedDigest(merged, blocks),
+        applied: storedVersionDigest(merged, blocks),
         appliedBase: entry.digest,
       },
     };
@@ -2127,7 +2114,8 @@ export class EmailTemplateService extends BaseService {
     this.ownedEntry(record);
     this.assertOverridden(record);
     if (
-      storedDigest(versionOf(row), storedFormat(row).blocks) !== undo.applied ||
+      storedVersionDigest(versionOf(row), storedFormat(row).blocks) !==
+        undo.applied ||
       row.baseDigest !== undo.appliedBase
     ) {
       throw changedSince("applied", id, record.slug);
@@ -2232,8 +2220,8 @@ export class EmailTemplateService extends BaseService {
     // With the blocks: a save of other blocks that write the same HTML is
     // still a save in between.
     if (
-      storedDigest(versionOf(after), storedFormat(after).blocks) !==
-        storedDigest(version, blocks) ||
+      storedVersionDigest(versionOf(after), storedFormat(after).blocks) !==
+        storedVersionDigest(version, blocks) ||
       after.baseDigest !== baseDigest
     ) {
       throw changedSince("saved", id, slug);

@@ -17,6 +17,7 @@ import {
   pageDuplicatePath,
   pagePath,
   PAGES_ROUTE_PATH,
+  type CreatedPageItem,
   type CreatePageRequest,
   type PageMutationResponse,
   type RenamePageRequest,
@@ -43,9 +44,14 @@ async function writePage<TItem extends PageItem | PageReference>(
   return answer.item;
 }
 
-/** Create a draft page titled `title` in `collection`. */
-export function createPage(request: CreatePageRequest): Promise<PageItem> {
-  return writePage<PageItem>("POST", PAGES_ROUTE_PATH, request);
+/**
+ * Create a page in `collection`, titled, with what the New page dialog adds,
+ * answering whether its author may also change it.
+ */
+export function createPage(
+  request: CreatePageRequest
+): Promise<CreatedPageItem> {
+  return writePage<CreatedPageItem>("POST", PAGES_ROUTE_PATH, request);
 }
 
 /** Duplicate `page` as a draft titled "Copy of" its title. */

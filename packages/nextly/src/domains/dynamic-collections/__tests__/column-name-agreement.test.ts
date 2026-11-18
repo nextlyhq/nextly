@@ -883,6 +883,12 @@ describe("altering a field that has no column", () => {
     }),
   };
 
+  // A many-to-many holds a list, which no dialect keeps unique, so marking it unique is refused
+  // before any statement (the list-relationship rule, `refuseUniqueOnList`); every other change
+  // here is one the save accepts and must emit no column statement for.
+  const refusedByRule = (label: string, change: Record<string, unknown>) =>
+    label === "manyToMany" && change.unique === true;
+
   it("emits no column statement when its index or flags change", () => {
     for (const dialect of DIALECTS) {
       for (const [label, make] of Object.entries(columnLess)) {
@@ -891,6 +897,7 @@ describe("altering a field that has no column", () => {
           { required: true },
           { unique: true },
         ]) {
+          if (refusedByRule(label, change)) continue;
           const sql = alterSql(dialect, [make({})], [make(change)]);
           const offending = [
             "CREATE INDEX",
@@ -903,6 +910,26 @@ describe("altering a field that has no column", () => {
           expect({ [at]: offending }).toEqual({ [at]: [] });
         }
       }
+    }
+  });
+
+  it("refuses a many-to-many marked unique, as the list-relationship rule does, on every dialect", () => {
+    for (const dialect of DIALECTS) {
+      const make = columnLess.manyToMany;
+      let refusal: unknown;
+      try {
+        alterSql(dialect, [make({})], [make({ unique: true })]);
+      } catch (error) {
+        refusal = error;
+      }
+      const codes = (
+        (refusal as { publicData?: { errors?: Array<{ code?: string }> } })
+          ?.publicData?.errors ?? []
+      ).map(error => error.code);
+
+      expect({ [dialect]: codes }).toEqual({
+        [dialect]: ["UNIQUE_NOT_ON_LIST"],
+      });
     }
   });
 

@@ -17,8 +17,12 @@ import {
 } from "../../auth/access/rule-language";
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import { container } from "../../di/container";
+import { getService } from "../../di/service-access";
 import type { CollectionsHandler } from "../../services/collections-handler";
 import type { FilteredWrite } from "../collections/services/collection-access-service";
+import { singleDocumentEditable } from "../singles/services/single-document-access";
+import { checkSingleAccess } from "../singles/services/single-query-service";
+import type { UserContext } from "../singles/types";
 
 import type { ReviewDocument } from "./review-state-repository";
 
@@ -51,6 +55,42 @@ function askedAs(caller: Exclude<EntryGateCaller, { kind: "system" }>): {
 }
 
 /**
+ * Whether `caller` may make the write `action` to the Single `slug`'s document, as the Single's own
+ * gate judges it: an update in the part's language as an update in it is (the stored row must
+ * exist, as for any edit of it), and a lifecycle write as one of the whole document is. A Single
+ * has no delete of its document.
+ */
+async function singleWriteAllowed(
+  slug: string,
+  part: string | null,
+  action: FilteredWrite,
+  caller: Exclude<EntryGateCaller, { kind: "system" }>
+): Promise<boolean> {
+  const user: UserContext = { id: caller.userId };
+  const actor = caller.kind === "key" ? caller.scope : undefined;
+  if (action === "update") {
+    return singleDocumentEditable(slug, {
+      user,
+      ...(actor === undefined ? {} : { actor }),
+      routeAuthorized: false,
+      ...(part === null ? {} : { locale: part }),
+    });
+  }
+  if (action === "delete") return false;
+  const denied = await checkSingleAccess({
+    slug,
+    operation: action,
+    user,
+    overrideAccess: false,
+    routeAuthorized: false,
+    rbacAccessControlService: getService("rbacAccessControlService"),
+    ...(actor === undefined ? {} : { authenticatedScope: actor }),
+    logger: getService("logger"),
+  });
+  return denied === null;
+}
+
+/**
  * Whether an update of `document` in the language `part` is allowed, judged as an update in that
  * language is: its rules told that one language (`registeredWriteLanguagesFor`), and a filter on a
  * translated field matched in it (`canUpdateEntry`'s `locale`), as the update write sets them.
@@ -74,8 +114,8 @@ function updateAllowedIn(
  * Whether `caller` may make the write `action` to one part of `document`, as the write would be
  * judged. An update of a language part is judged in that language, as an update in it is; the
  * shared part, and a lifecycle write, as a write to the whole document is, in every language.
- * Trusted code is allowed, as an `overrideAccess` write is. A Single's document is refused: its
- * gate is not asked here yet, and a refusal is the safe answer until it is.
+ * Trusted code is allowed, as an `overrideAccess` write is. A Single's document is judged by the
+ * Single's own gate, as its update, publish and unpublish are; a Single is never deleted.
  */
 export async function entryWriteAllowed(
   document: ReviewDocument,
@@ -84,7 +124,9 @@ export async function entryWriteAllowed(
   caller: EntryGateCaller
 ): Promise<boolean> {
   if (caller.kind === "system") return true;
-  if (document.scopeKind !== "collection") return false;
+  if (document.scopeKind === "single") {
+    return singleWriteAllowed(document.scopeSlug, part, action, caller);
+  }
   const asked = askedAs(caller);
   if (action === "update" && part !== null) {
     return updateAllowedIn(document, part, asked);

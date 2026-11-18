@@ -40,9 +40,11 @@ import type {
 import { ContentEventsRepository } from "../../content-events/repository";
 import type { VersionsDbApi } from "../../versions/db-api";
 import { VersionsRepository } from "../../versions/versions-repository";
+import { approvalDigest } from "../approval-digest";
 import { defineWorkflow } from "../define-workflow";
 import { workflowDefinitionHash } from "../hash";
 import {
+  createReviewState,
   readReviewState,
   updateReviewState,
   type ReviewPart,
@@ -327,23 +329,51 @@ describe.each(getConfiguredTestDialects())(
           "NOT_APPROVED",
         ]);
       });
+
+      it("a Single whose content changed after its approval, and lets the approved content through", async () => {
+        await boot(dialect);
+        const approved = await bannerWith("Approved banner");
+        await createReviewState(
+          stateDb(),
+          {
+            scopeKind: "single",
+            scopeSlug: BANNER,
+            entryId: approved.id,
+            part: null,
+          },
+          {
+            stage: "approved",
+            enteredAt: new Date("2026-11-02T10:00:00.000Z"),
+            definitionHash: HASH,
+            approval: {
+              versionNo: approved.newest.versionNo!,
+              digest: approvalDigest(approved.newest.snapshot, "single"),
+              by: "rita",
+              at: new Date("2026-11-02T10:00:00.000Z"),
+            },
+          }
+        );
+        const banner = { kind: "single", slug: BANNER } as const;
+
+        const asApproved = await app().adapter.transaction(tx =>
+          gate().judge(tx, publishing(banner, approved.id))
+        );
+        await bannerWith("Edited after approval");
+        const asEdited = await app().adapter.transaction(tx =>
+          gate().judge(tx, publishing(banner, approved.id))
+        );
+
+        expect(asApproved.refusals).toEqual([]);
+        expect(asEdited.refusals).toEqual([
+          expect.objectContaining({
+            code: "NOT_APPROVED",
+            message: expect.stringContaining("changed since it was approved"),
+          }),
+        ]);
+      });
     });
 
     describe("lets through", () => {
-      it("a Single, approved or not, until a Single's steps can approve it", async () => {
-        await boot(dialect);
-        const banner = { kind: "single", slug: BANNER } as const;
-        const never = await bannerWith("Never reviewed");
-
-        const early = await gate().refusals(publishing(banner, never.id));
-        const locked = await app().adapter.transaction(tx =>
-          gate().judge(tx, publishing(banner, never.id))
-        );
-
-        expect(early).toEqual([]);
-        expect(locked.refusals).toEqual([]);
-      });
-
       it("an approved part", async () => {
         await boot(dialect);
         const id = await approvedPage();
