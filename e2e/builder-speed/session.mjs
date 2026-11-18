@@ -50,13 +50,11 @@ export async function publishes(page, watcher, id, count) {
     if (expected === base) await page.keyboard.press("Backspace");
     else await page.keyboard.type("!");
     await page.keyboard.press("Tab");
+    // The id travels as an argument: the callback runs in the browser, where
+    // this module's constants don't exist.
     await page.waitForFunction(
-      t =>
-        window.__builderSpeedChecks.canvasText({
-          id: HEADING,
-          text: t,
-        }),
-      expected,
+      ({ id, text }) => window.__builderSpeedChecks.canvasText({ id, text }),
+      { id: HEADING, text: expected },
       { timeout: SHOW_LIMIT_MS, polling: 100 }
     );
     // The autosave a pause after the edit, so every press starts alike.

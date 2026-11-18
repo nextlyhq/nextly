@@ -221,13 +221,11 @@ async function editingRound(page, watcher, texts) {
     if (key === "!") await page.keyboard.type("!");
     else await page.keyboard.press(key);
     await page.keyboard.press("Tab");
+    // The id travels as an argument: the callback runs in the browser, where
+    // this module's constants don't exist.
     await page.waitForFunction(
-      text =>
-        window.__builderSpeedChecks.canvasText({
-          id: HEADING,
-          text,
-        }),
-      expected,
+      ({ id, text }) => window.__builderSpeedChecks.canvasText({ id, text }),
+      { id: HEADING, text: expected },
       { timeout: SHOW_LIMIT_MS, polling: 100 }
     );
   }
