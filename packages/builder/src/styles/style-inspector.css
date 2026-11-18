@@ -820,10 +820,6 @@
    site's brand accent replaces the fill. */
 .nx-css-properties__add,
 .nx-css-found__add {
-  /* At least 24px tall (WCAG 2.5.8), whatever the text's own height. */
-  display: inline-flex;
-  align-items: center;
-  min-block-size: 1.5rem;
   padding: 0.125rem 0.375rem;
   border-radius: 0.25rem;
   font-size: var(--text-xs);
