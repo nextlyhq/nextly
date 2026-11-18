@@ -987,7 +987,6 @@ export function useSaveSiteStyle(): SiteStyleWrite {
             }),
             inverse: undefined,
           });
-          holdsNow(chainOf(settled, section), after);
         },
         save: async (value, inverse, options) => {
           const chain = chainOf(settled, section);
@@ -1168,20 +1167,33 @@ export function useSaveSiteStyle(): SiteStyleWrite {
 }
 
 /**
- * What a section holds once a route stored `after`, for the writes after it,
- * until the read moves on and is believed instead. Left alone while writes
- * of its own are in flight: their answers say what it holds.
+ * A turn on a section's chain for a write made elsewhere, a route's: the
+ * writes after it wait for it, as for one of this editor's own, and build
+ * on what it says the section holds once it has answered.
  */
-function holdsNow(chain: SectionChain, after: unknown): void {
-  if (chain.pending > 0) return;
-  chain.held = after;
-  chain.tail = Promise.resolve(after);
+function routeTurn(chain: SectionChain): {
+  prior: Promise<unknown>;
+  settle: (holds: unknown) => void;
+} {
+  const prior = chain.tail;
+  chain.pending += 1;
+  let settle: (holds: unknown) => void = () => {};
+  const answered = new Promise<unknown>(resolve => {
+    settle = resolve;
+  });
+  chain.tail = answered.then(holds => {
+    chain.pending -= 1;
+    if (chain.pending === 0) chain.held = holds;
+    return holds;
+  });
+  return { prior, settle };
 }
 
 /**
- * A route's change, run after the writes before it and filled into the
- * place taken for it with the halves the route answered: given up when it
- * stored nothing or refused. Outside the editor it is no step.
+ * A route's change, run in turn on the section's chain, after the writes
+ * before it and before those after it, and filled into the place taken for
+ * it with the halves the route answered: given up when it stored nothing or
+ * refused. Outside the editor it is no step.
  */
 async function changedThrough(
   editor: {
@@ -1203,14 +1215,22 @@ async function changedThrough(
     return;
   }
   const slot = editor.reserve(section);
+  // A turn of its own, so a save made while the route runs waits for it.
+  const turn = routeTurn(editor.chainOf(history.settled, section));
+  let holds: unknown;
   try {
-    await editor.chainOf(history.settled, section).tail;
+    holds = await turn.prior;
     const halves = await change();
     if (halves === undefined) slot.cancel();
-    else slot.stored(halves.before, halves.after);
+    else {
+      slot.stored(halves.before, halves.after);
+      holds = halves.after;
+    }
   } catch (refused) {
     slot.cancel();
     throw refused;
+  } finally {
+    turn.settle(holds);
   }
 }
 

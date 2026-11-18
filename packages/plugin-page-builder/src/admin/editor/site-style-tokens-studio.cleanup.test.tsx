@@ -78,6 +78,8 @@ const colour = (id: string) => ({
 });
 const spare = colour("t-spare");
 const accent = colour("t-accent");
+const blueAccent = { ...accent, values: { light: "#0000ff" } };
+const added = colour("t-added");
 
 beforeEach(() => {
   calls.order.length = 0;
@@ -88,8 +90,12 @@ beforeEach(() => {
   calls.halves = undefined;
   calls.cleaned = {
     result: { kind: "done", removed: ["t-spare"], kept: [] },
-    // As the server answered them.
-    halves: { before: { server: "before" }, after: { server: "after" } },
+    // As the server answered them: another author has since made Accent
+    // blue and added a colour, which this studio never read.
+    halves: {
+      before: { tokens: [spare, blueAccent, added] },
+      after: { tokens: [blueAccent, added], order: ["t-added"] },
+    },
   };
   panels.tokens = undefined;
 });
@@ -126,13 +132,17 @@ describe("cleaning up unused colours from the studio", () => {
     expect(calls.asked).toEqual([["t-spare", "t-accent"]]);
     // The step's halves are the server's, as the route answered them.
     expect(calls.halves).toEqual({
-      before: { server: "before" },
-      after: { server: "after" },
+      before: { tokens: [spare, blueAccent, added] },
+      after: { tokens: [blueAccent, added], order: ["t-added"] },
     });
     expect(answer).toEqual({ kind: "done", removed: ["t-spare"], kept: [] });
-    expect(shownIds()).toEqual(expect.arrayContaining(["t-accent"]));
+    // What the server holds now is shown, not this studio's older copy.
+    expect(shownIds()).toEqual(expect.arrayContaining(["t-accent", "t-added"]));
     expect(shownIds()).not.toContain("t-spare");
-    expect(panels.tokens?.tokens.order).toEqual(["t-accent"]);
+    expect(
+      panels.tokens?.tokens.tokens.find(token => token.id === "t-accent")
+    ).toMatchObject({ values: { light: "#0000ff" } });
+    expect(panels.tokens?.tokens.order).toEqual(["t-added"]);
     expect(calls.rereads).toBe(1);
   });
 

@@ -10,7 +10,6 @@
  */
 import {
   resolveSiteTokens,
-  tokenIdentity,
   type BlockDocument,
   type ComponentLookup,
   type DocumentLimits,
@@ -370,13 +369,13 @@ function useTokenCommits(
   };
   const notice =
     conflict === undefined ? undefined : { text: conflict, onReload: reload };
-  const cleanUp = useCleanUp(changeThrough, reread, gone => {
-    // What the studio shows, and knows stored, without what the route took.
-    const kept = withoutColours(shownNow() ?? editable, gone);
-    if (kept === undefined) return;
-    latest.current = kept;
-    persisted.current = kept;
-    show(kept);
+  const cleanUp = useCleanUp(changeThrough, reread, stored => {
+    // What the server holds once the route has written, as the studio shows
+    // and knows it stored: not its own older copy, less what went.
+    const adopted = tokensFromStored(supplied, stored);
+    latest.current = adopted;
+    persisted.current = adopted;
+    show(adopted);
   });
   return { edits, shownNow, issue, notice, commit, cleanUp };
 }
@@ -411,27 +410,24 @@ type CleanUpThrough = (
  * "Clean up unused…": the colours removed through the clean-up route, which
  * judges each on its own, as one step of the editor's history whose halves
  * are the server's own: the section as its last removal wrote it, and that
- * with what each removal took put back. What went is taken out of what the
- * studio shows at once, and the site style is read again whatever came of
- * it, so what is shown is what is stored.
+ * with what each removal took put back. Where any went, the studio shows
+ * the section the server answered at once; the site style is read again
+ * whatever came of it.
  */
 function useCleanUp(
   changeThrough: ReturnType<typeof useSaveSiteStyle>["changeThrough"],
   reread: () => void,
-  taken: (gone: ReadonlySet<string>) => void
+  adopt: (stored: unknown) => void
 ): CleanUpThrough {
   return async (ids, uses) => {
-    let result: CleanUpResult | undefined;
+    let answer: Awaited<ReturnType<typeof cleanUpUnused>> | undefined;
     await changeThrough("tokens", async () => {
-      const answer = await cleanUpUnused(ids, uses);
-      result = answer.result;
+      answer = await cleanUpUnused(ids, uses);
       return answer.halves;
     });
-    const done = result ?? NOT_ASKED;
-    const gone = removedBy(done);
-    if (gone.size > 0) taken(gone);
+    if (answer?.halves !== undefined) adopt(answer.halves.after);
     reread();
-    return done;
+    return answer?.result ?? NOT_ASKED;
   };
 }
 
@@ -440,26 +436,6 @@ const NOT_ASKED: CleanUpResult = {
   kind: "refused",
   reason: "The colours could not be removed. Try again.",
 };
-
-/** The identities a clean-up removed. */
-function removedBy(result: CleanUpResult): ReadonlySet<string> {
-  return new Set(result.kind === "done" ? result.removed : []);
-}
-
-/** The set without these colours, and without their places in the order. */
-function withoutColours(
-  set: SiteTokenSet | null | undefined,
-  gone: ReadonlySet<string>
-): SiteTokenSet | undefined {
-  if (set === null || set === undefined) return undefined;
-  return {
-    ...set,
-    tokens: set.tokens.filter(token => !gone.has(tokenIdentity(token))),
-    ...(set.order === undefined
-      ? {}
-      : { order: set.order.filter(identity => !gone.has(identity)) }),
-  };
-}
 
 /**
  * What the Variables tab is handed of usage: the variable routes, with the

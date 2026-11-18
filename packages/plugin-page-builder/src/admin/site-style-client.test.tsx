@@ -940,6 +940,37 @@ describe("a save inside the editor, as a step of its history", () => {
       expect(seen).toEqual([1]);
     });
 
+    it("holds a save made while the route runs until the route has answered, and builds it on the route's after", async () => {
+      readAnswer = { data: { tokens: before }, isPending: false, error: null };
+      const { wrapper } = editorHistory();
+      const { result } = renderHook(() => useSaveSiteStyle(), { wrapper });
+      let answer: (halves: {
+        before: unknown;
+        after: unknown;
+      }) => void = () => {};
+      const routed = new Promise<{ before: unknown; after: unknown }>(
+        resolve => {
+          answer = resolve;
+        }
+      );
+      let cleaned: Promise<void> | undefined;
+      let saved: Promise<unknown> | undefined;
+      await act(async () => {
+        cleaned = result.current.changeThrough("tokens", () => routed);
+        // Let the route start, then save: the save must not overtake it.
+        await Promise.resolve();
+        saved = result.current.save("tokens", { tokens: [], edited: true });
+        await new Promise(resolve => setTimeout(resolve, 20));
+      });
+      expect(writes).toEqual([]);
+      await act(async () => {
+        answer({ before, after });
+        await cleaned;
+        await saved;
+      });
+      expect(writes).toHaveLength(1);
+    });
+
     it("keeps no step when the route stored nothing, or refused", async () => {
       readAnswer = { data: { tokens: before }, isPending: false, error: null };
       const { steps, wrapper } = editorHistory();
