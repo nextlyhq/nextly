@@ -44,5 +44,15 @@ The editor did the same work again on every keystroke and every click:
 - The block panel checked each field's locks separately, composing the page and
   walking its locks once per field. It now reads them once per render for the
   whole block (`writablePropsOf`), and each field's answer is the same as before.
+- Every page check ran again on every click and keystroke, because the page
+  being edited and the page's data count were new objects on each render, and
+  so were the bindings rows. They now stay the same while what they hold does,
+  and the Page checks count is worked out a moment after an edit rather than
+  inside it.
+- A check run on every render that the canvas marks are still over the same
+  canvas laid the editor out each time. The frame's painted scale is now
+  measured only when something reads it.
+- The Style tab's cascade compiled the page's styles a second time inside each
+  keystroke. It is now compiled from the edit straight after it.
 
-Nothing saved or published changes, and no edit skips a check.
+Nothing saved, validated or published changes, and no edit skips a check.

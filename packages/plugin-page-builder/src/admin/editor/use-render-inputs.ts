@@ -58,6 +58,7 @@ import {
 } from "@nextlyhq/builder/shell";
 import {
   useCallback,
+  useDeferredValue,
   useEffect,
   useMemo,
   useRef,
@@ -913,6 +914,35 @@ function useStyleReadings({
    * declaration in the trace, so every value from a named class reads as set by
    * nobody, and a `url(...)` this host refuses reads as active.
    */
+  /*
+   * What the trace is compiled from, kept together and handed over deferred.
+   *
+   * The canvas draws each keystroke at once, and this second compile of the
+   * same page served only the inspector's provenance dots, so it delayed every
+   * letter reaching the canvas. Deferred as ONE value, the inputs never mix one
+   * render's document with another's context: a render that types reuses the
+   * last trace, and React compiles the new one straight after, once for a
+   * burst of keys rather than once per key.
+   */
+  const traceInputs = useMemo(
+    () => ({
+      document: editor.document,
+      canvasRender,
+      canvasSiteStyle,
+      remotePatterns,
+      siteStylePending,
+      siteStyleError,
+    }),
+    [
+      editor.document,
+      canvasRender,
+      canvasSiteStyle,
+      remotePatterns,
+      siteStylePending,
+      siteStyleError,
+    ]
+  );
+  const traced = useDeferredValue(traceInputs);
   const styleCascade = useMemo(
     () =>
       /*
@@ -935,31 +965,26 @@ function useStyleReadings({
        * withheld the trace unconditionally, which meant no provenance dot ever
        * appeared. The same test the canvas below uses.
        */
-      siteStylePending || siteStyleError !== null
+      traced.siteStylePending || traced.siteStyleError !== null
         ? undefined
         : pageStyleTrace(
-            editor.document,
-            canvasRender.styleContext,
-            siteSheet(canvasSiteStyle),
+            traced.document,
+            traced.canvasRender.styleContext,
+            siteSheet(traced.canvasSiteStyle),
             {
-              ...(remotePatterns === undefined ? {} : { remotePatterns }),
+              ...(traced.remotePatterns === undefined
+                ? {}
+                : { remotePatterns: traced.remotePatterns }),
               // The SAME map the canvas resolves against, under the SAME
               // caps, so the cascade the inspector reads describes the
               // composed tree on screen: neither one with every instance
               // left unresolved, nor one composed past a cap the canvas
               // stopped at.
-              definitions: canvasRender.definitions,
-              limits: canvasRender.limits,
+              definitions: traced.canvasRender.definitions,
+              limits: traced.canvasRender.limits,
             }
           ),
-    [
-      editor.document,
-      canvasRender,
-      canvasSiteStyle,
-      remotePatterns,
-      siteStylePending,
-      siteStyleError,
-    ]
+    [traced]
   );
 
   /*
