@@ -857,7 +857,7 @@ export type SharedStyleRemoval =
   | { readonly kind: "quiet" };
 
 /** Why a style in use, on the open page or a saved document, can't go. */
-export const SHARED_STYLE_IN_USE_REMOVAL =
+const SHARED_STYLE_IN_USE_REMOVAL =
   "In use, so it can’t be removed. Take it off the blocks that use it first.";
 
 /**
