@@ -42,7 +42,7 @@ export type ActivityRow =
       id: string;
       at: Date;
       state: QueuedEmailState;
-      attempts: number;
+      attempts: number | null;
       nextAttemptAt: Date | null;
       lastFailureReason: string | null;
       messageHeld: boolean;
@@ -232,7 +232,12 @@ const UNSETTLED: ReadonlySet<QueuedEmailState> = new Set([
  * itself, so a list showing it has to be read again to stay true.
  */
 export function holdsUnsettledQueued(rows: readonly ActivityRow[]): boolean {
-  return rows.some(row => row.source === "queued" && UNSETTLED.has(row.state));
+  return rows.some(row => row.source === "queued" && isUnsettled(row.state));
+}
+
+/** Whether a queued email in this state can still change by itself. */
+export function isUnsettled(state: QueuedEmailState): boolean {
+  return UNSETTLED.has(state);
 }
 
 /** What happened to a row, in one line, with a detail and a note when it has them. */
@@ -255,7 +260,7 @@ function spanText(ms: number): string {
  * When an attempt is due, in words: "Next attempt in 10 min", or how late it
  * is, "Next attempt overdue by 30 min", which a stalled jobs trigger makes it.
  */
-function dueText(due: Date | null, now: Date, attempt: string): string {
+export function dueText(due: Date | null, now: Date, attempt: string): string {
   if (due === null) return `${attempt} not scheduled`;
   const ms = due.getTime() - now.getTime();
   return ms >= 0

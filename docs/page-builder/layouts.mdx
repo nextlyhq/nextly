@@ -101,6 +101,41 @@ closes, or someone else takes over the page while you edit its header, the heade
 kept as its recovery point, offered when it is next opened. The header's variants are edited in
 its own view, not here.
 
+### Open a header & footer set in the builder
+
+A header & footer set opens in the builder as a screen of its own: from its row in the Pages
+panel's **Header & footer** group, or from **Open in builder** on the admin's Header & footer
+list or in a set's form. The builder draws the set's header and footer around a grey **Page
+content goes here** box, where any page using the set goes. They are the set's working header
+and footer, so a change you make here shows at once, before you save.
+
+With nothing selected, the right panel shows the set's settings:
+
+- **Name**, the set's name.
+- **Header** and **Footer**, each a menu with a picture of every published component you can
+  choose. The components marked **Use as: Header** (or **Footer**) come first, then **Other
+  components**, then **None**, which leaves that area empty in this set.
+- **Used on 11 pages**: how many pages show this set, including the pages that follow the site
+  default when this set is the default.
+- **Site default** when this set is the default. Otherwise, if you may choose the default,
+  **Make site default** (or **Publish it, then make default** for a set that was never
+  published). See [Make another header & footer set the default](#make-another-header--footer-set-the-default).
+- A **⋯** menu with **Rename**, which puts you in the **Name** field, **Duplicate**, which makes
+  a draft copy, and **Delete**, which works as [Removing a header & footer
+  set](#removing-a-header--footer-set) describes. The site default can't be deleted until another
+  set is the default.
+
+Changes to the name, the header and the footer are the set's own: **Save** stores them as the
+set's draft, and pages using the set keep showing it as published. **Publish** asks "Publish to
+11 pages?" first, then every page using the set shows the new header and footer. A set no page
+uses is published without asking.
+
+A click on the header or footer selects it, and **Edit header** edits it in place, exactly as on
+a page (above). There are no page blocks here: the Add panel is offered only while you edit the
+header or footer. **Back to Home** in the top bar returns to the page you opened the set from,
+asking first if the set has changes you haven't saved; opened from the admin, it goes back to the
+Header & footer list.
+
 Publishing a page that names an unpublished header & footer set asks first: **Publish page only**
 leaves the header & footer set as it is, and the site default shows until it is published;
 **Publish both** publishes the header & footer set too, if you may update and publish header & footer sets. See
@@ -467,6 +502,12 @@ get both headers whatever the option says.
 
 The option is read when the server starts, and any other value stops it with an
 error that names the option.
+
+With `"code"`, the editor shows no header & footer tools, since they would change nothing your site
+draws: no **Header & footer** group in the Pages panel (one line there says why), no **Header &
+footer** menu in Page settings, on the entry page or in the New page dialog, and no header or
+footer regions on the canvas. Header & footer sets and each page's choice are kept as they are, so
+switching back to `"page-builder"` shows them unchanged.
 
 When the editor's canvas shows your site's own header or footer around the page
 (through the [canvas route](/docs/page-builder#draw-the-canvas-in-your-sites-layout))

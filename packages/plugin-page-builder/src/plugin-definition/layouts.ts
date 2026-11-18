@@ -18,6 +18,7 @@ import { layoutAreaRoutes } from "../layout-area-route";
 import { layoutChoicesRoute } from "../layout-choices-route";
 import { registerLayoutComponentGuard } from "../layout-component-guard";
 import { layoutCountsRoute } from "../layout-counts-route";
+import { setAreaChoicesRoute } from "../set-area-choices-route";
 import { registerLayoutReadinessNotice } from "../layout-readiness-hook";
 import { removeLayoutRoute } from "../layout-removal/remove-route";
 import { layoutWriteRoutes } from "../layout-writes-route";
@@ -66,6 +67,7 @@ export function routesForLayouts(def: Definition): {
   readonly fillNotices: PluginRoute;
   readonly layoutWrites: PluginRoute[];
   readonly layoutArea: PluginRoute[];
+  readonly setAreaChoices: PluginRoute;
   readonly createInArea: PluginRoute;
 } {
   const { opts } = def;
@@ -100,6 +102,12 @@ export function routesForLayouts(def: Definition): {
     // The components marked for an area, and the write putting one in a
     // set's area: the builder's "Use a component" menu on the starter.
     layoutArea: layoutAreaRoutes(
+      componentStoreOf(opts),
+      () => opts.limits ?? DEFAULT_LIMITS
+    ),
+    // Every published component a set's header or footer may name, the
+    // ones marked for the area first: the set view's pickers in the builder.
+    setAreaChoices: setAreaChoicesRoute(
       componentStoreOf(opts),
       () => opts.limits ?? DEFAULT_LIMITS
     ),

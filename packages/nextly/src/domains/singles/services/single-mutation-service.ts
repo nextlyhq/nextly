@@ -73,6 +73,7 @@ import {
 } from "../../../revalidation/intent-builders";
 import type { RevalidationIntent } from "../../../revalidation/types";
 import type { DynamicSingleRecord } from "../../../schemas/dynamic-singles/types";
+import type { RelationshipDbExecutor } from "../../../services/collections/collection-relationship-service";
 import { expansionAccess } from "../../../services/collections/trust-bound";
 import {
   assumedBound,
@@ -3007,6 +3008,15 @@ export class SingleMutationService extends BaseService {
       const hookOriginal = {
         ...existingDeserialized,
         ...(await this.translationIn(existingDoc.id, companion, writeLocale)),
+        // The links its many-to-many fields hold, which neither its row nor
+        // its translations have a column for (a translated one reads null
+        // there), so a hook comparing old with new sees them as stored.
+        ...(await this.queryService.readManyToManyLinks({
+          executor: this.adapter.getDrizzle<RelationshipDbExecutor>(),
+          sourceTable: singleMeta.tableName,
+          entryId: String(existingDoc.id),
+          fields: singleMeta.fields,
+        })),
       };
       const beforeCall: SingleBeforeHookCall = {
         slug,
@@ -3487,6 +3497,23 @@ export class SingleMutationService extends BaseService {
       // them to the references they stand for rather than storing a snapshot
       // of the related row.
       normalizeRelationshipFields(currentData, fieldConfigs);
+
+      // 6.55. A many-to-many field's links are kept in its junction table, not
+      // on the Single's row, so they are taken off the row's values here and
+      // written on the save's transaction below. Read as a collection's update
+      // reads them: a list of ids, or one id; a field the save leaves out keeps
+      // its links, and an empty list or `null` clears them.
+      const manyToManyLinks: Record<string, string[]> = {};
+      for (const field of fieldConfigs) {
+        const name = "name" in field ? field.name : undefined;
+        if (typeof name !== "string" || !usesJunctionTable(field)) continue;
+        const value = currentData[name];
+        if (value === undefined) continue;
+        delete currentData[name];
+        manyToManyLinks[name] = (
+          Array.isArray(value) ? value : value === null ? [] : [value]
+        ).map(String);
+      }
 
       // 6.6. Every repeater row gets its saved id: after the field rules and
       // the password pass have decided the value, and after references are
@@ -4504,7 +4531,8 @@ export class SingleMutationService extends BaseService {
                     {
                       updatePayload: mainPayload,
                       componentFieldData: attemptComponentFields,
-                      manyToManyData: {},
+                      // Links alone are a change of the document too.
+                      manyToManyData: manyToManyLinks,
                     },
                     savedBy,
                     updateTimeOf(
@@ -4821,21 +4849,31 @@ export class SingleMutationService extends BaseService {
 
           const previousDoc =
             assembleDocuments && preRow
-              ? await buildSingleWebhookDoc(
-                  this.fieldGroupDataService,
-                  tx,
-                  existingDoc.id,
-                  singleMeta.tableName,
-                  preRow,
-                  fieldConfigs,
-                  companion,
-                  companionPhysicallyExists,
-                  eventLocale != null
-                    ? previousCompanionValues
-                    : defaultViewCompanion,
-                  payloadLocale,
-                  overlayLocaleStatus ? previousLocaleStatus : undefined
-                )
+              ? {
+                  ...(await buildSingleWebhookDoc(
+                    this.fieldGroupDataService,
+                    tx,
+                    existingDoc.id,
+                    singleMeta.tableName,
+                    preRow,
+                    fieldConfigs,
+                    companion,
+                    companionPhysicallyExists,
+                    eventLocale != null
+                      ? previousCompanionValues
+                      : defaultViewCompanion,
+                    payloadLocale,
+                    overlayLocaleStatus ? previousLocaleStatus : undefined
+                  )),
+                  // The links its many-to-many fields held, read before this
+                  // save replaces them, over the translations laid on it.
+                  ...(await this.queryService.readManyToManyLinks({
+                    executor: tx.getDrizzle<RelationshipDbExecutor>(),
+                    sourceTable: singleMeta.tableName,
+                    entryId: String(existingDoc.id),
+                    fields: fieldConfigs,
+                  })),
+                }
               : null;
 
           // On a restore, read the CURRENT component subtrees before the save
@@ -4968,6 +5006,35 @@ export class SingleMutationService extends BaseService {
               tx,
               componentWrite(attemptComponentData)
             );
+          }
+
+          // 9.55. Each many-to-many field's junction rows, replaced with the
+          // links the save sends, on this transaction, so a failure rolls the
+          // save back. Named from the Single's table, as its create made them.
+          // A held edit writes none, as it writes no component rows.
+          //
+          // The links the junctions hold once it has, `savedLinks`, are put on
+          // each document the save hands on: the written row, which its field
+          // hooks get, and its event and version, after their translations are
+          // laid over them, since a translated field has no column there either.
+          let savedLinks: Record<string, string[]> = {};
+          if (!holdEdit) {
+            await this.queryService.replaceManyToManyLinks({
+              executor: tx.getDrizzle<RelationshipDbExecutor>(),
+              sourceTable: singleMeta.tableName,
+              entryId: String(existingDoc.id),
+              fields: fieldConfigs,
+              links: manyToManyLinks,
+            });
+            savedLinks = await this.queryService.readManyToManyLinks({
+              executor: tx.getDrizzle<RelationshipDbExecutor>(),
+              sourceTable: singleMeta.tableName,
+              entryId: String(existingDoc.id),
+              fields: fieldConfigs,
+            });
+            if (Object.keys(savedLinks).length > 0) {
+              rows[0] = { ...rows[0], ...savedLinks };
+            }
           }
 
           // 9.6. i18n: upsert the companion row for the write locale in the SAME
@@ -5838,6 +5905,9 @@ export class SingleMutationService extends BaseService {
             if (singleHasStatus && isLocaleSpecificSnapshot) {
               parentRow.status = dataLocaleStatus;
             }
+            // Its many-to-many links, over the translations laid on it
+            // (`savedLinks`).
+            Object.assign(parentRow, savedLinks);
 
             const savedStatus =
               singleHasStatus && isLocaleSpecificSnapshot
@@ -5975,21 +6045,25 @@ export class SingleMutationService extends BaseService {
           // populateComponentData(strict) read the opt-out must skip. When off,
           // recordMutationEvent ignores `data`, so the raw written row stands in.
           const dataDoc = assembleDocuments
-            ? await buildSingleWebhookDoc(
-                this.fieldGroupDataService,
-                tx,
-                existingDoc.id,
-                singleMeta.tableName,
-                rows[0],
-                fieldConfigs,
-                companion,
-                companionPhysicallyExists,
-                eventLocale != null
-                  ? dataCompanionValues
-                  : defaultViewCompanion,
-                payloadLocale,
-                overlayLocaleStatus ? dataLocaleStatus : undefined
-              )
+            ? {
+                ...(await buildSingleWebhookDoc(
+                  this.fieldGroupDataService,
+                  tx,
+                  existingDoc.id,
+                  singleMeta.tableName,
+                  rows[0],
+                  fieldConfigs,
+                  companion,
+                  companionPhysicallyExists,
+                  eventLocale != null
+                    ? dataCompanionValues
+                    : defaultViewCompanion,
+                  payloadLocale,
+                  overlayLocaleStatus ? dataLocaleStatus : undefined
+                )),
+                // Over the translations laid on it (`savedLinks`).
+                ...savedLinks,
+              }
             : rows[0];
 
           // The single's field tree with component references expanded, so the
@@ -6461,7 +6535,10 @@ export class SingleMutationService extends BaseService {
             options.overrideAccess === true && !narrows(options.trusted)
               ? "all"
               : undefined,
-        }
+        },
+        false,
+        // Its many-to-many links are in junctions named from its table.
+        singleMeta.tableName
       );
 
       // 11. Execute afterChange hooks (afterUpdate equivalent for Singles)
@@ -7353,6 +7430,18 @@ export class SingleMutationService extends BaseService {
       );
       if (own !== null) parentRow.status = own;
     }
+    // Its many-to-many fields' links, which neither the row nor its
+    // translations have a column for, as every version of the Single records
+    // them.
+    Object.assign(
+      parentRow,
+      await this.queryService.readManyToManyLinks({
+        executor: tx.getDrizzle<RelationshipDbExecutor>(),
+        sourceTable: singleMeta.tableName,
+        entryId,
+        fields,
+      })
+    );
     applyReadShape(
       parentRow,
       fields,

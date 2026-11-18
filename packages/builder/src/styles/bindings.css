@@ -595,6 +595,17 @@
   border-block-start: 1px solid var(--nx-border);
 }
 
+/* Over a component's settings: how many pages use it, and what a setting
+   does for them. Quiet, as the hint under the list, and set apart from the
+   rows by the same rule. */
+.nx-binding-picker__reach {
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  border-block-end: 1px solid var(--nx-border);
+  color: var(--nx-muted-foreground);
+  font-size: var(--text-xs);
+}
+
 /* A source the host could not read, said above the fields that did list. */
 .nx-binding-picker__failed {
   margin: 0;
