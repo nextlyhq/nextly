@@ -836,20 +836,35 @@ describe.each(getConfiguredTestDialects())(
           const before = await standing(t, kind);
           await holdTheTable(t);
 
-          await expect(
-            kind.change(t, [{ name: "heading", type: "number" }])
-          ).rejects.toBeInstanceOf(Error);
+          const stop = await kind
+            .change(t, [{ name: "heading", type: "number" }])
+            .then(
+              () => undefined,
+              (error: unknown) => error
+            );
 
           free();
           await holding.catch(() => {});
-          expect(await standing(t, kind)).toEqual(before);
+          expect(stop).toBeInstanceOf(Error);
+          // What the stop recorded of itself, said beside a failure: a stop that changed nothing
+          // leaves nothing, and any other outcome would say why the files stayed.
+          expect(
+            await standing(t, kind),
+            JSON.stringify(
+              (stop as { code?: unknown; logContext?: { stop?: unknown } })
+                ?.logContext?.stop ?? (stop as Error | undefined)?.message
+            )
+          ).toEqual(before);
         }, 60_000);
 
         // MySQL commits each schema statement as it runs. A push whose second statement fails
         // after its first committed stopped part way: its files stay, recorded applied nowhere,
         // so the next `nextly migrate` names them. The failure comes through the test's seam on
-        // the push's statement executor, which runs the first statement and then fails.
-        it.runIf(dialect === "mysql")(
+        // the push's statement executor, which runs the first statement and then fails. A Single's
+        // settings save runs its service's own statements, which that seam does not reach.
+        it.runIf(
+          dialect === "mysql" && kind.name !== "a Single's settings save"
+        )(
           "keeps the files of a push whose second statement failed after its first committed",
           async () => {
             const t = await boot();
