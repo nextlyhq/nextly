@@ -152,7 +152,10 @@ function takeBoundTargets(
 ): void {
   for (const [key, { property }] of bound) {
     const fed = fedBy(property, relay);
-    if (fed !== undefined) chosen.set(key, { fed, set: true });
+    // A bound setting no host setting drives fills a prop no host edit can
+    // change, so the prop is mapped to none.
+    if (fed === undefined) chosen.delete(key);
+    else chosen.set(key, { fed, set: true });
   }
 }
 
@@ -169,12 +172,11 @@ export function relayOf(
   if (fed === undefined) return undefined;
   const relay = new Map<string, PropExposure>();
   for (const path of Object.keys(fed)) {
-    const [head, inner, ...rest] = path.split(".");
-    if (head !== "overrides" || inner === undefined || rest.length > 0) {
-      continue;
-    }
+    // The setting's id is the rest of the path as it is, dots included, as
+    // a placement's binding key names it.
+    const inner = boundSettingId(path);
     const host = fed[path];
-    if (host !== undefined) relay.set(inner, host);
+    if (inner !== undefined && host !== undefined) relay.set(inner, host);
   }
   return relay.size === 0 ? undefined : relay;
 }

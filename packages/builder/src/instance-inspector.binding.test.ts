@@ -295,4 +295,14 @@ describe("a placement's settings, bound to data", () => {
       },
     });
   });
+
+  it("keeps a binding's controls on a setting whose block is hidden here", () => {
+    const bound = { $bind: "title", source: "item", list: "l" };
+    // The Shown setting hides the title block on this placement.
+    const rows =
+      inspect({ "overrides.title": bound }, { shown: false })?.rows ?? [];
+    const title = rows.find(row => row.id === "title");
+    expect(title?.bindable?.type).toBe("text");
+    expect(title?.binding).toEqual(bound);
+  });
 });

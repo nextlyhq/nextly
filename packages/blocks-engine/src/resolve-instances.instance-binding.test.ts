@@ -379,4 +379,84 @@ describe("a placement's setting bound to data", () => {
       expect(composedOf(nodes, "Typed")?.exposedProps?.text?.id).toBe("first");
     });
   });
+
+  it("keeps a page-owned fallback's address, though the component holds that id", () => {
+    const linked = component(
+      [
+        heading("title"),
+        { ...heading("anchor"), attributes: { id: "pricing" } } as BlockNode,
+      ],
+      [exposure("goes", "title", "href", "link")]
+    );
+    const toPricing: Binding = {
+      $bind: "url",
+      source: "item",
+      list: "posts",
+      fallback: "#pricing",
+    };
+    const nodes = compose(
+      page([
+        list("posts", [
+          placement("p1", "card", {}, { "overrides.goes": toPricing }),
+        ]),
+      ]),
+      { card: linked }
+    );
+    expect(composedOf(nodes, "title")?.bindings).toEqual({ href: toPricing });
+  });
+
+  describe("a component inside the component", () => {
+    const inner = component(
+      [heading("label")],
+      [
+        exposure("caption.one", "label", "text"),
+        exposure("caption.two", "label", "text"),
+      ]
+    );
+    const outer = (nested: BlockNode) =>
+      component(
+        [nested],
+        [exposure("headline", "nested", "overrides.caption.one")]
+      );
+
+    it("maps a setting fed through a dotted id to the host's setting", () => {
+      const nodes = resolveComponentInstances(
+        page([placement("p1", "outer")]),
+        new Map([
+          ["inner", inner],
+          ["outer", outer(placement("nested", "inner"))],
+        ]),
+        { exposures: true }
+      ).document.nodes as ResolvedBlockNode[];
+      expect(composedOf(nodes, "label")?.exposedProps?.text?.id).toBe(
+        "headline"
+      );
+    });
+
+    it("maps nothing where a setting the host does not feed is bound over it", () => {
+      const nodes = resolveComponentInstances(
+        page([placement("p1", "outer")]),
+        new Map([
+          ["inner", inner],
+          [
+            "outer",
+            outer(
+              placement(
+                "nested",
+                "inner",
+                {},
+                {
+                  "overrides.caption.two": byItemTitle,
+                }
+              )
+            ),
+          ],
+        ]),
+        { exposures: true }
+      ).document.nodes as ResolvedBlockNode[];
+      // The nested placement's own binding fills the prop, which no host
+      // setting can change.
+      expect(composedOf(nodes, "label")?.exposedProps).toBeUndefined();
+    });
+  });
 });

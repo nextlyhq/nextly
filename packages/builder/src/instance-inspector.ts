@@ -239,10 +239,14 @@ export function inspectInstance(
     rows:
       exposure === undefined
         ? []
-        : rowsOf(exposure.properties, node, definitions).map(entry => {
-            const reason = held(entry);
-            return reason === undefined ? entry : { ...entry, heldBy: reason };
-          }),
+        : rowsOf(exposure.properties, node, definition, definitions).map(
+            entry => {
+              const reason = held(entry);
+              return reason === undefined
+                ? entry
+                : { ...entry, heldBy: reason };
+            }
+          ),
     orphaned:
       exposure === undefined
         ? []
@@ -435,16 +439,35 @@ function composedTargets(
 }
 
 /**
+ * A setting's target as the component itself declares it, for one whose
+ * block composing left out here (hidden by a setting or a variant): its own
+ * block and prop, so a binding the placement holds keeps its controls.
+ */
+function ownTarget(
+  definition: ComponentDocument | undefined,
+  property: Exposure
+): ComposedTarget | undefined {
+  const node =
+    definition === undefined
+      ? undefined
+      : findNode(definition.nodes, property.nodeId);
+  return node === undefined || isComponentInstance(node)
+    ? undefined
+    : { type: node.type, path: property.propPath };
+}
+
+/**
  * The schema of the composed block's prop a setting fills, named as the
  * setting, where a field can fill it: read from the block's own declaration,
  * the prop the composed binding lands on.
  */
 function bindableSchemaOf(
   property: Exposure,
-  targets: ReadonlyMap<string, ComposedTarget>
+  targets: ReadonlyMap<string, ComposedTarget>,
+  definition: ComponentDocument | undefined
 ): PropSchema | undefined {
   if (!BINDABLE_SETTING_TYPES.has(property.type)) return undefined;
-  const target = targets.get(property.id);
+  const target = targets.get(property.id) ?? ownTarget(definition, property);
   const declared =
     target === undefined ? undefined : getBlock(target.type)?.props;
   const schema =
@@ -477,6 +500,7 @@ function storedBindingOf(node: BlockNode, id: string): Binding | undefined {
 function rowsOf(
   properties: ReturnType<typeof instanceExposure>["properties"],
   node: BlockNode,
+  definition: ComponentDocument | undefined,
   definitions: ComponentLookup
 ): ExposedRow[] {
   const labels = new Map(
@@ -500,7 +524,7 @@ function rowsOf(
       state.property.type
     ),
     options: optionsOf(state.property.options),
-    ...bindingOf(state.property, node, targets),
+    ...bindingOf(state.property, node, targets, definition),
     ...(state.shadowedBy === undefined
       ? {}
       : {
@@ -517,9 +541,10 @@ function rowsOf(
 function bindingOf(
   property: Exposure,
   node: BlockNode,
-  targets: ReadonlyMap<string, ComposedTarget>
+  targets: ReadonlyMap<string, ComposedTarget>,
+  definition: ComponentDocument | undefined
 ): Pick<ExposedRow, "bindable" | "binding"> {
-  const bindable = bindableSchemaOf(property, targets);
+  const bindable = bindableSchemaOf(property, targets, definition);
   if (bindable === undefined) return {};
   const binding = storedBindingOf(node, property.id);
   return binding === undefined ? { bindable } : { bindable, binding };

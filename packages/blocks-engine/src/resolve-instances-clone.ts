@@ -77,6 +77,11 @@ export interface InlineContext {
    * to its scoped id, the one the renderer records the list's entry under.
    */
   nodeIds: Map<string, string>;
+  /**
+   * Each scoped node's bindings the placement gave it, by prop: the page's
+   * own, so a fallback naming a page id is not re-pointed at the component's.
+   */
+  pageBound: Map<string, ReadonlySet<string>>;
   /** The scope INSIDE this component, for instances the definition itself holds. */
   scope: ComposedScope;
   /**
@@ -296,6 +301,7 @@ export function scopeNode(
       ...scoped.bindings,
       ...plan.bindings,
     } as ResolvedBlockNode["bindings"];
+    ctx.pageBound.set(scoped.id, new Set(Object.keys(plan.bindings)));
   }
   // Removing the envelope rather than emptying it: `conditions` is only half of
   // what gates a node, and an instance saying "show this" means the reader
