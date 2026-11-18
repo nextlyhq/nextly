@@ -195,8 +195,10 @@ export function tokensToDtcg(
   const styles = textStylesFor(options.textStyles ?? [], written);
   if (styles.group !== undefined) document[TEXT_STYLES_GROUP] = styles.group;
   const site = siteDataOf(set);
+  const sequence = sequenceOf(set.tokens, written, carried);
   const own: DtcgNode = {
     ...(Object.keys(carried).length > 0 ? { [CARRIED]: carried } : {}),
+    ...(sequence === undefined ? {} : { [SEQUENCE]: sequence }),
     ...(site === undefined ? {} : { [SITE]: site }),
     ...(styles.kept === undefined ? {} : { [TEXT_STYLES]: styles.kept }),
   };
@@ -204,6 +206,46 @@ export function tokensToDtcg(
     document.$extensions = { [NEXTLY_EXTENSION]: own };
   }
   return { document, issues, keptTextStyles: styles.only };
+}
+
+/**
+ * The variables' names in the site's order, when reading the file would
+ * meet them in another: the tree groups them by path, and the variables the
+ * format can't type sit apart. Absent when the two orders agree.
+ */
+function sequenceOf(
+  tokens: readonly SiteToken[],
+  written: readonly { token: SiteToken }[],
+  carried: DtcgNode
+): string[] | undefined {
+  const names = new Set([
+    ...written.map(entry => entry.token.name),
+    ...Object.keys(carried),
+  ]);
+  const inSet = [
+    ...new Set(tokens.map(token => token.name).filter(name => names.has(name))),
+  ];
+  // The order a reader meets them in: the tree's groups, depth first, then
+  // the carried variables.
+  const tree: DtcgNode = {};
+  for (const { token } of written) {
+    let node = tree;
+    for (const segment of token.name.split(".")) {
+      if (!Object.hasOwn(node, segment)) node[segment] = {};
+      node = node[segment] as DtcgNode;
+    }
+  }
+  const met: string[] = [];
+  const walk = (node: DtcgNode, at: readonly string[]): void => {
+    for (const [key, child] of Object.entries(node)) {
+      const here = [...at, key].join(".");
+      if (names.has(here)) met.push(here);
+      walk(child as DtcgNode, [...at, key]);
+    }
+  };
+  walk(tree, []);
+  met.push(...Object.keys(carried));
+  return met.every((name, at) => name === inSet[at]) ? undefined : inSet;
 }
 
 /**
@@ -274,6 +316,9 @@ const SITE = "site";
 
 /** Where it holds every text style, exactly. */
 const TEXT_STYLES = "textStyles";
+
+/** Where it holds the variables' names in the site's order. */
+const SEQUENCE = "sequence";
 
 /**
  * Why a token's name or id keeps it out of an exported file, in words, or
@@ -428,7 +473,10 @@ export function dtcgToTokens(input: unknown): {
       issues: [issue("The file is not a design-token document.")],
     };
   }
-  const { tree, carried, site, textStyles } = takeCarried(input, issues);
+  const { tree, carried, site, textStyles, sequence } = takeCarried(
+    input,
+    issues
+  );
   const resolved = resolveAliases(tree);
   issues.push(...resolved.issues);
   read(resolved.document, [], undefined, tokens, issues);
@@ -466,6 +514,7 @@ export function dtcgToTokens(input: unknown): {
       tokens.push(token);
     }
   }
+  inSequence(tokens, sequence);
   const siteData = site === undefined ? undefined : readSiteData(site, issues);
   const styles =
     textStyles === undefined ? undefined : readTextStyles(textStyles, issues);
@@ -506,13 +555,19 @@ function holdsStoredValue(entry: DtcgNode): boolean {
 function takeCarried(
   input: DtcgNode,
   issues: ValidationIssue[]
-): { tree: DtcgNode; carried: DtcgNode; site?: unknown; textStyles?: unknown } {
+): {
+  tree: DtcgNode;
+  carried: DtcgNode;
+  site?: unknown;
+  textStyles?: unknown;
+  sequence?: unknown;
+} {
   const extensions = statedExtensions(input);
   const own = extensions?.[NEXTLY_EXTENSION];
   if (
     extensions === undefined ||
     !isPlainObject(own) ||
-    !(CARRIED in own || SITE in own || TEXT_STYLES in own)
+    !(CARRIED in own || SITE in own || TEXT_STYLES in own || SEQUENCE in own)
   ) {
     return { tree: input, carried: {} };
   }
@@ -520,6 +575,7 @@ function takeCarried(
     [CARRIED]: variables,
     [SITE]: site,
     [TEXT_STYLES]: textStyles,
+    [SEQUENCE]: sequence,
     ...ownRest
   } = own;
   const { [NEXTLY_EXTENSION]: _own, ...otherVendors } = extensions;
@@ -547,5 +603,22 @@ function takeCarried(
     carried: isPlainObject(variables) ? variables : {},
     ...(site === undefined ? {} : { site }),
     ...(textStyles === undefined ? {} : { textStyles }),
+    ...(sequence === undefined ? {} : { sequence }),
   };
+}
+
+/**
+ * The tokens put in the order the file's sequence names them, in place;
+ * one it doesn't name keeps its place after every one it does. A sequence
+ * that is not a list of names orders nothing.
+ */
+function inSequence(tokens: SiteToken[], sequence: unknown): void {
+  if (!Array.isArray(sequence)) return;
+  const at = new Map<string, number>();
+  sequence.forEach((name: unknown, index) => {
+    if (typeof name === "string" && !at.has(name)) at.set(name, index);
+  });
+  const rank = (token: SiteToken) => at.get(token.name) ?? at.size;
+  // A stable sort: tokens of one rank keep the order they were read in.
+  tokens.sort((left, right) => rank(left) - rank(right));
 }

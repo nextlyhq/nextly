@@ -147,3 +147,22 @@ describe("the site's own design data at the file's root", () => {
     ]);
   });
 });
+
+describe("the order of the variables", () => {
+  it("reads back in the site's order, whichever group or extension each is written under", () => {
+    const list: SiteToken[] = [
+      { name: "color.a", kind: "color", values: { light: "#111111" } },
+      { name: "space.em", kind: "dimension", values: { light: "1.5em" } },
+      { name: "space.px", kind: "dimension", values: { light: "4px" } },
+      { name: "color.b", kind: "color", values: { light: "#222222" } },
+    ];
+    const read = dtcgToTokens(written({ tokens: list }));
+    expect(read.issues).toEqual([]);
+    expect(read.tokens.map(token => token.name)).toEqual([
+      "color.a",
+      "space.em",
+      "space.px",
+      "color.b",
+    ]);
+  });
+});
