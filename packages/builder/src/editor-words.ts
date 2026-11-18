@@ -121,4 +121,5 @@ export const DESIGN_ACTION_WORDS = {
   notExported: "What wasn't exported",
   kept: "Kept for Nextly only",
   leftOut: "Left out",
+  withoutData: "Exported without its extra data",
 } as const;

@@ -862,9 +862,10 @@ export interface ExportGap {
   readonly label?: string;
   /**
    * `kept`: written only as Nextly data, which Nextly reads back exactly and
-   * other tools skip. `left-out`: not in the file at all.
+   * other tools skip. `left-out`: not in the file at all. `without-data`: in
+   * the file with its value, but without vendor data a file cannot hold.
    */
-  readonly outcome: "kept" | "left-out";
+  readonly outcome: "kept" | "left-out" | "without-data";
   /** Why, in plain words. */
   readonly why: string;
 }
@@ -878,6 +879,8 @@ export interface ExportGap {
  */
 export function exportDtcg(tokens: SiteTokenSet): ExportResult {
   let skipped: string[];
+  let refused: string[];
+  let lost: string[];
   let text: string;
   let kept: readonly string[];
   try {
@@ -892,7 +895,11 @@ export function exportDtcg(tokens: SiteTokenSet): ExportResult {
      * line added later from landing outside it.
      */
     const { document, issues } = tokensToDtcg(tokens);
-    skipped = [...issues.map(issue => issue.message), ...unwritable(tokens)];
+    // Kept apart for the list: a variable the engine refused is not in the
+    // file, while one whose vendor data cannot be written still is.
+    refused = issues.map(issue => issue.message);
+    lost = unwritable(tokens);
+    skipped = [...refused, ...lost];
     kept = carriedNames(document);
     text = `${JSON.stringify(document, null, 2)}\n`;
   } catch {
@@ -932,7 +939,7 @@ export function exportDtcg(tokens: SiteTokenSet): ExportResult {
     label: "variables",
     mime: "application/json",
     skipped,
-    gaps: gapsOf(tokens, skipped, kept),
+    gaps: gapsOf(tokens, refused, kept, lost),
   };
 }
 
@@ -1214,11 +1221,22 @@ function isJsonLeaf(value: unknown): boolean {
  * and a token table recovered from custom properties would have lost every
  * token's kind, which is what decides where it may be used.
  */
-export function variableCss(tokens: SiteTokenSet): string {
-  const { css } = emitTokenBlocks(tokens, ":root");
+export function variableCss(tokens: SiteTokenSet): {
+  readonly css: string;
+  /**
+   * What the writer left out, in its own words: a variable whose CSS name
+   * another already took, or a prefix it could not use. Named to the author,
+   * so a copy that is missing a variable never reads as complete.
+   */
+  readonly skipped: readonly string[];
+} {
+  const { css, issues } = emitTokenBlocks(tokens, ":root");
   // Empty stays empty: a lone newline would be copied and confirmed, telling
   // an author their variables were copied when nothing was.
-  return css === "" ? "" : `${css}\n`;
+  return {
+    css: css === "" ? "" : `${css}\n`,
+    skipped: issues.map(issue => issue.message),
+  };
 }
 
 /**
@@ -1232,23 +1250,14 @@ export function variableCss(tokens: SiteTokenSet): string {
 function gapsOf(
   tokens: SiteTokenSet,
   skipped: readonly string[],
-  kept: readonly string[]
+  kept: readonly string[],
+  lost: readonly string[] = []
 ): ExportGap[] {
   const byName = new Map(tokens.tokens.map(token => [token.name, token]));
-  const gaps: ExportGap[] = [];
-  for (const message of skipped) {
-    const token = aboutWhich(tokens.tokens, message);
-    if (token === undefined) {
-      gaps.push({ outcome: "left-out", why: message });
-      continue;
-    }
-    gaps.push({
-      name: token.name,
-      label: tokenDisplayLabel(token),
-      outcome: "left-out",
-      why: plainWhy(message.slice(token.name.length + 3)),
-    });
-  }
+  const gaps: ExportGap[] = [
+    ...skipped.map(message => gapNamedBy(tokens, message, "left-out")),
+    ...lost.map(message => gapNamedBy(tokens, message, "without-data")),
+  ];
   for (const name of kept) {
     const token = byName.get(name);
     if (token === undefined) continue;
@@ -1260,6 +1269,22 @@ function gapsOf(
     });
   }
   return gaps;
+}
+
+/** One engine sentence as a row of the list, under the variable it names. */
+function gapNamedBy(
+  tokens: SiteTokenSet,
+  message: string,
+  outcome: ExportGap["outcome"]
+): ExportGap {
+  const token = aboutWhich(tokens.tokens, message);
+  if (token === undefined) return { outcome, why: message };
+  return {
+    name: token.name,
+    label: tokenDisplayLabel(token),
+    outcome,
+    why: plainWhy(message.slice(token.name.length + 3)),
+  };
 }
 
 /**
@@ -1309,6 +1334,10 @@ const PLAIN_WHY: readonly (readonly [
   string | ((match: RegExpExecArray) => string),
 ])[] = [
   [/^is a shadow\./, "Figma keeps shadows as effect styles, not variables."],
+  [
+    /^carries vendor data that a file cannot hold/,
+    "It holds data from another tool that a file can't store, so the file has its value but not that data. Importing the file back treats it as a new variable.",
+  ],
   [
     /^is a size Figma cannot read/,
     "Figma takes sizes in px or rem, and fluid sizes that end in px or rem.",

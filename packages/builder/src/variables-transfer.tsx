@@ -144,6 +144,16 @@ export function useVariablesTransfer({
     },
     []
   );
+  // The toast whose button opens the list. The list is this panel's state,
+  // so when the panel goes the toast goes with it: left behind, its button
+  // would open nothing, then or after the panel comes back.
+  const listed = React.useRef<string | number | null>(null);
+  React.useEffect(
+    () => () => {
+      if (listed.current !== null) toast.dismiss(listed.current);
+    },
+    []
+  );
 
   const refuse = (headline: string, detail: readonly string[] = []): void =>
     sayUntilDismissed("error", headline, detail);
@@ -235,25 +245,25 @@ export function useVariablesTransfer({
               },
             },
           };
-    if (written.length === 0) {
-      toast.error(
-        set.tokens.length === 0
-          ? "No file was written: this site has no variables to write."
-          : "No file was written.",
-        list
-      );
-      return;
-    }
-    // Each file named in words, so an author knows which file holds what
-    // without opening it, and how many files to look for.
-    toast(
-      `${kind.done}: ${written.map(file => file.label).join(kind.join)} (${counted(
-        written.length,
-        "file",
-        "files"
-      )})`,
-      list
-    );
+    const shown =
+      written.length === 0
+        ? toast.error(
+            set.tokens.length === 0
+              ? "No file was written: this site has no variables to write."
+              : "No file was written.",
+            list
+          )
+        : // Each file named in words, so an author knows which file holds
+          // what without opening it, and how many files to look for.
+          toast(
+            `${kind.done}: ${written.map(file => file.label).join(kind.join)} (${counted(
+              written.length,
+              "file",
+              "files"
+            )})`,
+            list
+          );
+    listed.current = gaps.length === 0 ? null : shown;
   };
 
   const copy = (): void => {
@@ -264,7 +274,7 @@ export function useVariablesTransfer({
       );
       return;
     }
-    const css = variableCss(set);
+    const { css, skipped } = variableCss(set);
     if (css === "") {
       toast.error("This site has no variables to copy.");
       return;
@@ -286,7 +296,17 @@ export function useVariablesTransfer({
       return;
     }
     void clipboard.writeText(css).then(() => {
-      toast(said);
+      if (skipped.length === 0) {
+        toast(said);
+        return;
+      }
+      // Copied in part: what is missing is named, and stays named until the
+      // author has read it, as an import refused in part is.
+      sayUntilDismissed(
+        "warning",
+        `${said}. ${counted(skipped.length, "variable was", "variables were")} left out:`,
+        skipped
+      );
     }, refused);
   };
 
@@ -579,7 +599,7 @@ function NotExportedList({
                 className="nx-design-gaps__outcome"
                 data-outcome={gap.outcome}
               >
-                {gap.outcome === "kept" ? WORDS.kept : WORDS.leftOut}
+                {OUTCOME_WORDS[gap.outcome]}
               </span>
               <span className="nx-design-gaps__why">{gap.why}</span>
             </li>
@@ -594,6 +614,13 @@ function NotExportedList({
     </Dialog>
   );
 }
+
+/** What happened to a variable, as the list says it. */
+const OUTCOME_WORDS: Readonly<Record<ExportGap["outcome"], string>> = {
+  kept: WORDS.kept,
+  "left-out": WORDS.leftOut,
+  "without-data": WORDS.withoutData,
+};
 
 /** One entry per variable and outcome, however many files named it. */
 function oncePerVariable(gaps: readonly ExportGap[]): ExportGap[] {

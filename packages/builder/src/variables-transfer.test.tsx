@@ -38,10 +38,13 @@ function Host({
   tokens,
   readOnly = false,
   onChange = () => undefined,
+  toaster = true,
 }: {
   tokens: SiteTokenSet;
   readOnly?: boolean;
   onChange?: (tokens: SiteTokenSet) => void;
+  /** Off where the toaster lives above the panel, as in the editor. */
+  toaster?: boolean;
 }): React.JSX.Element {
   const latest = React.useRef(tokens);
   const transfer = useVariablesTransfer({
@@ -56,6 +59,24 @@ function Host({
     <>
       <div data-testid="header">{transfer.menu}</div>
       <div data-testid="panel">{transfer.overlays}</div>
+      {toaster ? <Toaster /> : null}
+    </>
+  );
+}
+
+/**
+ * The Design panel beside a switch to another panel, with the toaster above
+ * both, as the editor has it: leaving Design unmounts the menu and its list
+ * while a toast it raised is still on screen.
+ */
+function Switching({ tokens }: { tokens: SiteTokenSet }): React.JSX.Element {
+  const [design, setDesign] = React.useState(true);
+  return (
+    <>
+      {design ? <Host tokens={tokens} toaster={false} /> : null}
+      <button type="button" onClick={() => setDesign(false)}>
+        Layers
+      </button>
       <Toaster />
     </>
   );
@@ -315,6 +336,23 @@ describe("What wasn't exported", () => {
     ).toBeDefined();
   });
 
+  it("takes its button off the toast when the author leaves Design", async () => {
+    render(<Switching tokens={WITH_SHADOW} />);
+    await choose("Export for Figma");
+    const toast = await toastSaying(/Exported for Figma/);
+    expect(
+      within(toast).getByRole("button", { name: "What wasn't exported" })
+    ).toBeDefined();
+    fireEvent.click(screen.getByRole("button", { name: "Layers" }));
+    // The list belonged to the panel that has gone, so a button left on the
+    // toast would open nothing, then or after Design comes back.
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("button", { name: "What wasn't exported" })
+      ).toBeNull();
+    });
+  });
+
   it("takes focus when opened from the toast, and closes with Escape back to the ⋯ button", async () => {
     render(<Host tokens={WITH_SHADOW} />);
     await choose("Export for Figma");
@@ -491,6 +529,36 @@ describe("Copy CSS variables", () => {
     render(<Host tokens={WITH_DARK} />);
     await choose("Copy CSS variables");
     await toastSaying(/couldn't be copied/);
+  });
+
+  it("names a variable the copy left out, until the author dismisses it", async () => {
+    // Two code names that make one CSS name: the sheet writes the first and
+    // leaves the second out, and so does the copy.
+    render(
+      <Host
+        tokens={{
+          tokens: [
+            {
+              name: "color.primary-dark",
+              kind: "color",
+              values: { light: "#111111" },
+            },
+            {
+              name: "color-primary.dark",
+              kind: "color",
+              values: { light: "#222222" },
+            },
+          ],
+        }}
+      />
+    );
+    await choose("Copy CSS variables");
+    const toast = await toastSaying(/1 variable was left out/);
+    expect(within(toast).getByText(/color-primary\.dark/)).toBeDefined();
+    expect(
+      within(toast).getByRole("button", { name: "Dismiss" })
+    ).toBeDefined();
+    expect(copied[0]).toContain("--site-color-primary-dark:#111111");
   });
 
   it("is offered to an author who may not change the design", async () => {

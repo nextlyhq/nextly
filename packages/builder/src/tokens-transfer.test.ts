@@ -68,7 +68,7 @@ describe("what comes out", () => {
     // whatever either is passed, so a wrong argument would break neither
     // side. `emitTokenBlocks` is the function that decides what a token
     // declaration IS, and the site sheet is reached by a different route.
-    const css = variableCss(SITE);
+    const { css } = variableCss(SITE);
     const declared = emitTokenBlocks(SITE, ":root").css;
     expect(declared).not.toBe("");
     for (const property of [
@@ -815,7 +815,7 @@ describe("what a file can and cannot carry back out", () => {
   it("hands over NOTHING when there is no CSS to copy", () => {
     // A lone newline would be copied and confirmed, telling an author their
     // variables were copied when nothing was.
-    expect(variableCss({ tokens: [] })).toBe("");
+    expect(variableCss({ tokens: [] })).toEqual({ css: "", skipped: [] });
   });
 });
 
@@ -2018,6 +2018,46 @@ describe("what an export says it did not write", () => {
     ]);
   });
 
+  it("says a variable that lost only its vendor data was exported without it", () => {
+    const gaps = exportDtcg({
+      tokens: [
+        {
+          name: "color.ink",
+          label: "Ink",
+          kind: "color",
+          values: { light: "#111111" },
+          extensions: { vendor: new Map([["lost", 1]]) } as never,
+        },
+      ],
+    }).gaps;
+    expect(gaps).toEqual([
+      {
+        name: "color.ink",
+        label: "Ink",
+        outcome: "without-data",
+        why: "It holds data from another tool that a file can't store, so the file has its value but not that data. Importing the file back treats it as a new variable.",
+      },
+    ]);
+  });
+
+  it("never calls a value kept for Nextly left out because its vendor data was lost", () => {
+    const gaps = exportDtcg({
+      tokens: [
+        {
+          name: "space.lead",
+          label: "Lead",
+          kind: "dimension",
+          values: { light: "1.5em" },
+          extensions: { vendor: new Map([["lost", 1]]) } as never,
+        },
+      ],
+    }).gaps;
+    expect(gaps.map(gap => gap.outcome).sort()).toEqual([
+      "kept",
+      "without-data",
+    ]);
+  });
+
   it("names nothing when every variable was written", () => {
     expect(exportDtcgWithTheme(SITE).flatMap(file => file.gaps)).toEqual([]);
     expect(exportForFigma(SITE).flatMap(file => file.gaps)).toEqual([]);
@@ -2115,7 +2155,7 @@ describe("the CSS variables an author copies", () => {
   };
 
   it("are the site sheet's own variable blocks, light and dark", () => {
-    const copied = variableCss(DARK);
+    const copied = variableCss(DARK).css;
     const sheet = compileSiteSheet(
       { tokens: DARK, breakpoints: { viewport: [], container: [] } },
       {}
@@ -2129,7 +2169,7 @@ describe("the CSS variables an author copies", () => {
   });
 
   it("follow the site's prefix", () => {
-    const copied = variableCss({ ...DARK, prefix: "--brand-" });
+    const copied = variableCss({ ...DARK, prefix: "--brand-" }).css;
     expect(copied).toContain("--brand-color-brand:");
     expect(copied).not.toContain("--site-");
   });
