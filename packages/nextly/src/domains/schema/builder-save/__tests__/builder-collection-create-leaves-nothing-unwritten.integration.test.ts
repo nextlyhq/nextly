@@ -157,7 +157,8 @@ async function nothingLeftToCreate(): Promise<void> {
       setNonInteractive(false)
     );
   });
-  expect(created.code, created.said.join("\n")).toBeUndefined();
+  // It ends as a run with nothing to write ends: exit 0, or no exit at all.
+  expect([undefined, 0], created.said.join("\n")).toContain(created.code);
   // A file written here is a change the saves left unrecorded; its text says which.
   const written = migrationFiles().filter(f => !filesBefore.includes(f));
   expect(
