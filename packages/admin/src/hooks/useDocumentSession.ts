@@ -34,6 +34,8 @@
 
 import { useCallback, useMemo, useRef, type MutableRefObject } from "react";
 
+import { effectiveEntryStatus } from "@admin/components/features/entries/EntryForm/entry-address";
+import type { EntryData } from "@admin/components/features/entries/EntryForm/useEntryForm";
 import { useCollectionSchema } from "@admin/hooks/queries/useCollections";
 import {
   useDocumentLock,
@@ -42,6 +44,7 @@ import {
 import { useStoredEntry } from "@admin/hooks/queries/useStoredReferences";
 import { useUpdateEntry } from "@admin/hooks/queries/useUpdateEntry";
 import { useCan } from "@admin/hooks/useCan";
+import { useAsksTranslationStatus } from "@admin/hooks/useCanRequest";
 import {
   autosaveScopeFor,
   documentRecordingKey,
@@ -63,7 +66,7 @@ import {
 import { parseServerErrorMessage } from "@admin/lib/errors/error-mapping";
 import { readsHeldDraft } from "@admin/lib/held-draft";
 import type { UpdateEntryPayload } from "@admin/services/entryApi";
-import { versionApi } from "@admin/services/versionApi";
+import { versionApi, type VersionScope } from "@admin/services/versionApi";
 
 /** A document as stored: its values at depth 0, related items by their ids. */
 type StoredDocument = Record<string, unknown>;
@@ -128,7 +131,8 @@ export type DocumentSessionLock =
  * Why a save or publish did not happen: a newer version was saved since this
  * copy was read (`stale`), this session does not hold the lock (`locked`),
  * the collection keeps no drafts for a published document (`no-drafts`), the
- * document has not been read yet (`unread`), or the server refused it
+ * document has not been read yet (`unread`), the caller named another
+ * document before it was sent (`moved`), or the server refused it
  * (`refused`).
  *
  * @experimental Settles with editing a second document in place.
@@ -138,6 +142,7 @@ export type DocumentSessionRefusal =
   | "locked"
   | "no-drafts"
   | "unread"
+  | "moved"
   | "refused";
 
 /**
@@ -225,9 +230,20 @@ function refusalOf(error: unknown): DocumentSessionOutcome {
       };
 }
 
-/** Whether a read document is live. */
-function isPublished(document: StoredDocument): boolean {
-  return document.status === "published";
+/**
+ * Whether the language a document was read in is live: the language's own
+ * state where the read carries every language's (`_translations`), else the
+ * row's, by the rule the document's own editor reads it with.
+ */
+function isPublished(
+  document: StoredDocument,
+  locale: string | undefined,
+  defaultLocale: string | undefined
+): boolean {
+  return (
+    effectiveEntryStatus(document as EntryData, locale, defaultLocale) ===
+    "published"
+  );
 }
 
 /** Whether "Save as draft" can store a document without changing what is live. */
@@ -284,9 +300,66 @@ function targetKey(target: DocumentSessionTarget | null): string | null {
 /** The document as read, and what its collection keeps. */
 interface SessionRead {
   readonly document: StoredDocument | undefined;
+  /** Whether the language read is live. */
+  readonly published: boolean;
   readonly open: DocumentSessionOpen;
   readonly hasStatus: boolean;
   readonly keepsDrafts: boolean;
+  /** Read the document again, answering it as stored now. */
+  readonly refresh: () => Promise<StoredDocument | undefined>;
+  /** Whether `document` is live, read in the target's language. */
+  readonly publishedOf: (document: StoredDocument) => boolean;
+}
+
+/** The document as the session's caller is told it, once it is read. */
+function readyOpen(
+  document: StoredDocument,
+  published: boolean,
+  draftable: boolean
+): DocumentSessionOpen {
+  return {
+    status: "ready",
+    values: document,
+    published,
+    unpublishedChanges: !published || document._isWorkingDraft === true,
+    changedAt:
+      typeof document.updatedAt === "string" ? document.updatedAt : null,
+    draftable,
+  };
+}
+
+/**
+ * The named document's stored read: in the language named alone, with every
+ * language's state where the person may read it, so a translation is judged
+ * live or not by its own state rather than the default language's.
+ */
+function useStoredSessionDocument(
+  target: DocumentSessionTarget | null,
+  keepsDrafts: boolean,
+  ready: boolean
+): {
+  read: ReturnType<typeof useStoredEntry>;
+  publishedOf: (document: StoredDocument) => boolean;
+} {
+  const slug = target?.collection ?? "";
+  const { enabled: localized, defaultLocale } = useLocalization();
+  const asksLanguages = useAsksTranslationStatus(slug);
+  const locale = target?.locale;
+  const read = useStoredEntry({
+    collectionSlug: slug,
+    entryId: target?.id ?? "",
+    draft: keepsDrafts,
+    ...(locale === undefined ? {} : { locale }),
+    ...(localized ? { fallbackLocale: "none" } : {}),
+    translationStatus: localized && asksLanguages,
+    enabled: target !== null && ready,
+  });
+  const language = localized ? defaultLocale : undefined;
+  const publishedOf = useCallback(
+    (stored: StoredDocument) => isPublished(stored, locale, language),
+    [locale, language]
+  );
+  return { read, publishedOf };
 }
 
 /**
@@ -297,51 +370,46 @@ interface SessionRead {
  * as another language's words a save or a recovery would then store.
  */
 function useSessionRead(target: DocumentSessionTarget | null): SessionRead {
-  const named = target !== null;
-  const slug = target?.collection ?? "";
   // Whether the collection keeps a working draft, which decides both how the
   // document is read and what "Save as draft" may send.
-  const schema = useCollectionSchema(named ? slug : undefined);
+  const schema = useCollectionSchema(target?.collection);
   const keepsDrafts = readsHeldDraft(schema.data);
   const hasStatus = schema.data?.status === true;
-  const { enabled: localized } = useLocalization();
-  const read = useStoredEntry({
-    collectionSlug: slug,
-    entryId: target?.id ?? "",
-    draft: keepsDrafts,
-    ...(target?.locale === undefined ? {} : { locale: target.locale }),
-    ...(localized ? { fallbackLocale: "none" } : {}),
-    enabled: named && schema.data !== undefined,
-  });
-  const document = named ? read.data : undefined;
+  const { read, publishedOf } = useStoredSessionDocument(
+    target,
+    keepsDrafts,
+    schema.data !== undefined
+  );
+  const document = target === null ? undefined : read.data;
   const failed = read.isError || schema.isError;
   const { refetch: refetchRead } = read;
   const { refetch: refetchSchema } = schema;
+  const refresh = useCallback(
+    async () => (await refetchRead()).data,
+    [refetchRead]
+  );
+  const retry = useCallback(() => {
+    void refetchSchema();
+    void refetchRead();
+  }, [refetchSchema, refetchRead]);
+  const published = document !== undefined && publishedOf(document);
+  const draftable = isDraftable(published, hasStatus, keepsDrafts);
   const open = useMemo((): DocumentSessionOpen => {
-    if (document !== undefined) {
-      const published = isPublished(document);
-      return {
-        status: "ready",
-        values: document,
-        published,
-        unpublishedChanges: !published || document._isWorkingDraft === true,
-        changedAt:
-          typeof document.updatedAt === "string" ? document.updatedAt : null,
-        draftable: isDraftable(published, hasStatus, keepsDrafts),
-      };
-    }
-    if (!failed) return { status: "loading" };
-    return {
-      status: "failed",
-      retry: () => {
-        void refetchSchema();
-        void refetchRead();
-      },
-    };
-  }, [document, hasStatus, keepsDrafts, failed, refetchRead, refetchSchema]);
+    if (document !== undefined)
+      return readyOpen(document, published, draftable);
+    return failed ? { status: "failed", retry } : { status: "loading" };
+  }, [document, published, draftable, failed, retry]);
   return useMemo(
-    () => ({ document, open, hasStatus, keepsDrafts }),
-    [document, open, hasStatus, keepsDrafts]
+    () => ({
+      document,
+      published,
+      open,
+      hasStatus,
+      keepsDrafts,
+      refresh,
+      publishedOf,
+    }),
+    [document, published, open, hasStatus, keepsDrafts, refresh, publishedOf]
   );
 }
 
@@ -394,7 +462,45 @@ interface SessionRecording {
   /** Edits up to `generation` were stored: nothing more to record for them. */
   readonly stored: (generation: number) => void;
   readonly cancel: () => void;
+  /** Record the edits not yet stored after all: a write that put it off failed. */
+  readonly resume: () => void;
   readonly discard: () => Promise<void>;
+}
+
+/** Record `snapshot` as the point, noting it as this recorder's once stored. */
+async function recordSnapshot(
+  scope: VersionScope | null,
+  snapshot: Record<string, unknown>,
+  locale: string | null,
+  storedRef: MutableRefObject<Record<string, unknown> | null>
+): ReturnType<typeof versionApi.saveAutosave> {
+  if (scope === null) throw new Error("session: no document to record");
+  const result = await versionApi.saveAutosave(scope, snapshot, locale);
+  storedRef.current = snapshot;
+  return result;
+}
+
+/**
+ * Whether the person's recovery point is still this recorder's to empty:
+ * nothing recorded since, its own recording the last stored, and the point
+ * holding what it recorded, by the server's own reading (another tab of the
+ * same person writes the same point).
+ */
+async function stillOwnsThePoint({
+  scope,
+  document,
+  mine,
+  unsettled,
+  stored,
+}: {
+  scope: VersionScope;
+  document: string;
+  mine: number;
+  unsettled: () => boolean;
+  stored: Record<string, unknown> | null;
+}): Promise<boolean> {
+  if (unsettled() || lastStoredRecording(document) !== mine) return false;
+  return holdsOwnRecording(scope, stored);
 }
 
 /**
@@ -414,59 +520,87 @@ function useSessionRecording(
     [slug, id]
   );
   const document = documentRecordingKey(scope);
-  const identity = document === null ? null : `${document}:${locale ?? ""}`;
   const snapshotRef = useRef<Record<string, unknown>>({});
   // What this recorder last stored, so a discard empties the point only
   // while it still holds that: another tab of the same person writes the
   // same point.
   const storedRef = useRef<Record<string, unknown> | null>(null);
-  // Each edit recorded counts one, and a save settles only the edits it
-  // took, so an edit made while it was on its way is still recorded.
-  const generationRef = useRef(0);
-  const settledRef = useRef(0);
+  const edits = useEditGenerations();
   const { schedule, cancel, lastSent } = useSnapshotAutosave({
-    identity,
+    identity: recordingIdentity(document, locale),
     document,
-    save: async () => {
-      if (scope === null) throw new Error("session: no document to record");
-      const snapshot = snapshotRef.current;
-      const result = await versionApi.saveAutosave(scope, snapshot, locale);
-      storedRef.current = snapshot;
-      return result;
-    },
+    save: () => recordSnapshot(scope, snapshotRef.current, locale, storedRef),
     enabled: held,
-    stillWanted: () => generationRef.current > settledRef.current,
+    stillWanted: edits.unsettled,
   });
   const record = useCallback(
     (stored: StoredDocument, changes: Readonly<Record<string, unknown>>) => {
       // The WHOLE document, since restoring a recovery point replaces every
       // value its editor holds: the read's values with the changes over them.
       snapshotRef.current = { ...withoutId(stored), ...changes };
-      generationRef.current += 1;
+      edits.bump();
       schedule();
     },
-    [schedule]
+    [edits, schedule]
   );
-  const generation = useCallback(() => generationRef.current, []);
-  const stored = useCallback((upTo: number) => {
-    settledRef.current = Math.max(settledRef.current, upTo);
-  }, []);
+  const resume = useCallback(() => {
+    if (edits.unsettled()) schedule();
+  }, [edits, schedule]);
   const discard = useCallback(async () => {
-    settledRef.current = generationRef.current;
+    edits.settle(edits.generation());
     cancel();
     const mine = lastSent();
     if (scope === null || document === null || mine === null) return;
-    await emptyThePoint(scope, locale, async () => {
-      // Nothing recorded since, by this recorder, and the point still holds
-      // what it recorded, by the server's own reading.
-      if (generationRef.current > settledRef.current) return false;
-      if (lastStoredRecording(document) !== mine) return false;
-      return holdsOwnRecording(scope, storedRef.current);
-    });
-  }, [cancel, scope, document, lastSent, locale]);
+    await emptyThePoint(scope, locale, () =>
+      stillOwnsThePoint({
+        scope,
+        document,
+        mine,
+        unsettled: edits.unsettled,
+        stored: storedRef.current,
+      })
+    );
+  }, [edits, cancel, scope, document, lastSent, locale]);
+  const { generation, settle: stored } = edits;
   return useMemo(
-    () => ({ document, record, generation, stored, cancel, discard }),
-    [document, record, generation, stored, cancel, discard]
+    () => ({ document, record, generation, stored, cancel, resume, discard }),
+    [document, record, generation, stored, cancel, resume, discard]
+  );
+}
+
+/** What a recording of `document` in `locale` is keyed by, as the form's is. */
+function recordingIdentity(
+  document: string | null,
+  locale: string | null
+): string | null {
+  return document === null ? null : `${document}:${locale ?? ""}`;
+}
+
+/**
+ * The edits recorded, counted, and how many of them a save has stored: a
+ * save settles only the edits it took, so an edit made while it was on its
+ * way is still recorded.
+ */
+function useEditGenerations(): {
+  readonly bump: () => void;
+  readonly generation: () => number;
+  readonly settle: (upTo: number) => void;
+  readonly unsettled: () => boolean;
+} {
+  const generationRef = useRef(0);
+  const settledRef = useRef(0);
+  return useMemo(
+    () => ({
+      bump: () => {
+        generationRef.current += 1;
+      },
+      generation: () => generationRef.current,
+      settle: (upTo: number) => {
+        settledRef.current = Math.max(settledRef.current, upTo);
+      },
+      unsettled: () => generationRef.current > settledRef.current,
+    }),
+    []
   );
 }
 
@@ -476,21 +610,27 @@ function useSessionRecording(
  */
 function mayWrite(
   read: SessionRead,
+  document: StoredDocument | undefined,
   held: boolean,
   intent: "draft" | "publish"
 ):
-  | { readonly document: StoredDocument }
+  | { readonly published: boolean }
   | { readonly refused: DocumentSessionRefusal } {
-  const { document } = read;
   if (document === undefined) return { refused: "unread" };
   if (!held) return { refused: "locked" };
+  const published = read.publishedOf(document);
   if (
     intent === "draft" &&
-    !isDraftable(isPublished(document), read.hasStatus, read.keepsDrafts)
+    !isDraftable(published, read.hasStatus, read.keepsDrafts)
   ) {
     return { refused: "no-drafts" };
   }
-  return { document };
+  return { published };
+}
+
+/** A refusal decided before anything was sent. */
+function refused(reason: DocumentSessionRefusal): DocumentSessionOutcome {
+  return { ok: false, reason, message: null };
 }
 
 /**
@@ -516,40 +656,58 @@ function useSessionWrite(
     // The read stays what was stored until the server says otherwise.
     optimistic: false,
   });
-  // The document named now: a write's answer that lands after the caller
-  // named another changes nothing of the session it left.
+  // The document named now: a write that waited while the caller named
+  // another is not sent, and an answer that lands after it changes nothing
+  // of the session it left.
   const currentKey = useRef(targetKey(target));
   currentKey.current = targetKey(target);
+  // Whether a write has landed that the read has not caught up with: the
+  // next write reads the document again first, so it judges the status the
+  // last one left (a publish makes a draft's next save a working draft).
+  const readBehind = useRef<StoredDocument | undefined | null>(null);
+  if (readBehind.current !== null && readBehind.current !== read.document) {
+    readBehind.current = null;
+  }
 
   const write = useCallback(
     async (
       changes: Readonly<Record<string, unknown>>,
       intent: "draft" | "publish"
     ): Promise<DocumentSessionOutcome> => {
-      const verdict = mayWrite(read, held, intent);
-      if ("refused" in verdict) {
-        return { ok: false, reason: verdict.refused, message: null };
-      }
       const key = currentKey.current;
+      const moved = () => currentKey.current !== key;
+      const document =
+        readBehind.current === null ? read.document : await read.refresh();
+      if (moved()) return refused("moved");
+      const verdict = mayWrite(read, document, held, intent);
+      if ("refused" in verdict) return refused(verdict.refused);
       const taken = recording.generation();
       // A recording landing after the write would put the work back as a
       // recovery point, so the ones on their way land first.
       recording.cancel();
       await recordingsSettled(recording.document);
+      // Taken before anything else is awaited, and only while the session
+      // still names the document it judged: the update is bound to the
+      // document named now.
       const version = versionRef.current;
+      if (moved()) return refused("moved");
       const payload: UpdateEntryPayload = {
         ...changedFields(changes),
-        ...statusFor(intent, isPublished(verdict.document), read.hasStatus),
+        ...statusFor(intent, verdict.published, read.hasStatus),
         ...(version === undefined ? {} : { [DOCUMENT_VERSION_KEY]: version }),
       };
       try {
         const result = await mutateAsync(payload);
-        if (currentKey.current === key) {
+        if (!moved()) {
           versionRef.current = versionOf(result.item) ?? versionRef.current;
           recording.stored(taken);
+          readBehind.current = read.document;
         }
         return { ok: true, values: result.item };
       } catch (error) {
+        // The edits are still unsaved, so the recording the write put off is
+        // made after all.
+        if (!moved()) recording.resume();
         return refusalOf(error);
       }
     },
