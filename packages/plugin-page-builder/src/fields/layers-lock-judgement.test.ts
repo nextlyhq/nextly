@@ -18,7 +18,10 @@ import {
 } from "@nextlyhq/plugin-sdk";
 import { describe, expect, it, vi } from "vitest";
 
-import { DOCUMENT_FORMAT_VERSION } from "@nextlyhq/blocks-engine";
+import {
+  DOCUMENT_FORMAT_VERSION,
+  type MigrationSource,
+} from "@nextlyhq/blocks-engine";
 
 import type { OpenRemovalReader } from "../breakpoint-removal/lock-acceptance";
 import type { Removal } from "../breakpoint-removal/strip";
@@ -273,6 +276,58 @@ describe("layersLockIssues", () => {
     expect(
       await layersLockIssues(value, argsFor(writeTo(readStored)), "Content")
     ).toHaveLength(1);
+  });
+});
+
+describe("layersLockIssues, on a locked block stored at an older version", () => {
+  /** A Quote whose version 2 moved its source address to `href`. */
+  const quoteSource: MigrationSource = {
+    get: type =>
+      type === "core/quote"
+        ? {
+            version: 2,
+            migrate: { 1: props => props },
+            renames: { 1: { citeUrl: "href" } },
+          }
+        : undefined,
+  };
+  const page = (node: Record<string, unknown>) => ({
+    formatVersion: DOCUMENT_FORMAT_VERSION,
+    kind: "page",
+    nodes: [{ id: "q", type: "core/quote", locked: true, ...node }],
+  });
+  const stored = page({ version: 1, props: { citeUrl: "/talk" } });
+  const judge = (value: unknown, migration?: MigrationSource) =>
+    layersLockIssues(
+      value,
+      argsFor(writeTo(async () => ({ kind: "value" as const, value: stored }))),
+      "Content",
+      undefined,
+      undefined,
+      migration
+    );
+
+  it("keeps a write holding it upgraded, as the editor opened it", async () => {
+    // The editor upgrades every block it opens, so a save of an unrelated
+    // edit carries the locked Quote at version 2 with its address moved.
+    const upgraded = page({ version: 2, props: { href: "/talk" } });
+    expect(await judge(upgraded, quoteSource)).toEqual([]);
+    // CONTROL: judged against the stored form as it was, the same write
+    // reads as the locked block changed.
+    expect(await judge(upgraded)).toEqual([
+      expect.objectContaining({ code: LAYERS_LOCK_CHANGED }),
+    ]);
+  });
+
+  it("keeps a write holding it as stored, from a client that did not upgrade it", async () => {
+    expect(await judge(stored, quoteSource)).toEqual([]);
+  });
+
+  it("still refuses a change to the locked block", async () => {
+    const changed = page({ version: 2, props: { href: "/elsewhere" } });
+    expect(await judge(changed, quoteSource)).toEqual([
+      expect.objectContaining({ code: LAYERS_LOCK_CHANGED }),
+    ]);
   });
 });
 

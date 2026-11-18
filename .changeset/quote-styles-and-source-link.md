@@ -37,7 +37,8 @@ colour), Plain and Large, the same on the canvas and the live page. Its stored s
 is version 2: a Quote saved before is upgraded when it is read, its source address
 moved to the link's address, on a page or inside a component, together with a field
 bound to it. A migration step may now rename props (`renames`), and a value bound to
-a renamed prop moves with it. The page builder opens a page with every block at its
-current version, so an edit saves the block upgraded, and opening a page alone marks
-nothing as changed. Existing Quotes now draw the Line style and link their source's
-title.
+a renamed prop moves with it, and so does a component's exposure of it. The page
+builder opens a page with every block at its current version, so an edit saves the
+block upgraded, and opening a page alone marks nothing as changed; a locked block
+saved upgraded is not read as changed. Existing Quotes now draw the Line style and
+link their source's title.

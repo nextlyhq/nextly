@@ -18,8 +18,10 @@
  */
 import {
   layersLockChanges,
+  migrateDocument,
   type BlockDocument,
   type LayersLockChange,
+  type MigrationSource,
 } from "@nextlyhq/blocks-engine";
 import type {
   PluginFieldIssue,
@@ -114,7 +116,14 @@ export async function layersLockIssues(
   args: PluginFieldValidateArgs,
   label: string,
   onUnjudged?: (found: LayersLockUnjudged) => void,
-  openRemoval?: OpenRemovalReader
+  openRemoval?: OpenRemovalReader,
+  /**
+   * The site's block versions and upgrade steps. The write and the stored
+   * form are compared with every block upgraded, as the editor holds them:
+   * a block stored at an older version reaches the save upgraded by the
+   * editor that opened it, and must not read as a locked block changed.
+   */
+  migration?: MigrationSource
 ): Promise<PluginFieldIssue[]> {
   if (!judgesLayersLocks(args) || args.write === undefined) return [];
   if (!isTopLevel(args.path)) {
@@ -143,9 +152,12 @@ export async function layersLockIssues(
     });
     return [];
   }
-  const [newest] = stored.forms;
-  if (newest === undefined) return [];
-  const changes = layersLockChanges(value, newest);
+  const [held] = stored.forms;
+  if (held === undefined) return [];
+  const upgrade = upgradedBy(migration);
+  const newest = upgrade(held);
+  const written = upgrade(value);
+  const changes = layersLockChanges(written, newest);
   if (changes.length === 0) return [];
   // Asked only once a lock is broken, so a write breaking none reads nothing.
   const work = await openRemovalFor(openRemoval, args.write);
@@ -157,10 +169,25 @@ export async function layersLockIssues(
           work,
           lockTargetOf(args.write, args.path)
         );
-  if (accepted.some(form => layersLockChanges(value, form).length === 0)) {
+  if (accepted.some(form => layersLockChanges(written, form).length === 0)) {
     return [];
   }
   return layersLockIssuesFor(changes, args.path, label);
+}
+
+/**
+ * A value with every block in it upgraded to its current version, for a
+ * comparison only; never stored. A value that is not a document, and every
+ * value when no migration source was given, is compared as it came.
+ */
+function upgradedBy(
+  migration: MigrationSource | undefined
+): <T>(value: T) => T {
+  return value =>
+    migration === undefined || !isForest(value)
+      ? value
+      : (migrateDocument(value as BlockDocument, migration)
+          .doc as typeof value);
 }
 
 /**

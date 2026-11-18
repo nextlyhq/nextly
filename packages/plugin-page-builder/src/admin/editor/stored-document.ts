@@ -100,7 +100,13 @@ function atCurrentVersions(doc: BlockDocument): BlockDocument {
     doc,
     migrationSourceFor(entryBlockResolver())
   );
-  return migrated.rewritten.length === 0 && migrated.failures.length === 0
-    ? doc
-    : migrated.doc;
+  // Judged by the nodes, not by `rewritten`: that names only nodes whose
+  // PROPS were replaced, and an upgrade may change a node's version and its
+  // bindings alone (a source address held only as a binding). Migration
+  // returns each node it left untouched as the very object it was handed, so
+  // the same objects in the same places mean nothing was upgraded.
+  const unchanged =
+    migrated.doc.nodes.length === doc.nodes.length &&
+    migrated.doc.nodes.every((node, index) => node === doc.nodes[index]);
+  return unchanged ? doc : migrated.doc;
 }

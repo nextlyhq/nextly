@@ -160,6 +160,52 @@ describe.each(getConfiguredTestDialects())(
       expect(issues[0]!.message).toContain('"Hero" is locked in Layers');
     }
 
+    it("keeps a save carrying a locked block upgraded, as the editor opened it", async () => {
+      // Stored before Quote's version 2 moved its source address to `href`.
+      const quoteAt = (extra: Record<string, unknown>): Node => ({
+        id: "said",
+        type: "core/quote",
+        locked: true,
+        name: "Said",
+        ...extra,
+      });
+      const old = quoteAt({
+        version: 1,
+        props: { text: "Words", source: "Ada", citeUrl: "https://a.test/" },
+      });
+      const { update } = await storedPage([old, heading("free")]);
+      // The editor upgrades every block it opens, so a save of an edit
+      // elsewhere carries the locked Quote at version 2.
+      const upgraded = quoteAt({
+        version: 2,
+        props: { text: "Words", source: "Ada", href: "https://a.test/" },
+      });
+      await expect(
+        update(pageOf([upgraded, heading("free", { props: { text: "New" } })]))
+      ).resolves.toBeDefined();
+      // A real change to the locked Quote is still refused.
+      const issues = issuesOf(
+        await refusalOf(
+          update(
+            pageOf([
+              quoteAt({
+                version: 2,
+                props: {
+                  text: "Changed",
+                  source: "Ada",
+                  href: "https://a.test/",
+                },
+              }),
+              heading("free"),
+            ])
+          )
+        )
+      );
+      expect(issues).toEqual([
+        expect.objectContaining({ path: "content", code: LAYERS_LOCK_CHANGED }),
+      ]);
+    });
+
     it("refuses changing, moving or removing a locked block, naming it", async () => {
       const { update, read } = await storedPage();
       // CONTROL: the stored page sent back unchanged saves, so every refusal
