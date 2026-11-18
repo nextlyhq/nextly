@@ -494,6 +494,14 @@
   color: color-mix(in oklab, currentColor 55%, transparent);
 }
 
+/* A quote sits low in its stage, a little smaller, so the chosen tile's
+   tick in the corner never covers its words. */
+.nx-look-tile__frame[data-kind="quote"] {
+  --nx-look-sample-scale: 0.42;
+  place-items: end center;
+  padding-block-end: 0.5rem;
+}
+
 /* A quote's words, two lines at most. */
 .nx-look-tile__specimen[data-kind="quote"] {
   inline-size: 9rem;
