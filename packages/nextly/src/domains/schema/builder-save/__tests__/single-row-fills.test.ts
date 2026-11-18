@@ -58,6 +58,27 @@ describe("a Single's row answers", () => {
     });
   });
 
+  // The push offers no default for a unique column, so it leaves a unique field to the person;
+  // the file still fills the row with it.
+  it("leaves a required unique field out of the push's answers, and fills it on the file", () => {
+    const { fileAnswers, legacyBundle, settledOnPush } = answersFor(
+      [BODY],
+      [
+        BODY,
+        {
+          name: "code",
+          type: "text",
+          required: true,
+          unique: true,
+          defaultValue: "U1",
+        },
+      ]
+    );
+    expect(legacyBundle?.byFieldName.code).toBeUndefined();
+    expect(fileAnswers.rowFills).toEqual([{ field: "code", value: "U1" }]);
+    expect([...settledOnPush]).toEqual([]);
+  });
+
   it("leaves a field the person answered with a typed answer to that answer", () => {
     const { fileAnswers, legacyBundle } = answersFor(
       [BODY],

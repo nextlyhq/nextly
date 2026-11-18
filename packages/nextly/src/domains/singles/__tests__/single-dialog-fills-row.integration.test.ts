@@ -248,6 +248,46 @@ describeEachDialect(
       expect(body.hasDestructiveChanges).toBe(false);
     });
 
+    // A save that also changes a column's type takes the push road, which offers no default for
+    // a unique column: the review asks about a required unique field there, as it did before the
+    // row was filled, and the person's answer is what the save applies.
+    it("asks, on the push road, about a required unique field stating a default", async () => {
+      await save([BODY, { name: "count", type: "text" }]);
+      const fields: Field[] = [
+        BODY,
+        { name: "count", type: "number" },
+        {
+          name: "code",
+          type: "text",
+          required: true,
+          unique: true,
+          defaultValue: "U1",
+        },
+      ];
+      const answer = await dispatchSingles(
+        "previewSingleSchemaChanges",
+        { slug: "sdf_home" },
+        { fields }
+      );
+      const preview = (
+        answer instanceof Response ? await answer.json() : answer
+      ) as { data?: unknown } & Record<string, unknown>;
+      const body = (preview.data ?? preview) as {
+        interactiveFields?: { name: string }[];
+        classification?: string;
+      };
+      expect((body.interactiveFields ?? []).map(field => field.name)).toContain(
+        "code"
+      );
+      expect(body.classification).toBe("interactive");
+
+      await save(fields, {
+        resolutions: { code: { action: "mark_nullable" } },
+      });
+      expect(await nullable("code")).toBe(true);
+      expect((await row()).body).toBe("kept");
+    });
+
     it("still asks about a required field stating no default", async () => {
       await expect(
         save([BODY, { name: "tagline", type: "text", required: true }])
