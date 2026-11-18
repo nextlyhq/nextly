@@ -128,8 +128,8 @@ export async function collectTypeChange(
 
 /**
  * A verdict as the save's conversion leaves the value: a blank value the rules read as empty is
- * written as what the conversion writes for it (`blankAs`), which the new field then judges, as a
- * required list refuses the `[]` a blank link becomes.
+ * written as what the conversion writes for it (`blankAs`), and a stored empty list a list keeps
+ * stays `[]`; either is then judged by the new field, as a required list refuses `[]`.
  */
 function asConverted(
   verdict: ValueVerdict,
@@ -137,8 +137,14 @@ function asConverted(
   read: StoredAsRead
 ): ValueVerdict {
   if (verdict.reason !== "empty" || stored === null) return verdict;
-  if (read.blankAs === undefined) return verdict;
-  return { outcome: "changed", reason: "new-form", readsAs: read.blankAs };
+  if (read.blankAs !== undefined) {
+    return { outcome: "changed", reason: "new-form", readsAs: read.blankAs };
+  }
+  // A stored empty list the new type keeps as it is: still a value, which a required list refuses.
+  if (read.emptyListHeld && stored.trim() === "[]") {
+    return { outcome: "kept", reason: "same-value", readsAs: "[]" };
+  }
+  return verdict;
 }
 
 /** The values of one type change counted as they are judged: by outcome, by reason, and cleared. */

@@ -325,6 +325,27 @@ describe("a type change collected over its stored values", () => {
     expect(result.counts).toMatchObject({ lost: 2, changed: 1 });
   });
 
+  it("asks a required list whether it holds a stored empty list", async () => {
+    // `[]` is not a null, so no NOT NULL rule refuses it: the required field's own rule does.
+    const toField = {
+      name: "f",
+      type: "number",
+      hasMany: true,
+      required: true,
+    } as unknown as FieldDefinition;
+    const to = fieldTypeOnDialect(toField, "postgresql", "collection");
+    const result = await collectTypeChange(
+      typeOf("postgresql", "text", { hasMany: true }),
+      to,
+      stored("[]", null),
+      fieldAccepts(to, toField)
+    );
+    expect(result.cleared).toEqual([{ id: "1" }]);
+    expect(result.judgement.reasons.map(r => r.kind)).toEqual([
+      "field-refuses",
+    ]);
+  });
+
   it("blocks a relationship kept as a list becoming one link, where a row holds several", async () => {
     const list = typeOf("postgresql", "relationship", {
       relationTo: "people",
