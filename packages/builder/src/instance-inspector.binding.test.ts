@@ -296,6 +296,82 @@ describe("a placement's settings, bound to data", () => {
     });
   });
 
+  describe("a setting that feeds a component inside the component", () => {
+    const inner: ComponentDocument = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "component",
+      nodes: [
+        {
+          id: "label",
+          type: "acme/card-title",
+          version: 1,
+          props: { text: "Inner" },
+        },
+      ],
+      exposed: [
+        {
+          id: "caption.one",
+          label: "Caption",
+          nodeId: "label",
+          propPath: "text",
+          type: "text",
+        },
+      ],
+    } as ComponentDocument;
+    const outer: ComponentDocument = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "component",
+      nodes: [
+        {
+          id: "nested",
+          type: COMPONENT_INSTANCE_TYPE,
+          version: 1,
+          props: { componentId: "inner" },
+        },
+      ],
+      exposed: [
+        {
+          id: "headline",
+          label: "Headline",
+          nodeId: "nested",
+          propPath: "overrides.caption.one",
+          type: "text",
+        },
+        {
+          id: "shown",
+          label: "Shown",
+          nodeId: "nested",
+          propPath: "visibility",
+          type: "visibility",
+        },
+      ],
+    } as ComponentDocument;
+    const bound = { $bind: "title", source: "item", list: "l" };
+
+    it("keeps its binding's controls through a dotted id", () => {
+      const rows =
+        inspect({ "overrides.headline": bound }, undefined, {
+          card: outer,
+          inner,
+        })?.rows ?? [];
+      const headline = rows.find(row => row.id === "headline");
+      expect(headline?.bindable).toMatchObject({ type: "text" });
+      expect(headline?.binding).toEqual(bound);
+    });
+
+    it("keeps its binding's controls while the component inside is hidden", () => {
+      const rows =
+        inspect(
+          { "overrides.headline": bound },
+          { shown: false },
+          { card: outer, inner }
+        )?.rows ?? [];
+      const headline = rows.find(row => row.id === "headline");
+      expect(headline?.bindable).toMatchObject({ type: "text" });
+      expect(headline?.binding).toEqual(bound);
+    });
+  });
+
   it("keeps a binding's controls on a setting whose block is hidden here", () => {
     const bound = { $bind: "title", source: "item", list: "l" };
     // The Shown setting hides the title block on this placement.

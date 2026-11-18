@@ -51,6 +51,11 @@ export interface NodePlan {
    * written over the node's own binding of that prop.
    */
   bindings?: Record<string, unknown>;
+  /**
+   * Prop path to the placement's binding key that fills it, so a binding
+   * the page gave is still known as the page's inside a nested component.
+   */
+  bindingKeys?: Record<string, string>;
 }
 
 /**
@@ -172,11 +177,15 @@ export function relayOf(
   if (fed === undefined) return undefined;
   const relay = new Map<string, PropExposure>();
   for (const path of Object.keys(fed)) {
-    // The setting's id is the rest of the path as it is, dots included, as
-    // a placement's binding key names it.
-    const inner = boundSettingId(path);
+    // One segment only: a host value is written along the path, so a dotted
+    // id would get a value in the wrong place, and the canvas would offer an
+    // edit that doesn't show. A binding goes by the whole key instead.
+    const [head, inner, ...rest] = path.split(".");
+    if (head !== "overrides" || inner === undefined || rest.length > 0) {
+      continue;
+    }
     const host = fed[path];
-    if (inner !== undefined && host !== undefined) relay.set(inner, host);
+    if (host !== undefined) relay.set(inner, host);
   }
   return relay.size === 0 ? undefined : relay;
 }
@@ -875,6 +884,12 @@ function planBoundSettings(
     const plan = planFor(plans, property.nodeId);
     plan.bindings = { ...plan.bindings };
     defineEntry(plan.bindings, property.propPath, bound.get(property.id));
+    plan.bindingKeys = { ...plan.bindingKeys };
+    defineEntry(
+      plan.bindingKeys,
+      property.propPath,
+      settingBindingKey(property.id)
+    );
   }
 }
 

@@ -62,11 +62,13 @@ import {
   PenLine,
   RotateCcw,
   SquarePen,
+  Unlink,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import * as React from "react";
 
 import { BindableField } from "./binding-controls";
+import { unbindOp } from "./binding-ops";
 import type { UnbindPlanAnswer } from "./binding-services";
 import { BlockCard, type CardVerbs } from "./block-card";
 import { CanvasPassageContext } from "./canvas/canvas-passage";
@@ -443,6 +445,7 @@ function ExposedField({
             <span>{refusalAnnouncement(row.heldBy)}</span>
           </p>
         )}
+        <HeldBindingRemoval row={row} bind={bind} />
       </div>
       {/* Kept when empty, so every control ends at one edge, set or not. */}
       <span className="nx-inspector__exposed-reset-slot">
@@ -461,6 +464,42 @@ function ExposedField({
         ) : null}
       </span>
     </div>
+  );
+}
+
+/**
+ * The way back from a binding the page gave a setting its component has since
+ * locked: the field and its chip are held, but removing the binding gives
+ * the component's own value back, which the lock allows, so it is offered
+ * here, outside the held controls.
+ */
+function HeldBindingRemoval({
+  row,
+  bind,
+}: {
+  row: ExposedRow;
+  bind: SettingBinding | undefined;
+}): React.JSX.Element | null {
+  if (bind === undefined || row.heldBy === undefined) return null;
+  if (row.binding === undefined) return null;
+  const remove = (): void => {
+    const op = unbindOp(bind.document, bind.nodeId, settingBindingKey(row.id), {
+      set: {},
+    });
+    if (op !== null) bind.onApply(op);
+  };
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="sm"
+      aria-label={`Unbind ${row.label}`}
+      disabled={bind.locked}
+      onClick={remove}
+    >
+      <Unlink size={14} aria-hidden="true" />
+      Unbind
+    </Button>
   );
 }
 

@@ -14,6 +14,7 @@ import {
   DOCUMENT_FORMAT_VERSION,
   LIST_ENTRY_SLOT,
   registerBlocks,
+  resolveComponentInstances,
   type BlockDocument,
   type BlockNode,
   type BuilderOp,
@@ -105,7 +106,8 @@ const CARD: ComponentDocument = {
 
 /** The card placed in a Posts list's entry, as given. */
 function mount(
-  placement: Partial<BlockNode> = {}
+  placement: Partial<BlockNode> = {},
+  card: ComponentDocument = CARD
 ): EditorState & { apply: ReturnType<typeof vi.fn> } {
   registerBlocks(
     [
@@ -162,7 +164,10 @@ function mount(
     canRedo: false,
     undoDepth: 0,
     lockRefusalFor: () => undefined,
-    composed: () => undefined,
+    composed: () =>
+      resolveComponentInstances(current, new Map([["card", card]]), {
+        exposures: true,
+      }).document,
   } as unknown as EditorState & { apply: ReturnType<typeof vi.fn> };
   const services: ContentServices = {
     listBindingFields: async () => SOURCES,
@@ -173,8 +178,8 @@ function mount(
     <InspectorPanel
       editor={editor}
       componentLibrary={{
-        definitions: new Map([["card", CARD]]),
-        components: [{ id: "card", title: "Card", document: CARD }],
+        definitions: new Map([["card", card]]),
+        components: [{ id: "card", title: "Card", document: card }],
       }}
       contentServices={services}
     />
@@ -261,6 +266,33 @@ describe("a placement's setting bound to data", () => {
         unset: ["bindings"],
       })
     );
+  });
+
+  it("unbinds a setting its component locks, from beside the held field", async () => {
+    const [title, ...rest] = CARD.nodes;
+    const lockedCard = {
+      ...CARD,
+      nodes: [{ ...title, locked: true }, ...rest],
+    } as ComponentDocument;
+    const editor = mount(
+      {
+        bindings: {
+          "overrides.title": { $bind: "title", source: "item", list: "list" },
+        },
+      },
+      lockedCard
+    );
+    const unbind = (await screen.findByRole("button", {
+      name: "Unbind Title",
+    })) as HTMLButtonElement;
+    expect(unbind.disabled).toBe(false);
+    fireEvent.click(unbind);
+    expect(editor.apply).toHaveBeenCalledWith({
+      kind: "update",
+      id: "p",
+      patch: { props: { componentId: "card" } },
+      unset: ["bindings"],
+    });
   });
 
   it("holds the bind button while the placement is locked", () => {

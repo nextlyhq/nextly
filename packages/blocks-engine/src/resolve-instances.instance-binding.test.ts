@@ -419,18 +419,112 @@ describe("a placement's setting bound to data", () => {
         [exposure("headline", "nested", "overrides.caption.one")]
       );
 
-    it("maps a setting fed through a dotted id to the host's setting", () => {
-      const nodes = resolveComponentInstances(
-        page([placement("p1", "outer")]),
-        new Map([
-          ["inner", inner],
-          ["outer", outer(placement("nested", "inner"))],
-        ]),
-        { exposures: true }
-      ).document.nodes as ResolvedBlockNode[];
-      expect(composedOf(nodes, "label")?.exposedProps?.text?.id).toBe(
-        "headline"
+    it("offers no canvas edit through a dotted id, which a value written there can't reach", () => {
+      const composedWith = (props: Record<string, unknown>) =>
+        resolveComponentInstances(
+          page([placement("p1", "outer", props)]),
+          new Map([
+            ["inner", inner],
+            ["outer", outer(placement("nested", "inner"))],
+          ]),
+          { exposures: true }
+        ).document.nodes as ResolvedBlockNode[];
+      // A value for the host setting lands at overrides.caption.one as a
+      // path, not as the nested setting's own key, so it doesn't show.
+      const edited = composedWith({ overrides: { headline: "New" } });
+      expect(flatten(edited).some(entry => entry.props.text === "New")).toBe(
+        false
       );
+      expect(
+        composedOf(composedWith({}), "label")?.exposedProps
+      ).toBeUndefined();
+    });
+
+    it("keeps a page-owned fallback's address through the component inside", () => {
+      const toPricing: Binding = {
+        $bind: "url",
+        source: "item",
+        list: "posts",
+        fallback: "#pricing",
+      };
+      const linkedInner = component(
+        [heading("label")],
+        [exposure("go", "label", "href", "link")]
+      );
+      const anchored = component(
+        [
+          placement("nested", "inner"),
+          { ...heading("anchor"), attributes: { id: "pricing" } } as BlockNode,
+        ],
+        [exposure("goes", "nested", "overrides.go", "link")]
+      );
+      const nodes = compose(
+        page([
+          list("posts", [
+            placement("p1", "outer", {}, { "overrides.goes": toPricing }),
+          ]),
+        ]),
+        { inner: linkedInner, outer: anchored }
+      );
+      expect(composedOf(nodes, "label")?.bindings).toEqual({ href: toPricing });
+    });
+
+    it("keeps it the page's two components down", () => {
+      const toPricing: Binding = {
+        $bind: "url",
+        source: "item",
+        list: "posts",
+        fallback: "#pricing",
+      };
+      const anchor = { ...heading("anchor"), attributes: { id: "pricing" } };
+      const inner2 = component(
+        [heading("label")],
+        [exposure("go", "label", "href", "link")]
+      );
+      const middle = component(
+        [placement("deep", "inner"), anchor as BlockNode],
+        [exposure("via", "deep", "overrides.go", "link")]
+      );
+      const top = component(
+        [placement("nested", "middle"), anchor as BlockNode],
+        [exposure("goes", "nested", "overrides.via", "link")]
+      );
+      const nodes = compose(
+        page([
+          list("posts", [
+            placement("p1", "top", {}, { "overrides.goes": toPricing }),
+          ]),
+        ]),
+        { inner: inner2, middle, top }
+      );
+      expect(composedOf(nodes, "label")?.bindings).toEqual({ href: toPricing });
+    });
+
+    it("still re-points a fallback the component's own placement binds", () => {
+      const ownLink: Binding = {
+        $bind: "url",
+        source: "entry",
+        fallback: "#pricing",
+      };
+      const linkedInner = component(
+        [heading("label")],
+        [exposure("go", "label", "href", "link")]
+      );
+      const anchored = component(
+        [
+          placement("nested", "inner", {}, { "overrides.go": ownLink }),
+          { ...heading("anchor"), attributes: { id: "pricing" } } as BlockNode,
+        ],
+        []
+      );
+      const nodes = compose(page([placement("p1", "outer")]), {
+        inner: linkedInner,
+        outer: anchored,
+      });
+      const href = composedOf(nodes, "label")?.bindings?.href as
+        | Binding
+        | undefined;
+      expect(href?.fallback).toMatch(/^#pricing-/);
     });
 
     it("maps nothing where a setting the host does not feed is bound over it", () => {
