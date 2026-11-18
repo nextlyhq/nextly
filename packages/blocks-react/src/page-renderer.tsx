@@ -6,6 +6,7 @@ import {
   ownLooksRead,
   PAGE_ROOT_CLASS,
   resolveSiteTokens,
+  type BindingRun,
   type BlockDocument,
   type NamedClass,
   type DefinitionsById,
@@ -32,12 +33,19 @@ import {
   type PageContext,
   type PageIssue,
 } from "./context";
+import {
+  pageOutline,
+  withOutline,
+  type OutlineArea,
+  type OutlinePart,
+} from "./outline";
 import { BlockPlaceholder } from "./placeholder";
 import {
   heldConditionsOf,
   pageBindingRun,
   readStagesFor,
   rendersOwnMarkup,
+  type DocumentReadStages,
   type PreparedDocument,
 } from "./prepare-document";
 import { registeredBlocks, type BlockResolver } from "./resolver";
@@ -762,32 +770,20 @@ export function PageRenderer({
   // tree that renders — which reads those states rather than recomputing them.
   // One pass for the whole render, shared by the page's bindings and every
   // list item's, so each formatter is built once.
-  const bindingRun =
-    bindings === undefined
-      ? undefined
-      : pageBindingRun(
-          bindings,
-          pageContext.locale,
-          resolver,
-          pageContext.namedQueries
-        );
-  const stages = readStagesFor(
-    document,
+  const { bindingRun, stages } = rendererReading(
     {
-      resolver,
+      document,
+      blocks,
+      definitions,
       limits,
       styleContext,
-      definitions,
-      ...(bindingRun === undefined ? {} : { bindings: bindingRun }),
-      // An editor drawing a list item's hidden block keeps such blocks for
-      // the list to judge; a published page's route decides them itself.
-      ...(itemHiddenAs === undefined ? {} : { itemsDecided: true }),
-      // An editor showing the page as a visitor reading an entry judges
-      // every block for it, the route's way, drawing its own node in place of
-      // one hidden.
-      ...(entryJudged === undefined ? {} : { entryJudged }),
+      bindings,
+      prepared,
+      itemHiddenAs,
+      entryJudged,
     },
-    prepared
+    pageContext,
+    resolver
   );
   // `null` here means only an unreadable ENVELOPE, which the two guards above
   // already answered. Kept because unreachability is a property of the current
@@ -1024,6 +1020,17 @@ export function PageRenderer({
       : { itemRules, itemRulesServed: new Set<string>() }),
   };
   const rootClassName = scope ? `${PAGE_ROOT_CLASS} ${scope}` : PAGE_ROOT_CLASS;
+  // The blocks draw with the page's outline on their context: the one the
+  // host set for a page drawn in parts, else this document's own, read off
+  // the tree this render draws (after its bindings, without placeholders).
+  const blockContext = blockContextOf(pageContext, scope, mayFetchUrl);
+  const drawnContext =
+    pageContext.outline === undefined
+      ? withOutline(
+          blockContext,
+          pageOutline([{ area: "content", nodes: stages.prepared.nodes }])
+        )
+      : blockContext;
 
   // Tokens LAYERED over the defaults, never replacing them: a site supplying
   // one brand colour must not thereby lose `content.width` and `space.4`, and
@@ -1158,7 +1165,7 @@ export function PageRenderer({
       ) : null}
       <BlockList
         nodes={bound.nodes}
-        context={blockContextOf(pageContext, scope, mayFetchUrl)}
+        context={drawnContext}
         blocks={resolver}
         classes={classes}
         fallback={blockFallback}
@@ -1193,6 +1200,91 @@ function blockContextOf(
     ...(scope ? { pageScope: scope } : {}),
     ...(mayFetchUrl === undefined ? {} : { pageMayFetchUrl: mayFetchUrl }),
   };
+}
+
+/** The props a renderer reads its document by. */
+type ReadingProps = Pick<
+  PageRendererProps,
+  | "document"
+  | "blocks"
+  | "definitions"
+  | "limits"
+  | "styleContext"
+  | "bindings"
+  | "prepared"
+  | "itemHiddenAs"
+  | "entryJudged"
+>;
+
+/**
+ * What a renderer reads its document into: its binding pass and the read
+ * stages. One derivation for the render and for the outline of a page drawn
+ * in parts (`outlinePartOf`), so the outline lists the very tree each part
+ * draws.
+ */
+function rendererReading(
+  props: ReadingProps,
+  pageContext: PageContext,
+  resolver: BlockResolver
+): { bindingRun: BindingRun | undefined; stages: DocumentReadStages | null } {
+  const { bindings, itemHiddenAs, entryJudged } = props;
+  const bindingRun =
+    bindings === undefined
+      ? undefined
+      : pageBindingRun(
+          bindings,
+          pageContext.locale,
+          resolver,
+          pageContext.namedQueries
+        );
+  const stages = readStagesFor(
+    props.document,
+    {
+      resolver,
+      limits: props.limits,
+      styleContext: props.styleContext,
+      definitions: props.definitions,
+      ...(bindingRun === undefined ? {} : { bindings: bindingRun }),
+      // An editor drawing a list item's hidden block keeps such blocks for
+      // the list to judge; a published page's route decides them itself.
+      ...(itemHiddenAs === undefined ? {} : { itemsDecided: true }),
+      // An editor showing the page as a visitor reading an entry judges
+      // every block for it, the route's way, drawing its own node in place of
+      // one hidden.
+      ...(entryJudged === undefined ? {} : { entryJudged }),
+    },
+    props.prepared
+  );
+  return { bindingRun, stages };
+}
+
+/**
+ * One part of a page as a renderer given these props draws it, for the
+ * outline of a page drawn in parts: its tree after the read pipeline, with
+ * the blocks drawn as placeholders gone. An unreadable document draws no
+ * headings.
+ *
+ * @internal Shared by this package's route.
+ */
+export function outlinePartOf(
+  props: ReadingProps & Pick<PageRendererProps, "context">,
+  area: OutlineArea
+): OutlinePart {
+  const document = props.document;
+  if (
+    typeof document !== "object" ||
+    document === null ||
+    Array.isArray(document) ||
+    document.formatVersion !== DOCUMENT_FORMAT_VERSION
+  ) {
+    return { area, nodes: [] };
+  }
+  const { stages } = rendererReading(
+    props,
+    props.context ?? createStandaloneContext(),
+    props.blocks ?? registeredBlocks()
+  );
+  return { area, nodes: stages?.prepared.nodes ?? [] };
 }
 
 /** What a site sheet was compiled from, beyond what every draw shares. */

@@ -23,6 +23,7 @@ import { useSharedStylesClient } from "../shared-styles-client";
 import { useDesignBrowse } from "./design-panel";
 import type { ClassSurface } from "./site-style-class-surface";
 import { useStyleToOpen } from "./site-style-tokens-studio";
+import { useUsageHere, useUsageReadKey } from "./usage-here";
 
 /**
  * The Styles tab, with the class surface's rename and whole-list edits (the
@@ -52,7 +53,11 @@ export function SharedStylesStudio({
   looks?: React.ComponentProps<typeof SharedStylesPanel>["looks"];
 }): React.JSX.Element {
   const mayChange = useCan("update-site-style");
-  const access = useSharedStylesClient();
+  // Named with what the editor has open, as the inspector's read is: the
+  // rows count the open page from `pageBlocks`, in place of its saved share.
+  const here = useUsageHere();
+  const readKey = useUsageReadKey(here);
+  const access = useSharedStylesClient(here, readKey);
   const initialOpenId = useStyleToOpen();
   const { search, setSearch, searchRef, folds } = useDesignBrowse();
   // The Design panel's one search, across its tabs, and its box, where focus
@@ -64,6 +69,12 @@ export function SharedStylesStudio({
   return (
     <SharedStylesHostSearch.Provider value={hostSearch}>
       <SharedStylesPanel
+        // Drawn again when what the editor has open changes (a publish, a
+        // first draft, another language) or the document is stored: the
+        // rows keep each style's usage once read, and the open document's
+        // parts in it would then describe another copy, or one the save
+        // replaced, and count blocks the page no longer holds.
+        key={readKey}
         library={classes.library}
         absence={classes.absence}
         suppliedClassIds={suppliedClassIds}

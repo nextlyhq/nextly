@@ -152,6 +152,36 @@ describe("a new Section's padding in the Style tab", () => {
   });
 });
 
+describe("a Compact or Roomy Section's padding in the Style tab", () => {
+  /** A new Section with a preset chosen. */
+  function preset(name: "compact" | "roomy"): BlockDocument {
+    const page = inserted("core/section");
+    const [node] = page.nodes;
+    return {
+      ...page,
+      nodes: [{ ...node, props: { ...node?.props, paddingPreset: name } }],
+    } as BlockDocument;
+  }
+
+  it.each([
+    ["compact", "Section padding, compact"],
+    ["roomy", "Section padding, roomy"],
+  ] as const)(
+    "names each %s side by its preset's variable, from the site's section spacing",
+    (name, words) => {
+      const box = styleTab(preset(name));
+      expect(sideText(box, "Padding top")).toBe(`${words} (top and bottom)`);
+      expect(sideText(box, "Padding left")).toBe(`${words} (sides)`);
+      expect(
+        [...box.querySelectorAll("[data-site-default]")].map(
+          each => each.textContent
+        )
+      ).toEqual(["Site default: Section spacing"]);
+      expect(box.textContent).not.toContain("var(");
+    }
+  );
+});
+
 describe("a new Section's padding side", () => {
   it('names its source "Site default" in brief, and in full on its dot', () => {
     const box = styleTab(inserted("core/section"));
@@ -206,6 +236,24 @@ describe("naming a site default", () => {
         "--brand-"
       )
     ).toBe("Site default: Section spacing");
+  });
+
+  it("names a preset's variables, written as one Section's default, the same way", () => {
+    const presetDefault = {
+      kind: "blockType",
+      type: "core/section",
+      node: "a",
+    } as const;
+    for (const value of [
+      "var(--site-space-section-y-compact)",
+      "var(--site-space-gutter-compact)",
+      "var(--site-space-section-y-roomy)",
+      "var(--site-space-gutter-roomy)",
+    ]) {
+      expect(siteDefaultSource(presetDefault, entry(value), "--site-")).toBe(
+        "Site default: Section spacing"
+      );
+    }
   });
 
   it("names nothing for another variable, another prefix, a typed value or another tier", () => {

@@ -17,7 +17,7 @@ import {
   type SiteTokenSet,
   type TokenMode,
 } from "@nextlyhq/blocks-engine";
-import { ArrowUpRight, Check } from "lucide-react";
+import { ArrowUpRight, Check, Image as ImageIcon } from "lucide-react";
 import * as React from "react";
 
 import { siteBaseOf } from "./block-look-rows";
@@ -57,16 +57,48 @@ export interface LookTilesProps {
 /** The section's name, which its fold is remembered by. */
 const BLOCK_STYLE_SECTION = "Block style";
 
-/** What a specimen is drawn as, by the kind of block it stands for. */
-function specimenKind(blockType: string): "button" | "image" | "band" | "text" {
+/**
+ * What a specimen is drawn as, by the kind of block it stands for: a mark
+ * (a Button's label, "Aa" for any other block), or a sample of the block
+ * itself (an Image's picture, a Quote's words, a Section's band).
+ */
+type SpecimenKind = "button" | "text" | SampleKind;
+type SampleKind = "image" | "quote" | "band";
+
+function specimenKind(blockType: string): SpecimenKind {
   if (blockType === "core/button") return "button";
   if (blockType === "core/image") return "image";
+  if (blockType === "core/quote") return "quote";
   if (blockType === "core/section") return "band";
   return "text";
 }
 
-/** The words a specimen carries, where it carries any. */
-const SPECIMEN_WORDS = { button: "Button", band: "Section", text: "Aa" };
+/** Whether a kind is drawn as a sample of the block rather than a mark. */
+function isSample(kind: SpecimenKind): kind is SampleKind {
+  return kind === "image" || kind === "quote" || kind === "band";
+}
+
+/** The words a mark carries. */
+const MARK_WORDS = { button: "Button", text: "Aa" };
+
+/**
+ * What a sample draws of the block it stands for, where one is selected: the
+ * picture the canvas shows for it, and its words. Absent (a Design row, or a
+ * block with neither), the sample draws its type's own example.
+ */
+export interface BlockSample {
+  readonly picture?: string | undefined;
+  readonly words?: string | undefined;
+}
+
+/**
+ * What the canvas draws of the selected block, as the Style tab hands it to
+ * the tiles: the picture it shows and the quotation it shows, each read from
+ * the canvas, so a library file, a typed address and a bound value are all
+ * the one on the page. Empty where no canvas is read.
+ */
+export const RenderedSample: React.Context<BlockSample> =
+  React.createContext<BlockSample>({});
 
 /**
  * One look drawn as a small block of its type: the look's styles laid over the
@@ -79,12 +111,14 @@ export function LookSpecimen({
   styles,
   tokens,
   mode,
+  sample,
 }: {
   readonly blockType: string;
   readonly base: NodeStyles | undefined;
   readonly styles: NodeStyles | undefined;
   readonly tokens: SiteTokenSet | undefined;
   readonly mode: TokenMode;
+  readonly sample?: BlockSample | undefined;
 }): React.JSX.Element {
   const kind = specimenKind(blockType);
   return (
@@ -93,15 +127,132 @@ export function LookSpecimen({
       aria-hidden="true"
       style={lookStageStyle(tokens, mode)}
     >
-      <span
-        className="nx-look-tile__specimen"
-        data-kind={kind}
-        style={lookTileStyle(base, styles, tokens, mode)}
-      >
-        {kind === "image" ? null : SPECIMEN_WORDS[kind]}
+      {isSample(kind) ? (
+        <Sample
+          kind={kind}
+          blockType={blockType}
+          style={lookTileStyle(base, styles, tokens, mode, "sample")}
+          sample={sample}
+        />
+      ) : (
+        <span
+          className="nx-look-tile__specimen"
+          data-kind={kind}
+          style={lookTileStyle(base, styles, tokens, mode)}
+        >
+          {MARK_WORDS[kind]}
+        </span>
+      )}
+    </span>
+  );
+}
+
+/**
+ * A sample of the block: drawn at the page's own sizes, in a frame standing
+ * for the page's screen that scales it down whole (`styles/inspector.css`),
+ * with the style laid on the block's box.
+ */
+function Sample({
+  kind,
+  blockType,
+  style,
+  sample,
+}: {
+  readonly kind: SampleKind;
+  readonly blockType: string;
+  readonly style: Record<string, string>;
+  readonly sample: BlockSample | undefined;
+}): React.JSX.Element {
+  return (
+    <span className="nx-look-tile__frame" data-kind={kind}>
+      <span className="nx-look-tile__specimen" data-kind={kind} style={style}>
+        {kind === "image" ? (
+          // The fit is the picture's own property, as the page routes it to
+          // the picture: it is not inherited from the box that holds it.
+          <SamplePicture picture={sample?.picture} fit={style.objectFit} />
+        ) : kind === "quote" ? (
+          (sample?.words ?? exampleWords(blockType))
+        ) : (
+          <BandLines />
+        )}
       </span>
     </span>
   );
+}
+
+/**
+ * An Image's picture in its box, fitted as the style fits it and cropped to
+ * the box where the style says nothing; with no picture, a picture's outline.
+ */
+function SamplePicture({
+  picture,
+  fit,
+}: {
+  readonly picture: string | undefined;
+  readonly fit: string | undefined;
+}): React.JSX.Element {
+  if (picture === undefined) {
+    return (
+      <span className="nx-look-tile__placeholder">
+        <ImageIcon size={28} strokeWidth={1.5} />
+      </span>
+    );
+  }
+  return (
+    <img
+      className="nx-look-tile__picture"
+      src={picture}
+      alt=""
+      draggable={false}
+      style={{
+        objectFit: (fit ?? "cover") as React.CSSProperties["objectFit"],
+      }}
+    />
+  );
+}
+
+/**
+ * What a Section's band holds: a heading and two lines of text as bars, which
+ * stand in for its content and follow its alignment as words would.
+ */
+function BandLines(): React.JSX.Element {
+  return (
+    <>
+      <span className="nx-look-tile__row">
+        <span className="nx-look-tile__line" data-line="heading" />
+      </span>
+      <span className="nx-look-tile__row">
+        <span className="nx-look-tile__line" data-line="text" />
+      </span>
+      <span className="nx-look-tile__row">
+        <span className="nx-look-tile__line" data-line="short" />
+      </span>
+    </>
+  );
+}
+
+/** The words a block type's own example carries, for a sample of none. */
+function exampleWords(blockType: string): string {
+  const props = getBlock(blockType)?.example?.props;
+  const text = props !== undefined && "text" in props ? props.text : undefined;
+  return typeof text === "string" ? text : "";
+}
+
+/**
+ * What the tiles draw of the selected block: the picture and the words the
+ * canvas shows for it, and where the canvas shows no words (none read, as in
+ * a panel with no canvas), its own stored words.
+ */
+function sampleOfNode(
+  props: Readonly<Record<string, unknown>>,
+  rendered: BlockSample
+): BlockSample {
+  const stored = typeof props.text === "string" ? props.text : "";
+  const words = (rendered.words ?? stored).trim();
+  return {
+    picture: rendered.picture,
+    ...(words === "" ? {} : { words }),
+  };
 }
 
 /** The block's own look's name, as its definition names it. */
@@ -186,6 +337,9 @@ export function LookTiles({
   onRefused,
   onEditBlockStyles,
 }: LookTilesProps): React.JSX.Element | null {
+  // What the canvas draws of the selected block: an Image's tiles draw its
+  // picture in each shape, a Quote's its words in each style.
+  const rendered = React.useContext(RenderedSample);
   const offered = blockStyleTilesOf(editor, library);
   if (offered === undefined || library === undefined) return null;
   const { node, worn, tiles } = offered;
@@ -234,6 +388,7 @@ export function LookTiles({
                   held={held}
                   blockType={node.type}
                   base={siteBaseOf(library, node.type)}
+                  sample={sampleOfNode(node.props, rendered)}
                   tokens={tokens}
                   mode={mode}
                   onChoose={choose}
@@ -264,6 +419,7 @@ function TileGrid({
   held,
   blockType,
   base,
+  sample,
   tokens,
   mode,
   onChoose,
@@ -274,6 +430,8 @@ function TileGrid({
   readonly blockType: string;
   /** The base as the site draws it, its edits to the own look included. */
   readonly base: NodeStyles | undefined;
+  /** What every tile draws of the selected block itself. */
+  readonly sample: BlockSample;
   readonly tokens: SiteTokenSet | undefined;
   readonly mode: TokenMode;
   readonly onChoose: (tile: LookTile) => void;
@@ -328,6 +486,7 @@ function TileGrid({
               styles={tile.styles}
               tokens={tokens}
               mode={mode}
+              sample={sample}
             />
             <TileName tile={tile} />
           </button>

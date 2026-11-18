@@ -271,3 +271,27 @@ describe("the first-add step", () => {
     expect(result.current.firstAdd).toBeUndefined();
   });
 });
+
+describe("a new session of the editor", () => {
+  it("forgets the block just added in the session before", () => {
+    const row = columns();
+    const hook = renderHook(
+      ({ session, start }: { session: object; start: BlockDocument }) =>
+        useEditorState({ initialDocument: start, session }),
+      { initialProps: { session: {}, start: START } }
+    );
+    act(() => {
+      hook.result.current.apply({
+        kind: "insert",
+        node: row,
+        at: { index: 1 },
+      });
+      hook.result.current.select(row.id);
+    });
+    // The control: the row just added asks for its layout.
+    expect(hook.result.current.firstAdd?.nodeId).toBe("row");
+    // Another document, holding a row of the same id.
+    hook.rerender({ session: {}, start: doc([box("intro"), columns()]) });
+    expect(hook.result.current.firstAdd).toBeUndefined();
+  });
+});

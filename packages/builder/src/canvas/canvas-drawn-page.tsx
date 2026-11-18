@@ -173,6 +173,7 @@ export function useDrawnPage({
   document,
   environment,
   applied,
+  addressed,
 }: {
   regions: readonly CanvasRegion[] | undefined;
   rendered: Omit<PageRendererProps, "document" | "siteStyles"> | undefined;
@@ -180,6 +181,13 @@ export function useDrawnPage({
   document: BlockDocument;
   environment: BlockEnvironment | undefined;
   applied: AppliedConditions | undefined;
+  /**
+   * Whether the page's blocks carry their addresses: false while a region of
+   * its layout is edited in place, so no surface can find, mark or select a
+   * block of the page then, nor take one for the region's block of the same
+   * id.
+   */
+  addressed: boolean;
 }): { drawn: LayoutParts | undefined; page: React.JSX.Element } {
   const drawn = useLayoutParts(regions, rendered, sheet);
   // Every conditioned block drawn, whoever the page would show it to, so the
@@ -214,12 +222,17 @@ export function useDrawnPage({
           // not carry an editor's addressing — so the canvas asks and a route
           // does not. Spread first and set here deliberately: a caller passing
           // `nodeAttribute: false` through `render` would silently disable
-          // selection for the whole canvas.
-          nodeAttribute
+          // selection for the whole canvas. Withheld only while a region is
+          // edited in place, when the page is not the document being edited.
+          nodeAttribute={addressed}
+          // What its images and lists drew is kept as it is while it is not
+          // addressed, as it is while it is: the node attribute alone would
+          // otherwise run them again on every edit in the region.
+          {...(addressed ? {} : { keepAsyncOutputs: true })}
         />
       </BlockEnvironmentProvider>
     ),
-    [drawnRender, drawable, sheet, environment, drawn]
+    [drawnRender, drawable, sheet, environment, drawn, addressed]
   );
   return { drawn, page };
 }
