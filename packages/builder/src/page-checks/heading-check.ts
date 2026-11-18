@@ -12,7 +12,11 @@
  *
  * @module page-checks/heading-check
  */
-import { MAX_DEPTH, type BlockNode } from "@nextlyhq/blocks-engine";
+import {
+  COLLECTION_LIST_TYPE,
+  MAX_DEPTH,
+  type BlockNode,
+} from "@nextlyhq/blocks-engine";
 import {
   pageOutline,
   type OutlineHeading,
@@ -50,12 +54,18 @@ function withBoundHeadings(list: readonly BlockNode[], depth = 0): BlockNode[] {
     const node = withBoundWords(stored);
     if (node.slots === undefined || depth >= MAX_DEPTH) return node;
     const slots = Object.fromEntries(
-      Object.entries(node.slots).map(([slot, children]) => [
-        slot,
-        Array.isArray(children)
-          ? withBoundHeadings(children, depth + 1)
-          : children,
-      ])
+      Object.entries(node.slots)
+        // A Collection list draws its entries or its empty state, never both:
+        // its entries are read, so the two can't count as one page.
+        .filter(
+          ([slot]) => node.type !== COLLECTION_LIST_TYPE || slot !== "empty"
+        )
+        .map(([slot, children]) => [
+          slot,
+          Array.isArray(children)
+            ? withBoundHeadings(children, depth + 1)
+            : children,
+        ])
     );
     return { ...node, slots };
   });

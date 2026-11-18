@@ -300,6 +300,20 @@ describe("the headings check", () => {
     expect(report.findings).toEqual([]);
   });
 
+  it("reads a Collection list's entries, not also its empty state", () => {
+    const list: BlockNode = {
+      id: "list",
+      type: "core/collection-loop",
+      version: 1,
+      props: {},
+      slots: {
+        children: [heading("entry-title", "h1")],
+        empty: [heading("nothing-yet", "h1")],
+      },
+    };
+    expect(findings(page(list))).toEqual([]);
+  });
+
   it("counts a Heading 1 whose words come from a field", () => {
     const bound: BlockNode = {
       id: "title",
