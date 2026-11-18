@@ -32,6 +32,7 @@ import {
   SHARED_STYLE_REMOVE_ROUTE_PATH,
   sharedStyleUsagePath,
 } from "../library-contract";
+import { closedDocumentSession } from "../__tests__/closed-document-session";
 import { PUBLISH_READINESS_ROUTE_PATH } from "../publish-readiness-contract";
 
 const DOCUMENT = { formatVersion: 1, kind: "page", nodes: [] };
@@ -227,6 +228,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   // The form's storing gate, which site style writes are tracked with.
   useTrackedWrite: () => () => {},
   useBeforeDocumentAction: () => {},
+  // The session a header edited in place opens; none is opened here.
+  useDocumentSession: () => closedDocumentSession(),
   // The header's controls the bar places; drawn by the admin, not here.
   DocumentSaveAndPublish: () => null,
   useDocumentLifeStage: () => null,

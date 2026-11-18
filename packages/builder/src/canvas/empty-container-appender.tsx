@@ -209,7 +209,11 @@ import { authoredName } from "../panels/layers/layers";
 import { CANVAS_ROOT_CLASS, CHROME_ATTRIBUTE, nodeElement } from "./canvas";
 import { useCanvasFrame } from "./canvas-frame-context";
 import { watchCanvasFor } from "./canvas-geometry-watch";
-import { EMPTY_CONTAINER_SELECTOR, emptySlotOf } from "./empty-slot";
+import {
+  EMPTY_CONTAINER_SELECTOR,
+  EMPTY_DISCLOSURE_SELECTOR,
+  emptySlotOf,
+} from "./empty-slot";
 import {
   canvasContentRect,
   clippedByAncestorRect,
@@ -449,6 +453,26 @@ export function centeredControlRect(
 }
 
 /**
+ * Where a container's start is drawn, in the canvas root's coordinates: its
+ * whole box, or for an open Question emptied of its answer the part under its
+ * title, where the frame's sheet draws the box (`EMPTY_DISCLOSURE_SELECTOR`).
+ */
+function answerAreaOf(target: Element, root: HTMLElement): Rect {
+  const box = canvasContentRect(target, root);
+  if (!target.matches(EMPTY_DISCLOSURE_SELECTOR)) return box;
+  const summary = target.querySelector(":scope > summary");
+  if (summary === null) return box;
+  const title = canvasContentRect(summary, root);
+  const top = title.y + title.height;
+  return {
+    x: box.x,
+    y: top,
+    width: box.width,
+    height: Math.max(0, box.y + box.height - top),
+  };
+}
+
+/**
  * Whether this pass refuses to place a control on this element.
  *
  * The refusals that have an ELEMENT to ask about, gathered into one named
@@ -497,7 +521,12 @@ function declines(target: Element, root: HTMLElement): boolean {
    * compound, so one call covers the rule rather than the part of it that
    * happens to be about this element.
    */
-  if (!target.matches(EMPTY_CONTAINER_SELECTOR)) {
+  if (
+    !target.matches(EMPTY_CONTAINER_SELECTOR) &&
+    // An open Question emptied of its answer: its box is drawn under its
+    // title, and so is its control (`answerAreaOf`).
+    !target.matches(EMPTY_DISCLOSURE_SELECTOR)
+  ) {
     return true;
   }
   /*
@@ -739,7 +768,7 @@ export function EmptyContainerAppenders({
       }
       // Placed in the chrome's coordinates before the control is centred in
       // it, so the control keeps its own size at any zoom.
-      const measured = space.place(canvasContentRect(target, root));
+      const measured = space.place(answerAreaOf(target, root));
       next.set(container.id, {
         kind: "measured",
         rect: centeredControlRect(

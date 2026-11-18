@@ -62,6 +62,8 @@ export interface PanelSection {
   readonly label: string;
   /** Whether it holds a value for what is being edited. */
   readonly holdsValue: boolean;
+  /** `false` keeps it folded while it holds a value (`FoldedSection`). */
+  readonly opensWithValue?: false;
   readonly body: React.ReactNode;
 }
 

@@ -118,6 +118,27 @@ const REFUSAL_WORDS: Record<ConversionReasonKind, string> = {
   "late-write": "could be changed by a write while the conversion runs",
   "cleared-under-not-null":
     "would be cleared, and the column does not allow a null",
+  // A field's type change gives these besides; a default is judged by the same words.
+  "not-a-number": "is not a number",
+  "not-a-date": "is not an ISO 8601 date or date-time",
+  "not-an-email": "is not an address the email field accepts",
+  "not-an-option": "is not one of the field's options",
+  "not-a-boolean": "is not true, false, 1 or 0",
+  "non-finite": "is a NaN or infinite number the field cannot hold",
+  object: "is a JSON object",
+  "kind-never-held": "is of a kind the new type could never hold",
+  "column-refuses": "is refused by the new column",
+  "field-refuses": "is refused by the field's own validation",
+  rounded: "would be held only rounded",
+  "out-of-range": "is outside the range the new type holds",
+  "no-time-or-offset": "names no time or no offset from UTC",
+  "several-items": "is a list of several items",
+  "item-not-held": "holds an item the new list cannot hold",
+  "pair-blocked": "could never be held by the new type",
+  repeated:
+    "reads as a value another row holds, which a unique field holds once",
+  "needs-rewrite": "is read by the new type only once rewritten into its form",
+  "new-form": "would be stored in the new type's form",
 };
 
 /** The entry for a default whose literal the new type refuses. */
