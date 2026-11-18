@@ -45,5 +45,10 @@ export function withTypographyDefaults(
   context: StyleCompileContext
 ): StyleCompileContext {
   if (context.elementBases !== undefined) return context;
-  return { ...context, elementBases: siteTextElementBases(context.siteText) };
+  // The site's classes too: a row following a text style writes that text
+  // style's look, read from the same library the class tier is written from.
+  return {
+    ...context,
+    elementBases: siteTextElementBases(context.siteText, context.namedClasses),
+  };
 }

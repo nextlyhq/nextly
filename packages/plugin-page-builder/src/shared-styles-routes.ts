@@ -94,6 +94,11 @@ import {
   type StoredUse,
 } from "./shared-style-rescan";
 import {
+  readableHere,
+  usageOf,
+  type UsageHereReaders,
+} from "./shared-style-usage-here";
+import {
   collectionsTheBuilderOpens,
   siteLocales,
   singlesTheBuilderOpens,
@@ -322,29 +327,6 @@ export const NOTHING_FOUND: DocumentsUsing = {
   complete: false,
 };
 
-const NO_KINDS: Readonly<Record<SharedStyleUsageKind, number>> = {
-  pages: 0,
-  components: 0,
-  patterns: 0,
-  layouts: 0,
-};
-
-/** One listing as a usage: its count, the same documents by kind. */
-export function usageOf(
-  found: DocumentsUsing,
-  kindOf: (collection: string) => SharedStyleUsageKind
-): SharedStyleUsage {
-  const byKind = { ...NO_KINDS };
-  for (const entry of found.collections) {
-    byKind[kindOf(entry.collection)] += entry.documents.length;
-  }
-  return {
-    documents: documentCountOf(found),
-    byKind,
-    complete: found.complete,
-  };
-}
-
 /**
  * How widely each named shared style is used, with the index's health and
  * whether this caller may lock styles.
@@ -355,9 +337,18 @@ export function usageOf(
 export async function readSharedStyleUsage(
   req: Request,
   ctx: Pick<PluginRouteContext, "caller" | "self">,
-  usage: SharedStyleUsageSource
+  usage: SharedStyleUsageSource,
+  /**
+   * Whether the caller may read the document the editor names, and the
+   * site's default language. Without them no document's share is reported.
+   */
+  readers?: UsageHereReaders
 ): Promise<SharedStylesUsageResponse> {
   const ids = usageIds(req.url);
+  // What the editor has open, whose saved share is reported apart: only for
+  // a document the caller may read, checked before the index is read.
+  const here =
+    readers === undefined ? undefined : await readableHere(req.url, readers);
   const health = await usage.health();
   // One read for the whole page of styles, not one per style.
   const found = await usage.documentsUsingEach(ids, health);
@@ -366,8 +357,10 @@ export async function readSharedStyleUsage(
   const styles: Record<string, SharedStyleUsage> = Object.fromEntries(
     ids.map(id => [
       id,
-      usageOf(found.get(id) ?? NOTHING_FOUND, collection =>
-        usage.kindOf(collection)
+      usageOf(
+        found.get(id) ?? NOTHING_FOUND,
+        collection => usage.kindOf(collection),
+        here
       ),
     ])
   );
@@ -1342,6 +1335,16 @@ export async function countSharedStyleUsage(
   );
 }
 
+/**
+ * The site's default language by code, as the usage index files it: the
+ * configured default, else the first language, else none.
+ */
+function siteDefaultLocale(ctx: Pick<PluginRouteContext, "config">): string {
+  return (
+    ctx.config.localization?.defaultLocale || siteLocales(ctx.config)[0] || ""
+  );
+}
+
 /** Refuse a caller who may not read shared styles' usage, before any read. */
 async function admitUsageReader(
   ctx: Pick<PluginRouteContext, "caller" | "self">
@@ -1402,7 +1405,11 @@ export function sharedStyleRoutes(setup: SharedStyleRouteSetup): {
       handler: async (req, ctx) => {
         await admitUsageReader(ctx);
         return respondDoc(
-          await readSharedStyleUsage(req, ctx, setup.usage(ctx))
+          await readSharedStyleUsage(req, ctx, setup.usage(ctx), {
+            named: namedDocumentsReader(ctx),
+            single: namedSingleReader(ctx),
+            defaultLocale: () => siteDefaultLocale(ctx),
+          })
         );
       },
     },

@@ -21,6 +21,8 @@ import { classUsageIndex } from "./class-usage-reconcile";
 import { componentUsageIndex } from "./component-usage";
 import {
   countDocumentsUsing,
+  blockCountOf,
+  documentBlocks,
   listDocumentsUsingEach,
   USAGE_ROW_PAGES_MAX,
   type UsageRowReader,
@@ -303,7 +305,8 @@ describe("counting the documents that use something", () => {
 const classRow = (
   classId: string,
   entity: string | null,
-  entityKey: string
+  entityKey: string,
+  blocks: number | null = 1
 ) => ({
   scope: "collection",
   entity,
@@ -312,6 +315,7 @@ const classRow = (
   locale: "",
   variant: "published",
   classId,
+  blocks,
 });
 
 /**
@@ -330,6 +334,107 @@ function rowReader(rows: readonly Record<string, unknown>[], size = 500) {
   };
   return { read, asked };
 }
+
+describe("the blocks a listing counts", () => {
+  const listed = async (rows: readonly Record<string, unknown>[]) => {
+    const { read } = rowReader(rows);
+    const found = await listDocumentsUsingEach({
+      index: classUsageIndex,
+      rows: read,
+      referenceIds: ["c-0"],
+      health: WHOLE,
+    });
+    const listing = found.get("c-0");
+    if (listing === undefined) throw new Error("no listing for c-0");
+    return listing;
+  };
+
+  it("adds a copy's fields and takes the largest copy as the page's", async () => {
+    // Published: 2 in the content and 1 in another field, one page of 3.
+    // Its draft has 4. The page's blocks are its largest copy, not every
+    // copy added up.
+    const listing = await listed([
+      classRow("c-0", "pages", "p1", 2),
+      { ...classRow("c-0", "pages", "p1", 1), field: "sidebar" },
+      { ...classRow("c-0", "pages", "p1", 4), variant: "draft" },
+      classRow("c-0", "pages", "p2", 5),
+    ]);
+    expect(listing.collections.map(entry => entry.documents)).toEqual([
+      ["p1", "p2"],
+    ]);
+    expect(listing.collections[0]?.shares?.map(documentBlocks)).toEqual([4, 5]);
+    expect(blockCountOf(listing)).toEqual({ blocks: 9, complete: true });
+  });
+
+  it("counts a field every language shares in each language's copy", async () => {
+    // English content 2, French content 3, a shared sidebar 1: the French
+    // copy is 4, not the 3 a copy of the sidebar apart would leave.
+    const listing = await listed([
+      { ...classRow("c-0", "pages", "p1", 2), locale: "en" },
+      { ...classRow("c-0", "pages", "p1", 3), locale: "fr" },
+      { ...classRow("c-0", "pages", "p1", 1), field: "sidebar" },
+    ]);
+    expect(blockCountOf(listing)).toEqual({ blocks: 4, complete: true });
+  });
+
+  it("takes a field once in a copy however many rows describe it", async () => {
+    // A save's new row beside its old one, before the old one goes: the
+    // same field of the same copy, so the larger, never the two added.
+    const listing = await listed([
+      classRow("c-0", "pages", "p1", 3),
+      classRow("c-0", "pages", "p1", 2),
+    ]);
+    expect(blockCountOf(listing)).toEqual({ blocks: 3, complete: true });
+  });
+
+  it("is a floor while any row holds no count", async () => {
+    // A row stored before the count was kept: the page is counted, its
+    // blocks are not known, so the total is a floor.
+    const { read } = rowReader([
+      classRow("c-0", "pages", "p1", 3),
+      classRow("c-0", "pages", "p2", null),
+    ]);
+    const found = await listDocumentsUsingEach({
+      index: classUsageIndex,
+      rows: read,
+      referenceIds: ["c-0"],
+      health: WHOLE,
+    });
+    const listing = found.get("c-0");
+    expect(listing?.collections[0]?.shares?.map(documentBlocks)).toEqual([
+      3,
+      null,
+    ]);
+    expect(listing && blockCountOf(listing)).toEqual({
+      blocks: 3,
+      complete: false,
+    });
+  });
+
+  it("says no blocks for a style no document uses", async () => {
+    const { read } = rowReader([]);
+    const found = await listDocumentsUsingEach({
+      index: classUsageIndex,
+      rows: read,
+      referenceIds: ["c-0"],
+      health: WHOLE,
+    });
+    const listing = found.get("c-0");
+    expect(listing && blockCountOf(listing)).toEqual({
+      blocks: 0,
+      complete: true,
+    });
+  });
+
+  it("counts no blocks from a listing the grouped read made", () => {
+    expect(
+      blockCountOf({
+        collections: [{ collection: "pages", documents: ["p1"] }],
+        complete: true,
+      })
+    ).toBeUndefined();
+  });
+});
 
 describe("listDocumentsUsingEach", () => {
   const ids = Array.from({ length: 50 }, (_, n) => `c-${n}`);
@@ -362,6 +467,14 @@ describe("listDocumentsUsingEach", () => {
     expect(fifty.asked[0]?.where).toEqual({ classId: { in: ids } });
   });
 
+  /** A `classRow`'s share of its document's blocks, in one language. */
+  const contentShare = (locale: string) => ({
+    locale,
+    variant: "published",
+    field: "content",
+    blocks: 1,
+  });
+
   it("lists each id's distinct documents by collection", async () => {
     const { read } = rowReader(rows);
     const found = await listDocumentsUsingEach({
@@ -372,12 +485,26 @@ describe("listDocumentsUsingEach", () => {
     });
     expect(found.get("c-1")).toEqual({
       collections: [
-        { collection: "pages", documents: ["p1"] },
-        { collection: "components", documents: ["k1"] },
+        {
+          collection: "pages",
+          documents: ["p1"],
+          // Its rows, each a share of its blocks: both languages.
+          shares: [[contentShare(""), contentShare("fr")]],
+        },
+        {
+          collection: "components",
+          documents: ["k1"],
+          shares: [[contentShare("")]],
+        },
       ],
       complete: true,
+      countsBlocks: true,
     });
-    expect(found.get("c-unused")).toEqual({ collections: [], complete: true });
+    expect(found.get("c-unused")).toEqual({
+      collections: [],
+      complete: true,
+      countsBlocks: true,
+    });
   });
 
   it("is a floor for every id once the reads reach their cap", async () => {
@@ -404,7 +531,11 @@ describe("listDocumentsUsingEach", () => {
       referenceIds: ["c-0"],
       health: WHOLE,
     });
-    expect(found.get("c-0")).toEqual({ collections: [], complete: false });
+    expect(found.get("c-0")).toEqual({
+      collections: [],
+      complete: false,
+      countsBlocks: true,
+    });
   });
 
   it("agrees with the single count, which derives from the same listing", async () => {

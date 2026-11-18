@@ -10,7 +10,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const readableDocumentIds = vi.fn();
-const singleDocumentReadable = vi.fn();
+const documentReadableIn = vi.fn();
 const resolveSingleDocumentId = vi.fn();
 const contentSnapshot = vi.fn();
 const configValue = vi.fn();
@@ -26,6 +26,10 @@ vi.mock("../readable-documents", () => ({
   readableDocumentIds: (...args: unknown[]) =>
     readableDocumentIds(...args) as unknown,
 }));
+vi.mock("../document-readable-in", () => ({
+  documentReadableIn: (...args: unknown[]) =>
+    documentReadableIn(...args) as unknown,
+}));
 // A container holding the config alone: the languages are then the config's, as on a boot that
 // registered no language registry.
 vi.mock("../../../di/container", () => ({
@@ -36,8 +40,6 @@ vi.mock("../../../di/container", () => ({
 }));
 
 vi.mock("../../../domains/singles/services/single-document-access", () => ({
-  singleDocumentReadable: (...args: unknown[]) =>
-    singleDocumentReadable(...args) as unknown,
   resolveSingleDocumentId: (...args: unknown[]) =>
     resolveSingleDocumentId(...args) as unknown,
 }));
@@ -112,7 +114,7 @@ beforeEach(() => {
   readableDocumentIds.mockImplementation((_slug, ids: string[]) =>
     Promise.resolve(new Set(ids))
   );
-  singleDocumentReadable.mockResolvedValue(true);
+  documentReadableIn.mockResolvedValue(true);
   resolveSingleDocumentId.mockResolvedValue("single-live");
   contentSnapshot.mockResolvedValue({
     kinds: new Map([
@@ -285,7 +287,7 @@ describe("rows nothing can decide", () => {
 
     expect(visible).toEqual([]);
     expect(readableDocumentIds).not.toHaveBeenCalled();
-    expect(singleDocumentReadable).not.toHaveBeenCalled();
+    expect(documentReadableIn).not.toHaveBeenCalled();
   });
 
   it("drops a row whose slug is in neither registry", async () => {
@@ -312,7 +314,13 @@ describe("single rows", () => {
     await asDocuments([single("single-live")], caller, await scopeNow());
 
     expect(resolveSingleDocumentId).toHaveBeenCalledWith("site-settings");
-    expect(singleDocumentReadable).toHaveBeenCalled();
+    // The Single is judged by the per-language document check a history asks
+    // too, about the live document, in the row's language (none here).
+    expect(documentReadableIn).toHaveBeenCalledWith(
+      { kind: "single", slug: "site-settings", entryId: "single-live" },
+      caller,
+      null
+    );
   });
 
   it("drops a row belonging to a PREDECESSOR document, without probing at all", async () => {
@@ -326,7 +334,7 @@ describe("single rows", () => {
     );
 
     expect(visible).toEqual([]);
-    expect(singleDocumentReadable).not.toHaveBeenCalled();
+    expect(documentReadableIn).not.toHaveBeenCalled();
   });
 
   it("drops every row when the Single has never been materialized", async () => {
@@ -339,7 +347,7 @@ describe("single rows", () => {
     );
 
     expect(visible).toEqual([]);
-    expect(singleDocumentReadable).not.toHaveBeenCalled();
+    expect(documentReadableIn).not.toHaveBeenCalled();
   });
 });
 

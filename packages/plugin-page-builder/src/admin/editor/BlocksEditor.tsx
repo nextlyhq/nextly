@@ -99,6 +99,8 @@ import {
   useDrawnTemplate,
   useTemplatePreviewState,
 } from "./template-preview-strip";
+import { useTwoRegionsNotice } from "./two-regions-notice";
+import { UsageHereField } from "./usage-here";
 import { useComponentView, type ComponentView } from "./use-component-view";
 import { useEditorMount, type EditorMount } from "./use-editor-mount";
 import {
@@ -217,18 +219,25 @@ export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>(
           */}
             <CanvasFrameProvider>
               {/*
+                The field the editor is bound to, which the shared-style
+                usage reads name, so the site's counts take this field's
+                live blocks in place of its saved ones.
+              */}
+              <UsageHereField.Provider value={props.name}>
+                {/*
                 A template is drawn with an entry of the collection it names,
                 chosen in the strip above its canvas: read around the editor,
                 so the canvas, the inspector and the strip all read the one
                 answer. Any other document is drawn as itself.
               */}
-              {isTemplate ? (
-                <TemplatePreviewScope control={props.control}>
+                {isTemplate ? (
+                  <TemplatePreviewScope control={props.control}>
+                    <EditorBody {...props} place={fieldPlace(props)} />
+                  </TemplatePreviewScope>
+                ) : (
                   <EditorBody {...props} place={fieldPlace(props)} />
-                </TemplatePreviewScope>
-              ) : (
-                <EditorBody {...props} place={fieldPlace(props)} />
-              )}
+                )}
+              </UsageHereField.Provider>
             </CanvasFrameProvider>
           </ConnectStyleHistoryContext.Provider>
         </StyleRevisionContext.Provider>
@@ -666,6 +675,17 @@ function EditorBody<TFieldValues extends FieldValues>({
     deviceRequest,
     setChosenDevice,
   } = view;
+  // A page showing the set's header and a header block of its own, pointed
+  // out above the canvas; the same for footers.
+  const twoRegions = useTwoRegionsNotice({
+    editor,
+    applied: conditions.applied,
+    regionCards: view.regionCards,
+    areaOf: mount.componentLibrary.areaOf,
+    currentPage: view.pages.currentPage,
+    userId: mount.userId,
+    openSettings: view.pages.openSettings,
+  });
 
   return (
     // Fills the view's area, under the admin's lock and recovery notices for
@@ -713,7 +733,7 @@ function EditorBody<TFieldValues extends FieldValues>({
           })}
           // Pinned above the canvas: a template's entry it is drawn with, and
           // the visitor's view while it is on.
-          canvasStrip={editorStrip(templatePreview, conditions)}
+          canvasStrip={editorStrip(templatePreview, conditions, twoRegions)}
           openSettingsRequest={view.pages.settingsRequest}
           renderSettings={editorSettings(view, page, settingsPlace, {
             kind: mount.initialDocument.kind,

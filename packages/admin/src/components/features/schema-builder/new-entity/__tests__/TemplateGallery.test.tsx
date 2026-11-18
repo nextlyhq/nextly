@@ -203,7 +203,7 @@ describe("templates in the new-entity dialog", () => {
       expect(screen.queryByRole("dialog", { name: "All templates" })).toBeNull()
     );
 
-    await user.type(screen.getByLabelText("Name"), "Thing");
+    await user.type(screen.getByRole("textbox", { name: "Name" }), "Thing");
     const picked = screen.getByRole("group", { name: "Template: Acme flawed" });
     // Each failing field is named, with what it breaks.
     expect(
@@ -241,7 +241,7 @@ describe("templates in the new-entity dialog", () => {
   it("applies a quick template's fields on Create", async () => {
     const { onCreate, user } = renderDialog();
     await user.click(screen.getByRole("radio", { name: /Authors/ }));
-    await user.type(screen.getByLabelText("Name"), "Writer");
+    await user.type(screen.getByRole("textbox", { name: "Name" }), "Writer");
     await waitFor(() => expect(createButton()).toBeEnabled());
     await user.click(createButton());
     // Each field whole, as the template declares it: a converter that kept
@@ -257,7 +257,7 @@ describe("templates in the new-entity dialog", () => {
     const { onCreate, user } = renderDialog();
     await user.click(screen.getByRole("radio", { name: /Authors/ }));
     // A name that suggests no icon of its own.
-    await user.type(screen.getByLabelText("Name"), "Thing");
+    await user.type(screen.getByRole("textbox", { name: "Name" }), "Thing");
     await waitFor(() => expect(createButton()).toBeEnabled());
     await user.click(createButton());
     expect(onCreate.mock.calls.at(-1)?.[0].icon).toBe("User");
@@ -289,7 +289,7 @@ describe("templates in the new-entity dialog", () => {
   it("creates with no template's fields when none is picked", async () => {
     const { onCreate, user } = renderDialog();
     expect(screen.getByRole("radio", { name: /No template/ })).toBeChecked();
-    await user.type(screen.getByLabelText("Name"), "Thing");
+    await user.type(screen.getByRole("textbox", { name: "Name" }), "Thing");
     await waitFor(() => expect(createButton()).toBeEnabled());
     await user.click(createButton());
     expect(onCreate.mock.calls.at(-1)?.[1]).toEqual([]);
@@ -317,7 +317,7 @@ describe("templates in the new-entity dialog", () => {
       screen.getByRole("radio", { name: /Pages you design visually/ })
     );
     await user.click(screen.getByRole("radio", { name: /Acme landing/ }));
-    await user.type(screen.getByLabelText("Name"), "Landing");
+    await user.type(screen.getByRole("textbox", { name: "Name" }), "Landing");
     const picked = screen.getByRole("group", {
       name: "Template: Acme landing",
     });
@@ -369,7 +369,7 @@ describe("templates in the new-entity dialog", () => {
     await user.click(
       within(picked).getByRole("checkbox", { name: "Leave out Bio" })
     );
-    await user.type(screen.getByLabelText("Name"), "Writer");
+    await user.type(screen.getByRole("textbox", { name: "Name" }), "Writer");
     await waitFor(() => expect(createButton()).toBeEnabled());
     await user.click(createButton());
     const fields = onCreate.mock.calls.at(-1)?.[1] ?? [];

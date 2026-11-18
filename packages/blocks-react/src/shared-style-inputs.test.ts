@@ -1076,3 +1076,34 @@ describe("the label the stamp is taken over", () => {
     expect(sharedStyleInputsLabel(inputs())).not.toContain("Medium");
   });
 });
+
+describe("a text style's role in the stamp", () => {
+  it("moves the stamp when a class becomes a text style, since its selector and tier change", () => {
+    const shared = inputs({
+      namedClasses: [
+        {
+          id: "c1",
+          slug: "hero",
+          orderIndex: 0,
+          styles: { base: { base: { fontSize: "40px" } } },
+        },
+      ],
+    });
+    const asText = inputs({
+      namedClasses: [
+        {
+          id: "c1",
+          slug: "hero",
+          orderIndex: 0,
+          role: "text",
+          styles: { base: { base: { fontSize: "40px" } } },
+        },
+      ],
+    });
+    expect(sharedStyleInputsId(asText)).not.toBe(sharedStyleInputsId(shared));
+    // A class with no role stamps as before.
+    expect(sharedStyleInputsId(shared)).toBe(
+      sharedStyleInputsId(inputs({ namedClasses: shared.namedClasses }))
+    );
+  });
+});

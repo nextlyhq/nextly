@@ -80,7 +80,6 @@ import {
   type BreakpointSet,
   type ComponentLookup,
   type NestingSource,
-  type RegionArea,
 } from "@nextlyhq/blocks-engine";
 import {
   Input,
@@ -152,6 +151,15 @@ import {
   LayersDropOverlay,
   useLayersDrag,
 } from "./layers-drag";
+import {
+  EditedRegionHeading,
+  emptyNoteOf,
+  layersTitleOf,
+  RegionRow,
+  useEditedRegionLayers,
+  type LayersEditedRegion,
+  type LayersRegionRow,
+} from "./layers-regions";
 
 export interface LayersPanelProps {
   /** The editor whose document this shows and whose selection it drives. */
@@ -220,39 +228,14 @@ export interface LayersPanelProps {
    * the keys on its own rows.
    */
   shortcuts?: boolean;
-}
-
-/** One region of the page's layout, as a row of its own in Layers. */
-export interface LayersRegionRow {
-  readonly area: RegionArea;
-  /** The region's name, "Site header". */
-  readonly name: string;
-  /** Where it comes from, "Main header & footer". */
-  readonly origin: string;
-  /** Whether the region is the canvas's selection. */
-  readonly selected?: boolean;
-  /** Select the region, and show it on the canvas. */
-  readonly onActivate: () => void;
-}
-
-/** A region of the page's layout, as a row that is not one of the page's blocks. */
-function RegionRow({ row }: { row: LayersRegionRow }): React.JSX.Element {
-  return (
-    <button
-      type="button"
-      className="nx-layers-region"
-      data-nx-layers-region={row.area}
-      // Named whole, so it is announced as one sentence: what it is and where
-      // it comes from. Pressed while the region is selected.
-      aria-label={`${row.name}, ${row.origin}`}
-      aria-pressed={row.selected === true}
-      onClick={row.onActivate}
-    >
-      <Lock size={14} aria-hidden="true" />
-      <span className="nx-layers-region__name">{row.name}</span>
-      <span className="nx-layers-region__origin">{row.origin}</span>
-    </button>
-  );
+  /**
+   * The region of the page's layout edited in place, while one is: `editor`
+   * is then the region's, and the panel is headed "Layers · Site header" in
+   * the region's own name. Focus moves to its first row once, as editing it
+   * starts, so a keyboard author lands on what they went in to edit.
+   * @experimental Settles with editing a header or footer in place.
+   */
+  editedRegion?: LayersEditedRegion;
 }
 
 /** One badge: an icon nobody has to see, and a word every reader gets. */
@@ -1169,8 +1152,13 @@ export function LayersPanel({
   canvasRoot,
   verbs,
   shortcuts = false,
+  // The region edited in place, while one is: see `layers-regions`.
+  ...region
 }: LayersPanelProps): React.JSX.Element {
-  const [query, setQuery] = React.useState("");
+  const { editedRegion } = region;
+  // Its own search for each document Layers shows, and the tree's element,
+  // whose first row takes focus as a region's editing starts.
+  const { query, setQuery, body } = useEditedRegionLayers(region.editedRegion);
   const [opened, setOpened] = React.useState<readonly string[]>([]);
 
   // Memoised on what was supplied, so the drag is not handed a new rule
@@ -1192,9 +1180,8 @@ export function LayersPanel({
       ),
   });
 
-  // The tree's own element: where a rename's focus returns, and where the
-  // row keystrokes are scoped.
-  const body = React.useRef<HTMLDivElement | null>(null);
+  // The tree's own element (`body`, above): where a rename's focus returns,
+  // and where the row keystrokes are scoped.
   const rows = useRowVerbs(editor, device, body);
   const setHovered = useHoveredBlockSetter();
   // Nothing stays pointed at once the panel goes, or the canvas would keep
@@ -1207,6 +1194,9 @@ export function LayersPanel({
   }, [drag.draggingId, setHovered]);
 
   const revealChosen = useRevealChosen(canvasRoot);
+  // What the panel and its tree are called: "Layers", or "Layers · Site
+  // header" while a region is edited in place.
+  const title = layersTitleOf(editedRegion);
 
   // Recomputed each render rather than memoised. The tree is only valid against
   // the document it was read from, and every edit replaces that document — a
@@ -1300,6 +1290,7 @@ export function LayersPanel({
 
   return (
     <div className="nx-layers-panel">
+      <EditedRegionHeading region={editedRegion} title={title} />
       <div className="nx-layers-panel__search">
         <Input
           value={query}
@@ -1316,9 +1307,7 @@ export function LayersPanel({
         ))}
 
       {tree.length === 0 ? (
-        <p className="nx-layers-panel__note">
-          This page has no blocks yet. Open Add in the rail to place one.
-        </p>
+        <p className="nx-layers-panel__note">{emptyNoteOf(editedRegion)}</p>
       ) : nodes.length === 0 ? (
         <p className="nx-layers-panel__note">No blocks match “{query}”.</p>
       ) : (
@@ -1349,7 +1338,7 @@ export function LayersPanel({
           >
             <TreeView
               className={LAYERS_TREE_CLASS}
-              aria-label={EDITOR_WORDS.layers}
+              aria-label={title}
               nodes={nodes}
               selectedId={editor.selectedId}
               // The panel shows what the canvas shows. Passing only the primary

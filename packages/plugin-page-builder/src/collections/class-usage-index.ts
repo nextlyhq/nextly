@@ -94,6 +94,11 @@ export type ClassUsageRow = UsageSubject & {
    * usable class id and a document can genuinely reference one.
    */
   classId: string;
+  /**
+   * How many of the document's blocks wear the class: absent or `null` on a
+   * marker row, and on a row stored before the count was kept.
+   */
+  blocks?: number | null;
 };
 
 /**

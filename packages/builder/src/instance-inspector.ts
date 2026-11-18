@@ -489,18 +489,20 @@ function bindableSchemaOf(
   if (!BINDABLE_SETTING_TYPES.has(property.type)) return undefined;
   const target =
     targets.get(property.id) ?? ownTarget(definition, property, definitions);
-  const declared =
-    target === undefined ? undefined : getBlock(target.type)?.props;
-  const schema =
-    target === undefined ||
-    declared === undefined ||
-    !Object.hasOwn(declared, target.path)
-      ? undefined
-      : declared[target.path];
+  const schema = target === undefined ? undefined : declaredSchemaOf(target);
   if (schema === undefined || bindablePropKind(schema) === undefined) {
     return undefined;
   }
   return { ...schema, label: labelOf(property) };
+}
+
+/** The schema the target's block declares for its prop, if it declares one. */
+function declaredSchemaOf(target: ComposedTarget): PropSchema | undefined {
+  const declared = getBlock(target.type)?.props;
+  if (declared === undefined || !Object.hasOwn(declared, target.path)) {
+    return undefined;
+  }
+  return declared[target.path];
 }
 
 /**

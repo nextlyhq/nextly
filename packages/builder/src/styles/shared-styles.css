@@ -322,9 +322,11 @@
 
 /* The specimen's stage, at the row's size rather than a tile's. */
 .nx-block-looks__specimen .nx-look-tile__stage {
+  --nx-look-sample-zoom: 0.64;
   block-size: 2.25rem;
   border: 1px solid var(--nx-border);
   border-radius: var(--radius-sm);
+  overflow: hidden;
 }
 
 /* The note that counts are minimums, under the list's head, and the row

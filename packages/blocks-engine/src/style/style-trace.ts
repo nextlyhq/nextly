@@ -35,7 +35,19 @@ export type StyleOrigin =
    * block that differ only in which element they landed on are otherwise
    * indistinguishable.
    */
-  | { kind: "blockType"; type: string; part?: string }
+  | {
+      kind: "blockType";
+      type: string;
+      part?: string;
+      /**
+       * Set on a default of ONE block of the type, which takes the type's
+       * place on that block alone: a Section's padding preset. The id of the
+       * block it was written for.
+       *
+       * @experimental
+       */
+      node?: string;
+    }
   /**
    * The typographic baseline for one element, shared by every `h1` on the page.
    *

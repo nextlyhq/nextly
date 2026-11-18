@@ -287,6 +287,15 @@ describe("the REST route gate, asking a rule that closes French", () => {
     expect(await status("read", "listEntryVersions", "?locale=")).toBe(403);
   });
 
+  it("judges a document's history read in the language it names, and one naming none in any one language", async () => {
+    expect(await status("read", "readDocumentHistory", "?locale=en")).toBe(200);
+    expect(await status("read", "readDocumentHistory", "?locale=fr")).toBe(403);
+    // Naming none, it is admitted where the rule admits a language: the
+    // document gate behind it asks each language and returns those alone.
+    expect(await status("read", "readDocumentHistory")).toBe(200);
+    expect(await status("read", "readDocumentHistory", "?locale=")).toBe(200);
+  });
+
   it("refuses an operation on the whole entry, whatever language the request names", async () => {
     expect(await status("update", "publishAllLocales")).toBe(403);
     expect(await status("delete", "deleteEntry", "?locale=en")).toBe(403);
@@ -358,5 +367,15 @@ describe("the REST route gate, asking a rule that admits a read involving French
     expect(
       await status("read", "listEntries", `?locale=en${frenchFilter}`)
     ).toBe(200);
+  });
+});
+
+describe("the REST route gate, asking a rule that refuses every language", () => {
+  beforeEach(() => {
+    state.rules.set("notes", { read: () => false });
+  });
+
+  it("refuses a document's history read naming no language", async () => {
+    expect(await status("read", "readDocumentHistory")).toBe(403);
   });
 });
