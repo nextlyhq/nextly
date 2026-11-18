@@ -1,6 +1,6 @@
 // F11 PR 3: snapshot-io tests.
 
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -10,6 +10,7 @@ import {
   computeMigrationHash,
   EMPTY_SNAPSHOT,
   loadLatestSnapshot,
+  newestSnapshotName,
   parseSnapshotFile,
   SnapshotFileError,
   snapshotPathOf,
@@ -22,7 +23,13 @@ describe("snapshot-io", () => {
   let metaDir: string;
 
   beforeEach(async () => {
-    metaDir = await mkdtemp(join(tmpdir(), "nextly-snapshot-test-"));
+    // A migration folder's `meta/`, so a migration file has a folder of the
+    // test's own to sit in beside it.
+    metaDir = join(
+      await mkdtemp(join(tmpdir(), "nextly-snapshot-test-")),
+      "meta"
+    );
+    await mkdir(metaDir);
   });
 
   afterEach(async () => {
@@ -81,10 +88,73 @@ describe("snapshot-io", () => {
         JSON.stringify(fileB),
         "utf-8"
       );
+      // Each beside its migration file, as a written migration leaves them.
+      for (const base of [
+        "20260101_120000_001_first",
+        "20260102_120000_001_second",
+      ]) {
+        await writeFile(join(metaDir, "..", `${base}.sql`), "", "utf-8");
+      }
       const result = await loadLatestSnapshot(metaDir);
       expect(result).not.toBeNull();
       expect(result!.filename).toBe("20260102_120000_001_second.snapshot.json");
       expect(result!.data.snapshot.tables[0].name).toBe("dc_b");
+    });
+
+    it("passes over a snapshot whose migration file was never written", async () => {
+      // As a writer stopped between its two files leaves the folder: the
+      // snapshot is there, and the migration it describes is not.
+      const file = (table: string): SnapshotFile => ({
+        version: 1,
+        migrationHash: "a".repeat(64),
+        snapshot: { tables: [{ name: table, columns: [] }] },
+      });
+      await writeFile(
+        join(metaDir, "20260101_120000_001_first.snapshot.json"),
+        JSON.stringify(file("dc_a")),
+        "utf-8"
+      );
+      await writeFile(
+        join(metaDir, "..", "20260101_120000_001_first.sql"),
+        "",
+        "utf-8"
+      );
+      await writeFile(
+        join(metaDir, "20260102_120000_001_unwritten.snapshot.json"),
+        JSON.stringify(file("dc_b")),
+        "utf-8"
+      );
+
+      expect(await newestSnapshotName(metaDir)).toBe(
+        "20260101_120000_001_first.snapshot.json"
+      );
+      const result = await loadLatestSnapshot(metaDir);
+      expect(result!.data.snapshot.tables[0].name).toBe("dc_a");
+
+      // Alone in the folder, it is no snapshot to start from at all.
+      await rm(join(metaDir, "..", "20260101_120000_001_first.sql"));
+      expect(await loadLatestSnapshot(metaDir)).toBeNull();
+    });
+
+    it("counts a snapshot whose migration is written for one dialect", async () => {
+      await writeFile(
+        join(metaDir, "0001_000000_schema.snapshot.json"),
+        JSON.stringify({
+          version: 1,
+          migrationHash: "a".repeat(64),
+          snapshot: { tables: [{ name: "dc_a", columns: [] }] },
+        } satisfies SnapshotFile),
+        "utf-8"
+      );
+      await writeFile(
+        join(metaDir, "..", "0001_000000_schema.mysql.sql"),
+        "",
+        "utf-8"
+      );
+
+      expect(await newestSnapshotName(metaDir)).toBe(
+        "0001_000000_schema.snapshot.json"
+      );
     });
   });
 
@@ -195,6 +265,12 @@ describe("snapshot-io", () => {
         snapshot,
         "-- sql"
       );
+      // Beside its migration file, as a written migration leaves it.
+      await writeFile(
+        join(metaDir, "..", "20260601_120000_001_idx.sql"),
+        "",
+        "utf-8"
+      );
       const loaded = await loadLatestSnapshot(metaDir);
       const tables = loaded!.data.snapshot.tables;
       const x = tables.find(t => t.name === "dc_x")!;
@@ -237,6 +313,7 @@ describe("snapshot-io", () => {
     it("creates the meta directory if missing", async () => {
       const nestedMetaDir = join(metaDir, "nested", "meta");
       await writeSnapshot(nestedMetaDir, "test", { tables: [] }, "");
+      await writeFile(join(nestedMetaDir, "..", "test.sql"), "", "utf-8");
       const result = await loadLatestSnapshot(nestedMetaDir);
       expect(result).not.toBeNull();
     });

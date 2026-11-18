@@ -35,4 +35,8 @@ Each writer holds the project's migration folder while it reads the newest snaps
 
 A migration's snapshot and `.sql` file now each appear whole, the snapshot first, so `nextly migrate` never reads half a file or a migration whose snapshot is still to come.
 
+A snapshot counts as the newest only once its migration file is beside it. One left alone, by a writer killed between the two files, is passed over, so the next `nextly migrate:create` still writes the change; `nextly migrate:check` names the leftover snapshot to delete.
+
+A command stopped by a held folder ends with `MIGRATIONS_WRITER_BUSY`, and one that another writer overtook with `MIGRATIONS_WRITER_OVERTAKEN`.
+
 Add `.nextly-writer.lock` to a project's `.gitignore`: it is left in the migration folder only when a writer is killed, and the next writer removes it.

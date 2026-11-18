@@ -30,13 +30,13 @@ import { readFileSync, rmSync } from "node:fs";
 import {
   link,
   mkdir,
-  readFile,
+  open,
   rename,
   rm,
   rmdir,
   stat,
-  utimes,
   writeFile,
+  type FileHandle,
 } from "node:fs/promises";
 import { hostname } from "node:os";
 import { resolve } from "node:path";
@@ -121,10 +121,10 @@ export interface WriterHold {
 type WhenHeld = "wait" | "refuse";
 
 /** The `logContext.reason` of a refusal over a held folder. */
-const WRITER_HOLD_HELD_REASON = "migration files held by another writer";
+export const WRITER_HOLD_HELD_REASON = "migration files held by another writer";
 
 /** The `logContext.reason` of a writer that lost its hold. */
-const WRITER_HOLD_LOST_REASON = "migration writer hold lost while held";
+export const WRITER_HOLD_LOST_REASON = "migration writer hold lost while held";
 
 /** Whether `error` is the refusal of a writer that found the folder held. */
 export function isWriterHoldHeld(error: unknown): error is NextlyError {
@@ -169,32 +169,52 @@ function recordOf(text: string): HoldRecord | undefined {
     : undefined;
 }
 
-/** A hold as its file stands: who holds it, and when it lapses with nothing renewing it. */
+/** A hold as one file stands: who holds it, and when it lapses with nothing renewing it. */
 interface HoldReading {
   /** Undefined where the file holds no record: one half-written, or not ours. */
   record: HoldRecord | undefined;
   /** When the hold lapses, in epoch milliseconds. */
   lapsesAt: number;
+  /** The file read, by device and inode: the path may name another by now. */
+  file: { dev: number; ino: number };
 }
 
-/** The hold on `path`, or undefined where nothing holds it. */
-async function readHold(path: string): Promise<HoldReading | undefined> {
+/** The hold the open file `handle` is, whatever its path names by now. */
+async function holdIn(handle: FileHandle): Promise<HoldReading> {
+  const text = await handle.readFile("utf-8");
+  const { mtimeMs, dev, ino } = await handle.stat();
+  const record = recordOf(text);
+  return {
+    record,
+    // A file with no record is given the lease a holder would have taken: a
+    // writer may be between creating it and filling it.
+    lapsesAt: mtimeMs + (record?.leaseSeconds ?? bounds.leaseSeconds) * 1000,
+    file: { dev, ino },
+  };
+}
+
+/** `work` over the file at `path`, opened once; undefined where there is none. */
+async function withFileAt<T>(
+  path: string,
+  work: (handle: FileHandle) => Promise<T>
+): Promise<T | undefined> {
+  let handle: FileHandle;
   try {
-    const [text, { mtimeMs }] = await Promise.all([
-      readFile(path, "utf-8"),
-      stat(path),
-    ]);
-    const record = recordOf(text);
-    return {
-      record,
-      // A file with no record is given the lease a holder would have taken: a
-      // writer may be between creating it and filling it.
-      lapsesAt: mtimeMs + (record?.leaseSeconds ?? bounds.leaseSeconds) * 1000,
-    };
+    handle = await open(path, "r");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
     throw error;
   }
+  try {
+    return await work(handle);
+  } finally {
+    await handle.close();
+  }
+}
+
+/** The hold on `path`, or undefined where nothing holds it. */
+function readHold(path: string): Promise<HoldReading | undefined> {
+  return withFileAt(path, holdIn);
 }
 
 /** Whether `error` says the file is already there. */
@@ -205,10 +225,13 @@ function alreadyThere(error: unknown): boolean {
 /**
  * Sets a lapsed hold aside so the folder can be taken, and answers whether it
  * did. The file is moved, never deleted in place: of two writers that both
- * read it lapsed, one moves it and the other finds nothing to move. A file
- * moved by mistake (another writer took the folder between the read and the
- * move) is put back unless the folder was taken again meanwhile, and its
- * holder then finds its hold gone before it writes (`assertHeld`).
+ * read it lapsed, one moves it and the other finds nothing to move.
+ *
+ * What was moved is then read again, as the one file it is: it is set aside
+ * only if it is still the hold that was read and still lapsed. A holder that
+ * renewed it between the read and the move (`renewOwn`), or another writer's
+ * hold taken in that time, is put back where it was, unless the folder was
+ * taken again meanwhile; its holder then finds its hold gone before it writes.
  */
 async function setLapsedAside(path: string, lapsed: HoldReading) {
   const aside = `${path}.${randomUUID()}.lapsed`;
@@ -218,56 +241,95 @@ async function setLapsedAside(path: string, lapsed: HoldReading) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
     throw error;
   }
-  const moved = recordOf(await readFile(aside, "utf-8"));
-  const mistaken = moved !== undefined && moved.token !== lapsed.record?.token;
-  if (mistaken) {
+  const moved = await readHold(aside);
+  const stillLapsed =
+    moved !== undefined &&
+    moved.record?.token === lapsed.record?.token &&
+    moved.lapsesAt <= Date.now();
+  if (!stillLapsed) {
     await link(aside, path).catch((error: unknown) => {
       if (!alreadyThere(error)) throw error;
     });
   }
   await rm(aside, { force: true });
-  return !mistaken;
+  return stillLapsed;
 }
 
-/** The refusal of a writer that found the folder held. */
-function heldError(
-  command: string,
-  whenHeld: WhenHeld,
-  held: HoldReading,
-  waitedMs: number
-): NextlyError {
-  const now = Date.now();
-  const started = Date.parse(held.record?.startedAt ?? "");
-  const holder = {
-    kind: "schema" as const,
-    owner: held.record?.owner ?? "an unknown process",
-    command: held.record?.command ?? null,
-    heldForSeconds: Number.isNaN(started)
-      ? null
-      : Math.max(0, Math.round((now - started) / 1000)),
-    lapsesInSeconds: Math.round((held.lapsesAt - now) / 1000),
-  };
+/**
+ * Renews the hold `token` took, and answers whether it is still that
+ * taking's: `true`, or the record that holds the folder instead (undefined
+ * where nothing does).
+ *
+ * Checked and renewed as one file, opened once: the token is read from it and
+ * its time set on it, never on whatever the path names a moment later. It is
+ * the holder's only once that same file is still the one at the path after
+ * the renewal. A writer taking a lapsed hold moves the file and reads its
+ * time again (`setLapsedAside`), so of the two, one finds the renewal and
+ * the other finds its file gone.
+ */
+async function renewOwn(
+  path: string,
+  token: string
+): Promise<true | HoldRecord | undefined> {
+  const other = () => readHold(path).then(now => now?.record);
+  const renewed = await withFileAt(path, async handle => {
+    const held = await holdIn(handle);
+    if (held.record?.token !== token) return held.record;
+    const at = new Date();
+    await handle.utimes(at, at);
+    const there = await stat(path).catch(() => undefined);
+    return there?.ino === held.file.ino && there.dev === held.file.dev
+      ? true
+      : other();
+  });
+  return renewed;
+}
+
+/** Who holds the folder, as the refusal names them. */
+export interface WriterHolder {
+  /** The host and process. */
+  owner: string;
+  /** The command, or null where the hold's file does not say. */
+  command: string | null;
+  /** Seconds since the hold was taken, or null where the file does not say. */
+  heldForSeconds: number | null;
+  /** Seconds until the hold lapses if nothing renews it. */
+  lapsesInSeconds: number;
+}
+
+/**
+ * The refusal of a writer that found the folder held: a command's, in three
+ * sentences a terminal prints as what happened, why, and what to run, or a
+ * Builder save's (`whenHeld: "refuse"`), which tells the editor what to do
+ * and keeps the holder for the log.
+ */
+export function writerHeldError(args: {
+  command: string;
+  whenHeld: "wait" | "refuse";
+  holder: WriterHolder;
+  waitedMs: number;
+  now?: number;
+}): NextlyError {
+  const { command, holder, waitedMs } = args;
+  const described = describeHolder({ kind: "schema", ...holder }, args.now);
   const logContext = {
     reason: WRITER_HOLD_HELD_REASON,
     command,
     holder,
     waitedMs,
   };
-  if (whenHeld === "refuse") {
-    // The editor is told what to do; the holder's host and process stay in the log.
+  if (args.whenHeld === "refuse") {
     return NextlyError.serviceUnavailable({
       publicMessage:
         "A migration is being written for this project, so this change was not saved. " +
         "Save it again once that ends.",
-      logMessage: `${command} refused: ${describeHolder(holder, now)}`,
+      logMessage: `${command} refused: ${described}`,
       logContext,
     });
   }
   const waited =
-    waitedMs > 0 ? ` after waiting ${Math.round(waitedMs / 1000)} seconds` : "";
-  const described = describeHolder(holder, now);
-  return new NextlyError({
-    code: "NEXTLY_MIGRATE_LOCK_BUSY",
+    waitedMs > 0 ? ` after waiting ${Math.round(waitedMs / 1000)} s` : "";
+  return NextlyError.serviceUnavailable({
     publicMessage:
       `\`${command}\` wrote nothing: another run is still writing this project's migration ` +
       `files${waited}. ${described[0].toUpperCase()}${described.slice(1)} ` +
@@ -276,19 +338,43 @@ function heldError(
   });
 }
 
-/**
- * The refusal of a writer that no longer holds the folder. It carries the
- * code of a run stopped by a held lock, so a command prints it in the same
- * three parts: what happened, why, and what to run.
- */
-function lostError(
+/** `writerHeldError`, for the hold as its file was read. */
+function heldError(
   command: string,
-  taken: HoldRecord | undefined
+  whenHeld: WhenHeld,
+  held: HoldReading,
+  waitedMs: number
 ): NextlyError {
-  const by =
-    taken === undefined ? "" : ` \`${taken.command}\` has held it since.`;
-  return new NextlyError({
-    code: "NEXTLY_MIGRATE_LOCK_BUSY",
+  const now = Date.now();
+  const started = Date.parse(held.record?.startedAt ?? "");
+  return writerHeldError({
+    command,
+    whenHeld,
+    holder: {
+      owner: held.record?.owner ?? "an unknown process",
+      command: held.record?.command ?? null,
+      heldForSeconds: Number.isNaN(started)
+        ? null
+        : Math.max(0, Math.round((now - started) / 1000)),
+      lapsesInSeconds: Math.round((held.lapsesAt - now) / 1000),
+    },
+    waitedMs,
+    now,
+  });
+}
+
+/**
+ * The refusal of a writer that no longer holds the folder: it stalled past
+ * its lease, and `takenBy`, where known, is the command that holds it now.
+ * In the three sentences a terminal prints as what happened, why, and what
+ * to run.
+ */
+export function writerLostError(
+  command: string,
+  takenBy: string | undefined
+): NextlyError {
+  const by = takenBy === undefined ? "" : ` \`${takenBy}\` has held it since.`;
+  return NextlyError.serviceUnavailable({
     publicMessage:
       `\`${command}\` wrote no migration and no snapshot: it lost its hold on this project's ` +
       "migration files. It stopped for longer than its lease, so another run may have " +
@@ -383,14 +469,8 @@ export async function acquireWriterHold(args: {
   held.set(key, { path, token: record.token });
   releaseOnExit();
   let lost = false;
-  /** Whether the file still carries this taking's token; renews it where it does. */
-  const stillOwn = async (): Promise<HoldRecord | undefined | true> => {
-    const now = await readHold(path);
-    if (now?.record?.token !== record.token) return now?.record;
-    const at = new Date();
-    await utimes(path, at, at);
-    return true;
-  };
+  /** Whether the hold is still this taking's; renews it where it is. */
+  const stillOwn = () => renewOwn(path, record.token);
   const renewal = setInterval(() => {
     stillOwn().then(
       own => {
@@ -408,10 +488,7 @@ export async function acquireWriterHold(args: {
       const own = lost ? undefined : await stillOwn();
       if (own === true) return;
       lost = true;
-      throw lostError(
-        args.command,
-        own ?? (await readHold(path))?.record ?? undefined
-      );
+      throw writerLostError(args.command, own?.command);
     },
     release: async () => {
       clearInterval(renewal);
@@ -449,26 +526,42 @@ export async function withMigrationWriterHold<T>(
       work
     );
   } finally {
-    await hold.release();
+    await releaseAll(holds);
   }
+}
+
+/** Gives up every hold a writer took, as it ends. */
+async function releaseAll(holds: Map<string, WriterHold>): Promise<void> {
+  for (const hold of holds.values()) await hold.release();
 }
 
 /**
  * Run a Schema Builder change, `work`, so that a migration it writes is
- * written holding its folder: taken when the generator first writes there,
- * refused at once where another writer holds it, and kept until `work` ends.
+ * written holding its folder, refused at once where another writer holds it,
+ * and kept until `work` ends.
+ *
+ * Given `migrationsDir` (a save that has a writer, which knows where its
+ * migration goes), the hold is taken before `work` begins: before the save
+ * changes its definition, which another writer reading the folder would
+ * otherwise take for a change to write. Without it, the hold is taken when
+ * the change first reads or writes the folder.
  */
 export async function withBuilderWriterScope<T>(
   label: string,
-  work: () => Promise<T>
+  work: () => Promise<T>,
+  migrationsDir?: string
 ): Promise<T> {
+  const held = async () => {
+    if (migrationsDir !== undefined) await holdInBuilderChange(migrationsDir);
+    return work();
+  };
   // A change made inside another's scope writes under that one's holds.
-  if (scope.getStore() !== undefined) return work();
+  if (scope.getStore() !== undefined) return held();
   const holds = new Map<string, WriterHold>();
   try {
-    return await scope.run({ command: label, whenHeld: "refuse", holds }, work);
+    return await scope.run({ command: label, whenHeld: "refuse", holds }, held);
   } finally {
-    for (const hold of holds.values()) await hold.release();
+    await releaseAll(holds);
   }
 }
 
@@ -516,7 +609,7 @@ export async function holdInBuilderChange(
 }
 
 /** The `logContext.reason` of a writer whose starting snapshot is no longer the newest. */
-const WRITER_START_MOVED_REASON =
+export const WRITER_START_MOVED_REASON =
   "another writer wrote a migration after this one read the newest";
 
 /**
@@ -547,8 +640,7 @@ export function startMovedError(newest: string | undefined): NextlyError {
       logContext,
     });
   }
-  return new NextlyError({
-    code: "NEXTLY_MIGRATE_LOCK_BUSY",
+  return NextlyError.serviceUnavailable({
     publicMessage:
       `\`${running?.command ?? "migrate:create"}\` wrote no migration and no snapshot. ` +
       `${moved} Run it again.`,

@@ -221,6 +221,7 @@ export class FieldGroupMetadataService {
         adapter: this.adapter,
         logger: this.logger,
         label: `create field group "${input.slug}"`,
+        migrationsDir: this.builderSave?.migrationsDir,
         issuesDdl: true,
       },
       () => this.createFieldGroupExcluded(input)
@@ -388,6 +389,7 @@ export class FieldGroupMetadataService {
         adapter: this.adapter,
         logger: this.logger,
         label: `update field group "${input.slug}"`,
+        migrationsDir: this.builderSave?.migrationsDir,
         // 🔴 Derived from the request, CONSERVATIVELY, because claiming DDL is not free: the
         // exclusion may create and seed its lock table, and a deployment whose role holds DML but
         // not DDL then fails an otherwise valid metadata edit on that `CREATE TABLE`.

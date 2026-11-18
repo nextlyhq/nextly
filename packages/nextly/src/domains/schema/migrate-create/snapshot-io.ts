@@ -21,7 +21,7 @@
 
 import { createHash } from "node:crypto";
 import { mkdir, readdir, readFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 
 import { normalizeContributions } from "../pipeline/diff/contributions";
 import type {
@@ -224,25 +224,44 @@ export type TemplateStart = (
   template: TemplateEntities
 ) => NextlySchemaSnapshot;
 
+/** A folder's file names, or none where there is no such folder. */
+async function filesIn(dir: string): Promise<string[]> {
+  try {
+    return await readdir(dir);
+  } catch (err) {
+    if ((err as { code?: string }).code === "ENOENT") return [];
+    throw err;
+  }
+}
+
 /**
  * The newest snapshot file's name in `metaDir`, by the same order
  * `loadLatestSnapshot` reads; undefined where the folder is absent or holds
  * none.
+ *
+ * A snapshot counts only once its migration file is beside the folder: the
+ * snapshot is written first, so one whose writer stopped between the two
+ * files describes a migration that was never written, and read as the newest
+ * it would hide that change from the next `migrate:create`. Its `.sql`, or a
+ * dialect's variant of it (`<name>.<dialect>.sql`), is what says the
+ * migration exists.
  */
 export async function newestSnapshotName(
   metaDir: string
 ): Promise<string | undefined> {
-  let files: string[] = [];
-  try {
-    files = await readdir(metaDir);
-  } catch (err) {
-    if ((err as { code?: string }).code === "ENOENT") return undefined;
-    throw err;
-  }
-  return files
+  const snapshots = (await filesIn(metaDir))
     .filter(f => f.endsWith(".snapshot.json"))
-    .sort()
-    .at(-1);
+    .sort();
+  if (snapshots.length === 0) return undefined;
+  const migrations = (await filesIn(dirname(metaDir))).filter(f =>
+    f.endsWith(".sql")
+  );
+  return snapshots.findLast(snapshot => {
+    const base = snapshot.slice(0, -".snapshot.json".length);
+    return migrations.some(
+      file => file === `${base}.sql` || file.startsWith(`${base}.`)
+    );
+  });
 }
 
 /**

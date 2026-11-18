@@ -30,7 +30,6 @@ import {
   underWriterHold,
   withBuilderWriterScope,
   withMigrationWriterHold,
-  writeWhole,
 } from "../writer-hold";
 
 let dir: string;
@@ -332,6 +331,42 @@ describe("a writer's work under the hold", () => {
     await command.release();
   });
 
+  it("takes the hold before a Builder save begins where the save names its folder, so a refused save has done nothing", async () => {
+    const command = await acquireWriterHold({
+      migrationsDir: dir,
+      command: "migrate:create",
+      whenHeld: "wait",
+    });
+    let began = false;
+
+    const refused = await thrownBy(() =>
+      withBuilderWriterScope(
+        "collection save",
+        async () => {
+          began = true;
+        },
+        dir
+      )
+    );
+
+    expect(isWriterHoldHeld(refused)).toBe(true);
+    expect(began).toBe(false);
+    await command.release();
+
+    // Free, the save holds the folder from its first step to its last.
+    await withBuilderWriterScope(
+      "collection save",
+      async () => {
+        expect(
+          (JSON.parse(readFileSync(lockFile(), "utf-8")) as { command: string })
+            .command
+        ).toBe("collection save");
+      },
+      dir
+    );
+    expect(existsSync(lockFile())).toBe(false);
+  });
+
   it("takes and gives back a hold of its own for a caller with no writer running", async () => {
     await underWriterHold(dir, "migrate:create", async () => {
       expect(
@@ -341,26 +376,5 @@ describe("a writer's work under the hold", () => {
     });
 
     expect(existsSync(lockFile())).toBe(false);
-  });
-});
-
-describe("a file written whole", () => {
-  it("appears under its name only once it is complete, leaving nothing else", async () => {
-    const hold = await acquireWriterHold({
-      migrationsDir: dir,
-      command: "migrate:create",
-      whenHeld: "wait",
-    });
-    const path = join(dir, "20260101_000000_000_one.sql");
-
-    await writeWhole(path, "CREATE TABLE one (id integer);\n");
-
-    expect(readFileSync(path, "utf-8")).toBe(
-      "CREATE TABLE one (id integer);\n"
-    );
-    expect(readdirSync(dir).sort()).toEqual(
-      [WRITER_LOCK_FILE, "20260101_000000_000_one.sql"].sort()
-    );
-    await hold.release();
   });
 });

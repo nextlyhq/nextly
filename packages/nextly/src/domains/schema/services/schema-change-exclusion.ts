@@ -63,6 +63,13 @@ export async function withSchemaChangeExcluded<T>(
     /** Names the operation in the refusal's log line, so an operator can see what was held off. */
     label: string;
     issuesDdl: boolean;
+    /**
+     * Where this change writes a migration: given by a Schema Builder save
+     * that has a writer. The project's migration files are then held from
+     * before `work` begins, so the save changes nothing, its definition
+     * included, while another writer of those files is at work.
+     */
+    migrationsDir?: string | undefined;
   },
   work: () => Promise<T>
 ): Promise<T> {
@@ -72,7 +79,8 @@ export async function withSchemaChangeExcluded<T>(
   );
   // A migration this change writes is written holding the project's
   // migration files, refused at once where another writer holds them.
-  const held = () => withBuilderWriterScope(args.label, work);
+  const held = () =>
+    withBuilderWriterScope(args.label, work, args.migrationsDir);
   const { adapter } = args;
   if (!adapter) return held();
 

@@ -22,7 +22,7 @@
 // The CLI then says "No schema changes detected" and exits 0, since nothing
 // to do is a finished run; a failure exits 1.
 
-import { mkdir } from "node:fs/promises";
+import { mkdir, rm } from "node:fs/promises";
 import { resolve } from "node:path";
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
@@ -1830,7 +1830,14 @@ async function writeMigrationPair(
     pair.entities,
     pair.permissions
   );
-  await writeWhole(sqlPath, pair.sqlContent);
+  try {
+    await writeWhole(sqlPath, pair.sqlContent);
+  } catch (error) {
+    // No migration was written, so its snapshot is withdrawn: left, it would
+    // describe a migration that does not exist.
+    await rm(snapshotPath, { force: true });
+    throw error;
+  }
   return { sqlPath, snapshotPath };
 }
 

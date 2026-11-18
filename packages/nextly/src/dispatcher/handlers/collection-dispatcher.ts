@@ -1004,6 +1004,11 @@ const COLLECTIONS_METHODS: Record<
           // the console.
           logger: getLoggerFromDI() ?? consoleLogger,
           label: `apply schema changes to collection "${p.collectionName}"`,
+          // The apply writes a migration where a writer is registered: its folder is held first.
+          migrationsDir: container.has("builderSaveSetup")
+            ? container.get<{ migrationsDir: string }>("builderSaveSetup")
+                .migrationsDir
+            : undefined,
           // This road runs the push pipeline, so it issues DDL and may create the lock table.
           issuesDdl: true,
         },

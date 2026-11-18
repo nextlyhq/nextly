@@ -1,0 +1,23 @@
+---
+title: MIGRATIONS_WRITER_OVERTAKEN
+description: "Another run wrote a migration for this project while the command was part-way, so the command wrote no migration and no snapshot."
+---
+
+## Cause
+
+Another run wrote a migration for this project while the command was part-way, so the command wrote no migration and no snapshot.
+
+A writer of migration files holds the project's migration folder while it reads the newest snapshot and writes (see [`MIGRATIONS_WRITER_BUSY`](/docs/cli/errors/migrations-writer-busy)). A hold nothing renews lapses after about two minutes, so a run that stops for longer than that, on a suspended machine or a paused process, can find that another run took the folder and wrote a migration. Written then, this run's migration would be a second one made from the snapshot it read, so it writes nothing. The same holds where the newest snapshot is no longer the one the run read, for example after a `git pull` brought in a migration while the command waited at a question.
+
+## Fix
+
+- Run the command again. It reads the newest snapshot as it is now, and writes only what that snapshot does not hold.
+
+## Example
+
+```text
+✗ `migrate:create` wrote no migration and no snapshot: it lost its hold on this project's migration files.
+  Why:  It stopped for longer than its lease, so another run may have written a migration. `migrate:baseline` has held it since.
+  Next: Run it again.
+  Docs: https://nextlyhq.com/docs/cli/errors/migrations-writer-overtaken  (MIGRATIONS_WRITER_OVERTAKEN)
+```

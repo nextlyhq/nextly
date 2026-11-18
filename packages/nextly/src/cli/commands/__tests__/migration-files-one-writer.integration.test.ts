@@ -17,7 +17,14 @@
  * `nextly migrate`, run at the moment between a migration's two files, finds
  * no migration whose snapshot is missing.
  */
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  unlinkSync,
+  watch,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -56,6 +63,7 @@ import type { CommandContext } from "../../program";
 import { createLogger } from "../../utils/logger";
 import { runMigrate } from "../migrate";
 import { runMigrateCreate } from "../migrate-create";
+import { runMigrateResolve } from "../migrate-resolve";
 
 /** The configs the commands load, in the order they are started. */
 const loaded = vi.hoisted(() => ({ configs: [] as unknown[] }));
@@ -75,7 +83,9 @@ vi.mock("../../utils/config-loader", async importOriginal => ({
  */
 const stops = vi.hoisted(() => ({
   afterInputs: undefined as (() => Promise<void>) | undefined,
-  aroundSnapshot: undefined as (() => Promise<void>) | undefined,
+  aroundSnapshot: undefined as
+    | ((migration: string) => Promise<void>)
+    | undefined,
 }));
 vi.mock(
   "../../../domains/schema/migrate-create/app-migration-inputs",
@@ -112,9 +122,10 @@ vi.mock(
       ) => {
         const look = stops.aroundSnapshot;
         stops.aroundSnapshot = undefined;
-        await look?.();
+        // The migration's base name, as the snapshot is written for it.
+        await look?.(args[1]);
         const path = await original.writeSnapshot(...args);
-        await look?.();
+        await look?.(args[1]);
         return path;
       },
     };
@@ -268,6 +279,27 @@ async function migrate(
   }
 }
 
+/**
+ * `nextly migrate:resolve --applied <file>` over `config`: what it said, its
+ * refusal as the CLI prints it included, and whether it was refused.
+ */
+async function resolveApplied(
+  config: unknown,
+  file: string
+): Promise<{ refused: boolean; said: string }> {
+  loaded.configs.push(config);
+  const { context, said } = command();
+  try {
+    await runMigrateResolve({ applied: file, cwd: dir }, context);
+    return { refused: false, said: said.join("\n") };
+  } catch (error) {
+    if (!/^exit \d+$/.test((error as Error).message)) {
+      said.push(formatCliError(toCliError(error)));
+    }
+    return { refused: true, said: said.join("\n") };
+  }
+}
+
 /** The migration files written so far, in run order. */
 const sqlFiles = () => filesIn(join(dir, "migrations"));
 /** The tables the snapshot of `file` records. */
@@ -323,6 +355,8 @@ describe.each(getConfiguredTestDialects())(
             logger: quiet as never,
             label: `create collection "${NOTES}"`,
             issuesDdl: false,
+            // As the service gives it: where the save's writer writes.
+            migrationsDir: deps.migrationsDir,
           },
           () =>
             writeCollectionSave(deps, {
@@ -506,9 +540,20 @@ describe.each(getConfiguredTestDialects())(
         whenHeld: "wait",
       });
 
+      // What the save does to its definition, `ui-schema.json` in the
+      // project's folder, while it is refused.
+      const touched: string[] = [];
+      const watching = watch(dir, (_event, name) => {
+        // The definition and any file written on the way to replacing it;
+        // the database's own files sit in this folder too.
+        if (name?.startsWith("ui-schema") === true) touched.push(name);
+      });
       const started = Date.now();
       const saved = await builderCreate();
       const savedIn = Date.now() - started;
+      // Changes reach a watcher a moment after they are made.
+      await pause(200);
+      watching.close();
       const created = await migrateCreate(WITH_PAGES, "pages");
 
       expect(saved.code).toBe(-1);
@@ -517,11 +562,38 @@ describe.each(getConfiguredTestDialects())(
       expect(created.code, created.said).toBe(-1);
       expect(created.said).toMatch(/`migrate:create` wrote nothing/);
       expect(created.said).toMatch(/`migrate:baseline` holds it/);
-      // Neither wrote a file, and the Builder's definition was not kept.
+      // Neither wrote a file, and the save never changed its definition, even
+      // for a moment: a command reading the folder then would have written it.
+      expect(touched).toEqual([]);
+      expect(existsSync(join(dir, "ui-schema.json"))).toBe(false);
       expect(sqlFiles()).toHaveLength(1);
       expect(existsSync(join(dir, "migrations", WRITER_LOCK_FILE))).toBe(true);
       await holder.release();
       expect(oneLine()).toEqual([[table(POSTS)]]);
+    }, 120_000);
+
+    it("a writer stopped between a migration's two files leaves a snapshot no writer starts from", async () => {
+      const stopped = await migrateCreate(WITH_PAGES, "pages");
+      expect(stopped.code, stopped.said).toBeUndefined();
+      // As a writer killed after its snapshot and before its file leaves the
+      // folder: the snapshot records the page collection, and nothing creates it.
+      const unwritten = sqlFiles().at(-1)!;
+      unlinkSync(join(dir, "migrations", unwritten));
+      await pause(5);
+
+      const again = await migrateCreate(WITH_PAGES, "pages_again");
+
+      // The change is still to be written, and is: not "no changes".
+      expect(again.code, again.said).toBeUndefined();
+      const files = sqlFiles();
+      expect(files.map(f => f.replace(/^[\d_]+/, ""))).toEqual([
+        "base.sql",
+        "pages_again.sql",
+      ]);
+      expect(snapshotTables(files[1])).toEqual([table(PAGES), table(POSTS)]);
+      const applied = await migrate(WITH_PAGES);
+      expect(applied.refused, applied.said).toBe(false);
+      expect(await adapter.tableExists(table(PAGES))).toBe(true);
     }, 120_000);
 
     it("a migration appears to nextly migrate with both its files or not at all", async () => {
@@ -558,6 +630,33 @@ describe.each(getConfiguredTestDialects())(
       expect(await adapter.tableExists(table(PAGES))).toBe(true);
       expect(oneLine()).toEqual([[table(POSTS)], [table(PAGES)]]);
       expect(reads).toHaveLength(2);
+    }, 120_000);
+
+    it("a migration appears to migrate:resolve with both its files or not at all", async () => {
+      const reads: { refused: boolean; said: string }[] = [];
+      let written = "";
+      stops.aroundSnapshot = async migration => {
+        written = `${migration}.sql`;
+        reads.push(await resolveApplied(WITH_PAGES, written));
+      };
+
+      const created = await migrateCreate(WITH_PAGES, "pages");
+
+      expect(created.code, created.said).toBeUndefined();
+      // On either side of the snapshot's write there was no such migration
+      // to record: neither a file without its snapshot nor half of one.
+      expect(reads).toHaveLength(2);
+      for (const read of reads) {
+        expect(read.refused, read.said).toBe(true);
+        expect(`${read.said}\n${printed.join("\n")}`).toMatch(
+          /Migration file not found/
+        );
+      }
+      // Nothing was recorded for it, so the next run applies it.
+      const next = await migrate(WITH_PAGES);
+      expect(next.refused, next.said).toBe(false);
+      expect(await adapter.tableExists(table(PAGES))).toBe(true);
+      expect(sqlFiles()).toContain(written);
     }, 120_000);
   }
 );

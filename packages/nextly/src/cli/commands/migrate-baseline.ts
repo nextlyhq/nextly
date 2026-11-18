@@ -23,7 +23,7 @@
  *
  * @module cli/commands/migrate-baseline
  */
-import { mkdir } from "node:fs/promises";
+import { mkdir, rm } from "node:fs/promises";
 import { resolve } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
@@ -1048,7 +1048,13 @@ async function adopt(deps: BaselineCoreDeps): Promise<BaselineCoreResult> {
         // the owner's own after this file becomes the latest snapshot.
         planned.contributions
       );
-      await writeWhole(sqlPath, sqlContent);
+      try {
+        await writeWhole(sqlPath, sqlContent);
+      } catch (error) {
+        // No baseline was written, so its snapshot is withdrawn with it.
+        await rm(snapshotPath, { force: true });
+        throw error;
+      }
 
       // The ledger is bootstrapped out of band by `migrate`, which has never
       // run on a database managed by `db:sync` — so this command is the first
