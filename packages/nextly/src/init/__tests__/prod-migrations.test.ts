@@ -348,6 +348,10 @@ describe("runProdMigrationsIfEnabled", () => {
           refused.push(refusal);
         },
       });
+      const errors: string[] = [];
+      a.logger.error = (line: string) => {
+        errors.push(line);
+      };
 
       await expect(runProdMigrationsIfEnabled(a as never)).resolves.toBe(false);
       // In a start's words: the variable a start reads, then the command's flag.
@@ -356,6 +360,11 @@ describe("runProdMigrationsIfEnabled", () => {
           message:
             'This would delete:\n  plugin:seo/002_drop_summary:\n    - column seo_pages.summary\nNothing was changed. To consent: start with NEXTLY_ACCEPT_DATA_LOSS=seo_pages.summary, or run "nextly migrate --accept-data-loss=seo_pages.summary".',
         },
+      ]);
+      // The log line ends on that same consent, not on a command the consent
+      // would refuse again.
+      expect(errors).toEqual([
+        '[Nextly] Boot migrations failed, and the app will continue: This would delete:\n  plugin:seo/002_drop_summary:\n    - column seo_pages.summary\nNothing was changed. To consent: start with NEXTLY_ACCEPT_DATA_LOSS=seo_pages.summary, or run "nextly migrate --accept-data-loss=seo_pages.summary".',
       ]);
     }
   );

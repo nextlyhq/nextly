@@ -624,13 +624,20 @@ async function settleFailedBootMigrations(
   const refusedForConsent = await dataLossRefusalOf(err);
   if (refusedForConsent !== undefined) {
     args.onDataLossRefusal?.(refusedForConsent);
+    // In the same words as that later refusal, so the line ends on the
+    // consent to give: `nextly migrate` alone would be refused the same way.
+    logger.error(
+      "[Nextly] Boot migrations failed, and the app will continue: " +
+        refusedForConsent.message
+    );
+  } else {
+    // The operator's rendering, with the code and the context that say why: a
+    // refusal's reasons travel in its context, as the command prints them.
+    logger.error(
+      `[Nextly] Boot migrations failed: ${describeError(err)}. The app will ` +
+        "continue; run `nextly migrate` to resolve."
+    );
   }
-  // The operator's rendering, with the code and the context that say why: a
-  // refusal's reasons travel in its context, as the command prints them.
-  logger.error(
-    `[Nextly] Boot migrations failed: ${describeError(err)}. The app will ` +
-      "continue; run `nextly migrate` to resolve."
-  );
 
   // The app continues on this path, so the gate must open — a swallowed
   // failure that left it pending would hang every consumer forever, turning a

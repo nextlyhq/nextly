@@ -820,9 +820,13 @@ describe.each(getConfiguredTestDialects())(
       // what it deletes.
       expect(final).toContain(`  ${key(module)}:\n    - `);
       expect(final).toContain(consent);
-      // The step's own log line still tells of the refusal, before the start ends.
+      // The step's own log line tells of the refusal before the start ends,
+      // and ends on the same consent.
       expect(startLog).toContain(key(module));
-      expect(startLog).toContain(consent);
+      expect(startLog).toContain(
+        `start with ${CONSENT_ENV}=${consent}, or run "nextly migrate --accept-data-loss=${consent}".`
+      );
+      expect(startLog).not.toContain("to resolve");
       expect(final).toContain(
         `start with ${CONSENT_ENV}=${consent}, or run "nextly migrate --accept-data-loss=${consent}".`
       );
