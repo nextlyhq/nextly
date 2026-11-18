@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import type { Binding } from "./document-bindings";
 import {
   isComponentDocument,
   type BlockDocument,
@@ -16,6 +17,7 @@ import {
   migrationInfoOf,
   nodeAtPointer,
 } from "./migration";
+import { settingBindingIssues } from "./setting-bindings";
 import { componentEnvelopeIssues } from "./validation-components";
 
 /** A migrated component's exposures; none for any other document. */
@@ -954,6 +956,60 @@ describe("a step's drops", () => {
         issue => issue.code === "variant-unknown-target"
       )
     ).toEqual([]);
+  });
+
+  it("leave a block following a dropped setting with what it showed, following nothing", () => {
+    // The component's save refuses a binding to a setting it no longer has;
+    // the block keeps the value it showed, read before the prop goes, as
+    // removing the setting in the editor leaves it.
+    const follows = (id: string): Binding => ({ $bind: id, source: "setting" });
+    const component: ComponentDocument = {
+      formatVersion: 1,
+      kind: "component",
+      nodes: [
+        {
+          id: "toc",
+          type: "core/table-of-contents",
+          version: 1,
+          props: { content: { root: "the passage" }, title: "On this page" },
+        },
+        {
+          id: "words",
+          type: "t",
+          version: 1,
+          props: { content: "stored", title: "stored" },
+          bindings: { content: follows("passage"), title: follows("label") },
+        },
+      ],
+      exposed: [
+        {
+          id: "passage",
+          label: "Passage",
+          nodeId: "toc",
+          propPath: "content",
+          type: "richText",
+        },
+        {
+          id: "label",
+          label: "Label",
+          nodeId: "toc",
+          propPath: "title",
+          type: "text",
+        },
+      ],
+    };
+    const { doc } = migrateDocument(
+      component,
+      source({ "core/table-of-contents": contents, t: { version: 1 } })
+    );
+    const words = doc.nodes[1];
+    expect(words?.props.content).toEqual({ root: "the passage" });
+    expect(words?.bindings).toEqual({ title: follows("label") });
+    expect(
+      settingBindingIssues(doc).filter(issue => issue.severity === "error")
+    ).toEqual([]);
+    // The stored document is left as it was.
+    expect(component.nodes[1]?.bindings?.content).toEqual(follows("passage"));
   });
 
   it("keep a variant's value for an id another exposure still carries", () => {
