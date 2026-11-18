@@ -103,6 +103,11 @@ import {
 } from "../../domains/schema/migrate/database-behind-migrations";
 import { addDocumentColumns } from "../../domains/schema/migrate/document-columns";
 import {
+  isFieldGroupTransition,
+  refuseFieldGroupTransitionOnLegacy,
+  refuseMovedStorageBehindLegacyHistory,
+} from "../../domains/schema/migrate/field-group-history";
+import {
   assertNotPartiallyApplied,
   applyFailedError,
   reconcileFile,
@@ -3294,7 +3299,15 @@ async function refuseDatabaseBehindLedger(
     },
   }));
   const newest = snapshots.at(-1);
-  if (newest === undefined || newest.snapshot.tables.length === 0) return;
+  if (newest === undefined) return;
+  // A database whose field groups moved ahead of the history is named as that, before its tables
+  // are compared with a snapshot that names every field-group table by its legacy name.
+  await refuseMovedStorageBehindLegacyHistory({
+    adapter: deps.adapter as unknown as DrizzleAdapter,
+    migrationsDir: deps.migrationsDir,
+    newestApplied: newest.fieldGroupNaming,
+  });
+  if (newest.snapshot.tables.length === 0) return;
   // An applied migration with no snapshot of its own (`migrate:create --blank`, a translations
   // file) ordered after the newest applied snapshot may have dropped or renamed what that snapshot
   // records, and no snapshot says what it left. The database's end state cannot be read from the
@@ -4757,6 +4770,14 @@ export async function runFileMigrations(args: {
       }
       if (!plan.runs.has(m)) break;
       if (m === plan.continuesAt) logger.info(plan.notice);
+      // The file that moves the history to the current field-group names applies only to a
+      // database whose storage already moved; on any other it is refused before it is recorded.
+      if (isFieldGroupTransition(beforeFile, targetFile)) {
+        await refuseFieldGroupTransitionOnLegacy(
+          adapter as unknown as DrizzleAdapter,
+          filename
+        );
+      }
 
       // Both apply routes run the same whole-file judgement, so a foreign drop
       // — or a statement the runner's transaction cannot hold — is refused

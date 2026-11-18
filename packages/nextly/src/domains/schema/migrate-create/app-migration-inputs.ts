@@ -49,6 +49,7 @@ import { assertMigrationSiblingFields } from "./sibling-fields";
 import {
   EMPTY_SNAPSHOT,
   loadLatestSnapshot,
+  snapshotFieldGroupNaming,
   type SnapshotFile,
 } from "./snapshot-io";
 
@@ -103,8 +104,8 @@ export interface AppMigrationInputsArgs {
   /**
    * The naming the site's field-group storage is on (`field-group-storage-names`): the table each
    * field group is generated under, and the registry its Builder row is upserted into. A Builder
-   * save reads it from the database it writes to. Absent, the legacy names, which every migration
-   * history this release writes is on.
+   * save reads it from the database it writes to. Absent, the latest snapshot's naming (legacy where the
+   * folder has none), so every offline command follows the history.
    */
   fieldGroupNaming?: FieldGroupNaming;
   /**
@@ -126,6 +127,12 @@ export interface AppMigrationInputs {
   appStream: AppStreamTables;
   /** The latest snapshot file, or null where the folder has none. */
   latest: { data: SnapshotFile } | null;
+  /**
+   * The field-group names `components` were resolved under: the caller's, else the latest
+   * snapshot's. Passed on to `generateMigration`, which records it and refuses one that differs
+   * from the history's.
+   */
+  fieldGroupNaming: FieldGroupNaming;
   /** Whether there is nothing a migration could be generated from (`nothingToGenerate`). */
   nothing: boolean;
 }
@@ -163,8 +170,15 @@ export async function appMigrationInputs(
     ...(input.manifest === undefined ? {} : { manifest: input.manifest }),
     logger,
   });
+  const latest = await loadLatestSnapshot(resolve(input.migrationsDir, "meta"));
+  // The names the history keeps field groups under, unless the caller read the site's own: a
+  // history moved to the current names generates every group there, and `generateMigration`
+  // refuses a caller's naming that differs from the history's (`refuseNamingAgainstHistory`).
+  const fieldGroupNaming =
+    input.fieldGroupNaming ??
+    (latest === null ? "legacy" : snapshotFieldGroupNaming(latest.data));
   // Each field group under the table it is stored in on this site (`withFieldGroupTables`).
-  const fieldGroupNames = storageNamesFor(input.fieldGroupNaming ?? "legacy");
+  const fieldGroupNames = storageNamesFor(fieldGroupNaming);
   const merged = withFieldGroupTables(
     definitions.merged,
     fieldGroupNames,
@@ -191,9 +205,7 @@ export async function appMigrationInputs(
   // but extension schema. Taking that early return first meant an
   // extension-only configuration wrote no migration at all and production
   // never received the table.
-  const latest = await loadLatestSnapshot(resolve(input.migrationsDir, "meta"));
-
-  // The definitions judged against that snapshot, as `migrate:check` judges
+  // The definitions judged against the latest snapshot, as `migrate:check` judges
   // them: a Builder entity the file lost (the drop below would take its
   // table), then each relationship's target. A save writing one entity's
   // migration judges that entity's relationships alone, and no loss
@@ -250,7 +262,7 @@ export async function appMigrationInputs(
     // Each field group under the table the entities above name, so a contribution to it attaches
     // to the same physical table in both streams. Only where the caller said where groups are
     // stored; otherwise both streams derive the same names, as before.
-    ...(input.fieldGroupNaming === undefined &&
+    ...(fieldGroupNaming === "legacy" &&
     input.fieldGroupTables === undefined
       ? {}
       : {
@@ -293,6 +305,7 @@ export async function appMigrationInputs(
     previousMetadataUpserts,
     appStream,
     latest,
+    fieldGroupNaming,
     nothing,
   };
 }
@@ -397,7 +410,7 @@ export function nothingToGenerate(input: {
  * these names, except for a row an earlier release created under the other naming, which `stored`
  * names.
  */
-function withFieldGroupTables<T extends { components: MinimalConfigEntity[] }>(
+export function withFieldGroupTables<T extends { components: MinimalConfigEntity[] }>(
   merged: T,
   names: FieldGroupStorageNames,
   stored: ReadonlyMap<string, string> | undefined

@@ -110,6 +110,7 @@ import {
   consentTookTheName,
   migrationCreateCancelled,
   migrationDeletionsDeclined,
+  fieldGroupNamesOptionInvalid,
   migrationNameRequired,
   recordSnapshotNeedsAppMigration,
 } from "../errors/areas/migrate-create";
@@ -196,6 +197,14 @@ export interface MigrateCreateCommandOptions {
    * @default false
    */
   recordSnapshot?: boolean;
+
+  /**
+   * `--field-group-names=current`: write the migration that moves the history's field groups to
+   * the current names (`dynamic_field_groups`, `fg_<slug>`). It changes nothing in the database,
+   * whose storage `nextly migrate:field-groups` moves. Refused while the config has changes to
+   * migrate. The name defaults to `field_group_current_names`.
+   */
+  fieldGroupNames?: string;
 
   /**
    * `--dry-run`: plan the migration as a real run does, rename questions included, print it and
@@ -574,6 +583,16 @@ export async function runMigrateCreate(
   if (options.recordSnapshot === true && (options.blank || options.plugin)) {
     exitWithError(logger, recordSnapshotNeedsAppMigration());
   }
+  // The transition writes the app's migration and snapshot alone, and only to the current names.
+  if (
+    options.fieldGroupNames !== undefined &&
+    (options.fieldGroupNames !== "current" ||
+      options.blank === true ||
+      options.plugin !== undefined ||
+      options.recordSnapshot === true)
+  ) {
+    exitWithError(logger, fieldGroupNamesOptionInvalid(options.fieldGroupNames));
+  }
 
   if (options.plugin) {
     // A plugin's module is never generated with a drop, so the consent has nothing to cover here.
@@ -616,7 +635,11 @@ export async function runMigrateCreate(
   const name =
     options.name ??
     nameArg ??
-    (options.recordSnapshot === true ? "record_translated_fields" : undefined);
+    (options.recordSnapshot === true
+      ? "record_translated_fields"
+      : options.fieldGroupNames === "current"
+        ? "field_group_current_names"
+        : undefined);
   if (!options.blank && !name) {
     // `--accept-data-loss` takes an optional list, so a name written after it is read as the list.
     if (typeof options.acceptDataLoss === "string") {
@@ -787,6 +810,7 @@ export async function runMigrateCreate(
       nonInteractive,
       autoAcceptRenames: options.acceptRenames === true,
       recordSnapshot: options.recordSnapshot === true,
+      fieldGroupTransition: options.fieldGroupNames === "current",
       liveCompanionColumns: live.read,
       dryRun: options.dryRun === true,
       releaseHeldBack: options.releaseHeldBack === true,

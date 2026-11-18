@@ -37,6 +37,10 @@ export function registerMigrateCreateCommand(program: Command): void {
       false
     )
     .option(
+      "--field-group-names <naming>",
+      "Move the migration history's field groups to the current names (dynamic_field_groups, fg_<slug>): writes one migration that changes nothing. Move each database first with `nextly migrate:field-groups --apply --backup-confirmed`. The only value is `current`"
+    )
+    .option(
       "--no-transaction",
       "Write a unit that runs outside a transaction: with --blank, a file whose first line is the marker; with --plugin, a module with transaction: false that you can edit"
     )

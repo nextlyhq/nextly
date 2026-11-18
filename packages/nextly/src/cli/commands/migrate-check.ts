@@ -66,7 +66,12 @@ import {
   functionsDefinedBy,
 } from "../../domains/schema/migrate/file-deletions";
 import { offlineDeletionFacts } from "../../domains/schema/migrate/offline-deletion-facts";
-import { declaredNamesOf } from "../../domains/schema/migrate/resolved-schema";
+import {
+  declaredNamesOf,
+  fieldGroupNamingOfHistory,
+} from "../../domains/schema/migrate/resolved-schema";
+import { withFieldGroupTables } from "../../domains/schema/migrate-create/app-migration-inputs";
+import { storageNamesFor } from "../../domains/field-groups/services/field-group-storage-names";
 import {
   marksNoTransaction,
   splitSqlStatements,
@@ -212,7 +217,17 @@ export async function runMigrateCheck(
   } catch (error) {
     exitWithError(logger, configDeclarationError(error) ?? error);
   }
-  const { merged } = definitions;
+  // Each field group under the names the history keeps them under, as `migrate:create` names them
+  // (`appMigrationInputs`): a history moved to the current names compares `fg_<slug>` tables.
+  const fieldGroupNaming = await fieldGroupNamingOfHistory({
+    projectRoot: cwd,
+    config: configResult.config,
+  });
+  const merged = withFieldGroupTables(
+    definitions.merged,
+    storageNamesFor(fieldGroupNaming),
+    undefined
+  );
 
   // Built once the latest snapshot is read, as `migrate:create` builds it:
   // a field a plugin holds back from a type switched off keeps its column
@@ -235,6 +250,14 @@ export async function runMigrateCheck(
     config: configResult.config,
     dialect,
     logger: { warn: m => logger.warn(m) },
+    // A contribution to a field group attaches to the table the entities above name.
+    ...(fieldGroupNaming === "legacy"
+      ? {}
+      : {
+          fieldGroupTables: new Map(
+            merged.components.map(c => [c.slug, c.tableName])
+          ),
+        }),
   });
 
   // Read as `nextly migrate` reads the folder.

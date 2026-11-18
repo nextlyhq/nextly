@@ -23,6 +23,7 @@ import { createHash } from "node:crypto";
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
+import type { FieldGroupNaming } from "../../field-groups/services/field-group-storage-names";
 import { normalizeContributions } from "../pipeline/diff/contributions";
 import type {
   ContributedElements,
@@ -38,9 +39,26 @@ import {
   type EntitySettingsRecord,
 } from "./entity-settings";
 
+/**
+ * The envelope version of a snapshot whose field groups are on the current names
+ * (`fieldGroupStorage: "current"`). Higher than a legacy snapshot's 1 on purpose: a CLI that
+ * predates the record refuses any version it does not know ("upgrade your CLI"), so it stops
+ * instead of reading the file as legacy and planning to drop every `fg_` table and create its
+ * `comp_` twin. A legacy snapshot stays version 1 and is written byte-identically.
+ */
+export const CURRENT_NAMES_SNAPSHOT_VERSION = 2;
+
 export interface SnapshotFile {
-  version: 1;
+  /** 1 for a history on the legacy field-group names, 2 for one on the current names. */
+  version: 1 | typeof CURRENT_NAMES_SNAPSHOT_VERSION;
   migrationHash: string;
+  /**
+   * The names this point of the history keeps field groups under: `"current"` once the project
+   * moved to `dynamic_field_groups` / `fg_<slug>` / `_field_group_type`, and absent on the legacy
+   * names. Absent on every file written before the record existed, which were all legacy, so an
+   * existing history reads exactly as it did. Present exactly when `version` is 2.
+   */
+  fieldGroupStorage?: "current";
   snapshot: NextlySchemaSnapshot;
   /**
    * Elements the app contributed to tables another owner declares, by table.
@@ -81,6 +99,17 @@ export interface SnapshotFile {
    * snapshot, which may not say which tables were translated.
    */
   translatedFieldsRecorded?: true;
+}
+
+/**
+ * The field-group names a snapshot's point of the history is on: `"current"` when it says so,
+ * otherwise legacy, which is what every snapshot written before the record existed was on. The
+ * one reading of the record, for every command that follows the history's naming.
+ */
+export function snapshotFieldGroupNaming(
+  file: Pick<SnapshotFile, "fieldGroupStorage">
+): FieldGroupNaming {
+  return file.fieldGroupStorage === "current" ? "current" : "legacy";
 }
 
 /**
@@ -187,12 +216,19 @@ export function parseSnapshotFile(
     throw new SnapshotFileError(filename, "expected a JSON object");
   }
   const obj = raw as Record<string, unknown>;
-  if (obj.version !== 1) {
+  if (obj.version !== 1 && obj.version !== CURRENT_NAMES_SNAPSHOT_VERSION) {
     throw new SnapshotFileError(
       filename,
-      `expected version: 1, got ${JSON.stringify(obj.version)}. ` +
+      `expected version: 1 or ${CURRENT_NAMES_SNAPSHOT_VERSION}, got ${JSON.stringify(obj.version)}. ` +
         "If this snapshot was created by a newer nextly version, upgrade your CLI."
     );
+  }
+  const namingProblem = fieldGroupStorageProblem(
+    obj.version,
+    obj.fieldGroupStorage
+  );
+  if (namingProblem !== undefined) {
+    throw new SnapshotFileError(filename, namingProblem);
   }
   if (
     typeof obj.migrationHash !== "string" ||
@@ -217,6 +253,27 @@ export function parseSnapshotFile(
   const problem = optionalPartProblem(obj);
   if (problem !== undefined) throw new SnapshotFileError(filename, problem);
   return obj as unknown as SnapshotFile;
+}
+
+/**
+ * What is wrong with a snapshot's field-group naming record. The record and the version go
+ * together — version 2 exactly when the file says `"current"` — so a file whose two disagree was
+ * edited by hand, and reading either one alone could plan against the wrong names.
+ */
+function fieldGroupStorageProblem(
+  version: unknown,
+  fieldGroupStorage: unknown
+): string | undefined {
+  if (fieldGroupStorage !== undefined && fieldGroupStorage !== "current") {
+    return `expected fieldGroupStorage to be "current" when present, got ${JSON.stringify(fieldGroupStorage)}`;
+  }
+  if (version === CURRENT_NAMES_SNAPSHOT_VERSION && fieldGroupStorage === undefined) {
+    return `expected fieldGroupStorage: "current" in a version ${CURRENT_NAMES_SNAPSHOT_VERSION} snapshot`;
+  }
+  if (version === 1 && fieldGroupStorage !== undefined) {
+    return `expected version: ${CURRENT_NAMES_SNAPSHOT_VERSION} for a snapshot on the current field-group names, got version: 1`;
+  }
+  return undefined;
 }
 
 /** What is wrong with the envelope's optional parts, each checked only when present. */
@@ -263,13 +320,24 @@ export async function writeSnapshot(
   /** Every entity's settings; omitted only by a caller that has none to record. */
   entities?: EntitySettingsRecord,
   /** Every declared permission, by owner; omitted only by a caller that knows none. */
-  permissions?: PermissionRecord
+  permissions?: PermissionRecord,
+  /**
+   * The field-group names this point of the history is on. Legacy writes the file exactly as
+   * before the record existed (version 1, no record); current writes version 2 with
+   * `fieldGroupStorage: "current"`.
+   */
+  fieldGroupNaming: FieldGroupNaming = "legacy"
 ): Promise<string> {
   await mkdir(metaDir, { recursive: true });
   const byName = (a: { name: string }, b: { name: string }) =>
     a.name.localeCompare(b.name);
   const file: SnapshotFile = {
-    version: 1,
+    ...(fieldGroupNaming === "current"
+      ? {
+          version: CURRENT_NAMES_SNAPSHOT_VERSION,
+          fieldGroupStorage: "current" as const,
+        }
+      : { version: 1 as const }),
     migrationHash: computeMigrationHash(sqlContent),
     ...(Object.keys(contributions).length > 0
       ? {

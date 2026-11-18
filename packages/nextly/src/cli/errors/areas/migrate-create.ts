@@ -119,6 +119,37 @@ export const MIGRATE_CREATE_CODES = defineCodes({
     cause:
       "`--record-snapshot` was given to `nextly migrate:create` with `--blank` or `--plugin`, which write no snapshot of the app.",
   },
+  FIELD_GROUP_NAMES_OPTION_INVALID: {
+    cause:
+      "`--field-group-names` was given to `nextly migrate:create` with a value other than `current`, or with `--blank`, `--plugin` or `--record-snapshot`.",
+  },
+  FIELD_GROUP_NAMES_DIFFER_FROM_HISTORY: {
+    cause:
+      "A migration was planned with field groups under names the project's migration history is not on.",
+    from: [
+      {
+        code: "VALIDATION_ERROR",
+        reason: "field-group-naming-differs-from-history",
+        describe: error => refusal(error, 1),
+      },
+    ],
+  },
+  FIELD_GROUP_TRANSITION_REFUSED: {
+    cause:
+      "`nextly migrate:create --field-group-names=current` was run in a project with no migration yet, or while the config had other changes to migrate.",
+    from: [
+      {
+        code: "VALIDATION_ERROR",
+        reason: "field-group-transition-without-history",
+        describe: error => refusal(error, 1),
+      },
+      {
+        code: "VALIDATION_ERROR",
+        reason: "field-group-transition-with-changes",
+        describe: error => refusal(error, 1),
+      },
+    ],
+  },
   TRANSLATIONS_UNRECORDED: {
     cause:
       "`nextly migrate:create` was run in a project with translations whose latest snapshot predates the record of translated fields.",
@@ -180,6 +211,18 @@ export function recordSnapshotNeedsAppMigration(): CliError {
     what: "`--record-snapshot` can't be combined with `--blank` or `--plugin`.",
     why: "It writes the app's migration and the snapshot that records which fields are translated, and a blank migration or a plugin module has no such snapshot.",
     next: "Run `nextly migrate:create --record-snapshot` on its own.",
+  });
+}
+
+/** `--field-group-names` takes `current` alone, and writes the app's migration and snapshot. */
+export function fieldGroupNamesOptionInvalid(value: string): CliError {
+  return new CliError("FIELD_GROUP_NAMES_OPTION_INVALID", {
+    what:
+      value === "current"
+        ? "`--field-group-names` can't be combined with `--blank`, `--plugin` or `--record-snapshot`."
+        : ``--field-group-names` takes `current`, and was given `${value}`.`,
+    why: "It writes the one migration that moves the app's history to the current field-group names (dynamic_field_groups, fg_<slug>), and there is no other naming to move it to.",
+    next: "Run `nextly migrate:create --field-group-names=current` on its own.",
   });
 }
 

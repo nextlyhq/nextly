@@ -29,6 +29,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
+import type { FieldGroupNaming } from "../../field-groups/services/field-group-storage-names";
 import { typeColumnForNewTable } from "../../field-groups/storage/resolve-storage-names";
 import { isFieldLocalized } from "../../i18n/classify-fields";
 import type { JoinRetries } from "../../i18n/migration/archive-preflight";
@@ -156,8 +157,17 @@ import {
   type EntitySettingsRecord,
   type RecordedEntitySettings,
 } from "./entity-settings";
+import {
+  contributionsUnderCurrentNames,
+  historyFieldGroupNaming,
+  refuseChangesToTransition,
+  refuseNamingAgainstHistory,
+  snapshotUnderCurrentNames,
+  transitionNeeded,
+} from "./field-group-names-transition";
 import { planFieldGroupRenames } from "./field-group-renames";
 import {
+  formatFieldGroupTransitionFile,
   formatMigrationFile,
   formatSnapshotRecordFile,
   formatTimestamp,
@@ -415,6 +425,19 @@ export interface GenerateArgs {
    * null when the latest snapshot already records them.
    */
   recordSnapshot?: boolean;
+  /**
+   * The field-group names `components` were resolved under. Omitted, the newest snapshot's (the
+   * history's) naming; given and different from it, the run is refused, naming the transition
+   * step (`refuseNamingAgainstHistory`). A project's first migration records it, else legacy.
+   */
+  fieldGroupNaming?: FieldGroupNaming;
+  /**
+   * `--field-group-names=current`: write the file that moves the history to the current
+   * field-group names, holding no statement, whose snapshot is the newest one under those names.
+   * Refused while the config has another change to migrate; returns null when the history is
+   * already on the current names (`field-group-names-transition.ts`).
+   */
+  fieldGroupTransition?: boolean;
   /**
    * The columns `<tableName>_locales` has in the database, empty when there is no such table. Read
    * only by `recordSnapshot`, which records which fields are translated as the database holds them
@@ -820,6 +843,18 @@ export async function generateMigration(
 
   // 1. Load previous state.
   const previous = await loadLatestSnapshot(metaDir);
+  // The history's field-group naming holds for every file but the transition, which moves it.
+  refuseNamingAgainstHistory(previous?.data ?? null, scoped.fieldGroupNaming);
+  if (
+    scoped.fieldGroupTransition === true &&
+    !transitionNeeded(previous?.data ?? null)
+  ) {
+    return null;
+  }
+  const fieldGroupNaming = historyFieldGroupNaming(
+    previous?.data ?? null,
+    scoped.fieldGroupNaming
+  );
 
   // Taken once, here, so the table diff and every companion planner below
   // see the same fields (`withKeptScopeFieldsOf`).
@@ -993,27 +1028,37 @@ export async function generateMigration(
   const changesBeyondTables =
     hasSettingsChanges || changedPermissions.length > 0;
 
-  const recorded = await recordedUnlessChanged(args, {
-    // Not the per-language unique indexes: a snapshot from before the record has none of them, so
-    // each reads as new, and recording them is the record's own work. Counted, they would leave a
-    // project with a translated unique field no way to record.
-    pendingTables: [
+  // Not the per-language unique indexes: a snapshot from before the record has none of them, so
+  // each reads as new, and recording them is the record's own work. Counted, they would leave a
+  // project with a translated unique field no way to record.
+  const pendingTables = [
       ...operations.map(operationTableName),
       ...[
         ...companionPlans,
         ...fieldLeavesPlans.map(({ plan }) => plan.shared),
         ...fieldJoinsPlans.map(({ plan }) => plan),
       ].map(({ spec }) => spec.mainTable),
-    ],
+  ];
+  const record: Omit<MigrationPair, "sqlContent"> = {
+    written,
+    contributions: stream.contributions,
+    entities: settingsRecord,
+    permissions: permissionRecord,
+    metaDir,
+    now,
+    fieldGroupNaming,
+  };
+  if (args.fieldGroupTransition === true) {
+    refuseChangesToTransition({
+      tables: pendingTables,
+      beyondTables: changesBeyondTables,
+    });
+    return transitionSnapshot(args, record);
+  }
+  const recorded = await recordedUnlessChanged(args, {
+    pendingTables,
     hasSettingsChanges: changesBeyondTables,
-    record: {
-      written,
-      contributions: stream.contributions,
-      entities: settingsRecord,
-      permissions: permissionRecord,
-      metaDir,
-      now,
-    },
+    record,
   });
   if (recorded !== undefined) return recorded;
   if (operations.length === 0 && !hasCompanions && !changesBeyondTables) {
@@ -1451,6 +1496,7 @@ export async function generateMigration(
     contributions: stream.contributions,
     entities: settingsRecord,
     permissions: permissionRecord,
+    fieldGroupNaming,
   });
 
   if (args.dryRun !== true) {
@@ -1736,6 +1782,48 @@ async function recordSnapshot(
   };
 }
 
+/**
+ * `--field-group-names=current`: the migration that moves the history to the current field-group
+ * names. Its snapshot is the newest one with each field-group table and its type column under the
+ * current names, as `nextly migrate:field-groups` leaves the database, and it records `current`;
+ * its file holds no statement (`formatFieldGroupTransitionFile`). Written only once the config
+ * has nothing else to migrate (`refuseChangesToTransition`), so the record is the history as it
+ * stands, renamed.
+ */
+async function transitionSnapshot(
+  args: GenerateArgs,
+  record: Omit<MigrationPair, "sqlContent">
+): Promise<GenerateResult> {
+  const groupTables = new Set(args.components.map(c => c.tableName));
+  const run: MigrationPair = {
+    ...record,
+    written: snapshotUnderCurrentNames(record.written, groupTables),
+    contributions: contributionsUnderCurrentNames(
+      record.contributions ?? {},
+      groupTables
+    ),
+    fieldGroupNaming: "current",
+    sqlContent: formatFieldGroupTransitionFile(
+      args.name,
+      args.dialect,
+      record.now
+    ),
+  };
+  const { sqlPath, snapshotPath } = await writeMigrationPair(args, run);
+  return {
+    sqlPath,
+    snapshotPath,
+    sqlContent: run.sqlContent,
+    companionFiles: [],
+    operationCount: 0,
+    renamesAccepted: 0,
+    settingsChanges: [],
+    permissionChanges: [],
+    // The transition changes nothing in the database, so it deletes nothing.
+    deletions: [],
+  };
+}
+
 /** A migration's `.sql` content and what its paired snapshot records. */
 interface MigrationPair {
   sqlContent: string;
@@ -1745,6 +1833,8 @@ interface MigrationPair {
   permissions: Parameters<typeof writeSnapshot>[6];
   metaDir: string;
   now: Date;
+  /** The field-group names the snapshot records this point of the history on. */
+  fieldGroupNaming: FieldGroupNaming;
 }
 
 /**
@@ -1771,7 +1861,8 @@ async function writeMigrationPair(
     pair.sqlContent,
     pair.contributions,
     pair.entities,
-    pair.permissions
+    pair.permissions,
+    pair.fieldGroupNaming
   );
   return { sqlPath, snapshotPath };
 }
