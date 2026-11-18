@@ -212,7 +212,14 @@ export function pageChecks() {
         buttonKind: button?.getAttribute("data-state-kind") ?? null,
         tone,
       };
-      return answered && finished && tone === "saved";
+      // The builder draws no separate save indicator: its buttons say the
+      // page's status themselves, and Publish reads "published" once the
+      // page is live. A surface with the indicator still waits for "saved".
+      const shown =
+        state === null
+          ? button?.getAttribute("data-state-kind") === "published"
+          : tone === "saved";
+      return answered && finished && shown;
     },
   };
 }
