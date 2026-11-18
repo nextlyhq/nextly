@@ -126,7 +126,7 @@
   background: var(--nx-builder-surface-raised);
   color: var(--nx-builder-text);
   font: inherit;
-  font-size: 0.75rem;
+  font-size: var(--text-xs);
   cursor: pointer;
 }
 
@@ -160,7 +160,7 @@
 .nx-list-picker__note {
   margin: 0;
   color: var(--nx-builder-text-muted);
-  font-size: 0.75rem;
+  font-size: var(--text-xs);
   text-align: center;
 }
 
