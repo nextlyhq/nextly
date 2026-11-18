@@ -12,6 +12,7 @@
 import {
   classNameOf,
   isLook,
+  isTextStyle,
   MAX_NAMED_CLASS_NAME_LENGTH,
   tokenLabelIssue,
   type NamedClass,
@@ -179,6 +180,11 @@ export interface SharedStyleRow {
   readonly inCode: boolean;
   /** A look, bound to one block type, rather than a shared style. */
   readonly look?: boolean;
+  /**
+   * A text style, worn from the Style tab's "Text style" picker rather than
+   * as a shared style.
+   */
+  readonly text?: boolean;
   readonly styles: NodeStyles;
 }
 
@@ -200,17 +206,20 @@ export function sharedStyleRows(
     locked: entry.locked === true,
     inCode: suppliedIds.has(entry.id),
     ...(isLook(entry) ? { look: true } : {}),
+    ...(isTextStyle(entry) ? { text: true } : {}),
     styles: entry.styles,
   }));
 }
 
 /**
- * The library without its looks: the shared styles an author applies to any
- * block, as the Shared styles tab and the picker list them. A look is bound
- * to one block type and is picked from that block's own tiles.
+ * The library without its looks and text styles: the shared styles an author
+ * applies to any block, as the Shared styles tab and the picker list them. A
+ * look is bound to one block type and is picked from that block's own tiles;
+ * a text style is picked from the Style tab's "Text style" and listed in
+ * Design's Type tab.
  */
 export function sharedStylesOnly(library: readonly NamedClass[]): NamedClass[] {
-  return library.filter(entry => !isLook(entry));
+  return library.filter(entry => !isLook(entry) && !isTextStyle(entry));
 }
 
 /** A style's name: its label, or its slug for a style made before labels. */

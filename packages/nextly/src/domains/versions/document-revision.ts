@@ -286,7 +286,7 @@ export interface SelectsRows {
  * model does not declare the counter, since the same model serves
  * field-group translation tables, which are no documents and never carry it.
  */
-async function readLanguageRevisions(
+export async function readLanguageRevisions(
   db: SelectsRows,
   args: { dialect: SupportedDialect; table: string; ids: readonly string[] }
 ): Promise<Map<string, Map<string, number>>> {

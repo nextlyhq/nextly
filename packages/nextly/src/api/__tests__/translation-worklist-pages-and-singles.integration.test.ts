@@ -21,6 +21,29 @@ vi.mock("../../auth/middleware", async importActual => {
   };
 });
 
+// A Single's document lookup fails for the slugs named here, as a database error would.
+const lookup = vi.hoisted(() => ({ fails: new Set<string>() }));
+vi.mock(
+  "../../domains/singles/services/single-document-access",
+  async importActual => {
+    const actual =
+      await importActual<
+        typeof import("../../domains/singles/services/single-document-access")
+      >();
+    return {
+      ...actual,
+      resolveSingleDocumentId: vi.fn(
+        async (
+          ...args: Parameters<typeof actual.resolveSingleDocumentId>
+        ): ReturnType<typeof actual.resolveSingleDocumentId> => {
+          if (lookup.fails.has(args[0])) throw new Error("lookup failed");
+          return actual.resolveSingleDocumentId(...args);
+        }
+      ),
+    };
+  }
+);
+
 import { userWhoMay } from "../../__tests__/fixtures/permission-holders";
 import { defineCollection, defineSingle, text } from "../../config";
 import { createTestNextly, type TestNextly } from "../../plugins/test-nextly";
@@ -28,6 +51,7 @@ import type { CollectionsHandler } from "../../services/collections-handler";
 
 let current: TestNextly | undefined;
 afterEach(async () => {
+  lookup.fails.clear();
   await current?.destroy();
   current = undefined;
 });
@@ -195,5 +219,49 @@ describe("the translation worklist, page by page", () => {
 
     const stale = await worklist("locale=de&state=stale");
     expect(stale.items.map(row => row.id)).toEqual([ids[0]]);
+  });
+
+  it("names a Single whose document cannot be looked up as not consulted, and answers for the rest", async () => {
+    // One Single's lookup failing is that Single's answer missing, not the worklist's: the rest
+    // is listed, and the Single is named as not consulted, as a collection whose read fails is.
+    const t = await boot();
+    await t.nextly.updateSingle({
+      slug: "banner",
+      locale: "en",
+      data: { headline: "Sale", _overwrite: true },
+    } as never);
+    await t.nextly.create({
+      collection: "pages",
+      locale: "en",
+      data: { title: "Home", team: "public" },
+    });
+    lookup.fails.add("banner");
+
+    const { items, meta } = await worklist("locale=de&state=missing");
+    expect(items.map(item => item.collection)).toEqual(["pages"]);
+    expect(meta.notConsulted).toEqual(expect.arrayContaining(["banner"]));
+  });
+
+  it("names a Single that cannot answer staleness as unanswerable, as a collection is", async () => {
+    // Staleness compares when each language was written, a column a translations table made
+    // before it has none of. A collection without it is named as unanswerable, with its remedy;
+    // a Single without it must be too, not left out of the stale list as if it had no stale
+    // translation.
+    const t = await boot();
+    await t.nextly.updateSingle({
+      slug: "banner",
+      locale: "en",
+      data: { headline: "Sale", _overwrite: true },
+    } as never);
+    await (
+      t.adapter as unknown as {
+        executeQuery(statement: string): Promise<unknown>;
+      }
+    ).executeQuery(
+      `ALTER TABLE "single_banner_locales" DROP COLUMN "_updated_at"`
+    );
+
+    const { meta } = await worklist("locale=de&state=stale");
+    expect(meta.unanswerable).toEqual(expect.arrayContaining(["banner"]));
   });
 });

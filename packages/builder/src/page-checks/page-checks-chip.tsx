@@ -52,6 +52,10 @@ export interface PageChecksChipProps {
   readonly checks?: readonly PageCheck[];
   /** The page's block definitions; the registry by default. */
   readonly blocks?: CheckedPage["blocks"];
+  /** The header and footer drawn around the page, read with it. */
+  readonly regions?: CheckedPage["regions"];
+  /** The definitions the page's component placements are drawn from. */
+  readonly definitions?: CheckedPage["definitions"];
 }
 
 /** Whether the list, the bar, or neither is open. */
@@ -203,15 +207,22 @@ export function PageChecksChip({
   canvas,
   checks = CORE_PAGE_CHECKS,
   blocks,
+  regions,
+  definitions,
 }: PageChecksChipProps): React.JSX.Element {
   const { document } = editor;
   const report = React.useMemo(
     () =>
       runPageChecks(
-        { document, ...(blocks === undefined ? {} : { blocks }) },
+        {
+          document,
+          ...(blocks === undefined ? {} : { blocks }),
+          ...(regions === undefined ? {} : { regions }),
+          ...(definitions === undefined ? {} : { definitions }),
+        },
         checks
       ),
-    [document, blocks, checks]
+    [document, blocks, regions, definitions, checks]
   );
   const { findings } = report;
   const [opened, setOpened] = React.useState<Opened>("closed");

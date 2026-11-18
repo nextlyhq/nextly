@@ -83,6 +83,12 @@ export function SharedValueLine({
   }
   const under = styleBeneath(target.worn, answer, address);
   if (under === undefined) return null;
+  // A text style is the block's own typographic choice, so a value over it
+  // reads as a change from it: "Changed from Eyebrow".
+  const words =
+    under.text === true
+      ? `Changed from\u00a0${under.name}`
+      : `Set on this block\u00a0·\u00a0overrides\u00a0${under.name}`;
   return (
     <div
       className="nx-style-inspector__shared-line"
@@ -92,9 +98,7 @@ export function SharedValueLine({
        * The separator is held to the words on either side by no-break spaces,
        * so a wrap falls between other words and never leaves it ending a line.
        */}
-      <span data-shared-line-text="">
-        {`Set on this block\u00a0·\u00a0overrides\u00a0${under.name}`}
-      </span>
+      <span data-shared-line-text="">{words}</span>
       <button
         type="button"
         className="nx-style-inspector__breakpoint-action"
@@ -332,7 +336,7 @@ function originBrief(
 function briefSubject(origin: StyleOrigin, editing: EditedAddress): string {
   switch (origin.kind) {
     case "class":
-      return editing.sharedStyleName?.(origin.slug) ?? `.${origin.slug}`;
+      return className(origin, editing);
     case "blockType":
       return origin.type === editing.blockType
         ? "block defaults"
@@ -346,6 +350,19 @@ function briefSubject(origin: StyleOrigin, editing: EditedAddress): string {
     case "node":
       return enclosingName(editing, origin.id);
   }
+}
+
+/**
+ * A class as the author knows it: a shared style by its name ("Card"), a
+ * text style said to be one ("text style: Eyebrow"), each by its class name
+ * where the panel does not know its name.
+ */
+function className(
+  origin: Extract<StyleOrigin, { kind: "class" }>,
+  editing: EditedAddress
+): string {
+  const name = editing.sharedStyleName?.(origin.slug) ?? `.${origin.slug}`;
+  return origin.role === "text" ? `text style: ${name}` : name;
 }
 
 /** An enclosing block as the Layers panel names it, or in general words. */
@@ -373,7 +390,7 @@ function originSubject(
 ): string {
   switch (origin.kind) {
     case "class":
-      return editing.sharedStyleName?.(origin.slug) ?? `.${origin.slug}`;
+      return className(origin, editing);
     case "blockType":
       /*
        * The same problem the `node` case has, and it arrives by the same route:
