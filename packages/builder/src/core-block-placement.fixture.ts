@@ -291,6 +291,13 @@ export const CORE_SETTING_PLACES: readonly SettingPlace[] = [
     label: "Link relationship",
   },
   {
+    block: "core/heading",
+    setting: "tocExclude",
+    tab: "advanced",
+    section: "Visibility",
+    label: "Leave out of table of contents",
+  },
+  {
     block: "core/text",
     setting: "text",
     tab: "content",
