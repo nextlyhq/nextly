@@ -13,7 +13,7 @@ import { SITE_CODE_LIMITS } from "./limits";
  * What ends a style element early, wherever author text is drawn inside one:
  * the HTML parser closes it at `</style`, whatever follows.
  */
-export const STYLE_ELEMENT_END = /<\/style/i;
+export const STYLE_ELEMENT_END: RegExp = /<\/style/i;
 
 /**
  * A URL with what browsers ignore before reading it taken out: ASCII
