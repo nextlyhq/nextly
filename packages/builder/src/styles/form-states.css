@@ -3,21 +3,15 @@
  * editor's own colours.
  *
  * A layer over the canvas root's content box that takes no presses itself,
- * like `.nx-image-states`. Each notice's place is the block's measured
- * rectangle: a tag sits on the block's top edge, at its right, so the form
- * beneath stays in view and the block toolbar at its left is not covered; a
- * deleted form's plate fills the room its box is given.
+ * like `.nx-image-states`, whose rule it shares in `canvas.css`. Each
+ * notice's place is the block's measured rectangle: a tag sits on the
+ * block's top edge, at its right, so the form beneath stays in view and the
+ * block toolbar at its left is not covered; a deleted form's plate fills the
+ * room its box is given.
  *
  * Amber words on an amber-tinted plate of the editor's raised surface
  * (`--nx-builder-warning-*`), which hold their contrast in both themes.
  */
-.nx-form-states {
-  position: absolute;
-  inset: 0;
-  z-index: 1;
-  pointer-events: none;
-}
-
 .nx-form-states__place {
   position: absolute;
   pointer-events: none;
@@ -58,6 +52,11 @@
   border-style: dashed;
   border-radius: var(--radius-md);
   text-align: center;
+}
+
+/* The picker's presses stop here, so they don't select the Form. */
+.nx-form-states__picker {
+  display: contents;
 }
 
 .nx-form-states__pick {

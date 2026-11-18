@@ -171,12 +171,9 @@
   justify-self: stretch;
 }
 
-.nx-form-source__from,
-.nx-form-source__hint {
+/* The panel's own hint words; the grid's gap spaces them. */
+.nx-form-source > .nx-inspector__hint {
   margin: 0;
-  font-size: var(--text-xs);
-  line-height: 1.4;
-  color: var(--nx-muted-foreground);
 }
 
 .nx-form-source__edit {

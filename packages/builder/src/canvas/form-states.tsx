@@ -42,9 +42,11 @@ import {
   FormChoiceItems,
   formOfChoice,
   useFormSources,
+  useShownAgain,
 } from "../form-source-control";
 import type { Rect } from "../geometry";
 import { lockViewOf, propIsWritable, propPatch } from "../inspector";
+import { selectionModeFor } from "../selection";
 import { CANVAS_ROOT_CLASS } from "../shell-state";
 
 import { CHROME_ATTRIBUTE } from "./canvas-chrome";
@@ -103,9 +105,24 @@ function pickedForms(document: EditorState["document"]): PickedForm[] {
   return [...picks.values()];
 }
 
+/** What `usePickedFormStates` has asked, and in which round of asking. */
+interface Asked {
+  readonly read: ContentServices["pickedFormState"];
+  readonly again: number;
+  /** The round, bumped whenever everything is to be read afresh. */
+  round: number;
+  /** Each form asked in this round, by key. */
+  readonly keys: Set<string>;
+}
+
 /**
- * Each picked form's state, read once per form while the editor is open; a
- * read that fails leaves its form unread, so nothing is said over it.
+ * Each picked form's state, read once per form, and read again for every
+ * form when the author comes back to the editor (`useShownAgain`), since the
+ * form may have changed in its own tab, or when the host's reader changes. A
+ * form no longer picked is read afresh if it is picked again. A read that
+ * fails leaves its form unread, so nothing is said over it, until the next
+ * time everything is read. An answer from an earlier round is dropped, so a
+ * slow old read never puts back a state that was read since.
  */
 function usePickedFormStates(
   document: EditorState["document"],
@@ -114,21 +131,41 @@ function usePickedFormStates(
   const [states, setStates] = React.useState<
     ReadonlyMap<string, PickedFormState>
   >(() => new Map());
-  const asked = React.useRef(new Set<string>());
+  const again = useShownAgain();
+  const asked = React.useRef<Asked>({
+    read,
+    again,
+    round: 0,
+    keys: new Set(),
+  });
   React.useEffect(() => {
+    const kept = asked.current;
+    if (kept.read !== read || kept.again !== again) {
+      asked.current = { read, again, round: kept.round + 1, keys: new Set() };
+    }
+    const now = asked.current;
     if (read === undefined) return;
-    for (const form of pickedForms(document)) {
+    const forms = pickedForms(document);
+    const picked = new Set(forms.map(pickedFormKey));
+    for (const key of now.keys) if (!picked.has(key)) now.keys.delete(key);
+    for (const form of forms) {
       const key = pickedFormKey(form);
-      if (asked.current.has(key)) continue;
-      asked.current.add(key);
+      if (now.keys.has(key)) continue;
+      now.keys.add(key);
+      const round = now.round;
       read(form).then(
         state => {
-          setStates(current => new Map(current).set(key, state));
+          if (asked.current.round !== round) return;
+          setStates(current =>
+            current.get(key) === state
+              ? current
+              : new Map(current).set(key, state)
+          );
         },
         () => undefined
       );
     }
-  }, [document, read]);
+  }, [document, read, again]);
   return states;
 }
 
@@ -318,24 +355,37 @@ function FormNotice({
         }
         role="note"
         // The notice's own presses stay on it: the canvas beneath would
-        // otherwise select whatever block is under the pointer.
-        onClick={event => event.stopPropagation()}
+        // otherwise select whatever block is under the pointer. A click on
+        // the notice selects its Form instead, so a deleted form's box,
+        // which the plate covers, still opens its settings; the picker's
+        // own presses stop at the picker.
+        onClick={event => {
+          event.stopPropagation();
+          const mode = selectionModeFor(event);
+          if (mode === "replace") editor.select(nodeId);
+          else editor.select(nodeId, mode);
+        }}
         onPointerDown={event => event.stopPropagation()}
         onContextMenu={event => event.stopPropagation()}
       >
         <span className="nx-form-states__words">{NOTICE_WORDS[kind]}</span>
         {offersPick ? (
-          <Select value="" onValueChange={pick}>
-            <SelectTrigger
-              className="nx-form-states__pick"
-              aria-label={FORM_WORDS.pickAnother}
-            >
-              {FORM_WORDS.pickAnother}
-            </SelectTrigger>
-            <SelectContent>
-              <FormChoiceItems sources={sources} />
-            </SelectContent>
-          </Select>
+          <span
+            className="nx-form-states__picker"
+            onClick={event => event.stopPropagation()}
+          >
+            <Select value="" onValueChange={pick}>
+              <SelectTrigger
+                className="nx-form-states__pick"
+                aria-label={FORM_WORDS.pickAnother}
+              >
+                {FORM_WORDS.pickAnother}
+              </SelectTrigger>
+              <SelectContent>
+                <FormChoiceItems sources={sources} />
+              </SelectContent>
+            </Select>
+          </span>
         ) : null}
       </div>
     </div>

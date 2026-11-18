@@ -117,6 +117,23 @@ function sectionNames(): string[] {
 const simple = form.defaultProps as Record<string, unknown>;
 
 describe("a Form with a form source installed", () => {
+  it("lists the forms again when the author comes back to the editor", async () => {
+    let listed: FormSource[] = [{ ...FORMS, forms: [] }];
+    mount(simple, { listForms: async () => listed });
+    await screen.findByRole("combobox", { name: "Form" });
+    // A form made in Forms' own tab, then back to the builder.
+    listed = [FORMS];
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      get: () => "visible",
+    });
+    document.dispatchEvent(new Event("visibilitychange"));
+    fireEvent.click(await screen.findByRole("combobox", { name: "Form" }));
+    expect(
+      await screen.findByRole("option", { name: "Request a quote" })
+    ).toBeDefined();
+  });
+
   it("makes 'Form: <pick a form>' its first setting, listing the forms with drafts and closed ones marked", async () => {
     const editor = mount(simple, { listForms: async () => [FORMS] });
     const picker = await screen.findByRole("combobox", { name: "Form" });

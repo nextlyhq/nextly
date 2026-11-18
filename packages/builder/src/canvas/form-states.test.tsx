@@ -125,7 +125,21 @@ function mount(
       <FormStates editor={editor} services={services} />
     </div>
   );
-  return { apply, pickedFormState };
+  return { apply, pickedFormState, editor };
+}
+
+/** The editor's tab is shown or hidden, as switching tabs does. */
+function tabBecomes(state: DocumentVisibilityState): void {
+  Object.defineProperty(document, "visibilityState", {
+    configurable: true,
+    get: () => state,
+  });
+  document.dispatchEvent(new Event("visibilitychange"));
+}
+
+/** The author comes back to the editor's tab, from the form's own page. */
+function comeBack(): void {
+  tabBecomes("visible");
 }
 
 const picked = (ref: string) => ({ form: { provider: "forms", ref } });
@@ -189,6 +203,70 @@ describe("a picked form on the canvas", () => {
     await waitFor(() => expect(pickedFormState).toHaveBeenCalled());
     await Promise.resolve();
     expect(document.querySelector("[data-form-notice]")).toBeNull();
+  });
+});
+
+describe("a picked form changed elsewhere", () => {
+  it("is read again when the author comes back to the editor", async () => {
+    const states: Record<string, PickedFormState | Error> = { "2": "draft" };
+    const { pickedFormState } = mount(
+      [formNode("a", picked("2")), formNode("b", picked("2"))],
+      states
+    );
+    expect(
+      await screen.findAllByText(
+        "Draft form: visitors can't send it until it's published"
+      )
+    ).toHaveLength(2);
+    // Published in the form's own tab, then back to the builder.
+    states["2"] = "published";
+    comeBack();
+    await waitFor(() =>
+      expect(document.querySelector("[data-form-notice]")).toBeNull()
+    );
+    // One read per form each time, however many blocks pick it.
+    expect(pickedFormState).toHaveBeenCalledTimes(2);
+  });
+
+  it("is not read again while the editor's tab is hidden", async () => {
+    const { pickedFormState } = mount([formNode("a", picked("2"))], {
+      "2": "draft",
+    });
+    await screen.findByText(
+      "Draft form: visitors can't send it until it's published"
+    );
+    tabBecomes("hidden");
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(pickedFormState).toHaveBeenCalledTimes(1);
+    tabBecomes("visible");
+  });
+
+  it("is tried again after a failed read, once the author comes back", async () => {
+    const states: Record<string, PickedFormState | Error> = {
+      "3": new Error("down"),
+    };
+    const { pickedFormState } = mount([formNode("a", picked("3"))], states);
+    await waitFor(() => expect(pickedFormState).toHaveBeenCalledTimes(1));
+    states["3"] = "closed";
+    comeBack();
+    expect(
+      await screen.findByText(
+        "This form is closed. Visitors see its closed message."
+      )
+    ).toBeTruthy();
+  });
+});
+
+describe("a deleted form's plate", () => {
+  it("selects the Form when the plate is clicked, but not through its picker", async () => {
+    const { editor } = mount([formNode("a", picked("9"))], { "9": "missing" });
+    fireEvent.click(await screen.findByText("This form was deleted."));
+    expect(editor.select).toHaveBeenCalledWith("a");
+    vi.mocked(editor.select).mockClear();
+    fireEvent.click(
+      await screen.findByRole("combobox", { name: "Pick another form" })
+    );
+    expect(editor.select).not.toHaveBeenCalled();
   });
 });
 

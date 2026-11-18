@@ -39,20 +39,47 @@ export type FormSources =
   | { readonly status: "failed" }
   | { readonly status: "ready"; readonly sources: readonly FormSource[] };
 
-/** The site's form sources, read once per `listForms`. */
+/**
+ * A count that goes up each time the editor's tab is shown again: the author
+ * coming back from another tab, such as a form's own page opened from "Edit
+ * this form ↗", where the form may have been published, closed or deleted.
+ * What was read about forms is read again on each.
+ */
+export function useShownAgain(): number {
+  const [count, setCount] = React.useState(0);
+  React.useEffect(() => {
+    const shown = (): void => {
+      if (document.visibilityState === "visible") setCount(n => n + 1);
+    };
+    document.addEventListener("visibilitychange", shown);
+    return () => document.removeEventListener("visibilitychange", shown);
+  }, []);
+  return count;
+}
+
+/**
+ * The site's form sources, read once per `listForms`, and again each time
+ * the author comes back to the editor (`useShownAgain`). A read again keeps
+ * the last list on screen until the new one comes, so nothing flickers.
+ */
 export function useFormSources(
   listForms: ContentServices["listForms"]
 ): FormSources {
   const [sources, setSources] = React.useState<FormSources>(
     listForms === undefined ? { status: "absent" } : { status: "loading" }
   );
+  const again = useShownAgain();
+  const listedBy = React.useRef<ContentServices["listForms"]>(undefined);
   React.useEffect(() => {
     if (listForms === undefined) {
+      listedBy.current = undefined;
       setSources({ status: "absent" });
       return;
     }
     let current = true;
-    setSources({ status: "loading" });
+    // Another host's list starts from nothing; the same one read again doesn't.
+    if (listedBy.current !== listForms) setSources({ status: "loading" });
+    listedBy.current = listForms;
     listForms().then(
       read => {
         if (current) setSources({ status: "ready", sources: read });
@@ -64,7 +91,7 @@ export function useFormSources(
     return () => {
       current = false;
     };
-  }, [listForms]);
+  }, [listForms, again]);
   return sources;
 }
 
@@ -194,7 +221,7 @@ export function FormSourceControl({
   if (sources.sources.length === 0) {
     return (
       <div className="nx-form-source" data-content-control="form-source">
-        <p className="nx-form-source__hint">{FORM_WORDS.installHint}</p>
+        <p className="nx-inspector__hint">{FORM_WORDS.installHint}</p>
         {useSimple}
       </div>
     );
@@ -228,7 +255,7 @@ export function FormSourceControl({
         </Select>
       </div>
       {listed === undefined ? null : (
-        <p className="nx-form-source__from">
+        <p className="nx-inspector__hint">
           {FORM_WORDS.comesFrom(listed.source.label)}
         </p>
       )}
