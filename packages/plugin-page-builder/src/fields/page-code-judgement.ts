@@ -65,13 +65,13 @@ async function changesCode(
 }
 
 /**
- * The stored forms a write's code is compared with: the ones it changes, as
- * the reference check reads them (`formsChangedBy`). A draft-only save is
- * compared with the draft alone, so it can't put the published code back
- * over the draft's own unasked; a publish with both, so promoting an
- * approved draft asks nothing.
+ * The stored forms a write's code and CSS are compared with: the ones it
+ * changes, as the reference check reads them (`formsChangedBy`). A
+ * draft-only save is compared with the draft alone, so it can't put the
+ * published code back over the draft's own unasked; a publish with both, so
+ * promoting an approved draft asks nothing.
  */
-export function pageCodeBaseline(
+export function changedFormsBaseline(
   args: JudgedField & Pick<PluginFieldValidateArgs, "data">
 ): () => Promise<StoredForms> {
   const status = (args.data as { status?: unknown } | undefined)?.status;
@@ -100,7 +100,7 @@ function isPage(value: unknown): boolean {
  * Whether the field is a page's own top-level field: no group, no row, and
  * not a field-group instance's, which is judged at the top of the instance.
  */
-function isTopLevel(args: JudgedField): boolean {
+export function isTopLevel(args: JudgedField): boolean {
   if (args.write?.inFieldGroup === true) return false;
   return !args.path.includes(".") && !args.path.includes("[");
 }
@@ -110,27 +110,45 @@ function refusal(args: JudgedField, message: string): PluginFieldIssue {
   return { path: args.path, code: PAGE_CODE_REFUSED, message };
 }
 
+/** What a refused caller is told, for each reason. */
+export interface CallerRefusalWords {
+  /** The write doesn't say who is making it. */
+  readonly nobody: string;
+  /** It is made with an API key. */
+  readonly apiKey: string;
+  /** The person can't change the site's settings. */
+  readonly notPermitted: string;
+}
+
 /**
- * Whether the write's caller may change page code: a person (or trusted
- * code), never an API key, holding the site settings permission. Answers
- * the refusal's words, or null where the caller may.
+ * Whether the write's caller may change what runs or draws on every visit
+ * to a published page (page code, custom CSS): a person (or trusted code),
+ * never an API key, holding the site settings permission. Answers the
+ * refusal's words, or null where the caller may.
  */
-async function callerRefusal(args: JudgedField): Promise<string | null> {
+export async function siteSettingsCallerRefusal(
+  args: JudgedField,
+  words: CallerRefusalWords
+): Promise<string | null> {
   const caller = args.write?.caller;
-  if (caller === undefined) {
-    return "This page's code can't be changed here: the write doesn't say who is making it.";
-  }
-  if (caller.kind === "apiKey") {
-    return "An API key can't change a page's code. Sign in as someone who can change the site's settings.";
-  }
+  if (caller === undefined) return words.nobody;
+  if (caller.kind === "apiKey") return words.apiKey;
   const may = await caller.can(
     PAGE_CODE_PERMISSION.action,
     PAGE_CODE_PERMISSION.resource
   );
-  return may
-    ? null
-    : "Only people who can change site settings can change a page's code.";
+  return may ? null : words.notPermitted;
 }
+
+/** What a caller refused a change to page code is told. */
+const PAGE_CODE_CALLER_WORDS: CallerRefusalWords = {
+  nobody:
+    "This page's code can't be changed here: the write doesn't say who is making it.",
+  apiKey:
+    "An API key can't change a page's code. Sign in as someone who can change the site's settings.",
+  notPermitted:
+    "Only people who can change site settings can change a page's code.",
+};
 
 /**
  * The issues a write's page code raises: none where it leaves the code as
@@ -172,7 +190,7 @@ export async function pageCodeIssues(
   }
   if (!(await changesCode(written, stored))) return [];
   // The caller first, before anything about the code is read out.
-  const refused = await callerRefusal(args);
+  const refused = await siteSettingsCallerRefusal(args, PAGE_CODE_CALLER_WORDS);
   if (refused !== null) return [refusal(args, `${label}: ${refused}`)];
   // Before the plugin's setup is installed (a dev server's config reload
   // builds the field again), the site's policy isn't known to judge by.

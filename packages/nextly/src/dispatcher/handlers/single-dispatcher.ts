@@ -62,6 +62,10 @@ import {
   type SchemaChangeAnswers,
 } from "../../domains/schema/builder-save/schema-change-save";
 import { entityRelations } from "../../domains/schema/builder-save/single-relations";
+import {
+  dialogRowAnswers,
+  reviewWithRowFillsSettled,
+} from "../../domains/schema/builder-save/single-row-fills";
 import { singleEntity } from "../../domains/schema/builder-save/stored-entity";
 import { refuseCompanionRenameSwitch } from "../../domains/schema/pipeline/companion-shape-switches";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
@@ -519,6 +523,70 @@ async function requireLiveSingleId(slug: string): Promise<string> {
     });
   }
   return id;
+}
+
+/**
+ * Whether a Single's dialog save takes the push road (`pushCarriesValues`) rather than its own
+ * migration file: asked by the save (its `pushWhen`) and by its review, which on that road still
+ * asks about what the push leaves to the person (`dialogRowAnswers`' `settledOnPush`). No
+ * `singleRow`: the file fills the Single's row, so no fill keeps the push.
+ */
+async function singleSaveTakesPush(args: {
+  oldFields: readonly FieldDefinition[];
+  newFields: readonly FieldDefinition[];
+  layout: ReturnType<typeof translationLayoutChange>;
+  companionRename: Parameters<typeof pushCarriesValues>[0]["renamed"];
+  renameResolutions: readonly BrowserRenameResolution[] | undefined;
+  db: Parameters<typeof introspectLiveSnapshot>[0];
+  dialect: Parameters<typeof introspectLiveSnapshot>[1];
+  tableName: string;
+}): Promise<boolean> {
+  return pushCarriesValues({
+    oldFields: args.oldFields,
+    newFields: args.newFields,
+    wasStored: args.layout.wasStored,
+    isStored: args.layout.isStored,
+    wasStatus: args.layout.wasPublishedPerLanguage,
+    status: args.layout.isPublishedPerLanguage,
+    renamed: args.companionRename,
+    liveTable: async () =>
+      (await introspectLiveSnapshot(args.db, args.dialect, [args.tableName]))
+        .tables[0],
+    columnOf: field =>
+      getSingleRowColumnDescriptor(field, args.dialect, "collection"),
+    renames: renamedFieldsOf(args.renameResolutions ?? []),
+  });
+}
+
+/**
+ * The fields a Single's dialog review settles, as its save will: every field the row is filled for
+ * on the file road; on the push road (`singleSaveTakesPush`) only those the push answers for itself
+ * (`settledOnPush`). A companion rename still to be answered is judged as the push road, which asks
+ * the most.
+ */
+async function settledInReview(
+  args: Omit<Parameters<typeof singleSaveTakesPush>[0], "companionRename"> & {
+    filled: readonly string[];
+    settledOnPush: ReadonlySet<string>;
+  }
+): Promise<ReadonlySet<string>> {
+  const companion = await resolveCompanionRename(args.renameResolutions, {
+    tableName: args.tableName,
+    oldFields: args.oldFields,
+    newFields: args.newFields,
+    wasLocalized: args.layout.wasStored,
+    isLocalized: args.layout.isStored,
+    dialect: args.dialect,
+    // A Single's table is built by the collection's generator.
+    builtBy: "collection",
+  }).then(
+    rename => ({ rename }),
+    () => undefined
+  );
+  const onPush =
+    companion === undefined ||
+    (await singleSaveTakesPush({ ...args, companionRename: companion.rename }));
+  return onPush ? args.settledOnPush : new Set(args.filled);
 }
 
 /**
@@ -1346,6 +1414,36 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // What the save writes beyond the person's change, for the review to show before they
       // confirm, as a collection's does: each conversion an adoption makes, each fill and delete.
       const answers = body as SchemaChangeAnswers;
+      // The review settles, as the save will, each field the Single's row is filled for with its
+      // stated default (`dialogRowAnswers`): the dialog then asks nothing the default answers.
+      const wasLocalized =
+        (single as { localized?: boolean }).localized === true;
+      const layout = translationLayoutChange({
+        wasLocalized,
+        isLocalized: readRequestLocalized(body) ?? wasLocalized,
+        wasStatus: single.status === true,
+        hasStatus: single.status === true,
+      });
+      const { fileAnswers, settledOnPush } = dialogRowAnswers({
+        single: { tableName, fields: currentFields },
+        fields: fields as FieldDefinition[],
+        renameResolutions: answers.renameResolutions,
+        resolutions: answers.resolutions,
+        eventResolutions: answers.eventResolutions,
+        dialect,
+        translatedAfter: layout.isStored,
+      });
+      const settled = await settledInReview({
+        tableName,
+        oldFields: currentFields,
+        newFields: fields as FieldDefinition[],
+        layout,
+        renameResolutions: answers.renameResolutions,
+        db,
+        dialect,
+        filled: (fileAnswers.rowFills ?? []).map(fill => fill.field),
+        settledOnPush,
+      });
       const reviewDeps = builderSaveDeps();
       const review = await reviewBuilderSchemaChange(reviewDeps, {
         kind: "single",
@@ -1365,6 +1463,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           ...(answers.acknowledgedConversions === undefined
             ? {}
             : { acknowledgedConversions: answers.acknowledgedConversions }),
+          // The Single's row fills the save writes, so the file's review matches it.
+          ...fileAnswers,
         },
         ...(reviewDeps === undefined
           ? {}
@@ -1376,7 +1476,10 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
               fields as FieldDefinition[]
             )),
       });
-      return respondData({ ...preview, ...review });
+      return respondData({
+        ...reviewWithRowFillsSettled(preview, settled),
+        ...review,
+      });
     },
   },
 
@@ -1488,10 +1591,6 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           assertSchemaVersionMatch(schemaVersion, currentVersion, slug);
           const tableName = single.tableName;
 
-          const legacyBundle = resolutions
-            ? { tableName, byFieldName: resolutions }
-            : undefined;
-
           const adapter = getAdapterFromDI();
           if (!adapter) throw new Error("Database adapter not initialized");
           // Where the translatable values live and how each language publishes, before and after
@@ -1502,6 +1601,16 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             isLocalized,
             wasStatus: single.status === true,
             hasStatus: single.status === true,
+          });
+          // The Single's row given each new field's stated default (`dialogRowAnswers`).
+          const { fileAnswers, legacyBundle } = dialogRowAnswers({
+            single,
+            fields: fields as unknown as FieldDefinition[],
+            renameResolutions,
+            resolutions,
+            eventResolutions,
+            dialect: adapter.dialect,
+            translatedAfter: layout.isStored,
           });
           // A precondition, so before anything changes: turning translation off drops each
           // language's own publish state, which loses nothing only where it is the entry's.
@@ -1693,6 +1802,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
                 renameResolutions: renameResolutions ?? [],
                 eventResolutions: eventResolutions ?? [],
                 ...(resolutions ? { resolutions } : {}),
+                ...fileAnswers,
                 // The conversions an adoption makes that the review showed and the person confirmed.
                 ...(acknowledgedConversions === undefined
                   ? {}
@@ -1712,25 +1822,17 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             landing.landed,
             {
               // The push where the save carries values across its change; its own migration file,
-              // run in tries as `nextly migrate` runs it, where it carries none. No `singleRow`:
-              // this dialog's push does not fill the Single's row for a field it adds either (an
-              // optional field's default stays out of it, and a required field is refused unless
-              // the dialog answers with a value), so keeping the push for one would fill nothing.
+              // run in tries as `nextly migrate` runs it, where it carries none.
               pushWhen: () =>
-                pushCarriesValues({
+                singleSaveTakesPush({
                   oldFields: single.fields as unknown as FieldDefinition[],
                   newFields: fields as unknown as FieldDefinition[],
-                  wasStored: layout.wasStored,
-                  isStored: layout.isStored,
-                  wasStatus: layout.wasPublishedPerLanguage,
-                  status: layout.isPublishedPerLanguage,
-                  renamed: companionRename,
-                  liveTable: async () =>
-                    (await introspectLiveSnapshot(db, dialect, [tableName]))
-                      .tables[0],
-                  columnOf: field =>
-                    getSingleRowColumnDescriptor(field, dialect, "collection"),
-                  renames: renamedFieldsOf(renameResolutions ?? []),
+                  layout,
+                  companionRename,
+                  renameResolutions,
+                  db,
+                  dialect,
+                  tableName,
                 }),
               afterFile: () => reconcileBuilderCompanion("single", companion),
             }

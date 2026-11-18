@@ -20,7 +20,9 @@ function textOf(value: unknown): string {
 }
 
 /** A blocks value as a record: parsed where it is stored as text. */
-function documentOf(value: unknown): Record<string, unknown> | undefined {
+export function blocksValueRecord(
+  value: unknown
+): Record<string, unknown> | undefined {
   if (typeof value === "string") {
     try {
       const parsed: unknown = JSON.parse(value);
@@ -34,7 +36,7 @@ function documentOf(value: unknown): Record<string, unknown> | undefined {
 
 /** The code a document holds, or none where it holds no code. */
 export function pageCodeOf(value: unknown): HeldPageCode | null {
-  const settings = documentOf(value)?.settings;
+  const settings = blocksValueRecord(value)?.settings;
   const code = isPlainRecord(settings) ? settings.code : undefined;
   if (!isPlainRecord(code)) return null;
   const held = { head: textOf(code.head), body: textOf(code.body) };

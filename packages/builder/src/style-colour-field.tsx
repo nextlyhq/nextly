@@ -310,7 +310,7 @@ export function ColourField({
   const noteId = React.useId();
   // Lifted out of the text field because two controls edit one value: a draft
   // private to the field would leave the swatch painting a superseded one.
-  const { draft, setDraft, edited, reset } = useDraft(stored);
+  const { draft, setDraft, edited, reset, live } = useDraft(stored);
   const commitColour = rememberingCommit(
     onCommit,
     React.useContext(RecentColoursStore)
@@ -505,6 +505,9 @@ export function ColourField({
             // The REFUSAL alone. `describes` also carries the contrast verdict,
             // which is supplementary text and never a complaint.
             invalid={describedBy !== undefined}
+            live={live}
+            // Remembered among Recent colours once, when the edit ends.
+            onType={onCommit}
             onCommit={commitColour}
           />
         ) : (

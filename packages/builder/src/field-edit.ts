@@ -106,6 +106,43 @@ export function useFieldEdit(
   );
 }
 
+/**
+ * The edit of a field that writes as it is typed (`live-draft.ts`), whose own
+ * writes move the stored value as it goes, so the edit cannot end when the
+ * stored value moves, as a draft's does. Begun at the first keystroke in the
+ * element focus is in, unless this field already holds the edit in progress;
+ * ended by the field when its edit ends (blur, Enter, the value moved by
+ * something else) and when it goes. Escape's put-back runs `cancel`.
+ */
+export function useTypedFieldEdit(): {
+  readonly begin: (cancel: () => void) => void;
+  readonly end: () => void;
+} {
+  const handle = React.useRef<FieldEditHandle | null>(null);
+  const end = React.useCallback(() => {
+    handle.current?.end();
+    handle.current = null;
+  }, []);
+  React.useEffect(() => end, [end]);
+  return React.useMemo(
+    () => ({
+      begin: (cancel: () => void) => {
+        if (handle.current?.held() === true) return;
+        handle.current = beginFieldEdit({
+          element:
+            typeof document === "undefined" ? null : document.activeElement,
+          cancel: () => {
+            handle.current = null;
+            cancel();
+          },
+        });
+      },
+      end,
+    }),
+    [end]
+  );
+}
+
 /** Whether `edit` was begun in `origin`, or in a field holding it. */
 function inField(edit: FieldEdit, origin: Element): boolean {
   return edit.element !== null && edit.element.contains(origin);
