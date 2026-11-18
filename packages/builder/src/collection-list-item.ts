@@ -62,6 +62,12 @@ export interface ItemSource {
   readonly entriesHavePages?: boolean;
   /** Every field a visitor may read. */
   readonly readable?: readonly ItemField[];
+  /**
+   * Whether a list may sort it by the date its entries were created on: a
+   * collection with timestamps turned off has no such field, and a list
+   * sorting by it is refused when saved.
+   */
+  readonly sortsByCreated?: boolean;
 }
 
 /** The fields the item binds, by role; `undefined` for a role with none. */
@@ -331,11 +337,21 @@ export function planStartingList(
     ...(list.styles?.base?.[BASE_BREAKPOINT] ?? {}),
     ...own,
   };
+  // A new list's Newest first sorts by `createdAt`, which a collection with
+  // timestamps off does not have: there the list keeps no sort and draws in
+  // the order its entries were created.
+  const props: Record<string, unknown> = {
+    ...list.props,
+    collection: source.slug,
+  };
+  if (source.sortsByCreated === false && props.sort === "-createdAt") {
+    delete props.sort;
+  }
   const update: BuilderOp = {
     kind: "update",
     id: listId,
     patch: {
-      props: { ...list.props, collection: source.slug },
+      props,
       ...(own === undefined
         ? {}
         : {

@@ -91,3 +91,86 @@
   border-color: var(--nx-builder-select);
   background: color-mix(in srgb, var(--nx-builder-select) 18%, transparent);
 }
+
+/* A new Collection list's two steps (`collection-list-picker.tsx`): the
+   collections as a wrapping row of buttons, then three layout tiles, each a
+   small drawing of the layout above its name, in the editor's colours. */
+.nx-list-picker {
+  inline-size: 100%;
+  max-inline-size: 36rem;
+}
+
+.nx-list-picker__sources {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.375rem;
+  max-inline-size: 100%;
+}
+
+.nx-list-picker__layouts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(7rem, 1fr));
+  gap: 0.5rem;
+  inline-size: 100%;
+}
+
+.nx-list-picker__tile {
+  display: grid;
+  justify-items: center;
+  gap: 0.375rem;
+  min-block-size: 5.5rem;
+  padding: 0.5rem;
+  border: 1px solid var(--nx-builder-border);
+  border-radius: var(--radius-sm);
+  background: var(--nx-builder-surface-raised);
+  color: var(--nx-builder-text);
+  font: inherit;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.nx-list-picker__tile:hover,
+.nx-list-picker__tile:focus-visible {
+  border-color: var(--nx-builder-select);
+}
+
+.nx-list-picker__tile:focus-visible {
+  outline: 2px solid var(--nx-builder-select);
+  outline-offset: 1px;
+}
+
+/* The drawing has a size of its own, so a narrow canvas never stretches it
+   past the plate. */
+.nx-list-picker__glyph {
+  inline-size: 4.5rem;
+  block-size: 2.75rem;
+  max-inline-size: 100%;
+  fill: var(--nx-builder-text-muted);
+}
+
+.nx-list-picker__fill {
+  fill: color-mix(in srgb, var(--nx-builder-select) 30%, transparent);
+}
+
+.nx-list-picker__faint {
+  fill: color-mix(in srgb, var(--nx-builder-text-muted) 45%, transparent);
+}
+
+.nx-list-picker__note {
+  margin: 0;
+  color: var(--nx-builder-text-muted);
+  font-size: 0.75rem;
+  text-align: center;
+}
+
+.nx-list-picker__more {
+  font-weight: 600;
+  color: var(--nx-builder-text);
+}
+
+.nx-list-picker__actions {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: center;
+}

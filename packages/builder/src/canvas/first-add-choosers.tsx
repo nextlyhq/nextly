@@ -413,6 +413,9 @@ function Chooser({
     case "collection-source":
       return (
         <CollectionListPicker
+          // One picker per list: a step taken for one list never carries to
+          // another selected after it.
+          key={firstAdd.nodeId}
           firstAdd={firstAdd}
           document={editor.document}
           services={services}

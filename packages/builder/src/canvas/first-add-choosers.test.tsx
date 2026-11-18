@@ -96,3 +96,43 @@ describe("a list with no source", () => {
     expect(question()).toBeNull();
   });
 });
+
+describe("one picker per list", () => {
+  it("starts a newly selected list on its own first step", async () => {
+    const two: BlockDocument = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        { id: "a", type: "core/collection-loop", version: 1, props: {} },
+        { id: "b", type: "core/collection-loop", version: 1, props: {} },
+      ],
+    };
+    const services = {
+      listLoopCollections: () =>
+        Promise.resolve([{ slug: "posts", label: "Posts", fields: [] }]),
+    };
+    const selecting = (id: string) =>
+      ({ ...editorOf(two), selectedId: id, selection: { ids: [id], primary: id } }) as EditorState;
+    const host = (editor: EditorState) => (
+      <div className={CANVAS_ROOT_CLASS}>
+        <div data-nx-node="a" />
+        <div data-nx-node="b" />
+        <FirstAddChoosers editor={editor} services={services} />
+      </div>
+    );
+    const { rerender } = render(host(selecting("a")));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    fireEvent.click(screen.getByText("Posts"));
+    expect(screen.queryByText("Posts · choose a starting layout")).not.toBeNull();
+    rerender(host(selecting("b")));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    // List B asks its own first question, not A's layout step.
+    expect(screen.queryByText("Posts · choose a starting layout")).toBeNull();
+    expect(question()).not.toBeNull();
+  });
+});

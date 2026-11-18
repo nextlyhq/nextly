@@ -71,6 +71,8 @@ function itemSourceOf(collection: LoopCollection): ItemSource {
     ...(collection.entriesHavePages === undefined
       ? {}
       : { entriesHavePages: collection.entriesHavePages }),
+    // The sortable fields list a collection's timestamps where it keeps them.
+    sortsByCreated: collection.fields.some(field => field.name === "createdAt"),
     readable: (collection.readable ?? []).map(field => ({
       name: field.name,
       type: field.type,

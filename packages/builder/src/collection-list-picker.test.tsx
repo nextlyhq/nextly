@@ -36,7 +36,8 @@ afterEach(() => {
 const POSTS: LoopCollection = {
   slug: "posts",
   label: "Posts",
-  fields: [],
+  // Its timestamps, as a collection keeping them lists them to sort by.
+  fields: [{ name: "createdAt", label: "Created", kind: "date" }],
   titleField: "title",
   entriesHavePages: true,
   readable: [

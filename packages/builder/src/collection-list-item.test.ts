@@ -8,6 +8,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import {
   itemFieldsOf,
+  planStartingList,
   startingItem,
   type ItemSource,
 } from "./collection-list-item";
@@ -190,5 +191,36 @@ describe("startingItem", () => {
       });
     walk([...startingItem(POSTS, "cards"), ...startingItem(POSTS, "cards")]);
     expect(new Set(ids).size).toBe(ids.length);
+  });
+});
+
+describe("planStartingList", () => {
+  const list = (sort?: string) => ({
+    formatVersion: 1 as const,
+    kind: "page" as const,
+    nodes: [
+      {
+        id: "list",
+        type: "core/collection-loop",
+        version: 1,
+        props: { limit: 6, ...(sort === undefined ? {} : { sort }) },
+      },
+    ],
+  });
+
+  it("keeps Newest first for a collection that keeps its creation dates", () => {
+    const [update] = planStartingList(list("-createdAt"), "list", { ...POSTS, sortsByCreated: true }, "titles") ?? [];
+    expect(update).toMatchObject({ patch: { props: { collection: "posts", sort: "-createdAt" } } });
+  });
+
+  it("drops it for a collection with timestamps off, which a save would refuse", () => {
+    const [update] = planStartingList(list("-createdAt"), "list", { ...PEOPLE, sortsByCreated: false }, "skip") ?? [];
+    const props = (update as { patch: { props: Record<string, unknown> } }).patch.props;
+    expect(props).toEqual({ limit: 6, collection: "people" });
+  });
+
+  it("leaves an author's own sort alone", () => {
+    const [update] = planStartingList(list("title"), "list", { ...PEOPLE, sortsByCreated: false }, "skip") ?? [];
+    expect(update).toMatchObject({ patch: { props: { sort: "title" } } });
   });
 });
