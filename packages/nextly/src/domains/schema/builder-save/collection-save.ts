@@ -943,7 +943,8 @@ async function settledRows(
 
 /** Whether field `name` of the saved collection keeps its value as JSON. */
 function storesJson(save: CollectionSave, name: string): boolean {
-  const field = save.entity?.fields.find(f => f.name === name);
+  // Found as the answer it serializes was: among the row's fields, inside a group with no name too.
+  const field = answeredField(save, name);
   return (
     field !== undefined &&
     classifyFieldKind(field as FieldDefinition, kindOf(save).builtBy) === "json"
