@@ -177,9 +177,7 @@ export function TokensStudio({
     onChange: commit,
     currentTokens,
     readOnly: !mayChange,
-    ...(mode === undefined ? {} : { mode }),
-    ...useTransferInputs(classes, onEditClasses),
-    ...(breakpoints === undefined ? {} : { breakpoints }),
+    ...useTransferInputs({ classes, onEditClasses, breakpoints, mode }),
   });
   // Memoised, so a set whose prefix was replaced is the same object until
   // the edits or the read change, as `edits ?? editable` was.
@@ -224,16 +222,25 @@ export function TokensStudio({
  * What the ⋯ menu's export and import carry beyond the variables: the
  * site's classes as they are when one is asked for (their text styles are
  * exported and matched on import), the class writer an import's text styles
- * are stored through, and the Google Fonts catalogue a missing font is added
- * from, unless the host turned it off. The catalogue is read through the
+ * are stored through, the Google Fonts catalogue a missing font is added
+ * from, unless the host turned it off, and the site's breakpoints, which an
+ * import's text styles are matched with. The catalogue is read through the
  * site-style client, so the fonts panel stays unloaded until it is drawn.
  */
-function useTransferInputs(
-  classes: readonly NamedClass[] | undefined,
-  onEditClasses: EditClasses | undefined
-): Pick<
+function useTransferInputs({
+  classes,
+  onEditClasses,
+  breakpoints,
+  mode,
+}: {
+  classes: readonly NamedClass[] | undefined;
+  onEditClasses: EditClasses | undefined;
+  breakpoints: BreakpointSet | undefined;
+  /** The host's mode, which the header's swatches show where it is given. */
+  mode: TokenMode | undefined;
+}): Pick<
   Parameters<typeof useVariablesHeader>[0],
-  "currentClasses" | "onEditClasses" | "catalogue"
+  "currentClasses" | "onEditClasses" | "catalogue" | "breakpoints" | "mode"
 > {
   const latest = useRef(classes);
   useEffect(() => {
@@ -245,6 +252,8 @@ function useTransferInputs(
     currentClasses: () => latest.current,
     ...(onEditClasses === undefined ? {} : { onEditClasses }),
     ...(off ? {} : { catalogue }),
+    ...(breakpoints === undefined ? {} : { breakpoints }),
+    ...(mode === undefined ? {} : { mode }),
   };
 }
 

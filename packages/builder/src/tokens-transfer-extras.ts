@@ -23,6 +23,7 @@ import {
   SITE_TEXT_ROLES,
   type DtcgSiteData,
   type FontFaceDef,
+  type ModesRead,
   type NamedClass,
   type SiteToken,
   type SiteTokenSet,
@@ -76,80 +77,161 @@ export interface ImportContext {
   readonly breakpoints?: BreakpointSet;
 }
 
+/**
+ * What an import carries beyond the variables, planned against the site:
+ * its site data, its text styles and the fonts it names that the site
+ * lacks. Text styles are stored by the host's class writer; where there is
+ * none (`context.textStyles` absent) the file's are not imported, and that
+ * is said in `refused` rather than counted as imported and dropped.
+ */
+export function importExtras(
+  read: Pick<ModesRead, "tokens" | "textStyles" | "site">,
+  context: ImportContext,
+  refused: string[]
+): ImportExtras {
+  const fileStyles = read.textStyles ?? [];
+  if (context.textStyles === undefined && fileStyles.length > 0) {
+    refused.push(
+      fileStyles.length === 1
+        ? "The file's text style wasn't imported: text styles can only be imported from the editor's Design panel."
+        : `The file's ${String(fileStyles.length)} text styles weren't imported: text styles can only be imported from the editor's Design panel.`
+    );
+  }
+  return {
+    ...(read.site === undefined ? {} : { site: read.site }),
+    textStyles: planTextStyles(
+      context.textStyles === undefined ? undefined : fileStyles,
+      context.textStyles ?? [],
+      refused,
+      context.breakpoints
+    ),
+    missingFonts:
+      context.faces === undefined
+        ? []
+        : missingFonts(read.tokens, fileStyles, read.site, context.faces),
+  };
+}
+
 /** A file's text styles sorted against the site's, with what is refused. */
-export function planTextStyles(
+function planTextStyles(
   incoming: readonly NamedClass[] | undefined,
   library: readonly NamedClass[],
   refused: string[],
   breakpoints?: BreakpointSet
 ): TextStylesPlan {
-  const added: NamedClass[] = [];
-  const updated: NamedClass[] = [];
-  const unchanged: NamedClass[] = [];
-  const byId = new Map(library.map(entry => [entry.id, entry]));
-  const known =
-    breakpoints === undefined
-      ? undefined
-      : new Set(breakpointContexts(breakpoints).map(entry => entry.id));
-  // Which of the site's classes are drawn now: an import that would stop
-  // one being drawn is refused, as the site's own save would refuse it.
-  const drawn = usableNamedClasses(library).map(entry => entry.id);
+  const plan: Record<keyof TextStylesPlan, NamedClass[]> = {
+    added: [],
+    updated: [],
+    unchanged: [],
+  };
+  const site: SiteStyles = {
+    library,
+    byId: new Map(library.map(entry => [entry.id, entry])),
+    known:
+      breakpoints === undefined
+        ? undefined
+        : new Set(breakpointContexts(breakpoints).map(entry => entry.id)),
+    // Which of the site's classes are drawn now: an import that would stop
+    // one being drawn is refused, as the site's own save would refuse it.
+    drawn: usableNamedClasses(library).map(entry => entry.id),
+  };
   for (const file of incoming ?? []) {
-    const name = sharedStyleName(file);
-    const held = byId.get(file.id);
-    if (held !== undefined && !isTextStyle(held)) {
-      refused.push(
-        `“${name}” was not imported: a style on this site that isn't a text style has the same id.`
-      );
+    const verdict = textStyleVerdict(file, site, plan);
+    if (verdict.kind === "refused") {
+      refused.push(verdict.why);
       continue;
     }
-    const notes: string[] = [];
-    const style = withSiteLock(
-      withinBreakpoints(file, known, name, notes),
-      held
-    );
-    // A lock holds on the site that set it: a style locked here is left as
-    // it is until someone unlocks it, as every other write leaves it.
-    if (held?.locked === true && !sameJsonValue(held, style)) {
-      refused.push(
-        `“${name}” is locked on this site, so the file's version was not imported. Unlock it first.`
-      );
-      continue;
-    }
-    const clash = library.find(
-      entry =>
-        entry.id !== style.id &&
-        isTextStyle(entry) &&
-        (sharedStyleName(entry).toLowerCase() === name.toLowerCase() ||
-          entry.slug === style.slug)
-    );
-    if (clash !== undefined) {
-      refused.push(
-        `There is already a text style named “${sharedStyleName(clash)}” on this site, so “${name}” was not imported.`
-      );
-      continue;
-    }
-    const taken = held === undefined ? added : updated;
-    if (held !== undefined && sameJsonValue(held, style)) {
-      unchanged.push(style);
-      refused.push(...notes);
-      continue;
-    }
-    if (!drawnTogether(library, drawn, { added, updated }, style, taken)) {
-      const owner = library.find(
-        entry => entry.id !== style.id && entry.slug === style.slug
-      );
-      refused.push(
-        owner === undefined
-          ? `“${name}” was not imported: this site couldn't draw it beside its own styles.`
-          : `“${name}” was not imported: a style on this site already uses its code name, “${style.slug}”.`
-      );
-      continue;
-    }
-    taken.push(style);
-    refused.push(...notes);
+    plan[verdict.kind].push(verdict.style);
+    refused.push(...verdict.notes);
   }
-  return { added, updated, unchanged };
+  return plan;
+}
+
+/** What a file's text style is planned against: the site's own styles. */
+interface SiteStyles {
+  readonly library: readonly NamedClass[];
+  readonly byId: ReadonlyMap<string, NamedClass>;
+  /** The site's breakpoint ids, or `undefined` where they aren't known. */
+  readonly known: ReadonlySet<string> | undefined;
+  /** The ids of the site's classes drawn now. */
+  readonly drawn: readonly string[];
+}
+
+/** Where one of a file's text styles goes, or why it doesn't. */
+type TextStyleVerdict =
+  | { readonly kind: "refused"; readonly why: string }
+  | {
+      readonly kind: keyof TextStylesPlan;
+      readonly style: NamedClass;
+      /** What was left out of it, said in the preview. */
+      readonly notes: readonly string[];
+    };
+
+/**
+ * One of a file's text styles judged against the site: refused where the
+ * site would refuse to store it (an id another kind of style holds, a lock
+ * set here, a name or code name taken), else added, updated or unchanged,
+ * with the lock this site gives it and without values for breakpoints the
+ * site lacks.
+ */
+function textStyleVerdict(
+  file: NamedClass,
+  site: SiteStyles,
+  planned: { added: readonly NamedClass[]; updated: readonly NamedClass[] }
+): TextStyleVerdict {
+  const name = sharedStyleName(file);
+  const held = site.byId.get(file.id);
+  if (held !== undefined && !isTextStyle(held)) {
+    return {
+      kind: "refused",
+      why: `“${name}” was not imported: a style on this site that isn't a text style has the same id.`,
+    };
+  }
+  const notes: string[] = [];
+  const style = withSiteLock(
+    withinBreakpoints(file, site.known, name, notes),
+    held
+  );
+  if (held !== undefined && sameJsonValue(held, style)) {
+    return { kind: "unchanged", style, notes };
+  }
+  const why = refusalOf(style, name, held, site, planned);
+  if (why !== undefined) return { kind: "refused", why };
+  return { kind: held === undefined ? "added" : "updated", style, notes };
+}
+
+/** Why the site would refuse to store a changed text style, if it would. */
+function refusalOf(
+  style: NamedClass,
+  name: string,
+  held: NamedClass | undefined,
+  site: SiteStyles,
+  planned: { added: readonly NamedClass[]; updated: readonly NamedClass[] }
+): string | undefined {
+  // A lock holds on the site that set it: a style locked here is left as
+  // it is until someone unlocks it, as every other write leaves it.
+  if (held?.locked === true) {
+    return `“${name}” is locked on this site, so the file's version was not imported. Unlock it first.`;
+  }
+  const clash = site.library.find(
+    entry =>
+      entry.id !== style.id &&
+      isTextStyle(entry) &&
+      (sharedStyleName(entry).toLowerCase() === name.toLowerCase() ||
+        entry.slug === style.slug)
+  );
+  if (clash !== undefined) {
+    return `There is already a text style named “${sharedStyleName(clash)}” on this site, so “${name}” was not imported.`;
+  }
+  if (drawnTogether(site, planned, style, held === undefined)) {
+    return undefined;
+  }
+  const owner = site.library.find(
+    entry => entry.id !== style.id && entry.slug === style.slug
+  );
+  return owner === undefined
+    ? `“${name}” was not imported: this site couldn't draw it beside its own styles.`
+    : `“${name}” was not imported: a style on this site already uses its code name, “${style.slug}”.`;
 }
 
 /**
@@ -159,23 +241,23 @@ export function planTextStyles(
  * is caught as the site's save would catch it.
  */
 function drawnTogether(
-  library: readonly NamedClass[],
-  drawn: readonly string[],
+  site: SiteStyles,
   planned: { added: readonly NamedClass[]; updated: readonly NamedClass[] },
   style: NamedClass,
-  taken: readonly NamedClass[]
+  isNew: boolean
 ): boolean {
   const trial = textStylesEdit({
-    added: taken === planned.added ? [...planned.added, style] : planned.added,
-    updated:
-      taken === planned.updated ? [...planned.updated, style] : planned.updated,
+    added: isNew ? [...planned.added, style] : planned.added,
+    updated: isNew ? planned.updated : [...planned.updated, style],
     unchanged: [],
-  })(library);
+  })(site.library);
   if (!("classes" in trial)) return false;
   const now = new Set(usableNamedClasses(trial.classes).map(entry => entry.id));
-  return [...drawn, ...planned.added.map(entry => entry.id), style.id].every(
-    id => now.has(id)
-  );
+  return [
+    ...site.drawn,
+    ...planned.added.map(entry => entry.id),
+    style.id,
+  ].every(id => now.has(id));
 }
 
 /**
@@ -328,7 +410,7 @@ export function siteDataLines(site: DtcgSiteData | undefined): string[] {
  * its Site text rows. A generic family (`serif`) and a font through
  * `var()` are never missing.
  */
-export function missingFonts(
+function missingFonts(
   tokens: readonly SiteToken[],
   textStyles: readonly NamedClass[],
   site: DtcgSiteData | undefined,

@@ -65,12 +65,10 @@ function layerToDtcg(
   write: ShadowWriters
 ): DtcgNode | undefined {
   const { inset, rest } = withoutInset(layer);
-  // The colour may open or close the layer: whichever end isn't a size.
-  const atStart = rest[0] !== undefined && rest[0].kind !== "length";
-  const colourPart = atStart ? rest[0] : rest.at(-1);
+  const { colourPart, sizeParts } = splitColour(rest);
   const colour =
     colourPart === undefined ? undefined : colourOf(colourPart, write);
-  const sizes = sizesOf(atStart ? rest.slice(1) : rest.slice(0, -1), write);
+  const sizes = sizesOf(sizeParts, write);
   if (colour === undefined || sizes === undefined) return undefined;
   const zero = { value: 0, unit: "px" };
   return {
@@ -81,6 +79,21 @@ function layerToDtcg(
     spread: sizes[3] ?? zero,
     inset,
   };
+}
+
+/**
+ * A layer's colour and its sizes: the colour may open or close the layer,
+ * whichever end isn't a size.
+ */
+function splitColour(rest: readonly ShadowPart[]): {
+  colourPart: ShadowPart | undefined;
+  sizeParts: readonly ShadowPart[];
+} {
+  const first = rest[0];
+  if (first !== undefined && first.kind !== "length") {
+    return { colourPart: first, sizeParts: rest.slice(1) };
+  }
+  return { colourPart: rest.at(-1), sizeParts: rest.slice(0, -1) };
 }
 
 /** A layer without the `inset` that may open or close it, once. */
