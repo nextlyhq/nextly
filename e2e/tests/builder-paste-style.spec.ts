@@ -65,7 +65,22 @@ const FRAMED = {
   slug: "ps-framed",
   label: "Framed",
   orderIndex: 2,
-  styles: { base: { base: { borderStyle: "solid", borderWidth: "3px" } } },
+  // The catalog's one border property: a width per logical side and a style.
+  styles: {
+    base: {
+      base: {
+        border: {
+          style: "solid",
+          width: {
+            blockStart: "3px",
+            blockEnd: "3px",
+            inlineStart: "3px",
+            inlineEnd: "3px",
+          },
+        },
+      },
+    },
+  },
 };
 
 const SOURCE = "ps-source";
@@ -320,6 +335,15 @@ test.describe("Copy style and Paste style", () => {
           page.getByRole("menuitem", { name, exact: true })
         ).toBeVisible();
       }
+      // Scanned once it has finished opening: mid-fade, axe can read no
+      // contrast and the scan says it saw nothing.
+      await page
+        .getByRole("menu")
+        .evaluate(menu =>
+          Promise.all(
+            menu.getAnimations({ subtree: true }).map(each => each.finished)
+          )
+        );
       await expectNoAxeViolations(page, { include: '[role="menu"]' });
       // The menu as an author sees it, kept with the run's results.
       await page.getByRole("menu").screenshot({
