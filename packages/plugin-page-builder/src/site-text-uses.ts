@@ -66,9 +66,19 @@ export function siteTextReasons(
   removable: readonly { readonly id: string; readonly name: string }[],
   section: unknown
 ): SiteTextReason[] {
-  const rowsUsing = siteTextRowsUsing(section);
+  return rowReasons(removable, siteTextRowsUsing(section));
+}
+
+/**
+ * One reason per removable item some rows name, in the words both removals
+ * give: the item's name, then the rows, in the order the rows are listed.
+ */
+function rowReasons(
+  removable: readonly { readonly id: string; readonly name: string }[],
+  rowsOf: (id: string) => readonly SiteTextRole[]
+): SiteTextReason[] {
   return removable.flatMap(({ id, name }) => {
-    const roles = rowsUsing(id);
+    const roles = rowsOf(id);
     if (roles.length === 0) return [];
     const rows = roles.map(role => SITE_TEXT_LABELS[role]).join(", ");
     return [
@@ -88,7 +98,7 @@ export function siteTextReasons(
  * The one reading the removal refusals share, so the remove route and a
  * write of the site style that drops a text style name the same rows.
  */
-export function siteTextRowsFollowing(
+function siteTextRowsFollowing(
   section: unknown
 ): (id: string) => readonly SiteTextRole[] {
   const read = isPlainRecord(section) ? section : {};
@@ -111,17 +121,5 @@ export function textStyleReasons(
   removable: readonly { readonly id: string; readonly name: string }[],
   section: unknown
 ): SiteTextReason[] {
-  const following = siteTextRowsFollowing(section);
-  return removable.flatMap(({ id, name }) => {
-    const roles = following(id);
-    if (roles.length === 0) return [];
-    const rows = roles.map(role => SITE_TEXT_LABELS[role]).join(", ");
-    return [
-      {
-        id,
-        message: `${name} is used by Site text: ${rows}.`,
-        used: true as const,
-      },
-    ];
-  });
+  return rowReasons(removable, siteTextRowsFollowing(section));
 }
