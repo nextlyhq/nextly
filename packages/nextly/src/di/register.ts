@@ -90,6 +90,7 @@ import type { LanguageRegistry } from "../domains/i18n/language-registry";
 import {
   mainTableFields,
   publishesPerLanguage,
+  perLanguageStorageEnabled,
   warnPerLanguageStorageSetting,
   storesPerLanguage,
 } from "../domains/i18n/per-language-storage";
@@ -1324,7 +1325,14 @@ async function registerServicesOnce(
       await refuseMixedStorageInConfig(
         adapter,
         transformedConfig,
-        transformedConfig.perLanguageStorage === true
+        // The layout this installation keeps, which no configuration chooses any longer.
+        perLanguageStorageEnabled()
+      );
+      // Every installation keeps its translatable fields per language: the setting no longer
+      // chooses a layout, and a site that still sets it is told so.
+      warnPerLanguageStorageSetting(
+        transformedConfig.perLanguageStorage,
+        message => resolvedLogger.warn?.(message)
       );
       // A configured code written the earlier way (`pt_BR`) is read in standard form (`pt-BR`):
       // the start says so, and refuses while rows are still stored under the older spelling.
@@ -1675,12 +1683,6 @@ async function resolveBootConfig(
   // registry registers no table before this either, and the choice is made here once: a reload
   // refuses to change it. A site restarted over the database it laid out would otherwise register
   // its tables as if the setting were off, naming translatable columns its main tables lack.
-  // Every installation keeps its translatable fields per language: the setting no longer chooses
-  // a layout, and a site that still sets it is told so.
-  warnPerLanguageStorageSetting(
-    transformedSetupConfig.perLanguageStorage,
-    message => resolvedLogger.warn?.(message)
-  );
   const {
     config: contributedConfig,
     deferredExtends,
