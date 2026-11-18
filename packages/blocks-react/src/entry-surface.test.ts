@@ -138,6 +138,7 @@ const SOURCE_MODULES: ReadonlyArray<{
       "outlineAnchors",
       "outlineForPart",
       "pageOutline",
+      "passageAnchors",
       "withOutline",
     ],
   },

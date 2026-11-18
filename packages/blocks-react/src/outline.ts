@@ -38,7 +38,9 @@
  * A Collection list draws its template once per entry. A heading in it is
  * drawn with its anchor and the entry's place (`outlineAnchors`): `title--0`,
  * `title--1`. A made anchor never holds two hyphens in a row, so no other
- * heading's words can make one of these.
+ * heading's words can make one of these. A Rich text there may draw the
+ * entry's own passage, filled after the outline, so its anchors are made
+ * from the passage drawn (`passageAnchors`).
  *
  * @experimental
  * @module outline
@@ -155,6 +157,8 @@ interface OutlineRecord {
   readonly byPart: ReadonlyMap<OutlineArea, ReadonlyMap<string, string[]>>;
   /** Every id an author gave a block on the page. */
   readonly taken: ReadonlySet<string>;
+  /** Every id the page's headings are drawn with: the authors' and the made. */
+  readonly drawn: ReadonlySet<string>;
 }
 
 /** The record of each outline this module made, and of each part's view. */
@@ -211,7 +215,11 @@ export function pageOutline(parts: readonly OutlinePart[]): PageOutline {
     headings,
     anchorsOf: nodeId => firstById.get(nodeId) ?? NONE,
   };
-  RECORDS.set(outline, { byPart, taken });
+  RECORDS.set(outline, {
+    byPart,
+    taken,
+    drawn: new Set([...taken, ...headings.map(heading => heading.anchor)]),
+  });
   return outline;
 }
 
@@ -255,13 +263,42 @@ export function outlineAnchors(
   const place = ctx.itemPosition;
   if (place === undefined || anchors.length === 0) return anchors;
   const taken = outline === undefined ? undefined : RECORDS.get(outline)?.taken;
-  return anchors.map(anchor => {
-    const id = `${anchor}--${place}`;
-    if (taken === undefined || !taken.has(id)) return id;
-    let n = 2;
-    while (taken.has(`${id}--${n}`)) n += 1;
-    return `${id}--${n}`;
-  });
+  return anchors.map(anchor => entryId(`${anchor}--${place}`, taken));
+}
+
+/** An id inside a list's entry, stepped past any an author gave a block. */
+function entryId(id: string, taken: ReadonlySet<string> | undefined): string {
+  if (taken === undefined || !taken.has(id)) return id;
+  let n = 2;
+  while (taken.has(`${id}--${n}`)) n += 1;
+  return `${id}--${n}`;
+}
+
+/**
+ * The anchors a Rich text block draws its passage's headings with: the
+ * outline's, except inside a Collection list's entry. There the passage can
+ * be the entry's own (bound to an item field, filled as each entry is drawn,
+ * after the outline), so its anchors are made from the passage drawn: by the
+ * same slug rules, never one the page's headings are drawn with, and with
+ * the entry's place after each (`notes-2--0`).
+ *
+ * @experimental
+ */
+export function passageAnchors(
+  ctx: Pick<PageContext, "outline" | "itemPosition">,
+  nodeId: string,
+  passage: unknown
+): readonly string[] {
+  const place = ctx.itemPosition;
+  const outline = ctx.outline;
+  if (place === undefined || outline === undefined) {
+    return outlineAnchors(ctx, nodeId);
+  }
+  const record = RECORDS.get(outline);
+  const allocator = anchorAllocator(new Set(record?.drawn));
+  return headingsDrawn(passage).map(heading =>
+    entryId(`${allocator.take(heading.text)}--${place}`, record?.taken)
+  );
 }
 
 /**

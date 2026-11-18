@@ -491,6 +491,47 @@ describe("a heading drawn once per entry of a Collection list", () => {
     expect(headingIds(html)).toEqual(["title", "title-2--0", "title-2--1"]);
   });
 
+  it("anchors a Rich text bound to each entry by the passage the entry gives it", async () => {
+    // The template's own passage is empty: the entry's words are known only
+    // once each entry is drawn.
+    const empty: RichTextValue = {
+      root: { type: "root", children: [{ type: "paragraph", children: [] }] },
+    };
+    const find = vi.fn(() =>
+      Promise.resolve({
+        items: [
+          { id: "a", body: passage(["h2", "Notes"], ["h3", "More"]) },
+          { id: "b", body: passage(["h2", "Notes"]) },
+        ],
+        total: 2,
+      })
+    );
+    const html = await drawn(
+      page(heading("Notes"), {
+        id: "list",
+        type: "core/collection-loop",
+        version: 1,
+        props: { collection: "posts", limit: 10 },
+        slots: {
+          children: [
+            {
+              ...richText(empty),
+              bindings: { content: { $bind: "body", source: "item" } },
+            },
+          ],
+        },
+      }),
+      { context: createStandaloneContext({ data: { find } }), bindings: {} }
+    );
+    // Never a made anchor of the page (`notes`), and each entry's own.
+    expect(headingIds(html)).toEqual([
+      "notes",
+      "notes-2--0",
+      "more--0",
+      "notes-2--1",
+    ]);
+  });
+
   it("never draws an entry's id an author gave another block", async () => {
     const find = vi.fn(() =>
       Promise.resolve({ items: [{ id: "a" }, { id: "b" }], total: 2 })

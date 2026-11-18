@@ -33,7 +33,7 @@ import {
 import type { ReactElement } from "react";
 
 import type { BlockRenderArgs, PageContext } from "../context";
-import { outlineAnchors } from "../outline";
+import { passageAnchors } from "../outline";
 import { drawsInteractive, RichText } from "../rich-text";
 
 import { CONTENT } from "./categories";
@@ -84,12 +84,14 @@ export function renderRichText({
       {/*
        * Every heading carries its anchor from the page outline, unique on
        * the whole page: a heading this passage shares with another, or with
-       * a Heading block, is numbered rather than repeated.
+       * a Heading block, is numbered rather than repeated. Inside a list's
+       * entry the passage may be the entry's own, so its anchors are made
+       * from the passage drawn (`passageAnchors`).
        */}
       <RichText
         value={props.content}
         hostPolicy={hostPolicy}
-        anchors={outlineAnchors(ctx, node.id)}
+        anchors={passageAnchors(ctx, node.id, props.content)}
       />
     </div>
   );
