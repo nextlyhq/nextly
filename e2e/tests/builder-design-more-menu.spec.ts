@@ -7,7 +7,11 @@
  *   exported", which names the shadow, that it was left out, and why.
  * - At the panel's narrowest, the menu opens whole inside the window, works
  *   from the keyboard, and passes the accessibility check in light and dark.
+ * - A design token file carries a site's text styles, Site text and fluid
+ *   range into a fresh site, and its import names a font the site lacks.
  */
+import { readFileSync } from "node:fs";
+
 import { expect, type Page } from "@playwright/test";
 
 import { openEditorWith } from "./canvas/editor-driver";
@@ -125,6 +129,183 @@ test("a default site's export ends with a toast naming its files, and no box sta
     await expect(toast).toBeHidden({ timeout: 20_000 });
   } finally {
     await seed(page, before);
+  }
+});
+
+/** The stored site style's variables and classes, to put back afterwards. */
+async function storedDesign(
+  page: Page
+): Promise<{ tokens: unknown; classes: unknown }> {
+  const response = await page.request.get(SITE_STYLE);
+  expect(response.ok(), `reading the site style: ${response.status()}`).toBe(
+    true
+  );
+  const body = (await response.json()) as Record<string, unknown>;
+  const item = (body.item ?? body) as Record<string, unknown>;
+  const read = (value: unknown) =>
+    typeof value === "string" ? (JSON.parse(value) as unknown) : value;
+  return {
+    tokens: read(item.tokens) ?? null,
+    classes: read(item.classes) ?? [],
+  };
+}
+
+async function seedDesign(
+  page: Page,
+  design: { tokens: unknown; classes: unknown }
+): Promise<void> {
+  await countEveryPage(page.request);
+  const written = await page.request.patch(SITE_STYLE, {
+    data: { ...design, _overwrite: true },
+  });
+  expect(written.ok(), `writing the design: ${written.status()}`).toBe(true);
+}
+
+const EYEBROW = {
+  id: "ts-e2e-eyebrow",
+  slug: "e2e-eyebrow",
+  label: "Eyebrow",
+  orderIndex: 900,
+  role: "text",
+  styles: {
+    base: {
+      base: {
+        fontSize: { $token: "font-size.h2" },
+        textTransform: "uppercase",
+      },
+    },
+  },
+};
+
+const CARRIED_DESIGN = {
+  tokens: {
+    tokens: [
+      {
+        id: "c-e2e-brand",
+        name: "color.e2e-brand",
+        label: "E2E brand",
+        kind: "color",
+        group: "Brand",
+        values: { light: "#1d4ed8", dark: "#93c5fd" },
+      },
+      {
+        name: "font.body",
+        kind: "fontFamily",
+        values: { light: '"Brand Sans E2E", sans-serif' },
+      },
+      {
+        name: "shadow.e2e-lift",
+        label: "Lift",
+        kind: "shadow",
+        values: {
+          light: "0 1px 2px #000000, 0 8px 24px var(--site-c-e2e-brand)",
+        },
+      },
+    ],
+    siteText: {
+      body: { fontFamily: { $token: "font.body" } },
+      h3: { textStyle: EYEBROW.id },
+    },
+    fluidRange: { min: 320, max: 1440 },
+  },
+  classes: [EYEBROW],
+};
+
+test("a design token file carries text styles, Site text and the fluid range into a fresh site, and names a font it lacks", async ({
+  page,
+}) => {
+  test.setTimeout(240_000);
+  const before = await storedDesign(page);
+  try {
+    await seedDesign(page, CARRIED_DESIGN);
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await openEditorWith(page, NODES, "more-text");
+    await openDesign(page);
+
+    // Export: the token file holds the text style as a typography value
+    // and the shadow as a shadow value.
+    const saved = new Map<string, string>();
+    page.on("download", download => {
+      void download.path().then(path => {
+        if (path !== null) saved.set(download.suggestedFilename(), path);
+      });
+    });
+    await choose(page, "Export design tokens (.json)");
+    await expect
+      .poll(() => saved.has("variables.tokens.json"), { timeout: 20_000 })
+      .toBe(true);
+    const tokensFile = saved.get("variables.tokens.json") ?? "";
+    const file = JSON.parse(readFileSync(tokensFile, "utf8")) as Record<
+      string,
+      Record<string, Record<string, unknown>>
+    >;
+    expect(file.textStyles?.["e2e-eyebrow"]).toMatchObject({
+      $type: "typography",
+      $value: { fontSize: "{font-size.h2}" },
+    });
+    expect(file.shadow?.["e2e-lift"]).toMatchObject({ $type: "shadow" });
+
+    // A fresh site: none of it stored.
+    await seedDesign(page, { tokens: null, classes: [] });
+    await openEditorWith(page, NODES, "more-text");
+    await openDesign(page);
+    const chooser = page.waitForEvent("filechooser");
+    await choose(page, "Import design tokens…");
+    await (await chooser).setFiles([tokensFile]);
+
+    const preview = page.getByRole("dialog", { name: "Import variables" });
+    await expect(preview).toBeVisible();
+    await expect(
+      preview.getByRole("heading", { name: "Text styles" })
+    ).toBeVisible();
+    await expect(preview).toContainText("Eyebrow");
+    await expect(preview).toContainText("Site text: Body, Heading 3");
+    await expect(preview).toContainText(
+      "Fluid sizes grow from 320px to 1440px wide"
+    );
+    const fonts = preview
+      .getByRole("heading", { name: "Fonts this site doesn't have" })
+      .locator("xpath=..");
+    await expect(fonts).toContainText("Brand Sans E2E");
+    await expect(fonts).toContainText(
+      "Upload its font file in Fonts to use it."
+    );
+    for (const scheme of ["light", "dark"] as const) {
+      await page.emulateMedia({ colorScheme: scheme });
+      await spellMissingColourComponents(page);
+      await expectNoAxeViolations(page, { include: ".nx-vars-import" });
+    }
+
+    // From the keyboard: Tab reaches Import, and Enter imports.
+    const importButton = preview.getByRole("button", {
+      name: "Import",
+      exact: true,
+    });
+    await importButton.focus();
+    await page.keyboard.press("Enter");
+    await expect(
+      toastSaying(page, /^Imported \d+ variables? and 1 text style\./)
+    ).toBeVisible();
+
+    await expect
+      .poll(async () => {
+        const stored = await storedDesign(page);
+        const tokens = stored.tokens as Record<string, unknown> | null;
+        return {
+          siteText: tokens?.siteText,
+          fluidRange: tokens?.fluidRange,
+          textStyles: (stored.classes as { id: string }[]).map(
+            entry => entry.id
+          ),
+        };
+      })
+      .toEqual({
+        siteText: CARRIED_DESIGN.tokens.siteText,
+        fluidRange: CARRIED_DESIGN.tokens.fluidRange,
+        textStyles: [EYEBROW.id],
+      });
+  } finally {
+    await seedDesign(page, before);
   }
 });
 
