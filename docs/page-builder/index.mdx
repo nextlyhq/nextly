@@ -15,7 +15,7 @@ It ships as a plugin, `@nextlyhq/plugin-page-builder`.
 ## What you get
 
 - **23 blocks out of the box.** Layout (section, box, columns, column, card, accordion,
-  accordion item, spacer, divider), content (heading, paragraph, rich text, table of
+  question, spacer, divider), content (heading, paragraph, rich text, table of
   contents, list, quote, image, gallery, icon, button, embed, form), one that reads
   from your content ([Collection list](#reading-content-into-a-page)), and Entry content,
   offered only in a collection's template, where it draws the entry's own blocks.
@@ -27,11 +27,23 @@ It ships as a plugin, `@nextlyhq/plugin-page-builder`.
   fill it in for an icon that says something on its own. A linked icon is named by its
   label, or by the icon's name when there is none. The page stores the icon's id
   (`lucide:star`); an id the set no longer draws renders nothing, and the editor says so.
-- **Accordion titles and icons.** An accordion's **Titles as** (Content tab, Behaviour)
-  draws each section's title as plain text or as a heading from level 2 to 6, and its
-  **Icon** and **Icon position** (Style tab) choose a chevron, a plus, no icon or the
-  browser's own triangle, before or after the title. Some screen readers announce a section title as the button's
-  text rather than as a heading; the section still opens and closes as normal.
+- **Accordions.** A new accordion starts with three questions, "Question 1" to
+  "Question 3", each with a Text answer to write over. While the accordion or one of its
+  questions is selected, **+ Add a question** under the last one adds the next numbered
+  question, opens it and puts the cursor in its title, which you type on the canvas. A
+  question's answer holds any blocks: a picture, a button, a list. In its Content tab,
+  Behaviour has **Open** (**One at a time**, the default, where opening one question
+  closes the others, or **Many**), **First open** (on by default) and **Titles as**
+  (plain text or a heading from level 2 to 6, Heading 3 by default), and **Icon** picks
+  **+ / −**, **Chevron** or **None**; **Icon position** (Style tab) puts it before or
+  after the title. A question's **Open by default** shows only with **Many**. Each
+  question is a native `<details>`, so it opens and closes by mouse, touch or keyboard
+  (Enter, Space) with no script, and One at a time is the browser's own grouping too.
+  Each title row is at least 44px tall, shows a focus ring from the keyboard, and its
+  icon is hidden from screen readers. An accordion saved before these settings opens
+  each question by its own setting, as Many does. Some screen readers announce a
+  question's title as the button's text rather than as a heading; it still opens and
+  closes as normal.
 - **Columns, sections and linked containers.** A Columns block picks its columns in its
   Content tab: 2 equal, 3 equal, 4 equal, Wide left, Wide right or Wide middle, adding or
   removing empty columns to match, and **Stack on** puts the columns one under another on
@@ -125,8 +137,8 @@ Clicking the item opens the **Page Builder** overview
   that opens its create page.
 - **Where it is used**: the collections and Singles that have a Page Builder field, each
   opening its list or, for a Single, its edit page. Only those you can read are listed.
-  Add a Blocks field to a collection or Single, in the Schema Builder or in code, and it
-  is listed here.
+  Add one to a collection or Single in the Schema Builder (choose **Blocks**) or in code,
+  and it is listed here.
 
 The overview is for people who can edit pages. Anyone else opening the item lands on the
 first library they can read. To keep the Page Builder under **Plugins** instead, set its

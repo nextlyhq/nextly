@@ -40,6 +40,13 @@ describe("the site CSS calls", () => {
     await expect(readSiteCss()).rejects.toThrow("The site did not answer.");
   });
 
+  it("refuses an answer that isn't the site's CSS, rather than drawing it", async () => {
+    sdk.readPluginRoute.mockResolvedValue({ items: [] });
+    await expect(readSiteCss()).rejects.toThrow("The site did not answer.");
+    sdk.readPluginRoute.mockResolvedValue({ css: 1, sha256: "f".repeat(64) });
+    await expect(readSiteCss()).rejects.toThrow("The site did not answer.");
+  });
+
   it("saves the CSS naming the hash it was read at", async () => {
     sdk.writePluginRoute.mockResolvedValue({
       message: "saved",

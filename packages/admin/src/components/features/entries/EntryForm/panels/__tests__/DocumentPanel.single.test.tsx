@@ -236,6 +236,25 @@ describe("a Single's side panel", () => {
     expect(onOpenHistory).toHaveBeenCalledTimes(1);
   });
 
+  it("draws History in the panel's text colour, not the brand's", () => {
+    // `--nx-primary` is a fill a site's brand may set to any colour (the
+    // e2e suite's indigo reads 4.35:1 on the panel, under AA's 4.5:1), so
+    // text drawn in it is only as readable as the brand happens to be. The
+    // panel's other links read in `--nx-foreground`, which every theme and
+    // brand keeps readable on the panel.
+    singlePanel({
+      single: { label: "Contact details", onOpenHistory: vi.fn() },
+    });
+    const history = within(section("Last changed")).getByRole("button", {
+      name: "History",
+    });
+    expect(history.className.split(/\s+/)).toContain("text-foreground");
+    expect(history.className).not.toMatch(/(^|\s)text-primary(\s|$)/);
+    // In the same colour as the sentence around it, so underlined at rest:
+    // its weight alone would not say it can be pressed.
+    expect(history.className.split(/\s+/)).toContain("underline");
+  });
+
   it("leaves History out where the Single keeps no history", () => {
     singlePanel({ single: { label: "Contact details" } });
     expect(section("Last changed")).toHaveTextContent(

@@ -4,13 +4,15 @@
  * page never draws.
  */
 import {
+  clearBlocks,
   DOCUMENT_FORMAT_VERSION,
+  registerBlocks,
   toOneParagraph,
   type BlockDocument,
 } from "@nextlyhq/blocks-engine";
 import type { ReactElement } from "react";
 import { renderToReadableStream } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { createStandaloneContext } from "../context";
 import { PageRenderer } from "../page-renderer";
@@ -179,5 +181,33 @@ describe("a list whose item has no blocks yet", () => {
 
   it("still draws a visitor's page as before, an entry per post", async () => {
     expect(entries(await drawItemless(false))).toBe(2);
+  });
+});
+
+describe("sample items where the page knows no fields", () => {
+  // The editor's own registry, as its canvas has it: the blocks the item is
+  // made of, whose props say what each bound value should be.
+  beforeAll(() => {
+    registerBlocks(coreBlocks as never, { source: "samples-test" });
+  });
+  afterAll(() => {
+    clearBlocks();
+  });
+
+  it("fill what the item binds, by the prop each fills", async () => {
+    const html = await renderToHtml(
+      <PageRenderer
+        document={document}
+        blocks={resolver}
+        siteStyles={false}
+        bindings={{}}
+        context={createStandaloneContext({
+          data: { find: () => Promise.resolve({ items: [], total: 0 }) },
+          diagnostics: true,
+        })}
+      />
+    );
+    expect(html.match(/data-nx-list-sample/g)).toHaveLength(3);
+    expect(html).toContain("Sample title 1");
   });
 });

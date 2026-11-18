@@ -136,6 +136,27 @@ describe("the Settings place", () => {
     ]);
   });
 
+  it("reads the page's own CSS, and applies a change of it as one customCss edit", () => {
+    const { editor: e, applied } = editor("page");
+    const styled = {
+      ...e,
+      document: {
+        ...e.document,
+        settings: { customCss: "h1 { color: teal; }" },
+      } as BlockDocument,
+    };
+    const { result } = renderHook(() =>
+      useSettingsPlace(styled, {} as never, "page")
+    );
+    expect(result.current?.pageCss.value).toBe("h1 { color: teal; }");
+    expect(result.current?.pageCss.set("h1 { color: red; }")).toBe(true);
+    result.current?.pageCss.set(null);
+    expect(applied).toEqual([
+      { kind: "customCss", customCss: "h1 { color: red; }" },
+      { kind: "customCss", customCss: null },
+    ]);
+  });
+
   it("makes an edit a tab holds before the document is stored, and answers the document it made", () => {
     const { editor: e, applied } = editor("template");
     const made = { ...e.document, nodes: [] } as BlockDocument;

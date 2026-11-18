@@ -192,8 +192,16 @@ example `Entry content shows "summary", which isn't a blocks field of Posts. Cho
 
 `bind-prop` binds the prop `prop` of the block whose id is `nodeId` to a field. `binding` is
 stored as the block stores it: `{ "$bind": "title" }`, with `source` (`entry`, the
-default, `item` inside a Collection list, `single` with `sourceKey`, or `site`), a
-`fallback` and a `format`. The prop's own value stays, and is shown when the binding can't
+default, `item` inside a Collection list, `single` with `sourceKey`, `site`, or `setting`), a
+`fallback` and a `format`. A `setting` binding is for a block inside a component: its `$bind`
+is the id of one of the component's own settings (`{ "$bind": "title", "source": "setting" }`),
+and the block shows what each placement gives that setting, as the setting's own block does:
+the placement's value, else its binding, else the setting's default. Shown on its own, the
+component shows the default. A setting the component doesn't have, or one that shows or
+hides its block, is refused, as is one whose value the prop can't hold: another type, or a
+choice the prop doesn't offer. On a page, where no setting is there to follow, the block shows
+its own value. Removing the setting leaves each block that followed it showing the
+setting's last default, unbound. The prop's own value stays, and is shown when the binding can't
 be. The write is judged as the editor's save is: a prop the block lacks, a field its source
 lacks, a type that does not fit the prop and a fallback the prop can't hold are refused.
 
@@ -234,8 +242,9 @@ Content-Type: application/json
 { "action": { "kind": "add-variant", "label": "Dark" }, "dryRun": true }
 ```
 
-Where the component store translates its definition field, an edit changes the default
-language's definition.
+Where the component store translates its definition field, **`locale`** names the
+language whose definition the edit reads and changes; without it, the edit changes the
+default language's definition. A store that translates nothing ignores it.
 
 The caller needs **update** on components; where `componentReadiness` names a collection
 of the site's own for them, the route edits that collection's document field and needs

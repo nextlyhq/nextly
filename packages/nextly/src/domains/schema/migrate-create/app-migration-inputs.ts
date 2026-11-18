@@ -48,6 +48,7 @@ import {
   type SnapshotFile,
 } from "./snapshot-io";
 import { templateStartFor } from "./template-start";
+import { holdInBuilderChange } from "./writer-hold";
 
 /**
  * The parts of the app's config a migration is generated from: the code-first
@@ -132,6 +133,12 @@ export async function appMigrationInputs(
   input: AppMigrationInputsArgs
 ): Promise<AppMigrationInputs> {
   const { config, dialect, logger } = input;
+  // A Builder save (the one caller that names the entity it is about) holds
+  // the folder from here, its first read of it, so what it reads is still the
+  // newest when it writes. Every other caller only reads, or holds it already.
+  if (input.judged !== undefined) {
+    await holdInBuilderChange(input.migrationsDir);
+  }
   // The Builder's definitions, read and judged as `migrate:check` reads them
   // (`readBuilderDefinitions`), merged with the configuration's entities.
   // Each Builder entity carries its manifest entry as its settings, as each

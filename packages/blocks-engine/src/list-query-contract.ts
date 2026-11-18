@@ -35,12 +35,23 @@ export function outerListOf(
   // Bounded by the document's depth: each step moves one parent out.
   while (at?.parent !== undefined) {
     const parent = at.parent;
-    if (parent.type === COLLECTION_LIST_TYPE && at.slot === LIST_ENTRY_SLOT) {
-      return parent;
-    }
+    if (drawsItsEntry(parent, at.slot)) return parent;
     at = locateNode(nodes, parent.id);
   }
   return undefined;
+}
+
+/**
+ * Whether what sits in `slot` of `parent` has that list's entry as its
+ * item: only a list's per-entry slot draws one. The rule
+ * {@link outerListOf} walks by, for a walk down a tree to keep the same
+ * answer.
+ */
+export function drawsItsEntry(
+  parent: { type?: unknown },
+  slot: string | undefined
+): boolean {
+  return parent.type === COLLECTION_LIST_TYPE && slot === LIST_ENTRY_SLOT;
 }
 
 /**
