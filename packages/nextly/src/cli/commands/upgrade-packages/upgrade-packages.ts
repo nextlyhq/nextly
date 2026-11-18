@@ -20,6 +20,7 @@ import { join } from "node:path";
 
 import {
   detectPackageManager,
+  forgetInstallState,
   installArgs,
   lockfileOf,
   runManager,
@@ -212,6 +213,8 @@ async function restoreAndFail(
 ): Promise<never> {
   const { manager } = project.detected;
   putFilesBack(project, saved);
+  forgetInstallState(manager, project.detected.root);
+  forgetInstallState(manager, project.dir);
   const again = await runManager(manager, installArgs(manager), project.dir);
   // A project that had no lockfile has none again.
   if (saved.lockfile === undefined) putFilesBack(project, saved);

@@ -68,6 +68,10 @@ const ENV: Record<string, string | undefined> = {
       .map(name => [name, undefined])
   ),
   COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
+  // A download the registry refuses is refused at once: pnpm would otherwise
+  // try it again over more than a minute.
+  pnpm_config_fetch_retries: "0",
+  npm_config_fetch_retries: "0",
   // A lockfile changing is the point of these tests.
   CI: undefined,
   YARN_ENABLE_IMMUTABLE_INSTALLS: "false",
@@ -82,10 +86,15 @@ function scrubbed(): NodeJS.ProcessEnv {
   return env;
 }
 
-/** Whether `manager` can be run on this machine. It asks no registry, so it may block. */
+/**
+ * Whether `manager` can be run on this machine. It asks no registry, so it
+ * may block. Asked in a folder outside this repository, whose own
+ * `packageManager` field would make Corepack refuse another manager.
+ */
 export function hasManager(manager: Manager): boolean {
   return (
     spawnSync(manager, ["--version"], {
+      cwd: tmpdir(),
       env: scrubbed(),
       encoding: "utf8",
       timeout: 60_000,

@@ -12,7 +12,7 @@
  */
 
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 export type PackageManager = "npm" | "pnpm" | "yarn" | "bun";
@@ -110,6 +110,25 @@ export function installArgs(manager: PackageManager): string[] {
       return ["install", "--no-immutable"];
     default:
       return ["install"];
+  }
+}
+
+/**
+ * Makes `manager` install again from the lockfile, in full, where it would
+ * otherwise take the folder for up to date. pnpm records what it last linked
+ * in `node_modules/.modules.yaml` and `node_modules/.pnpm/lock.yaml`; an
+ * install that failed part-way has unlinked packages and left both records
+ * as they were, so an install from the same lockfile finds nothing to do.
+ * Without the records it links everything the lockfile names, from its
+ * store.
+ */
+export function forgetInstallState(
+  manager: PackageManager,
+  root: string
+): void {
+  if (manager !== "pnpm") return;
+  for (const record of [".modules.yaml", join(".pnpm", "lock.yaml")]) {
+    rmSync(join(root, "node_modules", record), { force: true });
   }
 }
 
