@@ -14,7 +14,8 @@
  *
  * Each starting layout arranges those: "Cards, 3 across" (a Card each, the
  * picture 16:9 above a linked title and the summary), "List rows" (a row of a
- * 96px square picture beside the title and summary, stacking on a phone) and
+ * 96px square picture beside the title and summary, wrapping under it on a
+ * phone) and
  * "Titles only" (linked titles alone). Every binding is an ordinary one, on
  * the item, so the author can change any of it after.
  *
@@ -23,11 +24,17 @@
  * @module collection-list-item
  */
 import {
+  BASE_BREAKPOINT,
+  findNode,
   getBlock,
   makeNode,
+  type BlockDocument,
   type BlockNode,
   type NodeStyles,
+  type StyleValues,
 } from "@nextlyhq/blocks-engine";
+
+import type { BuilderOp } from "./op-vocabulary";
 
 /** The starting layouts an author picks from. */
 export type StartingLayout = "cards" | "rows" | "titles";
@@ -250,7 +257,9 @@ export function startingItem(
           flexDirection: "column",
           gap: "0.25rem",
           minWidth: "0",
-          flex: "1 1 0%",
+          // Beside the picture while the row has room for 12rem of words,
+          // under it on a phone: the row wraps, with no device to name.
+          flex: "1 1 12rem",
         });
   const picture = pictureBlock(fields, {
     width: "96px",
@@ -267,8 +276,85 @@ export function startingItem(
     dressed(blockOf("core/box", {}, { children: inside }), undefined, {
       display: "flex",
       flexDirection: "row",
+      flexWrap: "wrap",
       alignItems: "flex-start",
       gap: "1rem",
     })
   );
+}
+
+/**
+ * The style values the list itself takes for `layout`, at its base: Cards
+ * lay the items in a grid, three across where there is room and one under
+ * a phone's width, with no device to name (the Gallery's own default grid);
+ * Titles only sets them closer together. List rows keep the list's own
+ * spacing.
+ */
+export function startingListStyles(
+  layout: StartingLayout
+): Record<string, string> | undefined {
+  switch (layout) {
+    case "cards":
+      return {
+        display: "grid",
+        gridTemplateColumns:
+          "repeat(auto-fit, minmax(max(calc(33.333% - 2rem), min(100%, 20rem)), 1fr))",
+        gap: "1.5rem",
+      };
+    case "titles":
+      return { gap: "0.5rem" };
+    case "rows":
+      return undefined;
+  }
+}
+
+/** The slot of a list that its item is built in, repeated per entry. */
+const ITEM_SLOT = "children";
+
+/**
+ * What choosing a source and a starting layout writes to a list, as ops to
+ * apply together (ONE step): the source and the layout's own style values on
+ * the list, whatever its item held taken out, and the item built for the
+ * layout put in. `skip` sets the source and leaves an empty item to build.
+ * `null` where there is no such list.
+ */
+export function planStartingList(
+  document: BlockDocument,
+  listId: string,
+  source: ItemSource,
+  layout: StartingLayout | "skip"
+): BuilderOp[] | null {
+  const list = findNode(document.nodes, listId);
+  if (list === undefined) return null;
+  const own = layout === "skip" ? undefined : startingListStyles(layout);
+  const base: StyleValues = {
+    ...(list.styles?.base?.[BASE_BREAKPOINT] ?? {}),
+    ...own,
+  };
+  const update: BuilderOp = {
+    kind: "update",
+    id: listId,
+    patch: {
+      props: { ...list.props, collection: source.slug },
+      ...(own === undefined
+        ? {}
+        : {
+            styles: {
+              ...list.styles,
+              base: { ...list.styles?.base, [BASE_BREAKPOINT]: base },
+            },
+          }),
+    },
+  };
+  const removed: BuilderOp[] = (list.slots?.[ITEM_SLOT] ?? []).map(child => ({
+    kind: "remove",
+    id: child.id,
+  }));
+  const item = layout === "skip" ? [] : startingItem(source, layout);
+  const inserted: BuilderOp[] = item.map((node, index) => ({
+    kind: "insert",
+    node,
+    at: { parentId: listId, slot: ITEM_SLOT, index },
+  }));
+  return [update, ...removed, ...inserted];
 }
