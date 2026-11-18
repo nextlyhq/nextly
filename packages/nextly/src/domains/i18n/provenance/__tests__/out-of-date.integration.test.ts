@@ -205,6 +205,61 @@ describe.each(getConfiguredTestDialects())(
       expect(overview.es.stale).toBe(true);
     });
 
+    it("judges a field with no recorded origin by the language-level stamp, beside a recorded one", async () => {
+      await boot(dialect);
+      const id = await translatedPost();
+      // Spanish's summary as a translation made before origins were recorded: its title keeps
+      // its record, made from English's title, which does not change.
+      await t!.adapter.delete("nextly_translation_provenance", {
+        and: [
+          { column: "locale", op: "=", value: "es" },
+          { column: "fieldPath", op: "=", value: "summary" },
+        ],
+      });
+      await new Promise(resolve => setTimeout(resolve, 1100));
+      await save(id, "en", { summary: "Shorter" });
+
+      const overview = await overviewOf(id);
+      expect(overview.es.fields?.title).toMatchObject({ outOfDate: false });
+      // Nothing records what the summary was made from: the source moved after Spanish was
+      // written, so the language-level stamp says Spanish is out of date.
+      expect(overview.es.stale).toBe(true);
+    });
+
+    it("judges a copy by the stamp of the language it was copied from, not the default's", async () => {
+      await boot(dialect);
+      const created = (await t!.nextly.create({
+        collection: "posts",
+        locale: "en",
+        data: { title: "Hi", summary: "Short" },
+      })) as unknown as { item: { id: string } };
+      const id = created.item.id;
+      await save(id, "fr", { title: "Bonjour", summary: "Bref" });
+      // French as written before origins were recorded: nothing fingerprints its values.
+      await t!.adapter.delete("nextly_translation_provenance", {
+        and: [{ column: "locale", op: "=", value: "fr" }],
+      });
+      await new Promise(resolve => setTimeout(resolve, 1100));
+      // Spanish copied from French.
+      await save(id, "es", {
+        title: "Hola",
+        summary: "Corto",
+        _provenance: {
+          title: { origin: "copy", sourceLocale: "fr" },
+          summary: { origin: "copy", sourceLocale: "fr" },
+        },
+      });
+      await new Promise(resolve => setTimeout(resolve, 1100));
+      await save(id, "en", { title: "Hello" });
+
+      // English moved, but Spanish was copied from French, which did not.
+      expect((await overviewOf(id)).es.stale).toBeUndefined();
+
+      await new Promise(resolve => setTimeout(resolve, 1100));
+      await save(id, "fr", { title: "Bonjour encore" });
+      expect((await overviewOf(id)).es.stale).toBe(true);
+    });
+
     it("shows a published read no provenance for a language whose translation is only a draft", async () => {
       await boot(dialect);
       const created = (await t!.nextly.create({
