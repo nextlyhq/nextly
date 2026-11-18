@@ -229,6 +229,13 @@ describe("unconfigured and malformed configuration reads as off", () => {
           },
         },
         gapRoles: { enabled: true, provision: { roles: gapRoles } },
+        // An empty string names no role, and one blank element refuses the
+        // whole provision, as every malformed line here does.
+        blankRoles: { enabled: true, provision: { roles: [""] } },
+        trailingBlank: {
+          enabled: true,
+          provision: { roles: ["editor", ""] },
+        },
       },
     });
     for (const key of [
@@ -238,6 +245,8 @@ describe("unconfigured and malformed configuration reads as off", () => {
       "emptyRoles",
       "holeyRoles",
       "gapRoles",
+      "blankRoles",
+      "trailingBlank",
     ]) {
       expect(policy.requireEnabled(key).provisioning.mayProvision).toBe(false);
     }
@@ -308,6 +317,89 @@ describe("unconfigured and malformed configuration reads as off", () => {
           delete (Object.prototype as Record<string, unknown>)[field];
         }
       });
+    }
+  });
+
+  it("reads no providers map a polluted Object.prototype feeds", () => {
+    // A fully-enabled provider map, planted on the prototype the app's auth
+    // object inherits. Saved and restored in finally, like the pollution
+    // test above, because this worker's modules outlive this file.
+    const saved = Object.getOwnPropertyDescriptor(
+      Object.prototype,
+      "providers"
+    );
+    try {
+      (Object.prototype as Record<string, unknown>).providers = {
+        google: {
+          enabled: true,
+          trustedForImplicitLinking: true,
+          provision: { roles: ["admin"] },
+        },
+      };
+      // The app's auth object owns no providers field, so the map every
+      // object now inherits is not its configuration: nothing is
+      // configured, and every key refuses as the all-refused default does.
+      const policy = linkingPolicyFromAuthConfig({});
+      const refusal = refusalOf(() => policy.requireEnabled("google"));
+      expect(refusal.logContext).toMatchObject({
+        reason: "provider-key-not-configured",
+      });
+    } finally {
+      if (saved) {
+        Object.defineProperty(Object.prototype, "providers", saved);
+      } else {
+        delete (Object.prototype as Record<string, unknown>).providers;
+      }
+    }
+  });
+
+  it("reads no roles a polluted Object.prototype feeds an empty provision", () => {
+    // One level down from the row: the app's row owns its provision object,
+    // and that object owns no roles field. A `roles` array planted on the
+    // prototype would otherwise speak as the app's role set.
+    const saved = Object.getOwnPropertyDescriptor(Object.prototype, "roles");
+    try {
+      (Object.prototype as Record<string, unknown>).roles = ["admin"];
+      const policy = linkingPolicyFromAuthConfig({
+        providers: { google: { enabled: true, provision: {} } },
+      });
+      expect(policy.requireEnabled("google").provisioning.mayProvision).toBe(
+        false
+      );
+    } finally {
+      if (saved) {
+        Object.defineProperty(Object.prototype, "roles", saved);
+      } else {
+        delete (Object.prototype as Record<string, unknown>).roles;
+      }
+    }
+  });
+
+  it("reads no role name a polluted Array.prototype feeds a hole", () => {
+    // A hole in the roles array, with a role name planted at its index on
+    // Array.prototype: reading the hole by index would find the planted
+    // name, and a holey array would provision with attacker roles. Only
+    // indices the array OWNS are read, so the hole refuses.
+    const saved = Object.getOwnPropertyDescriptor(Array.prototype, "0");
+    try {
+      (Array.prototype as unknown as Record<string, unknown>)[0] = "admin";
+      const policy = linkingPolicyFromAuthConfig({
+        providers: {
+          google: {
+            enabled: true,
+            provision: { roles: new Array(1) as unknown as readonly string[] },
+          },
+        },
+      });
+      expect(policy.requireEnabled("google").provisioning.mayProvision).toBe(
+        false
+      );
+    } finally {
+      if (saved) {
+        Object.defineProperty(Array.prototype, "0", saved);
+      } else {
+        delete (Array.prototype as unknown as Record<string, unknown>)[0];
+      }
     }
   });
 });

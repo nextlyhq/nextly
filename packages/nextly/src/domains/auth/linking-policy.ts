@@ -18,11 +18,18 @@
  * fields alone, by one schema: `enabled` and `trustedForImplicitLinking`
  * switch on only for a literal `true`, and a row carrying anything else in
  * either of them is the refused row; a `provision` that is not an object
- * holding at least one role name leaves provisioning off and the rest of
- * the row standing. No default silently enables a branch. Trust for
- * implicit linking and permission to provision govern only those two
+ * holding at least one non-empty role name leaves provisioning off and the
+ * rest of the row standing. No default silently enables a branch. Trust
+ * for implicit linking and permission to provision govern only those two
  * branches: an identity already linked signs in through a key that has
  * neither.
+ *
+ * Every object this reads — the providers map, a row, the nested
+ * provision, a roles array's indices — is read by its OWN properties only.
+ * A read by property name traverses the prototype chain when the object
+ * lacks the key, so pollution on `Object.prototype` or `Array.prototype`
+ * would otherwise speak as the app's configuration; a value a prototype
+ * feeds in is never one.
  *
  * The matrix is a snapshot of the configuration as the app wrote it. The
  * boot resolves it once and the sign-in path asks it per key, so a later
@@ -101,8 +108,9 @@ export interface ProviderKeyPolicyConfig {
   /**
    * Whether the key may provision an account for an address no local account
    * holds, with the roles a provisioned account receives. Absent, or without
-   * a `roles` array of at least one role name, provisions nothing: an empty
-   * array is provisioning off, not zero-role provisioning.
+   * a `roles` array of at least one non-empty role name, provisions nothing:
+   * an empty array is provisioning off, not zero-role provisioning, and an
+   * empty string names no role.
    */
   readonly provision?: { readonly roles?: readonly string[] };
 }
@@ -158,6 +166,32 @@ const REFUSED_PROVIDER_KEY: ProviderKeyPolicy = Object.freeze({
 });
 
 /**
+ * A roles array that owns every index it counts.
+ *
+ * zod's element parse reads by index, and an index a sparse array lacks is
+ * found on `Array.prototype` when pollution puts one there — a hole stops
+ * meaning "absent element" and starts meaning "inherited element". Only an
+ * array whose indices are all OWN reaches the element parse, so a hole
+ * refuses whatever the prototype carries.
+ */
+function ownsItsIndices(value: unknown[]): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    if (!Object.prototype.hasOwnProperty.call(value, index)) return false;
+  }
+  return true;
+}
+
+/**
+ * Role names: at least one, each naming something, each index owned. An
+ * empty string names no role, and one bad element refuses the whole
+ * provision, as every malformed line here does.
+ */
+const roleNames = z.preprocess(
+  value => (Array.isArray(value) && ownsItsIndices(value) ? value : undefined),
+  z.array(z.string().min(1)).min(1)
+);
+
+/**
  * One provider key's row of the configuration, as the policy reads it.
  *
  * The configuration is outside input, parsed where it enters. `enabled` and
@@ -165,18 +199,22 @@ const REFUSED_PROVIDER_KEY: ProviderKeyPolicy = Object.freeze({
  * and read as off, so a row carrying anything else in either gate field
  * fails the row — and a failed row is the refused row. Provisioning is
  * contained: a `provision` that is anything but an object holding a
- * `roles` array of at least one role name reads as off — an empty array, a
- * holey one (`new Array(1)`, whose hole zod reads as an element and
- * `z.string()` refuses), or one holding a non-string — and leaves the rest
- * of the row standing. A malformed line can only refuse, never enable.
+ * `roles` array as `roleNames` accepts reads as off — an empty array, a
+ * holey one, an empty-string name, or one holding a non-string — and
+ * leaves the rest of the row standing. A malformed line can only refuse,
+ * never enable.
+ *
+ * The nested `provision` object is stripped to its own fields before the
+ * schema reads it, as the row itself is: a row owning `provision: {}`
+ * would otherwise answer `roles` from a polluted prototype one level down.
  */
 const providerKeyRowSchema = z.object({
   enabled: z.literal(true).optional(),
   trustedForImplicitLinking: z.literal(true).optional(),
-  provision: z
-    .object({ roles: z.array(z.string()).min(1) })
-    .optional()
-    .catch(undefined),
+  provision: z.preprocess(
+    value => (isPlainObject(value) ? ownFieldsOf(value) : value),
+    z.object({ roles: roleNames }).optional().catch(undefined)
+  ),
 });
 
 /**
@@ -251,7 +289,16 @@ export function linkingPolicyFromAuthConfig(
   // define that key as a provider would corrupt the matrix rather than
   // configure it.
   const resolved: Record<string, ProviderKeyPolicy> = Object.create(null);
-  const providers: unknown = auth?.providers;
+  // `providers` is read only when the app's auth object OWNS it: the read
+  // traverses the prototype chain like any other, and a map a polluted
+  // `Object.prototype` carries is not the app's configuration — an app
+  // that configured nothing would come up enabled, trusted and
+  // provisioning.
+  const providers: unknown =
+    auth !== undefined &&
+    Object.prototype.hasOwnProperty.call(auth, "providers")
+      ? auth.providers
+      : undefined;
   if (isPlainObject(providers)) {
     for (const [key, value] of Object.entries(providers)) {
       resolved[key] = providerKeyPolicyOf(value);
