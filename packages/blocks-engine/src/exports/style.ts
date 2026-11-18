@@ -265,8 +265,19 @@ export {
 } from "../style/inline-style";
 export type {
   CompiledPageCss,
+  // A host's checker for author-written CSS, which the compile asks before it
+  // draws any; and the level a piece of it was written at. @experimental
+  CustomCssLevel,
+  CustomCssPolicy,
   StyleCompileContext,
 } from "../style/compile-page";
+// A block's custom CSS scoped to the block, so a host's checker can name the
+// lines that cannot be, as the compile would refuse them. @experimental
+export {
+  scopeBlockCss,
+  type CustomCssRefusal,
+  type ScopedBlockCss,
+} from "../style/custom-css-scope";
 export {
   blockPartClassName,
   blockTypeClassName,
