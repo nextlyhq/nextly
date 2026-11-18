@@ -99,4 +99,40 @@ describe("a Single's row answers", () => {
       { field: "topic", value: "General" },
     ]);
   });
+
+  // The push binds an answer as it is given, so an automatic one is given in the form its column
+  // stores, as the file's fill writes it.
+  describe("the push's automatic answers, in the form their columns store", () => {
+    const pushed = (field: Record<string, unknown>) =>
+      answersFor([BODY], [BODY, { required: true, ...field }]).legacyBundle
+        ?.byFieldName[field.name as string]?.value;
+
+    it("a date as the moment it names (SQLite: epoch seconds)", () => {
+      const moment = "2026-01-02T03:04:05.000Z";
+      expect(
+        pushed({ name: "launch", type: "date", defaultValue: moment })
+      ).toBe(Date.parse(moment) / 1000);
+    });
+
+    it("JSON as its text", () => {
+      expect(
+        pushed({ name: "meta", type: "json", defaultValue: { a: 1 } })
+      ).toBe(JSON.stringify({ a: 1 }));
+    });
+
+    it("a checkbox as 1 or 0 on SQLite", () => {
+      expect(
+        pushed({ name: "flag", type: "checkbox", defaultValue: true })
+      ).toBe(1);
+    });
+  });
+
+  // A virtual field stores nothing, so the row has no column to fill.
+  it("fills nothing for a virtual field", () => {
+    const { fileAnswers } = answersFor(
+      [BODY],
+      [BODY, { name: "note", type: "text", virtual: true, defaultValue: "V" }]
+    );
+    expect(fileAnswers.rowFills ?? []).toEqual([]);
+  });
 });

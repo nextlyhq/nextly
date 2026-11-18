@@ -164,6 +164,37 @@ describeEachDialect(
       expect(await nullable("tagline")).toBe(false);
     });
 
+    // The review shows what the save does: a required field stating a default its row takes is
+    // settled by that default, so the dialog does not ask for one.
+    it("does not ask, in the review, about a required field stating a default", async () => {
+      const answer = await dispatchSingles(
+        "previewSingleSchemaChanges",
+        { slug: "sdf_home" },
+        {
+          fields: [
+            BODY,
+            {
+              name: "tagline",
+              type: "text",
+              required: true,
+              defaultValue: "Draft",
+            },
+          ],
+        }
+      );
+      const preview = (
+        answer instanceof Response ? await answer.json() : answer
+      ) as { data?: unknown } & Record<string, unknown>;
+      const body = (preview.data ?? preview) as {
+        interactiveFields?: { name: string }[];
+        classification?: string;
+      };
+      expect(
+        (body.interactiveFields ?? []).map(field => field.name)
+      ).not.toContain("tagline");
+      expect(body.classification).not.toBe("interactive");
+    });
+
     it("still asks about a required field stating no default", async () => {
       await expect(
         save([BODY, { name: "tagline", type: "text", required: true }])
