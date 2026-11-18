@@ -42,6 +42,16 @@ import {
   type SupportedDialect,
 } from "../services/field-column-descriptor";
 import { withColumnOverride } from "../services/runtime-schema-generator";
+import {
+  readMysqlIdentifierCaseRules,
+  type RawSqlExecutor,
+} from "../utils/read-identifier-case";
+import {
+  identifierCaseRules,
+  indexCatalog,
+  resolveCatalogName,
+  type IdentifierCase,
+} from "../utils/resolve-catalog-name";
 import { keyedByOf, type KeyedBy } from "../value-conversion/read-values";
 
 import { classifyDifference, planDifference } from "./classify";
@@ -265,15 +275,39 @@ interface LiveTable {
 }
 
 /**
- * A table's identity among the live tables, as the dialect tells names apart. PostgreSQL keeps the
- * case of a quoted name, so two names that differ by case alone are two tables and are kept
- * apart. MySQL and SQLite are looked up without regard to case.
+ * How this run's server compares table names: PostgreSQL keeps the case of a quoted name, SQLite
+ * folds `A` to `Z` alone, and MySQL follows its `lower_case_table_names` setting, which is read
+ * once here. No default is safe for MySQL: folding merges two tables a case-sensitive server keeps
+ * apart, and not folding misses a table a folding server lowercased.
  */
-function tableKey(dialect: SupportedDialect, name: string): string {
-  return dialect === "postgresql" ? name : name.toLowerCase();
+async function tableNameCase(
+  db: unknown,
+  dialect: SupportedDialect
+): Promise<IdentifierCase> {
+  const rules =
+    dialect === "mysql"
+      ? await readMysqlIdentifierCaseRules(db as RawSqlExecutor)
+      : identifierCaseRules({ dialect });
+  return rules.tables;
 }
 
-/** The live tables, looked up by name as the dialect tells names apart. */
+/**
+ * A lookup by table name over `entries`, which are keyed by the names the database reported,
+ * resolving a name as the server compares table names. The one lookup every question about a live
+ * table goes through, so two tables the server keeps apart are never answered for one another.
+ */
+function byTableName<T>(
+  tableCase: IdentifierCase,
+  entries: ReadonlyMap<string, T>
+): (table: string) => T | undefined {
+  const catalog = indexCatalog([...entries.keys()], tableCase);
+  return table => {
+    const name = resolveCatalogName(catalog, table);
+    return name === undefined ? undefined : entries.get(name);
+  };
+}
+
+/** The live tables, looked up by name as the server compares table names. */
 interface LiveTables {
   get(table: string): LiveTable | undefined;
   has(table: string): boolean;
@@ -281,16 +315,14 @@ interface LiveTables {
 
 /** The lookup over the live tables one or more reads returned. */
 function liveTablesOf(
-  dialect: SupportedDialect,
+  tableCase: IdentifierCase,
   tables: readonly LiveTable[]
 ): LiveTables {
-  const byKey = new Map(
-    tables.map(table => [tableKey(dialect, table.name), table])
+  const get = byTableName(
+    tableCase,
+    new Map(tables.map(table => [table.name, table]))
   );
-  return {
-    get: table => byKey.get(tableKey(dialect, table)),
-    has: table => byKey.has(tableKey(dialect, table)),
-  };
+  return { get, has: table => get(table) !== undefined };
 }
 
 /**
@@ -426,16 +458,17 @@ export async function findColumnDifferences(args: {
     })
   );
   let live: LiveTables;
-  let held: ReadonlyMap<string, TableLockFacts>;
+  let lockOf: (table: string) => TableLockFacts | undefined;
   try {
+    const tableCase = await tableNameCase(db, dialect);
     const read = await readDefinitions(db, dialect, planned, waits);
     if (read.kind === "ran-out") {
       return planned.flatMap(entity =>
         definitionUnreadableFindings(entity, () => read.lock)
       );
     }
-    live = read.live;
-    held = read.held;
+    live = liveTablesOf(tableCase, read.live);
+    lockOf = byTableName(tableCase, read.held);
   } catch (error) {
     if (!isDatabaseHeld(error, dialect)) throw error;
     // Another connection holds the whole database, so no table's definition can be read: every
@@ -446,7 +479,6 @@ export async function findColumnDifferences(args: {
   // A table's row count is the same for each of its columns, so it is read once per table.
   const countRows = rowCounter(dialect);
   const findings: ColumnFinding[] = [];
-  const lockOf = (table: string) => held.get(tableKey(dialect, table));
   const isRead = (column: NamedColumn) =>
     lockOf(column.location.table) === undefined;
   for (const each of planned) {
@@ -635,8 +667,8 @@ async function readDefinitions(
 ): Promise<
   | {
       kind: "done";
-      live: LiveTables;
-      /** Each table whose tries ran out before its definition could be read, by `tableKey`. */
+      live: LiveTable[];
+      /** Each table whose tries ran out before its definition could be read, by its name. */
       held: ReadonlyMap<string, TableLockFacts>;
     }
   | { kind: "ran-out"; lock: TableLockFacts }
@@ -647,7 +679,7 @@ async function readDefinitions(
   if (waits === undefined || dialect === "mysql") {
     return {
       kind: "done",
-      live: liveTablesOf(dialect, await readLiveTables(db, dialect, names)),
+      live: await readLiveTables(db, dialect, names),
       held: none,
     };
   }
@@ -657,7 +689,7 @@ async function readDefinitions(
     );
     return read.kind === "ran-out"
       ? read
-      : { kind: "done", live: liveTablesOf(dialect, read.value), held: none };
+      : { kind: "done", live: read.value, held: none };
   }
   // PostgreSQL: reading a table's definition opens the table, which waits behind another
   // session's change to it, so each table is read in its own tries.
@@ -668,12 +700,12 @@ async function readDefinitions(
       readLiveTables(on, dialect, [name])
     );
     if (read.kind === "ran-out") {
-      held.set(tableKey(dialect, name), read.lock);
+      held.set(name, read.lock);
       continue;
     }
     live.push(...read.value);
   }
-  return { kind: "done", live: liveTablesOf(dialect, live), held };
+  return { kind: "done", live, held };
 }
 
 /**

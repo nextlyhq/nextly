@@ -1215,39 +1215,63 @@ describe.each(getConfiguredTestDialects())(
       ]);
     });
 
-    // Only PostgreSQL holds two tables whose names differ by case alone. Both directions: with the
-    // two tables looked up under one name, whichever is read last stands for both, so one
-    // direction alone could pass by the order the database returns them.
-    it.skipIf(dialect !== "postgresql").each([
-      { from: MX_OLD, to: MX_RECASED },
-      { from: MX_RECASED, to: MX_OLD },
+    /**
+     * Two table names this dialect's server keeps apart though they differ by case alone:
+     * PostgreSQL keeps a quoted name's case, MySQL does where `lower_case_table_names` is 0 (its
+     * default on Linux), and SQLite folds only `A` to `Z`, so `Ä` and `ä` name two tables there.
+     */
+    const [CASED_A, CASED_B] =
+      dialect === "sqlite"
+        ? (["dc_rc_mx_Ä", "dc_rc_mx_ä"] as const)
+        : ([MX_OLD, MX_RECASED] as const);
+
+    /** Whether this server keeps `CASED_A` and `CASED_B` apart. */
+    async function keepsCaseApart(): Promise<boolean> {
+      if (dialect !== "mysql") return true;
+      const rows = (await run(
+        "select @@lower_case_table_names as setting"
+      )) as unknown as { setting?: unknown }[];
+      return Number(rows[0]?.setting) === 0;
+    }
+
+    // Both directions: with the two tables looked up under one name, whichever is read last
+    // stands for both, so one direction alone could pass by the order the database returns them.
+    it.for([
+      { from: CASED_A, to: CASED_B },
+      { from: CASED_B, to: CASED_A },
     ])(
       "judges a table renamed by case at the applied table where the destination exists ($from to $to)",
-      async ({ from, to }) => {
+      async ({ from, to }, { skip }) => {
+        if (!(await keepsCaseApart())) skip();
         // The applied table holds `score` as text where its field is a number; the destination,
         // which differs by case alone, holds it as the field describes it.
         await createBuilderTable(from, MX_RETYPED);
         await createBuilderTable(to, MX_FIELDS);
-        const findings = await find(
-          resolveRepairEntities({
-            configured: [mxConfigured(to)],
-            registry: [mxRow({ tableName: to })],
-            snapshots: [mxSnapshot({ table: from })],
-            hasManifest: true,
-          })
-        );
-        expect(findings.map(matrixRow)).toEqual([
-          ["differs", col(from, "score"), "", "", ""],
-          ...MX_COLUMNS.map(c => [
-            "pending-migration",
-            col(to, c),
-            "change",
-            from,
-            "live",
-          ]),
-        ]);
-        // The table a conversion would name is the applied one, never the destination.
-        expect(differs(findings)[0]?.judged?.liveTable).toBe(from);
+        try {
+          const findings = await find(
+            resolveRepairEntities({
+              configured: [mxConfigured(to)],
+              registry: [mxRow({ tableName: to })],
+              snapshots: [mxSnapshot({ table: from })],
+              hasManifest: true,
+            })
+          );
+          expect(findings.map(matrixRow)).toEqual([
+            ["differs", col(from, "score"), "", "", ""],
+            ...MX_COLUMNS.map(c => [
+              "pending-migration",
+              col(to, c),
+              "change",
+              from,
+              "live",
+            ]),
+          ]);
+          // The table a conversion would name is the applied one, never the destination.
+          expect(differs(findings)[0]?.judged?.liveTable).toBe(from);
+        } finally {
+          await run(`DROP TABLE IF EXISTS ${q(from)}`);
+          await run(`DROP TABLE IF EXISTS ${q(to)}`);
+        }
       }
     );
 

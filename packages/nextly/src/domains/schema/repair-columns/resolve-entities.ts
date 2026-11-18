@@ -35,6 +35,7 @@
 
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type { ColumnOverride } from "../extension/draft";
+import { DEFINITION_APPLIED } from "../migrate/unique-column-guard";
 import { builtByFor, isCodeOwned } from "../pipeline/registered-collections";
 import type { ColumnOrigin } from "../services/field-column-descriptor";
 
@@ -122,18 +123,6 @@ const NO_SOURCES: EntitySources = {
   recorded: undefined,
 };
 
-/**
- * The registry statuses that say the row's definition is in the database. Every other status says
- * it is not, each for its own reason: `pending` waits for its migration, `generated` has one
- * written and not applied, and `failed` is an apply that did not finish, whose table may hold part
- * of the change. None of them says what was applied, so the entity is reported as pending and
- * never converted. `diverged` is none of these: the reader refuses such a row before it gets here.
- */
-const APPLIED_STATUSES: ReadonlySet<string | undefined> = new Set([
-  "applied",
-  "synced",
-]);
-
 /** Whether a Builder manifest is checked out, which decides what a Builder registry row stands for. */
 interface ResolutionContext {
   hasManifest: boolean;
@@ -162,10 +151,13 @@ function appliedDefinition({
       source: "snapshot",
     };
   }
-  // Any other row describes what a migration will apply, or one that did not finish, not what was.
-  if (row === undefined || !APPLIED_STATUSES.has(row.migrationStatus)) {
-    return null;
-  }
+  // Only a row a sync or a migration finished says what was applied, by the one list of such
+  // statuses. Every other says it is not, each for its own reason: `pending` waits for its
+  // migration, `generated` has one written and not applied, and `failed` is an apply that did
+  // not finish, whose table may hold part of the change. Such an entity is reported as pending
+  // and never converted. `diverged` is none of these: the reader refuses that row first.
+  if (row === undefined) return null;
+  if (!DEFINITION_APPLIED.has(row.migrationStatus ?? "")) return null;
   return {
     fields: asFields(row.fields),
     localized: row.localized === true,
