@@ -980,9 +980,80 @@ export function exportDtcgWithTheme(tokens: SiteTokenSet): ExportResult[] {
       label: "dark values in a theme file",
       mime: "application/json",
       skipped: themeSkipped,
-      gaps: gapsOf(tokens, themeSkipped, []),
+      gaps: [
+        ...gapsOf(tokens, themeSkipped, []),
+        ...darkValuesKept(tokens, theme.resolver, themeSkipped, main.gaps),
+      ],
     },
   ];
+}
+
+/**
+ * The variables whose dark value only the token file's Nextly data holds.
+ *
+ * The engine writes a dark value the format has no type for into the token
+ * file's own extension and leaves it out of the theme file without a report,
+ * since Nextly reads it back exactly. A variable whose light value IS typed
+ * is in the token file as other tools read it, so nothing else names it, yet
+ * those tools have no dark value for it and use the light one in dark mode.
+ * Read off the theme file the engine wrote rather than worked out again here,
+ * so what this names is what the file holds. A variable the token file
+ * already names, or the theme file refused, is not named a second time.
+ */
+function darkValuesKept(
+  tokens: SiteTokenSet,
+  resolver: unknown,
+  skipped: readonly string[],
+  named: readonly ExportGap[]
+): ExportGap[] {
+  const written = darkDocumentOf(resolver);
+  const elsewhere = new Set<string>(
+    named.flatMap(gap => (gap.name === undefined ? [] : [gap.name]))
+  );
+  for (const message of skipped) {
+    const token = aboutWhich(tokens.tokens, message);
+    if (token !== undefined) elsewhere.add(token.name);
+  }
+  return tokens.tokens.flatMap(token =>
+    token.values.dark === undefined ||
+    elsewhere.has(token.name) ||
+    holdsTokenAt(written, token.name)
+      ? []
+      : [
+          {
+            name: token.name,
+            label: tokenDisplayLabel(token),
+            outcome: "kept" as const,
+            why: `${DARK_KEPT_WHY} ${KEPT_WHY[token.kind]}`,
+          },
+        ]
+  );
+}
+
+/** What a dark value kept only as Nextly data means for other tools. */
+const DARK_KEPT_WHY =
+  "Its dark value is kept for Nextly only, so design tools use its light value in dark mode.";
+
+/** The token tree a theme file gives its `dark` context, if it has one. */
+function darkDocumentOf(resolver: unknown): unknown {
+  const modifiers = isPlainRecord(resolver) ? resolver["modifiers"] : undefined;
+  if (!isPlainRecord(modifiers)) return undefined;
+  for (const modifier of Object.values(modifiers)) {
+    const contexts = isPlainRecord(modifier) ? modifier["contexts"] : undefined;
+    const dark = isPlainRecord(contexts) ? contexts["dark"] : undefined;
+    if (Array.isArray(dark)) return dark[0];
+  }
+  return undefined;
+}
+
+/** Whether a token tree holds a token at a dotted name's path. */
+function holdsTokenAt(tree: unknown, name: string): boolean {
+  let node = tree;
+  for (const segment of name.split(".")) {
+    if (!isPlainRecord(node) || !Object.hasOwn(node, segment)) return false;
+    node = node[segment];
+  }
+  return isPlainRecord(node) && "$value" in node;
 }
 
 /**

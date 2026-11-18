@@ -1970,6 +1970,54 @@ describe("what an export says it did not write", () => {
     ]);
   });
 
+  it("lists a dark value only the token file's Nextly data holds", () => {
+    // The light value is one the format types, so the variable is in the
+    // token file as other tools read it; its dark value is not, so the theme
+    // file has no dark value for it and other tools use the light one.
+    const files = exportDtcgWithTheme({
+      tokens: [
+        {
+          name: "space.lead",
+          kind: "dimension",
+          values: { light: "16px", dark: "2em" },
+        },
+        {
+          name: "space.4",
+          kind: "dimension",
+          values: { light: "1rem", dark: "1.5rem" },
+        },
+      ],
+    });
+    expect(files.flatMap(file => file.gaps)).toEqual([
+      {
+        name: "space.lead",
+        label: "Lead",
+        outcome: "kept",
+        why: "Its dark value is kept for Nextly only, so design tools use its light value in dark mode. Design tools take sizes in px or rem only.",
+      },
+    ]);
+  });
+
+  it("names a variable once when both its values are Nextly data", () => {
+    const gaps = exportDtcgWithTheme({
+      tokens: [
+        {
+          name: "space.lead",
+          kind: "dimension",
+          values: { light: "1.5em", dark: "2em" },
+        },
+      ],
+    }).flatMap(file => file.gaps);
+    expect(gaps).toEqual([
+      {
+        name: "space.lead",
+        label: "Lead",
+        outcome: "kept",
+        why: "Design tools take sizes in px or rem only.",
+      },
+    ]);
+  });
+
   it("names nothing when every variable was written", () => {
     expect(exportDtcgWithTheme(SITE).flatMap(file => file.gaps)).toEqual([]);
     expect(exportForFigma(SITE).flatMap(file => file.gaps)).toEqual([]);
