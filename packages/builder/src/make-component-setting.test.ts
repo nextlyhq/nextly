@@ -27,6 +27,8 @@ beforeEach(() => {
           text: { label: "Text", role: "content", type: "text" },
           href: { label: "Address", role: "content", type: "url" },
           picture: { label: "Picture", role: "content", type: "media" },
+          entryId: { label: "Linked entry", role: "content", type: "text" },
+          rel: { label: "Link relationship", type: "text" },
           body: { label: "Body", role: "content", type: "richText" },
           tone: { label: "Tone", type: "select", options: ["light", "dark"] },
           count: { label: "Count", type: "number" },
@@ -90,7 +92,13 @@ function card(extra: Partial<ComponentDocument> = {}): ComponentDocument {
       },
     ],
     exposed: [
-      { id: "goes", label: "Goes to", nodeId: "t", propPath: "href", type: "link" },
+      {
+        id: "goes",
+        label: "Goes to",
+        nodeId: "t",
+        propPath: "href",
+        type: "link",
+      },
     ],
     ...extra,
   } as ComponentDocument;

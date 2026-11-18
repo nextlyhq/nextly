@@ -184,9 +184,7 @@ function mount(
       editor={editor}
       componentLibrary={{
         definitions: new Map([["card", CARD]]),
-        components: [
-          { id: "card", title: "Card", usedOn: 3, document: CARD },
-        ],
+        components: [{ id: "card", title: "Card", usedOn: 3, document: CARD }],
       }}
       contentServices={services}
     />
@@ -243,7 +241,10 @@ describe("making a component's prop a setting, from a placement", () => {
       kind: "update",
       id: "p",
       patch: {
-        bindings: { "overrides.title-2": { $bind: "title", source: "item" } },
+        // Naming the list around the placement, as every setting binding.
+        bindings: {
+          "overrides.title-2": { $bind: "title", source: "item", list: "list" },
+        },
       },
     });
     expect((await screen.findByRole("status")).textContent).toContain(

@@ -13,6 +13,7 @@
  */
 import {
   bindablePropKind,
+  ENTRY_LINK_PROPS,
   getBlock,
   isPlainRecord,
   walkNodes,
@@ -29,6 +30,11 @@ import { propLabel } from "./prop-label";
  * edited on the canvas, and a number or a choice is the component's design.
  */
 const SETTING_KINDS: ReadonlySet<string> = new Set(["text", "link", "image"]);
+
+/** The props a link's entry reference is stored in, set with its address. */
+const ENTRY_LINK_NAMES: ReadonlySet<string> = new Set(
+  Object.values(ENTRY_LINK_PROPS)
+);
 
 /**
  * One prop of the component a placement may make a setting.
@@ -107,6 +113,9 @@ function candidatesOf(
   for (const [propPath, schema] of Object.entries(declared)) {
     if (schema === undefined) continue;
     if (!SETTING_KINDS.has(bindablePropKind(schema) ?? "")) continue;
+    // Content only: what the page shows, never a setting of how it is
+    // linked or drawn. A link's entry reference is set with its address.
+    if (schema.role !== "content" || ENTRY_LINK_NAMES.has(propPath)) continue;
     // Already a setting, or already showing data of its own.
     if (taken.has(`${node.id}\u0000${propPath}`)) continue;
     if (Object.hasOwn(bound, propPath)) continue;

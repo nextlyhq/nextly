@@ -84,8 +84,11 @@ export function MakeSettingSection(
     () => settingCandidates(props.definition),
     [props.definition]
   );
+  // Said by the section, not the row: a setting made leaves the list, as
+  // it is a setting now, and its row with it.
+  const [note, setNote] = React.useState<MadeNote | null>(null);
   if (props.services?.makeComponentSetting === undefined) return null;
-  if (candidates.length === 0) return null;
+  if (candidates.length === 0 && note === null) return null;
   return (
     <section aria-labelledby={headingId}>
       <h3 id={headingId} className="nx-inspector__heading">
@@ -100,9 +103,11 @@ export function MakeSettingSection(
             key={`${props.nodeId}:${candidate.nodeId}:${candidate.propPath}`}
             placement={props}
             candidate={candidate}
+            onNote={setNote}
           />
         ))}
       </div>
+      {note === null ? null : <RowNote note={note} />}
     </section>
   );
 }
@@ -111,12 +116,15 @@ export function MakeSettingSection(
 function CandidateRow({
   placement,
   candidate,
+  onNote,
 }: {
   placement: MakeSettingPlacement;
   candidate: SettingCandidate;
+  /** Say what a pick came to, under the section. */
+  onNote: (note: MadeNote) => void;
 }): React.JSX.Element {
   const [open, setOpen] = React.useState(false);
-  const [note, setNote] = React.useState<MadeNote | null>(null);
+  const setNote = onNote;
   const [pending, setPending] = React.useState(false);
   // The document as the editor holds it when the host answers: the bind is
   // planned against that, so an edit made meanwhile stays.
@@ -145,8 +153,7 @@ function CandidateRow({
     } catch {
       answer = { refusal: "The setting could not be added. Try again." };
     }
-    if (!mounted.current) return;
-    setPending(false);
+    if (mounted.current) setPending(false);
     if ("refusal" in answer) {
       setNote({ text: answer.refusal, tone: "refused" });
       return;
@@ -215,7 +222,6 @@ function CandidateRow({
           />
         </PopoverContent>
       </Popover>
-      {note === null ? null : <RowNote note={note} />}
     </div>
   );
 }
