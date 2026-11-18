@@ -86,6 +86,33 @@ describe("the theme (resolver) file", () => {
     });
   });
 
+  it("reads the token file's text styles and site data through its theme file", () => {
+    const withExtras: SiteTokenSet = {
+      ...SET,
+      siteText: { body: { fontFamily: { $token: "font.body" } } },
+      fluidRange: { min: 320, max: 1440 },
+    };
+    const eyebrow = {
+      id: "ts-eyebrow",
+      slug: "eyebrow",
+      orderIndex: 0,
+      role: "text" as const,
+      styles: { base: { base: { fontSize: "0.75rem" } } },
+    };
+    const file = tokensToDtcg(withExtras, { textStyles: [eyebrow] }).document;
+    const { resolver } = tokensToResolver(withExtras, "site.tokens.json");
+    const back = resolverToTokens(
+      resolver,
+      new Map([["site.tokens.json", JSON.parse(JSON.stringify(file))]])
+    );
+    expect(back.issues).toEqual([]);
+    expect(back.site).toEqual({
+      siteText: withExtras.siteText,
+      fluidRange: withExtras.fluidRange,
+    });
+    expect(back.textStyles).toEqual([eyebrow]);
+  });
+
   it("names a source file it was not given", () => {
     const { resolver } = tokensToResolver(SET, "site.tokens.json");
     const back = resolverToTokens(resolver, new Map());

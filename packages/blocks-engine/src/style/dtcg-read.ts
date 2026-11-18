@@ -52,6 +52,49 @@ export function isReservedKey(key: string): boolean {
 }
 
 /**
+ * A token's group and fluid sizes from this system's own extension: each
+ * taken in the shape a site stores, and named and left out otherwise.
+ */
+function statedShown(
+  own: unknown,
+  name: string,
+  issues: ValidationIssue[]
+): Pick<SiteToken, "group" | "fluid"> {
+  if (!isPlainObject(own)) return {};
+  const shown: { group?: string; fluid?: { small: number; large: number } } =
+    {};
+  const { group, fluid } = own;
+  if (group !== undefined) {
+    if (typeof group === "string" && group.trim() !== "") shown.group = group;
+    else {
+      issues.push(
+        issue(`"${name}" has a group that is not a name, so it was ignored.`)
+      );
+    }
+  }
+  if (fluid !== undefined) {
+    if (
+      isPlainObject(fluid) &&
+      typeof fluid.small === "number" &&
+      typeof fluid.large === "number" &&
+      Number.isFinite(fluid.small) &&
+      Number.isFinite(fluid.large) &&
+      fluid.small > 0 &&
+      fluid.large > 0
+    ) {
+      shown.fluid = { small: fluid.small, large: fluid.large };
+    } else {
+      issues.push(
+        issue(
+          `"${name}" has fluid sizes that are not two sizes in px, so they were ignored.`
+        )
+      );
+    }
+  }
+  return shown;
+}
+
+/**
  * Whether a string names a token or a group: not blank, not reserved, and free
  * of what a name may not contain.
  *
@@ -430,6 +473,7 @@ export function readToken(
   const id = stated === name ? undefined : stated;
 
   const label = statedLabelOf(own, name, issues);
+  const shown = statedShown(own, name, issues);
 
   // The cap, now that the identity is settled. Held here rather than on either
   // field alone because the identity is what a stylesheet is written under: a
@@ -476,6 +520,8 @@ export function readToken(
       kind,
       values,
       ...(description !== undefined ? { description } : {}),
+      ...(shown.fluid !== undefined ? { fluid: shown.fluid } : {}),
+      ...(shown.group !== undefined ? { group: shown.group } : {}),
       ...(carried !== undefined ? { extensions: carried } : {}),
       ...(unread !== undefined ? { unreadExtension: unread } : {}),
     };

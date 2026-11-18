@@ -2323,10 +2323,8 @@ describe("every variable, whatever the format can type", () => {
     expect(issues).toEqual([]);
     const read = dtcgToTokens(file);
     expect(read.issues).toEqual([]);
-    // A colour's display group is not written to the file yet, so the
-    // comparison leaves it out; every value still reads back exactly.
-    const ungrouped = ALL.map(({ group: _group, ...token }) => token);
-    expect(byName(read.tokens)).toEqual(byName(ungrouped));
+    // Every field, a colour's display group included.
+    expect(byName(read.tokens)).toEqual(byName(ALL));
   });
 
   it("keeps a default site's spacing, fluid and em sizes included", () => {
@@ -2365,12 +2363,7 @@ describe("every variable, whatever the format can type", () => {
       (file.$extensions as DtcgNode)[NEXTLY_EXTENSION] as DtcgNode
     ).variables as DtcgNode;
     expect(Object.keys(carried).sort()).toEqual(
-      [
-        "gap.em",
-        "gap.half",
-        "misc.ratio",
-        "space.paragraph",
-      ].sort()
+      ["gap.em", "gap.half", "misc.ratio", "space.paragraph"].sort()
     );
     // A shadow whose CSS reads as fields is a DTCG shadow token.
     expect(((file.shadow as DtcgNode).card as DtcgNode).$type).toBe("shadow");

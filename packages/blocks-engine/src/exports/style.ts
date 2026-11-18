@@ -210,7 +210,7 @@ export {
   tokensToFigma,
   tokensToResolver,
 } from "../style/dtcg-modes";
-export type { ModeFile } from "../style/dtcg-modes";
+export type { ModeFile, ModesRead } from "../style/dtcg-modes";
 // Whether two tokens say the same thing: one answer for a stored override and
 // for an editor's Reset.
 export { sameJsonValue, sameSiteToken } from "../style/same-token";
@@ -222,6 +222,7 @@ export { isRawColour } from "../style/raw-colour";
 export {
   GENERIC_FONT_FAMILIES,
   NEXTLY_EXTENSION,
+  TEXT_STYLES_GROUP,
   dtcgToTokens,
   isKind,
   resolveAliases,
@@ -232,6 +233,8 @@ export {
 } from "../style/dtcg";
 export type {
   DtcgNode,
+  DtcgSiteData,
+  TokensToDtcgOptions,
   FamilyListKind,
   FamilyListReading,
   FamilyPart,

@@ -28,6 +28,8 @@ import {
   readFamilyList,
   tokensToDtcg,
   type DtcgNode,
+  NEXTLY_EXTENSION,
+  TEXT_STYLES_GROUP,
 } from "./dtcg";
 import type { SiteToken, SiteTokenSet, TokenMode } from "./site-tokens";
 
@@ -73,15 +75,10 @@ export function tokensToResolver(
       values: { light: token.values.dark },
     });
   }
-  // The dark shadows' colour variables are named as aliases to the light
-  // file's, which a reader of the theme resolves to their dark values.
-  const dark = tokensToDtcg(
-    {
-      tokens: darkTokens,
-      ...(set.prefix === undefined ? {} : { prefix: set.prefix }),
-    },
-    { references: set.tokens }
-  );
+  // Without the light file's variables: a dark shadow naming a colour
+  // variable has no value a reader of the theme alone resolves, so it stays
+  // in the token file's extension, exactly.
+  const dark = tokensToDtcg({ tokens: darkTokens });
   stripExtensions(dark.document);
   // The document's own extension too: it carries the variables the format
   // cannot type, whose dark values the token file's extension already holds
@@ -120,7 +117,7 @@ export function tokensToResolver(
 export function resolverToTokens(
   resolver: unknown,
   files: ReadonlyMap<string, unknown>
-): { tokens: SiteToken[]; issues: ValidationIssue[] } {
+): ModesRead {
   const issues: ValidationIssue[] = [];
   if (!isRecord(resolver) || typeof resolver.version !== "string") {
     return {
@@ -144,13 +141,20 @@ export function resolverToTokens(
           mergeSources(modes.dark, files, issues)
         );
   const read = combineModes(light, dark);
-  return { tokens: read.tokens, issues: [...issues, ...read.issues] };
+  return { ...read, issues: [...issues, ...read.issues] };
 }
 
-/** A token tree without its own root `$extensions`. */
+/**
+ * A token tree without its own root `$extensions`, nor the typography values
+ * written beside the text styles those extensions keep: the light tree reads
+ * the kept copy, and a dark tree has no text styles of its own.
+ */
 function withoutRootExtensions(tree: DtcgNode): DtcgNode {
-  const { $extensions: _extensions, ...rest } = tree;
-  return rest;
+  const { $extensions: extensions, ...rest } = tree;
+  const own = isRecord(extensions) ? extensions[NEXTLY_EXTENSION] : undefined;
+  if (!isRecord(own) || !("textStyles" in own)) return rest;
+  const { [TEXT_STYLES_GROUP]: _styles, ...tokens } = rest;
+  return tokens;
 }
 
 /** The sources of every set, in the order the theme file resolves them. */
@@ -325,10 +329,7 @@ export function modeFilesToTokens(files: readonly ModeFile[]): {
  * A token only the dark document holds is named and skipped: every token needs
  * a light value.
  */
-function combineModes(
-  light: unknown,
-  dark: unknown
-): { tokens: SiteToken[]; issues: ValidationIssue[] } {
+function combineModes(light: unknown, dark: unknown): ModesRead {
   const lightRead = dtcgToTokens(light);
   if (dark === undefined) return lightRead;
   const darkRead = dtcgToTokens(dark);
@@ -380,8 +381,20 @@ function combineModes(
       )
     );
   }
-  return { tokens, issues };
+  // The site's data and text styles come from the light file, which holds
+  // the token file's own extension.
+  return {
+    ...(lightRead.site === undefined ? {} : { site: lightRead.site }),
+    ...(lightRead.textStyles === undefined
+      ? {}
+      : { textStyles: lightRead.textStyles }),
+    tokens,
+    issues,
+  };
 }
+
+/** What a set of files reads as: the variables, and what the file keeps beside them. */
+export type ModesRead = ReturnType<typeof dtcgToTokens>;
 
 /* ---------------------------------------------------------------- For Figma */
 
