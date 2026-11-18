@@ -52,7 +52,9 @@ before, and the block panel shows it that way. The stored shape is additive
 and stays at version 1. The published HTML changes: each summary carries a
 part class (a 44px minimum height and a focus ring in the text's colour), a
 One at a time accordion's `<details>` carry a `name` attribute, and the
-default icon is the plus, which a stored "Browser default" now draws as well.
+default icon is the plus, so a stored accordion that never set an icon, and
+one storing "Browser default", now draws the plus where it drew a chevron or
+the browser's marker.
 The stylesheet encoding moves to v13, since a stored "browser" icon now
 compiles differently, so every stored sheet compiles again once.
 

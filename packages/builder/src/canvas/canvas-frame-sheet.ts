@@ -35,7 +35,10 @@ import {
   ENTRY_CONTENT_NOTE_ATTRIBUTE,
 } from "@nextlyhq/blocks-react";
 
-import { QUESTION_ROOM_ATTRIBUTE } from "../accordion-questions";
+import {
+  QUESTION_ROOM_ATTRIBUTE,
+  QUESTION_ROOM_PROPERTY,
+} from "../accordion-questions";
 import { GALLERY_BLOCK } from "../gallery-pictures";
 import { CANVAS_ROOT_CLASS } from "../shell-state";
 
@@ -260,12 +263,12 @@ ${EMPTY_CONTAINER_SELECTOR} {
    EMPTY_DISCLOSURE_SELECTOR); the published page draws nothing there. */
 /* The selected Accordion's row of room after its last question, where
    "+ Add a question" sits (accordion-add-question.tsx): inside its own box,
-   so its margins and the blocks around it stay as set. 44px, the button's
-   height. Marked by the canvas only; a published page never has it. */
+   so its margins and the blocks around it stay as set. The button's height
+   at the canvas's zoom. Marked by the canvas only; a published page never has it. */
 ${ROOT} [${QUESTION_ROOM_ATTRIBUTE}]::after {
   content: "";
   display: block;
-  min-height: 2.75rem;
+  min-height: var(${QUESTION_ROOM_PROPERTY}, 2.75rem);
 }
 ${EMPTY_DISCLOSURE_SELECTOR}::after {
   content: "";

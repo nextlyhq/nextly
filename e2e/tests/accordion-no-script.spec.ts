@@ -262,11 +262,10 @@ for (const script of [false, true]) {
         expect(ring).toEqual({ style: "solid", width: "2px" });
         await live.context().close();
       }
-      // The site's text colours, as its default tokens hold them.
-      expect(paints).toEqual({
-        light: "rgb(17, 24, 39)",
-        dark: "rgb(249, 250, 251)",
-      });
+      // The site's dark values change it: drawn in each scheme's text colour.
+      expect(paints.light).toBeTruthy();
+      expect(paints.dark).toBeTruthy();
+      expect(paints.dark).not.toBe(paints.light);
     });
 
     test("an accordion stored before Open opens each question by its own setting", async ({

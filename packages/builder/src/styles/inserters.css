@@ -422,10 +422,12 @@
 
 .nx-add-question__button {
   position: absolute;
+  box-sizing: border-box;
   display: inline-flex;
   align-items: center;
   gap: 0.375rem;
-  min-height: 2.75rem;
+  /* The room the canvas makes for it (accordion-add-question.tsx). */
+  height: 44px;
   padding: 0 0.75rem;
   pointer-events: auto;
   border: 1px solid transparent;

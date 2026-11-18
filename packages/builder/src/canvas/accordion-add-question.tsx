@@ -36,7 +36,9 @@ import {
   numberedForPlace,
   QUESTION_BLOCK,
   QUESTION_ROOM_ATTRIBUTE,
+  QUESTION_ROOM_PROPERTY,
 } from "../accordion-questions";
+import { isHTMLElement } from "../dom-kind";
 import type { EditorState } from "../editor-state";
 import type { Rect } from "../geometry";
 import type { BuilderOp } from "../op-vocabulary";
@@ -137,19 +139,37 @@ function sameRect(a: Rect | null, b: Rect | null): boolean {
  * the author set them. Written only when it changes, since the canvas
  * watches the page's attributes and measures again.
  */
-function markRoom(holder: { current: Element | null }, element: Element) {
+function markRoom(
+  holder: { current: Element | null },
+  element: Element,
+  scale: number
+) {
   if (holder.current !== element) {
-    holder.current?.removeAttribute(QUESTION_ROOM_ATTRIBUTE);
+    unmarkRoom(holder);
     holder.current = element;
   }
   if (!element.hasAttribute(QUESTION_ROOM_ATTRIBUTE)) {
     element.setAttribute(QUESTION_ROOM_ATTRIBUTE, "");
   }
+  // The room as tall as the button at the canvas's zoom: the button keeps
+  // its own size over a zoomed page, so the page's pixels are scaled back.
+  // A custom property only, which no author value is overridden by.
+  const height = `${String(ROOM_PX / (scale > 0 ? scale : 1))}px`;
+  if (
+    isHTMLElement(element) &&
+    element.style.getPropertyValue(QUESTION_ROOM_PROPERTY) !== height
+  ) {
+    element.style.setProperty(QUESTION_ROOM_PROPERTY, height);
+  }
 }
 
 /** Take the room back from the accordion last given it. */
 function unmarkRoom(holder: { current: Element | null }): void {
-  holder.current?.removeAttribute(QUESTION_ROOM_ATTRIBUTE);
+  const element = holder.current;
+  element?.removeAttribute(QUESTION_ROOM_ATTRIBUTE);
+  if (isHTMLElement(element)) {
+    element.style.removeProperty(QUESTION_ROOM_PROPERTY);
+  }
   holder.current = null;
 }
 
@@ -200,7 +220,7 @@ export function AccordionAddQuestion({
       setPlace(current => (current === null ? current : null));
       return;
     }
-    markRoom(room, block);
+    markRoom(room, block, space.scale);
     const visible = visiblePartOf(block, space.root);
     const rect =
       visible === null || visible === "hidden" ? null : space.place(visible);
@@ -261,7 +281,7 @@ export function AccordionAddQuestion({
           // In the room at the foot of the accordion, at the canvas's zoom.
           style={{
             left: place.rect.x,
-            top: place.rect.y + place.rect.height - ROOM_PX * place.scale,
+            top: place.rect.y + place.rect.height - ROOM_PX,
           }}
           onClick={event => {
             // Kept off the canvas, which would select what lies under it.
