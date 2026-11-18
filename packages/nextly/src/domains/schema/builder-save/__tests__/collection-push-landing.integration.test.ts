@@ -250,6 +250,63 @@ for (const dialect of getConfiguredTestDialects()) {
       expect(await standing()).toEqual(before);
     }, 60_000);
 
+    // The title every entry carries is kept out of the stored fields, so the stored list never
+    // names it: made unique, it is still a field the table already holds, whose values may repeat.
+    // On its own the change runs through the save writer; beside the switch the push applies it.
+    const titleUnique = { ...text("title"), unique: true };
+    for (const [how, fields] of [
+      ["on its own", [titleUnique, text("code"), author(false)]],
+      [
+        "beside a change the push applies",
+        [titleUnique, text("code"), author(true), text("body")],
+      ],
+    ] as const) {
+      it(`refuses a title made unique over entries that share one, ${how}, and leaves nothing`, async () => {
+        for (const code of ["one", "two"]) {
+          await t.nextly.create({
+            collection: "posts",
+            data: { title: "Same", code },
+          } as never);
+        }
+        const before = await standing();
+
+        await expect(save([...fields])).rejects.toMatchObject({
+          code: "VALIDATION_ERROR",
+          publicData: {
+            errors: [
+              expect.objectContaining({
+                path: "fields.title",
+                code: "UNIQUE_OVER_DUPLICATES",
+              }),
+            ],
+          },
+        });
+
+        expect(await standing()).toEqual(before);
+      }, 60_000);
+
+      // Titles that differ are made unique: the check refuses repeats, never the title itself.
+      it(`makes a title unique where no two entries share one, ${how}`, async () => {
+        for (const [title, code] of [
+          ["One", "one"],
+          ["Two", "two"],
+        ]) {
+          await t.nextly.create({
+            collection: "posts",
+            data: { title, code },
+          } as never);
+        }
+
+        await expect(save([...fields])).resolves.toBeDefined();
+        await expect(
+          t.nextly.create({
+            collection: "posts",
+            data: { title: "One", code: "three" },
+          } as never)
+        ).rejects.toBeDefined();
+      }, 60_000);
+    }
+
     /**
      * The test's seam on the push's statement executor, with no production hook: every statement
      * the push sends, across its calls, is noted; the first runs, which MySQL commits, SQLite's push

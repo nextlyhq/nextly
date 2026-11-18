@@ -33,6 +33,7 @@ import { NextlyError } from "../../../errors";
 import { getProductionNotifier } from "../../../runtime/notifications/index";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { consoleLogger } from "../../../shared/types";
+import { withSystemTextFields } from "../../collections/system-text-fields";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import {
   appLanguageOrder,
@@ -469,7 +470,13 @@ export async function refuseUniqueOverRepeats(args: {
     adapter.dialect,
     [tableName]
   );
-  const oldFields = onMain(args.oldFields ?? [], args.wasLocalized);
+  // The stored fields leave out the `title` and `slug` every table is built with, so they are added
+  // back: a title made unique is then a column the table holds, whose repeats are counted, not a
+  // field the save adds, which every entry would hold as NULL. One the author declared stays theirs.
+  const oldFields = onMain(
+    withSystemTextFields(args.oldFields ?? []),
+    args.wasLocalized
+  );
   const newFields = onMain(args.newFields, args.isLocalized);
   const refusals = await refusalsForCollectionSave({
     adapter,
