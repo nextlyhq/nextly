@@ -70,12 +70,68 @@ export function providerRead(
   return { id: found ? providerId : null, type, origin };
 }
 
+/** Databases known to hold the providers table, by their Drizzle handle. */
+const PROVIDERS_PRESENT = new WeakMap<object, true>();
+
+/** The Drizzle surface the presence check needs. */
+interface ProbeDb {
+  select(fields: Record<string, unknown>): {
+    from(table: unknown): { limit(count: number): PromiseLike<unknown[]> };
+  };
+}
+
+/** Whether a thrown database error says a table does not exist. */
+function missingTable(error: unknown): boolean {
+  const texts: string[] = [];
+  for (
+    let current: unknown = error, depth = 0;
+    current instanceof Error && depth < 5;
+    current = current.cause, depth += 1
+  ) {
+    texts.push(current.message);
+  }
+  return /no such table|does not exist|doesn't exist/i.test(texts.join(" "));
+}
+
+/**
+ * Whether the database holds the providers table. A SQLite database built by
+ * the core-tables fallback has the delivery log before it has providers, and
+ * a statement naming a table that isn't there fails outright; with no table,
+ * no provider row exists, and every record's provider reads that way. Only a
+ * found table is remembered, so one created later is seen.
+ */
+export async function providersTablePresent(
+  db: ProbeDb,
+  dialect: string
+): Promise<boolean> {
+  if (PROVIDERS_PRESENT.has(db)) return true;
+  const providers = loadedDialect(dialect).tables.emailProviders;
+  try {
+    await db
+      .select({ one: sql`1` })
+      .from(providers)
+      .limit(1);
+  } catch (error) {
+    if (missingTable(error)) return false;
+    throw error;
+  }
+  PROVIDERS_PRESENT.set(db, true);
+  return true;
+}
+
 /**
  * Whether a record's provider row exists now: selected with the record, and
  * the test the origin filter makes. The id is compared as text on
  * PostgreSQL, where the queue keeps it as text and the providers as a uuid.
+ * `present` is whether the providers table exists at all
+ * (`providersTablePresent`): without it, none does.
  */
-export function providerExists(table: OriginColumns, dialect: string): SQL {
+export function providerExists(
+  table: OriginColumns,
+  dialect: string,
+  present: boolean
+): SQL {
+  if (!present) return dialect === "postgresql" ? sql`false` : sql`0`;
   const providers = loadedDialect(dialect).tables.emailProviders;
   const asText = (value: SQL | Column) =>
     dialect === "postgresql" ? sql`${value}::text` : sql`${value}`;
@@ -99,10 +155,18 @@ interface OriginColumns {
 export function originCondition(
   table: OriginColumns,
   origin: FilterableOrigin,
-  dialect: string
+  dialect: string,
+  present: boolean
 ): SQL {
   const { providerId, providerOrigin } = table;
-  const exists = providerExists(table, dialect);
+  // Without the providers table no provider row exists: nothing is stored,
+  // and every recorded stored provider has been deleted since.
+  if (!present) {
+    if (origin === "stored") return sql`1 = 0`;
+    if (origin === "code") return eq(providerOrigin, "code");
+    return or(eq(providerOrigin, "stored"), isNotNull(providerId)) as SQL;
+  }
+  const exists = providerExists(table, dialect, present);
   if (origin === "stored") return exists;
   if (origin === "code") return eq(providerOrigin, "code");
   return and(

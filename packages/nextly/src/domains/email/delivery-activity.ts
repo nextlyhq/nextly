@@ -59,6 +59,7 @@ import {
   originCondition,
   providerExists,
   providerRead,
+  providersTablePresent,
   type FilterableOrigin,
   type ProviderRead,
 } from "./provider-origin";
@@ -527,6 +528,13 @@ export class EmailDeliveryActivity {
     return this.adapter.getDrizzle<ActivityDb>();
   }
 
+  /** Whether the providers table exists (`providersTablePresent`). */
+  private providersPresent(): Promise<boolean> {
+    return this.run(() =>
+      providersTablePresent(this.db as never, this.dialect)
+    );
+  }
+
   /** Run a read, turning a driver's failure into the API's error. */
   private async run<T>(read: () => PromiseLike<T>): Promise<T> {
     try {
@@ -613,6 +621,7 @@ export class EmailDeliveryActivity {
     limit: number
   ): Promise<QueueRow[]> {
     const queue = loadedDialect(this.dialect).tables.emailQueue;
+    const present = await this.providersPresent();
     return (await this.run(() =>
       this.db
         .select({
@@ -630,7 +639,7 @@ export class EmailDeliveryActivity {
           providerId: queue.providerId,
           providerOrigin: queue.providerOrigin,
           // Read with the row, as the origin filter tests it.
-          providerExists: providerExists(queue, this.dialect),
+          providerExists: providerExists(queue, this.dialect, present),
           createdAt: queue.createdAt,
           updatedAt: queue.updatedAt,
           settledAt: queue.settledAt,
@@ -845,6 +854,7 @@ export class EmailDeliveryActivity {
     limit: number
   ): Promise<ActivityEntry[]> {
     const queue = loadedDialect(this.dialect).tables.emailQueue;
+    const present = await this.providersPresent();
     const conditions = [
       stateCondition(queue, options.status),
       options.template ? eq(queue.templateSlug, options.template) : undefined,
@@ -856,7 +866,7 @@ export class EmailDeliveryActivity {
         ? sql`CAST(${queue.providerType} AS BINARY) = CAST(${options.providerType} AS BINARY)`
         : undefined,
       options.providerOrigin
-        ? originCondition(queue, options.providerOrigin, this.dialect)
+        ? originCondition(queue, options.providerOrigin, this.dialect, present)
         : undefined,
       options.from ? gte(queue.createdAt, options.from.getTime()) : undefined,
       options.to ? lte(queue.createdAt, options.to.getTime()) : undefined,

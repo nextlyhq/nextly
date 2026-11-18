@@ -85,6 +85,7 @@ import {
   originCondition,
   providerExists,
   providerRead,
+  providersTablePresent,
   type FilterableOrigin,
   type ProviderRead,
 } from "../provider-origin";
@@ -1013,6 +1014,12 @@ export class EmailDeliveryService extends BaseService {
   async list(
     options: ListDeliveriesOptions = {}
   ): Promise<EmailDeliveryRecord[]> {
+    let present: boolean;
+    try {
+      present = await providersTablePresent(this.db as never, this.dialect);
+    } catch (error) {
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
+    }
     const filters = [
       options.recipient !== undefined
         ? inArray(
@@ -1050,7 +1057,12 @@ export class EmailDeliveryService extends BaseService {
       options.id !== undefined ? eq(this.deliveries.id, options.id) : undefined,
       options.standalone ? this.standsAlone() : undefined,
       options.providerOrigin !== undefined
-        ? originCondition(this.deliveries, options.providerOrigin, this.dialect)
+        ? originCondition(
+            this.deliveries,
+            options.providerOrigin,
+            this.dialect,
+            present
+          )
         : undefined,
       options.queuedId !== undefined
         ? eq(this.deliveries.queuedId, options.queuedId)
@@ -1088,7 +1100,11 @@ export class EmailDeliveryService extends BaseService {
         .select({
           ...getTableColumns(this.deliveries),
           // Read with the row, as the origin filter tests it.
-          providerExists: providerExists(this.deliveries, this.dialect),
+          providerExists: providerExists(
+            this.deliveries,
+            this.dialect,
+            present
+          ),
         })
         .from(this.deliveries)
         .where(filters.length > 0 ? and(...filters) : undefined)
