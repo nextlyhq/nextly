@@ -171,7 +171,9 @@ export const pageBuilder = (
   const layouts = routesForLayouts(def);
   const bindings = routesForBindings(def, bindingReportDeps);
   const usage = routesForUsage(def);
-  const breakpoints = routesForBreakpoints(def, breakpointRemoval);
+  const breakpoints = routesForBreakpoints(def, breakpointRemoval, {
+    usageSourceOf,
+  });
   const siteCode = routesForSiteCode(def);
   const siteStyle = routesForSiteStyle(def, {
     usageSourceOf,
@@ -519,6 +521,7 @@ export const pageBuilder = (
         pages.pageCollection,
         breakpoints.siteSettings,
         breakpoints.siteBreakpoints,
+        breakpoints.siteCssPrefix,
         breakpoints.siteBreakpointRemoval,
         breakpoints.siteBreakpointUndo,
         breakpoints.siteBreakpointRemovalStatus,

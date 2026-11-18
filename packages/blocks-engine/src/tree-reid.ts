@@ -8,6 +8,7 @@
  */
 import { type BlockNode, renderedDomId } from "./document";
 import { remapFragmentBindings, remapFragmentProps } from "./fragment-refs";
+import { withListsRelinked } from "./list-binding-refs";
 import { isPlainRecord } from "./plain-record";
 import { defineEntry, ownEntry } from "./safe-record";
 import { insertNode, mapForest, newId } from "./tree-edits";
@@ -20,8 +21,18 @@ export function reidSubtree(node: BlockNode): BlockNode {
   // knows how to drop a cycle-closing entry, leave a malformed slot alone and
   // keep depth off the call stack, and a second traversal written here would be
   // a second set of answers to the same three questions.
-  const [rebuilt] = mapForest([node], reidOne);
-  return rebuilt ?? node;
+  const nodeIds = new Map<string, string>();
+  const rebuilt = mapForest([node], original => {
+    const copy = reidOne(original);
+    if (typeof original.id === "string") nodeIds.set(original.id, copy.id);
+    return copy;
+  });
+  // A second pass, once every id is known: a binding naming the list it reads
+  // follows a list this copy re-identified to its copy, so a duplicated outer
+  // list's blocks read the copy's entries rather than naming a list they are
+  // no longer inside.
+  const [linked] = mapForest(rebuilt, copy => withListsRelinked(copy, nodeIds));
+  return linked ?? node;
 }
 
 /**
@@ -223,7 +234,11 @@ export function reidForestWithMap(
   // first had not reached yet. Without it a copied `aria-labelledby` points at
   // the original's id, so the copy loses its accessible name — the same gap
   // composition has, closed the same way.
-  const linked = mapForest(rebuilt, copy => relinkOne(copy, domIds));
+  // The same pass points a binding naming the list it reads at the copy of
+  // that list, when this copy re-identified it.
+  const linked = mapForest(rebuilt, copy =>
+    withListsRelinked(relinkOne(copy, domIds), nodeIds)
+  );
   return { nodes: linked, nodeIds, domIds };
 }
 
@@ -544,7 +559,10 @@ function reidForestRestoringEach(
   // a new object once the rebuild puts its slots back, so it may not be the one
   // this pass is handed.
   const linked = mapForest(rebuilt, copy =>
-    relinkOne(copy, referenceAnswers(each.holders.get(copy.id), each))
+    withListsRelinked(
+      relinkOne(copy, referenceAnswers(each.holders.get(copy.id), each)),
+      each.nodeIds
+    )
   );
   return {
     nodes: linked,

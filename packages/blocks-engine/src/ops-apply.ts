@@ -171,12 +171,12 @@ function assertKeepsLayersLocks(
   // Refused rather than exempting the inverse from the lock: see the insert
   // branch of `applyOp`. With the lock ignored, the inverse is a remove the
   // same option lets through, so the round trip still holds.
-  if (op.kind === "insert") {
+  if (op.kind === "insert" || op.kind === "turnInto") {
     const lockedId = lockedWithin(op.node);
     if (lockedId !== undefined) {
       throw new OpError(
-        `insert: ${describe(lockedId)} arrives locked, and a locked node cannot be ` +
-          `removed — so this insert could never be undone. Unlock it before ` +
+        `${op.kind}: ${describe(lockedId)} arrives locked, and a locked node cannot be ` +
+          `removed — so this ${op.kind} could never be undone. Unlock it before ` +
           `adding it to the document.`
       );
     }
@@ -851,6 +851,9 @@ export function applyOp(
     case "code":
       return applyCode(document, op, limits);
 
+    case "turnInto":
+      return applyTurnInto(document, op, limits, options);
+
     default: {
       // The discriminant is exhausted above, so TypeScript never reaches this.
       // A JavaScript caller, a queued agent edit and a buffer written by a
@@ -865,6 +868,79 @@ export function applyOp(
       );
     }
   }
+}
+
+/**
+ * Apply a `turnInto` op: the block at `op.id` replaced by `op.node`, a block of
+ * another type under the same id, in the same place.
+ *
+ * Held to what `remove` and `insert` are held to, because it is both at once:
+ * the block that goes must be one an insert could put back (its inverse is
+ * this op carrying it), and the block that comes must be one an insert would
+ * take, with no id the rest of the document already uses. A block of the SAME
+ * type is refused: that is an `update`, and a history entry for it should say
+ * so.
+ */
+function applyTurnInto(
+  document: BlockDocument,
+  op: Extract<BuilderOp, { kind: "turnInto" }>,
+  limits: DocumentLimits,
+  options: ApplyOptions
+): AppliedOp {
+  const nodes = document.nodes;
+  assertNodeId(op.id, "turnInto");
+  const node = findNode(nodes, op.id);
+  const location = locateNode(nodes, op.id);
+  if (node === undefined || location === undefined) {
+    throw new OpError(
+      `turnInto: no node with id ${describe(op.id)} in the document.`
+    );
+  }
+  assertIdIsUnique(nodes, op.id, "turnInto");
+  assertNodeShape(op.node, "turnInto", limits);
+  if (op.node.id !== op.id) {
+    throw new OpError(
+      `turnInto: the new block's id ${describe(op.node.id)} is not ` +
+        `${describe(op.id)}. A block keeps its id when it is turned into ` +
+        `another type, so everything addressing it still finds it.`
+    );
+  }
+  if (op.node.type === node.type) {
+    throw new OpError(
+      `turnInto: ${describe(op.id)} is already a ${describe(node.type)}. ` +
+        `Changing its props is an update.`
+    );
+  }
+  // The block that goes is what the inverse puts back, so it must be one the
+  // same op would accept, as a remove's subtree must be insertable.
+  assertSubtreeIdsAreUnique(nodes, node, "turnInto");
+  assertNodeShape(node, "turnInto", SHAPE_ONLY_LIMITS);
+  if (location.parent !== undefined) {
+    assertIdIsUnique(nodes, location.parent.id, "turnInto");
+  }
+  assertWalkable(
+    measured(() => treeDepth([op.node]), "turnInto"),
+    "turnInto"
+  );
+  assertKeepsLayersLocks(nodes, op, options);
+  const at = positionOf(location);
+  const without = accepted(
+    nodes,
+    removeNode(nodes, op.id),
+    `turnInto: the document did not accept removing ${describe(op.id)}.`
+  );
+  const placed = accepted(
+    without,
+    insertNode(without, snapshot(op.node), at),
+    `turnInto: the document did not accept the new ${describe(op.node.type)} ` +
+      `in place of ${describe(op.id)}. It may carry an id the document ` +
+      `already uses.`
+  );
+  assertFitsCaps(document, withNodes(document, placed), "turnInto", limits);
+  return {
+    document: withNodes(document, placed),
+    inverse: { kind: "turnInto", id: op.id, node: snapshot(node) },
+  };
 }
 
 /**

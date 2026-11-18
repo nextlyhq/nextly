@@ -17,12 +17,21 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { CANVAS_ROOT_CLASS } from "./canvas";
 import { FORMAT_BAR_WORDS, FormatBar } from "./format-bar";
+import type { BlockDocument } from "@nextlyhq/blocks-engine";
+
+import {
+  BlockActionsContext,
+  type BlockActions,
+} from "../block-actions-context";
+import type { TurnIntoOffer } from "../turn-into-verb";
+
 import {
   createFormatBarStore,
   formatBar,
   formatBarShown,
   TEXT_FORMAT_ACTIONS,
   type FormatTarget,
+  type FormatTurnInto,
 } from "./format-bar-state";
 
 afterEach(() => {
@@ -35,11 +44,25 @@ afterEach(() => {
 /** The canvas the bar is drawn over, holding the words it serves. */
 let canvas: HTMLElement;
 
-/** Draws the bar in the canvas, as the overlay does. */
-function drawBar() {
+/**
+ * Draws the bar in the canvas, as the overlay does, under the editor's
+ * "Turn into" verbs when given.
+ */
+function drawBar(turnIntoIn?: BlockActions["turnIntoIn"]) {
   const layer = document.createElement("div");
   canvas.append(layer);
-  return render(<FormatBar />, { container: layer });
+  return render(
+    <BlockActionsContext.Provider
+      value={
+        turnIntoIn === undefined
+          ? null
+          : ({ turnIntoIn } as unknown as BlockActions)
+      }
+    >
+      <FormatBar />
+    </BlockActionsContext.Provider>,
+    { container: layer }
+  );
 }
 
 function serve(extra: Partial<FormatTarget> = {}) {
@@ -101,11 +124,12 @@ describe("the bar a Text is offered", () => {
   });
 
   it("draws Turn into once the host can turn the block into another", () => {
-    const turnInto = vi.fn();
+    const { turnInto, verbs } = turning();
     serve({ turnInto });
-    drawBar();
-    fireEvent.click(screen.getByRole("button", { name: "Turn into" }));
-    expect(turnInto).toHaveBeenCalled();
+    drawBar(verbs);
+    const button = screen.getByRole("button", { name: "Turn into" });
+    expect(button.getAttribute("aria-haspopup")).toBe("menu");
+    expect(button.getAttribute("aria-expanded")).toBe("false");
   });
 
   it("presses the editor's own bold and italic, and says which are on", () => {
@@ -301,6 +325,146 @@ describe("the keyboard", () => {
   });
 });
 
+/** The page a "Turn into" is judged on, and the one the finished edit leaves. */
+const TYPED = { formatVersion: 1, kind: "page", nodes: [] } as BlockDocument;
+const WRITTEN = {
+  ...TYPED,
+  nodes: [{ id: "t1", type: "core/text", version: 2, props: {} }],
+} as BlockDocument;
+
+/**
+ * A passage's "Turn into" and the editor's verbs for it: Rich text open,
+ * Heading open and saying what goes.
+ */
+function turning(heading: Partial<TurnIntoOffer> = {}) {
+  const offers: TurnIntoOffer[] = [
+    {
+      id: "turn-into-rich-text",
+      to: "core/rich-text",
+      name: "Rich text",
+      label: "Turn into Rich text",
+      enabled: true,
+    },
+    {
+      id: "turn-into-heading",
+      to: "core/heading",
+      name: "Heading",
+      label: "Turn into Heading",
+      enabled: true,
+      note: "Bold and links are removed",
+      ...heading,
+    },
+  ];
+  const finish = vi.fn((): BlockDocument | null => WRITTEN);
+  const turnInto: FormatTurnInto = {
+    nodeId: "t1",
+    typedPage: () => TYPED,
+    finish,
+  };
+  const choices = vi.fn((_page: BlockDocument, _id: string) => offers);
+  const run = vi.fn();
+  return { turnInto, finish, verbs: { choices, run }, choices, run };
+}
+
+describe("Turn into, in the bar", () => {
+  it("is not drawn without the editor's verbs", () => {
+    serve({ turnInto: turning().turnInto });
+    drawBar();
+    expect(screen.queryByRole("button", { name: "Turn into" })).toBeNull();
+  });
+
+  it("opens the choices, judged on the words typed, each saying what it removes", () => {
+    const { turnInto, verbs, choices } = turning();
+    serve({ turnInto });
+    drawBar(verbs);
+    fireEvent.click(screen.getByRole("button", { name: "Turn into" }));
+    const menu = screen.getByRole("menu", { name: "Turn into" });
+    const items = [...menu.querySelectorAll("[role='menuitem']")].map(
+      item => item.textContent
+    );
+    expect(items).toEqual(["Rich text", "HeadingBold and links are removed"]);
+    expect(choices.mock.calls[0]?.[0]).toBe(TYPED);
+    expect(choices.mock.calls[0]?.[1]).toBe("t1");
+  });
+
+  it("finishes the edit, then turns the block in the page it left", () => {
+    const { turnInto, verbs, run, finish } = turning();
+    serve({ turnInto });
+    drawBar(verbs);
+    fireEvent.click(screen.getByRole("button", { name: "Turn into" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /^Heading/ }));
+    expect(finish).toHaveBeenCalled();
+    expect(run.mock.calls[0]?.[0]).toBe(WRITTEN);
+    expect(run.mock.calls[0]?.slice(1)).toEqual(["t1", "core/heading"]);
+    expect(formatBar.get().turning).toBe(false);
+  });
+
+  it("turns nothing when the words typed could not be written", () => {
+    const { turnInto, verbs, run, finish } = turning();
+    finish.mockReturnValue(null);
+    serve({ turnInto });
+    drawBar(verbs);
+    fireEvent.click(screen.getByRole("button", { name: "Turn into" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /^Heading/ }));
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it("dims a choice that is not open, and says why", () => {
+    const { turnInto, verbs } = turning({
+      enabled: false,
+      reason: "Intro is locked, so nothing about it may change.",
+    });
+    serve({ turnInto });
+    drawBar(verbs);
+    fireEvent.click(screen.getByRole("button", { name: "Turn into" }));
+    const heading = screen.getByRole("menuitem", { name: /^Heading/ });
+    expect((heading as HTMLButtonElement).disabled).toBe(true);
+    expect(heading.textContent).toContain("Intro is locked");
+  });
+
+  it("keeps the focus in the choices when none is open, so Escape still goes back", () => {
+    const { turnInto, verbs, choices } = turning();
+    choices.mockReturnValue(
+      ["core/rich-text", "core/heading"].map(to => ({
+        id: "turn-into-heading" as const,
+        to,
+        name: to,
+        label: to,
+        enabled: false,
+        reason: "Only Text can sit here.",
+      }))
+    );
+    const { session } = serve({ turnInto });
+    drawBar(verbs);
+    fireEvent.click(screen.getByRole("button", { name: "Turn into" }));
+    const menu = screen.getByRole("menu");
+    expect(document.activeElement).toBe(menu);
+    fireEvent.keyDown(menu, { key: "Escape" });
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(session.focus).toHaveBeenCalled();
+  });
+
+  it("is placed again when the choices open, as they change its size", () => {
+    const { turnInto, verbs } = turning();
+    serve({ turnInto });
+    drawBar(verbs);
+    const measured = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect");
+    fireEvent.click(screen.getByRole("button", { name: "Turn into" }));
+    expect(measured).toHaveBeenCalled();
+    measured.mockRestore();
+  });
+
+  it("goes back to the words on Escape", () => {
+    const { turnInto, verbs } = turning();
+    const { session } = serve({ turnInto });
+    drawBar(verbs);
+    fireEvent.click(screen.getByRole("button", { name: "Turn into" }));
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(session.focus).toHaveBeenCalled();
+  });
+});
+
 describe("the notice a paste leaves", () => {
   it("says what a Text keeps, in one line, and goes when dismissed", () => {
     serve();
@@ -319,15 +483,16 @@ describe("the notice a paste leaves", () => {
     expect(screen.queryByRole("status")).toBeNull();
   });
 
-  it("offers Turn into Rich text once the host can", () => {
-    const turnInto = vi.fn();
+  it("offers Turn into Rich text once the host can, and turns the block", () => {
+    const { turnInto, verbs, run } = turning();
     serve({ turnInto });
-    drawBar();
+    drawBar(verbs);
     act(() => formatBar.setDropped(true));
     fireEvent.click(
       screen.getByRole("button", { name: "Turn into Rich text" })
     );
-    expect(turnInto).toHaveBeenCalled();
+    expect(run.mock.calls[0]?.[0]).toBe(WRITTEN);
+    expect(run.mock.calls[0]?.slice(1)).toEqual(["t1", "core/rich-text"]);
   });
 });
 

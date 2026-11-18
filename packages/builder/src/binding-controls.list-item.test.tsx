@@ -93,6 +93,15 @@ const POSTS: LoopCollection = {
   ],
 };
 
+/** The Categories collection, for a Posts list inside its entries. */
+const CATEGORIES: LoopCollection = {
+  slug: "categories",
+  label: "Categories",
+  singular: "Category",
+  fields: [],
+  readable: [{ name: "name", type: "text" }],
+};
+
 /** The list the block sits in, by its stored props. */
 const LIST_PROPS = { collection: "posts", limit: 3 };
 
@@ -104,8 +113,14 @@ function mount(
   bindings: BlockNode["bindings"],
   {
     inList = true,
+    inCategories = false,
     services = {},
-  }: { inList?: boolean; services?: Partial<ContentServices> } = {}
+  }: {
+    inList?: boolean;
+    /** The Posts list inside a Categories list's entry. */
+    inCategories?: boolean;
+    services?: Partial<ContentServices>;
+  } = {}
 ): { editor: EditorState; readListSample: ReturnType<typeof vi.fn> } {
   registerBlocks(
     [
@@ -136,10 +151,17 @@ function mount(
     props: LIST_PROPS,
     slots: { [LIST_ENTRY_SLOT]: [heading] },
   } as BlockNode;
+  const categories = {
+    id: "categories",
+    type: COLLECTION_LIST_TYPE,
+    version: 1,
+    props: { collection: "categories", limit: 3 },
+    slots: { [LIST_ENTRY_SLOT]: [list] },
+  } as BlockNode;
   const document = {
     formatVersion: 1,
     kind: "page",
-    nodes: [inList ? list : heading],
+    nodes: [inCategories ? categories : inList ? list : heading],
   } as BlockDocument;
   let current = document;
   const editor = {
@@ -166,7 +188,7 @@ function mount(
   }));
   const contentServices: ContentServices = {
     listBindingFields: async () => SOURCES,
-    listLoopCollections: async () => [POSTS],
+    listLoopCollections: async () => [POSTS, CATEGORIES],
     readListSample,
     ...services,
   };
@@ -271,5 +293,50 @@ describe("the field picker inside a collection list's item", () => {
     expect(marked).toHaveLength(1);
     expect(item.contains(marked[0] ?? null)).toBe(true);
     expect(marked[0]?.textContent).toMatch(/^Title/);
+  });
+
+  it("binds a pick of the OUTER list's field to that list, by its id", async () => {
+    const { editor } = mount(undefined, { inCategories: true });
+    const list = await openPicker();
+    fireEvent.click(
+      await within(
+        await within(list).findByRole("group", {
+          name: "Each category in the list",
+        })
+      ).findByRole("option", { name: /^Name/ })
+    );
+    const op = vi.mocked(editor.apply).mock.calls[0]?.[0] as BuilderOp;
+    expect(op).toMatchObject({
+      kind: "update",
+      id: "h",
+      patch: {
+        bindings: {
+          text: { $bind: "name", source: "item", list: "categories" },
+        },
+      },
+    });
+  });
+
+  it("names and marks an outer list's binding by that list", async () => {
+    mount(
+      { text: { $bind: "name", source: "item", list: "categories" } },
+      { inCategories: true }
+    );
+    const chip = await screen.findByRole("button", {
+      name: /^Text: bound to Name of each category/,
+    });
+    fireEvent.keyDown(chip, { key: "Enter" });
+    fireEvent.click(
+      await screen.findByRole("menuitem", { name: "Change field…" })
+    );
+    const list = await screen.findByRole("listbox", {
+      name: "Fields for Text",
+    });
+    const outer = await within(list).findByRole("group", {
+      name: "Each category in the list",
+    });
+    const marked = list.querySelectorAll("[data-current]");
+    expect(marked).toHaveLength(1);
+    expect(outer.contains(marked[0] ?? null)).toBe(true);
   });
 });
