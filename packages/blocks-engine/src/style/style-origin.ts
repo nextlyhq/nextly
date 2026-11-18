@@ -27,6 +27,7 @@
 
 import type { StyleState } from "../document";
 
+import { SITE_TEXT_ROOT } from "./site-text";
 import type { StyleTraceEntry } from "./style-trace";
 
 /**
@@ -103,12 +104,16 @@ function weightOf(entry: StyleTraceEntry): readonly [number, number, number] {
   switch (origin.kind) {
     // Anchored to one class, everything else inside `:where()`. A descendant
     // adds nothing, which is the whole point of the wrapper.
+    // The page root's own text (Site text's Body) lands on the root, so a
+    // block reads it by inheritance, on the single root class: below the
+    // page's values, which are written on the doubled one.
     case "element":
+      return origin.tag === SITE_TEXT_ROOT ? [INHERITED, 1, 0] : [DIRECT, 1, 0];
     case "blockType":
       return [DIRECT, 1, 0];
     case "page":
       return entry.descendant === undefined
-        ? [INHERITED, 0, 0]
+        ? [INHERITED, 2, 0]
         : [DIRECT, ...descendantWeight(entry.descendant, 2)];
     // The doubled root plus the node's or class's own class.
     case "node":
@@ -176,6 +181,28 @@ function outranks(
 }
 
 /**
+ * Whether a class's rule lands on the node: a class it applies, a look only on
+ * its own block type, and a type's ★ look on a block of the type that applies
+ * none of the type's looks, as the compiler's ★ rule selects it.
+ */
+function classReaches(
+  origin: Extract<StyleTraceEntry["origin"], { kind: "class" }>,
+  subject: Pick<StyleSubject, "blockType" | "classIds">
+): boolean {
+  const applied = subject.classIds ?? [];
+  if (origin.unlessWearing !== undefined) {
+    return (
+      origin.blockType === subject.blockType &&
+      !origin.unlessWearing.some(id => applied.includes(id))
+    );
+  }
+  return (
+    applied.includes(origin.id) &&
+    (origin.blockType === undefined || origin.blockType === subject.blockType)
+  );
+}
+
+/**
  * Whether an entry's origin reaches this node directly.
  *
  * Directly means the selector lands on the node's own element: its own rules, a class it applies,
@@ -195,21 +222,28 @@ function reachesNode(entry: StyleTraceEntry, subject: StyleSubject): boolean {
     // the subject names, because a subject has no way to say which part it is:
     // the answer would have to be guessed, and the quiet answer is the one this
     // module already gives a caller that cannot state its tag.
+    //
+    // A default written for one block of the type (a Section's padding
+    // preset) reaches that block alone.
     case "blockType":
-      return origin.part === undefined && origin.type === subject.blockType;
-    case "class":
       return (
-        (subject.classIds ?? []).includes(origin.id) &&
-        // A look only on its own block type, as the compiler applies it.
-        (origin.blockType === undefined ||
-          origin.blockType === subject.blockType)
+        origin.part === undefined &&
+        origin.type === subject.blockType &&
+        (origin.node === undefined || origin.node === subject.nodeId)
       );
+    case "class":
+      return classReaches(origin, subject);
     // The baseline lands on the ELEMENT, so only a node rendering that element
     // is wearing it. A subject that does not state its tag gets `false`: the
     // tag lives in a block's render, and a caller that cannot say is answered
     // quietly rather than told a heading's baseline styles its paragraph.
+    //
+    // The page root's own text is the exception: every node sits under it.
     case "element":
-      return subject.tag !== undefined && origin.tag === subject.tag;
+      return (
+        origin.tag === SITE_TEXT_ROOT ||
+        (subject.tag !== undefined && origin.tag === subject.tag)
+      );
   }
 }
 

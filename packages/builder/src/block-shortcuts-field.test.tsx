@@ -74,6 +74,10 @@ function mount(
         supports: { dimensions: true, spacing: true },
         baseStyles: { base: { base: { padding } } },
       }),
+      block("core/icon", {
+        supports: { dimensions: true, typography: true },
+        baseStyles: { base: { base: { fontSize: "1.5rem" } } },
+      }),
     ] as never,
     { source: "block-shortcuts-field-test" }
   );
@@ -119,22 +123,25 @@ function mount(
 
 /** Open a section of the panel by its heading. */
 function open(section: string): void {
-  const heading = screen.getByRole("button", {
-    name: new RegExp(`^${section}`),
-  });
+  // The section's heading is the button that folds: a control inside it may
+  // be named after the section too ("Background position: Top left").
+  const heading = screen
+    .getAllByRole("button", { name: new RegExp(`^${section}`) })
+    .find(button => button.hasAttribute("aria-expanded"));
+  if (heading === undefined) throw new Error(`No ${section} section heading`);
   if (heading.getAttribute("aria-expanded") !== "true")
     fireEvent.click(heading);
 }
 
-describe("a Section's Min height presets", () => {
-  it("are the Min height row while no min height draws the field", () => {
+describe("a Section's Height", () => {
+  it("is the Height row, Fit content or Full screen, while no min height draws the field", () => {
     const editor = mount("core/section");
     open("Size");
+    expect(screen.getByRole("radiogroup", { name: "Height" })).toBeDefined();
     expect(
-      screen.getByRole("radiogroup", { name: "Min height" })
-    ).toBeDefined();
-    expect(
-      screen.getByRole("radio", { name: "Auto" }).getAttribute("aria-checked")
+      screen
+        .getByRole("radio", { name: "Fit content" })
+        .getAttribute("aria-checked")
     ).toBe("true");
     fireEvent.click(screen.getByRole("radio", { name: "Full screen" }));
     expect(JSON.stringify(editor.apply.mock.calls[0]?.[0])).toContain(
@@ -142,7 +149,7 @@ describe("a Section's Min height presets", () => {
     );
   });
 
-  it("stand over the Min height field once it is drawn, one label for both", () => {
+  it("stands over the Min height field once it is drawn, one label on screen", () => {
     mount("core/section", {
       base: { [BASE_BREAKPOINT]: { minHeight: "100svh" } },
     });
@@ -152,9 +159,7 @@ describe("a Section's Min height presets", () => {
         .getByRole("radio", { name: "Full screen" })
         .getAttribute("aria-checked")
     ).toBe("true");
-    expect(
-      screen.getByRole("radiogroup", { name: "Min height presets" })
-    ).toBeDefined();
+    expect(screen.getByRole("radiogroup", { name: "Height" })).toBeDefined();
     // The field's label is the one on screen; no second "Height" row.
     expect(screen.getAllByText("Min height")).toHaveLength(1);
     const presets = document.querySelector('[data-control="section-height"]');
@@ -163,10 +168,11 @@ describe("a Section's Min height presets", () => {
   });
 });
 
-describe("a Section's Min height presets, chosen from the keyboard", () => {
-  it("keep focus on the chosen preset as the field they stand over comes and goes", () => {
+describe("a Section's Height, chosen from the keyboard", () => {
+  it("keeps focus on the chosen choice as the field it stands over comes and goes", () => {
     // A live editor: each write redraws the panel, so Full screen draws the
-    // Min height field and the presets move over it, and Auto moves them back.
+    // Min height field and the presets move over it, and Fit content moves
+    // them back.
     const editor = mount("core/section");
     let document = editor.document;
     const view = (): React.JSX.Element => (
@@ -183,23 +189,19 @@ describe("a Section's Min height presets, chosen from the keyboard", () => {
       rendered.rerender(view());
     }
     open("Size");
-    const auto = screen.getByRole("radio", { name: "Auto" });
-    auto.focus();
-    fireEvent.keyDown(auto, { key: "ArrowRight" });
-    expect(
-      screen.getByRole("radiogroup", { name: "Min height presets" })
-    ).toBeDefined();
+    const fitContent = screen.getByRole("radio", { name: "Fit content" });
+    fitContent.focus();
+    fireEvent.keyDown(fitContent, { key: "ArrowRight" });
+    expect(screen.getByRole("radiogroup", { name: "Height" })).toBeDefined();
     expect(globalThis.document.activeElement).toBe(
       screen.getByRole("radio", { name: "Full screen" })
     );
     fireEvent.keyDown(globalThis.document.activeElement as Element, {
       key: "ArrowLeft",
     });
-    expect(
-      screen.getByRole("radiogroup", { name: "Min height" })
-    ).toBeDefined();
+    expect(screen.getByRole("radiogroup", { name: "Height" })).toBeDefined();
     expect(globalThis.document.activeElement).toBe(
-      screen.getByRole("radio", { name: "Auto" })
+      screen.getByRole("radio", { name: "Fit content" })
     );
   });
 });
@@ -256,6 +258,39 @@ describe("a Button's Size and Full width", () => {
     expect(
       screen.getAllByText("button.padding-y × 0.75").length
     ).toBeGreaterThan(0);
+  });
+});
+
+describe("an Icon's Size", () => {
+  it("is in Size, Medium at the icon's own font size", () => {
+    mount("core/icon");
+    open("Size");
+    expect(
+      screen.getByRole("radio", { name: "Medium" }).getAttribute("aria-checked")
+    ).toBe("true");
+  });
+
+  it("writes the font size Large draws the glyph at", () => {
+    const editor = mount("core/icon");
+    open("Size");
+    fireEvent.click(screen.getByRole("radio", { name: "Large" }));
+    expect(JSON.stringify(editor.apply.mock.calls[0]?.[0])).toContain(
+      '"fontSize"'
+    );
+    expect(JSON.stringify(editor.apply.mock.calls[0]?.[0])).toContain(
+      '"2rem"'
+    );
+  });
+
+  it("says Custom for a font size set another way, choosing none", () => {
+    mount("core/icon", { base: { [BASE_BREAKPOINT]: { fontSize: "3rem" } } });
+    open("Size");
+    for (const name of ["Small", "Medium", "Large"]) {
+      expect(
+        screen.getByRole("radio", { name }).getAttribute("aria-checked")
+      ).toBe("false");
+    }
+    expect(screen.getByText(/^Custom:/)).toBeDefined();
   });
 });
 

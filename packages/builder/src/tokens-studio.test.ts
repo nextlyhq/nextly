@@ -15,6 +15,7 @@
 import {
   compileSiteSheet,
   emitTokenBlocks,
+  MAX_TOKEN_LABEL_LENGTH,
   tokenIdentity,
   type SiteTokenSet,
 } from "@nextlyhq/blocks-engine";
@@ -24,13 +25,20 @@ import {
   TOKEN_KIND_LABELS,
   addToken,
   addVariable,
+  duplicateVariable,
+  labelClashes,
   labelNewVariable,
   relabelToken,
   variableGroups,
+  variableMatchesByTab,
+  DESIGN_TAB_GROUPS,
   variableLabelIssue,
   clearDarkValue,
   removeToken,
   renameToken,
+  fluidRangeOf,
+  setFluidRange,
+  setFluidSize,
   setTokenValue,
   tokenNameIssue,
   tokenRowsFor,
@@ -38,6 +46,8 @@ import {
   LINE_HEIGHT_MIXED,
   DARK_FOLLOWS_LIGHT,
 } from "./tokens-studio";
+import { colourOrder } from "./colour-groups";
+import { fluidValue } from "./fluid-size";
 
 const BREAKPOINTS = { base: { id: "base", label: "Base" } } as never;
 
@@ -553,18 +563,64 @@ describe("variables, grouped as the Design panel shows them", () => {
       ])
     );
 
-  it("puts each variable in one of four groups, in the panel's order", () => {
+  it("puts each variable in one of eight groups, in the panel's order", () => {
     expect(variableGroups(SET).map(group => group.heading)).toEqual([
       "Colours",
       "Type scale",
-      "Spacing, radius & shadows",
-      "Other",
+      "Fonts and weights",
+      "Spacing",
+      "Radius",
+      "Shadows",
+      "Content width",
+      "Other values",
     ]);
+    // A font sits with the type, and only what belongs to no other group is
+    // an other value.
     expect(grouped()).toEqual({
       colours: ["Brand"],
       type: ["Body", "Loose"],
-      spacing: ["Space 4", "Card", "Card"],
-      other: ["Content width", "Body"],
+      fonts: ["Body"],
+      spacing: ["Space 4"],
+      radius: ["Card"],
+      shadows: ["Card"],
+      content: ["Content width"],
+      other: [],
+    });
+  });
+
+  it("lists each group under one Design tab", () => {
+    expect(DESIGN_TAB_GROUPS).toEqual({
+      colours: ["colours"],
+      type: ["type", "fonts"],
+      spacing: ["spacing", "radius", "shadows", "content", "other"],
+      styles: [],
+    });
+    // Every group is under exactly one tab.
+    const listed = Object.values(DESIGN_TAB_GROUPS).flat();
+    expect([...listed].sort()).toEqual(
+      variableGroups(SET)
+        .map(group => group.group)
+        .sort()
+    );
+  });
+
+  it("counts a search's matches per tab, by the names shown", () => {
+    // "Body" is a type size and a font: two in Type, none elsewhere.
+    expect(variableMatchesByTab(SET, "body")).toEqual({
+      colours: 0,
+      type: 2,
+      spacing: 0,
+    });
+    expect(variableMatchesByTab(SET, "card")).toEqual({
+      colours: 0,
+      type: 0,
+      spacing: 2,
+    });
+    // Code names are hidden, so they are not what a search matches.
+    expect(variableMatchesByTab(SET, "font-size")).toEqual({
+      colours: 0,
+      type: 0,
+      spacing: 0,
     });
   });
 
@@ -614,12 +670,16 @@ describe("variables, grouped as the Design panel shows them", () => {
     expect(emitTokenBlocks(made.tokens, ":root").issues).toEqual([]);
   });
 
-  it("adds spacing, radius and shadow to their shared group", () => {
-    for (const kind of ["spacing", "radius", "shadow"] as const) {
+  it("adds spacing, radius and shadow each to its own group", () => {
+    for (const [kind, group] of [
+      ["spacing", "spacing"],
+      ["radius", "radius"],
+      ["shadow", "shadows"],
+    ] as const) {
       const made = addVariable({ tokens: [] }, kind);
       expect(
         variableGroups(made.tokens).map(g => [g.group, g.entries.length])
-      ).toContainEqual(["spacing", 1]);
+      ).toContainEqual([group, 1]);
     }
   });
 
@@ -737,5 +797,311 @@ describe("a line height's two modes", () => {
     expect("tokens" in written && written.tokens.tokens[0]?.kind).toBe(
       "dimension"
     );
+  });
+});
+
+describe("a value is checked before it is accepted", () => {
+  const set: SiteTokenSet = {
+    tokens: [
+      { name: "space.4", kind: "dimension", values: { light: "1rem" } },
+      { name: "color.brand", kind: "color", values: { light: "#1d2b6b" } },
+      { name: "radius.md", kind: "dimension", values: { light: "6px" } },
+    ],
+  };
+
+  it("refuses a value the save would refuse, saying what is wrong and what to type", () => {
+    // The engine's own kind check, the one a save runs: a value refused here
+    // is never sent, and one accepted here is never refused for its kind.
+    expect(writeTokenValue(set, 0, "light", "12pxred")).toEqual({
+      issue:
+        '"12pxred" is measured in pxred, which is not a unit CSS knows, not a length. Type a number with a unit, such as 16px or 1.5rem.',
+    });
+    expect(writeTokenValue(set, 0, "light", "the spacing")).toEqual({
+      issue:
+        '"the spacing" is words, not a length. Type a number with a unit, such as 16px or 1.5rem.',
+    });
+    expect(writeTokenValue(set, 1, "light", "#12345")).toEqual({
+      issue:
+        '"#12345" is not a hex colour, which has 3, 4, 6 or 8 digits from 0-9 and a-f. Type a colour, such as #1d4ed8.',
+    });
+    // The dark value is held to the same rule.
+    expect("issue" in writeTokenValue(set, 1, "dark", "16px")).toBe(true);
+  });
+
+  it("adds px to a bare number in a length, and leaves zero and units alone", () => {
+    const light = (at: number, value: string): string | undefined => {
+      const written = writeTokenValue(set, at, "light", value);
+      return "tokens" in written
+        ? written.tokens.tokens[at]?.values.light
+        : undefined;
+    };
+    expect(light(0, "20")).toBe("20px");
+    expect(light(2, "4.5")).toBe("4.5px");
+    expect(light(0, "-8")).toBe("-8px");
+    expect(light(0, "0")).toBe("0");
+    expect(light(0, "2rem")).toBe("2rem");
+    expect(light(0, "clamp(1rem, 2vw, 2rem)")).toBe("clamp(1rem, 2vw, 2rem)");
+    // Not a length: a number stays a number.
+    expect(light(1, "20")).toBeUndefined();
+  });
+
+  it("accepts what the check cannot judge", () => {
+    expect(
+      "tokens" in writeTokenValue(set, 1, "light", "oklch(0.6 0.2 250)")
+    ).toBe(true);
+    expect("tokens" in writeTokenValue(set, 0, "light", "auto")).toBe(true);
+  });
+});
+
+describe("duplicating a variable", () => {
+  const base: SiteTokenSet = {
+    tokens: [
+      { name: "color.brand", kind: "color", values: { light: "#1d2b6b" } },
+    ],
+  };
+
+  it("names a second copy apart from the first", () => {
+    const once = duplicateVariable(base, 0, "Brand");
+    expect(once.tokens.tokens[once.at]?.label).toBe("Brand copy");
+    const twice = duplicateVariable(once.tokens, 0, "Brand");
+    expect(twice.tokens.tokens[twice.at]?.label).toBe("Brand copy 2");
+    expect(labelClashes(twice.tokens)).toEqual([]);
+  });
+
+  it("lists a copied colour right after the one it copies, where the site keeps an order", () => {
+    const set: SiteTokenSet = {
+      tokens: [
+        {
+          name: "color.brand",
+          kind: "color",
+          group: "Brand",
+          values: { light: "#111111" },
+        },
+        {
+          name: "color.accent",
+          kind: "color",
+          group: "Brand",
+          values: { light: "#222222" },
+        },
+        {
+          name: "color.text",
+          kind: "color",
+          group: "Text",
+          values: { light: "#333333" },
+        },
+      ],
+      order: ["color.accent", "color.brand", "color.text"],
+    };
+    // Accent is listed first in Brand, so the copy's place is beside it,
+    // not at the group's end.
+    const made = duplicateVariable(set, 1, "Accent");
+    const copy = made.tokens.tokens[made.at]?.name;
+    expect(copy).toBeDefined();
+    expect(colourOrder(made.tokens)).toEqual([
+      "color.accent",
+      copy,
+      "color.brand",
+      "color.text",
+    ]);
+  });
+
+  it("keeps a copied colour's place when its name, and so its code name, changes", () => {
+    const set: SiteTokenSet = {
+      tokens: [
+        {
+          name: "color.brand",
+          kind: "color",
+          group: "Brand",
+          values: { light: "#111111" },
+        },
+        {
+          name: "color.accent",
+          kind: "color",
+          group: "Brand",
+          values: { light: "#222222" },
+        },
+      ],
+      order: ["color.accent", "color.brand"],
+    };
+    const made = duplicateVariable(set, 1, "Accent");
+    const named = labelNewVariable(made.tokens, made.at, "Highlight");
+    expect(named.tokens[made.at]?.name).toBe("color.highlight");
+    expect(named.order).toEqual([
+      "color.accent",
+      "color.highlight",
+      "color.brand",
+    ]);
+  });
+
+  describe("a colour order naming a colour the site no longer has", () => {
+    const set: SiteTokenSet = {
+      tokens: [
+        {
+          name: "color.brand",
+          kind: "color",
+          group: "Brand",
+          values: { light: "#111111" },
+        },
+        {
+          name: "color.accent",
+          kind: "color",
+          group: "Brand",
+          values: { light: "#222222" },
+        },
+      ],
+      // A copy made and removed before: its name is free again.
+      order: [
+        "color.accent",
+        "color.accent-copy",
+        "color.highlight",
+        "color.brand",
+      ],
+    };
+    const once = (order: readonly string[] | undefined) =>
+      new Set(order).size === order?.length;
+
+    it("lists a new copy under that name once", () => {
+      const made = duplicateVariable(set, 1, "Accent");
+      expect(made.tokens.tokens[made.at]?.name).toBe("color.accent-copy");
+      expect(once(made.tokens.order)).toBe(true);
+      expect(colourOrder(made.tokens)).toEqual([
+        "color.accent",
+        "color.accent-copy",
+        "color.brand",
+      ]);
+    });
+
+    it("lists a copy once when it is named as the colour removed was", () => {
+      const made = duplicateVariable(set, 1, "Accent");
+      const named = labelNewVariable(made.tokens, made.at, "Highlight");
+      expect(named.tokens[made.at]?.name).toBe("color.highlight");
+      expect(once(named.order)).toBe(true);
+      expect(colourOrder(named)).toEqual([
+        "color.accent",
+        "color.highlight",
+        "color.brand",
+      ]);
+    });
+
+    it("lets a removed colour go from the order", () => {
+      const made = duplicateVariable(set, 1, "Accent");
+      expect(removeToken(made.tokens, made.at).order).not.toContain(
+        "color.accent-copy"
+      );
+    });
+  });
+
+  it("keeps a copy of a long name within the label limit", () => {
+    const long = "L".repeat(MAX_TOKEN_LABEL_LENGTH);
+    const set: SiteTokenSet = {
+      tokens: [{ ...base.tokens[0]!, label: long }],
+    };
+    const made = duplicateVariable(set, 0, long);
+    const label = made.tokens.tokens[made.at]?.label ?? "";
+    expect(label.length).toBeLessThanOrEqual(MAX_TOKEN_LABEL_LENGTH);
+    expect(label.endsWith(" copy")).toBe(true);
+    expect(variableLabelIssue(made.tokens, made.at, label)).toBeUndefined();
+  });
+});
+
+describe("a size made fluid from two sizes", () => {
+  const set: SiteTokenSet = {
+    tokens: [
+      { name: "font-size.lead", kind: "dimension", values: { light: "18px" } },
+    ],
+  };
+  const range = { min: 360, max: 1280 };
+
+  it("stores the value made from them and keeps the two sizes beside it", () => {
+    const made = setFluidSize(set, 0, { small: 16, large: 20 }, range);
+    expect(made.tokens[0]?.values.light).toBe(
+      fluidValue({ small: 16, large: 20 }, range)
+    );
+    expect(made.tokens[0]?.fluid).toEqual({ small: 16, large: 20 });
+  });
+
+  it("becomes a value typed by hand once its light value is typed, and drops the two sizes", () => {
+    const made = setFluidSize(set, 0, { small: 16, large: 20 }, range);
+    const typed = setTokenValue(made, 0, "light", "22px");
+    expect(typed.tokens[0]?.fluid).toBeUndefined();
+    // A dark value leaves the fluid light value as it was made.
+    const dark = setTokenValue(made, 0, "dark", "24px");
+    expect(dark.tokens[0]?.fluid).toEqual({ small: 16, large: 20 });
+  });
+});
+
+describe("a fluid line height typed by hand", () => {
+  it("drops its two sizes, as any other size does", () => {
+    const set: SiteTokenSet = {
+      tokens: [
+        {
+          name: "line-height.loose",
+          kind: "dimension",
+          values: { light: "24px" },
+        },
+      ],
+    };
+    const made = setFluidSize(
+      set,
+      0,
+      { small: 24, large: 32 },
+      {
+        min: 360,
+        max: 1280,
+      }
+    );
+    const typed = writeTokenValue(made, 0, "light", "28px");
+    if (!("tokens" in typed)) throw new Error("the write was refused");
+    expect(typed.tokens.tokens[0]?.fluid).toBeUndefined();
+  });
+});
+
+describe("a change of the site's fluid range", () => {
+  const range = { min: 360, max: 1280 };
+  const made = setFluidSize(
+    {
+      tokens: [
+        {
+          name: "font-size.lead",
+          kind: "dimension",
+          values: { light: "18px" },
+        },
+        {
+          name: "space.stack",
+          kind: "dimension",
+          values: { light: "clamp(1rem, 0.875rem + 0.5vw, 1.25rem)" },
+        },
+      ],
+    },
+    0,
+    { small: 16, large: 20 },
+    range
+  );
+
+  it("makes every size made with Fluid… again, keeping its two sizes", () => {
+    const wider = { min: 320, max: 1440 };
+    const next = setFluidRange(made, wider);
+    expect(next.fluidRange).toEqual(wider);
+    expect(next.tokens[0]?.values.light).toBe(
+      fluidValue({ small: 16, large: 20 }, wider)
+    );
+    expect(next.tokens[0]?.fluid).toEqual({ small: 16, large: 20 });
+  });
+
+  it("leaves a fluid value written by hand as it is", () => {
+    const next = setFluidRange(made, { min: 320, max: 1440 });
+    expect(next.tokens[1]?.values.light).toBe(
+      "clamp(1rem, 0.875rem + 0.5vw, 1.25rem)"
+    );
+  });
+
+  it("is 360px to 1280px until the site sets its own", () => {
+    expect(fluidRangeOf(made)).toEqual({ min: 360, max: 1280 });
+    expect(
+      fluidRangeOf({ ...made, fluidRange: { min: 320, max: 1440 } })
+    ).toEqual({
+      min: 320,
+      max: 1440,
+    });
   });
 });

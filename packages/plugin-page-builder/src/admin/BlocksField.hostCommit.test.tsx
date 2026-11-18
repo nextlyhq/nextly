@@ -74,6 +74,11 @@ let undoEdit: (() => void) | undefined;
  * one followed by the other.
  */
 let beforeStore: (() => void) | undefined;
+/**
+ * Every mounted caller's handler, as the admin keeps them: each runs before a
+ * store, not only the one that registered last.
+ */
+const storeHandlers = new Set<() => void>();
 let storedAt: Date | null = null;
 const storeListeners = new Set<() => void>();
 let documentActions: { storedAt: Date | null } | null = null;
@@ -207,6 +212,9 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
 vi.mock("./publish-offer", () => ({
   usePublishOffer: () => null,
   useFormPublishOffer: () => null,
+  // Page checks asks which parts aren't published; answered as unknown, so
+  // it lists none and these tests stay on what they test.
+  askReadiness: async () => null,
 }));
 vi.mock("./removal-hold-client", () => ({
   useRemovalHold: () => null,
@@ -226,6 +234,10 @@ vi.mock("./site-style-read", () => ({
 }));
 
 vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
+  // Where the page opens and the pin's id, which the top bar reads; no
+  // collection is named here, so the exit goes to the form.
+  useDocumentOpensIn: () => null,
+  PIN_TO_DASHBOARD_ACTION: "pin-to-dashboard",
   // The canvas's media read, answering nothing: these cases draw no image.
   // One function for every call, as the admin's own hook keeps it.
   useMediaResolver: (
@@ -242,6 +254,9 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   WEB_FONT_FORMATS: (await import("nextly/config")).WEB_FONT_FORMATS,
   // The media library, drawn as nothing: these cases never open it.
   MediaPickerDialog: () => null,
+  // The media library's upload, which an Image's empty state offers: these
+  // cases upload nothing.
+  useUploadMedia: () => ({ mutateAsync: () => new Promise<never>(() => {}) }),
   loadInlineRichTextEditor: () => new Promise<never>(() => {}),
   // No preview here: the surrounding editor offers none.
   useDocumentPreview: () => null,
@@ -290,11 +305,24 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   // The form's storing gate, which site style writes are tracked with.
   useTrackedWrite: () => () => {},
   useBeforeDocumentAction: (handler: () => void) => {
-    beforeStore = handler;
+    const latest = React.useRef(handler);
+    React.useEffect(() => {
+      latest.current = handler;
+    });
+    React.useEffect(() => {
+      const run = (): void => latest.current();
+      storeHandlers.add(run);
+      return () => {
+        storeHandlers.delete(run);
+      };
+    }, []);
+    beforeStore = () => {
+      for (const run of storeHandlers) run();
+    };
   },
   // The header's controls the bar places; drawn by the admin, not here.
-  DocumentSaveIndicator: () => null,
-  DocumentPrimaryAction: () => null,
+  DocumentSaveAndPublish: () => null,
+  useDocumentLifeStage: () => null,
   useDocumentActions: () =>
     React.useSyncExternalStore(
       listener => {
@@ -635,7 +663,7 @@ describe("a colleague taking the document over", () => {
     // which the card says in words of its own, and the edit holds a block, so
     // the card offers its preview instead.
     await waitFor(() =>
-      expect(container.textContent).toContain("Live preview")
+      expect(container.textContent).toMatch(/Sections \(\d+\)/)
     );
     expect(container.textContent).not.toContain("Nothing here yet");
     // Into this browser\'s form only. Nothing left the editor through its

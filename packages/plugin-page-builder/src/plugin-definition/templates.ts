@@ -5,6 +5,7 @@
  * the routes for the template actions, previews, routing, collection choices
  * and an entry's designs.
  */
+import { DEFAULT_LIMITS } from "@nextlyhq/blocks-engine";
 import {
   NextlyError,
   readableTitleText,
@@ -40,8 +41,11 @@ import {
   templatePreviewEntriesRoute,
   templatePreviewEntryRoute,
 } from "../templates/template-preview-route";
+import { templatesPanelRoute } from "../templates/templates-panel-route";
 import { unlinkCopies } from "../templates/unlink-copies";
+
 import type { InitContext } from "./install-context";
+import { componentStoreOf } from "./options";
 import type { Definition } from "./state";
 
 /**
@@ -258,8 +262,9 @@ export function routesForTemplates(def: Definition): {
   readonly templateCollectionRetarget: PluginRoute;
   readonly templateCollectionChoices: PluginRoute;
   readonly entryDesigns: PluginRoute;
+  readonly templatesPanel: PluginRoute;
 } {
-  const { templateActions, requireTemplateGuard } = def;
+  const { templateActions, requireTemplateGuard, opts } = def;
   return {
     // Give a collection its template, publish or delete it, set its address,
     // and give an entry its own design or take it away, each with a dry run.
@@ -300,5 +305,11 @@ export function routesForTemplates(def: Definition): {
     // the caller: what the admin's Design section, Design column and the
     // template's own designs list draw from.
     entryDesigns: entryDesignsRoute({ guard: requireTemplateGuard }),
+    // The builder's Pages panel's templates: each with its collection, its
+    // picture and the entries it draws.
+    templatesPanel: templatesPanelRoute(
+      componentStoreOf(opts),
+      () => opts.limits ?? DEFAULT_LIMITS
+    ),
   };
 }

@@ -23,6 +23,8 @@ const asked: string[] = [];
 const navigated: string[] = [];
 
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
+  // The person signed in, whom the builder's start-up answers are for.
+  useCurrentUserId: () => "ada",
   usePluginRoute: ({ path, enabled }: { path: string; enabled?: boolean }) => {
     if (enabled !== false) asked.push(path);
     const data =

@@ -17,7 +17,6 @@
  * however it is called.
  *
  * @module direct-api/namespaces/versions
- * @experimental Until the history feature is complete.
  */
 
 import type { ComparisonQuery } from "../../api/versions-access";
@@ -82,7 +81,6 @@ async function historyFunctions() {
   };
 }
 
-/** @experimental */
 export interface VersionsNamespace {
   /** A page of the document's versions, newest first, without snapshots. */
   list(
@@ -410,6 +408,9 @@ function versionOperations(defaultConfig: DirectAPIConfig): VersionsNamespace {
         h.markVersionSeenForDocument({
           ...restArgs(ref, checked?.user ?? (user as UserContext), args),
           versionNo: args.versionNo,
+          // A trusted call records the person's marker for what the server
+          // showed them, without asking their own read rules.
+          ...(checked ? {} : { trusted: true }),
         })
       );
       return { message: "Marked as seen.", item };

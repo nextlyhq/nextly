@@ -340,6 +340,7 @@ export type {
   PluginFieldType,
   PluginFieldValidateArgs,
   PluginFieldWrite,
+  PluginFieldWriteCaller,
   PluginStoredValue,
   PluginStoredValueTarget,
   PluginFieldInstance,
@@ -753,15 +754,10 @@ export type {
  * plugin can type a helper that takes one of them.
  * @experimental `PluginConfig` (`ctx.config`), `PluginSummary` (an entry of
  *   `ctx.config.plugins`), `PluginEmailSettings` (`ctx.config.email`),
- *   `PluginUserService`, `PluginMediaService`, `PluginEmailService`,
- *   `PluginVersionsService` (the methods `ctx.services.users`, `media`,
- *   `email` and `versions` expose), `PluginCollectionTransaction` (what
- *   `ctx.services.collections.withTransaction` hands its work), and the
- *   version pins of `ctx.services.versions.pins`: `PluginVersionPins`,
- *   `PluginVersionPinHolder`, `PluginVersionPin`, `PluginPinOptions`,
- *   `PluginPinTransaction`, `VersionPinHolderDefinition` (what
- *   `registerHolder` takes) and `VersionRef` (the document a pin is on).
- *   `FrozenCopy`
+ *   `PluginUserService`, `PluginMediaService`, `PluginEmailService` (the
+ *   methods `ctx.services.users`, `media` and `email` expose) and
+ *   `PluginCollectionTransaction` (what
+ *   `ctx.services.collections.withTransaction` hands its work). `FrozenCopy`
  *   is the readonly-all-the-way-down type `PluginConfig` is built from, and
  *   `FrozenValue` the type of each of its properties, both exported so a
  *   plugin's declaration files can name them. See STABILITY.md.
@@ -783,8 +779,26 @@ export type {
   QueuedRecipientOutcome,
   QueuedEmailStanding,
   QueuedEmailStatus,
-  PluginVersionsService,
   PluginCollectionTransaction,
+} from "nextly";
+
+/**
+ * A document's history for a plugin: `ctx.services.versions` (`PluginVersionsService`: reading
+ * versions and content events, naming, restoring, discarding a working draft and recording a
+ * recovery point) and its version pins, `ctx.services.versions.pins` (`PluginVersionPins`,
+ * `PluginVersionPinHolder`, `PluginVersionPin`, `PluginPinOptions`, `PluginPinTransaction`,
+ * `VersionPinHolderDefinition`, what `registerHolder` takes, and `VersionRef`, the document a pin
+ * is on). Stable: `plugin-page-builder` depends on both, on every database. See STABILITY.md.
+ * With them, every type their methods take or return, so a plugin names each from here: the
+ * reads' options and rows (`VersionListOptions`, `VersionMeta`, `VersionRow`, `VersionStatus`,
+ * `PendingEditOrder`, `PendingEditCursor`), a recovery point's result (`AutosaveWriteResult`,
+ * `AutosaveSupersession`), a restore's (`RestoreVersionResult`), and the content events
+ * `listEvents` reads (`ContentEventSubject`, `SubjectEventsQuery`, `ContentEventRecord`).
+ *
+ * @public
+ */
+export type {
+  PluginVersionsService,
   PluginVersionPins,
   PluginVersionPinHolder,
   PluginVersionPin,
@@ -792,6 +806,18 @@ export type {
   PluginPinTransaction,
   VersionPinHolderDefinition,
   VersionRef,
+  VersionListOptions,
+  VersionMeta,
+  VersionRow,
+  VersionStatus,
+  PendingEditOrder,
+  PendingEditCursor,
+  AutosaveWriteResult,
+  AutosaveSupersession,
+  RestoreVersionResult,
+  ContentEventSubject,
+  SubjectEventsQuery,
+  ContentEventRecord,
 } from "nextly";
 
 /**
@@ -1356,8 +1382,9 @@ export {
 
 /**
  * Filter/action registry (D63) — `ctx.filters` / `ctx.actions` surface + seam types.
- * @experimental No first-party plugin contributes a filter/action through this
- *   surface yet (see STABILITY.md).
+ * @experimental The form builder contributes one: an `email.templateReferences`
+ *   handler reporting the notification rules that send a template (see
+ *   STABILITY.md).
  */
 export {
   FilterSeams,
@@ -1380,6 +1407,8 @@ export {
   type ListQueryWhere,
   type ListQueryFilterContext,
   type PublicAddressTemplateContext,
+  type EmailTemplateReference,
+  type EmailTemplateReferencesContext,
 } from "nextly";
 
 /**

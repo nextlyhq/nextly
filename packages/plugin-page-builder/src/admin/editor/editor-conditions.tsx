@@ -2,8 +2,8 @@
 
 /**
  * The editor's conditions: what the canvas's condition badges judge with, the
- * strip above the canvas, and the author's switch that applies a document's
- * conditions for the entry it is previewed with.
+ * strip above the canvas, and the author's "Preview as visitor", which
+ * applies a document's conditions for the entry it is previewed with.
  *
  * @module @nextlyhq/plugin-page-builder/admin/editor/editor-conditions
  */
@@ -13,22 +13,23 @@ import {
   type AppliedConditions,
   type AppliedConditionsOptions,
 } from "@nextlyhq/builder/shell";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { loopCollectionsIn } from "../loop-collections-client";
 
 import type { useCanvasEntryIdentity } from "./canvas-entry";
 import type { ConditionedPage } from "./conditioned-page";
 import {
-  PageConditionsStrip,
-  PlacedConditionsStrip,
-  type TemplateConditions,
+  VisitorStrip,
+  visitorStripWords,
+  visitorUnavailable,
 } from "./conditions-strip";
 import type { ContentServices } from "./editor-services";
 import {
   usePageConditionsRead,
   type PageConditionsSource,
 } from "./page-conditions-read";
+import { focusPreviewMenu, type VisitorPreview } from "./preview-button";
 import {
   TemplatePreviewStrip,
   type useTemplatePreviewState,
@@ -58,38 +59,49 @@ export function useConditionServices(
 }
 
 /**
- * The strip above the canvas: a template's Previewing strip, with the switch
- * that applies its conditions while it holds a block whose conditions read
- * the entry; a page's own strip, with the switch and no entry to name, while
- * it holds a block whose conditions read the page; a component's own strip,
- * with the switch disabled, while it holds a conditioned block; none
- * otherwise.
+ * The strip above the canvas: a template's Previewing strip, with the
+ * visitor's row under it while "Preview as visitor" is on; on any other
+ * document, the visitor's row alone while it is on, and none otherwise.
  */
 export function editorStrip(
   preview: ReturnType<typeof useTemplatePreviewState>,
   conditions: AppliedConditionsSwitch,
-  kind: DocumentKind,
-  title: string | undefined
+  /** Notices about the page itself, drawn under the preview's rows. */
+  notice?: React.JSX.Element
 ): React.JSX.Element | undefined {
-  if (conditions.page !== undefined) {
-    return <PageConditionsStrip conditions={conditions.page} />;
-  }
-  if (preview !== undefined) {
-    return conditions.template === undefined ? (
-      <TemplatePreviewStrip preview={preview} />
-    ) : (
-      <TemplatePreviewStrip
-        preview={preview}
-        conditions={conditions.template}
+  const strip = previewStrip(preview, conditions);
+  if (notice === undefined) return strip;
+  return strip === undefined ? (
+    notice
+  ) : (
+    <>
+      {strip}
+      {notice}
+    </>
+  );
+}
+
+/** The template's Previewing row and the visitor's, where either shows. */
+function previewStrip(
+  preview: ReturnType<typeof useTemplatePreviewState>,
+  conditions: AppliedConditionsSwitch
+): React.JSX.Element | undefined {
+  const visitor =
+    conditions.said === undefined ? undefined : (
+      <VisitorStrip
+        said={conditions.said}
+        onStop={() => {
+          conditions.visitor.onChange(false);
+          focusPreviewMenu();
+        }}
       />
     );
-  }
-  // Only a component is placed elsewhere and edited on its own: a Layout's
-  // header and footer are components too, so they get this same strip.
-  if (!conditions.held || kind !== "component") {
-    return undefined;
-  }
-  return <PlacedConditionsStrip kind="Component" name={title ?? "Component"} />;
+  if (preview === undefined) return visitor;
+  return visitor === undefined ? (
+    <TemplatePreviewStrip preview={preview} />
+  ) : (
+    <TemplatePreviewStrip preview={preview} visitor={visitor} />
+  );
 }
 
 /**
@@ -113,16 +125,17 @@ export function pageConditionsSourceOf(
   return { collection: identity.slug, id: identity.documentId, locale };
 }
 
-/** The switch that applies a document's conditions, and what it did. */
+/** "Preview as visitor", what it did, and the page as the canvas draws it. */
 interface AppliedConditionsSwitch {
-  /** The switch's state in a template's strip; absent outside a template. */
-  readonly template: TemplateConditions | undefined;
-  /** The switch's state in a page's strip; absent outside a page. */
-  readonly page: TemplateConditions | undefined;
+  /** "Preview as visitor", for the top bar's Preview menu. */
+  readonly visitor: VisitorPreview;
+  /**
+   * What the visitor strip says the conditions did, while the canvas shows
+   * the page as a visitor gets it; absent while it does not.
+   */
+  readonly said: string | undefined;
   /** The page with its conditions applied, while they are. */
   readonly applied: AppliedConditions | undefined;
-  /** Whether the document holds a conditioned block at all. */
-  readonly held: boolean;
   /** What the previewed entry is called in words, lower case: "post". */
   readonly noun: string;
   /**
@@ -134,14 +147,39 @@ interface AppliedConditionsSwitch {
 }
 
 /**
- * The author's switch that applies the conditions for the entry a template
- * is previewed with, and the page as they leave it. Applied only to the
- * blocks that read the entry; checked against the entry as a visitor reads
- * it, so the canvas hides what the published page would.
+ * What the conditions are checked against, and what it is called: on a
+ * template, its previewed entry as the page settles on it (so a refresh of
+ * that same entry keeps the subject they were judged by), named as the
+ * collection names its entries; on a page, the page itself as a visitor
+ * reads it, where it is an entry of a collection.
+ */
+function checkedSubject(
+  preview: ReturnType<typeof useTemplatePreviewState>,
+  entry: ConditionedPage["entry"],
+  pageRead: ReturnType<typeof usePageConditionsRead>,
+  pageSource: PageConditionsSource | undefined
+): { readonly noun: string; readonly previewed: ConditionedPage["entry"] } {
+  if (preview !== undefined) {
+    return { noun: preview.labels.singular.toLowerCase(), previewed: entry };
+  }
+  return {
+    noun: pageSource === undefined ? "entry" : pageRead.noun,
+    previewed: pageRead.previewed,
+  };
+}
+
+/**
+ * The author's "Preview as visitor", which applies the conditions for the
+ * entry a template is previewed with, or for the page itself, and the page
+ * as they leave it. Applied only to the blocks that read the entry; checked
+ * against the entry as a visitor reads it, so the canvas hides what the
+ * published page would. The author's own, for this session: kept in this
+ * editor's state and never stored.
  */
 export function useAppliedConditionsSwitch(
   { entry, composed, held }: ConditionedPage,
   preview: ReturnType<typeof useTemplatePreviewState>,
+  kind: DocumentKind,
   pageSource: PageConditionsSource | undefined,
   options: Omit<AppliedConditionsOptions, "noun">
 ): AppliedConditionsSwitch {
@@ -152,60 +190,57 @@ export function useAppliedConditionsSwitch(
   // Each time the conditions are applied, counted, so a failed read of the
   // page is asked again rather than kept.
   const [attempt, setAttempt] = useState(0);
-  const toggle = useCallback(() => {
-    if (!on) setAttempt(count => count + 1);
-    setOn(!on);
-  }, [on]);
+  const onChange = useCallback((next: boolean) => {
+    if (next) setAttempt(count => count + 1);
+    setOn(next);
+  }, []);
+  // A document left with no conditioned block turns the view off, so one
+  // added again later doesn't bring it back unasked. Judged only with the
+  // entry in hand: between entries a template is drawn bare, without the
+  // entry's own content and any conditions in it, which is no removal, so a
+  // template switching entries keeps showing each as a visitor gets it.
+  const entryInHand = preview === undefined || entry?.kind === "entry";
+  useEffect(() => {
+    if (!checks && entryInHand) setOn(false);
+  }, [checks, entryInHand]);
+  const unavailable = visitorUnavailable(
+    kind,
+    checks,
+    preview !== undefined ? entry?.kind === "entry" : pageSource !== undefined
+  );
+  // Applied only while it is on and can be: a template between entries
+  // shows every block until the next one is read.
+  const active = on && unavailable === undefined;
   // A page is read as a visitor reads it, and only once the author applies
   // its conditions.
   const pageRead = usePageConditionsRead(
     pageSource,
-    on && checks && pageSource !== undefined,
+    active && pageSource !== undefined,
     attempt
   );
-  const noun =
-    preview !== undefined
-      ? preview.labels.singular.toLowerCase()
-      : pageSource !== undefined
-        ? pageRead.noun
-        : "entry";
-  // A template's entry as the page settles on it, so a refresh of that same
-  // entry keeps the subject its conditions were judged by.
-  const previewed = preview !== undefined ? entry : pageRead.previewed;
-  // The entry is handed over only while the switch is on: the canvas then
-  // draws the page as a visitor reading that entry would get it.
+  const { noun, previewed } = checkedSubject(
+    preview,
+    entry,
+    pageRead,
+    pageSource
+  );
+  // The entry is handed over only while it is on: the canvas then draws the
+  // page as a visitor reading that entry would get it.
   const applied = useAppliedConditions(
     composed,
-    on && checks ? previewed : undefined,
+    active ? previewed : undefined,
     { ...options, noun }
   );
-  const template = useMemo<TemplateConditions | undefined>(
-    () =>
-      preview === undefined || !checks
-        ? undefined
-        : {
-            on,
-            toggle,
-            available: previewed?.kind === "entry",
-            applied,
-            noun,
-          },
-    [preview, checks, on, toggle, previewed, applied, noun]
+  const visitor = useMemo<VisitorPreview>(
+    () => ({ on: active, onChange, unavailable }),
+    [active, onChange, unavailable]
   );
-  const page = useMemo<TemplateConditions | undefined>(
-    () =>
-      pageSource === undefined || !checks
-        ? undefined
-        : // The editor opens only a saved page, so there is always one to read.
-          {
-            on,
-            toggle,
-            available: true,
-            applied,
-            noun,
-            failed: pageRead.failed,
-          },
-    [pageSource, checks, on, toggle, applied, noun, pageRead.failed]
-  );
-  return { template, page, applied, held: held.any, noun, composed };
+  const said = active
+    ? visitorStripWords({
+        applied,
+        noun,
+        failed: preview === undefined && pageRead.failed,
+      })
+    : undefined;
+  return { visitor, said, applied, noun, composed };
 }

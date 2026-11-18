@@ -21,6 +21,7 @@ import type { CompositionSetup } from "../fields/blocks-composition";
 import type { HostAddress } from "../host-rewrite/contract";
 import type { RewriteInstall } from "../host-rewrite/service";
 import { siteBreakpointUndoRoute } from "../site-breakpoint-undo";
+import { siteCssPrefixRoute } from "../site-css-prefix";
 import {
   siteBreakpointRemovalRoute,
   siteBreakpointRemovalStatusRoute,
@@ -36,8 +37,11 @@ import {
   readStoredSiteStyleVersioned,
   SITE_STYLE_SLUG,
 } from "../site-style-storage";
+import { tokenUsageIndex } from "../token-usage";
+
 import type { InitContext, siteStyleReads } from "./install-context";
 import type { Definition } from "./state";
+import type { UsageParts } from "./usage";
 
 /**
  * How long a save removing breakpoints walks the site before it answers with
@@ -188,10 +192,13 @@ export function installBreakpointRemoval(
 /** The routes breakpoints contribute, by name. */
 export function routesForBreakpoints(
   def: Definition,
-  breakpointRemoval: BreakpointRemovalParts["breakpointRemoval"]
+  breakpointRemoval: BreakpointRemovalParts["breakpointRemoval"],
+  /** The usage indexes, which the prefix route counts old-prefix names from. */
+  parts: Pick<UsageParts, "usageSourceOf">
 ): {
   readonly siteSettings: PluginRoute;
   readonly siteBreakpoints: PluginRoute;
+  readonly siteCssPrefix: PluginRoute;
   readonly siteBreakpointRemoval: PluginRoute;
   readonly siteBreakpointUndo: PluginRoute;
   readonly siteBreakpointRemovalStatus: PluginRoute;
@@ -206,6 +213,18 @@ export function routesForBreakpoints(
     // A set that removes breakpoints strips what they held from the site;
     // one that does not finish in its save is carried on by the second.
     siteBreakpoints: siteBreakpointsRoute(breakpointRemoval),
+    // The CSS variable prefix, under the same site permission; its dry run
+    // counts what still names a variable by the old prefix from the
+    // variable usage index.
+    siteCssPrefix: siteCssPrefixRoute({
+      ...(configStyle === undefined ? {} : { defaults: configStyle }),
+      usage: ctx =>
+        parts.usageSourceOf(
+          ctx.self.collections,
+          tokenUsageIndex,
+          ctx.services.jobs
+        ),
+    }),
     siteBreakpointRemoval: siteBreakpointRemovalRoute(breakpointRemoval),
     // The newest removal undone, within its 30 days; its walk is carried
     // on through the removal route.

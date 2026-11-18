@@ -252,9 +252,16 @@ vi.mock("./site-style-read", () => ({
 }));
 
 vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
+  // Where the page opens and the pin's id, which the top bar reads; no
+  // collection is named here, so the exit goes to the form.
+  useDocumentOpensIn: () => null,
+  PIN_TO_DASHBOARD_ACTION: "pin-to-dashboard",
   // Settings' place for other plugins' tabs, with none added: the page's own
   // settings alone, as the admin draws them with no tab.
-  PlaceTabs: ({ children }: { children: unknown }) => children,
+  // No plugin adds a tab to Page settings here.
+  usePlaceTabs: () => [],
+  // Nor a block where the page's search result is drawn: the builder's own.
+  TargetSlot: ({ fallback }: { fallback?: unknown }) => fallback ?? null,
   // The canvas's media read, answering nothing: these cases draw no image.
   // One function for every call, as the admin's own hook keeps it.
   useMediaResolver: (
@@ -309,14 +316,18 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   }),
   useDocumentCheckpoint: () => ({ schedule: () => {} }),
   useEntryFieldsPanel: () => null,
+  // Page settings' Fields and "Show me": no other field to draw or show.
+  useEntryFieldsLayout: () => null,
+  useRevealField: () => {},
+  useDocumentField: () => null,
   useReportUnsavedWork: () => {},
   useSuppressAdminChrome: () => {},
   // The form's storing gate, which site style writes are tracked with.
   useTrackedWrite: () => () => {},
   useBeforeDocumentAction: () => {},
   // The header's controls the bar places; drawn by the admin, not here.
-  DocumentSaveIndicator: () => null,
-  DocumentPrimaryAction: () => null,
+  DocumentSaveAndPublish: () => null,
+  useDocumentLifeStage: () => null,
   useDocumentActions: () => null,
   // No preview here: the top bar's Preview draws nothing.
   useDocumentPreview: () => null,
@@ -516,7 +527,7 @@ describe("where the breakpoints are edited", () => {
     ).toBeNull();
   });
 
-  it("edits them in Settings, on the Site tab", async () => {
+  it("edits them in Site settings, opened from Page settings", async () => {
     /*
      * The control on the case above: the marker is found where the editor
      * does mount the manager, so its absence there is not a marker that
@@ -534,12 +545,16 @@ describe("where the breakpoints are edited", () => {
     openEditor();
     expect(managers()).toHaveLength(0);
 
-    await userEvent.click(screen.getByRole("tab", { name: "Site" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Site settings" })
+    );
 
     expect(managers()).toHaveLength(1);
-    expect(screen.getByRole("dialog").contains(managers()[0] ?? null)).toBe(
-      true
-    );
+    expect(
+      screen
+        .getByRole("dialog", { name: "Site settings" })
+        .contains(managers()[0] ?? null)
+    ).toBe(true);
   });
 });
 

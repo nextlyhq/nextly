@@ -249,6 +249,22 @@ const VARIANTS: readonly Variant[] = [
   },
   { name: "Divider", type: "core/divider", props: {}, ...FLOW },
   { name: "Quote", type: "core/quote", props: { text: "Hi" }, ...FLOW },
+  // Interactive once its source's title links, so a linked Box or Card can't
+  // hold it and nest one link in another.
+  {
+    name: "Quote with a linked source",
+    type: "core/quote",
+    props: { text: "Hi", source: "A Book", href: "/books" },
+    is: ["flow", "interactive"],
+    without: [],
+  },
+  // A link with no title to draw it on is only `cite`, which is no link.
+  {
+    name: "Quote with a source link and no title",
+    type: "core/quote",
+    props: { text: "Hi", href: "/books" },
+    ...FLOW,
+  },
   {
     name: "Embed",
     type: "core/embed",

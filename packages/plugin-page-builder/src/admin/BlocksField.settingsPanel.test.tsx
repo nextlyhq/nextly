@@ -119,10 +119,20 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
   };
 });
 
-// The dialog stands in as what it is handed: the entry's own fields.
+// The dialog stands in as what it is handed: the document it is for and the
+// field the builder edits, beside which it asks for the entry's own fields.
 vi.mock("./editor/settings-dialog", () => ({
-  SettingsDialog: ({ pageFields }: { pageFields: React.ReactNode }) => (
-    <div>{pageFields}</div>
+  SettingsDialog: ({
+    kind,
+    fieldName,
+  }: {
+    kind: string;
+    fieldName: string;
+  }) => (
+    <div>
+      <span data-testid="settings-kind">{kind}</span>
+      <span data-testid="settings-field">{fieldName}</span>
+    </div>
   ),
 }));
 
@@ -140,11 +150,11 @@ vi.mock("./site-style-read", () => ({
 }));
 
 vi.mock("@nextlyhq/plugin-sdk/admin", async importOriginal => ({
-  // The status pill's rule and words, the admin's own: the pill is drawn for
-  // real here, so a published page with edits is read as the bar shows it.
-  savedPillState: (
-    await importOriginal<typeof import("@nextlyhq/plugin-sdk/admin")>()
-  ).savedPillState,
+  // Where the page opens and the pin's id, which the top bar reads; no
+  // collection is named here, so the exit goes to the form.
+  useDocumentOpensIn: () => null,
+  PIN_TO_DASHBOARD_ACTION: "pin-to-dashboard",
+  // The admin's pill words, for the template preview's rows.
   PILL_LABEL: (
     await importOriginal<typeof import("@nextlyhq/plugin-sdk/admin")>()
   ).PILL_LABEL,
@@ -204,8 +214,16 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async importOriginal => ({
   useTrackedWrite: () => () => {},
   useBeforeDocumentAction: () => {},
   // The header's controls the bar places; drawn by the admin, not here.
-  DocumentSaveIndicator: () => null,
-  DocumentPrimaryAction: () => null,
+  DocumentSaveAndPublish: () => null,
+  // The page's life stage as the admin answers it from the saved status:
+  // the rule itself is the admin's, tested there; here it stands for it,
+  // so what is pinned is that the pill reads the stage and nothing else.
+  useDocumentLifeStage: () =>
+    documentStatus === null
+      ? null
+      : documentStatus.status === "published"
+        ? { stage: "published", label: "Published" }
+        : { stage: "draft", label: "Draft" },
   useDocumentActions: () => null,
   // No preview here: the top bar's Preview draws nothing.
   useDocumentPreview: () => null,
@@ -322,12 +340,10 @@ describe("Settings, as a dialog rather than a panel", () => {
     }
   });
 
-  it("hands the dialog the entry's own fields to show", () => {
+  it("hands the dialog the document it is for", () => {
     entryFields = <p>the entry&apos;s other fields</p>;
     openEditor();
-    expect(screen.getByTestId("settings").textContent).toContain(
-      "the entry's other fields"
-    );
+    expect(screen.getByTestId("settings-kind").textContent).toBe("page");
   });
 
   it("offers the same panels whether or not there are fields", () => {
@@ -361,15 +377,17 @@ describe("Settings, as a dialog rather than a panel", () => {
     expect(filled()).toBe(rail());
   });
 
-  it("asks about the builder field's OWN path, so it is never offered itself", () => {
-    // Rendering this editor inside this editor's settings panel would nest an
+  it("hands the dialog the builder field's OWN path, so it is never offered itself", () => {
+    // Rendering this editor inside this editor's settings would nest an
     // editor in its own chrome. The exclusion is the caller's to state, and it
-    // can only state it correctly if it passes its own name.
+    // can only state it correctly if it passes its own name: the dialog asks
+    // for the entry's fields beside the path it is handed.
     entryFields = <p>fields</p>;
     openEditor();
 
-    expect(askedFor.length).toBeGreaterThan(0);
-    expect(new Set(askedFor)).toEqual(new Set(["body"]));
+    expect(screen.getByTestId("settings-field").textContent).toBe("body");
+    // The editor itself draws none of them.
+    expect(askedFor).toEqual([]);
   });
 
   it("reports the document dirty when only a SETTINGS field was edited", () => {
@@ -432,11 +450,11 @@ describe("the page status beside unsaved work", () => {
       .getByText(/Page status/)
       .parentElement?.textContent?.replace("Page status: ", "") ?? "";
 
-  it("still reads Published after an edit, leaving unsaved work to the save chip", () => {
+  it("still reads Published after an edit, leaving unsaved work to the Save button", () => {
     /*
      * A published page with an edit used to read "Modified" here while the
      * save chip said "Unsaved changes": two signals for one state. The pill
-     * reports where the SAVED page stands, as the entry page's does.
+     * reports where the page is in its life; the Save button says the rest.
      */
     documentStatus = { status: "published", hasWorkingDraft: false };
     entryFields = <p>fields</p>;
@@ -453,11 +471,11 @@ describe("the page status beside unsaved work", () => {
     expect(pillWords()).toBe("Published");
   });
 
-  it("reads Changed for a published page with a saved working draft", () => {
-    // The positive control: the pill still follows the saved status, so the
-    // case above is not a pill stuck on "Published".
-    documentStatus = { status: "published", hasWorkingDraft: true };
+  it("reads Draft for a draft page", () => {
+    // The positive control: the pill follows the life stage, so the case
+    // above is not a pill stuck on "Published".
+    documentStatus = { status: "draft", hasWorkingDraft: false };
     openEditor();
-    expect(pillWords()).toBe("Changed");
+    expect(pillWords()).toBe("Draft");
   });
 });

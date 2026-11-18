@@ -42,6 +42,7 @@ import {
   coerceDateFieldsToDate,
   normalizeRelationshipFields,
 } from "../../../shared/lib/field-transform";
+import { fieldWriteCaller } from "../../../shared/lib/field-write-caller";
 import { toJsonColumnValue } from "../../../shared/lib/json-column-value";
 import {
   carryStoredPasswords,
@@ -470,14 +471,34 @@ function instancesWrittenBy(
 export function instanceWriteOf(
   host: EntryWriteContext,
   /** The instance's own field names: the reads that would mistake the host's. */
-  ownFields: ReadonlySet<string>
+  ownFields: ReadonlySet<string>,
+  /**
+   * Who the instance's write is made as: the access the entry's write hands
+   * its field-group save, so a validator inside the instance is told the
+   * caller the entry's own fields are, from the same grants.
+   */
+  access?: FieldGroupWriteAccess
 ): EntryWriteContext {
   return {
     ...host,
+    ...(access === undefined ? {} : { caller: fieldWriteCaller(access) }),
+    inFieldGroup: true,
     readStored: (allowedType, target) =>
       ownFields.has(topLevelName(target.field)) && readsTheHost(host, target)
         ? Promise.resolve({ kind: "absent" as const })
         : host.readStored(allowedType, target),
+    // The same rule for each entry read: the host's own entry is left out of
+    // the read, so its answer holds nothing for it, and every other entry is
+    // the host's own read.
+    readStoredOf: (allowedType, target) =>
+      host.readStoredOf(
+        allowedType,
+        ownFields.has(topLevelName(target.field)) &&
+          host.kind === "collection" &&
+          target.collection === host.slug
+          ? { ...target, ids: target.ids.filter(id => id !== host.id) }
+          : target
+      ),
   };
 }
 
@@ -2353,7 +2374,8 @@ export class FieldGroupMutationService extends BaseService {
                   componentFields.flatMap(field =>
                     typeof field.name === "string" ? [field.name] : []
                   )
-                )
+                ),
+                writeScope.getStore()?.access
               ),
             }),
       }

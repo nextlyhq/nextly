@@ -13,6 +13,17 @@
  * Adding a property here is backwards-compatible; removing one, or changing an
  * existing one's meaning or value shape, is a document-format migration.
  */
+import {
+  APPEAR_DELAY_PROPERTY,
+  APPEAR_DURATION_PROPERTY,
+  APPEAR_EFFECT_EXPANSIONS,
+  APPEAR_EFFECT_PROPERTY,
+  APPEAR_EFFECTS,
+  APPEAR_MAX_MILLISECONDS,
+  APPEAR_START_EXPANSIONS,
+  APPEAR_START_PROPERTY,
+  APPEAR_STARTS,
+} from "./appear";
 import type {
   ColorLeaf,
   CssValueLeaf,
@@ -290,6 +301,7 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
   {
     property: "margin",
     group: "spacing",
+    appliesWhen: ["always"],
     flag: "margin",
     shape: logicalSides("margin", undefined, {
       keywords: ["auto"],
@@ -301,6 +313,7 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
   {
     property: "padding",
     group: "spacing",
+    appliesWhen: ["always"],
     flag: "padding",
     shape: logicalSides("padding", undefined, { allowPercentage: true }),
     summary: "Space inside the element, per logical side.",
@@ -310,12 +323,14 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
   {
     property: "boxSizing",
     group: "layout",
+    appliesWhen: ["always"],
     shape: keyword("box-sizing", ["content-box", "border-box"]),
     summary: "Whether a stated width includes padding and border.",
   },
   {
     property: "display",
     group: "layout",
+    appliesWhen: ["always"],
     shape: keyword("display", [
       "block",
       "flex",
@@ -361,6 +376,7 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
   {
     property: "flexDirection",
     group: "layout",
+    appliesWhen: ["flex-container"],
     shape: keyword("flex-direction", [
       "row",
       "row-reverse",
@@ -372,12 +388,14 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
   {
     property: "flexWrap",
     group: "layout",
+    appliesWhen: ["flex-container"],
     shape: keyword("flex-wrap", ["nowrap", "wrap", "wrap-reverse"]),
     summary: "Whether flex children wrap onto more lines.",
   },
   {
     property: "justifyContent",
     group: "layout",
+    appliesWhen: ["flex-or-grid-container"],
     shape: keyword("justify-content", [
       "normal",
       ...CONTENT_DISTRIBUTION,
@@ -390,6 +408,7 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
   {
     property: "alignItems",
     group: "layout",
+    appliesWhen: ["flex-or-grid-container"],
     shape: keyword("align-items", [
       "normal",
       "stretch",
@@ -406,6 +425,9 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
   {
     property: "alignContent",
     group: "layout",
+    // A block container's content moves too, wherever its height leaves room:
+    // a Stack with a set height centres with `align-content: center`.
+    appliesWhen: ["wrapping-flex-or-grid", "block-container"],
     shape: keyword("align-content", [
       "normal",
       ...BASELINE_POSITIONS,
@@ -417,6 +439,7 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
   {
     property: "gap",
     group: "layout",
+    appliesWhen: ["flex-or-grid-container"],
     shape: dimension("gap", {
       keywords: ["normal"],
       maxParts: 2,
@@ -427,6 +450,7 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
   {
     property: "rowGap",
     group: "layout",
+    appliesWhen: ["flex-or-grid-container"],
     shape: dimension("row-gap", {
       keywords: ["normal"],
       allowPercentage: true,
@@ -436,6 +460,7 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
   {
     property: "columnGap",
     group: "layout",
+    appliesWhen: ["flex-or-grid-container"],
     shape: dimension("column-gap", {
       keywords: ["normal"],
       allowPercentage: true,
@@ -445,18 +470,21 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
   {
     property: "gridTemplateColumns",
     group: "layout",
+    appliesWhen: ["grid-container"],
     shape: cssValue("grid-template-columns"),
     summary: "Grid column track sizes.",
   },
   {
     property: "gridTemplateRows",
     group: "layout",
+    appliesWhen: ["grid-container"],
     shape: cssValue("grid-template-rows"),
     summary: "Grid row track sizes.",
   },
   {
     property: "gridAutoFlow",
     group: "layout",
+    appliesWhen: ["grid-container"],
     shape: keyword("grid-auto-flow", [
       "row",
       "column",
@@ -470,11 +498,23 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
     ]),
     summary: "How auto-placed grid items are inserted.",
   },
+  {
+    property: "justifyItems",
+    group: "layout",
+    appliesWhen: ["grid-container"],
+    // Each grid item's place across its column. A flex line has no such
+    // thing: it places items along its main axis with `justify-content`.
+    // Positions only, as on `justify-self`: Baseline records no baseline,
+    // overflow-safety or `legacy` forms here as widely available.
+    shape: keyword("justify-items", ["normal", "stretch", ...SELF_POSITIONS]),
+    summary: "Where each grid item sits across its column.",
+  },
 
   // --- dimensions (physical on purpose: size is direction-neutral)
   {
     property: "width",
     group: "dimensions",
+    appliesWhen: ["always"],
     shape: dimension("width", {
       keywords: SIZING_KEYWORDS,
       functions: SIZING_FUNCTIONS,
@@ -485,6 +525,7 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
   {
     property: "height",
     group: "dimensions",
+    appliesWhen: ["always"],
     shape: dimension("height", {
       keywords: SIZING_KEYWORDS,
       functions: SIZING_FUNCTIONS,
@@ -495,6 +536,7 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
   {
     property: "minWidth",
     group: "dimensions",
+    appliesWhen: ["always"],
     shape: dimension("min-width", {
       keywords: SIZING_KEYWORDS,
       functions: SIZING_FUNCTIONS,
@@ -505,6 +547,7 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
   {
     property: "minHeight",
     group: "dimensions",
+    appliesWhen: ["always"],
     shape: dimension("min-height", {
       keywords: SIZING_KEYWORDS,
       functions: SIZING_FUNCTIONS,
@@ -515,6 +558,7 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
   {
     property: "maxWidth",
     group: "dimensions",
+    appliesWhen: ["always"],
     shape: dimension("max-width", {
       keywords: MAX_SIZING_KEYWORDS,
       functions: SIZING_FUNCTIONS,
@@ -525,6 +569,7 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
   {
     property: "maxHeight",
     group: "dimensions",
+    appliesWhen: ["always"],
     shape: dimension("max-height", {
       keywords: MAX_SIZING_KEYWORDS,
       functions: SIZING_FUNCTIONS,
@@ -535,12 +580,14 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
   {
     property: "aspectRatio",
     group: "dimensions",
+    appliesWhen: ["always"],
     shape: cssValue("aspect-ratio"),
     summary: "Preferred width-to-height ratio.",
   },
   {
     property: "objectFit",
     group: "dimensions",
+    appliesWhen: ["replaced"],
     shape: keyword("object-fit", [
       "fill",
       "contain",
@@ -553,6 +600,7 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
   {
     property: "objectPosition",
     group: "dimensions",
+    appliesWhen: ["replaced"],
     shape: cssValue("object-position"),
     summary:
       "Which part of replaced content stays in view when it is cropped, or where it sits in its box.",
@@ -560,6 +608,7 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
   {
     property: "overflow",
     group: "dimensions",
+    appliesWhen: ["always"],
     shape: keyword(
       "overflow",
       ["visible", "hidden", "clip", "scroll", "auto"],
@@ -567,17 +616,94 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
     ),
     summary: "How content exceeding the box is handled.",
   },
+  // How a block takes space inside a Row or a Grid. In this group rather than
+  // a group of their own because every block with a size can sit in one, so a
+  // block offering `dimensions` offers these with nothing further to declare.
+  {
+    property: "flexGrow",
+    group: "dimensions",
+    appliesWhen: ["flex-child"],
+    shape: numberValue("flex-grow", { min: 0 }),
+    summary: "How much of a row's spare space the element takes.",
+  },
+  {
+    property: "flexShrink",
+    group: "dimensions",
+    appliesWhen: ["flex-child"],
+    shape: numberValue("flex-shrink", { min: 0 }),
+    summary: "How much the element gives up when a row is short of space.",
+  },
+  {
+    property: "flexBasis",
+    group: "dimensions",
+    appliesWhen: ["flex-child"],
+    shape: dimension("flex-basis", {
+      // `content` sizes the item by its content even where a width is set,
+      // which `auto` (use the width) does not. Only the keywords Baseline
+      // marks widely available on `flex-basis`: `stretch`, `contain` and the
+      // sizing functions a width takes are not, here.
+      keywords: [
+        "auto",
+        "content",
+        "min-content",
+        "max-content",
+        "fit-content",
+      ],
+      allowPercentage: true,
+    }),
+    summary: "The element's starting size along a row, before space is shared.",
+  },
+  {
+    property: "alignSelf",
+    group: "dimensions",
+    appliesWhen: ["flex-or-grid-child"],
+    // No overflow-safety forms: Baseline does not yet mark `safe` and
+    // `unsafe` widely available on `align-self`.
+    shape: keyword("align-self", [
+      "auto",
+      "normal",
+      "stretch",
+      ...BASELINE_POSITIONS,
+      ...SELF_POSITIONS,
+    ]),
+    summary: "The element's own cross-axis alignment, over its parent's.",
+  },
+  {
+    property: "justifySelf",
+    group: "dimensions",
+    appliesWhen: ["grid-child"],
+    // Positions only: Baseline records no baseline or overflow-safety forms
+    // of `justify-self` as widely available.
+    shape: keyword("justify-self", [
+      "auto",
+      "normal",
+      "stretch",
+      ...SELF_POSITIONS,
+    ]),
+    summary:
+      "Where the element sits across its grid column, over its parent's.",
+  },
+  {
+    property: "order",
+    group: "dimensions",
+    appliesWhen: ["flex-or-grid-child"],
+    // Visual order only: reading and tab order stay the document's.
+    shape: numberValue("order", { integer: true }),
+    summary: "Where the element is drawn among its siblings, lowest first.",
+  },
 
   // --- typography
   {
     property: "fontFamily",
     group: "typography",
+    appliesWhen: ["always"],
     shape: cssValue("font-family", ["fontFamily"]),
     summary: "Typeface stack. Token-first: reference a typography token.",
   },
   {
     property: "fontSize",
     group: "typography",
+    appliesWhen: ["always"],
     shape: dimension("font-size", {
       keywords: FONT_SIZE_KEYWORDS,
       allowPercentage: true,
@@ -587,6 +713,7 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
   {
     property: "fontWeight",
     group: "typography",
+    appliesWhen: ["always"],
     shape: {
       kind: "union",
       of: [
@@ -602,6 +729,7 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
   {
     property: "lineHeight",
     group: "typography",
+    appliesWhen: ["always"],
     shape: {
       kind: "union",
       of: [
@@ -621,6 +749,7 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
   {
     property: "letterSpacing",
     group: "typography",
+    appliesWhen: ["always"],
     shape: dimension("letter-spacing", {
       keywords: ["normal"],
       allowNegative: true,
@@ -630,6 +759,7 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
   {
     property: "wordSpacing",
     group: "typography",
+    appliesWhen: ["always"],
     shape: dimension("word-spacing", {
       keywords: ["normal"],
       allowNegative: true,
@@ -640,6 +770,7 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
   {
     property: "textAlign",
     group: "typography",
+    appliesWhen: ["always"],
     shape: keyword("text-align", [
       // Resolves against the PARENT's direction, which neither `start` nor
       // `inherit` reproduces when parent and child directions differ.
@@ -657,6 +788,7 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
   {
     property: "textTransform",
     group: "typography",
+    appliesWhen: ["always"],
     // A case transform, a full-width transform and a kana transform compose in
     // any order; only the case transforms are mutually exclusive, which falls
     // out of each combination taking at most one of them.
@@ -676,6 +808,7 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
   {
     property: "fontStyle",
     group: "typography",
+    appliesWhen: ["always"],
     // `oblique` takes an optional angle, which no closed keyword set can
     // express; the vocabulary stays for an editor to offer, and the free-form
     // variant is what makes `oblique 10deg` storable.
@@ -695,6 +828,7 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
     // property in that group — so a heading and a button would both be offered
     // a list-marker control that cannot change anything they render.
     group: "list",
+    appliesWhen: ["always"],
     // `revert` earns its place beside the concrete markers. A CSS reset that
     // sets `list-style: none` on every list — Tailwind's Preflight does, and
     // this library's own scaffold imports it — leaves an author no keyword that
@@ -723,6 +857,7 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
     // (an Accordion): each keyword writes its sections' title rows, so on any
     // other block it would style nothing.
     group: "disclosure",
+    appliesWhen: ["always"],
     shape: {
       ...keyword(DISCLOSURE_ICON_PROPERTY, DISCLOSURE_ICONS),
       expands: DISCLOSURE_ICON_EXPANSIONS,
@@ -732,6 +867,7 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
   {
     property: "disclosurePosition",
     group: "disclosure",
+    appliesWhen: ["always"],
     shape: {
       ...keyword(DISCLOSURE_POSITION_PROPERTY, DISCLOSURE_POSITIONS),
       expands: DISCLOSURE_POSITION_EXPANSIONS,
@@ -741,12 +877,14 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
   {
     property: "textDecoration",
     group: "typography",
+    appliesWhen: ["always"],
     shape: cssValue("text-decoration"),
     summary: "Underline, overline, or line-through decoration.",
   },
   {
     property: "textShadow",
     group: "typography",
+    appliesWhen: ["always"],
     shape: cssValue("text-shadow", ["shadow"]),
     summary: "Shadow cast by the text.",
   },
@@ -755,6 +893,7 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
   {
     property: "color",
     group: "color",
+    appliesWhen: ["always"],
     flag: "text",
     shape: color("color"),
     summary: "Text color.",
@@ -762,6 +901,7 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
   {
     property: "linkColor",
     group: "color",
+    appliesWhen: ["always"],
     flag: "link",
     shape: color("color", "a"),
     summary: "Color of links inside the element.",
@@ -769,6 +909,7 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
   {
     property: "linkColorHover",
     group: "color",
+    appliesWhen: ["always"],
     flag: "link",
     shape: color("color", "a:hover"),
     summary: "Color of hovered links inside the element.",
@@ -778,6 +919,7 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
   {
     property: "backgroundColor",
     group: "background",
+    appliesWhen: ["always"],
     flag: "color",
     shape: color("background-color"),
     summary: "Background fill color.",
@@ -785,6 +927,7 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
   {
     property: "background",
     group: "background",
+    appliesWhen: ["always"],
     flag: "image",
     shape: {
       kind: "object",
@@ -820,6 +963,7 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
   {
     property: "backgroundGradient",
     group: "background",
+    appliesWhen: ["always"],
     flag: "gradient",
     shape: { ...cssValue("background-image"), overlaid: true },
     summary: "Gradient fill, as a CSS gradient value.",
@@ -829,6 +973,7 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
   {
     property: "border",
     group: "border",
+    appliesWhen: ["always"],
     flag: "line",
     shape: {
       kind: "object",
@@ -858,6 +1003,7 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
   {
     property: "borderRadius",
     group: "border",
+    appliesWhen: ["always"],
     flag: "radius",
     shape: {
       kind: "union",
@@ -869,11 +1015,46 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
     summary:
       "Corner rounding: one radius for all corners, or per logical corner.",
   },
+  {
+    property: "outline",
+    group: "border",
+    appliesWhen: ["always"],
+    flag: "outline",
+    // Drawn outside the border and taking no space, so setting one never
+    // moves the layout: what a focus ring needs. The offset moves it out, or
+    // in over the box's edge when negative.
+    shape: {
+      kind: "object",
+      fields: {
+        width: dimension("outline-width", {
+          keywords: ["thin", "medium", "thick"],
+        }),
+        style: keyword("outline-style", [
+          // The browser's own focus ring, in its colour and shape.
+          "auto",
+          "none",
+          "solid",
+          "dashed",
+          "dotted",
+          "double",
+          "groove",
+          "ridge",
+          "inset",
+          "outset",
+        ]),
+        color: color("outline-color"),
+        offset: dimension("outline-offset", { allowNegative: true }),
+      },
+    },
+    summary:
+      "A line drawn outside the border that takes no space, such as a focus ring.",
+  },
 
   // --- shadow
   {
     property: "boxShadow",
     group: "shadow",
+    appliesWhen: ["always"],
     shape: cssValue("box-shadow", ["shadow"]),
     summary: "Shadow cast by the element's box.",
   },
@@ -882,18 +1063,21 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
   {
     property: "opacity",
     group: "effects",
+    appliesWhen: ["always"],
     shape: numberValue("opacity", { min: 0, max: 1 }),
     summary: "Element opacity, 0 to 1.",
   },
   {
     property: "filter",
     group: "effects",
+    appliesWhen: ["always"],
     shape: cssValue("filter"),
     summary: "Graphical effects such as blur or brightness.",
   },
   {
     property: "mixBlendMode",
     group: "effects",
+    appliesWhen: ["always"],
     shape: keyword("mix-blend-mode", [
       "normal",
       "multiply",
@@ -919,20 +1103,61 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
   {
     property: "transform",
     group: "effects",
+    appliesWhen: ["always"],
     shape: cssValue("transform"),
     summary: "Geometric transforms such as translate, scale, or rotate.",
   },
   {
     property: "transition",
     group: "effects",
+    appliesWhen: ["always"],
     shape: cssValue("transition", ["custom", "duration"]),
     summary: "Explicit transitions. Nothing is smoothed automatically.",
+  },
+  {
+    property: "appear",
+    group: "effects",
+    appliesWhen: ["always"],
+    // Four parts, each its own custom property, so each is set per device on
+    // its own: see `appear.ts`. The two times are whole milliseconds.
+    shape: {
+      kind: "object",
+      fields: {
+        effect: {
+          ...keyword(APPEAR_EFFECT_PROPERTY, APPEAR_EFFECTS),
+          expands: APPEAR_EFFECT_EXPANSIONS,
+        },
+        duration: numberValue(
+          APPEAR_DURATION_PROPERTY,
+          { min: 0, max: APPEAR_MAX_MILLISECONDS, integer: true },
+          []
+        ),
+        delay: numberValue(
+          APPEAR_DELAY_PROPERTY,
+          { min: 0, max: APPEAR_MAX_MILLISECONDS, integer: true },
+          []
+        ),
+        start: {
+          ...keyword(APPEAR_START_PROPERTY, APPEAR_STARTS),
+          expands: APPEAR_START_EXPANSIONS,
+        },
+      },
+    },
+    summary:
+      "An animation as the block scrolls into view or the page loads, moving only its opacity and transform.",
   },
 
   // --- position
   {
     property: "position",
     group: "position",
+    // The type always takes effect; the offsets only move a positioned block,
+    // and z-index also stacks a flex or grid item that is not positioned.
+    appliesWhen: ["always"],
+    fieldAppliesWhen: {
+      inset: ["positioned"],
+      zIndex: ["positioned", "flex-or-grid-child"],
+    },
     shape: {
       kind: "object",
       fields: {
@@ -965,6 +1190,7 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
   {
     property: "containerType",
     group: "container",
+    appliesWhen: ["always"],
     // A scroll-state container answers a different kind of query from a size
     // one, and the two combine in either order.
     shape: keyword("container-type", [

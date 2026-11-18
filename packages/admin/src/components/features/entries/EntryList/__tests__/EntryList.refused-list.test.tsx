@@ -10,6 +10,7 @@
  */
 
 import { screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { parseApiError } from "@admin/lib/api/parseApiError";
@@ -23,6 +24,8 @@ type EntriesQuery = {
 };
 
 let entriesQuery: EntriesQuery;
+/** The collection's description, drawn under its name. */
+let description: string | undefined;
 
 vi.mock("@admin/hooks/queries", () => ({
   useEntries: () => entriesQuery,
@@ -30,8 +33,10 @@ vi.mock("@admin/hooks/queries", () => ({
   useBulkUpdateEntries: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 vi.mock("@admin/hooks/queries/useCollections", () => ({
+  // The list opens rows by its own copy of the collection.
+  useEveryNavCollection: () => ({ data: undefined }),
   useCollection: () => ({
-    data: { name: "posts", label: "Posts", fields: [] },
+    data: { name: "posts", label: "Posts", fields: [], description },
     isLoading: false,
   }),
 }));
@@ -51,6 +56,40 @@ const REFUSAL = "You can't see posts.";
 
 beforeEach(() => {
   entriesQuery = { data: undefined, isLoading: false, error: null };
+  description = undefined;
+});
+
+// A description set in code, or saved before the builder's limit, can be any
+// length; drawn whole it pushed the list off the screen. A long one is held to
+// two lines with a control to read the rest, and the whole text stays in the
+// page, so assistive technology reads all of it either way.
+describe("EntryList — the collection's description", () => {
+  it("shows a short description whole, with no control", () => {
+    description = "Articles for the blog.";
+    renderWithProviders(<EntryList collectionSlug="posts" />);
+    expect(screen.getByText(description)).not.toHaveClass("line-clamp-2");
+    expect(screen.queryByRole("button", { name: "Show more" })).toBeNull();
+  });
+
+  it("holds a long description to two lines, and shows and hides the rest", async () => {
+    const user = userEvent.setup();
+    description = "word ".repeat(80).trim();
+    renderWithProviders(<EntryList collectionSlug="posts" />);
+
+    const text = screen.getByText(description);
+    expect(text).toHaveClass("line-clamp-2", "break-words");
+    const more = screen.getByRole("button", { name: "Show more" });
+    expect(more).toHaveAttribute("aria-expanded", "false");
+    expect(more).toHaveAttribute("aria-controls", text.id);
+
+    await user.click(more);
+    expect(text).not.toHaveClass("line-clamp-2");
+    const less = screen.getByRole("button", { name: "Show less" });
+    expect(less).toHaveAttribute("aria-expanded", "true");
+
+    await user.click(less);
+    expect(text).toHaveClass("line-clamp-2");
+  });
 });
 
 describe("EntryList", () => {

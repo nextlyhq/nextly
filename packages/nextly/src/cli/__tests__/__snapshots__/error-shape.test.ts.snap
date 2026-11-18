@@ -506,6 +506,13 @@ exports[`each code, as a command ends with it > BUILD_STRICT_WARNINGS 1`] = `
   Docs: https://nextlyhq.com/docs/cli/errors/build-strict-warnings  (BUILD_STRICT_WARNINGS)"
 `;
 
+exports[`each code, as a command ends with it > BUILDER_DEFINITION_MISSING 1`] = `
+"✗ The newest migration snapshot records a Builder collection 'articles' that neither \`nextly.config.ts\` nor \`./ui-schema.json\` declares.
+  Why:  \`./ui-schema.json\` is part of the code: \`migrate:create\` reads the Builder's entities from it. Without them, a migration written now would drop each one's table and its content.
+  Next: Restore \`./ui-schema.json\` from version control and commit it with your migrations. To remove an entity, delete it in the Schema Builder, which writes the migration that drops it. Then run the command again.
+  Docs: https://nextlyhq.com/docs/cli/errors/builder-definition-missing  (BUILDER_DEFINITION_MISSING)"
+`;
+
 exports[`each code, as a command ends with it > BUILDER_MIGRATION_SNAPSHOT_MISSING 1`] = `
 "✗ nextly migrate does not apply a file with a Schema Builder name that is not recognised as an earlier Builder's: 1761732000000_update_posts.sql, which has a statement on a table that is not its own entity's, or one that cannot be read.
   Why:  1761732000000_update_posts.sql was written by the Schema Builder and has no snapshot beside it (meta/1761732000000_update_posts.snapshot.json), so nothing says what the database should look like once it has run.
@@ -514,9 +521,9 @@ exports[`each code, as a command ends with it > BUILDER_MIGRATION_SNAPSHOT_MISSI
 `;
 
 exports[`each code, as a command ends with it > BUILDER_RELATION_TARGET_UNKNOWN 1`] = `
-"✗ A field in \`ui-schema.json\` relates to a collection that does not exist.
+"✗ A field in \`./ui-schema.json\` relates to a collection that does not exist.
   Why:  articles.author relates to unknown target 'authors'
-  Next: Point each field listed at a collection in \`nextly.config.ts\` or \`ui-schema.json\`, or create the collection it names, then run the command again.
+  Next: Point each field listed at a collection in \`nextly.config.ts\` or \`./ui-schema.json\`, or create the collection it names, then run the command again.
   Docs: https://nextlyhq.com/docs/cli/errors/builder-relation-target-unknown  (BUILDER_RELATION_TARGET_UNKNOWN)"
 `;
 
@@ -666,11 +673,33 @@ exports[`each code, as a command ends with it > DATA_LOSS_DECLINED 1`] = `
   Docs: https://nextlyhq.com/docs/cli/errors/data-loss-declined  (DATA_LOSS_DECLINED)"
 `;
 
+exports[`each code, as a command ends with it > DATA_STEPS_BACKUP_DECLINED 1`] = `
+"✗ The data an earlier Nextly release stored was left as it is (hash passwords stored before this release: 3): the backup question was answered no.
+  Why:  The command rewrites stored values in place, so it asks for a backup first, and the answer was no. Nothing was changed.
+  Next: Back up the database, then run \`nextly migrate\` again and answer yes, or pass \`--backup-confirmed\`.
+  Docs: https://nextlyhq.com/docs/cli/errors/data-steps-backup-declined  (DATA_STEPS_BACKUP_DECLINED)"
+`;
+
+exports[`each code, as a command ends with it > DATA_STEPS_BACKUP_NOT_CONFIRMED 1`] = `
+"✗ \`nextly migrate\` would change data an earlier Nextly release stored (hash passwords stored before this release: 3), and does so only once a backup is confirmed.
+  Why:  No terminal is attached to ask whether the database is backed up, and \`--backup-confirmed\` was not passed. Nothing was changed.
+  Next: Back up the database, then run \`nextly migrate --backup-confirmed\`.
+  Docs: https://nextlyhq.com/docs/cli/errors/data-steps-backup-not-confirmed  (DATA_STEPS_BACKUP_NOT_CONFIRMED)"
+`;
+
 exports[`each code, as a command ends with it > DATABASE_ADAPTER_MISSING 1`] = `
 "✗ The MySQL adapter, \`@nextlyhq/adapter-mysql\`, is not installed.
   Why:  \`DATABASE_URL\` names a MySQL database, and Nextly reaches it through that package.
   Next: Install it in the project, for example \`pnpm add @nextlyhq/adapter-mysql\`, then run the command again.
   Docs: https://nextlyhq.com/docs/cli/errors/database-adapter-missing  (DATABASE_ADAPTER_MISSING)"
+`;
+
+exports[`each code, as a command ends with it > DATABASE_BEHIND_MIGRATIONS 1`] = `
+"✗ The database lacks 2 tables or columns its applied migrations created, so it no longer matches its ledger. Nothing was changed.
+  Why:  - table dc_posts (created by 20261116_120000_000_create_posts)
+        - column dc_tags.label (created by 20261116_120000_001_add_label)
+  Next: Restore what is missing (from a backup, or by running again the statements of the migration named), then run \`nextly migrate\` again. Nothing applies until the database holds what its ledger says it does.
+  Docs: https://nextlyhq.com/docs/cli/errors/database-behind-migrations  (DATABASE_BEHIND_MIGRATIONS)"
 `;
 
 exports[`each code, as a command ends with it > DATABASE_CATALOG_UNREADABLE 1`] = `
@@ -836,7 +865,7 @@ exports[`each code, as a command ends with it > INVALID_SNAPSHOT 1`] = `
 exports[`each code, as a command ends with it > LEGACY_BOOKKEEPING_FOUND 1`] = `
 "✗ Legacy bookkeeping tables detected (nextly_migrations).
   Why:  They hold the history an earlier release recorded, which this release keeps in \`nextly_schema_events\`.
-  Next: Run \`pnpm nextly upgrade\` once to consolidate them into nextly_schema_events before continuing.
+  Next: Back up the database, then run \`nextly migrate --backup-confirmed\` once to move them into nextly_schema_events before continuing.
   Docs: https://nextlyhq.com/docs/cli/errors/legacy-bookkeeping-found  (LEGACY_BOOKKEEPING_FOUND)"
 `;
 
@@ -887,6 +916,34 @@ exports[`each code, as a command ends with it > MEDIA_THUMBNAILS_NOT_REMOVED 1`]
   Why:  Could not remove media/2026/10/0b7f0b0e-thumb_x.png: AccessDenied: Access Denied
   Next: Run \`nextly media orphans --apply\` again to list and remove what is left.
   Docs: https://nextlyhq.com/docs/cli/errors/media-thumbnails-not-removed  (MEDIA_THUMBNAILS_NOT_REMOVED)"
+`;
+
+exports[`each code, as a command ends with it > MIGRATE_BACKUP_DECLINED 1`] = `
+"✗ The migration records of an earlier Nextly release were not moved: the backup question was answered no.
+  Why:  \`nextly migrate\` moves those records into \`nextly_schema_events\` and drops the tables that held them, so it asks for a backup first, and the answer was no. Nothing was changed.
+  Next: Back up the database, then run \`nextly migrate\` again and answer yes, or pass \`--backup-confirmed\`.
+  Docs: https://nextlyhq.com/docs/cli/errors/migrate-backup-declined  (MIGRATE_BACKUP_DECLINED)"
+`;
+
+exports[`each code, as a command ends with it > MIGRATE_BACKUP_NOT_CONFIRMED 1`] = `
+"✗ This database keeps its migration records the way an earlier Nextly release did, and \`nextly migrate\` moves them only once a backup is confirmed.
+  Why:  No terminal is attached to ask whether the database is backed up, and \`--backup-confirmed\` was not passed. Nothing was changed.
+  Next: Back up the database, then run \`nextly migrate --backup-confirmed\`.
+  Docs: https://nextlyhq.com/docs/cli/errors/migrate-backup-not-confirmed  (MIGRATE_BACKUP_NOT_CONFIRMED)"
+`;
+
+exports[`each code, as a command ends with it > MIGRATE_EVENTS_TABLE_TAKEN 1`] = `
+"✗ A table named "nextly_schema_events" already exists with an unexpected shape.
+  Why:  \`nextly migrate\` moves the migration records of an earlier release into "nextly_schema_events", and the table there does not have the columns it writes. Nothing was changed.
+  Next: Rename it, then run \`nextly migrate\` again.
+  Docs: https://nextlyhq.com/docs/cli/errors/migrate-events-table-taken  (MIGRATE_EVENTS_TABLE_TAKEN)"
+`;
+
+exports[`each code, as a command ends with it > MIGRATE_LEDGER_UNREADABLE 1`] = `
+"✗ The table "nextly_migrations" holds records \`nextly migrate\` cannot read: the record of 0001_init.sql has the status "rolled_back".
+  Why:  \`nextly migrate\` moves the records an earlier release kept in \`nextly_migrations\` into \`nextly_schema_events\`, and reads every one before writing any. One of them it cannot read, so nothing was changed.
+  Next: Rename the table if Nextly did not create it, then run \`nextly migrate\` again.
+  Docs: https://nextlyhq.com/docs/cli/errors/migrate-ledger-unreadable  (MIGRATE_LEDGER_UNREADABLE)"
 `;
 
 exports[`each code, as a command ends with it > MIGRATION_APPLY_FAILED 1`] = `
@@ -945,6 +1002,16 @@ exports[`each code, as a command ends with it > MIGRATION_NAME_REQUIRED 1`] = `
   Why:  Only a \`--blank\` migration may be created without a name.
   Next: Name it, as in \`nextly migrate:create add_excerpt\` or \`--name=add_excerpt\`, or pass \`--blank\` for an empty migration.
   Docs: https://nextlyhq.com/docs/cli/errors/migration-name-required  (MIGRATION_NAME_REQUIRED)"
+`;
+
+exports[`each code, as a command ends with it > MIGRATION_NOT_PROVEN 1`] = `
+"✗ 20261020_120000_add_posts.sql is pending, and the database already stands where it ends, not where it starts.
+  Why:  It was neither run nor recorded as applied without running: its snapshot does not show what 1 statement does.
+        Statements it would have skipped:
+          1. ALTER TABLE "dc_posts" ADD COLUMN "slug" text (the database has it)
+          2. UPDATE "dc_posts" SET "slug" = (not shown by its snapshot)
+  Next: Run the statements not marked "the database has it" by hand, or confirm they are not needed, then record the file with \`nextly migrate:resolve --applied 20261020_120000_add_posts\` and run \`nextly migrate\` again.
+  Docs: https://nextlyhq.com/docs/cli/errors/migration-not-proven  (MIGRATION_NOT_PROVEN)"
 `;
 
 exports[`each code, as a command ends with it > MIGRATION_SQL_UNCHECKABLE 1`] = `
@@ -1069,7 +1136,7 @@ exports[`each code, as a command ends with it > NEXTLY_ROUTE_INVALID_PATH 1`] = 
 `;
 
 exports[`each code, as a command ends with it > NEXTLY_SCHEMA_CONVERSION_UNCONFIRMED 1`] = `
-"✗ This save also converts body from text to varchar(255), from an earlier Nextly version. Review the save and confirm the conversion to write it.
+"✗ dc_posts was made by an earlier Nextly version. This save brings it up to date: changes body from text to varchar(255). Review the save and confirm the conversion to write it.
   Why:  The column's type differs from what its field makes now, and a save converts only the columns its review showed.
   Next: Review the save in the Schema Builder and confirm the conversion, or pass the column in \`acknowledgedConversions\`.
   Docs: https://nextlyhq.com/docs/cli/errors/nextly-schema-conversion-unconfirmed  (NEXTLY_SCHEMA_CONVERSION_UNCONFIRMED)"
@@ -1808,9 +1875,9 @@ exports[`each code, as a command ends with it > SCHEMA_LOCK_UNAVAILABLE 1`] = `
 `;
 
 exports[`each code, as a command ends with it > SCHEMA_SYNC_IN_PRODUCTION 1`] = `
-"✗ Cannot auto-sync schema in production mode.
-  Why:  \`NODE_ENV\` is \`production\`, and 2 collections would change: posts, pages.
-  Next: Run \`nextly migrate:create --name="<migration-name>"\` to create migrations, then \`nextly migrate\` to apply.
+"✗ db:sync does not run in production.
+  Why:  \`NODE_ENV\` is \`production\`, and db:sync changes the database directly, without a migration. Nothing was changed.
+  Next: Run \`nextly migrate:create --name="<migration-name>"\` where you develop, commit the migration, then run \`nextly migrate\` against this database.
   Docs: https://nextlyhq.com/docs/cli/errors/schema-sync-in-production  (SCHEMA_SYNC_IN_PRODUCTION)"
 `;
 
@@ -1925,6 +1992,20 @@ exports[`each code, as a command ends with it > UPGRADE_EVENTS_TABLE_TAKEN 1`] =
   Why:  \`nextly upgrade\` moves the migration records into "nextly_schema_events", and the table there does not have the columns it writes. Nothing was changed.
   Next: Rename it, or re-run with \`--target-table-name <name>\`.
   Docs: https://nextlyhq.com/docs/cli/errors/upgrade-events-table-taken  (UPGRADE_EVENTS_TABLE_TAKEN)"
+`;
+
+exports[`each code, as a command ends with it > UPGRADE_LEDGER_UNREADABLE 1`] = `
+"✗ The table "nextly_migrations" holds records \`nextly upgrade\` cannot read: the record of 0001_init.sql has the status "rolled_back".
+  Why:  \`nextly upgrade\` moves the records an earlier release kept in \`nextly_migrations\` into \`nextly_schema_events\`, and reads every one before writing any. One of them it cannot read, so nothing was changed.
+  Next: Rename the table if Nextly did not create it, then run \`nextly upgrade\` again.
+  Docs: https://nextlyhq.com/docs/cli/errors/upgrade-ledger-unreadable  (UPGRADE_LEDGER_UNREADABLE)"
+`;
+
+exports[`each code, as a command ends with it > UPGRADE_WORK_MOVED 1`] = `
+"✗ \`nextly upgrade\` no longer changes the database, and changed nothing.
+  Why:  \`nextly migrate\` now hashes passwords stored before this release, removes passwords kept in version history and converts roles holding a retired manage permission, once its migrations have applied. \`nextly i18n:convert-zoned-dates\` converts translated date columns kept with a time zone.
+  Next: Run \`nextly migrate\` (\`nextly migrate --backup-confirmed\` where no terminal is attached). Once the release serves every instance, run \`nextly i18n:convert-zoned-dates\` if a start or \`nextly migrate\` named such a column.
+  Docs: https://nextlyhq.com/docs/cli/errors/upgrade-work-moved  (UPGRADE_WORK_MOVED)"
 `;
 
 exports[`each code, as a command ends with it > WIDGET_GENERATE_CANCELLED 1`] = `

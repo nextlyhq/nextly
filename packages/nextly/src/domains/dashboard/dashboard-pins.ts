@@ -10,7 +10,6 @@
  * yet works as before rather than failing.
  *
  * @module domains/dashboard/dashboard-pins
- * @experimental Until the dashboard's pins are built on it.
  */
 
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
@@ -183,7 +182,7 @@ export class DashboardPins {
       if (pinned.length >= MAX_PINS_PER_READER) {
         throw NextlyError.conflict({
           reason: "state",
-          message: `You can pin at most ${MAX_PINS_PER_READER} entries and Singles. Unpin one to pin another.`,
+          message: `You can keep up to ${MAX_PINS_PER_READER} pins. Unpin one first.`,
           logContext: { userId, limit: MAX_PINS_PER_READER },
         });
       }

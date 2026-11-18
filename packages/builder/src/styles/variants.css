@@ -248,9 +248,8 @@
 
 /*
  * The one row the canvas's preview tags share, where the variant's tag sits
- * alone: the variant previewed and the site mode picked, side by side and
- * never over each other. Inside it the row places each tag, so the variant's
- * tag gives up its own position. Drawn in the frame's pinned chrome, so its
+ * and any tag added later beside it, never over it. Inside it the row places
+ * each tag, so the variant's tag gives up its own position. Drawn in the frame's pinned chrome, so its
  * top right is the viewport's and it stays there while the page scrolls.
  */
 .nx-canvas-tags {
@@ -282,51 +281,6 @@
 
 .dark .nx-variant-preview-tag {
   --nx-builder-component: var(--nx-builder-component-on-dark);
-}
-
-/*
- * "Dark preview · Use device": a pill in the admin's own colours, at rest as
- * the variant's tag is, whose one control takes presses back from the layer.
- */
-.nx-mode-preview-tag {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.375rem;
-  margin: 0;
-  padding: 0.1875rem 0.25rem 0.1875rem 0.625rem;
-  border: 1px solid var(--nx-border);
-  border-radius: 999px;
-  background: var(--nx-card);
-  color: var(--nx-foreground);
-  font-size: var(--text-xs);
-  font-weight: 500;
-  white-space: nowrap;
-}
-
-.nx-mode-preview-tag__dot {
-  color: var(--nx-muted-foreground);
-}
-
-.nx-mode-preview-tag__clear {
-  padding: 0 0.375rem;
-  border: 0;
-  border-radius: 999px;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  text-decoration: underline;
-  text-underline-offset: 2px;
-  cursor: pointer;
-  pointer-events: auto;
-}
-
-.nx-mode-preview-tag__clear:hover {
-  background: var(--nx-muted);
-}
-
-.nx-mode-preview-tag__clear:focus-visible {
-  outline: 2px solid var(--nx-ring);
-  outline-offset: 1px;
 }
 
 /*

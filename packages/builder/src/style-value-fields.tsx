@@ -7,6 +7,8 @@
  * @module style-value-fields
  */
 import {
+  APPEAR_DELAY_PROPERTY,
+  APPEAR_DURATION_PROPERTY,
   isStyleLeaf,
   OVERLAY_STRENGTH,
   STYLE_CATALOG,
@@ -27,20 +29,26 @@ import {
 import * as React from "react";
 
 import { AspectRatioField, drawsAspectRatio } from "./aspect-ratio-field";
+import {
+  BackgroundPositionField,
+  BackgroundSizeField,
+} from "./background-fields";
+import { BackgroundImageField } from "./background-image-control";
+import { useCanvasTokenMode } from "./canvas/prefers-dark";
 import { commitOnEnter } from "./commit-on-enter";
+import { CssHint, OptionWrites, useFieldDescription } from "./css-hint";
 import { DecorationField, drawsDecoration } from "./decoration-field";
 import { FocalPointField } from "./focal-point-field";
 import { IconChoiceField } from "./icon-choice-field";
 import { InheritedValue, useUnsetHint } from "./inherited-value";
 import { useLabelScrub } from "./label-scrub";
-import { useCanvasTokenMode } from "./prefers-dark";
 import { SectionHeld } from "./section-held";
 import {
   alignmentGroupFor,
   drawsIcons,
   type Flow,
 } from "./style-alignment-icons";
-import { foldedLeaf } from "./style-colour";
+import { foldedLeaf, type SiteVariable } from "./style-colour";
 import type { StyleControl } from "./style-controls";
 import type { CommitOutcome } from "./style-field-surroundings";
 import {
@@ -60,9 +68,31 @@ import {
   toggleShows,
 } from "./style-numeric";
 import { textNumber, UnitWords, NumericField } from "./style-numeric-field";
+import { BOX_SHADOW, drawsShadow, ShadowField } from "./style-shadow-field";
 import { useDraft, arrowStep, storedText } from "./style-text-field";
 import { tokenForTypedName } from "./style-variables";
-import { VariableChoice } from "./variable-choice";
+import {
+  focusVariableAfterPick,
+  pickedVariable,
+  useOfferedVariables,
+  VariableChoice,
+  VariableSelectItems,
+} from "./variable-choice";
+
+/**
+ * The leaf a catalog property's variables are offered for, outside the style
+ * panel: its own leaf, or, for a union such as line height or weight, the one
+ * folded leaf over its forms the panel's field uses. `undefined` for a
+ * property the catalog does not list, or one with no form a variable fits.
+ */
+export function propertyVariableLeaf(property: string): StyleLeaf | undefined {
+  const shape = STYLE_CATALOG.find(entry => entry.property === property)?.shape;
+  if (shape === undefined) return undefined;
+  if (isStyleLeaf(shape)) return shape;
+  if (shape.kind !== "union") return undefined;
+  const first = shape.of.find(isStyleLeaf);
+  return first === undefined ? undefined : foldedLeafFor(property, first);
+}
 
 /**
  * The leaf a field's variables are offered for: the control's own, or, for a
@@ -122,6 +152,8 @@ function SelectField({
   describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
+  // The refusal, and the CSS names while they are shown.
+  const described = useFieldDescription(describedBy);
   const current = typeof stored === "string" ? stored : "";
   const hint = useUnsetHint("Not set");
   // The validator accepts a keyword case-insensitively, with surrounding CSS
@@ -140,7 +172,7 @@ function SelectField({
       <Select value={current} onValueChange={value => onCommit(value)}>
         <SelectTrigger
           id={id}
-          aria-describedby={describedBy}
+          aria-describedby={described}
           aria-invalid={describedBy === undefined ? undefined : true}
         >
           <SelectValue placeholder={hint} />
@@ -201,19 +233,13 @@ function FoldedField({
   describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
-  // The site's variables for this property, at the field's end: a fold has
-  // no unit menu to hold them.
-  const variables = (
-    <VariableChoice
-      leaf={leaf}
-      tokens={tokens}
-      bound={false}
-      empty={stored === undefined}
-      current={undefined}
-      label={actionName}
-      onPick={identity => onCommit({ $token: identity })}
-    />
-  );
+  // The site's variables for this property: first in the list a weight is
+  // chosen from, and behind a menu of its own at a typed field's end, which
+  // has no unit menu to hold them.
+  const offered = useOfferedVariables(leaf, tokens);
+  const pick = (identity: string): void => {
+    onCommit({ $token: identity });
+  };
   if (fold.kind === "number-or-length") {
     return (
       <div className="nx-style-inspector__numeric">
@@ -225,7 +251,13 @@ function FoldedField({
           describedBy={describedBy}
           onCommit={onCommit}
         />
-        {variables}
+        <VariableChoice
+          leaf={leaf}
+          tokens={tokens}
+          current={undefined}
+          label={actionName}
+          onPick={pick}
+        />
       </div>
     );
   }
@@ -236,7 +268,8 @@ function FoldedField({
       stored={stored}
       describedBy={describedBy}
       onCommit={onCommit}
-      after={variables}
+      variables={offered}
+      onPickVariable={pick}
     />
   );
 }
@@ -262,16 +295,20 @@ function OptionSelect({
   stored,
   describedBy,
   onCommit,
-  after,
+  variables,
+  onPickVariable,
 }: {
   id: string;
   options: readonly FoldedOption[];
   stored: StyleValue | undefined;
   describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
-  /** What follows the list in its row: the site's variables, where offered. */
-  after?: React.ReactNode;
+  /** The site's variables the property takes, listed before the options. */
+  variables: readonly SiteVariable[];
+  onPickVariable: (identity: string) => void;
 }): React.JSX.Element {
+  // The refusal, and the CSS names while they are shown.
+  const described = useFieldDescription(describedBy);
   const current = storedKey(stored) ?? "";
   const inherited = React.useContext(InheritedValue);
   const hint =
@@ -281,18 +318,26 @@ function OptionSelect({
       <Select
         value={current}
         onValueChange={key => {
+          const identity = pickedVariable(key);
+          if (identity !== undefined) {
+            // The list becomes the variable's chip; focus follows to it.
+            focusVariableAfterPick(document.getElementById(id));
+            onPickVariable(identity);
+            return;
+          }
           const chosen = options.find(option => option.key === key);
           if (chosen !== undefined) onCommit(chosen.value);
         }}
       >
         <SelectTrigger
           id={id}
-          aria-describedby={describedBy}
+          aria-describedby={described}
           aria-invalid={describedBy === undefined ? undefined : true}
         >
           <SelectValue placeholder={hint} />
         </SelectTrigger>
         <SelectContent>
+          <VariableSelectItems offered={variables} before />
           {options.map(option => (
             <SelectItem key={option.key} value={option.key}>
               {option.label}
@@ -300,7 +345,6 @@ function OptionSelect({
           ))}
         </SelectContent>
       </Select>
-      {after}
     </div>
   );
 }
@@ -326,6 +370,8 @@ function LengthOrNumberField({
   describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
+  // The refusal, and the CSS names while they are shown.
+  const described = useFieldDescription(describedBy);
   const { draft, setDraft } = useDraft(stored);
   const mode = useCanvasTokenMode();
   const hint = useUnsetHint("1.5, 24px or 150%");
@@ -348,7 +394,7 @@ function LengthOrNumberField({
       placeholder={hint}
       // A value, not words: no list of earlier entries over the field.
       autoComplete="off"
-      aria-describedby={describedBy}
+      aria-describedby={described}
       aria-invalid={describedBy === undefined ? undefined : true}
       onChange={event => setDraft(event.target.value)}
       // Nothing of its own is written while a drag on the label owns it.
@@ -416,9 +462,21 @@ const OWN_FIELDS: Readonly<
     string,
     {
       draws: (stored: StyleValue | undefined) => boolean;
-      Field: typeof AspectRatioField;
+      /** Given the control and the site's variables too, for a field that offers them. */
+      Field: (
+        props: Parameters<typeof AspectRatioField>[0] & {
+          control: StyleControl;
+          tokens: SiteTokenSet | undefined;
+        }
+      ) => React.JSX.Element;
       /** Whether its tab stop is a button a label's `for` would click. */
       buttons: boolean;
+      /**
+       * The kind of value it draws, where one CSS property is written by
+       * several: `background-image` is both an image's address and a
+       * gradient, and only the address is a file to choose.
+       */
+      leaf?: StyleControl["leaf"]["kind"];
     }
   >
 > = {
@@ -432,13 +490,54 @@ const OWN_FIELDS: Readonly<
     Field: DecorationField,
     buttons: true,
   },
+  // A shadow is built with the shadow control, as a shadow variable is; a
+  // held shadow variable keeps its chip.
+  [BOX_SHADOW]: {
+    draws: drawsShadow,
+    Field: ShadowField,
+    buttons: false,
+  },
   // Any position: the nine points, or one written as CSS beside them.
   "object-position": {
     draws: stored => stored === undefined || typeof stored === "string",
     Field: FocalPointField,
     buttons: true,
   },
+  // The background's image: the Media library, an upload or a link, rather
+  // than an address typed as CSS.
+  "background-image": {
+    draws: stored => stored === undefined || typeof stored === "string",
+    Field: BackgroundImageField,
+    buttons: false,
+    leaf: "url",
+  },
+  // Where the background image sits, as the object position does.
+  "background-position": {
+    draws: stored => stored === undefined || typeof stored === "string",
+    Field: BackgroundPositionField,
+    buttons: true,
+  },
+  // How it is sized: Cover, Fit or Tile, each with the repeat it needs, or
+  // any other size written as CSS.
+  "background-size": {
+    draws: stored => stored === undefined || typeof stored === "string",
+    Field: BackgroundSizeField,
+    buttons: true,
+  },
 };
+
+/**
+ * The field of its own a control is drawn with, if any: found by the CSS
+ * property it writes, and by the kind of value where an entry names one.
+ */
+function ownFieldFor(
+  leaf: StyleControl["leaf"]
+): (typeof OWN_FIELDS)[string] | undefined {
+  const own = OWN_FIELDS[leaf.cssProperty];
+  return own === undefined || (own.leaf !== undefined && own.leaf !== leaf.kind)
+    ? undefined
+    : own;
+}
 
 /**
  * Whether a field's label only moves focus: where the control drawn is a
@@ -450,7 +549,7 @@ export function labelFocusOnly(
   stored: StyleValue | undefined
 ): boolean {
   if (drawsIcons(leaf)) return true;
-  const own = OWN_FIELDS[leaf.cssProperty];
+  const own = ownFieldFor(leaf);
   return own !== undefined && own.buttons && own.draws(stored);
 }
 
@@ -554,14 +653,16 @@ export function ValueField({
   }
   // A property with a field of its own, where the stored value is one that
   // field can draw; any other spelling keeps the text field.
-  const own = OWN_FIELDS[control.leaf.cssProperty];
+  const own = ownFieldFor(control.leaf);
   if (own !== undefined && own.draws(stored)) {
     return (
       <own.Field
         id={id}
         labelledBy={labelledBy}
+        control={control}
         stored={stored}
         actionName={actionName}
+        tokens={tokens}
         describedBy={describedBy}
         onCommit={onCommit}
       />
@@ -590,6 +691,19 @@ export function ValueField({
         id={id}
         control={{ ...control, leaf: control.leaf }}
         stored={stored}
+        describedBy={describedBy}
+        onCommit={onCommit}
+      />
+    );
+  }
+  if (MILLISECOND_PROPERTIES.has(control.leaf.cssProperty)) {
+    return (
+      <MillisecondsField
+        id={id}
+        control={control}
+        stored={stored}
+        actionName={actionName}
+        tokens={tokens}
         describedBy={describedBy}
         onCommit={onCommit}
       />
@@ -678,6 +792,36 @@ function fromPercent(
         : undefined;
   if (number === undefined) return value;
   return scale.fraction ? fractionOf(number) : number;
+}
+
+/** The values stored as whole milliseconds, by CSS property. */
+const MILLISECOND_PROPERTIES: ReadonlySet<string> = new Set([
+  APPEAR_DURATION_PROPERTY,
+  APPEAR_DELAY_PROPERTY,
+]);
+
+/**
+ * A time stored as a number of milliseconds: the ordinary number field, with
+ * its unit beside it, since the number alone does not say what it counts.
+ */
+function MillisecondsField(
+  props: React.ComponentProps<typeof NumericField>
+): React.JSX.Element {
+  const unitId = React.useId();
+  return (
+    <div className="nx-style-inspector__unit-field">
+      <UnitWords.Provider value={unitId}>
+        <NumericField {...props} />
+      </UnitWords.Provider>
+      <span className="nx-style-inspector__unit" aria-hidden="true">
+        ms
+      </span>
+      {/* The sign is not read; these words are, as the field's description. */}
+      <span id={unitId} className="sr-only">
+        milliseconds
+      </span>
+    </div>
+  );
 }
 
 /**
@@ -796,6 +940,8 @@ function PercentSlider({
   describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
+  // The refusal, and the CSS names while they are shown.
+  const described = useFieldDescription(describedBy);
   const [preview, setPreview] = React.useState<number | undefined>(undefined);
   // Held with its section, as the fieldset holds the form controls; a
   // slider's thumb is not one, so it is told.
@@ -821,7 +967,7 @@ function PercentSlider({
           // may hold the focus when it arrives.
           ...(describedBy === undefined
             ? {}
-            : { "aria-describedby": describedBy }),
+            : { "aria-describedby": described }),
         },
       ]}
     />
@@ -854,6 +1000,10 @@ function ToggleField({
   describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
+  // The refusal, and the CSS names while they are shown.
+  const described = useFieldDescription(describedBy);
+  // What each option writes, from the field it is drawn in.
+  const optionWrites = React.useContext(OptionWrites);
   return (
     <div
       // The field's id sits on the GROUP rather than on any one button. The
@@ -867,30 +1017,34 @@ function ToggleField({
       className="nx-style-inspector__toggle"
       role="group"
       aria-labelledby={labelledBy}
-      aria-describedby={describedBy}
+      aria-describedby={described}
     >
       {options.map(option => {
         const pressed = stored === option;
         return (
-          <button
+          // What this option writes, on hover or keyboard focus.
+          <CssHint
             key={option}
-            type="button"
-            aria-pressed={pressed}
-            // Marked on the BUTTONS rather than on the group, which carries the
-            // description. `aria-invalid` is not a state `role="group"`
-            // supports, so setting it there would be an attribute a screen
-            // reader is entitled to ignore — and the file's own rule is that a
-            // control described by a refusal must also read as invalid, or it
-            // announces the message as a hint rather than as a failure.
-            aria-invalid={describedBy === undefined ? undefined : true}
-            // Pressing the pressed option CLEARS rather than re-writing it,
-            // which is the only way a group of options can reach unset without
-            // spending a button on "neither".
-            onClick={() => onCommit(pressed ? null : option)}
-            title={option}
+            writes={optionWrites?.(option) ?? `${cssProperty}: ${option}`}
           >
-            {keywordLabel(cssProperty, option)}
-          </button>
+            <button
+              type="button"
+              aria-pressed={pressed}
+              // Marked on the BUTTONS rather than on the group, which carries the
+              // description. `aria-invalid` is not a state `role="group"`
+              // supports, so setting it there would be an attribute a screen
+              // reader is entitled to ignore — and the file's own rule is that a
+              // control described by a refusal must also read as invalid, or it
+              // announces the message as a hint rather than as a failure.
+              aria-invalid={describedBy === undefined ? undefined : true}
+              // Pressing the pressed option CLEARS rather than re-writing it,
+              // which is the only way a group of options can reach unset without
+              // spending a button on "neither".
+              onClick={() => onCommit(pressed ? null : option)}
+            >
+              {keywordLabel(cssProperty, option)}
+            </button>
+          </CssHint>
         );
       })}
     </div>

@@ -1,26 +1,35 @@
 /**
  * The Section and Button shortcuts, drawn at the top of the Size section: a
- * Section's Height, and a Button's Size and Full width. Each writes the Style
+ * Section's Height, a Button's Size and Full width, and an Icon's Size. Each writes the Style
  * value beneath it at the device being edited, which stays editable as itself.
  *
  * @module block-shortcuts-field
  */
 import {
   findNode,
+  type BlockNode,
   type BreakpointId,
   type StyleState,
 } from "@nextlyhq/blocks-engine";
 import { Switch } from "@nextlyhq/ui";
 import * as React from "react";
 
+import { SettingSlot } from "./settings-filter";
+
 import {
   BUTTON_BLOCK,
+  FULL_SCREEN,
   fullWidthOf,
   heightOf,
+  ICON_BLOCK,
+  ICON_SIZES,
+  iconSizeOf,
   planFullWidth,
   planHeight,
+  planIconSize,
   planSize,
   SECTION_BLOCK,
+  SIZES,
   sizeOf,
   sizesOffered,
   type HeightChoice,
@@ -28,16 +37,40 @@ import {
   type ShortcutAt,
   type SizeChoice,
 } from "./block-shortcuts";
+import {
+  FULL_WIDTH_WRITES,
+  heightShortcutWrites,
+  iconSizeShortcutWrites,
+  sizeShortcutWrites,
+} from "./code-hints";
+import { CssHint } from "./css-hint";
 import type { EditorState } from "./editor-state";
 import type { BuilderOp } from "./op-vocabulary";
 import { SegmentChoices } from "./segment-choices";
 
-const HEIGHT_LABELS: Readonly<Record<HeightChoice, string>> = {
-  auto: "Auto",
+/** The ids the settings search knows each shortcut by. */
+export const SHORTCUT_IDS = {
+  height: "shortcut:height",
+  size: "shortcut:size",
+  fullWidth: "shortcut:fullWidth",
+} as const;
+
+/** A Section's height, in the words of what it does: fit, or fill the screen. */
+export const HEIGHT_LABELS: Readonly<Record<HeightChoice, string>> = {
+  auto: "Fit content",
   screen: "Full screen",
 };
 
-const SIZE_LABELS: Readonly<Record<SizeChoice, string>> = {
+/** What each Height choice writes. */
+const HEIGHT_WRITES = heightShortcutWrites(FULL_SCREEN);
+
+/** What each Size choice writes. */
+const SIZE_WRITES = sizeShortcutWrites(SIZES);
+
+/** What each of an Icon's Size choices writes. */
+const ICON_SIZE_WRITES = iconSizeShortcutWrites(ICON_SIZES);
+
+export const SIZE_LABELS: Readonly<Record<SizeChoice, string>> = {
   small: "Small",
   medium: "Medium",
   large: "Large",
@@ -56,12 +89,15 @@ function ChoiceRow<T extends string>({
   labels,
   hint,
   onChoose,
+  writes,
 }: {
   label: string;
   shownLabel?: boolean;
   options: readonly T[];
   on: T | undefined;
   labels: Readonly<Record<T, string>>;
+  /** What each choice writes, for its tooltip. */
+  writes?: Readonly<Record<T, string>> | undefined;
   /** What the choices do, or none where the field beneath already says. */
   hint?: string | undefined;
   onChoose: (choice: T) => void;
@@ -79,6 +115,7 @@ function ChoiceRow<T extends string>({
           labels={labels}
           labelId={labelId}
           onChoose={onChoose}
+          writes={writes}
         />
       </div>
       {hint === undefined ? null : <p className="nx-inspector__note">{hint}</p>}
@@ -101,9 +138,10 @@ interface ShortcutProps {
 /**
  * The Section whose presets held focus when a choice moved them, if any.
  * Choosing Full screen draws the Min height field and the presets move over
- * it, and Auto moves them back: two places in the panel, so the focused radio
- * is unmounted with the old row. The row drawn in the new place takes the
- * focus back, read once by whichever row draws next and cleared.
+ * it, and Fit content moves them back: two places in the panel, so the
+ * focused radio is unmounted with the old row. The row drawn in the new
+ * place takes the focus back, read once by whichever row draws next and
+ * cleared.
  */
 let focusMovesWith: string | undefined;
 
@@ -118,9 +156,10 @@ function takeMovedFocus(group: HTMLElement | null, nodeId: string): void {
 }
 
 /**
- * A Section's Min height presets, Auto and Full screen: on the Min height
- * row, as a row over its input where that field is drawn (`over`), else as
- * the row itself, named Min height, until a value draws the field.
+ * A Section's Height, Fit content and Full screen, which presets its min
+ * height: a row over the Min height input where that field is drawn
+ * (`over`), named for screen readers only, else a row of its own, named
+ * Height, until a value draws the field.
  */
 export function MinHeightPresets({
   editor,
@@ -143,35 +182,38 @@ export function MinHeightPresets({
   };
   return (
     <div ref={row} className="nx-block-shortcuts" data-control="section-height">
-      <ChoiceRow
-        label={over ? "Min height presets" : "Min height"}
-        shownLabel={!over}
-        options={["auto", "screen"] as const}
-        on={heightOf(node, at, reaching)}
-        labels={HEIGHT_LABELS}
-        // Over the field, the value beneath says what Full screen wrote, and a
-        // line between them would part the presets from the field they set.
-        hint={
-          over
-            ? undefined
-            : "Full screen: at least the screen's height, growing with its content."
-        }
-        onChoose={choice => {
-          const op = planHeight(node, choice, at, reaching);
-          if (op === null) return;
-          // Marked before the write, which may move this row elsewhere.
-          if (row.current?.contains(document.activeElement) === true) {
-            focusMovesWith = nodeId;
-            // Only for the draw this write makes, committed within the event:
-            // a write that draws nothing (refused) leaves no mark to steal
-            // focus from a field typed in later.
-            setTimeout(() => {
-              if (focusMovesWith === nodeId) focusMovesWith = undefined;
-            }, 0);
+      <SettingSlot tab="style" ids={[SHORTCUT_IDS.height]}>
+        <ChoiceRow
+          label="Height"
+          shownLabel={!over}
+          options={["auto", "screen"] as const}
+          on={heightOf(node, at, reaching)}
+          labels={HEIGHT_LABELS}
+          writes={HEIGHT_WRITES}
+          // Over the field, the value beneath says what Full screen wrote, and a
+          // line between them would part the presets from the field they set.
+          hint={
+            over
+              ? undefined
+              : "Full screen: at least the screen's height, growing with its content."
           }
-          editor.apply(op);
-        }}
-      />
+          onChoose={choice => {
+            const op = planHeight(node, choice, at, reaching);
+            if (op === null) return;
+            // Marked before the write, which may move this row elsewhere.
+            if (row.current?.contains(document.activeElement) === true) {
+              focusMovesWith = nodeId;
+              // Only for the draw this write makes, committed within the event:
+              // a write that draws nothing (refused) leaves no mark to steal
+              // focus from a field typed in later.
+              setTimeout(() => {
+                if (focusMovesWith === nodeId) focusMovesWith = undefined;
+              }, 0);
+            }
+            editor.apply(op);
+          }}
+        />
+      </SettingSlot>
     </div>
   );
 }
@@ -195,35 +237,83 @@ export function BlockShortcutsControl({
   const apply = (op: BuilderOp | null) => {
     if (op !== null) editor.apply(op);
   };
+  if (node.type === ICON_BLOCK) {
+    return (
+      <IconSizeRow node={node} at={at} reaching={reaching} apply={apply} />
+    );
+  }
   if (node.type !== BUTTON_BLOCK) return null;
   const size = sizeOf(node, at, reaching);
   return (
     <div className="nx-block-shortcuts" data-control="button-size">
       {sizesOffered(node) ? (
+        <SettingSlot tab="style" ids={[SHORTCUT_IDS.size]}>
+          <ChoiceRow
+            label="Size"
+            options={["small", "medium", "large"] as const}
+            on={size}
+            labels={SIZE_LABELS}
+            writes={SIZE_WRITES}
+            hint={
+              size === undefined
+                ? "Custom: the padding or text size below is set another way."
+                : "Sets the padding and text size together."
+            }
+            onChoose={choice => apply(planSize(node, choice, at, reaching))}
+          />
+        </SettingSlot>
+      ) : null}
+      <SettingSlot tab="style" ids={[SHORTCUT_IDS.fullWidth]}>
+        <div className="nx-inspector__field">
+          <span className="nx-inspector__field-name">Full width</span>
+          <CssHint writes={FULL_WIDTH_WRITES}>
+            <Switch
+              aria-label="Full width"
+              checked={fullWidthOf(node, at, reaching)}
+              onCheckedChange={on =>
+                apply(planFullWidth(node, on, at, reaching))
+              }
+            />
+          </CssHint>
+        </div>
+        <p className="nx-inspector__note">
+          As wide as its container, here and below.
+        </p>
+      </SettingSlot>
+    </div>
+  );
+}
+
+/** An Icon's Size, at the top of its Size section: the font size its glyph is drawn at. */
+function IconSizeRow({
+  node,
+  at,
+  reaching,
+  apply,
+}: {
+  node: BlockNode;
+  at: ShortcutAt;
+  reaching: Reaching | undefined;
+  apply: (op: BuilderOp | null) => void;
+}): React.JSX.Element {
+  const iconSize = iconSizeOf(node, at, reaching);
+  return (
+    <div className="nx-block-shortcuts" data-control="icon-size">
+      <SettingSlot tab="style" ids={[SHORTCUT_IDS.size]}>
         <ChoiceRow
           label="Size"
           options={["small", "medium", "large"] as const}
-          on={size}
+          on={iconSize}
           labels={SIZE_LABELS}
+          writes={ICON_SIZE_WRITES}
           hint={
-            size === undefined
-              ? "Custom: the padding or text size below is set another way."
-              : "Sets the padding and text size together."
+            iconSize === undefined
+              ? "Custom: the font size below is set another way."
+              : "Sets the icon's font size, which its glyph is drawn at."
           }
-          onChoose={choice => apply(planSize(node, choice, at, reaching))}
+          onChoose={choice => apply(planIconSize(node, choice, at, reaching))}
         />
-      ) : null}
-      <div className="nx-inspector__field">
-        <span className="nx-inspector__field-name">Full width</span>
-        <Switch
-          aria-label="Full width"
-          checked={fullWidthOf(node, at, reaching)}
-          onCheckedChange={on => apply(planFullWidth(node, on, at, reaching))}
-        />
-      </div>
-      <p className="nx-inspector__note">
-        As wide as its container, here and below.
-      </p>
+      </SettingSlot>
     </div>
   );
 }

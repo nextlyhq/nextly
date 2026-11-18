@@ -35,6 +35,7 @@ import {
 } from "../loop-collections-contract";
 
 import { sessionAnswer } from "./session-answers";
+import { readStarted } from "./startup-reads";
 
 /** Said when the route answered with something that is not a list of collections. */
 const UNEXPLAINED = "Collections could not be listed. Try again.";
@@ -49,14 +50,21 @@ const UNEXPLAINED = "Collections could not be listed. Try again.";
  * absent for the default.
  */
 export async function listLoopCollections(
-  locale?: string
+  locale?: string,
+  userId: string | null = null
 ): Promise<readonly LoopCollectionItem[]> {
-  const body = await readPluginRoute<LoopCollectionsResponse>({
-    plugin: PAGE_BUILDER_PLUGIN_NAME,
-    // In the language being edited, so the fields offered are the ones a
-    // save in that language takes.
-    path: loopCollectionsPath(locale),
-  });
+  // In the language being edited, so the fields offered are the ones a save
+  // in that language takes; the builder's start-up answer when it opens.
+  const path = loopCollectionsPath(locale);
+  const body = await readStarted(
+    path,
+    () =>
+      readPluginRoute<LoopCollectionsResponse>({
+        plugin: PAGE_BUILDER_PLUGIN_NAME,
+        path,
+      }),
+    userId
+  );
   const collections = loopCollectionsOf(body);
   if (collections === undefined) throw new Error(UNEXPLAINED);
   return collections;
@@ -88,7 +96,7 @@ export function loopCollectionsIn(
       sessionAnswer(
         userId,
         JSON.stringify(["loop-collections", locale ?? ""]),
-        () => listLoopCollections(locale)
+        () => listLoopCollections(locale, userId)
       );
     loopCollectionReads.set(key, read);
   }
@@ -148,6 +156,12 @@ function collectionOf(item: unknown): LoopCollectionItem | undefined {
       typeof name === "string" ? name : undefined
     ),
     readable: eachOf(record.readable, readableOf),
+    ...(typeof record.titleField === "string"
+      ? { titleField: record.titleField }
+      : {}),
+    ...(typeof record.entriesHavePages === "boolean"
+      ? { entriesHavePages: record.entriesHavePages }
+      : {}),
   };
 }
 
@@ -203,6 +217,9 @@ function readableOf(value: unknown): LoopReadableField | undefined {
     // Both decide a field's kind for a list, as the save reads them.
     ...(record.timeOnly === true ? { timeOnly: true as const } : {}),
     ...(isStoragePrimitive(storage) ? { storage } : {}),
+    ...(typeof record.takesImages === "boolean"
+      ? { takesImages: record.takesImages }
+      : {}),
   };
 }
 

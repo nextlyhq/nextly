@@ -25,10 +25,12 @@ export {
   type FieldGroupsNamespace,
 } from "./field-groups";
 export {
+  createEmailDeliveriesNamespace,
   createEmailNamespace,
   createEmailProvidersNamespace,
   createEmailTemplatesNamespace,
   createUserFieldsNamespace,
+  type EmailDeliveriesNamespace,
   type EmailNamespace,
   type EmailProvidersNamespace,
   type EmailTemplatesNamespace,
@@ -51,6 +53,14 @@ export {
   createContentEventsNamespace,
   type ContentEventsNamespace,
 } from "./content-events";
+export {
+  createWorkflowsNamespace,
+  type WorkflowAssignmentInput,
+  type WorkflowCallArgs,
+  type WorkflowDocumentRef,
+  type WorkflowSeenPart,
+  type WorkflowsNamespace,
+} from "./workflows";
 export {
   createReleasesNamespace,
   type ReleaseCallerArgs,

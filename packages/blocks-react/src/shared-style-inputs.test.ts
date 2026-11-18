@@ -944,8 +944,8 @@ describe("the label the stamp is taken over", () => {
     // Both surfaces, because they can disagree — the label is what the stamp is
     // taken over, so a version reaching one and not the other would key
     // artifacts on a value the label never carried.
-    expect(JSON.parse(sharedStyleInputsLabel(inputs()))[0]).toBe("v7");
-    expect(sharedStyleInputsId(inputs())).toMatch(/^v7:[0-9a-z]+$/);
+    expect(JSON.parse(sharedStyleInputsLabel(inputs()))[0]).toBe("v12");
+    expect(sharedStyleInputsId(inputs())).toMatch(/^v12:[0-9a-z]+$/);
   });
 
   it("refuses every sheet stored before blocks lost their outer margins", () => {
@@ -958,7 +958,7 @@ describe("the label the stamp is taken over", () => {
     const label: unknown[] = JSON.parse(sharedStyleInputsLabel(inputs()));
     const before = `v3:${hashId(JSON.stringify(["v3", ...label.slice(1)]))}`;
     expect(now).not.toBe(before);
-    expect(now?.startsWith("v7:")).toBe(true);
+    expect(now?.startsWith("v12:")).toBe(true);
   });
 
   it("refuses every sheet stored before parts took properties from a wrapping root", () => {
@@ -997,6 +997,67 @@ describe("the label the stamp is taken over", () => {
     expect(stampedUnderCurrentEncoding(before)).toBe(false);
   });
 
+  it("refuses every sheet stored before a row's items were flagged", () => {
+    // `v8` flags a flex or grid item, and a block out of the flow, for the
+    // containment inset. A `v7` sheet carries neither flag, so a contained item
+    // in a row would be inset from the whole row: recompiled, not served.
+    // Rebuilt from the label the old compiler wrote.
+    const now = sharedStyleInputsId(inputs());
+    const label: unknown[] = JSON.parse(sharedStyleInputsLabel(inputs()));
+    const before = `v7:${hashId(JSON.stringify(["v7", ...label.slice(1)]))}`;
+    expect(now).not.toBe(before);
+    expect(stampedUnderCurrentEncoding(before)).toBe(false);
+  });
+
+  it("refuses every sheet stored before a full row and a contents wrapper were flagged", () => {
+    // `v9` flags a flex item that fills its row, and hands a `display:
+    // contents` wrapper's flags to its children. A `v8` sheet has neither:
+    // recompiled, not served. Rebuilt from the label the old compiler wrote.
+    const now = sharedStyleInputsId(inputs());
+    const label: unknown[] = JSON.parse(sharedStyleInputsLabel(inputs()));
+    const before = `v8:${hashId(JSON.stringify(["v8", ...label.slice(1)]))}`;
+    expect(now).not.toBe(before);
+    expect(stampedUnderCurrentEncoding(before)).toBe(false);
+  });
+
+  it("refuses every sheet stored before a container could state its own width", () => {
+    // `v10` reads a container's own content width before the site's, and
+    // resets it to the site's on every element. A `v9` sheet reads the site's
+    // width alone: recompiled, not served. Rebuilt from the label the old
+    // compiler wrote.
+    const now = sharedStyleInputsId(inputs());
+    const label: unknown[] = JSON.parse(sharedStyleInputsLabel(inputs()));
+    const before = `v9:${hashId(JSON.stringify(["v9", ...label.slice(1)]))}`;
+    expect(now).not.toBe(before);
+    expect(stampedUnderCurrentEncoding(before)).toBe(false);
+  });
+
+  it("refuses every sheet stored before a site with dark values stated its colour scheme", () => {
+    // `v11` writes `color-scheme` in each token block of a site with dark
+    // values, so the browser draws its checkboxes, radios and scrollbars in the
+    // scheme its colours are in. A `v10` sheet states none, and a dark page
+    // draws them light: recompiled, not served. Rebuilt from the label the old
+    // compiler wrote.
+    const now = sharedStyleInputsId(inputs());
+    const label: unknown[] = JSON.parse(sharedStyleInputsLabel(inputs()));
+    const before = `v10:${hashId(JSON.stringify(["v10", ...label.slice(1)]))}`;
+    expect(now).not.toBe(before);
+    expect(stampedUnderCurrentEncoding(before)).toBe(false);
+  });
+
+  it("refuses every sheet stored before the links in a coloured container took its colour", () => {
+    // `v12` writes, for each rule giving a container a text colour, a rule
+    // making the links inside it inherit that colour while the site's Links
+    // row sets none. A `v11` sheet has none, so its links keep the browser's
+    // colour inside a dark section: recompiled, not served. Rebuilt from the
+    // label the old compiler wrote.
+    const now = sharedStyleInputsId(inputs());
+    const label: unknown[] = JSON.parse(sharedStyleInputsLabel(inputs()));
+    const before = `v11:${hashId(JSON.stringify(["v11", ...label.slice(1)]))}`;
+    expect(now).not.toBe(before);
+    expect(stampedUnderCurrentEncoding(before)).toBe(false);
+  });
+
   it("moves when a container's child gap moves", () => {
     const stack = { childGaps: { "core/section": { $token: "space.stack" } } };
     const wide = { childGaps: { "core/section": "3rem" } };
@@ -1013,5 +1074,36 @@ describe("the label the stamp is taken over", () => {
     // Asserted on the LABEL as well as through the stamp, because the stamp
     // agreeing could also mean the digest collided.
     expect(sharedStyleInputsLabel(inputs())).not.toContain("Medium");
+  });
+});
+
+describe("a text style's role in the stamp", () => {
+  it("moves the stamp when a class becomes a text style, since its selector and tier change", () => {
+    const shared = inputs({
+      namedClasses: [
+        {
+          id: "c1",
+          slug: "hero",
+          orderIndex: 0,
+          styles: { base: { base: { fontSize: "40px" } } },
+        },
+      ],
+    });
+    const asText = inputs({
+      namedClasses: [
+        {
+          id: "c1",
+          slug: "hero",
+          orderIndex: 0,
+          role: "text",
+          styles: { base: { base: { fontSize: "40px" } } },
+        },
+      ],
+    });
+    expect(sharedStyleInputsId(asText)).not.toBe(sharedStyleInputsId(shared));
+    // A class with no role stamps as before.
+    expect(sharedStyleInputsId(shared)).toBe(
+      sharedStyleInputsId(inputs({ namedClasses: shared.namedClasses }))
+    );
   });
 });

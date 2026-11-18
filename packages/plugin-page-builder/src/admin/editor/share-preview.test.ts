@@ -9,7 +9,7 @@ import type {
 } from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
-import { sharePreview } from "./share-preview";
+import { sharePreview, shareTitle } from "./share-preview";
 
 /** A block that offers its props as the page's title, prose and image. */
 const definitions: SeoDefinitionSource = type =>
@@ -37,6 +37,14 @@ const hero = {
     image: "/uploads/team.jpg",
   },
 };
+
+describe("the title a result shows", () => {
+  it("is the SEO title, else the page's own, trimmed, else Untitled", () => {
+    expect(shareTitle({ metaTitle: " Plans " }, "Pricing")).toBe("Plans");
+    expect(shareTitle(undefined, "  Pricing ")).toBe("Pricing");
+    expect(shareTitle({ metaTitle: "" }, "")).toBe("Untitled");
+  });
+});
 
 describe("the share preview", () => {
   it("takes what the page offers when there are no SEO fields, but never its title", () => {

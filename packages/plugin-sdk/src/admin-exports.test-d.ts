@@ -290,6 +290,7 @@ expectTypeOf<adminEntry.FieldPickerConfig>().toEqualTypeOf<{
     type: string;
     options: readonly adminEntry.FieldGroupOption[];
     loading?: boolean;
+    onNew?: () => Promise<adminEntry.FieldGroupOption | null>;
   };
 }>();
 expectTypeOf<adminEntry.FieldPickerChoice>().toEqualTypeOf<{

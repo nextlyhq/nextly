@@ -14,14 +14,11 @@ import { TooltipProvider } from "@nextlyhq/ui";
 import * as React from "react";
 
 import { ChromeTooltip } from "./chrome-tooltip";
-import { blockLabel } from "./inserter";
+import { blockLabel } from "./panels/add/inserter";
 import { UsesTail, UsesUnread } from "./shared-style-details";
 import { sharedStyleKindName } from "./shared-style-library";
 import {
-  CountedByJobs,
-  countNowWords,
   useUsageReads,
-  type CountNow,
   type UsageRead,
   type UsageReads,
   type UsageSource,
@@ -29,7 +26,7 @@ import {
 import { useUses, type UsesRead } from "./uses-read";
 import {
   sharedStyleSets,
-  variableCount,
+  variableCountWords,
   variableLossSentence,
   variableRemoval,
   type VariableReach,
@@ -77,48 +74,26 @@ export interface VariableUsageHere {
   /** Read these variables' usage again, settling once it is kept. */
   readonly readAgain: (identities: readonly string[]) => Promise<void>;
   readonly access: VariablesAccess;
-  /** Counting the pages now, when this author may and the host can. */
-  readonly counter: CountNow | undefined;
   /** The site's shared styles, so one using it says what it sets. */
   readonly classes: readonly NamedClass[] | undefined;
 }
 
 /**
- * The count at the end of a variable's row: a bare number of places, muted
- * when nothing uses it, "2+" while it is a floor; nothing until it is read.
- * Said in words by the row's tooltip ({@link CountTip}), and by the row's own
- * name to a screen reader.
- */
-export function VariableRowCount({
-  reach,
-}: {
-  reach: VariableReach | undefined;
-}): React.JSX.Element | null {
-  if (reach === undefined) return null;
-  const count = variableCount(reach);
-  return (
-    <span
-      className="nx-vars__count"
-      aria-hidden="true"
-      data-zero={count.zero ? "" : undefined}
-      data-floor={count.floor ? "" : undefined}
-    >
-      {count.text}
-    </span>
-  );
-}
-
-/**
- * The row's count in words, as the editor's tooltip: shown when the row is
- * pointed at or takes focus, so keyboard and touch users meet it too, not a
- * title on the hidden count. Above the row and at its end, over the count.
- * Closed until its usage is read.
+ * How widely the row's variable is used, as its tooltip: shown when the row
+ * is pointed at or takes focus, so keyboard and touch users meet it too.
+ * Above the row and at its end. Closed until its usage is read, and while
+ * the row's editor or menu is open: opened
+ * by the row's focus, it stayed up over the editor in a browser and took the
+ * first Escape meant for the editor.
  */
 export function CountTip({
   reach,
+  quiet = false,
   children,
 }: {
   reach: VariableReach | undefined;
+  /** True while the row's editor is open. */
+  quiet?: boolean;
   children: React.ReactElement;
 }): React.JSX.Element {
   // Wrapped whether or not the count has arrived, and only closed until it
@@ -129,8 +104,8 @@ export function CountTip({
       <ChromeTooltip
         side="top"
         align="end"
-        content={reach === undefined ? null : variableCount(reach).words}
-        disabled={reach === undefined}
+        content={reach === undefined ? null : variableCountWords(reach)}
+        disabled={reach === undefined || quiet}
       >
         {children}
       </ChromeTooltip>
@@ -150,9 +125,9 @@ export interface RemovedPart {
 
 /**
  * Why Remove cannot go ahead, opened in place by Remove: the places using
- * what it would take away, or that some pages are not counted yet, and the
- * way forward. Focus moves to its heading, so the reason is what is read
- * next.
+ * what it would take away, and the way forward. Focus moves to its heading,
+ * so the reason is what is read next. Shown only while a use is known; a
+ * removal the counts cannot judge goes to its confirm, and the save decides.
  */
 export function VariableRefusal({
   name,
@@ -176,12 +151,9 @@ export function VariableRefusal({
 }): React.JSX.Element {
   const id = React.useId();
   const heading = React.useRef<HTMLHeadingElement>(null);
-  const inUse = variableRemoval(reach) === "in-use";
-  // Again whenever what the box says changes: a count can turn "not counted
-  // yet" into "in use", and the new reason is the one to read.
   React.useEffect(() => {
     heading.current?.focus();
-  }, [inUse]);
+  }, []);
   return (
     <section className="nx-vars-refusal" aria-labelledby={id}>
       <h4
@@ -190,21 +162,15 @@ export function VariableRefusal({
         ref={heading}
         tabIndex={-1}
       >
-        {inUse
-          ? `${name} can't be removed while it's in use.`
-          : `${name} can't be removed yet.`}
+        {`${name} can't be removed while it's in use.`}
       </h4>
-      {inUse ? (
-        <InUse
-          name={name}
-          loss={loss}
-          parts={parts}
-          reach={reach}
-          usage={usage}
-        />
-      ) : (
-        <NotCounted counter={usage.counter} />
-      )}
+      <InUse
+        name={name}
+        loss={loss}
+        parts={parts}
+        reach={reach}
+        usage={usage}
+      />
     </section>
   );
 }
@@ -226,15 +192,38 @@ function InUse({
   reach: VariableReach;
   usage: VariableUsageHere;
 }): React.JSX.Element {
+  return (
+    <>
+      <p className="nx-vars-refusal__text">
+        {variableLossSentence(reach, loss)}
+      </p>
+      <VariableUses parts={parts} usage={usage} />
+      <p className="nx-vars-refusal__text">
+        {`Change those blocks and styles to another variable, or clear the value there, then remove ${name}.`}
+      </p>
+    </>
+  );
+}
+
+/**
+ * Where a variable is used: a list for each of its parts in use (a type
+ * size and its line height are two), each named when there are two, the
+ * first few places and then every one on "Show all". The one listing for
+ * the variable's editor and for the reason Remove waits.
+ */
+export function VariableUses({
+  parts,
+  usage,
+}: {
+  parts: readonly RemovedPart[];
+  usage: VariableUsageHere;
+}): React.JSX.Element {
   // Only the parts something uses have places to list.
   const used = parts.filter(
     part => variableRemoval(usage.reachOf(part.identity)) === "in-use"
   );
   return (
     <>
-      <p className="nx-vars-refusal__text">
-        {variableLossSentence(reach, loss)}
-      </p>
       {used.map(part => (
         <PartUses
           key={part.identity}
@@ -243,9 +232,6 @@ function InUse({
           usage={usage}
         />
       ))}
-      <p className="nx-vars-refusal__text">
-        {`Change those blocks and styles to another variable, or clear the value there, then remove ${name}.`}
-      </p>
     </>
   );
 }
@@ -544,48 +530,6 @@ function Place({
         <>
           <span className="nx-sr-only"> · </span>
           <span className="nx-shared-styles__meta">{detail}</span>
-        </>
-      )}
-    </>
-  );
-}
-
-/**
- * While some pages are not counted yet: that it may still be in use, and
- * Count now where the author may and the host can, else who counts them.
- */
-function NotCounted({
-  counter,
-}: {
-  counter: CountNow | undefined;
-}): React.JSX.Element {
-  return (
-    <>
-      <p className="nx-vars-refusal__text">
-        Some pages haven&rsquo;t been counted, so it may still be in use.
-      </p>
-      {counter === undefined ? (
-        <CountedByJobs />
-      ) : (
-        <>
-          {/* None once a count said another cannot get further. */}
-          {counter.final ? null : (
-            <p className="nx-vars__note">
-              <button
-                type="button"
-                className="nx-vars__link"
-                disabled={counter.busy}
-                onClick={counter.run}
-              >
-                {countNowWords(counter)}
-              </button>
-              {" · usually a few seconds"}
-            </p>
-          )}
-          {/* What the last count found, said as it changes. */}
-          <p className="nx-vars__note nx-vars-refusal__said" role="status">
-            {counter.said ?? ""}
-          </p>
         </>
       )}
     </>

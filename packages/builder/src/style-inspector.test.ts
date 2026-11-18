@@ -384,6 +384,7 @@ describe("the builder's sections, over the engine's groups", () => {
     const inspection = inspectStyle(documentOf(), "a");
     expect(inspection?.sections.map(section => section.label)).toEqual([
       "Layout",
+      "Inside its parent",
       "Spacing",
       "Size",
       "Position",
@@ -436,7 +437,11 @@ describe("the builder's sections, over the engine's groups", () => {
       (inspectStyle(documentOf(styles), "a")?.sections[0]?.properties ?? [])
         .filter(p => p.common)
         .map(p => p.property);
-    expect(commonOf()).toEqual(["display"]);
+    expect(
+      commonOf({
+        base: { [BASE_BREAKPOINT]: { display: "block" } },
+      } as NodeStyles)
+    ).toEqual(["display"]);
     expect(
       commonOf({
         base: { [BASE_BREAKPOINT]: { display: "flex" } },
@@ -453,12 +458,28 @@ describe("the builder's sections, over the engine's groups", () => {
 
   it("shows the media fit controls on a replaced element only", () => {
     register({ dimensions: true });
-    const fitIsCommon = (media: boolean) =>
-      inspectStyle(documentOf(), "a", { media })?.sections[0]?.properties.find(
-        p => p.property === "objectFit"
-      )?.common;
-    expect(fitIsCommon(false)).toBe(false);
-    expect(fitIsCommon(true)).toBe(true);
+    // Read from the canvas, which names the element the block draws.
+    const fitIsCommon = (media: boolean, tag: string) =>
+      inspectStyle(documentOf(), "a", {
+        media,
+        cascade: { trace: [], subject: { nodeId: "a", tag } },
+      })
+        ?.sections.find(section => section.key === "size")
+        ?.properties.find(p => p.property === "objectFit")?.common;
+    expect(fitIsCommon(false, "div")).toBe(false);
+    expect(fitIsCommon(true, "img")).toBe(true);
+  });
+
+  it("shows every row that could apply before the canvas has been read", () => {
+    // Nothing says what the block is yet, so nothing is hidden for it.
+    register({ layout: true });
+    const common = (
+      inspectStyle(documentOf(), "a")?.sections[0]?.properties ?? []
+    )
+      .filter(p => p.common)
+      .map(p => p.property);
+    expect(common).toContain("flexDirection");
+    expect(common).toContain("gridTemplateColumns");
   });
 });
 
@@ -519,7 +540,10 @@ describe("which display the tiers read", () => {
       ],
     } as never;
     const styles = {
-      base: { card: { display: "flex" } },
+      base: {
+        [BASE_BREAKPOINT]: { display: "grid" },
+        card: { display: "flex" },
+      },
     } as unknown as NodeStyles;
     const shown = (breakpoint: string) =>
       inspectStyle(documentOf(styles), "a", {
@@ -528,7 +552,8 @@ describe("which display the tiers read", () => {
       })?.sections[0]?.properties.find(p => p.property === "flexDirection")
         ?.common;
     expect(shown("card-narrow")).toBe(true);
-    // The control: the viewport's unconditional tier is not on that axis.
+    // The control: the card rule is not on the viewport axis, so at its
+    // unconditional tier the grid stored there holds.
     expect(shown(BASE_BREAKPOINT)).toBe(false);
   });
 
@@ -580,12 +605,13 @@ describe("which display the tiers read", () => {
     expect(shown(["c1"])).toBe(true);
     // The control: a node that does not apply the class is not flex.
     expect(shown([])).toBe(false);
-    // And without a cascade only what the node stores is read.
+    // And without a cascade only what the node stores is read: nothing, so
+    // what the block is cannot be said and the row is not hidden.
     expect(
       inspectStyle(documentOf(), "a")?.sections[0]?.properties.find(
         p => p.property === "flexDirection"
       )?.common
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("reads a block default at a wider tier through the cascade", () => {
@@ -653,11 +679,35 @@ describe("every label fits the Style tab's label column", () => {
     );
   });
 
+  /**
+   * Whether a property's name is a heading above its rows rather than a label
+   * in the column: it has more than one control, and no choice of form at its
+   * root, which draws on a row named for the property (`StylePropertyFields`).
+   * Its rows are named by their positions, which the column then holds.
+   */
+  const headed = (row: ReturnType<typeof everyRow>[number]) =>
+    row.controls.length > 1 &&
+    !row.variants.some(
+      variant => variant.path.length === 0 && variant.count > 1
+    );
+
   it("gives each label no more characters than the column holds", () => {
     const tooLong = everyRow()
-      .filter(row => row.label.length > LABEL_BUDGET)
+      .filter(row => !headed(row) && row.label.length > LABEL_BUDGET)
       .map(row => `${row.property}: "${row.label}"`);
     expect(tooLong).toEqual([]);
+  });
+
+  it("draws the entrance animation's name above its rows, each named to fit", () => {
+    const appear = everyRow().find(row => row.property === "appear");
+    expect(appear?.label).toBe("Animation when it appears");
+    expect(appear === undefined ? false : headed(appear)).toBe(true);
+    expect(appear?.controls.map(control => control.path)).toEqual([
+      ["effect"],
+      ["duration"],
+      ["delay"],
+      ["start"],
+    ]);
   });
 
   it("labels the background gradient Gradient, with its full name on hover", () => {
@@ -666,5 +716,22 @@ describe("every label fits the Style tab's label column", () => {
     );
     expect(gradient?.label).toBe("Gradient");
     expect(gradient?.summary.startsWith("Background gradient: ")).toBe(true);
+  });
+});
+
+describe("how a block's parent lays it out", () => {
+  it("is not offered to a block with no size of its own to set", () => {
+    // It keeps a stored order, clear-only, but has no Width to choose.
+    register({ typography: true });
+    const inspection = inspectStyle(
+      documentOf({ base: { [BASE_BREAKPOINT]: { order: 2 } } } as NodeStyles),
+      "a"
+    );
+    expect(inspection?.parent).toBeUndefined();
+  });
+
+  it("is offered to a block with a size", () => {
+    register({ dimensions: true });
+    expect(inspectStyle(documentOf(), "a")?.parent).toBe("flow");
   });
 });

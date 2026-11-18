@@ -26,12 +26,18 @@ import { ShortcutProvider } from "@nextlyhq/ui";
 import * as React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { blockActionRunners } from "./builder-commands";
+import { blockActionRunners } from "./shell/builder-commands";
 import { ComponentBanner, reachSentence } from "./component-banner";
 import { InspectorPanel } from "./inspector-panel";
 import { useEditorState } from "./editor-state";
 import { useBlockKeyboardActions } from "./keyboard-actions";
-import { toolbarActions } from "./toolbar-actions";
+import { toolbarActions } from "./canvas/toolbar-actions";
+import type { SharedBlockVerbs } from "./keyboard-actions";
+
+/** Verbs as a host shares them: the menu's locked answers are the same list. */
+function shared(verbs: Omit<SharedBlockVerbs, "withLocks">): SharedBlockVerbs {
+  return { ...verbs, withLocks: () => verbs.actions };
+}
 
 afterEach(() => cleanup());
 
@@ -170,7 +176,7 @@ describe("the Edit component verb", () => {
     rerender();
     blockActionRunners(result.current.result.actions)["edit-component"]();
     expect(opened).toHaveBeenCalledWith("hero", "placed");
-    expect(ids(result.current.result.selectionActions)).toContain(
+    expect(ids(result.current.result.offer.actions)).toContain(
       "edit-component"
     );
   });
@@ -193,6 +199,9 @@ describe("a host built before the verb", () => {
       move: () => {},
       delete: () => {},
       duplicate: () => {},
+      copy: () => {},
+      cut: () => {},
+      paste: () => {},
       selectParent: () => {},
       saveAsPattern: () => {},
     });
@@ -275,12 +284,12 @@ describe("the placement inspector's Edit component", () => {
       <InspectorPanel
         editor={editor}
         componentLibrary={library}
-        verbs={{
+        verbs={shared({
           actions: offered
             ? [{ id: "edit-component", label: "Edit component", enabled: true }]
             : [],
           run,
-        }}
+        })}
       />
     );
   }

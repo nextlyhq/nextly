@@ -8,12 +8,12 @@
  *
  * @module lib/block-pages-route
  */
-import { createBlockResolver } from "@nextlyhq/blocks-react";
-import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import type { BlocksPageConfig } from "@nextlyhq/blocks-react/next";
 import {
   loadSiteStyle,
   namedQueriesOf,
+  pageBuilderCustomCss,
+  pageBuilderImageCopies,
   SITE_STYLE_SLUG,
 } from "@nextlyhq/plugin-page-builder";
 import { notFoundLogged } from "@nextlyhq/plugin-seo/next";
@@ -57,17 +57,18 @@ export const blockPagesRoute: BlocksPageConfig = {
   // preview token against, and a token always names a resolved locale rather
   // than a blank one.
   locale: "en",
-  // An explicit set, not the process registry. `registeredBlocks()` reads the
-  // engine's global registry, which is populated by whatever booted the
-  // editor — so a route depending on it renders the unknown-block placeholder
-  // whenever this request arrived before the admin did.
-  blocks: createBlockResolver(coreBlocks),
   // This site's named queries, a list's custom sources: the page builder's
   // own, so a list here never resolves another site's served alongside.
   namedQueries: namedQueriesOf(pageBuilderPlugin),
+  // Each image sized to where it sits, from this site's media.
+  imageCopies: pageBuilderImageCopies(siteReader),
   // No `data`: a `core/collection-loop` reads through the route's public
   // reader, published entries and public fields only, as any visitor would.
   styleContext: SITE_STYLE_CONTEXT,
+  // The CSS authors write for the site, a page or a block, through the page
+  // builder's checker, the site's read through this page builder. Without it
+  // the route draws none of it.
+  customCss: pageBuilderCustomCss({ plugin: pageBuilderPlugin }),
   // Resolved per request: defaults with the stored Site Style layered on top.
   // The same statement the page-builder route makes, because both routes serve
   // documents of one engine and a site sheet that differed between them would

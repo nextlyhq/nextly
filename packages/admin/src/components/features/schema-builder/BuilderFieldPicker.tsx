@@ -13,10 +13,11 @@
 import { MOST_USED_FIELD_TYPES } from "nextly/field-catalog";
 import { isFieldGroupFieldType } from "nextly/field-group-type";
 import type { JSX } from "react";
-import { useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 
 import {
   FieldPicker,
+  type FieldGroupOption,
   type FieldPickerChoice,
 } from "@admin/components/field-ui";
 import { toast } from "@admin/components/ui";
@@ -41,9 +42,19 @@ import {
 import { namingLevelFor } from "@admin/lib/builder/move-rule";
 import { BUILDER_FIELD_TYPES } from "@admin/lib/builder/offered-field-types";
 import { fieldsWithDeleted } from "@admin/lib/builder/outline/pending-rows";
+import {
+  addUnsavedEntities,
+  type UnsavedEntity,
+  unsavedFieldGroupFrom,
+  useUnsavedEntitiesOf,
+} from "@admin/lib/builder/unsaved-entities";
+import type { FieldDefinition } from "@admin/types/collection";
 
 import { pickerExcludedTypes, type BuilderConfig } from "./builder-config";
+import type { BuilderSettingsValues } from "./BuilderSettingsModal";
+import { FIELD_GROUP_BUILDER_CONFIG } from "./field-group-builder-config";
 import { FIELD_TYPES_CATALOG } from "./field-picker-modal/field-types-catalog";
+import { NewEntityDialog } from "./new-entity/NewEntityDialog";
 import type { BuilderField } from "./types";
 
 /** The Builder's types: the catalog rows a ui-schema can store, described once. */
@@ -52,6 +63,94 @@ import type { BuilderField } from "./types";
 const FIELD_GROUP_TYPE = FIELD_TYPES_CATALOG.find(entry =>
   isFieldGroupFieldType(entry.type)
 )?.type;
+
+/**
+ * Field groups as the picker lists them, each told apart by its kind and address, and one not
+ * saved yet marked so: choosing it embeds a group the host's save creates first.
+ */
+function fieldGroupOptionsOf(
+  groups: readonly { label: string; slug: string }[],
+  state: "saved" | "unsaved"
+): FieldGroupOption[] {
+  return distinguishEntities(
+    groups.map(group => ({
+      kind: "field-group" as const,
+      label: group.label,
+      slug: group.slug,
+    }))
+  ).map(entity => ({
+    slug: entity.slug,
+    label: entity.label,
+    text: state === "unsaved" ? `${entity.text} · not saved yet` : entity.text,
+  }));
+}
+
+/**
+ * "New field group": the new-entity dialog over the picker, its Create held in the store as an
+ * unsaved field group `host` owns and handed back to the picker as chosen; null when the dialog
+ * is closed. Each one opens a fresh dialog, never the values a cancelled one left.
+ */
+function useNewFieldGroupDialog(host: UnsavedEntity["ownedBy"]) {
+  const [making, setMaking] = useState<
+    ((made: FieldGroupOption | null) => void) | null
+  >(null);
+  const [operation, setOperation] = useState(0);
+  const onNew = useCallback(
+    () =>
+      new Promise<FieldGroupOption | null>(resolve => {
+        setOperation(count => count + 1);
+        setMaking(() => resolve);
+      }),
+    []
+  );
+  const finish = (made: FieldGroupOption | null) => {
+    making?.(made);
+    setMaking(null);
+  };
+  const onCreate = (
+    values: BuilderSettingsValues,
+    templateFields: FieldDefinition[],
+    needed: Omit<UnsavedEntity, "token">[]
+  ) => {
+    // It starts with its template's fields, or none, as one made from the
+    // field groups' list does.
+    const entity = {
+      ...unsavedFieldGroupFrom(values, host),
+      fields: templateFields,
+    };
+    // What its template needs belongs to the host, as it does: the host's
+    // save creates them before it, and the host's discard lets them go. With
+    // no host yet, they stay the field group's own.
+    const neededByHost = host
+      ? needed.map(each => ({ ...each, ownedBy: host }))
+      : needed;
+    // The dialog's checks count an unsaved entity's address as used, so this is reached only if
+    // another unsaved entity took one of these addresses meanwhile.
+    if (!addUnsavedEntities([...neededByHost, entity])) {
+      toast.error(
+        needed.length === 0
+          ? "A field group not saved yet already uses this address. Choose another."
+          : "An entity not saved yet already uses this address or one the template needs. Choose another."
+      );
+      return;
+    }
+    const [option] = fieldGroupOptionsOf(
+      [{ label: entity.settings.singularName, slug: entity.address }],
+      "unsaved"
+    );
+    finish(option);
+  };
+  return {
+    onNew,
+    dialog: {
+      key: operation,
+      open: making !== null,
+      config: FIELD_GROUP_BUILDER_CONFIG,
+      onCancel: () => finish(null),
+      onCreate,
+    },
+  };
+}
 
 type Props = {
   config: BuilderConfig;
@@ -119,27 +218,42 @@ export function BuilderFieldPicker({
     lifecycleEnabled,
   });
 
-  const fieldGroupOptions = useMemo(
-    () =>
-      distinguishEntities(
-        (fieldGroupData?.items ?? [])
-          // A field group embedding itself would never finish rendering.
-          .filter(
-            group =>
-              !(config.kind === "field-group" && group.slug === entitySlug)
-          )
-          .map(group => ({
-            kind: "field-group" as const,
-            label: group.label,
-            slug: group.slug,
-          }))
-      ).map(entity => ({
-        slug: entity.slug,
-        label: entity.label,
-        text: entity.text,
-      })),
-    [fieldGroupData, config.kind, entitySlug]
+  // The entity this picker adds to, as a field group made here names its owner.
+  const host = useMemo(
+    () => (entitySlug ? { kind: config.kind, address: entitySlug } : undefined),
+    [config.kind, entitySlug]
   );
+  const unsavedFieldGroups = useUnsavedEntitiesOf("field-group");
+
+  const fieldGroupOptions = useMemo(() => {
+    // A field group embedding itself would never finish rendering.
+    const notThisOne = (slug: string) =>
+      !(config.kind === "field-group" && slug === entitySlug);
+    const saved = (fieldGroupData?.items ?? []).filter(group =>
+      notThisOne(group.slug)
+    );
+    // An unsaved field group is offered where this host's save would create it: one made from
+    // its own picker, or one made from its own create page, which no host owns. One another
+    // host's picker made is that host's to create or drop at its save.
+    const unsaved = unsavedFieldGroups
+      .filter(
+        group =>
+          notThisOne(group.address) &&
+          (group.ownedBy === undefined ||
+            (group.ownedBy.kind === host?.kind &&
+              group.ownedBy.address === host.address))
+      )
+      .map(group => ({
+        label: group.settings.singularName,
+        slug: group.address,
+      }));
+    return [
+      ...fieldGroupOptionsOf(saved, "saved"),
+      ...fieldGroupOptionsOf(unsaved, "unsaved"),
+    ];
+  }, [fieldGroupData, unsavedFieldGroups, config.kind, entitySlug, host]);
+
+  const newGroup = useNewFieldGroupDialog(host);
 
   const add = (choice: FieldPickerChoice, how: { addAnother: boolean }) => {
     const field: BuilderField = {
@@ -163,37 +277,42 @@ export function BuilderFieldPicker({
   };
 
   return (
-    <FieldPicker
-      open
-      title="Add a field"
-      placement={parent ? `to ${parent.label || parent.name}` : undefined}
-      config={{
-        surface: "entries",
-        // The Builder's own types, the list a template's are checked against.
-        types: BUILDER_FIELD_TYPES,
-        exclude: pickerExcludedTypes(config),
-        mostUsed: MOST_USED_FIELD_TYPES,
-        // A label with nothing the name rule keeps (a label in another
-        // script, say) still gets a name, "field", which the editor can change.
-        // A derived name that is taken, by a sibling or as a built-in or Draft/Published name, gets
-        // the next free suffix; one the rules refuse for its spelling or length is shown as refused.
-        deriveName: label =>
-          nextDuplicateName(
-            toSnakeName(label) || "field",
-            place.siblingNames,
-            name => nameIsTakenAt(name, { ...place, siblingNames: [] })
-          ),
-        nameProblem: name => builderNameProblem(name, place),
-        fieldGroups: FIELD_GROUP_TYPE
-          ? {
-              type: FIELD_GROUP_TYPE,
-              options: fieldGroupOptions,
-              loading: fieldGroupsLoading,
-            }
-          : undefined,
-      }}
-      onCancel={onCancel}
-      onAdd={add}
-    />
+    <>
+      <FieldPicker
+        open
+        title="Add a field"
+        placement={parent ? `to ${parent.label || parent.name}` : undefined}
+        config={{
+          surface: "entries",
+          // The Builder's own types, the list a template's are checked against.
+          types: BUILDER_FIELD_TYPES,
+          exclude: pickerExcludedTypes(config),
+          mostUsed: MOST_USED_FIELD_TYPES,
+          // A label with nothing the name rule keeps (a label in another
+          // script, say) still gets a name, "field", which the editor can change.
+          // A derived name that is taken, by a sibling or as a built-in or Draft/Published name, gets
+          // the next free suffix; one the rules refuse for its spelling or length is shown as refused.
+          deriveName: label =>
+            nextDuplicateName(
+              toSnakeName(label) || "field",
+              place.siblingNames,
+              name => nameIsTakenAt(name, { ...place, siblingNames: [] })
+            ),
+          nameProblem: name => builderNameProblem(name, place),
+          fieldGroups: FIELD_GROUP_TYPE
+            ? {
+                type: FIELD_GROUP_TYPE,
+                options: fieldGroupOptions,
+                loading: fieldGroupsLoading,
+                onNew: newGroup.onNew,
+              }
+            : undefined,
+        }}
+        onCancel={onCancel}
+        onAdd={add}
+      />
+      {/* Over the picker, which waits on the chooser until it is made or closed. */}
+      <NewEntityDialog {...newGroup.dialog} />
+    </>
   );
 }

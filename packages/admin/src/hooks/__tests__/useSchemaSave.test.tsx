@@ -10,13 +10,18 @@ import { renderHook } from "@admin/__tests__/utils";
 import type { SchemaChangeConfirmation } from "@admin/components/features/schema-builder/types";
 import { parseApiError } from "@admin/lib/api/parseApiError";
 import type { SettingChange } from "@admin/lib/builder/settings-changes";
-import type { SchemaPreviewResponse } from "@admin/services/schemaApi";
+import type { PendingChange } from "@admin/lib/builder/pending-changes";
+import type {
+  SchemaPreviewRenameCandidate,
+  SchemaPreviewResponse,
+} from "@admin/services/schemaApi";
 import type { FieldDefinition } from "@admin/types/collection";
 
 import {
   mirrorSchemaFile,
   useSchemaSave,
   type SchemaApplyOutcome,
+  type UseSchemaSaveOptions,
 } from "../useSchemaSave";
 
 const { toastError, toastWarning, startRestart, stopRestart } = vi.hoisted(
@@ -93,8 +98,12 @@ type Overrides = {
   onApplied?: (fields: FieldDefinition[]) => void | Promise<void>;
   /** The settings the preview and the apply are sent with, read at each render. */
   previewedWith?: () => unknown;
+  /** The draft's pending changes: its renames of saved fields. */
+  draftRenames?: PendingChange[];
   /** The entity's settings changed since the save, read at each render. */
   settingChanges?: () => readonly SettingChange[];
+  /** The field groups not saved yet that the fields use. */
+  fieldGroupsFirst?: UseSchemaSaveOptions["fieldGroupsFirst"];
 };
 
 function setup(overrides: Overrides = {}) {
@@ -120,7 +129,9 @@ function setup(overrides: Overrides = {}) {
       onNoChanges,
       onApplied,
       previewedWith: overrides.previewedWith?.(),
+      pendingChanges: overrides.draftRenames,
       settingChanges: overrides.settingChanges?.() ?? [],
+      fieldGroupsFirst: overrides.fieldGroupsFirst,
     })
   );
 
@@ -393,7 +404,7 @@ describe("confirmApply", () => {
 
     await waitFor(() => expect(onApplied).toHaveBeenCalledWith(FIELDS));
     // The version applied is the one the user was shown, not a re-read.
-    expect(applyFn).toHaveBeenCalledWith(FIELDS, 9, {}, []);
+    expect(applyFn).toHaveBeenCalledWith(FIELDS, 9, {}, [], []);
     expect(startRestart).toHaveBeenCalledTimes(1);
     expect(stopRestart).toHaveBeenCalledWith(
       true,
@@ -402,6 +413,47 @@ describe("confirmApply", () => {
     expect(confirmation.settle).toHaveBeenCalledTimes(1);
     expect(confirmation.beginApply).toHaveBeenCalledTimes(1);
     expect(confirmation.endApply).toHaveBeenCalledTimes(1);
+  });
+
+  // The review listed what the save brings up to date in a table an earlier version made, and its
+  // Save confirmed them: the apply sends the key of every conversion that preview named, so the
+  // server writes those and no other.
+  it("confirms each conversion the reviewed preview named, by its key", async () => {
+    const pending = preview({
+      conversions: [
+        {
+          table: "dc_posts",
+          column: "dc_posts",
+          from: "as an earlier version made it",
+          to: "as Nextly declares it (add index)",
+          change: "adds an index on created_at",
+          deletesValues: false,
+        },
+        {
+          table: "dc_posts",
+          column: "body",
+          from: "text",
+          to: "varchar(255)",
+          change: "changes body from text to varchar(255)",
+          deletesValues: false,
+        },
+      ],
+    });
+    const { result, applyFn } = setup({
+      confirmation: confirmationStub(pending),
+    });
+
+    await act(async () => result.current.confirmApply({}, []));
+
+    await waitFor(() =>
+      expect(applyFn).toHaveBeenCalledWith(
+        FIELDS,
+        9,
+        {},
+        [],
+        ["dc_posts", "body"]
+      )
+    );
   });
 
   // "no changes" is the server saying the apply was a no-op, which reads as
@@ -532,6 +584,161 @@ describe("a settings-only save", () => {
   });
 });
 
+// A field group made from the picker and not saved yet is created by its host's save: listed in
+// the review, and created only once the review is confirmed, before the host, so cancelling
+// creates nothing and a refused group leaves the host as it was.
+describe("field groups not saved yet", () => {
+  const HERO = { kind: "field-group" as const, address: "hero", label: "Hero" };
+
+  it("creates them after the confirmation and before the apply", async () => {
+    const order: string[] = [];
+    const create = vi.fn(async () => {
+      order.push("create the field groups");
+      return null;
+    });
+    const confirmation = confirmationStub(preview());
+    const { result, onApplied } = setup({
+      confirmation,
+      fieldGroupsFirst: { creates: [HERO], create },
+      applyFn: vi.fn(async () => {
+        order.push("apply the host");
+        return { success: true };
+      }),
+    });
+
+    await act(async () => result.current.confirmApply({}, []));
+
+    await waitFor(() => expect(onApplied).toHaveBeenCalledTimes(1));
+    expect(order).toEqual(["create the field groups", "apply the host"]);
+  });
+
+  it("stops before the host when one is refused, keeping the change pending", async () => {
+    const confirmation = confirmationStub(preview());
+    const { result, applyFn, onApplied } = setup({
+      confirmation,
+      fieldGroupsFirst: {
+        creates: [HERO],
+        create: vi.fn(
+          async () => "Another field group already uses this address."
+        ),
+      },
+    });
+
+    await act(async () => result.current.confirmApply({}, []));
+
+    await waitFor(() => expect(confirmation.endApply).toHaveBeenCalledTimes(1));
+    expect(applyFn).not.toHaveBeenCalled();
+    expect(onApplied).not.toHaveBeenCalled();
+    expect(confirmation.settle).not.toHaveBeenCalled();
+    expect(stopRestart).toHaveBeenCalledWith(
+      false,
+      "Another field group already uses this address."
+    );
+  });
+
+  it("creates nothing before the review is confirmed", async () => {
+    const create = vi.fn(async () => null);
+    const { result, confirmation } = setup({
+      fieldGroupsFirst: { creates: [HERO], create },
+    });
+
+    await act(async () => result.current.handleSave());
+
+    expect(confirmation.request).toHaveBeenCalledTimes(1);
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it("puts a save in front of the user when a field group is all it creates", async () => {
+    const { result, confirmation, onNoChanges } = setup({
+      previewFn: vi.fn(() => Promise.resolve(preview({ hasChanges: false }))),
+      fieldGroupsFirst: { creates: [HERO], create: vi.fn(async () => null) },
+    });
+
+    await act(async () => result.current.handleSave());
+
+    expect(confirmation.request).toHaveBeenCalledTimes(1);
+    expect(onNoChanges).not.toHaveBeenCalled();
+  });
+
+  it("creates them first when the confirmed save changes no schema", async () => {
+    const order: string[] = [];
+    const confirmation = confirmationStub(preview({ hasChanges: false }));
+    const { result } = setup({
+      confirmation,
+      fieldGroupsFirst: {
+        creates: [HERO],
+        create: vi.fn(async () => {
+          order.push("create the field groups");
+          return null;
+        }),
+      },
+      onNoChanges: vi.fn(() => {
+        order.push("save the host");
+      }),
+    });
+
+    await act(async () => result.current.confirmApply({}, []));
+
+    await waitFor(() =>
+      expect(order).toEqual(["create the field groups", "save the host"])
+    );
+  });
+
+  it("lets go of the host's unused ones once the save has landed", async () => {
+    const letGoUnused = vi.fn();
+    const confirmation = confirmationStub(preview());
+    const { result, onApplied } = setup({
+      confirmation,
+      fieldGroupsFirst: {
+        creates: [HERO],
+        create: vi.fn(async () => null),
+        letGoUnused,
+      },
+    });
+
+    await act(async () => result.current.confirmApply({}, []));
+
+    await waitFor(() => expect(letGoUnused).toHaveBeenCalledTimes(1));
+    expect(onApplied).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps them when the save is refused", async () => {
+    const letGoUnused = vi.fn();
+    const confirmation = confirmationStub(preview());
+    const { result } = setup({
+      confirmation,
+      applyFn: vi.fn(async () => ({ success: false, message: "Refused." })),
+      fieldGroupsFirst: {
+        creates: [],
+        create: vi.fn(async () => null),
+        letGoUnused,
+      },
+    });
+
+    await act(async () => result.current.confirmApply({}, []));
+
+    await waitFor(() => expect(confirmation.endApply).toHaveBeenCalledTimes(1));
+    expect(letGoUnused).not.toHaveBeenCalled();
+  });
+
+  it("keeps them through a save with nothing to review, whose write lands later", async () => {
+    const letGoUnused = vi.fn();
+    const { result, onNoChanges } = setup({
+      previewFn: vi.fn(() => Promise.resolve(preview({ hasChanges: false }))),
+      fieldGroupsFirst: {
+        creates: [],
+        create: vi.fn(async () => null),
+        letGoUnused,
+      },
+    });
+
+    await act(async () => result.current.handleSave());
+
+    expect(onNoChanges).toHaveBeenCalledTimes(1);
+    expect(letGoUnused).not.toHaveBeenCalled();
+  });
+});
+
 describe("the settings a review shows", () => {
   it("are those its preview was made with, not ones changed while it was on its way", async () => {
     const RENAMED: SettingChange = {
@@ -558,5 +765,266 @@ describe("the settings a review shows", () => {
     changes = [{ ...RENAMED, to: "Story" }];
     rerender();
     expect(result.current.reviewedSettingChanges).toEqual([RENAMED]);
+  });
+});
+
+// A saved field the Builder renamed reaches the save as one column dropped and another added. The
+// Builder answers that pair as a rename itself, never as a drop and an add, and saves nothing when
+// the preview does not offer the pair: a rename must never lose the field's values.
+describe("a rename the Builder made", () => {
+  const candidate = (
+    from: string,
+    to: string,
+    table = "dc_posts"
+  ): SchemaPreviewRenameCandidate => ({
+    table,
+    from,
+    to,
+    fromType: "text",
+    toType: "text",
+    typesCompatible: true,
+    preservesValues: true,
+    defaultSuggestion: "rename",
+  });
+  const rename = (
+    previousName: string,
+    name: string,
+    requiredChanged = false
+  ): PendingChange => ({
+    kind: "renamed",
+    fieldId: `f-${previousName}`,
+    label: "Summary",
+    previousName,
+    name,
+    type: "text",
+    requiredChanged,
+  });
+
+  it("is answered as a rename, whatever the dialog chose, on every table holding it", async () => {
+    const pending = preview({
+      renamed: [
+        candidate("summary", "abstract"),
+        candidate("summary", "abstract", "dc_posts_locales"),
+      ],
+    });
+    const { result, applyFn } = setup({
+      confirmation: confirmationStub(pending),
+      draftRenames: [rename("summary", "abstract")],
+    });
+
+    await act(async () =>
+      result.current.confirmApply({}, [
+        {
+          tableName: "dc_posts",
+          fromColumn: "summary",
+          toColumn: "abstract",
+          choice: "drop_and_add",
+        },
+      ])
+    );
+
+    await waitFor(() => expect(applyFn).toHaveBeenCalledTimes(1));
+    expect(applyFn).toHaveBeenCalledWith(
+      FIELDS,
+      9,
+      {},
+      [
+        {
+          tableName: "dc_posts",
+          fromColumn: "summary",
+          toColumn: "abstract",
+          choice: "rename",
+        },
+        {
+          tableName: "dc_posts_locales",
+          fromColumn: "summary",
+          toColumn: "abstract",
+          choice: "rename",
+        },
+      ],
+      // No conversion to confirm.
+      []
+    );
+  });
+
+  it("is matched by the column a camelCase name becomes", async () => {
+    const pending = preview({
+      renamed: [candidate("meta_title", "meta_heading")],
+    });
+    const { result, applyFn } = setup({
+      confirmation: confirmationStub(pending),
+      draftRenames: [rename("metaTitle", "metaHeading")],
+    });
+
+    await act(async () => result.current.confirmApply({}, []));
+
+    await waitFor(() => expect(applyFn).toHaveBeenCalledTimes(1));
+    expect(applyFn).toHaveBeenCalledWith(
+      FIELDS,
+      9,
+      {},
+      [
+        {
+          tableName: "dc_posts",
+          fromColumn: "meta_title",
+          toColumn: "meta_heading",
+          choice: "rename",
+        },
+      ],
+      // No conversion to confirm.
+      []
+    );
+  });
+
+  it("saves nothing, naming the field, when the preview does not offer it", async () => {
+    const confirmation = confirmationStub();
+    const { result, applyFn } = setup({
+      confirmation,
+      previewFn: vi.fn(() =>
+        Promise.resolve(preview({ renamed: [candidate("body", "text")] }))
+      ),
+      draftRenames: [rename("summary", "abstract")],
+    });
+
+    await act(async () => result.current.handleSave());
+
+    await waitFor(() => expect(toastError).toHaveBeenCalledTimes(1));
+    expect(toastError.mock.lastCall?.[0]).toMatch(
+      /Summary.*summary.*abstract/s
+    );
+    expect(confirmation.request).not.toHaveBeenCalled();
+    expect(applyFn).not.toHaveBeenCalled();
+  });
+
+  // A pair the preview offers but that would change or lose values is not a rename that keeps
+  // them: the save stops for the person to save the rename on its own.
+  it.each([
+    [
+      "changes its values",
+      { preservesValues: false, valueChangeReason: "text becomes number" },
+    ],
+    ["is between types that do not fit", { typesCompatible: false }],
+  ])(
+    "saves nothing, naming the field, when the pair %s",
+    async (_case, over) => {
+      const confirmation = confirmationStub();
+      const { result, applyFn } = setup({
+        confirmation,
+        previewFn: vi.fn(() =>
+          Promise.resolve(
+            preview({
+              renamed: [{ ...candidate("summary", "abstract"), ...over }],
+            })
+          )
+        ),
+        draftRenames: [rename("summary", "abstract")],
+      });
+
+      await act(async () => result.current.handleSave());
+
+      await waitFor(() => expect(toastError).toHaveBeenCalledTimes(1));
+      expect(toastError.mock.lastCall?.[0]).toMatch(
+        /Summary.*summary.*abstract/s
+      );
+      expect(confirmation.request).not.toHaveBeenCalled();
+      expect(applyFn).not.toHaveBeenCalled();
+    }
+  );
+
+  // Another dropped field the preview pairs with the renamed field's new column would compete for
+  // it: answered as a rename, it could take the column first and leave the real rename a drop.
+  it("answers every other pair onto the new column as a drop and an add", async () => {
+    const pending = preview({
+      renamed: [
+        candidate("summary", "abstract"),
+        candidate("body", "abstract"),
+      ],
+    });
+    const { result, applyFn } = setup({
+      confirmation: confirmationStub(pending),
+      draftRenames: [rename("summary", "abstract")],
+    });
+
+    await act(async () =>
+      result.current.confirmApply({}, [
+        {
+          tableName: "dc_posts",
+          fromColumn: "body",
+          toColumn: "abstract",
+          choice: "rename",
+        },
+      ])
+    );
+
+    await waitFor(() => expect(applyFn).toHaveBeenCalledTimes(1));
+    const sent = (applyFn as ReturnType<typeof vi.fn>).mock.lastCall?.[3] as {
+      fromColumn: string;
+      toColumn: string;
+      choice: string;
+    }[];
+    expect(
+      sent.map(r => `${r.fromColumn}->${r.toColumn}:${r.choice}`).sort()
+    ).toEqual(["body->abstract:drop_and_add", "summary->abstract:rename"]);
+  });
+
+  // Two fields that trade names (through a third name on the way) leave the same columns, so the
+  // preview sees no change. Saving the definitions then would put each field's label and settings
+  // on the other's values, so the save stops as for any rename the preview does not offer.
+  it("saves nothing for a swap of names the preview sees as no change", async () => {
+    const confirmation = confirmationStub();
+    const { result, onNoChanges } = setup({
+      confirmation,
+      previewFn: vi.fn(() => Promise.resolve(preview({ hasChanges: false }))),
+      draftRenames: [
+        rename("summary", "abstract"),
+        rename("abstract", "summary"),
+      ],
+    });
+
+    await act(async () => result.current.handleSave());
+
+    await waitFor(() => expect(toastError).toHaveBeenCalledTimes(1));
+    expect(toastError.mock.calls[0][0]).toContain(
+      "Summary was renamed from summary to abstract"
+    );
+    expect(onNoChanges).not.toHaveBeenCalled();
+    expect(confirmation.request).not.toHaveBeenCalled();
+  });
+
+  // The save answers the pair as a rename, which keeps the column's not-null as it was, so a rename
+  // whose Required the same save changes would be saved with a column that disagrees: made
+  // required over a nullable column, or made optional over one that still refuses an empty value.
+  it("saves nothing for a rename the same save changes Required of", async () => {
+    const confirmation = confirmationStub();
+    const { result } = setup({
+      confirmation,
+      previewFn: vi.fn(() =>
+        Promise.resolve(
+          preview({ renamed: [candidate("summary", "abstract")] })
+        )
+      ),
+      draftRenames: [rename("summary", "abstract", true)],
+    });
+
+    await act(async () => result.current.handleSave());
+
+    await waitFor(() => expect(toastError).toHaveBeenCalledTimes(1));
+    expect(toastError.mock.calls[0][0]).toContain(
+      "Save the rename on its own, then change Required."
+    );
+    expect(confirmation.request).not.toHaveBeenCalled();
+  });
+
+  it("needs no pair when the new name keeps the column", async () => {
+    const confirmation = confirmationStub();
+    const { result } = setup({
+      confirmation,
+      draftRenames: [rename("metaTitle", "meta_title")],
+    });
+
+    await act(async () => result.current.handleSave());
+
+    await waitFor(() => expect(confirmation.request).toHaveBeenCalledTimes(1));
+    expect(toastError).not.toHaveBeenCalled();
   });
 });

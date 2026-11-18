@@ -131,7 +131,7 @@ describe("the advisory for a page naming an unpublished Layout", () => {
       });
     }
     expect(LAYOUT_NOT_PUBLISHED_NO_DEFAULT_MESSAGE).toBe(
-      "This page names a Layout that is not published, so it is shown with no header or footer until that Layout is published."
+      "This page names a header & footer set that is not published, so it is shown with no header or footer until that header & footer set is published."
     );
   });
 
@@ -147,10 +147,10 @@ describe("the advisory for a page naming an unpublished Layout", () => {
       message: LAYOUT_UNKNOWN_NO_DEFAULT_MESSAGE,
     });
     expect(LAYOUT_UNKNOWN_MESSAGE).toBe(
-      "This page names a Layout you can't view, or one that no longer exists. If it no longer exists, the site's default Layout shows instead."
+      "This page names a header & footer set you can't view, or one that no longer exists. If it no longer exists, the site's default header & footer set shows instead."
     );
     expect(LAYOUT_UNKNOWN_NO_DEFAULT_MESSAGE).toBe(
-      "This page names a Layout you can't view, or one that no longer exists. If it no longer exists, the page shows no header or footer."
+      "This page names a header & footer set you can't view, or one that no longer exists. If it no longer exists, the page shows no header or footer."
     );
   });
 

@@ -63,6 +63,7 @@ import {
 } from "./DocumentRestoreContext";
 import { DocumentViewFieldChooser } from "./DocumentViewFieldChooser";
 import { DocumentViewFieldRefused } from "./DocumentViewFieldRefused";
+import { FieldRevealScope } from "./field-reveal";
 import { FormErrorSummary } from "./FormErrorSummary";
 import { MissingDocumentViewComponent } from "./MissingDocumentViewComponent";
 import {
@@ -348,7 +349,7 @@ function useChipRecoveryOffer(
   viewingVersion: ViewedVersion | null
 ): HostedRecoveryOffer | null {
   const offer = liveRecoveryOffer(recovery, viewingVersion);
-  const { restore, dismiss } = recovery;
+  const { restore, dismiss, discard } = recovery;
   return useMemo(
     () =>
       offer === null
@@ -358,8 +359,9 @@ function useChipRecoveryOffer(
             olderVersion: offer.olderVersion,
             restore,
             dismiss,
+            discard,
           },
-    [offer, restore, dismiss]
+    [offer, restore, dismiss, discard]
   );
 }
 
@@ -586,59 +588,63 @@ export function DocumentViewBody({
 
   return (
     <FormProvider {...form}>
-      <div
-        data-testid="document-view-frame"
-        // The content area's height, handed down by the split around the
-        // form, rather than the window's: below the desktop breakpoint the
-        // admin keeps a header above that area, and a frame the window's
-        // height was that header taller than the area, which then scrolled.
-        className="flex h-full min-h-0 flex-col bg-background"
-      >
-        {/* Above the view, in the editor's order: a document somebody else is
+      {/* The view draws some fields out of sight (a closed dialog): it says
+          here how to show one, so a refused save's message offers "Show me". */}
+      <FieldRevealScope>
+        <div
+          data-testid="document-view-frame"
+          // The content area's height, handed down by the split around the
+          // form, rather than the window's: below the desktop breakpoint the
+          // admin keeps a header above that area, and a frame the window's
+          // height was that header taller than the area, which then scrolled.
+          className="flex h-full min-h-0 flex-col bg-background"
+        >
+          {/* Above the view, in the editor's order: a document somebody else is
             in changes what the view's edits mean, so it is read before the
             offer to restore work into it. A save the shortcut attempted and
             validation refused is said here too, since none of the fields it
             names are on screen to say it themselves. */}
-        <div className="shrink-0">
-          {banner}
-          <DocumentLockBanner
-            notice={lock.notice}
-            onTakeOver={lock.takeOver}
-            onRequestAccess={lock.requestAccess}
-            onRetry={lock.retryLoad}
-            onChoose={lock.answerChange}
-          />
-          {recoveryOffer.claimed ? null : (
-            <LiveDocumentRecoveryOffer
-              recovery={offered.recovery}
-              viewingVersion={viewingVersion}
+          <div className="shrink-0">
+            {banner}
+            <DocumentLockBanner
+              notice={lock.notice}
+              onTakeOver={lock.takeOver}
+              onRequestAccess={lock.requestAccess}
+              onRetry={lock.retryLoad}
+              onChoose={lock.answerChange}
+            />
+            {recoveryOffer.claimed ? null : (
+              <LiveDocumentRecoveryOffer
+                recovery={offered.recovery}
+                viewingVersion={viewingVersion}
+                className="mx-6 mt-3"
+              />
+            )}
+            <FormErrorSummary
+              errors={errors}
+              submitCount={submitCount}
               className="mx-6 mt-3"
             />
-          )}
-          <FormErrorSummary
-            errors={errors}
-            submitCount={submitCount}
-            className="mx-6 mt-3"
-          />
-        </div>
-        {/* The view fills what is left. Boxed so a view rooted in bare text
+          </div>
+          {/* The view fills what is left. Boxed so a view rooted in bare text
             or `display: contents` still has an element taking the height. */}
-        <div className="min-h-0 flex-1" aria-busy={recovering || undefined}>
-          <RecoveryOfferProvider value={recoveryOffer.value}>
-            <DocumentRestoreProvider registry={restoreRegistry}>
-              <ViewArea
-                editing={editing}
-                refusal={refusal}
-                withdrawn={offered.withdrawn}
-                generation={offered.generation}
-                reloads={lock.reloads}
-                component={view.component}
-                viewProps={viewProps}
-              />
-            </DocumentRestoreProvider>
-          </RecoveryOfferProvider>
+          <div className="min-h-0 flex-1" aria-busy={recovering || undefined}>
+            <RecoveryOfferProvider value={recoveryOffer.value}>
+              <DocumentRestoreProvider registry={restoreRegistry}>
+                <ViewArea
+                  editing={editing}
+                  refusal={refusal}
+                  withdrawn={offered.withdrawn}
+                  generation={offered.generation}
+                  reloads={lock.reloads}
+                  component={view.component}
+                  viewProps={viewProps}
+                />
+              </DocumentRestoreProvider>
+            </RecoveryOfferProvider>
+          </div>
         </div>
-      </div>
+      </FieldRevealScope>
     </FormProvider>
   );
 }

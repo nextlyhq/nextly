@@ -189,14 +189,6 @@
   margin-top: 0;
   min-height: 0;
 }
-/* What an import or export reported, under the header whichever tab is
-   open; nothing at all until there is something to say. */
-.nx-pb-design__reports {
-  padding: 0 12px 8px;
-}
-.nx-pb-design__reports:empty {
-  display: none;
-}
 
 /* ------------------------------------------------------------ generic btn */
 .nx-pb-icon-btn {
@@ -793,4 +785,55 @@
 .nx-pb-bindings-chip:focus-visible {
   outline: 2px solid var(--nx-ring);
   outline-offset: 2px;
+}
+
+/* The Design panel's one search, under its tabs, across all four. */
+.nx-pb-design__search {
+  position: relative;
+  margin-top: 8px;
+}
+.nx-pb-design__search > svg {
+  position: absolute;
+  top: 50%;
+  left: 0.625rem;
+  transform: translateY(-50%);
+  color: var(--nx-muted-foreground);
+  pointer-events: none;
+}
+.nx-pb-design__search input {
+  height: 32px;
+  padding-left: 1.875rem;
+  font-size: 13px;
+}
+/* How many matches a tab holds, beside its name, while a search is on. */
+.nx-pb-design__tab-count {
+  margin-left: 4px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--nx-muted-foreground);
+}
+/* A group another panel fills (the site's fonts under Type): its heading
+   lines up with the variable groups' headings, and the panel inside keeps
+   its own padding, so its rows take the same width as theirs. */
+.nx-pb-design__group > .nx-vars__group-head {
+  padding: 0.5rem 0.75rem 0;
+}
+
+/* ---------------------------------------------- header & footer pictures */
+/*
+ * A set's picture in the "Header & footer" menu, its trigger and its rows:
+ * 30×20, its header above its footer. The picture part sizes itself to its
+ * container's width at 16:10, so the box here sets both sides and the part
+ * fills it.
+ */
+.nx-pb-hf-picture {
+  display: block;
+  flex: none;
+  width: 30px;
+  height: 20px;
+}
+
+.nx-pb-hf-picture .nx-picture {
+  height: 100%;
+  aspect-ratio: auto;
 }

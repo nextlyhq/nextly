@@ -30,18 +30,18 @@
  * that a Layout exists and uses this component — against the alternative of
  * destroying it. Nothing about the Layout's content is read or shown.
  *
+ * ## A Layout write racing the delete
+ *
+ * Closed from the Layout's side (`layout-area-guard.ts`), which this registers
+ * with the rest. A Layout write adding a component is judged again inside its
+ * own transaction: it holds the component's row, so it either commits before
+ * the delete removes the row or is told the component is gone; and it reads
+ * the component's delete run under the composition graph lock, which Delete
+ * component takes to move its run to `deleting` before this scan runs. So a
+ * Layout committed too late for this scan to see it is one that was refused.
+ * A Layout saved naming a component that does not exist is refused there too.
+ *
  * ## What this does NOT close, stated rather than implied
- *
- * A Layout write racing this delete. The scan runs before the delete commits
- * and takes no lock the Layout write would contend for, so a Layout can add a
- * reference between the two and the delete still commits — leaving a dangling
- * id, which the missing foreign key does not refuse either.
- *
- * Narrowing it is not this hook's to do: the boundary would have to be shared
- * with the Layout write, and a plugin registering a hook has no transaction to
- * enlist it in. What the guard removes is the ordinary case — a component
- * already in use being deleted by someone who did not know — and the race is
- * left visible here rather than papered over by a check that looks total.
  *
  * A host's own `afterRead` hook on the Layouts collection, for the same reason.
  * The scan reads through the collection's read pipeline, which substitutes
@@ -55,6 +55,10 @@
 import { NextlyError } from "@nextlyhq/plugin-sdk";
 
 import type { ClassUsageDirectApi } from "./class-usage-runtime";
+import {
+  registerLayoutAreaGuard,
+  type LayoutAreaGuardContext,
+} from "./layout-area-guard";
 import {
   layoutReferencesOf,
   type LayoutComponentReference,
@@ -86,16 +90,11 @@ const SCAN_PAGE_SIZE = 100;
  */
 export type LayoutGuardDirectApi = ClassUsageDirectApi;
 
-/** The plugin context this needs, named structurally. */
-export interface LayoutGuardContext {
-  hooks: {
-    on(
-      type: string,
-      collection: string,
-      handler: (context: unknown) => unknown
-    ): void;
-  };
-}
+/**
+ * The plugin context this needs, named structurally: the Layout side's, which
+ * this registers too.
+ */
+export type LayoutGuardContext = LayoutAreaGuardContext;
 
 /**
  * Refuse deleting or unpublishing a component while a Layout still names it.
@@ -114,6 +113,10 @@ export function registerLayoutComponentGuard(args: {
   args.ctx.hooks.on("beforeDelete", args.componentsCollection, context =>
     refuseWhileALayoutNamesIt(args, context, DELETING)
   );
+  // The other end of the same reference: a Layout write can't add a
+  // component that is gone or going. Registered here so the two halves are
+  // never installed one without the other.
+  registerLayoutAreaGuard(args);
   // Unpublishing takes the component off the site as surely as deleting it:
   // a reader is served only published components, so every page drawn inside
   // a Layout using it would show the gap. Every other save is let through
@@ -177,7 +180,7 @@ async function refuseWhileALayoutNamesIt(
   if (isInsideACallerTransaction(context)) {
     throw refusal(
       `This component cannot be ${removal.done} in a bulk operation, because ` +
-        `whether a Layout still uses it cannot be checked safely there. ` +
+        `whether a header & footer set still uses it cannot be checked safely there. ` +
         `${removal.alone} on its own and the check will run.`
     );
   }
@@ -203,7 +206,7 @@ async function refuseWhileALayoutNamesIt(
   // direction is not.
   if (!usage.complete) {
     throw refusal(
-      `This component cannot be ${removal.done}: there are too many Layouts ` +
+      `This component cannot be ${removal.done}: there are too many header & footer sets ` +
         `to check, so whether one still uses it could not be established.`
     );
   }
@@ -213,9 +216,11 @@ async function refuseWhileALayoutNamesIt(
   const named = layoutsNamed(usage.references);
   throw refusal(
     `This component cannot be ${removal.done} because ${describeLayouts(named)}. ` +
-      `A Layout appears on every page assigned to it, so ${removal.doing} a ` +
+      `A header & footer set appears on every page assigned to it, so ${removal.doing} a ` +
       `component it uses would leave a gap on all of them. Remove it from ${
-        named.length === 1 ? "that Layout" : "those Layouts"
+        named.length === 1
+          ? "that header & footer set"
+          : "those header & footer sets"
       } first.`
   );
 }
@@ -317,8 +322,8 @@ function layoutsNamed(
 /** How those Layouts read in the refusal, so an author knows where to go. */
 function describeLayouts(named: readonly string[]): string {
   return named.length === 1
-    ? `the Layout "${named[0]}" uses it`
-    : `${String(named.length)} Layouts use it: ${named.map(n => `"${n}"`).join(", ")}`;
+    ? `the header & footer set "${named[0]}" uses it`
+    : `${String(named.length)} header & footer sets use it: ${named.map(n => `"${n}"`).join(", ")}`;
 }
 
 /**

@@ -93,8 +93,8 @@ import {
   sameVersion,
   storedOwner,
   versionDigest,
+  storedVersionDigest,
   versionOf,
-  writtenVersionDigest,
   type KeptBase,
   type OwnedTemplate,
   type RegistryInput,
@@ -278,7 +278,7 @@ function rowAsBase(row: StoredTemplateRow): KeptBase {
 
 /** The digest a row's own version is known by as a base, with its blocks. */
 function rowDigest(row: StoredTemplateRow): string {
-  return storedDigest(versionOf(row), storedFormat(row).blocks);
+  return storedVersionDigest(versionOf(row), storedFormat(row).blocks);
 }
 
 /**
@@ -394,25 +394,12 @@ function reviewToken(
     .update(
       JSON.stringify([
         ...[base, theirs, mine].map(v => versionOf(v)),
-        storedDigest(base, blocks.base),
-        storedDigest(theirs, blocks.theirs),
-        storedDigest(mine, blocks.mine),
+        storedVersionDigest(base, blocks.base),
+        storedVersionDigest(theirs, blocks.theirs),
+        storedVersionDigest(mine, blocks.mine),
       ])
     )
     .digest("hex");
-}
-
-/**
- * A stored version's digest: its text, or for a written one its subject,
- * preheader and blocks, so blocks that write the same HTML are told apart.
- */
-function storedDigest(
-  version: EmailTemplateVersion,
-  blocks: WrittenDocument | null | undefined
-): string {
-  return blocks
-    ? writtenVersionDigest(version, blocks)
-    : versionDigest(version);
 }
 
 /** What an applied review replaced, so it can be undone. */
@@ -636,6 +623,11 @@ export class EmailTemplateService extends BaseService {
    * boot reconciliation does not run (see `ensureBuiltInTemplates`).
    */
   private registry: TemplateOwnerRegistry;
+
+  /** What sends a template, as its running owner says; empty when it says nothing. */
+  ownerSentBy(slug: string): string[] {
+    return [...(this.registry.owned.get(slug)?.sentBy ?? [])];
+  }
   /** Where the switch to Liquid, and the templates kept off it, are recorded. */
   private readonly meta: MetaService;
   /**
@@ -2110,8 +2102,8 @@ export class EmailTemplateService extends BaseService {
               entry.version,
               mine,
               // Whether the site edited its version since the base.
-              storedDigest(base, baseBlocks) !==
-                storedDigest(mine, record.blocks)
+              storedVersionDigest(base, baseBlocks) !==
+                storedVersionDigest(mine, record.blocks)
             ),
           ]
         : [];
@@ -2234,7 +2226,7 @@ export class EmailTemplateService extends BaseService {
         baseDigest: row.baseDigest ?? null,
         base,
         baseBlocks,
-        applied: storedDigest(merged, blocks),
+        applied: storedVersionDigest(merged, blocks),
         appliedBase: entry.digest,
       },
     };
@@ -2254,7 +2246,8 @@ export class EmailTemplateService extends BaseService {
     this.ownedEntry(record);
     this.assertOverridden(record);
     if (
-      storedDigest(versionOf(row), storedFormat(row).blocks) !== undo.applied ||
+      storedVersionDigest(versionOf(row), storedFormat(row).blocks) !==
+        undo.applied ||
       row.baseDigest !== undo.appliedBase
     ) {
       throw changedSince("applied", id, record.slug);
@@ -2368,8 +2361,8 @@ export class EmailTemplateService extends BaseService {
     // With the blocks: a save of other blocks that write the same HTML is
     // still a save in between.
     if (
-      storedDigest(versionOf(after), storedFormat(after).blocks) !==
-        storedDigest(version, blocks) ||
+      storedVersionDigest(versionOf(after), storedFormat(after).blocks) !==
+        storedVersionDigest(version, blocks) ||
       after.baseDigest !== baseDigest
     ) {
       throw changedSince("saved", id, slug);

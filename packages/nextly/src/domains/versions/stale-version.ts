@@ -110,6 +110,16 @@ function decodeDocumentVersion(raw: unknown): DecodedVersion {
 }
 
 /**
+ * The counter language `code` holds in a `_rev` a client read: 0 where the version names none.
+ * How a copy says which version of its source language it was made from.
+ *
+ * @throws NextlyError.validation when `raw` is not a version.
+ */
+export function languageCounterInVersion(raw: unknown, code: string): number {
+  return languageCounterOf(decodeDocumentVersion(raw), code);
+}
+
+/**
  * The version `body` names, decoded; undefined when it names none. Only the
  * decode: whether a write must name one is `versionCheckFor`'s to decide.
  *
@@ -649,13 +659,18 @@ const CHANGER_KINDS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * A last changer as a refusal shows it: a person by the name their account
- * gives now, never their email, and no name once the account is gone; a
+ * A changer as a refusal shows it: a person by the name their account gives
+ * now, never their email, and no name once the account is gone; a
  * plugin-defined person by their kind alone; anything else by its kind.
  * Undefined for a kind this version of Nextly does not know.
+ *
+ * The one naming rule for "who changed it" wherever a caller who may read the
+ * document is told: a refused save, a recovery point, an entry's details.
+ *
+ * @experimental
  */
-async function shownChanger(
-  changer: LastChanger,
+export async function shownChanger(
+  changer: Pick<LastChanger, "kind" | "id" | "principalKind">,
   namePeople: boolean
 ): Promise<StaleVersionPublicData["changedBy"]> {
   if (!CHANGER_KINDS.has(changer.kind)) return undefined;

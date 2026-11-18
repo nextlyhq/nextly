@@ -17,6 +17,7 @@
  */
 import type { BuilderField } from "@admin/components/features/schema-builder/types";
 
+import { followRename } from "./condition-identity";
 import { settingsSignatureOf } from "./dirty-tracking";
 
 /** What a pending change does to one field. */
@@ -39,6 +40,8 @@ export interface PendingChange {
   name: string;
   /** For a rename, the name as saved. */
   previousName?: string;
+  /** For a rename, whether the same draft turns the field's Required on or off. */
+  requiredChanged?: boolean;
   /** The field's type now, or as saved when it is deleted. */
   type: string;
   /** For a type change, the type as saved. */
@@ -244,21 +247,73 @@ function changeOf(
   return { kind, fieldId: field.id, ...describe(field), ...extra };
 }
 
-/** What changed in a field that was saved and is still here. */
+/** `fields` with the field `id` named `name`, at any depth. */
+function renamedIn(
+  fields: readonly BuilderField[],
+  id: string,
+  name: string
+): BuilderField[] {
+  return fields.map(each =>
+    each.id === id
+      ? { ...each, name }
+      : each.fields
+        ? { ...each, fields: renamedIn(each.fields, id, name) }
+        : each
+  );
+}
+
+/**
+ * Each saved field as the draft's renames leave it: every rename applied, and the conditions each
+ * carries followed (`followRename`), by id. A condition a rename rewrote then reads as saved, so it
+ * counts as part of that rename rather than as a change of its own.
+ */
+function savedAsRenamed(
+  baseline: readonly BuilderField[],
+  before: Map<string, Placement>,
+  after: Map<string, Placement>
+): Map<string, BuilderField> {
+  let fields = [...baseline];
+  for (const [id, { field }] of after) {
+    const previousName = before.get(id)?.field.name ?? "";
+    if (before.has(id) && previousName !== (field.name ?? "")) {
+      fields = followRename(
+        renamedIn(fields, id, field.name ?? ""),
+        id,
+        previousName
+      );
+    }
+  }
+  return new Map(
+    [...placementsOf(fields)].map(([id, placed]) => [id, placed.field])
+  );
+}
+
+/**
+ * What changed in a field that was saved and is still here. `followed` is the field as saved with
+ * the draft's renames carried through its condition, which its settings are compared with.
+ */
 function changesOfKept(
   field: BuilderField,
   was: BuilderField,
-  moved: boolean
+  moved: boolean,
+  followed: BuilderField = was
 ): PendingChange[] {
   const changes: PendingChange[] = [];
   if (moved) changes.push(changeOf("moved", field));
   if ((was.name ?? "") !== (field.name ?? "")) {
-    changes.push(changeOf("renamed", field, { previousName: was.name ?? "" }));
+    changes.push(
+      changeOf("renamed", field, {
+        previousName: was.name ?? "",
+        requiredChanged:
+          (was.validation?.required === true) !==
+          (field.validation?.required === true),
+      })
+    );
   }
   if (was.type !== field.type) {
     changes.push(changeOf("typeChanged", field, { previousType: was.type }));
   }
-  if (settingsSignatureOf(was) !== settingsSignatureOf(field)) {
+  if (settingsSignatureOf(followed) !== settingsSignatureOf(field)) {
     changes.push(changeOf("settings", field));
   }
   return changes;
@@ -282,6 +337,8 @@ export function pendingChanges(
     currentOrder
   );
 
+  const followed = savedAsRenamed(baseline, before, after);
+
   const changes: PendingChange[] = [];
   for (const field of currentOrder) {
     const was = before.get(field.id)?.field;
@@ -289,7 +346,9 @@ export function pendingChanges(
       const moved =
         before.get(field.id)?.parentId !== after.get(field.id)?.parentId ||
         movedInPlace.has(field.id);
-      changes.push(...changesOfKept(field, was, moved));
+      changes.push(
+        ...changesOfKept(field, was, moved, followed.get(field.id) ?? was)
+      );
     } else if (!underAny(field.id, after, added)) {
       // A field added inside an added field comes with it.
       changes.push(changeOf("added", field, insideOf(field, added)));

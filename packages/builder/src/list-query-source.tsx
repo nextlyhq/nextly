@@ -407,7 +407,7 @@ export function SourceField({
   return (
     <div className="nx-inspector__field" data-content-control="listSource">
       <Label id={labelId} htmlFor={id}>
-        Source
+        Show entries from
       </Label>
       <LoopPicker
         id={id}
@@ -458,6 +458,23 @@ export function SourceField({
         named={named}
         collections={collections}
       />
+      {/* A list with no source asks on the canvas, over the list itself,
+          where its first step picks the entries and a starting layout. */}
+      {hasNoSource(query, named) ? (
+        <p className="nx-inspector__note">{CHOOSE_ON_CANVAS}</p>
+      ) : null}
     </div>
+  );
+}
+
+/** What the panel says while a list has no source. */
+const CHOOSE_ON_CANVAS = "Choose on the canvas to start.";
+
+/** Whether a list shows nothing yet: no collection, relation or custom source. */
+function hasNoSource(query: ListQuery, named: ShownNamed | undefined): boolean {
+  return (
+    named === undefined &&
+    query.relation === undefined &&
+    (query.collection === undefined || query.collection.trim() === "")
   );
 }

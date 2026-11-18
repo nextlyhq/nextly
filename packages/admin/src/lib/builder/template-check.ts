@@ -9,7 +9,8 @@
  *   depth, the lifecycle's own names while drafts are on).
  * - Its siblings: no two clash by the server's sibling rule (the same name, in
  *   other letter case, or the same column), and none at the top level takes a
- *   name the entity's built-in fields hold, which the save would drop.
+ *   name the entity's built-in fields hold, which the save would drop, or the
+ *   name of the field the entity starts with, which would sit beside it.
  * - Its type: one the kind's picker offers; a type no built-in field has is a
  *   plugin's, named as such while that plugin is not installed.
  * - Its place: a unique field only where a unique value can be kept, never in
@@ -35,7 +36,7 @@ import {
 } from "nextly/config";
 import { isFieldGroupFieldType } from "nextly/field-group-type";
 
-import { SYSTEM_FIELD_NAMES } from "./constants";
+import { builtInFieldNamesOf } from "./constants";
 import { convertToBuilderField } from "./field-transformers";
 import { builderFieldErrors } from "./field-validators";
 import { BUILT_IN_FIELD_TYPES } from "./offered-field-types";
@@ -44,6 +45,7 @@ import type {
   SchemaTemplateField,
   SchemaTemplateKind,
 } from "./schema-templates";
+import { storedTemplateField, templateFieldKey } from "./template-fields";
 
 /** Which rule a field breaks. */
 export type TemplateRule =
@@ -90,6 +92,11 @@ export interface TemplateCheckContext {
   lifecycleEnabled?: boolean;
   /** The keys of the fields left out. */
   leftOut?: ReadonlySet<string>;
+  /**
+   * The names of the fields the new entity starts with (`startingFields`),
+   * which the template's top-level fields are added beside.
+   */
+  startingFieldNames?: readonly string[];
 }
 
 const CLASH_WORDS: Record<SiblingClashKind, string> = {
@@ -100,6 +107,10 @@ const CLASH_WORDS: Record<SiblingClashKind, string> = {
 
 /** The fields that hold fields of their own. */
 const CONTAINER_TYPES: ReadonlySet<string> = new Set(["group", "repeater"]);
+
+// Where a field's key comes from, for the readers that list a template's
+// fields by the keys this check names them by.
+export { templateFieldKey };
 
 /** A field placed: where it is, what it is called, and whether it is nested. */
 interface Placed {
@@ -142,10 +153,15 @@ function nameFailure(
   };
 }
 
-/** The clashes among one level's fields, and with the entity's built-in fields at the top. */
+/**
+ * The clashes among one level's fields, and, at the top, with the entity's
+ * built-in fields and the fields it starts with.
+ */
 function clashFailures(
   level: readonly Placed[],
-  topLevel: boolean
+  topLevel: boolean,
+  builtInNames: readonly string[],
+  startingFieldNames: readonly string[]
 ): Map<Placed, TemplateFailure> {
   const found = new Map<Placed, TemplateFailure>();
   const clash = (each: Placed, other: string, kind: SiblingClashKind) => {
@@ -160,9 +176,13 @@ function clashFailures(
   };
   level.forEach((each, at) => {
     if (topLevel) {
-      for (const builtIn of SYSTEM_FIELD_NAMES) {
+      for (const builtIn of builtInNames) {
         const kind = siblingNameClash(each.field.name, builtIn);
         if (kind) clash(each, `the built-in field ${builtIn}`, kind);
+      }
+      for (const starting of startingFieldNames) {
+        const kind = siblingNameClash(each.field.name, starting);
+        if (kind) clash(each, `the starting field ${starting}`, kind);
       }
     }
     for (const other of level.slice(at + 1)) {
@@ -210,30 +230,14 @@ function placeFailure(each: Placed): TemplateFailure | null {
 
 /**
  * Why the Builder's own preflight would refuse the field, if it would: judged
- * on the field alone, its own fields judged in their turn. An empty name is
- * left to the name rule, which already names it.
+ * as the save sees it, in its stored shape with the fields inside it, so a
+ * rule about what a container holds judges what the template declares. Only
+ * the field's own refusal is read; its fields are judged in their turn. An
+ * empty name is left to the name rule, which already names it.
  */
 function preflightFailure(each: Placed): TemplateFailure | null {
-  const {
-    fields: _inside,
-    options,
-    relationTo,
-    components,
-    ...rest
-  } = each.field;
-  // The stored shape takes plain arrays, so the declaration's are copied.
   const builderField = convertToBuilderField(
-    {
-      ...rest,
-      options: options?.map(option => ({ ...option })),
-      ...(relationTo === undefined
-        ? {}
-        : {
-            relationTo:
-              typeof relationTo === "string" ? relationTo : [...relationTo],
-          }),
-      ...(components ? { components: [...components] } : {}),
-    },
+    storedTemplateField(each.field),
     each.path
   );
   const error = builderFieldErrors([builderField]).get(builderField.id);
@@ -289,12 +293,17 @@ export function checkTemplate(
       .map((field, at) => ({
         field,
         path: parent ? `${parent.path}.${field.name}` : field.name,
-        key: parent ? `${parent.key}.${at}` : String(at),
+        key: templateFieldKey(parent?.key ?? null, at),
         label: field.label || field.name,
         nested: parent !== null,
       }))
       .filter(each => !leftOut.has(each.key));
-    const clashes = clashFailures(level, parent === null);
+    const clashes = clashFailures(
+      level,
+      parent === null,
+      builtInFieldNamesOf(template.kind),
+      ctx.startingFieldNames ?? []
+    );
     for (const each of level) {
       const found = [
         nameFailure(each, template.kind, ctx),

@@ -11,7 +11,12 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { expect, type Page, type Request } from "@playwright/test";
+import {
+  expect,
+  type Locator,
+  type Page,
+  type Request,
+} from "@playwright/test";
 
 import {
   block,
@@ -85,8 +90,11 @@ async function restoreFonts(page: Page, fonts: unknown): Promise<void> {
   ).toBe(true);
 }
 
-/** Show Design's Fonts tab, whether or not the panel was left open. */
-async function openFonts(page: Page): Promise<void> {
+/**
+ * Open the Fonts screen over the Design panel, from Type's "Manage fonts…",
+ * whether or not the panel was left open, and hand back the screen.
+ */
+async function openFonts(page: Page): Promise<Locator> {
   const panel = page.getByRole("region", { name: "Design panel" });
   await page.getByRole("navigation", { name: "Editor panels" }).waitFor();
   const restored = await panel
@@ -99,10 +107,13 @@ async function openFonts(page: Page): Promise<void> {
       .getByRole("button", { name: "Design", exact: true })
       .click();
   }
-  await panel.getByRole("tab", { name: "Fonts" }).click();
+  await panel.getByRole("tab", { name: "Type" }).click();
+  await panel.getByRole("button", { name: "Manage fonts…" }).click();
+  const fonts = panel.getByRole("region", { name: "Fonts" });
   await expect(
-    panel.getByRole("heading", { name: "On this site" })
+    fonts.getByRole("heading", { name: "On this site" })
   ).toBeVisible();
+  return fonts;
 }
 
 /**
@@ -124,8 +135,7 @@ test("a Google font added in Design is previewed, picked in the inspector, and l
   try {
     await page.setViewportSize({ width: 1440, height: 900 });
     await openEditorWith(page, NODES, HEADING);
-    await openFonts(page);
-    const panel = page.getByRole("region", { name: "Design panel" });
+    const panel = await openFonts(page);
     await expectNoAxeViolations(page, { include: ".nx-pb-design" });
 
     // By keyboard alone: the "+" opens its menu, Enter takes the first item.
@@ -199,7 +209,9 @@ test("a Google font added in Design is previewed, picked in the inspector, and l
       .click();
     const font = page.getByRole("button", { name: /^Font,/ });
     if (!(await font.isVisible())) {
-      await page.getByRole("button", { name: /^Typography/ }).click();
+      await page
+        .getByRole("button", { name: /^Text(\s?has changes)?$/ })
+        .click();
     }
     await font.click();
     const list = page.getByRole("listbox");
@@ -268,8 +280,7 @@ test("a font file can still be uploaded", async ({ page }) => {
   const before = await storedFonts(page);
   try {
     await openEditorWith(page, NODES, HEADING);
-    await openFonts(page);
-    const panel = page.getByRole("region", { name: "Design panel" });
+    const panel = await openFonts(page);
     await panel.getByRole("button", { name: "Add a font" }).press("Enter");
     await page.getByRole("menuitem", { name: "Upload a font file" }).click();
     const editor = page.getByRole("dialog", { name: "Upload a font file" });

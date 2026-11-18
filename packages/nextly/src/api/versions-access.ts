@@ -17,9 +17,11 @@
 
 import { z } from "zod";
 
+import { withVersionLanguage } from "../auth/access/rule-language";
 import { apiKeyScopeFrom } from "../auth/authenticated-scope";
 import type { AuthenticatedScope } from "../auth/authenticated-scope";
 import { authorizationGroups } from "../auth/entity-read-access";
+import { READ_DOCUMENT_HISTORY } from "../auth/middleware";
 import type { FieldConfig } from "../collections/fields/types";
 import { getService } from "../di";
 import { container } from "../di/container";
@@ -32,7 +34,6 @@ import { storesPerLanguage } from "../domains/i18n/per-language-storage";
 import {
   resolveSingleDocumentId,
   singleDocumentEditable,
-  singleDocumentReadable,
 } from "../domains/singles/services/single-document-access";
 import type { UserContext } from "../domains/singles/types";
 import { resolveComparisonPair } from "../domains/versions/comparison-baselines";
@@ -60,16 +61,16 @@ import {
   type VersionRef,
 } from "../domains/versions/versions-repository";
 import type { VersionListOptions } from "../domains/versions/versions-service";
-import {
-  errorFromServiceEnvelope,
-  type ServiceErrorEnvelope,
-} from "../errors/from-service-envelope";
 import { NextlyError } from "../errors/nextly-error";
 import { rethrowIfRuleCouldNotRun } from "../errors/rule-could-not-run";
 import type {
   ResolvedVersionsConfig,
   VersionScopeKind,
 } from "../schemas/versions/types";
+import {
+  documentReadableIn,
+  type DocumentReadHookInputs,
+} from "../services/lib/document-readable-in";
 import { resolveRoleSlugs } from "../services/lib/permissions";
 import {
   applyFieldReadAccess,
@@ -87,24 +88,38 @@ import { requireRouteCollectionAccess } from "./route-auth";
  * gating first would make the first request to a fresh process fail instead of
  * auto-initializing.
  *
- * @returns The resolved caller, for redacting whatever is returned next.
+ * `locale` is the language the request names, which both the route gate and
+ * the document gate ask the read rule in. Naming none, each is answered where
+ * any language the history holds is readable, and what is returned is
+ * narrowed to the readable ones afterwards.
+ *
+ * @returns The resolved caller, for redacting whatever is returned next, and
+ *   the languages the document gate found it may read the history in.
  */
 export async function requireRouteVersionReadAccess(
   request: Request,
   scopeKind: VersionScopeKind,
   slug: string,
-  entryId: string
-): Promise<{ user: UserContext; authenticatedScope?: AuthenticatedScope }> {
+  entryId: string,
+  locale?: string
+): Promise<{
+  user: UserContext;
+  authenticatedScope?: AuthenticatedScope;
+  readableLanguages: ReadonlySet<string>;
+}> {
   // The boot entry is loaded when a history is asked for, so the dispatchers
   // that import this module's helpers do not load the whole boot with them.
   const { getCachedNextly } = await import("../init");
   await getCachedNextly();
 
   // A history names one document: a caller who may not read it is answered
-  // as if it were missing, as the dispatcher's history routes answer.
+  // as if it were missing, as the dispatcher's history routes answer. The
+  // rule is asked in the language the request names, or where it names none,
+  // in each language alone (`READ_DOCUMENT_HISTORY`).
+  const named = locale !== undefined && locale !== "" ? locale : undefined;
   const auth = await requireRouteCollectionAccess(request, "read", slug, {
-    method: "readDocumentHistory",
-    params: {},
+    method: READ_DOCUMENT_HISTORY,
+    params: named === undefined ? {} : { locale: named },
     namesOne: true,
   });
 
@@ -128,27 +143,25 @@ export async function requireRouteVersionReadAccess(
   const authenticatedScope: AuthenticatedScope | undefined =
     auth.authMethod === "api-key" ? apiKeyScopeFrom(auth) : undefined;
 
-  await assertVersionDocumentReadable(
+  const readableLanguages = await assertVersionDocumentReadable(
     scopeKind,
     slug,
     entryId,
     user,
-    authenticatedScope
+    authenticatedScope,
+    {},
+    named === undefined ? [] : [named]
   );
 
-  return { user, authenticatedScope };
+  return { user, authenticatedScope, readableLanguages };
 }
 
 /**
- * What the document's read hooks are handed besides the caller: the request
- * behind the read and the context its caller passed. A hook that narrows reads
- * by either must see the same values here as on the caller's own document read,
- * or the probe answers a different caller than the one asking.
+ * What the document's read hooks are handed besides the caller. Declared
+ * beside the per-language document check that hands them on, and re-exported
+ * here for the history gates' callers.
  */
-export interface DocumentReadHookInputs {
-  request?: Request;
-  context?: Record<string, unknown>;
-}
+export type { DocumentReadHookInputs };
 
 /**
  * Confirm a caller may see this document's history, assuming they are already
@@ -160,6 +173,9 @@ export interface DocumentReadHookInputs {
  * separate from {@link requireRouteVersionReadAccess} means those rules are defined
  * once instead of drifting between the two entry points.
  *
+ * @returns The languages asked about that the caller may read the history
+ *   in: the named ones, or else every readable language the history holds.
+ *   Empty for a history that names no language.
  * @throws NextlyError.notFound when the caller may not see the document.
  */
 export async function assertVersionDocumentReadable(
@@ -176,15 +192,42 @@ export async function assertVersionDocumentReadable(
   // The languages the read names or returns, each asked about in its own
   // right; null is a part with no language, which the read above covers.
   locales: readonly (string | null)[] = []
-): Promise<void> {
-  const readable = await canReadLiveDocument(
-    scopeKind,
-    slug,
-    entryId,
-    user,
-    authenticatedScope,
-    hookInputs
-  );
+): Promise<ReadonlySet<string>> {
+  // The document's history is open to a caller who may read the document in
+  // a language its history is about: the languages the read names when it
+  // names any, otherwise any language its history can be asked about. Never
+  // the default language alone, which a read rule may refuse while admitting
+  // another. One answer serves both halves of the gate.
+  const named = [
+    ...new Set(locales.filter((l): l is string => l !== null && l !== "")),
+  ];
+  const asked =
+    named.length > 0 ? named : [...(await historyLanguagesOf(scopeKind, slug))];
+  const allowed =
+    asked.length === 0
+      ? new Set<string>()
+      : await readableHistoryLocales(
+          scopeKind,
+          slug,
+          entryId,
+          user,
+          authenticatedScope,
+          hookInputs,
+          asked
+        );
+  // A history that names no language (a site without languages) is the
+  // document's own, read once as it is.
+  const readable =
+    asked.length === 0
+      ? await canReadLiveDocument(
+          scopeKind,
+          slug,
+          entryId,
+          user,
+          authenticatedScope,
+          hookInputs
+        )
+      : allowed.size > 0;
   if (!readable) {
     // Deliberately "not found" rather than "forbidden": a distinct 403 would
     // confirm the document exists to a caller not allowed to know that.
@@ -198,52 +241,36 @@ export async function assertVersionDocumentReadable(
       },
     });
   }
-  await assertHistoryLocalesReadable(
-    scopeKind,
-    slug,
-    entryId,
-    user,
-    authenticatedScope,
-    hookInputs,
-    locales
-  );
+  if (named.some(locale => !allowed.has(locale))) {
+    // Not found, as the document half answers, so a refused language does
+    // not confirm that the document has history in it.
+    throw NextlyError.notFound({
+      logContext: {
+        reason: "version-language-not-readable",
+        scopeKind,
+        scopeSlug: slug,
+        entryId,
+        userId: user.id,
+      },
+    });
+  }
+  return allowed;
 }
 
 /**
- * What a history listing reads, by language: the one it names, once its caller
- * may read the document in it, or else every language they may read it in.
- * Spread into the listing's options, so every listing narrows alike.
- *
- * @throws NextlyError.notFound when the named language is not readable.
+ * What a history listing reads, by language: the one it names, or else every
+ * language its caller may read it in. Derived from the answer of
+ * {@link assertVersionDocumentReadable}, asked with the same `locale`, which
+ * has refused a named language the caller may not read; so every listing
+ * narrows alike and no language is asked about twice.
  */
-export async function historyListLanguages(
-  scopeKind: VersionScopeKind,
-  slug: string,
-  entryId: string,
-  user: UserContext,
-  authenticatedScope: AuthenticatedScope | undefined,
-  locale: string | undefined
-): Promise<Pick<VersionListOptions, "locale" | "locales">> {
-  if (locale !== undefined && locale !== "") {
-    await assertHistoryLocalesReadable(
-      scopeKind,
-      slug,
-      entryId,
-      user,
-      authenticatedScope,
-      {},
-      [locale]
-    );
-    return { locale };
-  }
-  const readable = await readableHistoryLocales(
-    scopeKind,
-    slug,
-    entryId,
-    user,
-    authenticatedScope
-  );
-  return { locales: [...readable] };
+export function historyListLanguages(
+  locale: string | undefined,
+  readable: ReadonlySet<string>
+): Pick<VersionListOptions, "locale" | "locales"> {
+  return locale !== undefined && locale !== ""
+    ? { locale }
+    : { locales: [...readable] };
 }
 
 /**
@@ -362,7 +389,9 @@ export async function assertVersionLanguageReadable(
  * The languages of a document the caller may read its history in.
  *
  * Asked of the document's read in each language, because a read rule or hook
- * may answer differently per language: it is handed that language's values.
+ * may answer differently per language: it is handed that language's values,
+ * and the collection's or Single's own read rule is asked in that language
+ * rather than taken as answered by the route's allow.
  * A language no longer configured is never readable here. A read in it would
  * resolve to the default language and answer for that instead, which is not
  * an answer about the entries written in it. That includes every language
@@ -504,15 +533,21 @@ async function canUpdateLiveSingle(
 }
 
 /**
- * Whether the caller can read the live document, using the same service the
- * normal read path uses so the collection's own gate applies identically.
+ * Whether the caller can read the live document, in `locale` (the default
+ * language where it names none), for its history in that language.
  *
- * A denial (403) and a missing document (404) both mean "no history for you".
- * Any other failure is the read failing rather than refusing — a database not
- * migrated for the collection, a component/relationship load error, a throwing
- * afterRead hook — and is re-thrown with the read's own error, so the route
- * answers what the document read would instead of disguising it as missing
- * content.
+ * Asked of {@link documentReadableIn}, the one per-language document check
+ * the workflow notices' Single rows ask too, with nothing attested: the
+ * collection's or Single's own read rule is asked in the language its history
+ * is about, so a language the rule refuses this caller has no readable
+ * history. That check keeps what this gate needs: `status: "all"` so a draft
+ * still has history, a scoped API key judged on its own grant, the read's own
+ * report of the row it loaded for a collection, and for a Single its live id
+ * resolved without materializing it. A refusal and a missing document both
+ * answer `false`; any other failure is thrown with the read's own error.
+ *
+ * A history scope other than a Single is read as a collection, as it always
+ * has been.
  */
 async function canReadLiveDocument(
   scopeKind: VersionScopeKind,
@@ -524,88 +559,19 @@ async function canReadLiveDocument(
   // The language to read the document in; absent reads the default one.
   locale?: string
 ): Promise<boolean> {
-  if (scopeKind === "single") {
-    return canReadLiveSingle(
+  return documentReadableIn(
+    {
+      kind: scopeKind === "single" ? "single" : "collection",
       slug,
       entryId,
+    },
+    {
       user,
-      authenticatedScope,
-      hookInputs,
-      locale
-    );
-  }
-
-  const collections = getService("collectionsHandler");
-  const result = await collections.getEntry({
-    collectionName: slug,
-    entryId,
-    user,
-    overrideAccess: false,
-    // The route already authenticated and authorized the caller, so skip only
-    // the redundant RBAC re-check (which would reject a scoped API key by
-    // resolving its creator's stored roles). Document-level rules still run.
-    routeAuthorized: true,
-    // A scoped API key is judged on its OWN read grant, so a super-admin-owned
-    // key does not skip the collection's read gate.
-    authenticatedScope,
-    // Match the authenticated read path: without this, a status-enabled
-    // collection filters to published only, and a draft would report no
-    // history — exactly when an author needs it most.
-    status: "all",
-    // The request and context the caller's own read would carry, for hooks
-    // that narrow reads by them.
-    ...hookInputs,
-    // The read rules and hooks are handed this language's values.
-    ...(locale === undefined ? {} : { locale }),
-  });
-  if (!interpretReadResult(result)) return false;
-  // The read must be of the document asked about. A `beforeOperation` hook may
-  // rewrite the id a read resolves, and a read that passed on another document
-  // would authorize this one's history by that document's rules. The id is the
-  // read's own report of the row it loaded, not `data.id`: an `afterRead` hook
-  // may project the output without it.
-  return result.resolvedEntryId === entryId;
-}
-
-/**
- * Single variant. Reads the backing row directly first, because
- * `SingleEntryService.get` MATERIALIZES a missing Single (creating the default
- * document, and for a versioned Single capturing an initial version). A version
- * request is a read, so it must never write; skipping straight to 404 when no
- * row exists is also correct, since an unmaterialized Single has no history.
- *
- * The row's id is then compared with the requested `entryId`: version rows
- * outlive the document they came from, so a Single recreated under a new id
- * must not expose the previous document's snapshots.
- */
-async function canReadLiveSingle(
-  slug: string,
-  entryId: string,
-  user: UserContext,
-  authenticatedScope: AuthenticatedScope | undefined,
-  hookInputs: DocumentReadHookInputs,
-  locale: string | undefined
-): Promise<boolean> {
-  const registry = getService("singleRegistryService");
-  const record = await registry.getSingleBySlug(slug);
-  if (!record?.tableName) return false;
-
-  // Not materialized yet, or the live document is a different one than the
-  // requested history belongs to.
-  const liveId = await resolveSingleDocumentId(slug);
-  if (liveId === null || liveId !== entryId) return false;
-
-  // Shared with draft preview for the reason the update gate above gives.
-  return singleDocumentReadable(slug, {
-    user,
-    // The version route gates on `read` before reaching here, so the coarse
-    // read check has run and re-running it would reject a scoped API key by
-    // resolving its creator's roles.
-    routeAuthorized: true,
-    ...(authenticatedScope === undefined ? {} : { actor: authenticatedScope }),
-    ...hookInputs,
-    ...(locale === undefined ? {} : { locale }),
-  });
+      ...(authenticatedScope === undefined ? {} : { authenticatedScope }),
+    },
+    locale,
+    hookInputs
+  );
 }
 
 /**
@@ -615,28 +581,6 @@ async function canReadLiveSingle(
  * and `domains/` must not import from `api/`.
  */
 export { resolveSingleDocumentId };
-
-/**
- * Collapse a live-read result into "may the caller see this document".
- * Only 403/404 mean no; anything else non-successful is a genuine fault.
- *
- * The fault keeps the code and status the read gave it, rebuilt through the
- * shared converter: a database not migrated for the collection answers
- * ENTITY_NOT_MIGRATED, as the caller's own read of the document does, rather
- * than an opaque 500, and a rule that could not run answers RULE_COULD_NOT_RUN
- * rather than an internal error. The read ran as the caller, so its answer
- * names only what the caller may be told.
- */
-function interpretReadResult(
-  read: ServiceErrorEnvelope & { success: boolean; statusCode: number }
-): boolean {
-  if (read.success) return true;
-  if (read.statusCode === 403 || read.statusCode === 404) return false;
-  throw errorFromServiceEnvelope(read, {
-    reason: "version-live-read-failed",
-    statusCode: read.statusCode,
-  });
-}
 
 /** An entity's current schema, as redaction reads it. */
 export interface RedactionSchema {
@@ -690,9 +634,16 @@ export async function currentRedactionSchema(
  *
  * Fails closed: if the rules cannot be evaluated, every field carrying a read
  * rule is withheld rather than the snapshot returned as stored.
+ *
+ * Takes the version itself, its snapshot and the language it records, and
+ * runs every rule in that language (`withVersionLanguage`): a field rule
+ * answering by language withholds from a version what it withholds from a
+ * read in the version's language. The one redaction every surface returning a
+ * stored snapshot or a judgment of one calls, so none can judge it in another
+ * language.
  */
 export async function redactSnapshotForUser(
-  snapshot: unknown,
+  version: { snapshot: unknown; locale: string | null },
   scopeKind: VersionScopeKind,
   slug: string,
   user: UserContext,
@@ -705,6 +656,7 @@ export async function redactSnapshotForUser(
   schema?: RedactionSchema
 ): Promise<ReadonlySet<string>> {
   const withheld = new Set<string>();
+  const { snapshot } = version;
   if (typeof snapshot !== "object" || snapshot === null) return withheld;
   if (scopeKind !== "collection" && scopeKind !== "single") return withheld;
 
@@ -733,16 +685,18 @@ export async function redactSnapshotForUser(
     grants: callerAccessGrants(user, authenticatedScope),
   };
   try {
-    await applyFieldReadAccess({
-      kind: scopeKind,
-      slug,
-      entry,
-      user,
-      authenticatedScope,
-      grants: caller.grants,
-      overrideAccess: false,
+    await withVersionLanguage(version.locale, async () => {
+      await applyFieldReadAccess({
+        kind: scopeKind,
+        slug,
+        entry,
+        user,
+        authenticatedScope,
+        grants: caller.grants,
+        overrideAccess: false,
+      });
+      await applyComponentReadAccess(entry, fields, componentFields, caller);
     });
-    await applyComponentReadAccess(entry, fields, componentFields, caller);
   } catch (error) {
     // A rule that could not run never answered: the request ends with that,
     // not with every field carrying a read rule withheld.
@@ -1057,6 +1011,8 @@ export async function readableFieldSources<
   Row extends {
     // Null on an autosave row, which records no sources.
     versionNo: number | null;
+    // The row's language, which its snapshot is judged in.
+    locale: string | null;
     fieldSources?: Readonly<Record<string, number>> | null;
   },
 >(
@@ -1104,7 +1060,7 @@ export async function readableFieldSources<
         if (!(name in entry)) entry[name] = null;
       }
       const withheld = await redactSnapshotForUser(
-        entry,
+        { snapshot: entry, locale: row.locale },
         args.ref.scopeKind,
         args.ref.scopeSlug,
         args.user,
@@ -1198,7 +1154,7 @@ export async function hydrateVersionSnapshot(
 export interface ComparisonQuery {
   from?: number;
   to?: number;
-  /** @experimental A registered comparison baseline's name. */
+  /** A registered comparison baseline's name. */
   baseline?: string;
   /** The part to open on when no `to` is named. */
   locale?: string;
@@ -1563,7 +1519,7 @@ export async function diffDocumentVersions(args: {
   const user = args.user;
   const withheldFrom = user
     ? await redactSnapshotForUser(
-        fromRow.snapshot,
+        fromRow,
         args.scopeKind,
         args.slug,
         user,
@@ -1572,7 +1528,7 @@ export async function diffDocumentVersions(args: {
     : new Set<string>();
   const withheldTo = user
     ? await redactSnapshotForUser(
-        toRow.snapshot,
+        toRow,
         args.scopeKind,
         args.slug,
         user,

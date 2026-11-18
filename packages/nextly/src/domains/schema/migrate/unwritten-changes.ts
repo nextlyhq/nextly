@@ -18,18 +18,15 @@
  *
  * A snapshot written before snapshots recorded settings or permissions says
  * nothing about them, so its silence is never a difference. There the
- * settings and permissions are compared with what the database records once
- * its first run on this release has recorded them (the registry rows, and the
- * live permissions by owner), and nothing is named before that run.
+ * settings and permissions are compared with what the database's first run on
+ * this release recorded of them, once and for good (the registry record's
+ * rows and owned permissions), and nothing is named before that run.
  *
  * **Runtime restriction (F11):** CLI and boot only; never import from runtime
  * code.
  *
  * @module domains/schema/migrate/unwritten-changes
  */
-import { readdir, readFile } from "node:fs/promises";
-import { resolve } from "node:path";
-
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { CliError } from "../../../cli/errors";
@@ -60,7 +57,6 @@ import {
 } from "../migrate-create/generate";
 import {
   EMPTY_SNAPSHOT,
-  isOlderFormatSnapshot,
   type SnapshotFile,
 } from "../migrate-create/snapshot-io";
 import { describeOp } from "../pipeline/diff/describe-operation";
@@ -85,8 +81,18 @@ export interface RecordedInDatabase {
    * declared settings: each one's settings differ from what is recorded.
    */
   settingsDiffer?: readonly EntitySettingsChange[];
-  /** The live permissions not orphaned, the app's and each plugin's, by owner. */
+  /**
+   * The app's and each plugin's permissions, by owner: as the registry record
+   * kept them, or, where the database has no such record of them, the live
+   * ones not orphaned.
+   */
   permissions?: Pick<PermissionRecord, "app" | "plugins">;
+  /**
+   * Every permission slug a registry record kept, where it was written before
+   * owners were kept. A declared permission not among them was added since;
+   * one removed cannot be named, since a slug alone does not say whose it was.
+   */
+  permissionSlugs?: readonly string[];
 }
 
 /** Everything the declared schema holds that the newest snapshot does not. */
@@ -173,10 +179,7 @@ export function permissionDifferences(
   recorded: RecordedInDatabase | undefined
 ): Extract<PermissionChange, { kind: "owner" }>[] {
   const previous =
-    latest?.data.permissions ??
-    (recorded?.permissions === undefined
-      ? undefined
-      : { ...recorded.permissions, collections: {}, singles: {} });
+    latest?.data.permissions ?? recordedPermissions(declared, recorded);
   // Over a snapshot that predates the record and a database that records none
   // yet, there is nothing to compare: `permissionChanges` names that "recorded".
   if (previous === undefined) return [];
@@ -184,6 +187,37 @@ export function permissionDifferences(
     (change): change is Extract<PermissionChange, { kind: "owner" }> =>
       change.kind === "owner"
   );
+}
+
+/**
+ * The owners' permissions the database records, as a permission record:
+ * undefined where it records none. Over slugs alone (`permissionSlugs`), each
+ * declared permission whose slug was kept, so only an added one differs.
+ */
+function recordedPermissions(
+  declared: PermissionRecord,
+  recorded: RecordedInDatabase | undefined
+): PermissionRecord | undefined {
+  if (recorded?.permissions !== undefined) {
+    return { ...recorded.permissions, collections: {}, singles: {} };
+  }
+  if (recorded?.permissionSlugs === undefined) return undefined;
+  const keptSlugs = new Set(recorded.permissionSlugs);
+  const keptOf = (owned: OwnerPermissions): OwnerPermissions =>
+    Object.fromEntries(
+      Object.entries(owned).filter(([slug]) => keptSlugs.has(slug))
+    );
+  return {
+    app: keptOf(declared.app),
+    plugins: Object.fromEntries(
+      Object.entries(declared.plugins).map(([name, owned]) => [
+        name,
+        keptOf(owned),
+      ])
+    ),
+    collections: {},
+    singles: {},
+  };
 }
 
 /** One permission row as the database stores it, for {@link livePermissionsByOwner}. */
@@ -291,36 +325,6 @@ export function unwrittenChangesError(
       });
 }
 
-/**
- * Whether the newest snapshot in the folder, the one `loadLatestSnapshot`
- * reads, is a template's older-format one. False where there is none, or it
- * is not JSON (the reader then refuses it as it always has).
- */
-async function newestSnapshotIsOlderFormat(
-  migrationsDir: string
-): Promise<boolean> {
-  const metaDir = resolve(migrationsDir, "meta");
-  let names: string[];
-  try {
-    names = await readdir(metaDir);
-  } catch (error) {
-    if ((error as { code?: string }).code === "ENOENT") return false;
-    throw error;
-  }
-  const newest = names
-    .filter(name => name.endsWith(".snapshot.json"))
-    .sort()
-    .at(-1);
-  if (newest === undefined) return false;
-  try {
-    return isOlderFormatSnapshot(
-      JSON.parse(await readFile(resolve(metaDir, newest), "utf-8")) as unknown
-    );
-  } catch {
-    return false;
-  }
-}
-
 /** What {@link unwrittenChangesOf} reads the declared schema from. */
 export type UnwrittenChangesArgs = Pick<
   AppMigrationInputsArgs,
@@ -337,7 +341,9 @@ export type UnwrittenChangesArgs = Pick<
    * database), such a snapshot's silence names nothing.
    */
   recorded?: (
-    entities: DeclaredEntities
+    entities: DeclaredEntities,
+    /** The newest snapshot's migration, by base name; null where there is none. */
+    newest: string | null
   ) => Promise<RecordedInDatabase | undefined>;
   /**
    * Whether `config` carries everything a permission is declared from (the
@@ -356,13 +362,6 @@ export type UnwrittenChangesArgs = Pick<
 export async function unwrittenChangesOf(
   args: UnwrittenChangesArgs
 ): Promise<UnwrittenChanges> {
-  // A template's older-format snapshot (`isOlderFormatSnapshot`) lists entities, not tables,
-  // settings or permissions as they are recorded now, and `nextly migrate` runs its migration as
-  // written. It records nothing this comparison reads, so, as an earlier version's snapshot, its
-  // silence is never a difference; and it is no snapshot the comparison could parse.
-  if (await newestSnapshotIsOlderFormat(args.migrationsDir)) {
-    return { tables: [], settings: [], permissions: [], noSnapshot: false };
-  }
   const inputs = await appMigrationInputs({
     config: args.config,
     ...(args.deferredExtends === undefined
@@ -379,10 +378,16 @@ export async function unwrittenChangesOf(
     components: inputs.components,
   };
   const latest = inputs.latest;
+  // A template's older-format snapshot is read as the tables its listed
+  // entities were made with (`template-start.ts`), so a collection, a Single
+  // or a top-level field added or removed since is a table difference like
+  // any other. It records no settings and no permissions, and what the
+  // database holds of them was never written from it, so neither is compared.
   const predatesRecord =
     latest === null ||
-    latest.data.entities === undefined ||
-    latest.data.permissions === undefined;
+    (latest.template !== true &&
+      (latest.data.entities === undefined ||
+        latest.data.permissions === undefined));
   const changes = compareWithNewestSnapshot({
     entities,
     appStream: inputs.appStream,
@@ -393,7 +398,14 @@ export async function unwrittenChangesOf(
     latest,
     dialect: args.dialect,
     ...(predatesRecord && args.recorded !== undefined
-      ? { recorded: await args.recorded(entities) }
+      ? {
+          recorded: await args.recorded(
+            entities,
+            latest === null
+              ? null
+              : latest.filename.replace(/\.snapshot\.json$/, "")
+          ),
+        }
       : {}),
   });
   return args.comparePermissions === false
