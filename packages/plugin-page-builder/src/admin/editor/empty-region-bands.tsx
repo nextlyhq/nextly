@@ -20,7 +20,6 @@
  */
 import type { RegionArea } from "@nextlyhq/blocks-engine";
 import type {
-  CanvasRegion,
   EmptyRegionAnchor,
   EmptyRegionBandProps,
 } from "@nextlyhq/builder/shell";
@@ -33,7 +32,7 @@ import {
   useAreaComponents,
   type AreaComponentsRead,
 } from "../layout-area-client";
-import type { EmptyDefaultArea } from "../page-layout";
+import type { EmptyDefaultArea, RegionCardFacts } from "../page-layout";
 
 import { AreaComponentList, useChooseInArea } from "./use-a-component";
 
@@ -70,10 +69,17 @@ export interface EmptyRegionBands {
   /** The "Use a component" menu a band opened, while it is open. */
   readonly menu: OpenMenu | null;
   readonly closeMenu: () => void;
-  /** The area a header was just created in, until it is opened in place. */
-  readonly created: RegionArea | null;
+  /** The header just created, until it is opened in place or given up. */
+  readonly created: CreatedHeader | null;
   /** The created header was opened, or there is nothing to open. */
   readonly createdHandled: () => void;
+}
+
+/** A header just created: its area, the component, and the set it is in. */
+interface CreatedHeader {
+  readonly area: RegionArea;
+  readonly componentId: string;
+  readonly setId: string;
 }
 
 /** The ways a band with the right to fill it offers, by area. */
@@ -138,10 +144,13 @@ function createRefusal(error: unknown, area: RegionArea): string {
 export function useEmptyRegionBands({
   empty,
   siteHeaderFooter,
+  followsDefault,
   reread,
 }: {
   readonly empty: readonly EmptyDefaultArea[];
   readonly siteHeaderFooter: SiteHeaderFooter;
+  /** Whether the page follows the default, where a created header goes. */
+  readonly followsDefault: boolean;
   /** Read the regions again, so the canvas draws the header just made. */
   readonly reread: () => void;
 }): EmptyRegionBands {
@@ -158,16 +167,25 @@ export function useEmptyRegionBands({
     enabled: footer !== undefined,
   });
   const [creating, setCreating] = useState<RegionArea | null>(null);
-  const [created, setCreated] = useState<RegionArea | null>(null);
+  const [created, setCreated] = useState<CreatedHeader | null>(null);
+  // A page moved off the default no longer draws the header it created
+  // there: nothing is opened, now or when it comes back.
+  useEffect(() => {
+    if (!followsDefault) setCreated(null);
+  }, [followsDefault]);
   const [menu, setMenu] = useState<OpenMenu | null>(null);
 
   const create = async (area: RegionArea) => {
     setCreating(area);
     try {
-      const { message } = await createInDefaultArea(area);
+      const { message, item } = await createInDefaultArea(area);
       toast.success(message);
       reread();
-      setCreated(area);
+      setCreated({
+        area,
+        componentId: item.component.id,
+        setId: item.set.id,
+      });
     } catch (error) {
       toast.error(createRefusal(error, area));
     } finally {
@@ -190,7 +208,7 @@ export function useEmptyRegionBands({
         ? menu
         : null,
     closeMenu: () => setMenu(null),
-    created,
+    created: followsDefault ? created : null,
     createdHandled: () => setCreated(null),
   };
 }
@@ -198,26 +216,34 @@ export function useEmptyRegionBands({
 /**
  * What the bands open, drawn over the canvas: the "Use a component" menu,
  * and the header just created opened for editing in place once the canvas
- * draws it, since it is drawn only after the choices are read again.
+ * draws it, since it is drawn only after the choices are read again. Only
+ * that header: where the area shows another, the page has moved to another
+ * set meanwhile, and nothing is opened.
  */
 export function EmptyRegionBandsOverlay({
   bands,
-  regions,
+  cards,
   requestEdit,
 }: {
   readonly bands: EmptyRegionBands;
-  /** The regions the canvas draws, watched for the one just created. */
-  readonly regions: readonly CanvasRegion[] | undefined;
+  /** What each region drawn is, watched for the header just created. */
+  readonly cards: readonly RegionCardFacts[];
   /** Edit a region in place; absent for someone who may not. */
   readonly requestEdit: ((area: RegionArea) => void) | undefined;
 }): JSX.Element | null {
   const { created, createdHandled, menu, closeMenu } = bands;
   useEffect(() => {
     if (created === null) return;
-    if (!(regions ?? []).some(region => region.area === created)) return;
+    const card = cards.find(drawn => drawn.area === created.area);
+    if (card === undefined) return;
     createdHandled();
-    requestEdit?.(created);
-  }, [created, createdHandled, regions, requestEdit]);
+    if (
+      card.componentId === created.componentId &&
+      card.setId === created.setId
+    ) {
+      requestEdit?.(created.area);
+    }
+  }, [created, createdHandled, cards, requestEdit]);
   return menu === null ? null : (
     <BandMenu
       key={`${menu.area}:${menu.setId}`}

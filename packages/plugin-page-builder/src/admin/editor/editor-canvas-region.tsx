@@ -307,7 +307,7 @@ export function editorCanvasRegion(view: EditorView): React.JSX.Element {
                     anchored where the band's button is. */}
                 <EmptyRegionBandsOverlay
                   bands={view.emptyRegionBands}
-                  regions={view.canvasRegions}
+                  cards={view.regionCards}
                   requestEdit={view.regionEditing.requestEdit}
                 />
                 {/* An Image with no picture: "Add an image" with Upload,

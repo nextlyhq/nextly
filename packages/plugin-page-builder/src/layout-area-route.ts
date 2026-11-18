@@ -49,7 +49,10 @@ import { LAYOUT_AREAS, type LayoutArea } from "./collections/areas";
 import { COMPONENTS_SLUG } from "./collections/components";
 import { LAYOUTS_SLUG } from "./collections/layouts";
 import { readBodyWith } from "./composition-route-kit";
-import type { DefaultLayoutDirectApi } from "./default-layout/store";
+import {
+  relationId,
+  type DefaultLayoutDirectApi,
+} from "./default-layout/store";
 import { documentVersionOf, withVersionFrom } from "./document-version";
 import { entryOf, readSavedAsCaller } from "./entry-reads";
 import {
@@ -235,14 +238,46 @@ export function refuseUnlessPublishedAsSaved(
 }
 
 /**
+ * Refuse a set whose `area` names a component other than `allowed`: a
+ * write meant for an empty area would replace what the set shows. A caller
+ * who cannot read the areas is refused too, since nothing can be judged.
+ */
+export function refuseFilledArea(
+  saved: Record<string, unknown>,
+  area: LayoutArea,
+  allowed?: string
+): void {
+  if (saved.areas === undefined) {
+    throw NextlyError.forbidden({
+      logContext: { reason: "layout-area-areas-unreadable" },
+    });
+  }
+  const held = areaRowsOf(saved.areas).some(row => {
+    if (row.area !== area) return false;
+    const id = relationId(row.component);
+    return id !== null && id !== allowed;
+  });
+  if (!held) return;
+  const title = entryOf(saved, "title")?.title ?? "";
+  throw NextlyError.conflict({
+    reason: "state",
+    message: `The ${title} header & footer already has a ${AREA_WORDS[area]}. Reload to see it.`,
+    logContext: { reason: "layout-area-not-empty" },
+  });
+}
+
+/**
  * Put `componentId` in `area` of set `setId`, published, as the module
- * docblock describes.
+ * docblock describes. With `onlyIntoEmpty`, every attempt also refuses an
+ * area that names another component by then, so a write meant to fill an
+ * empty area never replaces a choice made meanwhile.
  */
 export async function putInArea(
   setId: string,
   area: LayoutArea,
   componentId: string,
-  writes: LayoutAreaWrites
+  writes: LayoutAreaWrites,
+  options: { readonly onlyIntoEmpty?: boolean } = {}
 ): Promise<WrittenArea> {
   if (!(await writes.mayChange())) {
     throw NextlyError.forbidden({
@@ -265,6 +300,9 @@ export async function putInArea(
         });
       }
       refuseUnlessPublishedAsSaved(saved, area);
+      if (options.onlyIntoEmpty === true) {
+        refuseFilledArea(saved, area, component.id);
+      }
       // Asked again right before the write: a component unpublished since
       // the first ask would leave the published set naming one no visitor
       // can see.

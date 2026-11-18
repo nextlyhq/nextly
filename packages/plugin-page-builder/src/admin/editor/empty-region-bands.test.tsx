@@ -12,7 +12,6 @@
  * @module admin/editor/empty-region-bands.test
  */
 import type { RegionArea } from "@nextlyhq/blocks-engine";
-import type { CanvasRegion } from "@nextlyhq/builder/shell";
 import {
   act,
   cleanup,
@@ -58,7 +57,7 @@ vi.mock("@nextlyhq/ui", async importOriginal => ({
 import { usePluginRoute, writePluginRoute } from "@nextlyhq/plugin-sdk/admin";
 
 import type { AreaComponentsResponse } from "../../layout-area-contract";
-import type { EmptyDefaultArea } from "../page-layout";
+import type { EmptyDefaultArea, RegionCardFacts } from "../page-layout";
 
 import {
   EmptyRegionBandsOverlay,
@@ -97,16 +96,23 @@ const NO_HEADER: readonly EmptyDefaultArea[] = [
   { area: "header", setId: "main", setTitle: "Main" },
 ];
 
-const drawn = (area: RegionArea): CanvasRegion =>
-  ({
-    area,
-    document: { nodes: [] },
-    definitions: new Map(),
-  }) as unknown as CanvasRegion;
+/** A region the canvas draws, as its card says: which component, which set. */
+const drawn = (
+  area: RegionArea,
+  componentId = area === "header" ? "new-h" : "footer-1",
+  setId = "main"
+): RegionCardFacts => ({
+  area,
+  componentId,
+  setId,
+  setTitle: setId,
+  starter: false,
+});
 
 interface Props {
   empty: readonly EmptyDefaultArea[];
   mode: "page-builder" | "code";
+  following?: boolean;
 }
 
 const requestEdit = vi.fn();
@@ -117,6 +123,7 @@ function bands(props: Partial<Props> = {}) {
       useEmptyRegionBands({
         empty: current.empty,
         siteHeaderFooter: current.mode,
+        followsDefault: current.following ?? true,
         reread: askChoicesAgain,
       }),
     {
@@ -125,15 +132,15 @@ function bands(props: Partial<Props> = {}) {
   );
 }
 
-/** What the bands open, drawn over a canvas drawing `regions`. */
+/** What the bands open, drawn over a canvas whose regions' cards are `cards`. */
 function overlay(
   current: EmptyRegionBands,
-  regions: readonly CanvasRegion[]
+  cards: readonly RegionCardFacts[]
 ): ReturnType<typeof render> {
   return render(
     <EmptyRegionBandsOverlay
       bands={current}
-      regions={regions}
+      cards={cards}
       requestEdit={requestEdit}
     />
   );
@@ -193,6 +200,16 @@ describe("the bands where the site default shows no header or footer", () => {
   });
 });
 
+/** The create route's answer: the header made, in the default Main. */
+const CREATED = {
+  message: "Header was created.",
+  item: {
+    set: { id: "main", title: "Main" },
+    area: "header",
+    component: { id: "new-h", title: "Header" },
+  },
+};
+
 describe("Create a header", () => {
   function pressCreate(hook: ReturnType<typeof bands>) {
     const actions = hook.result.current.bands?.header?.actions;
@@ -223,14 +240,18 @@ describe("Create a header", () => {
     );
     expect(toast.success).toHaveBeenCalledWith("Header was created.");
     expect(askChoicesAgain).toHaveBeenCalledTimes(1);
-    expect(hook.result.current.created).toBe("header");
+    expect(hook.result.current.created).toEqual({
+      area: "header",
+      componentId: "new-h",
+      setId: "main",
+    });
     // Not before it is drawn: editing a region the canvas lacks opens nothing.
     const drawnOver = overlay(hook.result.current, [drawn("footer")]);
     expect(requestEdit).not.toHaveBeenCalled();
     drawnOver.rerender(
       <EmptyRegionBandsOverlay
         bands={hook.result.current}
-        regions={[drawn("header"), drawn("footer")]}
+        cards={[drawn("header"), drawn("footer")]}
         requestEdit={requestEdit}
       />
     );
@@ -240,11 +261,29 @@ describe("Create a header", () => {
     drawnOver.rerender(
       <EmptyRegionBandsOverlay
         bands={hook.result.current}
-        regions={[drawn("header")]}
+        cards={[drawn("header")]}
         requestEdit={requestEdit}
       />
     );
     expect(requestEdit).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens nothing when the area shows another header, the page having moved to another set", async () => {
+    write.mockResolvedValue(CREATED);
+    const hook = bands();
+    await pressCreate(hook);
+    overlay(hook.result.current, [drawn("header", "landing-h", "landing")]);
+    expect(requestEdit).not.toHaveBeenCalled();
+    // Given up, so the header is not opened later either.
+    expect(hook.result.current.created).toBeNull();
+  });
+
+  it("drops the opening once the page stops following the default", async () => {
+    write.mockResolvedValue(CREATED);
+    const hook = bands();
+    await pressCreate(hook);
+    hook.rerender({ empty: [], mode: "page-builder", following: false });
+    expect(hook.result.current.created).toBeNull();
   });
 
   it("says a refusal in the route's words and opens nothing", async () => {

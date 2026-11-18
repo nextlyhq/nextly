@@ -638,6 +638,8 @@ export interface PageLayoutRegions {
   readonly cards: readonly RegionCardFacts[];
   /** The default's empty areas, while the page follows the default. */
   readonly empty: readonly EmptyDefaultArea[];
+  /** Whether the page follows the site default: names no set, not off. */
+  readonly followsDefault: boolean;
 }
 
 /** What a header or footer is called in the editor. */
@@ -691,7 +693,16 @@ const NOTHING_DRAWN: PageLayoutRegions = {
   layers: [],
   cards: [],
   empty: [],
+  followsDefault: false,
 };
+
+/** Whether a page follows the site default: it names no set, and is not off. */
+function followsDefaultOf(stored: {
+  layout: unknown;
+  noHeaderFooter: boolean;
+}): boolean {
+  return layoutRelationId(stored.layout) === null && !stored.noHeaderFooter;
+}
 
 /** The areas a set has, header first. */
 const AREAS: readonly RegionArea[] = ["header", "footer"];
@@ -707,9 +718,7 @@ function emptyDefaultAreasOf(
   stored: { layout: unknown; noHeaderFooter: boolean },
   choices: LayoutChoicesResponse
 ): readonly EmptyDefaultArea[] {
-  if (layoutRelationId(stored.layout) !== null || stored.noHeaderFooter) {
-    return [];
-  }
+  if (!followsDefaultOf(stored)) return [];
   const { defaultLayout } = choices.meta;
   const set = choices.items.find(item => item.id === defaultLayout);
   if (set === undefined || !set.published || set.removal !== undefined) {
@@ -730,9 +739,10 @@ function regionsOf(
 ): PageLayoutRegions {
   if (stored === undefined || state.kind !== "ready") return NOTHING_DRAWN;
   const empty = emptyDefaultAreasOf(stored, state.choices);
+  const followsDefault = followsDefaultOf(stored);
   const effective = layoutPickerView(stored, state).effective;
   if (effective === null || effective.regions.length === 0) {
-    return { ...NOTHING_DRAWN, empty };
+    return { ...NOTHING_DRAWN, empty, followsDefault };
   }
   const { meta } = state.choices;
   const definitions = new Map<string, BlockDocument>(
@@ -772,7 +782,7 @@ function regionsOf(
       ...noteOf(effective, region, meta),
     })
   );
-  return { canvas, layers, cards, empty };
+  return { canvas, layers, cards, empty, followsDefault };
 }
 
 /** The area the region's component is the untouched starter for, if any. */

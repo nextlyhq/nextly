@@ -18,8 +18,10 @@
  *    slug no component holds. The components collection's own create and
  *    publish rules judge it.
  * 4. Puts it in the default's area through `putInArea`, the one write that
- *    changes a set's area. Should that refuse, the component just created is
- *    deleted again, best effort, so a refused fill leaves nothing behind.
+ *    changes a set's area, which refuses again, in every attempt, an area
+ *    someone filled while the header was created. Should that refuse, the
+ *    component just created is deleted again, best effort, so a refused fill
+ *    leaves nothing behind.
  *
  * Publishing a header the first time can fill the seeded default by itself
  * (`first-fill-hook`); that names this same component in this same area, so
@@ -40,7 +42,6 @@ import { COMPONENTS_SLUG } from "../collections/components";
 import { LAYOUTS_SLUG } from "../collections/layouts";
 import { PAGES_SLUG } from "../collections/pages";
 import { deleteUnplacedComponent } from "../component-delete/system-delete";
-import { entryOf } from "../entry-reads";
 import { fenceStore } from "../host-rewrite/fence";
 import {
   DEFAULT_AREA_ROUTE_PATH,
@@ -49,10 +50,10 @@ import {
 import {
   directLayoutAreaWrites,
   putInArea,
+  refuseFilledArea,
   refuseUnlessPublishedAsSaved,
   type LayoutAreaWrites,
 } from "../layout-area-route";
-import { areaRowsOf } from "../layout-area-rows";
 import {
   DEFAULT_COMPONENT_STORE,
   readingAsUser,
@@ -119,11 +120,15 @@ export async function createInDefaultArea(
     });
   }
   refuseUnlessPublishedAsSaved(saved, area);
-  refuseUnlessEmpty(saved, area);
+  // Asked before anything is created, and again in every attempt of the
+  // write: someone may fill the area while the header is being created.
+  refuseFilledArea(saved, area);
 
   const created = await writes.createStarter(area);
   try {
-    return await putInArea(setId, area, created.id, writes);
+    return await putInArea(setId, area, created.id, writes, {
+      onlyIntoEmpty: true,
+    });
   } catch (error) {
     await writes.removeCreated(created.id).catch((removal: unknown) => {
       writes.warn(
@@ -139,29 +144,26 @@ export async function createInDefaultArea(
 }
 
 /**
- * Refuse a set whose `area` already names a component: the band that asked
- * is out of date, and a create would replace what the set shows. A caller who
- * cannot read the areas is refused too, as `putInArea` refuses them.
+ * The row a created header (or footer) is stored as: its names, marked for
+ * its area, published, with the starter's design under the component store's
+ * own document field, which a host may name otherwise.
  */
-function refuseUnlessEmpty(
-  saved: Record<string, unknown>,
-  area: LayoutArea
-): void {
-  if (saved.areas === undefined) {
-    throw NextlyError.forbidden({
-      logContext: { reason: "default-area-areas-unreadable" },
-    });
+export function starterComponentData(
+  area: LayoutArea,
+  names: {
+    readonly title: string;
+    readonly slug: string;
+    readonly field: string;
+    readonly pagesSlug: string;
   }
-  const held = areaRowsOf(saved.areas).some(
-    row => row.area === area && relationId(row.component) !== null
-  );
-  if (!held) return;
-  const title = entryOf(saved, "title")?.title ?? "";
-  throw NextlyError.conflict({
-    reason: "state",
-    message: `The ${title} header & footer already has a ${area}. Reload to see it.`,
-    logContext: { reason: "default-area-not-empty" },
-  });
+): Record<string, unknown> {
+  return {
+    title: names.title,
+    slug: names.slug,
+    area,
+    [names.field]: starterDocument(area, names.pagesSlug),
+    status: "published",
+  };
 }
 
 /** The Direct API for the create, as the caller except for the cleanup. */
@@ -191,13 +193,17 @@ function directCreateInAreaWrites(
       // the caller cannot see still holds its unique slug.
       const taken = await takenNames(nextly, components);
       const title = createdTitle(area, taken.titles);
-      const content = starterDocument(area, pages);
       for (let attempt = 1; ; attempt += 1) {
         const slug = createdSlug(area, taken.slugs);
         try {
           const created = await nextly.create({
             collection: components,
-            data: { title, slug, area, content, status: "published" },
+            data: starterComponentData(area, {
+              title,
+              slug,
+              field: store.field,
+              pagesSlug: pages,
+            }),
             ...(await readingAsUser(ctx)),
           });
           const id = relationId(created.item);

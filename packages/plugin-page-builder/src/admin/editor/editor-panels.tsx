@@ -675,6 +675,7 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
     emptyRegionBands: useEmptyRegionBands({
       empty: layoutRegions.empty,
       siteHeaderFooter: readSiteHeaderFooter(clientConfig),
+      followsDefault: layoutRegions.followsDefault,
       reread: layoutRegions.reread,
     }),
     siteTokens: page.siteTokens,

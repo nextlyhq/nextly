@@ -10,6 +10,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   createInDefaultArea,
+  starterComponentData,
   type CreateInAreaWrites,
 } from "./create-in-area-route";
 
@@ -29,6 +30,8 @@ function writes(
     set?: Record<string, unknown> | null;
     refuseUpdate?: boolean;
     refuseRemove?: boolean;
+    /** What lands in the set's header while the create runs, if anything. */
+    filledMeanwhile?: string;
   } = {}
 ) {
   const calls: string[] = [];
@@ -49,11 +52,22 @@ function writes(
     },
     createStarter: async area => {
       calls.push(`create ${area}`);
+      if (options.filledMeanwhile !== undefined && set !== null) {
+        const areas = (set.areas ?? []) as Record<string, unknown>[];
+        set = {
+          ...set,
+          _rev: "rev-2",
+          areas: [
+            ...areas,
+            { id: "r9", area: "header", component: options.filledMeanwhile },
+          ],
+        };
+      }
       return { id: "new-h", title: "Header" };
     },
     publishedComponent: async id => {
       calls.push(`component ${id}`);
-      return id === "new-h" ? { id, title: "Header" } : null;
+      return id === "new-h" || id === "theirs" ? { id, title: "Header" } : null;
     },
     update: async (id, data) => {
       calls.push(`update ${id}`);
@@ -151,6 +165,42 @@ describe("creating a header for the default's empty area", () => {
       NextlyError.isForbidden(error)
     );
     expect(calls).not.toContain("create header");
+  });
+
+  it("refuses, keeping their choice, when someone fills the area while the header is created", async () => {
+    const { fake, calls, stored } = writes({ filledMeanwhile: "theirs" });
+    await expect(createInDefaultArea("header", fake)).rejects.toThrow(
+      "The Main header & footer already has a header. Reload to see it."
+    );
+    expect(calls).not.toContain("update main");
+    expect(calls.at(-1)).toBe("remove new-h");
+    const areas = (stored()?.areas ?? []) as {
+      area: string;
+      component: string;
+    }[];
+    expect(areas.find(row => row.area === "header")?.component).toBe("theirs");
+  });
+
+  it("goes on when what fills the area meanwhile is the header it created", async () => {
+    // A site's first published header fills its seeded default by itself.
+    const { fake, calls } = writes({ filledMeanwhile: "new-h" });
+    const written = await createInDefaultArea("header", fake);
+    expect(written.component.id).toBe("new-h");
+    expect(calls).not.toContain("remove new-h");
+  });
+
+  it("writes the starter document under the component store's own field", () => {
+    const data = starterComponentData("header", {
+      title: "Header",
+      slug: "header",
+      field: "body",
+      pagesSlug: "pages",
+    });
+    expect(Object.keys(data).sort()).toEqual(
+      ["area", "body", "slug", "status", "title"].sort()
+    );
+    expect(data).toMatchObject({ area: "header", status: "published" });
+    expect((data.body as { kind?: string }).kind).toBe("component");
   });
 
   it("removes the header it created when the default refuses it", async () => {
