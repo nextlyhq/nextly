@@ -411,6 +411,61 @@ describe("an import carrying the site's own design data", () => {
     expect(h2).toEqual({ fontSize: "3rem" });
   });
 
+  it("leaves out a text style using a variable that isn't imported, saying so, and stores the rest", () => {
+    const into: SiteTokenSet = {
+      tokens: [
+        {
+          id: "dest-size",
+          name: "font-size.custom",
+          kind: "dimension",
+          values: { light: "2rem" },
+        },
+      ],
+    };
+    const source: SiteTokenSet = {
+      tokens: [
+        {
+          id: "source-size",
+          name: "font-size.custom",
+          kind: "dimension",
+          values: { light: "1rem" },
+        },
+        { name: "font-size.h2", kind: "dimension", values: { light: "2rem" } },
+      ],
+      siteText: { h3: { textStyle: "ts-a" } },
+    };
+    const style = (id: string, label: string, size: string): NamedClass => ({
+      id,
+      slug: label.toLowerCase(),
+      label,
+      orderIndex: 0,
+      role: "text",
+      styles: { base: { base: { fontSize: { $token: size } } } },
+    });
+    const a = style("ts-a", "Alpha", "source-size");
+    const b = style("ts-b", "Beta", "font-size.h2");
+    const plan = ready(
+      planImport(files(source, [a, b]), into, { textStyles: [] })
+    );
+    expect(plan.extras.textStyles.added.map(entry => entry.id)).toEqual([
+      "ts-b",
+    ]);
+    expect(plan.skipped).toContain(
+      "“Alpha” was not imported: a variable it uses, “font-size.custom”, wasn't imported."
+    );
+    // The row following it keeps this site's own.
+    expect(plan.extras.site?.siteText).toBeUndefined();
+    const applied = applyImport(plan, into, new Map());
+    if (!applied.ok) throw new Error(applied.error);
+    expect(applied.textStyles).toBe(1);
+    const edited = applied.classes?.([]);
+    expect(
+      edited !== undefined && "classes" in edited
+        ? edited.classes.map(entry => entry.id)
+        : []
+    ).toEqual(["ts-b"]);
+  });
+
   it("follows only the whole custom property of a merged variable, never one it begins", () => {
     const mine: SiteTokenSet = {
       tokens: [

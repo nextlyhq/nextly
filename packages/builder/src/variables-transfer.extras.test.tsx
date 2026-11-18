@@ -84,6 +84,7 @@ function Host({
   onEditClasses,
   catalogue,
   storeNow = async () => true,
+  meanwhile = tokens => tokens,
 }: {
   tokens: SiteTokenSet;
   classes?: readonly NamedClass[];
@@ -92,6 +93,8 @@ function Host({
   catalogue?: FontCatalogue;
   /** The host's write at once, answering whether it was stored. */
   storeNow?: (tokens: SiteTokenSet) => Promise<boolean>;
+  /** The variables as an edit made meanwhile leaves them, read as current. */
+  meanwhile?: (tokens: SiteTokenSet) => SiteTokenSet;
 }): React.JSX.Element {
   const latest = React.useRef(tokens);
   const transfer = useVariablesTransfer({
@@ -103,7 +106,7 @@ function Host({
       latest.current = next;
       return storeNow(next);
     },
-    currentTokens: () => latest.current,
+    currentTokens: () => meanwhile(latest.current),
     readOnly: false,
     currentClasses: () => classes,
     ...(onEditClasses === undefined ? {} : { onEditClasses }),
@@ -291,6 +294,49 @@ describe("importing a file with text styles and the site's design data", () => {
     expect(
       await screen.findByText("Imported 3 variables and 1 text style.")
     ).toBeDefined();
+  });
+
+  it("keeps a Site text edit made while the text styles were being stored", async () => {
+    const onChange = vi.fn();
+    let finish: (refusal: string | undefined) => void = () => undefined;
+    const onEditClasses = vi.fn<EditClasses>(
+      () =>
+        new Promise<string | undefined>(resolve => {
+          finish = resolve;
+        })
+    );
+    // The author changes Heading 1 once the variables are stored.
+    let edited = false;
+    render(
+      <WithFonts
+        tokens={{ tokens: [] }}
+        onChange={onChange}
+        onEditClasses={onEditClasses}
+        meanwhile={tokens =>
+          edited
+            ? {
+                ...tokens,
+                siteText: { ...tokens.siteText, h1: { fontSize: "5rem" } },
+              }
+            : tokens
+        }
+      />
+    );
+    await chooseFile("variables.tokens.json", exported());
+    const preview = await screen.findByRole("dialog", {
+      name: "Import variables",
+    });
+    fireEvent.click(within(preview).getByRole("button", { name: "Import" }));
+    await waitFor(() => expect(onEditClasses).toHaveBeenCalledTimes(1));
+    edited = true;
+    await act(async () => {
+      finish(undefined);
+    });
+    await waitFor(() => expect(onChange).toHaveBeenCalledTimes(1));
+    expect((onChange.mock.calls[0]?.[0] as SiteTokenSet).siteText).toEqual({
+      h1: { fontSize: "5rem" },
+      ...SOURCE.siteText,
+    });
   });
 
   it("counts only what was stored: refused text styles, and the rows following them, are said", async () => {
