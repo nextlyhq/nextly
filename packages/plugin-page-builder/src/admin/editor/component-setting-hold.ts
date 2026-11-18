@@ -176,18 +176,23 @@ function refusedHold(
 
 /**
  * Take off each placement binding of a setting its component doesn't have,
- * which no hold here will make, as one edit, and say so.
+ * which no hold here will make and the page was not stored with, as one
+ * edit, and say so.
  */
 function takeOffUnmadeBindings(
   now: {
     readonly editor: Pick<EditorState, "document" | "applyAll">;
     readonly held: Holds;
     readonly library: ComponentLibraryRead;
+    readonly stored: BlockDocument | undefined;
   },
   written: ReadonlySet<string>
 ): void {
   const { editor: at, held: holds, library: read } = now;
-  const unmade = unmadeSettingBindings(at.document, read, holds, written);
+  const unmade = unmadeSettingBindings(at.document, read, holds, {
+    written,
+    stored: storedBindingKeys(now.stored),
+  });
   if (unmade.length === 0) return;
   if (at.applyAll(unmade.map(entry => entry.op)) === null) return;
   const titles = [...new Set(unmade.map(entry => entry.componentId))].map(
@@ -288,16 +293,43 @@ function writtenKey(componentId: string, settingId: string): string {
   return `${componentId}\u0000${settingId}`;
 }
 
+/** A stored binding's key: its placement and the key it binds under. */
+function bindingKey(nodeId: string, key: string): string {
+  return `${nodeId}\u0000${key}`;
+}
+
+/** Every binding the page as stored holds, by placement and key. */
+function storedBindingKeys(stored: BlockDocument | undefined): Set<string> {
+  const keys = new Set<string>();
+  if (stored === undefined || !Array.isArray(stored.nodes)) return keys;
+  walkNodes(stored.nodes, node => {
+    if (!isPlainRecord(node.bindings)) return;
+    for (const key of Object.keys(node.bindings)) {
+      keys.add(bindingKey(node.id, key));
+    }
+  });
+  return keys;
+}
+
 /**
  * Each placement binding of a setting its component doesn't have, and the
  * edit taking it off: judged only against a library read whole, for a
  * component it holds, past the settings held or written here.
+ *
+ * Never one the page was stored with: the library reads each component's
+ * draft, which may have taken off a setting its live version still has, so
+ * absence there proves nothing about a binding already stored. One this page
+ * holds and never stored, as a page recovered after a reload holds for a
+ * setting it planned and never wrote, is what was never made.
  */
 function unmadeSettingBindings(
   document: BlockDocument,
   library: ComponentLibraryRead,
   held: Holds,
-  written: ReadonlySet<string>
+  past: {
+    readonly written: ReadonlySet<string>;
+    readonly stored: ReadonlySet<string>;
+  }
 ): { readonly componentId: string; readonly op: BuilderOp }[] {
   if (library.state !== "ready" || library.truncated) return [];
   const found: { componentId: string; op: BuilderOp }[] = [];
@@ -324,7 +356,8 @@ function unmadeSettingBindings(
         id !== undefined &&
         !has.has(id) &&
         held.get(componentId)?.settingId !== id &&
-        !written.has(writtenKey(componentId, id));
+        !past.written.has(writtenKey(componentId, id)) &&
+        !past.stored.has(bindingKey(node.id, key));
       if (unmade) dropped = true;
       else kept[key] = binding;
     }
@@ -476,7 +509,9 @@ const REFUSED_TOAST_MS = 15_000;
  */
 export function useComponentSettingHold(
   editor: Pick<EditorState, "document" | "applyAll">,
-  library: ComponentLibraryRead
+  library: ComponentLibraryRead,
+  /** The page as last stored, whose bindings are never taken for unmade. */
+  stored?: BlockDocument
 ): {
   readonly library: ComponentLibraryRead;
   readonly makeComponentSetting: (
@@ -493,8 +528,8 @@ export function useComponentSettingHold(
   const [held, setHeld] = useState<Holds>(() => new Map());
   // Read when an answer or the Save arrives, never from the render that
   // asked, so an edit made meanwhile is what is judged.
-  const now = useRef({ editor, held, library });
-  now.current = { editor, held, library };
+  const now = useRef({ editor, held, library, stored });
+  now.current = { editor, held, library, stored };
   const actions = useDocumentActions();
   const locale = useDocumentLocale()?.code ?? undefined;
   // The language and the actions as they are when an answer arrives.
@@ -603,6 +638,7 @@ export function useHeldComponentSettings<
   M extends {
     readonly editor: Pick<EditorState, "document" | "applyAll">;
     readonly componentLibrary: ComponentLibraryRead;
+    readonly stored?: BlockDocument;
   },
 >(
   mount: M
@@ -614,7 +650,11 @@ export function useHeldComponentSettings<
     typeof useComponentSettingHold
   >["writeHeldSettings"];
 } {
-  const held = useComponentSettingHold(mount.editor, mount.componentLibrary);
+  const held = useComponentSettingHold(
+    mount.editor,
+    mount.componentLibrary,
+    mount.stored
+  );
   return {
     ...mount,
     componentLibrary: held.library,

@@ -173,7 +173,7 @@ const BOUND = {
 };
 
 /** The hook over an editor whose document the test moves. */
-function mount(document: BlockDocument) {
+function mount(document: BlockDocument, stored?: BlockDocument) {
   const editor = {
     document,
     applyAll: vi.fn((ops: BuilderOp[]) => {
@@ -192,7 +192,11 @@ function mount(document: BlockDocument) {
   } as unknown as ComponentLibraryRead;
   const hook = renderHook(
     ({ doc }: { doc: BlockDocument }) =>
-      useComponentSettingHold({ ...editor, document: doc } as never, library),
+      useComponentSettingHold(
+        { ...editor, document: doc } as never,
+        library,
+        stored
+      ),
     { initialProps: { doc: document } }
   );
   return { hook, editor, retry, library };
@@ -681,6 +685,23 @@ describe("the page's Save", () => {
     const [words] = toastWarning.mock.calls[0] as [string];
     expect(words).toContain("Card doesn't have");
     expect(route.sent).toEqual([]);
+  });
+
+  it("keeps a binding the page was stored with, which the component's draft may lack", async () => {
+    // The draft may have taken the setting off while the live component
+    // still has it, so only a binding this page never stored is taken off.
+    const ghost = pageWith({
+      "overrides.ghost": { $bind: "title", source: "entry" },
+    });
+    const { editor } = mount(ghost, ghost);
+    await act(async () => {
+      await form.before?.("save", settled);
+    });
+    expect(editor.applyAll).not.toHaveBeenCalled();
+    expect(editor.document.nodes[0]?.bindings).toEqual({
+      "overrides.ghost": { $bind: "title", source: "entry" },
+    });
+    expect(toastWarning).not.toHaveBeenCalled();
   });
 
   it("writes the setting to the component's draft with a page's Publish too", async () => {

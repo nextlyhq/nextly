@@ -924,6 +924,10 @@ function EditorBody<TFieldValues extends FieldValues>({
                 library={componentLibrary}
                 onClose={makeComponent.close}
                 returnFocusTo={makeComponent.returnFocusTo}
+                // A held setting the selection binds is written first: the
+                // new component keeps the binding, and the page, past a
+                // convert, no placement holding the setting.
+                beforeCreate={mount.writeHeldSettings}
               />
               <ComponentActionPrompt
                 request={makeComponent.request}

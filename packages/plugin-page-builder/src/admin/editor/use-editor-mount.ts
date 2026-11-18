@@ -536,6 +536,7 @@ export function useEditorMount(
 
   return {
     initialDocument,
+    stored,
     clientConfig,
     documentLimits,
     componentLibrary,
@@ -559,6 +560,8 @@ export function useEditorMount(
 /** What mounting the editor produced, for the hooks that build on it. */
 export type EditorMount = {
   initialDocument: BlockDocument;
+  /** The page as last stored, undefined for an entry never saved. */
+  stored: BlockDocument | undefined;
   clientConfig: Record<string, unknown> | undefined;
   documentLimits: DocumentLimits;
   componentLibrary: ComponentLibraryRead;
