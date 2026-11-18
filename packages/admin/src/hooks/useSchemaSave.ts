@@ -23,6 +23,7 @@ import type { SchemaChangeConfirmation } from "@admin/components/features/schema
 import { toast } from "@admin/components/ui";
 import { useRestart } from "@admin/context/RestartContext";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
+import { acknowledgedConversionsOf } from "@admin/lib/builder/brought-up-to-date";
 import type { SettingChange } from "@admin/lib/builder/settings-changes";
 import type {
   FieldResolution,
@@ -114,7 +115,9 @@ export interface UseSchemaSaveOptions {
     fields: FieldDefinition[],
     schemaVersion: number,
     resolutions: Record<string, FieldResolution>,
-    renameResolutions: SchemaRenameResolution[]
+    renameResolutions: SchemaRenameResolution[],
+    /** The keys of the conversions the reviewed preview listed, which its Save confirmed. */
+    acknowledgedConversions: string[]
   ) => Promise<SchemaApplyOutcome>;
   /**
    * The preview found nothing to migrate: persist the settings. Run at once
@@ -320,7 +323,9 @@ export function useSchemaSave({
             fields,
             previewed.schemaVersion,
             resolutions,
-            renameResolutions
+            renameResolutions,
+            // Every conversion the dialog listed: its Save confirms them all.
+            acknowledgedConversionsOf(previewed)
           );
           if (!result.success) {
             stopRestart(

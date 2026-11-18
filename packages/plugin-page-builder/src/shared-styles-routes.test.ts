@@ -1622,3 +1622,75 @@ describe("counting the pages now", () => {
     expect(body.item.ran).toBe(false);
   });
 });
+
+describe("removing a text style a Site text row follows", () => {
+  const eyebrow = {
+    id: "t-eyebrow",
+    slug: "eyebrow",
+    label: "Eyebrow",
+    orderIndex: 0,
+    role: "text",
+    styles: { base: { base: { fontSize: "12px" } } },
+  };
+
+  /** A store whose Single also holds these Site text rows. */
+  function storeWithRows(siteText: Record<string, unknown>) {
+    const write = vi.fn<SharedStyleStore["write"]>(async () => undefined);
+    const store: SharedStyleStore = {
+      read: async () => ({
+        entries: [eyebrow, hero],
+        rev: undefined,
+        tokens: { tokens: [], siteText },
+      }),
+      write,
+    };
+    return { store, write };
+  }
+
+  it("refuses, naming each row that follows it, and writes nothing", async () => {
+    const { store, write } = storeWithRows({
+      h1: { textStyle: "t-eyebrow" },
+      caption: { fontSize: "13px", textStyle: "t-eyebrow" },
+      h2: { fontSize: "30px" },
+    });
+    const { source } = usageOf(WHOLE);
+    expect(
+      await refusal(
+        removeSharedStyles(
+          post({ ids: ["t-eyebrow"] }),
+          store,
+          source,
+          new Set(),
+          NOT_STILL_USED
+        )
+      )
+    ).toMatchObject({
+      code: "VALIDATION_ERROR",
+      publicData: {
+        errors: [
+          {
+            path: "",
+            code: SHARED_STYLE_IN_USE_CODE,
+            message:
+              "Nothing was removed. Eyebrow is used by Site text: Heading 1, Captions.",
+          },
+        ],
+      },
+    });
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  it("removes it once no row follows it", async () => {
+    const { store, write } = storeWithRows({ h1: { fontSize: "40px" } });
+    const { source } = usageOf(WHOLE);
+    const response = await removeSharedStyles(
+      post({ ids: ["t-eyebrow"] }),
+      store,
+      source,
+      new Set(),
+      NOT_STILL_USED
+    );
+    expect(response.status).toBe(200);
+    expect(write).toHaveBeenCalledWith([hero], {}, expect.anything());
+  });
+});
