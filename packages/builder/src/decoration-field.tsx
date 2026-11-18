@@ -43,6 +43,7 @@ import { IconChoiceField } from "./icon-choice-field";
 import { InheritedValue } from "./inherited-value";
 import { commitRawCss } from "./raw-css";
 import { SectionHeld } from "./section-held";
+import { useStoredDraft } from "./stored-draft";
 import type { AlignmentGroup } from "./style-alignment-icons";
 import { keywordLabel } from "./style-keyword-labels";
 
@@ -352,16 +353,11 @@ const STYLE_LABELS: Readonly<Record<string, string>> = {
 /**
  * A draft that follows the value it edits: a stored change (an undo, a shared
  * style's update) moves it, so leaving the field never writes back the value
- * that change replaced.
+ * that change replaced. The inspector's one draft rule (`useStoredDraft`), so
+ * Escape in the field puts an edit back here as in every other field.
  */
-function useDraft(
-  value: string | undefined
-): [string, React.Dispatch<React.SetStateAction<string>>] {
-  const [draft, setDraft] = React.useState(value ?? "");
-  React.useEffect(() => {
-    setDraft(value ?? "");
-  }, [value]);
-  return [draft, setDraft];
+function useDraft(value: string | undefined): [string, (next: string) => void] {
+  return useStoredDraft(value ?? "");
 }
 
 /**
