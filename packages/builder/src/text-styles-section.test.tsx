@@ -12,6 +12,7 @@ import {
   type BreakpointSet,
   type NamedClass,
   type NodeStyles,
+  type SiteTokenSet,
 } from "@nextlyhq/blocks-engine";
 import {
   act,
@@ -83,6 +84,7 @@ const breakpoints = {
 function mount(
   options: {
     library?: NamedClass[];
+    tokens?: SiteTokenSet;
     readOnly?: boolean;
     access?: Partial<SharedStylesAccess>;
   } = {}
@@ -108,7 +110,7 @@ function mount(
   const view = render(
     <TextStylesSection
       library={library}
-      tokens={{ tokens: [] }}
+      tokens={options.tokens ?? { tokens: [] }}
       mode="light"
       breakpoints={breakpoints}
       readOnly={options.readOnly ?? false}
@@ -365,6 +367,73 @@ describe("a part's own value", () => {
       expect(after).toHaveProperty("fontSize", "12px");
       cleanup();
     }
+  });
+
+  it("says Weight is not set on a style that sets none, so Regular 400 can be picked", async () => {
+    const unweighted: NamedClass = {
+      ...eyebrow,
+      styles: {
+        base: { [BASE_BREAKPOINT]: { fontSize: "12px" } },
+      } as NodeStyles,
+    };
+    const { writeStyles } = mount({ library: [card, unweighted] });
+    fireEvent.click(row(/^Text styles: Eyebrow/));
+    const trigger = screen.getByRole("combobox", { name: /^Weight, / });
+    // Not Regular 400: that would read as already chosen, so choosing it
+    // could never write the weight a heading needs to stop being bold.
+    expect(trigger.getAttribute("aria-label")).toBe("Weight, Not set");
+    fireEvent.pointerDown(trigger, {
+      button: 0,
+      ctrlKey: false,
+      pointerType: "mouse",
+    });
+    fireEvent.click(await screen.findByRole("option", { name: "Regular 400" }));
+    expect(
+      written(writeStyles, unweighted.styles)?.base?.[BASE_BREAKPOINT]
+    ).toMatchObject({
+      fontWeight: 400,
+    });
+  });
+
+  it("keeps a variable's multiplier when the part is unlinked", () => {
+    const halved: NamedClass = {
+      ...eyebrow,
+      styles: {
+        base: {
+          [BASE_BREAKPOINT]: {
+            fontSize: { $token: "font-size.display", times: 0.5 },
+          },
+        },
+      } as unknown as NodeStyles,
+    };
+    const { writeStyles } = mount({
+      library: [card, halved],
+      tokens: {
+        tokens: [
+          {
+            name: "font-size.display",
+            kind: "dimension",
+            values: { light: "32px" },
+          },
+        ],
+      },
+    });
+    fireEvent.click(row(/^Text styles: Eyebrow/));
+    const unlink = screen
+      .getAllByRole("button")
+      .filter(button =>
+        /^Unlink /.test(button.getAttribute("aria-label") ?? "")
+      );
+    expect(unlink.map(button => button.getAttribute("aria-label"))).toEqual([
+      "Unlink Desktop",
+    ]);
+    fireEvent.click(unlink[0] as HTMLElement);
+    // What the page drew (half of 32px), not the variable's own value.
+    expect(
+      written(writeStyles, halved.styles)?.base?.[BASE_BREAKPOINT]
+    ).toMatchObject({
+      fontSize: "16px",
+    });
   });
 
   it("offers no Reset for a part the style leaves unset", () => {

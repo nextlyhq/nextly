@@ -241,6 +241,10 @@ function VariablePart({
 }): React.JSX.Element {
   const labelId = React.useId();
   const held = isTokenRef(value) ? value.$token : undefined;
+  // A scaled reference's multiplier ("half of Display"), kept when another
+  // variable is picked and when the part is unlinked, so the value written is
+  // the one the page draws rather than the variable's own.
+  const times = isTokenRef(value) ? value.times : undefined;
   return (
     <div className="nx-vars-editor__field nx-text-styles__part">
       <span className="nx-vars-editor__label" id={labelId}>
@@ -252,9 +256,10 @@ function VariablePart({
             leaf={leaf}
             tokens={tokens}
             identity={held}
+            times={times}
             label={label}
             labelledBy={labelId}
-            onPick={identity => onValue(tokenRef(identity))}
+            onPick={identity => onValue(tokenRef(identity, times))}
             onUnlink={onValue}
           />
         ) : (
@@ -402,6 +407,9 @@ function SizePart({
   );
 }
 
+/** The select key of a weight the style leaves unset, apart from every weight. */
+const UNSET_WEIGHT = "unset";
+
 /** The weight, by name: "Semibold 600". */
 function WeightPart({
   value,
@@ -413,13 +421,23 @@ function WeightPart({
   onValue: (value: StyleValue) => void;
 }): React.JSX.Element {
   const options = fontWeightOptions(value);
+  // A style that sets no weight says so, rather than showing Regular 400 as
+  // chosen: a heading following it keeps its own bold, and Regular has to be
+  // a choice the author can make, not one the list thinks already made.
   const current =
-    options.find(option => option.value === value)?.key ?? "n:400";
+    value === undefined
+      ? UNSET_WEIGHT
+      : (options.find(option => option.value === value)?.key ?? UNSET_WEIGHT);
   return (
     <PartSelect
       label="Weight"
       value={current}
-      options={options.map(option => [option.key, option.label] as const)}
+      options={[
+        ...(current === UNSET_WEIGHT
+          ? [[UNSET_WEIGHT, "Not set"] as const]
+          : []),
+        ...options.map(option => [option.key, option.label] as const),
+      ]}
       disabled={readOnly}
       onChange={key => {
         const picked = options.find(option => option.key === key);
