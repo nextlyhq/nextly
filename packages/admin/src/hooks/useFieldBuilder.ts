@@ -71,6 +71,7 @@ import {
   startFrom,
   undo as historyUndo,
 } from "@admin/lib/builder/builder-history";
+import { followRename } from "@admin/lib/builder/condition-identity";
 import type { FieldBuilderValidationResult } from "@admin/lib/builder/field-validators";
 
 // ---------------------------------------------------------------------------
@@ -495,13 +496,17 @@ export function useFieldBuilder<T extends FieldValues = FieldValues>(
   );
 
   // Keyed by the field, so a setting typed a character at a time is one
-  // step, ended by an edit of anything else or an undo.
+  // step, ended by an edit of anything else or an undo. A changed name carries
+  // the conditions that read the field with it, in the same step.
   const handleFieldUpdate = useCallback(
     (updatedField: BuilderField) => {
-      commitFields(
-        prev => updateFieldById(prev, updatedField),
-        `field:${updatedField.id}`
-      );
+      commitFields(prev => {
+        const previousName = findFieldById(prev, updatedField.id)?.name;
+        const next = updateFieldById(prev, updatedField);
+        return previousName === undefined
+          ? next
+          : followRename(next, updatedField.id, previousName);
+      }, `field:${updatedField.id}`);
     },
     [commitFields]
   );

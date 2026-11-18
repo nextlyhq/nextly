@@ -618,7 +618,7 @@ function canvasRootOf(layer: HTMLElement | null): HTMLElement | null {
 }
 
 /** The canvas the plates are drawn over, and how a rectangle is placed there. */
-type Space = NonNullable<ReturnType<typeof overlaySpaceOf>>;
+export type Space = NonNullable<ReturnType<typeof overlaySpaceOf>>;
 
 /**
  * Whether the canvas draws an element at all. A box the render keeps but lays
@@ -639,7 +639,7 @@ function isDrawn(element: Element): boolean {
  * when the page shows none of it, lays it out nowhere, or clips it in a way
  * that cannot be described.
  */
-function shownRectOf(element: Element, space: Space): Rect | null {
+export function shownRectOf(element: Element, space: Space): Rect | null {
   if (!isDrawn(element)) return null;
   const visible = visiblePartOf(element, space.root);
   if (visible === null || visible === "hidden") return null;
