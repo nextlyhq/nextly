@@ -7,9 +7,9 @@
  * trust and provisioning are separate switches from `enabled` (so a linked
  * identity signs in through a key with neither, while an untrusted key
  * refuses the implicit-link branch), everything unconfigured or malformed
- * reads as off, and the verdict tracks the app's configuration — the one
- * input the reader accepts — and not a plugin-supplied policy riding a
- * sign-in.
+ * reads as off — including fields a polluted prototype would feed a row that
+ * never wrote them — and the verdict follows the app's configuration, the
+ * one input the reader accepts.
  */
 import { describe, expect, it } from "vitest";
 
@@ -148,51 +148,28 @@ describe("trust for implicit linking and permission to provision", () => {
 });
 
 describe("where the policy comes from", () => {
-  it("ignores a policy a plugin hands over with a sign-in", () => {
-    const appConfig: LinkingPolicyAuthConfig = {
-      providers: { google: { trustedForImplicitLinking: true } },
-    };
-    // What a login plugin hands core with a sign-in: the identity's facts
-    // and a policy claiming everything. The reader accepts the app's
-    // configuration and nothing else, so there is no argument these objects
-    // can travel in. The property: two payloads that differ draw the same
-    // refusal, so the verdict does not track them.
-    const signInsHandedOver = [
-      {
-        providerKey: "google",
-        policy: {
-          enabled: true,
-          trustedForImplicitLinking: true,
-          provision: { roles: ["super-admin"] },
-        },
-      },
-      { providerKey: "google" },
-    ];
-    expect(signInsHandedOver[0]).not.toEqual(signInsHandedOver[1]);
-    const withTheFirstHandedOver = refusalOf(() =>
-      linkingPolicyFromAuthConfig(appConfig).requireEnabled("google")
+  it("follows the app's configuration, the reader's only input", () => {
+    // The reader takes the app's auth configuration and nothing else; a
+    // sign-in a plugin hands over carries no argument into it, so the
+    // verdict can move only when the configuration moves. Asserted on
+    // both sides of that: one configuration refuses the key, and the
+    // configuration that enables it passes the gate. That a plugin
+    // supplying its own policy is refused where the payload first arrives,
+    // at the sign-in boundary, is the identity-service slice's test.
+    const refuses = refusalOf(() =>
+      linkingPolicyFromAuthConfig({
+        providers: { google: { trustedForImplicitLinking: true } },
+      }).requireEnabled("google")
     );
-    const withTheSecondHandedOver = refusalOf(() =>
-      linkingPolicyFromAuthConfig(appConfig).requireEnabled("google")
-    );
-    expect(withTheFirstHandedOver.logContext).toEqual(
-      withTheSecondHandedOver.logContext
-    );
-    expect(withTheFirstHandedOver.logContext).toMatchObject({
+    expect(refuses.logContext).toMatchObject({
       reason: "provider-key-not-enabled",
     });
-    // The control that makes the mechanism observable: the verdict DOES
-    // track the app's configuration, the one input the reader takes, and a
-    // key the configuration enables passes the gate with no payload in
-    // scope at all.
-    const enabledAppConfig: LinkingPolicyAuthConfig = {
-      providers: {
-        google: { enabled: true, trustedForImplicitLinking: true },
-      },
-    };
     expect(
-      linkingPolicyFromAuthConfig(enabledAppConfig).requireEnabled("google")
-        .trustedForImplicitLinking
+      linkingPolicyFromAuthConfig({
+        providers: {
+          google: { enabled: true, trustedForImplicitLinking: true },
+        },
+      }).requireEnabled("google").trustedForImplicitLinking
     ).toBe(true);
   });
 });
@@ -223,7 +200,12 @@ describe("unconfigured and malformed configuration reads as off", () => {
     expect(policy.policyFor("google").provisioning.mayProvision).toBe(false);
   });
 
-  it("provisions nothing without a roles array of role names", () => {
+  it("provisions nothing without a roles array of at least one role name", () => {
+    // A hole between real role names: `["editor", <hole>, "viewer"]`. zod
+    // reads the hole as an element and `z.string()` refuses it, so the
+    // array is refused whole rather than compacted around the hole.
+    const gapRoles: string[] = ["editor"];
+    gapRoles[2] = "viewer";
     const policy = linkingPolicyFromAuthConfig({
       providers: {
         stringRoles: {
@@ -235,10 +217,97 @@ describe("unconfigured and malformed configuration reads as off", () => {
           provision: { roles: ["editor", 42] as unknown as readonly string[] },
         },
         noRoles: { enabled: true, provision: {} },
+        // An empty array is off, not zero-role provisioning: the roles are
+        // the switch, and at least one is required to switch on.
+        emptyRoles: { enabled: true, provision: { roles: [] } },
+        // A holey array carries an element zod reads as undefined, which
+        // z.string() refuses: pinning that a hole is not a role name.
+        holeyRoles: {
+          enabled: true,
+          provision: {
+            roles: new Array(1) as unknown as readonly string[],
+          },
+        },
+        gapRoles: { enabled: true, provision: { roles: gapRoles } },
       },
     });
-    for (const key of ["stringRoles", "mixedRoles", "noRoles"]) {
+    for (const key of [
+      "stringRoles",
+      "mixedRoles",
+      "noRoles",
+      "emptyRoles",
+      "holeyRoles",
+      "gapRoles",
+    ]) {
       expect(policy.requireEnabled(key).provisioning.mayProvision).toBe(false);
+    }
+  });
+
+  it("refuses a row whose gate fields are malformed, not only absent", () => {
+    const policy = linkingPolicyFromAuthConfig({
+      providers: {
+        // A gate field carrying anything but literal true fails the row
+        // itself: the key refuses across the board, so a malformed gate
+        // value cannot leave the row standing with the other gate on.
+        google: {
+          trustedForImplicitLinking: true,
+          enabled: "yes" as unknown as boolean,
+        },
+      },
+    });
+    const refusal = refusalOf(() => policy.requireEnabled("google"));
+    expect(refusal.logContext).toMatchObject({
+      reason: "provider-key-not-enabled",
+    });
+    expect(policy.policyFor("google")).toEqual({
+      enabled: false,
+      trustedForImplicitLinking: false,
+      provisioning: { mayProvision: false },
+    });
+  });
+
+  it("reads no field a polluted Object.prototype feeds an empty row", () => {
+    // The three switch fields, planted on the prototype every object
+    // inherits. Saved and restored around the assertion, because this
+    // worker runs other files' modules after this one and they must not
+    // see the pollution.
+    const fields = [
+      "enabled",
+      "trustedForImplicitLinking",
+      "provision",
+    ] as const;
+    const saved = fields.map(field =>
+      Object.getOwnPropertyDescriptor(Object.prototype, field)
+    );
+    try {
+      for (const field of fields) {
+        (Object.prototype as Record<string, unknown>)[field] =
+          field === "provision" ? { roles: ["editor"] } : true;
+      }
+      const policy = linkingPolicyFromAuthConfig({
+        providers: { google: {} },
+      });
+      // The app wrote an empty row for this key: nothing it configured
+      // enables anything, and the fields every object now inherits are
+      // never read, so the row refuses across the board.
+      const refusal = refusalOf(() => policy.requireEnabled("google"));
+      expect(refusal.logContext).toMatchObject({
+        reason: "provider-key-not-enabled",
+      });
+      expect(policy.policyFor("google")).toEqual({
+        enabled: false,
+        trustedForImplicitLinking: false,
+        provisioning: { mayProvision: false },
+      });
+    } finally {
+      fields.forEach((field, index) => {
+        const descriptor = saved[index];
+        if (descriptor) {
+          Object.defineProperty(Object.prototype, field, descriptor);
+        } else {
+          delete (Object.prototype as Record<string, unknown>)[field];
+        }
+      });
     }
   });
 });

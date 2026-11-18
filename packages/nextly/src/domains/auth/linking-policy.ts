@@ -14,11 +14,15 @@
  * runs first, whatever it costs.
  *
  * Every answer refuses unless the configuration turns it on. An app that
- * configures nothing refuses every key; a field that is absent, or present
- * with anything but the shape that switches it on, reads as off, so no
- * default silently enables a branch. Trust for implicit linking and
- * permission to provision govern only those two branches: an identity
- * already linked signs in through a key that has neither.
+ * configures nothing refuses every key. Each row is parsed, from its own
+ * fields alone, by one schema: `enabled` and `trustedForImplicitLinking`
+ * switch on only for a literal `true`, and a row carrying anything else in
+ * either of them is the refused row; a `provision` that is not an object
+ * holding at least one role name leaves provisioning off and the rest of
+ * the row standing. No default silently enables a branch. Trust for
+ * implicit linking and permission to provision govern only those two
+ * branches: an identity already linked signs in through a key that has
+ * neither.
  *
  * The matrix is a snapshot of the configuration as the app wrote it. The
  * boot resolves it once and the sign-in path asks it per key, so a later
@@ -28,6 +32,8 @@
  *
  * @module domains/auth/linking-policy
  */
+import { z } from "zod";
+
 import { NextlyError } from "../../errors/nextly-error";
 import { isPlainObject } from "../../shared/lib/plain-copy";
 
@@ -95,7 +101,8 @@ export interface ProviderKeyPolicyConfig {
   /**
    * Whether the key may provision an account for an address no local account
    * holds, with the roles a provisioned account receives. Absent, or without
-   * a `roles` array of role names, provisions nothing.
+   * a `roles` array of at least one role name, provisions nothing: an empty
+   * array is provisioning off, not zero-role provisioning.
    */
   readonly provision?: { readonly roles?: readonly string[] };
 }
@@ -103,8 +110,11 @@ export interface ProviderKeyPolicyConfig {
 /**
  * The slice of an app's auth configuration the linking policy reads.
  *
- * Structural, so the app's own auth object is assignable as it is and the
- * policy declares nothing about the rest of it.
+ * Structural, so the policy declares the `providers` field it reads and
+ * nothing about the rest of an app's auth configuration. `NextlyConfig`'s
+ * `auth` section has no `providers` member yet, so an app's own auth object
+ * does not satisfy this type as it is — until that wiring lands, a caller
+ * passes the field's value, not the whole auth object.
  */
 export interface LinkingPolicyAuthConfig {
   /** Each provider key's policy, keyed by the provider key as the app wrote it. */
@@ -148,36 +158,77 @@ const REFUSED_PROVIDER_KEY: ProviderKeyPolicy = Object.freeze({
 });
 
 /**
- * One configured entry's provisioning, or off.
+ * One provider key's row of the configuration, as the policy reads it.
  *
- * Only a plain object carrying `roles` as an array of strings switches
- * provisioning on; the roles are copied into a frozen array so the matrix
- * holds its own and the app's later edits reach nothing.
+ * The configuration is outside input, parsed where it enters. `enabled` and
+ * `trustedForImplicitLinking` admit only a literal `true`, absent allowed
+ * and read as off, so a row carrying anything else in either gate field
+ * fails the row — and a failed row is the refused row. Provisioning is
+ * contained: a `provision` that is anything but an object holding a
+ * `roles` array of at least one role name reads as off — an empty array, a
+ * holey one (`new Array(1)`, whose hole zod reads as an element and
+ * `z.string()` refuses), or one holding a non-string — and leaves the rest
+ * of the row standing. A malformed line can only refuse, never enable.
  */
-function provisioningOf(value: unknown): ProviderProvisioningPolicy {
-  if (!isPlainObject(value)) return NO_PROVISIONING;
-  const roles: unknown = value.roles;
-  // A roles array with a non-string in it is a malformed line, and a
-  // malformed line provisions nothing rather than the entries that parsed.
-  if (!Array.isArray(roles) || roles.some(role => typeof role !== "string")) {
-    return NO_PROVISIONING;
+const providerKeyRowSchema = z.object({
+  enabled: z.literal(true).optional(),
+  trustedForImplicitLinking: z.literal(true).optional(),
+  provision: z
+    .object({ roles: z.array(z.string()).min(1) })
+    .optional()
+    .catch(undefined),
+});
+
+/**
+ * A row's own enumerable fields, as a fresh object no prototype feeds.
+ *
+ * The schema reads by property name, so an empty row could otherwise
+ * answer from fields a polluted `Object.prototype` carries: an inherited
+ * `enabled` would enable what nothing configured. Only own fields reach
+ * zod, so an inherited field is never read on the way in.
+ */
+function ownFieldsOf(row: Record<string, unknown>): Record<string, unknown> {
+  const own: Record<string, unknown> = Object.create(null);
+  for (const [field, value] of Object.entries(row)) {
+    own[field] = value;
   }
-  return Object.freeze({
-    mayProvision: true as const,
-    roles: Object.freeze([...roles]) as readonly string[],
-  });
+  return own;
 }
 
 /**
- * One configured entry's row: `true` alone enables, as `allowRegistration`
- * is sanitized, and provisioning is the object's own question.
+ * One configured entry's row: parsed by the schema above, so `true` alone
+ * enables, as `allowRegistration` is sanitized, and provisioning is the
+ * object's own question. A row that is not a plain object at all, or one
+ * the schema refuses, is the refused row.
  */
 function providerKeyPolicyOf(value: unknown): ProviderKeyPolicy {
   if (!isPlainObject(value)) return REFUSED_PROVIDER_KEY;
+  const parsed = providerKeyRowSchema.safeParse(ownFieldsOf(value));
+  if (!parsed.success) return REFUSED_PROVIDER_KEY;
+  const data = parsed.data;
+  // The parse's answers are read as OWN fields too: an absent optional
+  // leaves no own key on zod's output, and a read of an absent key goes
+  // through the prototype chain, where the same pollution waits even on
+  // the fresh object zod built. A guarded read is undefined when absent,
+  // never inherited.
+  const ownAnswer = (field: keyof typeof data) =>
+    Object.prototype.hasOwnProperty.call(data, field);
+  const enabled = ownAnswer("enabled") && data.enabled === true;
+  const trustedForImplicitLinking =
+    ownAnswer("trustedForImplicitLinking") &&
+    data.trustedForImplicitLinking === true;
+  const provision = ownAnswer("provision") ? data.provision : undefined;
   return Object.freeze({
-    enabled: value.enabled === true,
-    trustedForImplicitLinking: value.trustedForImplicitLinking === true,
-    provisioning: provisioningOf(value.provision),
+    enabled,
+    trustedForImplicitLinking,
+    // The roles are copied into a frozen array so the matrix holds its own
+    // and the app's later edits reach nothing.
+    provisioning: provision
+      ? Object.freeze({
+          mayProvision: true as const,
+          roles: Object.freeze([...provision.roles]),
+        })
+      : NO_PROVISIONING,
   });
 }
 
