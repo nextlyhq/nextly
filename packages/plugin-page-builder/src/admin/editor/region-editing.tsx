@@ -40,6 +40,7 @@ import {
 import {
   canvasEditingOf,
   INLINE_EDIT_UNCHANGED,
+  type ComponentFieldsHost,
   type EditingTargetState,
   type EditorState,
   type InlineEditOutcome,
@@ -94,6 +95,8 @@ interface InlineTyping {
   readonly commit: () => InlineEditOutcome;
   readonly editing: unknown;
   readonly editingRich: unknown;
+  /** A passage open in an inspector field, whose words are not yet written. */
+  readonly inspecting?: boolean;
 }
 
 /** No passage open: what the page types while a region is edited in place. */
@@ -192,6 +195,12 @@ export interface RegionEditingHost {
   readonly dirty: boolean;
   /** The questions, to be drawn anywhere inside the editor. */
   readonly dialogs: JSX.Element;
+  /**
+   * The edited component's live facts, while a region is edited: the ids a
+   * new field must never reuse and how far a change reaches, as its own view
+   * is told.
+   */
+  readonly componentFacts: ComponentFieldsHost | undefined;
 }
 
 /** The pages the component reaches, once its facts have answered. */
@@ -236,8 +245,9 @@ function regionDocumentOf(
  * session starts from the stored version, at depth 0.
  *
  * A store names the document it sent, and moves the point only while that is
- * still the document edited: an edit made while the store was on its way is
- * not in what was stored, so it stays unsaved.
+ * still the document edited. An edit or an undo made while the store was on
+ * its way left what was stored behind, so no point in the history is known
+ * to be stored, and the header stays unsaved until the next store.
  */
 function useRegionSavePoint(
   active: Pick<EditorState, "undoDepth" | "document">,
@@ -256,7 +266,7 @@ function useRegionSavePoint(
   }
   if (sent !== null) {
     stored(null);
-    if (sent === active.document) setSavedAt(active.undoDepth);
+    setSavedAt(sent === active.document ? active.undoDepth : "unreachable");
   }
   if (typeof savedAt === "number" && active.undoDepth < savedAt) {
     setSavedAt("unreachable");
@@ -265,7 +275,8 @@ function useRegionSavePoint(
     editingArea !== undefined &&
     (savedAt !== active.undoDepth ||
       inline.editing !== null ||
-      inline.editingRich !== null);
+      inline.editingRich !== null ||
+      inline.inspecting === true);
   return { dirty, stored };
 }
 
@@ -309,6 +320,8 @@ function useRegionOpening({
 }): ((area: RegionArea) => void) | undefined {
   const { enter } = editing;
   const inRegion = editing.target.kind === "region";
+  // The way in as it is now, which a failed opening's "Try again" takes.
+  const retry = useRef<((area: RegionArea) => void) | undefined>(undefined);
   useEffect(() => {
     if (opening === null || inRegion || field === undefined) return;
     const { area } = opening;
@@ -319,8 +332,9 @@ function useRegionOpening({
     }
     if (session.open.status === "failed") {
       setOpening(null);
+      // Asked again as the author asks: never while something is edited.
       toast.error(couldNotOpen(area), {
-        action: { label: TRY_AGAIN, onClick: () => setOpening(opening) },
+        action: { label: TRY_AGAIN, onClick: () => retry.current?.(area) },
       });
       return;
     }
@@ -333,8 +347,12 @@ function useRegionOpening({
     ) {
       return;
     }
-    // The page's own passage, if one is open, ends here, in the page.
-    inline.commit();
+    // The page's own passage, if one is open, ends here, in the page; one
+    // that could not be written keeps the page, with the words in it.
+    if (inline.commit().status === "refused") {
+      setOpening(null);
+      return;
+    }
     const unpublishedFrom =
       session.open.published && session.open.unpublishedChanges
         ? (session.open.changedAt ?? undefined)
@@ -363,7 +381,7 @@ function useRegionOpening({
     setOpening,
     onEntered,
   ]);
-  return useMemo(() => {
+  const requestEdit = useMemo(() => {
     if (field === undefined) return undefined;
     return (area: RegionArea) => {
       if (inRegion) return;
@@ -373,6 +391,8 @@ function useRegionOpening({
       }
     };
   }, [field, inRegion, cards, setOpening]);
+  retry.current = requestEdit;
+  return requestEdit;
 }
 
 /** A save or publish of the region, carried out and said. */
@@ -462,6 +482,7 @@ interface RegionLeaving {
 function useRegionLeaving({
   area,
   dirty,
+  busy,
   editing,
   session,
   store,
@@ -472,6 +493,8 @@ function useRegionLeaving({
 }: {
   area: RegionArea | undefined;
   dirty: boolean;
+  /** A store is on its way, whose outcome the question waits for. */
+  busy: boolean;
   editing: Pick<EditingTargetState, "leave">;
   session: Pick<DocumentSession, "discard">;
   store: RegionStore["store"];
@@ -500,9 +523,9 @@ function useRegionLeaving({
   }, [area, leaveTarget, release, rereadRegions, selection, canvas]);
   const done = useCallback(() => {
     if (area === undefined) return;
-    if (dirty) ask("done");
+    if (dirty || busy) ask("done");
     else leave();
-  }, [area, dirty, leave]);
+  }, [area, dirty, busy, leave]);
   const leaveThen = useCallback(
     (next: () => void) => {
       leaving.current = next;
@@ -636,6 +659,7 @@ function usePageStoreWaits(
 function useOpenedComponent(opening: Opening | null): {
   store: ReturnType<typeof useComponentEditing>;
   session: DocumentSession;
+  facts: ComponentFieldsHost | undefined;
   reach: { known: boolean; reach: RegionReach };
 } {
   const store = useComponentEditing();
@@ -651,7 +675,7 @@ function useOpenedComponent(opening: Opening | null): {
   );
   const facts = useComponentFacts(opening?.componentId);
   const reach = useMemo(() => reachOf(facts), [facts]);
-  return { store, session, reach };
+  return { store, session, facts, reach };
 }
 
 /**
@@ -687,7 +711,12 @@ export function useRegionEditing({
   rereadRegions: () => void;
 }): RegionEditingHost {
   const [opening, setOpening] = useState<Opening | null>(null);
-  const { store: place, session, reach } = useOpenedComponent(opening);
+  const {
+    store: place,
+    session,
+    facts: componentFacts,
+    reach,
+  } = useOpenedComponent(opening);
   const field = place?.field;
   const area = editedAreaOf(editing);
   const { active } = editing;
@@ -719,6 +748,7 @@ export function useRegionEditing({
   const leaving = useRegionLeaving({
     area,
     dirty: savePoint.dirty,
+    busy: store.busy,
     editing,
     session,
     store: store.store,
@@ -743,6 +773,7 @@ export function useRegionEditing({
     leaveThen: leaving.leaveThen,
     topBar: regionTopBar(area, facts, store.store, leaving.ask),
     dirty: savePoint.dirty,
+    componentFacts: area === undefined ? undefined : componentFacts,
     dialogs: (
       <RegionQuestions
         area={area}

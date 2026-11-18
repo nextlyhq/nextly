@@ -82,6 +82,7 @@ import { useSiteStyle } from "../site-style-client";
 import { useStoredSiteStyle } from "../site-style-read";
 
 import { useCanvasPageContext, type VisitorLists } from "./canvas-page-context";
+import { useListPreviews } from "./list-previews";
 import { useSharedStyleVerb, type SharedStyleVerb } from "./shared-style-verb";
 import { useSiteCanvas, type SiteCanvas } from "./site-canvas";
 import {
@@ -980,11 +981,12 @@ export function useCanvasInputs(
   /** The document the lists are read as a visitor of, while they are. */
   asVisitor?: VisitorLists
 ): CanvasInputs {
+  // The page's lists, read as the page: a header edited in place leaves the
+  // page's list choices as they were, and adds its own lists' previews.
+  const lists = useListPreviews(mount.page, mount.editor);
   const render = useCanvasRender({
     ...mount,
-    // The page's lists, read as the page: a header edited in place leaves
-    // the page's list choices as they were.
-    editor: mount.page,
+    editor: { ...mount.page, ...lists },
     ...style,
     ...(asVisitor === undefined ? {} : { asVisitor }),
   });

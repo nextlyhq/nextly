@@ -47,6 +47,14 @@ const hoisted = vi.hoisted(() => ({
   toastSuccess: vi.fn(),
   fills: vi.fn(),
   locale: null as null | { code: string | null },
+  inline: undefined as
+    | undefined
+    | {
+        commit: () => never;
+        editing: unknown;
+        editingRich: unknown;
+        inspecting?: boolean;
+      },
 }));
 
 vi.mock("@nextlyhq/plugin-sdk/admin", async importOriginal => ({
@@ -111,6 +119,7 @@ beforeEach(() => {
   hoisted.toastSuccess.mockReset();
   hoisted.fills.mockReset();
   hoisted.locale = null;
+  hoisted.inline = undefined;
   hoisted.session = sessionWith({});
 });
 
@@ -137,6 +146,13 @@ const CARDS: readonly RegionCardFacts[] = [
   {
     area: "header",
     componentId: "h1",
+    setId: "s1",
+    setTitle: "Main",
+    starter: false,
+  },
+  {
+    area: "footer",
+    componentId: "f1",
     setId: "s1",
     setTitle: "Main",
     starter: false,
@@ -183,7 +199,7 @@ function Host(): React.JSX.Element {
   const selection = useRegionSelection(page, ["header"]);
   const host = useRegionEditing({
     editing,
-    inline: INLINE,
+    inline: hoisted.inline ?? INLINE,
     definitions: new Map(),
     cards: CARDS,
     selection,
@@ -290,6 +306,55 @@ describe("entering header editing", () => {
     });
   });
 
+  it("stays on the page when the page's open passage could not be written", async () => {
+    hoisted.inline = {
+      commit: () => ({ status: "refused", reason: "rejected" }) as never,
+      editing: "intro",
+      editingRich: null,
+    };
+    render(<Host />);
+    act(() => current().host.requestEdit?.("header"));
+
+    await waitFor(() => expect(hoisted.target.at(-1)).toBeNull());
+    expect(current().host.area).toBeUndefined();
+  });
+
+  it("tries a failed opening again only while nothing else is edited", async () => {
+    hoisted.session = sessionWith({
+      open: { status: "failed", message: "Offline." } as never,
+    });
+    const { rerender } = render(<Host />);
+    act(() => current().host.requestEdit?.("header"));
+    await waitFor(() => expect(hoisted.toastError).toHaveBeenCalled());
+    const [, options] = hoisted.toastError.mock.calls[0] as [
+      string,
+      { action: { onClick: () => void } },
+    ];
+    hoisted.session = sessionWith({});
+    rerender(<Host />);
+    act(() => current().host.requestEdit?.("footer"));
+    await waitFor(() => expect(current().host.area).toBe("footer"));
+
+    act(() => options.action.onClick());
+
+    expect(current().host.area).toBe("footer");
+    expect(hoisted.target.at(-1)).toEqual({
+      collection: "components",
+      id: "f1",
+    });
+  });
+
+  it("hands the inspector the header's own component facts while it is edited", async () => {
+    render(<Host />);
+    expect(current().host.componentFacts).toBeUndefined();
+    await enterHeader();
+
+    expect(current().host.componentFacts).toMatchObject({
+      reserved: { properties: [], slots: [] },
+      pages: { count: 11, complete: true },
+    });
+  });
+
   it("does not enter while a colleague holds the header, and says who", async () => {
     hoisted.session = sessionWith({
       lock: { status: "held-by-other", holder: "Ana Diaz" },
@@ -388,6 +453,43 @@ describe("saving the header", () => {
 
     await waitFor(() => expect(hoisted.toastSuccess).toHaveBeenCalled());
     expect(sentIds(saveDraft, 0)).toEqual(["menu", "cart"]);
+    expect(current().host.dirty).toBe(true);
+  });
+
+  it("asks before leaving while a save is on its way, and an undo meanwhile stays unsaved", async () => {
+    let answer: (outcome: DocumentSessionOutcome) => void = () => undefined;
+    const saveDraft = vi.fn(
+      () =>
+        new Promise<DocumentSessionOutcome>(resolve => {
+          answer = resolve;
+        })
+    );
+    hoisted.session = sessionWith({ saveDraft });
+    render(<Host />);
+    await enterHeader();
+    editHeader();
+
+    act(() => current().host.topBar?.save());
+    await waitFor(() => expect(saveDraft).toHaveBeenCalledTimes(1));
+    act(() => current().editing.active.undo());
+    act(() => current().host.done());
+    expect(await screen.findByRole("alertdialog")).toBeTruthy();
+    expect(current().host.area).toBe("header");
+
+    await act(async () => answer(STORED));
+    await waitFor(() => expect(hoisted.toastSuccess).toHaveBeenCalled());
+    expect(current().host.dirty).toBe(true);
+  });
+
+  it("counts a passage open in the inspector as unsaved", async () => {
+    hoisted.inline = { ...INLINE, inspecting: false };
+    const { rerender } = render(<Host />);
+    await enterHeader();
+    expect(current().host.dirty).toBe(false);
+
+    hoisted.inline = { ...INLINE, inspecting: true };
+    rerender(<Host />);
+
     expect(current().host.dirty).toBe(true);
   });
 

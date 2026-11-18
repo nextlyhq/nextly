@@ -168,7 +168,12 @@ export function editorInspector<TFieldValues extends FieldValues>(
       // In a component's own view: the ids its live definition holds, which a
       // new field must never reuse, how far a removal reaches, and its name
       // for the card heading the view, which is the open document's title.
-      componentFields={namedFacts(componentFacts, view.pageTitle)}
+      // In a header or footer edited in place, its component's own.
+      componentFields={
+        view.regionEditing.area === undefined
+          ? namedFacts(componentFacts, view.pageTitle)
+          : view.regionEditing.componentFacts
+      }
       // And how many placements chose a variant, for its delete dialog, and
       // the open variant, which the canvas previews.
       componentVariants={previewingHost(componentVariants, view.preview)}
