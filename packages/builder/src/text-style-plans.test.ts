@@ -11,6 +11,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   duplicateTextStylePlan,
+  fluidTextStyleSizePlan,
   newTextStylePlan,
   renameTextStylePlan,
 } from "./text-style-plans";
@@ -22,7 +23,9 @@ const eyebrow: NamedClass = {
   orderIndex: 1,
   role: "text",
   styles: {
-    base: { [BASE_BREAKPOINT]: { fontSize: "12px", textTransform: "uppercase" } },
+    base: {
+      [BASE_BREAKPOINT]: { fontSize: "12px", textTransform: "uppercase" },
+    },
   },
 };
 const card: NamedClass = {
@@ -96,7 +99,11 @@ describe("a copy of a text style", () => {
   it("counts on past a copy name already taken", () => {
     const first = duplicateTextStylePlan([eyebrow], "t-eyebrow", ids("t-2"));
     if (!first.ok) throw new Error(first.reason);
-    const second = duplicateTextStylePlan(first.classes, "t-eyebrow", ids("t-3"));
+    const second = duplicateTextStylePlan(
+      first.classes,
+      "t-eyebrow",
+      ids("t-3")
+    );
     expect(second.ok && second.classes.at(-1)?.label).toBe("Eyebrow copy 2");
   });
 
@@ -117,9 +124,75 @@ describe("renaming a text style", () => {
     expect(
       renameTextStylePlan([{ ...eyebrow, locked: true }], "t-eyebrow", "Kicker")
     ).toMatchObject({ ok: false, reason: expect.stringMatching(/locked/) });
-    const display = { ...eyebrow, id: "t-display", slug: "display", label: "Display" };
+    const display = {
+      ...eyebrow,
+      id: "t-display",
+      slug: "display",
+      label: "Display",
+    };
     expect(
       renameTextStylePlan([eyebrow, display], "t-eyebrow", "DISPLAY")
+    ).toMatchObject({ ok: false });
+  });
+});
+
+describe("a copy of a text style with a fluid size", () => {
+  it("keeps the two sizes the size was made from, so it follows the range too", () => {
+    const sizes = { small: 16, large: 32 };
+    const fluid: NamedClass = {
+      ...eyebrow,
+      fluidSizes: { [BASE_BREAKPOINT]: sizes },
+    };
+    const planned = duplicateTextStylePlan(
+      [fluid],
+      "t-eyebrow",
+      () => "t-copy"
+    );
+    expect(planned.ok && planned.classes.at(-1)?.fluidSizes).toEqual({
+      [BASE_BREAKPOINT]: sizes,
+    });
+  });
+});
+
+describe("a text style's size made fluid", () => {
+  const sizes = { small: 16, large: 32 };
+
+  it("writes the size on its device and keeps the sizes of the others", () => {
+    const fluid: NamedClass = {
+      ...eyebrow,
+      fluidSizes: { mobile: { small: 10, large: 12 } },
+    };
+    const planned = fluidTextStyleSizePlan(
+      [card, fluid],
+      "t-eyebrow",
+      BASE_BREAKPOINT,
+      sizes,
+      "clamp(1rem, 0.6087rem + 1.7391vw, 2rem)"
+    );
+    expect(planned.ok).toBe(true);
+    if (!planned.ok) return;
+    expect(planned.classes[0]).toBe(card);
+    const made = planned.classes[1];
+    expect(made?.styles.base?.[BASE_BREAKPOINT]).toEqual({
+      fontSize: "clamp(1rem, 0.6087rem + 1.7391vw, 2rem)",
+      textTransform: "uppercase",
+    });
+    expect(made?.fluidSizes).toEqual({
+      mobile: { small: 10, large: 12 },
+      [BASE_BREAKPOINT]: sizes,
+    });
+  });
+
+  it("is refused on a locked text style, and on one no longer on the site", () => {
+    const locked: NamedClass = { ...eyebrow, locked: true };
+    expect(
+      fluidTextStyleSizePlan([locked], "t-eyebrow", BASE_BREAKPOINT, sizes, "x")
+    ).toEqual({
+      ok: false,
+      reason: "Eyebrow is locked. Unlock it to change it.",
+    });
+    expect(
+      fluidTextStyleSizePlan([card], "t-eyebrow", BASE_BREAKPOINT, sizes, "x")
     ).toMatchObject({ ok: false });
   });
 });

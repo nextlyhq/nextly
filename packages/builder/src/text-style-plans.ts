@@ -1,6 +1,6 @@
 /**
  * What Design's Type → "Text styles" writes: a new text style, a copy of
- * one, and a rename. Each is the site's whole class list after the action,
+ * one, a rename, and a size made fluid. Each is the site's whole class list after the action,
  * so the host stores it through the one writer every class write joins (and
  * so it undoes as one step), or why it can't be.
  *
@@ -15,7 +15,9 @@ import {
   MAX_NAMED_CLASS_NAME_LENGTH,
   newId,
   tokenLabelIssue,
+  type FluidSizes,
   type NamedClass,
+  type NodeStyles,
 } from "@nextlyhq/blocks-engine";
 
 import {
@@ -126,8 +128,9 @@ function copyName(
 }
 
 /**
- * A copy of a text style: its parts, under the next free "copy" name, and
- * unlocked, since a lock is the original's.
+ * A copy of a text style: its parts and the sizes a fluid size was made
+ * from, under the next free "copy" name, and unlocked, since a lock is the
+ * original's.
  */
 export function duplicateTextStylePlan(
   library: readonly NamedClass[],
@@ -143,8 +146,30 @@ export function duplicateTextStylePlan(
       reason: `There are as many copies of “${sharedStyleName(source)}” as a name can count. Rename one first.`,
     };
   }
-  const entry = madeTextStyle(library, label, source.styles, mintId);
+  const made = madeTextStyle(library, label, source.styles, mintId);
+  // The sizes its fluid sizes were made from go with them, so the copy's
+  // follow a change of the site's fluid range as the original's do.
+  const entry =
+    source.fluidSizes === undefined
+      ? made
+      : { ...made, fluidSizes: source.fluidSizes };
   return { ok: true, classes: [...library, entry], id: entry.id };
+}
+
+/**
+ * A text style an action may change, or why not: it is gone, or locked, said
+ * with the action's own words after "<name> is locked".
+ */
+function unlockedTextStyle(
+  library: readonly NamedClass[],
+  id: string,
+  whenLocked: string
+): { readonly source: NamedClass } | { readonly reason: string } {
+  const source = textStyleOf(library, id);
+  if (source === undefined) return { reason: GONE };
+  return source.locked === true
+    ? { reason: `${sharedStyleName(source)} is locked${whenLocked}` }
+    : { source };
 }
 
 /**
@@ -156,15 +181,10 @@ export function renameTextStylePlan(
   id: string,
   name: string
 ): TextStylePlanResult {
-  const source = textStyleOf(library, id);
-  if (source === undefined) return { ok: false, reason: GONE };
   // A lock holds a style's name as well as its parts.
-  if (source.locked === true) {
-    return {
-      ok: false,
-      reason: `${sharedStyleName(source)} is locked, so it can't be renamed.`,
-    };
-  }
+  const found = unlockedTextStyle(library, id, ", so it can't be renamed.");
+  if ("reason" in found) return { ok: false, reason: found.reason };
+  const { source } = found;
   const label = name.trim();
   const refused = nameRefusal(library, label, id);
   if (refused !== undefined) return { ok: false, reason: refused };
@@ -172,6 +192,40 @@ export function renameTextStylePlan(
     ok: true,
     classes: library.map(entry =>
       entry === source ? { ...entry, label } : entry
+    ),
+    id,
+  };
+}
+
+/**
+ * A text style's size on one device made fluid: the value "Fluid…" made, and
+ * the two sizes it was made from kept beside the styles, so a change of the
+ * site's fluid range makes the size again. One edit, so the two are stored
+ * and undone together, and never apart.
+ */
+export function fluidTextStyleSizePlan(
+  library: readonly NamedClass[],
+  id: string,
+  device: string,
+  sizes: FluidSizes,
+  value: string
+): TextStylePlanResult {
+  const found = unlockedTextStyle(library, id, ". Unlock it to change it.");
+  if ("reason" in found) return { ok: false, reason: found.reason };
+  const { source } = found;
+  const atRest = source.styles.base ?? {};
+  const styles: NodeStyles = {
+    ...source.styles,
+    base: { ...atRest, [device]: { ...atRest[device], fontSize: value } },
+  };
+  const fluidSizes = {
+    ...source.fluidSizes,
+    [device]: { small: sizes.small, large: sizes.large },
+  };
+  return {
+    ok: true,
+    classes: library.map(entry =>
+      entry === source ? { ...entry, styles, fluidSizes } : entry
     ),
     id,
   };

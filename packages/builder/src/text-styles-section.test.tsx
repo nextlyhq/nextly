@@ -9,6 +9,7 @@
  */
 import {
   BASE_BREAKPOINT,
+  fluidValue,
   type BreakpointSet,
   type NamedClass,
   type NodeStyles,
@@ -568,5 +569,74 @@ describe("read-only", () => {
     expect((caps as HTMLInputElement).disabled).toBe(true);
     fireEvent.click(caps);
     expect(writeStyles).not.toHaveBeenCalled();
+  });
+});
+
+describe("a size made fluid", () => {
+  const range = { min: 360, max: 1280 };
+  const openParts = () => fireEvent.click(row(/^Text styles: Eyebrow/));
+  /** "Fluid…" beside Desktop's size, the first device listed. */
+  const openFluid = () =>
+    fireEvent.click(screen.getAllByRole("button", { name: "Fluid…" })[0]!);
+
+  it("stores the size and the two sizes it was made from, in one edit", async () => {
+    const { edit, writeStyles, stored } = mount();
+    openParts();
+    openFluid();
+    fireEvent.change(screen.getByLabelText("On small screens"), {
+      target: { value: "16" },
+    });
+    fireEvent.change(screen.getByLabelText("On large screens"), {
+      target: { value: "32" },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Make fluid" }));
+    });
+    expect(edit).toHaveBeenCalledTimes(1);
+    expect(writeStyles).not.toHaveBeenCalled();
+    const style = stored().find(entry => entry.id === "t-eyebrow");
+    expect(style?.styles.base?.[BASE_BREAKPOINT]).toMatchObject({
+      fontSize: fluidValue({ small: 16, large: 32 }, range),
+      lineHeight: 1.4,
+    });
+    expect(style?.fluidSizes).toEqual({
+      [BASE_BREAKPOINT]: { small: 16, large: 32 },
+    });
+    // The rest of the library is as it was.
+    expect(stored().find(entry => entry.id === "c-card")).toBe(card);
+  });
+
+  it("opens on the sizes a fluid size was made from", () => {
+    const sizes = { small: 15.5, large: 31.5 };
+    const fluid: NamedClass = {
+      ...eyebrow,
+      styles: {
+        base: { [BASE_BREAKPOINT]: { fontSize: fluidValue(sizes, range) } },
+      } as NodeStyles,
+      fluidSizes: { [BASE_BREAKPOINT]: sizes },
+    };
+    mount({ library: [fluid] });
+    openParts();
+    openFluid();
+    expect(
+      (screen.getByLabelText("On small screens") as HTMLInputElement).value
+    ).toBe("15.5");
+    expect(
+      (screen.getByLabelText("On large screens") as HTMLInputElement).value
+    ).toBe("31.5");
+  });
+
+  it("opens on the size as it reads where it was typed since", () => {
+    const fluid: NamedClass = {
+      ...eyebrow,
+      fluidSizes: { [BASE_BREAKPOINT]: { small: 15.5, large: 31.5 } },
+    };
+    mount({ library: [fluid] });
+    openParts();
+    openFluid();
+    // 12px, typed by hand: the stored sizes no longer made it.
+    expect(
+      (screen.getByLabelText("On small screens") as HTMLInputElement).value
+    ).toBe("12");
   });
 });

@@ -55,6 +55,7 @@ import { TextStyleEditor } from "./text-style-editor";
 import { textStyleDevices } from "./text-style-parts";
 import {
   duplicateTextStylePlan,
+  fluidTextStyleSizePlan,
   newTextStylePlan,
   renameTextStylePlan,
   type TextStylePlanResult,
@@ -358,6 +359,12 @@ function RowEditor({
         queued === undefined ? Promise.resolve(NO_WRITE) : queued.write(change)
       }
       onTokens={panel.onTokens}
+      fluidSizes={panel.library?.find(entry => entry.id === row.id)?.fluidSizes}
+      onFluid={(device, sizes, value) =>
+        runPlan(panel.onEditClasses, existing =>
+          fluidTextStyleSizePlan(existing, row.id, device, sizes, value)
+        ).then(answer => ("refused" in answer ? answer.refused : undefined))
+      }
     />
   );
 }

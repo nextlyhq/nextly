@@ -495,9 +495,18 @@ export { authoredBreakpoints, inCascadeOrder } from "../style/breakpoint-set";
 export {
   DEFAULT_FLUID_RANGE,
   fluidValue,
+  isFluidSize,
+  isFluidSizes,
   type FluidRangeWidths,
   type FluidSizes,
 } from "../style/fluid-value";
+
+/**
+ * Text styles' fluid sizes made again across a new fluid range. Public
+ * because the site style's save remakes them in the write that changes the
+ * range.
+ */
+export { classesAcrossFluidRange } from "../style/fluid-classes";
 
 /**
  * Site text: the size and line height of body text, each heading level,
