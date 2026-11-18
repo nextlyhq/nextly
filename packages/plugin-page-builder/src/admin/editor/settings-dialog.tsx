@@ -77,7 +77,6 @@ import type { PageCodeTab as PageCodeTabPart } from "./settings-code";
 import { PageFieldsTab, usePageFields } from "./settings-fields";
 import { DocumentGeneral, PageGeneral } from "./settings-general";
 import type { SettingsPlace } from "./settings-place";
-import { SettingsTabRequestContext } from "./settings-tab-request";
 import {
   keepEnterFromThePage,
   mayOpenSiteSettings,
@@ -85,6 +84,7 @@ import {
   type SettingsBreakpoints,
   type SiteSettingsQuery,
 } from "./settings-site";
+import { SettingsTabRequestContext } from "./settings-tab-request";
 import {
   CODE_TAB,
   FIELDS_TAB,
@@ -194,23 +194,26 @@ function useChosenTab() {
 
 /**
  * The dialog's tabs: Fields where a page has anything left for it, the
- * place's tabs after it, which one is shown, and "Show me" for a field the
- * page refused to save, which opens the dialog on that field's tab.
+ * place's tabs after it, the Code tab last for someone who may change the
+ * site's settings, which one is shown, and "Show me" for a field the page
+ * refused to save, which opens the dialog on that field's tab.
  */
 function useSettingsTabs({
   page,
   fieldName,
   place,
-  showsCode,
+  site,
   onOpenChange,
 }: {
   page: boolean;
   fieldName: string;
   place: SettingsPlace | null;
-  /** Whether the Code tab ends the row. */
-  showsCode: boolean;
+  /** The site's settings, whose permission decides the Code tab. */
+  site: SiteSettingsQuery;
   onOpenChange: (open: boolean) => void;
 }) {
+  // The Code tab, last, where this person may change the site's settings.
+  const code = usePageCode(page, fieldName, place, site);
   const pageFields = usePageFields(fieldName);
   const fields = page ? pageFields : null;
   const tabs = useChosenTab();
@@ -223,7 +226,7 @@ function useSettingsTabs({
     GENERAL_TAB,
     ...(fields === null ? [] : [FIELDS_TAB]),
     ...offered.map(tab => tab.id),
-    ...(showsCode ? [CODE_TAB] : []),
+    ...(code.showsCode ? [CODE_TAB] : []),
   ];
   const contentTab = contentTabOf(page, fields !== null);
   useShowMe({
@@ -239,6 +242,7 @@ function useSettingsTabs({
     fields,
     placeTabs,
     offered,
+    code,
     shown: ids.includes(tabs.chosen) ? tabs.chosen : GENERAL_TAB,
     choose: tabs.choose,
     focusPath: tabs.focusPath,
@@ -262,17 +266,11 @@ export function SettingsDialog({
 }: SettingsDialogProps): JSX.Element {
   const page = kind === "page";
   const site = useSiteSettingsEntry(open);
-  const { showsCode, holdsHiddenCode, codeBody } = usePageCode(
-    page,
-    fieldName,
-    place,
-    site.read
-  );
   const tabs = useSettingsTabs({
     page,
     fieldName,
     place,
-    showsCode,
+    site: site.read,
     onOpenChange,
   });
   useNoteClosed(open);
@@ -312,7 +310,7 @@ export function SettingsDialog({
               showsFields={tabs.fields !== null}
               // A tab that left the row keeps its panel below, hidden.
               placeTabs={tabs.offered}
-              showsCode={showsCode}
+              showsCode={tabs.code.showsCode}
               site={site.offer}
             />
             <ReadOnlyNote />
@@ -329,10 +327,10 @@ export function SettingsDialog({
                   address={address}
                   open={open}
                   // Said, never shown, to someone who may not see it.
-                  holdsHiddenCode={holdsHiddenCode}
+                  holdsHiddenCode={tabs.code.holdsHiddenCode}
                 />
               }
-              code={codeBody}
+              code={tabs.code.codeBody}
             />
           </Tabs>
           <SavedWithThePage openAsForm={openAsForm} />
