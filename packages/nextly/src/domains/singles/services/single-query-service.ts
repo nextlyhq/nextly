@@ -168,6 +168,7 @@ import {
 import { resolveLocaleChain } from "../../i18n/resolve-locale";
 import {
   buildCompanionSchema,
+  companionWriteVia,
   splitLocalizedWrite,
   upsertCompanionRow,
   type CompanionSchema,
@@ -223,6 +224,7 @@ import type {
 
 import { resolveSingleForRequest } from "./ensure-runtime-table";
 import { readSingleForCreation } from "./single-first-row";
+import { recordSingleProvenance } from "./single-provenance";
 import { singleReadPlan, tableProjection } from "./single-read-plan";
 import { applyReadShape } from "./single-read-shape";
 import type { SingleRegistryService } from "./single-registry-service";
@@ -2797,12 +2799,11 @@ export class SingleQueryService extends BaseService {
    * `localizedDefaultsCompanionExists` BEFORE the transaction opens (see that
    * method for why the probe cannot happen here). No-op when it is false or when
    * seeding does not apply. The default-locale companion `_status` is seeded to
-   * the main row's status so the two agree from the start.
+   * the main row's status so the two agree from the start. The defaults are
+   * recorded as where those values came from, on the same transaction.
    */
   async seedLocalizedDefaultsCompanion(
-    tx: {
-      execute<T = unknown>(sql: string, params?: unknown[]): Promise<T[]>;
-    },
+    tx: TransactionContext,
     singleMeta: DynamicSingleRecord,
     parentId: string,
     localizedDefaults: Record<string, unknown>,
@@ -2823,18 +2824,34 @@ export class SingleQueryService extends BaseService {
     const companionStatus = companion.hasStatus
       ? (status ?? "draft")
       : undefined;
-    const writeAdapter = {
-      dialect: this.adapter.dialect,
-      executeQuery: <T = unknown>(sql: string, params?: unknown[]) =>
-        tx.execute<T>(sql, params),
-    };
     await upsertCompanionRow(
-      writeAdapter,
+      // The transaction's own connection, through the one adapter for it.
+      companionWriteVia(tx, this.adapter.dialect),
       companion.companionTableName,
       parentId,
       this.localization.defaultLocale,
       companionData,
       companionStatus
+    );
+    // The defaults are the document's first values in its default language, the source every
+    // translation is made from: recorded with the seed, so a translation made from one is found
+    // out of date once it changes, rather than read as made from an unknown source for good.
+    await recordSingleProvenance(
+      {
+        adapter: this.adapter,
+        logger: this.logger,
+        defaultLocale: this.localization.defaultLocale,
+      },
+      tx,
+      {
+        slug: singleMeta.slug,
+        entryId: parentId,
+        locale: this.localization.defaultLocale,
+        values: companionData,
+        localizedFields: companion.localizedFields,
+        languagesTable: companion.companionTableName,
+        savedBy: SYSTEM_ACTOR,
+      }
     );
   }
 

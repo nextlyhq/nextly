@@ -29,6 +29,7 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import type { CollectionsHandler } from "../../../services/collections-handler";
+import { WITHOUT_REVIEW_KEY } from "../../collections/services/save-door-gate";
 import type { VersionsDbApi } from "../../versions/db-api";
 import { VersionsRepository } from "../../versions/versions-repository";
 import { canonicalJson } from "../../../shared/lib/canonical-json";
@@ -249,7 +250,15 @@ async function save(
         ? { actor: { type: "apiKey" as const, id: options.keyId } }
         : {}),
     },
-    { ...data, _overwrite: true }
+    {
+      ...data,
+      _overwrite: true,
+      // A save that publishes sets a document up as published, past the workflow's review: what
+      // is under test is how its approvals follow later saves, not the publish gate.
+      ...(data.status === "published"
+        ? { [WITHOUT_REVIEW_KEY]: { reason: "Set up as published" } }
+        : {}),
+    }
   );
   if (!result.success) {
     throw new Error(`save refused: ${result.statusCode} ${result.message}`);
@@ -607,6 +616,38 @@ describe.each(getConfiguredTestDialects())(
         await save("posts", post, { code: "X-1" }, { locale: "en" });
         expect(await stateOf(app(), partOf("posts", post, "es"))).toMatchObject(
           { stage: "legal", approval: null }
+        );
+      });
+
+      it("keeps the shared part's approval through a translation saved in any language, and withdraws it for a shared field", async () => {
+        await boot(dialect);
+        const bob = await person(app(), "bob", [["sign-off", "posts"]]);
+        const post = await entry(app(), "posts");
+        await save("posts", post, { title: "Hola" }, { locale: "es" });
+        await seedState(app(), partOf("posts", post, null), "legal", {
+          enteredBy: "alice",
+          definitionHash: HASH,
+        });
+        await take("posts", post, null, "clear", bob);
+        const shared = await stateOf(app(), partOf("posts", post, null));
+        if (!shared?.approval)
+          throw new Error("the shared part is not approved");
+
+        // A translation is its language's, not the shared part's: whichever language saved last,
+        // the shared part still shows what bob approved.
+        await save("posts", post, { title: "Only English" }, { locale: "en" });
+        expect(await stateOf(app(), partOf("posts", post, null))).toEqual(
+          shared
+        );
+        await save("posts", post, { title: "Hola otra vez" }, { locale: "es" });
+        expect(await stateOf(app(), partOf("posts", post, null))).toEqual(
+          shared
+        );
+
+        // A shared field is the shared part's own: changing it withdraws the approval.
+        await save("posts", post, { code: "X-1" }, { locale: "en" });
+        expect(await stateOf(app(), partOf("posts", post, null))).toMatchObject(
+          { approval: null }
         );
       });
 

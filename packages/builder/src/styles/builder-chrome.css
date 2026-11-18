@@ -21,6 +21,8 @@
  *   a block is visible on, and variable choices.
  * - canvas: the canvas region and frame, the marks drawn over blocks, the drop
  *   line and its refusals.
+ * - canvas-preview-width: the handles at the frame's edges, the ruler of
+ *   breakpoint starts and the line naming the device still edited.
  * - layers: the Layers panel.
  * - block-toolbar: the bottom bar, the breadcrumb, the block toolbar and the
  *   spacing overlay.
@@ -74,6 +76,8 @@
 @import "./style-inspector.css";
 
 @import "./canvas.css";
+/* The handles, ruler and notice for previewing another width. */
+@import "./canvas-preview-width.css";
 
 @import "./layers.css";
 
