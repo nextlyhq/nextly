@@ -20,8 +20,11 @@ export interface BuildMessage {
     column: number;
     lineText?: string;
   } | null;
-  /** What esbuild adds about the message: a resolver's explanation, a suggested remedy. */
-  notes?: ReadonlyArray<{ text: string }>;
+  /**
+   * What esbuild adds about the message: a resolver's explanation, a suggested remedy, each with
+   * the second place it points at, if any. A note has a message's shape and is read as one.
+   */
+  notes?: readonly BuildMessage[];
 }
 
 /** Where a message points, as an editor shows it: line and column from 1, in characters. */
@@ -61,7 +64,10 @@ export function buildMessagesOf(cause: unknown): BuildMessage[] {
         ? {
             notes: message.notes
               .filter(note => typeof note?.text === "string")
-              .map(note => ({ text: redactCredentialsInText(note.text) })),
+              .map(note => ({
+                ...note,
+                text: redactCredentialsInText(note.text),
+              })),
           }
         : {}),
     }));
@@ -230,7 +236,10 @@ export function withEditorPlaces(failure: unknown): Error | undefined {
         .map(message =>
           [
             formatBuildMessages([message]),
-            ...(message.notes ?? []).map(note => `  note: ${note.text}`),
+            // Each note rendered as a message is, its place at the editor's column.
+            ...(message.notes ?? []).map(
+              note => `  note: ${formatBuildMessages([note])}`
+            ),
           ].join("\n")
         )
         .join("\n")}`

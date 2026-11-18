@@ -5,10 +5,10 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { withEditorPlaces } from "../build-messages";
+import { type BuildMessage, withEditorPlaces } from "../build-messages";
 
 /** esbuild's failure for an import it could not resolve, with the notes it attaches. */
-function unresolved(notes: { text: string }[]): Error {
+function unresolved(notes: BuildMessage[]): Error {
   return Object.assign(new Error("Build failed with 1 error"), {
     errors: [
       {
@@ -44,6 +44,28 @@ describe("withEditorPlaces", () => {
     const message = carried?.message ?? "";
     expect(message.indexOf("Could not resolve")).toBeLessThan(
       message.indexOf("is not exported")
+    );
+  });
+
+  // A note can point at a second place, such as the package.json entry a resolver read. It is
+  // named as the message's own place is: the editor's line and column.
+  it("names the place a note points at, as the editor counts it", () => {
+    const carried = withEditorPlaces(
+      unresolved([
+        {
+          text: 'The "exports" field here does not export "./posts".',
+          location: {
+            file: "node_modules/app/package.json",
+            line: 4,
+            column: 2,
+            lineText: '  "exports": { ".": "./index.js" },',
+          },
+        },
+      ])
+    );
+
+    expect(carried?.message).toContain(
+      'node_modules/app/package.json:4:3: The "exports" field here'
     );
   });
 
