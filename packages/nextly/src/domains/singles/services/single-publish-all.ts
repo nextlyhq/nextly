@@ -574,17 +574,23 @@ export class SinglePublishAllService extends BaseService {
                 plan.slug
               )
             : new Map<string, string | null>();
+        const mainStatus = (plan.existingDoc as { status?: unknown }).status;
         await refusePublishEarly({
           scope: { kind: "single", slug: plan.slug },
           entryId: plan.existingDoc.id,
           direction: "publish",
-          parts: this.gatePartsOf(plan),
+          parts: this.gatePartsOf(
+            plan,
+            await this.languagesPublishMovesOn(this.adapter, plan, {
+              prior: statuses,
+              mainStatus,
+            })
+          ),
           live: {
             languages: [...statuses]
               .filter(([, status]) => status === "published")
               .map(([locale]) => locale),
-            shared:
-              (plan.existingDoc as { status?: unknown }).status === "published",
+            shared: mainStatus === "published",
           },
           caller: publishCallerOf(options),
           ...(options.actor === undefined ? {} : { actor: options.actor }),
@@ -1346,19 +1352,56 @@ export class SinglePublishAllService extends BaseService {
   }
 
   /**
-   * The parts a publish moves, as the publish gate is told them early and under the lock: every
-   * language the site has where it moves them all, the chosen ones otherwise, and the shared part
-   * where it moves.
+   * The parts a publish moves, as the publish gate is told them early and under the lock: the
+   * `languages` it moves where the Single keeps a status per language, and the shared part where
+   * it moves. An untranslated Single moves its shared part alone, whatever languages the site has.
    */
-  private gatePartsOf(plan: PublishPlan): PublishPart[] {
-    const configured =
-      this.localization?.locales.map(locale => locale.code) ?? [];
+  private gatePartsOf(
+    plan: PublishPlan,
+    languages: readonly string[]
+  ): PublishPart[] {
     return [
-      ...(plan.parts === undefined ? configured : [...plan.parts.locales]).map(
-        locale => ({ kind: "language" as const, locale })
-      ),
+      ...(plan.companionPublishable ? languages : []).map(locale => ({
+        kind: "language" as const,
+        locale,
+      })),
       ...(movesShared(plan.parts) ? [{ kind: "shared" as const }] : []),
     ];
+  }
+
+  /**
+   * The languages a publish tells (`languagesTold`), within the parts it moves, as `reader` reads
+   * its pending changes: on the pool for the publish gate's early answer, on the transaction under
+   * the row lock for its verdict. Each language that goes live, and each already live whose
+   * pending change goes live. A language holding nothing, or live with no change, is left as it is
+   * and is not among them, so the gate judges no language the publish does not move, as a
+   * collection entry's publish is judged. None where the Single keeps no status per language.
+   */
+  private async languagesPublishMovesOn(
+    reader: TransactionContext | DrizzleAdapter,
+    plan: PublishPlan,
+    args: {
+      /** Each stored translation's status before the publish, as `reader` read it. */
+      prior: ReadonlyMap<string, string | null>;
+      /** The Single's own status before the publish, on its main row. */
+      mainStatus: unknown;
+    }
+  ): Promise<string[]> {
+    if (!plan.companion || !plan.companionPublishable) return [];
+    const pending = await this.pendingChanges(reader, plan);
+    return languagesTold({
+      configured: new Set(this.localization?.locales.map(l => l.code) ?? []),
+      defaultLocale: this.localization?.defaultLocale ?? "",
+      prior: args.prior,
+      promoted: new Set(
+        pending.flatMap(change =>
+          change.locale === null ? [] : [change.locale]
+        )
+      ),
+      mainStatus: args.mainStatus,
+    })
+      .filter(language => movesLanguage(plan.parts, language.locale))
+      .map(language => language.locale);
   }
 
   /**
@@ -1381,7 +1424,13 @@ export class SinglePublishAllService extends BaseService {
       scope: { kind: "single", slug: plan.slug },
       entryId: plan.existingDoc.id,
       direction: "publish",
-      parts: this.gatePartsOf(plan),
+      parts: this.gatePartsOf(
+        plan,
+        await this.languagesPublishMovesOn(tx, plan, {
+          prior: under.priorCompanionStatuses,
+          mainStatus: under.lockedRow.status,
+        })
+      ),
       live: {
         languages: [...under.priorCompanionStatuses]
           .filter(([, status]) => status === "published")

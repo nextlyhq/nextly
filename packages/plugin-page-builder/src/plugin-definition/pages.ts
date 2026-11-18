@@ -681,8 +681,9 @@ export function routesForPages(def: Definition): {
     addressWaiting: addressWaitingRoute(),
     // The Pages panel's writes: create, duplicate, rename and delete a
     // page, each as the author asking, in exactly the collections the
-    // search lists.
-    pagesWrite: pagesWriteRoutes(componentStoreOf(opts)),
+    // search lists; and the New page dialog's read of what a new page
+    // would get, its address shown where the search shows a page's.
+    pagesWrite: pagesWriteRoutes(componentStoreOf(opts), opts.pagePreviewPath),
     // Which collection holds the pages, as renamed: the picker draws on
     // that collection's forms and no other.
     pageCollection: pageCollectionRoute(),
