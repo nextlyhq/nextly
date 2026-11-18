@@ -14,16 +14,19 @@
  */
 import {
   compileStyleValues,
+  customPropertiesReferenced,
   DEFAULT_SITE_TEXT,
   isTokenRef,
   readFamilyList,
   resolveSiteText,
   resolveSiteTokens,
   resolveTokenPrefix,
+  siteTextStyles,
   tokenCustomProperty,
   tokenIdentity,
   tokenRef,
   type FontFaceDef,
+  type NamedClass,
   type SiteTextEntry,
   type SiteTextMap,
   type SiteTextRole,
@@ -72,26 +75,91 @@ export type FontRoleSetting =
   | { readonly kind: "set"; readonly stack: string }
   | { readonly kind: "mixed" };
 
-/** A variable's light value, a built-in's included. */
+/** The colour mode a variable's value is read in. */
+type FontMode = "light" | "dark";
+
+/**
+ * A variable's value in a mode, a built-in's included. A variable with no
+ * dark value draws its light one in dark mode too.
+ */
 function variableValue(
   tokens: SiteTokenSet,
-  identity: string
+  identity: string,
+  mode: FontMode
 ): string | undefined {
-  return resolveSiteTokens(tokens).tokens.find(
+  const values = resolveSiteTokens(tokens).tokens.find(
     token => tokenIdentity(token) === identity
-  )?.values.light;
+  )?.values;
+  return mode === "dark" ? (values?.dark ?? values?.light) : values?.light;
 }
 
-/** The font a row's value draws, as a stack. */
-function drawnStack(
+/**
+ * The site variable a row's font reads, by identity: a `$token`, or a stack
+ * whose first family is a `var()` of one of the site's variables, as
+ * `var(--site-font-display), serif` reads `font.display`. A `var()` later in
+ * the stack is only a fallback, and one naming no site variable reads none.
+ */
+function variableRead(
   tokens: SiteTokenSet,
   value: StyleValue
 ): string | undefined {
-  if (isTokenRef(value)) return variableValue(tokens, value.$token);
-  return typeof value === "string" ? value : undefined;
+  if (isTokenRef(value)) return value.$token;
+  if (typeof value !== "string") return undefined;
+  const first = readFamilyList(value).parts[0];
+  if (first?.kind !== "dynamic") return undefined;
+  const [property] = customPropertiesReferenced(first.part.raw) ?? [];
+  if (property === undefined) return undefined;
+  const { prefix } = resolveTokenPrefix(tokens.prefix);
+  const read = resolveSiteTokens(tokens).tokens.find(
+    token => tokenCustomProperty(tokenIdentity(token), prefix) === property
+  );
+  return read === undefined ? undefined : tokenIdentity(read);
 }
 
-/** What a role is set to, read from the rows it is written on. */
+/**
+ * The font a row's value draws in a mode, as a stack. A variable it reads is
+ * followed, and so is one that variable reads through `var()` in turn. A loop
+ * of variables draws no font, as a browser draws none.
+ */
+function drawnStack(
+  tokens: SiteTokenSet,
+  value: StyleValue,
+  mode: FontMode
+): string | undefined {
+  const seen = new Set<string>();
+  let current: StyleValue = value;
+  for (
+    let identity = variableRead(tokens, current);
+    identity !== undefined;
+    identity = variableRead(tokens, current)
+  ) {
+    if (seen.has(identity)) return undefined;
+    seen.add(identity);
+    const next = variableValue(tokens, identity, mode);
+    if (next === undefined) return undefined;
+    current = next;
+  }
+  return typeof current === "string" ? current : undefined;
+}
+
+/**
+ * The fonts a site variable draws, in light and dark mode, as stacks: what
+ * it holds, or what a variable it reads through `var()` holds.
+ */
+export function variableStacks(
+  tokens: SiteTokenSet,
+  identity: string
+): readonly string[] {
+  return (["light", "dark"] as const).flatMap(mode => {
+    const stack = drawnStack(tokens, tokenRef(identity), mode);
+    return stack === undefined ? [] : [stack];
+  });
+}
+
+/**
+ * What a role is set to, read from the rows it is written on, in light mode
+ * as the picker shows it.
+ */
 export function fontRoleSetting(
   tokens: SiteTokenSet,
   role: FontRole
@@ -104,12 +172,80 @@ export function fontRoleSetting(
   // Compared by the font each row draws, so a row holding the font as written
   // and one pointing at a variable of that font read as one setting.
   const stacks = fonts.map(font =>
-    font === undefined ? undefined : drawnStack(tokens, font)
+    font === undefined ? undefined : drawnStack(tokens, font, "light")
   );
   const [stack] = stacks;
   return stack !== undefined && stacks.every(each => each === stack)
     ? { kind: "set", stack }
     : { kind: "mixed" };
+}
+
+/**
+ * The fonts a row draws, as the engine writes it: a row following a text
+ * style draws the style's, at every state and size, and its own otherwise.
+ */
+function rowFonts(
+  row: SiteTextRole,
+  entry: SiteTextEntry | undefined,
+  classes: readonly NamedClass[] | undefined
+): StyleValue[] {
+  const styles = siteTextStyles(row, entry, classes) ?? {};
+  return Object.values(styles).flatMap(sizes =>
+    Object.values(sizes ?? {}).flatMap(values =>
+      values?.fontFamily === undefined ? [] : [values.fontFamily]
+    )
+  );
+}
+
+/** Every font a role's rows draw, each row on its own, as the engine reads it. */
+function roleFonts(
+  tokens: SiteTokenSet,
+  role: FontRole,
+  classes: readonly NamedClass[] | undefined
+): StyleValue[] {
+  const rows = resolveSiteText(tokens.siteText);
+  return rowsOf(role).flatMap(row => rowFonts(row, rows[row], classes));
+}
+
+/**
+ * Every font a role's rows draw, each row on its own and in both modes, as
+ * stacks: what removing a font takes from the role, whether its rows agree
+ * or not. A row with no font of its own adds none, and a row following a
+ * text style adds the style's.
+ *
+ * @param classes - the site's classes, where its text styles are
+ */
+export function fontRoleStacks(
+  tokens: SiteTokenSet,
+  role: FontRole,
+  classes?: readonly NamedClass[]
+): readonly string[] {
+  const stacks = new Set<string>();
+  for (const font of roleFonts(tokens, role, classes)) {
+    for (const mode of ["light", "dark"] as const) {
+      const stack = drawnStack(tokens, font, mode);
+      if (stack !== undefined) stacks.add(stack);
+    }
+  }
+  return [...stacks];
+}
+
+/**
+ * The variables a role's rows point at, by identity, a followed text
+ * style's included.
+ *
+ * @param classes - the site's classes, where its text styles are
+ */
+export function fontRoleVariables(
+  tokens: SiteTokenSet,
+  role: FontRole,
+  classes?: readonly NamedClass[]
+): readonly string[] {
+  const identities = roleFonts(tokens, role, classes).flatMap(font => {
+    const identity = variableRead(tokens, font);
+    return identity === undefined ? [] : [identity];
+  });
+  return [...new Set(identities)];
 }
 
 /** Two rows holding the same values, whatever order they hold them in. */
@@ -132,7 +268,9 @@ function withRoleVariable(
   identity: string,
   stack: string
 ): SiteTokenSet {
-  const at = tokens.tokens.findIndex(token => tokenIdentity(token) === identity);
+  const at = tokens.tokens.findIndex(
+    token => tokenIdentity(token) === identity
+  );
   if (at === -1) {
     return {
       ...tokens,
@@ -191,6 +329,105 @@ export function withFontRole(
     : withRoleVariable(withRows, identity, stack);
 }
 
+/** One of the site's variables, as a token set stores it. */
+type StoredToken = SiteTokenSet["tokens"][number];
+
+/**
+ * A role as a set holds it, to put back later exactly: its variable as
+ * stored, both modes included, and each of its rows as stated.
+ */
+export interface RoleSnapshot {
+  readonly role: FontRole;
+  /** The role's variable as stored; `undefined` where the set holds none. */
+  readonly variable: StoredToken | undefined;
+  /** Each of the role's rows as stated; a row the set states not, absent. */
+  readonly rows: Readonly<Partial<Record<SiteTextRole, SiteTextEntry>>>;
+}
+
+/** The role as `tokens` holds it, for {@link withRoleSnapshot}. */
+export function roleSnapshot(
+  tokens: SiteTokenSet,
+  role: FontRole
+): RoleSnapshot {
+  const identity = FONT_ROLE_TOKEN[role];
+  const rows: Partial<Record<SiteTextRole, SiteTextEntry>> = {};
+  for (const row of rowsOf(role)) {
+    const stated = tokens.siteText?.[row];
+    if (stated !== undefined) rows[row] = stated;
+  }
+  return {
+    role,
+    variable: tokens.tokens.find(token => tokenIdentity(token) === identity),
+    rows,
+  };
+}
+
+/**
+ * A role's row put back as a snapshot stated it, onto the row as it is now:
+ * only its font, so another change to the row since is kept. A row the
+ * snapshot did not state, left with its built-in values, is left out again,
+ * unless the site's code supplies it.
+ */
+function restoredRow(
+  row: SiteTextRole,
+  was: SiteTextEntry | undefined,
+  now: SiteTextEntry | undefined,
+  supplied: SiteTextMap | undefined
+): SiteTextEntry | undefined {
+  const base = now ?? was;
+  if (was !== undefined && Object.hasOwn(was, "fontFamily")) {
+    return { ...base, fontFamily: was.fontFamily };
+  }
+  if (base === undefined) return undefined;
+  const { fontFamily: _font, ...rest } = base;
+  const builtIn =
+    was === undefined &&
+    sameRow(rest, DEFAULT_SITE_TEXT[row] ?? {}) &&
+    (supplied === undefined || !Object.hasOwn(supplied, row));
+  return builtIn ? undefined : rest;
+}
+
+/**
+ * The set with a role put back as a snapshot held it, onto the set as it is
+ * now: the role's variable exactly as it was (or taken away where there was
+ * none) and its rows' fonts, leaving every other variable and row, the other
+ * role's included, as they are.
+ *
+ * @param supplied - the rows the site's code supplies
+ */
+export function withRoleSnapshot(
+  tokens: SiteTokenSet,
+  snapshot: RoleSnapshot,
+  supplied?: SiteTextMap
+): SiteTokenSet {
+  const identity = FONT_ROLE_TOKEN[snapshot.role];
+  const stated: Partial<Record<SiteTextRole, SiteTextEntry>> = {
+    ...tokens.siteText,
+  };
+  for (const row of rowsOf(snapshot.role)) {
+    const next = restoredRow(row, snapshot.rows[row], stated[row], supplied);
+    if (next === undefined) delete stated[row];
+    else stated[row] = next;
+  }
+  const others = tokens.tokens.filter(
+    token => tokenIdentity(token) !== identity
+  );
+  const at = tokens.tokens.findIndex(
+    token => tokenIdentity(token) === identity
+  );
+  const { variable } = snapshot;
+  let variables: StoredToken[] = others;
+  if (variable !== undefined) {
+    variables =
+      at === -1
+        ? [...tokens.tokens, variable]
+        : tokens.tokens.map((token, index) =>
+            index === at ? variable : token
+          );
+  }
+  return { ...tokens, tokens: variables, siteText: stated };
+}
+
 /** The element a role's font is written on, as a developer names it. */
 const ROLE_SELECTOR: Readonly<Record<FontRole, string>> = {
   body: ".nx-pb-page",
@@ -199,7 +436,11 @@ const ROLE_SELECTOR: Readonly<Record<FontRole, string>> = {
 
 /** A font as the compiler writes it: a variable's `var()`, else as given. */
 function writtenFont(value: StyleValue, prefix: string): string {
-  const { declarations } = compileStyleValues({ fontFamily: value }, "", prefix);
+  const { declarations } = compileStyleValues(
+    { fontFamily: value },
+    "",
+    prefix
+  );
   return declarationsText(declarations);
 }
 
@@ -214,7 +455,7 @@ function variableDeclared(
 ): string {
   if (!isTokenRef(value)) return "";
   const property = tokenCustomProperty(value.$token, prefix);
-  return `${property}: ${variableValue(tokens, value.$token) ?? ""}; `;
+  return `${property}: ${variableValue(tokens, value.$token, "light") ?? ""}; `;
 }
 
 /**
@@ -240,7 +481,10 @@ export function fontRoleWrites(tokens: SiteTokenSet, role: FontRole): string {
     return `${variableDeclared(tokens, first[1], prefix)}${ROLE_SELECTOR[role]} { ${writtenFont(first[1], prefix)} }`;
   }
   return held
-    .map(([row, font]) => `${variableDeclared(tokens, font, prefix)}${row} { ${writtenFont(font, prefix)} }`)
+    .map(
+      ([row, font]) =>
+        `${variableDeclared(tokens, font, prefix)}${row} { ${writtenFont(font, prefix)} }`
+    )
     .join(" ");
 }
 

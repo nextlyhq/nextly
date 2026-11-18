@@ -56,6 +56,7 @@ import {
 } from "../../schema/pipeline/sql-templates/index";
 import {
   fieldProducesColumn,
+  junctionLinkColumnsOf,
   junctionTableNameBetween,
   junctionTableNameFor,
   junctionTablesOf,
@@ -80,7 +81,7 @@ import {
 } from "../../schema/services/index-name";
 import {
   relationshipKeyTarget,
-  relationshipTargetSlug,
+  sameRelationTarget,
 } from "../../schema/services/relationship-key-target";
 import {
   backfillDefaultForType,
@@ -2994,16 +2995,8 @@ ${allColumnDefs.join(",\n")}
    * same relation kind — the only relations a rename preserves.
    */
   private sameRelationTarget(a: FieldDefinition, b: FieldDefinition): boolean {
-    // The target as reads take it (`relationTo` before `options.target`), so two relationships
-    // naming different collections only by `relationTo` are not mistaken for one; a `relationTo`
-    // list is compared whole.
-    const listOf = (f: FieldDefinition) =>
-      Array.isArray(f.relationTo) ? JSON.stringify(f.relationTo) : null;
-    return (
-      relationshipTargetSlug(a) === relationshipTargetSlug(b) &&
-      listOf(a) === listOf(b) &&
-      a.options?.relationType === b.options?.relationType
-    );
+    // The one rule, which the save's preview asks too (`legacy-preview/translate`).
+    return sameRelationTarget(a, b);
   }
 
   /**
@@ -3266,6 +3259,12 @@ CREATE INDEX IF NOT EXISTS ${q(j.idxTarget)} ON ${q(j.table)}(${q(j.targetColumn
     const targetCollection = field.options?.target ?? "";
     // Extract collection name from table name (remove dc_ prefix)
     const sourceCollection = sourceTableName.replace("dc_", "");
+    // The link columns every read and write of the junction's rows asks for,
+    // from the one place that names them.
+    const { sourceColumn, targetColumn } = junctionLinkColumnsOf(
+      sourceTableName,
+      targetCollection
+    );
     return {
       table,
       sourceCollection,
@@ -3274,8 +3273,8 @@ CREATE INDEX IF NOT EXISTS ${q(j.idxTarget)} ON ${q(j.table)}(${q(j.targetColumn
       // The table the target is stored in, which a renamed target kept (see `targetTableOf`). The
       // junction's own name and columns stay spelled from the slug, as its reads and writes spell them.
       targetTable: this.targetTableOf(targetCollection, targetTables),
-      sourceColumn: `${sourceCollection}_id`,
-      targetColumn: `${targetCollection}_id`,
+      sourceColumn,
+      targetColumn,
       fkSource: `fk_${table}_${sourceCollection}`,
       fkTarget: `fk_${table}_${targetCollection}`,
       uqPair: `uq_${table}_pair`,

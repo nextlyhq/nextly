@@ -282,7 +282,7 @@ export function Canvas({
   conditionsApplied,
   composed,
   // The selected region, the ways to select and edit one, and the one edited
-  // in place, for the regions alone.
+  // in place, for the regions alone; and the placeholder for the page.
   ...regionUse
 }: CanvasProps): JSX.Element {
   const root = useRef<HTMLDivElement | null>(null);
@@ -341,6 +341,7 @@ export function Canvas({
     environment,
     applied: conditionsApplied,
     addressed: regionUse.editingRegion === undefined,
+    placeholder: regionUse.placeholder,
   });
 
   /*

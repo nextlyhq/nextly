@@ -55,3 +55,35 @@ function parsed(text: string): unknown {
     return null;
   }
 }
+
+/** `areas` with nothing in `area`, every other row kept as stored. */
+export function withoutArea(
+  areas: readonly AreaRow[],
+  area: LayoutArea
+): AreaRow[] {
+  return areas.filter(entry => entry.area !== area);
+}
+
+/**
+ * The component a row names, by id: as stored, an id, and as a form holds a
+ * relationship it read, the related row. Anything else names none.
+ */
+function rowComponentId(row: AreaRow | undefined): string | undefined {
+  const value = row?.component;
+  if (typeof value === "string") return value === "" ? undefined : value;
+  if (typeof value === "number") return String(value);
+  if (typeof value === "object" && value !== null && "id" in value) {
+    const id = (value as { id?: unknown }).id;
+    if (typeof id === "string" && id !== "") return id;
+    if (typeof id === "number") return String(id);
+  }
+  return undefined;
+}
+
+/** The component `areas` names for `area`, by id, if any. */
+export function areaComponentOf(
+  areas: readonly AreaRow[],
+  area: LayoutArea
+): string | undefined {
+  return rowComponentId(areas.find(entry => entry.area === area));
+}

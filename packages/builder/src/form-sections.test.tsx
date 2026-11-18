@@ -27,6 +27,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { ContentServices } from "./content-controls";
 import type { EditorState } from "./editor-state";
+import { finishFieldEdit } from "./field-edit";
 import { moved, openAfterMove } from "./form-fields-control";
 import { InspectorPanel } from "./inspector-panel";
 
@@ -143,6 +144,23 @@ describe("a Form's Fields", () => {
       label: "Message",
       type: "textarea",
       required: true,
+    });
+  });
+
+  it("writes a label still being typed when the page is stored", () => {
+    // Save pressed from the keyboard, focus still in the label: the label
+    // is written as leaving it would write it.
+    const editor = mount();
+    fireEvent.click(screen.getByRole("button", { name: /^Message/ }));
+    const label = screen.getByLabelText("Label");
+    act(() => label.focus());
+    fireEvent.change(label, { target: { value: "Your question" } });
+    expect(editor.apply).not.toHaveBeenCalled();
+
+    act(() => finishFieldEdit());
+    expect((written(editor).fields as unknown[])[2]).toEqual({
+      label: "Your question",
+      type: "textarea",
     });
   });
 

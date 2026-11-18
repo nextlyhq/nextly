@@ -437,8 +437,9 @@ describe("Page settings", () => {
     show({ place });
     expect(tabNames()).toEqual(["General", "Fields", "Reviews", "Code"]);
     await userEvent.click(screen.getByRole("tab", { name: "Code" }));
+    // Found once it is drawn: the Code tab is fetched when first opened.
     expect(
-      screen.getByText(
+      await screen.findByText(
         "Code added to this page only. Site-wide code lives in Site settings."
       )
     ).toBeTruthy();

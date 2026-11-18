@@ -391,8 +391,12 @@ describeEachDialect("a shared field that becomes translated", dialect => {
     "refuses a field whose type changes as it becomes translated, and changes nothing, when $path",
     async ({ table, seed, change }) => {
       // The shared value would be copied as it is into a companion column of the new type: text
-      // into a number column fails part-way on PostgreSQL and is coerced on MySQL.
+      // into a number column fails part-way on PostgreSQL and is coerced on MySQL. A value the new
+      // type reads ("5") passes the judgement of the values, so this refusal is the one reached.
       const id = await seed();
+      await query(
+        `UPDATE ${quote(dialect, table)} SET ${quote(dialect, "heading")} = '5' WHERE ${quote(dialect, "id")} = '${id}'`
+      );
 
       const refusal = await change([
         { name: "heading", type: "number", localized: true },
@@ -412,9 +416,39 @@ describeEachDialect("a shared field that becomes translated", dialect => {
       const [row] = await query<{ heading: string }>(
         `SELECT ${quote(dialect, "heading")} AS heading FROM ${quote(dialect, table)} WHERE ${quote(dialect, "id")} = '${id}'`
       );
-      expect(row?.heading).toBe("Hello");
+      expect(String(row?.heading)).toBe("5");
     }
   );
+
+  it("refuses first a type change whose values the new type cannot read, as it becomes translated, through the collection's schema dialog", async () => {
+    // "Hello" is no number: the collection's save judges the values before the translation's
+    // own check, so its refusal names the field and the values, and nothing changes.
+    const dialog = PATHS.find(
+      p => p.path === "the builder applies the change with the schema dialog"
+    );
+    if (!dialog) throw new Error("the collection dialog path is missing");
+    const { table, seed, change } = dialog;
+    const id = await seed();
+
+    const refusal = await change([
+      { name: "heading", type: "number", localized: true },
+      { name: "views", type: "number" },
+    ]).then(
+      () => undefined,
+      (error: unknown) => error
+    );
+
+    const reported =
+      refusal instanceof Error
+        ? `${refusal.message} ${JSON.stringify((refusal as { publicData?: unknown }).publicData ?? null)}`
+        : String(refusal);
+    expect(reported).toMatch(/TYPE_CHANGE_LOSES_VALUES/);
+    expect(await columnsOf(`${table}_locales`)).not.toContain("heading");
+    const [row] = await query<{ heading: string }>(
+      `SELECT ${quote(dialect, "heading")} AS heading FROM ${quote(dialect, table)} WHERE ${quote(dialect, "id")} = '${id}'`
+    );
+    expect(row?.heading).toBe("Hello");
+  });
 
   it("keeps the value on main when moving it fails, so the drop never runs, and moves it on the next try", async () => {
     // The apply moves the value before it drops the main column, so a move that fails stops the
