@@ -186,6 +186,29 @@ export interface SampledItem {
 }
 
 /**
+ * The media ids a list's sample holds, by the field's path: each field
+ * holding a media item, and one step into a group or a relation, as far as
+ * the picker lists fields (`seo.ogImage`).
+ */
+function mediaIdsIn(
+  fields: readonly ItemField[],
+  sample: ListSample | undefined,
+  parent?: string
+): [string, string][] {
+  return fields.flatMap((field): [string, string][] => {
+    const path = parent === undefined ? field.name : `${parent}.${field.name}`;
+    const value = sample?.[path];
+    const own: [string, string][] =
+      holdsMedia(field) && typeof value === "string" ? [[path, value]] : [];
+    const inside =
+      parent === undefined && field.fields !== undefined
+        ? mediaIdsIn(field.fields, sample, path)
+        : [];
+    return [...own, ...inside];
+  });
+}
+
+/**
  * The pictures each list's sample names by id (`items`, nearest first), by
  * the field's path: each read through the author's own media read
  * (`readMedia`, the one the canvas draws pictures with), its small picture's
@@ -196,15 +219,13 @@ export function useSamplePictures(
   readMedia: ContentServices["readMedia"],
   items: readonly SampledItem[]
 ): readonly ReadonlyMap<string, string>[] {
-  const ids: [number, string, string][] = [];
-  items.forEach(({ fields, sample }, index) => {
-    for (const field of fields) {
-      const value = sample?.[field.name];
-      if (holdsMedia(field) && typeof value === "string") {
-        ids.push([index, field.name, value]);
-      }
-    }
-  });
+  const ids = items.flatMap(({ fields, sample }, index) =>
+    mediaIdsIn(fields, sample).map(([path, id]): [number, string, string] => [
+      index,
+      path,
+      id,
+    ])
+  );
   // By value: a new sample object for the same entry asks nothing again.
   const key = JSON.stringify(ids);
   const [found, setFound] = React.useState<{

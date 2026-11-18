@@ -91,6 +91,13 @@ const PROJECTS: LoopCollection = {
     { name: "title", type: "text" },
     { name: "summary", type: "text" },
     { name: "cover", type: "upload", relationTo: "media" },
+    // A group with a picture inside, as a named query's declared rows carry
+    // one; the readable shape a host lists for a collection is flat.
+    {
+      name: "seo",
+      type: "group",
+      fields: [{ name: "ogImage", type: "upload", relationTo: "media" }],
+    } as NonNullable<LoopCollection["readable"]>[number],
   ],
 };
 
@@ -363,5 +370,22 @@ describe("each field's live value", () => {
       );
     });
     expect(cover.textContent).not.toContain("m7");
+  });
+
+  it("shows a picture inside a group, stored by its id, the same way", async () => {
+    mount([projectsList()], IMAGE, [
+      { title: "Highway 9", "seo.ogImage": "m7" },
+    ]);
+    const list = await picker();
+    const og = await within(
+      await within(list).findByRole("group", {
+        name: "Each project in the list",
+      })
+    ).findByRole("option", { name: /Og image/ });
+    await vi.waitFor(() => {
+      expect(og.querySelector("img")?.getAttribute("src")).toBe(
+        "/media/m7-thumb.jpg"
+      );
+    });
   });
 });
