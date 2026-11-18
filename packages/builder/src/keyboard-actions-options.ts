@@ -10,6 +10,7 @@ import type { ComponentLookup, NestingSource } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
 import type { BlockActions, ToolbarFocusSlot } from "./block-actions-context";
+import type { BlockClipboardVerbs } from "./block-clipboard-verbs";
 import type {
   ComponentVerbsOffer,
   ToolbarAction,
@@ -246,6 +247,11 @@ export interface BlockKeyboardActionsResult {
    * wherever it is pressed.
    */
   readonly canvasFrame: CanvasFrameSlot;
+  /**
+   * Copy, Cut and Paste, for the clipboard events {@link BlockKeyboardActions}
+   * listens for: the same verbs the menus run, writing to the event in hand.
+   */
+  readonly clipboard: BlockClipboardVerbs;
 }
 
 /**

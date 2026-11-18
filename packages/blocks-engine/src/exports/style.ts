@@ -356,6 +356,7 @@ export {
 export {
   migrateDocument,
   migrateProps,
+  migrationInfoOf,
   findMigrationGaps,
   nodeAtPointer,
 } from "../migration";
@@ -366,6 +367,7 @@ export type {
   MigrateResult,
   MigrationFailure,
   MigrationMap,
+  MigrationRenames,
   MigrationSource,
   PropsMigrationResult,
 } from "../migration";

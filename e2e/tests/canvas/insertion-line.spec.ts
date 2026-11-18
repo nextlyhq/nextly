@@ -351,8 +351,34 @@ test.describe("the line where a highlighted tile would land", () => {
       { steps: 40 }
     );
     await page.waitForTimeout(400);
+    // The block revealed is a neighbour of the place last pointed at, Hero or
+    // its heading by the pointer's path. Each one's own inline scroll margins
+    // are left exactly as they were: a shorthand through a variable, whose
+    // sides read empty until it is substituted, and one side with a priority.
+    const neighbours = [
+      canvasBlock(page, HERO),
+      canvasBlock(page, HERO_HEADING),
+    ];
+    const styled =
+      "--gap: 9px; scroll-margin: var(--gap); scroll-margin-top: 7px !important;";
+    const stylesBefore: (string | null)[] = [];
+    for (const neighbour of neighbours) {
+      stylesBefore.push(
+        await neighbour.evaluate((element, style) => {
+          element.setAttribute("style", style);
+          return element.getAttribute("style");
+        }, styled)
+      );
+    }
     await edge.click();
     await expect.poll(() => scrolledBy(page)).toBeLessThan(before - 500);
+    const stylesAfter: (string | null)[] = [];
+    for (const neighbour of neighbours) {
+      stylesAfter.push(
+        await neighbour.evaluate(element => element.getAttribute("style"))
+      );
+    }
+    expect(stylesAfter).toEqual(stylesBefore);
   });
 
   test("lights an empty Box it would go inside, and draws no line", async ({

@@ -685,6 +685,16 @@
   transform: translateY(3px);
 }
 
+/* Ending at the line's start instead, where it starts too near the screen's
+   right edge for the label to fit after it, above or below as before. */
+.nx-insertion-line__label[data-axis="y"][data-before] {
+  transform: translate(-100%, calc(-100% - 3px));
+}
+
+.nx-insertion-line__label[data-axis="y"][data-below][data-before] {
+  transform: translate(-100%, 3px);
+}
+
 /* Just after the top of a line down a row. */
 .nx-insertion-line__label[data-axis="x"] {
   transform: translateX(4px);
