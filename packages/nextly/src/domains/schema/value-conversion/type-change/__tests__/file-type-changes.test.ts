@@ -296,11 +296,44 @@ describe("fileTypeChangesOf", () => {
     );
     const unrenamed = fileTypeChangesOf(source(before, target));
 
+    // Its values are read from the table as it is before the file runs: under its old name.
     expect(renamed.map(f => [f.slug, f.input.table])).toEqual([
-      ["stories", "dc_stories"],
+      ["stories", "dc_posts"],
     ]);
+    expect(renamed[0]?.input.translationsTable).toBe("dc_posts_locales");
     // A table dropped and another created: no type change to judge.
     expect(unrenamed).toEqual([]);
+  });
+
+  it("refuses, without reading a row, a table rename it cannot read beside a field of another type", async () => {
+    const before = record({ collections: { posts: posts(TEXT) } });
+    const target = record({
+      collections: {
+        legacy: declared({
+          slug: "legacy",
+          fields: [SELECT],
+          dbName: "LegacyPosts",
+        }),
+      },
+    });
+    // A quoted PostgreSQL name in another case than lower: the rename is not read.
+    const unread = source(before, target, [
+      'ALTER TABLE "dc_posts" RENAME TO "dc_LegacyPosts"',
+    ]);
+
+    const refused = await fileTypeChangeRefusals(undefined, unread);
+
+    expect(refused).toEqual([
+      expect.objectContaining({
+        path: "heading",
+        code: "TYPE_CHANGE_BLOCKED",
+        entity: { kind: "collection", slug: "legacy" },
+      }),
+    ]);
+    // With no rename beside it, the same snapshots are an entity dropped and another added.
+    expect(
+      await fileTypeChangeRefusals(undefined, source(before, target))
+    ).toEqual([]);
   });
 
   it("pairs an entity whose table SQLite rebuilds under its own name", () => {

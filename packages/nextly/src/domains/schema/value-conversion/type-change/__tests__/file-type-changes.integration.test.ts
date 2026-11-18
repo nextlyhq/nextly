@@ -235,6 +235,35 @@ function cases(open: () => { connection: Connection; slug: string }) {
     });
   });
 
+  it("reads a renamed table's values under its old name, before the file renames it", async () => {
+    const { connection, slug, first } = await holding(TEXT, { r1: "Hello" });
+    const q = (n: string) =>
+      connection.dialect === "mysql" ? `\`${n}\`` : `"${n}"`;
+    const renamedSlug = `${slug}_r`;
+    const next = await create(renamedSlug, connection.dialect, CHOICE, 2);
+    // The table renamed as the file renames it; the judgement runs before it does.
+    const rename = `ALTER TABLE ${q(resolveCollectionTableName(slug))} RENAME TO ${q(resolveCollectionTableName(renamedSlug))}`;
+
+    await expect(
+      refuseFileTypeChanges(connection.db, {
+        filename: next.filename,
+        before: first.snapshot.entities,
+        target: next.snapshot.entities,
+        statements: [rename],
+        dialect: connection.dialect,
+      })
+    ).rejects.toMatchObject({
+      publicData: {
+        errors: [
+          expect.objectContaining({
+            path: "fields.heading",
+            code: "TYPE_CHANGE_LOSES_VALUES",
+          }),
+        ],
+      },
+    });
+  });
+
   it("lists each refusal with its entity, for a run that reports rather than refuses", async () => {
     const { connection, slug, first } = await holding(TEXT, {
       r1: "a",

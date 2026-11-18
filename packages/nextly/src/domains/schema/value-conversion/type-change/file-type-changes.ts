@@ -185,17 +185,24 @@ function sameColumnRenames(
   return pairs;
 }
 
+/** An entity a snapshot records, with its slug and its table. */
+interface RecordedEntity {
+  slug: string;
+  table: string;
+  recorded: RecordedEntitySettings;
+}
+
 /** Each kind's entities in a snapshot, by their table, lower-cased. */
 function entitiesByTable(
   record: EntitySettingsRecord,
   key: keyof EntitySettingsRecord,
   kind: SettingsEntityKind
-): Map<string, RecordedEntitySettings> {
+): Map<string, RecordedEntity> {
   return new Map(
-    Object.entries(record[key]).map(([slug, recorded]) => [
-      tableOf(kind, slug, recorded.settings).toLowerCase(),
-      recorded,
-    ])
+    Object.entries(record[key]).map(([slug, recorded]) => {
+      const table = tableOf(kind, slug, recorded.settings);
+      return [table.toLowerCase(), { slug, table, recorded }];
+    })
   );
 }
 
@@ -219,13 +226,39 @@ export function fileTypeChangesOf(
     // Paired by their table, not their slug: a slug the file renames keeps its table where it
     // states one (`dbName`), and a table the file renames is paired through the rename.
     const beforeByTable = entitiesByTable(before, key, kind);
-    return Object.entries(target[key]).flatMap(([slug, after]) => {
+    const paired = new Set<RecordedEntity>();
+    const unpaired: {
+      slug: string;
+      table: string;
+      after: RecordedEntitySettings;
+    }[] = [];
+    const changes = Object.entries(target[key]).flatMap(([slug, after]) => {
       const table = tableOf(kind, slug, after.settings);
       const was = recordedBefore(beforeByTable, tableBefore, table);
-      return was === undefined
-        ? []
-        : entityTypeChange({ kind, slug, table, was, after, source, renames });
+      if (was === undefined) {
+        unpaired.push({ slug, table, after });
+        return [];
+      }
+      paired.add(was);
+      return entityTypeChange({
+        kind,
+        slug,
+        table,
+        was,
+        after,
+        source,
+        renames,
+      });
     });
+    return [
+      ...changes,
+      ...unpairedTypeChanges({
+        kind,
+        source,
+        unpaired,
+        unpairedBefore: [...beforeByTable.values()].filter(e => !paired.has(e)),
+      }),
+    ];
   });
 }
 
@@ -244,10 +277,10 @@ interface FileEntityTypeChange {
  * table's own name, which is no other entity's), else under the same table.
  */
 function recordedBefore(
-  beforeByTable: ReadonlyMap<string, RecordedEntitySettings>,
+  beforeByTable: ReadonlyMap<string, RecordedEntity>,
   tableBefore: ReadonlyMap<string, string>,
   table: string
-): RecordedEntitySettings | undefined {
+): RecordedEntity | undefined {
   const key = table.toLowerCase();
   return (
     beforeByTable.get(tableBefore.get(key) ?? "") ?? beforeByTable.get(key)
@@ -259,24 +292,29 @@ function entityTypeChange(args: {
   kind: SettingsEntityKind;
   slug: string;
   table: string;
-  was: RecordedEntitySettings;
+  was: RecordedEntity;
   after: RecordedEntitySettings;
   source: FileTypeChangeSource;
   renames: ReturnType<typeof renamesMadeBy>;
 }): FileEntityTypeChange[] {
-  const { kind, slug, table, was, after, source, renames } = args;
+  const { kind, slug, table, after, source, renames } = args;
   const { dialect } = source;
-  const previous = fieldsOf(was);
+  const previous = fieldsOf(args.was.recorded);
   const next = fieldsOf(after);
   if (previous === undefined || next === undefined) return [];
-  const translationsTable = `${table}_locales`;
+  // Read where the values are before the file runs: under the table's old name where the file
+  // renames it, since this is asked before its first statement.
+  const readFrom = args.was.table;
+  const translationsTable = `${readFrom}_locales`;
   const builtBy = builtByFor(kind, after.source === "builder");
   const columnOf = (field: FieldDefinition) =>
     getColumnDescriptor(field, dialect, builtBy)?.name.toLowerCase();
-  const tables = new Set([
-    table.toLowerCase(),
-    translationsTable.toLowerCase(),
-  ]);
+  // A column rename names the table by whichever name it has when the rename runs.
+  const tables = new Set(
+    [table, `${table}_locales`, readFrom, translationsTable].map(t =>
+      t.toLowerCase()
+    )
+  );
   const stated = renamedFieldsOf(
     previous,
     next,
@@ -312,12 +350,12 @@ function entityTypeChange(args: {
       ...(unread.length > 0 ? { unread: { table, fields: unread } } : {}),
       input: {
         label: `${entityLabel(kind, slug)} (migration ${source.filename})`,
-        table,
+        table: readFrom,
         // A field translated before the file keeps each language's value in the companion;
         // a file that turns translation on or off has the values where they were, so the
         // companion is always named and each value read from whichever table holds it.
         translationsTable,
-        ...perLanguageBefore(was.settings, table, previous),
+        ...perLanguageBefore(args.was.recorded.settings, readFrom, previous),
         previous,
         next,
         ...(renamed.size > 0 ? { renamed } : {}),
@@ -325,6 +363,96 @@ function entityTypeChange(args: {
       },
     },
   ];
+}
+
+/**
+ * Whether the statements rename something on `tables` (lower-cased) in a way not read here: a
+ * `RENAME` that neither `renamesIn` nor MySQL's run reader (`mysqlLiveRunAt`) reads, on one of
+ * them, or on tables not read at all, which may be any of them.
+ */
+function unreadRenameOn(
+  statements: readonly string[],
+  dialect: SupportedDialect,
+  tables: ReadonlySet<string>
+): boolean {
+  return statements.some((statement, at) => {
+    if (!/\bRENAME\b/i.test(statement)) return false;
+    if (dialect === "mysql" && mysqlLiveRunAt(statements, at) !== undefined) {
+      return false;
+    }
+    if (renamesIn(statement, dialect) !== undefined) return false;
+    const touched = tablesChangedIn(statement, dialect);
+    return (
+      touched === undefined ||
+      touched.some(table => tables.has(table.toLowerCase()))
+    );
+  });
+}
+
+/**
+ * Entities the file may rename in a way not read here, refused rather than taken for one entity
+ * dropped and another added: an entity the later snapshot records that pairs with none before it,
+ * beside one before it that pairs with none after, where an unread rename (`unreadRenameOn`) may
+ * reach either's table. Each field of the later entity whose type differs from a field of the same
+ * name on an unpaired earlier one is refused, since the rename may carry its values to a type that
+ * cannot read them. An entity added with no such rename beside it is not judged.
+ */
+function unpairedTypeChanges(args: {
+  kind: SettingsEntityKind;
+  source: FileTypeChangeSource;
+  unpaired: readonly {
+    slug: string;
+    table: string;
+    after: RecordedEntitySettings;
+  }[];
+  unpairedBefore: readonly RecordedEntity[];
+}): FileEntityTypeChange[] {
+  const { kind, source, unpairedBefore } = args;
+  const { dialect } = source;
+  if (args.unpaired.length === 0 || unpairedBefore.length === 0) return [];
+  return args.unpaired.flatMap(({ slug, table, after }) => {
+    const next = fieldsOf(after);
+    if (next === undefined) return [];
+    const tables = new Set(
+      [table, ...unpairedBefore.map(e => e.table)].flatMap(t => [
+        t.toLowerCase(),
+        `${t}_locales`.toLowerCase(),
+      ])
+    );
+    if (!unreadRenameOn(source.statements, dialect, tables)) return [];
+    const builtBy = builtByFor(kind, after.source === "builder");
+    const fields = fieldsStoredOnRow(next)
+      .filter(to =>
+        unpairedBefore.some(was =>
+          fieldsStoredOnRow(fieldsOf(was.recorded) ?? []).some(
+            from =>
+              from.name === to.name &&
+              fieldTypeChangesOf({
+                previous: [from],
+                next: [to],
+                dialect,
+                builtBy,
+              }).length > 0
+          )
+        )
+      )
+      .map(field => field.name);
+    if (fields.length === 0) return [];
+    return [
+      {
+        kind,
+        slug,
+        unread: { table, fields },
+        input: {
+          label: `${entityLabel(kind, slug)} (migration ${source.filename})`,
+          table,
+          previous: [],
+          next: [],
+          builtBy,
+        },
+      },
+    ];
+  });
 }
 
 /**
@@ -343,21 +471,8 @@ function unreadRenameFields(args: {
   renamed: ReadonlyMap<string, string>;
   builtBy: EntityTypeChangeInput["builtBy"];
 }): string[] {
-  const { statements, dialect } = args;
-  const unreadOnTables = statements.some((statement, at) => {
-    if (!/\bRENAME\b/i.test(statement)) return false;
-    if (dialect === "mysql" && mysqlLiveRunAt(statements, at) !== undefined) {
-      return false;
-    }
-    if (renamesIn(statement, dialect) !== undefined) return false;
-    // A statement whose tables are not read may rename on any of them.
-    const touched = tablesChangedIn(statement, dialect);
-    return (
-      touched === undefined ||
-      touched.some(table => args.tables.has(table.toLowerCase()))
-    );
-  });
-  if (!unreadOnTables) return [];
+  const { dialect } = args;
+  if (!unreadRenameOn(args.statements, dialect, args.tables)) return [];
   const renamedTo = new Set(args.renamed.values());
   const nextNames = new Set(fieldsStoredOnRow(args.next).map(f => f.name));
   const previousNames = new Set(
