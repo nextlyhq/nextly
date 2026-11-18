@@ -32,11 +32,15 @@ import {
   isDefaultLook,
   isLook,
   isUsableNamedClass,
+  MAX_TOKEN_NAME_LENGTH,
   ownLooksRead,
   namedClassesRead,
   newStyleIssueBudget,
+  nonTypographyProperties,
   resolveSiteTokens,
   sameSiteToken,
+  SITE_TEXT_ROLES,
+  siteTextIssues,
   tokenIdentity,
   tokenLabelIssue,
   usableNamedClasses,
@@ -47,6 +51,9 @@ import {
   type FontFaceDef,
   type MayFetchUrl,
   type NamedClass,
+  type SiteTextEntry,
+  type SiteTextMap,
+  type SiteTextRole,
   type SiteToken,
   type SiteTokenSet,
   type StyleIssueBudget,
@@ -54,8 +61,10 @@ import {
 } from "@nextlyhq/blocks-engine";
 
 import {
+  BUILT_IN_NAME_FIELDS,
   resolveSiteStyle,
   siteStyleOf,
+  withBuiltInNames,
   type SiteStyleData,
 } from "./site-style";
 
@@ -132,16 +141,22 @@ const optionalRecord = (
  * values is asked. The type guard is what lets the whitelist below read each
  * field without a cast.
  */
-function isStoredTokenShape(entry: unknown): entry is {
+/** A stored token's shape, before any rule about its values is asked. */
+interface StoredTokenShape {
   id?: string;
   name: string;
   label?: string;
+  /** Judged by the label rule, which refuses one that is no name. */
+  group?: unknown;
   kind: string;
   values: { light: string; dark?: string };
   description?: string;
   extensions?: Readonly<Record<string, unknown>>;
   unreadExtension?: Readonly<Record<string, unknown>>;
-} {
+  fluid?: { small: number; large: number };
+}
+
+function isStoredTokenShape(entry: unknown): entry is StoredTokenShape {
   return (
     isPlainRecord(entry) &&
     typeof entry.name === "string" &&
@@ -161,8 +176,219 @@ function isStoredTokenShape(entry: unknown): entry is {
     optionalString(entry.id) &&
     optionalString(entry.label) &&
     optionalRecord(entry.extensions) &&
-    optionalRecord(entry.unreadExtension)
+    optionalRecord(entry.unreadExtension) &&
+    (entry.fluid === undefined || isFluidSizes(entry.fluid))
   );
+}
+
+/** The most colours an order may list: far beyond any palette. */
+const MAX_COLOUR_ORDER = 1000;
+
+/**
+ * The site's colour order as stored: identities, each once, none longer
+ * than a code name can be. A colour the order does not name is listed after
+ * the ones it does, so an order naming a colour since removed is harmless.
+ */
+function isColourOrder(value: unknown): value is readonly string[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= MAX_COLOUR_ORDER &&
+    value.every(
+      identity =>
+        typeof identity === "string" &&
+        identity !== "" &&
+        identity.length <= MAX_TOKEN_NAME_LENGTH
+    ) &&
+    new Set(value).size === value.length
+  );
+}
+
+/**
+ * The site's fluid range as stored: two positive, finite widths in px, the
+ * smallest screen below the largest, or a fluid size would grow across no
+ * width at all.
+ */
+function isFluidRange(value: unknown): value is { min: number; max: number } {
+  return (
+    isPlainRecord(value) &&
+    typeof value.min === "number" &&
+    typeof value.max === "number" &&
+    Number.isFinite(value.min) &&
+    Number.isFinite(value.max) &&
+    value.min > 0 &&
+    value.min < value.max
+  );
+}
+
+/**
+ * A fluid size's two sizes as stored: two positive, finite numbers of px.
+ * Anything else would make the size again from nonsense when the site's
+ * fluid range changes.
+ */
+function isFluidSizes(
+  value: unknown
+): value is { small: number; large: number } {
+  return (
+    isPlainRecord(value) &&
+    [value.small, value.large].every(
+      size => typeof size === "number" && Number.isFinite(size) && size > 0
+    )
+  );
+}
+
+/**
+ * One stored token, read and checked: the token as it is kept, or why it is
+ * refused. Display text (a label, a colour's group) is judged here too.
+ */
+function readStoredToken(
+  entry: unknown,
+  index: number
+): { readonly token: SiteToken } | { readonly issue: string } {
+  if (!isStoredTokenShape(entry)) {
+    return {
+      issue: `tokens[${index}] is not a token: it needs a string name, a kind (${TOKEN_KINDS.join(", ")}), and values with a light string (dark optional). An id, when present, must be a string, extensions must be an object, and a fluid size's two sizes must be positive numbers of px.`,
+    };
+  }
+  const textIssue = displayTextIssue(entry, index);
+  return textIssue === undefined
+    ? { token: storedTokenOf(entry) }
+    : { issue: textIssue };
+}
+
+/**
+ * Why a token's display text cannot be used: its label, or a colour's group,
+ * each judged by the engine's one rule for a label. Refused rather than
+ * dropped, because the author is present to fix it and a save that quietly
+ * lost the name they typed would report success.
+ */
+function displayTextIssue(
+  entry: StoredTokenShape,
+  index: number
+): string | undefined {
+  const labelIssue = tokenLabelIssue(entry.label);
+  if (labelIssue !== undefined) {
+    return `tokens[${index}] has a label that cannot be used. ${labelIssue}`;
+  }
+  const groupIssue = tokenLabelIssue(entry.group);
+  return groupIssue === undefined
+    ? undefined
+    : `tokens[${index}] has a group that cannot be used. ${groupIssue.replace(/^A label/, "A group name")}`;
+}
+
+/**
+ * The fields a stored token keeps where they are present. This is a
+ * WHITELIST: a field it omits is dropped by a save that reports success.
+ * The id above all, which is what a rename leaves alone, so a write that
+ * lost it would turn every rename into a silent break of every reference;
+ * the extensions, so data an import carried survives the next write; and a
+ * colour's display group. The guard has already refused any of these that
+ * is not of its type, and the label rule any group that is no name.
+ */
+const KEPT_WHEN_PRESENT = [
+  "id",
+  "label",
+  "group",
+  "description",
+  "extensions",
+  "unreadExtension",
+] as const;
+
+/** A checked entry as the token it is kept as. */
+function storedTokenOf(entry: StoredTokenShape): SiteToken {
+  const kept: Partial<SiteToken> = {};
+  for (const key of KEPT_WHEN_PRESENT) {
+    const value: unknown = entry[key];
+    if (value !== undefined) Object.assign(kept, { [key]: value });
+  }
+  return {
+    ...kept,
+    name: entry.name,
+    kind: entry.kind as TokenKind,
+    values: {
+      light: entry.values.light,
+      ...(entry.values.dark === undefined ? {} : { dark: entry.values.dark }),
+    },
+    // The sizes a fluid size was made from: left out, a save would lose them
+    // and the size would stop following the site's fluid range.
+    ...(entry.fluid === undefined
+      ? {}
+      : { fluid: { small: entry.fluid.small, large: entry.fluid.large } }),
+  };
+}
+
+/** One site-wide setting as stored: what is kept of it, and any refusal. */
+interface SettingRead {
+  readonly kept: Partial<SiteTokenSet>;
+  readonly issue?: string;
+  /** Several, for a setting with parts of its own, such as the site text. */
+  readonly issues?: readonly string[];
+}
+
+/** A setting that is absent keeps nothing and is not refused. */
+const NOTHING: SettingRead = { kept: {} };
+
+/** Each site-wide setting's reader, in the order they are reported. */
+const SETTING_READERS: readonly ((
+  raw: Record<string, unknown>
+) => SettingRead)[] = [
+  ({ prefix }) => {
+    if (prefix === undefined) return NOTHING;
+    return typeof prefix === "string"
+      ? { kept: { prefix } }
+      : { kept: {}, issue: "The token prefix must be a string when set." };
+  },
+  ({ darkMode }) => {
+    if (darkMode === undefined) return NOTHING;
+    return darkMode === "attribute" || darkMode === "media"
+      ? { kept: { darkMode } }
+      : {
+          kept: {},
+          issue: 'darkMode must be "attribute" or "media" when set.',
+        };
+  },
+  ({ fluidRange }) => {
+    if (fluidRange === undefined) return NOTHING;
+    return isFluidRange(fluidRange)
+      ? { kept: { fluidRange: { min: fluidRange.min, max: fluidRange.max } } }
+      : {
+          kept: {},
+          issue:
+            "The fluid range must be two positive widths in px, the smallest screen first.",
+        };
+  },
+  ({ order }) => {
+    if (order === undefined) return NOTHING;
+    return isColourOrder(order)
+      ? { kept: { order: [...order] } }
+      : {
+          kept: {},
+          issue:
+            "The colour order must be a list of different code names, each used once.",
+        };
+  },
+  // Row by row: a refused row is left out and the others are kept.
+  ({ siteText }) => {
+    const read = storedSiteText(siteText);
+    return {
+      kept: read.value === undefined ? {} : { siteText: read.value },
+      issues: read.issues,
+    };
+  },
+];
+
+/** The token set's site-wide settings, as stored, and why any is refused. */
+function storedSettingsOf(raw: Record<string, unknown>): {
+  readonly value: Omit<SiteTokenSet, "tokens">;
+  readonly issues: readonly string[];
+} {
+  const value: Partial<SiteTokenSet> = {};
+  const issues: string[] = [];
+  for (const read of SETTING_READERS.map(reader => reader(raw))) {
+    Object.assign(value, read.kept);
+    if (read.issue !== undefined) issues.push(read.issue);
+    issues.push(...(read.issues ?? []));
+  }
+  return { value, issues };
 }
 
 /**
@@ -190,70 +416,39 @@ export function checkStoredTokens(
   const issues: string[] = [];
   const tokens: SiteToken[] = [];
   raw.tokens.forEach((entry: unknown, index) => {
-    if (!isStoredTokenShape(entry)) {
-      issues.push(
-        `tokens[${index}] is not a token: it needs a string name, a kind (${TOKEN_KINDS.join(", ")}), and values with a light string (dark optional). An id, when present, must be a string, and extensions must be an object.`
-      );
-      return;
-    }
-    // A label is display text, judged by the engine's one rule for it. Refused
-    // rather than dropped, because the author is present to fix it and a save
-    // that quietly lost the name they typed would report success.
-    const labelIssue = tokenLabelIssue(entry.label);
-    if (labelIssue !== undefined) {
-      issues.push(
-        `tokens[${index}] has a label that cannot be used. ${labelIssue}`
-      );
-      return;
-    }
-    tokens.push({
-      // Carried, not rebuilt. The id is the whole point of the field: it is
-      // what a rename leaves alone, so a write that does not preserve it turns
-      // every rename into a silent break of every reference.
-      ...(entry.id === undefined ? {} : { id: entry.id }),
-      name: entry.name,
-      ...(entry.label === undefined ? {} : { label: entry.label }),
-      kind: entry.kind as TokenKind,
-      values: {
-        light: entry.values.light,
-        ...(entry.values.dark === undefined ? {} : { dark: entry.values.dark }),
-      },
-      ...(entry.description === undefined
-        ? {}
-        : { description: entry.description }),
-      // Both named here because this object is a WHITELIST: a token field the
-      // list omits is dropped by a save that reports success, which for either
-      // of these would mean data survives an import and is lost the moment the
-      // site is written. The guard above has already refused anything that is
-      // neither a record nor absent, so a present value here is a record.
-      ...(entry.extensions === undefined
-        ? {}
-        : { extensions: entry.extensions }),
-      ...(entry.unreadExtension === undefined
-        ? {}
-        : { unreadExtension: entry.unreadExtension }),
-    });
+    const read = readStoredToken(entry, index);
+    if ("issue" in read) issues.push(read.issue);
+    else tokens.push(read.token);
   });
 
-  if (!optionalString(raw.prefix)) {
-    issues.push("The token prefix must be a string when set.");
-  }
-  const darkMode = raw.darkMode;
-  if (
-    darkMode !== undefined &&
-    darkMode !== "attribute" &&
-    darkMode !== "media"
-  ) {
-    issues.push('darkMode must be "attribute" or "media" when set.');
-  }
-
-  const set: SiteTokenSet = {
-    tokens,
-    ...(typeof raw.prefix === "string" ? { prefix: raw.prefix } : {}),
-    ...(darkMode === "attribute" || darkMode === "media" ? { darkMode } : {}),
-  };
+  const settings = storedSettingsOf(raw);
+  issues.push(...settings.issues);
+  const set: SiteTokenSet = { tokens, ...settings.value };
   issues.push(...tokenEmissionIssues(set, policy));
   return { value: set, issues };
+}
+
+/**
+ * The site's text a stored token set holds: each row the engine's own check
+ * (`siteTextIssues`) finds usable, kept as written, and a sentence for each
+ * refusal, naming the row. A save is refused on any refusal; a read keeps
+ * the usable rows, so one bad row never takes the others off every page.
+ */
+function storedSiteText(raw: unknown): {
+  value: SiteTextMap | undefined;
+  issues: string[];
+} {
+  if (raw === undefined) return { value: undefined, issues: [] };
+  const found = siteTextIssues(raw);
+  const issues = found.map(issue => `Site text: ${issue.message}`);
+  if (!isPlainRecord(raw)) return { value: undefined, issues };
+  const refused = new Set(found.map(issue => issue.path.split("/")[1]));
+  const kept: Partial<Record<SiteTextRole, SiteTextEntry>> = {};
+  for (const role of SITE_TEXT_ROLES) {
+    if (!Object.hasOwn(raw, role) || refused.has(role)) continue;
+    kept[role] = raw[role] as SiteTextEntry;
+  }
+  return { value: kept, issues };
 }
 
 /**
@@ -833,6 +1028,43 @@ function withUsableMarks(
  * rather than through the `var()` substitution that makes a token's own gate
  * the last chance to stop one.
  */
+/**
+ * Why a stored class's role makes it unusable, in words an author can act on,
+ * or `undefined` when its role is fine. Asked before the general usability
+ * check, whose single sentence about ids, slugs and indexes would not tell an
+ * author that a text style may hold only typography, or which property broke
+ * that.
+ *
+ * The rule itself is the engine's (`isUsableNamedClass` refuses the same
+ * entries), so a class refused here is one the stylesheet would leave out.
+ */
+function roleIssue(entry: unknown, index: number): string | undefined {
+  if (!isPlainRecord(entry) || entry.role === undefined) return undefined;
+  const at = `classes[${index}]`;
+  if (entry.role !== "text") {
+    // Named only when it is text an author could have typed; any other value
+    // is described rather than stringified.
+    const named =
+      typeof entry.role === "string"
+        ? `the role "${entry.role.slice(0, 40)}"`
+        : "a role that is not text";
+    return `${at} has ${named}; the only role a class may have is "text", for a text style.`;
+  }
+  if (entry.blockType !== undefined) {
+    return `${at} is a text style, which no block type owns: any block may wear one.`;
+  }
+  // Five named at most, so a stored entry with thousands of bad keys costs
+  // five reads past the first, not one per key.
+  const others = nonTypographyProperties(entry.styles, 5);
+  if (others.length === 0) return undefined;
+  const named = others.map(property => `"${property}"`);
+  const list =
+    named.length === 1
+      ? named[0]
+      : `${named.slice(0, -1).join(", ")} and ${named[named.length - 1]}`;
+  return `${at} is a text style, which holds typography only: ${list} ${named.length === 1 ? "is" : "are"} not typography.`;
+}
+
 export function checkStoredClasses(
   raw: unknown,
   policy: SectionPolicy = {}
@@ -850,6 +1082,11 @@ export function checkStoredClasses(
   const ids = new Set<string>();
   const slugs = new Set<string>();
   raw.forEach((entry: unknown, index) => {
+    const role = roleIssue(entry, index);
+    if (role !== undefined) {
+      issues.push(role);
+      return;
+    }
     if (!isUsableNamedClass(entry) || !Number.isFinite(entry.orderIndex)) {
       issues.push(
         `classes[${index}] is not a usable class: it needs a string id, a lowercase dash-separated slug, a numeric orderIndex and a styles record.`
@@ -860,9 +1097,13 @@ export function checkStoredClasses(
       issues.push(`classes[${index}] repeats the id "${entry.id}".`);
       return;
     }
+    // Judged as it merges: an override of a built-in that leaves out its
+    // name fields takes the code's, so its own-style mark is the code's too.
+    const named =
+      withBuiltInNames(policy.defaults?.classes, [entry])?.[0] ?? entry;
     // A block's own look is never written as a class and claims no slug, as
     // the engine's claim rules have it, so a style may share its name.
-    const claimsSlug = !isDefaultLook(entry);
+    const claimsSlug = !isDefaultLook(named);
     if (claimsSlug && slugs.has(entry.slug)) {
       issues.push(`classes[${index}] repeats the slug "${entry.slug}".`);
       return;
@@ -875,7 +1116,7 @@ export function checkStoredClasses(
     if (!budget.truncated) {
       issues.push(...classValueIssues(entry, index, policy, budget));
     }
-    issues.push(...blockStyleMarkIssues(entry, index));
+    issues.push(...blockStyleMarkIssues(named, index));
     issues.push(...builtInRenameIssues(entry, index, policy));
     classes.push(withUsableMarks(entry, index, issues));
   });
@@ -917,6 +1158,14 @@ function blockStyleMarkIssues(entry: NamedClass, index: number): string[] {
  * supplies in code) that renames it: its name, its slug, its block type and
  * whether it is the block's own style stay as the code states them, so a
  * block style is only ever renamed where its name is written.
+ *
+ * The name alone may be left out, as an edit of a built-in's styles and an
+ * export taken back into a site with the same built-ins store it: it only
+ * names the style, and the merge gives it the code's. The slug, the block
+ * type and the own-style mark decide what the entry IS (whether it claims
+ * a slug, whether it may carry ★), and every reader of the stored row reads
+ * them, many without the code's defaults; so they are stated, as the code
+ * states them.
  */
 function builtInRenameIssues(
   entry: NamedClass,
@@ -925,11 +1174,11 @@ function builtInRenameIssues(
 ): string[] {
   const code = policy.defaults?.classes?.find(each => each.id === entry.id);
   if (code === undefined || !isLook(code)) return [];
-  const same =
-    entry.label === code.label &&
-    entry.slug === code.slug &&
-    entry.blockType === code.blockType &&
-    entry.isDefault === code.isDefault;
+  const same = BUILT_IN_NAME_FIELDS.every(
+    field =>
+      entry[field] === code[field] ||
+      (field === "label" && entry.label === undefined)
+  );
   return same
     ? []
     : [

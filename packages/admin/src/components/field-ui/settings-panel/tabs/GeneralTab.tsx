@@ -268,15 +268,30 @@ function LabelAndName({
               })
             }
           />
+          {/* Optional: the record editor names a field with no label by its
+              name made readable, so a blank label is not a mistake. */}
           <p className="text-xs text-muted-foreground">
-            What content authors see in the record editor.
+            What content authors see in the record editor. Left blank, the name
+            is shown.
           </p>
         </div>
 
         <div className="space-y-1">
-          <Label htmlFor="field-name">Name</Label>
+          <Label htmlFor="field-name">
+            Name
+            {/* Marked where it can be typed: a field cannot be kept without a
+                name, which the problem below says the moment it is empty. In
+                the entry form's own required mark, hidden from the accessible
+                name; the input's `required` says it to assistive technology. */}
+            {!nameDisabled && (
+              <span className="text-danger-text ml-1" aria-hidden="true">
+                *
+              </span>
+            )}
+          </Label>
           <Input
             id="field-name"
+            required={!nameDisabled}
             value={field.name}
             disabled={nameDisabled}
             aria-invalid={problem !== null}

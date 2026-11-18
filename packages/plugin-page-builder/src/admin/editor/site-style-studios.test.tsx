@@ -38,19 +38,27 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async importOriginal => ({
   usePluginClientConfig: () => undefined,
 }));
 
+import type { SiteTokenSet, TokenMode } from "@nextlyhq/blocks-engine";
 import {
   CanvasFrame,
   CanvasFrameProvider,
   type CanvasFrameSource,
-  type VariablesPreview,
 } from "@nextlyhq/builder/shell";
+import { TooltipProvider } from "@nextlyhq/ui";
 
-import { previewedCanvas, useCanvasPreviewMode } from "./canvas-preview-mode";
+import {
+  CanvasModeSwitch,
+  previewedCanvas,
+  useCanvasPreviewMode,
+} from "./canvas-preview-mode";
 import { DesignPanel } from "./design-panel";
 import { FontsPanelWithUpload } from "./site-style-fonts";
 import { TokensStudio, VariablesTab } from "./site-style-studios";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  sessionStorage.clear();
+});
 
 beforeAll(() => {
   (window as unknown as Record<string, unknown>).ResizeObserver =
@@ -66,12 +74,32 @@ beforeAll(() => {
  * the Variables tab reading from it. The tab is the panel's own state here,
  * as the shell keeps it.
  */
+/** The site's variables in these tests: a colour and a gap with dark values. */
+const SITE: SiteTokenSet = {
+  tokens: [
+    {
+      name: "color.brand",
+      kind: "color",
+      values: { light: "#1d2b6b", dark: "#8fa7ff" },
+    },
+    // Its row shows the previewed mode's value; a colour's swatch shows both
+    // of its values whatever the preview.
+    {
+      name: "space.gap",
+      kind: "dimension",
+      values: { light: "8px", dark: "12px" },
+    },
+  ],
+};
+
 function Studio({
   start,
-  preview,
+  mode,
+  tokens = SITE,
 }: {
   start: string;
-  preview?: VariablesPreview;
+  mode?: TokenMode;
+  tokens?: SiteTokenSet;
 }): React.JSX.Element {
   const [current, choose] = React.useState<string | null>(start);
   return (
@@ -79,25 +107,10 @@ function Studio({
       view={{ current, choose }}
       frame={tabs => (
         <TokensStudio
-          merged={{
-            tokens: [
-              {
-                name: "color.brand",
-                kind: "color",
-                values: { light: "#1d2b6b", dark: "#8fa7ff" },
-              },
-              // Its row shows the previewed mode's value; a colour's swatch
-              // shows both of its values whatever the preview.
-              {
-                name: "space.gap",
-                kind: "dimension",
-                values: { light: "8px", dark: "12px" },
-              },
-            ],
-          }}
+          merged={tokens}
           supplied={undefined}
           pending={false}
-          {...(preview === undefined ? {} : { preview })}
+          {...(mode === undefined ? {} : { mode })}
         >
           {tabs}
         </TokensStudio>
@@ -144,17 +157,15 @@ describe("the Variables studio", () => {
     expect(screen.getByRole("button", { name: "Add colour" })).toBeTruthy();
   });
 
-  it("draws its preview switch and menu into the Design panel's header", async () => {
+  it("draws its More design actions menu into the Design panel's header, and no light/dark switch or Preview label", async () => {
     can.update = true;
     renderStudio();
-    const header = screen.getByRole("heading", { name: "Design" })
-      .parentElement as HTMLElement;
     expect(
-      await within(header).findByRole("group", { name: "Preview" })
+      await within(header()).findByRole("button", {
+        name: "More design actions",
+      })
     ).toBeTruthy();
-    expect(
-      within(header).getByRole("button", { name: "Import or export" })
-    ).toBeTruthy();
+    expectNoModeSwitchIn(header());
   });
 });
 
@@ -172,36 +183,38 @@ describe("the space between blocks", () => {
 });
 
 describe("the Design panel's header", () => {
-  it("is the same on every tab: the preview switch and the import and export menu", async () => {
+  it("is the same on every tab: the More design actions menu, and no light/dark switch", async () => {
     can.update = true;
-    for (const tab of ["variables", "classes", "fonts"]) {
+    for (const tab of ["colours", "type", "spacing", "styles"]) {
       renderStudio(tab);
       expect(
-        await within(header()).findByRole("group", { name: "Preview" })
+        await within(header()).findByRole("button", {
+          name: "More design actions",
+        })
       ).toBeTruthy();
-      expect(
-        within(header()).getByRole("button", { name: "Import or export" })
-      ).toBeTruthy();
+      expectNoModeSwitchIn(header());
       cleanup();
     }
   });
 
-  it("keeps the preview chosen while the author moves between tabs", async () => {
+  it("has no box above the tabs: an export or import says so in a toast", async () => {
     can.update = true;
-    renderStudio("variables");
-    const dark = () => within(header()).getByRole("button", { name: "Dark" });
-    fireEvent.click(
-      await within(header()).findByRole("button", { name: "Dark" })
-    );
-    openTab("Styles");
+    renderStudio();
+    await within(header()).findByRole("button", {
+      name: "More design actions",
+    });
+    expect(document.querySelector(".nx-pb-design__reports")).toBeNull();
+  });
+
+  it("shows the editor's mode on every tab", async () => {
+    can.update = true;
+    render(<Studio start="styles" mode="dark" />);
     expect(await screen.findByText("Styles content")).toBeTruthy();
-    expect(dark()).toHaveProperty("ariaPressed", "true");
     openTab("Spacing");
-    // The Variables tab draws the mode the header chose.
+    // The Variables tab draws the mode the editor previews.
     expect(
       await screen.findByRole("button", { name: /^Gap, 12px/ })
     ).toBeTruthy();
-    expect(dark()).toHaveProperty("ariaPressed", "true");
   });
 });
 
@@ -216,32 +229,58 @@ const UNLOADED_PAGE: CanvasFrameSource = {
 };
 
 /**
- * The Design panel and the canvas as the editor wires them: one preview mode,
- * held above both, picked by the panel's switch and drawn by the frame, with
- * the frame's theme and its tags from the editor's own `previewedCanvas`.
+ * No light/dark switch and no "Preview" label inside `place`: the preview
+ * is the top bar's.
  */
-function PreviewedEditor({ variant }: { variant?: string }): React.JSX.Element {
-  const mode = useCanvasPreviewMode();
+function expectNoModeSwitchIn(place: HTMLElement): void {
+  expect(within(place).queryByRole("group", { name: "Preview" })).toBeNull();
+  expect(within(place).queryByRole("button", { name: "Light" })).toBeNull();
+  expect(within(place).queryByRole("button", { name: "Dark" })).toBeNull();
+  expect(
+    within(place).queryByRole("button", { name: "Preview in dark mode" })
+  ).toBeNull();
+  expect(place.textContent).not.toMatch(/Preview/);
+}
+
+/**
+ * The top bar's switch, the Design panel and the canvas as the editor wires
+ * them: one preview mode, held above all three, picked by the switch and
+ * drawn by the frame, with the frame's theme and its tags from the editor's
+ * own `previewedCanvas`.
+ */
+function PreviewedEditor({
+  variant,
+  tokens = SITE,
+}: {
+  variant?: string;
+  tokens?: SiteTokenSet;
+}): React.JSX.Element {
+  const mode = useCanvasPreviewMode(tokens);
   const previewed = previewedCanvas(mode, variant);
   return (
-    <CanvasFrameProvider>
-      <Studio start="variables" preview={mode} />
-      <CanvasFrame
-        width={1280}
-        title="Home"
-        source={UNLOADED_PAGE}
-        theme={previewed.theme}
-        overlay={previewed.tags}
-      />
-    </CanvasFrameProvider>
+    <TooltipProvider>
+      <CanvasFrameProvider>
+        <div data-testid="top-bar">
+          <CanvasModeSwitch preview={mode} />
+        </div>
+        <Studio start="spacing" mode={mode.mode} tokens={tokens} />
+        <CanvasFrame
+          width={1280}
+          title="Home"
+          source={UNLOADED_PAGE}
+          theme={previewed.theme}
+          overlay={previewed.tags}
+        />
+      </CanvasFrameProvider>
+    </TooltipProvider>
   );
 }
 
-/** The row of tags over the canvas, drawn only while one shows. */
-function tagRow(): HTMLElement {
-  const row = document.querySelector<HTMLElement>(".nx-canvas-tags");
-  if (row === null) throw new Error("no tags over the canvas");
-  return row;
+/** The top bar's switch, or nothing while it is not offered. */
+function darkSwitch(): HTMLElement | null {
+  return within(screen.getByTestId("top-bar")).queryByRole("button", {
+    name: "Preview in dark mode",
+  });
 }
 
 function canvasElement(): HTMLIFrameElement {
@@ -250,56 +289,83 @@ function canvasElement(): HTMLIFrameElement {
   return frame;
 }
 
-describe("the canvas previewed in the mode the Design panel picks", () => {
-  it("draws the canvas in Dark once Dark is picked, and says so over it", async () => {
+/** The gap's row, which shows the value of the mode the panel shows. */
+const gapRow = (): Promise<HTMLElement> =>
+  screen.findByRole("button", { name: /^Gap, / });
+
+describe("the canvas previewed in the mode the top bar's switch picks", () => {
+  it("draws the canvas and the swatches light first, and both dark once the switch is pressed", async () => {
     can.update = true;
     render(<PreviewedEditor />);
-    const dark = await within(header()).findByRole("button", { name: "Dark" });
-    // Nothing picked: the canvas draws the page's own mode and no tag shows.
-    expect(canvasElement().style.colorScheme).toBe("");
-    expect(screen.queryByRole("button", { name: "Use device" })).toBeNull();
+    expect((await gapRow()).getAttribute("aria-label")).toMatch(/^Gap, 8px/);
+    expect(canvasElement().style.colorScheme).toBe("light");
+    expect(darkSwitch()?.getAttribute("aria-pressed")).toBe("false");
 
-    fireEvent.click(dark);
+    fireEvent.click(darkSwitch() as HTMLElement);
 
     expect(canvasElement().style.colorScheme).toBe("dark");
-    expect(within(tagRow()).getByRole("status").textContent).toBe(
-      "Dark preview"
-    );
-    expect(dark).toHaveProperty("ariaPressed", "true");
+    expect((await gapRow()).getAttribute("aria-label")).toMatch(/^Gap, 12px/);
+    expect(darkSwitch()?.getAttribute("aria-pressed")).toBe("true");
+    // No tag over the canvas and no switch in the panel: the top bar says it.
+    expect(document.querySelector(".nx-canvas-tags")).toBeNull();
+    expectNoModeSwitchIn(header());
+
+    fireEvent.click(darkSwitch() as HTMLElement);
+    expect(canvasElement().style.colorScheme).toBe("light");
+    expect((await gapRow()).getAttribute("aria-label")).toMatch(/^Gap, 8px/);
   });
 
-  it("goes back to the page's own mode from the tag's Use device, on the canvas and the switch", async () => {
+  it("hides the switch and returns the canvas and the swatches to light when the last dark value goes while previewing dark", async () => {
     can.update = true;
-    render(<PreviewedEditor />);
+    const { rerender } = render(<PreviewedEditor />);
     fireEvent.click(
-      await within(header()).findByRole("button", { name: "Dark" })
+      (await screen.findByRole("button", {
+        name: "Preview in dark mode",
+      })) as HTMLElement
     );
     expect(canvasElement().style.colorScheme).toBe("dark");
 
-    fireEvent.click(screen.getByRole("button", { name: "Use device" }));
+    // Every variable light only, the built-in colours included.
+    const lightOnly: SiteTokenSet = {
+      tokens: [
+        ...SITE.tokens.map(token => ({
+          ...token,
+          values: { light: token.values.light },
+        })),
+        ...[
+          "color.primary",
+          "color.text",
+          "color.background",
+          "color.surface",
+          "color.border",
+          "color.border-strong",
+          "color.muted",
+        ].map(name => ({
+          name,
+          kind: "color" as const,
+          values: { light: "#777777" },
+        })),
+      ],
+    };
+    rerender(<PreviewedEditor tokens={lightOnly} />);
 
-    expect(canvasElement().style.colorScheme).toBe("");
-    expect(screen.queryByRole("button", { name: "Use device" })).toBeNull();
-    // The switch shows what the canvas draws again: this device's light.
-    expect(
-      within(header()).getByRole("button", { name: "Light" })
-    ).toHaveProperty("ariaPressed", "true");
+    expect(darkSwitch()).toBeNull();
+    expect(canvasElement().style.colorScheme).toBe("light");
+    expect((await gapRow()).getAttribute("aria-label")).toMatch(/^Gap, 8px/);
   });
 
-  it("puts the picked mode beside a previewed variant, in one row", async () => {
+  it("keeps the variant's tag over the canvas alone, whichever mode is previewed", async () => {
     can.update = true;
     render(<PreviewedEditor variant="Featured" />);
-    fireEvent.click(
-      await within(header()).findByRole("button", { name: "Light" })
-    );
-    expect(canvasElement().style.colorScheme).toBe("light");
+    fireEvent.click(darkSwitch() as HTMLElement);
+    expect(canvasElement().style.colorScheme).toBe("dark");
     const rows = document.querySelectorAll(".nx-canvas-tags");
     expect(rows).toHaveLength(1);
     expect(
-      within(tagRow())
-        .getAllByRole("status")
-        .map(status => status.textContent)
-    ).toEqual(["Previewing Featured", "Light preview"]);
+      [...(rows[0]?.querySelectorAll('[role="status"]') ?? [])].map(
+        status => status.textContent
+      )
+    ).toEqual(["Previewing Featured"]);
   });
 });
 

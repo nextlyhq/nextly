@@ -30,12 +30,40 @@ vi.mock("@admin/hooks/queries/useCollections", () => ({
     ],
   }),
 }));
+vi.mock("@admin/hooks/queries/useSingles", async importOriginal => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  useEverySingle: () => ({
+    data: [
+      {
+        // Named like the collection above, whose entries open in the builder:
+        // the Single is read for itself, an email first, so a form.
+        slug: "notes",
+        fields: [
+          { name: "email", type: "email" },
+          { name: "extras", type: "blocks" },
+        ],
+      },
+      {
+        slug: "homepage",
+        fields: [
+          { name: "title", type: "text" },
+          { name: "layout", type: "blocks" },
+        ],
+      },
+    ],
+  }),
+}));
 /** What the reader may do, by the access asked; every access unless a test says otherwise. */
-const access = vi.hoisted(() => ({ refused: new Set<string>() }));
+const access = vi.hoisted(() => ({
+  refused: new Set<string>(),
+  asked: [] as string[],
+}));
 vi.mock("@admin/hooks/useCurrentUserPermissions", () => ({
   useCurrentUserPermissions: () => ({
-    canAccessCollection: (_slug: string, asked: string) =>
-      !access.refused.has(asked),
+    canAccessCollection: (slug: string, asked: string) => {
+      access.asked.push(`${slug}:${asked}`);
+      return !access.refused.has(asked);
+    },
   }),
 }));
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
@@ -44,7 +72,12 @@ vi.mock("@admin/context/providers/BrandingProvider", () => ({
       {
         name: "@acme/builder",
         documentViews: [
-          { fieldType: "blocks", path: "builder", component: "@acme/x#View" },
+          {
+            fieldType: "blocks",
+            path: "builder",
+            component: "@acme/x#View",
+            opensFirst: "mainField",
+          },
         ],
       },
     ],
@@ -90,5 +123,46 @@ describe("useDocumentAddress", () => {
     expect(result.current(NOTE, { locale: "es" })).toBe(
       "/admin/collections/notes/n1?locale=es"
     );
+  });
+});
+
+describe("useDocumentAddress on a Single", () => {
+  const HOMEPAGE = { kind: "single", slug: "homepage" } as const;
+
+  it("opens a Single where the rule says, from the admin's list of Singles", () => {
+    const { result } = renderHook(() => useDocumentAddress());
+    expect(result.current(HOMEPAGE)).toBe(
+      "/admin/singles/homepage/builder?field=layout"
+    );
+  });
+
+  it("asks whether the reader may update the Single's default language", () => {
+    access.asked = [];
+    access.refused = new Set(["updateInDefaultLanguage"]);
+    const { result } = renderHook(() => useDocumentAddress());
+    expect(result.current(HOMEPAGE)).toBe("/admin/singles/homepage");
+    expect(access.asked).toContain("homepage:updateInDefaultLanguage");
+    access.refused = new Set();
+  });
+
+  it("reads the Single, not a collection sharing its slug", () => {
+    const { result } = renderHook(() => useDocumentAddress());
+    expect(result.current({ kind: "single", slug: "notes" })).toBe(
+      "/admin/singles/notes"
+    );
+  });
+
+  it("reads a Single the caller holds before the admin's list", () => {
+    const { result } = renderHook(() => useDocumentAddress());
+    expect(
+      result.current(
+        { kind: "single", slug: "notes" },
+        {
+          collection: {
+            fields: [{ name: "layout", type: "blocks" }],
+          },
+        }
+      )
+    ).toBe("/admin/singles/notes/builder?field=layout");
   });
 });

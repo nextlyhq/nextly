@@ -37,7 +37,10 @@ import {
   type BuilderKind,
 } from "./builder-config";
 import { AdvancedTab } from "./builder-settings-modal/AdvancedTab";
-import { BasicsTab } from "./builder-settings-modal/BasicsTab";
+import {
+  BasicsTab,
+  descriptionTooLong,
+} from "./builder-settings-modal/BasicsTab";
 import { StoredHooksView } from "./HooksEditor/StoredHooksView";
 import {
   type AddressCheckState,
@@ -431,7 +434,11 @@ export function BuilderSettingsModal({
                 Cancel
               </Button>
               <Button
-                disabled={address.held}
+                // Held past the description limit too: the field says so
+                // beneath itself, and nothing over it is cut on its way out.
+                disabled={
+                  address.held || descriptionTooLong(values.description)
+                }
                 onClick={() => onSubmit(normalizedSettings(values))}
               >
                 {primaryLabel}

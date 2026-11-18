@@ -2,12 +2,11 @@
  * The rules a heading's anchor is made by: its level, and the id its words
  * give it.
  *
- * Which headings a passage draws, and with which words, is the renderer's
- * question, answered by the walk in `../rich-text` that draws them:
- * `passageHeadings` reads a passage with that walk and gives each heading the
- * id this module makes. `core/rich-text` puts the ids on its headings and
- * `core/table-of-contents` links to them, both from that one reading, so a
- * contents link and the heading it names cannot disagree.
+ * Which headings a page draws, and with which words, is answered once per
+ * page by the page outline (`../outline`): Heading blocks and the headings
+ * inside Rich text, in page order. It hands every heading its id from ONE
+ * allocator made here, so `core/heading`, `core/rich-text` and a table of
+ * contents all read the same anchor, and no two headings on a page share one.
  *
  * ## How an id is made
  *
@@ -22,10 +21,9 @@
  * rather than dropped, so a heading in another script gets a readable anchor
  * instead of `section`.
  *
- * Ids are unique within one passage. Two passages on one page that share a
- * heading both give it the same id, and a link to it reaches the first; the
- * renderer draws each block alone and has no page-wide count to number them
- * by.
+ * A made id never holds two hyphens in a row, since a run of them is one. The
+ * outline relies on that to give a heading drawn once per entry of a list an
+ * id no other heading's words can make (`../outline`).
  *
  * @module blocks/heading-anchors
  */
@@ -38,7 +36,7 @@ export type HeadingRank = 1 | 2 | 3 | 4 | 5 | 6;
 export interface HeadingAnchor {
   /** The node the renderer draws, so it can find the id of the heading it draws. */
   readonly node: RichTextNode;
-  /** The anchor, unique within the passage. */
+  /** The anchor, unique among the headings it was handed out with. */
   readonly id: string;
   /** The words the heading draws, as a reader sees them. */
   readonly text: string;
@@ -54,8 +52,16 @@ const HEADING_TAG = /^h([1-6])$/;
  * rather than a second top-level heading).
  */
 export function headingRank(node: RichTextNode): HeadingRank {
-  const match =
-    typeof node.tag === "string" ? HEADING_TAG.exec(node.tag) : null;
+  return rankOfTag(node.tag);
+}
+
+/**
+ * The level a stored heading tag draws at: `h1` to `h6`, or 2 for anything
+ * else. Shared by a passage's headings and by `core/heading`'s level, so a
+ * heading is drawn at the level the page outline lists it at.
+ */
+export function rankOfTag(tag: unknown): HeadingRank {
+  const match = typeof tag === "string" ? HEADING_TAG.exec(tag) : null;
   return match === null ? 2 : (Number(match[1]) as HeadingRank);
 }
 
@@ -73,7 +79,7 @@ function slug(words: string): string {
 }
 
 /**
- * The ids of one passage, handed out in the order its headings are drawn.
+ * The ids of a page's headings, handed out in the order they are drawn.
  *
  * Each base remembers the next number it may try, so a passage of thousands
  * of identical headings costs one probe per heading rather than one per
@@ -81,7 +87,9 @@ function slug(words: string): string {
  * takes an id another heading's own words gave it (`notes-2` written by hand,
  * then a second `notes`).
  *
- * @param used - the ids taken so far; a test passes its own to count probes
+ * @param used - the ids taken before the first heading: the page outline
+ *   passes every id an author gave a block, so a made id never repeats one;
+ *   a test passes its own to count probes
  */
 export function anchorAllocator(used: Set<string> = new Set()): {
   take(words: string): string;
@@ -101,11 +109,4 @@ export function anchorAllocator(used: Set<string> = new Set()): {
       return id;
     },
   };
-}
-
-/** The anchors of a passage, by the node each is drawn on. */
-export function anchorIds(
-  anchors: readonly HeadingAnchor[]
-): ReadonlyMap<RichTextNode, string> {
-  return new Map(anchors.map(anchor => [anchor.node, anchor.id]));
 }

@@ -185,7 +185,9 @@ test.describe("the editing bar", () => {
     await unmoved("a font picked");
 
     // A block style applied, when the button has any.
-    const looks = inspector(page).getByRole("radiogroup", { name: "Look" });
+    const looks = inspector(page).getByRole("radiogroup", {
+      name: "Block style",
+    });
     if ((await looks.count()) > 0) {
       await looks.getByRole("radio", { checked: false }).first().click();
       await unmoved("a block style applied");

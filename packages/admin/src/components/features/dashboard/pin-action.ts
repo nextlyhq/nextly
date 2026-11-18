@@ -28,6 +28,7 @@ import type { ContributedAction } from "../entries/EntryForm/DocumentActionBar";
 import type { EntityRowMenuItem } from "../widgets/frame/entity-row";
 
 import { openAllPins } from "./all-pins";
+import { PIN_TO_DASHBOARD_ACTION } from "./pin-action-id";
 
 /** Core's Continue where you left off card, the one place pins are drawn. */
 const CONTINUE_WIDGET_ID = "core/continue";
@@ -133,7 +134,7 @@ export function usePinAction(
   if (pinned === null) return null;
   return {
     action: {
-      id: "pin-to-dashboard",
+      id: PIN_TO_DASHBOARD_ACTION,
       label: pinLabel(pinned),
       placement: "menu",
       group: "document",
@@ -158,7 +159,7 @@ export function usePinRowItem(): (
   const queryClient = useQueryClient();
   return useCallback(
     (target: PinTarget, pinned: boolean): EntityRowMenuItem => ({
-      id: "pin-to-dashboard",
+      id: PIN_TO_DASHBOARD_ACTION,
       label: pinLabel(pinned),
       onSelect: () =>
         choosePin(

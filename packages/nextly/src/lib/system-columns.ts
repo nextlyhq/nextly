@@ -215,6 +215,14 @@ const BOTH_ENTITIES: readonly SystemColumnEntity[] = ["collection", "single"];
  * Order is load-bearing: it is the column order of the emitted `CREATE TABLE`, so reordering this
  * array reorders physical tables.
  */
+/**
+ * The width of `_changed_by_principal_kind`, a varchar on PostgreSQL and MySQL:
+ * the kind of a plugin-defined person who last changed a row. It is written in
+ * the same statement as the save, so it also bounds the longest kind a plugin
+ * may register: a longer one would fail every save that person makes.
+ */
+export const CHANGED_BY_PRINCIPAL_KIND_LENGTH = 64;
+
 export const SYSTEM_COLUMNS: readonly SystemColumnDeclaration[] = [
   {
     name: "id",
@@ -509,8 +517,16 @@ export const SYSTEM_COLUMNS: readonly SystemColumnDeclaration[] = [
     strippedFromResponses: true,
     reservedIn: [],
     shape: {
-      postgresql: { kind: "varchar", length: 64, nullable: true },
-      mysql: { kind: "varchar", length: 64, nullable: true },
+      postgresql: {
+        kind: "varchar",
+        length: CHANGED_BY_PRINCIPAL_KIND_LENGTH,
+        nullable: true,
+      },
+      mysql: {
+        kind: "varchar",
+        length: CHANGED_BY_PRINCIPAL_KIND_LENGTH,
+        nullable: true,
+      },
       sqlite: { kind: "text", nullable: true },
     },
     addedByMigrateStep: true,

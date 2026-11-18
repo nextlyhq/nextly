@@ -19,6 +19,8 @@
 
 import {
   findNode,
+  itemOfPropName,
+  itemPropName,
   type BlockDocument,
   type BlockNode,
   type PropSchema,
@@ -67,8 +69,36 @@ function targetFor(
     nodeId: node.id,
     prop,
     multiline: schema?.type === "textarea",
-    value: asText((node.props as Record<string, unknown> | undefined)?.[prop]),
+    value: asText(valueAt(node, prop)),
   };
+}
+
+/**
+ * What a node holds under a canvas value's name: the prop's value, or one item
+ * of a list of words (`items.2`).
+ */
+function valueAt(node: BlockNode, name: string): unknown {
+  const props = node.props as Record<string, unknown> | undefined;
+  const item = itemOfPropName(name);
+  if (item === null) return props?.[name];
+  const items = props?.[item.prop];
+  return Array.isArray(items) ? items[item.index] : undefined;
+}
+
+/**
+ * The op writing a node's list of words with one change made to a copy of
+ * it. The whole list is written, as the panel writes it, so an item has no
+ * second way to be stored.
+ */
+function itemsOp(
+  node: BlockNode,
+  prop: string,
+  change: (items: unknown[]) => void
+): BuilderOp {
+  const stored = (node.props as Record<string, unknown> | undefined)?.[prop];
+  const items = Array.isArray(stored) ? [...stored] : [];
+  change(items);
+  return { kind: "update", id: node.id, patch: propPatch(node, prop, items) };
 }
 
 /**
@@ -145,5 +175,93 @@ export function inlineTextOp(
   if (target === null || target.value === next) return null;
   const node = findNode(document.nodes, nodeId);
   if (node === undefined) return null;
+  const item = itemOfPropName(prop);
+  if (item !== null) {
+    return itemsOp(node, item.prop, items => {
+      items[item.index] = next;
+    });
+  }
   return { kind: "update", id: nodeId, patch: propPatch(node, prop, next) };
+}
+
+/**
+ * The item being typed and its node, while it is still editable here: the
+ * same refusals as any other canvas value (gone, locked, not declared).
+ */
+function editableItem(
+  document: BlockDocument,
+  nodeId: string,
+  prop: string
+): { node: BlockNode; prop: string; index: number } | null {
+  const item = itemOfPropName(prop);
+  if (item === null || inlineTarget(document, nodeId, prop) === null) {
+    return null;
+  }
+  const node = findNode(document.nodes, nodeId);
+  return node === undefined ? null : { node, ...item };
+}
+
+/** An edit to a list of words, and the item the caret goes to after it. */
+export interface ItemEdit<Next> {
+  readonly op: BuilderOp;
+  readonly next: Next;
+}
+
+/**
+ * Enter in an item: the words before the caret stay, the words after it start
+ * a new item after this one, and the caret goes there. One op, so one undo
+ * takes the new item back with the words it took. `null` when the item is no
+ * longer editable here.
+ *
+ * @param head - the item's words before the caret
+ * @param tail - its words after the caret, empty at its end
+ */
+export function splitItemOp(
+  document: BlockDocument,
+  nodeId: string,
+  prop: string,
+  head: string,
+  tail: string
+): ItemEdit<string> | null {
+  const found = editableItem(document, nodeId, prop);
+  if (found === null) return null;
+  return {
+    op: itemsOp(found.node, found.prop, items => {
+      items.splice(found.index, 1, head, tail);
+    }),
+    next: itemPropName(found.prop, found.index + 1),
+  };
+}
+
+/** Where the caret goes in the item an edit moved it to. */
+export interface ItemCaret {
+  readonly prop: string;
+  readonly caret: "start" | "end";
+}
+
+/**
+ * Backspace in an empty item: the item goes, and the caret goes to the end of
+ * the item before it, or to the start of the one that followed when it was
+ * the first. `next` is `null` when it was the only item. `null` when the item
+ * is no longer editable here.
+ */
+export function removeItemOp(
+  document: BlockDocument,
+  nodeId: string,
+  prop: string
+): ItemEdit<ItemCaret | null> | null {
+  const found = editableItem(document, nodeId, prop);
+  if (found === null) return null;
+  let left = 0;
+  const op = itemsOp(found.node, found.prop, items => {
+    items.splice(found.index, 1);
+    left = items.length;
+  });
+  const next: ItemCaret | null =
+    found.index > 0
+      ? { prop: itemPropName(found.prop, found.index - 1), caret: "end" }
+      : left > 0
+        ? { prop: itemPropName(found.prop, 0), caret: "start" }
+        : null;
+  return { op, next };
 }

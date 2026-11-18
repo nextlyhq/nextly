@@ -48,7 +48,12 @@ const named = (name: string): Command => commandAt(program, name.split(" "));
  */
 const RETIRED: Record<string, string[]> = {
   "db:sync": ["-f, --force"],
+  // The earlier spelling of the backup confirmation `--backup-confirmed`.
+  migrate: ["--confirm-backed-up"],
   "migrate:fresh": ["-f, --force", "--yes"],
+  // It named another table for the migration records `nextly migrate` now
+  // moves; still accepted, and answered with a notice.
+  upgrade: ["--target-table-name <name>"],
   prune: ["--force"],
   "generate:widget": ["--force"],
 };
