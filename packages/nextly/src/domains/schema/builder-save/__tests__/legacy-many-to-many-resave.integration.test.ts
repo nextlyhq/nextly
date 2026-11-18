@@ -297,6 +297,26 @@ describeEachDialect(
         links: [],
       });
     });
+
+    // Allow multiple turned off: the admin sends the field as one link (`manyToOne`), as its test
+    // pins it. One link per entry needs no link table, so the table goes and the posts hold the
+    // link in a column of their own.
+    it("becomes one link when Allow multiple is turned off, its link table dropped", async () => {
+      const { after } = await resave({
+        ...SENT_TAGS,
+        relationTo: "lm_tags",
+        hasMany: false,
+        options: { target: "lm_tags", relationType: "manyToOne" },
+      });
+      const report = JSON.stringify(after, null, 2);
+      expect(after.outcome, report).toBe("accepted");
+      expect(after.stored, report).toMatchObject({
+        hasMany: false,
+        options: { target: "lm_tags", relationType: "manyToOne" },
+      });
+      expect(after.junction, report).toEqual({ exists: false, links: [] });
+      expect(after.postColumns, report).toContain("tags");
+    });
   }
 );
 
