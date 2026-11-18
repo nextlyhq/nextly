@@ -214,14 +214,21 @@ test("two catalogue fonts in use load only from the site, on the canvas and on t
       .toMatch(/^"?Fixture Sans"?,/);
     // Both faces really load, from wherever the canvas takes them.
     await expect
-      .poll(() =>
-        heading.evaluate(async element => {
-          await element.ownerDocument.fonts.ready;
-          return (
-            element.ownerDocument.fonts.check('16px "Fixture Serif"') &&
-            element.ownerDocument.fonts.check('16px "Fixture Sans"')
-          );
-        })
+      .poll(
+        () =>
+          heading.evaluate(async element => {
+            await element.ownerDocument.fonts.ready;
+            // A face of each family has loaded, whichever weight the text
+            // drew: `check` asks after one weight, which may not be the one used.
+            const loaded = new Set(
+              [...element.ownerDocument.fonts]
+                .filter(face => face.status === "loaded")
+                .map(face => face.family.replace(/"/g, ""))
+            );
+            return loaded.has("Fixture Serif") && loaded.has("Fixture Sans");
+          }),
+        // Font files load after the text draws, slower on a busy machine.
+        { timeout: 30_000 }
       )
       .toBe(true);
     expect(offSite(onCanvas), "canvas requests to off-site font hosts").toEqual(
@@ -243,14 +250,19 @@ test("two catalogue fonts in use load only from the site, on the canvas and on t
     });
     await expect(siteHeading).toBeVisible({ timeout: 30_000 });
     await expect
-      .poll(() =>
-        site.evaluate(async () => {
-          await document.fonts.ready;
-          return (
-            document.fonts.check('16px "Fixture Serif"') &&
-            document.fonts.check('16px "Fixture Sans"')
-          );
-        })
+      .poll(
+        () =>
+          site.evaluate(async () => {
+            await document.fonts.ready;
+            const loaded = new Set(
+              [...document.fonts]
+                .filter(face => face.status === "loaded")
+                .map(face => face.family.replace(/"/g, ""))
+            );
+            return loaded.has("Fixture Serif") && loaded.has("Fixture Sans");
+          }),
+        // Font files load after the text draws, slower on a busy machine.
+        { timeout: 30_000 }
       )
       .toBe(true);
     expect(
@@ -277,27 +289,47 @@ test("two catalogue fonts in use load only from the site, on the canvas and on t
   }
 });
 
-/** The Fonts screen over the Design panel, from Type's "Manage fonts…". */
+/**
+ * The Fonts screen over the Design panel, from Type's "Manage fonts…". A
+ * reload may bring the panel back on the screen it was left on, a moment
+ * after drawing its tabs, or not: so the way there is retried until the
+ * screen is open, from whichever state the panel is in.
+ */
 async function openFonts(page: Page) {
   const panel = page.getByRole("region", { name: "Design panel" });
+  const back = panel.getByRole("button", { name: "Back to Design" });
   await page.getByRole("navigation", { name: "Editor panels" }).waitFor();
-  const restored = await panel
-    .waitFor({ timeout: 3_000 })
-    .then(() => true)
-    .catch(() => false);
-  if (!restored) {
-    await page
-      .getByRole("navigation", { name: "Editor panels" })
-      .getByRole("button", { name: "Design", exact: true })
-      .click();
-  }
-  await panel.getByRole("tab", { name: "Type" }).click();
-  await panel.getByRole("button", { name: "Manage fonts…" }).click();
-  return panel.getByRole("region", { name: "Fonts" });
+  await expect(async () => {
+    if (await back.isVisible()) return;
+    if (!(await panel.isVisible())) {
+      await page
+        .getByRole("navigation", { name: "Editor panels" })
+        .getByRole("button", { name: "Design", exact: true })
+        .click({ timeout: 2_000 });
+    }
+    await panel.getByRole("tab", { name: "Type" }).click({ timeout: 2_000 });
+    await panel
+      .getByRole("button", { name: "Manage fonts…" })
+      .click({ timeout: 2_000 });
+    await expect(back).toBeVisible({ timeout: 2_000 });
+  }).toPass({ timeout: 30_000 });
+  return panel;
 }
 
 /** The Google Fonts catalogue, opened from the Fonts screen's add menu. */
 async function openCatalogue(page: Page) {
+  // A reload may bring the catalogue itself back.
+  const panel = page.getByRole("region", { name: "Design panel" });
+  const search = panel.getByRole("searchbox", { name: "Search Google Fonts" });
+  await page.getByRole("navigation", { name: "Editor panels" }).waitFor();
+  if (
+    await search
+      .waitFor({ timeout: 3_000 })
+      .then(() => true)
+      .catch(() => false)
+  ) {
+    return panel;
+  }
   const fonts = await openFonts(page);
   await fonts.getByRole("button", { name: "Add a font" }).click();
   await page.getByRole("menuitem", { name: "From Google Fonts" }).click();
