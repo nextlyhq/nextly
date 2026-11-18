@@ -29,6 +29,7 @@ import {
   documentLanguageKey,
   fieldProvenanceOf,
   languageOutOfDateSql,
+  stampSourceLocaleSql,
   type FieldProvenance,
   type ProvenanceScope,
 } from "./provenance/field-status";
@@ -1045,7 +1046,12 @@ function buildStaleCondition(args: {
       byStamp: sql`EXISTS (
         SELECT 1 FROM ${table} ${src}
         WHERE ${src}.${parent} = ${mainIdColumn}
-        AND ${src}.${localeCol} = ${defaultLocale}
+        AND ${src}.${localeCol} = ${stampSourceOf({
+          provenance: args.provenance,
+          entryId: sql`${tgt}.${parent}`,
+          locale: sql`${locale}`,
+          defaultLocale,
+        })}
         AND ${sourceMovedAfterTarget(src, tgt)}
       )`,
       entryId: sql`${tgt}.${parent}`,
@@ -1074,6 +1080,27 @@ function languageStale(args: {
         byStamp: args.byStamp,
       })
     : args.byStamp;
+}
+
+/**
+ * The language a document's language-level stamp is compared with: the source its recorded values
+ * claim where provenance is recorded (`stampSourceLocaleSql`), else the default language. ONE
+ * answer, for the filter arm and {@link readStaleLocales} alike.
+ */
+function stampSourceOf(args: {
+  provenance: ProvenanceScope | undefined;
+  entryId: SQL;
+  locale: SQL;
+  defaultLocale: string;
+}): SQL {
+  return args.provenance
+    ? stampSourceLocaleSql({
+        scope: args.provenance,
+        entryId: args.entryId,
+        locale: args.locale,
+        defaultLocale: args.defaultLocale,
+      })
+    : sql`${args.defaultLocale}`;
 }
 
 /** A table alias as `sql.identifier` produces it — derived, so it cannot drift from that call. */
@@ -1308,7 +1335,12 @@ async function readStaleLocales(
             byStamp: sql`EXISTS (
               SELECT 1 FROM ${target} ${source}
               WHERE ${source}.${parent} = ${target}.${parent}
-              AND ${source}.${localeCol} = ${defaultLocale}
+              AND ${source}.${localeCol} = ${stampSourceOf({
+                provenance,
+                entryId: sql`${target}.${parent}`,
+                locale: sql`${target}.${localeCol}`,
+                defaultLocale,
+              })}
               AND ${sourceMovedAfterTarget(source, target)}
             )`,
             entryId: sql`${target}.${parent}`,
