@@ -33,6 +33,7 @@ import {
   sharedStyleUsagePath,
 } from "../library-contract";
 import { closedDocumentSession } from "../__tests__/closed-document-session";
+import { PUBLISH_READINESS_ROUTE_PATH } from "../publish-readiness-contract";
 
 const DOCUMENT = { formatVersion: 1, kind: "page", nodes: [] };
 
@@ -439,7 +440,11 @@ describe("the Shared styles tab reaching an author", () => {
         within(dialog).getByRole("button", { name: "Remove card" })
       );
     });
-    expect(routeWrites).toEqual([
+    // The style's own writes: Page checks also asks which parts aren't
+    // published, a separate ask that is no write of the class list.
+    expect(
+      routeWrites.filter(write => write.path !== PUBLISH_READINESS_ROUTE_PATH)
+    ).toEqual([
       { path: SHARED_STYLE_REMOVE_ROUTE_PATH, body: { ids: ["id-card"] } },
     ]);
     expect(saved).toEqual([]);

@@ -268,12 +268,19 @@ type DefaultDocumentDraft = {
  */
 const DEFAULT_READ_DEPTH = 2;
 
-/** Whether these fields hold a relationship, optionally looking inside containers. */
+/**
+ * Whether these fields hold a relationship, optionally looking inside containers.
+ *
+ * Each level is read as the expansion reads it (`fieldsStoredOnRow`): a group with
+ * no name only lays fields out, so the fields inside it count at the level it sits
+ * in. Skipping it as a field with no name left a relationship inside one, in a named
+ * group or at the top, unexpanded on a read that asked for depth.
+ */
 function containsRelationField(
   fields: FieldConfig[],
   includeNested: boolean
 ): boolean {
-  return fields.some(field => {
+  return fieldsStoredOnRow(fields).some(field => {
     if (!("name" in field) || !field.name) return false;
     const type = field.type as string;
     if (type === "relationship" || type === "relation") return true;

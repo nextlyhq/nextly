@@ -7,7 +7,7 @@
  *
  * @module @nextlyhq/plugin-page-builder/admin/editor/editor-top-bar
  */
-import type { PageCheck } from "@nextlyhq/builder";
+import type { PageCheck, PageFacts } from "@nextlyhq/builder";
 import { BreakpointSwitcher, PageChecksChip } from "@nextlyhq/builder/shell";
 import { DocumentSaveAndPublish } from "@nextlyhq/plugin-sdk/admin";
 
@@ -78,6 +78,8 @@ export function editorTopBar(
     openAsForm: (() => void) | undefined;
     /** The checks the Page checks count runs: the builder's and plugins'. */
     pageChecks: readonly PageCheck[];
+    /** What those checks read of the page beyond its document. */
+    pageFacts: PageFacts;
     /** Opens Page settings at a tab, for a plugin's fix found there. */
     openSettingsTab: (tab: string) => void;
   }
@@ -114,6 +116,8 @@ export function editorTopBar(
                 }
           }
           userId={view.userId}
+          // "+ New page…" asks about it before leaving the page.
+          unsavedWork={view.documentDirty}
           onAllPages={() => view.requestPanel("pages")}
         />
         {page.location === undefined ? null : (
@@ -181,6 +185,7 @@ export function editorTopBar(
             canvas={page.canvas}
             // The builder's checks and other plugins', in their own groups.
             checks={page.pageChecks}
+            facts={page.pageFacts}
             onOpenSettingsTab={page.openSettingsTab}
             // The site's header and footer, read with the page, so their
             // headings count in the page's order.

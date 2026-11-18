@@ -231,6 +231,9 @@ vi.mock("./publish-offer", () => ({
   usePublishOffer: () => null,
   useFormPublishOffer: () => null,
   usePublishQuestion: () => ({ offer: () => Promise.resolve(), dialog: null }),
+  // Page checks asks which parts aren't published; answered as unknown, so
+  // it lists none and these tests stay on what they test.
+  askReadiness: async () => null,
 }));
 vi.mock("./removal-hold-client", () => ({
   useRemovalHold: () => null,

@@ -46,6 +46,7 @@ import {
 import { ComponentActionPrompt } from "../ComponentActionPrompt";
 import { ComponentFromSelectionPrompt } from "../ComponentFromSelectionPrompt";
 import { useFilledDefaultNotice } from "../filled-default-notice";
+import { usePageLayoutAsk } from "../page-layout";
 import { SavePatternPrompt } from "../SavePatternPrompt";
 import {
   SiteStyleHistoryContext,
@@ -82,7 +83,9 @@ import {
   useMediaSearchReader,
   useMediaSummaryReader,
 } from "./media-summary-reader";
+import { usePageCheckFacts } from "./page-check-facts";
 import { usePageDataCount } from "./page-read-meter";
+import { useProvidedChecks } from "./provided-checks";
 import { useReadBack } from "./read-back";
 import { recentColoursStore } from "./recent-colours-store";
 import { regionRefusal } from "./region-card";
@@ -97,6 +100,10 @@ import { useReveal } from "./reveal-hidden";
 import type { SelectedRegion } from "./selected-region";
 import { useSettingsPlace } from "./settings-place";
 import {
+  SettingsTabRequestContext,
+  useSettingsTabRequestState,
+} from "./settings-tab-request";
+import {
   ConnectStyleHistoryContext,
   StyleRevisionContext,
   useSiteStyleHistory,
@@ -108,11 +115,6 @@ import {
   useDrawnTemplate,
   useTemplatePreviewState,
 } from "./template-preview-strip";
-import { useProvidedChecks } from "./provided-checks";
-import {
-  SettingsTabRequestContext,
-  useSettingsTabRequestState,
-} from "./settings-tab-request";
 import { useTwoRegionsNotice } from "./two-regions-notice";
 import { UsageHereField } from "./usage-here";
 import { useComponentView, type ComponentView } from "./use-component-view";
@@ -684,6 +686,8 @@ function EditorBody<TFieldValues extends FieldValues>({
     // The limit the canvas draws under, read once for both.
     cap: view.pageDataLimit,
   });
+  // The Layout the page names, which Page checks asks about as Publish does.
+  const pageLayout = usePageLayoutAsk(control);
   useOpenAtSection({
     sectionId: openAt?.sectionId,
     blockId: openAt?.blockId,
@@ -710,8 +714,6 @@ function EditorBody<TFieldValues extends FieldValues>({
     deviceRequest,
     setChosenDevice,
   } = view;
-  // A page showing the set's header and a header block of its own, pointed
-  // out above the canvas; the same for footers.
   // Page settings opened at a plugin check's tab, and heard closing.
   const settingsTabs = useSettingsTabRequestState(view.pages.openSettings);
   // The Page checks count's checks: the builder's own and other plugins',
@@ -724,6 +726,8 @@ function EditorBody<TFieldValues extends FieldValues>({
     locale: mount.locale,
     settingsClosed: settingsTabs.closed,
   });
+  // A page showing the set's header and a header block of its own, pointed
+  // out above the canvas; the same for footers.
   const twoRegions = useTwoRegionsNotice({
     editor: pageState,
     applied: conditions.applied,
@@ -732,6 +736,18 @@ function EditorBody<TFieldValues extends FieldValues>({
     currentPage: view.pages.currentPage,
     userId: mount.userId,
     openSettings: view.pages.openSettings,
+  });
+  // What Page checks reads of the page beyond its document: the bindings,
+  // data count, unpublished parts and doubled header the editor already has.
+  const pageFacts = usePageCheckFacts({
+    field: place.address,
+    document: editor.document,
+    applied: conditions.applied,
+    regionCards: view.regionCards,
+    areaOf: mount.componentLibrary.areaOf,
+    currentPage: view.pages.currentPage,
+    pageData,
+    layout: pageLayout,
   });
 
   return (
@@ -779,6 +795,7 @@ function EditorBody<TFieldValues extends FieldValues>({
               // "Preview as visitor", in Preview's menu.
               visitor: conditions.visitor,
               pageChecks,
+              pageFacts,
               openSettingsTab: settingsTabs.ask,
               pageData,
               // The form, in the ⋯ menu: the same leave as the exit to the

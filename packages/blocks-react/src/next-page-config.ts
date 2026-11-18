@@ -80,6 +80,11 @@ export interface CustomCssSource {
   readSite: () => string | undefined | Promise<string | undefined>;
   /** The Single slugs `readSite` consults, so a write to one busts the page. */
   readonly singles: readonly string[];
+  /**
+   * Cache tags of other data `readSite` consults, such as a plugin's own
+   * (`pluginCacheTag`), whose expiry busts the page as a Single's write does.
+   */
+  readonly tags?: readonly string[];
 }
 
 /**
