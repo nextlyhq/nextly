@@ -13,6 +13,8 @@
  *   scrollbars, no tab scrolls sideways and nothing ends past its edge.
  * - **Hit areas:** every switch and toggle answers a pointer over at least
  *   24 by 24 pixels.
+ * - **Focus returns:** a menu or popover closed with Escape gives focus back
+ *   to what opened it.
  *
  * Each test makes its own page, named uniquely, and reads through its own
  * account, so no lock is needed.
@@ -228,6 +230,25 @@ test.describe("the block panel", () => {
           back.push(await focusedStop(page));
         }
         expect(back.reverse(), `${tab}: Shift+Tab`).toEqual(stops);
+      }
+    });
+  });
+
+  test.describe("focus returns", () => {
+    ownSeat(7);
+    test("a menu or popover closed with Escape gives focus back to what opened it", async ({
+      page,
+    }) => {
+      const inspector = await openHeading(page);
+      await chooseTab(inspector, "Style");
+      for (const name of [/^Panel options$/, /^Editing: /, /^State: /]) {
+        const opener = inspector.getByRole("button", { name });
+        await opener.focus();
+        await page.keyboard.press("Enter");
+        await expect(opener).toHaveAttribute("aria-expanded", "true");
+        await page.keyboard.press("Escape");
+        await expect(opener).toHaveAttribute("aria-expanded", "false");
+        await expect(opener, `${String(name)} has focus back`).toBeFocused();
       }
     });
   });
