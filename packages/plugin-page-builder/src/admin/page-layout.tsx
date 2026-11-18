@@ -803,19 +803,35 @@ function regionWords(
   region: EffectiveLayout["regions"][number],
   meta: LayoutChoicesResponse["meta"]
 ): Pick<CanvasRegion, "label" | "badge" | "name"> {
-  const from = `from the ${effective.title} header & footer`;
-  const starter = starterOf(region, meta);
-  if (starter === region.area) {
+  return regionNaming(
+    effective.title,
+    region.area,
+    starterOf(region, meta) === region.area
+  );
+}
+
+/**
+ * What a region of set `setTitle` is called on the canvas and in Layers:
+ * where it comes from, or, while it shows the site's starter as seeded, that
+ * it is the starter, so an author knows it is theirs to edit or replace.
+ */
+export function regionNaming(
+  setTitle: string,
+  area: RegionArea,
+  starter: boolean
+): Pick<CanvasRegion, "label" | "badge" | "name"> {
+  const from = `from the ${setTitle} header & footer`;
+  if (starter) {
     return {
-      label: `${STARTER_NAMES[starter]}, ${from}`,
-      badge: STARTER_BADGES[starter],
-      name: STARTER_NAMES[starter],
+      label: `${STARTER_NAMES[area]}, ${from}`,
+      badge: STARTER_BADGES[area],
+      name: STARTER_NAMES[area],
     };
   }
-  const name = siteRegionName(region.area);
+  const name = siteRegionName(area);
   return {
     label: `${name}, ${from}`,
-    badge: `${name} · ${effective.title}`,
+    badge: `${name} · ${setTitle}`,
     name,
   };
 }
