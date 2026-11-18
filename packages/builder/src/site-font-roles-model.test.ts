@@ -38,12 +38,7 @@ function face(
   };
 }
 
-const LORA = {
-  kind: "google",
-  id: "lora",
-  category: "serif",
-  subset: "latin",
-} as const;
+const LORA = { kind: "google", id: "lora", category: "serif", subset: "latin" } as const;
 
 function valueOf(tokens: SiteTokenSet, name: string): string | undefined {
   return tokens.tokens.find(token => token.name === name)?.values.light;
@@ -59,9 +54,7 @@ describe("the Body and Headings fonts", () => {
   it("sets Body by writing font.body and pointing the Body row at it, in one set", () => {
     const next = withFontRole(SITE, "body", '"Inter", sans-serif');
     expect(valueOf(next, "font.body")).toBe('"Inter", sans-serif');
-    expect(next.siteText?.body).toEqual({
-      fontFamily: { $token: "font.body" },
-    });
+    expect(next.siteText?.body).toEqual({ fontFamily: { $token: "font.body" } });
     expect(fontRoleSetting(next, "body")).toEqual({
       kind: "set",
       stack: '"Inter", sans-serif',
@@ -91,11 +84,7 @@ describe("the Body and Headings fonts", () => {
       "body",
       '"Inter", sans-serif'
     );
-    const cleared = withFontRole(
-      withFontRole(set, "heading", undefined),
-      "body",
-      undefined
-    );
+    const cleared = withFontRole(withFontRole(set, "heading", undefined), "body", undefined);
     expect(cleared.siteText).toEqual({});
     expect(fontRoleSetting(cleared, "heading")).toEqual({ kind: "unset" });
   });
@@ -115,10 +104,7 @@ describe("the Body and Headings fonts", () => {
     const set = withFontRole(SITE, "heading", '"Lora", serif');
     const literal = {
       ...set,
-      siteText: {
-        ...set.siteText,
-        h3: { ...set.siteText?.h3, fontFamily: '"Lora", serif' },
-      },
+      siteText: { ...set.siteText, h3: { ...set.siteText?.h3, fontFamily: '"Lora", serif' } },
     };
     expect(fontRoleSetting(literal, "heading")).toEqual({
       kind: "set",
@@ -143,10 +129,7 @@ describe("the Body and Headings fonts", () => {
 
 describe("what a role's hover says it writes", () => {
   it("says the rule the row writes: a plain font as written, with no variable", () => {
-    const tokens = {
-      ...SITE,
-      siteText: { body: { fontFamily: "Georgia, serif" } },
-    };
+    const tokens = { ...SITE, siteText: { body: { fontFamily: "Georgia, serif" } } };
     expect(fontRoleWrites(tokens, "body")).toBe(
       ".nx-pb-page { font-family: Georgia, serif }"
     );
@@ -228,12 +211,7 @@ describe("a Headings font with no bold", () => {
     const tokens = withFontRole(SITE, "heading", '"Lora", serif');
     expect(missingBold(tokens, lora)).toEqual({
       family: "Lora",
-      add: {
-        id: "lora",
-        weights: [700],
-        styles: ["normal"],
-        subsets: ["latin"],
-      },
+      add: { id: "lora", weights: [700], styles: ["normal"], subsets: ["latin"] },
     });
   });
 
@@ -256,15 +234,11 @@ describe("a Headings font with no bold", () => {
     ).toBeUndefined();
     // An italic bold leaves upright headings with a fake bold.
     const italic = roleFamilies(
-      [
-        face("Lora", "400", LORA),
-        { ...face("Lora", "700", LORA), style: "italic" },
-      ],
+      [face("Lora", "400", LORA), { ...face("Lora", "700", LORA), style: "italic" }],
       []
     );
     expect(
-      missingBold(withFontRole(SITE, "heading", '"Lora", serif'), italic)
-        ?.family
+      missingBold(withFontRole(SITE, "heading", '"Lora", serif'), italic)?.family
     ).toBe("Lora");
     // A variable face reaching 600 or heavier between two named weights
     // draws a bold too.

@@ -132,9 +132,7 @@ function withRoleVariable(
   identity: string,
   stack: string
 ): SiteTokenSet {
-  const at = tokens.tokens.findIndex(
-    token => tokenIdentity(token) === identity
-  );
+  const at = tokens.tokens.findIndex(token => tokenIdentity(token) === identity);
   if (at === -1) {
     return {
       ...tokens,
@@ -201,11 +199,7 @@ const ROLE_SELECTOR: Readonly<Record<FontRole, string>> = {
 
 /** A font as the compiler writes it: a variable's `var()`, else as given. */
 function writtenFont(value: StyleValue, prefix: string): string {
-  const { declarations } = compileStyleValues(
-    { fontFamily: value },
-    "",
-    prefix
-  );
+  const { declarations } = compileStyleValues({ fontFamily: value }, "", prefix);
   return declarationsText(declarations);
 }
 
@@ -246,10 +240,7 @@ export function fontRoleWrites(tokens: SiteTokenSet, role: FontRole): string {
     return `${variableDeclared(tokens, first[1], prefix)}${ROLE_SELECTOR[role]} { ${writtenFont(first[1], prefix)} }`;
   }
   return held
-    .map(
-      ([row, font]) =>
-        `${variableDeclared(tokens, font, prefix)}${row} { ${writtenFont(font, prefix)} }`
-    )
+    .map(([row, font]) => `${variableDeclared(tokens, font, prefix)}${row} { ${writtenFont(font, prefix)} }`)
     .join(" ");
 }
 

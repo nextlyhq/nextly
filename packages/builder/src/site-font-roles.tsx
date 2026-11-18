@@ -21,7 +21,12 @@ import type {
   SiteTextMap,
   SiteTokenSet,
 } from "@nextlyhq/blocks-engine";
-import { Button, Popover, PopoverContent, PopoverTrigger } from "@nextlyhq/ui";
+import {
+  Button,
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@nextlyhq/ui";
 import { ChevronDown } from "lucide-react";
 import * as React from "react";
 
@@ -83,11 +88,12 @@ const SYSTEM_STACKS: ReadonlyArray<readonly [string, string]> = [
   ["System rounded", "ui-rounded, sans-serif"],
 ];
 
-const GROUPS: ReadonlyArray<{ group: RoleChoice["group"]; heading: string }> = [
-  { group: "start", heading: "" },
-  { group: "site", heading: "On this site" },
-  { group: "system", heading: "System" },
-];
+const GROUPS: ReadonlyArray<{ group: RoleChoice["group"]; heading: string }> =
+  [
+    { group: "start", heading: "" },
+    { group: "site", heading: "On this site" },
+    { group: "system", heading: "System" },
+  ];
 
 /** What a role says while it writes nothing. */
 function unsetWords(role: FontRole): string {
@@ -122,10 +128,7 @@ function choicesFor(
 
 /** A stack as two equal stacks compare: no spacing, no case. */
 function normalised(stack: string): string {
-  return stack
-    .replace(/\s*,\s*/g, ",")
-    .trim()
-    .toLowerCase();
+  return stack.replace(/\s*,\s*/g, ",").trim().toLowerCase();
 }
 
 /**
@@ -144,7 +147,8 @@ function choiceOf(
   if (exact !== undefined) return exact;
   const first = firstFamily(stack);
   return choices.find(
-    choice => choice.stack !== undefined && firstFamily(choice.stack) === first
+    choice =>
+      choice.stack !== undefined && firstFamily(choice.stack) === first
   );
 }
 
@@ -243,9 +247,7 @@ function FontRoleRow({
       <span
         className="nx-font-roles__specimen"
         aria-hidden="true"
-        style={
-          shown.drawn === undefined ? undefined : { fontFamily: shown.drawn }
-        }
+        style={shown.drawn === undefined ? undefined : { fontFamily: shown.drawn }}
       >
         Aa
       </span>
