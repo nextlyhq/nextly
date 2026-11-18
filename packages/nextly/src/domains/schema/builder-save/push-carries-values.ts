@@ -17,9 +17,9 @@ import {
 
 /**
  * Whether the save carries values across its change, which the dialog's push does and the file,
- * written from the newest snapshot, does not yet: a Required or Unique field leaving translation,
- * whose setting the push applies once the default language's values are in its shared column
- * (`fieldsWithLeavingSettingsDeferred`); a field whose column changes type or size, whose stored
+ * written from the newest snapshot, does not yet: a Required or Unique field renamed as it leaves
+ * translation, whose setting the push applies once the default language's values are in its new
+ * shared column (`fieldsWithLeavingSettingsDeferred`); a field whose column changes type or size, whose stored
  * values the push judges before it alters the column; a field new to a Single's table that its row
  * is filled in; and a change reaching a relation's storage (`reachesRelationStorage`), which the
  * push plans from the live table.
@@ -55,18 +55,12 @@ export async function pushCarriesValues(args: {
     holdsRow: () => Promise<boolean>;
   };
 }): Promise<boolean> {
-  // A Required or Unique field leaving translation: the push adds its shared column without the
-  // setting, copies the default language's values in, then sets it. The file adds the column with
-  // the setting before any value is there, refused for every table that has rows.
-  if (
-    fieldsWithLeavingSettingsDeferred({
-      oldFields: args.oldFields,
-      newFields: args.newFields,
-      wasLocalized: args.wasStored,
-      isLocalized: args.isStored,
-      renamed: args.renamed,
-    }) !== undefined
-  ) {
+  // A Required or Unique field renamed as it leaves translation: the file, which finds a field
+  // leaving by its name on the companion, adds the renamed column with its setting before any
+  // value is there, refused for every table that has rows. The push adds it without the setting,
+  // copies the default language's values in from the old column, then sets it. Under its own name
+  // the file does the same as the push (`migrate:create`'s held-back settings).
+  if (args.renamed && renamedFieldLeavesWithSetting(args, args.renamed)) {
     return true;
   }
   // A field whose column changes type or size: the push judges every stored value against the new
@@ -142,4 +136,32 @@ async function fillsSingleRow(
     field => !kept.has(toSnakeCase(field.name)) && row.fills(field)
   );
   return filled && (await row.holdsRow());
+}
+
+/**
+ * Whether the field `renamed` names leaves translation under its new name with a Required or
+ * Unique setting the push holds back until its values are copied in.
+ */
+function renamedFieldLeavesWithSetting(
+  args: {
+    oldFields: readonly FieldDefinition[];
+    newFields: readonly FieldDefinition[];
+    wasStored: boolean;
+    isStored: boolean;
+  },
+  renamed: FieldRename
+): boolean {
+  const deferred = fieldsWithLeavingSettingsDeferred({
+    oldFields: args.oldFields,
+    newFields: args.newFields,
+    wasLocalized: args.wasStored,
+    isLocalized: args.isStored,
+    renamed,
+  });
+  // A field held back is a new object; every other is the field as it was given.
+  return (
+    deferred?.some(
+      (field, i) => field !== args.newFields[i] && field.name === renamed.to
+    ) === true
+  );
 }
