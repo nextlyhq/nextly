@@ -1142,22 +1142,11 @@ export function useSaveSiteStyle(): SiteStyleWrite {
    * after the writes before it, and the step is filled with the two halves
    * of the section, or given up when the route stored nothing or refused.
    */
-  const changeThrough = useCallback(
-    async (
-      section: SiteStyleSection,
-      change: (before: unknown) => Promise<unknown>
-    ): Promise<void> =>
-      changedThrough(
-        {
-          history,
-          take: () => reserve(section),
-          tail: settled => chainOf(settled, section).tail,
-          read: () => storedSection(stored.current, section),
-        },
-        change
-      ),
-    [history, reserve, chainOf]
-  );
+  const changeThrough = (
+    section: SiteStyleSection,
+    change: (before: unknown) => Promise<unknown>
+  ): Promise<void> =>
+    changedThrough({ history, reserve, chainOf, stored }, section, change);
 
   const reread = useCallback(() => {
     void refetch();
@@ -1191,22 +1180,27 @@ function holdsNow(chain: SectionChain, after: unknown): void {
 async function changedThrough(
   editor: {
     readonly history: SiteStyleHistory | null;
-    /** Takes the change's place in the history. */
-    readonly take: () => SiteStyleSlot;
-    /** The section once every write before the change has answered. */
-    readonly tail: (settled: SiteStyleHistory["settled"]) => Promise<unknown>;
-    /** The section as read, outside the editor. */
-    readonly read: () => unknown;
+    /** Takes a change's place in the history. */
+    readonly reserve: (section: SiteStyleSection) => SiteStyleSlot;
+    /** A section's chain of writes in this editor. */
+    readonly chainOf: (
+      settled: SiteStyleHistory["settled"],
+      section: SiteStyleSection
+    ) => SectionChain;
+    /** The stored document as read. */
+    readonly stored: { readonly current: unknown };
   },
+  section: SiteStyleSection,
   change: (before: unknown) => Promise<unknown>
 ): Promise<void> {
-  if (editor.history === null) {
-    await change(editor.read());
+  const { history } = editor;
+  if (history === null) {
+    await change(storedSection(editor.stored.current, section));
     return;
   }
-  const slot = editor.take();
+  const slot = editor.reserve(section);
   try {
-    const before = await editor.tail(editor.history.settled);
+    const before = await editor.chainOf(history.settled, section).tail;
     const after = await change(before);
     if (after === undefined) slot.cancel();
     else slot.stored(before, after);
