@@ -541,6 +541,12 @@ export { VisitorUnreadableProvider } from "./visitor-unreadable-context";
  */
 export { RecentColoursStore } from "./recent-colours";
 /**
+ * @experimental The colours every colour picker in the builder leaves out
+ * while the site hides its unused built-in colours, provided once around
+ * the shell, and the read a host provides it from.
+ */
+export { HiddenColours, useHiddenColoursRead } from "./built-in-colours";
+/**
  * @experimental A template's document with an entry's own blocks composed
  * into its Entry content block, as the canvas draws it, for a host asking
  * for the sources the drawn page's bindings read.

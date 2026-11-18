@@ -81,6 +81,7 @@ import {
 } from "./media-summary-reader";
 import { usePageDataCount } from "./page-read-meter";
 import { useReadBack } from "./read-back";
+import { EditorHiddenColours } from "./hidden-colours";
 import { recentColoursStore } from "./recent-colours-store";
 import { regionRefusal } from "./region-card";
 import { useReveal } from "./reveal-hidden";
@@ -685,7 +686,11 @@ function EditorBody<TFieldValues extends FieldValues>({
     // Fills the view's area, under the admin's lock and recovery notices for
     // this document, rather than covering the window over them. A component's
     // own view carries its banner above the editor.
-    <EditorFrame banner={componentView.banner} userId={mount.userId}>
+    <EditorFrame
+      banner={componentView.banner}
+      userId={mount.userId}
+      view={view}
+    >
       {/* The bound props a visitor will not see, for the inspector's note
           under each; the canvas's badges are handed the same answer. */}
       <VisitorUnreadableProvider value={view.visitorUnreadable}>
@@ -941,16 +946,20 @@ function shellExit(
  * The editor's area: the whole of it for a page, and under the banner for a
  * component's own view, so the banner takes its height and the shell the rest.
  * The author's Recent colours are provided here, around the whole editor, so
- * the Design panel's colour pickers and the inspector's read one list.
+ * the Design panel's colour pickers and the inspector's read one list; and
+ * the built-in colours the site hides, which every one of them leaves out.
  */
 function EditorFrame({
   banner,
   userId,
+  view,
   children,
 }: {
   banner: React.ReactNode;
   /** The signed-in author, whose Recent colours these are. */
   userId: string | null;
+  /** The editor's view, which the hidden colours are read from. */
+  view: React.ComponentProps<typeof EditorHiddenColours>["view"];
   children: React.ReactNode;
 }): React.JSX.Element {
   const recentColours = useMemo(() => recentColoursStore(userId), [userId]);
@@ -960,7 +969,7 @@ function EditorFrame({
   const body = (
     <RecentColoursStore.Provider value={recentColours}>
       <InsertUsageContext.Provider value={insertCounts}>
-        {children}
+        <EditorHiddenColours view={view}>{children}</EditorHiddenColours>
       </InsertUsageContext.Provider>
     </RecentColoursStore.Provider>
   );

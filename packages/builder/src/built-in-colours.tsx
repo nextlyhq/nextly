@@ -55,16 +55,11 @@ export function withBuiltInColoursShown(
   return { ...tokens, builtInColoursShown: shown };
 }
 
-/** The identities of the colours among `tokens` that `supplied` supplies. */
-function builtInColourIds(
-  tokens: SiteTokenSet | undefined,
-  supplied: SiteTokenSet | undefined
-): string[] {
-  const builtIn = new Set((supplied?.tokens ?? []).map(tokenIdentity));
-  return (tokens?.tokens ?? [])
+/** The identities of the built-in colours: those `supplied` supplies. */
+function builtInColourIds(supplied: SiteTokenSet | undefined): string[] {
+  return (supplied?.tokens ?? [])
     .filter(token => token.kind === "color")
-    .map(tokenIdentity)
-    .filter(identity => builtIn.has(identity));
+    .map(tokenIdentity);
 }
 
 /** How long after a change of the variables their use is read again. */
@@ -96,8 +91,8 @@ export function useHiddenColoursRead({
 }): ReadonlySet<string> {
   const shown = builtInColoursShown(tokens);
   const builtIns = React.useMemo(
-    () => (shown ? [] : builtInColourIds(tokens, supplied)),
-    [shown, tokens, supplied]
+    () => (shown ? [] : builtInColourIds(supplied)),
+    [shown, supplied]
   );
   const { values, readAgain } = useVariableUsage(access, builtIns);
   useHiddenReadAgain(shown, tokens, builtIns, readAgain);
