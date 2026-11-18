@@ -389,50 +389,57 @@ async function countLinksDropped(
   const dropped = new Map<string, LinksDropped>();
   for (const before of currentFields) {
     const after = afterByName.get(before.name);
-    if (after === undefined) continue;
-    const hadTable = usesJunctionTable(before);
-    const hasTable = usesJunctionTable(after);
-    // Kept a many-to-many and pointed the same way, its link table is carried
-    // (`sameRelationTarget`, the save's own pairing); otherwise neither moves a link.
-    if (!hadTable && !hasTable) continue;
-    if (hadTable && hasTable && sameRelationTarget(before, after)) continue;
-    if (!hadTable) {
-      const counts = await computeNonNullCounts(
-        db,
-        dialect,
-        at.tableName,
-        at.localized,
-        [before]
-      );
-      dropped.set(before.name, {
-        count: counts[before.name] ?? UNCOUNTED,
-        before,
-        after,
-        direction: "joining",
-      });
-      continue;
-    }
-    try {
-      const { total } = await countRowsBreakingNotNull(db, dialect, {
-        table: junctionTableNameFor(at.tableName, before),
-        column: null,
-      });
-      dropped.set(before.name, {
-        count: { rowCount: total, unknown: false },
-        before,
-        after,
-        direction: hasTable ? "retargeted" : "leaving",
-      });
-    } catch {
-      dropped.set(before.name, {
-        count: UNCOUNTED,
-        before,
-        after,
-        direction: hasTable ? "retargeted" : "leaving",
-      });
-    }
+    const direction = after && linkMoveOf(before, after);
+    if (!after || !direction) continue;
+    const count =
+      direction === "joining"
+        ? ((
+            await computeNonNullCounts(
+              db,
+              dialect,
+              at.tableName,
+              at.localized,
+              [before]
+            )
+          )[before.name] ?? UNCOUNTED)
+        : await countJunctionLinks(db, dialect, at.tableName, before);
+    dropped.set(before.name, { count, before, after, direction });
   }
   return dropped;
+}
+
+/**
+ * Which way a kept relationship's links move, if they do: into a link table, out of one, or to a
+ * new one for another target. Kept a many-to-many and pointed the same way, its link table is
+ * carried (`sameRelationTarget`, the save's own pairing), so no link moves.
+ */
+function linkMoveOf(
+  before: FieldDefinition,
+  after: FieldDefinition
+): LinksDropped["direction"] | null {
+  const hadTable = usesJunctionTable(before);
+  const hasTable = usesJunctionTable(after);
+  if (!hadTable) return hasTable ? "joining" : null;
+  if (!hasTable) return "leaving";
+  return sameRelationTarget(before, after) ? null : "retargeted";
+}
+
+/** The links a many-to-many's link table holds, or unknown where they cannot be counted. */
+async function countJunctionLinks(
+  db: unknown,
+  dialect: SupportedDialect,
+  tableName: string,
+  field: FieldDefinition
+): Promise<RemovedCount> {
+  try {
+    const { total } = await countRowsBreakingNotNull(db, dialect, {
+      table: junctionTableNameFor(tableName, field),
+      column: null,
+    });
+    return { rowCount: total, unknown: false };
+  } catch {
+    return UNCOUNTED;
+  }
 }
 
 /** What a relationship is called on the side of the move that keeps no link table. */
