@@ -191,8 +191,11 @@ test("adds site code from Settings, says what it is, and it runs on a public pag
       .getByRole("navigation", { name: "Editor panels" })
       .getByRole("button", { name: "Settings" })
       .click();
-    const dialog = page.getByRole("dialog", { name: "Settings" });
-    await dialog.getByRole("tab", { name: "Site" }).click();
+    await page
+      .getByRole("dialog", { name: /^Page settings · / })
+      .getByRole("button", { name: "Site settings" })
+      .click();
+    const dialog = page.getByRole("dialog", { name: "Site settings" });
     const section = dialog.getByRole("region", { name: "Code" });
     await expect(section.getByText("Nothing yet")).toHaveCount(2);
     await section.getByRole("button", { name: "Add code" }).click();
