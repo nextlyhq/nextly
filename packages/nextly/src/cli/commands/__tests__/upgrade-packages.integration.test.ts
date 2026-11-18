@@ -56,10 +56,10 @@ afterEach(() => {
   for (const project of projects.splice(0)) project.remove();
 });
 
-function project(
+async function project(
   args: Omit<Parameters<typeof createProject>[0], "registry">
-): UpgradeProject {
-  const made = createProject({ ...args, registry });
+): Promise<UpgradeProject> {
+  const made = await createProject({ ...args, registry });
   projects.push(made);
   return made;
 }
@@ -103,7 +103,7 @@ describe("nextly upgrade moves every Nextly package to one release", () => {
       it(
         "with no version, moves each to the release its channel's tag names, exactly, and says what to run next",
         async () => {
-          const app = project({ manager, versions: OLDEST });
+          const app = await project({ manager, versions: OLDEST });
           // The fixture's control: installed where the command starts from.
           expect(versions(app)).toEqual(allAt(OLDEST));
 
@@ -123,7 +123,7 @@ describe("nextly upgrade moves every Nextly package to one release", () => {
       it(
         "moves to an older release when it is named",
         async () => {
-          const app = project({ manager, versions: MIDDLE });
+          const app = await project({ manager, versions: MIDDLE });
 
           const run = await app.nextly(["upgrade", OLDEST]);
 
@@ -136,7 +136,7 @@ describe("nextly upgrade moves every Nextly package to one release", () => {
       it(
         "moves a package held at another version into lockstep",
         async () => {
-          const app = project({
+          const app = await project({
             manager,
             versions: {
               nextly: OLDEST,
@@ -157,16 +157,19 @@ describe("nextly upgrade moves every Nextly package to one release", () => {
       it(
         "leaves package.json, the lockfile and every installed package as they were when the registry fails part-way",
         async () => {
-          const app = project({ manager, versions: OLDEST });
+          const app = await project({ manager, versions: OLDEST });
           const before = app.files();
-          // The second package's download fails, after the first has come.
+          const downloadsBefore = registry.downloads.length;
+          // One package's download fails; the others' are served.
           registry.failDownloadOf(`@nextlyhq/admin@${UNSERVED}`);
 
           const run = await app.nextly(["upgrade", UNSERVED]);
 
           expect(run.status, output(run)).toBe(1);
-          // The control: the install did reach the registry for the release.
-          expect(registry.downloads).toContain(`@nextlyhq/admin@${UNSERVED}`);
+          // The control: this run's install did reach the registry for it.
+          expect(registry.downloads.slice(downloadsBefore)).toContain(
+            `@nextlyhq/admin@${UNSERVED}`
+          );
           expect(app.files()).toEqual(before);
           expect(versions(app)).toEqual(allAt(OLDEST));
           expect(output(run)).toContain("(UPGRADE_INSTALL_FAILED)");
@@ -182,7 +185,7 @@ describe("nextly upgrade moves every Nextly package to one release", () => {
       async () => {
         // npm runs `dependencies` once it has changed `node_modules` and both
         // files. It passes for the fixture's install and fails once asked to.
-        const app = project({
+        const app = await project({
           manager: "npm",
           versions: OLDEST,
           manifest: {
@@ -193,11 +196,18 @@ describe("nextly upgrade moves every Nextly package to one release", () => {
           },
         });
         const before = app.files();
+        const downloadsBefore = registry.downloads.length;
         writeFileSync(join(app.dir, "fail-now"), "");
 
         const run = await app.nextly(["upgrade"]);
 
         expect(run.status, output(run)).toBe(1);
+        // The control: npm did fetch the new release, so `node_modules` had
+        // changed by the time the script failed.
+        expect(registry.downloads.slice(downloadsBefore)).toContain(
+          `nextly@${MIDDLE}`
+        );
+        expect(output(run)).toContain("(UPGRADE_INSTALL_FAILED)");
         expect(app.files()).toEqual(before);
         expect(versions(app)).toEqual(allAt(OLDEST));
       },
@@ -210,7 +220,7 @@ describe("nextly upgrade with no version follows the installed release's channel
   it(
     "changes nothing on the channel's newest release, exits 0, and names the newer release another tag holds",
     async () => {
-      const app = project({ manager: "npm", versions: MIDDLE });
+      const app = await project({ manager: "npm", versions: MIDDLE });
       const before = app.files();
 
       const run = await app.nextly(["upgrade"]);
@@ -227,7 +237,7 @@ describe("nextly upgrade with no version follows the installed release's channel
   it(
     "follows latest from a release with no prerelease identifier",
     async () => {
-      const app = project({ manager: "npm", versions: STABLE });
+      const app = await project({ manager: "npm", versions: STABLE });
 
       const run = await app.nextly(["upgrade"]);
 
@@ -253,7 +263,7 @@ describe("nextly upgrade with no version follows the installed release's channel
   it(
     "changes nothing and exits 1 on a channel the registry has no tag for, naming every tag",
     async () => {
-      const app = project({ manager: "npm", versions: CANDIDATE });
+      const app = await project({ manager: "npm", versions: CANDIDATE });
       const before = app.files();
 
       const run = await app.nextly(["upgrade"]);
@@ -270,7 +280,7 @@ describe("nextly upgrade with no version follows the installed release's channel
   it(
     "does the same where the packages are not installed",
     async () => {
-      const app = project({ manager: "npm", versions: OLDEST, install: false });
+      const app = await project({ manager: "npm", versions: OLDEST, install: false });
       const before = app.files();
 
       const run = await app.nextly(["upgrade"]);
@@ -287,7 +297,7 @@ describe("nextly upgrade with no version follows the installed release's channel
   it.each([`9.0.0-beta.9`, "not-a-version"])(
     "refuses %s, which is not a published release, naming the installed channel's release",
     async given => {
-      const app = project({ manager: "npm", versions: OLDEST });
+      const app = await project({ manager: "npm", versions: OLDEST });
       const before = app.files();
 
       const run = await app.nextly(["upgrade", given]);
@@ -304,7 +314,7 @@ describe("nextly upgrade with no version follows the installed release's channel
   it.each([`9.0.0-beta.9`, "not-a-version"])(
     "refuses %s with every tag where the packages are not installed",
     async given => {
-      const app = project({ manager: "npm", versions: OLDEST, install: false });
+      const app = await project({ manager: "npm", versions: OLDEST, install: false });
       const before = app.files();
 
       const run = await app.nextly(["upgrade", given]);

@@ -7,7 +7,7 @@
  * release has, so an install takes a moment and nothing can come from the
  * network. The command under test runs from source, as a process.
  */
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
@@ -76,12 +76,39 @@ function scrubbed(): NodeJS.ProcessEnv {
   return env;
 }
 
-/** Whether `manager` can be run on this machine. */
+/** Whether `manager` can be run on this machine. It asks no registry, so it may block. */
 export function hasManager(manager: Manager): boolean {
   return (
-    spawnSync(manager, ["--version"], { env: scrubbed(), encoding: "utf8" })
-      .status === 0
+    spawnSync(manager, ["--version"], {
+      env: scrubbed(),
+      encoding: "utf8",
+      timeout: 60_000,
+    }).status === 0
   );
+}
+
+/**
+ * Runs `manager <args>` in `cwd` without blocking this process: the
+ * registry it downloads from is served by this process, so a synchronous
+ * run would wait for an answer that cannot come. Ended after a minute.
+ */
+function runManager(
+  manager: Manager,
+  args: string[],
+  cwd: string
+): Promise<{ status: number | null; output: string }> {
+  return new Promise(settle => {
+    const child = spawn(manager, args, {
+      cwd,
+      env: scrubbed(),
+      timeout: 60_000,
+    });
+    let output = "";
+    child.stdout.setEncoding("utf8").on("data", chunk => (output += chunk));
+    child.stderr.setEncoding("utf8").on("data", chunk => (output += chunk));
+    child.on("error", error => (output += `\n${error.message}`));
+    child.on("close", status => settle({ status, output }));
+  });
 }
 
 /** The lockfile each manager keeps, newest spelling first. */
@@ -113,14 +140,14 @@ export interface UpgradeProject {
  * version for all, or one per package), with its registry settings written
  * as each manager reads them. Installed unless `install` is false.
  */
-export function createProject(args: {
+export async function createProject(args: {
   manager: Manager;
   registry: LocalRegistry;
   versions: string | Readonly<Record<string, string>>;
   install?: boolean;
   /** Extra `package.json` fields, such as `scripts`. */
   manifest?: Readonly<Record<string, unknown>>;
-}): UpgradeProject {
+}): Promise<UpgradeProject> {
   const { manager, registry } = args;
   const dir = mkdtempSync(join(tmpdir(), `nextly-upgrade-${manager}-`));
   const versionOf = (name: string) =>
@@ -193,15 +220,11 @@ export function createProject(args: {
   };
 
   if (args.install !== false) {
-    const run = spawnSync(manager, ["install"], {
-      cwd: dir,
-      env: scrubbed(),
-      encoding: "utf8",
-    });
+    const run = await runManager(manager, ["install"], dir);
     if (run.status !== 0) {
       project.remove();
       throw new Error(
-        `${manager} install failed in the fixture:\n${run.stdout}\n${run.stderr}`
+        `${manager} install failed in the fixture (status ${String(run.status)}):\n${run.output}`
       );
     }
   }
