@@ -221,7 +221,7 @@ Layout templates also support `{{variable}}` interpolation, so common variables 
 
 ## Templates written in blocks
 
-A template is either **coded**, written in HTML as described above (in Liquid, or on the older `{{variable}}` engine for a template kept on it), or **written**: a short list of content blocks, with variables placed as chips. A written template always renders as Liquid. A written template is drawn in its layout and your brand settings, and its HTML and plain text are written from its blocks each time it renders, so a preview, a test send and a real send of the same data are the same email.
+A template is either **coded**, written in HTML as described above (in Liquid, or on the older `{{variable}}` engine for a template kept on it), or **written**: a short list of content blocks, with variables placed as chips. A written template always renders as Liquid. A written template is drawn in its layout and your brand settings, and its HTML and plain text are written from its blocks each time it renders, so a preview, a test send and a real send of the same saved template, with the same layout, brand settings and data, are the same email.
 
 Every template you already have stays coded, unchanged. Nothing turns a coded template into blocks.
 
@@ -239,7 +239,7 @@ Written templates are `@experimental`: `format`, `blocks` and the shapes below m
 | `spacer`  | Empty space, 4 to 96 px high (24 when left out).                                                            |
 | `list`    | Blocks repeated for each item of a list variable. A list can't hold another list; it holds up to 50 blocks. |
 
-A template holds up to 200 blocks. A link is `{ "url": "https://…" }` or `{ "chip": { "variable": "orderUrl" } }`. Links take complete `https`, `http` and `mailto` addresses, and images `https` and `http` ones. An address written in the blocks is refused when saved, and one a variable supplies at send time is left out. Links in text stay readable in a dark inbox.
+A template holds up to 200 blocks at its top level, a list counting as one; a list holds up to 50 blocks of its own. A link is `{ "url": "https://…" }` or `{ "chip": { "variable": "orderUrl" } }`. Links take complete `https`, `http` and `mailto` addresses, and images `https` and `http` ones. An invalid address written in the blocks is refused when saved, and an invalid one a variable supplies at send time is left out. Links in text stay readable in a dark inbox.
 
 ### Variables and fallbacks
 
@@ -249,9 +249,10 @@ Each chip is made safe for where it sits:
 
 - In headings, text and button labels, the value is escaped as text.
 - In a link, the value must be a complete `https`, `http` or `mailto` address, and in an image address a complete `https` or `http` one. It is escaped as an attribute, and any other value is left out.
-- In the subject, preview text and From name, it is plain text with line breaks removed.
+- In the subject and From name, it is plain text with line breaks removed.
+- In the preview text, it is escaped as text, as the inbox's preview line is HTML.
 - In the plain-text body, it is plain text, without markup.
-- In Reply-To, it must be an email address.
+- Reply-To must render as one email address. When it renders empty, the email has no Reply-To; anything else fails the send.
 
 ### Showing a block only sometimes
 
@@ -312,7 +313,7 @@ await nextly.emailTemplates.create({
 });
 ```
 
-The REST route takes the same body: `POST /admin/api/email-templates`.
+The REST route, `POST /admin/api/email-templates`, takes the contents of `data` as its JSON body, without the `data` wrapper.
 
 ### Converting to code
 
