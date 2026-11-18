@@ -34,8 +34,8 @@ export interface DraftRename {
   previousName: string;
   /** Its name in the draft. */
   name: string;
-  /** Whether the same draft makes it required, which it was not as saved. */
-  madeRequired?: boolean;
+  /** Whether the same draft turns its Required on or off. */
+  requiredChanged?: boolean;
 }
 
 /** The renames among a draft's pending changes: every saved field whose name changed. */
@@ -48,7 +48,7 @@ export function draftRenamesOf(
       label: change.label || change.name,
       previousName: change.previousName ?? "",
       name: change.name,
-      madeRequired: change.madeRequired === true,
+      requiredChanged: change.requiredChanged === true,
     }));
 }
 
@@ -61,10 +61,11 @@ export interface RenameNotKept {
   /** The pair is offered, but the column's values would not come through it unchanged. */
   valuesChange: boolean;
   /**
-   * The same save makes the field required. The save converts the pair as a rename, which keeps the
-   * column as it was, so the field would be saved required over a column that is not.
+   * The same save turns the field's Required on or off. The save converts the pair as a rename,
+   * which keeps the column's not-null as it was, so the field would be saved required over a column
+   * that allows empty values, or optional over one that still refuses them.
    */
-  madeRequired?: boolean;
+  requiredChanged?: boolean;
   /** The preview's reason the values change, when it gives one. */
   reason?: string;
 }
@@ -92,11 +93,11 @@ export function renameAnswers(
       sameColumn.push(rename);
       continue;
     }
-    if (rename.madeRequired === true) {
+    if (rename.requiredChanged === true) {
       return {
         decided,
         sameColumn,
-        missing: { rename, valuesChange: false, madeRequired: true },
+        missing: { rename, valuesChange: false, requiredChanged: true },
       };
     }
     const pairs = candidates.filter(c => c.from === from && c.to === to);
@@ -168,8 +169,8 @@ export function withDecidedRenames(
 export function renameNotOffered(notKept: RenameNotKept): string {
   const { rename } = notKept;
   const renamed = `${rename.label} was renamed from ${rename.previousName} to ${rename.name}`;
-  if (notKept.madeRequired === true) {
-    return `${renamed} and made required, which one save cannot do while keeping its values. Save the rename on its own, then make the field required.`;
+  if (notKept.requiredChanged === true) {
+    return `${renamed} and its Required changed, which one save cannot do while keeping its values. Save the rename on its own, then change Required.`;
   }
   const why = notKept.valuesChange
     ? `, but this save would not carry its values over unchanged${notKept.reason ? ` (${notKept.reason})` : ""}`
@@ -182,8 +183,8 @@ export function renameNotOffered(notKept: RenameNotKept): string {
  * and a rename that keeps its column (`sameColumn`), is no field removed beside one added, and no
  * pair left to choose for, so its fields leave those lists. Its new column needs no default either:
  * the preview asks for one for a required field's column before the pair is answered, but the
- * rename brings the field's values with it (a field the same save makes required is refused
- * before the review, by `renameAnswers`). The save is then called destructive only when
+ * rename brings the field's values with it (a field whose Required the same save changes is
+ * refused before the review, by `renameAnswers`). The save is then called destructive only when
  * something else still deletes values, and asks only what is still the person's to answer.
  */
 export function previewWithDecidedRenames(

@@ -751,7 +751,7 @@ describe("a rename the Builder made", () => {
   const rename = (
     previousName: string,
     name: string,
-    madeRequired = false
+    requiredChanged = false
   ): PendingChange => ({
     kind: "renamed",
     fieldId: `f-${previousName}`,
@@ -759,7 +759,7 @@ describe("a rename the Builder made", () => {
     previousName,
     name,
     type: "text",
-    madeRequired,
+    requiredChanged,
   });
 
   it("is answered as a rename, whatever the dialog chose, on every table holding it", async () => {
@@ -939,9 +939,10 @@ describe("a rename the Builder made", () => {
     expect(confirmation.request).not.toHaveBeenCalled();
   });
 
-  // The save answers the pair as a rename without the field's new not-null, so a rename the same
-  // save makes required would be saved required while its column stays nullable.
-  it("saves nothing for a rename the same save makes required", async () => {
+  // The save answers the pair as a rename, which keeps the column's not-null as it was, so a rename
+  // whose Required the same save changes would be saved with a column that disagrees: made
+  // required over a nullable column, or made optional over one that still refuses an empty value.
+  it("saves nothing for a rename the same save changes Required of", async () => {
     const confirmation = confirmationStub();
     const { result } = setup({
       confirmation,
@@ -957,7 +958,7 @@ describe("a rename the Builder made", () => {
 
     await waitFor(() => expect(toastError).toHaveBeenCalledTimes(1));
     expect(toastError.mock.calls[0][0]).toContain(
-      "Save the rename on its own, then make the field required."
+      "Save the rename on its own, then change Required."
     );
     expect(confirmation.request).not.toHaveBeenCalled();
   });

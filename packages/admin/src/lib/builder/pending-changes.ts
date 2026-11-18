@@ -40,8 +40,8 @@ export interface PendingChange {
   name: string;
   /** For a rename, the name as saved. */
   previousName?: string;
-  /** For a rename, whether the same draft makes the field required, which it was not as saved. */
-  madeRequired?: boolean;
+  /** For a rename, whether the same draft turns the field's Required on or off. */
+  requiredChanged?: boolean;
   /** The field's type now, or as saved when it is deleted. */
   type: string;
   /** For a type change, the type as saved. */
@@ -304,9 +304,9 @@ function changesOfKept(
     changes.push(
       changeOf("renamed", field, {
         previousName: was.name ?? "",
-        madeRequired:
-          was.validation?.required !== true &&
-          field.validation?.required === true,
+        requiredChanged:
+          (was.validation?.required === true) !==
+          (field.validation?.required === true),
       })
     );
   }
