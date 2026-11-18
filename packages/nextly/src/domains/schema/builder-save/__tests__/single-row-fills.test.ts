@@ -5,7 +5,10 @@
 import { describe, expect, it } from "vitest";
 
 import type { FieldDefinition } from "../../../../schemas/dynamic-collections";
-import { dialogRowAnswers } from "../single-row-fills";
+import {
+  dialogRowAnswers,
+  reviewWithRowFillsSettled,
+} from "../single-row-fills";
 
 const TABLE = "single_srf_home";
 
@@ -134,5 +137,49 @@ describe("a Single's row answers", () => {
       [BODY, { name: "note", type: "text", virtual: true, defaultValue: "V" }]
     );
     expect(fileAnswers.rowFills ?? []).toEqual([]);
+  });
+});
+
+// The review as the save applies it: a required field its row is filled for asks nothing.
+describe("a review settled by a Single's row fills", () => {
+  /** The legacy review of one added required field the row is filled for, and nothing else. */
+  const review = {
+    hasChanges: true,
+    // The translator rolls every non-safe result up as destructive.
+    hasDestructiveChanges: true,
+    classification: "interactive",
+    changes: {
+      added: [{ name: "tagLine", classification: "interactive" }],
+      removed: [],
+      changed: [],
+    },
+    // Asked about by its column, as the pipeline names it.
+    interactiveFields: [{ name: "tag_line" }],
+  };
+
+  it("asks nothing about the field, matched by its column", () => {
+    const settled = reviewWithRowFillsSettled(review, new Set(["tagLine"]));
+    expect(settled.interactiveFields).toEqual([]);
+  });
+
+  it("is safe when nothing else changes, with no destructive flag", () => {
+    const settled = reviewWithRowFillsSettled(review, new Set(["tagLine"]));
+    expect(settled.classification).toBe("safe");
+    expect(settled.hasDestructiveChanges).toBe(false);
+  });
+
+  it("stays destructive for another change that is", () => {
+    const settled = reviewWithRowFillsSettled(
+      {
+        ...review,
+        changes: {
+          ...review.changes,
+          removed: [{ name: "body", classification: "destructive" }],
+        },
+      },
+      new Set(["tagLine"])
+    );
+    expect(settled.classification).toBe("destructive");
+    expect(settled.hasDestructiveChanges).toBe(true);
   });
 });

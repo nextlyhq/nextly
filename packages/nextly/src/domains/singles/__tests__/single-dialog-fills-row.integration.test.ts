@@ -195,6 +195,35 @@ describeEachDialect(
       expect(body.classification).not.toBe("interactive");
     });
 
+    it("does not ask about a camelCase required field stating a default, and calls the review safe", async () => {
+      const answer = await dispatchSingles(
+        "previewSingleSchemaChanges",
+        { slug: "sdf_home" },
+        {
+          fields: [
+            BODY,
+            {
+              name: "tagLine",
+              type: "text",
+              required: true,
+              defaultValue: "Draft",
+            },
+          ],
+        }
+      );
+      const preview = (
+        answer instanceof Response ? await answer.json() : answer
+      ) as { data?: unknown } & Record<string, unknown>;
+      const body = (preview.data ?? preview) as {
+        interactiveFields?: { name: string }[];
+        classification?: string;
+        hasDestructiveChanges?: boolean;
+      };
+      expect(body.interactiveFields ?? []).toEqual([]);
+      expect(body.classification).toBe("safe");
+      expect(body.hasDestructiveChanges).toBe(false);
+    });
+
     it("still asks about a required field stating no default", async () => {
       await expect(
         save([BODY, { name: "tagline", type: "text", required: true }])
