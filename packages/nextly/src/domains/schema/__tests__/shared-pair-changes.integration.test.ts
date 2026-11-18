@@ -46,12 +46,16 @@ const SEO = {
 /** Each change to one field of the pair, as the fields a save sends after it. */
 const CHANGES = {
   rename: [SHARED, { name: "headline", type: "text" }, SEO],
+  // The snake-case field moves, so the Builder's name rule (snake case for a name it creates) is
+  // no reason for a refusal; `siteName` stays on the column.
   move: [
-    SHARED,
-    { ...SEO, fields: [...SEO.fields, { name: "siteName", type: "text" }] },
+    PAIRED,
+    { ...SEO, fields: [...SEO.fields, { name: "site_name", type: "text" }] },
   ],
   removal: [SHARED, SEO],
   typeChange: [SHARED, { name: "siteName", type: "number" }, SEO],
+  nullability: [SHARED, { ...PAIRED, required: true }, SEO],
+  default: [SHARED, { ...PAIRED, defaultValue: "Draft" }, SEO],
 } as const;
 type Change = keyof typeof CHANGES;
 
@@ -235,10 +239,18 @@ describeEachDialect(
           expect
             .soft(valuesIn(after.rows, "site_name"), "the other field's values")
             .toEqual(kept(road));
-          if (change === "typeChange") {
+          if (
+            change === "typeChange" ||
+            change === "nullability" ||
+            change === "default"
+          ) {
+            // Refused as the pair's, before any judgement of the values: naming both fields.
             expect
               .soft(outcome, "a change to the shared column is refused")
               .not.toBe("accepted");
+            expect
+              .soft(JSON.stringify(outcome), "the refusal names both fields")
+              .toMatch(/site_name.*siteName|siteName.*site_name/);
           } else {
             expect.soft(outcome, "the change is accepted").toBe("accepted");
           }
@@ -252,7 +264,7 @@ describeEachDialect(
           }
           if (change === "move") {
             expect
-              .soft(keyIn(after.rows, "siteName"), "the moved field's copy")
+              .soft(keyIn(after.rows, "site_name"), "the moved field's copy")
               .toEqual(kept(road));
           }
         });
