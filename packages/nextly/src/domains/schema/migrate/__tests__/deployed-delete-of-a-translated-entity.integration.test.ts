@@ -55,6 +55,7 @@ import {
 import type { ServiceContainer } from "../../../../services";
 import { _resetEnvCache } from "../../../../shared/lib/env";
 import { clearRegistryRowCache } from "../../../dynamic-collections/services/collection-row-cache";
+import { ensureI18nArchive } from "../../../i18n/migration/ensure-archive";
 import type { SingleEntryService } from "../../../singles/services/single-entry-service";
 import { resolveSingleTableName } from "../../../singles/services/resolve-single-table-name";
 import { resolveComponentTableName } from "../../utils/resolve-table-name";
@@ -68,6 +69,49 @@ vi.mock("../../../../cli/utils/config-loader", async importOriginal => ({
   >()),
   loadConfig: async () => ({ config: loaded.config, dependencies: [] }),
 }));
+
+/**
+ * Two switches over the removal of a deleted entity's leftovers, both off
+ * unless a case arms them: `earlier` runs a delete as a release before the
+ * removal existed did, removing none; `stop` fails the translation rows'
+ * removal once, after the field-group values are removed in the same
+ * transaction, as a run stopped there would.
+ */
+const leftovers = vi.hoisted(() => ({ earlier: false, stop: false }));
+vi.mock("../dropped-entity-leftovers", async importOriginal => {
+  const actual =
+    await importOriginal<typeof import("../dropped-entity-leftovers")>();
+  return {
+    ...actual,
+    removeDroppedEntityLeftovers: (
+      ...args: Parameters<typeof actual.removeDroppedEntityLeftovers>
+    ) =>
+      leftovers.earlier
+        ? Promise.resolve([])
+        : actual.removeDroppedEntityLeftovers(...args),
+  };
+});
+vi.mock(
+  "../../../i18n/migration/entity-translation-rows",
+  async importOriginal => {
+    const actual =
+      await importOriginal<
+        typeof import("../../../i18n/migration/entity-translation-rows")
+      >();
+    return {
+      ...actual,
+      removeEntityTranslationRows: (
+        ...args: Parameters<typeof actual.removeEntityTranslationRows>
+      ) => {
+        if (leftovers.stop) {
+          leftovers.stop = false;
+          return Promise.reject(new Error("stopped in the translation rows"));
+        }
+        return actual.removeEntityTranslationRows(...args);
+      },
+    };
+  }
+);
 
 const MIGRATIONS = "./migrations";
 const DEFINITION = "./schema/builder.json";
@@ -201,6 +245,8 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  leftovers.earlier = false;
+  leftovers.stop = false;
   setNonInteractive(false);
   await shutdownServices().catch(() => {});
   for (const close of closers.splice(0)) await close();
@@ -550,6 +596,178 @@ describe.skipIf(!getConfiguredTestDialects().includes("sqlite"))(
         table: false,
         translationsTable: false,
         translations: 0,
+      });
+    }, 180_000);
+  }
+);
+
+describe.each(getConfiguredTestDialects())(
+  "what a deleted translated collection left, on a deployed database (%s)",
+  dialect => {
+    const KEPT = "dpl_kept";
+    const META_TABLE = resolveComponentTableName(META);
+    const notes = KINDS[0]!;
+
+    const q = (name: string) =>
+      dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+
+    /** What `adapter` holds of NOTES in the tables every entity shares, and KEPT's field-group values. */
+    async function sharedLeftOf(adapter: DrizzleAdapter) {
+      const count = async (sql: string) =>
+        Number(
+          (await adapter.executeQuery<{ n: unknown }>(sql))[0]?.n ?? Number.NaN
+        );
+      const valuesOf = (table: string) =>
+        count(
+          `SELECT COUNT(*) AS n FROM ${q(META_TABLE)} WHERE ${q("_parent_table")} = '${table}'`
+        );
+      return {
+        registryRow: await count(
+          `SELECT COUNT(*) AS n FROM ${q("dynamic_collections")} WHERE ${q("slug")} = '${NOTES}'`
+        ),
+        values: await valuesOf(notes.table),
+        archiveRows: (await adapter.tableExists("nextly_i18n_archive"))
+          ? await count(
+              `SELECT COUNT(*) AS n FROM ${q("nextly_i18n_archive")} WHERE ${q("collection")} = '${NOTES}'`
+            )
+          : 0,
+        keptValues: await valuesOf(`dc_${KEPT}`),
+      };
+    }
+
+    /**
+     * NOTES and KEPT, both placing the META field group, made in the Builder
+     * and applied to the deployed database, each with an entry there, NOTES's
+     * translated and with an archived translation; then NOTES deleted in the
+     * Builder and the delete applied by `nextly migrate`.
+     */
+    async function deleteNotesOnTheDeployedDatabase() {
+      const own = await openDatabase(dialect, "builder");
+      const deployed = await openDatabase(dialect, "deployed");
+
+      reach(dialect, own.url);
+      await start(own.adapter);
+      await builder(async () => {
+        await notes.create();
+        await dispatchCollections(
+          {} as ServiceContainer,
+          "createCollection",
+          {},
+          {
+            name: KEPT,
+            label: KEPT,
+            fields: [fieldGroup({ name: "meta", component: META })],
+          }
+        );
+      });
+
+      reach(dialect, deployed.url);
+      await start(deployed.adapter);
+      const created = await migrate();
+      expect(created.code, created.said).toBeUndefined();
+      const site = await start(deployed.adapter);
+      await notes.write?.(site);
+      await site.nextly.create({
+        collection: KEPT as never,
+        data: { meta: { note: "kept" } } as never,
+      });
+      await ensureI18nArchive(deployed.adapter, dialect);
+      await deployed.adapter.insert("nextly_i18n_archive", {
+        collection: NOTES,
+        entityKind: "collection",
+        entryId: "an-entry",
+        locale: "es",
+        field: "body",
+        value: "Hola",
+        archivedAt: new Date(),
+      });
+      const before = await sharedLeftOf(deployed.adapter);
+
+      reach(dialect, own.url);
+      await start(own.adapter);
+      await builder(notes.remove);
+
+      reach(dialect, deployed.url);
+      await start(deployed.adapter);
+      const deleted = await migrate();
+      const after = await sharedLeftOf(deployed.adapter);
+      return { deployed, before, deleted, after };
+    }
+
+    /** The run's line naming what it removed of NOTES. */
+    const removedLine = new RegExp(
+      `Removed what the deleted collection "${NOTES}" left: 1 field group value, [1-9]\\d* translation rows?\\.`
+    );
+
+    it("removes its field-group values and translation rows once it is gone, naming it, and leaves another's", async () => {
+      const { before, deleted, after } =
+        await deleteNotesOnTheDeployedDatabase();
+      // Positive control: the deployed database held each of them.
+      expect(before).toMatchObject({
+        registryRow: 1,
+        values: 1,
+        archiveRows: 1,
+      });
+      expect(before.keptValues).toBe(1);
+
+      expect(deleted.code, deleted.said).toBeUndefined();
+      expect(after, deleted.said).toEqual({
+        registryRow: 0,
+        values: 0,
+        archiveRows: 0,
+        keptValues: 1,
+      });
+      expect(deleted.said).toMatch(removedLine);
+    }, 180_000);
+
+    it("removes what an earlier delete left on a later run with nothing to apply", async () => {
+      // The delete applied as a release before the removal existed applied it.
+      leftovers.earlier = true;
+      const { deployed, deleted, after } =
+        await deleteNotesOnTheDeployedDatabase();
+      leftovers.earlier = false;
+      expect(deleted.code, deleted.said).toBeUndefined();
+      // Positive control: the earlier delete removed the row and left the rest.
+      expect(after).toMatchObject({
+        registryRow: 0,
+        values: 1,
+        archiveRows: 1,
+      });
+
+      const later = await migrate();
+      const cleaned = await sharedLeftOf(deployed.adapter);
+
+      expect(later.code, later.said).toBeUndefined();
+      expect(cleaned, later.said).toEqual({
+        registryRow: 0,
+        values: 0,
+        archiveRows: 0,
+        keptValues: 1,
+      });
+      expect(later.said).toMatch(removedLine);
+    }, 180_000);
+
+    it("removes none of its rows in a run stopped part-way through them, and all of them in the next", async () => {
+      leftovers.stop = true;
+      const { deployed, before, deleted, after } =
+        await deleteNotesOnTheDeployedDatabase();
+      expect(leftovers.stop, "the stop was reached").toBe(false);
+      expect(deleted.code, deleted.said).toBeUndefined();
+      // The field-group values went first in the same transaction, and came back with it.
+      expect(after, deleted.said).toEqual({ ...before, registryRow: 0 });
+      expect(deleted.said).toContain(
+        `Could not remove what the deleted collection "${NOTES}" left`
+      );
+
+      const next = await migrate();
+      const cleaned = await sharedLeftOf(deployed.adapter);
+
+      expect(next.code, next.said).toBeUndefined();
+      expect(cleaned, next.said).toEqual({
+        registryRow: 0,
+        values: 0,
+        archiveRows: 0,
+        keptValues: 1,
       });
     }, 180_000);
   }

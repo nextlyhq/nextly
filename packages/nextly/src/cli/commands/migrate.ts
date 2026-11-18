@@ -1397,6 +1397,7 @@ export interface MigrateCoreResult {
     fieldGroupsRegistered: number;
     rowsNotWritten: string[];
     rowsRemoved: string[];
+    leftoversRemoved: string[];
     marked: number;
     stillPending: number;
     awaitingMigration: number;
@@ -2478,6 +2479,12 @@ function reportMetadataOutcome(
     );
   }
 
+  // What deleted entities left in the tables every entity shares, removed once
+  // their rows were gone: each entity named with what went.
+  for (const line of metadata.leftoversRemoved) {
+    logger.success(`Removed what the deleted ${line}.`);
+  }
+
   if (marked > 0) {
     logger.success(
       `${formatCount(marked, "registry row")} recorded as applied.`
@@ -2747,6 +2754,7 @@ export async function migrateCore(
     fieldGroupsRegistered: 0,
     rowsNotWritten: [] as string[],
     rowsRemoved: [] as string[],
+    leftoversRemoved: [] as string[],
     marked: 0,
     stillPending: 0,
     awaitingMigration: 0,

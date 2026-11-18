@@ -57,14 +57,17 @@ import type {
   EntitySettingsRecord,
   SettingsEntityKind,
 } from "../migrate-create/entity-settings";
+import { isSchemaLockLost } from "../pipeline/schema-lock";
 import {
   inRegistryStep,
   newestAppliedAppMigration,
   readSchemaVersion,
+  registryWriteOpen,
   writeRegistryRows,
 } from "../schema-version";
 
 import { outstandingEntityChanges } from "./applied-entity-changes";
+import { removeDroppedEntityLeftovers } from "./dropped-entity-leftovers";
 import { registerFromMigrations } from "./metadata-register";
 import {
   isAwaitingMigration,
@@ -156,6 +159,12 @@ export interface ReconcileMetadataResult {
   rowsNotWritten: string[];
   /** Rows of entities an applied migration dropped, removed this run, as `<kind> <slug>`. */
   rowsRemoved: string[];
+  /**
+   * What dropped entities left in the tables every entity shares, removed this
+   * run once their rows were gone: one line each, naming the entity and what
+   * went (`removeDroppedEntityLeftovers`).
+   */
+  leftoversRemoved: string[];
   /** Rows moved from `pending`/`generated` to `applied`. */
   marked: number;
   /**
@@ -435,7 +444,49 @@ export async function reconcileMigrationMetadata(
         complete ? appliedMigration : undefined,
     }
   );
-  return swept.result;
+  return {
+    ...swept.result,
+    leftoversRemoved: await leftoversOfDroppedEntities(deps),
+  };
+}
+
+/**
+ * Removes what the entities the applied migrations dropped left in the tables
+ * every entity shares, once the registry write above has committed their
+ * rows' removal (`removeDroppedEntityLeftovers`). Not inside a registry write
+ * a caller holds open (a first run's), whose transaction each entity's
+ * removal would join: the next run, finding the entity still gone, removes
+ * them. A pass that cannot read the applied records removes nothing, and says
+ * why.
+ */
+async function leftoversOfDroppedEntities(
+  deps: ReconcileMetadataDeps
+): Promise<string[]> {
+  if (registryWriteOpen()) return [];
+  const { adapter, dialect, migrationsDir, logger } = deps;
+  try {
+    const events = new SchemaEventsRepository(adapter.getDrizzle(), dialect);
+    const source = await readRegistrySource({
+      migrationsDir,
+      isApplied: filename => events.isFileApplied(filename),
+    });
+    if (source.kind !== "snapshot") return [];
+    return await removeDroppedEntityLeftovers({
+      adapter,
+      chain: source.chain ?? [source.entities],
+      logger: asServiceLogger(logger),
+    });
+  } catch (error) {
+    // A run that lost the schema lock stops; anything else costs only this
+    // removal, which the next run tries again.
+    if (isSchemaLockLost(error)) throw error;
+    logger.warn(
+      `Could not remove what deleted entities left: ${
+        error instanceof Error ? error.message : String(error)
+      }. The next \`nextly migrate\` tries again.`
+    );
+    return [];
+  }
 }
 
 /**
@@ -542,6 +593,8 @@ async function registerAndSweep(
       awaitingMigration,
       unscopedMigrations: awaiting.unscoped,
       unreadable,
+      // Removed after the registry write commits, by the caller.
+      leftoversRemoved: [],
     },
     complete: registered.complete && unreadable.length === 0,
   };
