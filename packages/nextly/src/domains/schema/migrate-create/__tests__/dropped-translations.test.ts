@@ -115,3 +115,41 @@ describe("the translations table of a dropped table", () => {
     expect(down).toEqual([]);
   });
 });
+
+describe("the translations table of a dropped field group", () => {
+  it("is found under the table name its record keeps, not one made from its slug", () => {
+    const { down } = droppedTranslations({
+      operations: dropping("comp_custom_cards"),
+      previous: {
+        tables: [
+          {
+            name: "comp_custom_cards",
+            columns: [{ name: "id", type: "text", nullable: false }],
+            localized: true,
+            localizedColumns: ["caption"],
+          },
+        ],
+      } as NextlySchemaSnapshot,
+      previousEntities: {
+        collections: {},
+        singles: {},
+        fieldGroups: {
+          cards: {
+            source: "builder",
+            settings: {
+              tableName: "comp_custom_cards",
+              localized: true,
+              fields: [{ name: "caption", type: "text", localized: true }],
+            },
+          },
+        },
+      },
+      dialect: "sqlite",
+      defaultLocale: "en",
+    });
+    expect(down).toHaveLength(1);
+    expect(down[0]).toMatch(
+      /^CREATE TABLE IF NOT EXISTS "comp_custom_cards_locales"/
+    );
+  });
+});
