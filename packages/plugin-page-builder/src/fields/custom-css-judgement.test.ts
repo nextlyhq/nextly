@@ -349,7 +349,7 @@ describe("custom CSS, judged on every write that adds or changes it", () => {
       manager
     );
     expect(pasted[0]).toBe(
-      "Content (page CSS): Line 1: Paste the CSS without the <style> tags."
+      "Content (page CSS): Line 1: Leave out the <style> tags."
     );
     expect(
       await issuesOf(
