@@ -20,6 +20,7 @@ import {
 } from "./binding-picker";
 import { useBindingSources } from "./binding-picker-reads";
 import type { BindingFieldSource } from "./binding-services";
+import { settingBoundFrom } from "./binding-setting-source";
 import type { ContentServices } from "./content-controls";
 import { fieldLabel } from "./inspector";
 import { useItemSource, type ItemSource } from "./item-binding-source";
@@ -151,7 +152,10 @@ export function useBoundFrom(
 } {
   const sources = useBindingSources(services, true);
   const item = useItemSource(binding, document, nodeId, services);
-  return { from: boundFrom(binding, sources, item), sources, item };
+  // A component's setting is named from the component itself.
+  const from =
+    settingBoundFrom(binding, document) ?? boundFrom(binding, sources, item);
+  return { from, sources, item };
 }
 
 /**
