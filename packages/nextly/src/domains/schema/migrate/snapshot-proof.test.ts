@@ -724,6 +724,26 @@ describe("a MySQL column restated by MODIFY or CHANGE", () => {
     expect(asked).toEqual(["dc_posts.slug", "dc_posts.slug"]);
   });
 
+  it("reads the column past a condition written before the table or the column", async () => {
+    const asked: string[] = [];
+    const schema: LiveSchemaWithColumnFacts = {
+      ...liveWith({}),
+      untrackedSettings: (table, column) => {
+        asked.push(`${table}.${column}`);
+        return ["COMMENT"];
+      },
+    };
+    for (const statement of [
+      "ALTER TABLE IF EXISTS `dc_posts` MODIFY COLUMN `slug` varchar(500)",
+      "ALTER TABLE `dc_posts` MODIFY COLUMN IF EXISTS `slug` varchar(500)",
+    ]) {
+      const [status] = await statusesAgainst([statement], "mysql", schema);
+      // Shown or not, never recorded with the column unasked.
+      expect(status === "keeps" || status === "unshown", statement).toBe(true);
+    }
+    expect(asked.every(each => each === "dc_posts.slug")).toBe(true);
+  });
+
   it("is proven where the live column holds nothing the statement would reset", async () => {
     expect(await statusesAgainst([MODIFY], "mysql", liveWith({}))).toEqual([
       "shown",
@@ -741,6 +761,10 @@ describe("a MySQL column restated by MODIFY or CHANGE", () => {
       "timestamp ON UPDATE CURRENT_TIMESTAMP",
       "int AUTO_INCREMENT",
       "int GENERATED ALWAYS AS (1) STORED",
+      "point SRID 4326",
+      "varchar(500) NOT SECONDARY",
+      "bigint SERIAL DEFAULT VALUE",
+      "national varchar(500)",
     ]) {
       const statement = `ALTER TABLE \`dc_posts\` MODIFY COLUMN \`slug\` ${tail}`;
       expect(shown(statement, "mysql"), statement).toBe(false);
@@ -750,6 +774,13 @@ describe("a MySQL column restated by MODIFY or CHANGE", () => {
       "varchar(500)",
       "varchar(500) NOT NULL DEFAULT 'first'",
       "text NULL",
+      "bigint unsigned NOT NULL DEFAULT 0",
+      "decimal(10,2) DEFAULT -1.5",
+      "datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)",
+      "json DEFAULT (JSON_ARRAY())",
+      "binary(16) NULL DEFAULT NULL",
+      "double precision",
+      "enum('first','after') NOT NULL DEFAULT 'after'",
     ]) {
       const statement = `ALTER TABLE \`dc_posts\` MODIFY COLUMN \`slug\` ${tail}`;
       expect(shown(statement, "mysql"), statement).toBe(true);
@@ -865,6 +896,60 @@ describe("a key the database assigns, on a table the file creates", () => {
         add
       ).toEqual(["shown"]);
     }
+  });
+
+  it("reads MySQL's SERIAL DEFAULT VALUE as a key the database assigns", async () => {
+    expect(
+      await statusesAgainst(
+        [
+          "CREATE TABLE `counters` (`id` bigint unsigned SERIAL DEFAULT VALUE, `label` text)",
+        ],
+        "mysql",
+        liveWith({ generatesKey: false }),
+        creating
+      )
+    ).toEqual(["not-done"]);
+  });
+
+  it("does not take a name or a constraint for a key the database assigns", async () => {
+    const never = liveWith({ generatesKey: false });
+    for (const [statement, between] of [
+      [
+        'CREATE TABLE "counters" ("id" integer PRIMARY KEY, "label" text REFERENCES identity (id))',
+        creating,
+      ],
+      [
+        'CREATE TABLE "counters" ("id" integer PRIMARY KEY, "label" text CHECK (identity > 0))',
+        creating,
+      ],
+      [
+        'ALTER TABLE "dc_posts" ADD CONSTRAINT serial CHECK ("title" <> \'\')',
+        sides,
+      ],
+    ] as const) {
+      expect(
+        await statusesAgainst([statement], "postgresql", never, between),
+        statement
+      ).toEqual(["shown"]);
+    }
+  });
+
+  it("asks nothing of a key a later statement of the file renames or drops", async () => {
+    // The column no longer stands under the name the statement gave it: the file's end is what
+    // the snapshot comparison already held the database to.
+    const renamedAway: LiveSchemaWithColumnFacts = {
+      ...liveWith({ generatesKey: false, gone: "position" }),
+    };
+    expect(
+      await statusesAgainst(
+        [
+          'ALTER TABLE "dc_posts" ADD COLUMN "position" serial',
+          'ALTER TABLE "dc_posts" RENAME COLUMN "position" TO "slug"',
+        ],
+        "postgresql",
+        renamedAway
+      )
+    ).toEqual(["shown", "shown"]);
   });
 
   it("asks nothing of a key the file leaves plain, or of SQLite's rowid key", async () => {

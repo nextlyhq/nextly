@@ -7,8 +7,10 @@
  *
  * - MySQL's `MODIFY` and `CHANGE` restate a column's whole definition, so a run of one puts back
  *   every setting it leaves out: the column's own character set and collation, its comment, its
- *   visibility, `ON UPDATE`, `AUTO_INCREMENT`, a generated column's expression. A column already at
- *   the statement's type can still hold any of them (`untrackedSettings`).
+ *   visibility, `ON UPDATE`, `AUTO_INCREMENT`, a generated column's expression, a geometry
+ *   column's spatial reference. A column already at the statement's type can still hold any of
+ *   them (`untrackedSettings`). A column's storage format and engine attributes are not in
+ *   `information_schema.COLUMNS` and are not read.
  * - A key the database assigns (`serial`, an identity column, `AUTO_INCREMENT`) reads as its
  *   storage type, so a table made by hand with a plain integer key compares equal to one whose
  *   key the database assigns (`generatesKey`).
@@ -70,6 +72,8 @@ interface MysqlColumnRow {
   comment: unknown;
   extra: unknown;
   generated: unknown;
+  /** The spatial reference a geometry column is held to, where it has one. */
+  srid: unknown;
 }
 
 /**
@@ -88,6 +92,7 @@ export function mysqlUntrackedSettings(row: MysqlColumnRow): string[] {
     ...(extra.includes("auto_increment") ? ["AUTO_INCREMENT"] : []),
     ...(extra.includes("on update") ? ["ON UPDATE"] : []),
     ...(extra.includes("invisible") ? ["INVISIBLE"] : []),
+    ...(row.srid !== null && row.srid !== undefined ? ["SRID"] : []),
     ...(text(row.comment) !== "" ? ["COMMENT"] : []),
   ];
 }
@@ -143,7 +148,8 @@ export async function readLiveColumnFacts(
                      c.COLLATION_NAME AS collation,
                      t.TABLE_COLLATION AS table_collation,
                      c.COLUMN_COMMENT AS comment, c.EXTRA AS extra,
-                     c.GENERATION_EXPRESSION AS \`generated\`
+                     c.GENERATION_EXPRESSION AS \`generated\`,
+                     c.SRS_ID AS srid
               FROM information_schema.COLUMNS c
               JOIN information_schema.TABLES t
                 ON t.TABLE_SCHEMA = c.TABLE_SCHEMA

@@ -120,14 +120,19 @@ export async function proveStatements(args: {
   live: LiveFacts;
 }): Promise<StatementProof[]> {
   const { statements, dialect, live } = args;
+  const judged = judgeStatements(statements, dialect, live.schema);
   const proofs = statementsShownBySnapshot(
     statements,
     dialect,
     args.sides,
-    judgeStatements(statements, dialect, live.schema)
+    judged
   );
   for (const [at, proof] of proofs.entries()) {
     if (proof.status !== "shown") continue;
+    // A column or table a later statement of the file renames, drops or changes again no longer
+    // stands as this one named it, so the live database is not asked about it under that name:
+    // where the file ends is what the snapshot comparison held the database to.
+    if (judged[at]?.reason === "undone") continue;
     if (
       !inlineConstraintsUsable(
         statements[at],
@@ -192,23 +197,53 @@ const SERIAL_TYPES = new Set([
   "SERIAL8",
 ]);
 
+/** The tokens of a definition outside any parentheses: what it declares, not what it names. */
+function outsideParentheses(
+  tokens: readonly StatementToken[]
+): StatementToken[] {
+  let depth = 0;
+  return tokens.filter(token => {
+    if (token === "(") depth += 1;
+    const outside = depth === 0;
+    if (token === ")") depth = Math.max(0, depth - 1);
+    return outside;
+  });
+}
+
+/** Whether `words` come next to each other, in order, somewhere in `tokens`. */
+function hasRun(
+  tokens: readonly StatementToken[],
+  ...words: readonly string[]
+): boolean {
+  return tokens.some((_token, at) =>
+    words.every((word, k) => tokens[at + k] === word)
+  );
+}
+
 /**
  * Whether a column definition's tail has the database assign its value: PostgreSQL's serial types
- * and identity columns, MySQL's `AUTO_INCREMENT` and its `SERIAL` alias. SQLite declares none: an
- * `INTEGER PRIMARY KEY` is the rowid whatever else the table says.
+ * and identity columns (`AS IDENTITY`), MySQL's `AUTO_INCREMENT`, its `SERIAL` type and its
+ * `SERIAL DEFAULT VALUE` attribute. Read outside parentheses, so a name inside a check or a
+ * reference is not taken for one. SQLite declares none: an `INTEGER PRIMARY KEY` is the rowid
+ * whatever else the table says.
  */
 function declaresGeneratedKey(
   tail: readonly StatementToken[],
   dialect: SupportedDialect
 ): boolean {
   if (dialect === "sqlite") return false;
-  const type = tail[0];
+  const declared = outsideParentheses(tail);
+  const type = declared[0];
   if (dialect === "mysql") {
-    return type === "SERIAL" || tail.includes("AUTO_INCREMENT");
+    return (
+      type === "SERIAL" ||
+      declared.includes("AUTO_INCREMENT") ||
+      hasRun(declared, "SERIAL", "DEFAULT", "VALUE")
+    );
   }
   return (
     (typeof type === "string" && SERIAL_TYPES.has(type)) ||
-    tail.includes("IDENTITY")
+    hasRun(declared, "AS", "IDENTITY")
   );
 }
 
@@ -262,6 +297,7 @@ function restatedColumns(
   if (dialect !== "mysql") return [];
   const cursor = cursorOf(statement, dialect, EXACT);
   if (!cursor.accept("ALTER", "TABLE")) return [];
+  cursor.acceptCondition();
   const table = cursor.name();
   if (table === undefined) return [];
   return cursor.clauses().flatMap(tokens => {
@@ -269,6 +305,7 @@ function restatedColumns(
     const renames = clause.accept("CHANGE");
     if (!renames && !clause.accept("MODIFY")) return [];
     clause.accept("COLUMN");
+    clause.acceptCondition();
     const named = clause.name();
     const column = renames ? clause.name() : named;
     return column === undefined ? [] : [{ table, column }];
@@ -383,11 +420,26 @@ function columnsAdded(
   return cursor.clauses().flatMap(tokens => {
     const clause = new StatementCursor(tokens);
     if (!clause.accept("ADD")) return [];
-    clause.accept("COLUMN");
+    // A constraint, index or key added is not a column, whatever it is named.
+    if (!clause.accept("COLUMN") && addsAnotherElement(clause, dialect)) {
+      return [];
+    }
     clause.acceptCondition();
     const column = clause.name();
     return column === undefined ? [] : [[table, column, clause.rest()]];
   });
+}
+
+/** Whether what follows `ADD` is a constraint, index, key or anything else that is not a column. */
+function addsAnotherElement(
+  clause: StatementCursor,
+  dialect: SupportedDialect
+): boolean {
+  const next = clause.peek();
+  return (
+    typeof next === "string" &&
+    (elementWord(next, dialect) || NOT_A_COLUMN.has(next))
+  );
 }
 
 /**
@@ -887,55 +939,27 @@ function columnChangeShown(clause: StatementCursor): boolean {
   return change.at(-1) !== "TYPE" || castsItself(clause.rest(), column);
 }
 
-/**
- * Words of a restated MySQL column that say more than the snapshot records of one: its character
- * set and collation (the attributes and national types that imply one included), comment,
- * visibility, `ON UPDATE`, generation, storage, a key or check declared with it, and where it
- * stands among the columns.
- */
-const RESTATED_BEYOND_SNAPSHOT = new Set([
-  "CHARACTER",
-  "CHARSET",
-  "COLLATE",
-  "ASCII",
-  "UNICODE",
-  "BINARY",
+/** Whether a token is a word, as a keyword or a bare name is, and not a literal or a symbol. */
+const isKeyword = (token: StatementToken | undefined): boolean =>
+  typeof token === "string" && /^[A-Z_]/.test(token);
+
+/** Type words that say more than a type: a key the database assigns, or a character set. */
+const TYPES_BEYOND_SNAPSHOT = new Set([
+  "SERIAL",
   "NATIONAL",
   "NCHAR",
   "NVARCHAR",
-  "COMMENT",
-  "VISIBLE",
-  "INVISIBLE",
-  "ON",
-  "AUTO_INCREMENT",
-  "SERIAL",
-  "GENERATED",
-  "AS",
-  "VIRTUAL",
-  "STORED",
-  "COLUMN_FORMAT",
-  "STORAGE",
-  "ENGINE_ATTRIBUTE",
-  "SECONDARY_ENGINE_ATTRIBUTE",
-  "SRID",
-  "UNIQUE",
-  "PRIMARY",
-  "KEY",
-  "REFERENCES",
-  "CHECK",
-  "FIRST",
-  "AFTER",
 ]);
 
-/** A type name that is also an attribute word: read as the type where it comes first. */
-const TYPES_AMONG_ATTRIBUTES = new Set(["BINARY"]);
+/** Words that are part of a type after its name: `double precision`, `bigint unsigned`. */
+const TYPE_WORDS = new Set(["PRECISION", "UNSIGNED", "SIGNED", "ZEROFILL"]);
 
 /**
  * MySQL's `MODIFY [COLUMN] c ...` and `CHANGE [COLUMN] a b ...`: a column's definition restated,
- * naming only what the snapshot records of a column, its type, whether it is nullable and its
- * default, as `migrate:create` writes one. A clause that states anything else, or a position
- * (`FIRST`, `AFTER`), changes what no snapshot shows. What it leaves out is asked of the live
- * column (`restatedColumnsKeep`).
+ * in the one shape `migrate:create` writes, which names only what the snapshot records of a
+ * column: `<type> [NULL | NOT NULL] [DEFAULT <value>]`. A clause that states anything else, a
+ * position (`FIRST`, `AFTER`) included, changes what no snapshot shows. What the clause leaves out
+ * is asked of the live column (`restatedColumnsKeep`).
  */
 function restatedColumnShown(
   clause: StatementCursor,
@@ -944,16 +968,39 @@ function restatedColumnShown(
   if (file.dialect !== "mysql") return false;
   const renames = clause.peek(-1) === "CHANGE";
   clause.accept("COLUMN");
+  clause.acceptCondition();
   if (clause.name() === undefined) return false;
   if (renames && clause.name() === undefined) return false;
-  return clause
-    .rest()
-    .every(
-      (token, at) =>
-        typeof token !== "string" ||
-        !RESTATED_BEYOND_SNAPSHOT.has(token) ||
-        (at === 0 && TYPES_AMONG_ATTRIBUTES.has(token))
-    );
+  return statesOnlyWhatSnapshotRecords(outsideParentheses(clause.rest()));
+}
+
+/**
+ * Whether a restated column's definition, read outside parentheses, is a type followed by nothing
+ * but its nullability and its default. A default's value is one word or one literal, signed or
+ * not; one written in parentheses (an expression, or a function's arguments) has been left out
+ * with them.
+ */
+function statesOnlyWhatSnapshotRecords(
+  declared: readonly StatementToken[]
+): boolean {
+  const [type, ...after] = declared;
+  if (typeof type !== "string" || TYPES_BEYOND_SNAPSHOT.has(type)) return false;
+  const rest = new StatementCursor(after);
+  while (nextIn(rest, TYPE_WORDS)) rest.accept(String(rest.peek()));
+  while (!rest.done()) {
+    if (rest.accept("NOT", "NULL") || rest.accept("NULL")) continue;
+    if (!rest.accept("DEFAULT")) return false;
+    if (!rest.accept("-")) rest.accept("+");
+    // One word (`NULL`, `CURRENT_TIMESTAMP`), or a literal: a quoted one, or a number in as many
+    // pieces as the reading gives it. A second word is not part of the value.
+    if (isKeyword(rest.peek())) {
+      if (rest.isWord("NOT") || rest.isWord("DEFAULT")) return false;
+      rest.at += 1;
+    } else {
+      while (!rest.done() && !isKeyword(rest.peek())) rest.at += 1;
+    }
+  }
+  return true;
 }
 
 /** `RENAME [COLUMN] a TO b`, or MySQL's `RENAME INDEX|KEY a TO b`, as the whole clause. */
