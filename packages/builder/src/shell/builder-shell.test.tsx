@@ -32,6 +32,7 @@ import { useNoticeQueue, useNoticeSink } from "./builder-notices";
 import { BuilderShell, type SettingsDialogState } from "./builder-shell";
 import { CanvasFrameProvider } from "../canvas/canvas-frame-context";
 import { CommandPalette } from "./command-palette";
+import { ShowInspectorContext } from "./show-inspector";
 import { EMPTY_CONTAINER_SELECTOR } from "../canvas/empty-slot";
 import {
   DEFAULT_PREFERENCES,
@@ -2559,6 +2560,33 @@ describe("hiding the side panels", () => {
     ).toBeNull();
     expect(toggle(/^Inspector$/).getAttribute("aria-pressed")).toBe("false");
     expect(stored(store).inspectorHidden).toBe(true);
+  });
+
+  it("shows a hidden inspector for a control in the top bar that asks", () => {
+    stubContainerFits(true);
+    const store = memoryStore(
+      JSON.stringify({ ...DEFAULT_PREFERENCES, inspectorHidden: true })
+    );
+    function AsksForInspector(): React.JSX.Element {
+      const show = React.useContext(ShowInspectorContext);
+      return (
+        <button type="button" onClick={() => show?.()}>
+          Go to a setting
+        </button>
+      );
+    }
+    render(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={store}
+        inspector={<p>inspector body</p>}
+        topBarEnd={<AsksForInspector />}
+      />
+    );
+    expect(screen.queryByText("inspector body")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Go to a setting" }));
+    expect(screen.getByText("inspector body")).toBeTruthy();
+    expect(stored(store).inspectorHidden).toBe(false);
   });
 
   it("restores a hidden inspector when nothing else differs from the defaults", () => {

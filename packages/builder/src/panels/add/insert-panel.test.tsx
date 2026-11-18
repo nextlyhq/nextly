@@ -827,7 +827,7 @@ describe("InsertPanel", () => {
       "Goes inside Columns, at the end."
     );
 
-    // The line names where the highlighted tile goes, before the click.
+    // The line names the highlighted tile and where it goes, before the click.
     const search = screen.getByRole("combobox", { name: "Insert a block" });
     const live = () =>
       document
@@ -836,14 +836,14 @@ describe("InsertPanel", () => {
     expect(live()).toBe("polite");
     fireEvent.keyDown(search, { key: "Home" });
     expect(popoverName()).toBe("Column");
-    expect(placementLine()).toBe("Adding inside Columns, at the end");
+    expect(placementLine()).toBe("Column goes inside Columns, at the end");
     // The tile's own description says it; the line is not announced twice.
     expect(live()).toBe("off");
     for (let step = 0; step < 6 && popoverName() !== "Text"; step++) {
       fireEvent.keyDown(search, { key: "ArrowDown" });
     }
     expect(popoverName()).toBe("Text");
-    expect(placementLine()).toBe("Adding after Columns");
+    expect(placementLine()).toBe("Text goes after Columns");
 
     fireEvent.click(tile("Column"));
     fireEvent.click(tile("Text"));

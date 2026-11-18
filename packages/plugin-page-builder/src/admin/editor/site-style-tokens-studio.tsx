@@ -172,9 +172,10 @@ export function TokensStudio({
   return (
     <VariablesStudio.Provider value={studio}>
       <InHeaderSlot slot={headerSlot}>{header.controls}</InHeaderSlot>
-      {/* Above whichever tab is open, since an import or export can be
-          started from any of them. */}
-      <div className="nx-pb-design__reports">{header.overlays}</div>
+      {/* The import preview and "What wasn't exported": dialogs over the
+          editor, so they take no room above the tab. An export or import says
+          what it did in a toast. */}
+      {header.overlays}
       <SharedStyleToOpen.Provider value={usage.toOpen}>
         {children}
       </SharedStyleToOpen.Provider>
@@ -555,6 +556,14 @@ function absenceOf(pending: boolean): "pending" | "failed" {
 
 /** The tokens studio's state, for the Variables tab inside it. */
 const VariablesStudio = createContext<TokensPanelProps | null>(null);
+
+/**
+ * The studio's state, for a tab drawn inside its frame that edits the same
+ * variables: `null` outside one.
+ */
+export function useVariablesStudio(): TokensPanelProps | null {
+  return useContext(VariablesStudio);
+}
 
 /** The Variables tab: the studio's variables, in the panel its frame holds. */
 export function VariablesTab({

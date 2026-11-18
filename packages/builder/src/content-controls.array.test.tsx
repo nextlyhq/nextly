@@ -124,7 +124,7 @@ describe("a list of text", () => {
     const editor = editorFor({ items: ["One", "Two"] });
     render(<InspectorPanel editor={editor} />);
     const second = group("Items").getByRole("textbox", {
-      name: "Items, item 2",
+      name: "Item 2",
     });
     fireEvent.change(second, { target: { value: "Deux" } });
     fireEvent.blur(second);
@@ -138,12 +138,12 @@ describe("a list of text", () => {
     const editor = editorFor({ items: ["One", "Two"] });
     render(<InspectorPanel editor={editor} />);
     const first = group("Items").getByRole("textbox", {
-      name: "Items, item 1",
+      name: "Item 1",
     });
     fireEvent.change(first, { target: { value: "Uno" } });
     fireEvent.blur(first);
     fireEvent.click(
-      screen.getByRole("button", { name: "Move Items, item 1 down" })
+      screen.getByRole("button", { name: "Move Item 1 down" })
     );
     expect(written(editor).items).toEqual(["Two", "Uno"]);
   });
@@ -158,7 +158,7 @@ describe("a list of text", () => {
       group("Items").getByRole("button", { name: "Add to Items" })
     );
     fireEvent.click(
-      group("Items").getByRole("button", { name: "Remove Items, item 1" })
+      group("Items").getByRole("button", { name: "Remove Item 1" })
     );
     // Not ["Two", ""]: the refused blank item is not written with the removal.
     expect(written(editor).items).toEqual(["Two"]);
@@ -175,11 +175,11 @@ describe("a list of text", () => {
     // Each action starts from the list as last written, as it does when the
     // editor redraws between them: this stand-in's document never changes.
     fireEvent.click(
-      group("Items").getByRole("button", { name: "Remove Items, item 1" })
+      group("Items").getByRole("button", { name: "Remove Item 1" })
     );
     expect(written(editor).items).toEqual(["Two", ""]);
     fireEvent.click(
-      group("Items").getByRole("button", { name: "Move Items, item 2 up" })
+      group("Items").getByRole("button", { name: "Move Item 2 up" })
     );
     expect(written(editor).items).toEqual(["", "Two"]);
     expect(editor.apply).toHaveBeenCalledTimes(3);
@@ -196,7 +196,7 @@ describe("a list of records", () => {
       ],
     });
     render(<InspectorPanel editor={editor} />);
-    const second = group("Fields, item 2");
+    const second = group("Item 2");
     const label = second.getByRole("textbox", { name: "Label" });
     expect((label as HTMLInputElement).value).toBe("Email");
     fireEvent.change(label, { target: { value: "Your email" } });
@@ -218,7 +218,7 @@ describe("a list of records", () => {
         editor={editorFor({ fields: [{ label: "Name", type: "text" }] })}
       />
     );
-    const item = group("Fields, item 1");
+    const item = group("Item 1");
     expect(item.getByText("When")).toBeDefined();
     expect(item.getByText(/Not editable here \(datetime\)/)).toBeDefined();
   });
@@ -294,7 +294,7 @@ describe("on a locked block", () => {
     expect(
       (
         group("Items").getByRole("textbox", {
-          name: "Items, item 1",
+          name: "Item 1",
         }) as HTMLInputElement
       ).disabled
     ).toBe(true);

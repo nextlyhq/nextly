@@ -944,8 +944,8 @@ describe("the label the stamp is taken over", () => {
     // Both surfaces, because they can disagree — the label is what the stamp is
     // taken over, so a version reaching one and not the other would key
     // artifacts on a value the label never carried.
-    expect(JSON.parse(sharedStyleInputsLabel(inputs()))[0]).toBe("v11");
-    expect(sharedStyleInputsId(inputs())).toMatch(/^v11:[0-9a-z]+$/);
+    expect(JSON.parse(sharedStyleInputsLabel(inputs()))[0]).toBe("v12");
+    expect(sharedStyleInputsId(inputs())).toMatch(/^v12:[0-9a-z]+$/);
   });
 
   it("refuses every sheet stored before blocks lost their outer margins", () => {
@@ -958,7 +958,7 @@ describe("the label the stamp is taken over", () => {
     const label: unknown[] = JSON.parse(sharedStyleInputsLabel(inputs()));
     const before = `v3:${hashId(JSON.stringify(["v3", ...label.slice(1)]))}`;
     expect(now).not.toBe(before);
-    expect(now?.startsWith("v11:")).toBe(true);
+    expect(now?.startsWith("v12:")).toBe(true);
   });
 
   it("refuses every sheet stored before parts took properties from a wrapping root", () => {
@@ -1041,6 +1041,19 @@ describe("the label the stamp is taken over", () => {
     const now = sharedStyleInputsId(inputs());
     const label: unknown[] = JSON.parse(sharedStyleInputsLabel(inputs()));
     const before = `v10:${hashId(JSON.stringify(["v10", ...label.slice(1)]))}`;
+    expect(now).not.toBe(before);
+    expect(stampedUnderCurrentEncoding(before)).toBe(false);
+  });
+
+  it("refuses every sheet stored before the links in a coloured container took its colour", () => {
+    // `v12` writes, for each rule giving a container a text colour, a rule
+    // making the links inside it inherit that colour while the site's Links
+    // row sets none. A `v11` sheet has none, so its links keep the browser's
+    // colour inside a dark section: recompiled, not served. Rebuilt from the
+    // label the old compiler wrote.
+    const now = sharedStyleInputsId(inputs());
+    const label: unknown[] = JSON.parse(sharedStyleInputsLabel(inputs()));
+    const before = `v11:${hashId(JSON.stringify(["v11", ...label.slice(1)]))}`;
     expect(now).not.toBe(before);
     expect(stampedUnderCurrentEncoding(before)).toBe(false);
   });

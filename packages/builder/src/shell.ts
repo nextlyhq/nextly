@@ -157,6 +157,11 @@ export {
   SITE_CODE_POLICY_DOCS_HREF,
 } from "./docs-links";
 export { CanvasMarks } from "./canvas/canvas-marks";
+/**
+ * @experimental The line where the Add panel's highlighted tile would land,
+ * drawn in the canvas's overlay.
+ */
+export { InsertionLine } from "./canvas/insertion-line";
 
 /**
  * @experimental Hold the editor's shortcuts while something modal is over it.
@@ -768,6 +773,9 @@ export { blockStyleFoldId } from "./block-looks-group";
 // and a font variable's in Design.
 export { FontChoicesContext } from "./font-family-field";
 export type { FontChoices } from "./font-family-field";
+// The top of Design's Type tab: the Body and Headings fonts every page uses.
+export { SiteFontRoles } from "./site-font-roles";
+export type { SiteFontRolesProps } from "./site-font-roles";
 export type { DesignTab, VariableGroup } from "./tokens-studio";
 /*
  * How widely variables are used, as a host reads it for the Variables view.
@@ -919,3 +927,15 @@ export type {
  */
 export { ExposurePicker, selectionAsComponent } from "./exposure-picker";
 export type { ExposurePickerProps } from "./exposure-picker";
+
+/**
+ * Page checks: the count beside Publish that opens the list and walks it
+ * while the author fixes things, and the list itself. The checks they run
+ * are on the root entry, callable without a DOM.
+ *
+ * @experimental
+ */
+export { PageChecksChip } from "./page-checks/page-checks-chip";
+export type { PageChecksChipProps } from "./page-checks/page-checks-chip";
+export { PageChecksList } from "./page-checks/page-checks-list";
+export type { PageChecksListProps } from "./page-checks/page-checks-list";

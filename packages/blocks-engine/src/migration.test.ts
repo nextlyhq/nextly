@@ -6,6 +6,7 @@ import {
   findMigrationGaps,
   migrateDocument,
   migrateProps,
+  migrationInfoOf,
   nodeAtPointer,
 } from "./migration";
 
@@ -619,5 +620,152 @@ describe("a slot named by a stored `__proto__`", () => {
     // And the migration itself still happened, so this is not passing because
     // nothing ran.
     expect(result.doc.nodes[0]!.slots!.main[0]!.props).toEqual({ v2: true });
+  });
+});
+
+describe("a step's renames", () => {
+  const same = (p: Record<string, unknown>) => p;
+  const quote = {
+    version: 2,
+    migrate: { 1: same },
+    renames: { 1: { citeUrl: "href" } },
+  };
+  const page = (node: Record<string, unknown>): BlockDocument =>
+    ({ formatVersion: 1, kind: "page", nodes: [node] }) as BlockDocument;
+
+  it("move a prop's value to its new name before the step runs", () => {
+    const seen: Record<string, unknown>[] = [];
+    const result = migrateProps(
+      { text: "x", citeUrl: "/a" },
+      1,
+      2,
+      { 1: p => (seen.push(p), p) },
+      { 1: { citeUrl: "href" } }
+    );
+    expect(seen[0]).toEqual({ text: "x", href: "/a" });
+    expect(result.props).toEqual({ text: "x", href: "/a" });
+  });
+
+  it("move a value bound to the renamed prop with it, in the same step", () => {
+    const binding = { source: "entry", field: "url" };
+    const { doc } = migrateDocument(
+      page({
+        id: "q",
+        type: "core/quote",
+        version: 1,
+        props: { citeUrl: "/fallback" },
+        bindings: { citeUrl: binding, text: { source: "entry", field: "t" } },
+      }),
+      source({ "core/quote": quote })
+    );
+    const [node] = doc.nodes;
+    expect(node?.version).toBe(2);
+    expect(node?.props).toEqual({ href: "/fallback" });
+    expect(node?.bindings).toEqual({
+      href: binding,
+      text: { source: "entry", field: "t" },
+    });
+  });
+
+  it("keep a value already at the new name, the newer of the two", () => {
+    const result = migrateProps(
+      { citeUrl: "/old", href: "/new" },
+      1,
+      2,
+      { 1: same },
+      { 1: { citeUrl: "href" } }
+    );
+    expect(result.props).toEqual({ citeUrl: "/old", href: "/new" });
+  });
+
+  it("move bindings only through the steps that ran", () => {
+    const { doc } = migrateDocument(
+      page({
+        id: "q",
+        type: "t",
+        version: 1,
+        props: { a: 1 },
+        bindings: { a: { source: "x" }, b: { source: "y" } },
+      }),
+      source({
+        t: {
+          version: 3,
+          migrate: {
+            1: same,
+            2: () => {
+              throw new Error("no");
+            },
+          },
+          renames: { 1: { a: "a2" }, 2: { b: "b2" } },
+        } as never,
+      })
+    );
+    // Step 1 ran, so `a` moved; step 2 failed, so `b` stays where it was.
+    expect(doc.nodes[0]?.bindings).toEqual({
+      a2: { source: "x" },
+      b: { source: "y" },
+    });
+  });
+
+  it("re-point a component's exposures of the renamed prop, on that node only", () => {
+    // A placement's override is written through the exposure's path, so an
+    // exposure left on the old name writes where the upgraded block no longer
+    // reads, and every placement's own value is lost.
+    const exposure = (id: string, nodeId: string, propPath: string) => ({
+      id,
+      label: id,
+      nodeId,
+      propPath,
+      type: "url",
+    });
+    const component = {
+      formatVersion: 1,
+      kind: "component",
+      nodes: [
+        { id: "q", type: "core/quote", version: 1, props: { citeUrl: "/a" } },
+        { id: "other", type: "t", version: 1, props: { citeUrl: "/b" } },
+      ],
+      exposed: [
+        exposure("link", "q", "citeUrl"),
+        exposure("deep", "q", "citeUrl.label"),
+        exposure("words", "q", "text"),
+        exposure("elsewhere", "other", "citeUrl"),
+      ],
+    } as unknown as BlockDocument;
+    const { doc } = migrateDocument(
+      component,
+      source({ "core/quote": quote, t: { version: 1 } })
+    );
+    const paths = (doc as { exposed?: { id: string; propPath: string }[] })
+      .exposed;
+    expect(paths?.map(each => [each.id, each.propPath])).toEqual([
+      ["link", "href"],
+      ["deep", "href.label"],
+      ["words", "text"],
+      ["elsewhere", "citeUrl"],
+    ]);
+    // The stored document is left as it was.
+    expect(
+      (component as { exposed: { propPath: string }[] }).exposed[0]?.propPath
+    ).toBe("citeUrl");
+  });
+
+  it("leave a component's exposures as the same list when nothing is renamed", () => {
+    const exposed = [
+      { id: "w", label: "w", nodeId: "q", propPath: "text", type: "text" },
+    ];
+    const component = {
+      formatVersion: 1,
+      kind: "component",
+      nodes: [{ id: "q", type: "core/quote", version: 2, props: {} }],
+      exposed,
+    } as unknown as BlockDocument;
+    const { doc } = migrateDocument(component, source({ "core/quote": quote }));
+    expect((doc as { exposed?: unknown }).exposed).toBe(exposed);
+  });
+
+  it("reach every migration source through the one reading of a definition", () => {
+    expect(migrationInfoOf(quote)).toEqual(quote);
+    expect(migrationInfoOf({ version: 1 })).toEqual({ version: 1 });
   });
 });

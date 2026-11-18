@@ -1,14 +1,15 @@
 /**
- * Settings, in a browser: the rail opens it, the page's own fields and a
- * share preview are in "This page", Enter in a field saves nothing, and the
- * site's breakpoints are edited in "Site", where a breakpoint added shows as a
- * device at once. The top bar no longer edits breakpoints.
+ * Settings, in a browser: the rail opens Page settings, the page's own fields
+ * and its search and sharing are on General, Enter in a field saves nothing, and the
+ * site's breakpoints are edited in Site settings, opened from Page settings,
+ * where a breakpoint added shows as a device at once. The top bar no longer
+ * edits breakpoints.
  *
  * Breakpoints are renamed and removed there too. Removing the one being
  * edited moves the editor to the next wider breakpoint, where a style then
  * lands. A fourth breakpoint added there is chosen from the menu beside the
  * device buttons, styled and published. A role that may not manage the site's
- * settings is offered no Site tab.
+ * settings is offered no way into Site settings.
  *
  * A breakpoint nothing is styled under is removed at Save, after a check that
  * finds nothing. One with styles stored under it is removed only once
@@ -86,15 +87,45 @@ async function openEditor(
   });
 }
 
-/** Open Settings from the rail, in the editor already on screen. */
+/** Page settings, as its heading names it after the page. */
+function pageSettings(page: Page): Locator {
+  return page.getByRole("dialog", { name: /^Page settings · / });
+}
+
+/** Open Page settings from the rail, in the editor already on screen. */
 async function showSettings(page: Page): Promise<Locator> {
   await page
     .getByRole("navigation", { name: "Editor panels" })
     .getByRole("button", { name: "Settings" })
     .click();
-  const dialog = page.getByRole("dialog", { name: "Settings" });
+  const dialog = pageSettings(page);
   await expect(dialog).toBeVisible();
   return dialog;
+}
+
+/** Site settings, opened from Page settings (opened first where it is not). */
+async function showSiteSettings(page: Page): Promise<Locator> {
+  const settings = (await pageSettings(page).isVisible())
+    ? pageSettings(page)
+    : await showSettings(page);
+  await settings.getByRole("button", { name: "Site settings" }).click();
+  const site = page.getByRole("dialog", { name: "Site settings" });
+  await expect(site).toBeVisible();
+  return site;
+}
+
+/** Close Site settings where it is open, then Page settings under it. */
+async function closeSettings(page: Page): Promise<void> {
+  const site = page.getByRole("dialog", { name: "Site settings" });
+  if (await site.isVisible()) {
+    await site.getByRole("button", { name: "Close", exact: true }).click();
+    await expect(site).toBeHidden();
+  }
+  const settings = pageSettings(page);
+  if (await settings.isVisible()) {
+    await settings.getByRole("button", { name: "Close", exact: true }).click();
+    await expect(settings).toBeHidden();
+  }
 }
 
 async function openSettings(page: Page, id: string): Promise<void> {
@@ -102,10 +133,9 @@ async function openSettings(page: Page, id: string): Promise<void> {
   await showSettings(page);
 }
 
-/** Settings' Site tab, with its breakpoints open for editing. */
+/** Site settings, with its breakpoints open for editing. */
 async function editBreakpoints(page: Page): Promise<Locator> {
-  const dialog = await showSettings(page);
-  await dialog.getByRole("tab", { name: "Site" }).click();
+  const dialog = await showSiteSettings(page);
   await dialog.getByRole("button", { name: "Edit breakpoints" }).click();
   return dialog;
 }
@@ -190,25 +220,27 @@ async function storedTextStyles(
 }
 
 test.describe("Settings", () => {
-  test("holds the page's fields and a share preview, and Enter saves nothing", async ({
+  test("holds the page's fields and its search and sharing, and Enter saves nothing", async ({
     page,
   }) => {
     const { id } = await createPage(page.request);
     await openSettings(page, id);
-    const dialog = page.getByRole("dialog", { name: "Settings" });
+    const dialog = pageSettings(page);
 
     // The top bar's breakpoint editor is gone: breakpoints live in Settings.
     await expect(
       page.getByRole("button", { name: /^Breakpoints:/ })
     ).toHaveCount(0);
 
-    await expect(dialog.getByRole("tab", { name: "This page" })).toBeVisible();
+    await expect(dialog.getByRole("tab", { name: "General" })).toBeVisible();
+    // The playground's SEO plugin leaves Pages out: General says SEO is
+    // turned off for them, and draws no preview of its own beside it.
+    await expect(
+      dialog.getByText("SEO is turned off for Pages.")
+    ).toBeVisible();
     await expect(
       dialog.getByRole("figure", { name: "Share preview" })
-    ).toContainText("Settings ");
-    await expect(
-      dialog.getByText("Approximate: your site's metadata may differ.")
-    ).toBeVisible();
+    ).toHaveCount(0);
 
     let wrote = false;
     page.on("request", request => {
@@ -229,14 +261,13 @@ test.describe("Settings", () => {
     await expect(dialog).toBeVisible();
   });
 
-  test("adds a breakpoint in Site, and it shows as a device at once", async ({
+  test("adds a breakpoint in Site settings, and it shows as a device at once", async ({
     page,
   }) => {
     const { id } = await createPage(page.request);
     try {
-      await openSettings(page, id);
-      const dialog = page.getByRole("dialog", { name: "Settings" });
-      await dialog.getByRole("tab", { name: "Site" }).click();
+      await openEditor(page, id);
+      const dialog = await showSiteSettings(page);
       await expect(
         dialog.getByText("Changes here apply to the live site immediately.")
       ).toBeVisible();
@@ -265,7 +296,7 @@ test.describe("Settings", () => {
         dialog.getByRole("listitem").filter({ hasText: "Wide phone" })
       ).toContainText("up to 700 pixels");
 
-      await dialog.getByRole("button", { name: "Close" }).click();
+      await closeSettings(page);
       // The new device is offered for styling: as a button when it is one of
       // the widest, otherwise in the menu beside them.
       const button = page
@@ -283,7 +314,9 @@ test.describe("Settings", () => {
       await storeSiteBreakpoints(page.request, null);
     }
   });
-  test("renames and removes a breakpoint in Site", async ({ page }) => {
+  test("renames and removes a breakpoint in Site settings", async ({
+    page,
+  }) => {
     // A breakpoint of its own, so nothing anywhere is styled under it.
     await storeSiteBreakpoints(page.request, {
       viewport: [
@@ -312,7 +345,7 @@ test.describe("Settings", () => {
       await expect(
         dialog.getByRole("listitem").filter({ hasText: "Wide phone" })
       ).toHaveCount(0);
-      await dialog.getByRole("button", { name: "Close" }).click();
+      await closeSettings(page);
       await expect(
         devices(page).getByRole("radio", { name: /^Large phone/ })
       ).toBeVisible();
@@ -330,7 +363,7 @@ test.describe("Settings", () => {
       await expect(
         dialog.getByRole("listitem").filter({ hasText: "Tablet" })
       ).toContainText("up to 1024 pixels");
-      await dialog.getByRole("button", { name: "Close" }).click();
+      await closeSettings(page);
       await expect(
         devices(page).getByRole("radio", { name: /^Large phone/ })
       ).toHaveCount(0);
@@ -369,7 +402,7 @@ test.describe("Settings", () => {
       const dialog = await editBreakpoints(page);
       await dialog.getByRole("button", { name: "Remove Wide phone" }).click();
       await saveBreakpoints(page, dialog);
-      await dialog.getByRole("button", { name: "Close" }).click();
+      await closeSettings(page);
 
       // The device chosen is now Tablet, shown as the active button.
       const chosen = devices(page).getByRole("radio", { checked: true });
@@ -422,7 +455,7 @@ test.describe("Settings", () => {
         .fill("Small phone");
       await dialog.getByLabel("Up to", { exact: true }).last().fill("400");
       await saveBreakpoints(page, dialog);
-      await dialog.getByRole("button", { name: "Close" }).click();
+      await closeSettings(page);
 
       // The narrowest goes in the menu; the three buttons are unchanged.
       await expect(devices(page).getByRole("radio")).toHaveCount(3);
@@ -475,7 +508,7 @@ test.describe("Settings", () => {
     }
   });
 
-  test("offers no Site tab to a role that may not manage the site's settings", async ({
+  test("offers no Site settings to a role that may not manage the site's settings", async ({
     browser,
     page,
   }, testInfo) => {
@@ -489,11 +522,11 @@ test.describe("Settings", () => {
     try {
       const authorPage = await author.context.newPage();
       await openSettings(authorPage, id);
-      const dialog = authorPage.getByRole("dialog", { name: "Settings" });
+      const dialog = pageSettings(authorPage);
+      await expect(dialog.getByRole("tab", { name: "General" })).toBeVisible();
       await expect(
-        dialog.getByRole("tab", { name: "This page" })
-      ).toBeVisible();
-      await expect(dialog.getByRole("tab", { name: "Site" })).toHaveCount(0);
+        dialog.getByRole("button", { name: "Site settings" })
+      ).toHaveCount(0);
       await expect(
         dialog.getByRole("button", { name: "Edit breakpoints" })
       ).toHaveCount(0);
@@ -719,7 +752,7 @@ test.describe("Removing a breakpoint in Settings", () => {
       await expect
         .poll(async () => (await storedTextStyles(page.request, id))[small])
         .toBeUndefined();
-      await dialog.getByRole("button", { name: "Close" }).click();
+      await closeSettings(page);
       await expect(
         devices(page).getByRole("radio", { name: /^Small/ })
       ).toHaveCount(0);
@@ -773,7 +806,7 @@ test.describe("Removing a breakpoint in Settings", () => {
         .toBeDefined();
       // Undone once: nothing is offered to undo any more.
       await expect(dialog.getByRole("button", { name: "Undo" })).toHaveCount(0);
-      await dialog.getByRole("button", { name: "Close" }).click();
+      await closeSettings(page);
       await expect(
         devices(page).getByRole("radio", { name: /^Small/ })
       ).toHaveCount(1);
@@ -861,7 +894,7 @@ test.describe("Removing a breakpoint in Settings", () => {
       await expect(
         dialog.getByText("Nothing was styled for it.")
       ).toBeVisible();
-      await dialog.getByRole("button", { name: "Close" }).click();
+      await closeSettings(page);
 
       // Opened again, the tab's read reports that run still open, as it
       // would while the removal job carries a large one on: every read until
@@ -895,8 +928,7 @@ test.describe("Removing a breakpoint in Settings", () => {
         }
       });
       const carried = await hold(page, `${BREAKPOINTS_ROUTE}/removal`);
-      const again = await showSettings(page);
-      await again.getByRole("tab", { name: "Site" }).click();
+      const again = await showSiteSettings(page);
       await carried.seen;
       await expect(
         step(again, "resumed").getByText(
@@ -979,9 +1011,8 @@ test.describe("Removing a breakpoint in Settings", () => {
         "It has a draft waiting to be published"
       );
       // Said again when Settings opens, until the draft is resolved.
-      await dialog.getByRole("button", { name: "Close" }).click();
-      const again = await showSettings(page);
-      await again.getByRole("tab", { name: "Site" }).click();
+      await closeSettings(page);
+      const again = await showSiteSettings(page);
       await expect(step(again, "left")).toContainText(
         "except from 1 live version"
       );

@@ -43,6 +43,7 @@ import {
 
 import { ComponentActionPrompt } from "../ComponentActionPrompt";
 import { ComponentFromSelectionPrompt } from "../ComponentFromSelectionPrompt";
+import { useFilledDefaultNotice } from "../filled-default-notice";
 import { SavePatternPrompt } from "../SavePatternPrompt";
 import {
   SiteStyleHistoryContext,
@@ -404,7 +405,7 @@ function EditorBody<TFieldValues extends FieldValues>({
   // inputs, which read them, and set by "Preview as visitor" below.
   const listsAsVisitor = useListsAsVisitor();
   const canvas = useCanvasInputs(mount, style, listsAsVisitor.lists);
-  const panels = useEditorPanels(mount, name, {
+  const panels = useEditorPanels(mount, {
     control,
     canvasRoot: canvas.canvasElement,
     siteTokens: offerableTokens(
@@ -461,6 +462,8 @@ function EditorBody<TFieldValues extends FieldValues>({
     mount.initialDocument.kind === "component",
     canvas.pageDataLimit
   );
+  // A component published as the first header or footer: said once.
+  useFilledDefaultNotice(mount.initialDocument.kind, panels);
   // The "Part of" toast offers the same Edit component the panel does.
   useOfferedEditComponent(
     mount.offerEditComponent,
@@ -706,7 +709,13 @@ function EditorBody<TFieldValues extends FieldValues>({
           // the visitor's view while it is on.
           canvasStrip={editorStrip(templatePreview, conditions)}
           openSettingsRequest={view.pages.settingsRequest}
-          renderSettings={editorSettings(view, page, settingsPlace)}
+          renderSettings={editorSettings(view, page, settingsPlace, {
+            kind: mount.initialDocument.kind,
+            fieldName: name,
+            control: control as unknown as Control<FieldValues>,
+            // At the bottom of Page settings, as in the ⋯ menu.
+            openAsForm: shellExit(componentView, done),
+          })}
           // The shell owns the region; this fills it. Rendered unconditionally
           // rather than only when something is selected, because with nothing
           // selected the panel shows the document's own settings: a region
@@ -727,6 +736,7 @@ function EditorBody<TFieldValues extends FieldValues>({
             control,
             page,
             pageData,
+            place: settingsPlace,
           })}
           // Switched on the panel id rather than rendering the inserter for
           // whatever the rail reports open. The shell asks for the panel it

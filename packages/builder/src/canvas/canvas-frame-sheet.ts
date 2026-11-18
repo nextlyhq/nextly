@@ -144,13 +144,15 @@ ${ROOT} {
 ${BLANK} ${ROOT} {
   /* Fills the viewport: see the body above. */
   flex: 1 0 auto;
-  /* The site's background, text and body font, which the canvas root names
-     under the site's token prefix (see \`canvas.tsx\`); they follow the site's
-     dark values by themselves. */
+  /* The site's background and text, which the canvas root names under the
+     site's token prefix (see \`canvas.tsx\`); they follow the site's dark
+     values by themselves. The face is a plain base, not a site variable: the
+     site's Body font is the page sheet's rule on the page root, the same rule
+     a published page and a page the site serves carry. */
   color-scheme: light;
   background-color: var(--nx-canvas-site-ground, Canvas);
   color: var(--nx-canvas-site-ink, CanvasText);
-  font-family: var(--nx-canvas-site-font, system-ui), sans-serif;
+  font-family: system-ui, sans-serif;
 }
 
 /* The site's own dark mode, the one thing that darkens the blank page. The

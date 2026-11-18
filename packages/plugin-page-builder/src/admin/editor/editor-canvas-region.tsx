@@ -14,6 +14,7 @@ import {
   Canvas,
   CanvasFrame,
   CanvasMarks,
+  InsertionLine,
   DropIndicator,
   DropRefusal,
   elementAnchor,
@@ -296,6 +297,11 @@ export function editorCanvasRegion(view: EditorView): React.JSX.Element {
                   }
                   shownLabel={view.conditionsShownLabel}
                 />
+                {/* Where the Add panel's highlighted tile would land: a line
+                    with the panel's words, or an empty container lit. Not
+                    while a block is dragged, whose own drop line says where
+                    it lands. */}
+                {dragging ? null : <InsertionLine document={editor.document} />}
                 {/* A block whose bound value a visitor will not see says
                     so above its corner; pressing the badge selects it, and
                     the inspector says it in full. Hidden mid-drag, as the

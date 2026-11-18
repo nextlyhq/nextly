@@ -10,6 +10,7 @@ import {
   validateStyleValues,
   type SiteTokenSet,
 } from "@nextlyhq/blocks-engine";
+import { Toaster } from "@nextlyhq/ui";
 import {
   act,
   cleanup,
@@ -387,12 +388,12 @@ describe("the rows", () => {
     expect(previewed()).toBe("12px");
   });
 
-  it("draws the import and export menu into the element the host gives it, and no light/dark switch", () => {
+  it("draws the More design actions menu into the element the host gives it, and no light/dark switch", () => {
     const slot = document.createElement("div");
     document.body.append(slot);
     render(<Hosted tokens={PREVIEWED} headerActions={slot} />);
     expect(
-      within(slot).getByRole("button", { name: "Import or export" })
+      within(slot).getByRole("button", { name: "More design actions" })
     ).toBeDefined();
     expectNoModeSwitch();
     slot.remove();
@@ -422,11 +423,11 @@ describe("the rows", () => {
     }
     render(<Host />);
     expect(
-      screen.getAllByRole("button", { name: "Import or export" })
+      screen.getAllByRole("button", { name: "More design actions" })
     ).toHaveLength(1);
     expect(
       within(screen.getByTestId("host-header")).getByRole("button", {
-        name: "Import or export",
+        name: "More design actions",
       })
     ).toBeDefined();
     expect(previewed()).toBe("12px");
@@ -645,22 +646,22 @@ describe("the read-only view", () => {
   it("leaves Import out of the menu", async () => {
     render(<Hosted tokens={SITE} readOnly />);
     fireEvent.keyDown(
-      screen.getByRole("button", { name: "Import or export" }),
+      screen.getByRole("button", { name: "More design actions" }),
       { key: "Enter" }
     );
     await screen.findByRole("menu");
     expect(screen.queryByRole("menuitem", { name: /Import/ })).toBeNull();
     expect(
-      screen.getByRole("menuitem", { name: "Export (DTCG)" })
+      screen.getByRole("menuitem", { name: "Export design tokens (.json)" })
     ).toBeDefined();
   });
 });
 
-describe("the import and export menu", () => {
+describe("the More design actions menu", () => {
   it("leaves the rest of the panel reachable while it is open", async () => {
     render(<Hosted tokens={SITE} />);
     fireEvent.keyDown(
-      screen.getByRole("button", { name: "Import or export" }),
+      screen.getByRole("button", { name: "More design actions" }),
       { key: "Enter" }
     );
     await screen.findByRole("menu");
@@ -746,26 +747,34 @@ describe("the add menu and the rest of the editor", () => {
 });
 
 describe("import and export", () => {
-  it("lists the exports with CSS last", async () => {
+  it("lists the four design actions, Copy CSS variables last", async () => {
     render(<Hosted tokens={SITE} />);
     fireEvent.keyDown(
-      screen.getByRole("button", { name: "Import or export" }),
+      screen.getByRole("button", { name: "More design actions" }),
       { key: "Enter" }
     );
     await screen.findByRole("menu");
     expect(
-      screen.getAllByRole("menuitem").map(item => item.textContent)
+      screen
+        .getAllByRole("menuitem")
+        .map(item => item.getAttribute("aria-label") ?? item.textContent)
     ).toEqual([
-      "Import variables\u2026",
-      "Export (DTCG)",
+      "Import design tokens\u2026",
+      "Export design tokens (.json)",
       "Export for Figma",
-      "Export CSS",
+      "Copy CSS variables",
     ]);
   });
 
   it("previews an import and changes nothing until it is confirmed", async () => {
     const onChange = vi.fn();
-    render(<Hosted tokens={SITE} onChange={onChange} />);
+    const restore = answerMatchMedia();
+    render(
+      <>
+        <Hosted tokens={SITE} onChange={onChange} />
+        <Toaster />
+      </>
+    );
     const contents = JSON.stringify({
       color: {
         accent: {
@@ -782,7 +791,7 @@ describe("import and export", () => {
       value: () => Promise.resolve(contents),
     });
     const input = screen.getByLabelText("Choose variable files to import");
-    // Reached only through the menu's "Import variables…": a reader browsing
+    // Reached only through the menu's "Import design tokens…": a reader browsing
     // the panel meets one way to import, not a second bare file control.
     expect(input.getAttribute("aria-hidden")).toBe("true");
     expect(input.tabIndex).toBe(-1);
@@ -797,9 +806,8 @@ describe("import and export", () => {
     fireEvent.click(within(preview).getByRole("button", { name: "Import" }));
     const saved = onChange.mock.calls.at(-1)?.[0] as SiteTokenSet;
     expect(saved.tokens.map(t => t.name)).toContain("color.accent");
-    expect(screen.getByRole("status").textContent).toMatch(
-      /Imported 1 variable/
-    );
+    expect(await screen.findByText("Imported 1 variable.")).toBeDefined();
+    restore();
   });
 });
 
@@ -1146,6 +1154,25 @@ describe("reset compares the whole variable", () => {
 });
 
 /** Choose one file in the panel's hidden input, as the system chooser would. */
+/**
+ * A device-scheme answer for the toaster, which jsdom cannot give; returns
+ * the undo.
+ */
+function answerMatchMedia(): () => void {
+  const original = window.matchMedia;
+  window.matchMedia = ((query: string) => ({
+    matches: false,
+    media: query,
+    addEventListener: () => undefined,
+    removeEventListener: () => undefined,
+    addListener: () => undefined,
+    removeListener: () => undefined,
+  })) as unknown as typeof window.matchMedia;
+  return () => {
+    window.matchMedia = original;
+  };
+}
+
 async function chooseFile(name: string, contents: string): Promise<void> {
   const file = new File([contents], name, { type: "application/json" });
   Object.defineProperty(file, "text", {
@@ -1223,8 +1250,8 @@ describe("the import preview", () => {
   });
 });
 
-describe("a clean export after a refusal", () => {
-  it("replaces the refusal with what was saved", async () => {
+describe("an export after an import's refusal", () => {
+  it("keeps the refusal on screen beside the export's toast", async () => {
     Object.defineProperty(URL, "createObjectURL", {
       configurable: true,
       value: () => "blob:variables",
@@ -1233,18 +1260,26 @@ describe("a clean export after a refusal", () => {
       configurable: true,
       value: () => undefined,
     });
-    render(<Hosted tokens={SITE} />);
+    const restore = answerMatchMedia();
+    render(
+      <>
+        <Hosted tokens={SITE} />
+        <Toaster />
+      </>
+    );
     await chooseFile("broken.json", "{");
-    expect(screen.getByRole("alert").textContent).toMatch(/not valid JSON/);
+    const refusal = await screen.findByText(/not valid JSON/);
     fireEvent.keyDown(
-      screen.getByRole("button", { name: "Import or export" }),
+      screen.getByRole("button", { name: "More design actions" }),
       { key: "Enter" }
     );
     fireEvent.click(
-      await screen.findByRole("menuitem", { name: "Export CSS" })
+      await screen.findByRole("menuitem", { name: "Export for Figma" })
     );
-    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
-    expect(screen.getByRole("status").textContent).toMatch(/Saved/);
+    expect(await screen.findByText(/Exported for Figma/)).toBeDefined();
+    // The refusal names what did not arrive, so only the author removes it.
+    expect(refusal.isConnected).toBe(true);
+    restore();
   });
 });
 

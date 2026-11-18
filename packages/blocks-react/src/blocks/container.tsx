@@ -202,6 +202,11 @@ export const CONTAINER_SUPPORTS = {
   effects: true,
   position: true,
   container: true,
+  // Style › Text: a colour and type set once on the container, which every
+  // block inside inherits unless it sets its own. The page compile makes the
+  // links inside take the colour too, while the site's Links row sets none.
+  typography: true,
+  color: true,
 } as const;
 
 /** Whether a stored value is a tag a container may render. */

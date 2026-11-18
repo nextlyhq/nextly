@@ -8,7 +8,8 @@
  * explained here: it is the site header, which header & footer set it comes
  * from, how many pages show it (so a change here changes all of them), the
  * way to edit it for someone who may edit components, and where a page
- * chooses a different one.
+ * chooses a different one. While it is still the site's starter, the card
+ * also offers "Use a component ▾" to replace it in its set.
  *
  * The count is the component's reach, the same number its own view's banner
  * says, read through the component facts the editor already asks
@@ -18,10 +19,12 @@
  */
 import type { RegionArea } from "@nextlyhq/blocks-engine";
 import { Button } from "@nextlyhq/ui";
-import { useId, type JSX } from "react";
+import { useId, type JSX, type ReactNode } from "react";
 
 import { useComponentFacts } from "../component-facts-client";
 import { siteRegionName, type RegionCardFacts } from "../page-layout";
+
+import { UseAComponent } from "./use-a-component";
 
 /** How many pages show the region, or nothing while that is not known. */
 type PagesShown =
@@ -65,6 +68,7 @@ export function RegionCard({
   pages,
   onEdit,
   onOpenSettings,
+  replace,
 }: {
   facts: RegionCardFacts;
   pages: PagesShown;
@@ -72,6 +76,8 @@ export function RegionCard({
   onEdit: (() => void) | undefined;
   /** Open the page's settings, where it chooses its header and footer. */
   onOpenSettings: () => void;
+  /** The way to replace the starter, beside Edit; absent for any other. */
+  replace?: ReactNode;
 }): JSX.Element {
   const headingId = useId();
   const name = siteRegionName(facts.area);
@@ -108,10 +114,16 @@ export function RegionCard({
         <p className="text-[color:var(--nx-builder-text-muted)] m-0 text-xs">
           {`You can't change the site ${word}. Ask someone who can edit components.`}
         </p>
-      ) : (
-        <Button type="button" size="sm" className="self-start" onClick={onEdit}>
-          {word === "header" ? "Edit header" : "Edit footer"}
-        </Button>
+      ) : null}
+      {onEdit === undefined && replace === undefined ? null : (
+        <div className="flex flex-wrap items-center gap-2">
+          {onEdit === undefined ? null : (
+            <Button type="button" size="sm" onClick={onEdit}>
+              {word === "header" ? "Edit header" : "Edit footer"}
+            </Button>
+          )}
+          {replace}
+        </div>
       )}
       <p className="text-[color:var(--nx-builder-text-muted)] m-0 text-xs leading-relaxed">
         {`To use a different ${word} on this page, change it in `}
@@ -154,6 +166,17 @@ export function SelectedRegionCard({
           : () => onEditComponent(facts.componentId)
       }
       onOpenSettings={onOpenSettings}
+      {...(facts.starter
+        ? {
+            replace: (
+              <UseAComponent
+                area={facts.area}
+                setId={facts.setId}
+                current={facts.componentId}
+              />
+            ),
+          }
+        : {})}
     />
   );
 }

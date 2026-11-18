@@ -56,6 +56,11 @@ import {
 } from "@nextlyhq/blocks-engine";
 import { useCallback, useMemo, useRef, useState } from "react";
 
+import {
+  useEditorAsks,
+  type AskedSetting,
+  type SettingAsked,
+} from "./editor-asks";
 import { useFirstAdd, type FirstAdd } from "./first-add";
 import { keptLockAnswers } from "./kept-lock-answers";
 import {
@@ -263,6 +268,10 @@ export interface EditorState {
   sortFieldAsked?: { readonly id: string; readonly seq: number };
   /** Select a list and take the author to its first sort row. */
   askSortField?: (id: string) => void;
+  /** The setting last asked for, counted per ask (`editor-asks`). @experimental */
+  settingAsked?: SettingAsked;
+  /** Select a block and take the author to one of its settings. */
+  askSetting?: (id: string, setting: AskedSetting) => void;
   /**
    * A block just added that asks for a choice, while the canvas draws its
    * chooser: editor state only, never stored. See `first-add.ts`.
@@ -1170,17 +1179,8 @@ export function useEditorState(args: UseEditorStateArgs): EditorState {
   const state = useFirstAdd(useDocumentState(args));
   const { listsShowingEmpty, showListEmpty } = useListsShowingEmpty();
   const { listsStillShowing, tagListStillShowing } = useListsStillShowing();
-  const [sortFieldAsked, setSortFieldAsked] =
-    useState<EditorState["sortFieldAsked"]>(undefined);
-  const { select } = state;
-  // Selecting first, so the inspector the author is taken to is the list's.
-  const askSortField = useCallback(
-    (id: string) => {
-      select(id);
-      setSortFieldAsked(current => ({ id, seq: (current?.seq ?? 0) + 1 }));
-    },
-    [select]
-  );
+  // What the author asked the inspector to take them to (`editor-asks`).
+  const asks = useEditorAsks(state.select);
   return useMemo(
     () => ({
       ...state,
@@ -1188,8 +1188,7 @@ export function useEditorState(args: UseEditorStateArgs): EditorState {
       showListEmpty,
       listsStillShowing,
       tagListStillShowing,
-      ...(sortFieldAsked === undefined ? {} : { sortFieldAsked }),
-      askSortField,
+      ...asks,
     }),
     [
       state,
@@ -1197,8 +1196,7 @@ export function useEditorState(args: UseEditorStateArgs): EditorState {
       showListEmpty,
       listsStillShowing,
       tagListStillShowing,
-      sortFieldAsked,
-      askSortField,
+      asks,
     ]
   );
 }

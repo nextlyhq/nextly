@@ -7,6 +7,7 @@
  *
  * @module @nextlyhq/plugin-page-builder/admin/editor/editor-settings
  */
+import type { DocumentKind } from "@nextlyhq/blocks-engine";
 import {
   prepareDocumentForRead,
   registeredBlocks,
@@ -29,6 +30,7 @@ import {
   type SettingsAddress,
 } from "./settings-address";
 import { SettingsDialog } from "./settings-dialog";
+import { HeaderFooterMenu } from "./settings-general";
 import type { SettingsPlace } from "./settings-place";
 import {
   sharePreview,
@@ -122,18 +124,31 @@ export function pageAddressOf(
   };
 }
 
+/** What Settings is drawn for besides the editor's view and the page. */
+export interface SettingsFor {
+  /** Which document is open: a page gets General, Fields and its address. */
+  kind: DocumentKind;
+  /** The form path of the field the builder edits. */
+  fieldName: string;
+  /** The entry's form, which the header & footer menu writes through. */
+  control: Control<FieldValues>;
+  /** Opens the document's form, as the ⋯ menu's "Open as form" does. */
+  openAsForm?: (() => void) | undefined;
+}
+
 /**
- * Settings, as the shell's rail opens it: the entry's own fields and a share
- * preview built from the page as it is now, and the site's breakpoints, read
- * from the same answer the canvas and the device buttons are.
+ * Page settings, as the shell's rail opens it: the entry's own fields and a
+ * share preview built from the page as it is now, and the site's
+ * breakpoints, read from the same answer the canvas and the device buttons
+ * are.
  */
 export function editorSettings(
   view: EditorView,
   page: PageFacts,
-  place: SettingsPlace | null
+  place: SettingsPlace | null,
+  of: SettingsFor
 ): NonNullable<React.ComponentProps<typeof BuilderShell>["renderSettings"]> {
   const {
-    entryFields,
     pageLayout,
     canvasRender,
     saveBreakpoints,
@@ -161,20 +176,24 @@ export function editorSettings(
         <SettingsDialog
           key={view.pages.settingsRequest?.count ?? 0}
           {...dialog}
-          pageFields={entryFields}
-          // Other plugins' tabs beside the page's own settings.
+          kind={of.kind}
+          pageTitle={page.title}
+          fieldName={of.fieldName}
+          // Other plugins' tabs, in the same row as the page's own.
           place={place}
-          // The page's Layout, in its own section after the page's fields.
-          pageLayout={pageLayout}
+          // The page's header & footer, where its form has one.
+          headerFooter={
+            pageLayout === null ? null : (
+              <HeaderFooterMenu control={of.control} />
+            )
+          }
+          openAsForm={of.openAsForm}
           // Built only while the dialog is drawn, from the page on screen.
           share={
             // Prepared only while Settings is open: the shell asks for the
             // dialog on every pass, open or not.
             dialog.open ? pagePreview(view, page) : { title: page.title ?? "" }
           }
-          // The SEO plugin's group, where the page has one: its fields are then
-          // among the page's own, and the preview is not all there is.
-          seoFields={page.seo !== undefined}
           address={pageAddressOf(view, page)}
           breakpoints={{
             value: canvasRender.styleContext.breakpoints,
