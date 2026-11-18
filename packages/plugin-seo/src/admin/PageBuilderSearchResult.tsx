@@ -141,7 +141,7 @@ function PanelSearchResult({
     },
     context.entryId === null ? undefined : { id: context.entryId }
   );
-  const { context: levels } = useSeoTabContext(target, document);
+  const { context: levels, status } = useSeoTabContext(target, document);
   const values: SeoPanelValues = useMemo(() => {
     const seo = document[SEO_GROUP];
     return typeof seo === "object" && seo !== null ? seo : {};
@@ -158,7 +158,9 @@ function PanelSearchResult({
       <div className="min-w-0 rounded-md border border-border px-2.5 py-2">
         {answer === undefined || levels === undefined ? (
           <p className="m-0 text-xs text-muted-foreground">
-            Reading this page&apos;s search result…
+            {status === "failed"
+              ? "This page's search result could not be read just now."
+              : "Reading this page's search result…"}
           </p>
         ) : (
           <SearchResult answer={answer} site={levels.site} />

@@ -25,6 +25,8 @@ const handed = vi.hoisted(() => ({
   /** Each document the page's SEO answer was read for. */
   resolved: [] as Record<string, unknown>[],
   answer: undefined as unknown,
+  /** Whether the page's SEO answer is refused, as for a reader who may not. */
+  refuse: false,
 }));
 
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
@@ -41,7 +43,9 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   }),
   writePluginRoute: (request: { body: Record<string, unknown> }) => {
     handed.resolved.push(request.body);
-    return Promise.resolve(handed.answer);
+    return handed.refuse
+      ? Promise.reject(new Error("Forbidden"))
+      : Promise.resolve(handed.answer);
   },
   useDocumentLocale: () => null,
   humanizeFieldName: (name: string) =>
@@ -57,6 +61,7 @@ afterEach(() => {
   handed.asked = [];
   handed.settings = undefined;
   handed.resolved = [];
+  handed.refuse = false;
 });
 
 /** A page's levels: its title made by the type's title pattern. */
@@ -166,6 +171,16 @@ describe("the page's search result in the Page Builder", () => {
         "Plans and prices"
       )
     );
+  });
+
+  it("says so in the right panel where the page's SEO answer cannot be read, rather than reading forever", async () => {
+    handed.refuse = true;
+    render(<Block at="panel" />);
+    expect(
+      await screen.findByText(
+        "This page's search result could not be read just now."
+      )
+    ).toBeTruthy();
   });
 
   it("says SEO is turned off for the type where the plugin does not edit it, with the settings for someone who may change them", () => {
