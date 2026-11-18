@@ -283,6 +283,36 @@ describe("importing a file with text styles and the site's design data", () => {
     expect(fonts.textContent).not.toContain("Brand Sans");
     expect(fonts.textContent).toContain("Inter");
   });
+
+  it("words the preview plainly: no class or Classes, and no DTCG", async () => {
+    const catalogue: FontCatalogue = {
+      load: async () => ({ families: [INTER] }),
+      previewUrl: () => "",
+      add: async () => undefined,
+    };
+    // A site whose own text style has the file's name, so the preview also
+    // says why one was not imported.
+    const clash: NamedClass = { ...eyebrow, id: "ts-site-eyebrow" };
+    render(
+      <WithFonts
+        tokens={{ tokens: [] }}
+        classes={[clash]}
+        onEditClasses={async () => undefined}
+        catalogue={catalogue}
+      />
+    );
+    await chooseFile("variables.tokens.json", exported());
+    const preview = await screen.findByRole("dialog", {
+      name: "Import variables",
+    });
+    await within(preview).findByRole("button", {
+      name: "Add from Google Fonts: Inter",
+    });
+    const words = preview.textContent ?? "";
+    expect(words).toContain("Eyebrow");
+    expect(words).not.toMatch(/\bclass(?:es)?\b/i);
+    expect(words).not.toMatch(/DTCG/);
+  });
 });
 
 describe("exporting for Figma", () => {
