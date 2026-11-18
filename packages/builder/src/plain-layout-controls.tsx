@@ -67,6 +67,7 @@ import {
   AppliedAtTier,
   BeneathAtTier,
   StyleTargetContext,
+  TypesLiveContext,
   type CascadeAt,
   type StyleFieldSurroundings,
 } from "./style-field-surroundings";
@@ -1179,24 +1180,27 @@ function SpaceBetween({
   if (drawn.length === 0) return null;
   return (
     <StyleTargetContext.Provider value={written}>
-      {drawn.map(property => (
-        <StylePropertyFields
-          key={property.property}
-          property={property}
-          namesSection={false}
-          {...surroundings}
-          editor={editor}
-        />
-      ))}
-      {apartOffered && !apart ? (
-        <button
-          type="button"
-          className="nx-arrange__link"
-          onClick={() => setApartAsked(true)}
-        >
-          Set rows and columns apart
-        </button>
-      ) : null}
+      {/* A block's own fields: the canvas follows what is typed in them. */}
+      <TypesLiveContext.Provider value={true}>
+        {drawn.map(property => (
+          <StylePropertyFields
+            key={property.property}
+            property={property}
+            namesSection={false}
+            {...surroundings}
+            editor={editor}
+          />
+        ))}
+        {apartOffered && !apart ? (
+          <button
+            type="button"
+            className="nx-arrange__link"
+            onClick={() => setApartAsked(true)}
+          >
+            Set rows and columns apart
+          </button>
+        ) : null}
+      </TypesLiveContext.Provider>
     </StyleTargetContext.Provider>
   );
 }

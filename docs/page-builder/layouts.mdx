@@ -101,6 +101,41 @@ closes, or someone else takes over the page while you edit its header, the heade
 kept as its recovery point, offered when it is next opened. The header's variants are edited in
 its own view, not here.
 
+### Open a header & footer set in the builder
+
+A header & footer set opens in the builder as a screen of its own: from its row in the Pages
+panel's **Header & footer** group, or from **Open in builder** on the admin's Header & footer
+list or in a set's form. The builder draws the set's header and footer around a grey **Page
+content goes here** box, where any page using the set goes. They are the set's working header
+and footer, so a change you make here shows at once, before you save.
+
+With nothing selected, the right panel shows the set's settings:
+
+- **Name**, the set's name.
+- **Header** and **Footer**, each a menu with a picture of every published component you can
+  choose. The components marked **Use as: Header** (or **Footer**) come first, then **Other
+  components**, then **None**, which leaves that area empty in this set.
+- **Used on 11 pages**: how many pages show this set, including the pages that follow the site
+  default when this set is the default.
+- **Site default** when this set is the default. Otherwise, if you may choose the default,
+  **Make site default** (or **Publish it, then make default** for a set that was never
+  published). See [Make another header & footer set the default](#make-another-header--footer-set-the-default).
+- A **⋯** menu with **Rename**, which puts you in the **Name** field, **Duplicate**, which makes
+  a draft copy, and **Delete**, which works as [Removing a header & footer
+  set](#removing-a-header--footer-set) describes. The site default can't be deleted until another
+  set is the default.
+
+Changes to the name, the header and the footer are the set's own: **Save** stores them as the
+set's draft, and pages using the set keep showing it as published. **Publish** asks "Publish to
+11 pages?" first, then every page using the set shows the new header and footer. A set no page
+uses is published without asking.
+
+A click on the header or footer selects it, and **Edit header** edits it in place, exactly as on
+a page (above). There are no page blocks here: the Add panel is offered only while you edit the
+header or footer. **Back to Home** in the top bar returns to the page you opened the set from,
+asking first if the set has changes you haven't saved; opened from the admin, it goes back to the
+Header & footer list.
+
 Publishing a page that names an unpublished header & footer set asks first: **Publish page only**
 leaves the header & footer set as it is, and the site default shows until it is published;
 **Publish both** publishes the header & footer set too, if you may update and publish header & footer sets. See
@@ -127,6 +162,28 @@ from your design variables, so they follow your site's light and dark colours. E
 component, or replace them. In the builder it is tagged **Starter header · edit or replace** and **Starter
 footer** until you publish a change to them. The **Contact us** button goes to your site's 404 page
 until you add a `/contact` page or change its link.
+
+### When the default has no header or footer
+
+If the default header & footer set has no header, the builder draws a dashed **No header yet** band
+in the header's place on every page that follows the default (the same goes for the footer). The
+band is drawn on the canvas only; the published page shows nothing there. It offers two ways to
+fill the area:
+
+- **Create a header** makes a new published header with the starter header's design, called **Header**
+  (or **Header 2**, and so on, when that name is taken), puts it in the default, and opens it for
+  editing in place.
+- **Use a component** lists the published components used as the header and puts the one you
+  choose in the default.
+
+Both need the right to update and publish header & footer sets, and creating one also needs the
+right to create and publish components. Anyone else sees who to ask instead. A site that draws its
+header and footer in code never shows the band. The create is a route of its own, which finds the
+default on the server and refuses an area that already shows a component:
+
+```http
+POST /admin/api/plugins/@nextlyhq/plugin-page-builder/default-layout/areas/:area
+```
 
 The starter header and footer are created once, on a new site only. A site that already had a
 default when it upgraded keeps it, and gets no starter header and footer. If the default is lost later and the plugin re-creates it,

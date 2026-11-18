@@ -18,6 +18,7 @@ import {
   type PluginAuthApi,
 } from "../auth/plugin-auth-api";
 import { NextlyError } from "../errors/nextly-error";
+import { processGlobal } from "../shared/process-global";
 
 import {
   bootNameOf,
@@ -27,48 +28,52 @@ import {
 import type { PluginDefinition } from "./plugin-context";
 import { pluginAdminSlug } from "./plugin-slug";
 
-let memoized: PluginAuthApi | undefined;
-
 /**
- * How the provider reaches the auth router dependencies.
- *
- * Injected rather than imported so this module does not depend on the DI
- * container, which depends on the plugin context in turn.
+ * What the provider keeps, one per process (see {@link processGlobal}): the boot
+ * registers the resolver, and a request in any copy of this module uses it.
  */
-let resolveDeps: (() => CompleteLoginDeps) | undefined;
-
-/**
- * The dependencies the resolver built, kept until the resolver changes.
- *
- * Building them assembles every plugin context, the hook registries and the
- * served auth UI, and doing that on every `completeLogin` and `currentUser`
- * call made the cheapest question — who is signed in — pay for all of it.
- */
-let resolvedDeps: CompleteLoginDeps | undefined;
+const state = processGlobal("pluginAuth", () => ({
+  memoized: undefined as PluginAuthApi | undefined,
+  /**
+   * How the provider reaches the auth router dependencies.
+   *
+   * Injected rather than imported so this module does not depend on the DI
+   * container, which depends on the plugin context in turn.
+   */
+  resolveDeps: undefined as (() => CompleteLoginDeps) | undefined,
+  /**
+   * The dependencies the resolver built, kept until the resolver changes.
+   *
+   * Building them assembles every plugin context, the hook registries and the
+   * served auth UI, and doing that on every `completeLogin` and `currentUser`
+   * call made the cheapest question — who is signed in — pay for all of it.
+   */
+  resolvedDeps: undefined as CompleteLoginDeps | undefined,
+}));
 
 /** Register how to build the auth dependencies. Called once, during boot. */
 export function setPluginAuthDepsResolver(
   resolver: () => CompleteLoginDeps
 ): void {
-  resolveDeps = resolver;
+  state.resolveDeps = resolver;
   // A new resolver means the container was rebuilt, so both memos describe
   // the previous one. Dropped here rather than left for the next reload, or
   // hooks added by a config reload would never apply.
-  memoized = undefined;
-  resolvedDeps = undefined;
+  state.memoized = undefined;
+  state.resolvedDeps = undefined;
 }
 
 /** Drop the memos so the next call rebuilds. Used when the config reloads. */
 export function resetPluginAuthApi(): void {
-  memoized = undefined;
-  resolvedDeps = undefined;
+  state.memoized = undefined;
+  state.resolvedDeps = undefined;
 }
 
 /** The shared `ctx.auth`. */
 export function getPluginAuthApi(): PluginAuthApi {
-  if (!memoized) {
-    memoized = createPluginAuthApi(() => {
-      if (!resolveDeps) {
+  if (!state.memoized) {
+    state.memoized = createPluginAuthApi(() => {
+      if (!state.resolveDeps) {
         throw NextlyError.internal({
           logContext: {
             reason:
@@ -77,11 +82,11 @@ export function getPluginAuthApi(): PluginAuthApi {
           },
         });
       }
-      resolvedDeps ??= resolveDeps();
-      return resolvedDeps;
+      state.resolvedDeps ??= state.resolveDeps();
+      return state.resolvedDeps;
     });
   }
-  return memoized;
+  return state.memoized;
 }
 
 /**

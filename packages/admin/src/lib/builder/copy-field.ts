@@ -25,5 +25,11 @@ function reidentify(field: BuilderField): BuilderField {
  * shared with the original: a deep copy, so editing one never edits the other.
  */
 export function copyWithNewIds(field: BuilderField): BuilderField {
-  return reidentify(structuredClone(field));
+  const copy = reidentify(structuredClone(field));
+  // A copied relationship is a field of its own, so it never names the original's link table.
+  if (copy.storedRelationOptions?.junctionTable !== undefined) {
+    const { junctionTable: _shared, ...rest } = copy.storedRelationOptions;
+    copy.storedRelationOptions = rest;
+  }
+  return copy;
 }

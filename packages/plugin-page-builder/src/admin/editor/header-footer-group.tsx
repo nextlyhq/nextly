@@ -7,8 +7,9 @@
  * it, with the site default marked and a set's state where it is not plainly
  * published. "+ New header & footer" closes the list.
  *
- * A set's row and "+ New header & footer" open the set's admin form in a new
- * tab, so the page being edited and its undo history stay as they are.
+ * A set's row opens the set in the builder, its own screen, loading it as
+ * another page is opened, with a way back to the page it was opened from.
+ * "+ New header & footer" opens the admin's form for a new set in a new tab.
  *
  * Hidden from an author who may not read sets: the read is refused, and the
  * group is not drawn at all rather than drawn empty.
@@ -55,6 +56,7 @@ import { useRefreshOnReturn } from "../refresh-on-return";
 import { useRemoveLayout } from "../RemoveLayoutAction";
 
 import { RenameField } from "./rename-field";
+import { setBuilderAddress } from "./set-address";
 
 /** The group's key in the panel's fold memory. */
 const HEADER_FOOTER_GROUP = "header-footer";
@@ -94,12 +96,9 @@ function refused(error: unknown): boolean {
   return (error as { status?: unknown } | null)?.status === 403;
 }
 
-/** Where a set's admin form, or a new set's, opens. */
-function formHref(collection: string, id?: string): string {
-  const base = `/admin/collections/${encodeURIComponent(collection)}`;
-  return id === undefined
-    ? `${base}/create`
-    : `${base}/${encodeURIComponent(id)}`;
+/** Where a new set's admin form opens. */
+function newSetHref(collection: string): string {
+  return `/admin/collections/${encodeURIComponent(collection)}/create`;
 }
 
 /**
@@ -110,10 +109,16 @@ function formHref(collection: string, id?: string): string {
 export function HeaderFooterGroup({
   folds,
   currentPageId = null,
+  here,
+  currentSetId,
 }: {
   readonly folds: GroupFolds;
   /** The page being edited, by id, or null where none is saved yet. */
   readonly currentPageId?: string | null;
+  /** What the document open here is called, which a set's Back says. */
+  readonly here?: string;
+  /** The set whose own screen this is, by id, marked as the one open. */
+  readonly currentSetId?: string;
 }): React.JSX.Element | null {
   const choices = usePluginRoute<LayoutChoicesResponse>({
     plugin: PAGE_BUILDER_PLUGIN_NAME,
@@ -166,6 +171,8 @@ export function HeaderFooterGroup({
         <GroupBody
           read={choices}
           currentPageId={currentPageId}
+          here={here}
+          currentSetId={currentSetId}
           counts={counts.data}
           picture={picture}
           reread={afterWrite}
@@ -182,9 +189,13 @@ function GroupBody({
   picture,
   reread,
   currentPageId,
+  here,
+  currentSetId,
 }: {
   read: ReturnType<typeof usePluginRoute<LayoutChoicesResponse>>;
   currentPageId: string | null;
+  here: string | undefined;
+  currentSetId: string | undefined;
   counts: LayoutPageCountsResponse | undefined;
   picture: ReturnType<typeof useSetPictures>;
   /** Reads the sets and their counts again, after a write here. */
@@ -230,7 +241,13 @@ function GroupBody({
           <SetRow
             key={set.id}
             set={set}
-            href={formHref(meta.layoutsCollection, set.id)}
+            href={setBuilderAddress(
+              meta.layoutsCollection,
+              set.id,
+              window.location,
+              here
+            )}
+            open={set.id === currentSetId}
             note={setNote(set, meta.defaultLayout, counts?.[set.id])}
             picture={picture(set.regions)}
             isDefault={set.id === meta.defaultLayout}
@@ -264,7 +281,7 @@ function GroupBody({
         ) : null}
         <li>
           <a
-            href={formHref(meta.layoutsCollection)}
+            href={newSetHref(meta.layoutsCollection)}
             target="_blank"
             rel="noopener noreferrer"
             className="flex items-center gap-2 rounded-md px-1.5 py-1 text-sm text-muted-foreground hover:bg-[color:var(--nx-builder-hover)] hover:text-[color:var(--nx-builder-text)]"
@@ -293,6 +310,7 @@ function refusalOf(error: unknown): string {
  */
 function SetRow({
   set,
+  open,
   currentPageId,
   isDefault,
   onMakeDefault,
@@ -305,6 +323,8 @@ function SetRow({
   onWritten,
 }: {
   set: LayoutChoice;
+  /** Whether this set's own screen is the one open. */
+  open: boolean;
   /** The page being edited, by id, so a removal that moved it reloads it. */
   currentPageId: string | null;
   /** Whether this set is the site default. */
@@ -351,7 +371,9 @@ function SetRow({
     );
   };
   return (
-    <li className="group flex items-center gap-1 rounded-md hover:bg-[color:var(--nx-builder-hover)]">
+    <li
+      className={`group flex items-center gap-1 rounded-md hover:bg-[color:var(--nx-builder-hover)]${open ? " bg-[color:var(--nx-builder-hover)]" : ""}`}
+    >
       {renaming ? (
         <div className="flex min-w-0 flex-1 items-center gap-2.5 px-1.5 py-1 text-sm">
           <SetPicture>{picture}</SetPicture>
@@ -372,8 +394,7 @@ function SetRow({
       ) : (
         <a
           href={href}
-          target="_blank"
-          rel="noopener noreferrer"
+          {...(open ? { "aria-current": "page" as const } : {})}
           className="flex min-w-0 flex-1 items-center gap-2.5 px-1.5 py-1 text-sm"
         >
           <SetPicture>{picture}</SetPicture>
@@ -383,7 +404,6 @@ function SetRow({
               {note}
             </span>
           </span>
-          <span className="sr-only"> (opens in a new tab)</span>
         </a>
       )}
       <SetMenu
@@ -459,7 +479,9 @@ function SetMenu({
       >
         <DropdownMenuItem
           onSelect={() => {
-            window.open(href, "_blank", "noopener,noreferrer");
+            // Another document, loaded afresh: the admin asks first about
+            // unsaved work here, as for any page opened from this panel.
+            window.location.assign(href);
           }}
         >
           Open

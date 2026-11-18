@@ -595,10 +595,12 @@ export function buildEntryColumns(
         continue;
       }
 
+      // Headed "Address", the entry header's word for it: "slug" is the
+      // code's name, never an author's.
       if (columnName === "slug") {
         cols.push({
           name: "slug",
-          header: "Slug",
+          header: "Address",
           sortable: true,
           hidden,
           cell: ({ value }) => {

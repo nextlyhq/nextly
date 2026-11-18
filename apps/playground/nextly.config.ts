@@ -44,6 +44,7 @@ import { BuilderFirstPages } from "./src/collections/builder-first-pages";
 import { EntryArticles } from "./src/collections/entry-articles";
 import { ContributionStories } from "./src/collections/contribution-stories";
 import { ListStories } from "./src/collections/list-stories";
+import { e2eRateLimit } from "./src/e2e-rate-limit";
 import { E2E_NAMED_QUERIES } from "./src/named-queries";
 import { E2E_STARTER_PAGES } from "./src/starter-pages";
 import { Categories } from "./src/collections/categories";
@@ -482,6 +483,9 @@ export default defineConfig({
   typescript: {
     outputFile: "./src/types/nextly-types.ts",
   },
+  // The product's REST limits, unless the browser suite's server asks for
+  // its higher ones (`NEXTLY_E2E_RATE_LIMIT=1`; see `src/e2e-rate-limit.ts`).
+  ...e2eRateLimit(process.env.NEXTLY_E2E_RATE_LIMIT),
   db: {
     schemasDir: "./src/db/schemas/collections",
     migrationsDir: "./src/db/migrations",

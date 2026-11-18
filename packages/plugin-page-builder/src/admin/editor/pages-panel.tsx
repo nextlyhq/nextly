@@ -104,7 +104,9 @@ export interface PagesPanelMount {
  */
 export function usePagesPanel(
   /** Whether the document being edited is a page, not a component or pattern. */
-  editingPage: boolean
+  editingPage: boolean,
+  /** The header & footer set whose own screen this is, by id, if it is one. */
+  currentSetId?: string
 ): PagesPanelMount {
   const identity = useDocumentIdentity();
   const currentPage: PageReference | null =
@@ -139,6 +141,7 @@ export function usePagesPanel(
         unsavedWork={unsavedWork}
         onOpenSettings={openSettings}
         reveal={{ count: revealRequest, met: revealsMet }}
+        {...(currentSetId === undefined ? {} : { currentSetId })}
       />
     ),
   };
@@ -186,6 +189,8 @@ interface PagesPanelProps {
   onOpenSettings: () => void;
   /** Requests to show the Header & footer sets, and the last one met. */
   reveal?: { readonly count: number; readonly met: { current: number } };
+  /** The header & footer set whose own screen this is, by id, if any. */
+  currentSetId?: string;
 }
 
 function PagesPanel({
@@ -193,6 +198,7 @@ function PagesPanel({
   unsavedWork,
   onOpenSettings,
   reveal,
+  currentSetId,
 }: PagesPanelProps): React.JSX.Element {
   const [query, setQuery] = React.useState("");
   const list = usePagesList(query);
@@ -215,10 +221,10 @@ function PagesPanel({
   const pagesOpen = !folds.folded.has(PAGES_GROUP);
   const setsRef = React.useRef<HTMLDivElement>(null);
   useRevealSets(reveal, folds, setsRef);
-  const newPage = useNewPageDialog({
-    unsavedWork,
-    title: useOnScreenTitle(list, current),
-  });
+  // What the document open here is called: said by the New page dialog, and
+  // by Back on a set's own screen opened from here.
+  const onScreenTitle = useOnScreenTitle(list, current);
+  const newPage = useNewPageDialog({ unsavedWork, title: onScreenTitle });
 
   return (
     // In the builder's panel text; the surface is the panel region's own.
@@ -277,6 +283,8 @@ function PagesPanel({
         setsRef={setsRef}
         folds={folds}
         currentPageId={current?.id ?? null}
+        here={onScreenTitle}
+        {...(currentSetId === undefined ? {} : { currentSetId })}
       />
       <CollectionTemplatesGroup folds={folds} />
       {newPage.dialog}
@@ -919,17 +927,14 @@ function DeletePageDialog({
  */
 function HeaderFooterSets({
   setsRef,
-  folds,
-  currentPageId,
+  ...group
 }: {
   setsRef: React.RefObject<HTMLDivElement | null>;
-  folds: React.ComponentProps<typeof HeaderFooterGroup>["folds"];
-  currentPageId: string | null;
-}): React.JSX.Element | null {
+} & React.ComponentProps<typeof HeaderFooterGroup>): React.JSX.Element | null {
   if (useHeaderFooterInCode()) return null;
   return (
     <div ref={setsRef}>
-      <HeaderFooterGroup folds={folds} currentPageId={currentPageId} />
+      <HeaderFooterGroup {...group} />
     </div>
   );
 }
