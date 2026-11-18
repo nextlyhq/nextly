@@ -668,6 +668,13 @@ describe("Page settings", () => {
     );
   });
 
+  it("offers no Show me for the field the builder edits, which is on the canvas", () => {
+    tabOf = () => ({ kind: "content" });
+    show({ open: false });
+    expect(reveal?.("layout.nodes.0")).toBeNull();
+    expect(reveal?.("summary")).toBeTypeOf("function");
+  });
+
   it("offers no Show me for the page's content when Fields is left out", () => {
     contentLeft = false;
     tabOf = () => ({ kind: "content" });

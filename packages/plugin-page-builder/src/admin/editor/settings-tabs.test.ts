@@ -9,6 +9,7 @@ import {
   FIELDS_TAB,
   focusFieldIn,
   GENERAL_TAB,
+  inEditedField,
   tabForField,
 } from "./settings-tabs";
 
@@ -45,6 +46,16 @@ describe("the tab that shows a refused field", () => {
 
   it("answers nowhere for a field the entry page draws nowhere", () => {
     expect(tabForField(null, PAGE)).toBeNull();
+  });
+});
+
+describe("the field the builder is editing", () => {
+  it("is the field itself, a path inside it, or the group around it", () => {
+    expect(inEditedField("content", "content")).toBe(true);
+    expect(inEditedField("content.nodes.0.props", "content")).toBe(true);
+    expect(inEditedField("hero", "hero.body")).toBe(true);
+    expect(inEditedField("contents", "content")).toBe(false);
+    expect(inEditedField("summary", "content")).toBe(false);
   });
 });
 

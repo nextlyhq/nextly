@@ -96,7 +96,8 @@ function OtherEditorLine({ field }: { field: EntryContentField }): JSX.Element {
       role="group"
       aria-labelledby={labelId}
       className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border px-3 py-2.5"
-      data-other-editor={field.name}
+      // Where "Show me" finds the field: its way in takes the focus.
+      data-field={field.name}
     >
       <span id={labelId} className="text-sm font-medium">
         {field.label}

@@ -40,6 +40,16 @@ export function tabForField(
   return shown.placeTabs.find(id => pluginOf(id) === plugin) ?? null;
 }
 
+/**
+ * Whether a form path is in the field the builder is editing (`fieldName`,
+ * itself or inside it, as `content.nodes.0`, or the named group around it):
+ * that field is edited on the canvas, never in Page settings, so a save it
+ * refused keeps the message's usual way to it.
+ */
+export function inEditedField(path: string, fieldName: string): boolean {
+  return path.split(".")[0] === fieldName.split(".")[0];
+}
+
 /** What can take the focus inside a field's own wrapper. */
 const FOCUSABLE =
   "input:not([type=hidden]), textarea, select, button, [tabindex]:not([tabindex='-1']), [contenteditable='true']";

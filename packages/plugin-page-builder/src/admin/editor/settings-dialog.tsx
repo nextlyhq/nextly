@@ -82,6 +82,7 @@ import {
   FIELDS_TAB,
   focusFieldIn,
   GENERAL_TAB,
+  inEditedField,
   tabForField,
 } from "./settings-tabs";
 import type { SharePreview } from "./share-preview";
@@ -184,6 +185,7 @@ function useSettingsTabs({
   ];
   const contentTab = contentTabOf(page, fields !== null);
   useShowMe({
+    fieldName,
     contentTab,
     placeTabs,
     show: (tab, path) => {
@@ -574,13 +576,16 @@ function leaveEscapeToItsControl(event: KeyboardEvent): void {
 /**
  * Tell the editor how to show a field the page refused to save: on the tab
  * that holds it here, found by where the entry page draws it. A field this
- * dialog does not show is left to the message's usual link.
+ * dialog does not show, the builder's own among them, is left to the
+ * message's usual link.
  */
 function useShowMe({
+  fieldName,
   contentTab,
   placeTabs,
   show,
 }: {
+  fieldName: string;
   contentTab: string | null;
   placeTabs: readonly PlaceTabEntry[];
   show: (tab: string, path: string) => void;
@@ -588,6 +593,7 @@ function useShowMe({
   const layout = useEntryFieldsLayout();
   const placeIds = placeTabs.map(tab => tab.id);
   useRevealField(path => {
+    if (inEditedField(path, fieldName)) return null;
     const tab = tabForField(layout?.tabOf(path) ?? null, {
       contentTab,
       placeTabs: placeIds,
