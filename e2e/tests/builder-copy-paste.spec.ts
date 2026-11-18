@@ -245,10 +245,10 @@ test.describe("copying, cutting and pasting blocks", () => {
     await openBuilder(page, await createPage(page.request));
 
     await selectBlock(page, HEADING);
-    await page.keyboard.press("Control+c");
+    await page.keyboard.press("ControlOrMeta+c");
 
     await selectInLayers(page, PRICING);
-    await page.keyboard.press("Control+v");
+    await page.keyboard.press("ControlOrMeta+v");
 
     await expect.poll(() => childrenOf(page, PRICING)).toHaveLength(1);
     const [copy] = await childrenOf(page, PRICING);
@@ -258,7 +258,7 @@ test.describe("copying, cutting and pasting blocks", () => {
     // The original stays where it was.
     expect(await childrenOf(page, HERO)).toEqual([HEADING]);
 
-    await page.keyboard.press("Control+z");
+    await page.keyboard.press("ControlOrMeta+z");
     await expect.poll(() => childrenOf(page, PRICING)).toEqual([]);
   });
 
@@ -269,8 +269,8 @@ test.describe("copying, cutting and pasting blocks", () => {
     await openBuilder(page, id);
 
     await selectBlock(page, HEADING);
-    await page.keyboard.press("Control+c");
-    await page.keyboard.press("Control+v");
+    await page.keyboard.press("ControlOrMeta+c");
+    await page.keyboard.press("ControlOrMeta+v");
     await expect.poll(() => childrenOf(page, HERO)).toHaveLength(2);
     expect((await childrenOf(page, HERO))[0]).toBe(HEADING);
 
@@ -278,7 +278,7 @@ test.describe("copying, cutting and pasting blocks", () => {
     await page.keyboard.press("Escape");
     await page.keyboard.press("Escape");
     await expect.poll(() => selection(page)).toEqual([]);
-    await page.keyboard.press("Control+v");
+    await page.keyboard.press("ControlOrMeta+v");
 
     // The paste selects the copy it made.
     await expect.poll(async () => (await selection(page)).length).toBe(1);
@@ -298,12 +298,12 @@ test.describe("copying, cutting and pasting blocks", () => {
   }) => {
     await openBuilder(page, await createPage(page.request));
     await selectBlock(page, HEADING);
-    await page.keyboard.press("Control+c");
+    await page.keyboard.press("ControlOrMeta+c");
 
     const other = await context.newPage();
     const otherId = await createPage(other.request, true);
     await openBuilder(other, otherId);
-    await other.keyboard.press("Control+v");
+    await other.keyboard.press("ControlOrMeta+v");
 
     await expect(
       canvasFrame(other).locator("[data-nx-node]", { hasText: "Welcome" })
@@ -344,13 +344,13 @@ test.describe("copying, cutting and pasting blocks", () => {
     await openBuilder(page, await createPage(page.request));
     // Blocks on the clipboard: a paste the editor took for blocks would add one.
     await selectBlock(page, HEADING);
-    await page.keyboard.press("Control+c");
+    await page.keyboard.press("ControlOrMeta+c");
     const before = await pageIds(page, HERO);
 
     const text = await editText(page, HEADING);
     // A caret, with nothing highlighted, so only the text rule keeps the key.
     await page.keyboard.press("End");
-    await page.keyboard.press("Control+v");
+    await page.keyboard.press("ControlOrMeta+v");
     await page.keyboard.press("Escape");
 
     await expect(text).not.toHaveAttribute("contenteditable", /.+/);
@@ -366,9 +366,9 @@ test.describe("copying, cutting and pasting blocks", () => {
     const text = await editText(page, HEADING);
     // The whole of the words, highlighted inside the text being edited.
     await page.keyboard.press("Control+a");
-    await page.keyboard.press("Control+c");
+    await page.keyboard.press("ControlOrMeta+c");
     await page.keyboard.press("End");
-    await page.keyboard.press("Control+v");
+    await page.keyboard.press("ControlOrMeta+v");
     await page.keyboard.press("Enter");
 
     await expect(text).not.toHaveAttribute("contenteditable", /.+/);
@@ -386,16 +386,16 @@ test.describe("copying, cutting and pasting blocks", () => {
     const words = page.getByLabel("Text", { exact: true });
     await words.click();
     await page.keyboard.press("Control+a");
-    await page.keyboard.press("Control+c");
+    await page.keyboard.press("ControlOrMeta+c");
     await page.keyboard.press("End");
-    await page.keyboard.press("Control+v");
+    await page.keyboard.press("ControlOrMeta+v");
 
     await expect(words).toHaveValue("WelcomeWelcome");
     expect(await pageIds(page, HERO)).toEqual(before);
 
     // ⌘X cuts the words, not the block.
     await page.keyboard.press("Control+a");
-    await page.keyboard.press("Control+x");
+    await page.keyboard.press("ControlOrMeta+x");
     await expect(words).toHaveValue("");
     expect(await pageIds(page, HERO)).toEqual(before);
   });
