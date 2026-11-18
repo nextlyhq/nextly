@@ -6,11 +6,19 @@
  * a page starts blank without the author being asked a question with one
  * answer.
  *
+ * A starter's picture is drawn from its own blocks with the site's own
+ * style, by the part the header & footer menu's pictures use, so it shows
+ * the site's colours and fonts rather than a picture made for another site.
+ * Its short description is the choice's description, read by a screen
+ * reader with its name and shown on hover.
+ *
  * @module admin/new-page/new-page-starters
  */
-import { useId, type JSX } from "react";
+import type { BlockDocument } from "@nextlyhq/blocks-engine";
+import { Fragment, useId, type JSX, type ReactNode } from "react";
 
 import type { NewPageStarter } from "../../pages-write-contract";
+import { useDocumentPictures } from "../header-footer-pictures";
 
 import { NEW_PAGE_WORDS } from "./new-page-words";
 
@@ -21,33 +29,48 @@ export interface NewPageStartersProps {
   readonly onChoose: (starter: string | undefined) => void;
 }
 
+/** A starter's blocks draw no component, so its pictures wait on none. */
+const NO_DEFINITIONS: Readonly<Record<string, BlockDocument>> = {};
+
 /** One choice's picture: the starter's own, or an empty page for Blank. */
-function Picture({ src }: { src: string | undefined }): JSX.Element {
+function Picture({ children }: { children: ReactNode }): JSX.Element {
   return (
     <span
       aria-hidden="true"
       className="block aspect-[4/3] w-full overflow-hidden rounded-md border border-border bg-muted"
     >
-      {src === undefined ? null : (
-        <img src={src} alt="" className="size-full object-cover object-top" />
-      )}
+      {children}
     </span>
   );
 }
 
-export function NewPageStarters({
+export function NewPageStarters(
+  props: NewPageStartersProps
+): JSX.Element | null {
+  // Nothing is read for the pictures while there is nothing to draw.
+  return props.starters.length === 0 ? null : <StarterChoices {...props} />;
+}
+
+/** Blank and each starter, with their pictures. */
+function StarterChoices({
   starters,
   chosen,
   onChoose,
-}: NewPageStartersProps): JSX.Element | null {
+}: NewPageStartersProps): JSX.Element {
   const id = useId();
-  if (starters.length === 0) return null;
+  const draw = useDocumentPictures(NO_DEFINITIONS, true);
   const options = [
-    { id: undefined, label: NEW_PAGE_WORDS.blank, picture: undefined },
+    {
+      id: undefined,
+      label: NEW_PAGE_WORDS.blank,
+      description: undefined,
+      document: undefined,
+    },
     ...starters.map(starter => ({
       id: starter.id as string | undefined,
       label: starter.label,
-      picture: starter.picture,
+      description: starter.description as string | undefined,
+      document: starter.document as BlockDocument | undefined,
     })),
   ];
   return (
@@ -58,28 +81,46 @@ export function NewPageStarters({
       <div className="grid grid-cols-4 gap-2 max-sm:grid-cols-3">
         {options.map(option => {
           const optionId = `${id}-${option.id ?? "blank"}`;
+          const describedBy = `${optionId}-description`;
           const on = option.id === chosen;
           return (
-            <label
-              key={optionId}
-              htmlFor={optionId}
-              className={`grid cursor-pointer gap-1 rounded-lg border p-1.5 text-xs transition-colors has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring ${
-                on
-                  ? "border-primary ring-1 ring-primary"
-                  : "border-border hover:border-foreground/30"
-              }`}
-            >
-              <input
-                id={optionId}
-                type="radio"
-                name={id}
-                className="sr-only"
-                checked={on}
-                onChange={() => onChoose(option.id)}
-              />
-              <Picture src={option.picture} />
-              <span className="truncate text-center">{option.label}</span>
-            </label>
+            <Fragment key={optionId}>
+              <label
+                htmlFor={optionId}
+                title={option.description}
+                data-starter={option.id ?? "blank"}
+                className={`grid cursor-pointer gap-1 rounded-lg border p-1.5 text-xs transition-colors has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring ${
+                  on
+                    ? "border-primary ring-1 ring-primary"
+                    : "border-border hover:border-foreground/30"
+                }`}
+              >
+                <input
+                  id={optionId}
+                  type="radio"
+                  name={id}
+                  className="sr-only"
+                  checked={on}
+                  aria-describedby={
+                    option.description === undefined ? undefined : describedBy
+                  }
+                  onChange={() => onChoose(option.id)}
+                />
+                <Picture>
+                  {option.document === undefined
+                    ? null
+                    : draw([option.document])}
+                </Picture>
+                <span className="truncate text-center">{option.label}</span>
+              </label>
+              {/* Beside the label, not in it, so it describes the choice
+                without becoming part of its name. */}
+              {option.description === undefined ? null : (
+                <span id={describedBy} className="sr-only">
+                  {option.description}
+                </span>
+              )}
+            </Fragment>
           );
         })}
       </div>

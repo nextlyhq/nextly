@@ -73,6 +73,39 @@ vi.mock("../page-layout", () => ({
   ),
 }));
 
+// A starter's picture is the shared picture part's, tested beside it; here
+// it names the document it was handed, so a test can see which it draws.
+vi.mock("../header-footer-pictures", () => ({
+  useDocumentPictures:
+    () =>
+    (
+      documents: readonly { nodes: readonly { id: string }[] }[]
+    ): JSX.Element => (
+      <span data-picture={documents.map(d => d.nodes[0]?.id).join(" ")} />
+    ),
+}));
+
+/** A starter as the read lists it: its blocks are one Heading. */
+function starter(id: string, label: string, description: string) {
+  return {
+    id,
+    label,
+    description,
+    document: {
+      formatVersion: 1 as const,
+      kind: "page" as const,
+      nodes: [
+        {
+          id: `${id}-title`,
+          type: "core/heading",
+          version: 1,
+          props: { text: label, level: 1 },
+        },
+      ],
+    },
+  };
+}
+
 const { NewPageForm } = await import("./new-page-form");
 
 Element.prototype.hasPointerCapture ??= () => false;
@@ -210,8 +243,8 @@ describe("what the dialog shows", () => {
     facts = query =>
       pagesFacts(query, {
         starters: [
-          { id: "landing", label: "Landing" },
-          { id: "about", label: "About", picture: "/about.png" },
+          starter("landing", "Landing", "A welcome and a button."),
+          starter("about", "About", "Who we are, in three parts."),
         ],
       });
     createPage.mockResolvedValue(made());
@@ -222,6 +255,23 @@ describe("what the dialog shows", () => {
       ["Blank", "Landing", "About"]
     );
     expect((choices[0] as HTMLInputElement).checked).toBe(true);
+    // Each starter is drawn from its own blocks and described in its words;
+    // Blank has neither.
+    expect(
+      choices.map(
+        choice =>
+          choice
+            .closest("label")
+            ?.querySelector("[data-picture]")
+            ?.getAttribute("data-picture") ?? null
+      )
+    ).toEqual([null, "landing-title", "about-title"]);
+    const about = within(row).getByRole("radio", { name: "About" });
+    const describedBy = about.getAttribute("aria-describedby") ?? "";
+    expect(document.getElementById(describedBy)?.textContent).toBe(
+      "Who we are, in three parts."
+    );
+    expect(choices[0]?.getAttribute("aria-describedby")).toBeNull();
     await userEvent.type(screen.getByRole("textbox", { name: "Title" }), "Hi");
     await userEvent.click(within(row).getByRole("radio", { name: "Landing" }));
     await userEvent.click(

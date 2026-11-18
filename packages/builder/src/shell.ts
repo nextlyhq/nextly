@@ -592,6 +592,12 @@ export {
 export { PageInserters } from "./canvas/page-inserters";
 export type { PageInsertersProps, StartOptions } from "./canvas/page-inserters";
 export type { StarterPage } from "./canvas/page-start-area";
+// Starting an empty page from a starter page's blocks, as one undo step.
+export {
+  applyStarterPage,
+  planStarterPage,
+  type StarterPageSources,
+} from "./starter-page";
 
 /**
  * The editor's document state, published beside the canvas because it is a hook

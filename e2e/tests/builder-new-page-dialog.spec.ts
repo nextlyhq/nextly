@@ -139,7 +139,13 @@ test.describe("the New page dialog", () => {
       form.getByText("Header & footer", { exact: true })
     ).toBeVisible();
     await expect(form.getByText("Saved as a draft.")).toBeVisible();
-    await expect(form.getByText("Start from")).toHaveCount(0);
+    // The playground offers a starter page, and a page starts blank unless
+    // one is picked.
+    await expect(
+      form
+        .getByRole("group", { name: "Start from" })
+        .getByRole("radio", { name: "Blank" })
+    ).toBeChecked();
 
     await form.getByRole("button", { name: "Create and open builder" }).click();
     await expect(page).toHaveURL(
