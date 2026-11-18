@@ -29,4 +29,4 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-A Single's "History" link under Last changed now reads in the panel's own text colour, as the panel's other links do. It was drawn in the brand's primary colour, which a site can set to a shade too light to read on the panel (an indigo such as `#6366f1` falls under the 4.5:1 a small link needs).
+Two small links now read in the admin's own text colour rather than the brand's primary colour: a Single's "History" link under Last changed, and "Clear date filters" in a collection list's Filter menu. They were drawn in the brand's primary colour, which a site can set to a shade too light to read as small text on a light surface. An indigo such as `#6366f1` falls under the 4.5:1 a small link needs. The other links in the panel and the menu already read this way.

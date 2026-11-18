@@ -670,9 +670,12 @@ export const EntryTable: ForwardRefExoticComponent<
                       onToChange={value => onUpdatedToChange?.(value)}
                     />
 
+                    {/* In the menu's text colour: the primary token is a fill
+                        a brand may set to any colour, and small text drawn in
+                        it can fall under AA. */}
                     <button
                       type="button"
-                      className="w-full text-left text-xs text-primary hover:underline"
+                      className="w-full text-left text-xs text-foreground hover:underline"
                       onClick={clearDateFilters}
                     >
                       Clear date filters
