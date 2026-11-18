@@ -242,7 +242,11 @@ export function PageChecksChip({
   onOpenSettingsTab,
   facts,
 }: PageChecksChipProps): React.JSX.Element {
-  const { document } = editor;
+  // Checked a moment after each edit rather than inside it. The count only
+  // informs, and Save and Publish read nothing of it, while running every
+  // check over a large page delayed each keystroke reaching the canvas.
+  // Every edit is still checked; keys typed in quick succession together.
+  const document = React.useDeferredValue(editor.document);
   const report = React.useMemo(
     () =>
       runPageChecks(
