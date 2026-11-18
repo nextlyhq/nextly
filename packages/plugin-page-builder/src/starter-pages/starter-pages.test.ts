@@ -5,7 +5,11 @@
  *
  * @module starter-pages/starter-pages.test
  */
-import { createBlockRegistry, type BlockNode } from "@nextlyhq/blocks-engine";
+import {
+  createBlockRegistry,
+  DEFAULT_LIMITS,
+  type BlockNode,
+} from "@nextlyhq/blocks-engine";
 import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import type { StarterPageDefinition } from "@nextlyhq/plugin-sdk/blocks";
 import { describe, expect, it } from "vitest";
@@ -227,7 +231,7 @@ describe("refusing a starter page at start-up", () => {
       '"core/embed" ("src")',
     ],
     [
-      "a background picture in its styles",
+      "a picture written as CSS in its styles",
       {
         ...heading(),
         styles: {
@@ -236,10 +240,90 @@ describe("refusing a starter page at start-up", () => {
       },
       '"core/heading"\'s styles',
     ],
+    [
+      "a background image on this site, as the Style tab stores it",
+      {
+        ...heading(),
+        styles: { base: { base: { background: { url: "/a.png" } } } },
+      },
+      '"core/heading"\'s styles',
+    ],
+    [
+      "a background image on another site, as the Style tab stores it",
+      {
+        ...heading(),
+        styles: {
+          base: { mobile: { background: { url: "https://x.example/a.png" } } },
+        },
+      },
+      '"core/heading"\'s styles',
+    ],
+    [
+      "a picture an empty binding falls back to",
+      {
+        id: "i",
+        type: "core/image",
+        version: 1,
+        props: {},
+        bindings: {
+          src: {
+            $bind: "cover",
+            source: "entry",
+            fallback: "https://cdn.example/image.jpg",
+          },
+        },
+      },
+      '"core/image" ("src")',
+    ],
+    [
+      "a media library picture an empty binding falls back to",
+      {
+        id: "i",
+        type: "core/image",
+        version: 1,
+        props: {},
+        bindings: {
+          mediaId: { $bind: "cover", source: "entry", fallback: "42" },
+        },
+      },
+      '"core/image" ("mediaId")',
+    ],
   ])("refuses %s", (_case, node, where) => {
     expect(() =>
       boot({ starterPages: [withBlocks([node as BlockNode])] })
     ).toThrow(`has a picture or an address to load in ${where}`);
+  });
+
+  it("takes a background with no picture: a colour, or `none`", () => {
+    const plain = withBlocks(
+      [
+        {
+          ...heading(),
+          styles: {
+            base: {
+              base: { backgroundColor: "#fff", background: { url: "none" } },
+            },
+          },
+        },
+      ],
+      "plain"
+    );
+    expect(boot({ starterPages: [plain] }).map(e => e.starter.id)).toEqual([
+      "plain",
+    ]);
+  });
+
+  it("refuses a starter larger than the site's document limits allow", () => {
+    expect(() =>
+      registerStarterPagesAtBoot(
+        { config: { plugins: [] } as never },
+        { starterPages: [fixtureStarter()] },
+        [],
+        { ...judgement, limits: { ...DEFAULT_LIMITS, maxNodes: 3 } }
+      )
+    ).toThrow(
+      'The starter page "test-welcome" from pageBuilder({ starterPages }) fails validation'
+    );
   });
 
   it("takes a button's link, which is followed and never loaded", () => {

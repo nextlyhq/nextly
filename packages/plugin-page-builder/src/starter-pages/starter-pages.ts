@@ -25,11 +25,14 @@ import {
   forEachStyleValues,
   isComponentInstance,
   isErrorIssue,
+  isPlainRecord,
+  paintsBackgroundImage,
   validateDocument,
   walkNodes,
   type BlockNode,
   type BlockRegistryReader,
   type BreakpointSet,
+  type DocumentLimits,
 } from "@nextlyhq/blocks-engine";
 import {
   collectDeclarations,
@@ -106,6 +109,12 @@ const LEFT_OUT: unique symbol = Symbol("left out");
 export interface StarterJudgement {
   readonly blocks: BlockRegistryReader;
   readonly breakpoints: BreakpointSet;
+  /**
+   * The bounds the site holds a page to, so a starter too large for them is
+   * refused here rather than offered and then refused at create. The
+   * engine's defaults where the site sets none.
+   */
+  readonly limits?: DocumentLimits;
 }
 
 /** Why a text a starter needs is not one, or `undefined` when it is. */
@@ -167,15 +176,37 @@ function holdsValue(value: unknown): boolean {
   return true;
 }
 
-/** Whether a node's styles name a picture to load (`url(…)`). */
+/**
+ * Whether a node's styles name a picture to load, under any state and device:
+ * a background image as the Style tab stores it (an address the compiler
+ * wraps in `url(…)`, or a variable naming one), judged by the engine's own
+ * reading of whether it paints, so `none` is no picture; or `url(…)` written
+ * into any other value.
+ */
 function stylesLoadSomething(node: BlockNode): boolean {
   let found = false;
   forEachStyleValues(node.styles, (_breakpoint, values) => {
-    if (!found && JSON.stringify(values ?? null).includes("url(")) {
-      found = true;
-    }
+    if (found) return;
+    const background = isPlainRecord(values) ? values.background : undefined;
+    found =
+      (isPlainRecord(background) &&
+        paintsBackgroundImage("url", background.url)) ||
+      JSON.stringify(values ?? null).includes("url(");
   });
   return found;
+}
+
+/**
+ * The value an empty binding on `prop` falls back to, which the block draws
+ * when the bound field has none: a picture to load as much as the prop's own.
+ */
+function fallbackOf(node: BlockNode, prop: string): unknown {
+  const bindings: unknown = node.bindings;
+  if (!isPlainRecord(bindings) || !Object.hasOwn(bindings, prop)) {
+    return undefined;
+  }
+  const binding = bindings[prop];
+  return isPlainRecord(binding) ? binding.fallback : undefined;
 }
 
 /**
@@ -205,8 +236,8 @@ function blocksProblem(
       return;
     }
     const props = node.props ?? {};
-    const loaded = loadedProps(judgement.blocks, node.type).find(prop =>
-      holdsValue(props[prop])
+    const loaded = loadedProps(judgement.blocks, node.type).find(
+      prop => holdsValue(props[prop]) || holdsValue(fallbackOf(node, prop))
     );
     if (loaded !== undefined || stylesLoadSomething(node)) {
       problem =
@@ -227,6 +258,7 @@ function blocksProblem(
     {
       breakpoints: judgement.breakpoints,
       mode: "strict",
+      ...(judgement.limits === undefined ? {} : { limits: judgement.limits }),
       registry: judgement.blocks.lookup(),
       nesting: judgement.blocks.nestingSource(),
       definitions: judgement.blocks.blockSource(),

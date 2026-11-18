@@ -27,7 +27,12 @@ export function installStarterPages(ctx: InitContext, def: Definition): void {
     ctx,
     def.opts,
     FIRST_PARTY_STARTER_PAGES,
-    { blocks: def.blocks, breakpoints: siteBreakpoints(def.configStyle) }
+    {
+      blocks: def.blocks,
+      breakpoints: siteBreakpoints(def.configStyle),
+      // The bounds a create copies it under, so what boots is what copies.
+      ...(def.opts.limits === undefined ? {} : { limits: def.opts.limits }),
+    }
   );
 }
 
