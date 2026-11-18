@@ -146,7 +146,14 @@ export function StyleTab({
   // the controls below, so the canvas is watched by one subscription.
   const tokenMode = useCanvasTokenModeAt(editor.selectedId);
   return (
-    <>
+    // The picture the canvas draws for the block: the Block style tiles in
+    // the bar draw it in each shape, and the focal point is aimed over it.
+    <FocalFrame.Provider
+      value={{
+        picture: renderedPicture,
+        position: renderedPicturePosition,
+      }}
+    >
       {/*
       ABOVE the controls, because it decides what every one of them reads
       and writes. Below them it would be a filter applied after the fact,
@@ -184,36 +191,28 @@ export function StyleTab({
         value={blockStyleTilesOf(editor, shared.classLibrary) !== undefined}
       >
         <StateTinted state={state}>
-          {/* The picture the canvas draws, for the focal point aimed over it. */}
-          <FocalFrame.Provider
-            value={{
-              picture: renderedPicture,
-              position: renderedPicturePosition,
-            }}
-          >
-            <StyleInspectorPanel
-              editor={editor}
-              tokenMode={tokenMode}
-              // The block card above says why a held block can't be changed.
-              showReadOnlyReason={false}
-              renderedTag={renderedTag}
-              sideOrientation={sideOrientation}
-              policy={policy}
-              state={state}
-              breakpoint={breakpoint}
-              cascade={cascade}
-              breakpoints={breakpoints}
-              previewContainer={previewContainer}
-              liveBreakpoints={liveBreakpoints}
-              onJumpToBreakpoint={onJumpToBreakpoint}
-              tokens={tokens}
-              target={target}
-              fonts={fonts}
-            />
-          </FocalFrame.Provider>
+          <StyleInspectorPanel
+            editor={editor}
+            tokenMode={tokenMode}
+            // The block card above says why a held block can't be changed.
+            showReadOnlyReason={false}
+            renderedTag={renderedTag}
+            sideOrientation={sideOrientation}
+            policy={policy}
+            state={state}
+            breakpoint={breakpoint}
+            cascade={cascade}
+            breakpoints={breakpoints}
+            previewContainer={previewContainer}
+            liveBreakpoints={liveBreakpoints}
+            onJumpToBreakpoint={onJumpToBreakpoint}
+            tokens={tokens}
+            target={target}
+            fonts={fonts}
+          />
         </StateTinted>
       </FirstSectionAbove.Provider>
-    </>
+    </FocalFrame.Provider>
   );
 }
 

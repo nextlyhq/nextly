@@ -431,19 +431,114 @@
   padding: 0.375rem 0.625rem;
 }
 
-.nx-look-tile__specimen[data-kind="image"] {
-  /* The height follows the proportion, so a look's own (a circle's 1 / 1)
-     shows. */
-  inline-size: 2.5rem;
-  aspect-ratio: 4 / 3;
-  background: linear-gradient(135deg, var(--nx-chart-2), var(--nx-chart-3));
+/* A sample of the block: drawn at the page's own sizes (16px type, a
+   picture 6rem wide, a section's padding) inside a frame that stands for the
+   page's screen, then scaled down whole by `zoom`, so its proportions are the
+   page's. The frame fills the stage and is a size container, which the
+   sample's screen lengths are read against (`cqh` for `vh`). A row in Design,
+   a smaller stage, scales it further by `--nx-look-sample-zoom`. */
+.nx-look-tile__frame {
+  --nx-look-sample-scale: 0.5;
+  display: grid;
+  place-items: center;
+  inline-size: 100%;
+  block-size: 100%;
+  overflow: hidden;
+  container-type: size;
+  zoom: calc(var(--nx-look-sample-scale) * var(--nx-look-sample-zoom, 1));
+  font-size: 1rem;
+  font-weight: 400;
+  line-height: 1.4;
+  white-space: normal;
 }
 
+/* A section is as wide as the page, so its sample is drawn at a page's
+   width and scaled further. */
+.nx-look-tile__frame[data-kind="band"] {
+  --nx-look-sample-scale: 0.25;
+  place-items: start stretch;
+}
+
+.nx-look-tile__frame .nx-look-tile__specimen {
+  box-sizing: border-box;
+  display: block;
+  font-size: inherit;
+  font-weight: inherit;
+  line-height: inherit;
+  white-space: inherit;
+}
+
+/* The picture's box: a 4 / 3 picture unless the style gives its own
+   proportion (a circle's 1 / 1), clipped to the style's corners. */
+.nx-look-tile__specimen[data-kind="image"] {
+  inline-size: 6rem;
+  aspect-ratio: 4 / 3;
+  overflow: hidden;
+}
+
+.nx-look-tile__picture {
+  display: block;
+  inline-size: 100%;
+  block-size: 100%;
+  object-fit: cover;
+}
+
+/* No picture yet: a picture's outline in the page's own text colour, faint,
+   as an empty Image is drawn on the canvas. */
+.nx-look-tile__placeholder {
+  display: grid;
+  place-items: center;
+  inline-size: 100%;
+  block-size: 100%;
+  background: color-mix(in oklab, currentColor 10%, transparent);
+  color: color-mix(in oklab, currentColor 55%, transparent);
+}
+
+/* A quote's words, two lines at most. */
+.nx-look-tile__specimen[data-kind="quote"] {
+  inline-size: 9rem;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+
+/* A section's band, as wide as the page, holding a heading and two lines of
+   text drawn as bars in the page's text colour. Each bar sits on a line of
+   its own, so it follows the band's alignment as words would. */
 .nx-look-tile__specimen[data-kind="band"] {
-  inline-size: 4.375rem;
-  block-size: 2.375rem;
-  border: 1px dashed var(--nx-border);
-  font-size: var(--text-xs);
+  inline-size: 100%;
+}
+
+.nx-look-tile__row {
+  display: block;
+  line-height: 0;
+}
+
+.nx-look-tile__row + .nx-look-tile__row {
+  margin-block-start: 0.75rem;
+}
+
+.nx-look-tile__line {
+  display: inline-block;
+  block-size: 0.75rem;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: 0.35;
+}
+
+.nx-look-tile__line[data-line="heading"] {
+  inline-size: 55%;
+  block-size: 1.5rem;
+  opacity: 0.8;
+}
+
+.nx-look-tile__line[data-line="text"] {
+  inline-size: 80%;
+}
+
+.nx-look-tile__line[data-line="short"] {
+  inline-size: 60%;
 }
 
 .nx-look-tile__name {
