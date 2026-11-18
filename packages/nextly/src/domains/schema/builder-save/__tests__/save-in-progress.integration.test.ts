@@ -1043,8 +1043,8 @@ function anyMarkers(): string[] {
 describe.each(getConfiguredTestDialects())(
   "every Builder save and delete that succeeds leaves no record (%s)",
   (dialect: TestDialect) => {
-    async function boot(): Promise<TestNextly> {
-      vi.stubEnv("NODE_ENV", "development");
+    async function boot(development = true): Promise<TestNextly> {
+      if (development) vi.stubEnv("NODE_ENV", "development");
       current = await createTestNextly({
         dialect,
         basePath,
@@ -1069,10 +1069,12 @@ describe.each(getConfiguredTestDialects())(
       300_000
     );
 
-    // A collection's create answers a failed registry write as its result after its definition,
-    // files and statements were written: nothing records what was written, so the record stays.
+    // Outside development a collection's create writes its definition and files for the deploy's
+    // `nextly migrate`, then its registry row, and answers a failed registry write as its result:
+    // nothing records what was written, so the record stays. (In development the file's own run
+    // writes the registry row first, so the failed write after it leaves nothing part-way.)
     it("a create whose registry write fails, answered as its result, keeps the record", async () => {
-      const t = await boot();
+      const t = await boot(false);
       kill.failRegistry = true;
       const answer = await createPosts().catch((error: unknown) => error);
       expect(kill.failRegistry, "the registry write was never made").toBe(

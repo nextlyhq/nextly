@@ -27,6 +27,11 @@ import {
 } from "../save-in-progress";
 import { databaseIdentity, savedDatabase } from "../saved-database";
 
+// No schema version stored: the save's registry writes are counted from none.
+vi.mock("../../schema-version", () => ({
+  readSchemaVersion: () => Promise.resolve({ present: false }),
+}));
+
 // The record's row as a database holding one that is not a record would answer it.
 vi.mock("../../../meta/services/meta-service", () => ({
   MetaService: class {
