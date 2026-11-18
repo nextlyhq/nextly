@@ -15,10 +15,12 @@ describe("making a header for a set's picker", () => {
     const create = vi.fn(async () => ({ id: "h2", title: "Header 2" }));
     const route = areaComponentRoute({ field: "content" }, create);
     const answer = await route.handler(new Request("http://x/"), ctx("header"));
+    // Made for the set's own use, so the site default never takes it.
     expect(create).toHaveBeenCalledWith(
       expect.anything(),
       { field: "content" },
-      "header"
+      "header",
+      "own set"
     );
     expect(answer.status).toBe(201);
     expect(await answer.json()).toMatchObject({

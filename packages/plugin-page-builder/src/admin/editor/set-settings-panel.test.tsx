@@ -517,6 +517,33 @@ describe("a set's settings", () => {
     expect(editArea).toHaveBeenCalledWith("header");
   });
 
+  it("keeps a choice made while a create is on its way, writing the new header onto it", async () => {
+    let finish: (made: { id: string; title: string }) => void = () => {};
+    made.createAreaComponent.mockImplementationOnce(
+      () =>
+        new Promise(resolve => {
+          finish = resolve;
+        })
+    );
+    render();
+    await userEvent.click(screen.getByLabelText("Header"));
+    await userEvent.click(
+      screen.getByRole("option", { name: "+ Create a header" })
+    );
+    // While the header is being made, the footer is taken out.
+    await userEvent.click(screen.getByLabelText("Footer"));
+    await userEvent.click(screen.getByRole("option", { name: /None/ }));
+    expect(values.areas).toEqual([
+      { id: "r1", area: "header", component: "ridgeline" },
+    ]);
+    finish({ id: "header-new", title: "Header 2" });
+    await vi.waitFor(() =>
+      expect(values.areas).toEqual([
+        { id: "r1", area: "header", component: "header-new" },
+      ])
+    );
+  });
+
   it("words the footer's as + Create a footer", async () => {
     render();
     await userEvent.click(screen.getByLabelText("Footer"));

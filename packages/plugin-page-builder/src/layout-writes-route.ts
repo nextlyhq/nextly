@@ -48,8 +48,10 @@ import { COMPONENTS_SLUG } from "./collections/components";
 import { LAYOUTS_SLUG } from "./collections/layouts";
 import { deleteUnplacedComponent } from "./component-delete/system-delete";
 import { readBodyWith } from "./composition-route-kit";
+import { createStarterComponent } from "./default-layout/create-in-area-route";
+import { PAGE_BUILDER_SETTINGS_SLUG } from "./default-layout/settings-single";
+import { readLayoutSettings } from "./default-layout/store";
 import { documentVersionOf, withVersionFrom } from "./document-version";
-import { fenceStore } from "./host-rewrite/fence";
 import {
   entryOf,
   findAsCaller,
@@ -57,6 +59,7 @@ import {
   type AsCallerFindArgs,
   type AsCallerPage,
 } from "./entry-reads";
+import { fenceStore } from "./host-rewrite/fence";
 import {
   LAYOUT_DUPLICATE_ROUTE_PATH,
   LAYOUT_NEW_ROUTE_PATH,
@@ -66,9 +69,6 @@ import {
   type NewLayoutStart,
   type WrittenLayout,
 } from "./layout-writes-contract";
-import { PAGE_BUILDER_SETTINGS_SLUG } from "./default-layout/settings-single";
-import { readLayoutSettings } from "./default-layout/store";
-import { createStarterComponent } from "./default-layout/create-in-area-route";
 import {
   DEFAULT_COMPONENT_STORE,
   readingAsUser,
@@ -294,9 +294,19 @@ function directLayoutWrites(
     // A new starter header and footer of the set's own, made as the band's
     // "Create a header" makes one, each published as the caller.
     starterAreas: async () => {
-      const header = await createStarterComponent(ctx, store, "header");
+      const header = await createStarterComponent(
+        ctx,
+        store,
+        "header",
+        "own set"
+      );
       try {
-        const footer = await createStarterComponent(ctx, store, "footer");
+        const footer = await createStarterComponent(
+          ctx,
+          store,
+          "footer",
+          "own set"
+        );
         return [
           { area: "header", component: header.id },
           { area: "footer", component: footer.id },

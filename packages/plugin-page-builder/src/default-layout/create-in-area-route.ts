@@ -61,6 +61,7 @@ import {
 } from "../library-route";
 import { parseRouteParams } from "../route-query";
 
+import { OWN_SET_COMPONENT_CONTEXT_KEY } from "./first-fill-hook";
 import { createdSlug, createdTitle } from "./seed-names";
 import { PAGE_BUILDER_SETTINGS_SLUG } from "./settings-single";
 import { starterDocument } from "./starter-documents";
@@ -166,16 +167,26 @@ export function starterComponentData(
   };
 }
 
+/** Who a created header or footer is for: the site default, or a set's own. */
+export type StarterPurpose = "default" | "own set";
+
 /**
  * Create the starter's design for `area` as a published component marked for
  * it, AS THE CALLER, under the first title and slug no component holds: the
  * one create both "Create a header" on the band and a set's picker make. The
  * components collection's own create and publish rules judge it.
+ *
+ * `purpose` says who it is for, and must be said. One made for a set of its
+ * own (`"own set"`) carries the mark the first-fill hook reads, so publishing
+ * it never puts it in the site default, which would show another set's
+ * header on every page that follows the default. One made for the default
+ * (`"default"`) is put there anyway.
  */
 export async function createStarterComponent(
   ctx: PluginRouteContext,
   store: ComponentStore,
-  area: LayoutArea
+  area: LayoutArea,
+  purpose: StarterPurpose
 ): Promise<{ id: string; title: string }> {
   const components =
     store.collection ??
@@ -199,6 +210,9 @@ export async function createStarterComponent(
           pagesSlug: pages,
         }),
         ...(await readingAsUser(ctx)),
+        ...(purpose === "own set"
+          ? { context: { [OWN_SET_COMPONENT_CONTEXT_KEY]: true } }
+          : {}),
       });
       const id = relationId(created.item);
       if (id === null) {
@@ -235,7 +249,7 @@ function directCreateInAreaWrites(
             PAGE_BUILDER_SETTINGS_SLUG,
         })
       ).defaultLayout,
-    createStarter: area => createStarterComponent(ctx, store, area),
+    createStarter: area => createStarterComponent(ctx, store, area, "default"),
     removeCreated: id =>
       deleteUnplacedComponent(
         {

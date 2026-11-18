@@ -55,7 +55,8 @@ export function areaComponentRoute(
         AreaParams,
         "area component route"
       );
-      const made = await create(ctx, store, area);
+      // Made for this set's own use: the site default never takes it.
+      const made = await create(ctx, store, area, "own set");
       return respondMutation<CreatedAreaComponent>(
         `${made.title} was created.`,
         { ...made, area },

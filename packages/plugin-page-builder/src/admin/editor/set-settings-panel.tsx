@@ -86,15 +86,21 @@ export function SetSettingsPanel({
   const title = useController({ control, name: TITLE_FIELD });
   const areas = useController({ control, name: AREAS_FIELD });
   const { onChange: setAreas } = areas.field;
+  // The areas as they stand now, read when a choice is applied rather than
+  // when it began: a header still being created must land on whatever was
+  // chosen meanwhile, and two creates in flight must each keep the other's.
+  const latestRows = useRef(form.rows);
+  latestRows.current = form.rows;
   const chooseFor = useCallback(
     (area: RegionArea) => (component: string | null) => {
-      setAreas(
+      const next =
         component === null
-          ? withoutArea(form.rows, area)
-          : withArea(form.rows, area, component)
-      );
+          ? withoutArea(latestRows.current, area)
+          : withArea(latestRows.current, area, component);
+      latestRows.current = next;
+      setAreas(next);
     },
-    [form.rows, setAreas]
+    [setAreas]
   );
   const shownTitle =
     typeof title.field.value === "string" ? title.field.value : "";

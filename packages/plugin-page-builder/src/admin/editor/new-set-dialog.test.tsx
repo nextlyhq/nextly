@@ -108,6 +108,30 @@ describe("a new header & footer set", () => {
     }
   );
 
+  it("keeps the set it made when the author stays on the page, offering to open it again", async () => {
+    const dialog = show();
+    await userEvent.type(
+      within(dialog).getByRole("textbox", { name: "Name" }),
+      "Landing"
+    );
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Create" })
+    );
+    // The page did not leave: the admin's unsaved-work question was answered
+    // "Stay". The set exists, so the dialog opens it rather than making another.
+    const again = await within(dialog).findByRole("button", {
+      name: "Open Landing",
+    });
+    expect(again).toHaveProperty("disabled", false);
+    expect(within(dialog).queryByRole("button", { name: "Create" })).toBeNull();
+    await userEvent.click(again);
+    expect(opened.openDocument).toHaveBeenCalledTimes(2);
+    expect(opened.openDocument.mock.calls[1]?.[0]).toBe(
+      opened.openDocument.mock.calls[0]?.[0]
+    );
+    expect(sdk.writePluginRoute).toHaveBeenCalledTimes(1);
+  });
+
   it("asks for a name before anything is made", async () => {
     const dialog = show();
     await userEvent.click(

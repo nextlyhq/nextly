@@ -130,8 +130,19 @@ function NewSetForm({
   const [start, setStart] = useState<NewLayoutStart>(starts[0] ?? "empty");
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
+  // The set once made, with where it opens. Opening it may not happen: the
+  // admin asks about unsaved work here first, and "Stay" keeps this page. So
+  // it is kept, and the dialog opens it again rather than making another.
+  const [made, setMade] = useState<{
+    readonly title: string;
+    readonly address: string;
+  } | null>(null);
   const submit = async (event: FormEvent) => {
     event.preventDefault();
+    if (made !== null) {
+      openDocument(made.address);
+      return;
+    }
     const named = title.trim();
     if (named === "") {
       setProblem("Give the header & footer set a name.");
@@ -140,17 +151,18 @@ function NewSetForm({
     setBusy(true);
     setProblem(null);
     try {
-      const made = await makeSet({ title: named, start });
+      const set = await makeSet({ title: named, start });
+      const address = setBuilderAddress(
+        facts.collection,
+        set.id,
+        window.location,
+        facts.here
+      );
+      setMade({ title: named, address });
+      setBusy(false);
       // Another document, loaded afresh: the admin asks first about unsaved
       // work here, as for any page opened from the builder.
-      openDocument(
-        setBuilderAddress(
-          facts.collection,
-          made.id,
-          window.location,
-          facts.here
-        )
-      );
+      openDocument(address);
     } catch (error) {
       setProblem(refusalOf(error));
       setBusy(false);
@@ -198,7 +210,7 @@ function NewSetForm({
           Cancel
         </Button>
         <Button type="submit" disabled={busy}>
-          Create
+          {made === null ? "Create" : `Open ${made.title}`}
         </Button>
       </DialogFooter>
     </form>
