@@ -207,6 +207,34 @@ describe("removing a font in use", () => {
     expect(onRemoveFamily).not.toHaveBeenCalled();
   });
 
+  it("refuses a font the Body font draws in dark mode only", async () => {
+    const onRemoveFamily = vi.fn(async () => undefined);
+    panel({
+      tokens: {
+        tokens: [
+          ...TOKENS.tokens,
+          {
+            name: "font.body",
+            kind: "fontFamily",
+            values: { light: '"Inter", sans-serif', dark: '"Lora", serif' },
+          },
+        ],
+        siteText: { body: { fontFamily: { $token: "font.body" } } },
+      },
+      onRemoveFamily,
+    });
+    const open = await details("Lora");
+    fireEvent.click(within(open).getByRole("button", { name: "Remove" }));
+    expect(
+      within(open).getByRole("group", { name: "Lora can’t be removed" })
+        .textContent
+    ).toContain("Lora is your body font. Choose another body font first.");
+    expect(
+      within(open).queryByRole("button", { name: "Remove Lora" })
+    ).toBeNull();
+    expect(onRemoveFamily).not.toHaveBeenCalled();
+  });
+
   it("lists the variables using it and what their text falls back to, then removes it once confirmed", async () => {
     const onRemoveFamily = vi.fn(async () => undefined);
     panel({

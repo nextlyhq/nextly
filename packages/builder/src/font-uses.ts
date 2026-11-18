@@ -3,7 +3,7 @@
  * what the screen says when removing or using one.
  *
  * A font is used by the site's Body or Headings font, read from the rows
- * they are written on (`fontRoleSetting`), and by the font variables whose
+ * they are written on (`fontRoleSetting`) in either mode, and by the font variables whose
  * first family it is, in either mode: blocks, text styles and shared styles
  * reach a font through those variables, and the variables' own usage says
  * how widely. A font a block names as plain text is not a use the site can
@@ -25,6 +25,7 @@ import { FONT_ROLE_WORDS } from "./editor-words";
 import {
   firstFamily,
   fontRoleSetting,
+  type FontMode,
   type FontRole,
 } from "./site-font-roles-model";
 
@@ -56,6 +57,9 @@ function fallbackOf(stack: string): string | undefined {
   return rest.length === 0 ? undefined : rest.join(", ");
 }
 
+/** The modes a role's font is drawn in. */
+const MODES: readonly FontMode[] = ["light", "dark"];
+
 /** What a stack with nothing after the font falls back to, in words. */
 const BROWSER_FONT = "the browser’s own font";
 
@@ -82,10 +86,14 @@ export function familyUses(
   tokens: SiteTokenSet | undefined
 ): FamilyUses {
   if (tokens === undefined) return { roles: [], variables: [] };
-  const roles = (["body", "heading"] as const).filter(role => {
-    const setting = fontRoleSetting(tokens, role);
-    return setting.kind === "set" && firstFamily(setting.stack) === key;
-  });
+  // In either mode: a role whose variable draws the font only in dark mode
+  // still loses it for dark-mode visitors.
+  const roles = (["body", "heading"] as const).filter(role =>
+    MODES.some(mode => {
+      const setting = fontRoleSetting(tokens, role, mode);
+      return setting.kind === "set" && firstFamily(setting.stack) === key;
+    })
+  );
   // A role's own variable is said as the role, not a second time.
   const held = new Set(
     roles
@@ -134,9 +142,7 @@ export function roleRefusal(
   if (roles.length === 0) return undefined;
   const which = rolesWords(roles);
   const another =
-    roles.length === 1
-      ? `another ${which} font`
-      : `other ${which} fonts`;
+    roles.length === 1 ? `another ${which} font` : `other ${which} fonts`;
   return `${family} is your ${which} font. Choose ${another} first.`;
 }
 

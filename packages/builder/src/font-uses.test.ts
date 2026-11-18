@@ -43,7 +43,11 @@ describe("where a font is used", () => {
     const uses = familyUses("lora", BASE);
     expect(uses.roles).toEqual([]);
     expect(uses.variables).toEqual([
-      { identity: "font.display", label: "Display", fallback: "Georgia, serif" },
+      {
+        identity: "font.display",
+        label: "Display",
+        fallback: "Georgia, serif",
+      },
       { identity: "font.quote", label: "Quote", fallback: "serif" },
     ]);
   });
@@ -58,6 +62,27 @@ describe("where a font is used", () => {
     // Headings alone: Body keeps the site's own font.
     const headings = withFontRole(BASE, "heading", '"Lora", serif');
     expect(familyUses("lora", headings).roles).toEqual(["heading"]);
+  });
+
+  it("names a role whose variable draws the font in dark mode only, and not that variable", () => {
+    // Body points at a variable drawn in Inter in light and Lora in dark:
+    // removing Lora would change the body text dark-mode visitors see.
+    const set: SiteTokenSet = {
+      tokens: [
+        ...BASE.tokens,
+        {
+          name: "font.body",
+          kind: "fontFamily",
+          values: { light: "Inter, sans-serif", dark: '"Lora", serif' },
+        },
+      ],
+      siteText: { body: { fontFamily: { $token: "font.body" } } },
+    };
+    expect(familyUses("lora", set).roles).toEqual(["body"]);
+    expect(familyUses("inter", set).roles).toEqual(["body"]);
+    expect(
+      familyUses("lora", set).variables.map(entry => entry.identity)
+    ).toEqual(["font.display", "font.quote"]);
   });
 
   it("matches a family however its case is written", () => {
@@ -107,7 +132,9 @@ describe("what using a new font says", () => {
     expect(nowYourFontWords("Inter", ["heading"])).toBe(
       "Inter is now your headings font"
     );
-    expect(nowYourFontWords("Inter", ["body"])).toBe("Inter is now your body font");
+    expect(nowYourFontWords("Inter", ["body"])).toBe(
+      "Inter is now your body font"
+    );
     expect(nowYourFontWords("Inter", ["body", "heading"])).toBe(
       "Inter is now your body and headings font"
     );

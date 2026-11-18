@@ -72,29 +72,44 @@ export type FontRoleSetting =
   | { readonly kind: "set"; readonly stack: string }
   | { readonly kind: "mixed" };
 
-/** A variable's light value, a built-in's included. */
+/** The colour mode a variable's value is read in. */
+export type FontMode = "light" | "dark";
+
+/**
+ * A variable's value in a mode, a built-in's included. A variable with no
+ * dark value draws its light one in dark mode too.
+ */
 function variableValue(
   tokens: SiteTokenSet,
-  identity: string
+  identity: string,
+  mode: FontMode
 ): string | undefined {
-  return resolveSiteTokens(tokens).tokens.find(
+  const values = resolveSiteTokens(tokens).tokens.find(
     token => tokenIdentity(token) === identity
-  )?.values.light;
+  )?.values;
+  return mode === "dark" ? (values?.dark ?? values?.light) : values?.light;
 }
 
-/** The font a row's value draws, as a stack. */
+/** The font a row's value draws in a mode, as a stack. */
 function drawnStack(
   tokens: SiteTokenSet,
-  value: StyleValue
+  value: StyleValue,
+  mode: FontMode
 ): string | undefined {
-  if (isTokenRef(value)) return variableValue(tokens, value.$token);
+  if (isTokenRef(value)) return variableValue(tokens, value.$token, mode);
   return typeof value === "string" ? value : undefined;
 }
 
-/** What a role is set to, read from the rows it is written on. */
+/**
+ * What a role is set to, read from the rows it is written on.
+ *
+ * @param mode - The mode its variables are read in: light, as the picker
+ *   shows them, unless asked for dark
+ */
 export function fontRoleSetting(
   tokens: SiteTokenSet,
-  role: FontRole
+  role: FontRole,
+  mode: FontMode = "light"
 ): FontRoleSetting {
   const rows = resolveSiteText(tokens.siteText);
   const fonts = rowsOf(role).map(row => rows[row]?.fontFamily);
@@ -104,7 +119,7 @@ export function fontRoleSetting(
   // Compared by the font each row draws, so a row holding the font as written
   // and one pointing at a variable of that font read as one setting.
   const stacks = fonts.map(font =>
-    font === undefined ? undefined : drawnStack(tokens, font)
+    font === undefined ? undefined : drawnStack(tokens, font, mode)
   );
   const [stack] = stacks;
   return stack !== undefined && stacks.every(each => each === stack)
@@ -319,7 +334,7 @@ function variableDeclared(
 ): string {
   if (!isTokenRef(value)) return "";
   const property = tokenCustomProperty(value.$token, prefix);
-  return `${property}: ${variableValue(tokens, value.$token) ?? ""}; `;
+  return `${property}: ${variableValue(tokens, value.$token, "light") ?? ""}; `;
 }
 
 /**
