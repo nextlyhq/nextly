@@ -21,7 +21,7 @@ const api = vi.hoisted(() => ({
   saveAutosave: vi.fn(),
   getAutosave: vi.fn(),
   can: vi.fn(),
-  localized: { enabled: false },
+  localized: { enabled: false, defaultLocale: "en" },
 }));
 
 vi.mock("@admin/lib/api/protectedApi", () => ({
@@ -53,6 +53,9 @@ vi.mock("@admin/services/versionApi", () => ({
 vi.mock("@admin/hooks/useCan", () => ({ useCan: api.can }));
 vi.mock("@admin/hooks/useLocalization", () => ({
   useLocalization: () => api.localized,
+}));
+vi.mock("@admin/hooks/useCanRequest", () => ({
+  useAsksTranslationStatus: () => api.localized.enabled,
 }));
 
 import { parseApiError } from "@admin/lib/api/parseApiError";
@@ -146,7 +149,7 @@ beforeEach(() => {
     updatedAt: "2026-11-18T09:00:00.000Z",
     locale: null,
   });
-  api.localized = { enabled: false };
+  api.localized = { enabled: false, defaultLocale: "en" };
   api.getAutosave.mockImplementation(async () => ({
     snapshot: api.saveAutosave.mock.calls.at(-1)?.[1] ?? null,
   }));
@@ -180,7 +183,7 @@ describe("useDocumentSession: open", () => {
   });
 
   it("reads a language alone, never another language's words in its place", async () => {
-    api.localized = { enabled: true };
+    api.localized = { enabled: true, defaultLocale: "en" };
     await openSession({ ...HEADER, locale: "de" });
 
     expect(api.findByID).toHaveBeenCalledWith("components", "h1", {
@@ -188,6 +191,34 @@ describe("useDocumentSession: open", () => {
       draft: true,
       locale: "de",
       fallbackLocale: "none",
+      translationStatus: true,
+    });
+  });
+
+  it("judges a translation live by its own state, not the default language's", async () => {
+    // The default language is a draft; German is published. A draft of the
+    // German header is its working draft, never a status that withdraws it.
+    api.localized = { enabled: true, defaultLocale: "en" };
+    api.findByID.mockResolvedValue({
+      ...STORED,
+      status: "draft",
+      _translations: { en: { status: "draft" }, de: { status: "published" } },
+    });
+    const view = renderHook(
+      () => useDocumentSession({ ...HEADER, locale: "de" }),
+      {
+        wrapper: wrapper(),
+      }
+    );
+    await waitFor(() => expect(view.result.current.lock.status).toBe("held"));
+
+    expect(view.result.current.open).toMatchObject({ published: true });
+    await act(async () => {
+      await view.result.current.saveDraft({ title: "Kopf" });
+    });
+    expect(api.update.mock.calls[0]?.[2]).toEqual({
+      title: "Kopf",
+      _rev: "v1",
     });
   });
 
@@ -332,6 +363,66 @@ describe("useDocumentSession: save as draft and publish", () => {
       title: "Two",
       _rev: "v2",
     });
+  });
+
+  it("reads the document again before writing after a publish, so the next draft is a working draft", async () => {
+    // Never published, then published here: a draft saved right after must
+    // not send "draft", which would withdraw what was just published.
+    let live = false;
+    api.findByID.mockImplementation(async () =>
+      live
+        ? { ...STORED, status: "published", _isWorkingDraft: false, _rev: "v2" }
+        : { ...STORED, status: "draft" }
+    );
+    api.update.mockImplementation(
+      async (_slug: string, _id: string, data: Record<string, unknown>) => {
+        if (data.status === "published") live = true;
+        return { item: { ...STORED, ...data, _rev: "v2" }, warnings: [] };
+      }
+    );
+    const { result } = await heldSession();
+
+    await act(async () => {
+      await result.current.publish({ title: "One" });
+      await result.current.saveDraft({ title: "Two" });
+    });
+
+    expect(api.update.mock.calls[0]?.[2]).toMatchObject({
+      status: "published",
+    });
+    expect(api.update.mock.calls[1]?.[2]).toEqual({ title: "Two", _rev: "v2" });
+  });
+
+  it("sends nothing to a document named while the write waited", async () => {
+    // A recording on its way holds the write back; meanwhile the caller
+    // names the footer. The header's changes are not sent to it.
+    let land: (value: unknown) => void = () => undefined;
+    api.saveAutosave.mockImplementationOnce(
+      () => new Promise(resolve => (land = resolve))
+    );
+    api.findByID.mockImplementation(async (_slug: string, id: string) =>
+      id === "f1" ? { ...STORED, id: "f1", _rev: "f-v1" } : STORED
+    );
+    const view = await heldSession();
+    act(() => view.result.current.record({ title: "Header" }));
+    await act(async () => void vi.advanceTimersByTime(DEBOUNCE_WAIT));
+    await waitFor(() => expect(api.saveAutosave).toHaveBeenCalledTimes(1));
+
+    let outcome: unknown;
+    let saving: Promise<unknown> = Promise.resolve();
+    act(() => {
+      saving = view.result.current
+        .publish({ title: "Header" })
+        .then(answer => (outcome = answer));
+    });
+    view.rerender({ named: { collection: "components", id: "f1" } });
+    await act(async () => {
+      land({ updatedAt: "2026-11-18T09:00:00.000Z", locale: null });
+      await saving;
+    });
+
+    expect(outcome).toEqual({ ok: false, reason: "moved", message: null });
+    expect(api.update).not.toHaveBeenCalled();
   });
 
   it("refuses to write while someone else holds the lock", async () => {
@@ -555,6 +646,27 @@ describe("useDocumentSession: recovery point", () => {
 
     // The footer's own version, not the header's answer.
     expect(api.update.mock.calls[1]?.[2]).toMatchObject({ _rev: "f-v1" });
+  });
+
+  it("still records the work when a save that put the recording off fails", async () => {
+    api.update.mockRejectedValue(
+      parseApiError(
+        { error: { code: "INTERNAL", message: "Down.", requestId: "r" } },
+        500
+      )
+    );
+    const { result } = await heldSession();
+
+    act(() => result.current.record({ title: "Unsaved" }));
+    await act(async () => {
+      await result.current.saveDraft({ title: "Unsaved" });
+    });
+    await act(async () => void vi.advanceTimersByTime(DEBOUNCE_WAIT));
+
+    await waitFor(() => expect(api.saveAutosave).toHaveBeenCalledTimes(1));
+    expect(api.saveAutosave.mock.calls[0]?.[1]).toMatchObject({
+      title: "Unsaved",
+    });
   });
 
   it("leaves a point another tab recorded over when the changes are discarded", async () => {

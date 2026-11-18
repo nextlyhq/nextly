@@ -65,7 +65,13 @@ expectTypeOf<{
   // Every reason a write did not happen, named.
   refused: {
     readonly ok: false;
-    readonly reason: "stale" | "locked" | "no-drafts" | "unread" | "refused";
+    readonly reason:
+      | "stale"
+      | "locked"
+      | "no-drafts"
+      | "unread"
+      | "moved"
+      | "refused";
     readonly message: string | null;
     readonly changedBy?: string | null;
   };

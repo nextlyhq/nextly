@@ -1114,7 +1114,8 @@ optional `locale`. Pass `null` when you stop editing it.
   when you pass `null`, when your view unmounts, and when the page goes away.
 - `saveDraft(changes)` and `publish(changes)` write the fields you pass,
   through the admin's own update, as the signed-in person. The status is
-  the operation's: a `status` among the fields is ignored. Each sends the
+  the operation's, judged by the language's own state: a `status` among the
+  fields is ignored. Each sends the
   version your copy started from, so a save made since is refused. Saving a
   draft of a published document stores its working draft and leaves what
   visitors see. Both resolve to `{ ok: true, values }` once stored. Otherwise
@@ -1123,6 +1124,7 @@ optional `locale`. Pass `null` when you stop editing it.
   - `"locked"`: you don't hold the lock;
   - `"no-drafts"`: the collection keeps no drafts for a published document;
   - `"unread"`: the document hasn't been read yet;
+  - `"moved"`: you named another document before it was sent;
   - `"refused"`: the server refused it, in its own words.
 - `mayPublish` is whether the person may publish documents of that
   collection, as the admin's Publish button decides it.
