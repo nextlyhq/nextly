@@ -472,6 +472,11 @@ export type {
   // a consumer can reach through a re-exported one but cannot name is a hole in
   // the surface, which `type-surface.test.ts` refuses.
   BindingSource,
+  // Reachable from `BlockDefinition.converters`, which a block declares to be
+  // turned into another type.
+  BlockConversion,
+  BlockConversionContext,
+  BlockConverter,
   BlockDefinition,
   BlockDocument,
   BlockEditorMeta,
