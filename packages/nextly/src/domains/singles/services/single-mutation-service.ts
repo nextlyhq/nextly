@@ -3008,6 +3008,15 @@ export class SingleMutationService extends BaseService {
       const hookOriginal = {
         ...existingDeserialized,
         ...(await this.translationIn(existingDoc.id, companion, writeLocale)),
+        // The links its many-to-many fields hold, which neither its row nor
+        // its translations have a column for (a translated one reads null
+        // there), so a hook comparing old with new sees them as stored.
+        ...(await this.queryService.readManyToManyLinks({
+          executor: this.adapter.getDrizzle<RelationshipDbExecutor>(),
+          sourceTable: singleMeta.tableName,
+          entryId: String(existingDoc.id),
+          fields: singleMeta.fields,
+        })),
       };
       const beforeCall: SingleBeforeHookCall = {
         slug,
