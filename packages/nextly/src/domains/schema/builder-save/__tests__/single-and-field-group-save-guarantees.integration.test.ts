@@ -857,19 +857,33 @@ describe.each(getConfiguredTestDialects())(
           ).toEqual(before);
         }, 60_000);
 
-        // MySQL commits each schema statement as it runs. A push whose second statement fails
-        // after its first committed stopped part way: its files stay, recorded applied nowhere,
-        // so the next `nextly migrate` names them. The failure comes through the test's seam on
-        // the push's statement executor, which runs the first statement and then fails. A Single's
-        // settings save runs its service's own statements, which that seam does not reach.
+        // MySQL commits each schema statement as it runs, and SQLite's push keeps the statements
+        // that ran before one that fails. A push whose second statement fails after its first
+        // ran stopped part way: its files stay, recorded applied nowhere, so the next
+        // `nextly migrate` names them. The failure comes through the test's seam on the push's
+        // statement executor, which runs the first statement and then fails. A Single's settings
+        // save runs its service's own statements, which that seam does not reach.
         it.runIf(
-          dialect === "mysql" && kind.name !== "a Single's settings save"
+          (dialect === "mysql" || dialect === "sqlite") &&
+            kind.name !== "a Single's settings save"
         )(
           "keeps the files of a push whose second statement failed after its first committed",
           async () => {
             const t = await boot();
             await kind.create([text("heading")]);
             const filesBefore = migrationFiles();
+            const definitionOf = () =>
+              readTableDefinition(
+                statement =>
+                  (
+                    adapterOf(t) as unknown as {
+                      executeQuery<R>(sql: string): Promise<R[]>;
+                    }
+                  ).executeQuery(statement),
+                adapterOf(t).getCapabilities().dialect,
+                kind.table
+              );
+            const tableBefore = await definitionOf();
             const run = DrizzleStatementExecutor.prototype.executeStatements;
             const sent: string[] = [];
             // Every statement the push sends, across its calls: the first runs, which MySQL
@@ -900,6 +914,8 @@ describe.each(getConfiguredTestDialects())(
             failing.mockRestore();
 
             expect(sent.length, sent.join("\n")).toBeGreaterThan(1);
+            // The first statement stayed: the table is no longer as it was.
+            expect(await definitionOf()).not.toEqual(tableBefore);
             const kept = migrationFiles().filter(f => !filesBefore.includes(f));
             expect(kept).not.toEqual([]);
             const applied = await appliedFiles(t);
