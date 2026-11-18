@@ -349,6 +349,24 @@ function focusHandlers(
   };
 }
 
+/** How a text field types live: see {@link TextField}. */
+interface TypedLive {
+  /**
+   * The caller's draft written as it is typed, from {@link useDraft}, so the
+   * canvas follows the typing. Without it the field writes on blur and Enter
+   * only. A shared style is written on blur and Enter either way: it is
+   * stored on the site at once, so a write per keystroke would put
+   * half-typed values on every page that wears it.
+   */
+  live?: LiveDraft | undefined;
+  /**
+   * The write a keystroke makes, where it differs from the commit: a colour
+   * is remembered among Recent colours once, when the edit ends, not for
+   * every value on the way. `onCommit` when omitted.
+   */
+  onType?: (value: StyleValue | null) => CommitOutcome;
+}
+
 /**
  * A text field over one stored value.
  *
@@ -370,8 +388,7 @@ export function TextField({
   display,
   fallbackHint,
   editing,
-  live,
-  onType,
+  ...typed
 }: {
   id: string;
   control: StyleControl;
@@ -421,21 +438,7 @@ export function TextField({
   fallbackHint?: string;
   /** The number field's part in the edit; see {@link FieldEditing}. */
   editing?: FieldEditing | undefined;
-  /**
-   * The caller's draft written as it is typed, from {@link useDraft}, so the
-   * canvas follows the typing. Without it the field writes on blur and Enter
-   * only. A shared style is written on blur and Enter either way: it is
-   * stored on the site at once, so a write per keystroke would put
-   * half-typed values on every page that wears it.
-   */
-  live?: LiveDraft | undefined;
-  /**
-   * The write a keystroke makes, where it differs from the commit: a colour
-   * is remembered among Recent colours once, when the edit ends, not for
-   * every value on the way. `onCommit` when omitted.
-   */
-  onType?: (value: StyleValue | null) => CommitOutcome;
-}): React.JSX.Element {
+} & TypedLive): React.JSX.Element {
   // The refusal, and the CSS names while they are shown.
   const described = useFieldDescription(describedBy);
   // Typed since focus: the text is then shown as typed, since a unit on its
@@ -444,8 +447,7 @@ export function TextField({
   // A side of the spacing box says "–" while unset: a hint would not fit.
   const compact = React.useContext(CompactSides);
   const hint = useUnsetHint(unsetWords(compact, fallbackHint, control));
-  const typedLive = useTypedLive(live);
-  const commit = useDraftCommit({
+  const { commit, onChange } = useFieldWrites({
     draft,
     stored,
     control,
@@ -453,16 +455,7 @@ export function TextField({
     onCommit,
     setDraft,
     setTyping,
-    live: typedLive,
-    settles: onType !== undefined,
-  });
-  const onChange = useTypedChange({
-    live: typedLive,
-    control,
-    tokens,
-    onType: onType ?? onCommit,
-    setDraft,
-    setTyping,
+    ...typed,
   });
 
   return (
@@ -480,17 +473,71 @@ export function TextField({
       // is one undo step, which blur and Enter end.
       onChange={onChange}
       {...focusHandlers(editing?.holdBlur, setTyping, commit)}
-      onKeyDown={event => {
-        if (commitOnEnter(event, commit)) return;
-        // The draft follows the value that was written, so the field shows the
-        // step immediately rather than waiting for `stored` to come back.
-        stepOnKey(event, onStep, draft, next => {
-          setDraft(next);
-          setTyping(false);
-        });
-      }}
+      onKeyDown={keyHandler({ commit, onStep, draft, setDraft, setTyping })}
     />
   );
+}
+
+/** The field's keys: Enter commits, and an arrow steps the draft. */
+function keyHandler({
+  commit,
+  onStep,
+  draft,
+  setDraft,
+  setTyping,
+}: {
+  commit: () => void;
+  onStep: ((draft: string, delta: number) => string | null) | undefined;
+  draft: string;
+  setDraft: (value: string) => void;
+  setTyping: (typing: boolean) => void;
+}): (event: React.KeyboardEvent<HTMLInputElement>) => void {
+  return event => {
+    if (commitOnEnter(event, commit)) return;
+    // The draft follows the value that was written, so the field shows the
+    // step immediately rather than waiting for `stored` to come back.
+    stepOnKey(event, onStep, draft, next => {
+      setDraft(next);
+      setTyping(false);
+    });
+  };
+}
+
+/**
+ * The field's two writes: the commit that ends an edit, and each keystroke's,
+ * both through the live draft where the field types live.
+ */
+function useFieldWrites({
+  live,
+  onType,
+  ...field
+}: {
+  draft: string;
+  stored: StyleValue | undefined;
+  control: StyleControl;
+  tokens: SiteTokenSet | undefined;
+  onCommit: (value: StyleValue | null) => CommitOutcome;
+  setDraft: (value: string) => void;
+  setTyping: (typing: boolean) => void;
+} & TypedLive): {
+  commit: () => void;
+  onChange: (event: React.ChangeEvent<HTMLInputElement>) => void;
+} {
+  const typedLive = useTypedLive(live);
+  const commit = useDraftCommit({
+    ...field,
+    live: typedLive,
+    settles: onType !== undefined,
+  });
+  const onChange = useTypedChange({
+    live: typedLive,
+    control: field.control,
+    tokens: field.tokens,
+    onType: onType ?? field.onCommit,
+    setDraft: field.setDraft,
+    setTyping: field.setTyping,
+  });
+  return { commit, onChange };
 }
 
 /**
