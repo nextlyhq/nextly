@@ -8,7 +8,9 @@
  * is a plain number read as a multiple of the text size, with an offer of
  * pixels when the number is too large to be meant as a multiple. Anything
  * else is a text field. Every field commits on blur or Enter, never per
- * keystroke, because a variable is read by the whole site.
+ * keystroke, because a variable is read by the whole site. Given `onPreview`,
+ * what is typed, picked or pointed at meanwhile is offered to be drawn on the
+ * canvas, and the end of the edit is said before its one commit.
  *
  * @module variable-value-controls
  */
@@ -38,7 +40,10 @@ import { FontChoicesContext, FontFamilyField } from "./font-family-field";
 import { NAMED_WEIGHTS, weightName, weightsDrawn } from "./font-library";
 import { InheritedValue } from "./inherited-value";
 import { styleControlsFor, type StyleControl } from "./style-controls";
-import type { CommitOutcome } from "./style-field-surroundings";
+import {
+  TypesLiveContext,
+  type CommitOutcome,
+} from "./style-field-surroundings";
 import { CSS_NUMBER, lineHeightAsPixels } from "./style-numeric";
 import { NumericField } from "./style-numeric-field";
 import { typeScaleProperty } from "./tokens-studio";
@@ -308,6 +313,23 @@ function sizeCommit(
 }
 
 /**
+ * A numeric field's typed or dragged value handed to a variable's preview,
+ * as text, which judges it as the write would: one it would refuse is not
+ * drawn, so the canvas keeps the last valid value. An emptied field draws
+ * nothing new; it is a value only once the field is left.
+ */
+function previewOf(
+  onPreview: (text: string | null) => void
+): (next: unknown) => CommitOutcome {
+  return next => {
+    const text = typeof next === "number" ? String(next) : next;
+    if (typeof text !== "string" || text.trim() === "") return "unchanged";
+    onPreview(text.trim());
+    return "applied";
+  };
+}
+
+/**
  * A size with its unit menu and no visible label of its own, for a layout
  * that names its columns, such as a type size's pair. Read-only, it is the
  * plain field, which still lets a value be selected and copied.
@@ -319,6 +341,7 @@ export function SizeInput({
   readOnly,
   refusedBy,
   onCommit,
+  onPreview,
   css,
 }: Omit<ValueFieldProps, "label"> & {
   label: string;
@@ -350,6 +373,7 @@ export function SizeInput({
         placeholder={placeholder}
         refusedBy={refusedBy}
         onCommit={onCommit}
+        onPreview={onPreview}
         control={SIZE_CONTROL}
         css={css}
       />
@@ -380,6 +404,7 @@ function NumericValue({
   readOnly,
   refusedBy,
   onCommit,
+  onPreview,
   css,
   control,
   placeholder,
@@ -408,6 +433,7 @@ function NumericValue({
         placeholder={placeholder}
         refusedBy={refusedBy}
         onCommit={onCommit}
+        onPreview={onPreview}
         control={control}
         css={css}
       />
@@ -464,7 +490,7 @@ function useDurationDraft(
  * such as `var(…)`, is edited whole as text, and so is a read-only one.
  */
 function DurationValue(props: ValueFieldProps): React.JSX.Element {
-  const { label, value, readOnly, refusedBy, onCommit } = props;
+  const { label, value, readOnly, refusedBy, onCommit, onPreview } = props;
   const id = React.useId();
   const parts = DURATION.exec(value);
   const number = parts?.[1] ?? "";
@@ -472,6 +498,8 @@ function DurationValue(props: ValueFieldProps): React.JSX.Element {
   const [draft, setDraft] = useDurationDraft(value, number);
   if (readOnly || parts === null) return <TextValue {...props} />;
   const commit = (text: string): void => {
+    // The edit is over, written or not.
+    onPreview?.(null);
     const typed = text.trim();
     if (typed === "" || (typed === number && refusedBy === undefined)) return;
     onCommit(durationOf(typed, unit));
@@ -489,7 +517,12 @@ function DurationValue(props: ValueFieldProps): React.JSX.Element {
           aria-describedby={refusedBy}
           className="nx-vars-editor__mono"
           value={draft}
-          onChange={event => setDraft(event.currentTarget.value)}
+          onChange={event => {
+            const typed = event.currentTarget.value;
+            setDraft(typed);
+            // Drawn as it would be written: a bare number in the unit shown.
+            if (typed.trim() !== "") onPreview?.(durationOf(typed, unit));
+          }}
           onBlur={event => commit(event.currentTarget.value)}
           onKeyDown={event => {
             if (event.key === "Enter") commit(event.currentTarget.value);
@@ -498,6 +531,7 @@ function DurationValue(props: ValueFieldProps): React.JSX.Element {
         <Select
           value={unit}
           onValueChange={next => {
+            onPreview?.(null);
             if (next !== unit || draft.trim() !== number) {
               onCommit(durationInUnit(draft, next));
             }
@@ -522,7 +556,15 @@ function DurationValue(props: ValueFieldProps): React.JSX.Element {
   );
 }
 
-/** The block panel's numeric field over a variable's value. */
+/**
+ * The block panel's numeric field over a variable's value.
+ *
+ * Given `onPreview`, the field types live as a block's own fields do, but
+ * what it types is handed to the preview rather than written: the field's
+ * keystrokes and its label's drag (`NumericField`'s `onType`). Every commit
+ * says the edit is over first, so the canvas draws what is stored again when
+ * the commit writes nothing.
+ */
 function SizeField({
   id,
   label,
@@ -530,6 +572,7 @@ function SizeField({
   placeholder,
   refusedBy,
   onCommit,
+  onPreview,
   control,
   css,
 }: {
@@ -539,6 +582,7 @@ function SizeField({
   placeholder: string | undefined;
   refusedBy: string | undefined;
   onCommit: (value: string) => void;
+  onPreview?: ((text: string | null) => void) | undefined;
   control: StyleControl;
   css: string | undefined;
 }): React.JSX.Element {
@@ -550,6 +594,27 @@ function SizeField({
     if (refusedBy === undefined || !isInput(field)) return;
     if (restoresStored(field.value, value)) onCommit(value);
   };
+  const commit = sizeCommit(value, refusedBy, onCommit);
+  const field = (
+    <NumericField
+      id={id}
+      control={control}
+      stored={value === "" ? undefined : value}
+      actionName={label}
+      // No site variables offered: a variable holds a value of its own.
+      tokens={undefined}
+      describedBy={refusedBy}
+      onCommit={
+        onPreview === undefined
+          ? commit
+          : next => {
+              onPreview(null);
+              return commit(next);
+            }
+      }
+      {...(onPreview === undefined ? {} : { onType: previewOf(onPreview) })}
+    />
+  );
   return (
     // The light value shows as the empty dark field's hint, as a value
     // reaching a block's field from elsewhere shows in the block panel.
@@ -562,16 +627,13 @@ function SizeField({
         }}
         onBlurCapture={restore}
       >
-        <NumericField
-          id={id}
-          control={control}
-          stored={value === "" ? undefined : value}
-          actionName={label}
-          // No site variables offered: a variable holds a value of its own.
-          tokens={undefined}
-          describedBy={refusedBy}
-          onCommit={sizeCommit(value, refusedBy, onCommit)}
-        />
+        {onPreview === undefined ? (
+          field
+        ) : (
+          <TypesLiveContext.Provider value={true}>
+            {field}
+          </TypesLiveContext.Provider>
+        )}
       </div>
     </InheritedValue.Provider>
   );
@@ -589,6 +651,7 @@ export function LineHeightInput({
   readOnly,
   refusedBy,
   onCommit,
+  onPreview,
 }: Omit<ValueFieldProps, "label"> & {
   /** The field's name where no visible label points at it. */
   label: string | undefined;
@@ -605,6 +668,7 @@ export function LineHeightInput({
         readOnly={readOnly}
         refusedBy={refusedBy}
         onCommit={onCommit}
+        onPreview={onPreview}
         {...(placeholder === undefined ? {} : { placeholder })}
       />
       {times ? (
@@ -704,6 +768,7 @@ function FontValue({
   readOnly,
   refusedBy,
   onCommit,
+  onPreview,
 }: ValueFieldProps): React.JSX.Element {
   const fonts = React.useContext(FontChoicesContext);
   const id = React.useId();
@@ -734,6 +799,16 @@ function FontValue({
         onCommit={next => {
           if (typeof next === "string" && next !== value) onCommit(next);
         }}
+        // The family under the keyboard or the pointer is drawn on the
+        // canvas while the list is open; closing it ends that.
+        {...(onPreview === undefined
+          ? {}
+          : {
+              onPreview: (next: unknown) => {
+                if (next === null) onPreview(null);
+                else if (typeof next === "string") onPreview(next);
+              },
+            })}
         {...(manage === undefined ? {} : { onManageFonts: manage })}
       />
     </div>
@@ -789,6 +864,7 @@ function WeightValue({
   readOnly,
   refusedBy,
   onCommit,
+  onPreview,
 }: ValueFieldProps): React.JSX.Element {
   const fonts = React.useContext(FontChoicesContext);
   const id = React.useId();
@@ -817,7 +893,12 @@ function WeightValue({
       <Select
         value={value}
         onValueChange={next => {
+          onPreview?.(null);
           if (next !== value) onCommit(next);
+        }}
+        // Closed without a choice, the canvas draws what is stored again.
+        onOpenChange={open => {
+          if (!open) onPreview?.(null);
         }}
       >
         <SelectTrigger
@@ -831,13 +912,23 @@ function WeightValue({
         <SelectContent>
           {unnamed ? <SelectItem value={value}>{value}</SelectItem> : null}
           {ours.map(weight => (
-            <SelectItem key={weight} value={String(weight)}>
+            <SelectItem
+              key={weight}
+              value={String(weight)}
+              // The weight the keyboard or the pointer is on is drawn on
+              // the canvas, as the list moves.
+              onFocus={() => onPreview?.(String(weight))}
+            >
               {weightName(weight)}
             </SelectItem>
           ))}
           {ours.length > 0 && others.length > 0 ? <SelectSeparator /> : null}
           {others.map(weight => (
-            <SelectItem key={weight} value={String(weight)}>
+            <SelectItem
+              key={weight}
+              value={String(weight)}
+              onFocus={() => onPreview?.(String(weight))}
+            >
               {weightName(weight)}
               <span className="nx-vars-editor__weight-note">
                 No font on this site has this weight
@@ -857,6 +948,7 @@ function LineHeightValue({
   readOnly,
   refusedBy,
   onCommit,
+  onPreview,
   mode = "light",
 }: ValueFieldProps): React.JSX.Element {
   const id = React.useId();
@@ -872,6 +964,7 @@ function LineHeightValue({
         readOnly={readOnly}
         refusedBy={refusedBy}
         onCommit={onCommit}
+        onPreview={onPreview}
       />
       <LineHeightHint
         value={value}

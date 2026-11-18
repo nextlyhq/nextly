@@ -63,6 +63,12 @@ export interface ChoiceListProps<C extends ListedChoice> {
   /** The entry the stored value is, marked in the list. */
   readonly currentKey: string | undefined;
   readonly onPick: (choice: C) => void;
+  /**
+   * The author moved onto an entry that can be picked, by an arrow key, Home,
+   * End or the pointer: for a picker that shows the entry before it is
+   * picked, as the Font control draws a family on the canvas.
+   */
+  readonly onActive?: (choice: C) => void;
   /** What the list is called: "Fonts". */
   readonly label: string;
   /** What the search is called, and says while empty: "Search fonts". */
@@ -178,10 +184,48 @@ function drawnSections(
   );
 }
 
+/**
+ * What moving to a row does: it becomes the active one, and an entry that can
+ * be picked is said to `onActive`, unless it is the entry said last. Judged by
+ * the entry rather than by its place: a search moves a different entry into
+ * the active place without the author moving, and the pointer or a key on it
+ * then still says it. A pointer resting on one entry says it once.
+ */
+function activeMover<C extends ListedChoice>(
+  shown: readonly DrawnRow<C>[],
+  setActive: (index: number) => void,
+  said: React.RefObject<string | undefined>,
+  onActive: ((choice: C) => void) | undefined
+): (index: number) => void {
+  return index => {
+    setActive(index);
+    const row = shown[index];
+    if (row?.kind !== "choice" || row.choice.disabled === true) return;
+    if (row.choice.key === said.current) return;
+    said.current = row.choice.key;
+    onActive?.(row.choice);
+  };
+}
+
+/**
+ * Where the keyboard is while the list is open: on the search, where there is
+ * one, which names the active entry itself; otherwise on the list, which does.
+ */
+function listFocus(
+  searchable: boolean,
+  describedActive: string | undefined
+): { tabIndex: number; "aria-activedescendant"?: string } {
+  if (searchable) return { tabIndex: -1 };
+  return describedActive === undefined
+    ? { tabIndex: 0 }
+    : { tabIndex: 0, "aria-activedescendant": describedActive };
+}
+
 export function ChoiceList<C extends ListedChoice>({
   choices,
   currentKey,
   onPick,
+  onActive,
   label,
   searchLabel,
   noMatch,
@@ -249,6 +293,11 @@ export function ChoiceList<C extends ListedChoice>({
     );
   };
 
+  /** The author moved to the row at `index`: it is active, and said so. */
+  // The entry last said to `onActive`; the stored one until the author moves.
+  const said = React.useRef<string | undefined>(currentKey);
+  const moveTo = activeMover(shown, setActive, said, onActive);
+
   /** What pressing a row does: pick an entry, or open a folded group. */
   const press = (row: DrawnRow<C>): void => {
     if (row.kind === "fold") open(row.group);
@@ -266,7 +315,7 @@ export function ChoiceList<C extends ListedChoice>({
     const next = moves[event.key];
     if (next !== undefined) {
       event.preventDefault();
-      setActive(next);
+      moveTo(next);
       return;
     }
     if (event.key === "Enter" && activeRow !== undefined) {
@@ -295,7 +344,7 @@ export function ChoiceList<C extends ListedChoice>({
           aria-describedby={foldHintId(row)}
           className="nx-font-pick__option nx-choice-fold"
           title={`Show ${row.group.heading}`}
-          onMouseMove={() => setActive(shown.indexOf(row))}
+          onMouseMove={() => moveTo(shown.indexOf(row))}
           onClick={() => press(row)}
         >
           <span className="nx-choice-fold__label">{fold?.label}</span>
@@ -324,7 +373,7 @@ export function ChoiceList<C extends ListedChoice>({
         // Cut with an ellipsis when long: whole on hover.
         title={choiceTitle === undefined ? choice.label : choiceTitle(choice)}
         style={choiceStyle?.(choice)}
-        onMouseMove={() => setActive(shown.indexOf(row))}
+        onMouseMove={() => moveTo(shown.indexOf(row))}
         onClick={() => press(row)}
       >
         {renderChoice === undefined ? choice.label : renderChoice(choice)}
@@ -362,8 +411,7 @@ export function ChoiceList<C extends ListedChoice>({
         role="listbox"
         aria-label={label}
         className="nx-font-pick__list"
-        tabIndex={searchable ? -1 : 0}
-        aria-activedescendant={searchable ? undefined : describedActive}
+        {...listFocus(searchable, describedActive)}
         onKeyDown={onKeyDown}
       >
         {shown.length === 0 ? (
