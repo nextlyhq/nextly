@@ -115,6 +115,70 @@ export interface NamedClass {
    * @experimental
    */
   hidden?: true;
+  /**
+   * `"text"` on a text style: a named look of typography only (font, size per
+   * breakpoint, line height, weight, letter spacing and case), worn by any
+   * block whatever its tag. Absent on a block style and a shared style.
+   *
+   * A text style is written after every block style and before every shared
+   * style, under a class name of its own, so it beats a block style's
+   * typography and never its colours or spacing, which it cannot hold. Never
+   * bound to a block type.
+   *
+   * @experimental
+   */
+  role?: "text";
+}
+
+/**
+ * The style properties a text style may hold: its six parts, and nothing that
+ * colours a block or moves its layout. One list, read by the check that makes
+ * a text style usable and by the site record's reader, so the two cannot
+ * disagree about what a text style is.
+ *
+ * @experimental
+ */
+export const TEXT_STYLE_PROPERTIES: ReadonlySet<string> = new Set([
+  "fontFamily",
+  "fontSize",
+  "lineHeight",
+  "fontWeight",
+  "letterSpacing",
+  "textTransform",
+]);
+
+/**
+ * The properties in a style envelope that a text style may not hold, each
+ * named once, in the order first met. Read across every state and every
+ * breakpoint, since a colour on hover or a margin on mobile is as far outside
+ * typography as one at rest on the widest screen. Empty for typography only.
+ *
+ * @experimental
+ */
+export function nonTypographyProperties(styles: unknown): string[] {
+  const found: string[] = [];
+  if (!isPlainRecord(styles)) return found;
+  for (const byBreakpoint of Object.values(styles)) {
+    if (!isPlainRecord(byBreakpoint)) continue;
+    for (const values of Object.values(byBreakpoint)) {
+      if (!isPlainRecord(values)) continue;
+      for (const property of Object.keys(values)) {
+        if (TEXT_STYLE_PROPERTIES.has(property)) continue;
+        if (!found.includes(property)) found.push(property);
+      }
+    }
+  }
+  return found;
+}
+
+/**
+ * Whether a class is a text style. Read from data that may not be a record,
+ * as {@link isLook} is: a role that is not `"text"` is no text style.
+ *
+ * @experimental
+ */
+export function isTextStyle(cls: NamedClass): boolean {
+  return (cls as { role?: unknown } | null)?.role === "text" && !isLook(cls);
 }
 
 /**
@@ -236,7 +300,14 @@ export function isUsableNamedClass(value: unknown): value is NamedClass {
     // The own-look mark is `true` or absent, and only on a look: an own look of no block type
     // would edit no base.
     (candidate.isDefault === undefined ||
-      (candidate.isDefault === true && isBlockType(candidate.blockType)))
+      (candidate.isDefault === true && isBlockType(candidate.blockType))) &&
+    // A role is the text role or absent. A text style is never a block's look
+    // and holds typography only: anything more would let it override a block
+    // style's colours or spacing from the tier above.
+    (candidate.role === undefined ||
+      (candidate.role === "text" &&
+        candidate.blockType === undefined &&
+        nonTypographyProperties(candidate.styles).length === 0))
   );
 }
 
@@ -365,16 +436,35 @@ export function namedClassName(slug: string): string {
 export const LOOK_CLASS_PREFIX = "nx-l-";
 
 /**
+ * The prefix a text style's class is written under, apart from looks' and
+ * shared styles'.
+ *
+ * @experimental
+ */
+export const TEXT_STYLE_CLASS_PREFIX = "nx-t-";
+
+/**
  * The emitted class name for one class: a look's under its own prefix, so a
  * look and a shared style can never be told apart by name alone, nor one
  * mistaken for the other where a renderer reads the class string.
  */
 export function classNameOf(
-  cls: Pick<NamedClass, "slug" | "blockType">
+  cls: Pick<NamedClass, "slug" | "blockType" | "role">
 ): string {
-  return isLook(cls as NamedClass)
-    ? `${LOOK_CLASS_PREFIX}${cls.slug}`
-    : namedClassName(cls.slug);
+  if (isLook(cls as NamedClass)) return `${LOOK_CLASS_PREFIX}${cls.slug}`;
+  if (isTextStyle(cls as NamedClass)) {
+    return `${TEXT_STYLE_CLASS_PREFIX}${cls.slug}`;
+  }
+  return namedClassName(cls.slug);
+}
+
+/**
+ * A class's tier in the order classes override one another: a look, then a
+ * text style, then a shared style.
+ */
+function tierOf(cls: NamedClass): number {
+  if (isLook(cls)) return 0;
+  return isTextStyle(cls) ? 1 : 2;
 }
 
 /**
@@ -437,8 +527,10 @@ export function orderedNamedClassPositions(
     const left = classes[a];
     const right = classes[b];
     return (
-      // Looks first: a look is worn under the shared styles, whatever its index.
-      Number(!isLook(left)) - Number(!isLook(right)) ||
+      // Looks first, then text styles, then shared styles, whatever their
+      // indexes: a text style beats a block style's typography, and a shared
+      // style the author applied beats both.
+      tierOf(left) - tierOf(right) ||
       index(left) - index(right) ||
       (id(left) < id(right) ? -1 : id(left) > id(right) ? 1 : 0) ||
       // Two entries that compare equal keep their stored order. `Array.prototype.sort` is

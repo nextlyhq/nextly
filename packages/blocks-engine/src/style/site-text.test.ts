@@ -319,7 +319,9 @@ describe("the Body and Headings fonts", () => {
     );
     expect(heading).toMatchObject({ kind: "fontFamily" });
     expect(
-      Object.values(DEFAULT_SITE_TEXT).some(row => row?.fontFamily !== undefined)
+      Object.values(DEFAULT_SITE_TEXT).some(
+        row => row?.fontFamily !== undefined
+      )
     ).toBe(false);
   });
 
@@ -361,5 +363,81 @@ describe("the Body and Headings fonts", () => {
     expect(siteTextRoleOf("root", "font-family")).toBe("body");
     expect(siteTextRoleOf("h3", "font-family")).toBe("h3");
     expect(siteTextRoleOf("a", "font-family")).toBeUndefined();
+  });
+});
+
+describe("a row that follows a text style", () => {
+  // "Display": a size per breakpoint, built on a variable at the widest.
+  const display = {
+    id: "t-display",
+    slug: "display",
+    label: "Display",
+    orderIndex: 0,
+    role: "text" as const,
+    styles: {
+      base: {
+        base: {
+          fontSize: { $token: "font-size.h1" },
+          lineHeight: 1.1,
+          fontWeight: 800,
+        },
+        mobile: { fontSize: "32px" },
+      },
+    },
+  };
+
+  it("writes the text style's whole look on its element, at every breakpoint", () => {
+    const bases = siteTextElementBases(
+      { h1: { fontSize: "40px", textStyle: "t-display" } },
+      [display as never]
+    );
+    expect(bases.h1?.base?.base).toMatchObject({
+      fontSize: { $token: "font-size.h1" },
+      lineHeight: 1.1,
+      fontWeight: 800,
+    });
+    expect(bases.h1?.base?.mobile).toEqual({ fontSize: "32px" });
+    const css = compilePageCss(
+      { formatVersion: 1, kind: "page", nodes: [] } as never,
+      { breakpoints: FIXTURE_BREAKPOINTS, elementBases: bases }
+    ).css;
+    // An H1 following "Display" takes its size, not the row's own 40px.
+    expect(css).toMatch(
+      /:where\(h1\) \{[^}]*font-size: var\(--site-font-size-h1\)[^}]*font-weight: 800/
+    );
+    expect(css).not.toContain("font-size: 40px");
+    expect(css).toMatch(
+      /@media[^{]*max-width: 640px[^{]*\{[^@]*:where\(h1\) \{ font-size: 32px \}/
+    );
+  });
+
+  it("keeps its own values while the text style it names is not there or not usable", () => {
+    const missing = siteTextElementBases(
+      { h2: { fontSize: "40px", textStyle: "t-gone" } },
+      [display as never]
+    );
+    expect(missing.h2?.base?.base?.fontSize).toBe("40px");
+    const coloured = {
+      ...display,
+      styles: { base: { base: { color: "red" } } },
+    };
+    const unusable = siteTextElementBases(
+      { h2: { fontSize: "40px", textStyle: "t-display" } },
+      [coloured as never]
+    );
+    expect(unusable.h2?.base?.base?.fontSize).toBe("40px");
+    expect(JSON.stringify(unusable.h2)).not.toContain("red");
+  });
+
+  it("is refused on Links, and as anything but a text style's id", () => {
+    const issues = siteTextIssues({
+      h1: { textStyle: "t-display" },
+      link: { textStyle: "t-display" },
+      h2: { textStyle: 7 },
+    } as never);
+    expect(issues.map(issue => issue.path).sort()).toEqual([
+      "siteText/h2/textStyle",
+      "siteText/link/textStyle",
+    ]);
   });
 });

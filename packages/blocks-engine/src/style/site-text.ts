@@ -40,6 +40,12 @@ import type { ValidationIssue } from "../validation";
 import type { TypographicElement } from "./compile-page-states";
 import { customPropertiesReferenced } from "./css-value-check";
 import type { FluidSizes } from "./fluid-value";
+import {
+  isTextStyle,
+  isUsableNamedClass,
+  MAX_NAMED_CLASS_NAME_LENGTH,
+  type NamedClass,
+} from "./named-class";
 import { validateStyleValues } from "./validate-style-value";
 
 /** The rows of Site text, in the order an author meets them. */
@@ -114,6 +120,16 @@ export interface SiteTextEntry {
   readonly hoverColor?: string | TokenRef;
   /** When a link is underlined. Links only. */
   readonly underline?: SiteTextUnderline;
+  /**
+   * The id of a text style the row follows ("Heading 1 uses Display"). While
+   * that text style is there and usable, the row writes the text style's
+   * whole look, at every breakpoint, instead of its own values; the row's own
+   * values stay stored, and come back if the text style goes. Every row but
+   * Links.
+   *
+   * @experimental
+   */
+  readonly textStyle?: string;
 }
 
 /** A site's rows by role. A role it leaves out keeps its built-in row. */
@@ -302,9 +318,12 @@ export function siteTextRoleOf(
  */
 export function siteTextStyles(
   role: SiteTextRole,
-  entry: SiteTextEntry | undefined
+  entry: SiteTextEntry | undefined,
+  classes?: readonly NamedClass[]
 ): NodeStyles | undefined {
   if (entry === undefined) return undefined;
+  const followed = role === "link" ? undefined : textStyleOf(entry, classes);
+  if (followed !== undefined) return followed.styles;
   const { base, hover } =
     role === "link"
       ? linkValues(entry)
@@ -314,6 +333,22 @@ export function siteTextStyles(
     ...(Object.keys(hover).length === 0 ? {} : { hover: { base: hover } }),
   };
   return Object.keys(styles).length === 0 ? undefined : styles;
+}
+
+/**
+ * The text style a row follows, when the row names one and the site holds it
+ * usable: the first usable text style with that id, as the class tier reads
+ * a library, so a row and a block wearing the same id get the same look.
+ */
+function textStyleOf(
+  entry: SiteTextEntry,
+  classes: readonly NamedClass[] | undefined
+): NamedClass | undefined {
+  const id = entry.textStyle;
+  if (typeof id !== "string" || classes === undefined) return undefined;
+  return classes.find(
+    cls => isUsableNamedClass(cls) && isTextStyle(cls) && cls.id === id
+  );
 }
 
 /** A text row's font, size and line height, where it states them. */
@@ -346,9 +381,10 @@ function linkValues(entry: SiteTextEntry): {
 }
 
 /**
- * An element's own defaults with a row laid over them. Rows are written at
- * the widest breakpoint only, as the defaults are, so the merge is two
- * levels deep and no more.
+ * An element's own defaults with a row laid over them, state by state and
+ * breakpoint by breakpoint. A row of its own values is written at the widest
+ * breakpoint only; a row following a text style carries that style's sizes
+ * per breakpoint, and each is kept.
  */
 function laidOver(
   under: NodeStyles | undefined,
@@ -358,10 +394,18 @@ function laidOver(
   if (under === undefined) return over;
   const out: NodeStyles = {};
   for (const state of STYLE_STATES) {
-    const below = under[state]?.base;
-    const above = over[state]?.base;
-    if (below === undefined && above === undefined) continue;
-    out[state] = { base: { ...below, ...above } };
+    const below = under[state] ?? {};
+    const above = over[state] ?? {};
+    const breakpoints = new Set([...Object.keys(below), ...Object.keys(above)]);
+    if (breakpoints.size === 0) continue;
+    const merged: Record<string, unknown> = {};
+    for (const breakpoint of breakpoints) {
+      merged[breakpoint] = {
+        ...(below as Record<string, object>)[breakpoint],
+        ...(above as Record<string, object>)[breakpoint],
+      };
+    }
+    out[state] = merged as NodeStyles[typeof state];
   }
   return out;
 }
@@ -374,14 +418,18 @@ function laidOver(
  * @param stated - the rows the site states; the built-in rows stand for the rest
  */
 export function siteTextElementBases(
-  stated?: SiteTextMap
+  stated?: SiteTextMap,
+  classes?: readonly NamedClass[]
 ): Readonly<Partial<Record<ElementBaseKey, NodeStyles>>> {
   const rows = resolveSiteText(stated);
   const out = elementDefaults();
   for (const role of SITE_TEXT_ROLES) {
     const key = ROW_ELEMENT[role];
     if (key === undefined) continue;
-    const styles = laidOver(out[key], siteTextStyles(role, rows[role]));
+    const styles = laidOver(
+      out[key],
+      siteTextStyles(role, rows[role], classes)
+    );
     if (styles !== undefined) out[key] = styles;
   }
   return out;
@@ -398,6 +446,7 @@ const TEXT_KEYS: ReadonlySet<string> = new Set([
   "fontSize",
   "lineHeight",
   "fluid",
+  "textStyle",
 ]);
 
 /** The style key each value of a row is judged as. */
@@ -422,6 +471,31 @@ function isFluidSizes(value: unknown): value is FluidSizes {
     value.small > 0 &&
     value.large > 0
   );
+}
+
+/**
+ * A text style named by a row is a text style's id: a short string. Whether
+ * the site holds it is not asked here, since a row naming one that has gone
+ * keeps its own values rather than breaking the map.
+ */
+function textStyleIssues(
+  entry: Record<string, unknown>,
+  held: ReadonlySet<string>,
+  label: string,
+  at: string
+): ValidationIssue[] {
+  const id = entry.textStyle;
+  if (id === undefined || !held.has("textStyle")) return [];
+  return typeof id === "string" &&
+    id.length > 0 &&
+    id.length <= MAX_NAMED_CLASS_NAME_LENGTH
+    ? []
+    : [
+        refusal(
+          `${at}/textStyle`,
+          `${label} names no text style it can follow.`
+        ),
+      ];
 }
 
 /** A refusal at one place in the map. */
@@ -478,6 +552,7 @@ function entryIssues(
       ),
     ...fluidIssues(entry, label, at),
     ...underlineIssues(entry, label, at),
+    ...textStyleIssues(entry, held, label, at),
     ...JUDGED_AS.filter(
       ([key]) => entry[key] !== undefined && held.has(key)
     ).flatMap(([key, judged]) =>
