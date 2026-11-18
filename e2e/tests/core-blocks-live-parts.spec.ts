@@ -10,7 +10,7 @@
  * - axe finds no colour-contrast failure, so text keeps 4.5:1 in the site's
  *   own values in both themes;
  * - each control a visitor taps (an accordion's question, the poster's play
- *   button, a form's fields and its send button, the lightbox's Close) is at
+ *   link in its own frame, a form's fields and its send button, the lightbox's Close) is at
  *   least 44px tall, and the open lightbox keeps its contrast too;
  * - on a phone, a form's fields use at least a 16px font, so the browser
  *   never zooms into them.
@@ -163,7 +163,7 @@ async function shortTargets(page: Page): Promise<string[]> {
   return page.evaluate(() => {
     const taps = [
       ...document.querySelectorAll(
-        "summary, form input, form textarea, form select, form button, button[aria-label^='Play']"
+        "summary, form input, form textarea, form select, form button"
       ),
     ];
     return taps
@@ -201,6 +201,27 @@ test.describe("the core blocks' live parts", () => {
         await expect(
           live.getByRole("navigation", { name: "On this page" })
         ).toBeVisible();
+        // Every part measured below is there, so a part that stops drawing
+        // fails here rather than quietly leaving the checks below.
+        await expect(live.getByText("How long does it take?")).toBeVisible();
+        // The poster is a document of its own, in its frame; its play link
+        // is the one control a visitor taps there.
+        const play = live
+          .frameLocator('iframe[title="How it works"]')
+          .getByRole("link", { name: /^Play/ });
+        await expect(play).toBeVisible();
+        const playBox = await play.boundingBox();
+        if (playBox === null || playBox.height < 44 || playBox.width < 44) {
+          problems.push(
+            `${at}: the poster's play link ${Math.round(playBox?.width ?? 0)}x${Math.round(playBox?.height ?? 0)}px`
+          );
+        }
+        for (const field of ["Name", "Email", "Message"]) {
+          await expect(
+            live.getByLabel(field, { exact: false }).first()
+          ).toBeVisible();
+        }
+        await expect(live.getByRole("button", { name: "Send" })).toBeVisible();
 
         const sideways = await live.evaluate(
           () =>

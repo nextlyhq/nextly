@@ -526,11 +526,11 @@ describe("a table of contents' settings", () => {
     );
   });
 
-  it("makes its folding title a target at least 44px tall, which an author's own height outweighs", async () => {
+  it("makes its folding title a target at least 44px tall, a floor an author's own minimum height replaces", async () => {
     const html = await drawn(page(contents({}), ...body));
     expect(navOf(html)).toContain("<summary");
-    // Under `:where`, so the rule weighs nothing against a height an author
-    // sets on the title.
+    // Under `:where`, so the rule weighs nothing against a minimum height an
+    // author sets on the title.
     expect(contentsRules(html)).toContain(
       ":where([data-nx-toc-toggle]){min-height:44px}"
     );

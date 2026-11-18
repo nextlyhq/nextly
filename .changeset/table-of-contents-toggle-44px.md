@@ -29,4 +29,4 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-A table of contents that folds draws its title as a target at least 44px tall, as each of its links is, so it is easy to tap on a phone. An author's own height on the title still wins.
+A table of contents that folds draws its title as a target at least 44px tall, as each of its links is, so it is easy to tap on a phone. An author's own minimum height on the title replaces it.

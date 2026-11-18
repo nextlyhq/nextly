@@ -116,9 +116,10 @@ const TABLE_OF_CONTENTS_CSS = [
   `[${MARKER_ATTRIBUTE}="bullets"] li li::before{content:"\\25E6";content:"\\25E6"/""}`,
   `[${HIGHLIGHT_ATTRIBUTE}]{scroll-target-group:auto}`,
   `[${HIGHLIGHT_ATTRIBUTE}] a:target-current{font-weight:600}`,
-  // Under `:where`, so it weighs nothing against a height an author sets on
-  // the title, and only the folding title takes it: a title that cannot fold
-  // is a label, not a target.
+  // A floor, under `:where`, so an author's own minimum height on the title
+  // replaces it; a smaller `height` cannot take the target below 44px. Only
+  // the folding title takes it: a title that cannot fold is a label, not a
+  // target.
   `:where([${TOGGLE_ATTRIBUTE}]){min-height:44px}`,
 ].join("");
 
