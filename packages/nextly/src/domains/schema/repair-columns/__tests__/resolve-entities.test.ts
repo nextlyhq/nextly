@@ -339,3 +339,136 @@ describe("resolveRepairEntities: the app's column overrides", () => {
     expect(entity?.applied?.recordedTypes).toBeUndefined();
   });
 });
+
+describe("resolveRepairEntities: which registry rows say what was applied", () => {
+  // With no snapshot, only a row a sync or a migration finished stands for the database.
+  it.each(["applied", "synced"])(
+    "takes a %s row as the applied definition",
+    migrationStatus => {
+      const entity = only(
+        resolveRepairEntities({
+          configured: [configured()],
+          registry: [registry({ migrationStatus })],
+          snapshots: [],
+        })
+      );
+      expect(entity?.applied?.source).toBe("registry");
+    }
+  );
+
+  it.each(["pending", "generated", "failed"])(
+    "leaves the applied definition unknown for a %s row",
+    migrationStatus => {
+      const entity = only(
+        resolveRepairEntities({
+          configured: [configured()],
+          registry: [registry({ migrationStatus })],
+          snapshots: [],
+        })
+      );
+      expect(entity?.applied).toBeNull();
+      expect(entity?.configured).not.toBeNull();
+    }
+  );
+});
+
+describe("resolveRepairEntities: each side's table", () => {
+  it("keeps the table the snapshot's migration created, and names the configured one as a rename", () => {
+    // A code-first row's table is rewritten from the configuration at each start, so only the
+    // snapshot still names the table the database holds.
+    const entity = only(
+      resolveRepairEntities({
+        configured: [configured({ table: "articles" })],
+        registry: [registry({ tableName: "articles" })],
+        snapshots: [snapshot({ table: "dc_posts" })],
+      })
+    );
+    expect(entity?.table).toBe("dc_posts");
+    expect(entity?.renamedTo).toBe("articles");
+  });
+
+  it("names no rename where both sides name one table", () => {
+    const entity = only(
+      resolveRepairEntities({
+        configured: [configured()],
+        registry: [registry()],
+        snapshots: [snapshot({ table: "dc_posts" })],
+      })
+    );
+    expect(entity?.table).toBe("dc_posts");
+    expect(entity).not.toHaveProperty("renamedTo");
+  });
+
+  it("puts an entity nothing has applied at the configured table, with no rename", () => {
+    const entity = only(
+      resolveRepairEntities({
+        configured: [configured({ table: "articles" })],
+        registry: [
+          registry({ tableName: "dc_posts", migrationStatus: "pending" }),
+        ],
+        snapshots: [],
+      })
+    );
+    expect(entity?.applied).toBeNull();
+    expect(entity?.table).toBe("articles");
+    expect(entity).not.toHaveProperty("renamedTo");
+  });
+
+  it("keeps a removed entity at its applied table", () => {
+    const entity = only(
+      resolveRepairEntities({
+        configured: [],
+        registry: [],
+        snapshots: [snapshot({ table: "dc_posts" })],
+      })
+    );
+    expect(entity?.configured).toBeNull();
+    expect(entity?.table).toBe("dc_posts");
+    expect(entity).not.toHaveProperty("renamedTo");
+  });
+});
+
+describe("resolveRepairEntities: a Builder entity the manifest leaves out", () => {
+  const builderRow = () => registry({ source: "ui", locked: false });
+
+  it("has no configured definition where a manifest is checked out: its removal is pending", () => {
+    const entity = only(
+      resolveRepairEntities({
+        configured: [],
+        registry: [builderRow()],
+        snapshots: [],
+        hasManifest: true,
+      })
+    );
+    expect(entity?.applied?.source).toBe("registry");
+    expect(entity?.configured).toBeNull();
+  });
+
+  it.each([false, undefined])(
+    "keeps its registry row as the configured definition with no manifest (hasManifest %s)",
+    hasManifest => {
+      const entity = only(
+        resolveRepairEntities({
+          configured: [],
+          registry: [builderRow()],
+          snapshots: [],
+          ...(hasManifest === undefined ? {} : { hasManifest }),
+        })
+      );
+      expect(entity?.configured?.origin).toBe("collection");
+    }
+  );
+
+  it("is no entity where its row still waits for a migration and the manifest leaves it out", () => {
+    expect(
+      resolveRepairEntities({
+        configured: [],
+        registry: [
+          registry({ source: "ui", locked: false, migrationStatus: "pending" }),
+        ],
+        snapshots: [],
+        hasManifest: true,
+      })
+    ).toEqual([]);
+  });
+});

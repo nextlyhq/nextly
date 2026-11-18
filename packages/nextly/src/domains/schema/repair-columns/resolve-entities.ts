@@ -7,17 +7,26 @@
 //
 // 1. the newest applied migration snapshot that records entities, where it records this one;
 // 2. where it does not (a site with no migration files, only files written before snapshots
-//    recorded entities, or an entity that snapshot no longer records), the registry row;
-// 3. where there is no row either, or the row still waits for a migration, nothing says what was
-//    applied: the entity awaits a migration, and the finder reports its columns as pending rather
-//    than judging them against a definition no migration has applied.
+//    recorded entities, or an entity that snapshot no longer records), the registry row, where a
+//    sync or a migration finished it (`applied` or `synced`);
+// 3. where there is no such row either (none, or one that waits for a migration, has one generated
+//    and not applied, or failed), nothing says what was applied: the applied definition is null,
+//    and the finder reports every configured column as pending rather than judging any against a
+//    definition no migration has applied.
 //
 // Once `nextly migrate` writes the registry from the applied snapshots, (1) and (2) agree, so the
 // order gives the same answer then as it does now.
 //
 // The configured definition is what the next migration would apply: the configuration's for a
-// code-first entity, the Builder manifest's for a Builder entity it declares, else the registry row
-// the Builder saved. Each side carries the builder that makes its tables, since the two can differ.
+// code-first entity, and the Builder manifest's for a Builder entity. Where a manifest is checked
+// out, a Builder entity it leaves out is one the next migration removes, so it has no configured
+// definition. Only a project with no manifest at all has the registry row the Builder saved stand
+// in for it. Each side carries the builder that makes its tables, since the two can differ.
+//
+// Each side names its own table too. A code-first `dbName` change rewrites the registry row's table
+// at the next start, while the database keeps the old table, which the applied snapshot records,
+// until the rename's migration applies: the entity stays at the applied side's table, and the
+// configured side's is named as where that migration moves it.
 //
 // Pure: the command reads the configuration, the manifest, the registry and the snapshots, and
 // hands them here.
@@ -61,7 +70,11 @@ export interface RegistryEntity {
   /** `code`, `ui`, `built-in` or `plugin:<name>`. */
   source?: string;
   locked?: boolean;
-  /** `pending` while a Builder change waits for its migration. */
+  /**
+   * `applied` or `synced` once a migration or a sync finished the entity; `pending` while a change
+   * waits for its migration, `generated` while that migration is written and not applied, `failed`
+   * where an apply did not finish.
+   */
   migrationStatus?: string;
 }
 
@@ -109,6 +122,17 @@ const NO_SOURCES: EntitySources = {
   recorded: undefined,
 };
 
+/** The registry statuses that say the row's definition is in the database. */
+const APPLIED_STATUSES: ReadonlySet<string | undefined> = new Set([
+  "applied",
+  "synced",
+]);
+
+/** Whether a Builder manifest is checked out, which decides what a Builder registry row stands for. */
+interface ResolutionContext {
+  hasManifest: boolean;
+}
+
 /** Whether the Builder owns a registry row, from the ownership the registry recorded. */
 const isBuilderRow = (row: RegistryEntity) =>
   !isCodeOwned({ locked: row.locked, source: row.source });
@@ -132,8 +156,10 @@ function appliedDefinition({
       source: "snapshot",
     };
   }
-  // A row waiting for its migration describes what that migration will apply, not what was.
-  if (row === undefined || row.migrationStatus === "pending") return null;
+  // Any other row describes what a migration will apply, or one that did not finish, not what was.
+  if (row === undefined || !APPLIED_STATUSES.has(row.migrationStatus)) {
+    return null;
+  }
   return {
     fields: asFields(row.fields),
     localized: row.localized === true,
@@ -145,14 +171,15 @@ function appliedDefinition({
 /**
  * The definition the next migration would apply, which a pending change is found against.
  *
- * The configuration's or the manifest's where either declares the entity. A Builder entity no
- * manifest declares has the row the Builder saved. A code-first entity the configuration no longer
+ * The configuration's or the manifest's where either declares the entity. A Builder entity a
+ * checked-out manifest leaves out has none: that migration removes it. With no manifest at all, a
+ * Builder entity has the row the Builder saved. A code-first entity the configuration no longer
  * declares has none.
  */
-function configuredDefinition({
-  fromConfig,
-  row,
-}: EntitySources): EntityDefinition | null {
+function configuredDefinition(
+  { fromConfig, row }: EntitySources,
+  { hasManifest }: ResolutionContext
+): EntityDefinition | null {
   if (fromConfig !== undefined) {
     return {
       fields: asFields(fromConfig.fields),
@@ -160,7 +187,7 @@ function configuredDefinition({
       origin: fromConfig.origin,
     };
   }
-  if (row !== undefined && isBuilderRow(row)) {
+  if (!hasManifest && row !== undefined && isBuilderRow(row)) {
     return {
       fields: asFields(row.fields),
       localized: row.localized === true,
@@ -177,9 +204,26 @@ function owningPlugin({ fromConfig, row }: EntitySources): string | undefined {
     : fromConfig?.plugin;
 }
 
-/** The table the entity's columns are in, as the first source that names it gives it. */
-function tableOf({ fromConfig, row, recorded }: EntitySources) {
-  return row?.tableName ?? recorded?.table ?? fromConfig?.table;
+/**
+ * The table the applied definition's columns are in: the one the snapshot's migration created
+ * where a snapshot says what was applied, else the one the registry row names. A snapshot that
+ * names none leaves it to the row.
+ */
+function appliedTableOf(
+  applied: AppliedDefinition,
+  { row, recorded }: EntitySources
+): string | undefined {
+  return applied.source === "snapshot"
+    ? (recorded?.table ?? row?.tableName)
+    : row?.tableName;
+}
+
+/**
+ * The table the next migration would have the entity at: the configuration's or the manifest's,
+ * else the registry row's, which is the one a row standing in as configured names.
+ */
+function configuredTableOf({ fromConfig, row }: EntitySources) {
+  return fromConfig?.table ?? row?.tableName;
 }
 
 /**
@@ -216,30 +260,41 @@ function withOverrides<D extends EntityDefinition>(
 /** One entity, from what each source records of it, or null where it cannot be compared. */
 function resolveEntity(
   sources: EntitySources,
-  overrides: RepairOverrides | undefined
+  overrides: RepairOverrides | undefined,
+  context: ResolutionContext
 ): RepairEntity | null {
   const identity = sources.fromConfig ?? sources.row ?? sources.recorded;
-  const table = tableOf(sources);
+  if (identity === undefined) return null;
+  const appliedSide = appliedDefinition(sources);
+  const configuredSide = configuredDefinition(sources, context);
+  // A row waiting for a migration that nothing declares any more: nothing says what was applied
+  // or what will be, so there is nothing to compare its columns with.
+  if (appliedSide === null && configuredSide === null) return null;
+
+  const configuredTable =
+    configuredSide === null ? undefined : configuredTableOf(sources);
+  // The entity is where the database holds it: at the applied side's table, or, where nothing was
+  // applied, at the one the next migration would create.
+  const table =
+    (appliedSide === null ? undefined : appliedTableOf(appliedSide, sources)) ??
+    configuredTable;
   // An entity whose table nothing names cannot be compared; every source that records one names
-  // it, so this is only a guard against a malformed row.
-  if (identity === undefined || table === undefined) return null;
+  // it, and the reader refuses a registry row that does not, so this is only a guard.
+  if (table === undefined) return null;
 
-  const declared = overrides?.byTable.get(table) ?? [];
-  const applied = withAppliedStorage(
-    appliedDefinition(sources),
-    sources,
-    declared
-  );
-  const configured = withOverrides(configuredDefinition(sources), declared);
-  // A code-first row waiting for a migration the configuration no longer declares: nothing says
-  // what was applied or what will be, so there is nothing to compare its columns with.
-  if (applied === null && configured === null) return null;
-
+  // The app declares an override by the table it configures, which a rename has already moved.
+  const declared = overrides?.byTable.get(configuredTable ?? table) ?? [];
+  const applied = withAppliedStorage(appliedSide, sources, declared);
+  const configured = withOverrides(configuredSide, declared);
   const plugin = owningPlugin(sources);
   return {
     kind: identity.kind,
     slug: identity.slug,
     table,
+    // Named only where the next migration moves the entity to another table.
+    ...(configuredTable !== undefined && configuredTable !== table
+      ? { renamedTo: configuredTable }
+      : {}),
     applied,
     configured,
     ...(plugin !== undefined ? { plugin } : {}),
@@ -289,6 +344,9 @@ function userFieldsEntity(userFields: UserFieldSources): RepairEntity | null {
 /**
  * One entity per kind and slug, in the order they are first seen: configuration, then registry,
  * then snapshots, and the user fields last. `userFields` is absent where they could not be read.
+ * `hasManifest` says whether a Builder manifest is checked out: where one is, `configured` holds
+ * every Builder entity the next migration would apply, and a Builder row it leaves out is a
+ * removal. Absent, none is checked out.
  */
 export function resolveRepairEntities(args: {
   configured: readonly ConfiguredEntity[];
@@ -297,6 +355,7 @@ export function resolveRepairEntities(args: {
   userFields?: UserFieldSources;
   /** The app's column overrides; absent, none is declared. */
   overrides?: RepairOverrides;
+  hasManifest?: boolean;
 }): RepairEntity[] {
   // One record per entity, in the order it is first seen, each source adding what it records.
   const byEntity = new Map<string, EntitySources>();
@@ -316,7 +375,9 @@ export function resolveRepairEntities(args: {
 
   const entities: RepairEntity[] = [];
   for (const sources of byEntity.values()) {
-    const entity = resolveEntity(sources, args.overrides);
+    const entity = resolveEntity(sources, args.overrides, {
+      hasManifest: args.hasManifest === true,
+    });
     if (entity !== null) entities.push(entity);
   }
 

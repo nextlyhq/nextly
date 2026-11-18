@@ -145,6 +145,26 @@ describe("readRepairEntities: which registries are read", () => {
   });
 });
 
+describe("readRepairEntities: a registry row that names no table", () => {
+  it.each([undefined, "", 7])(
+    "stops the run, naming the row (table name %s)",
+    async tableName => {
+      registry.collections = [
+        { slug: "rcposts", tableName: "dc_rcposts", fields: [], source: "ui" },
+        { slug: "rcbroken", tableName, fields: [], source: "ui" },
+      ];
+      registry.singles = [];
+      registry.fieldGroups = [];
+      await expect(read(["dynamic_collections"])).rejects.toMatchObject({
+        code: "CONFIGURATION_ERROR",
+        logMessage: expect.stringContaining(
+          'collection registry row "rcbroken"'
+        ) as unknown,
+      });
+    }
+  );
+});
+
 describe("readRepairEntities: user fields as configured", () => {
   const record = (over: Record<string, unknown>) => ({
     label: String(over.name),
@@ -251,6 +271,17 @@ describe("readRepairEntities: Builder entities as configured", () => {
     );
     expect(names(posts?.configured?.fields)).toEqual(["title"]);
     expect(posts?.configured?.origin).toBe("collection");
+  });
+
+  it("leaves a Builder collection a checked-out manifest omits with no configured definition", async () => {
+    // The manifest is there and does not declare it: the next migration removes it, so the
+    // registry row must not stand in for a declaration.
+    manifest({ collections: [], singles: [], components: [] });
+    const posts = (await read(["dynamic_collections"])).find(
+      e => e.slug === "rcposts"
+    );
+    expect(posts?.applied?.source).toBe("registry");
+    expect(posts?.configured).toBeNull();
   });
 
   it("refuses to run on a manifest it cannot read rather than drop the Builder's declarations", async () => {

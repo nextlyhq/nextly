@@ -8,6 +8,13 @@
 // reviewed migration file. Such a change is reported on its own record, so the owner sees both what
 // is wrong with the column today and what the next migration will do to it.
 //
+// Every entity takes the same two steps, whichever of its sides are present (the decision table is
+// in the model, `./types`): the applied columns, where there are any, are judged against the live
+// ones at the table the database holds; then the applied and configured columns are paired by
+// column name and every pair the next migration changes is reported pending. A missing side is not
+// a reason to say nothing: with no applied side every configured column is an add, and with no
+// configured side every applied column a removal.
+//
 // @module domains/schema/repair-columns/find-differences
 
 import { sql } from "drizzle-orm";
@@ -178,12 +185,13 @@ function recordedOverride(
 }
 
 /**
- * The column one field names, on the entity's own table or in its translation table, or null where
- * the field has no column.
+ * The column one field names, on `table` (the entity's own table as the definition's side names
+ * it) or in that table's translation table, or null where the field has no column.
  */
 function namedColumn(
   entity: RepairEntity,
   definition: EntityDefinition,
+  table: string,
   field: FieldDefinition,
   translation: boolean,
   dialect: SupportedDialect
@@ -201,7 +209,7 @@ function namedColumn(
       kind: entity.kind,
       slug: entity.slug,
       field: field.name,
-      table: translation ? translationTableOf(entity.table) : entity.table,
+      table: translation ? translationTableOf(table) : table,
       column: column.name,
       translation,
     },
@@ -217,8 +225,9 @@ function namedColumn(
 }
 
 /**
- * Every column a definition's fields name, in field order: on the entity's own table, or in its
- * translation table for a translatable field of a localized entity.
+ * Every column a definition's fields name, in field order: on `table`, the entity's own table as
+ * the definition's side names it, or in its translation table for a translatable field of a
+ * localized entity.
  *
  * Asked of the descriptor as the definition's own builder answers it, the one answer to which
  * fields have a column and what it is.
@@ -226,6 +235,7 @@ function namedColumn(
 function columnsNamedBy(
   entity: RepairEntity,
   definition: EntityDefinition,
+  table: string,
   dialect: SupportedDialect
 ): NamedColumn[] {
   // Kept per language when the entity is translated, or for every entity under the setting.
@@ -238,6 +248,7 @@ function columnsNamedBy(
     const column = namedColumn(
       entity,
       definition,
+      table,
       field,
       translatable.has(field.name),
       dialect
@@ -256,8 +267,12 @@ interface LiveTable {
 /** The live tables, by lower-cased name. */
 type LiveTables = ReadonlyMap<string, LiveTable>;
 
-const key = (table: string, column: string) =>
-  `${table.toLowerCase()}\u0000${column.toLowerCase()}`;
+/**
+ * A column within its entity: its name and whether it is in the translation table. Not its table,
+ * which the two sides name differently while a rename is pending.
+ */
+const columnKey = (column: NamedColumn) =>
+  `${column.location.translation ? "translation" : "own"}\u0000${column.location.column.toLowerCase()}`;
 
 /** A live column's state, as the model carries it. */
 function stateOf(spec: ColumnSpec): ColumnState {
@@ -372,14 +387,23 @@ export async function findColumnDifferences(args: {
 
   const namedBy = (
     definition: EntityDefinition | null,
-    entity: RepairEntity
+    entity: RepairEntity,
+    table: string
   ) =>
-    definition === null ? null : columnsNamedBy(entity, definition, dialect);
+    definition === null
+      ? null
+      : columnsNamedBy(entity, definition, table, dialect);
   const planned = entities.map(
     (entity): PlannedEntity => ({
       entity,
-      applied: namedBy(entity.applied, entity),
-      configured: namedBy(entity.configured, entity),
+      // The applied columns are where the database holds the entity; the configured ones where
+      // the next migration would have it, which is another table while a rename is pending.
+      applied: namedBy(entity.applied, entity, entity.table),
+      configured: namedBy(
+        entity.configured,
+        entity,
+        entity.renamedTo ?? entity.table
+      ),
     })
   );
   let live: LiveTables;
@@ -404,10 +428,8 @@ export async function findColumnDifferences(args: {
   const countRows = rowCounter(dialect);
   const findings: ColumnFinding[] = [];
   const lockOf = (table: string) => held.get(table.toLowerCase());
-  const readable = (columns: NamedColumn[] | null) =>
-    columns === null
-      ? null
-      : columns.filter(c => lockOf(c.location.table) === undefined);
+  const isRead = (column: NamedColumn) =>
+    lockOf(column.location.table) === undefined;
   for (const each of planned) {
     const { entity } = each;
     // A table whose definition its tries could not read: each column its fields name, once.
@@ -425,28 +447,37 @@ export async function findColumnDifferences(args: {
         lockOf
       )
     );
-    const applied = readable(each.applied);
-    const configured = readable(each.configured);
-    if (entity.applied === null || applied === null) {
-      findings.push(...awaitingMigrationFindings(entity, configured, live));
-      continue;
-    }
-    findings.push(
-      ...(await appliedColumnFindings(
-        db,
-        entity,
-        entity.applied.origin,
-        applied,
-        live,
-        dialect,
-        { countRows, waits }
-      ))
-    );
-    if (configured !== null) {
+    // Each applied column against the live one, where a record says what was applied.
+    if (entity.applied !== null && each.applied !== null) {
       findings.push(
-        ...pendingChanges(applied, configured, live, entity.plugin)
+        ...(await appliedColumnFindings(
+          db,
+          entity,
+          entity.applied.origin,
+          each.applied.filter(isRead),
+          live,
+          dialect,
+          { countRows, waits }
+        ))
       );
     }
+    // Then every change the next migration makes: a missing side gives the pairing no columns, so
+    // every column the other side names is an add or a removal.
+    findings.push(
+      ...pendingChanges(
+        each.applied ?? [],
+        each.configured ?? [],
+        live,
+        entity.plugin
+      )
+        .filter(
+          // A column on a table whose definition could not be read is already reported as that.
+          ({ pair }) =>
+            (pair.applied === undefined || isRead(pair.applied)) &&
+            (pair.configured === undefined || isRead(pair.configured))
+        )
+        .map(({ finding }) => finding)
+    );
   }
   return findings;
 }
@@ -486,10 +517,11 @@ function definitionUnreadableFindings(
   { entity, applied, configured }: PlannedEntity,
   lockOf?: (table: string) => TableLockFacts | undefined
 ): ColumnFinding[] {
+  // By column, not by table: a column a pending rename moves is one column, named where the
+  // database holds it.
   const named = new Map<string, NamedColumn>();
   for (const column of [...(applied ?? []), ...(configured ?? [])]) {
-    const key =
-      `${column.location.table}.${column.location.column}`.toLowerCase();
+    const key = columnKey(column);
     if (!named.has(key)) named.set(key, column);
   }
   return [...named.values()].map(column => {
@@ -504,40 +536,6 @@ function definitionUnreadableFindings(
         : { lock: { ...lock, table: column.location.table } }),
     };
   });
-}
-
-/**
- * The columns of an entity awaiting a migration that are not as its configured definition
- * describes them.
- *
- * No record says what was applied, so a column that is not as configured, a missing table
- * included, may be legacy or may be the change the migration will make: the migration decides,
- * and it may still have to be written.
- */
-function awaitingMigrationFindings(
-  entity: RepairEntity,
-  configured: readonly NamedColumn[] | null,
-  live: LiveTables
-): ColumnFinding[] {
-  const findings: ColumnFinding[] = [];
-  for (const column of configured ?? []) {
-    const found = liveColumnAt(live, column.location);
-    if (
-      found !== undefined &&
-      compareColumn(stateOf(found), column.expected) === null
-    ) {
-      continue;
-    }
-    findings.push({
-      kind: "pending-migration",
-      location: column.location,
-      ...ownedBy(entity.plugin),
-      applied: null,
-      configured: column.expected,
-      live: liveStateOf(found),
-    });
-  }
-  return findings;
 }
 
 /**
@@ -755,29 +753,42 @@ interface ColumnPair {
   configured?: NamedColumn;
 }
 
-/** Every column either definition names, paired by table and column, applied ones first. */
+/** Every column either definition names, paired by column, applied ones first. */
 function pairColumns(
   applied: readonly NamedColumn[],
   configured: readonly NamedColumn[]
 ): ColumnPair[] {
   const byKey = new Map<string, ColumnPair>();
   for (const column of applied) {
-    byKey.set(key(column.location.table, column.location.column), {
-      applied: column,
-    });
+    byKey.set(columnKey(column), { applied: column });
   }
   for (const column of configured) {
-    const at = key(column.location.table, column.location.column);
+    const at = columnKey(column);
     byKey.set(at, { ...byKey.get(at), configured: column });
   }
   return [...byKey.values()];
 }
 
-/** Whether both definitions name the column and agree on its type and nullability. */
+/** The table the configured side moves a paired column from, where it names another. */
+function movedFrom(pair: ColumnPair): string | undefined {
+  if (pair.applied === undefined || pair.configured === undefined) {
+    return undefined;
+  }
+  const from = pair.applied.location.table;
+  return from.toLowerCase() === pair.configured.location.table.toLowerCase()
+    ? undefined
+    : from;
+}
+
+/**
+ * Whether both definitions name the column, at one table, and agree on its type and nullability:
+ * the next migration leaves such a column as it is.
+ */
 function isUnchanged(pair: ColumnPair): boolean {
   return (
     pair.applied !== undefined &&
     pair.configured !== undefined &&
+    movedFrom(pair) === undefined &&
     compareColumn(pair.applied.expected, pair.configured.expected) === null
   );
 }
@@ -791,28 +802,39 @@ function locationOf(pair: ColumnPair): ColumnLocation | undefined {
 }
 
 /**
- * The columns whose configured definition differs from the applied one: added, removed, or of
- * another type or nullability. Each is one record, holding both definitions and the live column.
+ * The columns the next migration changes: added, removed, moved to another table, or of another
+ * type or nullability. Each is one record, holding both definitions and the live column, with the
+ * pair it was made from. An empty side makes every column of the other an add or a removal.
+ *
+ * The live column is read where the database holds it: at the applied side's location where that
+ * side names the column, else where the configured side puts it.
  */
 function pendingChanges(
   applied: readonly NamedColumn[],
   configured: readonly NamedColumn[],
   live: LiveTables,
   plugin: string | undefined
-): ColumnFinding[] {
-  const findings: ColumnFinding[] = [];
+): { pair: ColumnPair; finding: ColumnFinding }[] {
+  const changes: { pair: ColumnPair; finding: ColumnFinding }[] = [];
   for (const pair of pairColumns(applied, configured)) {
     if (isUnchanged(pair)) continue;
     const location = locationOf(pair);
     if (location === undefined) continue;
-    findings.push({
-      kind: "pending-migration",
-      location,
-      ...ownedBy(plugin),
-      applied: pair.applied?.expected ?? null,
-      configured: pair.configured?.expected ?? null,
-      live: liveStateOf(liveColumnAt(live, location)),
+    const renamedFrom = movedFrom(pair);
+    changes.push({
+      pair,
+      finding: {
+        kind: "pending-migration",
+        location,
+        ...ownedBy(plugin),
+        ...(renamedFrom !== undefined ? { renamedFrom } : {}),
+        applied: pair.applied?.expected ?? null,
+        configured: pair.configured?.expected ?? null,
+        live: liveStateOf(
+          liveColumnAt(live, pair.applied?.location ?? location)
+        ),
+      },
     });
   }
-  return findings;
+  return changes;
 }

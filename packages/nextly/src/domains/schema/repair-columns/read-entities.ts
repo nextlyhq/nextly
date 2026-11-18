@@ -11,7 +11,7 @@
 //
 // @module domains/schema/repair-columns/read-entities
 
-import { readdir } from "node:fs/promises";
+import { readdir, stat } from "node:fs/promises";
 import { resolve } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
@@ -170,6 +170,28 @@ const MANIFEST_LISTS = {
 } as const satisfies Record<RecordedKind, string>;
 
 /**
+ * Whether the Builder manifest is checked out. The loader reads an absent manifest as an empty one,
+ * which declares nothing, so it cannot say this: an empty manifest removes every Builder entity
+ * the registry holds, while no manifest at all leaves the registry rows to say what each would be.
+ * Any answer other than "it does not exist" stops the run, since guessing either way changes every
+ * Builder entity's configured definition.
+ */
+async function manifestExists(args: ConfigurationArgs): Promise<boolean> {
+  const path = resolve(args.projectRoot, args.config.db.uiSchemaFile);
+  try {
+    await stat(path);
+    return true;
+  } catch (error) {
+    if ((error as { code?: unknown }).code === "ENOENT") return false;
+    throw NextlyError.configuration({
+      logMessage: `Whether the Builder manifest ${path} exists could not be read, so what the next migration would apply cannot be known.`,
+      logContext: { path },
+      ...(error instanceof Error ? { cause: error } : {}),
+    });
+  }
+}
+
+/**
  * The Builder entities the next migration would apply: the manifest's, with the plugins' deferred
  * extensions of them and without those code-first shadows, merged as migration generation merges
  * them. The resolved entities do not carry `localized`, so it is read from the manifest itself.
@@ -226,17 +248,24 @@ interface ConfigurationArgs {
   deferredExtends?: readonly unknown[];
 }
 
-/** Every entity the next migration would apply: code-first, then the Builder's. */
+/**
+ * Every entity the next migration would apply, code-first then the Builder's, and whether a
+ * Builder manifest is checked out to declare the Builder's.
+ */
 async function configuredEntities(
   args: ConfigurationArgs
-): Promise<ConfiguredEntity[]> {
+): Promise<{ entities: ConfiguredEntity[]; hasManifest: boolean }> {
   const owners = pluginOwners(args.config.plugins);
   const ownerOf = (kind: RecordedKind, slug: string) =>
     owners.get(entityKey(kind, slug));
-  return [
-    ...codeFirstEntities(args.config, ownerOf),
-    ...(await builderEntities(args, ownerOf)),
-  ];
+  const [builder, hasManifest] = await Promise.all([
+    builderEntities(args, ownerOf),
+    manifestExists(args),
+  ]);
+  return {
+    entities: [...codeFirstEntities(args.config, ownerOf), ...builder],
+    hasManifest,
+  };
 }
 
 /**
@@ -247,6 +276,13 @@ const REGISTRY_TABLES: Record<RecordedKind, readonly string[]> = {
   collection: ["dynamic_collections"],
   single: ["dynamic_singles"],
   fieldGroup: [STORAGE_FORMAT.registryTable, MIGRATION_TARGET.registryTable],
+};
+
+/** Each kind of entity as a message about its registry row names it. */
+const REGISTRY_ROW_LABEL: Record<RecordedKind, string> = {
+  collection: "collection",
+  single: "Single",
+  fieldGroup: "field group",
 };
 
 /** How each registry's rows are read, through the service that owns that registry. */
@@ -276,6 +312,9 @@ async function hasRegistry(
 /**
  * One registry's rows. A registry the database does not have has none: a database can hold one
  * registry and not another, such as one created before Singles had a registry.
+ *
+ * A row that names no table stops the run: where its columns are cannot be known, and leaving the
+ * row out would report its entity as never applied, or not report it at all.
  */
 async function registryRows(
   adapter: DrizzleAdapter,
@@ -285,8 +324,20 @@ async function registryRows(
   if (!(await hasRegistry(adapter, kind))) return [];
   const rows = await REGISTRY_READERS[kind](adapter, logger);
   return rows.flatMap(raw => {
-    const row = raw as Omit<RegistryEntity, "kind">;
-    return typeof row.slug === "string" ? [{ ...row, kind }] : [];
+    // A row as its service returns it; its slug and table are checked before either is trusted.
+    const row = raw as Omit<RegistryEntity, "kind" | "slug" | "tableName"> & {
+      slug?: unknown;
+      tableName?: unknown;
+    };
+    const { slug, tableName } = row;
+    if (typeof slug !== "string") return [];
+    if (typeof tableName !== "string" || tableName === "") {
+      throw NextlyError.configuration({
+        logMessage: `The ${REGISTRY_ROW_LABEL[kind]} registry row "${slug}" names no table, so where its columns are cannot be known. Restore the row's table name, then run \`nextly repair-columns\` again.`,
+        logContext: { kind, slug },
+      });
+    }
+    return [{ ...row, kind, slug, tableName }];
   });
 }
 
@@ -581,7 +632,7 @@ export async function readRepairEntities(args: {
       snapshotEntities(adapter, dialect, args.migrationsDir),
       userFieldSources(adapter, dialect, logger, codeFields),
     ]);
-  const [configured, read] = await Promise.all([
+  const [{ entities: configured, hasManifest }, read] = await Promise.all([
     configuredEntities(args),
     args.waits === undefined || dialect !== "sqlite"
       ? fromDatabase().then(value => ({ kind: "done" as const, value }))
@@ -591,6 +642,7 @@ export async function readRepairEntities(args: {
   if (read.kind === "ran-out") {
     return resolveRepairEntities({
       configured,
+      hasManifest,
       registry: [],
       snapshots: [],
       userFields: { stored: null, configured: codeFields },
@@ -600,6 +652,7 @@ export async function readRepairEntities(args: {
   const [registry, snapshots, userFields] = read.value;
   return resolveRepairEntities({
     configured,
+    hasManifest,
     registry,
     snapshots,
     userFields,

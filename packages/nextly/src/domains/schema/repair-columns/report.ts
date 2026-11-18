@@ -104,6 +104,8 @@ export interface RepairRecord {
   pending: {
     applied: StateRecord | null;
     configured: StateRecord | null;
+    /** The table the column moves from, where the next migration moves it to another. */
+    renamedFrom: string | null;
   } | null;
   cause: CauseRecord | null;
   class: ConversionClass | null;
@@ -234,6 +236,7 @@ function findingFacts(finding: ColumnFinding): FindingFacts {
         pending: {
           applied: stateRecord(finding.applied),
           configured: stateRecord(finding.configured),
+          renamedFrom: finding.renamedFrom ?? null,
         },
       };
     case "differs":
@@ -459,7 +462,10 @@ function describeExpected(record: RepairRecord): string {
     : ` (expected ${describeState(record.expected)})`;
 }
 
-/** A change no migration has applied: the field as applied and as configured. */
+/**
+ * A change no migration has applied: the table the column moves from, where it moves, and the
+ * field as applied and as configured, where the two differ.
+ */
 function describePending(
   pending: NonNullable<RepairRecord["pending"]>
 ): string {
@@ -467,7 +473,15 @@ function describePending(
     pending.applied === null ? "not applied" : describeState(pending.applied);
   const to =
     pending.configured === null ? "removed" : describeState(pending.configured);
-  return ` ${from} as applied, ${to} as configured. Run \`nextly migrate:create\`, then \`nextly migrate\`.`;
+  const change = `${from} as applied, ${to} as configured`;
+  // A column a renamed table keeps as it is has only the move to report.
+  const what =
+    pending.renamedFrom === null
+      ? change
+      : from === to
+        ? `moves from ${pending.renamedFrom}`
+        : `moves from ${pending.renamedFrom}, ${change}`;
+  return ` ${what}. Run \`nextly migrate:create\`, then \`nextly migrate\`.`;
 }
 
 /** What the record's own finding says, without the run's facts. */
