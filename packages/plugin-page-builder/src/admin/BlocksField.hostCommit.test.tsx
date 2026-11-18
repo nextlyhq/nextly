@@ -23,7 +23,6 @@
  * @module admin/BlocksField.hostCommit.test
  */
 import type { BlockDocument } from "@nextlyhq/blocks-engine";
-import { ShortcutProvider, useShortcuts } from "@nextlyhq/ui";
 import {
   act,
   cleanup,
@@ -670,6 +669,14 @@ describe("a panel field holding a draft", () => {
   it("stores the draft when the page is stored with focus still in the field", () => {
     openEditor();
     holdDraft(DRAFTED);
+    // The handlers the editor registered through `useBeforeDocumentAction`,
+    // run as the admin's Save runs them before every store: the Save
+    // button's and the Save shortcut's alike, Command+S on a Mac among them
+    // (`DocumentSaveShortcuts.mac.test` in the admin drives that binding and
+    // the real hook). Here the hook is this file's stand-in, which keeps
+    // what the editor registers: the admin exports no document actions host
+    // a plugin test could mount the real hook inside.
+    expect(storeHandlers.size).toBeGreaterThan(0);
     store();
 
     expect(saved).toEqual(DRAFTED);
@@ -683,99 +690,6 @@ describe("a panel field holding a draft", () => {
 
     expect(saved).toEqual(DRAFTED);
     expect(heldAtExit).toEqual([DRAFTED]);
-  });
-});
-
-describe("Save from the keyboard on a Mac, with a panel field mid-edit", () => {
-  const DRAFTED: BlockDocument = {
-    formatVersion: 1,
-    kind: "page",
-    nodes: [
-      { id: "h1", type: "core/heading", props: { text: "Typed on a Mac" } },
-    ],
-  } as BlockDocument;
-
-  /**
-   * The admin's save binding, as its entry form declares it (`key: "s"`,
-   * `ctrl: true`, spelled `mod+s`): Command on macOS and Control elsewhere,
-   * firing inside a field, and only while the document reports unsaved work.
-   * Its action is the admin's Save, which runs every before-store handler.
-   */
-  function SaveShortcut(): null {
-    useShortcuts(
-      [
-        {
-          keys: "mod+s",
-          description: "Save",
-          run: () => beforeStore?.(),
-          when: () => reports.at(-1)?.hasWork === true,
-          whenTyping: true,
-        },
-      ],
-      { name: "entry-form" }
-    );
-    return null;
-  }
-
-  /** The builder over its form, with the save binding and a panel field. */
-  function MacHost(): React.JSX.Element {
-    return (
-      <ShortcutProvider>
-        <ViewHost />
-        <SaveShortcut />
-        <input aria-label="Label" />
-      </ShortcutProvider>
-    );
-  }
-
-  /** Pretend to be macOS for one case; `navigator.platform` decides `mod`. */
-  let restorePlatform: (() => void) | undefined;
-  beforeEach(() => {
-    const original = Object.getOwnPropertyDescriptor(
-      window.navigator,
-      "platform"
-    );
-    Object.defineProperty(window.navigator, "platform", {
-      value: "MacIntel",
-      configurable: true,
-    });
-    restorePlatform = () => {
-      if (original === undefined) {
-        Reflect.deleteProperty(window.navigator, "platform");
-      } else {
-        Object.defineProperty(window.navigator, "platform", original);
-      }
-    };
-  });
-  afterEach(() => {
-    restorePlatform?.();
-  });
-
-  /** Focus the panel field and hold `DRAFTED` in it, as typing does. */
-  function typeInField(): HTMLElement {
-    render(<MacHost />);
-    const field = screen.getByLabelText("Label");
-    act(() => field.focus());
-    holdDraft(DRAFTED);
-    return field;
-  }
-
-  it("Command+S saves the draft, with focus still in the field", () => {
-    const field = typeInField();
-    fireEvent.keyDown(field, { key: "s", metaKey: true });
-    announceStore();
-
-    expect(saved).toEqual(DRAFTED);
-    expect(document.activeElement).toBe(field);
-  });
-
-  it("Control+S is not the Mac's save, and stores nothing", () => {
-    // The control for the case above: a binding matched on any modifier
-    // would pass it.
-    const field = typeInField();
-    fireEvent.keyDown(field, { key: "s", ctrlKey: true });
-
-    expect(saved).toBeUndefined();
   });
 });
 

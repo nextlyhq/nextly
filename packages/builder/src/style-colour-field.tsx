@@ -31,6 +31,7 @@ import { ChoiceList } from "./choice-list";
 import { useFieldDescription } from "./css-hint";
 import { isElement } from "./dom-kind";
 import { InheritedValue } from "./inherited-value";
+import { useLiveGesture } from "./live-gesture";
 import {
   RecentColoursStore,
   rememberColour,
@@ -51,7 +52,7 @@ import {
 } from "./style-colour";
 import type { StyleControl } from "./style-controls";
 import type { CommitOutcome } from "./style-field-surroundings";
-import { useDraft, TextField } from "./style-text-field";
+import { useDraft, TextField, useTypesLive } from "./style-text-field";
 import { readStyleValue, type StyleAddress } from "./style-values";
 import {
   focusAfterUnlink,
@@ -324,90 +325,12 @@ export function ColourField({
     React.useContext(HiddenColours),
     reference
   );
-  // What the picker composed, written once the gesture is over. Compared
-  // against the stored text so closing a picker nobody moved writes nothing.
-  // What the picker has produced and not yet written. Held in a ref as well as
-  // in state because the unmount flush below reads it from a cleanup that runs
-  // once, where the closed-over `draft` would be the value at first render.
-  const pending = React.useRef<string | null>(null);
-  /*
-   * A discrete choice, which SUPERSEDES anything the picker was mid-way through.
-   *
-   * Dropping the pending value is the whole of it. Pressing this control also
-   * dismisses the picker, and the close reads `pending.current` to decide what
-   * the gesture produced — so clearing it first leaves that close with nothing
-   * to write, and the discrete choice is the only edit. One rule expressed
-   * once: a second expression of it is what drifts. A recent colour is one
-   * such choice, and joins the front of Recent colours again; a variable or
-   * a clear is no colour of its own and is not remembered.
-   */
-  const commitInstead = (value: StyleValue | null): void => {
-    pending.current = null;
-    settle(commitColour(value), reset);
-  };
-  /*
-   * The picker closed, whichever outcome that close had.
-   *
-   * ONE handler for both, because the two differ only in whether the gesture is
-   * written — the pending value is dropped either way. Expressed as two
-   * handlers, the supersede path is the one that silently does nothing: it
-   * would leave the draft queued, and the unmount flush below would write it
-   * back OVER the edit that superseded it, as a later op with no gesture behind
-   * it.
-   *
-   * Synchronous, because an author can leave the editor entirely in the same
-   * interaction that dismisses this popover: the page builder hands the current
-   * document to its host form and unmounts, and a write scheduled for after
-   * that lands on an editor nobody is reading any more. The gesture is simply
-   * gone from the document handed over.
-   *
-   * Which is why the supersede below is decided by WHERE the interaction went
-   * rather than by giving a later handler time to cancel a scheduled write. A
-   * timer bought that cancellation and paid for it with this race.
-   */
-  const closed = (outcome: PickerClose): void => {
-    const unwritten = pending.current;
-    pending.current = null;
-    if (outcome === "superseded" || unwritten === null) return;
-    settle(commitColour(unwritten), reset);
-  };
-  // The current writer, held so the teardown below depends on nothing. A
-  // teardown listing `onCommit` would re-run its cleanup on every render that
-  // gives the field a new callback — which is every render — and flush a
-  // gesture the author is still making.
-  const write = React.useRef(commitColour);
-  React.useEffect(() => {
-    write.current = commitColour;
+  const { commitInstead, closed, onColour } = usePickerWrites({
+    commitColour,
+    onCommit,
+    reset,
+    setDraft,
   });
-  /*
-   * Write an unfinished gesture when this field goes away, and do it NOW.
-   *
-   * Two ways to leave without closing the popover: selecting another block in
-   * the canvas iframe cannot reach the outside-dismiss handler, and the
-   * selection change remounts this field without firing `onOpenChange`. A
-   * scheduled write would not survive either, so the timer is cancelled and the
-   * value written synchronously rather than left to a callback whose component
-   * has gone.
-   */
-  React.useEffect(
-    () => () => {
-      const unwritten = pending.current;
-      pending.current = null;
-      // The outcome is DROPPED, and that is the honest limit rather than an
-      // oversight. A refusal here — a document at its byte limit, say — is
-      // reported through state belonging to a component that is going away, so
-      // there is nobody left to show it to and nowhere to keep the value: the
-      // ref does not survive the remount either. Writing when the document
-      // accepts strictly improves on not writing at all, and cannot improve the
-      // case where it does not.
-      //
-      // Closing it properly means the pending edit living somewhere that
-      // outlives one field, which is the same thing undo and the unsaved-work
-      // guard need and is tracked with them.
-      if (unwritten !== null) write.current(unwritten);
-    },
-    []
-  );
   // What the surface is currently SHOWING: the draft while a literal is being
   // typed, so the swatch follows the field, and the stored value for a
   // reference, which no field is editing. Named once and resolved once, rather
@@ -429,14 +352,16 @@ export function ColourField({
   // the old colour for the whole of a picker gesture — stale exactly while an
   // author is choosing, which is when a contrast readout is for — and put the
   // swatch and the figure beside it on two different colours.
-  const contrast =
-    obscuredBy === undefined
-      ? contrastAtLeaf(control.leaf, showing, pairedColour, tokens, mode)
-      : undefined;
-  const describes = describedByAll(
+  const { contrast, describes } = contrastReading({
+    leaf: control.leaf,
+    showing,
+    pairedColour,
+    tokens,
+    mode,
+    obscuredBy,
     describedBy,
-    contrast === undefined ? undefined : noteId
-  );
+    noteId,
+  });
 
   return (
     <>
@@ -461,18 +386,10 @@ export function ColourField({
           describedBy={describes}
           invalid={describedBy !== undefined}
           unrepresented={wouldReplace(shown, reference, draft)}
-          // The draft moves with the pointer and the DOCUMENT does not. A drag
-          // across the saturation surface fires `onColorChange` on every
-          // pointer event, and committing each one writes an editor op each
-          // time: one gesture becomes dozens of undo entries, and `MAX_HISTORY`
-          // is 100, so a single drag can evict unrelated earlier edits and
-          // leave undo walking intermediate colours instead of reverting the
-          // gesture. This is the rule the text fields already follow — an op
-          // per keystroke would make one undo remove one character.
-          onColour={value => {
-            pending.current = value;
-            setDraft(value);
-          }}
+          // The draft moves with the pointer, and the document follows at most
+          // once a frame where the panel writes as it is typed, as ONE step of
+          // undo however many moves the gesture makes (`usePickerWrites`).
+          onColour={onColour}
           // The gesture ends where the picker closes, whichever way it closed.
           onClosed={closed}
           /*
@@ -726,6 +643,186 @@ function ColourPicker({
  */
 function settle(outcome: CommitOutcome, reset: () => void): void {
   if (outcome === "unchanged") reset();
+}
+
+/**
+ * The contrast a colour field reports for what it shows, withheld while
+ * another property comes between the pair, and the ids that describe the
+ * field: its own, with the contrast note's while there is one.
+ */
+function contrastReading({
+  leaf,
+  showing,
+  pairedColour,
+  tokens,
+  mode,
+  obscuredBy,
+  describedBy,
+  noteId,
+}: {
+  leaf: StyleControl["leaf"];
+  showing: StyleValue | undefined;
+  pairedColour: StyleValue | undefined;
+  tokens: SiteTokenSet | undefined;
+  mode: TokenMode;
+  obscuredBy: string | undefined;
+  describedBy: string | undefined;
+  noteId: string;
+}): {
+  contrast: ReturnType<typeof contrastAtLeaf> | undefined;
+  describes: ReturnType<typeof describedByAll>;
+} {
+  const contrast =
+    obscuredBy === undefined
+      ? contrastAtLeaf(leaf, showing, pairedColour, tokens, mode)
+      : undefined;
+  return {
+    contrast,
+    describes: describedByAll(
+      describedBy,
+      contrast === undefined ? undefined : noteId
+    ),
+  };
+}
+
+/**
+ * What a picker gesture writes, and when: each move shown in the field and,
+ * where the panel writes as it is typed, written to the document at most
+ * once a frame (`live-gesture.ts`); the colour it ends on written in the same
+ * run when the picker closes, and remembered among Recent colours then; and
+ * a control writing this field itself putting back what the moves wrote.
+ */
+function usePickerWrites({
+  commitColour,
+  onCommit,
+  reset,
+  setDraft,
+}: {
+  commitColour: (value: StyleValue | null) => CommitOutcome;
+  onCommit: (value: StyleValue | null) => CommitOutcome;
+  reset: () => void;
+  setDraft: (value: string) => void;
+}): {
+  commitInstead: (value: StyleValue | null) => void;
+  closed: (outcome: PickerClose) => void;
+  onColour: (value: string) => void;
+} {
+  // Where the panel writes as it is typed, a picker gesture writes as it
+  // moves too, at most once a frame, the whole gesture one undo step.
+  const typesLive = useTypesLive();
+  const gesture = useLiveGesture();
+  // What the picker composed, written once the gesture is over. Compared
+  // against the stored text so closing a picker nobody moved writes nothing.
+  // What the picker has produced and not yet written. Held in a ref as well as
+  // in state because the unmount flush below reads it from a cleanup that runs
+  // once, where the closed-over `draft` would be the value at first render.
+  const pending = React.useRef<string | null>(null);
+  /*
+   * A discrete choice, which SUPERSEDES anything the picker was mid-way through.
+   *
+   * Dropping the pending value is the whole of it. Pressing this control also
+   * dismisses the picker, and the close reads `pending.current` to decide what
+   * the gesture produced — so clearing it first leaves that close with nothing
+   * to write, and the discrete choice is the only edit. One rule expressed
+   * once: a second expression of it is what drifts. A recent colour is one
+   * such choice, and joins the front of Recent colours again; a variable or
+   * a clear is no colour of its own and is not remembered.
+   */
+  const commitInstead = (value: StyleValue | null): void => {
+    pending.current = null;
+    // In the gesture's run, so the moves before it and the choice are one
+    // step.
+    gesture.end(() => settle(commitColour(value), reset));
+  };
+  /*
+   * The picker closed, whichever outcome that close had.
+   *
+   * ONE handler for both, because the two differ only in whether the gesture is
+   * written — the pending value is dropped either way. Expressed as two
+   * handlers, the supersede path is the one that silently does nothing: it
+   * would leave the draft queued, and the unmount flush below would write it
+   * back OVER the edit that superseded it, as a later op with no gesture behind
+   * it.
+   *
+   * Synchronous, because an author can leave the editor entirely in the same
+   * interaction that dismisses this popover: the page builder hands the current
+   * document to its host form and unmounts, and a write scheduled for after
+   * that lands on an editor nobody is reading any more. The gesture is simply
+   * gone from the document handed over.
+   *
+   * Which is why the supersede below is decided by WHERE the interaction went
+   * rather than by giving a later handler time to cancel a scheduled write. A
+   * timer bought that cancellation and paid for it with this race.
+   */
+  const closed = (outcome: PickerClose): void => {
+    const unwritten = pending.current;
+    pending.current = null;
+    // A control writing this field itself takes over: what the moves wrote
+    // goes back, so its write is the only edit.
+    if (outcome === "superseded") {
+      gesture.cancel();
+      return;
+    }
+    if (unwritten === null) {
+      gesture.end();
+      return;
+    }
+    // Written in the run the moves wrote in, and remembered once, here.
+    gesture.end(() => settle(commitColour(unwritten), reset));
+  };
+  // The current writer, held so the teardown below depends on nothing. A
+  // teardown listing `onCommit` would re-run its cleanup on every render that
+  // gives the field a new callback — which is every render — and flush a
+  // gesture the author is still making.
+  const write = React.useRef(commitColour);
+  // The gesture as it is now, for the same teardown.
+  const finishing = React.useRef(gesture);
+  React.useEffect(() => {
+    write.current = commitColour;
+    finishing.current = gesture;
+  });
+  /*
+   * Write an unfinished gesture when this field goes away, and do it NOW.
+   *
+   * Two ways to leave without closing the popover: selecting another block in
+   * the canvas iframe cannot reach the outside-dismiss handler, and the
+   * selection change remounts this field without firing `onOpenChange`. A
+   * scheduled write would not survive either, so the timer is cancelled and the
+   * value written synchronously rather than left to a callback whose component
+   * has gone.
+   */
+  React.useEffect(
+    () => () => {
+      const unwritten = pending.current;
+      pending.current = null;
+      // The outcome is DROPPED, and that is the honest limit rather than an
+      // oversight. A refusal here — a document at its byte limit, say — is
+      // reported through state belonging to a component that is going away, so
+      // there is nobody left to show it to and nowhere to keep the value: the
+      // ref does not survive the remount either. Writing when the document
+      // accepts strictly improves on not writing at all, and cannot improve the
+      // case where it does not.
+      //
+      // Closing it properly means the pending edit living somewhere that
+      // outlives one field, which is the same thing undo and the unsaved-work
+      // guard need and is tracked with them.
+      // In the gesture's run, as a close writes it, so the moves already
+      // written and this last one are one step of undo. The gesture's own
+      // teardown, which runs first, drops the frame but keeps the run.
+      if (unwritten !== null) {
+        const finish = write.current;
+        finishing.current.end(() => finish(unwritten));
+      }
+    },
+    []
+  );
+  const onColour = (value: string): void => {
+    pending.current = value;
+    setDraft(value);
+    // Not remembered among Recent colours until the gesture ends.
+    if (typesLive) gesture.move(() => onCommit(value));
+  };
+  return { commitInstead, closed, onColour };
 }
 
 /**

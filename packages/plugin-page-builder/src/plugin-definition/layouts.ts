@@ -18,6 +18,7 @@ import { layoutAreaRoutes } from "../layout-area-route";
 import { layoutChoicesRoute } from "../layout-choices-route";
 import { registerLayoutComponentGuard } from "../layout-component-guard";
 import { layoutCountsRoute } from "../layout-counts-route";
+import { areaComponentRoute } from "../area-component-route";
 import { setAreaChoicesRoute } from "../set-area-choices-route";
 import { registerLayoutReadinessNotice } from "../layout-readiness-hook";
 import { removeLayoutRoute } from "../layout-removal/remove-route";
@@ -68,6 +69,7 @@ export function routesForLayouts(def: Definition): {
   readonly layoutWrites: PluginRoute[];
   readonly layoutArea: PluginRoute[];
   readonly setAreaChoices: PluginRoute;
+  readonly areaComponent: PluginRoute;
   readonly createInArea: PluginRoute;
 } {
   const { opts } = def;
@@ -98,7 +100,7 @@ export function routesForLayouts(def: Definition): {
     fillNotices: fillNoticesRoute(),
     // A set's rename and copy from the builder's Pages panel, each gated by
     // the set write it makes and written as the caller.
-    layoutWrites: layoutWriteRoutes(),
+    layoutWrites: layoutWriteRoutes(componentStoreOf(opts)),
     // The components marked for an area, and the write putting one in a
     // set's area: the builder's "Use a component" menu on the starter.
     layoutArea: layoutAreaRoutes(
@@ -111,6 +113,9 @@ export function routesForLayouts(def: Definition): {
       componentStoreOf(opts),
       () => opts.limits ?? DEFAULT_LIMITS
     ),
+    // "+ Create a header" in a set's picker: the component alone, the
+    // starter's design, created as the caller; the set's form takes it.
+    areaComponent: areaComponentRoute(componentStoreOf(opts)),
     // "Create a header" on the band the canvas draws where the default set
     // has no header (or footer): the starter design, created as the caller
     // and put in the default.

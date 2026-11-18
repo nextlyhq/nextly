@@ -199,6 +199,11 @@ export const ENTRY_ACTIONS = ACTIONS.filter(
  * permission (`requirePermission`), the email provider routes by any of
  * several (`requireAnyPermission`). Their names keep the target column's
  * width, so the lines already in the answers file are unchanged.
+ *
+ * `deliveries` (email deliveries) is the Email hub's Activity, read only:
+ * its reads ask `read-email-deliveries` through the any-of check, and it has
+ * no create, update or delete of its own. It comes last, so every row
+ * already in the answers file keeps its place.
  */
 export const TARGETS = [
   "collection",
@@ -209,6 +214,7 @@ export const TARGETS = [
   "single-pub",
   "roles",
   "providers",
+  "deliveries",
 ] as const;
 export type Target = (typeof TARGETS)[number];
 
@@ -350,9 +356,10 @@ const REACH: Record<Door, Reach> = {
       "single-pub": PUBLISHING,
       roles: CRUD,
       providers: CRUD,
+      deliveries: READ,
     },
   },
-  // Media, users and roles are read by the namespaces a principal cannot call
+  // Media, users, roles and email deliveries are read by the namespaces a principal cannot call
   // (only collection and Single operations can be made as one), so they are
   // asked of the callers REST names there. A checked read of media naming
   // nobody is a visitor's, judged by the Public role's `read-media`.
@@ -365,11 +372,13 @@ const REACH: Record<Door, Reach> = {
       users: READ,
       "single-pub": PUBLISHING,
       roles: READ,
+      deliveries: READ,
     },
     callersOf: {
       media: NOT_PRINCIPAL,
       users: NOT_PRINCIPAL,
       roles: NOT_PRINCIPAL,
+      deliveries: NOT_PRINCIPAL,
     },
   },
   website: { callers: ["visitor", ...USERS], targets: { collection: READ } },
@@ -382,6 +391,7 @@ const REACH: Record<Door, Reach> = {
       users: USER_WRITES,
       roles: CRUD,
       providers: CRUD,
+      deliveries: READ,
     },
   },
   can: {
@@ -394,6 +404,7 @@ const REACH: Record<Door, Reach> = {
       "single-pub": PUBLISHING,
       roles: CRUD,
       providers: CRUD,
+      deliveries: READ,
     },
   },
   service: { callers: PRESENTED, targets: { collection: ACTIONS } },
@@ -421,6 +432,7 @@ const REACH: Record<Door, Reach> = {
       "single-pub": PUBLISHING,
       roles: CRUD,
       providers: CRUD,
+      deliveries: READ,
     },
   },
   // A lock is claimed by someone about to edit, so it is asked as an update.
@@ -542,7 +554,13 @@ function cross(
 }
 
 /** Targets that are not rule collections or Singles, which declare no rule. */
-const RULELESS: readonly Target[] = ["media", "users", "roles", "providers"];
+const RULELESS: readonly Target[] = [
+  "media",
+  "users",
+  "roles",
+  "providers",
+  "deliveries",
+];
 
 /** The system resources declare no code rule, so they are asked once. */
 const rulesOf = (target: Target): readonly Rule[] =>
@@ -670,7 +688,7 @@ const PARTIAL_ACTIONS: readonly Action[] = ["read", "update", "publish"];
 
 /**
  * The actions the role screen grants each caller on the rule targets, media,
- * roles and email providers, where the permission exists. A caller missing
+ * roles, email providers and email deliveries, where the permission exists. A caller missing
  * here holds none of them.
  */
 const GRANTS: Partial<Record<Caller, (action: Action) => boolean>> = {
@@ -695,13 +713,18 @@ const SEEDED: Partial<Record<Target, readonly Action[]>> = {
   users: ["create", "read", "update", "delete"],
   roles: ["create", "read", "update", "delete"],
   providers: ["create", "read", "update", "delete"],
+  // The Activity is read only: `read-email-deliveries` is its one permission
+  // here (`manage-email-deliveries` cancels a queued email, and does not
+  // count as a read).
+  deliveries: ["read"],
 };
 
 /**
  * The system resources among the targets whose `manage-` permission still
  * counts as read, create, update and delete on that same resource, as the
  * one decision counts it while installs move to plain permissions: media and
- * email providers here (settings and email templates are not targets). Never
+ * email providers here (settings and email templates are not targets; email
+ * deliveries are, but their `manage-` does not include the read). Never
  * publish or unpublish, and never on a collection. Only the super-admin's
  * full-access key, which carries the whole catalogue, holds a `manage-`
  * permission among the callers; the super-admin sessions pass every gate
@@ -814,7 +837,7 @@ export function hasOutsideTwin(row: Row): boolean {
  * What the Public role holds in the `public` setup, on that setup's own
  * targets: every permission it can be given on the rule collections, the
  * Singles and the related rows, and `read-media`; never `read-users`, a role
- * or an email provider, which boot seeding never grants it. Publish and
+ * or an email provider or delivery, which boot seeding never grants it. Publish and
  * unpublish are held too, so the table shows a visitor refused them even
  * where Public holds them.
  *
@@ -839,7 +862,8 @@ export const PUBLIC_HOLDS: Partial<Record<Target, readonly Action[]>> = {
  * seeding grants: `read-media`, and the read of each rule collection and
  * Single whose declared read rule answers a visitor exactly `true`, asked as
  * boot asks it, of a visitor holding no permissions (so `role-screen-spelling`
- * says `false`); never a write, a user, a role or an email provider. No plugin
+ * says `false`); never a write, a user, a role, an email provider or the
+ * email deliveries. No plugin
  * in the table's world declares a grant for Public.
  */
 export function publicHolds(

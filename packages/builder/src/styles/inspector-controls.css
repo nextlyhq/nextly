@@ -398,9 +398,16 @@
   overflow: hidden;
 }
 
+/*
+ * An option is at least a control tall and grows to hold its words: in a
+ * narrow panel two words ("Fit content") wrap to two lines, and a fixed
+ * height let the second line spill under the row below. One line stays a
+ * control tall, since the block padding and line height fit inside it.
+ */
 .nx-segment__option {
-  block-size: var(--nx-builder-control-height);
-  padding: 0 0.625rem;
+  min-block-size: var(--nx-builder-control-height);
+  padding: 0.25rem 0.625rem;
+  line-height: 1.2;
   border: 0;
   border-inline-end: 1px solid var(--nx-builder-border);
   background: transparent;
