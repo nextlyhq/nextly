@@ -348,6 +348,33 @@ describe("the line where a highlighted tile would land", () => {
     }
   });
 
+  it("keeps an edge label pointed at before the panel lets go, however long", async () => {
+    vi.useFakeTimers();
+    try {
+      layOut();
+      const far = {
+        at: { index: 3 },
+        words: "Text goes at the end of the page",
+      };
+      const { container, rerender } = drawWith(far);
+      await act(async () => undefined);
+      const edge = edgeIn(container);
+      if (edge === null) throw new Error("no edge label");
+      // The pointer reaches the label inside the panel's grace.
+      fireEvent.pointerEnter(edge);
+      rerender(canvasWith(null));
+      act(() => {
+        vi.advanceTimersByTime(PREVIEW_GRACE_MS + 50);
+      });
+      act(() => {
+        vi.advanceTimersByTime(EDGE_HOLD_MS * 3);
+      });
+      expect(edgeIn(container)).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not keep a line after the panel lets go (the control)", async () => {
     vi.useFakeTimers();
     try {
@@ -523,6 +550,37 @@ describe("the line where a highlighted tile would land", () => {
       `[${NODE_ID_ATTRIBUTE}="one"]`
     );
     expect(one?.style.scrollMargin).toBe("");
+  });
+
+  it("limits a label to the room on its side of the line", async () => {
+    // A 320px screen with a row line at 200px: the label goes left, where it
+    // has 200px, not its full width.
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+      function boxOf(this: Element) {
+        if (this.hasAttribute("data-scroller")) {
+          return new DOMRect(0, 0, 320, 500);
+        }
+        switch (this.getAttribute(NODE_ID_ATTRIBUTE)) {
+          case "hero":
+            return new DOMRect(0, 0, 320, 100);
+          case "one":
+            return new DOMRect(0, 0, 150, 100);
+          case "two":
+            return new DOMRect(250, 0, 70, 100);
+          default:
+            return new DOMRect(0, 0, 320, 2000);
+        }
+      }
+    );
+    const { container } = drawWith({
+      at: { parentId: "hero", slot: "children", index: 1 },
+      words: "Text goes after One, inside Hero",
+    });
+    await act(async () => undefined);
+    const label = labelIn(container);
+    expect(label?.hasAttribute("data-before")).toBe(true);
+    // 200px to the screen's left edge, less the gap it keeps from it.
+    expect(label?.style.maxWidth).toBe("192px");
   });
 
   it("anchors the label to the part of its line on screen", async () => {

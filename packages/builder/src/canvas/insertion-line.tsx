@@ -67,6 +67,8 @@ type Drawn =
       readonly labelBelow: boolean;
       /** No room right of a row's line on screen, so the label goes left. */
       readonly labelBefore: boolean;
+      /** The widest the label may be: the room on its side of the line. */
+      readonly labelRoom: number;
     }
   | {
       readonly kind: "edge";
@@ -80,6 +82,8 @@ type Drawn =
       readonly top: number;
       /** At the top or bottom, too near the right to fit: grows leftwards. */
       readonly before: boolean;
+      /** The widest the label may be: the room on its side. */
+      readonly room: number;
     }
   | { readonly kind: "empty"; readonly rect: Rect };
 
@@ -184,6 +188,7 @@ function edgeLabelFor(
     left: across ? within(drawnAt.x, screen.x + EDGE_GAP, right) : sideways,
     top: across ? upright : within(drawnAt.y, screen.y + EDGE_GAP, bottom),
     before: across && goesLeft(drawnAt.x, screen),
+    room: across ? roomFor(drawnAt.x, screen) : screen.width - 2 * EDGE_GAP,
   };
 }
 
@@ -195,6 +200,16 @@ function goesLeft(x: number, screen: Rect): boolean {
   const right = screen.x + screen.width - x;
   const left = x - screen.x;
   return right < LABEL_WIDEST && left > right;
+}
+
+/**
+ * The width a label beside `x` may take: the room on the side it goes, less
+ * the gap it keeps from the screen's edge, so even a long label keeps its
+ * arrow and its first words on screen.
+ */
+function roomFor(x: number, screen: Rect): number {
+  const side = goesLeft(x, screen) ? x - screen.x : screen.x + screen.width - x;
+  return Math.max(0, side - EDGE_GAP);
 }
 
 /** The preview's drawing, measured from the layer it is drawn in. */
@@ -238,6 +253,10 @@ function drawnFor(
     },
     labelBelow: drawnAt.y - LABEL_ROOM < screen.y,
     labelBefore: goesLeft(drawnAt.x, screen),
+    labelRoom: roomFor(
+      within(drawnAt.x, screen.x, screen.x + screen.width),
+      screen
+    ),
   };
 }
 
@@ -327,6 +346,8 @@ function useHeldPreview(
     if (timer.current !== null) clearTimeout(timer.current);
     timer.current = null;
   }, []);
+  // Whether the edge label is pointed at now: no hold runs out under it.
+  const over = React.useRef(false);
   const expire = React.useCallback(() => {
     stop();
     timer.current = setTimeout(() => setHeld(null), EDGE_HOLD_MS);
@@ -338,13 +359,17 @@ function useHeldPreview(
       setHeld(null);
     } else if (edgeShown.current && last.current !== null) {
       setHeld(last.current);
-      expire();
+      if (!over.current) expire();
     }
   }, [preview, stop, expire]);
   React.useEffect(() => stop, [stop]);
   return {
     shown: preview ?? held,
-    pointed: inside => (inside ? stop() : expire()),
+    pointed: inside => {
+      over.current = inside;
+      if (inside) stop();
+      else expire();
+    },
     release: () => {
       stop();
       setHeld(null);
@@ -413,7 +438,11 @@ export function InsertionLine({
             {...(drawn.labelBelow ? { "data-below": "" } : {})}
             {...(drawn.labelBefore ? { "data-before": "" } : {})}
             aria-hidden="true"
-            style={{ left: drawn.start.x, top: drawn.start.y }}
+            style={{
+              left: drawn.start.x,
+              top: drawn.start.y,
+              maxWidth: drawn.labelRoom,
+            }}
           >
             {words}
           </span>
@@ -425,7 +454,7 @@ export function InsertionLine({
           className="nx-insertion-line__edge"
           data-edge={drawn.edge}
           {...(drawn.before ? { "data-before": "" } : {})}
-          style={{ left: drawn.left, top: drawn.top }}
+          style={{ left: drawn.left, top: drawn.top, maxWidth: drawn.room }}
           onPointerEnter={() => pointed(true)}
           onPointerLeave={() => pointed(false)}
           onClick={() => {
