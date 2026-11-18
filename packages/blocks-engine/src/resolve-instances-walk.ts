@@ -321,7 +321,13 @@ function inlinedDefinition(
   const supplied = owned
     ? suppliedSlots(instance, definition, run)
     : presupplied;
-  const plans = planEdits(definition, instance, supplied, !owned);
+  const plans = planEdits(definition, instance, supplied, !owned, {
+    maxNodes: run.maxNodes,
+    maxDepth: run.maxDepth,
+    // Finding the followers reads the definition, so it is charged as the
+    // clone's reads are.
+    work: run.work,
+  });
   // The host placement's own exposures, and a nested instance's only where a
   // host exposure drives them: its fields are reached through the host
   // component's, so its nodes carry the HOST exposure's id or none.

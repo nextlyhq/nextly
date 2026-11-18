@@ -35,7 +35,13 @@ export function contributionProblem(
   const blocks = template.blocks !== undefined;
   if (html && blocks) return "gives both HTML and blocks; give one";
   if (!html && !blocks) return "gives neither HTML nor blocks";
-  if (!blocks) return null;
+  // The type asks for a string, but a plugin built without types can pass
+  // anything; taken as given, `null` would register an empty body.
+  if (!blocks) {
+    return typeof template.htmlContent === "string"
+      ? null
+      : "gives HTML that isn't text";
+  }
   if (template.plainTextContent !== undefined) {
     return "gives plain text with blocks; its plain text is written from them";
   }

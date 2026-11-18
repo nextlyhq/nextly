@@ -3,12 +3,12 @@
  * (`zonedDateColumns`), in the translations table of every translated entity the registry holds:
  * collections, Singles and field groups, made in the Schema Builder or declared in config alike.
  *
- * `nextly upgrade` converts them, once the release serves every instance: an instance of an earlier
+ * `nextly i18n:convert-zoned-dates` converts them, once the release serves every instance: an instance of an earlier
  * release still running writes a date in a non-default language as its own local time, which a
  * converted column keeps as given. The development sync and `next dev`'s reload, where no earlier
  * instance runs, convert them too, each once its own translations pass refused nothing. `nextly
  * migrate` and a production start change no column's type; they name each such column once, and
- * `nextly upgrade`.
+ * that command.
  *
  * Each column is found from its field's definition, never from its type alone, so a column given a
  * time zone by hand that no translated date field describes is left as it is.
@@ -78,7 +78,7 @@ type StoredEntity = RegisteredCollectionRow & {
  * `records` of one kind, each with its translatable fields. Every entity is taken, whatever its
  * own `localized` says: under per-language storage one not marked translated keeps its
  * translatable values in a translations table too, and a command that reads no config (`nextly
- * upgrade`) cannot know that setting. The translations table being there is what decides
+ * i18n:convert-zoned-dates`) cannot know that setting. The translations table being there is what decides
  * (`findZonedDateColumns`).
  */
 function entitiesOf(
@@ -179,7 +179,7 @@ export async function convertZonedDateColumns(
 /**
  * Converts, or names once, each translated date column an earlier release made with a time zone:
  * converted where no instance of an earlier release can be writing (`convert`), named with `nextly
- * upgrade` where one may be.
+ * i18n:convert-zoned-dates` where one may be.
  */
 export async function convertZonedDateCompanions(
   adapter: DrizzleAdapter,
@@ -218,8 +218,8 @@ function warnOnce(
     onWarning?.(
       `${name} is a date column with a time zone, as an earlier release made it: on a server ` +
         `whose time zone is not UTC its dates are stored shifted by that zone. Run \`nextly ` +
-        `upgrade\` once this release serves every instance, in the time zone the app runs in, ` +
-        `to convert it.`
+        `i18n:convert-zoned-dates\` once this release serves every instance, in the time zone ` +
+        `the app runs in, to convert it.`
     );
   }
 }

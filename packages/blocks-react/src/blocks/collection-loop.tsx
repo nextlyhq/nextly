@@ -26,6 +26,7 @@
  */
 import {
   type BlockDefinition,
+  type BlockNode,
   blockTypeClassName,
   CHILD_GAP_CLASS,
   COLLECTION_LIST_TYPE,
@@ -34,11 +35,13 @@ import {
   type ListFilter,
   type ListNamedQuery,
   type ListRelation,
+  toOneParagraph,
 } from "@nextlyhq/blocks-engine";
 import type { ReactElement } from "react";
 
 import type { BlockRenderArgs, ListPageContext, PageContext } from "../context";
 import { LIST_ACTION_ATTRIBUTE, LIST_REF_ATTRIBUTE } from "../editor-markers";
+import { registeredBlocks } from "../resolver";
 
 import { CONTENT } from "./categories";
 import {
@@ -449,7 +452,14 @@ export async function renderCollectionLoop({
     // collection's entries does, drawn with the query's own item context.
     return drawList(
       await withReadAhead(named, node, ctx, named.entriesOf),
-      { className, Tag, renderSlot, ctx, nodeId: node.id },
+      {
+        className,
+        Tag,
+        renderSlot,
+        ctx,
+        nodeId: node.id,
+        hasItem: hasItem(node),
+      },
       pageLinks(paging, named, props, partClass)
     );
   }
@@ -527,8 +537,15 @@ export async function renderCollectionLoop({
     itemSource: collection,
     itemQuery: undefined,
   });
+  // Where an author is looking at a collection with nothing to show, the
+  // item is drawn with sample entries instead, read ahead as entries are so
+  // its bindings fill from them. A failed read keeps its empty state.
+  const samples = samplesFor(outcome, props, paging, ctx, collection, node);
   const read = await withReadAhead(
-    { outcome, itemContext: contextOf },
+    {
+      outcome: samples === undefined ? outcome : { ...outcome, items: samples },
+      itemContext: contextOf,
+    },
     node,
     ctx,
     collection
@@ -543,9 +560,171 @@ export async function renderCollectionLoop({
   );
   return drawList(
     read,
-    { className, Tag, renderSlot, ctx, nodeId: node.id },
+    {
+      className,
+      Tag,
+      renderSlot,
+      ctx,
+      nodeId: node.id,
+      hasItem: hasItem(node),
+      sampled: samples !== undefined,
+    },
     pages
   );
+}
+
+/**
+ * Whether a list's read asks for the collection's entries from the first,
+ * unnarrowed: no filters, no related source, none skipped, its first page.
+ * Only then does an empty read mean the collection has nothing visitors can
+ * read, which is when samples stand in; a narrowed read that matched nothing
+ * shows its empty state, so the author sees that nothing matched.
+ */
+function readsEveryEntry(
+  props: CollectionLoopProps,
+  paging: { readonly page?: number | undefined } | undefined
+): boolean {
+  return (
+    (props.filters ?? []).length === 0 &&
+    props.relation === undefined &&
+    (props.offset ?? 0) === 0 &&
+    (paging?.page ?? 1) <= 1
+  );
+}
+
+/**
+ * The sample entries a read that came back empty is drawn with for an
+ * author: only for an unnarrowed read that did not fail, else none.
+ */
+function samplesFor(
+  outcome: { readonly items: readonly unknown[]; readonly failed: boolean },
+  props: CollectionLoopProps,
+  paging: { readonly page?: number | undefined } | undefined,
+  ctx: PageContext,
+  collection: string,
+  node: BlockNode
+): readonly Record<string, unknown>[] | undefined {
+  if (outcome.items.length > 0 || outcome.failed) return undefined;
+  return readsEveryEntry(props, paging)
+    ? sampleItems(ctx, collection, node)
+    : undefined;
+}
+
+/**
+ * The field kind a sample gives a value bound into a prop of `type`: the
+ * kinds `sampleValue` draws a value for, so one rule says what a sample holds.
+ * A picture, a link or a reference gets none, and draws its own empty state.
+ */
+const SAMPLE_KIND_OF_PROP: Readonly<Record<string, string>> = {
+  text: "text",
+  textarea: "text",
+  email: "text",
+  code: "text",
+  select: "text",
+  radio: "text",
+  number: "number",
+  date: "date",
+  checkbox: "checkbox",
+};
+
+/**
+ * The fields the list's item binds, each with the kind of the prop it fills:
+ * what a sample entry needs where the page knows no fields of its own, as on
+ * an editor's canvas. Read from the blocks registered where the item is drawn
+ * (`registeredBlocks`): the editor's own registry on its canvas, the only
+ * place samples are drawn. A list inside the item binds its own entries, so
+ * its blocks are left out.
+ */
+function boundItemFields(
+  node: BlockNode
+): readonly { readonly name: string; readonly type: string }[] {
+  const found = new Map<string, string>();
+  const blocks = registeredBlocks();
+  const visit = (nodes: readonly BlockNode[]): void => {
+    for (const child of nodes) {
+      const props = blocks.get(child.type)?.props;
+      for (const [prop, binding] of Object.entries(child.bindings ?? {})) {
+        const kind = SAMPLE_KIND_OF_PROP[props?.[prop]?.type ?? ""];
+        if (
+          kind !== undefined &&
+          binding.source === "item" &&
+          binding.list === undefined &&
+          !found.has(binding.$bind)
+        ) {
+          found.set(binding.$bind, kind);
+        }
+      }
+      if (child.type === COLLECTION_LIST_TYPE) continue;
+      for (const slot of Object.values(child.slots ?? {})) visit(slot);
+    }
+  };
+  visit(node.slots?.children ?? []);
+  return [...found].map(([name, type]) => ({ name, type }));
+}
+
+/** How many sample items a list with nothing to show draws for an author. */
+const SAMPLE_COUNT = 3;
+
+/**
+ * The attribute on a sample item, which the editor's canvas greys and tags
+ * "Sample". Spelled again in the editor's canvas sheet, whose test draws this
+ * block to find it, so the two cannot drift apart unseen.
+ */
+const LIST_SAMPLE_ATTRIBUTE = "data-nx-list-sample";
+
+/** A sample value for a field, by its kind, numbered for its item. */
+function sampleValue(
+  field: { readonly name: string; readonly type: string },
+  index: number
+): unknown {
+  const number = index + 1;
+  switch (field.type) {
+    case "text":
+    case "email":
+    case "url":
+      return `Sample ${field.name} ${String(number)}`;
+    case "textarea":
+      return "A few words about this entry, so the item can be designed.";
+    case "number":
+      return number;
+    case "checkbox":
+      return true;
+    case "date":
+      return new Date(Date.UTC(2026, 0, number)).toISOString();
+    default:
+      // Pictures, relations and the rest draw their own empty state.
+      return null;
+  }
+}
+
+/**
+ * The sample entries an author designs the item with while the collection
+ * shows nothing: one value per field by its kind, from the fields the page
+ * knows the collection has. Only where an author is looking; `undefined`
+ * on a page a visitor is served, which never draws a sample.
+ */
+function sampleItems(
+  ctx: PageContext,
+  collection: string,
+  node: BlockNode
+): readonly Record<string, unknown>[] | undefined {
+  if (ctx.diagnostics !== true) return undefined;
+  // The page's own knowledge of the collection's fields where it has it,
+  // else what the item binds, by the props it fills: an editor's canvas
+  // carries no field shapes outside its visitor view.
+  const shapes = ctx.fieldShapes?.fieldsOf({ collection });
+  const fields = shapes ?? boundItemFields(node);
+  return Array.from({ length: SAMPLE_COUNT }, (_, index) => ({
+    id: `sample-${String(index + 1)}`,
+    ...Object.fromEntries(
+      fields.map(field => [field.name, sampleValue(field, index)])
+    ),
+  }));
+}
+
+/** Whether a list's item holds any block: its stored `children` slot. */
+function hasItem(node: BlockNode): boolean {
+  return (node.slots?.children?.length ?? 0) > 0;
 }
 
 /**
@@ -557,14 +736,29 @@ function drawList(
   args: Pick<
     BlockRenderArgs<CollectionLoopProps>,
     "className" | "renderSlot" | "ctx"
-  > & { readonly nodeId: string; readonly Tag: ReturnType<typeof rootTagOf> },
+  > & {
+    readonly nodeId: string;
+    readonly Tag: ReturnType<typeof rootTagOf>;
+    /** The entries are samples, drawn for an author over an empty read. */
+    readonly sampled?: boolean;
+    /** Whether the item holds any block to draw per entry. */
+    readonly hasItem: boolean;
+  },
   pages: ReactElement | null = null
 ): ReactElement {
   const { outcome, itemContext } = read;
   const { className, Tag, renderSlot, ctx } = args;
   // How many entries this list drew, told to an editor that asks, so what
   // it says of the list is of what is drawn, never of a read made again.
-  reportShown(ctx, args.nodeId, outcome.items.length);
+  // Samples are no entries: the list drew none of the collection's.
+  const sampled = args.sampled === true;
+  reportShown(ctx, args.nodeId, sampled ? 0 : outcome.items.length);
+  // An item with no blocks yet draws nothing for any entry. Where an author
+  // is looking, the list then holds nothing at all, so the editor treats it
+  // as the empty container it is, with a box and a "+" to fill it, rather
+  // than a row of empty entries no taller than a line. A visitor's page is
+  // drawn as before.
+  const itemless = ctx.diagnostics === true && !args.hasItem;
   const note = diagnosticNote(outcome, ctx);
   const marks = {
     ...emptyMarks(
@@ -578,34 +772,38 @@ function drawList(
   const content =
     outcome.items.length === 0
       ? renderSlot("empty")
-      : outcome.items.map((item, index) => (
-          <div
-            key={listItemKey(item, index, read.rowKey)}
-            className={ENTRY_CLASS}
-          >
-            {/* Drawn again per entry, with this entry on the context, so
+      : itemless
+        ? null
+        : outcome.items.map((item, index) => (
+            <div
+              key={listItemKey(item, index, read.rowKey)}
+              className={ENTRY_CLASS}
+              // A sample, which the editor greys and tags "Sample".
+              {...(sampled ? { [LIST_SAMPLE_ATTRIBUTE]: "" } : {})}
+            >
+              {/* Drawn again per entry, with this entry on the context, so
                 anything inside the template reads its own values rather than
                 the first entry's. Its source goes with it, so an item
                 binding is checked against that source's fields. */}
-            {renderSlot(
-              "children",
-              // Recorded among the entries of the lists around what it
-              // draws, for a binding inside naming this list.
-              withListEntry(
-                {
-                  ...itemContext(item),
-                  // Its place among the entries, after the places of the
-                  // entries around it: what tells its blocks' copies apart.
-                  itemPosition:
-                    ctx.itemPosition === undefined
-                      ? String(index)
-                      : `${ctx.itemPosition}-${index}`,
-                },
-                args.nodeId
-              )
-            )}
-          </div>
-        ));
+              {renderSlot(
+                "children",
+                // Recorded among the entries of the lists around what it
+                // draws, for a binding inside naming this list.
+                withListEntry(
+                  {
+                    ...itemContext(item),
+                    // Its place among the entries, after the places of the
+                    // entries around it: what tells its blocks' copies apart.
+                    itemPosition:
+                      ctx.itemPosition === undefined
+                        ? String(index)
+                        : `${ctx.itemPosition}-${index}`,
+                  },
+                  args.nodeId
+                )
+              )}
+            </div>
+          ));
   // The note, when an author is looking, goes above what visitors see.
   return (
     <Tag className={className} {...marks}>
@@ -704,6 +902,12 @@ const COLLECTION_LOOP_PARTS = {
   },
 } as const;
 
+/** A new list's order: newest first, by the date every entry is created on. */
+const NEWEST_FIRST = "-createdAt";
+
+/** What a new list's empty state says until the author writes their own. */
+const NOTHING_HERE_YET = "Nothing here yet.";
+
 // Defined against the ENGINE's `defineBlock`, not the plugin SDK's: the engine
 // declares the contract and the SDK re-exports it for third parties. The
 // context is named rather than augmented, so a block compiled against the
@@ -791,8 +995,18 @@ export const collectionLoop: BlockDefinition<CollectionLoopProps, PageContext> =
       as: htmlTagProp(["div", "section", "article"]),
       ...CONTENT_WIDTH_PROPS,
     },
-    defaultProps: { as: "div", limit: 10, contained: false },
-    example: { props: { collection: "posts", limit: 3 } },
+    // A new list shows six entries, newest first: `createdAt` is the date
+    // every collection keeps unless it turns timestamps off, and where it
+    // doesn't the reader lists in creation order and the author is told.
+    defaultProps: {
+      as: "div",
+      limit: 6,
+      sort: NEWEST_FIRST,
+      contained: false,
+    },
+    // No source: a block is placed with its example's props, and a new list
+    // starts by asking on the canvas which entries it shows.
+    example: { props: {} },
     slots: {
       // The template repeated per entry, structurally editable.
       //
@@ -808,8 +1022,16 @@ export const collectionLoop: BlockDefinition<CollectionLoopProps, PageContext> =
       children: {},
       // Drawn in place of the entries when none match, or when the read
       // failed, so a visitor sees a designed "nothing here yet" rather than
-      // a gap. Left empty, the list shows nothing, as it always did.
-      empty: {},
+      // a gap. A new list starts it with a Text saying so; emptied, the list
+      // shows nothing, as it always did.
+      empty: {
+        defaultBlock: [
+          {
+            type: "core/text",
+            props: { text: toOneParagraph(NOTHING_HERE_YET).value },
+          },
+        ],
+      },
     },
     parts: COLLECTION_LOOP_PARTS,
     // Spaces one entry from the next, as any container spaces its blocks.

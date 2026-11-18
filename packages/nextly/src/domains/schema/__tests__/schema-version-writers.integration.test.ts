@@ -70,7 +70,8 @@ import { resolveRegistryTableName } from "../../field-groups/storage/resolve-sto
 import { getSchemaEventsDdl } from "../events/schema-events-ddl";
 import { SchemaEventsRepository } from "../events/schema-events-repository";
 import { generateMigration } from "../migrate-create/generate";
-import { EMPTY_SNAPSHOT, writeSnapshot } from "../migrate-create/snapshot-io";
+import { recordedSnapshot } from "../migrate-create/__tests__/helpers/recorded-snapshot";
+import { EMPTY_SNAPSHOT } from "../migrate-create/snapshot-io";
 import { runMigrationStatements } from "../migrate/migration-transaction";
 import { noPendingEntities } from "../migrate/pending-entities";
 import { reconcileMigrationMetadata } from "../migrate/reconcile-metadata";
@@ -199,7 +200,7 @@ describe.each(getConfiguredTestDialects())(
     it("`nextly migrate`'s registry phase: rows and version together, naming the newest applied migration", async () => {
       const slug = `svw_migrate_${dialect.slice(0, 2)}`;
       await recordApplied(MIGRATED);
-      await writeSnapshot(
+      await recordedSnapshot(
         join(dir, "meta"),
         MIGRATED,
         EMPTY_SNAPSHOT,
@@ -243,6 +244,9 @@ describe.each(getConfiguredTestDialects())(
       // Two collections a snapshot records on one table: the registry holds
       // a table once, so one row is written and the other refused.
       mkdirSync(join(dir, "meta"));
+      // Its migration file beside it: a snapshot is read only once its
+      // migration was written.
+      writeFileSync(join(dir, `${REGISTERED}.sql`), "");
       writeFileSync(
         join(dir, "meta", `${REGISTERED}.snapshot.json`),
         JSON.stringify({

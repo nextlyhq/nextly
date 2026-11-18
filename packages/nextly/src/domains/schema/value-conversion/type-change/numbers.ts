@@ -120,14 +120,6 @@ export function numberWriting(value: ReadNumber): string {
   return value.finite ? decimalWriting(value.value) : value.value;
 }
 
-/** Whether a whole number fits a signed integer of `bits` bits. */
-export function fitsInteger(value: ExactDecimal, bits: 32 | 64): boolean {
-  if (value.fraction !== "") return false;
-  const magnitude = BigInt(value.whole === "" ? "0" : value.whole);
-  const limit = 1n << BigInt(bits - 1);
-  return value.negative ? magnitude <= limit : magnitude < limit;
-}
-
 /**
  * Whether a double reads back as exactly this number: its shortest round-trip writing names the
  * same digits. A whole number beyond 2^53 that a double cannot hold, or a fraction with more
@@ -135,14 +127,4 @@ export function fitsInteger(value: ExactDecimal, bits: 32 | 64): boolean {
  */
 export function fitsDouble(value: ExactDecimal): boolean {
   return keptByDouble(decimalWriting(value));
-}
-
-/** Whether a `decimal(precision, scale)` column holds the number exactly. */
-export function fitsDecimal(
-  value: ExactDecimal,
-  precision: number,
-  scale: number
-): "exactly" | "rounded" | "out of range" {
-  if (value.whole.length > precision - scale) return "out of range";
-  return value.fraction.length > scale ? "rounded" : "exactly";
 }

@@ -42,6 +42,10 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   },
   useDocumentIdentity: () => identity,
   useDocumentStatus: () => liveStatus,
+  useDocumentField: (path: string) =>
+    path === "title" && formTitle !== undefined
+      ? { value: formTitle, writable: true, set: () => true }
+      : null,
   useCurrentUserId: () => userId,
   devicePreferenceStore: (key: string) => ({
     read: () => kept.get(key) ?? null,
@@ -50,6 +54,9 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
     },
   }),
 }));
+
+/** The page on screen's title as its form holds it, or undefined for none. */
+let formTitle: string | undefined;
 
 /** The author signed in, and what the preference store keeps, by key. */
 let userId: string | null = "ada";
@@ -90,6 +97,21 @@ vi.mock("../pages-client", () => ({
   renamePage: (page: PageReference, title: string) =>
     client.renamePage(page, title),
   deletePage: (page: PageReference) => client.deletePage(page),
+}));
+
+/** The New page dialog: which collection it was opened for, and what it was told. */
+const newPage = {
+  opened: [] as string[],
+  onScreen: undefined as { unsavedWork: boolean; title: string } | undefined,
+};
+vi.mock("../new-page/new-page-dialog", () => ({
+  useNewPageDialog: (onScreen: { unsavedWork: boolean; title: string }) => {
+    newPage.onScreen = onScreen;
+    return {
+      open: (collection: string) => newPage.opened.push(collection),
+      dialog: null,
+    };
+  },
 }));
 
 const { usePagesPanel } = await import("./pages-panel");
@@ -204,6 +226,7 @@ beforeEach(() => {
   navigateTo.mockReset();
   for (const write of Object.values(client)) write.mockReset();
   identity = { kind: "collection", slug: "pages", documentId: "current" };
+  formTitle = undefined;
   editingPage = true;
   unsavedWork = false;
   liveStatus = null;
@@ -448,26 +471,20 @@ describe("a row's actions", () => {
     expect(navigateTo).toHaveBeenLastCalledWith(address("a"));
   });
 
-  it("adds a page in the listed collection and opens it", async () => {
+  it("opens the New page dialog for the listed collection, and makes nothing itself", async () => {
+    newPage.opened.length = 0;
     await mount([item("a", "Home")]);
-    client.createPage.mockResolvedValue(
-      item("new", "Fresh", { status: "draft" })
-    );
     await userEvent.click(screen.getByRole("button", { name: "New page" }));
-    await userEvent.type(
-      screen.getByRole("textbox", { name: "Page title" }),
-      "Fresh{Enter}"
-    );
-    expect(client.createPage).toHaveBeenCalledWith({
-      collection: "pages",
-      title: "Fresh",
-    });
-    await waitFor(() =>
-      expect(navigateTo).toHaveBeenCalledWith(address("new"))
-    );
+    expect(newPage.opened).toEqual(["pages"]);
+    // No field takes its place: nothing is made by typing and leaving.
+    expect(screen.queryByRole("textbox", { name: "Page title" })).toBeNull();
+    expect(screen.getByRole("button", { name: "New page" })).toBeTruthy();
+    expect(client.createPage).not.toHaveBeenCalled();
   });
 
-  it("adds new pages to the page being edited's collection, whatever a search ranks first", async () => {
+  it("opens it for the page being edited's collection, whatever a search ranks first, naming that page", async () => {
+    newPage.opened.length = 0;
+    identity = { kind: "collection", slug: "pages", documentId: "a" };
     await mount([
       item("a", "Home"),
       item("p", "Post", { collection: "posts" }),
@@ -481,16 +498,25 @@ describe("a row's actions", () => {
       "post"
     );
     await screen.findByRole("button", { name: "Post" });
-    client.createPage.mockResolvedValue(item("new", "Fresh"));
     await userEvent.click(screen.getByRole("button", { name: "New page" }));
-    await userEvent.type(
-      screen.getByRole("textbox", { name: "Page title" }),
-      "Fresh{Enter}"
-    );
-    expect(client.createPage).toHaveBeenCalledWith({
-      collection: "pages",
-      title: "Fresh",
+    expect(newPage.opened).toEqual(["pages"]);
+  });
+
+  it("tells the dialog about the page on screen's unsaved work, by the title its form holds now", async () => {
+    identity = { kind: "collection", slug: "pages", documentId: "a" };
+    unsavedWork = true;
+    // Typed, not saved: the list still has the old title, or none at all
+    // where the page is past the list's first rows.
+    formTitle = "Home, renamed";
+    await mount([item("b", "About")]);
+    expect(newPage.onScreen).toEqual({
+      unsavedWork: true,
+      title: "Home, renamed",
     });
+    cleanup();
+    formTitle = undefined;
+    await mount([item("a", "Home"), item("b", "About")]);
+    expect(newPage.onScreen?.title).toBe("Home");
   });
 
   it("keeps New page when a search matches nothing", async () => {

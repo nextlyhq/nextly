@@ -1,0 +1,24 @@
+---
+title: DATA_STEPS_BACKUP_DECLINED
+description: "A command would change data an earlier Nextly release stored, and its backup question was answered no."
+---
+
+## Cause
+
+A command would change data an earlier Nextly release stored, and its backup question was answered no.
+
+`nextly migrate` and `nextly i18n:convert-zoned-dates` rewrite values an earlier release stored, in place, so each asks whether the database is backed up before it changes anything. At the prompt the answer was no, so nothing was changed.
+
+## Fix
+
+- Back up the database.
+- Run the command again and answer yes, or pass `--backup-confirmed`.
+
+## Example
+
+```text
+✗ The data an earlier Nextly release stored was left as it is (hash passwords stored before this release: 3): the backup question was answered no.
+  Why:  The command rewrites stored values in place, so it asks for a backup first, and the answer was no. Nothing was changed.
+  Next: Back up the database, then run `nextly migrate` again and answer yes, or pass `--backup-confirmed`.
+  Docs: https://nextlyhq.com/docs/cli/errors/data-steps-backup-declined  (DATA_STEPS_BACKUP_DECLINED)
+```

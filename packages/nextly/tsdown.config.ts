@@ -247,6 +247,11 @@ const clientEntries = [
   // The over-cap refusal, reachable by an adapter without the barrel for the
   // same reason as the helper above.
   "src/storage/read-errors.ts",
+  // `nextly/slugify`: core's one slug rule, as its own entry. The auto-slug
+  // hook and a plugin's routes make slugs by it, and a plugin's dialog shows
+  // an address before it is made by it, so none of them keeps a copy; it
+  // imports nothing.
+  "src/slugify.ts",
   // `nextly/zod`: the Zod generated schema files import, so they compile in an
   // app that depends on `nextly` and not on `zod`. Pure, so browser-safe.
   "src/zod.ts",

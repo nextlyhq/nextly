@@ -123,6 +123,7 @@ import {
   withoutDisabledBehavior,
 } from "../domains/schema/field-types/field-type-registry";
 import { pluginCollectionSources } from "../domains/schema/migrate/plugin/plugin-collection-sources";
+import type { ConsentRefusal } from "../domains/schema/ownership/schema-version-check";
 import {
   listTablesAtStart,
   tableExistsAtStart,
@@ -1125,11 +1126,18 @@ async function registerServicesOnce(
   // read. It sets an empty database up as the command does and applies what is
   // pending, so the rest of the start reads what it wrote, as a start after
   // `nextly migrate` does, and writes no bookkeeping or schema itself.
+  // The data-loss consent's refusal of those migrations, where it refused
+  // them: the start serves through it, and a plugin it leaves behind is
+  // refused below (`assertBootPluginSchemaVersions`), naming the consent.
+  let consentRefusal: ConsentRefusal | undefined;
   const migratedAtBoot = await withStartRegistrationsSetAside(
     async () =>
       await runBootMigrations(config, transformedConfig, deferredExtends, {
         adapter,
         logger: resolvedLogger,
+        onDataLossRefusal: refusal => {
+          consentRefusal = refusal;
+        },
       })
   );
   // The cache handlers read expiries from this adapter's ledger, and writes
@@ -1442,7 +1450,8 @@ async function registerServicesOnce(
             transformedConfig,
             adapter,
             adapterDrizzleDb,
-            resolvedLogger
+            resolvedLogger,
+            consentRefusal
           );
         },
       ]);
@@ -3024,7 +3033,7 @@ async function runBootMigrations(
   config: NextlyServiceConfig,
   transformedConfig: NextlyServiceConfig,
   deferredExtends: DeferredExtends,
-  deps: Pick<RunProdMigrationsArgs, "adapter" | "logger">
+  deps: Pick<RunProdMigrationsArgs, "adapter" | "logger" | "onDataLossRefusal">
 ): Promise<boolean> {
   // `next build` runs no migration, whatever the setting: the build may point
   // at a database other deployments share, and the deploy's own `nextly
@@ -3096,7 +3105,8 @@ async function assertBootPluginSchemaVersions(
   transformedConfig: NextlyServiceConfig,
   adapter: DrizzleAdapter,
   adapterDrizzleDb: DatabaseInstance,
-  logger: Logger
+  logger: Logger,
+  consentRefusal: ConsentRefusal | undefined
 ): Promise<void> {
   const plugins = transformedConfig.plugins ?? [];
   if (plugins.length === 0) return;
@@ -3129,6 +3139,9 @@ async function assertBootPluginSchemaVersions(
     ledgerExists: () => adapter.tableExists("nextly_schema_events"),
     production: process.env.NODE_ENV === "production",
     warn: m => logger.warn?.(m),
+    // Where this start's migrations were refused for the data-loss consent,
+    // a plugin behind is behind for that, and its refusal says so.
+    ...(consentRefusal === undefined ? {} : { consentRefusal }),
   });
 }
 
@@ -3470,7 +3483,7 @@ export function bootMigrationsArgs(
   rawDb: NonNullable<NextlyServiceConfig["db"]>,
   effective: NextlyServiceConfig,
   deferredExtends: readonly unknown[],
-  deps: Pick<RunProdMigrationsArgs, "adapter" | "logger">
+  deps: Pick<RunProdMigrationsArgs, "adapter" | "logger" | "onDataLossRefusal">
 ): RunProdMigrationsArgs {
   return {
     config: {

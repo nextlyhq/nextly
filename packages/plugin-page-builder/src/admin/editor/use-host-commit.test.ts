@@ -8,6 +8,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { BlockDocument } from "@nextlyhq/blocks-engine";
+import { typingEpoch } from "@nextlyhq/builder/shell";
 
 import {
   documentToHandOver,
@@ -45,6 +46,14 @@ describe("documentToStore", () => {
 
   it("is the document an edit a Settings tab held made, before the store", () => {
     expect(documentToStore(nothingOpen, held, () => made)).toBe(made);
+  });
+
+  it("ends every run of typing, so typing on after a save is a step of its own", () => {
+    // A field still being typed in when the save shortcut is pressed: what is
+    // stored is one step, and the history's save point has to match it.
+    const before = typingEpoch();
+    documentToStore(nothingOpen, held, undefined);
+    expect(typingEpoch()).toBe(before + 1);
   });
 
   it("is the document as held where no tab holds an edit", () => {

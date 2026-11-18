@@ -79,7 +79,11 @@ const record = z
     live: state.nullable(),
     expected: state.nullable(),
     pending: z
-      .object({ applied: state.nullable(), configured: state.nullable() })
+      .object({
+        applied: state.nullable(),
+        configured: state.nullable(),
+        renamedFrom: z.string().nullable(),
+      })
       .strict()
       .nullable(),
     cause: z

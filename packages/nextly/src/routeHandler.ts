@@ -111,6 +111,7 @@ import {
 } from "./api/widget-layout";
 import { getWidgetPreviews } from "./api/widget-previews";
 import { postWidgetQuery } from "./api/widget-query";
+import { handleWorkflowRequest } from "./api/workflows";
 import { runWithAccessMemo } from "./auth/access/request-memo";
 import { apiKeyScopeFrom } from "./auth/authenticated-scope";
 import {
@@ -431,6 +432,7 @@ const DIRECT_DISPATCH_SERVICES = new Set<string>([
   "apiKeys",
   "webhooks",
   "releases",
+  "workflows",
   "notices",
   "jobs",
   "generalSettings",
@@ -1684,6 +1686,14 @@ async function serveServiceRequest(
     return handleReleaseRequest(req, method, routeParams);
   }
 
+  // ==================== WORKFLOWS DIRECT DISPATCH ====================
+  // Review state, steps, assignments and a workflow's settings. Beside releases and for the same
+  // reason: the handler owns its auth and parses its own JSON, so it stays above the shared body
+  // read below. The route's params carry the workflow a settings route names.
+  if (service === "workflows") {
+    return handleWorkflowRequest(req, method, routeParams);
+  }
+
   // ==================== CONTENT EVENTS BY SUBJECT ====================
   // A subject's events read by subject (a release's, or a deleted
   // document's). The handler owns its authorization.
@@ -1714,7 +1724,7 @@ async function serveServiceRequest(
   // The Email hub's Activity reads. The handler asks `read-email-deliveries`
   // itself, from the system read policy, and reads its filters from the URL.
   if (service === "email") {
-    return handleEmailDeliveryRequest(req, method);
+    return handleEmailDeliveryRequest(req, method, routeParams);
   }
 
   // ==================== PREVIEW LINKS DIRECT DISPATCH ====================
