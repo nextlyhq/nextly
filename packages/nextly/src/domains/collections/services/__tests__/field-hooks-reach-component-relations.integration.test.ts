@@ -729,12 +729,12 @@ describe.each(getConfiguredTestDialects())(
       async ({ read, locale }) => {
         const answer = await laidReads[read](locale);
         const own = peopleIn(answer.meta, "$.meta");
-        if (read !== "a Single read") {
-          expect(
-            own.map(p => p.name),
-            JSON.stringify(answer.meta)
-          ).toContain("Ann");
-        }
+        // Populated on every read, a Single's included, so the hook below is
+        // observed on a row the read returned rather than passed by its absence.
+        expect(
+          own.map(p => p.name),
+          JSON.stringify(answer.meta)
+        ).toContain("Ann");
         expect(own, JSON.stringify(own)).toEqual(
           own.map(p => ({ ...p, secret: MASKED }))
         );
@@ -742,5 +742,19 @@ describe.each(getConfiguredTestDialects())(
       },
       60_000
     );
+
+    // Depth 0 asks for no related rows: the reference stays as stored, a Single's
+    // as an entry's, so the population above is the depth the read asked for.
+    it("a Single read at depth 0 keeps the related row as its reference", async () => {
+      const answer = (await laid.nextly.findSingle({
+        slug: LAID_HOME,
+        locale: "en",
+        depth: 0,
+        overrideAccess: false,
+      } as never)) as unknown as Record<string, unknown>;
+      const meta = answer.meta as Record<string, unknown>;
+      expect(typeof meta.keeper, JSON.stringify(meta)).toBe("string");
+      expect(JSON.stringify(answer)).not.toMatch(/stored (Ann|Bea)/);
+    }, 60_000);
   }
 );
