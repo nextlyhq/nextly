@@ -142,6 +142,12 @@ export interface CollectionSaveDeps {
   projectRoot: string;
   /** Absolute path to `db.migrationsDir`. */
   migrationsDir: string;
+  /**
+   * The database the app's saves write to, as a save's record that it is in progress names it
+   * (`savedDatabase`). Unknown where not given, which the commands reading the record take as
+   * this machine's database.
+   */
+  database?: string;
   /** Whether a save runs its migration here: in development. */
   applies: boolean;
   logger: {
@@ -485,8 +491,16 @@ async function writeSave(
     slug: save.slug,
     definitionFile: definitionPath,
     definitionBefore: before,
+    database: deps.database,
   });
-  await writeAtomically(definitionPath, serializeUiSchema(plan.next));
+  try {
+    await writeAtomically(definitionPath, serializeUiSchema(plan.next));
+  } catch (error) {
+    // A failed replace leaves the definition whole and nothing else of the save is written yet:
+    // there is nothing to settle, so the record clears with the save's failure.
+    started.withdrawn();
+    throw error;
+  }
 
   const names: string[] = [];
   const undo = async (error: unknown) => {

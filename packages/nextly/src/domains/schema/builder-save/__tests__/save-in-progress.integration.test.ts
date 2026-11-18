@@ -55,6 +55,8 @@ const kill = vi.hoisted(() => ({
   reached: undefined as undefined | (() => void),
   /** Ends the stop, so the save unwinds and the instance can close. */
   release: undefined as undefined | (() => void),
+  /** Whether a rename about to be made is one to refuse, as a full disk would. */
+  refuse: undefined as undefined | ((point: string) => boolean),
 }));
 
 /**
@@ -75,6 +77,11 @@ const stopHere = vi.hoisted(() => async (point: string): Promise<void> => {
 vi.mock("node:fs/promises", async importOriginal => {
   const real = await importOriginal<typeof import("node:fs/promises")>();
   const rename: typeof real.rename = async (from, to) => {
+    if (kill.refuse?.(`file:${String(to)}`) === true) {
+      throw Object.assign(new Error("no space left on device"), {
+        code: "ENOSPC",
+      });
+    }
     await real.rename(from, to);
     await stopHere(`file:${String(to)}`);
   };
@@ -121,6 +128,7 @@ afterEach(async () => {
   kill.reached = undefined;
   kill.release?.();
   kill.release = undefined;
+  kill.refuse = undefined;
   await stopped;
   stopped = undefined;
   vi.restoreAllMocks();
@@ -468,8 +476,9 @@ describe.each(getConfiguredTestDialects())(
             host: hostname(),
             definitionBefore,
           });
-          // The database by a hash of where it is, never the URL that reaches it.
-          expect(row?.database).toMatch(/^[0-9a-f]{16,64}$/);
+          // The harness hands its adapter in, so where the database is cannot be told: the
+          // record says so, never a URL, and the marker check takes it as this database's.
+          expect(row?.database).toBe("unknown");
 
           // Both readers refuse: `nextly migrate` by the row, the commands with no database by
           // the marker, which this host and this database wrote.
@@ -510,6 +519,33 @@ describe.each(getConfiguredTestDialects())(
           answer instanceof Response ? answer.ok : !(answer instanceof Error),
           "the save was not refused"
         ).toBe(false);
+        expect(await recordRow(t, path)).toBeUndefined();
+        expect(recordMarker(path)).toBeUndefined();
+      }, 300_000);
+
+      // A definition that cannot be replaced stays whole, and nothing else of the save is written
+      // yet: there is nothing to settle, so the record goes with the save's failure.
+      it("a save whose definition cannot be written leaves neither the row nor the marker", async () => {
+        const t = await boot();
+        await path.create([text("heading")]);
+        const definitionBefore = definitionText();
+        let refused = 0;
+        kill.refuse = point => {
+          if (point !== `file:${join(basePath, DEFINITION)}`) return false;
+          refused += 1;
+          return true;
+        };
+
+        const answer = await path
+          .save(t, [text("heading"), text("alpha")])
+          .catch((error: unknown) => error);
+        kill.refuse = undefined;
+        expect(refused, "the definition's write was never made").toBe(1);
+        expect(
+          answer instanceof Response ? answer.ok : !(answer instanceof Error),
+          "the save was not refused"
+        ).toBe(false);
+        expect(definitionText()).toBe(definitionBefore);
         expect(await recordRow(t, path)).toBeUndefined();
         expect(recordMarker(path)).toBeUndefined();
       }, 300_000);

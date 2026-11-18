@@ -9,14 +9,14 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { NextlyError } from "../../../../errors/nextly-error";
 import {
-  databaseIdentity,
   refuseWhileSaveLeftPartWay,
   saveInProgressFolder,
 } from "../save-in-progress";
+import { databaseIdentity, savedDatabase } from "../saved-database";
 
 const URL_HERE = "postgres://editor:secret@db.example.test:5432/site";
 
@@ -97,6 +97,19 @@ describe("databaseIdentity", () => {
     ]) {
       expect(databaseIdentity(other), other).not.toBe(named);
     }
+  });
+});
+
+// An app given its adapter cannot say where it leads: its records name the database as unknown.
+describe("savedDatabase", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("names DATABASE_URL's database for an adapter built from it, and unknown for one handed in", () => {
+    vi.stubEnv("DATABASE_URL", URL_HERE);
+    expect(savedDatabase(false)).toBe(databaseIdentity(URL_HERE));
+    expect(savedDatabase(true)).toBe("unknown");
   });
 });
 
@@ -189,6 +202,26 @@ describe("refuseWhileSaveLeftPartWay", () => {
     const message = (outcome.refused as NextlyError).publicMessage;
     expect(message).toContain("collection-posts-first.json");
     expect(message).toContain("collection-posts-second.json");
+  });
+
+  // Where a handed-in adapter wrote, the database cannot be told: on this host it is taken as
+  // this database, so the check fails closed; on another host it is still that host's notice.
+  it("refuses a marker of this host whose database is unknown, and notices one of another host", async () => {
+    leaveMarker(
+      "collection-posts-here.json",
+      markerOf("posts", hostname(), "unknown")
+    );
+    const here = await checked();
+    expect("refused" in here, "the check passed").toBe(true);
+
+    rmSync(saveInProgressFolder(projectRoot), { recursive: true, force: true });
+    leaveMarker(
+      "collection-posts-there.json",
+      markerOf("posts", "a-teammates-laptop", "unknown")
+    );
+    expect(await checked()).toEqual({
+      notices: [expect.stringContaining("a-teammates-laptop")],
+    });
   });
 
   it("refuses a marker that cannot be read, naming the file", async () => {

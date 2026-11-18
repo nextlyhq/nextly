@@ -66,6 +66,7 @@ import {
 } from "../../../plugins/test-nextly";
 import type { ServiceContainer } from "../../../services";
 import { consoleLogger } from "../../../shared/types";
+import { MetaService } from "../../meta/services/meta-service";
 import { resolveRegistryTableName } from "../../field-groups/storage/resolve-storage-names";
 import { getSchemaEventsDdl } from "../events/schema-events-ddl";
 import { SchemaEventsRepository } from "../events/schema-events-repository";
@@ -496,15 +497,33 @@ describe.each(getConfiguredTestDialects())(
      * Runs `save` with `nextly_meta` taken away, whatever the save answers,
      * and says what it reported of the failure: the error it threw, and the
      * warnings it logged, each with the context it carried.
+     *
+     * The table goes once the save has recorded that it is in progress, a
+     * row of the same table written before anything of the save, so the
+     * first write it cannot make is the version's, in the registry's
+     * transaction. The record's read-back is where that happens; a save that
+     * never reached it would test nothing, and fails here.
      */
     async function savedWithoutTheVersionTable(
       t: TestNextly,
       save: () => Promise<unknown>
     ): Promise<string> {
       const warned = vi.spyOn(consoleLogger, "warn");
-      await t.adapter.executeQuery(
-        "ALTER TABLE nextly_meta RENAME TO nextly_meta_away"
-      );
+      let away = false;
+      const get = MetaService.prototype.get;
+      vi.spyOn(MetaService.prototype, "get").mockImplementation(async function (
+        this: MetaService,
+        ...args: Parameters<MetaService["get"]>
+      ) {
+        const value = await get.apply(this, args);
+        if (!away && args[0].startsWith("builder-save-in-progress:")) {
+          await t.adapter.executeQuery(
+            "ALTER TABLE nextly_meta RENAME TO nextly_meta_away"
+          );
+          away = true;
+        }
+        return value;
+      });
       let reported = "";
       let logged: string[] = [];
       try {
@@ -514,13 +533,19 @@ describe.each(getConfiguredTestDialects())(
           )}`;
         });
       } finally {
-        await t.adapter.executeQuery(
-          "ALTER TABLE nextly_meta_away RENAME TO nextly_meta"
-        );
+        vi.mocked(MetaService.prototype.get).mockRestore();
+        if (away) {
+          await t.adapter.executeQuery(
+            "ALTER TABLE nextly_meta_away RENAME TO nextly_meta"
+          );
+        }
         // Read before the spy is restored, which clears what it recorded.
         logged = warned.mock.calls.map(call => call.map(String).join(" "));
         warned.mockRestore();
       }
+      expect(away, "the save never recorded that it was in progress").toBe(
+        true
+      );
       return [reported, ...logged].join("\n");
     }
 

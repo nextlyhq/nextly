@@ -33,7 +33,7 @@
  * @module domains/schema/builder-save/save-in-progress
  */
 import { AsyncLocalStorage } from "node:async_hooks";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import {
   link,
   mkdir,
@@ -43,7 +43,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { hostname } from "node:os";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, join, relative } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { like, type SQL } from "drizzle-orm";
@@ -54,6 +54,8 @@ import { NextlyError } from "../../../errors/nextly-error";
 import type { AddressKind } from "../../../shared/address-rule";
 import { consoleLogger } from "../../../shared/types";
 import { MetaService } from "../../meta/services/meta-service";
+
+import { databaseIdentity, UNKNOWN_DATABASE } from "./saved-database";
 
 /** The kinds of entity a Builder save writes. */
 export type SaveInProgressKind = AddressKind;
@@ -71,7 +73,7 @@ const savedRecord = z.object({
   startedAt: z.string(),
   /** The host the save ran on. */
   host: z.string(),
-  /** The database it wrote to, as `databaseIdentity` names it. */
+  /** The database it wrote to, as `savedDatabase` names it: a hash, or `unknown`. */
   database: z.string(),
   /** The definition file, relative to the project root. */
   definitionFile: z.string(),
@@ -101,38 +103,6 @@ function markerPath(projectRoot: string, record: SaveInProgress): string {
     saveInProgressFolder(projectRoot),
     `${record.kind}-${record.slug}-${record.id}.json`
   );
-}
-
-/**
- * The database `url` reaches, named by a hash of where it is (`databaseLocation`): the same
- * database gives the same name whoever connects to it, and no user name or password goes into it.
- * `url` defaults to `DATABASE_URL`, which the app and the CLI both connect with.
- */
-export function databaseIdentity(
-  url: string | undefined = process.env.DATABASE_URL
-): string {
-  return createHash("sha256")
-    .update(databaseLocation(url ?? ""))
-    .digest("hex")
-    .slice(0, 32);
-}
-
-/**
- * Where `url` leads. A SQLite file is opened at the URL with its `file:` prefix stripped, relative
- * to the working directory, so `file:./data/app.db` and `file:/data/app.db` are two files and
- * name two places. A server is its host, port and database name.
- */
-function databaseLocation(url: string): string {
-  if (url.startsWith("file:")) {
-    return `file:${resolve(url.slice("file:".length))}`;
-  }
-  try {
-    const parsed = new URL(url);
-    return `${parsed.hostname}:${parsed.port}${parsed.pathname}`;
-  } catch {
-    // Not a URL: a bare SQLite path, opened as it is.
-    return `file:${resolve(url)}`;
-  }
 }
 
 /**
@@ -230,6 +200,8 @@ export async function recordSaveStarted(args: {
   /** The definition file's absolute path. */
   definitionFile: string;
   definitionBefore: string | undefined;
+  /** The database the save writes to (`savedDatabase`); unknown where not given. */
+  database: string | undefined;
 }): Promise<StartedSave> {
   const made = scopes.getStore();
   // Every writer opens a scope before it gets here; without one, nothing would clear the record.
@@ -247,7 +219,7 @@ export async function recordSaveStarted(args: {
     slug: args.slug,
     startedAt: new Date().toISOString(),
     host: hostname(),
-    database: databaseIdentity(),
+    database: args.database ?? UNKNOWN_DATABASE,
     definitionFile: relative(args.projectRoot, args.definitionFile),
     definitionBefore: args.definitionBefore ?? null,
   };
@@ -419,8 +391,12 @@ export async function refuseWhileSaveLeftPartWay(args: {
     }
     const { record } = marker;
     // Every marker of this host and database refuses, each named with its file: two for one entity
-    // (a stopped save whose row was lost, then another) are both named, never one picked.
-    if (record.host === here && record.database === database) {
+    // (a stopped save whose row was lost, then another) are both named, never one picked. A marker
+    // whose database could not be told (an adapter handed in) is taken as this one's: it refuses.
+    if (
+      record.host === here &&
+      (record.database === database || record.database === UNKNOWN_DATABASE)
+    ) {
       left.push(
         `${described(record)} (${relative(args.projectRoot, marker.file)})`
       );
