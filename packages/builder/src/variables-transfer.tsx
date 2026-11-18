@@ -1,19 +1,28 @@
 /**
- * Bringing variables in from design-token files, and taking them out.
+ * The Design panel's ⋯ menu ("More design actions"): bringing variables in
+ * from design-token files, taking them out, and copying them as CSS.
  *
  * The menu sits in the Design panel's header. Importing opens the system's
  * file chooser through a hidden file input, so the visible control is a menu
  * item like every other and the keyboard reaches it the same way. Nothing is
  * applied until the author has seen what the files would change and confirmed
- * it, settling each conflict as they go.
+ * it, settling each conflict as they go. A message about values an import
+ * refused stays until the author dismisses it, since it names what did not
+ * arrive.
  *
- * Exports write files straight away: the DTCG token file (with a theme file
- * beside it when there are dark values), one file per mode for Figma, or the
- * CSS the site's pages read.
+ * Exports write files straight away: the design token file (with a theme file
+ * beside it when there are dark values), or one file per mode for Figma. A
+ * short toast says what was written; what the files did not carry is one
+ * click away, in "What wasn't exported", rather than in a box that stays.
+ * "Copy CSS variables" puts the site's variable blocks on the clipboard.
  *
  * @module variables-transfer
  */
-import { tokenDisplayLabel, type SiteTokenSet } from "@nextlyhq/blocks-engine";
+import {
+  resolveTokenPrefix,
+  tokenDisplayLabel,
+  type SiteTokenSet,
+} from "@nextlyhq/blocks-engine";
 import {
   Button,
   Dialog,
@@ -27,34 +36,71 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
+  toast,
+  TooltipProvider,
 } from "@nextlyhq/ui";
-import { ArrowDownUp } from "lucide-react";
+import { Ellipsis } from "lucide-react";
 import * as React from "react";
 
+import { ChromeTooltip } from "./chrome-tooltip";
+import { DESIGN_ACTION_WORDS as WORDS } from "./editor-words";
 import {
   applyImport,
-  exportCss,
   exportDtcgWithTheme,
   exportForFigma,
   planImport,
+  variableCss,
   type ConflictChoice,
+  type ExportGap,
   type ExportResult,
   type ImportPlan,
 } from "./tokens-transfer";
 
-/** What an import or an export carried, and what it did not. */
-interface Report {
-  tone: "done" | "refused";
-  headline: string;
-  detail: readonly string[];
-}
-
 type ReadyPlan = Extract<ImportPlan, { ok: true }>;
 
+/** One of the menu's exports: what it makes, and how its toast names it. */
+interface ExportKind {
+  make: (set: SiteTokenSet) => readonly ExportResult[];
+  /** The toast's opening words, before the files it names. */
+  done: string;
+  /** How the files' labels are joined in the toast. */
+  join: string;
+  /** Where the list of what was not exported says it comes from. */
+  from: string;
+}
+
+const DTCG_EXPORT: ExportKind = {
+  make: exportDtcgWithTheme,
+  done: "Design tokens exported",
+  // "variables, and dark values in a theme file": the second is a phrase
+  // of its own, so a comma keeps the two apart.
+  join: ", and ",
+  from: "From the design token files. A value kept for Nextly only is in the file as Nextly data: Nextly reads it back, and other design tools skip it.",
+};
+
+const FIGMA_EXPORT: ExportKind = {
+  make: exportForFigma,
+  done: "Exported for Figma",
+  join: " and ",
+  from: "From the Figma files.",
+};
+
+/** What "What wasn't exported" lists, and which export it is about. */
+interface NotExported {
+  gaps: readonly ExportGap[];
+  from: string;
+}
+
+/** How long an export's toast stays when it offers its list: time to reach it. */
+const WITH_LIST_MS = 10_000;
+
 export interface VariablesTransfer {
-  /** The header's import-and-export menu, with its hidden file input. */
+  /** The header's ⋯ menu, with its hidden file input. */
   menu: React.JSX.Element;
-  /** The report and the import preview, drawn in the panel body. */
+  /**
+   * The import preview and the list of what an export left out. Both are
+   * dialogs drawn over the editor, so where a host mounts this draws nothing.
+   */
   overlays: React.JSX.Element;
 }
 
@@ -74,9 +120,15 @@ export function useVariablesTransfer({
   currentTokens: () => SiteTokenSet | undefined;
   readOnly: boolean;
 }): VariablesTransfer {
-  const [report, setReport] = React.useState<Report | null>(null);
   const [plan, setPlan] = React.useState<ReadyPlan | null>(null);
+  const [notExported, setNotExported] = React.useState<NotExported | null>(
+    null
+  );
   const input = React.useRef<HTMLInputElement>(null);
+  // Where focus goes back to when the list closes: the toast that opened it
+  // has gone by then.
+  const trigger = React.useRef<HTMLButtonElement>(null);
+  const hint = React.useId();
   // The callbacks as they are now, published at commit, for reads that
   // outlive the render that started them.
   const latest = React.useRef({ onChange, currentTokens });
@@ -94,7 +146,7 @@ export function useVariablesTransfer({
   );
 
   const refuse = (headline: string, detail: readonly string[] = []): void =>
-    setReport({ tone: "refused", headline, detail });
+    sayUntilDismissed("error", headline, detail);
 
   const read = async (files: readonly File[]): Promise<void> => {
     const mine = reads.current + 1;
@@ -123,7 +175,6 @@ export function useVariablesTransfer({
       refuse(planned.error, planned.skipped);
       return;
     }
-    setReport(null);
     setPlan(planned);
   };
 
@@ -140,92 +191,160 @@ export function useVariablesTransfer({
       refuse(result.error, result.skipped);
       return;
     }
-    setReport({
-      tone: "done",
-      headline: `Imported ${String(result.imported)} ${
-        result.imported === 1 ? "variable" : "variables"
-      }.`,
-      detail: result.skipped,
-    });
     latest.current.onChange(result.tokens);
-  };
-
-  const send = (make: (set: SiteTokenSet) => readonly ExportResult[]): void => {
-    const set = latest.current.currentTokens();
-    if (set === undefined) {
-      refuse("This site's variables are not loaded, so nothing was exported.");
+    const imported = `Imported ${counted(result.imported, "variable", "variables")}.`;
+    if (result.skipped.length === 0) {
+      toast(imported);
       return;
     }
-    const made = make(set);
+    // Refused in part: what did not arrive is named, and stays named until
+    // the author has read it.
+    const refused = result.skipped.length;
+    sayUntilDismissed(
+      "warning",
+      `${imported} ${counted(refused, "value was", "values were")} refused:`,
+      result.skipped
+    );
+  };
+
+  const send = (kind: ExportKind): void => {
+    const set = latest.current.currentTokens();
+    if (set === undefined) {
+      toast.error(
+        "This site's variables are not loaded, so nothing was exported."
+      );
+      return;
+    }
+    const made = kind.make(set);
     const written = made.filter(file => file.text !== "");
     for (const file of written) download(file);
-    const detail = made.flatMap(file => file.skipped);
+    const gaps = oncePerVariable(made.flatMap(file => file.gaps));
+    const list =
+      gaps.length === 0
+        ? {}
+        : {
+            duration: WITH_LIST_MS,
+            action: {
+              label: WORDS.notExported,
+              onClick: () => setNotExported({ gaps, from: kind.from }),
+            },
+          };
     if (written.length === 0) {
-      refuse(
-        "No file was written, because this site has no variables to write.",
-        detail
+      toast.error(
+        set.tokens.length === 0
+          ? "No file was written: this site has no variables to write."
+          : "No file was written.",
+        list
       );
-    } else {
-      // Always a status, so an earlier refusal never stays on screen beside
-      // a file that was saved.
-      setReport({
-        tone: "done",
-        // Each file named in words beside its file name, so an author knows
-        // which file holds what without opening it.
-        headline: `Saved ${written
-          .map(file => `${file.filename} (${file.label})`)
-          .join(" and ")}.`,
-        detail,
-      });
+      return;
     }
+    // Each file named in words, so an author knows which file holds what
+    // without opening it, and how many files to look for.
+    toast(
+      `${kind.done}: ${written.map(file => file.label).join(kind.join)} (${counted(
+        written.length,
+        "file",
+        "files"
+      )})`,
+      list
+    );
+  };
+
+  const copy = (): void => {
+    const set = latest.current.currentTokens();
+    if (set === undefined) {
+      toast.error(
+        "This site's variables are not loaded, so nothing was copied."
+      );
+      return;
+    }
+    const css = variableCss(set);
+    if (css === "") {
+      toast.error("This site has no variables to copy.");
+      return;
+    }
+    const named = `named ${resolveTokenPrefix(set.prefix).prefix}\u2026`;
+    const said = set.tokens.some(token => token.values.dark !== undefined)
+      ? `CSS variables copied: light and dark values, ${named}`
+      : `CSS variables copied, ${named}`;
+    const refused = (): void => {
+      toast.error(
+        "The CSS variables couldn't be copied: this browser didn't allow the copy."
+      );
+    };
+    // The editor's own clipboard: a page may not be allowed to write to it.
+    const clipboard: Clipboard | undefined =
+      typeof navigator === "undefined" ? undefined : navigator.clipboard;
+    if (clipboard === undefined) {
+      refused();
+      return;
+    }
+    void clipboard.writeText(css).then(() => {
+      toast(said);
+    }, refused);
   };
 
   const menu = (
     <>
-      {/* Not modal: it opens the file chooser and the import preview from
-          inside, and a modal menu would hide the rest of the editor from
-          assistive technology while leaving it focusable. */}
-      <DropdownMenu modal={false}>
-        <DropdownMenuTrigger asChild>
-          <button
-            type="button"
-            className="nx-vars__icon-button"
-            aria-label="Import or export"
-            title="Import or export"
-          >
-            <ArrowDownUp aria-hidden="true" size={16} />
-          </button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="nx-vars__menu">
-          {readOnly ? null : (
-            <>
-              <DropdownMenuItem onSelect={() => input.current?.click()}>
-                Import variables…
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-            </>
-          )}
-          <DropdownMenuItem onSelect={() => send(exportDtcgWithTheme)}>
-            Export (DTCG)
-          </DropdownMenuItem>
-          <DropdownMenuItem onSelect={() => send(exportForFigma)}>
-            Export for Figma
-          </DropdownMenuItem>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem onSelect={() => send(set => [exportCss(set)])}>
-            Export CSS
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
+      <TooltipProvider delayDuration={300}>
+        {/* Not modal: it opens the file chooser and the import preview from
+            inside, and a modal menu would hide the rest of the editor from
+            assistive technology while leaving it focusable. */}
+        <DropdownMenu modal={false}>
+          {/* The tooltip is the button's only visible name, as on every icon
+              button beside the canvas; no browser tooltip. */}
+          <ChromeTooltip content={WORDS.more}>
+            <DropdownMenuTrigger asChild>
+              <button
+                ref={trigger}
+                type="button"
+                className="nx-vars__icon-button"
+                aria-label={WORDS.more}
+              >
+                <Ellipsis aria-hidden="true" size={16} />
+              </button>
+            </DropdownMenuTrigger>
+          </ChromeTooltip>
+          <DropdownMenuContent align="end" className="nx-vars__menu">
+            {readOnly ? null : (
+              <>
+                <DropdownMenuItem onSelect={() => input.current?.click()}>
+                  {WORDS.importTokens}
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+              </>
+            )}
+            {/* The format is a hint, not part of the name: an author picks
+                "design tokens", and the version is there for whoever needs
+                it. */}
+            <DropdownMenuItem
+              aria-label={WORDS.exportTokens}
+              aria-describedby={hint}
+              className="nx-design-more__item"
+              onSelect={() => send(DTCG_EXPORT)}
+            >
+              <span>{WORDS.exportTokens}</span>
+              <span id={hint} className="nx-design-more__hint">
+                {WORDS.exportTokensHint}
+              </span>
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => send(FIGMA_EXPORT)}>
+              {WORDS.exportFigma}
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={copy}>{WORDS.copyCss}</DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </TooltipProvider>
       {readOnly ? null : (
         <input
           ref={input}
           type="file"
           multiple
           className="nx-sr-only"
-          // Opened only from the menu's "Import variables…", so it is kept
-          // out of the tab order and out of the accessibility tree: one way
-          // to import, not a second bare file control beside the menu.
+          // Opened only from the menu's "Import design tokens…", so it is
+          // kept out of the tab order and out of the accessibility tree: one
+          // way to import, not a second bare file control beside the menu.
           tabIndex={-1}
           aria-hidden="true"
           aria-label="Choose variable files to import"
@@ -243,8 +362,12 @@ export function useVariablesTransfer({
 
   const overlays = (
     <>
-      {report === null ? null : (
-        <TransferReport report={report} onDismiss={() => setReport(null)} />
+      {notExported === null ? null : (
+        <NotExportedList
+          list={notExported}
+          onClose={() => setNotExported(null)}
+          returnTo={trigger}
+        />
       )}
       {plan === null ? null : (
         <ImportPreview
@@ -407,33 +530,108 @@ function NameList({
   );
 }
 
-/** A report shown until dismissed: what an import or export left behind. */
-function TransferReport({
-  report,
-  onDismiss,
+/**
+ * "What wasn't exported": each variable a file did not write as other tools
+ * read it, what happened to it, and why, in plain words.
+ */
+function NotExportedList({
+  list,
+  onClose,
+  returnTo,
 }: {
-  report: Report;
-  onDismiss: () => void;
+  list: NotExported;
+  onClose: () => void;
+  returnTo: React.RefObject<HTMLButtonElement | null>;
 }): React.JSX.Element {
   return (
-    <div
-      className="nx-vars__report"
-      data-tone={report.tone}
-      role={report.tone === "refused" ? "alert" : "status"}
+    <Dialog
+      open
+      onOpenChange={open => {
+        if (!open) onClose();
+      }}
     >
-      <p>{report.headline}</p>
-      {report.detail.length === 0 ? null : (
-        <ul>
-          {report.detail.map((line, at) => (
-            <li key={`${String(at)}-${line}`}>{line}</li>
+      <DialogContent
+        className="nx-design-gaps"
+        // Opened from a toast that has gone, so focus returns to the menu
+        // the export started from.
+        onCloseAutoFocus={event => {
+          event.preventDefault();
+          returnTo.current?.focus();
+        }}
+      >
+        <DialogHeader>
+          <DialogTitle>{WORDS.notExported}</DialogTitle>
+          <DialogDescription>{list.from}</DialogDescription>
+        </DialogHeader>
+        <ul className="nx-design-gaps__list">
+          {list.gaps.map(gap => (
+            <li key={gapKey(gap)} className="nx-design-gaps__row">
+              <span className="nx-design-gaps__name">
+                {gap.label ?? "The whole file"}
+              </span>
+              <span
+                className="nx-design-gaps__outcome"
+                data-outcome={gap.outcome}
+              >
+                {gap.outcome === "kept" ? WORDS.kept : WORDS.leftOut}
+              </span>
+              <span className="nx-design-gaps__why">{gap.why}</span>
+            </li>
           ))}
         </ul>
-      )}
-      <Button type="button" variant="ghost" size="sm" onClick={onDismiss}>
-        Dismiss
-      </Button>
-    </div>
+        <DialogFooter>
+          <Button type="button" variant="outline" onClick={onClose}>
+            Close
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
+}
+
+/** One entry per variable and outcome, however many files named it. */
+function oncePerVariable(gaps: readonly ExportGap[]): ExportGap[] {
+  const seen = new Map<string, ExportGap>();
+  for (const gap of gaps) {
+    if (!seen.has(gapKey(gap))) seen.set(gapKey(gap), gap);
+  }
+  return [...seen.values()];
+}
+
+function gapKey(gap: ExportGap): string {
+  return `${gap.outcome}|${gap.name ?? gap.why}`;
+}
+
+/**
+ * A message that stays until the author dismisses it: what an import could
+ * not bring in, each value named with why. A toast that left by itself would
+ * take the only list of what did not arrive with it.
+ */
+function sayUntilDismissed(
+  tone: "error" | "warning",
+  headline: string,
+  detail: readonly string[]
+): void {
+  toast[tone](headline, {
+    ...(detail.length === 0
+      ? {}
+      : {
+          description: (
+            <ul className="nx-design-toast__list">
+              {detail.map((line, at) => (
+                <li key={`${String(at)}-${line}`}>{line}</li>
+              ))}
+            </ul>
+          ),
+        }),
+    duration: Number.POSITIVE_INFINITY,
+    cancel: { label: "Dismiss", onClick: () => undefined },
+  });
+}
+
+/** "1 file", "2 files": a count with the word that fits it. */
+function counted(n: number, one: string, many: string): string {
+  return `${String(n)} ${n === 1 ? one : many}`;
 }
 
 /**

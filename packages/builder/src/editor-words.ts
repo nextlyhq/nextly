@@ -105,3 +105,20 @@ export const VARIABLE_LOSS_WORDS: Readonly<
   // code supplies: a dimension, but what the places lose is its line height.
   lineHeight: "line height",
 };
+
+/**
+ * The Design panel's ⋯ menu of site-wide actions, and the words of what an
+ * export reports. Each item says what it makes; "DTCG" is only ever the hint
+ * beside the one that writes that format.
+ */
+export const DESIGN_ACTION_WORDS = {
+  more: "More design actions",
+  importTokens: "Import design tokens…",
+  exportTokens: "Export design tokens (.json)",
+  exportTokensHint: "DTCG 2025.10",
+  exportFigma: "Export for Figma",
+  copyCss: "Copy CSS variables",
+  notExported: "What wasn't exported",
+  kept: "Kept for Nextly only",
+  leftOut: "Left out",
+} as const;
