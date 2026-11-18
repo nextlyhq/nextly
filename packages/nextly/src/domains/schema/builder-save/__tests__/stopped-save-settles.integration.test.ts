@@ -14,8 +14,9 @@
  *
  * On PostgreSQL and SQLite the file runs in one transaction, and so does PostgreSQL's push, so the
  * same failure leaves nothing applied and no file: those legs guard that settling never records a
- * step that rolled back. SQLite's push keeps the statements before the one that fails, which
- * these cases do not judge.
+ * step that rolled back. SQLite's push keeps the statements before the one that fails and so
+ * settles as MySQL's does, until it runs in one transaction as the spec asks:
+ * `SQLITE_PUSH_KEEPS_PART_WAY` says which, and moves its cases between the two.
  *
  * Not covered here: a translated field's rename stopped between its two tables; on the push a stop
  * after a drop, since the push drops a column holding data only on the dialog's answer for it;
@@ -109,6 +110,21 @@ async function versionOf(
     where: { and: [{ column: "slug", op: "=", value: slug }] },
   });
   return Number(row?.schemaVersion ?? 1);
+}
+
+/**
+ * Whether SQLite's push keeps the statements that ran before one that fails, as it does today,
+ * rather than running in one transaction as the spec asks. Undecided: this one value follows the
+ * ruling, and each case below then runs on the side it belongs to.
+ */
+const SQLITE_PUSH_KEEPS_PART_WAY = true;
+
+/** Whether `path`'s save on `dialect` keeps the steps that ran before a failing one. */
+function keepsPartWay(dialect: TestDialect, path: SavePath): boolean {
+  if (dialect === "mysql") return true;
+  return (
+    dialect === "sqlite" && path.push === true && SQLITE_PUSH_KEEPS_PART_WAY
+  );
 }
 
 const PATHS: readonly SavePath[] = [
@@ -520,7 +536,7 @@ describe.each(getConfiguredTestDialects())(
     }
 
     describe.each(PATHS)("$name", path => {
-      it.runIf(dialect === "mysql")(
+      it.runIf(keepsPartWay(dialect, path))(
         "stopped at its second addition, keeps the first: one file for it, recorded applied, the definition and the registry at that shape",
         async () => {
           const t = await boot();
@@ -616,7 +632,7 @@ describe.each(getConfiguredTestDialects())(
 
       // The push drops a column holding data only on the dialog's answer for it, which these
       // saves do not send: on the push its drops are judged by the push's own tests.
-      it.runIf(dialect === "mysql" && path.push !== true)(
+      it.runIf(keepsPartWay(dialect, path) && path.push !== true)(
         "stopped at an addition after a drop committed, stops naming the dropped field and keeps reading the rest",
         async () => {
           const t = await boot();
@@ -670,7 +686,7 @@ describe.each(getConfiguredTestDialects())(
       );
 
       // As above: the push drops a column holding data only on the dialog's answer for it.
-      it.runIf(dialect === "mysql" && path.push !== true)(
+      it.runIf(keepsPartWay(dialect, path) && path.push !== true)(
         "whose second drop fails after the first committed, names that column again with its values readable",
         async () => {
           const t = await boot();
@@ -737,11 +753,7 @@ describe.each(getConfiguredTestDialects())(
         300_000
       );
 
-      // SQLite's push keeps the statements before one that fails, so there a push is not one
-      // transaction: only PostgreSQL's push rolls back whole.
-      it.runIf(
-        dialect !== "mysql" && !(path.push === true && dialect === "sqlite")
-      )(
+      it.runIf(!keepsPartWay(dialect, path))(
         "stopped at its second addition, rolls back whole and records no step",
         async () => {
           const t = await boot();
