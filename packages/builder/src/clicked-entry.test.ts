@@ -15,6 +15,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   clickedEntryOf,
   forgetClickedEntries,
+  keepClickedEntriesFor,
   rememberClickedEntries,
 } from "./clicked-entry";
 import { CANVAS_ROOT_CLASS } from "./shell-state";
@@ -83,6 +84,19 @@ describe("the entry an author clicked", () => {
     expect(clickedEntryOf("other", "list")).toBeUndefined();
     // A later selection made without a click on an entry forgets it.
     rememberClickedEntries("other", null);
+    expect(clickedEntryOf("h", "list")).toBeUndefined();
+  });
+
+  it("is forgotten once another block is selected another way, and not back", () => {
+    const second = heading("h");
+    onCanvas(list("list", [[heading("h")], [second]]));
+    rememberClickedEntries("h", second);
+    // The click's own selection keeps it.
+    keepClickedEntriesFor(["h"]);
+    expect(clickedEntryOf("h", "list")).toBe(1);
+    // Another block, from Layers; then the first again, from Layers.
+    keepClickedEntriesFor(["other"]);
+    keepClickedEntriesFor(["h"]);
     expect(clickedEntryOf("h", "list")).toBeUndefined();
   });
 

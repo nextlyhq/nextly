@@ -28,6 +28,7 @@ import {
   useBindingSources,
   useListSample,
   usePreviewFormatIn,
+  useSamplePictures,
   type PreviewFormatIn,
 } from "./binding-picker-reads";
 import type {
@@ -514,12 +515,13 @@ function OptionRow({ option }: { option: FieldOption }): React.JSX.Element {
  */
 function itemPickerSource(
   item: ItemSource,
-  sample: ListSample | undefined
+  sample: ListSample | undefined,
+  pictures: ReadonlyMap<string, string>
 ): PickerSource {
   return {
     binding: { source: "item" },
     label: item.name,
-    fields: itemChoices(item.fields, sample),
+    fields: itemChoices(item.fields, sample, undefined, pictures),
   };
 }
 
@@ -557,6 +559,7 @@ export function BindingPicker({
   // the first: the item's values are that entry's.
   const entry = useClickedEntry(nodeId, item?.list?.id);
   const sample = useListSample(services?.readListSample, item?.list, entry);
+  const pictures = useSamplePictures(services?.readMedia, item?.fields, sample);
   const formatIn = usePreviewFormatIn(services);
   const name = propLabel(prop.name, prop.schema);
   // The list's fields are waited for with the page's, so the groups are
@@ -576,7 +579,7 @@ export function BindingPicker({
       sources={
         item === undefined
           ? listed
-          : [itemPickerSource(item, sample), ...listed]
+          : [itemPickerSource(item, sample, pictures), ...listed]
       }
       nearest={item !== undefined}
       prop={prop}

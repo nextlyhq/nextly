@@ -183,10 +183,16 @@ export function useItemSource(
  * thumbnail, or that the field holds nothing.
  */
 function sampled(
-  value: ListSampleValue | undefined
+  value: ListSampleValue | undefined,
+  field: ItemField,
+  picture: string | undefined
 ): Pick<BindingFieldChoice, "preview" | "thumbnail" | "empty"> {
+  if (picture !== undefined) return { thumbnail: picture };
   if (value === undefined) return {};
-  if (typeof value === "string") return { preview: value };
+  // A media item stored by its id: its picture, once read, never the id.
+  if (typeof value === "string") {
+    return field.type === "upload" ? {} : { preview: value };
+  }
   return "thumbnail" in value
     ? { thumbnail: value.thumbnail }
     : { empty: true as const };
@@ -201,7 +207,9 @@ function sampled(
 export function itemChoices(
   fields: readonly ItemField[],
   sample: ListSample | undefined,
-  parent?: string
+  parent?: string,
+  /** The pictures the sample names by id, read, by the field's path. */
+  pictures?: ReadonlyMap<string, string>
 ): readonly BindingFieldChoice[] {
   return fields.map(field => {
     const { fields: inside, ...own } = field;
@@ -209,11 +217,11 @@ export function itemChoices(
     return {
       ...own,
       public: true,
-      ...sampled(sample?.[path]),
+      ...sampled(sample?.[path], field, pictures?.get(path)),
       // One step in, as the host lists a source's fields.
       ...(inside === undefined || parent !== undefined
         ? {}
-        : { fields: itemChoices(inside, sample, path) }),
+        : { fields: itemChoices(inside, sample, path, pictures) }),
     };
   });
 }

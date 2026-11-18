@@ -16,7 +16,10 @@ import {
 import { useIsomorphicLayoutEffect } from "@nextlyhq/ui";
 import { useCallback, useEffect, useRef } from "react";
 
-import { rememberClickedEntries } from "../clicked-entry";
+import {
+  keepClickedEntriesFor,
+  rememberClickedEntries,
+} from "../clicked-entry";
 import { isElement } from "../dom-kind";
 import { selectionModeFor, type SelectionMode } from "../selection";
 import { CANVAS_ROOT_CLASS } from "../shell-state";
@@ -183,6 +186,9 @@ export function useCanvasPointer(
   onContextMenu: (event: React.MouseEvent<HTMLDivElement>) => void;
   onPointerDown: (event: React.PointerEvent<HTMLDivElement>) => void;
 } {
+  // A selection made any other way than a click on an entry forgets the
+  // entries clicked, which the binding picker samples.
+  useEffect(() => keepClickedEntriesFor(marked), [marked]);
   const click = useCallback(
     (event: React.MouseEvent<HTMLDivElement>) => {
       if (onSelect === undefined || isChrome(event.target)) return;
