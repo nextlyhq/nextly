@@ -9,6 +9,7 @@
  * @module domains/schema/value-conversion/type-change/decode-stored
  */
 import type { StoredValue } from "../types";
+import { keptByDouble } from "../value-readings";
 
 import type { FieldTypeOnDialect } from "./field-type";
 import type { Instant, OldValue } from "./judge";
@@ -113,10 +114,38 @@ function timestampOf(text: string): Instant | null {
 
 /** A JSON value as it parses, or the text where it does not. */
 function jsonOf(text: string): OldValue {
+  const parsed = parseJson(text);
+  if (parsed === null) return { kind: "text", text };
+  return parsed.inexact
+    ? { kind: "json", value: parsed.value, inexact: true }
+    : { kind: "json", value: parsed.value };
+}
+
+/**
+ * A JSON text as it parses, with whether it holds a number a JavaScript number does not keep
+ * exactly: each number read from its own writing (the reviver's source), so 0.10000000000000001 is
+ * told from the 0.1 it parses to. Null where the text is no JSON.
+ */
+function parseJson(text: string): { value: unknown; inexact: boolean } | null {
+  let inexact = false;
+  const reviver = (
+    _key: string,
+    value: unknown,
+    context?: { source?: string }
+  ): unknown => {
+    if (
+      typeof value === "number" &&
+      context?.source !== undefined &&
+      !keptByDouble(context.source)
+    ) {
+      inexact = true;
+    }
+    return value;
+  };
   try {
-    return { kind: "json", value: JSON.parse(text) as unknown };
+    return { value: JSON.parse(text, reviver) as unknown, inexact };
   } catch {
-    return { kind: "text", text };
+    return null;
   }
 }
 
@@ -134,12 +163,11 @@ function documentOf(text: string): OldValue {
  * (rule 4), and a text that is no JSON list as a text.
  */
 function listOf(from: FieldTypeOnDialect, text: string): OldValue {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    return { kind: "text", text };
-  }
+  const read = parseJson(text);
+  if (read === null) return { kind: "text", text };
+  const parsed = read.value;
+  // An item JavaScript reads rounded: the list is judged as the JSON it is, which blocks it.
+  if (read.inexact) return { kind: "json", value: parsed, inexact: true };
   if (!Array.isArray(parsed)) return { kind: "json", value: parsed };
   if (parsed.length === 0) return { kind: "empty" };
   return { kind: "list", items: parsed.map(item => itemOf(from.item, item)) };

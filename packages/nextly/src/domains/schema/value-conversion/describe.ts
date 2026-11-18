@@ -55,6 +55,8 @@ const REASON_TEXT: Record<ConversionReasonKind, string> = {
   "pair-blocked": "no value of the old type could ever be held by the new one",
   repeated:
     "values that become one value of the new type, which a unique field holds once",
+  "needs-rewrite":
+    "values the new type reads only once they are rewritten into its form, which a save does not do yet",
   "new-form": "values stored in the new type's form, nothing of them lost",
 };
 
@@ -143,6 +145,8 @@ const REASON_OWNER_CAN: Record<BlockingReasonKind, string | null> = {
   "pair-blocked": null,
   repeated:
     "make the named values distinct, or turn off Unique, before the change",
+  "needs-rewrite":
+    "rewrite the named values into the new type's form first, or keep them in a new field",
 };
 
 /** Whether `kind` blocks a column, whatever a consent names. */

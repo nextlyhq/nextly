@@ -105,17 +105,51 @@ export async function collectTypeChange(
       counts: { kept: 0, changed: 0, lost: 0, blocked: 0 },
     };
   }
-  const tally = new TypeChangeTally(options);
+  const tally = new TypeChangeTally(options, storedAsRead(from, to));
   for await (const value of values) {
     tally.add(
       value.key,
       await withFieldRule(
         judgeValue(from, to, decodeStored(from, value)),
         accepts
-      )
+      ),
+      value.exactReal ?? value.text
     );
   }
   return tally.result();
+}
+
+/**
+ * Whether a value the rules read in a new form is already stored as the new type reads it, so the
+ * save's own conversion reaches that reading with nothing rewritten:
+ *
+ * - into a number, a stored text that is the number's canonical writing ("5", not "01" or "5.0"),
+ *   which every database's cast reads as that number;
+ * - into a text, a value whose stored text (the database's own text of it, which its cast to text
+ *   writes) is the reading itself: a number's "4", not a MySQL checkbox's "1" read as "true";
+ * - a relationship's one link becoming a list of links, which every road's reference-list
+ *   conversion writes.
+ *
+ * No other new form is written by a save yet, so its values block the change (`needs-rewrite`).
+ */
+function storedAsRead(
+  from: FieldTypeOnDialect,
+  to: FieldTypeOnDialect
+): (stored: string | null, readsAs: string) => boolean {
+  if (
+    from.relation?.kept === "one" &&
+    (to.relation?.kept === "list" || to.relation?.kept === "targetList")
+  ) {
+    return () => true;
+  }
+  if (to.item !== undefined) return () => false;
+  if (to.family === "number") {
+    return (stored, readsAs) => stored !== null && stored.trim() === readsAs;
+  }
+  if (to.family === "text") {
+    return (stored, readsAs) => stored === readsAs;
+  }
+  return () => false;
 }
 
 /** The values of one type change counted as they are judged: by outcome, by reason, and cleared. */
@@ -135,21 +169,24 @@ class TypeChangeTally {
     | ((key: RowKey, readsAs: string) => RowKey[] | undefined)
     | undefined;
 
-  constructor(private readonly options: CollectOptions) {
+  constructor(
+    private readonly options: CollectOptions,
+    private readonly storedAsRead: (
+      stored: string | null,
+      readsAs: string
+    ) => boolean
+  ) {
     this.repeatsOf = options.unique === true ? uniqueValues() : undefined;
   }
 
-  /** One value's verdict, counted. */
-  add(key: RowKey, verdict: ValueVerdict): void {
-    if (verdict.readsAs !== undefined) {
-      this.options.onReading?.(key, verdict.readsAs);
-      // A value another row in its language already reads as: the unique field cannot hold both.
-      const repeated = this.repeatsOf?.(key, verdict.readsAs);
-      if (repeated !== undefined) {
-        this.counts.blocked += 1;
-        for (const row of repeated) this.note("repeated", row);
-        return;
-      }
+  /** One value's verdict, counted, with the text the database stores it as. */
+  add(key: RowKey, verdict: ValueVerdict, stored: string | null): void {
+    if (
+      verdict.readsAs !== undefined &&
+      this.blocks(key, verdict.outcome, verdict.readsAs, stored)
+    ) {
+      this.counts.blocked += 1;
+      return;
     }
     this.counts[verdict.outcome] += 1;
     if (verdict.outcome === "lost") this.cleared.push(key);
@@ -174,6 +211,30 @@ class TypeChangeTally {
       cleared: this.cleared,
       counts: this.counts,
     };
+  }
+
+  /**
+   * Whether a value the rules keep or change blocks the change all the same, noting why: one
+   * another row in its language already reads as, which a unique field cannot hold twice; or one
+   * read in a new form no save writes yet (`needs-rewrite`).
+   */
+  private blocks(
+    key: RowKey,
+    outcome: ValueVerdict["outcome"],
+    readsAs: string,
+    stored: string | null
+  ): boolean {
+    this.options.onReading?.(key, readsAs);
+    const repeated = this.repeatsOf?.(key, readsAs);
+    if (repeated !== undefined) {
+      for (const row of repeated) this.note("repeated", row);
+      return true;
+    }
+    if (outcome === "changed" && !this.storedAsRead(stored, readsAs)) {
+      this.note("needs-rewrite", key);
+      return true;
+    }
+    return false;
   }
 
   private note(kind: ConversionReasonKind, key: RowKey): void {

@@ -137,6 +137,7 @@ const REFUSAL_WORDS: Record<ConversionReasonKind, string> = {
   "pair-blocked": "could never be held by the new type",
   repeated:
     "reads as a value another row holds, which a unique field holds once",
+  "needs-rewrite": "is read by the new type only once rewritten into its form",
   "new-form": "would be stored in the new type's form",
 };
 

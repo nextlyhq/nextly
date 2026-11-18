@@ -97,6 +97,9 @@ const agree = (verdict: Verdict): Pinned => ({
  *   integer, are no conversion Nextly runs, so db:sync's rule blocks the pair whatever the values
  *   and names no row; the Builder's judge reads each value, so a column whose every value converts
  *   goes ahead, and one holding a value that does not names its row.
+ * - A value the Builder reads in a new form no save writes yet is blocked by it on every database
+ *   (`needs-rewrite`): a stored "true" read as a checkbox, an ISO text read as a date. Only a text
+ *   that is a number's canonical writing, or a value whose text is its reading, goes ahead.
  */
 const CASES: ParityCase[] = [
   {
@@ -153,9 +156,9 @@ const CASES: ParityCase[] = [
     to: { type: "checkbox" },
     values: { r1: "true", r2: "maybe" },
     pinned: {
-      sqlite: { builder: v("lossy", "r2"), sync: v("safe") },
-      postgresql: { builder: v("lossy", "r2"), sync: v("blocked") },
-      mysql: { builder: v("lossy", "r2"), sync: v("blocked") },
+      sqlite: { builder: v("blocked", "r1", "r2"), sync: v("safe") },
+      postgresql: { builder: v("blocked", "r1", "r2"), sync: v("blocked") },
+      mysql: { builder: v("blocked", "r1", "r2"), sync: v("blocked") },
     },
   },
   {
@@ -164,9 +167,9 @@ const CASES: ParityCase[] = [
     to: { type: "date" },
     values: { r1: "2024-01-02T03:04:05.000Z", r2: "nope" },
     pinned: {
-      sqlite: { builder: v("lossy", "r2"), sync: v("safe") },
-      postgresql: { builder: v("lossy", "r2"), sync: v("blocked") },
-      mysql: { builder: v("lossy", "r2"), sync: v("blocked") },
+      sqlite: { builder: v("blocked", "r1", "r2"), sync: v("safe") },
+      postgresql: { builder: v("blocked", "r1", "r2"), sync: v("blocked") },
+      mysql: { builder: v("blocked", "r1", "r2"), sync: v("blocked") },
     },
   },
 ];

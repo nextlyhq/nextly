@@ -118,6 +118,7 @@ import { uiToMinimal } from "../ui-schema/merge";
 import { mutateManifest, type ManifestKind } from "../ui-schema/mutate";
 import {
   entityLabel,
+  fieldTypeChangesOf,
   perLanguageBefore,
   refuseFieldTypeChanges,
 } from "../value-conversion/type-change/field-type-changes";
@@ -453,9 +454,12 @@ async function writeSave(
 }
 
 /**
- * Refuse the save's blocked and unconsented lossy field type changes, judged
- * over the values the entity's table holds (`refuseFieldTypeChanges`). A
- * create or a delete changes no field's type.
+ * Refuse the save's blocked and lossy field type changes, judged over the values the entity's
+ * table holds (`refuseFieldTypeChanges`). A create or a delete changes no field's type. The fields
+ * are the whole lists, so a field a group with no name holds is judged by its own name. Where an
+ * earlier save's file for the table is not applied yet (outside development, before the deploy's
+ * `nextly migrate`), the columns do not hold what the definition says, and a type change is
+ * refused until it is.
  */
 async function refuseSaveTypeChanges(
   deps: CollectionSaveDeps,
@@ -464,29 +468,68 @@ async function refuseSaveTypeChanges(
 ): Promise<void> {
   if (save.previous === null || save.entity === null) return;
   const kind = kindOf(save);
-  const previous = namedFields(save.previous) as unknown as FieldDefinition[];
-  await refuseFieldTypeChanges(
-    deps.adapter.getDrizzle(),
-    deps.adapter.getCapabilities().dialect,
-    {
-      label: entityLabel(kind.kind, save.slug),
-      table,
-      ...perLanguageBefore(save.previous, table, previous),
-      previous,
-      next: namedFields(save.entity) as unknown as FieldDefinition[],
-      ...(save.renamedFields !== undefined && save.renamedFields.length > 0
-        ? {
-            renamed: new Map(save.renamedFields.map(r => [r.from, r.to])),
-          }
-        : {}),
-      ...(save.migrationStatus !== undefined
-        ? { migrationStatus: save.migrationStatus }
-        : {}),
-      // No consent is taken here: a lossy type change is refused until the save clears the
-      // consented values before it converts the column.
-      builtBy: kind.builtBy,
-    }
+  const dialect = deps.adapter.getCapabilities().dialect;
+  const previous = save.previous.fields as unknown as FieldDefinition[];
+  const next = save.entity.fields as unknown as FieldDefinition[];
+  const renamed =
+    save.renamedFields !== undefined && save.renamedFields.length > 0
+      ? new Map(save.renamedFields.map(r => [r.from, r.to]))
+      : undefined;
+  // Asked only of a save that changes a field's type, so no other save reads its folder.
+  const changes = fieldTypeChangesOf({
+    previous,
+    next,
+    ...(renamed !== undefined ? { renamed } : {}),
+    dialect,
+    builtBy: kind.builtBy,
+  });
+  if (changes.length === 0) return;
+  const pending =
+    save.migrationStatus !== undefined
+      ? save.migrationStatus
+      : (await unappliedFileChanges(deps, table))
+        ? "pending"
+        : undefined;
+  await refuseFieldTypeChanges(deps.adapter.getDrizzle(), dialect, {
+    label: entityLabel(kind.kind, save.slug),
+    table,
+    ...perLanguageBefore(save.previous, table, previous),
+    previous,
+    next,
+    ...(renamed !== undefined ? { renamed } : {}),
+    ...(pending !== undefined ? { migrationStatus: pending } : {}),
+    // No consent is taken here: a lossy type change is refused until the save clears the
+    // consented values before it converts the column.
+    builtBy: kind.builtBy,
+  });
+}
+
+/**
+ * Whether a migration file in the folder that is not recorded applied changes `table`, or may: one
+ * whose statements name tables this reading cannot tell is taken as changing it.
+ */
+async function unappliedFileChanges(
+  deps: CollectionSaveDeps,
+  table: string
+): Promise<boolean> {
+  const dialect = deps.adapter.getCapabilities().dialect;
+  const repo = new SchemaEventsRepository(deps.adapter.getDrizzle(), dialect);
+  const applied = new Set(
+    (await repo.listFileApplies())
+      .filter(row => row.status === "applied")
+      .map(row => row.filename)
   );
+  for (const filename of await sqlFiles(deps.migrationsDir)) {
+    if (applied.has(filename)) continue;
+    const tables = tablesChangedBy(await unitOf(deps, filename), dialect);
+    if (
+      tables === undefined ||
+      tables.some(name => name.toLowerCase() === table.toLowerCase())
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**

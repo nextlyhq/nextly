@@ -136,7 +136,11 @@ export type OldValue =
   | { kind: "boolean"; value: boolean }
   | { kind: "date"; date: Instant }
   | { kind: "list"; items: OldValue[] }
-  | { kind: "json"; value: unknown }
+  /**
+   * A parsed JSON value. `inexact` where it holds a number whose writing a JavaScript number does
+   * not keep exactly (0.10000000000000001): every writing of it but its own JSON would round it.
+   */
+  | { kind: "json"; value: unknown; inexact?: true }
   | { kind: "document"; value: unknown };
 
 /** An instant: whole seconds since 1970 UTC, and the digits of a second, with no trailing zero. */
@@ -284,7 +288,12 @@ function judgeAs(
   fromJson: boolean
 ): ValueVerdict {
   if (value.kind === "empty") return { outcome: "kept", reason: "empty" };
-  if (value.kind === "json") return judgeJson(to, value.value);
+  if (value.kind === "json") {
+    // A number JavaScript reads rounded is rounded by any writing but the JSON it was read from.
+    return value.inexact === true && to.family !== "json"
+      ? { outcome: "blocked", reason: "rounded" }
+      : judgeJson(to, value.value);
+  }
   // JSON holds every kind as it is, a list included, so it is asked before any list rule.
   if (to.family === "json") return judgeIntoJson(to, value);
   if (to.family === "list") return judgeIntoList(to, value, fromJson);

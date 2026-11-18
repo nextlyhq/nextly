@@ -169,7 +169,7 @@ function cases(
 ) {
   it("refuses a change that would clear a value, naming the field and the row, and changes nothing", async () => {
     const { target, slug, table, seed, scores } = open();
-    await seed({ p1: "5", p2: "abc" });
+    await seed({ p1: "5", p2: "xyz" });
     const before = await scoreType(target, table);
 
     const result = await save(target, scoreToNumber(slug, table));
@@ -183,17 +183,17 @@ function cases(
       "values that are not a number would be cleared"
     );
     expect(result.error?.message).toContain("p2");
-    expect(result.error?.message).not.toContain("abc");
+    expect(result.error?.message).not.toContain("xyz");
     expect(result.error?.details).toMatchObject({
       errors: [{ path: "fields.score", code: "TYPE_CHANGE_LOSES_VALUES" }],
     });
     expect(await scoreType(target, table)).toBe(before);
-    expect(await scores()).toEqual({ p1: "5", p2: "abc" });
+    expect(await scores()).toEqual({ p1: "5", p2: "xyz" });
   });
 
   it("judges a field renamed and retyped in one save over the values its old column holds", async () => {
     const { target, slug, table, seed, scores } = open();
-    await seed({ p1: "5", p2: "abc" });
+    await seed({ p1: "5", p2: "xyz" });
     const before = await columnTypes(target, table);
 
     const result = await save(target, scoreToPoints(slug, table), {
@@ -207,7 +207,7 @@ function cases(
     );
     expect(result.error?.message).toContain("p2");
     expect(await columnTypes(target, table)).toEqual(before);
-    expect(await scores()).toEqual({ p1: "5", p2: "abc" });
+    expect(await scores()).toEqual({ p1: "5", p2: "xyz" });
   });
 
   it("refuses a change that would round a value, as blocked", async () => {

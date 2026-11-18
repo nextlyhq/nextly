@@ -84,6 +84,11 @@ const TYPE_CHANGE: [ConversionReasonKind, ConversionClass, string][] = [
     "values that become one value of the new type, which a unique field holds once",
   ],
   [
+    "needs-rewrite",
+    "blocked",
+    "values the new type reads only once they are rewritten into its form, which a save does not do yet",
+  ],
+  [
     "new-form",
     "safe",
     "values stored in the new type's form, nothing of them lost",
