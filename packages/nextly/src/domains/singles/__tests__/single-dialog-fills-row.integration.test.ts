@@ -145,7 +145,9 @@ describeEachDialect(
       expect(saved.body).toBe("kept");
       expect(await nullable("subtitle")).toBe(true);
       // The file a fresh database replays fills the row as this one was filled.
-      expect(await migrationText()).toMatch(/UPDATE[\s\S]*subtitle/i);
+      expect(await migrationText()).toMatch(
+        new RegExp(`UPDATE ${q(TABLE)} SET ${q("subtitle")} = `)
+      );
     });
 
     it("fills the row for a required field stating a default, instead of refusing it", async () => {
@@ -165,7 +167,9 @@ describeEachDialect(
     it("still asks about a required field stating no default", async () => {
       await expect(
         save([BODY, { name: "tagline", type: "text", required: true }])
-      ).rejects.toBeDefined();
+      ).rejects.toThrow(
+        /field 'tagline' cannot be added as required without a default/
+      );
       expect(Object.keys(await row())).not.toContain("tagline");
     });
 
@@ -334,6 +338,22 @@ describeEachDialect(
         locale: "en",
       })) as { body?: unknown };
       expect(read.body).toBe("kept");
+      // The main row has no column for it: the translated field lives in the translations table.
+      const columns = (
+        await (
+          t.adapter as unknown as {
+            executeQuery<R>(statement: string): Promise<R[]>;
+          }
+        ).executeQuery<{ name: string }>(
+          dialect === "sqlite"
+            ? `SELECT name FROM pragma_table_info('${TABLE}')`
+            : dialect === "mysql"
+              ? `SELECT COLUMN_NAME AS name FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '${TABLE}'`
+              : `SELECT column_name AS name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = '${TABLE}'`
+        )
+      ).map(row => row.name);
+      expect(columns).toContain("id");
+      expect(columns).not.toContain("motto");
     });
   }
 );

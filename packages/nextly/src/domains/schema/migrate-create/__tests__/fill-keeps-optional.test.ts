@@ -73,13 +73,20 @@ async function addedAndFilled(field: ReturnType<typeof text>): Promise<string> {
 describe("a filled column after the fill", () => {
   it("stays optional for an optional field", async () => {
     const sql = await addedAndFilled(text({ name: "extra" }));
-    expect(sql).toMatch(/UPDATE "dc_fko_posts" SET "extra"/);
+    // The fill writes the answer's value.
+    expect(sql).toMatch(/UPDATE "dc_fko_posts" SET "extra" = 'Hello'/);
+    // The column is added taking NULL, and nothing makes it NOT NULL afterwards.
+    const added = /ADD COLUMN "extra"[^;]*/.exec(sql)?.[0];
+    expect(added).toBeDefined();
+    expect(added).not.toMatch(/NOT NULL/);
     expect(sql).not.toMatch(/ALTER COLUMN "extra" SET NOT NULL/);
   });
 
-  it("is made NOT NULL for a required field", async () => {
+  it("is made NOT NULL for a required field, after its fill", async () => {
     const sql = await addedAndFilled(text({ name: "extra", required: true }));
-    expect(sql).toMatch(/UPDATE "dc_fko_posts" SET "extra"/);
-    expect(sql).toMatch(/ALTER COLUMN "extra" SET NOT NULL/);
+    const fill = sql.search(/UPDATE "dc_fko_posts" SET "extra" = 'Hello'/);
+    const tighten = sql.search(/ALTER COLUMN "extra" SET NOT NULL/);
+    expect(fill).toBeGreaterThan(-1);
+    expect(tighten).toBeGreaterThan(fill);
   });
 });
