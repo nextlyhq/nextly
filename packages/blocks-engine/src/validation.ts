@@ -219,13 +219,7 @@ export function validateDocument(
   // Where a block following a component's setting may stand, in a component
   // and anywhere a copy of one lands, against the settings it has.
   if (!overLimits) {
-    issues.push(
-      ...settingBindingIssues(
-        doc,
-        survey.limits,
-        (node, prop) => ctx.definitions?.get(node.type)?.props?.[prop]
-      )
-    );
+    issues.push(...settingBindingIssues(doc, survey.limits, ctx.definitions));
   }
 
   const state = nodeCheckState(ctx, issues, knownBreakpoints, unknownSeverity, {
