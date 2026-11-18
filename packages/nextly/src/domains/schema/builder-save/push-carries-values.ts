@@ -17,14 +17,16 @@ import {
 
 /**
  * Whether the save carries values across its change, which the dialog's push does and the file,
- * written from the newest snapshot, does not yet: a Required or Unique field leaving translation,
+ * written from the newest snapshot, does not yet: translation turned off for the entity's values,
+ * whose columns the push restores from the live tables; a Required or Unique field leaving
+ * translation,
  * whose setting the push applies once the default language's values are in its shared column
  * (`fieldsWithLeavingSettingsDeferred`); a field whose column changes type or size, whose stored
  * values the push judges before it alters the column; a field new to a Single's table that its row
  * is filled in; and a change reaching a relation's storage (`reachesRelationStorage`), which the
  * push plans from the live table.
  *
- * Any other save, translation turned on or off and a field joining or leaving it included, is
+ * Any other save, translation turned on and a field joining or leaving it included, is
  * applied by its file, in tries over a busy table and on SQLite as a migration file runs, with the
  * companion brought in step after it.
  */
@@ -55,6 +57,11 @@ export async function pushCarriesValues(args: {
     holdsRow: () => Promise<boolean>;
   };
 }): Promise<boolean> {
+  // Translation turned off: the file restores each translated column to the main table with the
+  // translations column's type, which on MySQL is not the type the main file's snapshot records,
+  // so the runner finds the main table at neither end of that file. The push restores the columns
+  // from the live tables.
+  if (args.wasStored && !args.isStored) return true;
   // A Required or Unique field leaving translation: the push adds its shared column without the
   // setting, copies the default language's values in, then sets it. The file adds the column with
   // the setting before any value is there, refused for every table that has rows.

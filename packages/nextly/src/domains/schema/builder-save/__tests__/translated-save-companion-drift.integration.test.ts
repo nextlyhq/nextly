@@ -40,8 +40,8 @@ interface Kind {
   name: string;
   table: string;
   create(): Promise<unknown>;
-  /** The Builder's schema dialog, saving `fields`, translation kept on unless `localized` says. */
-  save(t: TestNextly, fields: Field[], localized?: boolean): Promise<unknown>;
+  /** The Builder's schema dialog, saving `fields` with translation kept on. */
+  save(t: TestNextly, fields: Field[]): Promise<unknown>;
 }
 
 const KINDS: Kind[] = [
@@ -54,14 +54,14 @@ const KINDS: Kind[] = [
         {},
         { slug: "tale", label: "Tale", localized: true, fields: FIELDS }
       ),
-    save: async (t, fields, localized = true) =>
+    save: async (t, fields) =>
       dispatchSingles(
         "applySingleSchemaChanges",
         { slug: "tale" },
         {
           fields,
           confirmed: true,
-          localized,
+          localized: true,
           schemaVersion: (
             await t.getService("singleRegistryService").getSingle("tale")
           ).schemaVersion,
@@ -77,14 +77,14 @@ const KINDS: Kind[] = [
         {},
         { slug: "band", label: "Band", localized: true, fields: FIELDS }
       ),
-    save: async (t, fields, localized = true) =>
+    save: async (t, fields) =>
       dispatchComponents(
         "applyComponentSchemaChanges",
         { slug: "band" },
         {
           fields,
           confirmed: true,
-          localized,
+          localized: true,
           schemaVersion: (
             await t.getService("fieldGroupRegistryService").getComponent("band")
           ).schemaVersion,
@@ -150,10 +150,10 @@ for (const dialect of getConfiguredTestDialects()) {
         expect(await definitionOf(companion)).toEqual(translations);
       });
 
-      // Turning translation off brings each translated column home to the main table. One the
-      // main table already holds, which the history records on the translations table, is drift
-      // too: the file would add it again.
-      it("is refused as drift before anything changes, when translation is turned off over a main table already holding a translated column", async () => {
+      // A field made shared brings its translated column home to the main table. One the main
+      // table already holds, which the history records on the translations table, is drift too:
+      // the file would add it again.
+      it("is refused as drift before anything changes, when a field is made shared over a main table already holding its column", async () => {
         const companion = `${kind.table}_locales`;
         await exec(
           `ALTER TABLE ${q(kind.table)} ADD COLUMN ${q("title")} text`
@@ -161,9 +161,9 @@ for (const dialect of getConfiguredTestDialects()) {
         const main = await definitionOf(kind.table);
         const translations = await definitionOf(companion);
 
-        await expect(kind.save(t, FIELDS, false)).rejects.toMatchObject({
-          code: "NEXTLY_MIGRATION_DRIFT",
-        });
+        await expect(
+          kind.save(t, [{ ...FIELDS[0], localized: false }, FIELDS[1]])
+        ).rejects.toMatchObject({ code: "NEXTLY_MIGRATION_DRIFT" });
 
         expect(await definitionOf(kind.table)).toEqual(main);
         expect(await definitionOf(companion)).toEqual(translations);

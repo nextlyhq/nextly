@@ -76,22 +76,6 @@ describe("pushCarriesValues", () => {
       },
     ],
     [
-      "translation turned off",
-      {
-        oldFields: [translated("heading")],
-        newFields: [translated("heading")],
-        isStored: false,
-      },
-    ],
-    [
-      "translation turned off over a Required translated field",
-      {
-        oldFields: [translated("heading")],
-        newFields: [field("heading", { localized: true, required: true })],
-        isStored: false,
-      },
-    ],
-    [
       "a field joining translation",
       { oldFields: [shared("heading")], newFields: [translated("heading")] },
     ],
@@ -113,6 +97,28 @@ describe("pushCarriesValues", () => {
         save({ wasStored: true, isStored: true, ...change })
       )
     ).toBe(false);
+  });
+
+  // Translation turned off: the file restores each column with the translations column's type,
+  // which on MySQL is not the one the main file's snapshot records; the push restores them from
+  // the live tables.
+  it.each([
+    ["translation turned off", [translated("heading")]],
+    [
+      "translation turned off over a Required translated field",
+      [field("heading", { localized: true, required: true })],
+    ],
+  ] as const)("keeps the push for %s", async (_what, newFields) => {
+    expect(
+      await pushCarriesValues(
+        save({
+          oldFields: [translated("heading")],
+          newFields: [...newFields],
+          wasStored: true,
+          isStored: false,
+        })
+      )
+    ).toBe(true);
   });
 
   // The push adds the shared column without the setting, copies the default language's values in,
