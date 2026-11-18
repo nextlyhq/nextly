@@ -157,7 +157,10 @@ test.describe("the Add panel", () => {
     for (let added = 0; added < 5; added++) {
       await tile(page, "Divider").click();
       // The block just added is the selection, and the next one's anchor.
-      await expect(placementLine(page)).toHaveText("Adding after Divider");
+      // The pointer still rests on the tile, so the line names it.
+      await expect(placementLine(page)).toHaveText(
+        "Divider goes after Divider"
+      );
     }
     await saveDraft(page);
 
@@ -190,8 +193,9 @@ test.describe("the Add panel", () => {
       "Adding inside Section, at the end"
     );
     await tile(page, "Divider").click();
+    // The pointer still rests on the tile, so the line names it.
     await expect(placementLine(page)).toHaveText(
-      "Adding after Divider, inside Section"
+      "Divider goes after Divider, inside Section"
     );
     await tile(page, "Divider").click();
     await saveDraft(page);

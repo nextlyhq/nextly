@@ -635,6 +635,112 @@
  * Haloed like the ring, for the same reason: the line crosses the site's
  * content, and on a blue section the blue alone is not there to see.
  */
+/*
+ * Where the Add panel's highlighted tile would land (`insertion-line.tsx`):
+ * the drop line itself, drawn by `.nx-drop-indicator` below, with the panel's
+ * words on a label at its start. A layer over the canvas that takes no
+ * presses, so the page under it stays clickable; only the label pinned to an
+ * edge for a place off screen opts back in. Never animated: a new tile moves
+ * it at once.
+ */
+.nx-insertion-line {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.nx-insertion-line__label,
+.nx-insertion-line__edge {
+  position: absolute;
+  max-width: 24rem;
+  overflow: hidden;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--nx-builder-select);
+  box-shadow: 0 0 0 1px var(--nx-builder-halo);
+  color: var(--nx-builder-select-text);
+  font:
+    500 11px/16px var(--font-sans, system-ui),
+    sans-serif;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  transition: none;
+}
+
+/* An empty container the block goes inside, lit by the rule it shares with
+   a pointed empty container (`inserters.css`). */
+.nx-insertion-line__container {
+  position: absolute;
+  box-sizing: border-box;
+}
+
+/* Just above a line across the page, at its start. */
+.nx-insertion-line__label[data-axis="y"] {
+  transform: translateY(calc(-100% - 3px));
+}
+
+/* Below the line instead, where the top of the screen leaves no room above. */
+.nx-insertion-line__label[data-axis="y"][data-below] {
+  transform: translateY(3px);
+}
+
+/* Just after the top of a line down a row. */
+.nx-insertion-line__label[data-axis="x"] {
+  transform: translateX(4px);
+}
+
+/* Before it instead, where the screen's right edge leaves no room after it.
+   The room is judged against the label's max-width, which the insertion
+   line reads as `LABEL_WIDEST`. */
+.nx-insertion-line__label[data-axis="x"][data-before] {
+  transform: translateX(calc(-100% - 4px));
+}
+
+/* The place off screen: its label at the nearest edge, which a press scrolls
+   the place into view from. */
+.nx-insertion-line__edge {
+  border: none;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.nx-insertion-line__edge[data-edge="bottom"] {
+  transform: translateY(-100%);
+}
+
+/* Near the right edge, a top or bottom label grows leftwards from the place,
+   so it is never cut off by the canvas's edge. */
+.nx-insertion-line__edge[data-edge="top"][data-before] {
+  transform: translateX(-100%);
+}
+
+.nx-insertion-line__edge[data-edge="bottom"][data-before] {
+  transform: translate(-100%, -100%);
+}
+
+/* A canvas zoomed past its region can leave the place off to a side. */
+.nx-insertion-line__edge[data-edge="left"] {
+  transform: translateY(-50%);
+}
+
+.nx-insertion-line__edge[data-edge="right"] {
+  transform: translate(-100%, -50%);
+}
+
+.nx-insertion-line__edge:focus-visible {
+  outline: 2px solid var(--nx-builder-accent);
+  outline-offset: 2px;
+}
+
+@media (forced-colors: active) {
+  .nx-insertion-line__label,
+  .nx-insertion-line__edge {
+    background: Highlight;
+    color: HighlightText;
+  }
+}
+
 .nx-drop-indicator {
   position: absolute;
   z-index: 2;
