@@ -25,8 +25,10 @@ vi.mock("../transition-recorder", () => ({
   resolveTransitionStore: vi.fn(async () => ({ store: "meta" })),
 }));
 vi.mock("../transition-state", () => ({
+  // Answers that a record was there, as one is for a translated entity.
   forgetI18nTransition: vi.fn(async () => {
     calls.order.push("forget");
+    return true;
   }),
 }));
 
@@ -86,7 +88,11 @@ describe("removeEntityTranslationRows", () => {
       slug: "notes",
     });
 
-    expect(removed).toEqual({ archiveRowsPurged: 0, provenanceRowsPurged: 0 });
+    expect(removed).toEqual({
+      archiveRowsPurged: 0,
+      provenanceRowsPurged: 0,
+      transitionRecordsPurged: 0,
+    });
     expect(deletes).toEqual([]);
     expect(adapter.getDrizzle).not.toHaveBeenCalled();
     expect(forgetI18nTransition).not.toHaveBeenCalled();
@@ -101,7 +107,11 @@ describe("removeEntityTranslationRows", () => {
       slug: "notes",
     });
 
-    expect(removed).toEqual({ archiveRowsPurged: 3, provenanceRowsPurged: 3 });
+    expect(removed).toEqual({
+      archiveRowsPurged: 3,
+      provenanceRowsPurged: 3,
+      transitionRecordsPurged: 1,
+    });
     expect(deletes.map(d => d.table)).toEqual([
       "nextly_i18n_archive",
       "nextly_translation_provenance",
@@ -148,7 +158,11 @@ describe("removeEntityTranslationRows", () => {
       slug: "seo",
     });
 
-    expect(removed).toEqual({ archiveRowsPurged: 2, provenanceRowsPurged: 0 });
+    expect(removed).toEqual({
+      archiveRowsPurged: 2,
+      provenanceRowsPurged: 0,
+      transitionRecordsPurged: 1,
+    });
     expect(deletes.map(d => d.table)).toEqual(["nextly_i18n_archive"]);
     expect(deletes[0].params).toEqual(["seo", "fieldGroup"]);
     expect(forgetI18nTransition).toHaveBeenCalledWith(
