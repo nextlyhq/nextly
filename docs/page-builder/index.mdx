@@ -15,7 +15,7 @@ It ships as a plugin, `@nextlyhq/plugin-page-builder`.
 ## What you get
 
 - **23 blocks out of the box.** Layout (section, box, columns, column, card, accordion,
-  accordion item, spacer, divider), content (heading, paragraph, rich text, table of
+  question, spacer, divider), content (heading, paragraph, rich text, table of
   contents, list, quote, image, gallery, icon, button, embed, form), one that reads
   from your content ([Collection list](#reading-content-into-a-page)), and Entry content,
   offered only in a collection's template, where it draws the entry's own blocks.
@@ -27,11 +27,23 @@ It ships as a plugin, `@nextlyhq/plugin-page-builder`.
   fill it in for an icon that says something on its own. A linked icon is named by its
   label, or by the icon's name when there is none. The page stores the icon's id
   (`lucide:star`); an id the set no longer draws renders nothing, and the editor says so.
-- **Accordion titles and icons.** An accordion's **Titles as** (Content tab, Behaviour)
-  draws each section's title as plain text or as a heading from level 2 to 6, and its
-  **Icon** and **Icon position** (Style tab) choose a chevron, a plus, no icon or the
-  browser's own triangle, before or after the title. Some screen readers announce a section title as the button's
-  text rather than as a heading; the section still opens and closes as normal.
+- **Accordions.** A new accordion starts with three questions, "Question 1" to
+  "Question 3", each with a Text answer to write over. While the accordion or one of its
+  questions is selected, **+ Add a question** under the last one adds the next numbered
+  question, opens it and puts the cursor in its title, which you type on the canvas. A
+  question's answer holds any blocks: a picture, a button, a list. In its Content tab,
+  Behaviour has **Open** (**One at a time**, the default, where opening one question
+  closes the others, or **Many**), **First open** (on by default) and **Titles as**
+  (plain text or a heading from level 2 to 6, Heading 3 by default), and **Icon** picks
+  **+ / −**, **Chevron** or **None**; **Icon position** (Style tab) puts it before or
+  after the title. A question's **Open by default** shows only with **Many**. Each
+  question is a native `<details>`, so it opens and closes by mouse, touch or keyboard
+  (Enter, Space) with no script, and One at a time is the browser's own grouping too.
+  Each title row is at least 44px tall, shows a focus ring from the keyboard, and its
+  icon is hidden from screen readers. An accordion saved before these settings opens
+  each question by its own setting, as Many does. Some screen readers announce a
+  question's title as the button's text rather than as a heading; it still opens and
+  closes as normal.
 - **Columns, sections and linked containers.** A Columns block picks its columns in its
   Content tab: 2 equal, 3 equal, 4 equal, Wide left, Wide right or Wide middle, adding or
   removing empty columns to match, and **Stack on** puts the columns one under another on
@@ -331,6 +343,15 @@ before, so a single-site app keeps working. On a process serving several sites t
 another site's settings, so the route warns once per reader, in every environment, naming the
 line to add.
 
+### Hold the body in a boundary
+
+Under Cache Components, wrap your root layout's `<body>` in a `<Suspense>`, as the
+[routing guide](/docs/guides/routing-and-seo) shows. On a fresh deploy the database is
+seeded after `next build`, which expires every page the build kept, and the first visit
+draws each page again. Without a boundary above the body, a read there that isn't cached
+answers 500. React never sends a boundary that holds the body hidden, so a visitor without
+JavaScript still gets the whole page.
+
 ### Pages only some visitors may read
 
 `createPublicBlocksPage` reads trusted and pre-renders, so it reads the database during
@@ -510,7 +531,13 @@ loads:
   runtime, and whatever your layout adds. "No JavaScript of their own" is about the blocks,
   not the page.
 - **The embed block can run scripts.** It is an iframe sandboxed with `allow-scripts`, so
-  what you embed runs in the visitor's browser, inside the frame.
+  what you embed runs in the visitor's browser, inside the frame. A YouTube, Vimeo,
+  Spotify or Google Maps player also keeps its own origin, which those players need, and
+  by default it loads only when a visitor presses play on the poster: until then the
+  frame holds a small poster document with no script, written into the frame's `srcdoc`.
+  If your site sends a Content Security Policy, the poster's inline styles need
+  `style-src 'unsafe-inline'`, and the players' hosts need to be allowed in
+  `frame-src`.
 - **Your own blocks decide for themselves.** A block whose component is, or renders, a
   client component sends that component's JavaScript with every page that uses it.
 - **Styles arrive as CSS.** They are compiled on the server into `<style>` elements in the
@@ -909,18 +936,34 @@ was a link keeps that address as its Source link.
 
 ### A table of contents
 
-The **Table of contents** block (stored as `core/table-of-contents`) lists the headings
-of a passage of rich text, each linking to its heading. On a collection's template,
-bind its **Content** to the same field as the article's Rich text block, and every
-entry gets contents drawn from its own body:
+The **Table of contents** block (stored as `core/table-of-contents`) lists the page's
+own headings, in page order, each linking to its heading. There is nothing to fill in:
+add, rename or move a heading and the list follows, on the canvas at once. It lists
+Heading blocks, the headings inside Rich text blocks and, on a collection's template, the
+headings of each entry's own body, by the entry's words. It leaves out the headings in
+the site's header and footer, inside a Collection list or an Accordion (a link into a
+closed question does not open it in every browser), headings hidden on every device, and
+any heading you leave out (below).
 
 - **Headings**: H2 only, H2 and H3 (the default), or H2 to H4. An H1 is the
   page's title and is never listed. Each heading sits inside the heading above it, in a
   nested list, so a screen reader announces the structure as well as the words.
+- **List as**: Numbers (the default, nested as 1, 2, 2.1) or Bullets. The numbers are
+  drawn by the stylesheet, so a screen reader, which already says each entry's place,
+  does not read them twice.
 - **Title**: the label above the list (On this page by default), which also names the
   block's navigation landmark.
 - **Can be folded**: on by default, so the list starts open under its title and a
   reader can close it, with no script.
+- **Highlight the section being read**: on by default. In browsers with CSS
+  scroll-linked targets (Chrome and Edge today) the entry for the section in view is set
+  in a heavier weight as the reader scrolls; elsewhere the list works the same, without
+  the highlight. No script is added for it.
+
+A Table of contents saved before it listed the page's headings is upgraded when the page
+is read: the passage it was bound to is no longer read, its other settings are kept, and
+it lists the page's headings with bullets, as it drew none before. A binding left on its
+old **Content** fills nothing, and the bindings report names it so you can remove it.
 
 Every heading on a page carries an id, so a link can reach its section: each Heading
 block, and each heading inside a Rich text block, in the header and footer too. The id is
@@ -937,7 +980,8 @@ Visibility** turn on **Leave out of table of contents**. It keeps its id, so a l
 written by hand still reaches it.
 
 A visitor sees nothing when there are no headings to list, so an entry without any shows
-no empty box. On the canvas the block keeps its frame and says why it is empty.
+no empty box. On the canvas the block keeps its frame and says "Add H2 headings to this
+page and they'll be listed here."
 
 ## Related
 

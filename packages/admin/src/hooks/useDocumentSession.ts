@@ -42,7 +42,9 @@ import {
 } from "react";
 
 import { effectiveEntryStatus } from "@admin/components/features/entries/EntryForm/entry-address";
+import { useTrackedWritesSettled } from "@admin/components/features/entries/EntryForm/useDocumentActionHooks";
 import type { EntryData } from "@admin/components/features/entries/EntryForm/useEntryForm";
+import type { TrackedWritesVerdict } from "@admin/components/features/entries/EntryForm/useStoringGate";
 import { LOCALE_PARAM } from "@admin/constants/search-params";
 import { useCollectionSchema } from "@admin/hooks/queries/useCollections";
 import {
@@ -203,6 +205,37 @@ export interface DocumentSession {
    * recovery point this session recorded, so it is not offered later.
    */
   readonly discard: () => Promise<void>;
+  /**
+   * Waits for every write the view this session is drawn in depends on but
+   * does not contain (a site-wide style change it tracks with
+   * `useTrackedWrite`), as that view's own Save and Publish wait for them.
+   * Resolves to `null` once every one has landed, or to the refusal, in the
+   * author's words, while the latest attempt of one has failed or they keep
+   * starting; outside a document view, to `null` at once. Asked by the caller
+   * before it stores the document and before anything it does on the server
+   * for that store; `saveDraft` and `publish` do not ask it themselves.
+   *
+   * @experimental Settles with editing a second document in place.
+   */
+  readonly writesSettled: () => Promise<Extract<
+    DocumentSessionOutcome,
+    { ok: false }
+  > | null>;
+}
+
+/**
+ * What the view's tracked writes came to, as a session's caller reads it: the
+ * refusal in the author's words, or null when nothing stands in the way.
+ */
+function writesRefusalOf(
+  verdict: TrackedWritesVerdict
+): Extract<DocumentSessionOutcome, { ok: false }> | null {
+  if (verdict === null) return null;
+  const message =
+    verdict.kind === "failed"
+      ? `${verdict.label} wasn't saved: ${verdict.message} Make that change again where you made it, then try again.`
+      : "Other changes are still being saved. Try again in a moment.";
+  return { ok: false, reason: "refused", message };
 }
 
 /** The lock's state as a session's caller reads it. */
@@ -290,6 +323,23 @@ function changedFields(
   delete fields[DOCUMENT_VERSION_KEY];
   delete fields[DOCUMENT_OVERWRITE_KEY];
   return fields as UpdateEntryPayload;
+}
+
+/**
+ * The fields a write sent, as the server stored them: its answer's value for
+ * each where it gives one (a field hook may have changed what was sent), the
+ * value sent otherwise.
+ */
+function storedValues(
+  sent: Readonly<Record<string, unknown>>,
+  answer: Readonly<Record<string, unknown>>
+): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(sent).map(([key, value]) => [
+      key,
+      key in answer ? answer[key] : value,
+    ])
+  );
 }
 
 /** The document's values without its id, which a recovery point leaves out. */
@@ -507,8 +557,16 @@ interface SessionRecording {
    */
   readonly generation: () => number;
   /** Edits up to `generation` were stored: nothing more to record for them. */
-  readonly stored: (generation: number) => void;
+  readonly stored: (
+    generation: number,
+    /** The fields that write stored, which a later recording is rebased on. */
+    written: Readonly<Record<string, unknown>>,
+    /** The read they were stored over, until a newer one holds them. */
+    over: StoredDocument | undefined
+  ) => void;
   readonly cancel: () => void;
+  /** Make a recording asked for and not yet made now: see `useSnapshotAutosave`. */
+  readonly flushPending: () => void;
   /**
    * A write is on its way: nothing is recorded until it lands, since the
    * write empties the person's point as it stores.
@@ -583,7 +641,7 @@ function useSessionRecording(
     [slug, id]
   );
   const document = documentRecordingKey(scope);
-  const snapshotRef = useRef<Record<string, unknown>>({});
+  const parts = useRecordedParts();
   // What this recorder last stored, so a discard empties the point only
   // while it still holds that: another tab of the same person writes the
   // same point.
@@ -595,17 +653,17 @@ function useSessionRecording(
   // the one before is not this one's, so none of it can be recorded here.
   useStartAfreshOn(identity, () => {
     writes.clear();
-    snapshotRef.current = {};
+    parts.clear();
     storedRef.current = null;
     edits.reset();
   });
-  const { schedule, cancel, lastSent } = useSnapshotAutosave({
+  const { schedule, cancel, flushPending, lastSent } = useSnapshotAutosave({
     identity,
     document,
     save: () =>
       recordSnapshot(
         scope,
-        snapshotRef.current,
+        parts.joined(),
         versionRef.current,
         locale,
         storedRef
@@ -622,11 +680,11 @@ function useSessionRecording(
     (stored: StoredDocument, changes: Readonly<Record<string, unknown>>) => {
       // The WHOLE document, since restoring a recovery point replaces every
       // value its editor holds: the read's values with the changes over them.
-      snapshotRef.current = { ...withoutId(stored), ...changes };
+      parts.edited(stored, changes);
       edits.bump();
       schedule();
     },
-    [edits, schedule]
+    [parts, edits, schedule]
   );
   const { pause, resume } = writes;
   const discard = useCallback(async () => {
@@ -644,7 +702,18 @@ function useSessionRecording(
       })
     );
   }, [edits, cancel, scope, document, lastSent, locale]);
-  const { generation, settle: stored } = edits;
+  const { generation, settle } = edits;
+  const stored = useCallback(
+    (
+      upTo: number,
+      written: Readonly<Record<string, unknown>>,
+      over: StoredDocument | undefined
+    ) => {
+      parts.wrote(written, over);
+      settle(upTo);
+    },
+    [parts, settle]
+  );
   return useMemo(
     () => ({
       document,
@@ -652,11 +721,22 @@ function useSessionRecording(
       generation,
       stored,
       cancel,
+      flushPending,
       pause,
       resume,
       discard,
     }),
-    [document, record, generation, stored, cancel, pause, resume, discard]
+    [
+      document,
+      record,
+      generation,
+      stored,
+      cancel,
+      flushPending,
+      pause,
+      resume,
+      discard,
+    ]
   );
 }
 
@@ -698,6 +778,61 @@ function useWritesOnTheirWay(): {
   );
   const clear = useCallback(() => setWrites({ pending: 0, landed: 0 }), []);
   return { ...writes, pause, resume, clear };
+}
+
+/**
+ * What a recording is made of: the document as read, the fields this
+ * session's own writes stored since, and the latest edits over both. Kept
+ * apart and joined as it is sent, so edits recorded while a write was on its
+ * way are rebased on what that write stored rather than on the read from
+ * before it, which restoring would otherwise put back.
+ */
+function useRecordedParts(): {
+  readonly edited: (
+    base: Record<string, unknown>,
+    changes: Readonly<Record<string, unknown>>
+  ) => void;
+  readonly wrote: (
+    written: Readonly<Record<string, unknown>>,
+    over: StoredDocument | undefined
+  ) => void;
+  readonly joined: () => Record<string, unknown>;
+  readonly clear: () => void;
+} {
+  const base = useRef<Record<string, unknown>>({});
+  const written = useRef<Record<string, unknown>>({});
+  const changes = useRef<Readonly<Record<string, unknown>>>({});
+  // The read the written fields were stored over: a newer read already holds
+  // them as the server stored them, so they are dropped then.
+  const writtenOver = useRef<StoredDocument | null>(null);
+  return useMemo(
+    () => ({
+      edited: (read, edits) => {
+        if (writtenOver.current !== null && read !== writtenOver.current) {
+          written.current = {};
+          writtenOver.current = null;
+        }
+        base.current = read;
+        changes.current = edits;
+      },
+      wrote: (fields, over) => {
+        written.current = { ...written.current, ...fields };
+        writtenOver.current = over ?? null;
+      },
+      joined: () => ({
+        ...withoutId(base.current),
+        ...written.current,
+        ...changes.current,
+      }),
+      clear: () => {
+        base.current = {};
+        written.current = {};
+        changes.current = {};
+        writtenOver.current = null;
+      },
+    }),
+    []
+  );
 }
 
 /** What a recording of `document` in `locale` is keyed by, as the form's is. */
@@ -835,14 +970,19 @@ function useSessionWrite(
         const version = versionRef.current;
         if (moved()) return refused("moved");
         if (!holding.current) return refused("locked");
+        const written = changedFields(changes);
         const result = await mutateAsync({
-          ...changedFields(changes),
+          ...written,
           ...statusFor(intent, verdict.published, read.hasStatus),
           ...(version === undefined ? {} : { [DOCUMENT_VERSION_KEY]: version }),
         });
         if (!moved()) {
           versionRef.current = versionOf(result.item) ?? versionRef.current;
-          recording.stored(taken);
+          recording.stored(
+            taken,
+            storedValues(written, result.item),
+            read.document
+          );
           readBehind.current = read.document;
         }
         return { ok: true, values: result.item };
@@ -886,6 +1026,16 @@ function useMayPublishIn(target: DocumentSessionTarget | null): boolean {
 }
 
 /**
+ * What a session does as it unmounts, before any of its other cleanups: the
+ * latest render's, set once the recording is known.
+ */
+function useRecordOnLeave(): MutableRefObject<() => void> {
+  const leaving = useRef<() => void>(() => {});
+  useEffect(() => () => leaving.current(), []);
+  return leaving;
+}
+
+/**
  * Open a session on `target`, or on nothing: naming none (`null`) lets go of
  * the lock and stops recording, as unmounting does.
  *
@@ -894,11 +1044,17 @@ function useMayPublishIn(target: DocumentSessionTarget | null): boolean {
 export function useDocumentSession(
   target: DocumentSessionTarget | null
 ): DocumentSession {
+  // Going away, the work asked to be recorded within the last pause is
+  // recorded at once, its timer being cleared with the session: the editor
+  // holding it can be taken away mid-edit. Declared first, so its cleanup
+  // runs before the lock's lets the document go.
+  const recordOnLeave = useRecordOnLeave();
   const read = useSessionRead(target);
   const versionRef = useCopyVersion(read.document, targetKey(target));
   const lock = useSessionLock(target, versionRef);
   const held = lock.status === "held";
   const recording = useSessionRecording(target, held, versionRef);
+  recordOnLeave.current = recording.flushPending;
   const mayPublish = useMayPublishIn(target);
   const { saveDraft, publish } = useSessionWrite(
     target,
@@ -909,6 +1065,11 @@ export function useDocumentSession(
   );
   const { document } = read;
   const { record: recordDocument, discard } = recording;
+  const settleWrites = useTrackedWritesSettled();
+  const writesSettled = useCallback(
+    async () => writesRefusalOf(await settleWrites()),
+    [settleWrites]
+  );
   const record = useCallback(
     (changes: Readonly<Record<string, unknown>>) => {
       if (document !== undefined) recordDocument(document, changes);
@@ -925,7 +1086,17 @@ export function useDocumentSession(
       publish,
       record,
       discard,
+      writesSettled,
     }),
-    [read.open, lock, mayPublish, saveDraft, publish, record, discard]
+    [
+      read.open,
+      lock,
+      mayPublish,
+      saveDraft,
+      publish,
+      record,
+      discard,
+      writesSettled,
+    ]
   );
 }

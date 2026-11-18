@@ -1437,6 +1437,11 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           // the console.
           logger: getLoggerFromDI() ?? consoleLogger,
           label: `apply schema changes to single "${slug}"`,
+          // The apply writes a migration where a writer is registered: its folder is held first.
+          migrationsDir: container.has("builderSaveSetup")
+            ? container.get<{ migrationsDir: string }>("builderSaveSetup")
+                .migrationsDir
+            : undefined,
           // This road runs the push pipeline, so it issues DDL and may create the lock table.
           issuesDdl: true,
         },

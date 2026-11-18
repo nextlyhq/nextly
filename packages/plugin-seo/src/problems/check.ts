@@ -965,6 +965,16 @@ function inTurn(
 }
 
 /**
+ * Settles once every piece of work queued for the page `type`/`id` so far
+ * has: a reader asking about a page just saved waits for its save's check,
+ * rather than reading what was found before the save. Never rejects, as the
+ * queue keeps only settled work.
+ */
+export function checkedInTurn(type: string, id: string): Promise<void> {
+  return pageQueue.get(`${type}\u0000${id}`) ?? Promise.resolve();
+}
+
+/**
  * {@link inTurn}, started rather than awaited, for work after a save or a
  * delete: neither waits on it, and a failure is logged as `failed`, never
  * thrown into the write that is already done.

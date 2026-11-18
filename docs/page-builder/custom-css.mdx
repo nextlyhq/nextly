@@ -1,0 +1,135 @@
+---
+title: Custom CSS
+description: Add your own CSS where the builder's controls stop, for the whole site, one page or one block, checked and scoped before it reaches a page.
+---
+
+Custom CSS is your own CSS, for the cases the builder's style controls don't cover. It
+can be written for the whole site, for one page or for one block, and it is drawn on the
+published page and on the canvas.
+
+<Callout type="warn">
+  Custom CSS is experimental: the `customCss` route option,
+  `pageBuilderCustomCss` and the checker may change before they are stable.
+</Callout>
+
+## Show it on your site
+
+A pages route draws custom CSS only through the page builder's checker. **Add this line
+to your pages route** (and to any other route that draws page builder pages), or your
+custom CSS is saved but never shown on the live site:
+
+```ts title="app/[[...slug]]/page.tsx"
+import { createBlocksPage } from "@nextlyhq/blocks-react/next";
+import { pageBuilderCustomCss } from "@nextlyhq/plugin-page-builder";
+
+import { pageBuilderPlugin } from "../../nextly.config";
+
+export const { ContentPage, generateMetadata } = createBlocksPage({
+  collections: ["pages"],
+  field: "content",
+  customCss: pageBuilderCustomCss({ plugin: pageBuilderPlugin }),
+});
+```
+
+`plugin` is the page builder your `nextly.config.ts` installs (the value `pageBuilder()`
+returned): the route reads the site's CSS through it. Without `plugin` the route draws the
+page's and the blocks' CSS, and none for the whole site. A route without `customCss` draws
+none of it, at any level. The canvas always draws it, the site's CSS included, through the
+same checker, so it shows what the live page shows once the route has the line.
+
+## Site, page and block CSS
+
+- **The whole site**: drawn first, on every page.
+- **One page**: drawn after the site's, on that page.
+- **One block**: drawn after the page's, on that block only.
+
+All three come after the builder's own styles, so your CSS wins a tie with them, a page's
+wins a tie with the site's, and a block's wins a tie with its page's.
+
+## The site's CSS
+
+The site's CSS is saved under the site settings permission, by a signed-in person: an API
+key can never save it, as it can never save [site code](/docs/page-builder/site-code). The
+server checks every save with the same checker, and refuses one made while someone else
+saved theirs: "Someone changed the site CSS; reload to see it". Each save is recorded in the
+audit log (who saved it, when, how long it is and its SHA-256, never the CSS itself), and
+every cached published page is refreshed, so the next visitor gets the new CSS.
+
+<Callout>
+  The site's CSS has no version history yet: a save replaces what was there.
+  Keep a copy if you may want to go back.
+</Callout>
+
+## A block's CSS starts from `selector`
+
+Write `selector` where the block goes. Every rule of a block's CSS must start from it:
+
+```css
+selector {
+  border: 4px solid rebeccapurple;
+}
+selector:hover {
+  border-color: tomato;
+}
+selector h2 {
+  margin: 0;
+}
+@media (min-width: 40em) {
+  selector {
+    padding: 2rem;
+  }
+}
+```
+
+When the page is drawn, `selector` becomes the block's own selector, so the CSS reaches
+that block and what is inside it, and nothing else. The block keeps `selector` as you
+wrote it, so a copied, moved or exported block, or one saved as a section or a
+component, still styles itself wherever it lands.
+
+A rule that doesn't start from `selector` is refused, naming its line, and so is an
+at-rule that can't be confined to one block, like `@font-face` or `@keyframes`. Put
+those in the page's CSS.
+
+## Write a block's CSS in the builder
+
+A block's CSS is written in the builder, in the block's **Advanced** tab, in its last
+section, **Custom CSS**. Only people who may change the site's settings, the permission
+that guards site code, see that section. It stays folded until you open it, even when the
+block has CSS; a dot beside its name says it holds some.
+
+Type your CSS in the box, writing `selector` for the block. When you leave the box or
+press **Apply**, the CSS is checked: CSS the checker accepts is applied to the block on
+the canvas at once, as one step that **Undo** takes back. If it refuses anything, each
+refused line is listed under the box with its reason ("Line 3: @import isn't allowed."),
+and nothing is applied until you fix it. Emptying the box removes the block's CSS.
+
+Everyone who edits the page can see that a block has custom CSS, but not what it says:
+
+- its row in **Layers** shows a `{ }` mark, named "Has custom CSS";
+- the top of its **Style** tab says "This block also has custom CSS". For someone who may
+  change it, **Edit** opens Advanced at the box; anyone else is told it was set by
+  someone who can change site code.
+
+The Style tab never holds CSS of its own. **Find a setting** finds the section by
+"Custom CSS", "CSS" or "code", and **Only changed** counts a block's CSS as one of its
+settings.
+
+Someone without the permission can still move, copy or delete a block that has custom
+CSS: a copy keeps the CSS, and deleting the block removes it with the block.
+
+## What the checker refuses
+
+The same checker runs in the admin and on the server, so they never disagree. It
+refuses, naming the line:
+
+- `@import`;
+- any `url(…)` that isn't a path on your site (`url(/images/a.png)` is fine;
+  `https://`, `//`, `data:` and `javascript:` addresses are not);
+- anything that would end the style element early (`</style`), and a pasted
+  `<style>` wrapper (paste the CSS without the tags);
+- what can run script in a browser that still honours it: `expression()`, `behavior`
+  and `-moz-binding`;
+- CSS longer than 50,000 characters.
+
+Custom CSS that is refused is not saved. A value already stored that the checker refuses,
+from an import or an older version say, is kept but not drawn anywhere.

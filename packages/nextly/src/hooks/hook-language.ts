@@ -7,7 +7,9 @@
  * (`currentRuleLanguage`), set once where the operation enters, so a hook and
  * a rule cannot be told different languages. Whether the shared part moves is
  * known only to the write that decides it, which says so with
- * {@link withWriteParts}; a read moves nothing and says nothing.
+ * {@link withWriteParts}, and once more with {@link settleWriteParts} when
+ * its hooks have made the payload it persists; a read moves nothing and says
+ * nothing, even one made inside a write's hook.
  *
  * Added where a handler is called rather than where its context is built, as
  * the principal is (`withCurrentPrincipal`): contexts are built in many places
@@ -27,11 +29,32 @@ export interface WriteParts {
   readonly shared: boolean;
 }
 
-const writeParts = new AsyncLocalStorage<WriteParts>();
+/**
+ * One write's parts. Held in a frame of its own rather than as the stored
+ * value, so the write can settle them once its payload is final
+ * (`settleWriteParts`) for everything after that point, while what its
+ * before-hooks were told stays what they were told.
+ */
+interface WritePartsFrame {
+  parts: WriteParts;
+}
+
+const writeParts = new AsyncLocalStorage<WritePartsFrame>();
 
 /** Runs `operation` with its hooks told whether it moves the shared part. */
 export function withWriteParts<T>(parts: WriteParts, operation: () => T): T {
-  return writeParts.run(parts, operation);
+  return writeParts.run({ parts }, operation);
+}
+
+/**
+ * Settles what the write running now moves, from the payload it persists: a
+ * hook or the field rules can add or take out a field the body named, so the
+ * hooks after the write and its events are told `parts` instead of what the
+ * body sent. A no-op outside a write.
+ */
+export function settleWriteParts(parts: WriteParts): void {
+  const frame = writeParts.getStore();
+  if (frame !== undefined) frame.parts = parts;
 }
 
 /**
@@ -42,6 +65,11 @@ export const WHOLE_DOCUMENT: WriteParts = Object.freeze({ shared: true });
 
 /** What a write's entity says about which of its fields are shared. */
 export interface SharedPartOf {
+  /**
+   * Whether the entity has a lifecycle (`status: true`): only then is a
+   * `status` key the lifecycle status, and otherwise a field like any other.
+   */
+  hasLifecycle: boolean;
   /** The entity's fields, classified as the write classifies them. */
   fields: readonly {
     name: string;
@@ -60,11 +88,12 @@ export interface SharedPartOf {
 
 /**
  * Whether an update of `body` in `locale` moves the shared part: it sets a
- * field kept the same in every language, or it names a status the shared part
- * takes, which is every status on an entity that does not publish each
- * language on its own, and otherwise the default language's or every
- * language's. Keys beginning with `_` are instructions to the write, not
- * values, and move nothing.
+ * field kept the same in every language, or it names a lifecycle status the
+ * shared part takes, which is every status on an entity that does not publish
+ * each language on its own, and otherwise the default language's or every
+ * language's. On an entity with no lifecycle a `status` key is a field like
+ * any other, shared or translated as it is declared. Keys beginning with `_`
+ * are instructions to the write, not values, and move nothing.
  */
 export function writeMovesSharedPart(
   entity: SharedPartOf,
@@ -74,11 +103,14 @@ export function writeMovesSharedPart(
   const translated = new Set(
     resolveLocalizedFieldNames([...entity.fields], entity.localized)
   );
+  const isLifecycleStatus = (key: string) =>
+    entity.hasLifecycle && key === "status";
   const setsShared = Object.keys(body).some(
-    key => !key.startsWith("_") && key !== "status" && !translated.has(key)
+    key =>
+      !key.startsWith("_") && !isLifecycleStatus(key) && !translated.has(key)
   );
   if (setsShared) return true;
-  if (!("status" in body)) return false;
+  if (!entity.hasLifecycle || !("status" in body)) return false;
   return (
     !entity.publishesPerLanguage ||
     locale === undefined ||
@@ -97,13 +129,17 @@ export interface HookLanguage {
   shared?: boolean;
 }
 
-/** What a hook called now is told about languages. */
+/**
+ * What a hook called now is told about languages. `locales` is a copy of its
+ * own, so a hook that changes the list it is handed changes nothing another
+ * hook, a rule or an event is told.
+ */
 export function hookLanguage(): HookLanguage {
   const language = currentRuleLanguage();
-  const parts = writeParts.getStore();
+  const parts = writeParts.getStore()?.parts;
   return {
     ...(language.locale === undefined ? {} : { locale: language.locale }),
-    locales: language.locales,
+    locales: [...language.locales],
     ...(parts === undefined ? {} : { shared: parts.shared }),
   };
 }
@@ -119,11 +155,22 @@ export function eventLanguage(): HookLanguage | undefined {
   return language.locales.length === 0 ? undefined : language;
 }
 
-/** `context` with what a hook called now is told about languages. */
-export function withHookLanguage<C extends object>(
+/**
+ * `context` with what a hook called now is told about languages. A hook of a
+ * read (`operation: "read"`) is told nothing of the shared part: a read moves
+ * nothing, and one made inside a write's hook runs in that write's frame.
+ */
+export function withHookLanguage<C extends { operation?: unknown }>(
   context: C
 ): C & Partial<HookLanguage> {
   // A site without languages tells a hook nothing of them, so its context
   // keeps the shape it had: the same answer an event gives (`eventLanguage`).
-  return { ...context, ...(eventLanguage() ?? {}) };
+  const language = eventLanguage();
+  if (language === undefined) return { ...context };
+  if (context.operation !== "read") return { ...context, ...language };
+  return {
+    ...context,
+    ...(language.locale === undefined ? {} : { locale: language.locale }),
+    locales: language.locales,
+  };
 }

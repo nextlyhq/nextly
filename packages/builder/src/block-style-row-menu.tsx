@@ -118,6 +118,80 @@ export function BlockStyleMenu({
    */
   readonly returnTo?: React.RefObject<HTMLElement | null>;
 }): React.JSX.Element {
+  return (
+    <RowMenuFrame
+      name={name}
+      open={open}
+      onOpenChange={onOpenChange}
+      {...(returnTo === undefined ? {} : { returnTo })}
+    >
+      {handOff => (
+        <>
+          {offers.edit ? (
+            <DropdownMenuItem onSelect={handOff(actions.onEdit)}>
+              {BLOCK_STYLE_WORDS.edit}
+            </DropdownMenuItem>
+          ) : null}
+          {offers.setDefault ? (
+            <DropdownMenuItem onSelect={actions.onSetDefault}>
+              {BLOCK_STYLE_WORDS.setDefault}
+            </DropdownMenuItem>
+          ) : null}
+          {offers.rename ? (
+            <DropdownMenuItem onSelect={handOff(actions.onRename)}>
+              {BLOCK_STYLE_WORDS.rename}
+            </DropdownMenuItem>
+          ) : null}
+          {offers.duplicate ? (
+            <DropdownMenuItem onSelect={handOff(actions.onDuplicate)}>
+              {BLOCK_STYLE_WORDS.duplicate}
+            </DropdownMenuItem>
+          ) : null}
+          {offers.hide === undefined ? null : (
+            <DropdownMenuItem
+              onSelect={() => actions.onHidden(offers.hide === "hide")}
+            >
+              {offers.hide === "hide"
+                ? BLOCK_STYLE_WORDS.hide
+                : BLOCK_STYLE_WORDS.show}
+            </DropdownMenuItem>
+          )}
+          {offers.remove ? (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={actions.onRemove}>
+                {BLOCK_STYLE_WORDS.remove}
+              </DropdownMenuItem>
+            </>
+          ) : null}
+        </>
+      )}
+    </RowMenuFrame>
+  );
+}
+
+/**
+ * A row's ⋯ button and its menu, whose items the caller draws: shared by
+ * the Block styles and the Text styles rows. The menu key and Shift+F10 on
+ * a row open it too, through `open`, and closing it then hands focus back
+ * to the row (`returnTo`) rather than the ⋯. An item that hands focus
+ * elsewhere runs through `handOff`, so closing the menu takes focus nowhere.
+ */
+export function RowMenuFrame({
+  name,
+  open,
+  onOpenChange,
+  returnTo,
+  children,
+}: {
+  readonly name: string;
+  readonly open: boolean;
+  readonly onOpenChange: (open: boolean) => void;
+  readonly returnTo?: React.RefObject<HTMLElement | null>;
+  readonly children: (
+    handOff: (then: () => void) => () => void
+  ) => React.ReactNode;
+}): React.JSX.Element {
   const handingOff = React.useRef(false);
   const handOff = (then: () => void) => () => {
     handingOff.current = true;
@@ -154,43 +228,7 @@ export function BlockStyleMenu({
           back.focus();
         }}
       >
-        {offers.edit ? (
-          <DropdownMenuItem onSelect={handOff(actions.onEdit)}>
-            {BLOCK_STYLE_WORDS.edit}
-          </DropdownMenuItem>
-        ) : null}
-        {offers.setDefault ? (
-          <DropdownMenuItem onSelect={actions.onSetDefault}>
-            {BLOCK_STYLE_WORDS.setDefault}
-          </DropdownMenuItem>
-        ) : null}
-        {offers.rename ? (
-          <DropdownMenuItem onSelect={handOff(actions.onRename)}>
-            {BLOCK_STYLE_WORDS.rename}
-          </DropdownMenuItem>
-        ) : null}
-        {offers.duplicate ? (
-          <DropdownMenuItem onSelect={handOff(actions.onDuplicate)}>
-            {BLOCK_STYLE_WORDS.duplicate}
-          </DropdownMenuItem>
-        ) : null}
-        {offers.hide === undefined ? null : (
-          <DropdownMenuItem
-            onSelect={() => actions.onHidden(offers.hide === "hide")}
-          >
-            {offers.hide === "hide"
-              ? BLOCK_STYLE_WORDS.hide
-              : BLOCK_STYLE_WORDS.show}
-          </DropdownMenuItem>
-        )}
-        {offers.remove ? (
-          <>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onSelect={actions.onRemove}>
-              {BLOCK_STYLE_WORDS.remove}
-            </DropdownMenuItem>
-          </>
-        ) : null}
+        {children(handOff)}
       </DropdownMenuContent>
     </DropdownMenu>
   );

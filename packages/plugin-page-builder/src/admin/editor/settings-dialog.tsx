@@ -68,9 +68,12 @@ import {
   type SiteSettingsRead,
 } from "../../library-contract";
 import { PAGE_BUILDER_SETTINGS_PLACE } from "../../settings-place-contract";
+import { lazyPart } from "../lazy-part";
 
 import { ManageSetsContext } from "./manage-sets";
+import { holdsPageCode, pageCodeShown } from "./page-code-shown";
 import type { SettingsAddress } from "./settings-address";
+import type { PageCodeTab as PageCodeTabPart } from "./settings-code";
 import { PageFieldsTab, usePageFields } from "./settings-fields";
 import { DocumentGeneral, PageGeneral } from "./settings-general";
 import type { SettingsPlace } from "./settings-place";
@@ -79,8 +82,11 @@ import {
   mayOpenSiteSettings,
   SiteSettingsDialog,
   type SettingsBreakpoints,
+  type SiteSettingsQuery,
 } from "./settings-site";
+import { SettingsTabRequestContext } from "./settings-tab-request";
 import {
+  CODE_TAB,
   FIELDS_TAB,
   focusFieldIn,
   GENERAL_TAB,
@@ -88,6 +94,15 @@ import {
   tabForField,
 } from "./settings-tabs";
 import type { SharePreview } from "./share-preview";
+
+/**
+ * The page's Code tab, fetched when it is first drawn rather than with the
+ * editor, as Site settings' code is: it carries site code's checks and
+ * words, which an author who never opens it has no use for.
+ */
+const PageCodeTab: typeof PageCodeTabPart = lazyPart(() =>
+  import("./settings-code").then(m => m.PageCodeTab)
+);
 
 /** What the shell hands the dialog. */
 type DialogState = Parameters<
@@ -121,6 +136,28 @@ export interface SettingsDialogProps extends DialogState {
   openAsForm?: (() => void) | undefined;
 }
 
+/**
+ * Counts each close of Page settings with the editor's request, so what its
+ * settings decide (a plugin's page checks) is asked again once it closes.
+ */
+function useNoteClosed(open: boolean): void {
+  const request = useContext(SettingsTabRequestContext);
+  const noteClosed = useRef(request?.noteClosed);
+  noteClosed.current = request?.noteClosed;
+  const wasOpen = useRef(open);
+  useEffect(() => {
+    if (wasOpen.current && !open) noteClosed.current?.();
+    wasOpen.current = open;
+  }, [open]);
+  // Drawn afresh for each opening, it may close by going away while open.
+  useEffect(
+    () => () => {
+      if (wasOpen.current) noteClosed.current?.();
+    },
+    []
+  );
+}
+
 /** Said once at the top while the page takes no edits. */
 const READ_ONLY_NOTE =
   "You can't change this page right now, so its settings are read-only. The note above the editor says why.";
@@ -139,7 +176,9 @@ function headingOf(kind: DocumentKind, title: string | undefined): string {
  * than a blank dialog.
  */
 function useChosenTab() {
-  const [chosen, setChosen] = useState(GENERAL_TAB);
+  // A tab asked for before it opened (a page check's fix) is its first.
+  const request = useContext(SettingsTabRequestContext);
+  const [chosen, setChosen] = useState(() => request?.take() ?? GENERAL_TAB);
   const [focusPath, setFocusPath] = useState<string | null>(null);
   return {
     chosen,
@@ -155,20 +194,26 @@ function useChosenTab() {
 
 /**
  * The dialog's tabs: Fields where a page has anything left for it, the
- * place's tabs after it, which one is shown, and "Show me" for a field the
- * page refused to save, which opens the dialog on that field's tab.
+ * place's tabs after it, the Code tab last for someone who may change the
+ * site's settings, which one is shown, and "Show me" for a field the page
+ * refused to save, which opens the dialog on that field's tab.
  */
 function useSettingsTabs({
   page,
   fieldName,
   place,
+  site,
   onOpenChange,
 }: {
   page: boolean;
   fieldName: string;
   place: SettingsPlace | null;
+  /** The site's settings, whose permission decides the Code tab. */
+  site: SiteSettingsQuery;
   onOpenChange: (open: boolean) => void;
 }) {
+  // The Code tab, last, where this person may change the site's settings.
+  const code = usePageCode(page, fieldName, place, site);
   const pageFields = usePageFields(fieldName);
   const fields = page ? pageFields : null;
   const tabs = useChosenTab();
@@ -181,6 +226,7 @@ function useSettingsTabs({
     GENERAL_TAB,
     ...(fields === null ? [] : [FIELDS_TAB]),
     ...offered.map(tab => tab.id),
+    ...(code.showsCode ? [CODE_TAB] : []),
   ];
   const contentTab = contentTabOf(page, fields !== null);
   useShowMe({
@@ -196,6 +242,7 @@ function useSettingsTabs({
     fields,
     placeTabs,
     offered,
+    code,
     shown: ids.includes(tabs.chosen) ? tabs.chosen : GENERAL_TAB,
     choose: tabs.choose,
     focusPath: tabs.focusPath,
@@ -219,7 +266,14 @@ export function SettingsDialog({
 }: SettingsDialogProps): JSX.Element {
   const page = kind === "page";
   const site = useSiteSettingsEntry(open);
-  const tabs = useSettingsTabs({ page, fieldName, place, onOpenChange });
+  const tabs = useSettingsTabs({
+    page,
+    fieldName,
+    place,
+    site: site.read,
+    onOpenChange,
+  });
+  useNoteClosed(open);
   const leaveToSets = useLeaveToSets(onOpenChange);
   const body = useRef<HTMLDivElement | null>(null);
   useFocusShownField(open, tabs.shown, tabs.focusPath, body, tabs.focused);
@@ -256,6 +310,7 @@ export function SettingsDialog({
               showsFields={tabs.fields !== null}
               // A tab that left the row keeps its panel below, hidden.
               placeTabs={tabs.offered}
+              showsCode={tabs.code.showsCode}
               site={site.offer}
             />
             <ReadOnlyNote />
@@ -271,8 +326,11 @@ export function SettingsDialog({
                   place={place}
                   address={address}
                   open={open}
+                  // Said, never shown, to someone who may not see it.
+                  holdsHiddenCode={tabs.code.holdsHiddenCode}
                 />
               }
+              code={tabs.code.codeBody}
             />
           </Tabs>
           <SavedWithThePage openAsForm={openAsForm} />
@@ -313,10 +371,13 @@ function SettingsBody({
   bodyRef,
   tabs,
   general,
+  code,
 }: {
   bodyRef: { current: HTMLDivElement | null };
   tabs: ReturnType<typeof useSettingsTabs>;
   general: ReactNode;
+  /** The Code tab's body, or null where the row has no Code tab. */
+  code: ReactNode | null;
 }): JSX.Element {
   return (
     <div
@@ -337,6 +398,11 @@ function SettingsBody({
           {tab.panel}
         </TabPanel>
       ))}
+      {code === null ? null : (
+        <TabPanel value={CODE_TAB} shown={tabs.shown}>
+          {code}
+        </TabPanel>
+      )}
     </div>
   );
 }
@@ -402,6 +468,7 @@ function GeneralTab({
   place,
   address,
   open,
+  holdsHiddenCode,
 }: {
   page: boolean;
   fieldName: string;
@@ -410,6 +477,8 @@ function GeneralTab({
   place: SettingsPlace | null;
   address: SettingsAddress | null;
   open: boolean;
+  /** Whether the page adds code this reader may not see. */
+  holdsHiddenCode: boolean;
 }): JSX.Element {
   if (!page) {
     return (
@@ -424,6 +493,7 @@ function GeneralTab({
       place={place}
       address={address}
       open={open}
+      holdsHiddenCode={holdsHiddenCode}
     />
   );
 }
@@ -486,10 +556,13 @@ function ReadOnlyNote(): JSX.Element | null {
 function TabRow({
   showsFields,
   placeTabs,
+  showsCode,
   site,
 }: {
   showsFields: boolean;
   placeTabs: readonly PlaceTabEntry[];
+  /** Whether the Code tab ends the row: the riskiest tab last. */
+  showsCode: boolean;
   site: (() => void) | undefined;
 }): JSX.Element {
   return (
@@ -511,6 +584,7 @@ function TabRow({
               {tab.trigger}
             </TabsTrigger>
           ))}
+          {showsCode ? <TabsTrigger value={CODE_TAB}>Code</TabsTrigger> : null}
         </TabsList>
       </div>
       {site === undefined ? null : (
@@ -632,4 +706,54 @@ function useFocusShownField(
     });
     return () => cancelAnimationFrame(frame);
   }, [open, shown, path, body]);
+}
+
+/**
+ * The Code tab's body: the page's own code, held as the title is while the
+ * page takes no edits.
+ */
+function PageCodeTabBody({
+  pageCode,
+}: {
+  pageCode: SettingsPlace["pageCode"];
+}): JSX.Element {
+  const writable = useDocumentField("title")?.writable !== false;
+  return (
+    <PageCodeTab
+      value={pageCode.value}
+      set={pageCode.set}
+      writable={writable}
+    />
+  );
+}
+
+/**
+ * The page's own code in Page settings: its tab, last, for someone who may
+ * change the site's settings, whose permission the server holds every change
+ * to; and, for anyone else, whether General says the page adds code. Only a
+ * page's own top-level field holds code (`holdsPageCode`).
+ */
+function usePageCode(
+  page: boolean,
+  fieldName: string,
+  place: SettingsPlace | null,
+  site: SiteSettingsQuery
+): { showsCode: boolean; holdsHiddenCode: boolean; codeBody: ReactNode } {
+  const pageCode =
+    page && place !== null && holdsPageCode(fieldName) ? place.pageCode : null;
+  const shown =
+    pageCode === null || site.data === undefined
+      ? "none"
+      : pageCodeShown({
+          held: pageCode.value,
+          mayManageSite: site.data.mayManageSite,
+        });
+  return {
+    showsCode: shown === "tab",
+    holdsHiddenCode: shown === "line",
+    codeBody:
+      shown === "tab" && pageCode !== null ? (
+        <PageCodeTabBody pageCode={pageCode} />
+      ) : null,
+  };
 }

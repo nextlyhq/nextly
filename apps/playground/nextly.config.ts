@@ -45,6 +45,7 @@ import { EntryArticles } from "./src/collections/entry-articles";
 import { ContributionStories } from "./src/collections/contribution-stories";
 import { ListStories } from "./src/collections/list-stories";
 import { E2E_NAMED_QUERIES } from "./src/named-queries";
+import { E2E_STARTER_PAGES } from "./src/starter-pages";
 import { Categories } from "./src/collections/categories";
 import { DevReloadProbe } from "./src/collections/dev-reload-probe";
 import { HistoryNotes } from "./src/collections/history-notes";
@@ -58,6 +59,7 @@ import { LinkCard, LinkQuote } from "./src/field-groups/related-link-groups";
 import { Seo } from "./src/field-groups/seo";
 import { SITE_STYLE_DEFAULTS } from "./src/lib/site-style-defaults";
 import { blockFixturePlugin } from "./src/plugins/block-fixture/plugin";
+import { pageCheckFixturePlugin } from "./src/plugins/page-check-fixture/plugin";
 import { contributionsFixturePlugin } from "./src/plugins/contributions-fixture/plugin";
 import { missingWidgetFixturePlugin } from "./src/plugins/missing-widget-fixture/plugin";
 import { pageSummaryFixturePlugin } from "./src/plugins/page-summary-fixture/plugin";
@@ -185,6 +187,11 @@ export const pageBuilderPlugin = pageBuilder({
   // the collections and the Single they read.
   ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1"
     ? { namedQueries: [...E2E_NAMED_QUERIES] }
+    : {}),
+  // The browser tests' starter page, by the same switch: a new page made
+  // from it in the New page dialog, and an empty page started from it.
+  ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1"
+    ? { starterPages: [...E2E_STARTER_PAGES] }
     : {}),
   pagePreviewPath: "/{slug}",
   // Each post is served at `/blog/<its slug>` by the same route as the pages,
@@ -420,6 +427,11 @@ export default defineConfig({
     // hands their editor modules over, as the map would.
     ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1"
       ? [blockFixturePlugin]
+      : []),
+    // A plugin's own page check, listed in the builder's Page checks, for
+    // builder-plugin-page-checks.spec.ts. Fixtures only.
+    ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1"
+      ? [pageCheckFixturePlugin]
       : []),
     // The plugin contributions fixture (the dashed card on the dashboard, its
     // pieces on Posts, its proxy header), for the contributions specs, by the

@@ -88,6 +88,7 @@ import { getEventBus } from "../../../events/event-bus";
 // same way.
 import {
   eventLanguage,
+  settleWriteParts,
   WHOLE_DOCUMENT,
   withWriteParts,
   writeMovesSharedPart,
@@ -179,6 +180,7 @@ import {
   normalizeRelationshipFields,
   relationshipValidationView,
 } from "../../../shared/lib/field-transform";
+import { fieldWriteCaller } from "../../../shared/lib/field-write-caller";
 import { filterKeys } from "../../../shared/lib/filterable-fields";
 import { toJsonColumnValue } from "../../../shared/lib/json-column-value";
 import {
@@ -483,10 +485,10 @@ import {
   type VersionRow,
 } from "../../versions/versions-repository";
 import { workingDraftLocale } from "../../versions/working-draft-locale";
-import { computeChangedFields } from "../../webhooks/envelope";
 import { expandComponentFields } from "../../webhooks/expand-component-fields";
 import { projectFields } from "../../webhooks/project-fields";
 import {
+  eventChangedFields,
   recordEntryActivity,
   recordMutationEvent,
 } from "../../webhooks/record-mutation-event";
@@ -540,7 +542,6 @@ import {
   collectionFields,
   collectionTableName,
   generateSlug,
-  normalizeSlugPath,
 } from "./collection-utils";
 import {
   entryStillReferenced,
@@ -557,6 +558,7 @@ import {
   WITHOUT_REVIEW_KEY,
   withoutReviewOfBody,
 } from "./save-door-gate";
+import { slugAsStored } from "./slug-as-stored";
 import {
   entryWriteContext,
   fieldAccessPass,
@@ -2313,6 +2315,11 @@ export class CollectionMutationService extends BaseService {
    * `fields` — so for a `webhooks: false` collection that work is pure waste, and
    * a scalar write should never be able to fail on a component/relation read it
    * does not need. Returns the raw fields unchanged in that case (they go unread).
+   *
+   * Only for a write whose outbox event is the tree's one reader. A write that
+   * also announces an in-process `collection.<slug>.*` event names its changed
+   * fields from the tree, and that event is announced whatever the opt-out, so
+   * it takes {@link webhookFieldTree}.
    */
   private async webhookFieldTreeIfRecording(
     collectionSlug: string,
@@ -2831,9 +2838,10 @@ export class CollectionMutationService extends BaseService {
    * the interactive paths carry. These paths route no localized write, so the
    * relations are read without a locale (a single set of values).
    *
-   * `needsRelations` gates the relational read: it is skipped when neither a
-   * version nor an event will consume the result (versioning off AND the
-   * collection opted out of webhooks). `buildFullSnapshotRelations` issues a
+   * `needsRelations` gates the relational read: it is skipped when nothing
+   * will consume the result (a held edit's written document, with versioning
+   * off and the collection opted out of webhooks; the in-process event of every
+   * other write consumes it whatever the opt-out). `buildFullSnapshotRelations` issues a
    * query per component and m2m field and deliberately fails the write on a read
    * error, so running it for a write that consumes nothing would add avoidable
    * per-item query cost and could roll back an otherwise valid scalar write on an
@@ -3026,14 +3034,14 @@ export class CollectionMutationService extends BaseService {
       actor?: RequestActor;
       /** The locale this create's translatable values were written in, if any. */
       localeTag?: string;
-      /** The in-transaction handlers this write took, which will be run. */
-      inTransactionHandlers: InTransactionHandlerSet;
     }
   ): Promise<{
     eventRecorded: boolean;
     revalidationIntent: RevalidationIntent | undefined;
     /** The created document in read shape, as the outbox event carries it. */
     document: Record<string, unknown>;
+    /** The fields the outbox event names as changed (`eventChangedFields`). */
+    changedFields: string[];
   }> {
     const entryId = args.entry.id as string;
 
@@ -3055,23 +3063,10 @@ export class CollectionMutationService extends BaseService {
 
     const versionsConfig = (args.collection as Record<string, unknown>)
       .versions as ResolvedVersionsConfig | null | undefined;
-    // Skip the per-field component/m2m reads when neither a version nor an
-    // event will consume them (versioning off AND recording disabled by
-    // config). Gated on `isRecordingDisabledByConfig` — the SAME config-stable
-    // decision the webhook field-tree uses — so the relations and the stripped
-    // field tree are always assembled together: a decision that can flip
-    // mid-write (a stored opt-out or endpoint activation) never leaves a
-    // recorded event with a parent-only payload.
-    const needsRelations =
-      !!versionsConfig?.enabled ||
-      !isRecordingDisabledByConfig("collection", args.collectionName) ||
-      // A curated `webhooks.emit` consumes the assembled document too — its
-      // allowlist may include a component/m2m field — so assemble relations
-      // even when the raw entry.* recording is opted out for this collection.
-      getWebhookEmitSpec("collection", args.collectionName) !== undefined ||
-      // An in-transaction handler is handed the whole document, as on the
-      // create that opens its own transaction.
-      args.inTransactionHandlers.length > 0;
+    // The relations are read for every create: the in-process
+    // `collection.<slug>.created` event is announced whatever the webhook
+    // opt-out, and names the fields the create set from this document, so
+    // one without its components and many-to-many ids would leave them out.
     const { documentParts: createdParts, document: createdDocument } =
       await this.readTxDocumentParts(tx, {
         collectionName: args.collectionName,
@@ -3085,7 +3080,7 @@ export class CollectionMutationService extends BaseService {
         ),
         fields: args.fields,
         manyToManyFields: args.manyToManyFields,
-        needsRelations,
+        needsRelations: true,
       });
     const createdVersionNo = await this.captureTxVersion(tx, {
       lifecycle: hasLifecycle(args.collection),
@@ -3104,8 +3099,9 @@ export class CollectionMutationService extends BaseService {
       // values or its translated components went into.
       changedParts: partsCreated,
     });
-    const eventFields = await this.webhookFieldTreeIfRecording(
-      args.collectionName,
+    // Expanded whatever the webhook opt-out: the in-process event names the
+    // fields this write changed from it too, and is announced either way.
+    const eventFields = await this.webhookFieldTree(
       args.fields,
       tx.getDrizzle()
     );
@@ -3195,6 +3191,12 @@ export class CollectionMutationService extends BaseService {
     return {
       eventRecorded,
       document: createdDocument,
+      // From the same document and the same sanitizing as the outbox event,
+      // for the in-process event the caller announces at its commit.
+      changedFields: eventChangedFields({
+        data: createdDocument,
+        fields: eventFields,
+      }),
       revalidationIntent: buildEntryRevalidationIntent(
         args.collectionName,
         readRevalidateConfig(args.collection),
@@ -3484,15 +3486,20 @@ export class CollectionMutationService extends BaseService {
         ...(args.goesLive === true && !judgeInstances
           ? { judgeContainedComponents: false }
           : {}),
-        write: this.validationWrite(
-          args.collectionName,
-          args.id ??
-            suppliedCreateId(args.mode, args.collectionName, args.data),
-          args.tx,
-          // The language judged: each in turn where a write judges several,
-          // else the one this write is in.
-          args.readLocale ?? args.writeLocale
-        ),
+        write: {
+          ...this.validationWrite(
+            args.collectionName,
+            args.id ??
+              suppliedCreateId(args.mode, args.collectionName, args.data),
+            args.tx,
+            // The language judged: each in turn where a write judges several,
+            // else the one this write is in.
+            args.readLocale ?? args.writeLocale
+          ),
+          // Who the write is made as, from the reader its access is judged
+          // by, for a field type whose values only some callers may change.
+          caller: fieldWriteCaller(args.reader),
+        },
       }
     );
     // The document judged can hold fields the caller may not read; their
@@ -8757,11 +8764,9 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
-   * `raw` as `collectionName` stores a slug: one segment, normalised by
-   * {@link generateSlug}, or, where the collection's `db.slugPaths` is on, a
-   * path of several, each normalised alike ({@link normalizeSlugPath}). A
-   * path that cannot be stored is refused as a validation error on `slug`
-   * when `refuse` is set, in words an author can act on, and is otherwise
+   * `raw` as `collectionName` stores a slug, by {@link slugAsStored}. A path
+   * that cannot be stored is refused as a validation error on `slug` when
+   * `refuse` is set, in words an author can act on, and is otherwise
    * returned as given for a later pass to refuse.
    */
   private slugAsStored(
@@ -8769,10 +8774,7 @@ export class CollectionMutationService extends BaseService {
     raw: string,
     refuse: boolean
   ): string {
-    if (collectionDbOptions(collectionName).slugPaths !== true) {
-      return generateSlug(raw);
-    }
-    const read = normalizeSlugPath(raw);
+    const read = slugAsStored(collectionName, raw);
     if ("slug" in read) return read.slug;
     if (!refuse) return raw;
     throw NextlyError.validation({
@@ -9388,11 +9390,9 @@ export class CollectionMutationService extends BaseService {
       // definitions from the registry on the pooled connection, and doing that
       // inside the transaction would hold this write's connection while waiting
       // for a second one. It depends only on static field config, so nothing is
-      // gained by deferring it. Skipped entirely when the collection opted out.
-      const webhookFields = await this.webhookFieldTreeIfRecording(
-        params.collectionName,
-        fields
-      );
+      // gained by deferring it. Expanded whatever the webhook opt-out: the
+      // in-process event, announced either way, is sanitized by it too.
+      const webhookFields = await this.webhookFieldTree(fields);
 
       const entry: Record<string, unknown> = {};
       // Whether the outbox event was actually appended (false when the
@@ -9441,27 +9441,12 @@ export class CollectionMutationService extends BaseService {
         // this transaction, once the entry has its id: nothing of it was live before. A part held
         // back refuses the create, and it rolls back; what the verdict started is settled before
         // the transaction commits, below.
-        const createdSave =
-          finalData.status === "published"
-            ? this.statusSaveOf(
-                { ...params, entryId: String(entry.id) },
-                {
-                  status: finalData.status,
-                  locale: params.locale,
-                  everyLanguage: false,
-                  withoutReview,
-                  // A new entry has no drafts.
-                  sharedDraftPending: false,
-                },
-                collection
-              )
-            : null;
-        const settleCreateGate = createdSave
-          ? await judgeStatusSave(tx, createdSave, {
-              languages: [],
-              shared: false,
-            })
-          : undefined;
+        const settleCreateGate = await this.judgeCreateOnTx(
+          tx,
+          { ...params, entryId: String(entry.id) },
+          { status: finalData.status, locale: params.locale, withoutReview },
+          collection
+        );
 
         // i18n M5: write the translatable values to the companion `_locales` row for the
         // write's locale (same transaction → rolls back with the main insert).
@@ -9692,8 +9677,12 @@ export class CollectionMutationService extends BaseService {
         // the entry and is never recorded for a write that later rolls back.
         const createdDocument = assembleDocument(documentParts);
         // The fields the outbox event names as changed, from the same
-        // document, for the in-process event announced once this commits.
-        createdChangedFields = computeChangedFields(null, createdDocument);
+        // document and the same sanitizing, for the in-process event
+        // announced once this commits.
+        createdChangedFields = eventChangedFields({
+          data: createdDocument,
+          fields: webhookFields,
+        });
         recorded = await recordMutationEvent(tx, {
           type: "entry.created",
           resource: {
@@ -12115,8 +12104,9 @@ export class CollectionMutationService extends BaseService {
           tableName,
           await this.passwordReach(fields, tx.getDrizzle())
         );
-        const publishEventFields = await this.webhookFieldTreeIfRecording(
-          params.collectionName,
+        // Expanded whatever the webhook opt-out: the in-process event,
+        // announced either way, names its changed fields from it too.
+        const publishEventFields = await this.webhookFieldTree(
           fields,
           tx.getDrizzle()
         );
@@ -12145,12 +12135,14 @@ export class CollectionMutationService extends BaseService {
           ? "published"
           : (priorLanguageStatuses.find(status => status !== "published") ??
             null);
-        // The fields the outbox event names as changed, for the in-process
-        // event announced once this commits.
-        publishChangedFields = computeChangedFields(
-          previousDocument,
-          publishedDocument
-        );
+        // The fields the outbox event names as changed, sanitized as it
+        // sanitizes them, for the in-process event announced once this
+        // commits.
+        publishChangedFields = eventChangedFields({
+          data: publishedDocument,
+          previous: previousDocument,
+          fields: publishEventFields,
+        });
         const baseRecorded = await recordMutationEvent(tx, {
           type: "entry.updated",
           resource: {
@@ -12974,6 +12966,43 @@ export class CollectionMutationService extends BaseService {
       parts: undefined,
       mainStatus: args.mainStatus,
     });
+  }
+
+  /**
+   * The publish gate's verdict on a create that puts its entry live, asked on `tx` once the entry
+   * has its id: nothing of it was live before. A part held back throws its refusal, so the create
+   * rolls back; else what the verdict started, to settle before the transaction commits. Undefined
+   * where the create publishes nothing. Every create door asks it, on whichever transaction holds
+   * the insert, so none reads the pool from inside a caller's transaction.
+   */
+  private async judgeCreateOnTx(
+    tx: TransactionContext,
+    params: Parameters<CollectionMutationService["statusSaveOf"]>[0],
+    create: {
+      status: unknown;
+      locale: string | undefined;
+      withoutReview: { reason: string } | undefined;
+    },
+    collection: unknown
+  ): Promise<(() => Promise<void>) | undefined> {
+    const createdSave =
+      create.status === "published"
+        ? this.statusSaveOf(
+            params,
+            {
+              status: create.status,
+              locale: create.locale,
+              everyLanguage: false,
+              withoutReview: create.withoutReview,
+              // A new entry has no drafts.
+              sharedDraftPending: false,
+            },
+            collection
+          )
+        : null;
+    return createdSave
+      ? judgeStatusSave(tx, createdSave, { languages: [], shared: false })
+      : undefined;
   }
 
   /**
@@ -16612,11 +16641,29 @@ export class CollectionMutationService extends BaseService {
     locale: string | undefined,
     executor?: Parameters<DynamicCollectionService["getCollection"]>[1]
   ): Promise<WriteParts> {
-    const collection = await this.releaseCollection(collectionName, executor);
+    return this.writePartsFor(
+      await this.releaseCollection(collectionName, executor),
+      body,
+      locale
+    );
+  }
+
+  /**
+   * What an update of `body` in `locale` moves of `collection`: asked of the
+   * body as sent before the hooks run (`writePartsOf`), and of the payload as
+   * persisted once they have (`settleWriteParts`). The whole document where
+   * the collection is gone.
+   */
+  private writePartsFor(
+    collection: object | null,
+    body: Record<string, unknown>,
+    locale: string | undefined
+  ): WriteParts {
     if (collection === null) return { shared: true };
     return {
       shared: writeMovesSharedPart(
         {
+          hasLifecycle: hasLifecycle(collection),
           fields: collectionFields(collection),
           localized: (collection as { localized?: unknown }).localized === true,
           publishesPerLanguage: publishesPerLanguage(collection),
@@ -17638,11 +17685,10 @@ export class CollectionMutationService extends BaseService {
       // Resolved BEFORE the transaction opens, for the reason given on the
       // create path: expansion reads the component registry on the pooled
       // connection. Hoisting it also keeps a conflict retry from re-running the
-      // same registry reads on every attempt. Skipped when the collection opted out.
-      const webhookFields = await this.webhookFieldTreeIfRecording(
-        params.collectionName,
-        fields
-      );
+      // same registry reads on every attempt. Expanded whatever the webhook
+      // opt-out: the in-process event, announced either way, names its
+      // changed fields from it too.
+      const webhookFields = await this.webhookFieldTree(fields);
 
       // Promote-on-publish: a publish or unpublish on a split collection
       // must apply the whole accumulated working draft to the live row, not only
@@ -18433,6 +18479,25 @@ export class CollectionMutationService extends BaseService {
           }
         }
 
+        // The payload is final once a pending change it publishes is folded
+        // in: the hooks after the write and its events are told what it
+        // moves, a field a hook added, the rules took out or the promoted
+        // change carries included, where the hooks before it were told what
+        // the body sent. Taken from the payload as written, with what the
+        // write lifted out of it put back, on every attempt, so a retry that
+        // promotes nothing is not told what a lost attempt promoted.
+        settleWriteParts(
+          this.writePartsFor(
+            collection as object,
+            this.writtenPayload(
+              finalData,
+              [manyToManyData, componentFieldData],
+              localizedUpdate
+            ),
+            params.locale
+          )
+        );
+
         // A row becoming public for the first time records when, once and for good.
         //
         // `status` says what a document IS; nothing said what it HAS BEEN, so an unpublish
@@ -19111,12 +19176,13 @@ export class CollectionMutationService extends BaseService {
             );
             if (!storeAsWorkingDraft) {
               // The fields the outbox event names as changed, from the same
-              // two documents, for the in-process event announced once this
-              // commits.
-              updatedChangedFields = computeChangedFields(
-                previousDocument,
-                workingDraftDocument ?? updatedDocument
-              );
+              // two documents and the same sanitizing, for the in-process
+              // event announced once this commits.
+              updatedChangedFields = eventChangedFields({
+                data: workingDraftDocument ?? updatedDocument,
+                previous: previousDocument,
+                fields: webhookFields,
+              });
               recorded = await recordMutationEvent(tx, {
                 type: "entry.updated",
                 resource: {
@@ -21554,12 +21620,9 @@ export class CollectionMutationService extends BaseService {
         collection.fields ||
         []) as FieldDefinition[];
       // Resolved before the transaction opens: the expansion reads the component
-      // registry on the pooled connection (see the create/update paths). Skipped
-      // when the collection opted out.
-      const webhookFields = await this.webhookFieldTreeIfRecording(
-        params.collectionName,
-        snapshotFields
-      );
+      // registry on the pooled connection (see the create/update paths).
+      // Expanded whatever the webhook opt-out, for the in-process event too.
+      const webhookFields = await this.webhookFieldTree(snapshotFields);
 
       // Delete the entry, cascade its component subtrees, and append the
       // `entry.deleted` event in one transaction, so the event commits with the
@@ -21759,9 +21822,13 @@ export class CollectionMutationService extends BaseService {
         // post-delete state, so `previous` is null (mirroring create, which
         // carries only `data`). `locale` is set only for a localized collection,
         // so a receiver knows which translation the payload represents.
-        // The fields the outbox event names, from the same document, for the
-        // in-process event announced once this commits.
-        deletedChangedFields = computeChangedFields(null, deletedDocument);
+        // The fields the outbox event names, from the same document and the
+        // same sanitizing, for the in-process event announced once this
+        // commits.
+        deletedChangedFields = eventChangedFields({
+          data: deletedDocument,
+          fields: webhookFields,
+        });
         recorded = await recordMutationEvent(tx, {
           type: "entry.deleted",
           resource: {
@@ -22027,8 +22094,17 @@ export class CollectionMutationService extends BaseService {
       undefined
     );
     if ("refused" in provenance) return provenance.refused;
+    // A publish made without review, and why, read off the body for the publish gate and never
+    // stored; see createEntry.
+    const withoutReview = withoutReviewOfBody(body);
     // A version sent with the body is the server's to decide; see updateEntry.
     body = withoutDocumentVersionKeys(body);
+    if (WITHOUT_REVIEW_KEY in body) {
+      body = { ...body };
+      delete body[WITHOUT_REVIEW_KEY];
+    }
+    // What the publish gate's verdict on this create started, settled once it is written.
+    let settleCreateGate: (() => Promise<void>) | undefined;
     // Computed right after the row is written (before response redaction can
     // strip the slug, and before the after-hooks run) and carried on every
     // post-write return, so a committed item whose after-hook then throws still
@@ -22080,6 +22156,36 @@ export class CollectionMutationService extends BaseService {
           tx.getDrizzle()
         );
       writeRow = collection as Record<string, unknown>;
+
+      // Authorization is resolved once by the batch caller before this shared
+      // transaction (or here when called directly), so no permission read runs
+      // inside the transaction; see the transition check after the hooks.
+      const transitionAuth =
+        params.transitionAuth ??
+        (await this.resolveTransitionAuthorization({
+          collectionName: params.collectionName,
+          accessUser: params.overrideAccess ? undefined : params.user,
+          overrideAccess: params.overrideAccess,
+          // This fallback fires only for a direct caller-owned-tx write (the bulk
+          // paths always pre-resolve and pass transitionAuth), so bind the reads
+          // to this transaction's connection rather than re-entering the pool.
+          executor: tx.getDrizzle(),
+        }));
+      if (body.status === "published") {
+        // A caller who may not publish is told only that, before the publish gate is asked: what
+        // the workflow holds of an entry is not theirs to learn.
+        if (transitionAuth.publishDenied) return transitionAuth.publishDenied;
+        // The publish gate's early answer to a create that publishes, before any hook runs, as
+        // the create door asks it: a create the gate holds back runs no hook. Asked on the
+        // caller's transaction, with no entry yet, so it reads nothing from outside it; only its
+        // refusal is kept, and the verdict after the insert is the one the create settles.
+        await this.judgeCreateOnTx(
+          tx,
+          { ...params, entryId: "" },
+          { status: body.status, locale: undefined, withoutReview },
+          collection
+        );
+      }
 
       // The transaction API has always shaped the caller's own object in place;
       // the batch worker shapes a copy. Both are preserved so neither caller's
@@ -22376,20 +22482,7 @@ export class CollectionMutationService extends BaseService {
       // (hooks run unless skipped); a create has no prior status, and a trusted
       // server write bypasses via overrideAccess.
       //
-      // Authorization is resolved once by the batch caller before this shared
-      // transaction (or here on the pooled connection when called directly), so no
-      // permission read runs inside the transaction.
-      const transitionAuth =
-        params.transitionAuth ??
-        (await this.resolveTransitionAuthorization({
-          collectionName: params.collectionName,
-          accessUser: params.overrideAccess ? undefined : params.user,
-          overrideAccess: params.overrideAccess,
-          // This fallback fires only for a direct caller-owned-tx write (the bulk
-          // paths always pre-resolve and pass transitionAuth), so bind the reads
-          // to this transaction's connection rather than re-entering the pool.
-          executor: tx.getDrizzle(),
-        }));
+      // Authorization was resolved once, before the hooks (`transitionAuth`).
       const transitionDenied = await this.enforceTransitionUnderLock(tx, {
         tableName,
         nextStatus: finalData.status,
@@ -22426,7 +22519,7 @@ export class CollectionMutationService extends BaseService {
       // the row too, so a caller that catches the failure and commits its own
       // transaction keeps nothing of this create. Side effects and hooks run
       // after it, as before.
-      const entry = await underSavepoint(tx, async () => {
+      const { entry, createEffects } = await underSavepoint(tx, async () => {
         // Insert using transaction context
         const entry = await tx.insert<unknown>(tableName, entryData, {
           returning: "*",
@@ -22489,46 +22582,58 @@ export class CollectionMutationService extends BaseService {
             )
           ),
         });
-        return entry;
-      });
+        // A create that puts its entry live is a publish: the gate's verdict, on this
+        // transaction once the entry has its id. A part held back refuses the create, and the
+        // savepoint takes the row back with it.
+        settleCreateGate = await this.judgeCreateOnTx(
+          tx,
+          { ...params, entryId: String((entry as { id: unknown }).id) },
+          { status: finalData.status, locale: undefined, withoutReview },
+          collection
+        );
 
-      // The in-transaction handlers, asked once for this write: the same set
-      // decides how much of the document is assembled and which handlers run.
-      const inTransactionHandlers = this.inTransactionHandlersFor(
-        params.collectionName
-      );
-      // Junction rows, the version snapshot, the outbox event and the
-      // revalidation intent, all on the caller's transaction.
-      const createEffects = await this.recordCreateSideEffects(tx, {
-        collectionName: params.collectionName,
-        inTransactionHandlers,
-        tableName,
-        entry: entry as Record<string, unknown>,
-        collection,
-        fields,
-        manyToManyFields,
-        manyToManyData,
-        user: params.user,
-        actor: params.actor,
-        // The language this create's translatable values went into, so the
-        // version snapshot is tagged with it rather than reading as shared.
-        localeTag: localizedWrite?.writeLocale,
+        // The in-transaction handlers, asked once for this write: the same set
+        // decides how much of the document is assembled and which handlers run.
+        const inTransactionHandlers = this.inTransactionHandlersFor(
+          params.collectionName
+        );
+        // Junction rows, the version snapshot, the outbox event and the
+        // revalidation intent, all on the caller's transaction.
+        const createEffects = await this.recordCreateSideEffects(tx, {
+          collectionName: params.collectionName,
+          tableName,
+          entry: entry as Record<string, unknown>,
+          collection,
+          fields,
+          manyToManyFields,
+          manyToManyData,
+          user: params.user,
+          actor: params.actor,
+          // The language this create's translatable values went into, so the
+          // version snapshot is tagged with it rather than reading as shared.
+          localeTag: localizedWrite?.writeLocale,
+        });
+
+        // Last of the write itself, on the caller's transaction, before the
+        // after-hooks this path runs inside it. Run whether or not hooks are:
+        // see `runInTransactionPhase`. A handler's failure is thrown, not
+        // softened, so the caller's transaction keeps nothing of this entry.
+        await this.runInTransactionPhase(tx, inTransactionHandlers, {
+          collection: params.collectionName,
+          operation: "create",
+          id: (entry as { id: string }).id,
+          data: createEffects.document,
+          user: params.user,
+          context: sharedContext,
+        });
+        // What the gate's verdict started is settled now the create is written, under the same
+        // savepoint: a settle that fails takes this create back, even where a batch carries on
+        // with the items after it.
+        if (settleCreateGate) await settleCreateGate();
+        return { entry, createEffects };
       });
       const eventRecorded = createEffects.eventRecorded;
       revalidationIntent = createEffects.revalidationIntent;
-
-      // Last of the write itself, on the caller's transaction, before the
-      // after-hooks this path runs inside it. Run whether or not hooks are:
-      // see `runInTransactionPhase`. A handler's failure is thrown, not
-      // softened, so the caller's transaction keeps nothing of this entry.
-      await this.runInTransactionPhase(tx, inTransactionHandlers, {
-        collection: params.collectionName,
-        operation: "create",
-        id: (entry as { id: string }).id,
-        data: createEffects.document,
-        user: params.user,
-        context: sharedContext,
-      });
 
       // The collection event, held for the caller's commit. Announced whether
       // or not hooks run: it is not a hook, as the outbox event is not.
@@ -22536,7 +22641,8 @@ export class CollectionMutationService extends BaseService {
         "created",
         params.collectionName,
         entry as Record<string, unknown>,
-        params.user
+        params.user,
+        createEffects.changedFields
       );
 
       // Execute afterCreate hooks (unless skipped)
@@ -22752,13 +22858,15 @@ export class CollectionMutationService extends BaseService {
     action: CollectionEventAction,
     collectionName: string,
     row: Record<string, unknown>,
-    user: unknown
+    user: unknown,
+    /** The fields the write's outbox event names as changed (`eventChangedFields`). */
+    changedFields: readonly string[]
   ): Promise<void> {
     const committed = detachedForListeners(row);
     const by = detachedForListeners(user);
     // The languages read now, inside the write, rather than when the caller's
     // transaction commits, which may happen outside the write's languages.
-    const facts = collectionEventFacts();
+    const facts = collectionEventFacts(changedFields);
     return this.afterCommit(() =>
       deliverCollectionEvent(action, collectionName, committed, by, facts)
     );
@@ -23254,6 +23362,11 @@ export class CollectionMutationService extends BaseService {
       // A status the workflow cannot place is refused here, after every hook and before the
       // transition gate a trusted write skips, so trusted code is held to it too.
       this.refuseUnknownStatus(params.collectionName, finalData);
+      // The payload is final, as on updateEntry: what it moves is told to the
+      // hooks after the write and its events. It writes the default language.
+      settleWriteParts(
+        this.writePartsFor(collection as object, finalData, undefined)
+      );
 
       // A row its own gate judged as a publish or an unpublish in place of
       // update that a hook made an edit, naming a field or dropping the
@@ -23828,13 +23941,18 @@ export class CollectionMutationService extends BaseService {
 
       const versionsConfig = (collection as Record<string, unknown>)
         .versions as ResolvedVersionsConfig | null | undefined;
-      // Skip the per-field component/m2m reads when neither a version nor an
-      // event will consume them (versioning off AND recording disabled by
-      // config). Gated on `isRecordingDisabledByConfig` — the SAME config-stable
-      // decision the webhook field-tree uses — so the relations and the stripped
-      // field tree are always assembled together: a decision that can flip
-      // mid-write (a stored opt-out or endpoint activation) never leaves a
-      // recorded event with a parent-only payload.
+      // A write that is not held announces the in-process
+      // `collection.<slug>.updated` event, whatever the webhook opt-out, and
+      // names the fields it changed from the documents assembled here, so
+      // both are assembled whole for it: without its components and
+      // many-to-many ids, an edit of only those names nothing. A held edit
+      // announces nothing, and its written document skips the per-field
+      // component/m2m reads when neither a version nor an event will consume
+      // them (versioning off AND recording disabled by config). Gated on
+      // `isRecordingDisabledByConfig` — the SAME config-stable decision the
+      // webhook field-tree uses — so a decision that can flip mid-write (a
+      // stored opt-out or endpoint activation) never leaves a recorded event
+      // with a parent-only payload.
       // The activity trail consumes these documents too, and it is NOT gated on
       // webhook recording — so an opted-out collection whose update will be
       // recorded still has to assemble its relations. Without this a
@@ -23852,15 +23970,8 @@ export class CollectionMutationService extends BaseService {
       );
       const handsInTransaction = inTransactionHandlers.length > 0;
       const needsRelations =
+        !storeAsWorkingDraft ||
         !!versionsConfig?.enabled ||
-        recordsActivity ||
-        handsInTransaction ||
-        !isRecordingDisabledByConfig("collection", params.collectionName);
-      // The `previous` document is carried by the outbox event and by the
-      // trail's changed-field names, never by the version snapshot: a
-      // version-only update that records neither still skips it instead of
-      // paying a second full relational walk whose result is discarded.
-      const previousNeedsRelations =
         recordsActivity ||
         handsInTransaction ||
         !isRecordingDisabledByConfig("collection", params.collectionName);
@@ -23882,9 +23993,9 @@ export class CollectionMutationService extends BaseService {
           ),
           fields,
           manyToManyFields,
-          // A held edit needs the live relations regardless of what is being
-          // recorded: they are the base the pending change accumulates onto.
-          needsRelations: previousNeedsRelations || storeAsWorkingDraft,
+          // Always whole: the event of a write that is not held diffs against
+          // it, and a held edit accumulates onto the live relations.
+          needsRelations: true,
         });
 
       // Store the pending edit rather than the live row, through the same
@@ -24180,11 +24291,10 @@ export class CollectionMutationService extends BaseService {
           this.translatedFieldsOf(collection, fields)
         );
       }
-      const eventFields = await this.webhookFieldTreeIfRecording(
-        params.collectionName,
-        fields,
-        tx.getDrizzle()
-      );
+      // Expanded whatever the webhook opt-out: the in-process event below,
+      // announced either way, names its changed fields from it too, and a
+      // field hidden inside a component must not be named there either.
+      const eventFields = await this.webhookFieldTree(fields, tx.getDrizzle());
       const eventActor = actorForWrite(params.actor, params.user);
       let eventRecorded = await recordMutationEvent(tx, {
         type: "entry.updated",
@@ -24367,7 +24477,14 @@ export class CollectionMutationService extends BaseService {
           "updated",
           params.collectionName,
           updated as Record<string, unknown>,
-          params.user
+          params.user,
+          // From the same two documents and the same sanitizing as the
+          // outbox event recorded above.
+          eventChangedFields({
+            data: updatedDocument,
+            previous: previousDocument,
+            fields: eventFields,
+          })
         );
       }
 
@@ -24888,7 +25005,12 @@ export class CollectionMutationService extends BaseService {
       // through this helper is observable too, in the same shape as the
       // single-delete path. Resolve component schemas on this transaction's
       // connection to avoid taking a second pooled connection. `locale` is set
-      // only for a localized collection.
+      // only for a localized collection. Expanded whatever the webhook
+      // opt-out, for the in-process event announced either way.
+      const deleteEventFields = await this.webhookFieldTree(
+        snapshotFields,
+        tx.getDrizzle()
+      );
       const deleteRecorded = await recordMutationEvent(tx, {
         type: "entry.deleted",
         resource: {
@@ -24899,11 +25021,7 @@ export class CollectionMutationService extends BaseService {
         },
         data: deletedDocument,
         previous: null,
-        fields: await this.webhookFieldTreeIfRecording(
-          params.collectionName,
-          snapshotFields,
-          tx.getDrizzle()
-        ),
+        fields: deleteEventFields,
         actor: actorForWrite(params.actor, params.user),
       });
       // Last of the write itself, still inside the window whose failure is
@@ -24931,7 +25049,9 @@ export class CollectionMutationService extends BaseService {
         "deleted",
         params.collectionName,
         entry,
-        params.user
+        params.user,
+        // From the document and the sanitizing the outbox event used.
+        eventChangedFields({ data: deletedDocument, fields: deleteEventFields })
       );
 
       // The tags this delete invalidates, collected by the batch caller and

@@ -88,6 +88,12 @@ import {
   saveAsSharedStyleRefusal,
   type SharedStyleOffer,
 } from "../shared-style-target";
+import {
+  isUnwrappable,
+  planUnwrap,
+  planWrap,
+  WRAP_WORDS,
+} from "../selection-wrap";
 import { turnIntoOffers, type TurnIntoActionId } from "../turn-into-verb";
 
 import type { RefusalWording } from "./drag-refusal";
@@ -129,6 +135,8 @@ export type ToolbarActionId =
   | "copy"
   | "cut"
   | "paste"
+  | "copy-style"
+  | "paste-style"
   | TurnIntoActionId
   | "save-as-pattern"
   | "save-as-shared-style"
@@ -137,6 +145,8 @@ export type ToolbarActionId =
   | "detach-component"
   | "duplicate-component"
   | "update-pattern"
+  | "wrap-in-box"
+  | "unwrap"
   | "delete";
 
 /** One button's worth of decision. */
@@ -828,10 +838,11 @@ function manyBlockActions(
       ask,
       opsOf(selectionDuplication(document, ids))
     ),
-    ...clipboardActions(deleteItem),
+    ...clipboardActions(deleteItem, ids.length),
     saveAction(document, ids, nesting, mayCreate, planned),
     ...sharedStyleActions(document, ids, sharedStyles),
     ...compositionActions(document, ids, nesting, components, ask, planned),
+    ...wrapActions(document, ids, nesting, ask),
     deleteItem,
   ];
 }
@@ -1002,7 +1013,7 @@ export function toolbarActions(
       lockRefusalFor,
       duplication?.ops
     ),
-    ...clipboardActions(deleteItem),
+    ...clipboardActions(deleteItem, 1),
     ...turnIntoActions(
       document,
       selectedId,
@@ -1023,8 +1034,52 @@ export function toolbarActions(
       lockRefusalFor,
       planned
     ),
+    ...wrapActions(document, ids, rules, lockRefusalFor),
     deleteItem,
   ];
+}
+
+/**
+ * "Wrap in a box" for a selection side by side in one place, and "Unwrap
+ * (keep what's inside)" for one Box, Section, Column or Card, each from the
+ * menu. A result the placement rules forbid is offered dimmed with the
+ * reason, and a lock that holds a block it moves dims it too.
+ */
+function wrapActions(
+  document: BlockDocument,
+  ids: readonly string[],
+  nesting: NestingSource,
+  ask: LockQuestion | undefined
+): ToolbarAction[] {
+  const items: ToolbarAction[] = [];
+  const wrap = planWrap(document, ids, nesting);
+  if (wrap !== null) {
+    items.push(
+      isRefusal(wrap)
+        ? { id: "wrap-in-box", label: WRAP_WORDS.wrap, enabled: false, reason: wrap.reason, inMenu: true }
+        : heldByLock(
+            { id: "wrap-in-box", label: WRAP_WORDS.wrap, enabled: true, inMenu: true },
+            ask,
+            wrap.ops
+          )
+    );
+  }
+  const [only] = ids;
+  if (ids.length === 1 && only !== undefined && isUnwrappable(findNode(document.nodes, only))) {
+    const unwrap = planUnwrap(document, only, nesting);
+    if (unwrap !== null) {
+      items.push(
+        isRefusal(unwrap)
+          ? { id: "unwrap", label: WRAP_WORDS.unwrap, enabled: false, reason: unwrap.reason, inMenu: true }
+          : heldByLock(
+              { id: "unwrap", label: WRAP_WORDS.unwrap, enabled: true, inMenu: true },
+              ask,
+              unwrap.ops
+            )
+      );
+    }
+  }
+  return items;
 }
 
 /**
@@ -1291,11 +1346,38 @@ export function depthMoveActions(
  * clipboard holds is read only when it is pressed; a paste the page refuses
  * says why then.
  */
-function clipboardActions(deleteItem: ToolbarAction): ToolbarAction[] {
+function clipboardActions(
+  deleteItem: ToolbarAction,
+  count: number
+): ToolbarAction[] {
   return [
     { id: "copy", label: "Copy", enabled: true, inMenu: true },
     { ...deleteItem, id: "cut", label: "Cut", inMenu: true },
     { id: "paste", label: "Paste", enabled: true, inMenu: true },
+    ...styleClipboardActions(count),
+  ];
+}
+
+/**
+ * Copy style and Paste style, beside Copy and Paste in the same group.
+ *
+ * Copy style takes one block's look, so it is dimmed for several. Paste style
+ * gives that look to every selected block, and like Paste it is always
+ * offered: what was copied is read when it is pressed, and a paste with
+ * nothing copied, or onto a held block, says why then.
+ */
+function styleClipboardActions(count: number): ToolbarAction[] {
+  return [
+    count > 1
+      ? {
+          id: "copy-style",
+          label: "Copy style",
+          enabled: false,
+          reason: oneAtATime(count),
+          inMenu: true,
+        }
+      : { id: "copy-style", label: "Copy style", enabled: true, inMenu: true },
+    { id: "paste-style", label: "Paste style", enabled: true, inMenu: true },
   ];
 }
 

@@ -162,7 +162,12 @@ function columnTypeChanges(args: {
     const from =
       args.renames.find(rename => rename.to === column)?.from ?? column;
     const old = before.get(from);
-    return old !== undefined && shape(old) !== shape(field);
+    if (old === undefined) return false;
+    // A field gaining or losing a column of its own (a many-to-many, kept in a junction table, made
+    // one-to-one) changes no column's type: the column is added or dropped, as the file writes it.
+    const was = shape(old);
+    const is = shape(field);
+    return was !== null && is !== null && was !== is;
   });
 }
 

@@ -30,6 +30,7 @@
 
 import type {
   BlockDefinition as EngineBlockDefinition,
+  BlockNode as EngineBlockNode,
   BlockRenderArgs as EngineBlockRenderArgs,
 } from "@nextlyhq/blocks-engine";
 import type { ReactNode } from "react";
@@ -679,4 +680,163 @@ export interface FormProvider {
  */
 export interface FormProviderService {
   register(provider: FormProvider): void;
+}
+
+/**
+ * The group of the page builder's Page checks list a provider's findings are
+ * listed under: Accessibility, Content and data, Publishing, or Search.
+ *
+ * @experimental The page check provider contract is new; its names and shape
+ * may change before the page builder's checks are marked stable.
+ */
+export type PageCheckGroupName =
+  | "accessibility"
+  | "content"
+  | "publishing"
+  | "search";
+
+/**
+ * The page a provider is asked about: the collection and entry being edited,
+ * its language, and its blocks as the editor holds them, unsaved changes
+ * included. A provider that judges what it stores reads the saved entry, and
+ * its findings then follow the last save.
+ *
+ * @experimental Carried by the page check provider contract.
+ */
+export interface PageCheckRequest {
+  readonly collection: string;
+  /** The entry; null for a page not saved yet. */
+  readonly entryId: string | null;
+  readonly locale?: string;
+  /** The page's blocks as the editor holds them, read as stored data. */
+  readonly document: unknown;
+}
+
+/**
+ * Where a finding is fixed: a block's setting, by the tab it is on and its
+ * id as the inspector names it, or a tab of Page settings, by its id.
+ *
+ * @experimental Carried by the page check provider contract.
+ */
+export type PageCheckFix =
+  | {
+      readonly tab: "content" | "style" | "advanced";
+      readonly id: string;
+    }
+  | { readonly settingsTab: string };
+
+/**
+ * One problem a provider finds, in the plain words an author reads: what is
+ * wrong, why it matters, and what to do.
+ *
+ * @experimental Carried by the page check provider contract.
+ */
+export interface PageCheckFinding {
+  /** The block it is about; absent for the page as a whole. */
+  readonly nodeId?: string;
+  /** Which of several problems on one block this is. */
+  readonly part?: string;
+  readonly what: string;
+  readonly why: string;
+  readonly todo: string;
+  /** Where choosing it takes the author; absent, only its block is selected. */
+  readonly fix?: PageCheckFix;
+}
+
+/**
+ * A plugin's page check: findings about the page being edited, listed in
+ * the page builder's Page checks with the built-in ones, in `group`. It runs
+ * on the server, as the person editing (`access`), and never blocks a save
+ * or a publish.
+ *
+ * @experimental The page check provider contract is new; its names and shape
+ * may change before the page builder's checks are marked stable.
+ */
+export interface PageCheckProvider {
+  /** Lower case letters, digits and `-`, unique among a site's providers. */
+  readonly id: string;
+  readonly group: PageCheckGroupName;
+  check(
+    page: PageCheckRequest,
+    options: { readonly access: Extract<FormAccess, { as: "user" }> }
+  ): Promise<readonly PageCheckFinding[]>;
+}
+
+/**
+ * The page builder's cross-plugin `pageChecks` service, as a provider plugin
+ * reaches it: `ctx.services.plugins["@nextlyhq/plugin-page-builder"].pageChecks`.
+ * Resolve it from `init`, before or after the page builder's own. Registering
+ * an `id` already registered throws.
+ *
+ * @experimental Carried by the page check provider contract.
+ */
+export interface PageCheckProviderService {
+  register(provider: PageCheckProvider): void;
+}
+
+// ---------------------------------------------------------------------------
+// Starter pages
+// ---------------------------------------------------------------------------
+
+/**
+ * One block as a page stores it: its type, version, props, styles and the
+ * blocks in its slots. What a starter page is made of.
+ *
+ * @experimental Carried by the starter page contract.
+ */
+export type { BlockNode } from "@nextlyhq/blocks-engine";
+
+/**
+ * A starter page: a ready-made page body an author can start a new page
+ * from, in the New page dialog's "Start from" and on an empty page's
+ * "or start from a page" row.
+ *
+ * A starter is copied once. Its blocks become the page's own, each with a
+ * new id, so a later change to the starter in code never reaches a page made
+ * from it, and a change on the page never reaches the starter. It fills the
+ * page's body only: the header and footer are the ones the author chose.
+ *
+ * Its preview is drawn from its blocks, in the site's own colours and fonts,
+ * so style its blocks with the site's variables (`{ $token: "color.primary" }`)
+ * rather than raw colours.
+ *
+ * A site registers its own with `pageBuilder({ starterPages })`; a plugin
+ * declares them under
+ * `contributes.declarations["@nextlyhq/plugin-page-builder"].starterPages`.
+ * Each is checked at start-up, and the site does not start while one is
+ * refused: an id that is malformed or used twice, a block the site doesn't
+ * have, a placed component, a picture or an address to load from, or blocks
+ * the page builder's own validation refuses. Leave an Image empty: the author
+ * picks the site's own picture.
+ *
+ * A starter whose blocks, variables or shared styles the site no longer has
+ * is left out of the list, never offered half-drawn.
+ *
+ * @experimental The starter page contract is new; its names and shape may
+ * change before the page builder's starter pages are marked stable.
+ */
+export interface StarterPageDefinition {
+  /**
+   * Lower case letters, digits and `-`, 1 to 64 characters, unique among a
+   * site's starter pages.
+   */
+  readonly id: string;
+  /** Its name, as the author reads it: "Landing", "About us". */
+  readonly label: string;
+  /** One short sentence saying what the page holds. */
+  readonly description: string;
+  /** The page body's blocks, top to bottom. */
+  readonly blocks: readonly EngineBlockNode[];
+}
+
+/**
+ * Declare a starter page. Returns its argument unchanged; it exists so an
+ * editor checks the shape where the starter is written.
+ *
+ * @experimental Carried by the starter page contract.
+ */
+export function defineStarterPage(
+  starter: StarterPageDefinition
+): StarterPageDefinition {
+  return starter;
 }

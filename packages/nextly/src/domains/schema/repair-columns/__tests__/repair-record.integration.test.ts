@@ -16,7 +16,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { migrateCore } from "../../../../cli/commands/migrate";
-import { runUpgrade } from "../../../../cli/commands/upgrade";
+import { runMigrateDataSteps } from "../../../../cli/commands/__tests__/helpers/run-migrate-data-steps";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -149,14 +149,8 @@ describe.each(getConfiguredTestDialects())("a column repair on %s", dialect => {
     }
     expect(await legacyState(), "after nextly migrate").toEqual(before);
 
-    await runUpgrade(
-      { confirmBackedUp: true },
-      {
-        adapter: handle.adapter as never,
-        logger: { info: () => {}, warn: () => {} },
-      }
-    );
-    expect(await legacyState(), "after nextly upgrade").toEqual(before);
+    await runMigrateDataSteps(handle.adapter);
+    expect(await legacyState(), "after the data steps").toEqual(before);
 
     // A production start migrates through this same `migrateCore` when migrations run at boot, and
     // otherwise changes no schema; a second run of it is the start against an up-to-date database.

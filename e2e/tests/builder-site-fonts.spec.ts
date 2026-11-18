@@ -237,7 +237,7 @@ test("Body and Headings reach every page: the canvas, its header and footer, the
       )
     ).not.toBe("");
 
-    // At the top of Type, above the site's fonts.
+    // At the top of Type, above the way to the site's fonts.
     const frame = await openBuilder(page);
     const { panel, fonts } = await openType(page);
     await expect(
@@ -249,7 +249,7 @@ test("Body and Headings reach every page: the canvas, its header and footer, the
     const top = async (locator: ReturnType<Page["locator"]>) =>
       (await locator.boundingBox())?.y ?? Number.POSITIVE_INFINITY;
     expect(await top(fonts)).toBeLessThan(
-      await top(panel.getByRole("heading", { name: "On this site" }))
+      await top(panel.getByRole("button", { name: "Manage fonts…" }))
     );
 
     // Body: every paragraph, the header's and the footer's, and the heading
@@ -258,7 +258,9 @@ test("Body and Headings reach every page: the canvas, its header and footer, the
     await expect
       .poll(async () => (await stored(page.request)).tokens?.siteText?.body)
       .toEqual({ fontFamily: { $token: "font.body" } });
-    await expect.poll(async () => (await fontsIn(frame, ".nx-canvas")).text).toMatch(LORA_STACK);
+    await expect
+      .poll(async () => (await fontsIn(frame, ".nx-canvas")).text)
+      .toMatch(LORA_STACK);
     let canvas = await fontsIn(frame, ".nx-canvas");
     expect(canvas.header).toMatch(LORA_STACK);
     expect(canvas.heading).toMatch(LORA_STACK);
@@ -269,7 +271,9 @@ test("Body and Headings reach every page: the canvas, its header and footer, the
     await expect
       .poll(async () => (await stored(page.request)).tokens?.siteText?.h2)
       .toMatchObject({ fontFamily: { $token: "font.heading" } });
-    await expect.poll(async () => (await fontsIn(frame, ".nx-canvas")).heading).toMatch(MONO_STACK);
+    await expect
+      .poll(async () => (await fontsIn(frame, ".nx-canvas")).heading)
+      .toMatch(MONO_STACK);
     canvas = await fontsIn(frame, ".nx-canvas");
     expect(canvas.text).toMatch(LORA_STACK);
     expect(canvas.own).toBe("fantasy");
@@ -361,7 +365,11 @@ test("the fonts are changed with the keyboard alone, fit the narrowest panel, an
       await page.setViewportSize({ width: 1280, height: 720 });
       await page.emulateMedia({ reducedMotion: "reduce" });
       const id = await seedPage(page);
-      await gotoAdmin(page, `/collections/pages/${id}/builder?field=content`, theme);
+      await gotoAdmin(
+        page,
+        `/collections/pages/${id}/builder?field=content`,
+        theme
+      );
       await canvasDocument(page);
       const { panel, fonts } = await openType(page);
       const divider = page.getByRole("separator", { name: "Panel and canvas" });

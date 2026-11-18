@@ -88,6 +88,8 @@ export type SingleValidationErrorCode =
   | "FIELDS_EMPTY"
   | "FIELD_NAME_REQUIRED"
   | "FIELD_NAME_INVALID_FORMAT"
+  // A name longer than any field name may be (`MAX_FIELD_NAME_LENGTH`).
+  | "FIELD_NAME_TOO_LONG"
   | "FIELD_NAME_SQL_KEYWORD"
   | "FIELD_NEVER_TRANSLATABLE"
   | "FIELD_NAME_DUPLICATE"

@@ -1301,4 +1301,41 @@ describe("Copy, Cut and Paste in the menu", () => {
       expect(actionOf(actions, id).inMenu).toBe(true);
     }
   });
+
+  it("offers Copy style and Paste style beside them, in the same group", () => {
+    const actions = toolbarActions(documentOf([node("a")]), "a", ["a"]);
+    const ids = actions.map(action => action.id);
+    const at = ids.indexOf("paste");
+    expect(ids.slice(at - 2, at + 3)).toEqual([
+      "copy",
+      "cut",
+      "paste",
+      "copy-style",
+      "paste-style",
+    ]);
+    expect(actionOf(actions, "copy-style")).toEqual({
+      id: "copy-style",
+      label: "Copy style",
+      enabled: true,
+      inMenu: true,
+    });
+    expect(actionOf(actions, "paste-style")).toEqual({
+      id: "paste-style",
+      label: "Paste style",
+      enabled: true,
+      inMenu: true,
+    });
+  });
+
+  it("copies the style of one block only, and pastes onto every selected block", () => {
+    const actions = toolbarActions(documentOf([node("a"), node("b")]), "a", [
+      "a",
+      "b",
+    ]);
+    expect(actionOf(actions, "copy-style")).toMatchObject({
+      enabled: false,
+      reason: "Only one block at a time. 2 are selected.",
+    });
+    expect(actionOf(actions, "paste-style").enabled).toBe(true);
+  });
 });
