@@ -24,6 +24,7 @@ import {
   itemPropName,
   type AnyBlockDefinition,
   type BlockDocument,
+  type PropSchema,
 } from "@nextlyhq/blocks-engine";
 
 async function renderToHtml(element: ReactElement): Promise<string> {
@@ -181,7 +182,10 @@ describe("the declaration and the marking must agree", () => {
       const definition = coreBlocks.find(block => block.name === blockName);
       const example = definition?.example?.props ?? {};
       // A list of words is marked item by item, each under its own address.
-      const items = isInlineItemsProp(definition?.props?.[propName]);
+      // Read by the prop's name across every core block's own prop keys.
+      const props: Readonly<Record<string, PropSchema | undefined>> =
+        definition?.props ?? {};
+      const items = isInlineItemsProp(props[propName]);
       const markup = await html(
         documentOf(blockName, {
           ...example,
