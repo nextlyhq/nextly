@@ -561,8 +561,12 @@ export async function renderCollectionLoop({
 /** How many sample items a list with nothing to show draws for an author. */
 const SAMPLE_COUNT = 3;
 
-/** The attribute on a sample item, which the editor greys and tags. */
-export const LIST_SAMPLE_ATTRIBUTE = "data-nx-list-sample";
+/**
+ * The attribute on a sample item, which the editor's canvas greys and tags
+ * "Sample". Spelled again in the editor's canvas sheet, whose test draws this
+ * block to find it, so the two cannot drift apart unseen.
+ */
+const LIST_SAMPLE_ATTRIBUTE = "data-nx-list-sample";
 
 /** A sample value for a field, by its kind, numbered for its item. */
 function sampleValue(
