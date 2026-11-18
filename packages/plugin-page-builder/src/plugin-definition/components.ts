@@ -69,7 +69,6 @@ import { reconcileRetired } from "../retired-history";
 import { retiredPins } from "../retired-pins";
 import { allRetired, retiredStore } from "../retired-store";
 import { savePatternRoute } from "../save-pattern-route";
-import { appOrigin } from "../site-code/page-code";
 import { siteLocales as siteLocalesOf } from "../site-style-route";
 import { readEntryBlocksFields } from "../templates/entry-content-fields";
 import { templateTargets } from "../templates/template-guard";
@@ -325,12 +324,10 @@ export function installComposition(
     // Through the Direct API for the validation, and on the write's own
     // transaction for the judgement under the graph lock.
     siteDefinitions: siteStyle.definitions,
-    // A page's own code, judged on every write that changes it against the
-    // policy the site declared for its site code, from the site's own
-    // origin as the app knows it.
-    pageCode: {
-      options: opts.siteCode,
-      siteOrigin: () => appOrigin(process.env.NEXT_PUBLIC_APP_URL),
+    // Where saved sections are kept, as the host named the collection.
+    patterns: {
+      collection: ctx.self.collections[PATTERNS_SLUG] ?? PATTERNS_SLUG,
+      field: "content",
     },
     hostsOf: indexHostFinder({
       rows: () => usageTableRows(ctx.db, usageTableOf(componentUsageIndex)),

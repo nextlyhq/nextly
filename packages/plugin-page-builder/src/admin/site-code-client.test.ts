@@ -11,9 +11,8 @@ const sdk = vi.hoisted(() => ({
 vi.mock("@nextlyhq/plugin-sdk/admin", () => sdk);
 
 const { readSiteCss, saveSiteCss } = await import("./site-code-client");
-const { PAGE_BUILDER_PLUGIN_NAME, SITE_CSS_ROUTE_PATH } = await import(
-  "../library-contract"
-);
+const { PAGE_BUILDER_PLUGIN_NAME } = await import("../library-contract");
+const { SITE_CSS_ROUTE_PATH } = await import("../site-css-contract");
 
 beforeEach(() => {
   sdk.readPluginRoute.mockReset();
@@ -38,6 +37,13 @@ describe("the site CSS calls", () => {
 
   it("refuses a read the site did not answer", async () => {
     sdk.readPluginRoute.mockResolvedValue(undefined);
+    await expect(readSiteCss()).rejects.toThrow("The site did not answer.");
+  });
+
+  it("refuses an answer that isn't the site's CSS, rather than drawing it", async () => {
+    sdk.readPluginRoute.mockResolvedValue({ items: [] });
+    await expect(readSiteCss()).rejects.toThrow("The site did not answer.");
+    sdk.readPluginRoute.mockResolvedValue({ css: 1, sha256: "f".repeat(64) });
     await expect(readSiteCss()).rejects.toThrow("The site did not answer.");
   });
 

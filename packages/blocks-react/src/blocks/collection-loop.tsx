@@ -41,6 +41,7 @@ import type { ReactElement } from "react";
 
 import type { BlockRenderArgs, ListPageContext, PageContext } from "../context";
 import { LIST_ACTION_ATTRIBUTE, LIST_REF_ATTRIBUTE } from "../editor-markers";
+import { registeredBlocks } from "../resolver";
 
 import { CONTENT } from "./categories";
 import {
@@ -539,7 +540,7 @@ export async function renderCollectionLoop({
   // Where an author is looking at a collection with nothing to show, the
   // item is drawn with sample entries instead, read ahead as entries are so
   // its bindings fill from them. A failed read keeps its empty state.
-  const samples = samplesFor(outcome, props, paging, ctx, collection);
+  const samples = samplesFor(outcome, props, paging, ctx, collection, node);
   const read = await withReadAhead(
     {
       outcome: samples === undefined ? outcome : { ...outcome, items: samples },
@@ -600,12 +601,65 @@ function samplesFor(
   props: CollectionLoopProps,
   paging: { readonly page?: number | undefined } | undefined,
   ctx: PageContext,
-  collection: string
+  collection: string,
+  node: BlockNode
 ): readonly Record<string, unknown>[] | undefined {
   if (outcome.items.length > 0 || outcome.failed) return undefined;
   return readsEveryEntry(props, paging)
-    ? sampleItems(ctx, collection)
+    ? sampleItems(ctx, collection, node)
     : undefined;
+}
+
+/**
+ * The field kind a sample gives a value bound into a prop of `type`: the
+ * kinds `sampleValue` draws a value for, so one rule says what a sample holds.
+ * A picture, a link or a reference gets none, and draws its own empty state.
+ */
+const SAMPLE_KIND_OF_PROP: Readonly<Record<string, string>> = {
+  text: "text",
+  textarea: "text",
+  email: "text",
+  code: "text",
+  select: "text",
+  radio: "text",
+  number: "number",
+  date: "date",
+  checkbox: "checkbox",
+};
+
+/**
+ * The fields the list's item binds, each with the kind of the prop it fills:
+ * what a sample entry needs where the page knows no fields of its own, as on
+ * an editor's canvas. Read from the blocks registered where the item is drawn
+ * (`registeredBlocks`): the editor's own registry on its canvas, the only
+ * place samples are drawn. A list inside the item binds its own entries, so
+ * its blocks are left out.
+ */
+function boundItemFields(
+  node: BlockNode
+): readonly { readonly name: string; readonly type: string }[] {
+  const found = new Map<string, string>();
+  const blocks = registeredBlocks();
+  const visit = (nodes: readonly BlockNode[]): void => {
+    for (const child of nodes) {
+      const props = blocks.get(child.type)?.props;
+      for (const [prop, binding] of Object.entries(child.bindings ?? {})) {
+        const kind = SAMPLE_KIND_OF_PROP[props?.[prop]?.type ?? ""];
+        if (
+          kind !== undefined &&
+          binding.source === "item" &&
+          binding.list === undefined &&
+          !found.has(binding.$bind)
+        ) {
+          found.set(binding.$bind, kind);
+        }
+      }
+      if (child.type === COLLECTION_LIST_TYPE) continue;
+      for (const slot of Object.values(child.slots ?? {})) visit(slot);
+    }
+  };
+  visit(node.slots?.children ?? []);
+  return [...found].map(([name, type]) => ({ name, type }));
 }
 
 /** How many sample items a list with nothing to show draws for an author. */
@@ -651,10 +705,15 @@ function sampleValue(
  */
 function sampleItems(
   ctx: PageContext,
-  collection: string
+  collection: string,
+  node: BlockNode
 ): readonly Record<string, unknown>[] | undefined {
   if (ctx.diagnostics !== true) return undefined;
-  const fields = ctx.fieldShapes?.fieldsOf({ collection }) ?? [];
+  // The page's own knowledge of the collection's fields where it has it,
+  // else what the item binds, by the props it fills: an editor's canvas
+  // carries no field shapes outside its visitor view.
+  const shapes = ctx.fieldShapes?.fieldsOf({ collection });
+  const fields = shapes ?? boundItemFields(node);
   return Array.from({ length: SAMPLE_COUNT }, (_, index) => ({
     id: `sample-${String(index + 1)}`,
     ...Object.fromEntries(

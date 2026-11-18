@@ -8,6 +8,12 @@
  * when differences remain, 3 when a conversion failed or was interrupted, and 1 when it could not
  * run. With `--json` it writes one document to standard output and nothing else there.
  *
+ * A change the configuration holds and no migration has applied is reported as pending, never
+ * converted: every column of an entity no migration has applied yet, or of one the configuration
+ * or a checked-out Builder manifest removes, and every column a table rename moves. A record of
+ * what was applied that cannot be read (a migration snapshot, or a registry row naming no table)
+ * is a run that could not run.
+ *
  * Without `--apply` it changes nothing: no table, row, registry entry or ledger row, and it never
  * takes the schema lock, only reads who holds it. With `--apply` it takes the schema lock, converts
  * each safe column and records each repair; a lock still held after the wait is a run that could

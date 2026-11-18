@@ -31,9 +31,30 @@ export type LastStore =
   | { kind: "stored"; at: Date }
   | { kind: "failed"; message: string; action: string };
 
+/**
+ * What the tracked writes came to once none is on its way: null when every
+ * one landed, the label and message of one whose latest attempt failed, or
+ * `still-writing` when writes kept starting past the bound a store waits.
+ */
+export type TrackedWritesVerdict =
+  | null
+  | {
+      readonly kind: "failed";
+      readonly label: string;
+      readonly message: string;
+    }
+  | { readonly kind: "still-writing" };
+
 export interface StoringGate {
   registerBeforeAction: (handler: BeforeDocumentAction) => () => void;
   trackWrite: (label: string, write: Promise<unknown>) => void;
+  /**
+   * Waits for the tracked writes alone, as a store waits for them, readying
+   * nothing: for a second document stored from inside this editor, which
+   * depends on the same writes (a site-wide style change) but is not this
+   * document's store.
+   */
+  settleWrites: () => Promise<TrackedWritesVerdict>;
   /** Wraps an action that stores the editor's work: it runs once that work is ready. */
   storing: (
     action: string,
@@ -179,24 +200,32 @@ export function useStoringGate(scope: string): StoringGate {
 
   /**
    * Every tracked write settled, including one started while an earlier one
-   * was being waited for, and none failed: the refusal when one did, or null.
-   * Bounded, so writes that keep starting refuse the store rather than hold it
-   * forever.
+   * was being waited for, and what they came to. Bounded, so writes that keep
+   * starting are answered as still writing rather than waited for forever.
    */
-  const writesSettled = async (): Promise<DocumentActionOutcome | null> => {
+  const settleWrites = useCallback(async (): Promise<TrackedWritesVerdict> => {
     for (let pass = 0; writes.current.pending.size > 0; pass++) {
-      if (pass === MAX_WRITE_PASSES) return stillWriting;
+      if (pass === MAX_WRITE_PASSES) return { kind: "still-writing" };
       await Promise.allSettled([...writes.current.pending.values()]);
     }
     const failure = firstFailure(writes.current.failed);
-    return failure === null
-      ? null
-      : {
-          ok: false,
-          reason: "refused",
-          message: `${failure.label} wasn't saved, so this page wasn't either: ${failure.message}`,
-          beforeWrite: true,
-        };
+    return failure === null ? null : { kind: "failed", ...failure };
+  }, []);
+
+  /**
+   * The tracked writes settled and none failed: the store's refusal when one
+   * did or they kept starting, or null.
+   */
+  const writesSettled = async (): Promise<DocumentActionOutcome | null> => {
+    const verdict = await settleWrites();
+    if (verdict === null) return null;
+    if (verdict.kind === "still-writing") return stillWriting;
+    return {
+      ok: false,
+      reason: "refused",
+      message: `${verdict.label} wasn't saved, so this page wasn't either: ${verdict.message}`,
+      beforeWrite: true,
+    };
   };
 
   /**
@@ -345,6 +374,7 @@ export function useStoringGate(scope: string): StoringGate {
   return {
     registerBeforeAction,
     trackWrite,
+    settleWrites,
     storing,
     lastStore,
     inFlight: readying > 0 || writes.current.pending.size > 0,

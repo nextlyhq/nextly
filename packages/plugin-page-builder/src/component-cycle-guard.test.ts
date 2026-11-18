@@ -1731,7 +1731,10 @@ describe("saving a component that would reference itself", () => {
         string,
         { label: string; overrides: Record<string, unknown> }
       > = {};
-      for (let i = 0; i < 82; i += 1) {
+      // Each variant composes the definition once and walks it once more for
+      // blocks following its setting, so this many leaves the allowance almost
+      // gone by the last.
+      for (let i = 0; i < 40; i += 1) {
         many[`v${String(i)}`] = { label: "V", overrides: {} };
       }
       many.loop = { label: "Loop", overrides: { swap: "a" } };

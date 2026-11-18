@@ -41,6 +41,12 @@ export interface BuilderNamePlace {
   /** Whether Draft/Published is on, or turned on in the settings this save carries. */
   lifecycleEnabled: boolean;
   /**
+   * Whether the field becomes a column (`fieldProducesColumn`). A field that makes none carries its
+   * name in no column, so a column's length does not reach it. Absent is a column, as the save
+   * assumes.
+   */
+  producesColumn?: boolean;
+  /**
    * The names the other fields at the same level hold, the field's own left out. A field deleted
    * but not yet saved still holds its name, so its name is among them.
    */
@@ -54,6 +60,8 @@ function described(name: string, problem: FieldNameProblem): string {
       return "Use lowercase letters, digits and underscores, starting with a letter.";
     case "column-too-long":
       return "Too long: a field's column may have at most 63 characters.";
+    case "name-too-long":
+      return "Too long: a field's name may have at most 255 characters.";
     case "reserved":
       return `${name} is a built-in column here. Choose another name.`;
     case "lifecycle":
@@ -74,6 +82,9 @@ export function nameRuleProblem(
     surface: place.surface,
     nested: place.nested,
     lifecycleEnabled: place.lifecycleEnabled,
+    ...(place.producesColumn === undefined
+      ? {}
+      : { producesColumn: place.producesColumn }),
   });
   return problem
     ? { kind: problem.kind, message: described(name, problem) }

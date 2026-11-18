@@ -11,7 +11,7 @@ import type { BlockDocument, BlockNode } from "@nextlyhq/blocks-engine";
 
 import { MAX_HISTORY } from "./editor-history";
 import { useEditorState } from "./editor-state";
-import { joinTyping } from "./typing-run";
+import { endTypingRuns, joinTyping } from "./typing-run";
 
 const text = (words: string): BlockNode => ({
   id: "t",
@@ -225,5 +225,151 @@ describe("cancelling a run of typing", () => {
     });
     expect(cancelled).toBe(false);
     expect(label(result.current.document)).toBe("ABC");
+  });
+});
+
+describe("a save while a field is still being typed in", () => {
+  it("ends the run, so typing on after the save is a step of its own", () => {
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: page(text("A")) })
+    );
+    const run = {};
+    act(() => {
+      joinTyping(run, () => result.current.apply(write("AB")));
+    });
+    // The save shortcut, pressed without leaving the field.
+    act(() => {
+      endTypingRuns();
+    });
+    act(() => {
+      joinTyping(run, () => result.current.apply(write("ABC")));
+    });
+    // Two steps: undo after the save takes back only what came after it, so
+    // the saved page and the history's count of unsaved work agree.
+    expect(result.current.undoDepth).toBe(2);
+    act(() => {
+      void result.current.undo();
+    });
+    expect(label(result.current.document)).toBe("AB");
+  });
+
+  it("leaves the saved words alone when Escape cancels after the save", () => {
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: page(text("A")) })
+    );
+    const run = {};
+    act(() => {
+      joinTyping(run, () => result.current.apply(write("AB")));
+    });
+    act(() => {
+      endTypingRuns();
+    });
+    let cancelled = true;
+    act(() => {
+      cancelled = result.current.cancelTyping(run);
+    });
+    // What was saved is ordinary history now: Escape takes nothing back.
+    expect(cancelled).toBe(false);
+    expect(label(result.current.document)).toBe("AB");
+  });
+});
+
+describe("a run whose later write changes more than its first", () => {
+  it("puts every property back on undo, the ones first changed later too", () => {
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: page(text("A")) })
+    );
+    const run = {};
+    act(() => {
+      joinTyping(run, () => result.current.apply(write("AB")));
+    });
+    // A later keystroke whose write also sets a style, as a recognised
+    // embed link does.
+    act(() => {
+      joinTyping(run, () =>
+        result.current.apply({
+          kind: "update",
+          id: "t",
+          patch: {
+            props: { label: "ABC" },
+            styles: { base: { base: { color: "red" } } },
+          },
+        })
+      );
+    });
+    expect(result.current.undoDepth).toBe(1);
+    act(() => {
+      void result.current.undo();
+    });
+    expect(label(result.current.document)).toBe("A");
+    expect(result.current.document.nodes[0]?.styles).toBeUndefined();
+    act(() => {
+      void result.current.redo();
+    });
+    expect(label(result.current.document)).toBe("ABC");
+    expect(
+      (
+        result.current.document.nodes[0]?.styles as {
+          base?: { base?: { color?: unknown } };
+        }
+      )?.base?.base?.color
+    ).toBe("red");
+  });
+
+  it("undoes a run whose later write names a field it leaves as it was", () => {
+    // A recognised embed link writes its look along with the link, and the
+    // look can be the one already there: undo must still take the link back.
+    const look = { base: { base: { color: "red" } } };
+    const { result } = renderHook(() =>
+      useEditorState({
+        initialDocument: page({ ...text("A"), styles: look } as BlockNode),
+      })
+    );
+    const run = {};
+    act(() => {
+      joinTyping(run, () => result.current.apply(write("AB")));
+    });
+    act(() => {
+      joinTyping(run, () =>
+        result.current.apply({
+          kind: "update",
+          id: "t",
+          patch: { props: { label: "ABC" }, styles: look },
+        })
+      );
+    });
+    act(() => {
+      void result.current.undo();
+    });
+    expect(label(result.current.document)).toBe("A");
+    expect(result.current.document.nodes[0]?.styles).toEqual(look);
+  });
+
+  it("cancelling the run takes back the properties a later write first changed", () => {
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: page(text("A")) })
+    );
+    const run = {};
+    act(() => {
+      joinTyping(run, () => result.current.apply(write("AB")));
+    });
+    act(() => {
+      joinTyping(run, () =>
+        result.current.apply({
+          kind: "update",
+          id: "t",
+          patch: {
+            props: { label: "ABC" },
+            styles: { base: { base: { color: "red" } } },
+          },
+        })
+      );
+    });
+    act(() => {
+      result.current.cancelTyping(run);
+    });
+    expect(label(result.current.document)).toBe("A");
+    expect(result.current.document.nodes[0]?.styles).toBeUndefined();
+    expect(result.current.undoDepth).toBe(0);
   });
 });
