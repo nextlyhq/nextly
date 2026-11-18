@@ -3,8 +3,8 @@
  *
  * A many-to-many keeps its links in a table of its own (`usesJunctionTable`). Made a single link,
  * the save drops that table and every link in it, so the preview must call the change destructive,
- * count the links it drops, and say so. The other way, a single link made a many-to-many gets a
- * new, empty link table: a change, but not one the preview calls destructive.
+ * count the links it drops, and say so. The other way, the save drops the single link's column and
+ * makes a new, empty link table, so the links that column holds are lost too, and counted there.
  *
  * Every case goes through the dispatcher's preview action, the route the Builder calls.
  */
@@ -189,17 +189,27 @@ describeEachDialect(
       );
     });
 
-    it("finds a single link made a many-to-many a change, not a destructive one", async () => {
+    // The save drops the single link's column and makes an empty link table, so the link the
+    // post holds goes with the column.
+    it("calls a single link made a many-to-many destructive, counting the links its column drops", async () => {
       await createPosts(ONE_TAG);
+      await query(
+        `UPDATE ${q("dc_jc_posts")} SET ${q("tags")} = 't1' WHERE ${q("id")} = 'p1'`
+      );
       const preview = await previewOf([TAGS]);
       const report = JSON.stringify(preview, null, 2);
-      const row = preview.changes.changed.find(r => r.name === "tags");
-      expect(row, report).toMatchObject({ reason: "relation_changed" });
-      expect(row?.classification, report).not.toBe("destructive");
       expect(
-        preview.warnings.some(warning => warning.includes("link table")),
+        preview.changes.changed.find(row => row.name === "tags"),
         report
-      ).toBe(false);
+      ).toMatchObject({
+        reason: "relation_changed",
+        rowCount: 1,
+        classification: "destructive",
+      });
+      expect(preview.hasDestructiveChanges, report).toBe(true);
+      expect(preview.warnings, report).toContain(
+        "Changing 'tags' from a single link to many-to-many drops the column holding its 1 links; its new link table starts empty."
+      );
     });
   }
 );

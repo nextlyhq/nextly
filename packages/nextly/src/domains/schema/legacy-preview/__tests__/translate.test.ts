@@ -771,6 +771,39 @@ describe("a many-to-many leaving its link table", () => {
     );
   });
 
+  // The save drops a single link's column and makes an empty link table: its links go with the
+  // column, so the change is destructive, counted where the column holds them.
+  it("calls a single link made a many-to-many destructive, counting the links its column drops", async () => {
+    const { db } = countingDb({ dc_posts: { rows: 5, nulls: { tags: 2 } } });
+    const result = await leaving(singleLink, manyToMany(), db);
+    expect(result.changes.changed[0]).toMatchObject({
+      reason: "relation_changed",
+      rowCount: 3,
+      classification: "destructive",
+    });
+    expect(result.warnings).toContain(
+      "Changing 'tags' from a single link to many-to-many drops the column holding its 3 links; its new link table starts empty."
+    );
+  });
+
+  // A field group's many-to-many keeps its ids in its own row, with no link table to drop.
+  it("applies no link table to a field group's many-to-many", async () => {
+    const { db, queries } = linkCountDb(2);
+    const result = await translatePipelinePreviewToLegacy(emptyPreview, {
+      tableName: "comp_meta",
+      currentFields: [manyToMany()],
+      newFields: [singleLink],
+      db,
+      dialect: "sqlite",
+      builtBy: "fieldGroup",
+    });
+    expect(queries).toEqual([]);
+    expect(result.changes.changed[0]).not.toHaveProperty("rowCountUnknown");
+    expect(
+      result.warnings.some(warning => warning.includes("link table"))
+    ).toBe(false);
+  });
+
   it("names what the field becomes when it is no longer a link", async () => {
     const { db } = linkCountDb(2);
     const result = await leaving(
