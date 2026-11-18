@@ -51,6 +51,7 @@ import { ServiceContainer } from "../../../services/index";
 import type { ApiKeyService } from "../../auth/services/api-key-service";
 import { defineWorkflow } from "../define-workflow";
 import { workflowDefinitionHash } from "../hash";
+import { REVIEW_API_ERROR_CODES } from "../review-api";
 import { writeWorkflowSettings } from "../workflow-settings-repository";
 
 import {
@@ -155,6 +156,10 @@ interface Door {
   reviewState(who: Who, document: Doc): Promise<Doc>;
   takeStep(who: Who, input: Doc): Promise<Doc>;
   stepMany(who: Who, input: Doc): Promise<{ moved: string[]; refused: Doc[] }>;
+  assignMany(
+    who: Who,
+    input: Doc
+  ): Promise<{ assigned: string[]; refused: Doc[] }>;
   waiting(
     who: Who,
     query: { page: number; limit: number }
@@ -249,6 +254,18 @@ const REST: Door = {
       refused: answer.errors as Doc[],
     };
   },
+  async assignMany(who, input) {
+    const answer = await rest(
+      "POST",
+      ["workflows", "assignments", "bulk"],
+      who,
+      input
+    );
+    return {
+      assigned: (answer.items as Doc[]).map(item => String(item.id)),
+      refused: answer.errors as Doc[],
+    };
+  },
   async waiting(who, { page, limit }) {
     const answer = await rest(
       "GET",
@@ -321,8 +338,23 @@ const DIRECT: Door = {
     );
     return {
       moved: answer.moved.map(each => each.document.entryId),
+      // The document as the refusal names it: an entry's id, or a Single's slug.
       refused: answer.refused.map(each => ({
-        id: each.document.entryId,
+        ...(each.document as unknown as Doc),
+        code: each.code,
+        message: each.message,
+      })),
+    };
+  },
+  assignMany: async (who, input) => {
+    const answer = await direct(
+      args => app().nextly.workflows.assignMany({ ...args, ...input } as never),
+      who
+    );
+    return {
+      assigned: answer.assigned.map(each => each.entryId),
+      refused: answer.refused.map(each => ({
+        ...(each.document as unknown as Doc),
         code: each.code,
         message: each.message,
       })),
@@ -622,6 +654,139 @@ describe.each(getConfiguredTestDialects())(
         expect(unreadable).toEqual({ status: 404, code: "NOT_FOUND" });
       });
 
+      describe("a move touching a language its caller may not read the document in", () => {
+        const LENA: Who = { kind: "person", id: "lena" };
+
+        /** A Letter whose English, Spanish and shared parts are in Legal check; Lena may not read Spanish. */
+        async function letterInLegal(): Promise<string> {
+          current = await bootSteps(dialect);
+          // Letters are read in every language but Spanish.
+          await person(app(), "lena", [
+            ["read", "letters"],
+            ["update", "letters"],
+            ["sign-off", "letters"],
+          ]);
+          const id = await entry(app(), "letters");
+          for (const part of ["en", "es", null]) {
+            await seedState(app(), partOf("letters", id, part), "legal", {
+              definitionHash: HASH,
+            });
+          }
+          return id;
+        }
+
+        /** Parking `parts` of the Letter, as a caller who read each of `seen` sends it. */
+        async function parking(
+          id: string,
+          parts: "all" | (string | null)[],
+          seen: (string | null)[]
+        ): Promise<Doc> {
+          return {
+            document: { collection: "letters", id },
+            step: "park",
+            parts,
+            comment: "Waiting on the client",
+            seen: await Promise.all(
+              seen.map(async part => ({
+                part,
+                revision: 1,
+                version: await versionOf(app(), "letters", id, part),
+              }))
+            ),
+          };
+        }
+
+        const stageOf = async (id: string, part: string | null) =>
+          (await stateOf(app(), partOf("letters", id, part)))?.stage;
+
+        it("refuses a step on every part, and moves none", async () => {
+          const id = await letterInLegal();
+
+          const input = await parking(id, "all", ["en", "es", null]);
+          const refusal = await refusalOf(() => door.takeStep(LENA, input));
+
+          expect(refusal).toEqual({ status: 404, code: "NOT_FOUND" });
+          expect(await stageOf(id, "es")).toBe("legal");
+          expect(await stageOf(id, "en")).toBe("legal");
+          expect(await stageOf(id, null)).toBe("legal");
+        });
+
+        it("refuses a step naming that language among others, and moves none", async () => {
+          const id = await letterInLegal();
+
+          const input = await parking(id, ["en", "es"], ["en", "es"]);
+          const refusal = await refusalOf(() => door.takeStep(LENA, input));
+
+          expect(refusal).toEqual({ status: 404, code: "NOT_FOUND" });
+          expect(await stageOf(id, "es")).toBe("legal");
+          expect(await stageOf(id, "en")).toBe("legal");
+        });
+
+        it("refuses a step on every part over several documents, naming the document", async () => {
+          const id = await letterInLegal();
+          const one = await parking(id, "all", ["en", "es", null]);
+
+          const answer = await door.stepMany(LENA, {
+            step: one.step,
+            comment: one.comment,
+            documents: [
+              { document: one.document, parts: one.parts, seen: one.seen },
+            ],
+          });
+
+          expect(answer.moved).toEqual([]);
+          expect(answer.refused).toEqual([
+            expect.objectContaining({ id, code: "NOT_FOUND" }),
+          ]);
+          expect(await stageOf(id, "es")).toBe("legal");
+          expect(await stageOf(id, "en")).toBe("legal");
+        });
+
+        it("refuses an assignment of that language's part over several documents", async () => {
+          const id = await letterInLegal();
+
+          const answer = await door.assignMany(LENA, {
+            assignments: [
+              {
+                document: { collection: "letters", id },
+                part: "es",
+                revision: 1,
+                assignee: { kind: "user", id: "lena" },
+              },
+            ],
+          });
+
+          expect(answer.assigned).toEqual([]);
+          expect(answer.refused).toEqual([
+            expect.objectContaining({ id, code: "NOT_FOUND" }),
+          ]);
+          expect(
+            (await stateOf(app(), partOf("letters", id, "es")))?.assignee ??
+              null
+          ).toBeNull();
+        });
+
+        it("still moves and assigns the languages it may read, which is the control", async () => {
+          const id = await letterInLegal();
+
+          await door.takeStep(LENA, await parking(id, ["en"], ["en"]));
+          const assigned = await door.assignMany(LENA, {
+            assignments: [
+              {
+                document: { collection: "letters", id },
+                part: null,
+                revision: 1,
+                assignee: { kind: "user", id: "lena" },
+              },
+            ],
+          });
+
+          expect(await stageOf(id, "en")).toBe("hold");
+          expect(await stageOf(id, "es")).toBe("legal");
+          expect(assigned.assigned).toEqual([id]);
+        });
+      });
+
       it("leaves out the parts in a language its reader may not read the document in", async () => {
         current = await bootSteps(dialect);
         // Letters are read in every language but Spanish.
@@ -786,6 +951,35 @@ describe.each(getConfiguredTestDialects())(
         );
 
         expect(refusal).toEqual({ status: 400, code: "VALIDATION_ERROR" });
+        expect((await stateOf(app(), partOf(PAGES, id, null)))?.stage).toBe(
+          "legal"
+        );
+      });
+
+      it("refuses an approval over a document its caller may not read as not found, never telling its workflow", async () => {
+        current = await bootSteps(dialect);
+        // Bob holds the sign-off on Pages and may not read them.
+        await people();
+        const id = await entry(app(), PAGES);
+        await seedState(app(), partOf(PAGES, id, null), "legal", {
+          definitionHash: HASH,
+          enteredBy: "alice",
+        });
+        const { step: _step, ...seen } = await seenPage(id, "clear", 1);
+
+        const answer = await door.stepMany(BOB, {
+          step: "clear",
+          documents: [seen],
+        });
+
+        expect(answer.moved).toEqual([]);
+        expect(answer.refused).toEqual([
+          expect.objectContaining({ id, code: "NOT_FOUND" }),
+        ]);
+        expect(JSON.stringify(answer)).not.toContain(
+          REVIEW_API_ERROR_CODES.bulkApproval
+        );
+        expect(JSON.stringify(answer)).not.toContain("editorial");
         expect((await stateOf(app(), partOf(PAGES, id, null)))?.stage).toBe(
           "legal"
         );
@@ -1099,6 +1293,37 @@ describe.each(getConfiguredTestDialects())(
         });
       });
 
+      it("names a Single it refuses over several documents by the slug the caller named, never its id", async () => {
+        current = await bootSteps(dialect);
+        await people();
+        await app().nextly.updateSingle({
+          slug: "banner" as never,
+          data: { title: "Hello", _overwrite: true },
+        } as never);
+        const banner = (await app().nextly.findSingle({
+          slug: "banner" as never,
+          status: "all",
+        } as never)) as Doc;
+
+        // Alice may read Pages, not the Banner.
+        const answer = await door.stepMany(ALICE, {
+          step: "send",
+          documents: [
+            {
+              document: { single: "banner" },
+              parts: [null],
+              seen: [{ part: null, revision: 0, version: String(banner._rev) }],
+            },
+          ],
+        });
+
+        expect(answer.moved).toEqual([]);
+        expect(answer.refused).toEqual([
+          expect.objectContaining({ single: "banner", code: "NOT_FOUND" }),
+        ]);
+        expect(JSON.stringify(answer.refused)).not.toContain(String(banner.id));
+      });
+
       it("names no last move for a part that never moved, though another part did", async () => {
         current = await bootSteps(dialect);
         await person(app(), "alice", [
@@ -1138,6 +1363,151 @@ describe.each(getConfiguredTestDialects())(
         expect(moveOf(null)).toBeNull();
       });
     });
+    describe("trusted code naming a document or a part that does not exist", () => {
+      const MISSING = "00000000-0000-4000-8000-000000000000";
+      const sendOf = (
+        document: Doc,
+        part: string | null,
+        version = "1"
+      ): Doc => ({
+        document,
+        step: "send",
+        parts: [part],
+        seen: [{ part, revision: 0, version }],
+      });
+      const codeOf = (call: Promise<unknown>) =>
+        call.then(
+          () => "answered",
+          (error: { code?: string }) => error.code
+        );
+
+      it("refuses a step on a document that does not exist as not found, and writes nothing", async () => {
+        current = await bootSteps(dialect);
+
+        const code = await codeOf(
+          app().nextly.workflows.takeStep(
+            sendOf({ collection: PAGES, id: MISSING }, null) as never
+          )
+        );
+
+        expect(code).toBe("NOT_FOUND");
+        expect(await stateOf(app(), partOf(PAGES, MISSING, null))).toBeNull();
+      });
+
+      it("refuses a step naming a language the site does not have, and writes nothing", async () => {
+        current = await bootSteps(dialect);
+        const id = await entry(app(), POSTS);
+
+        const code = await codeOf(
+          app().nextly.workflows.takeStep(
+            sendOf({ collection: POSTS, id }, "xx") as never
+          )
+        );
+
+        expect(code).toBe("VALIDATION_ERROR");
+        expect(await stateOf(app(), partOf(POSTS, id, "xx"))).toBeNull();
+      });
+
+      it("refuses a step naming a language on a document kept in none, and writes nothing", async () => {
+        current = await bootSteps(dialect);
+        const id = await entry(app(), PAGES);
+
+        const code = await codeOf(
+          app().nextly.workflows.takeStep(
+            sendOf({ collection: PAGES, id }, "en") as never
+          )
+        );
+
+        expect(code).toBe("VALIDATION_ERROR");
+        expect(await stateOf(app(), partOf(PAGES, id, "en"))).toBeNull();
+      });
+
+      it("refuses an assignment on a missing document or an unknown part, and writes nothing", async () => {
+        current = await bootSteps(dialect);
+        await person(app(), "rita", [
+          ["sign-off", POSTS],
+          ["sign-off", PAGES],
+        ]);
+        const id = await entry(app(), POSTS);
+        const assign = (document: Doc, part: string | null) =>
+          codeOf(
+            app().nextly.workflows.assign({
+              assignments: [
+                {
+                  document,
+                  part,
+                  revision: 0,
+                  assignee: { kind: "user", id: "rita" },
+                },
+              ],
+            } as never)
+          );
+
+        expect(await assign({ collection: PAGES, id: MISSING }, null)).toBe(
+          "NOT_FOUND"
+        );
+        expect(await assign({ collection: POSTS, id }, "xx")).toBe(
+          "VALIDATION_ERROR"
+        );
+        expect(await stateOf(app(), partOf(PAGES, MISSING, null))).toBeNull();
+        expect(await stateOf(app(), partOf(POSTS, id, "xx"))).toBeNull();
+      });
+
+      it("refuses each such document of a move over several, and writes nothing for it", async () => {
+        current = await bootSteps(dialect);
+        await person(app(), "rita", [
+          ["sign-off", POSTS],
+          ["sign-off", PAGES],
+        ]);
+        const id = await entry(app(), POSTS);
+
+        const stepped = await app().nextly.workflows.stepMany({
+          step: "send",
+          documents: [
+            {
+              document: { collection: PAGES, id: MISSING },
+              parts: [null],
+              seen: [{ part: null, revision: 0, version: "1" }],
+            },
+            {
+              document: { collection: POSTS, id },
+              parts: ["xx"],
+              seen: [{ part: "xx", revision: 0, version: "1" }],
+            },
+          ],
+        } as never);
+        const assigned = await app().nextly.workflows.assignMany({
+          assignments: [
+            {
+              document: { collection: PAGES, id: MISSING },
+              part: null,
+              revision: 0,
+              assignee: { kind: "user", id: "rita" },
+            },
+            {
+              document: { collection: POSTS, id },
+              part: "xx",
+              revision: 0,
+              assignee: { kind: "user", id: "rita" },
+            },
+          ],
+        } as never);
+
+        expect(stepped.moved).toEqual([]);
+        expect(stepped.refused.map(each => each.code)).toEqual([
+          "NOT_FOUND",
+          "VALIDATION_ERROR",
+        ]);
+        expect(assigned.assigned).toEqual([]);
+        expect(assigned.refused.map(each => each.code)).toEqual([
+          "NOT_FOUND",
+          "VALIDATION_ERROR",
+        ]);
+        expect(await stateOf(app(), partOf(PAGES, MISSING, null))).toBeNull();
+        expect(await stateOf(app(), partOf(POSTS, id, "xx"))).toBeNull();
+      });
+    });
+
     it("tells trusted code it may take every step but an approval or a request for changes, as a step refuses those", async () => {
       current = await bootSteps(dialect);
       const id = await entry(app(), PAGES);

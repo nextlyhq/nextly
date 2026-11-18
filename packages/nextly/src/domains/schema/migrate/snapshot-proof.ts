@@ -21,7 +21,9 @@
  *    - MySQL's four-statement run `migrate:create` writes to change a column's nullability or
  *      rename a column a check uses (`mysqlLiveRunAt`);
  *    - the registry row `migrate:create` writes for an entity whose table the snapshot holds,
- *      which `nextly migrate` writes from the snapshot anyway;
+ *      which `nextly migrate` writes from the snapshot anyway, and the statement it writes after
+ *      a file's registry rows to move the stored schema version, which `nextly migrate` moves
+ *      then too;
  *    - a session setting from a short list (lock and statement timeouts, foreign-key checks), a
  *      savepoint, and the SQLite pragmas a rebuild uses.
  * 2. Its checksum matches the one recorded with its snapshot when it was written, so it is the
@@ -46,6 +48,7 @@ import {
   mysqlLiveRunAt,
 } from "../pipeline/sql-templates/mysql-live-restate";
 import { literalOf } from "../pipeline/sql-templates/sqlite-swap";
+import { schemaVersionStoreSql } from "../schema-version";
 import { registryRowKeys } from "../ui-schema/registry-row-keys";
 
 import {
@@ -391,6 +394,10 @@ export function statementsShownBySnapshot(
       copies.has(at) ||
       isSequenceCarry(statement, statements, dialect, objects) ||
       isOwnRegistryRow(statement, dialect, objects) ||
+      isVersionAfterOwnRegistryRows(statement, statements.slice(0, at), {
+        dialect,
+        objects,
+      }) ||
       statementShown(statement, file);
     const made = createdTable(statement, dialect);
     if (made !== undefined) created.add(made);
@@ -548,6 +555,25 @@ function isOwnRegistryRow(
   if (row === undefined) return false;
   const keys = registryRowKeys(row.table, row.slug);
   return keys !== undefined && objects.tables.has(keys.table_name);
+}
+
+/**
+ * The statement `migrate:create` writes after a file's registry rows, moving the stored schema
+ * version (`schemaVersionStoreSql`): that statement text for text, after a registry row of the
+ * file the snapshot shows. `nextly migrate` moves the stored version itself once it has written
+ * the registry rows of a file it records, so nothing of it is skipped. The same write anywhere
+ * else is a row the snapshot does not show.
+ */
+function isVersionAfterOwnRegistryRows(
+  statement: string,
+  earlier: readonly string[],
+  file: Pick<FileContext, "dialect" | "objects">
+): boolean {
+  const asWritten = (text: string) => text.trim().replace(/;$/, "");
+  return (
+    asWritten(statement) === asWritten(schemaVersionStoreSql(file.dialect)) &&
+    earlier.some(other => isOwnRegistryRow(other, file.dialect, file.objects))
+  );
 }
 
 /** One kind of statement on the closed list: its leading words, and how the rest is judged. */

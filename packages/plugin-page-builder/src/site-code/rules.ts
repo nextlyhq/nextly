@@ -21,6 +21,11 @@
  */
 import { cssFetches } from "./css-urls";
 import { SITE_CODE_LIMITS } from "./limits";
+import { siteCodeUrlProblem, STYLE_ELEMENT_END } from "./url-rule";
+
+// Moved to its own module, which loads no CSS parser, so the custom CSS
+// checker can share it in the browser; still exported from here.
+export { siteCodeUrlProblem } from "./url-rule";
 
 /** Where site code goes on every published page. */
 export type SiteCodeSlot = "head" | "body";
@@ -188,50 +193,6 @@ const URL_ATTRIBUTES: ReadonlySet<string> = new Set(["src", "href"]);
 /** A `data-*` attribute's name, as a script may carry one. */
 const DATA_ATTRIBUTE = /^data-[a-z0-9][a-z0-9._:-]*$/;
 
-/**
- * A URL with what browsers ignore before reading it taken out: ASCII
- * whitespace and control characters (U+0000 to U+0020, U+007F to U+009F),
- * which is how `java\tscript:` still runs. Read by code point, so no
- * pattern has to spell control characters.
- */
-function withoutIgnored(value: string): string {
-  let read = "";
-  for (const char of value) {
-    const code = char.codePointAt(0) ?? 0;
-    if (code <= 0x20 || (code >= 0x7f && code <= 0x9f)) continue;
-    read += char;
-  }
-  return read;
-}
-
-/**
- * Why a URL may not be used, or `undefined` when it may: it must be `https:`
- * or a path on this site (`/…`), read as a browser reads it once what it
- * ignores is taken out, so no obfuscation of another scheme gets through.
- */
-export function siteCodeUrlProblem(value: string): string | undefined {
-  if (value.length > SITE_CODE_LIMITS.urlLength) {
-    return `is longer than ${SITE_CODE_LIMITS.urlLength} characters`;
-  }
-  const read = withoutIgnored(value);
-  // A path on this site, but not `//host` or `/\host`, which browsers read
-  // as another host.
-  if (read.startsWith("/")) {
-    return read.startsWith("//") || read.includes("\\")
-      ? "points at another site without saying https:"
-      : undefined;
-  }
-  let url: URL;
-  try {
-    url = new URL(read);
-  } catch {
-    return "is not an https: address or a path on this site";
-  }
-  return url.protocol === "https:"
-    ? undefined
-    : `uses ${url.protocol}, and only https: addresses are allowed`;
-}
-
 /** Why one attribute of an element may not be used; `undefined` if it may. */
 function attributeProblem(
   tag: string,
@@ -348,7 +309,7 @@ function textProblem(
   if (tag === "script" && text.includes("<!--")) {
     return "its code contains <!--, which can keep the script from ending";
   }
-  if (tag === "style" && /<\/style/i.test(text)) {
+  if (tag === "style" && STYLE_ELEMENT_END.test(text)) {
     return "its styles contain </style, which would end them early";
   }
   if (tag !== "style") return undefined;

@@ -46,6 +46,16 @@ export interface NodePlan {
   slots?: Map<string, PlannedSlot>;
   /** Prop path to the host placement's exposure that feeds it, in editor mode. */
   exposedProps?: Record<string, PropExposure>;
+  /**
+   * Prop path to the binding the placement gave the setting that fills it,
+   * written over the node's own binding of that prop.
+   */
+  bindings?: Record<string, unknown>;
+  /**
+   * Prop path to the placement's binding key that fills it, so a binding
+   * the page gave is still known as the page's inside a nested component.
+   */
+  bindingKeys?: Record<string, string>;
 }
 
 /**
@@ -74,6 +84,7 @@ export function planEdits(
   const plans = new Map<string, NodePlan>();
   const values = effectiveOverrides(definition, instance);
   if (values.size > 0) planExposed(definition.exposed, values, plans);
+  planBoundSettings(definition.exposed, instance.bindings, plans);
   if (supplied !== undefined) {
     planSlots(definition.slots, supplied, plans, composed);
   }
@@ -100,10 +111,7 @@ export function planExposedProps(
   const set = effectiveOverrides(definition, instance);
   const chosen = new Map<string, { fed: PropExposure; set: boolean }>();
   for (const property of usableExposures(definition.exposed)) {
-    const fed: PropExposure | undefined =
-      relay === undefined
-        ? { id: property.id, type: property.type }
-        : relay.get(property.id);
+    const fed = fedBy(property, relay);
     if (fed === undefined) continue;
     // A visibility exposure drives the node, not a prop, so it is keyed by
     // the node's own `visibility` whatever its stored path says.
@@ -116,10 +124,43 @@ export function planExposedProps(
     if (held !== undefined && held.set && !isSet) continue;
     chosen.set(key, { fed, set: isSet });
   }
+  takeBoundTargets(chosen, boundWinnersOf(definition, instance), relay);
   for (const [key, { fed }] of chosen) {
     const [nodeId = "", path = ""] = key.split("\u0000");
     const plan = planFor(plans, nodeId);
     plan.exposedProps = { ...plan.exposedProps, [path]: fed };
+  }
+}
+
+/**
+ * The exposure that feeds an edit of `property`: its own, or for a nested
+ * instance the host's that drives it, or none where no host exposure does.
+ */
+function fedBy(
+  property: ExposedProperty,
+  relay: ReadonlyMap<string, PropExposure> | undefined
+): PropExposure | undefined {
+  return relay === undefined
+    ? { id: property.id, type: property.type }
+    : relay.get(property.id);
+}
+
+/**
+ * Give each target a bound setting fills to that setting: it fills its prop
+ * whatever another setting holds, so an edit there is an edit of the bound
+ * one.
+ */
+function takeBoundTargets(
+  chosen: Map<string, { fed: PropExposure; set: boolean }>,
+  bound: ReadonlyMap<string, BoundWinner>,
+  relay: ReadonlyMap<string, PropExposure> | undefined
+): void {
+  for (const [key, { property }] of bound) {
+    const fed = fedBy(property, relay);
+    // A bound setting no host setting drives fills a prop no host edit can
+    // change, so the prop is mapped to none.
+    if (fed === undefined) chosen.delete(key);
+    else chosen.set(key, { fed, set: true });
   }
 }
 
@@ -136,6 +177,9 @@ export function relayOf(
   if (fed === undefined) return undefined;
   const relay = new Map<string, PropExposure>();
   for (const path of Object.keys(fed)) {
+    // One segment only: a host value is written along the path, so a dotted
+    // id would get a value in the wrong place, and the canvas would offer an
+    // edit that doesn't show. A binding goes by the whole key instead.
     const [head, inner, ...rest] = path.split(".");
     if (head !== "overrides" || inner === undefined || rest.length > 0) {
       continue;
@@ -245,12 +289,16 @@ export function instanceExposure(
   const props = finalProps(nodes, applied);
   const byNode = writesByNode(applied);
 
+  const bound = boundWinnersOf(definition, instance);
   const properties = declared.map(property =>
-    exposedState(
-      property,
-      lastWriteOver(property, byNode.get(property.nodeId) ?? []),
-      props,
-      nodes
+    withBoundWinner(
+      exposedState(
+        property,
+        lastWriteOver(property, byNode.get(property.nodeId) ?? []),
+        props,
+        nodes
+      ),
+      bound
     )
   );
 
@@ -261,6 +309,22 @@ export function instanceExposure(
   );
 
   return { properties, orphanedOverrideIds };
+}
+
+/**
+ * A row as a binding decides it: a setting whose binding fills its target
+ * is what the page shows there, and every other setting aimed at that
+ * target is shadowed by it, whatever either holds.
+ */
+function withBoundWinner(
+  state: ExposedPropertyState,
+  bound: ReadonlyMap<string, BoundWinner>
+): ExposedPropertyState {
+  if (state.property.type === "visibility") return state;
+  const winner = bound.get(targetKey(state.property))?.property.id;
+  if (winner === undefined) return state;
+  const { shadowedBy: _literal, ...rest } = state;
+  return winner === state.property.id ? rest : { ...rest, shadowedBy: winner };
 }
 
 /**
@@ -754,6 +818,149 @@ function planExposed(
     if (typeof nodeId !== "string" || nodeId === "") continue;
     applyExposure(planFor(plans, nodeId), entry, values.get(id)?.value);
   }
+}
+
+/**
+ * The prefix of the key a placement binds one of its settings under:
+ * `overrides.<id>`, the path the setting's value is stored at in the
+ * placement's props.
+ */
+const SETTING_BINDING_PREFIX = "overrides.";
+
+/**
+ * The key a placement binds the setting `id` under.
+ *
+ * @experimental Settles with the editor's binding controls.
+ */
+export function settingBindingKey(id: string): string {
+  return `${SETTING_BINDING_PREFIX}${id}`;
+}
+
+/**
+ * The setting a placement's binding key names, or `undefined` for a key that
+ * is not `overrides.<id>` with a non-empty id. The id is the rest of the key
+ * as it is, dots included: a setting's id may hold one, and a placement's
+ * keys name nothing but its settings.
+ *
+ * @experimental Settles with the editor's binding controls.
+ */
+export function boundSettingId(key: string): string | undefined {
+  if (!key.startsWith(SETTING_BINDING_PREFIX)) return undefined;
+  const id = key.slice(SETTING_BINDING_PREFIX.length);
+  return id === "" ? undefined : id;
+}
+
+/**
+ * Whether a placement's binding reads what it read where the placement sits,
+ * once it is moved onto the component's block: a list item binding names the
+ * list it reads, since the block may sit in a list of the component's own,
+ * which a binding naming none would read instead.
+ *
+ * @experimental Settles with the editor's binding controls.
+ */
+export function keepsItsListWhenMoved(binding: unknown): boolean {
+  if (!isPlainRecord(binding)) return false;
+  if (binding.source !== "item") return true;
+  return typeof binding.list === "string" && binding.list !== "";
+}
+
+/**
+ * Turn a placement's bound settings into bindings of the props they fill.
+ *
+ * A placement binds a setting under `overrides.<id>`; the block that reads
+ * the binding is the component's own, so the binding is written there, on
+ * the prop the setting fills, where the page's binding pass reads it as it
+ * reads any block's. A visibility setting decides whether a block is shown,
+ * which no field fills, so it is never bound; nor is a setting the component
+ * no longer has, nor a stored binding that is not a record.
+ */
+function planBoundSettings(
+  exposed: unknown,
+  bindings: unknown,
+  plans: Map<string, NodePlan>
+): void {
+  const bound = boundSettings(bindings);
+  for (const { property } of boundWinners(exposed, bound).values()) {
+    const plan = planFor(plans, property.nodeId);
+    plan.bindings = { ...plan.bindings };
+    defineEntry(plan.bindings, property.propPath, bound.get(property.id));
+    plan.bindingKeys = { ...plan.bindingKeys };
+    defineEntry(
+      plan.bindingKeys,
+      property.propPath,
+      settingBindingKey(property.id)
+    );
+  }
+}
+
+/** A bound setting, and the target it fills. */
+interface BoundWinner {
+  readonly property: ExposedProperty;
+}
+
+/**
+ * Each target a placement's binding fills, by node and prop path, with the
+ * setting whose binding fills it: the last declared where two bound settings
+ * aim at one prop, as composing writes them in that order. A bound setting
+ * fills its prop whatever another setting aimed there holds, so this is what
+ * the page shows there, for the composed binding, the editor's exposure map
+ * and the inspector's rows alike.
+ */
+function boundWinners(
+  exposed: unknown,
+  bound: ReadonlyMap<string, unknown>
+): ReadonlyMap<string, BoundWinner> {
+  const winners = new Map<string, BoundWinner>();
+  if (bound.size === 0) return winners;
+  for (const property of usableExposures(exposed)) {
+    if (!bound.has(property.id) || !isBindableSetting(property)) continue;
+    winners.set(targetKey(property), { property });
+  }
+  return winners;
+}
+
+/** A setting's target, as one key: its node and its prop path. */
+function targetKey(property: ExposedProperty): string {
+  return `${property.nodeId}\u0000${property.propPath}`;
+}
+
+/** The targets a placement's own bindings fill, with what fills each. */
+function boundWinnersOf(
+  definition: ComponentDocument,
+  instance: BlockNode
+): ReadonlyMap<string, BoundWinner> {
+  return boundWinners(definition.exposed, boundSettings(instance.bindings));
+}
+
+/**
+ * A placement's stored bindings, by the setting each binds: records only, and
+ * a list item binding only where it names its list.
+ */
+function boundSettings(bindings: unknown): ReadonlyMap<string, unknown> {
+  const bound = new Map<string, unknown>();
+  if (!isPlainRecord(bindings)) return bound;
+  const keys = boundedOwnKeys(bindings, MAX_ENVELOPE_ENTRIES) ?? [];
+  for (const key of keys) {
+    const id = boundSettingId(key);
+    const binding = ownEntry(bindings, key);
+    if (id !== undefined && keepsItsListWhenMoved(binding)) {
+      bound.set(id, binding);
+    }
+  }
+  return bound;
+}
+
+/**
+ * Whether a setting's target can carry a binding: a prop of a block, at a
+ * path the writer follows. A visibility setting decides whether the block is
+ * shown, which no field fills.
+ */
+function isBindableSetting(property: ExposedProperty): boolean {
+  return (
+    property.type !== "visibility" &&
+    property.nodeId !== "" &&
+    isUsablePropPath(property.propPath)
+  );
 }
 
 /** Write one exposure's override into the plan for its node. */

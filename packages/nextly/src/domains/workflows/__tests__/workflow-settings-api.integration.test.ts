@@ -30,7 +30,7 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { buildClaims } from "../../../auth/jwt/claims";
 import { signAccessToken } from "../../../auth/jwt/sign";
@@ -39,7 +39,9 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import { createDynamicHandlers } from "../../../routeHandler";
+import { RolePermissionService } from "../../auth/services/role-permission-service";
 import { holderAnswer } from "../holders";
+import { updateWorkflowSettings } from "../workflow-settings-api";
 import { readWorkflowSettings } from "../workflow-settings-repository";
 
 import {
@@ -409,6 +411,22 @@ describe.each(getConfiguredTestDialects())(
         );
       });
 
+      it("answers a label that reads like a date exactly as it was saved, which is configuration", async () => {
+        current = await bootSteps(dialect);
+        await admin();
+        // A date with no offset: a date rewritten for the reader comes back as UTC, with one.
+        const label = "2026-11-17T09:00:00";
+
+        const saved = await door.update(SAM, "editorial", {
+          revision: 0,
+          labels: { legal: { label } },
+        });
+        const read = await door.read(SAM, "editorial");
+
+        expect(saved.labels).toEqual({ legal: { label } });
+        expect(read.labels).toEqual({ legal: { label } });
+      });
+
       it("refuses a default reviewer who cannot take the stage's primary step on every attached collection and Single", async () => {
         current = await bootSteps(dialect);
         await admin();
@@ -757,6 +775,68 @@ describe.each(getConfiguredTestDialects())(
           code: "NOT_FOUND",
         });
       });
+    });
+
+    it("keeps both of two workflows' grants made to one role at the same time", async () => {
+      current = await bootSteps(dialect);
+      const desk = await role(app(), "desk", [["read", "pages"]]);
+      // The first update is held after it has read the role's grants and before it writes them,
+      // while the second runs: an update that read the grants before locking the role writes back
+      // what it read, without the second's grant.
+      let release!: () => void;
+      const released = new Promise<void>(resolve => (release = resolve));
+      let reached!: () => void;
+      const holding = new Promise<void>(resolve => (reached = resolve));
+      const replace = RolePermissionService.prototype.replaceRolePermissionsOn;
+      let first = true;
+      const spy = vi
+        .spyOn(RolePermissionService.prototype, "replaceRolePermissionsOn")
+        .mockImplementation(async function (
+          this: RolePermissionService,
+          ...args: Parameters<typeof replace>
+        ) {
+          if (first) {
+            first = false;
+            reached();
+            await released;
+          }
+          return replace.apply(this, args);
+        });
+      try {
+        const editorialGrant = updateWorkflowSettings(
+          app().adapter,
+          "editorial",
+          { revision: 0, grants: { clear: [desk] } },
+          null
+        );
+        await holding;
+        const handoverGrant = updateWorkflowSettings(
+          app().adapter,
+          "handover",
+          { revision: 0, grants: { signOff: [desk] } },
+          null
+        );
+        // The second finishes while the first is held, or waits on the role the first locked.
+        await Promise.race([
+          handoverGrant.catch(() => undefined),
+          new Promise(resolve => setTimeout(resolve, 3000)),
+        ]);
+        release();
+        await Promise.all([editorialGrant, handoverGrant]);
+      } finally {
+        release();
+        spy.mockRestore();
+      }
+
+      expect(await roleHoldsOn(desk, "sign-off")).toEqual(holdingEverywhere);
+      expect(
+        await holderAnswer(
+          app().adapter,
+          { kind: "role", id: desk },
+          "sign-off",
+          "memos"
+        )
+      ).toBe("holds");
     });
   }
 );

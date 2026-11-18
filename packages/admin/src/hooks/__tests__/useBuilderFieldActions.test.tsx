@@ -94,7 +94,9 @@ describe("handleDuplicateField", () => {
 
   it("puts a copy of a top-level field right after it, under the next free name", () => {
     const builder = makeBuilder([field("title"), field("body"), field("tail")]);
-    const { result } = renderHook(() => useBuilderFieldActions(builder.api));
+    const { result } = renderHook(() =>
+      useBuilderFieldActions(builder.api, "collection")
+    );
 
     result.current.handleDuplicateField("field_body");
 
@@ -115,7 +117,9 @@ describe("handleDuplicateField", () => {
         fields: [field("caption"), field("alt")],
       }),
     ]);
-    const { result } = renderHook(() => useBuilderFieldActions(builder.api));
+    const { result } = renderHook(() =>
+      useBuilderFieldActions(builder.api, "collection")
+    );
 
     result.current.handleDuplicateField("field_body");
     result.current.handleDuplicateField("field_body");
@@ -145,7 +149,9 @@ describe("handleDuplicateField", () => {
       field("caption_2"),
       field("items", { type: "repeater", fields: [field("caption")] }),
     ]);
-    const { result } = renderHook(() => useBuilderFieldActions(builder.api));
+    const { result } = renderHook(() =>
+      useBuilderFieldActions(builder.api, "collection")
+    );
 
     result.current.handleDuplicateField("field_caption");
 
@@ -164,7 +170,9 @@ describe("handleDuplicateField", () => {
       // would take.
       field("fooBar_2"),
     ]);
-    const { result } = renderHook(() => useBuilderFieldActions(builder.api));
+    const { result } = renderHook(() =>
+      useBuilderFieldActions(builder.api, "collection")
+    );
 
     result.current.handleDuplicateField("field_body");
     // body_2 is taken as Body_2, in other letter case.
@@ -184,7 +192,9 @@ describe("handleDuplicateField", () => {
 
   it("avoids a name a pending delete still holds there until the save", () => {
     const builder = makeBuilder([field("body"), field("notes")]);
-    const { result } = renderHook(() => useBuilderFieldActions(builder.api));
+    const { result } = renderHook(() =>
+      useBuilderFieldActions(builder.api, "collection")
+    );
 
     result.current.handleDuplicateField("field_body", {
       heldNames: new Map([["", ["body_2"]]]),
@@ -195,7 +205,9 @@ describe("handleDuplicateField", () => {
 
   it("does nothing for a field id that is not in the tree", () => {
     const builder = makeBuilder([field("body")]);
-    const { result } = renderHook(() => useBuilderFieldActions(builder.api));
+    const { result } = renderHook(() =>
+      useBuilderFieldActions(builder.api, "collection")
+    );
 
     result.current.handleDuplicateField("field_missing");
 
@@ -212,7 +224,9 @@ describe("getValidatedFields", () => {
       field("slug"),
       field("body"),
     ]);
-    const { result } = renderHook(() => useBuilderFieldActions(builder.api));
+    const { result } = renderHook(() =>
+      useBuilderFieldActions(builder.api, "collection")
+    );
 
     const definitions = result.current.getValidatedFields();
 
@@ -228,7 +242,9 @@ describe("getValidatedFields", () => {
       valid: false,
       errorMessage: "All fields must have a name",
     });
-    const { result } = renderHook(() => useBuilderFieldActions(builder.api));
+    const { result } = renderHook(() =>
+      useBuilderFieldActions(builder.api, "collection")
+    );
 
     expect(result.current.getValidatedFields()).toBeNull();
     expect(toastError).toHaveBeenCalledWith("All fields must have a name");
@@ -248,7 +264,9 @@ describe("getValidatedFields", () => {
         fields: [field("body")],
       }),
     ]);
-    const { result } = renderHook(() => useBuilderFieldActions(builder.api));
+    const { result } = renderHook(() =>
+      useBuilderFieldActions(builder.api, "collection")
+    );
 
     expect(result.current.getValidatedFields(saved)).toBeNull();
     expect(toastError).toHaveBeenCalledWith(
@@ -268,7 +286,9 @@ describe("getValidatedFields", () => {
         fields: [field("body")],
       }),
     ]);
-    const { result } = renderHook(() => useBuilderFieldActions(builder.api));
+    const { result } = renderHook(() =>
+      useBuilderFieldActions(builder.api, "collection")
+    );
 
     expect(result.current.getValidatedFields(saved)).not.toBeNull();
   });
@@ -324,7 +344,9 @@ describe("a duplicated container", () => {
 
   function duplicateDetails() {
     const builder = makeRealBuilder(TREE());
-    const { result } = renderHook(() => useBuilderFieldActions(builder.api));
+    const { result } = renderHook(() =>
+      useBuilderFieldActions(builder.api, "collection")
+    );
     result.current.handleDuplicateField("field_details");
     const [original, copy] = builder.fields;
     return { builder, result, original, copy };
@@ -350,7 +372,9 @@ describe("a duplicated container", () => {
 
   it("gives a container duplicated inside a group new ids all the way down", () => {
     const builder = makeRealBuilder(TREE());
-    const { result } = renderHook(() => useBuilderFieldActions(builder.api));
+    const { result } = renderHook(() =>
+      useBuilderFieldActions(builder.api, "collection")
+    );
     result.current.handleDuplicateField("field_links");
     const details = builder.fields[0];
     expect(details.fields!.map(f => f.name)).toEqual([

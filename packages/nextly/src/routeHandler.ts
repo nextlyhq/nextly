@@ -1724,7 +1724,7 @@ async function serveServiceRequest(
   // The Email hub's Activity reads. The handler asks `read-email-deliveries`
   // itself, from the system read policy, and reads its filters from the URL.
   if (service === "email") {
-    return handleEmailDeliveryRequest(req, method);
+    return handleEmailDeliveryRequest(req, method, routeParams);
   }
 
   // ==================== PREVIEW LINKS DIRECT DISPATCH ====================

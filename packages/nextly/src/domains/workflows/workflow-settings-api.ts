@@ -687,9 +687,43 @@ interface GrantMoves {
 }
 
 /**
+ * Locks, on transaction `tx`, every role a change of `permissionIds` may touch: each role wanted,
+ * and each holding one of them, super-admin left out. A holder found once the locks are taken (one
+ * granted by a writer that committed meanwhile) is locked in turn, until none is left unlocked.
+ * Returns the roles locked.
+ */
+async function lockGrantedRoles(
+  tx: TransactionContext,
+  wanted: Map<string, Set<string>>,
+  permissionIds: readonly string[],
+  superAdmin: string | null
+): Promise<Set<string>> {
+  const wantedRoles = [...wanted.values()].flatMap(set => [...set]);
+  const locked = new Set<string>();
+  for (;;) {
+    const holders = await directHolders(tx, permissionIds);
+    const unlocked = [...new Set([...holders.keys(), ...wantedRoles])]
+      .filter(roleId => roleId !== superAdmin && !locked.has(roleId))
+      .sort();
+    if (unlocked.length === 0) return locked;
+    // In one order, as every writer of a role's grants locks it, so two writers wait rather than
+    // deadlock.
+    for (const roleId of unlocked) {
+      await tx.lockRow("roles", roleId);
+      locked.add(roleId);
+    }
+  }
+}
+
+/**
  * Sets, on transaction `tx`, which roles hold each action's permissions: exactly those wanted,
  * super-admin left as it is. Each role's own other grants are kept. Returns the roles changed and
  * the moves of each action.
+ *
+ * Every role it may change is locked before any role's grants are read, and each role's grants
+ * are read under that lock: a role's grants read unlocked could be changed by another writer (a
+ * second workflow's grants, or the role's own screen) before they are written back here, and that
+ * writer's change would be lost.
  */
 async function setGrantsOn(
   tx: TransactionContext,
@@ -698,13 +732,12 @@ async function setGrantsOn(
   permissionIds: Map<string, string[]>,
   superAdmin: string | null
 ): Promise<{ changed: Set<string>; moves: Map<string, GrantMoves> }> {
-  const all = [...permissionIds.values()].flat();
-  const holders = await directHolders(tx, all);
-  const roles = new Set([
-    ...holders.keys(),
-    ...[...wanted.values()].flatMap(set => [...set]),
-  ]);
-  if (superAdmin !== null) roles.delete(superAdmin);
+  const roles = await lockGrantedRoles(
+    tx,
+    wanted,
+    [...permissionIds.values()].flat(),
+    superAdmin
+  );
   const moves = new Map<string, GrantMoves>();
   const service = new RolePermissionService(adapter, logger());
   const changed = new Set<string>();

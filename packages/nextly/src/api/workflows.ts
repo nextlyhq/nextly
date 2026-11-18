@@ -37,16 +37,19 @@ import {
 } from "../domains/auth/system-write-policy";
 import { resolveSingleDocumentId } from "../domains/singles/services/single-document-access";
 import type { UserContext } from "../domains/singles/types";
+import { documentTableOf } from "../domains/workflows/part-versions";
 import { registeredWorkflows } from "../domains/workflows/registry";
 import {
   assignMany,
   reviewStateOf,
   stepMany,
   waitingFor,
+  type ManyRefusal,
 } from "../domains/workflows/review-api";
 import type { ReviewDocument } from "../domains/workflows/review-state-repository";
 import {
   assignWorkflowParts,
+  namedParts,
   takeWorkflowStep,
   type Assignment,
   type WorkflowCaller,
@@ -63,6 +66,7 @@ import { getCachedNextly } from "../init";
 import { readCaller } from "./authenticated-read";
 import {
   privateToSession,
+  SKIP_DATE_FORMATTING_HEADER,
   respondBulk,
   respondDoc,
   respondList,
@@ -75,6 +79,42 @@ import {
 } from "./versions-access";
 import { withErrorHandler } from "./with-error-handler";
 import { nextlyValidationFromZod } from "./zod-to-nextly-error";
+
+/**
+ * A document as a request names it: an entry of a collection by its id, or a Single by its slug.
+ *
+ * @experimental
+ */
+export type NamedDocument =
+  | { collection: string; id: string }
+  | { single: string };
+
+/**
+ * A document of a move over several that was refused, named as the request named it: a Single by
+ * its slug alone, so a refusal (one for a Single the caller may not read included) never tells
+ * the caller its stored id.
+ *
+ * @experimental
+ */
+export interface NamedRefusal {
+  document: NamedDocument;
+  code: string;
+  message: string;
+}
+
+/** A document as review state keys it, named as a request names it. */
+const namedDocument = (document: ReviewDocument): NamedDocument =>
+  document.scopeKind === "single"
+    ? { single: document.scopeSlug }
+    : { collection: document.scopeSlug, id: document.entryId };
+
+/** Refusals of a move over several, each document named as the request named it. */
+const namedRefusals = (refused: readonly ManyRefusal[]): NamedRefusal[] =>
+  refused.map(({ document, code, message }) => ({
+    document: namedDocument(document),
+    code,
+    message,
+  }));
 
 /** A document as a request names it: an entry of a collection, or a Single. */
 const DocumentRef = z.union([
@@ -316,13 +356,16 @@ async function documentOf(
 
 /**
  * Throws not found unless the asker may read `document` in every part named: first the collection
- * or Single at all, as a read route authorizes before it runs, then the document itself. Not found
- * rather than forbidden either way, so a caller who may not read it is not told it exists.
+ * or Single at all, as a read route authorizes before it runs, then the document itself, in each
+ * language named. Not found rather than forbidden either way, so a caller who may not read it is
+ * not told it exists. A move naming `"all"` is asked of each part it can move (`namedParts`),
+ * never of none, so it cannot reach a language its caller may not read. No parts at all is a
+ * read of the document, which any language its caller may read it in allows.
  */
 async function assertReadable(
   asker: WorkflowAsker,
   document: ReviewDocument,
-  parts: readonly (string | null)[] = []
+  parts: "all" | readonly (string | null)[] = []
 ): Promise<void> {
   if (asker === null) return;
   const readsEntity = await canReadEntity(
@@ -341,6 +384,8 @@ async function assertReadable(
       },
     });
   }
+  // Each language named is asked about in its own right: one the caller may not read refuses the
+  // whole move.
   await assertVersionDocumentReadable(
     document.scopeKind,
     document.scopeSlug,
@@ -348,7 +393,9 @@ async function assertReadable(
     asker.user,
     asker.scope,
     {},
-    parts
+    parts === "all"
+      ? namedParts("all", (await documentTableOf(document)).localized)
+      : parts
   );
 }
 
@@ -356,7 +403,7 @@ async function assertReadable(
 async function readableBy(
   asker: WorkflowAsker,
   document: ReviewDocument,
-  parts: readonly (string | null)[] = []
+  parts: "all" | readonly (string | null)[] = []
 ): Promise<boolean> {
   try {
     await assertReadable(asker, document, parts);
@@ -368,10 +415,6 @@ async function readableBy(
 }
 
 const adapter = () => container.get<DrizzleAdapter>("adapter");
-
-/** The parts a request names, for the read check: none for "all", which reads in every one. */
-const namedParts = (parts: "all" | readonly (string | null)[]) =>
-  parts === "all" ? [] : parts;
 
 /** Every assignment a request names, each document resolved and read-checked. */
 async function assignmentsOf(
@@ -433,7 +476,7 @@ export const workflowOperations = {
   async takeStep(asker: WorkflowAsker, input: unknown) {
     const body = parse(StepBody, input);
     const document = await documentOf(body.document);
-    await assertReadable(asker, document, namedParts(body.parts));
+    await assertReadable(asker, document, body.parts);
     return takeWorkflowStep(adapter(), {
       document,
       step: body.step,
@@ -464,23 +507,25 @@ export const workflowOperations = {
         seen: each.seen,
       });
     }
-    return stepMany(adapter(), {
+    const { moved, refused } = await stepMany(adapter(), {
       documents,
       step: body.step,
       comment: body.comment ?? null,
       caller: callerOf(asker),
-      readable: document => readableBy(asker, document),
+      readable: (document, parts) => readableBy(asker, document, parts),
     });
+    return { moved, refused: namedRefusals(refused) };
   },
 
   /** Assignments over several documents, each refusal named. */
   async assignMany(asker: WorkflowAsker, input: unknown) {
     const body = parse(AssignBody, input);
-    return assignMany(adapter(), {
+    const { assigned, refused } = await assignMany(adapter(), {
       assignments: await assignmentsOf(asker, body, false),
       caller: callerOf(asker),
-      readable: document => readableBy(asker, document),
+      readable: (document, parts) => readableBy(asker, document, parts),
     });
+    return { assigned, refused: namedRefusals(refused) };
   },
 
   /** The registered workflows, each with its stages, steps and attachments. */
@@ -564,6 +609,17 @@ export const workflowOperations = {
   },
 };
 
+/**
+ * A response whose body is configuration, not records: the registered workflows, or a workflow's
+ * settings. Marked so its values are answered as they were defined or saved, never rewritten as
+ * dates for the reader's timezone (a stage label that reads like a date included), the update's
+ * answer as much as the read's, since a settings screen renders the one it gets back.
+ */
+function configurationResponse(response: Response): Response {
+  response.headers.set(SKIP_DATE_FORMATTING_HEADER, "1");
+  return response;
+}
+
 /** The REST routes, by the method the route parser names. */
 const ROUTES: Record<
   string,
@@ -575,25 +631,29 @@ const ROUTES: Record<
 > = {
   async listWorkflows(_request, asker) {
     const { items, meta } = await workflowOperations.list(asker);
-    return respondList(items, meta);
+    return configurationResponse(respondList(items, meta));
   },
 
   async getWorkflowSettings(_request, asker, params) {
-    return respondDoc(
-      await workflowOperations.readSettings(asker, { slug: params.slug })
+    return configurationResponse(
+      respondDoc(
+        await workflowOperations.readSettings(asker, { slug: params.slug })
+      )
     );
   },
 
   async updateWorkflowSettings(request, asker, params) {
     const body: unknown = await request.json();
-    return respondMutation(
-      "Workflow settings saved.",
-      await workflowOperations.updateSettings(
-        asker,
-        // The slug the path names, over any the body names.
-        typeof body === "object" && body !== null && !Array.isArray(body)
-          ? { ...body, slug: params.slug }
-          : body
+    return configurationResponse(
+      respondMutation(
+        "Workflow settings saved.",
+        await workflowOperations.updateSettings(
+          asker,
+          // The slug the path names, over any the body names.
+          typeof body === "object" && body !== null && !Array.isArray(body)
+            ? { ...body, slug: params.slug }
+            : body
+        )
       )
     );
   },
@@ -635,11 +695,11 @@ const ROUTES: Record<
         id: document.entryId,
         ...result,
       })),
-      refused.map(({ document, code, message }) => ({
-        id: document.entryId,
-        code,
-        message,
-      }))
+      refused.map(({ document, code, message }) =>
+        "single" in document
+          ? { single: document.single, code, message }
+          : { id: document.id, code, message }
+      )
     );
   },
 
@@ -651,11 +711,11 @@ const ROUTES: Record<
     return respondBulk(
       `${assigned.length} assigned; ${refused.length} refused.`,
       assigned.map(document => ({ id: document.entryId })),
-      refused.map(({ document, code, message }) => ({
-        id: document.entryId,
-        code,
-        message,
-      }))
+      refused.map(({ document, code, message }) =>
+        "single" in document
+          ? { single: document.single, code, message }
+          : { id: document.id, code, message }
+      )
     );
   },
 

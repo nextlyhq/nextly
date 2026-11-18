@@ -129,3 +129,49 @@
   font-size: var(--text-sm);
   line-height: 1.5;
 }
+
+/*
+ * "Show built-in colours", the last thing in the Colours tab: a checkbox on
+ * a 24px line and its hint under the label.
+ */
+.nx-built-in-colours {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  margin: 0.5rem 0 0;
+}
+
+.nx-built-in-colours__line {
+  display: flex;
+  align-items: center;
+  gap: 0.4375rem;
+  min-height: 24px;
+}
+
+.nx-built-in-colours__label {
+  font-size: var(--text-xs);
+  font-weight: 400;
+}
+
+/* Under the label, past the checkbox and the gap beside it. */
+.nx-built-in-colours__hint {
+  margin: 0;
+  padding-inline-start: calc(1rem + 0.4375rem);
+  color: var(--nx-muted-foreground);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+}
+
+/*
+ * A built-in colour still listed while the site hides the ones it does not
+ * use: a quiet tag after its name, never squeezed out by a long one.
+ */
+.nx-vars__built-in {
+  flex: none;
+  padding: 0 5px;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-sm);
+  color: var(--nx-muted-foreground);
+  font-size: 10.5px;
+  line-height: 16px;
+}

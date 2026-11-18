@@ -140,7 +140,9 @@ export function composedTextAt(
       heldExposureId: exposureId,
     };
   }
-  if (exposureId === undefined || kind === null) {
+  // Bound to data, the prop shows the field whatever is typed, so it is
+  // changed through the binding in the panel.
+  if (exposureId === undefined || kind === null || isBound(node, prop)) {
     return { kind: "part-of", placementId: placement.id };
   }
   if (kind === "rich") {
@@ -185,6 +187,16 @@ function placedNode(
   const placement = findNode(document.nodes, placementId);
   if (placement === undefined || !isComponentInstance(placement)) return null;
   return { node, placement };
+}
+
+/** Whether the composed node's prop is bound, as a placement's binding lands. */
+function isBound(node: ResolvedBlockNode, prop: string): boolean {
+  const bindings: unknown = node.bindings;
+  return (
+    typeof bindings === "object" &&
+    bindings !== null &&
+    Object.hasOwn(bindings, prop)
+  );
 }
 
 /**
