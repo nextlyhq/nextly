@@ -204,6 +204,73 @@ export function FontsScreen({
   );
 }
 
+/** What the Fonts screen adds to the list it draws: where it opens. */
+export interface FontsScreenProps extends FontsPanelProps {
+  /**
+   * Close the screen, back to Design, where it opens over the Design panel.
+   * Absent where it is a page of its own, which has no "back".
+   */
+  onClose?: () => void;
+  /**
+   * The id of the heading that names the screen, where the page around it
+   * draws one. Absent, the screen draws its own "Fonts" title.
+   */
+  labelledBy?: string;
+}
+
+/**
+ * The one Fonts screen: the site's fonts, adding and removing them, under a
+ * "Fonts" heading. Every way in mounts this, so the builder (over its Design
+ * panel, from Design → Type or a font picker's "Manage fonts…") and the
+ * admin's own Fonts page show the same screen and behave the same; the host
+ * hands each the same writers.
+ *
+ * @param props - The list's inputs, and where the screen opens
+ * @returns The screen
+ */
+export function FontsScreen({
+  onClose,
+  labelledBy,
+  ...panel
+}: FontsScreenProps): React.JSX.Element {
+  const ownTitle = React.useId();
+  const back = React.useRef<HTMLButtonElement>(null);
+  // Opened over Design, the keyboard follows: the screen took the panel's
+  // place, so focus left behind would be on nothing.
+  const opensOver = onClose !== undefined && labelledBy === undefined;
+  React.useEffect(() => {
+    if (opensOver) back.current?.focus();
+  }, [opensOver]);
+  return (
+    <section
+      className="nx-fonts-screen"
+      aria-labelledby={labelledBy ?? ownTitle}
+      data-fonts-screen=""
+    >
+      {labelledBy === undefined ? (
+        <div className="nx-fonts-screen__head">
+          {onClose === undefined ? null : (
+            <button
+              ref={back}
+              type="button"
+              className="nx-vars__icon-button nx-fonts-screen__back"
+              aria-label={`Back to ${EDITOR_WORDS.design}`}
+              title={`Back to ${EDITOR_WORDS.design}`}
+              onClick={onClose}
+            >
+              <ArrowLeft aria-hidden="true" size={16} />
+            </button>
+          )}
+          <h2 className="nx-fonts-screen__title" id={ownTitle}>
+            {EDITOR_WORDS.fonts}
+          </h2>
+        </div>
+      ) : null}
+      <FontsPanel {...panel} />
+    </section>
+  );
+}
+
 /**
  * The tab's place names inside a sentence, from the editor's one catalogue of
  * them, so a rename of the tab moves its sentences with it.

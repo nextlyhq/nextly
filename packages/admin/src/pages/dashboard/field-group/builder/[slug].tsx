@@ -158,8 +158,10 @@ export default function FieldGroupBuilderEditPage({
     resolver: zodResolver(componentFormSchema),
     defaultValues: { singularName: "" },
   });
-  const { handleDuplicateField, getValidatedFields } =
-    useBuilderFieldActions(builder);
+  const { handleDuplicateField, getValidatedFields } = useBuilderFieldActions(
+    builder,
+    "fieldGroup"
+  );
 
   const [active, setActive] = useState<ActiveOverlay>({ kind: "none" });
   const [reconcileOpen, setReconcileOpen] = useState(false);
@@ -183,6 +185,7 @@ export default function FieldGroupBuilderEditPage({
     pinSettings,
     moveAddress,
   } = useBuilderEntityState({
+    kind: "fieldGroup",
     entity: fieldGroup,
     builder,
     toFields: loaded => loaded.fields ?? [],

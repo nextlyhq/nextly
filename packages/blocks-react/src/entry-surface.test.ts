@@ -317,8 +317,8 @@ const SOURCE_MODULES: ReadonlyArray<{
     // them at a depth React's renderer could not reach, and at the
     // partition's bound from both sides. `drawsInteractive` is shared with the
     // rich-text block's content model in this package, not offered outside it,
-    // and so is `passageHeadings`, the walk the table-of-contents block lists
-    // a passage's headings by, and `headingsDrawn`, the same walk the page
+    // and so is `passageHeadings`, the walk that anchors one passage read by
+    // itself, and `headingsDrawn`, the same walk the page
     // outline lists a Rich text block's headings by. `VIEWS_DRAWING_CHILDREN` is exported for the
     // test that holds every view to what it declares it draws.
     // `RichTextParagraphContent` draws the Text block's one paragraph inside

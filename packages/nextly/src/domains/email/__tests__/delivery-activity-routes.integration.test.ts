@@ -29,7 +29,7 @@ import { env } from "../../../lib/env";
 import { rowLockServer } from "../../audit/audit-log-writer";
 import { pluginSettingsSecrets } from "../../plugins/settings-service";
 import { recipientDigests } from "../delivery-record";
-import { storeQueuedEmail } from "../queued-send";
+import { retireJobsOfCancelled, storeQueuedEmail } from "../queued-send";
 import type { EmailDeliveryService } from "../services/email-delivery-service";
 
 const ORIGIN = "http://localhost";
@@ -41,13 +41,17 @@ type Headers = Record<string, string>;
 const DELIVERY_FIELDS = [
   "createdAt",
   "erased",
+  "failureKind",
   "failureReason",
+  "failureStatus",
   "id",
   "namedPerson",
   "outcome",
   "provider",
+  "queuedId",
   "recipientKind",
   "templateSlug",
+  "templateVersion",
 ].sort();
 
 /** What a queued email reads as, and nothing else. */
@@ -350,6 +354,31 @@ for (const dialect of getConfiguredTestDialects()) {
       }
     });
 
+    it("lets a reader open a delivery's and a queued email's detail, and refuses the rest", async () => {
+      const [delivery] = itemsOf((await read("email-deliveries", reader)).body);
+      const details = [
+        `email-deliveries/${String(delivery.id)}`,
+        `email-deliveries/queued/${failedQueuedId}`,
+      ];
+      for (const path of details) {
+        const { body, text } = await read(path, reader);
+        expectNothingPersonal(text);
+        expect(body).toMatchObject({ timeline: expect.any(Array) });
+        expect((await get(path, root)).status, path).toBe(200);
+        for (const caller of [manager, stranger, selfRegistered]) {
+          expect(REFUSED, path).toContain((await get(path, caller)).status);
+        }
+      }
+      // An id that names nothing, whatever its shape, is not found.
+      for (const path of [
+        "email-deliveries/00000000-0000-4000-8000-000000000000",
+        "email-deliveries/not-an-id",
+        "email-deliveries/queued/not-an-id",
+      ]) {
+        expect((await get(path, reader)).status, path).toBe(404);
+      }
+    });
+
     it("refuses each read to a manager without the read grant, a user with no email grant, and a self-registered account", async () => {
       for (const path of READS) {
         for (const caller of [manager, stranger, selfRegistered]) {
@@ -378,6 +407,10 @@ for (const dialect of getConfiguredTestDialects()) {
           failureReason: "The email provider refused the message.",
           namedPerson: false,
           erased: true,
+          queuedId: null,
+          templateVersion: "not-recorded",
+          failureKind: null,
+          failureStatus: null,
         },
         {
           id: expect.any(String),
@@ -389,6 +422,10 @@ for (const dialect of getConfiguredTestDialects()) {
           failureReason: null,
           namedPerson: true,
           erased: false,
+          queuedId: null,
+          templateVersion: "not-recorded",
+          failureKind: null,
+          failureStatus: null,
         },
         {
           id: expect.any(String),
@@ -400,6 +437,10 @@ for (const dialect of getConfiguredTestDialects()) {
           failureReason: expect.not.stringContaining("carol"),
           namedPerson: false,
           erased: false,
+          queuedId: null,
+          templateVersion: "not-recorded",
+          failureKind: null,
+          failureStatus: null,
         },
         expect.objectContaining({
           createdAt: "2026-11-01T10:00:00.000Z",
@@ -441,6 +482,12 @@ for (const dialect of getConfiguredTestDialects()) {
           s.startsWith("failed")
         )
       ).toEqual([]);
+      // A provider id in capitals names the same provider on every dialect.
+      expect(await slugsOf(`providerId=${providerId.toUpperCase()}`)).toEqual(
+        await slugsOf(`providerId=${providerId}`)
+      );
+      // A type id is compared exactly, on MySQL as on the others.
+      expect(await slugsOf("providerType=SMTP")).toEqual([]);
       expect(await slugsOf("providerType=smtp")).toEqual([
         "failed:welcome",
         "sent:null",
@@ -636,16 +683,62 @@ for (const dialect of getConfiguredTestDialects()) {
       }
     });
 
-    it("queues a template name longer than any template's as having no template, on every dialect", async () => {
-      const long = "x".repeat(300);
-      const queued = await t.nextly.email.queueWithTemplate({
-        template: long,
+    it("queues a template name longer than any template's, or not slug-shaped, as having no template, on every dialect", async () => {
+      // A name any template may have is kept: `daily+news` among them.
+      const kept = await t.nextly.email.queueWithTemplate({
+        template: "daily+news",
         to: "queued@example.com",
       });
-      const { items } = await t.nextly.emailDeliveries.findQueued({});
+      expect(
+        (await t.nextly.emailDeliveries.findQueued({})).items.find(
+          item => item.id === kept.id
+        )
+      ).toMatchObject({ templateSlug: "daily+news" });
+      for (const name of ["x".repeat(300), "alice@example.com"]) {
+        const queued = await t.nextly.email.queueWithTemplate({
+          template: name,
+          to: "queued@example.com",
+        });
+        const { items } = await t.nextly.emailDeliveries.findQueued({});
+        expect(items.find(item => item.id === queued.id)).toMatchObject({
+          state: "failed",
+          templateSlug: null,
+        });
+      }
+      // The address passed as a name is not returned anywhere.
+      const { text } = await read("email-deliveries/queued?limit=100", reader);
+      expectNothingPersonal(text);
+    });
+
+    it("says a queued email's attempts are unknown once its job is pruned", async () => {
+      const queued = await t.nextly.email.queue({
+        to: "queued@example.com",
+        subject: SUBJECT,
+        html: BODY,
+      });
+      const tables = loadedDialect(dialect).tables;
+      const db = t.adapter.getDrizzle() as never as {
+        select(fields: unknown): {
+          from(table: unknown): { where(c: unknown): Promise<unknown[]> };
+        };
+        delete(table: unknown): { where(c: unknown): Promise<unknown> };
+      };
+      const [row] = (await db
+        .select({ jobId: tables.emailQueue.jobId })
+        .from(tables.emailQueue)
+        .where(eq(tables.emailQueue.id as never, queued.id))) as Array<{
+        jobId: string;
+      }>;
+      await db
+        .delete(tables.nextlyJobs)
+        .where(eq(tables.nextlyJobs.id as never, row.jobId));
+
+      const { items } = await t.nextly.emailDeliveries.findQueued({
+        state: "sent",
+      });
       expect(items.find(item => item.id === queued.id)).toMatchObject({
-        state: "failed",
-        templateSlug: null,
+        state: "sent",
+        attempts: null,
       });
     });
 
@@ -686,6 +779,29 @@ for (const dialect of getConfiguredTestDialects()) {
         attempts: 0,
         nextAttemptAt: null,
         messageHeld: false,
+      });
+
+      // One cancelled by a release that left its job pending is retired at
+      // boot, beside the re-seal, so it stops counting too.
+      if (stored.state !== "waiting") {
+        throw new Error("the email was stored with no job to retire");
+      }
+      const jobs = loadedDialect(dialect).tables.nextlyJobs;
+      const db = t.adapter.getDrizzle() as never as {
+        update(table: unknown): {
+          set(values: unknown): { where(c: unknown): Promise<unknown> };
+        };
+      };
+      await db
+        .update(jobs)
+        .set({ state: "pending" })
+        .where(eq(jobs.id as never, stored.jobId));
+      expect(await t.nextly.emailDeliveries.overdue()).toMatchObject({
+        overdue: 1,
+      });
+      await retireJobsOfCancelled(t.adapter);
+      expect(await t.nextly.emailDeliveries.overdue()).toMatchObject({
+        overdue: 0,
       });
     });
   });
