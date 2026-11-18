@@ -103,6 +103,12 @@ describe("the site's own design data at the file's root", () => {
     });
   });
 
+  it("writes and reads the site's variable prefix, so a var() in the file can be followed", () => {
+    const file = written({ ...set, prefix: "--brand-" });
+    expect(rootData(file).site).toMatchObject({ prefix: "--brand-" });
+    expect(dtcgToTokens(file).site?.prefix).toBe("--brand-");
+  });
+
   it("writes none of it for a site that states none", () => {
     const file = written({ tokens: [brand] });
     expect(file.$extensions).toBeUndefined();

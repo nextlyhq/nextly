@@ -86,7 +86,12 @@ export interface ImportContext {
  */
 export interface Adoption {
   readonly ids: ReadonlyMap<string, string>;
-  readonly prefix: string;
+  /** Every variable identity the file holds, adopted or not. */
+  readonly identities: readonly string[];
+  /** The prefix the file's `var()` references are written under. */
+  readonly from: string;
+  /** This site's prefix, which they are read under here. */
+  readonly to: string;
 }
 
 /**
@@ -158,18 +163,35 @@ function siteFollowingAdoption(
  * adopted identity, by `$token` or through `var()` of its custom property,
  * pointed at the id that variable takes here.
  */
-function followingAdoption<T>(value: T, adoption: Adoption | undefined): T {
-  if (adoption === undefined || adoption.ids.size === 0) return value;
-  // Each adopted variable's custom property as a whole name inside `var()`:
-  // ended by a space, a fallback's comma or the closing parenthesis, so a
-  // longer property it begins is left alone.
-  const properties = [...adoption.ids].map(([from, to]) => ({
-    pattern: new RegExp(
-      `(var\\(\\s*)${escapeRegExp(tokenCustomProperty(from, adoption.prefix))}(?=[\\s,)])`,
-      "g"
-    ),
-    to: tokenCustomProperty(to, adoption.prefix),
-  }));
+export function followingAdoption<T>(
+  value: T,
+  adoption: Adoption | undefined
+): T {
+  if (adoption === undefined) return value;
+  // Each of the file's variables' custom properties, as the file writes it,
+  // to the one it is read under here: its id here, under this site's
+  // prefix. Matched as a whole name inside `var()`, ended by a space, a
+  // fallback's comma or the closing parenthesis, so a longer property it
+  // begins is left alone.
+  const properties = adoption.identities.flatMap(identity => {
+    const from = tokenCustomProperty(identity, adoption.from);
+    const to = tokenCustomProperty(
+      adoption.ids.get(identity) ?? identity,
+      adoption.to
+    );
+    return from === to
+      ? []
+      : [
+          {
+            pattern: new RegExp(
+              `(var\\(\\s*)${escapeRegExp(from)}(?=[\\s,)])`,
+              "g"
+            ),
+            to,
+          },
+        ];
+  });
+  if (properties.length === 0 && adoption.ids.size === 0) return value;
   const walk = (node: unknown): unknown => {
     if (typeof node === "string") {
       return properties.reduce(

@@ -60,7 +60,9 @@ import type { ClassListEdit } from "./block-style-actions";
 import { DESIGN_ACTION_WORDS } from "./editor-words";
 import { labelClashes, setFluidRange } from "./tokens-studio";
 import {
+  followingAdoption,
   importExtras,
+  type Adoption,
   siteDataChanges,
   textStylesEdit,
   textStylesTaken,
@@ -270,10 +272,22 @@ export function planImport(
   const skipped = read.issues.map(entry => entry.message);
   const refusedStyles: string[] = [];
   const adopted = adoptedIds(read.tokens, into);
-  const extras = importExtras(read, context, refusedStyles, {
+  const adoption: Adoption = {
     ids: adopted,
-    prefix: resolveTokenPrefix(into.prefix).prefix,
-  });
+    // The file's variables and this site's: a reference may name either.
+    identities: [
+      ...new Set([...read.tokens, ...into.tokens].map(tokenIdentity)),
+    ],
+    from: resolveTokenPrefix(read.site?.prefix).prefix,
+    to: resolveTokenPrefix(into.prefix).prefix,
+  };
+  // The file's own values name each other through `var()` too (a shadow
+  // its colour), so they follow the same map as its text styles and rows.
+  const tokens = read.tokens.map(token => ({
+    ...token,
+    values: followingAdoption(token.values, adoption),
+  }));
+  const extras = importExtras(read, context, refusedStyles, adoption);
   const { textStyles } = extras;
   const carriesMore =
     read.site !== undefined ||
@@ -293,9 +307,7 @@ export function planImport(
   // applying will merge: the last of two entries sharing an identity, with
   // the first reported.
   const dropped: string[] = [];
-  const unique = [
-    ...oneEach(withStoredIds(read.tokens, adopted), dropped).values(),
-  ];
+  const unique = [...oneEach(withStoredIds(tokens, adopted), dropped).values()];
   return {
     ok: true,
     skipped: [...skipped, ...refusedStyles, ...dropped],

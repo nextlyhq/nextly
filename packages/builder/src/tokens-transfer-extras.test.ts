@@ -334,6 +334,30 @@ describe("an import carrying the site's own design data", () => {
     });
   });
 
+  it("points the file's var() references at this site's prefix where the two sites' prefixes differ", () => {
+    const source: SiteTokenSet = {
+      ...SITE,
+      siteText: { h2: { fontSize: "var(--site-font-size-h2)" } },
+    };
+    const into: SiteTokenSet = { tokens: [], prefix: "--brand-" };
+    const styled: NamedClass = {
+      ...eyebrow,
+      styles: { base: { base: { fontSize: "var(--site-font-size-h2)" } } },
+    };
+    const plan = ready(
+      planImport(files(source, [styled]), into, { textStyles: [] })
+    );
+    expect(plan.skipped).toEqual([]);
+    expect(plan.extras.site?.siteText).toEqual({
+      h2: { fontSize: "var(--brand-font-size-h2)" },
+    });
+    expect(plan.extras.textStyles.added[0]?.styles).toEqual({
+      base: { base: { fontSize: "var(--brand-font-size-h2)" } },
+    });
+    const card = plan.added.find(token => token.name === "shadow.card");
+    expect(card?.values.light).toBe("0 2px 4px var(--brand-c-brand)");
+  });
+
   it("follows only the whole custom property of a merged variable, never one it begins", () => {
     const mine: SiteTokenSet = {
       tokens: [

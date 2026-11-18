@@ -13,13 +13,20 @@ import type { ValidationIssue } from "../validation";
 
 import { type DtcgNode, isPlainObject, issue } from "./dtcg-format";
 import { siteTextIssues } from "./site-text";
-import type { SiteTokenSet } from "./site-tokens";
+import { resolveTokenPrefix, type SiteTokenSet } from "./site-tokens";
 
 /** The parts of a token set the file keeps at its root. */
 export type DtcgSiteData = Pick<
   SiteTokenSet,
   "siteText" | "order" | "fluidRange" | "builtInColoursShown"
->;
+> & {
+  /**
+   * The prefix the site writing the file emits its variables under, which
+   * a `var()` in its values names them by. Read so an import can point
+   * those at the importing site's own; never stored as that site's prefix.
+   */
+  readonly prefix?: string;
+};
 
 /** The site data a set states, as the file keeps it, or `undefined` for none. */
 export function siteDataOf(set: SiteTokenSet): DtcgNode | undefined {
@@ -30,6 +37,7 @@ export function siteDataOf(set: SiteTokenSet): DtcgNode | undefined {
     ...(set.builtInColoursShown === undefined
       ? {}
       : { builtInColoursShown: set.builtInColoursShown }),
+    ...(set.prefix === undefined ? {} : { prefix: set.prefix }),
   };
   return Object.keys(data).length === 0 ? undefined : data;
 }
@@ -84,6 +92,12 @@ const PARTS: readonly (readonly [
     "builtInColoursShown",
     "The built-in colours setting",
     value => typeof value === "boolean",
+  ],
+  [
+    "prefix",
+    "The variable prefix",
+    value =>
+      typeof value === "string" && resolveTokenPrefix(value).prefix === value,
   ],
 ];
 
