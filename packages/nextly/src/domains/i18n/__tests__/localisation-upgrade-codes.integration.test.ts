@@ -14,6 +14,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { previewUpgrade, runUpgrade } from "../../../cli/commands/upgrade";
 import { UPGRADE_STEPS } from "../../../cli/commands/upgrade-steps";
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
+import { createDynamicHandlers } from "../../../routeHandler";
 import type { TestNextly } from "../../../plugins/test-nextly";
 import { VERSIONS_TABLE } from "../../../schemas/versions/types";
 import type { CollectionsHandler } from "../../../services/collections-handler";
@@ -202,6 +203,33 @@ describeEachDialect(
         /pt_BR.*pt-BR|pt-BR.*pt_BR/
       );
       expect(await storedLanguages()).toEqual(["en", "pt_BR"]);
+    });
+
+    it("answers a request naming the old code with a deprecation, and one naming the standard code without", async () => {
+      const id = await legacyArticle();
+      await runUpgrade(
+        { confirmBackedUp: true },
+        { adapter: database!.adapter as never, config: UNDERSCORED }
+      );
+      await bootSite(database!, "upgraded", UNDERSCORED);
+      const read = (locale: string) => {
+        const url = new URL(
+          `http://localhost/admin/api/collections/${ARTICLES}/entries/${id}?locale=${locale}`
+        );
+        return createDynamicHandlers().GET(
+          new Request(url, { method: "GET", headers: { origin: url.origin } }),
+          {
+            params: Promise.resolve({
+              params: ["collections", ARTICLES, "entries", id],
+            }),
+          }
+        );
+      };
+
+      const older = await read("pt_BR");
+      expect(older.headers.get("Deprecation")).toBe("true");
+      expect(older.headers.get("Warning")).toMatch(/pt_BR[\s\S]*pt-BR/);
+      expect((await read("pt-BR")).headers.get("Deprecation")).toBeNull();
     });
 
     /** A logger that keeps what the start warned. */

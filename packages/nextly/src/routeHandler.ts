@@ -80,6 +80,7 @@ import {
 } from "./api/general-settings";
 import { listJobsRoute } from "./api/jobs-list-route";
 import { runJobsRoute } from "./api/jobs-run-route";
+import { withLanguageCodeDeprecation } from "./api/language-code-deprecation";
 import { changeLanguages, getLanguages } from "./api/languages";
 import { getNoticeCount, getNotices, markNoticesRead } from "./api/notices";
 import { getPluginPanelNumbers } from "./api/plugin-panel-numbers";
@@ -2964,9 +2965,10 @@ export function createDynamicHandlers(options?: {
     // which is the join the diagnostics exist for.
     const effectiveRequestId =
       response.headers.get("x-request-id") ?? readOrGenerateRequestId(req);
-    const identifiedResponse = withRequestIdHeader(
-      response,
-      effectiveRequestId
+    const identifiedResponse = withLanguageCodeDeprecation(
+      req,
+      withRequestIdHeader(response, effectiveRequestId),
+      appLocalization()
     );
     // Every verb's server error, counted toward System health's "errors in
     // the last 24 hours"; once per request, however many boundaries it passed.
