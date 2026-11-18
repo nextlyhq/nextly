@@ -113,4 +113,34 @@ describe("a live draft", () => {
     rerender({ stored: "2px" });
     expect(result.current.draft).toBe("2px");
   });
+
+  it("knows the text its last keystroke wrote, and settles it in the stored spelling", () => {
+    const { state, write } = storedValue("8px");
+    const { result, rerender } = renderHook(
+      ({ stored }) => useLiveDraft(stored),
+      { initialProps: { stored: state.stored } }
+    );
+    act(() => result.current.type("24", write));
+    rerender({ stored: "24px" });
+    expect(result.current.written("24")).toBe(true);
+    // Refused on the way to a unit: still the last written one.
+    act(() => result.current.type("24p", () => false));
+    expect(result.current.written("24p")).toBe(false);
+    act(() => result.current.type("24", () => false));
+    act(() => result.current.end());
+    expect(result.current.draft).toBe("24px");
+    expect(result.current.written("24")).toBe(false);
+  });
+
+  it("forgets what it wrote once the value moves under it", () => {
+    const { state, write } = storedValue("1");
+    const { result, rerender } = renderHook(
+      ({ stored }) => useLiveDraft(stored),
+      { initialProps: { stored: state.stored } }
+    );
+    act(() => result.current.type("2", write));
+    rerender({ stored: "2" });
+    rerender({ stored: "1" });
+    expect(result.current.written("2")).toBe(false);
+  });
 });

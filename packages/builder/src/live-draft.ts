@@ -47,7 +47,15 @@ export interface LiveDraft {
    * blur) is part of the same step.
    */
   readonly join: <T>(write: () => T) => T;
-  /** The edit is over: the next keystroke starts a new step. */
+  /**
+   * Whether `text` is what the last keystroke wrote, so the edit ending on it
+   * has nothing left to write.
+   */
+  readonly written: (text: string) => boolean;
+  /**
+   * The edit is over: the next keystroke starts a new step, and a draft the
+   * last keystroke wrote takes the stored spelling ("24" shows as stored).
+   */
   readonly end: () => void;
 }
 
@@ -62,13 +70,20 @@ export function useLiveDraft(stored: string): LiveDraft {
   const run = React.useRef<object | null>(null);
   // Whether the stored value is about to move for a keystroke's own write.
   const own = React.useRef(false);
+  // The text the last keystroke wrote, while the document still holds it,
+  // and the stored spelling it came back as, once it has.
+  const wrote = React.useRef<string | null>(null);
+  const answered = React.useRef<string | null>(null);
   React.useEffect(() => {
     if (own.current) {
       own.current = false;
+      answered.current = stored;
       return;
     }
     // Moved underneath the field, so what it was typing no longer applies.
     run.current = null;
+    wrote.current = null;
+    answered.current = null;
     setDraft(stored);
   }, [stored]);
   return React.useMemo(
@@ -78,13 +93,23 @@ export function useLiveDraft(stored: string): LiveDraft {
       type: (next, write) => {
         setDraft(next);
         run.current ??= {};
-        if (joinTyping(run.current, () => write(next))) own.current = true;
+        if (joinTyping(run.current, () => write(next))) {
+          own.current = true;
+          wrote.current = next;
+          answered.current = null;
+        }
       },
       join: write =>
         run.current === null ? write() : joinTyping(run.current, write),
+      written: text => wrote.current === text,
       end: () => {
+        if (wrote.current === draft && answered.current !== null) {
+          setDraft(answered.current);
+        }
         run.current = null;
         own.current = false;
+        wrote.current = null;
+        answered.current = null;
       },
     }),
     [draft]

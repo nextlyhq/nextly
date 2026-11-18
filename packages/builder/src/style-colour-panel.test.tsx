@@ -403,13 +403,14 @@ describe("a colour leaf draws a colour control", () => {
     ).toBe("");
   });
 
-  it("commits a typed colour on blur", () => {
+  it("writes a typed colour as it is typed, before blur", () => {
     const editor = mount(styles("#3b82f6"));
     const field = screen.getByRole("textbox", { name: "Colour" });
     fireEvent.change(field, { target: { value: "#ff0000" } });
-    expect(editor.applyAll).not.toHaveBeenCalled();
-    fireEvent.blur(field);
     expect(editor.applyAll).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).toContain(
+      '"#ff0000"'
+    );
   });
 
   it("CLEARS rather than storing an empty colour", () => {

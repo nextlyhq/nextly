@@ -7,17 +7,18 @@
  * block exposes, in what order, and the patch that changes one all live there,
  * where they can be asserted without a DOM.
  *
- * **Text commits on blur, not on every keystroke.** Undo is built from op
- * inverses, so an op per character would make one undo remove one letter, and
- * a sentence would take a sentence's worth of presses to take back. Committing
- * on blur keeps an edit to a field one entry in the history, which is what an
- * author means by "undo that change". The cost is that the canvas updates when
- * focus leaves the field rather than as you type; live preview needs the store
- * to coalesce consecutive updates to one node and prop, which it does not do
- * yet.
+ * **Text writes as it is typed**, so the canvas follows every keystroke. Undo
+ * is built from op inverses, and an op per character would make one undo
+ * remove one letter, so the writes of one stretch of typing share a run
+ * (`live-draft.ts`, over `typing-run.ts`) that the history keeps as ONE step:
+ * undo takes back the whole edit, which is what an author means by "undo that
+ * change". Blur and Enter end the run. A value that is not one yet (`12p`,
+ * half a hex colour) writes nothing, so the canvas keeps the last valid one.
+ * A shared style is the exception: it is stored on the site at once, so its
+ * fields write when the edit ends.
  *
  * Discrete controls — a checkbox, a select — commit immediately. There is no
- * typing to coalesce, and waiting for blur on a checkbox would leave the canvas
+ * typing to group, and waiting for blur on a checkbox would leave the canvas
  * disagreeing with a control the author has already changed.
  *
  * This module draws the panel, its three tabs and the surface a selection

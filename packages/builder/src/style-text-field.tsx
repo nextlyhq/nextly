@@ -154,7 +154,9 @@ function sideTitle(compact: boolean, draft: string): string | undefined {
  * A text field's commit: the draft written, a variable's typed name matched
  * in the mode the canvas shows, as the field's variables list offers them.
  * Written in the edit's run of typing, where it was typed live, which the
- * commit then ends.
+ * commit then ends. A draft the last keystroke already wrote is not written
+ * again, unless the field's end-of-edit write does more than its keystrokes
+ * (`settles`: a colour joining Recent colours).
  */
 function useDraftCommit({
   draft,
@@ -165,6 +167,7 @@ function useDraftCommit({
   setDraft,
   setTyping,
   live,
+  settles,
 }: {
   draft: string;
   stored: StyleValue | undefined;
@@ -174,6 +177,7 @@ function useDraftCommit({
   setDraft: (value: string) => void;
   setTyping: (typing: boolean) => void;
   live: LiveDraft | undefined;
+  settles: boolean;
 }): () => void {
   const mode = useCanvasTokenMode();
   return () => {
@@ -191,7 +195,7 @@ function useDraftCommit({
         setDraft,
       });
     if (live === undefined) return commit();
-    live.join(commit);
+    if (settles || !live.written(draft)) live.join(commit);
     live.end();
   };
 }
@@ -450,6 +454,7 @@ export function TextField({
     setDraft,
     setTyping,
     live: typedLive,
+    settles: onType !== undefined,
   });
   const mode = useCanvasTokenMode();
   const write = typedWrite({

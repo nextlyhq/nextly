@@ -70,7 +70,12 @@ beforeEach(() => {
           summary: { type: "textarea", role: "content" },
           count: { type: "number", role: "content" },
         },
-        supports: { spacing: true, color: true, dimensions: true },
+        supports: {
+          spacing: true,
+          color: true,
+          dimensions: true,
+          typography: true,
+        },
         render: () => null,
       },
     ] as never,
@@ -121,9 +126,10 @@ function card(): BlockNode {
 
 /** The card's base style for `property`, as the canvas draws it. */
 function styleOf(property: string): unknown {
-  return (
-    card().styles?.base?.[BASE_BREAKPOINT] as Record<string, unknown>
-  )[property];
+  const values = card().styles?.base?.[BASE_BREAKPOINT] as
+    | Record<string, unknown>
+    | undefined;
+  return values?.[property];
 }
 
 /** Type `text` one character at a time into `field`, still focused. */
@@ -230,7 +236,9 @@ describe("the Style tab's typed fields", () => {
   it("writes a padding value before blur, and keeps the last valid one while a unit is typed", () => {
     mount();
     openStyle();
-    const field = row("padding").getByLabelText("Block start") as HTMLInputElement;
+    const field = row("padding").getByLabelText(
+      "Block start"
+    ) as HTMLInputElement;
     fireEvent.change(field, { target: { value: "" } });
     typeInto(field, "24");
     expect(styleOf("padding")).toEqual({ blockStart: "24px" });
@@ -294,5 +302,24 @@ describe("the Style tab's typed fields", () => {
       void editor().undo();
     });
     expect(styleOf("width")).toBe("12px");
+  });
+
+  it("writes a line height as it is typed, a number or a length", () => {
+    mount();
+    openStyle();
+    const field = screen.getByLabelText("Line height") as HTMLInputElement;
+    typeInto(field, "1.8");
+    expect(styleOf("lineHeight")).toBe(1.8);
+    typeInto(field, "p", "1.8");
+    // "1.8p" is neither: the canvas keeps 1.8.
+    expect(styleOf("lineHeight")).toBe(1.8);
+    typeInto(field, "x", "1.8p");
+    expect(styleOf("lineHeight")).toBe("1.8px");
+    fireEvent.blur(field);
+    expect(editor().undoDepth).toBe(1);
+    act(() => {
+      void editor().undo();
+    });
+    expect(styleOf("lineHeight")).toBeUndefined();
   });
 });

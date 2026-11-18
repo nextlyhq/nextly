@@ -42,6 +42,7 @@ import { FocalPointField } from "./focal-point-field";
 import { IconChoiceField } from "./icon-choice-field";
 import { InheritedValue, useUnsetHint } from "./inherited-value";
 import { useLabelScrub } from "./label-scrub";
+import { typedStyleText } from "./live-draft";
 import { SectionHeld } from "./section-held";
 import {
   alignmentGroupFor,
@@ -50,7 +51,10 @@ import {
 } from "./style-alignment-icons";
 import { foldedLeaf, type SiteVariable } from "./style-colour";
 import type { StyleControl } from "./style-controls";
-import type { CommitOutcome } from "./style-field-surroundings";
+import {
+  StyleTargetContext,
+  type CommitOutcome,
+} from "./style-field-surroundings";
 import {
   fontWeightOptions,
   lineHeightFromText,
@@ -351,8 +355,9 @@ function OptionSelect({
 
 /**
  * A field taking a number or a length as typed: "1.5" is stored as a number,
- * "24px" or "150%" as written. Committed on blur and on Enter, as every text
- * field in the panel is, so one undo removes one value, not one character.
+ * "24px" or "150%" as written. Written as it is typed, as every text field in
+ * the panel is, and the stretch of typing is one undo step, ended on blur and
+ * on Enter. A shared style is written only when the edit ends.
  */
 function LengthOrNumberField({
   id,
@@ -372,20 +377,29 @@ function LengthOrNumberField({
 }): React.JSX.Element {
   // The refusal, and the CSS names while they are shown.
   const described = useFieldDescription(describedBy);
-  const { draft, setDraft } = useDraft(stored);
+  const { draft, setDraft, live } = useDraft(stored);
+  const typedLive = React.useContext(StyleTargetContext).kind !== "shared";
   const mode = useCanvasTokenMode();
   const hint = useUnsetHint("1.5, 24px or 150%");
-  const commit = () => {
-    if (draft === storedText(stored)) return;
-    // A variable's name typed here is that variable, asked before the text is
-    // read as a number or a length, as every text field asks it.
-    const named = tokenForTypedName(leaf, tokens, draft, mode);
-    const value =
-      named === undefined ? lineHeightFromText(draft) : { $token: named };
-    if (onCommit(value) === "unchanged") {
-      setDraft(storedText(stored));
-    }
+  // A variable's name typed here is that variable, asked before the text is
+  // read as a number or a length, as every text field asks it.
+  const valueOf = (text: string): StyleValue | null => {
+    const named = tokenForTypedName(leaf, tokens, text, mode);
+    return named === undefined ? lineHeightFromText(text) : { $token: named };
   };
+  const commit = () => {
+    live.join(() => {
+      if (draft === storedText(stored) || live.written(draft)) return;
+      if (onCommit(valueOf(draft)) === "unchanged") {
+        setDraft(storedText(stored));
+      }
+    });
+    live.end();
+  };
+  // A keystroke writes nothing while emptied or refused, so the canvas keeps
+  // the last valid value.
+  const write = (text: string): boolean =>
+    typedStyleText(text) !== undefined && onCommit(valueOf(text)) === "applied";
   const owning = useLineHeightLabelScrub({ draft, setDraft, stored, onCommit });
   return (
     <Input
@@ -396,7 +410,10 @@ function LengthOrNumberField({
       autoComplete="off"
       aria-describedby={described}
       aria-invalid={describedBy === undefined ? undefined : true}
-      onChange={event => setDraft(event.target.value)}
+      onChange={event => {
+        if (typedLive) live.type(event.target.value, write);
+        else setDraft(event.target.value);
+      }}
       // Nothing of its own is written while a drag on the label owns it.
       onBlur={() => owning() || commit()}
       onKeyDown={event => {

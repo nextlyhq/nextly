@@ -195,6 +195,23 @@ describe("a block's colour picker", () => {
     expect(JSON.parse(store.value ?? "[]")).toEqual(["rgb(0 0 255)"]);
   });
 
+  it("remembers a colour typed live once, when the field is left", () => {
+    // Written as it is typed, "#ff0" and "#ff00" are colours on the way to
+    // "#ff0000": only the colour the author settled on joins the list.
+    const store = memory();
+    mount(store, "#3b82f6");
+    const field = screen.getByRole("textbox", { name: "Colour" });
+    let typed = "";
+    for (const character of "#ff0000") {
+      typed += character;
+      fireEvent.change(field, { target: { value: typed } });
+    }
+    expect(store.value).toBeNull();
+    fireEvent.blur(field);
+
+    expect(JSON.parse(store.value ?? "[]")).toEqual(["#ff0000"]);
+  });
+
   it("does not remember a variable chosen from the list", () => {
     const store = memory();
     mount(store);
