@@ -228,6 +228,9 @@ describe("the core block library's bind buttons", () => {
         "core/image.target",
         // What a click does is chosen, not filled from a field.
         "core/image.whenClicked",
+        "core/quote.entryCollection",
+        "core/quote.entryId",
+        "core/quote.target",
       ].sort()
     );
   });

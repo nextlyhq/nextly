@@ -43,7 +43,7 @@ import {
   declaredEditorEntries as entries,
   describeValue as describe,
 } from "./block-editor-modules";
-import { PLUGIN_SOURCE } from "./editor/stored-document";
+import { PLUGIN_SOURCE } from "./plugin-source";
 
 export {
   contributedInspector,
