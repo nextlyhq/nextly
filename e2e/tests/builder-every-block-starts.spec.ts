@@ -124,19 +124,13 @@ test("every core block starts at a visible size, real or with its next step, and
       .then(async () => (await selection(page))[0])
       .catch(() => undefined);
     if (added === undefined) {
-      const said = (await tile.getAttribute("aria-describedby")) ?? "";
-      const description =
-        said === ""
-          ? ""
-          : await page.evaluate(
-              ids =>
-                ids
-                  .split(" ")
-                  .map(each => document.getElementById(each)?.textContent ?? "")
-                  .join(" "),
-              said
-            );
-      if (!/goes inside/i.test(`${description} ${await tile.innerText()}`)) {
+      // Its tile says where it goes: in its accessible description (the
+      // tooltip it is described by) or its own words.
+      const describedWhere = await expect(tile)
+        .toHaveAccessibleDescription(/goes inside/i, { timeout: 1_000 })
+        .then(() => true)
+        .catch(() => false);
+      if (!describedWhere && !/goes inside/i.test(await tile.innerText())) {
         problems.push(
           `${name}: nothing was added, and the tile says nothing of where it goes`
         );
