@@ -773,6 +773,20 @@
 }
 
 /*
+ * A Section's Padding above the spacing box: Compact, Normal and Roomy, then
+ * the line saying where the space comes from, or that a side is Custom.
+ */
+.nx-section-padding {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.25rem;
+  min-inline-size: 0;
+  margin: 0 0 0.5rem;
+  padding: 0;
+  border: 0;
+}
+
+/*
  * A container's Content width: Boxed and Full width as picture buttons, each
  * picture the result in small, then the line saying the width in force.
  */
