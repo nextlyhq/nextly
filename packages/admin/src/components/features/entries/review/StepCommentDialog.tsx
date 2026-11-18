@@ -31,7 +31,7 @@ import { Loader2 } from "@admin/components/icons";
  * (its `MAX_STEP_COMMENT_LENGTH`, the content events' note limit). The admin
  * cannot import the server's constant, so it is stated here, once.
  */
-export const STEP_COMMENT_MAX_LENGTH = 4000;
+const STEP_COMMENT_MAX_LENGTH = 4000;
 
 export interface StepCommentDialogProps {
   open: boolean;
