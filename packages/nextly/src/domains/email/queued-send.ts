@@ -30,7 +30,7 @@ import { randomUUID } from "node:crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
-import { and, desc, eq, gt, inArray, isNotNull } from "drizzle-orm";
+import { and, eq, gt, inArray, isNotNull } from "drizzle-orm";
 
 import { loadedDialect } from "../../database/dialect-tables";
 import { getDialectTables } from "../../database/index";
@@ -76,7 +76,7 @@ import {
   type QueuedEmailChange,
   type QueuedEmailRecipient,
 } from "./queued-send-changes";
-import type { EmailService } from "./services/email-service";
+import type { EmailService, SentProvider } from "./services/email-service";
 import { markHtml, TrustedHtml } from "./services/liquid-engine";
 import { toAddressList } from "./services/recipients";
 import { notAcceptedFailure } from "./services/send-failures";
@@ -520,60 +520,53 @@ function shapeOf(message: QueuedMessage): {
   messageKind: QueuedMessage["kind"];
   recipientKinds: string;
 } {
-  const kinds = new Set(queuedRecipients(message).map(entry => entry.kind));
   return {
     messageKind: message.kind,
-    recipientKinds: (["to", "cc", "bcc"] as const)
-      .filter(kind => kinds.has(kind))
-      .join(","),
+    recipientKinds: kindsText(
+      queuedRecipients(message).map(entry => entry.kind)
+    ),
   };
 }
 
 /**
- * Note on a queued email the provider its latest attempt went through, as
- * that attempt's delivery records name it, so the Activity shows and filters
- * by it. Best effort: the attempt's own outcome is what matters.
+ * Note on a queued email what its latest attempt went through: the provider
+ * the send resolved, and the kinds of recipient the message finally went to
+ * once the filters had their say, which the queue-time record can't know.
+ * Best effort: the attempt's own outcome is what matters.
  */
-async function noteAttemptProvider(
+async function noteAttempt(
   adapter: DrizzleAdapter,
-  queuedId: string
+  queuedId: string,
+  provider: SentProvider | undefined,
+  finals: readonly FinalRecipient[]
 ): Promise<void> {
-  const tables = loadedDialect(adapter.getCapabilities().dialect).tables;
-  const deliveries = tables.emailDeliveries;
-  const queue = tables.emailQueue;
-  const db = adapter.getDrizzle<NoteDb>();
-  const [latest] = (await db
-    .select({
-      providerType: deliveries.providerType,
-      providerId: deliveries.providerId,
-      providerOrigin: deliveries.providerOrigin,
-    })
-    .from(deliveries)
-    .where(eq(deliveries.queuedId, queuedId))
-    .orderBy(desc(deliveries.createdAt), desc(deliveries.id))
-    .limit(1)) as Array<{
-    providerType: string;
-    providerId: string | null;
-    providerOrigin: string | null;
-  }>;
-  if (!latest) return;
-  await db.update(queue).set(latest).where(eq(queue.id, queuedId));
+  const values = {
+    ...(provider
+      ? {
+          providerType: provider.type,
+          providerId: provider.id,
+          providerOrigin: provider.origin,
+        }
+      : {}),
+    ...(finals.length > 0
+      ? { recipientKinds: kindsText(finals.map(entry => entry.kind)) }
+      : {}),
+  };
+  if (Object.keys(values).length === 0) return;
+  const queue = emailQueueTableFor(adapter.getCapabilities().dialect);
+  await adapter
+    .getDrizzle<QueueDb>()
+    .update(queue)
+    .set(values)
+    .where(eq(queue.id, queuedId));
 }
 
-/** The Drizzle surface noting an attempt's provider needs. */
-interface NoteDb {
-  select(fields: Record<string, unknown>): {
-    from(table: unknown): {
-      where(condition: unknown): {
-        orderBy(...columns: unknown[]): {
-          limit(count: number): PromiseLike<unknown[]>;
-        };
-      };
-    };
-  };
-  update(table: unknown): {
-    set(values: unknown): { where(condition: unknown): PromiseLike<unknown> };
-  };
+/** Recipient kinds as the queue keeps them: `to` first, each once. */
+function kindsText(kinds: readonly string[]): string {
+  const present = new Set(kinds);
+  return (["to", "cc", "bcc"] as const)
+    .filter(kind => present.has(kind))
+    .join(",");
 }
 
 /**
@@ -674,7 +667,12 @@ export type QueuedEmailSender = Pick<
   EmailService,
   "send" | "sendWithTemplate" | "withTemplateCopies"
 > &
-  Partial<Pick<EmailService, "withRecipientReport" | "withQueuedAttempt">>;
+  Partial<
+    Pick<
+      EmailService,
+      "withRecipientReport" | "withQueuedAttempt" | "withProviderReport"
+    >
+  >;
 
 /** What an attempt needs. */
 export interface QueuedAttemptDeps {
@@ -762,12 +760,14 @@ async function sendOnce(
   sender: QueuedEmailSender,
   message: QueuedMessage,
   id: string,
-  report: (recipients: FinalRecipient[]) => void
+  report: (recipients: FinalRecipient[]) => void,
+  onProvider: (provider: SentProvider) => void
 ): Promise<EmailFailure | undefined> {
   // Each delivery it records names this email, so its attempts read as one
-  // timeline.
+  // timeline; the provider it goes through is heard from the send itself.
   const attempting = sender.withQueuedAttempt?.(id) ?? sender;
-  const reporting = attempting.withRecipientReport?.(report) ?? attempting;
+  const providing = attempting.withProviderReport?.(onProvider) ?? attempting;
+  const reporting = providing.withRecipientReport?.(report) ?? providing;
   try {
     const outcome =
       message.kind === "template"
@@ -1055,15 +1055,21 @@ export async function attemptQueuedEmail(
   if (!message) return;
 
   let finals: FinalRecipient[] = [];
+  let provider: SentProvider | undefined;
   const failure = await sendOnce(
     deps.sender(row.scope),
     message,
     row.id,
     reported => {
       finals = reported;
+    },
+    heard => {
+      provider = heard;
     }
   );
-  await noteAttemptProvider(deps.adapter, row.id).catch(() => undefined);
+  await noteAttempt(deps.adapter, row.id, provider, finals).catch(
+    () => undefined
+  );
   // Digested before the change's transaction opens: the plugin's digest key
   // is read on a connection of its own the first time.
   const recipients = changesObserved(row.scope)

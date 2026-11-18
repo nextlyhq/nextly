@@ -11,6 +11,11 @@ process.env.NEXTLY_SECRET =
 import { eq } from "drizzle-orm";
 import { afterEach, describe, expect, it } from "vitest";
 
+import {
+  FilterSeams,
+  getFilterRegistry,
+  type EmailPayloadFilterValue,
+} from "../../../filters";
 import { env } from "../../../lib/env";
 import { loadedDialect } from "../../../database/dialect-tables";
 import { definePlugin } from "../../../plugins/plugin-context";
@@ -25,6 +30,7 @@ import { pluginSettingsSecrets } from "../../plugins/settings-service";
 import type { ActivityEntry } from "../delivery-activity";
 import { defineEmailProvider } from "../provider-definition";
 import { storeQueuedEmail } from "../queued-send";
+import { resolveEmailRetentionConfig } from "../retention-config";
 import type { EmailDeliveryService } from "../services/email-delivery-service";
 import type { EmailProviderAdapter } from "../types";
 
@@ -352,6 +358,74 @@ for (const dialect of getConfiguredTestDialects()) {
         ).items
       ).toEqual([]);
       expect(made.every(id => all.includes(id))).toBe(true);
+    });
+
+    it("notes a queued email's provider from its attempt, even when the log keeps no record", async () => {
+      const t = await boot(dialect);
+      await provider(t, true);
+      // An install that keeps no delivery history: no record is written.
+      const deliveries = t.getService("emailDeliveryService") as unknown as {
+        retentionPolicy?: () => unknown;
+      };
+      deliveries.retentionPolicy = () =>
+        resolveEmailRetentionConfig({ maxAgeMs: 0 });
+      const queued = await t.nextly.email.queue({
+        to: "a@example.com",
+        subject: "S",
+        html: "<p>x</p>",
+      });
+      const entry = (await t.nextly.emailDeliveries.activity({})).items.find(
+        item => item.id === queued.id
+      );
+      expect(entry).toMatchObject({
+        status: "sent",
+        provider: { type: "capturing-merged", origin: "stored" },
+      });
+    });
+
+    it("lists a pruned queued email's deliveries as rows of their own", async () => {
+      const t = await boot(dialect);
+      await provider(t, true);
+      const queued = await t.nextly.email.queue({
+        to: "a@example.com",
+        subject: "S",
+        html: "<p>x</p>",
+      });
+      // The queue keeps a settled email 7 days, the log its records longer.
+      const queue = loadedDialect(dialect).tables.emailQueue;
+      const db = t.adapter.getDrizzle() as never as {
+        delete(table: unknown): { where(c: unknown): Promise<unknown> };
+      };
+      await db.delete(queue).where(eq(queue.id as never, queued.id));
+
+      const { items } = await t.nextly.emailDeliveries.activity({});
+      expect(items).toEqual([
+        expect.objectContaining({ kind: "delivery", status: "sent" }),
+      ]);
+    });
+
+    it("records the kinds of recipient a queued email finally went to", async () => {
+      const t = await boot(dialect);
+      await provider(t, true);
+      const addCopy = (value: EmailPayloadFilterValue) => ({
+        ...value,
+        cc: [...(value.cc ?? []), "copy@example.com"],
+      });
+      getFilterRegistry().addFilter(FilterSeams.EmailBeforeSend, addCopy);
+      try {
+        const queued = await t.nextly.email.queue({
+          to: "a@example.com",
+          subject: "S",
+          html: "<p>x</p>",
+        });
+        const entry = (await t.nextly.emailDeliveries.activity({})).items.find(
+          item => item.id === queued.id
+        );
+        // Queued for `to` alone; the filter added a copy as it was sent.
+        expect(entry?.recipientKinds).toEqual(["to", "cc"]);
+      } finally {
+        getFilterRegistry().removeFilter(FilterSeams.EmailBeforeSend, addCopy);
+      }
     });
   });
 }

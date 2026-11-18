@@ -55,6 +55,7 @@ import {
   messageIdWithoutRecipients,
   type DeliveryTemplateVersion,
   type EmailDeliveryInput,
+  type ProviderSource,
   type EmailDeliveryRecipientKind,
 } from "../delivery-record";
 import { EmailErrorCode } from "../errors";
@@ -485,6 +486,14 @@ function sentVersion(
   }
 }
 
+/** The provider a send goes through, as `withProviderReport` hands it. */
+export interface SentProvider {
+  type: string;
+  /** The stored provider's id; null for the site's configured one. */
+  id: string | null;
+  origin: ProviderSource;
+}
+
 /** A template's owner as the delivery log names it. */
 function ownerName(owner: EmailTemplateRecord["owner"]): string {
   return owner.kind === "plugin" ? `plugin:${owner.name}` : owner.kind;
@@ -560,6 +569,8 @@ export class EmailService extends BaseService {
    * set (`withTemplateCopies`).
    */
   private frozenCopies?: { cc: string[]; bcc: string[] };
+  /** Set on a view made by `withProviderReport`. */
+  private providerReport?: (provider: SentProvider) => void;
   /** Set on a view made by `withRecipientReport`. */
   private recipientReport?: (recipients: FinalRecipient[]) => void;
   /** Set on a view made by `withQueuedAttempt`. */
@@ -635,6 +646,17 @@ export class EmailService extends BaseService {
   scopedTo(scope: string): EmailService {
     const view = Object.create(this) as EmailService;
     view.keyScope = scope;
+    return view;
+  }
+
+  /**
+   * @internal This service, handing `report` the provider each send it makes
+   * goes through, as it resolves it: a queued email notes it on its row
+   * whether or not the delivery log keeps a record of the send.
+   */
+  withProviderReport(report: (provider: SentProvider) => void): EmailService {
+    const view = Object.create(this) as EmailService;
+    view.providerReport = report;
     return view;
   }
 
@@ -1154,6 +1176,11 @@ export class EmailService extends BaseService {
       providerName,
       resolvedProviderId,
     } = await this.resolveProviderForSend(options.providerId);
+    this.providerReport?.({
+      type: providerType,
+      id: resolvedProviderId ?? null,
+      origin: resolvedProviderId ? "stored" : "code",
+    });
     observe?.provider?.({
       provider: providerName,
       type: providerType,

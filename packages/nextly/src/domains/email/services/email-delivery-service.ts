@@ -37,8 +37,10 @@ import {
   lte,
   or,
   sql,
+  type SQL,
 } from "drizzle-orm";
 
+import { loadedDialect } from "../../../database/dialect-tables";
 import { toDbError } from "../../../database/errors";
 import { getDialectTables } from "../../../database/index";
 import { NextlyError } from "../../../errors";
@@ -272,7 +274,11 @@ function failureOfRow(row: EmailDeliveryRow): DeliveryFailure | null {
 export interface ListDeliveriesOptions {
   /** One record, by its id. */
   id?: string;
-  /** Only records of sends that were not a queued email's attempt. */
+  /**
+   * Only records that stand on their own: a send that was not queued, or
+   * an attempt of a queued email whose row has since been pruned (the queue
+   * keeps a settled email 7 days, the log its records far longer).
+   */
   standalone?: true;
   /** Only records whose provider reads as this origin now. */
   providerOrigin?: FilterableOrigin;
@@ -988,6 +994,15 @@ export class EmailDeliveryService extends BaseService {
     return typeof maxAge === "number" ? new Date(now.getTime() - maxAge) : null;
   }
 
+  /** Records with no queued email still kept to read them under. */
+  private standsAlone(): SQL {
+    const queue = loadedDialect(this.dialect).tables.emailQueue;
+    return or(
+      isNull(this.deliveries.queuedId),
+      sql`not exists (select 1 from ${queue} where ${queue.id} = ${this.deliveries.queuedId})`
+    ) as SQL;
+  }
+
   /**
    * List recorded deliveries, newest first.
    *
@@ -1033,7 +1048,7 @@ export class EmailDeliveryService extends BaseService {
         ? sql`CAST(${this.deliveries.providerType} AS BINARY) = CAST(${options.providerType} AS BINARY)`
         : undefined,
       options.id !== undefined ? eq(this.deliveries.id, options.id) : undefined,
-      options.standalone ? isNull(this.deliveries.queuedId) : undefined,
+      options.standalone ? this.standsAlone() : undefined,
       options.providerOrigin !== undefined
         ? originCondition(this.deliveries, options.providerOrigin, this.dialect)
         : undefined,
