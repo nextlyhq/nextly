@@ -228,6 +228,14 @@ async function insertWithRetry(
 }
 
 /**
+ * Whether `db` takes savepoints, so {@link underSavepoint} can undo its work alone. MySQL's
+ * adapter keeps them off: there, nothing but the whole transaction undoes a part of it.
+ */
+export function takesSavepoints(db: VersionsDbApi): boolean {
+  return !(!db.savepoint || !db.rollbackToSavepoint || !db.releaseSavepoint);
+}
+
+/**
  * Run `work` inside a savepoint where the transaction has them, so a failure
  * rolls back only `work` and the transaction carries on; without them, run it
  * plainly.
@@ -236,9 +244,7 @@ export async function underSavepoint<T>(
   db: VersionsDbApi,
   work: () => Promise<T>
 ): Promise<T> {
-  if (!db.savepoint || !db.rollbackToSavepoint || !db.releaseSavepoint) {
-    return work();
-  }
+  if (!takesSavepoints(db)) return work();
   savepointSequence += 1;
   const name = `nextly_version_insert_${savepointSequence}`;
   await db.savepoint(name);

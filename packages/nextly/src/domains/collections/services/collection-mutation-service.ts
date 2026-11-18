@@ -474,6 +474,7 @@ import {
   tagNestedComponentTypes,
 } from "../../versions/tag-component-types";
 import {
+  takesSavepoints,
   underSavepoint,
   VersionCaptureService,
 } from "../../versions/version-capture-service";
@@ -22518,7 +22519,11 @@ export class CollectionMutationService extends BaseService {
       // field-group table this instance has not registered, say) then undoes
       // the row too, so a caller that catches the failure and commits its own
       // transaction keeps nothing of this create. Side effects and hooks run
-      // after it, as before.
+      // after it, as before. Where the transaction takes no savepoint (MySQL),
+      // nothing but the whole transaction can take the row back: a failure once
+      // it is written is marked a write-integrity failure, so a batch aborts and
+      // rolls back rather than carrying on and committing it.
+      const undoesAlone = takesSavepoints(tx);
       const { entry, createEffects } = await underSavepoint(tx, async () => {
         // Insert using transaction context
         const entry = await tx.insert<unknown>(tableName, entryData, {
@@ -22631,6 +22636,10 @@ export class CollectionMutationService extends BaseService {
         // with the items after it.
         if (settleCreateGate) await settleCreateGate();
         return { entry, createEffects };
+      }).catch((error: unknown) => {
+        throw rowWritten && !undoesAlone
+          ? markWriteIntegrityFailure(error)
+          : error;
       });
       const eventRecorded = createEffects.eventRecorded;
       revalidationIntent = createEffects.revalidationIntent;
