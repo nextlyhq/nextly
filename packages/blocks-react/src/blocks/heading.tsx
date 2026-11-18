@@ -93,7 +93,7 @@ function drawHeading(
   const level: HeadingLevel = `h${rankOfTag(props.level)}`;
   // Its anchor in the page outline. An author's own CSS id is that anchor,
   // and the boundary draws it on the same element.
-  const [anchor] = headingAnchors(ctx, node);
+  const [anchor] = headingAnchors(ctx, node, text(props.text));
   // A bound date keeps its machine-readable value, inside the anchor or the
   // heading itself.
   const label = boundText(text(props.text), bound?.text);

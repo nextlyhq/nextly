@@ -161,9 +161,9 @@ interface OutlineRecord {
   /** Every id the page's headings are drawn with: the authors' and the made. */
   readonly drawn: ReadonlySet<string>;
   /**
-   * Each Rich text block inside a Collection list, by part and node id
-   * (`passageKey`): its place among every such block on the page, from 1,
-   * in page order.
+   * Each Heading and Rich text block inside a Collection list, by part and
+   * node id (`passageKey`): its place among every such block on the page,
+   * from 1, in page order.
    */
   readonly passageInList: ReadonlyMap<string, number>;
   /** The part a view of the outline answers for; the page's content if none. */
@@ -217,7 +217,7 @@ export function pageOutline(parts: readonly OutlinePart[]): PageOutline {
       if (list !== undefined) listOf.set(node, list);
       if (
         list !== undefined &&
-        node.type === RICH_TEXT_BLOCK &&
+        (node.type === RICH_TEXT_BLOCK || node.type === HEADING_BLOCK) &&
         !passageInList.has(passageKey(part.area, node.id))
       ) {
         // Counted over the whole page, not per list: two lists' entries
@@ -334,28 +334,46 @@ export function passageAnchors(
 ): readonly string[] {
   const place = ctx.itemPosition;
   const outline = ctx.outline;
+  const drawn = headingsDrawn(passage).map(heading => heading.text);
   // Drawn with no page outline (a host drawing blocks with `BlockList`):
   // the passage is outlined by itself.
   if (outline === undefined) {
     const alone = anchorAllocator();
-    return headingsDrawn(passage).map(heading => {
-      const id = alone.take(heading.text);
+    return drawn.map(words => {
+      const id = alone.take(words);
       return place === undefined ? id : `${id}--${place}`;
     });
   }
   if (place === undefined) return outlineAnchors(ctx, nodeId);
-  const drawn = headingsDrawn(passage);
-  const read = outline.headings.filter(heading => heading.node.id === nodeId);
+  return entryAnchors(ctx, outline, place, nodeId, drawn);
+}
+
+/**
+ * The anchors of a block inside a list's entry, from the words it draws:
+ * the outline's while it draws the words the outline read for it in its
+ * own part, else made from the words drawn (`passageAnchors`).
+ */
+function entryAnchors(
+  ctx: Pick<PageContext, "outline" | "itemPosition">,
+  outline: PageOutline,
+  place: string,
+  nodeId: string,
+  drawn: readonly string[]
+): readonly string[] {
+  const record = RECORDS.get(outline);
+  const area = record?.area ?? "content";
+  const read = outline.headings.filter(
+    heading => heading.node.id === nodeId && heading.area === area
+  );
   const asRead =
     read.length === drawn.length &&
-    read.every((heading, i) => heading.text === drawn[i]?.text);
+    read.every((heading, i) => heading.text === drawn[i]);
   if (asRead) return outlineAnchors(ctx, nodeId);
-  const record = RECORDS.get(outline);
   const allocator = anchorAllocator(new Set(record?.drawn));
-  const block = record?.passageInList.get(passageKey(record.area, nodeId)) ?? 1;
+  const block = record?.passageInList.get(passageKey(area, nodeId)) ?? 1;
   const suffix = block > 1 ? `--p${block}` : "";
-  return drawn.map(heading =>
-    entryId(`${allocator.take(heading.text)}--${place}${suffix}`, record?.taken)
+  return drawn.map(words =>
+    entryId(`${allocator.take(words)}--${place}${suffix}`, record?.taken)
   );
 }
 
@@ -368,14 +386,26 @@ export function passageAnchors(
  */
 export function headingAnchors(
   ctx: Pick<PageContext, "outline" | "itemPosition">,
-  node: BlockNode
+  node: BlockNode,
+  words: string
 ): readonly string[] {
+  const place = ctx.itemPosition;
+  const drawn = words.replace(/\s+/g, " ").trim();
+  // Inside a list's entry the words may be the entry's own, bound to an
+  // item field and filled after the outline.
+  if (ctx.outline !== undefined && place !== undefined) {
+    return entryAnchors(
+      ctx,
+      ctx.outline,
+      place,
+      node.id,
+      drawn === "" ? [] : [drawn]
+    );
+  }
   return outlineAnchors(
     {
       outline: ctx.outline ?? pageOutline([{ area: "content", nodes: [node] }]),
-      ...(ctx.itemPosition === undefined
-        ? {}
-        : { itemPosition: ctx.itemPosition }),
+      ...(place === undefined ? {} : { itemPosition: place }),
     },
     node.id
   );
@@ -406,9 +436,11 @@ export function anchorsWithin(
     anchors.push(`p${passage}`);
     holdsPassage = true;
   });
-  // And never with an id the page's headings use, which any heading on the
-  // page may change.
-  if (holdsPassage && record !== undefined) anchors.push(...record.drawn);
+  // And by every id the page's headings and authors use, which its anchors
+  // step past and which a change anywhere on the page may move.
+  if ((holdsPassage || anchors.length > 0) && record !== undefined) {
+    anchors.push(...record.drawn);
+  }
   return anchors;
 }
 

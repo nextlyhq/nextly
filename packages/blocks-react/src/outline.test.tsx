@@ -682,6 +682,86 @@ describe("a heading drawn once per entry of a Collection list", () => {
     expect(headingIds(html)).toEqual(["notes", "notes-2--0", "notes-2--0--p2"]);
   });
 
+  it("anchors a Heading bound to each entry, with no words of its own, by the entry's words", async () => {
+    const find = vi.fn(() =>
+      Promise.resolve({
+        items: [
+          { id: "a", title: "First post" },
+          { id: "b", title: "Second post" },
+        ],
+        total: 2,
+      })
+    );
+    const html = await drawn(
+      page({
+        id: "list",
+        type: "core/collection-loop",
+        version: 1,
+        props: { collection: "posts", limit: 10 },
+        slots: {
+          children: [
+            heading("", {
+              bindings: { text: { $bind: "title", source: "item" } },
+            }),
+          ],
+        },
+      }),
+      { context: createStandaloneContext({ data: { find } }), bindings: {} }
+    );
+    expect(headingIds(html)).toEqual(["first-post--0", "second-post--1"]);
+  });
+
+  it("compares an entry passage with its own part's reading, not another part's block of the same id", async () => {
+    const empty: RichTextValue = {
+      root: { type: "root", children: [{ type: "paragraph", children: [] }] },
+    };
+    const find = vi.fn(() =>
+      Promise.resolve({
+        items: [{ id: "a", body: passage(["h2", "Notes"]) }],
+        total: 1,
+      })
+    );
+    const shared = {
+      context: createStandaloneContext({ data: { find } }),
+      blocks: resolver,
+      bindings: {},
+    };
+    const html = await renderToHtml(
+      <>
+        {drawWithRegions({
+          regions: [
+            {
+              region: { area: "header", componentId: "header-component" },
+              document: page(heading("Notes", { id: "r" })),
+              prepared: null,
+            },
+          ],
+          page: {
+            ...shared,
+            document: page({
+              id: "list",
+              type: "core/collection-loop",
+              version: 1,
+              props: { collection: "posts", limit: 10 },
+              slots: {
+                children: [
+                  {
+                    ...richText(empty, "r"),
+                    bindings: { content: { $bind: "body", source: "item" } },
+                  },
+                ],
+              },
+            }),
+          },
+          shared,
+          siteStyles: undefined,
+          definitions: new Map(),
+        })}
+      </>
+    );
+    expect(headingIds(html)).toEqual(["notes", "notes-2--0"]);
+  });
+
   it("never draws an entry's id an author gave another block", async () => {
     const find = vi.fn(() =>
       Promise.resolve({ items: [{ id: "a" }, { id: "b" }], total: 2 })
@@ -784,6 +864,26 @@ describe("pageOutline", () => {
         list
       );
     expect(within("Hello")).not.toEqual(within("Notes"));
+  });
+
+  it("changes what an editor keeps a list's output by when an author id it must step past appears", () => {
+    const list: BlockNode = {
+      id: "list",
+      type: "core/collection-loop",
+      version: 1,
+      props: { collection: "posts" },
+      slots: { children: [heading("Title", { id: "t" })] },
+    };
+    const within = (cssId: string) =>
+      anchorsWithin(
+        {
+          outline: pageOutline(
+            parts(["content", [box([], { id: "b", cssId }), list]])
+          ),
+        },
+        list
+      );
+    expect(within("other")).not.toEqual(within("title--0"));
   });
 
   it("numbers entry passages per part, as node ids are only unique within one", () => {
