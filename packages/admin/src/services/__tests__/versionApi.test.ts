@@ -203,3 +203,31 @@ describe("versionApi autosave", () => {
     await expect(versionApi.getAutosave(single)).resolves.toBeNull();
   });
 });
+
+describe("versionApi.diffFromBaseline", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getSpy.mockResolvedValue({});
+  });
+
+  /** The comparison request's query, as sent. */
+  const sentQuery = () =>
+    Object.fromEntries(
+      new URL(String(getSpy.mock.calls.at(-1)?.[0]), "http://admin.test")
+        .searchParams
+    );
+
+  it("names the language when no version is named, so the server compares that part", async () => {
+    await versionApi.diffFromBaseline(collection, "published", {
+      locale: "fr",
+    });
+
+    expect(sentQuery()).toEqual({ baseline: "published", locale: "fr" });
+  });
+
+  it("names the version and the baseline, and no language it was not given", async () => {
+    await versionApi.diffFromBaseline(collection, "draft", { to: 7 });
+
+    expect(sentQuery()).toEqual({ baseline: "draft", to: "7" });
+  });
+});

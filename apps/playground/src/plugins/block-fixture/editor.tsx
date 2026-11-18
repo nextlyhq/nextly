@@ -2,7 +2,7 @@
 
 /**
  * The block fixture's browser half: its editor entry and its custom inspector,
- * both imported by the generated component map.
+ * both handed to the editor by `admin.tsx`.
  *
  * The entry re-exports the very definitions the server registers, so the
  * editor and the server agree on what each block is.

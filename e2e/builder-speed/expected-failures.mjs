@@ -23,11 +23,9 @@ export const EXPECTED_FAILURES = {
   "keystroke-canvas":
     "not shown until the field is left, against 100 ms: the canvas does not follow typing yet",
   "open-canvas-slow-network":
-    "about 2.0 s against 2.0 s at 150 ms a round trip: the canvas waits on a chain of requests",
+    "about 2.1 s against 2.0 s at 150 ms a round trip: the canvas waits on a chain of requests",
   "open-requests":
-    "25 against 15: the builder asks for its document, styles, library and media one request at a time",
+    "18 against 15: besides the admin's own reads as it loads, the component library and Layout choices are read on their own as the builder opens",
   "open-round-trips":
-    "7 against 3: the requests before the canvas wait on each other",
-  "idle-commits":
-    "one against none: an untouched editor still renders on a timer",
+    "6 against 3: the requests before the canvas wait on each other",
 };

@@ -593,13 +593,6 @@
   min-width: 0;
 }
 
-/* Canvas shows: two words, taking the control column. */
-.nx-inspector__field[data-content-control="canvasShows"]
-  > .nx-style-inspector__toggle {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-}
-
 /*
  * A collection list's region in Layers: "Each entry" and "When empty",
  * muted, as regions rather than blocks, with how many blocks each holds.

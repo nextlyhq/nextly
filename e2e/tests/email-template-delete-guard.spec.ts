@@ -162,7 +162,7 @@ for (const { name, width, height } of WIDTHS) {
       )
     ).toBeVisible();
 
-    // Attach screenshot for the PR.
+    // A picture of the screen at this width, kept with the run's results.
     await testInfo.attach(`delete-guard-${width}`, {
       body: await page.screenshot({ fullPage: false }),
       contentType: "image/png",

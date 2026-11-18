@@ -5,6 +5,11 @@
  * design metadata, and the sweeps that fill, repair and clean up behind them.
  */
 import { DEFAULT_LIMITS } from "@nextlyhq/blocks-engine";
+import {
+  SITE_BLOCKS_SERVICE,
+  SITE_NAMED_QUERIES_SERVICE,
+  SITE_PAGE_DATA_LIMIT_SERVICE,
+} from "@nextlyhq/blocks-react";
 import type { PluginContributions } from "@nextlyhq/plugin-sdk";
 
 import { CONTENT_ADDRESS_SERVICE } from "../address-claims/content-addresses";
@@ -12,6 +17,7 @@ import { bindingsReportJob } from "../bindings-report/job";
 import {
   BLOCK_SERVICE,
   createBlockRegistrationService,
+  registryReader,
 } from "../blocks/registration-service";
 import { breakpointRemovalJob } from "../breakpoint-removal/job";
 import { BREAKPOINT_REMOVAL_SERVICE } from "../breakpoint-removal/service";
@@ -45,7 +51,7 @@ import {
 import type { BindingReportParts } from "./bindings";
 import type { BreakpointRemovalParts } from "./breakpoints";
 import type { retiredReader } from "./components";
-import { componentStoreOf } from "./options";
+import { componentStoreOf, pageDataLimitOf } from "./options";
 import type { Definition } from "./state";
 
 /** The services other code reaches through `ctx.services.plugins`. */
@@ -68,7 +74,25 @@ export function pluginServices(
   } = def;
   const { removalService, readRetiredFor } = parts;
   return {
-    [BLOCK_SERVICE]: () => createBlockRegistrationService(),
+    [BLOCK_SERVICE]: () => createBlockRegistrationService(def.blocks),
+    // The site's blocks, read-only, for a route given no `blocks` of its own
+    // (`@nextlyhq/blocks-react/next` reads this name).
+    [SITE_BLOCKS_SERVICE.service]: () => registryReader(def.blocks),
+    // And its named queries, for a route whose copy of the page builder
+    // never started (`namedQueriesOf`).
+    [SITE_NAMED_QUERIES_SERVICE.service]: () => ({
+      definitionOf: (name: string) => def.state.namedQueries.definitionOf(name),
+    }),
+    // And its page data limit, which a route given no `maxQueries` renders
+    // under, as the editor's meter counts against it. Offered only when set:
+    // with none, the route takes its own default.
+    ...(pageDataLimitOf(opts) === undefined
+      ? {}
+      : {
+          [SITE_PAGE_DATA_LIMIT_SERVICE.service]: () => ({
+            maxQueries: pageDataLimitOf(opts),
+          }),
+        }),
     // The index-wide facts behind "used on N pages", bound to the
     // installation. Offered as a service because answering needs the
     // installed context — which collections the registry holds, which
@@ -101,6 +125,7 @@ export function pluginServices(
         templates: templateActions,
         namedQueries: namedQueryDeclarations,
         bindings: pageActionBindings,
+        blocks: def.blocks,
       }),
     // Who holds a path, for the site's one content route: a page, or a
     // collection's entry under its template address. Read as committed,
@@ -137,6 +162,8 @@ export function pluginServices(
               nextly: args.config.nextly as NonNullable<
                 Parameters<typeof designMetadataFor>[0]["config"]["nextly"]
               >,
+              // This page builder's own blocks.
+              blocks: def.blocks,
             },
           });
         },

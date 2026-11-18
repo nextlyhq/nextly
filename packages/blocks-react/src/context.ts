@@ -11,6 +11,20 @@ import type {
 } from "@nextlyhq/blocks-engine";
 import type { ReactNode } from "react";
 
+import type { PageForms } from "./forms-context";
+import type { ImageCopies, ImageSlot } from "./image-slot";
+import type { PageOutline } from "./outline";
+
+export type {
+  FormAfterSendingDrawing,
+  FormDrawing,
+  FormFieldDrawing,
+  FormFieldKind,
+  FormReference,
+  FormUnavailableDrawing,
+  PageForms,
+} from "./forms-context";
+
 /**
  * What a block render receives, and where the renderer gets its data.
  *
@@ -690,6 +704,26 @@ export interface ResolvedIcon {
 }
 
 /**
+ * One list's entry as the list draws it: the entry as stored, and the
+ * collection or named query it is a row of.
+ *
+ * @experimental
+ */
+export interface DrawnListEntry {
+  readonly item: Record<string, unknown>;
+  readonly itemSource?: string;
+  readonly itemQuery?: string;
+  /**
+   * The related entries the list read ahead for this entry, by the relation
+   * field followed, as `itemFollowed` holds them for the nearest list: what
+   * a binding naming the list reads through a relation.
+   */
+  readonly followed?: Readonly<
+    Record<string, Readonly<Record<string, unknown>>>
+  >;
+}
+
+/**
  * The context every block render receives.
  *
  * Resolver functions rather than raw maps: a host that resolves media through a
@@ -782,6 +816,15 @@ export interface PageContext {
    */
   itemFollowed?: Readonly<Record<string, Readonly<Record<string, unknown>>>>;
   /**
+   * The entry each list around this point is drawing, by the list's node id,
+   * the nearest included: set by each list beside its entry, so an item
+   * binding naming the list it reads (`list`), for a block inside a list
+   * inside another, reads that list's entry. Absent outside every list.
+   *
+   * @experimental
+   */
+  listEntries?: ReadonlyMap<string, DrawnListEntry>;
+  /**
    * The blocks the route kept because their conditions held for the page's
    * entry, by id: what a list asks the renderer's own condition gate with,
    * so it reads ahead for exactly the blocks each entry draws.
@@ -811,6 +854,30 @@ export interface PageContext {
    * Absent outside a repeater.
    */
   item?: Record<string, unknown>;
+  /**
+   * Where {@link item} is drawn among its list's entries, from 0, after the
+   * positions of the entries around it in lists that hold this one: `2`, or
+   * `0-3` for the fourth entry of a list inside the first entry of another.
+   * What tells apart the copies of a block a list draws once per entry, as
+   * the node id alone cannot.
+   *
+   * Absent outside a repeater.
+   *
+   * @experimental
+   */
+  itemPosition?: string;
+  /**
+   * What a click on a picture does when the picture says nothing itself: the
+   * "When clicked" of the gallery it sits in, set by the gallery beside its
+   * pictures. A render is handed no parent, and a server render has no React
+   * context, so the gallery's choice reaches its pictures this way, as a
+   * list's entry reaches its blocks.
+   *
+   * Absent outside a gallery.
+   *
+   * @experimental
+   */
+  galleryWhenClicked?: "nothing" | "enlarge";
   /**
    * The collection {@link item} comes from, set by the repeater beside it, so
    * a binding to the item is checked against that collection's fields.
@@ -854,6 +921,47 @@ export interface PageContext {
    * @experimental
    */
   diagnostics?: boolean;
+  /**
+   * Resized copies of the images this page draws, from the route's
+   * `imageCopies` option. Absent, every image is drawn from its original.
+   *
+   * @experimental
+   */
+  imageCopies?: ImageCopies;
+  /**
+   * The widest an image may be drawn on each device where it sits: the whole
+   * width at the top of the page, narrowed by the containers it is in.
+   *
+   * @experimental
+   */
+  imageSlot?: ImageSlot;
+  /**
+   * The page's first top-level block, whose images load eagerly and first,
+   * since it is the first thing a visitor sees.
+   *
+   * @experimental
+   */
+  firstBlockId?: string;
+  /**
+   * The class the page's root carries beside `nx-pb-page` when its rules are
+   * scoped (a page drawn inside its Layout), so a block writing a rule of its
+   * own anchors it as the page's rules are. Set by the renderer, only on a
+   * page that sizes images.
+   *
+   * @internal
+   * @experimental
+   */
+  pageScope?: string;
+  /**
+   * Which addresses the page's stylesheet may fetch, as the renderer settled
+   * it for this page, so a block writing a style rule of its own fetches no
+   * address the page's rules would refuse. Set by the renderer, only on a
+   * page that sizes images.
+   *
+   * @internal
+   * @experimental
+   */
+  pageMayFetchUrl?: (url: string) => boolean;
   /**
    * The site's IANA time zone, in which a list's date filter compares whole
    * days for a field holding an instant. UTC when absent.
@@ -960,6 +1068,29 @@ export interface PageContext {
    * @experimental Settles when collection templates ship.
    */
   entryContentCanvas?: EntryContentCanvas;
+  /**
+   * Where this page's forms post, and the forms a provider describes: what
+   * a Form block needs to be sent, with no script, through the page
+   * builder's receiver. Absent where a form cannot be sent from the page,
+   * such as the editor's canvas; a Form then draws its fields with nowhere
+   * to post them.
+   *
+   * @experimental Settles with the form provider contract.
+   */
+  forms?: PageForms;
+  /**
+   * The page's outline: every heading the page draws, in page order, with
+   * the anchor each is drawn with, unique on the whole page (header, page and
+   * footer). Heading and Rich text take their ids from it, and a table of
+   * contents its entries, so a link and its heading cannot disagree.
+   *
+   * Set by the renderer. A host drawing a page in parts (a Layout's header
+   * and footer around it) sets the outline of all of them on each part's
+   * context; a renderer given none outlines the document it draws.
+   *
+   * @experimental
+   */
+  outline?: PageOutline;
 }
 
 /**
@@ -1049,6 +1180,21 @@ export interface BlocksSiteSettings {
 }
 
 /**
+ * What a page's site bindings read: the settings, and the values the route
+ * works out beside them, which no setting stores.
+ *
+ * @experimental
+ */
+export interface BlocksSiteValues extends BlocksSiteSettings {
+  /**
+   * The year the page is drawn in, in its time zone ("2026"). Worked out by
+   * the route where it reads the settings, inside a cached read; absent
+   * where nothing worked it out.
+   */
+  readonly currentYear?: string;
+}
+
+/**
  * Whose field shapes: a collection's entries, or one Single.
  *
  * @experimental
@@ -1095,7 +1241,7 @@ export interface PageBindings {
     Readonly<Record<string, unknown>> | null
   >;
   /** The site settings a page may show; `null` when there are none. */
-  readonly site?: BlocksSiteSettings | null;
+  readonly site?: BlocksSiteValues | null;
   readonly fieldShapes?: BlocksFieldShapes;
   /**
    * The time zone a date-time is shown in. UTC when absent, and when it is

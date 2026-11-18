@@ -15,6 +15,7 @@ import {
   USER,
   sleep,
 } from "./config.mjs";
+import { pageAgent, pageChecks } from "./page-agent.mjs";
 
 /** The canvas frame, as Playwright reaches it. */
 export function canvasOf(page) {
@@ -213,6 +214,22 @@ export async function fixtureIds(page) {
     ids[which] = id;
   }
   return ids;
+}
+
+/**
+ * A page for measuring: the check's window size, its counters and checks in
+ * every frame before the page's own scripts, and a CDP session on it.
+ */
+export async function measuredPage(browser) {
+  const context = await browser.newContext({
+    viewport: { width: 1440, height: 900 },
+    bypassCSP: true,
+  });
+  await context.addInitScript(pageAgent);
+  await context.addInitScript(pageChecks);
+  const page = await context.newPage();
+  const cdp = await context.newCDPSession(page);
+  return { page, cdp };
 }
 
 export async function throttle(cdp, rate) {

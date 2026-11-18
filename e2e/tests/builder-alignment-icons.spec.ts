@@ -204,7 +204,7 @@ test.describe("alignment and direction icons", () => {
 
   test("set a heading's text alignment, as stored", async ({ page }) => {
     const pageId = await createPage(page.request);
-    await openStyle(page, pageId, HEADING, "Typography");
+    await openStyle(page, pageId, HEADING, "Text(\\s?has changes)?$");
 
     const align = page.getByRole("radiogroup", { name: "Text align" });
     await align.getByRole("radio", { name: "Center" }).click();

@@ -547,10 +547,16 @@ test.describe("the composition exit tests", () => {
     await gotoAdmin(page, `/collections/pages/${switching}`);
     const picker = page.getByRole("combobox", { name: "Header & footer" });
     await expect(picker).toBeVisible({ timeout: 30_000 });
-    await expect(picker).toContainText(`Site default · main ${STAMP}`);
+    await expect(picker).toContainText(`Site default (main ${STAMP})`);
     await picker.click();
+    // By the option's bold name: its note follows it in the row.
     await page
-      .getByRole("option", { name: `other ${STAMP}`, exact: true })
+      .getByRole("option")
+      .filter({
+        has: page
+          .locator('[data-slot="hf-name"]')
+          .getByText(`other ${STAMP}`, { exact: true }),
+      })
       .click();
     await page.getByRole("button", { name: "Publish", exact: true }).click();
     await expect

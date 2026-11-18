@@ -180,17 +180,22 @@ function shippedSources(dir: string): string[] {
  * Texts that match a rule but name something else, by file. Each says why.
  */
 const ALLOWED: Readonly<Record<string, readonly string[]>> = {
-  // The name the seed gives a new site's first set: stored as its title, and
-  // chosen with the seed's own naming rule (the next free "Site layout N").
-  "packages/plugin-page-builder/src/default-layout/seed-names.ts": [
-    "Site layout",
-  ],
   // A Next.js layout file, in a message to the site's developer.
   "packages/plugin-page-builder/src/site/index.tsx": [
     "(its Cache Components version), then import it from the layout that",
   ],
   // The Add panel's group of layout blocks, by its heading there.
   "docs/page-builder/index.mdx": ["Layout (section, box, columns"],
+  // The Style tab's Layout section: where a container's Content width and
+  // Arrange are, and its place in the tab's one order of sections.
+  "docs/page-builder/editor.mdx": [
+    "under **Style → Layout → Arrange**",
+    "Every container has **Content width** under **Style → Layout**: **Boxed** or **Full width**. A new Section starts Boxed, and every other container starts Full width.",
+    "The Style tab lists its sections in the same order for every block: Block style, Layout, Inside its parent, Spacing, Size, Position, Text, Background, Border, Effects, Icon and CSS properties, each shown only where the block offers it. Advanced lists Visibility, then HTML.",
+    // The Gallery's own Layout section in its settings (`section: "Layout"`
+    // in `core/gallery`), where its columns are chosen.
+    "- **Layout**: **Columns** (**2**, **3** or **4**)",
+  ],
 };
 
 function findingsIn(

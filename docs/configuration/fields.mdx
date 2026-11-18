@@ -460,16 +460,16 @@ select({
 
 > Use `select` for arbitrary categorical options (priority, region, theme, etc.). For a collection's Draft / Published lifecycle, prefer the built-in `status: true` flag on `defineCollection` -- see [Draft / Published status](/docs/guides/draft-published-status).
 
-| Option              | Type                                | Default | Description                                                       |
-| ------------------- | ----------------------------------- | ------- | ----------------------------------------------------------------- |
-| `options`           | `SelectOption[]`                    | —       | **Required.** Array of `{ label, value }` objects.                |
-| `hasMany`           | `boolean`                           | `false` | Allow multiple selections.                                        |
-| `enumName`          | `string`                            | Auto    | Custom SQL enum name.                                             |
-| `interfaceName`     | `string`                            | —       | TypeScript interface name for code generation.                    |
-| `filterOptions`     | `(args) => SelectOption[]`          | —       | Dynamically filter options based on data, sibling data, and user. |
-| `defaultValue`      | `string \| string[] \| (data) => …` | —       | Default value(s).                                                 |
-| `admin.isClearable` | `boolean`                           | `false` | Show a clear button.                                              |
-| `admin.isSortable`  | `boolean`                           | `false` | Enable drag-and-drop reorder (multi-select only).                 |
+| Option              | Type                                | Default | Description                                                                               |
+| ------------------- | ----------------------------------- | ------- | ----------------------------------------------------------------------------------------- |
+| `options`           | `SelectOption[]`                    | —       | **Required.** Array of `{ label, value }` objects.                                        |
+| `hasMany`           | `boolean`                           | `false` | Allow multiple selections.                                                                |
+| `enumName`          | `string`                            | Auto    | Custom SQL enum name.                                                                     |
+| `interfaceName`     | `string`                            | —       | TypeScript interface name for code generation.                                            |
+| `filterOptions`     | `(args) => SelectOption[]`          | —       | Dynamically filter options based on data, sibling data, and user.                         |
+| `defaultValue`      | `string \| string[] \| (data) => …` | —       | Default value(s).                                                                         |
+| `admin.isClearable` | `boolean`                           | `true`  | Show a clear button on an optional field; never on a required one. Turn off with `false`. |
+| `admin.isSortable`  | `boolean`                           | `false` | Enable drag-and-drop reorder (multi-select only).                                         |
 
 The `option()` helper auto-generates the value from the label by lowercasing it and replacing spaces with underscores. Pass an explicit second arg if you want a different value.
 

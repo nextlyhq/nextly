@@ -145,7 +145,7 @@ function Editor({ steps }: { steps: EditorStep[] }): React.JSX.Element {
     });
     return () => connect(null);
   }, [connect, steps]);
-  const [current, choose] = React.useState<string | null>("variables");
+  const [current, choose] = React.useState<string | null>("colours");
   return (
     <SiteStyleHistoryContext.Provider value={style.history}>
       <SiteStylePreviewContext.Provider value={style.preview}>
@@ -171,9 +171,10 @@ function Editor({ steps }: { steps: EditorStep[] }): React.JSX.Element {
               </TokensStudio>
             )}
             tabs={{
-              variables: () => <VariablesTab />,
-              classes: () => <p>Shared styles content</p>,
-              fonts: () => <p>Fonts content</p>,
+              colours: () => <VariablesTab tab="colours" />,
+              type: () => <VariablesTab tab="type" />,
+              spacing: () => <VariablesTab tab="spacing" />,
+              styles: () => <p>Styles content</p>,
             }}
           />
         </StyleRevisionContext.Provider>
@@ -246,7 +247,8 @@ afterEach(() => {
 /** Open Brand's editor and answer its Light field. */
 function openBrand(): HTMLElement {
   act(() => {
-    fireEvent.click(screen.getByRole("button", { name: /^Brand/ }));
+    // The row, not the "Brand" group's heading, which reads "Brand, <count>".
+    fireEvent.click(screen.getByRole("button", { name: /^Brand, (?!\d+$)/ }));
   });
   return screen.getByLabelText("Light");
 }
@@ -332,7 +334,7 @@ describe("the Design panel's writes", () => {
     act(() => {
       // Hidden from the tree while the modal editor is open, and still there.
       fireEvent.mouseDown(
-        screen.getByRole("tab", { name: "Fonts", hidden: true }),
+        screen.getByRole("tab", { name: "Styles", hidden: true }),
         { button: 0 }
       );
     });

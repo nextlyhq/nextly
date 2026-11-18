@@ -39,8 +39,11 @@ function everyField(fields: readonly FieldDefinition[]): NamedAt[] {
     holders: ReadonlySet<object>;
   }[] = [{ list: fields, above: [], holders: new Set() }];
   while (pending.length > 0) {
-    const { list, above, holders } = pending.shift() as (typeof pending)[number];
-    for (const field of addressableFields(list) as unknown as FieldDefinition[]) {
+    const { list, above, holders } =
+      pending.shift() as (typeof pending)[number];
+    for (const field of addressableFields(
+      list
+    ) as unknown as FieldDefinition[]) {
       const name = nameOf(field);
       if (!name) continue;
       const path = [...above, name];

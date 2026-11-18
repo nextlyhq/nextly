@@ -56,7 +56,7 @@ function Controlled(props: {
 describe("GeneralTab", () => {
   it("disables Name for system fields, Label remains editable", () => {
     render(<Controlled initial={systemTitle} />);
-    expect(screen.getByLabelText(/^name$/i)).toBeDisabled();
+    expect(screen.getByRole("textbox", { name: "Name" })).toBeDisabled();
     expect(screen.getByLabelText(/^label$/i)).not.toBeDisabled();
   });
 
@@ -64,7 +64,7 @@ describe("GeneralTab", () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
     render(<Controlled initial={userTextarea} onChange={onChange} />);
-    const input = screen.getByLabelText(/^name$/i);
+    const input = screen.getByRole("textbox", { name: "Name" });
     await user.clear(input);
     await user.type(input, "summary");
     const last = onChange.mock.lastCall?.[0] as BuilderField;
@@ -87,7 +87,7 @@ describe("GeneralTab", () => {
         nameFixedReason="A user field's name is fixed once it is created."
       />
     );
-    const name = screen.getByLabelText(/^name$/i);
+    const name = screen.getByRole("textbox", { name: "Name" });
     expect(name).toBeDisabled();
     expect(name).toHaveAccessibleDescription(
       /a user field's name is fixed once it is created/i
@@ -127,7 +127,7 @@ describe("GeneralTab", () => {
 
   it("disables every input in readOnly mode", () => {
     render(<Controlled initial={userTextarea} readOnly />);
-    expect(screen.getByLabelText(/^name$/i)).toBeDisabled();
+    expect(screen.getByRole("textbox", { name: "Name" })).toBeDisabled();
     expect(screen.getByLabelText(/^label$/i)).toBeDisabled();
     expect(screen.getByLabelText(/description/i)).toBeDisabled();
     expect(screen.getByRole("switch", { name: /required/i })).toBeDisabled();
@@ -150,7 +150,7 @@ describe("GeneralTab -- PR E1 Label-first + Name auto-derive", () => {
   it("renders Label BEFORE Name in the DOM", () => {
     render(<Controlled initial={blank} />);
     const labelInput = screen.getByLabelText(/^Label$/);
-    const nameInput = screen.getByLabelText(/^Name$/);
+    const nameInput = screen.getByRole("textbox", { name: "Name" });
     expect(labelInput.compareDocumentPosition(nameInput)).toBe(
       Node.DOCUMENT_POSITION_FOLLOWING
     );
@@ -282,7 +282,9 @@ describe("GeneralTab -- PR E1 Label-first + Name auto-derive", () => {
     };
     render(<Controlled initial={seeded} onChange={onChange} />);
     // Override Name manually.
-    const nameInput = screen.getByLabelText(/^Name$/) as HTMLInputElement;
+    const nameInput = screen.getByRole("textbox", {
+      name: "Name",
+    }) as HTMLInputElement;
     await user.clear(nameInput);
     await user.type(nameInput, "content");
     onChange.mockClear();
@@ -292,5 +294,37 @@ describe("GeneralTab -- PR E1 Label-first + Name auto-derive", () => {
     const last = onChange.mock.lastCall?.[0] as BuilderField;
     expect(last.label).toBe("Body text");
     expect(last.name).toBe("content");
+  });
+});
+
+// A field cannot be kept without a name, so Name is marked required where it
+// can be typed. A label is optional — the record editor names a field with no
+// label by its name — and says so rather than looking forgotten.
+describe("GeneralTab — what a field must have", () => {
+  const requiredMark = (input: HTMLElement) =>
+    (input as HTMLInputElement).labels?.[0]?.querySelector(
+      '[aria-hidden="true"]'
+    ) ?? null;
+
+  it("marks an editable Name required, and Label not", () => {
+    render(<Controlled initial={userTextarea} />);
+    const name = screen.getByRole("textbox", { name: "Name" });
+    expect(name).toBeRequired();
+    expect(requiredMark(name)).toHaveTextContent("*");
+
+    const label = screen.getByRole("textbox", { name: "Label" });
+    expect(label).not.toBeRequired();
+    expect(requiredMark(label)).toBeNull();
+    expect(
+      screen.getByText(/left blank, the name is shown/i)
+    ).toBeInTheDocument();
+  });
+
+  it("does not mark a Name that cannot be changed", () => {
+    render(<Controlled initial={systemTitle} />);
+    const name = screen.getByRole("textbox", { name: "Name" });
+    expect(name).toBeDisabled();
+    expect(name).not.toBeRequired();
+    expect(requiredMark(name)).toBeNull();
   });
 });

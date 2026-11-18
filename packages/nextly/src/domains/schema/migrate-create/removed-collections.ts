@@ -30,6 +30,7 @@ import type { RemovedCollectionSeed } from "../../collections/services/collectio
 import { fieldGroupPlacements } from "../../field-groups/storage/field-group-placements";
 import type { ExtensionSchemaRecord } from "../ownership/dependent-elements";
 import { collectionOwnTables } from "../services/field-column-descriptor";
+import { BUILT_IN_RELATION_TARGETS } from "../ui-schema/cross-file";
 import {
   resolveCollectionTableName,
   resolveComponentTableName,
@@ -41,18 +42,6 @@ import {
   type MinimalConfigEntity,
   type RemovedEntityTables,
 } from "./generate";
-
-/**
- * The collections Nextly provides itself, which a relationship or upload may
- * name without the configuration declaring them. The same two the Builder's
- * cross-file check and the plugin relation check accept. Only these: another
- * core table's name, such as `audit_log`, is no relationship's target, and a
- * collection of that slug is one like any other.
- */
-const BUILT_IN_RELATION_TARGETS: ReadonlySet<string> = new Set([
-  "users",
-  "media",
-]);
 
 /**
  * Refuse to generate a migration that drops a collection, Single or field

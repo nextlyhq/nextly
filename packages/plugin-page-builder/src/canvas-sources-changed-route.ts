@@ -30,18 +30,15 @@ import { z } from "nextly/zod";
 
 import {
   CANVAS_SOURCES_CHANGED_ROUTE_PATH,
+  isSourceSlug,
   type CanvasSourcesChangedRequest,
   type CanvasSourcesChangedResponse,
 } from "./canvas-bindings-contract";
 import { readBodyWith } from "./composition-route-kit";
 import { readingAsUser } from "./library-route";
 
-/** A collection's or a Single's slug. */
-const SLUG = z
-  .string()
-  .min(1)
-  .max(128)
-  .regex(/^[A-Za-z0-9_-]+$/);
+/** A collection's or a Single's slug, as the editor checks it too. */
+const SLUG = z.string().refine(isSourceSlug, { message: "Not a slug." });
 
 /** A field name a binding follows: no paths, operators or quoting. */
 const NAME = z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/);
@@ -349,6 +346,17 @@ async function directSourcesChangedReads(
   };
 }
 
+/** The mark of every source `ask` names, read as the caller. */
+export async function sourcesChangedStampAsCaller(
+  ctx: PluginRouteContext,
+  ask: CanvasSourcesChangedRequest
+): Promise<string> {
+  return sourcesChangedStamp(
+    ask,
+    await directSourcesChangedReads(ctx, ask.locale)
+  );
+}
+
 /**
  * The route the editor's change check asks. A POST because an ask carries
  * what to look at, never because it writes; `noStore` because its answer is
@@ -373,10 +381,7 @@ export function canvasSourcesChangedRoute(): {
         "canvas sources changed"
       );
       const answer: CanvasSourcesChangedResponse = {
-        stamp: await sourcesChangedStamp(
-          body,
-          await directSourcesChangedReads(ctx, body.locale)
-        ),
+        stamp: await sourcesChangedStampAsCaller(ctx, body),
       };
       return respondDoc(answer);
     },

@@ -440,6 +440,29 @@ const WEIGHT_NAMES: Readonly<Record<number, string>> = {
   900: "Black",
 };
 
+/** The weights a font is named at, lightest first: 100 to 900. */
+export const NAMED_WEIGHTS: readonly number[] = Object.keys(WEIGHT_NAMES)
+  .map(Number)
+  .sort((a, b) => a - b);
+
+/**
+ * The named weights some face draws: each face's own weight, and every named
+ * weight inside a variable face's range. Only the faces the stylesheet emits
+ * count, the ones the Font picker lists, so a face kept only so its issue can
+ * be said draws no weight.
+ */
+export function weightsDrawn(faces: readonly FontFaceDef[]): Set<number> {
+  const drawn = new Set<number>();
+  for (const face of emittableFaces(faces)) {
+    const [low, high = low] = weightNumbers(face.weight);
+    if (low === undefined) continue;
+    for (const weight of NAMED_WEIGHTS) {
+      if (weight >= low && weight <= high) drawn.add(weight);
+    }
+  }
+  return drawn;
+}
+
 /** A weight in words with its number: `Bold 700`. */
 export function weightName(weight: number): string {
   const name = WEIGHT_NAMES[weight];
@@ -510,6 +533,39 @@ export function familyStack(family: string, category?: string): string {
       ? "system-ui"
       : (GENERIC_FOR[category] ?? "system-ui");
   return `"${cssString(family)}", ${generic}`;
+}
+
+/**
+ * The generic family a site-wide font falls back to: the one of its kind,
+ * serif, monospace, or sans-serif for every other kind (display and
+ * handwriting faces too), so body text never falls back to a script face.
+ */
+function roleGeneric(category: string | undefined): string {
+  return category === "serif" || category === "monospace"
+    ? category
+    : "sans-serif";
+}
+
+/**
+ * What picking a family for the site's Body or Headings font stores: its name
+ * quoted, then the generic family of its kind ({@link roleGeneric}).
+ */
+export function roleStack(family: string, category?: string): string {
+  return `"${cssString(family)}", ${roleGeneric(category)}`;
+}
+
+/**
+ * Whether the faces draw an upright bold: some upright face at weight 600 or
+ * heavier, which a browser picks for a bold heading rather than thickening a
+ * lighter one. An italic bold leaves upright headings thickened.
+ */
+export function drawsBold(faces: readonly FontFaceDef[]): boolean {
+  return emittableFaces(faces).some(face => {
+    if (slanted(face.style)) return false;
+    // A variable face's heavier end, which may fall between named weights.
+    const [low, high = low] = weightNumbers(face.weight);
+    return high !== undefined && high >= 600;
+  });
 }
 
 /** The specimen, one sentence with ascenders, descenders and round forms. */

@@ -152,7 +152,11 @@ describe("what InspectorPanel forwards to the style tab", () => {
 
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
 
-    expect(screen.getByRole("button", { name: "Hero" })).toBeDefined();
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: "Editing: This block" }),
+      { button: 0, ctrlKey: false }
+    );
+    expect(screen.getByRole("menuitemradio", { name: /^Hero/ })).toBeDefined();
   });
 
   it("names Content and Style for the inspector's own tab rules", () => {
@@ -178,8 +182,12 @@ describe("what InspectorPanel forwards to the style tab", () => {
     );
 
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: "Editing: This block" }),
+      { button: 0, ctrlKey: false }
+    );
 
-    expect(screen.queryByRole("button", { name: /hero/i })).toBeNull();
+    expect(screen.queryByRole("menuitemradio", { name: /hero/i })).toBeNull();
   });
 
   it("offers the state switcher when the host can act on the choice", () => {
@@ -383,18 +391,25 @@ function choose(name: string | RegExp): void {
   fireEvent.click(screen.getByRole("menuitem", { name }));
 }
 
-/**
- * Bring Content's Advanced section on screen, as an author does: back to the
- * Content tab if another is showing, then the summary, if it is closed.
- */
+/** Bring the Advanced tab on screen, as an author does, if another is showing. */
 function openAdvanced(): void {
-  const content = screen.getByRole("tab", { name: "Content" });
-  if (content.getAttribute("aria-selected") !== "true") {
-    fireEvent.mouseDown(content);
+  const advanced = screen.getByRole("tab", { name: "Advanced" });
+  if (advanced.getAttribute("aria-selected") !== "true") {
+    fireEvent.mouseDown(advanced);
   }
-  const summary = screen.getByText("Advanced", { selector: "summary" });
-  if (!(summary.parentElement as HTMLDetailsElement).open) {
-    fireEvent.click(summary);
+  openHtmlSection();
+}
+
+/**
+ * Open Advanced's HTML section unless it is open: it starts closed on a block
+ * whose HTML holds nothing, and these tests are about its fields.
+ */
+function openHtmlSection(): void {
+  const header = document.querySelector<HTMLElement>(
+    '[data-section="html"] [data-slot="accordion-trigger"]'
+  );
+  if (header !== null && header.getAttribute("aria-expanded") !== "true") {
+    fireEvent.click(header);
   }
 }
 
@@ -497,7 +512,10 @@ describe("InspectorPanel block card", () => {
 
   it("titles the card by type alone when the block has no label", () => {
     mount();
-    expect(screen.getByRole("heading", { name: "Heading" })).toBeDefined();
+    // The card's title, a level above the Content section named after it.
+    expect(
+      screen.getByRole("heading", { name: "Heading", level: 2 })
+    ).toBeDefined();
   });
 
   it("renames from the menu, in one op through the store, on blur", async () => {
@@ -596,7 +614,9 @@ describe("InspectorPanel block card", () => {
     );
     openAdvanced();
     expect(
-      (screen.getByLabelText("CSS id") as HTMLInputElement).matches(":disabled")
+      (screen.getByLabelText("Anchor (ID)") as HTMLInputElement).matches(
+        ":disabled"
+      )
     ).toBe(true);
 
     openCardMenu("Heading");
@@ -685,7 +705,9 @@ describe("InspectorPanel block card", () => {
     );
     openAdvanced();
     expect(
-      (screen.getByLabelText("CSS id") as HTMLInputElement).matches(":disabled")
+      (screen.getByLabelText("Anchor (ID)") as HTMLInputElement).matches(
+        ":disabled"
+      )
     ).toBe(false);
   });
 
@@ -831,9 +853,9 @@ describe("InspectorPanel advanced fields", () => {
     mount({ cssId: "hero", attributes: { "data-x": "1" } });
     openAdvanced();
 
-    expect((screen.getByLabelText("CSS id") as HTMLInputElement).value).toBe(
-      "hero"
-    );
+    expect(
+      (screen.getByLabelText("Anchor (ID)") as HTMLInputElement).value
+    ).toBe("hero");
     expect(
       (screen.getByLabelText("Name of attribute 1") as HTMLInputElement).value
     ).toBe("data-x");
@@ -843,7 +865,7 @@ describe("InspectorPanel advanced fields", () => {
     const editor = mount({});
     openAdvanced();
 
-    const field = screen.getByLabelText("CSS id");
+    const field = screen.getByLabelText("Anchor (ID)");
     fireEvent.change(field, { target: { value: "hero" } });
     // Nothing yet: an op per keystroke would make one undo remove one letter.
     expect(editor.apply).not.toHaveBeenCalled();
@@ -861,7 +883,7 @@ describe("InspectorPanel advanced fields", () => {
     const editor = mount({ cssId: "hero" });
     openAdvanced();
 
-    const field = screen.getByLabelText("CSS id");
+    const field = screen.getByLabelText("Anchor (ID)");
     fireEvent.change(field, { target: { value: "  " } });
     fireEvent.blur(field);
     /*
@@ -917,7 +939,7 @@ describe("InspectorPanel advanced fields", () => {
     mount({ cssId: "from-the-field", attributes: { id: "from-the-bag" } });
     openAdvanced();
 
-    expect(screen.getByRole("alert").textContent).toContain("CSS id");
+    expect(screen.getByRole("alert").textContent).toContain("Anchor (ID)");
   });
 
   it("says nothing about an attribute that WILL reach the page", () => {
@@ -1001,7 +1023,7 @@ describe("the Advanced tab's ops, through the real store", () => {
     const editor = mount({ cssId: "hero" });
     openAdvanced();
 
-    const field = screen.getByLabelText("CSS id");
+    const field = screen.getByLabelText("Anchor (ID)");
     fireEvent.change(field, { target: { value: "" } });
     fireEvent.blur(field);
 
@@ -1030,7 +1052,7 @@ describe("the Advanced tab's ops, through the real store", () => {
     const editor = mount({});
     openAdvanced();
 
-    const field = screen.getByLabelText("CSS id");
+    const field = screen.getByLabelText("Anchor (ID)");
     fireEvent.change(field, { target: { value: "hero" } });
     fireEvent.blur(field);
 
@@ -1051,7 +1073,7 @@ describe("the Advanced tab keeps what the author typed", () => {
      */
     const editor = mount({});
     openAdvanced();
-    fireEvent.change(screen.getByLabelText("CSS id"), {
+    fireEvent.change(screen.getByLabelText("Anchor (ID)"), {
       target: { value: "hero" },
     });
     // No blur: the tab is clicked with the field still focused, which is what
@@ -1083,7 +1105,7 @@ describe("the Advanced tab keeps what the author typed", () => {
      */
     const editor = mount({ attributes: { id: "old" } });
     openAdvanced();
-    const field = screen.getByLabelText("CSS id");
+    const field = screen.getByLabelText("Anchor (ID)");
     fireEvent.change(field, { target: { value: "new" } });
     fireEvent.blur(field);
 
@@ -1131,7 +1153,7 @@ describe("a refused row survives its own commit", () => {
     fireEvent.change(name, { target: { value: "onclick" } });
     fireEvent.blur(name);
 
-    const field = screen.getByLabelText("CSS id");
+    const field = screen.getByLabelText("Anchor (ID)");
     fireEvent.change(field, { target: { value: "hero" } });
     fireEvent.blur(field);
 
@@ -1157,7 +1179,7 @@ describe("a refused row survives its own commit", () => {
     render(<InspectorPanel editor={editor} />);
     openAdvanced();
 
-    const field = screen.getByLabelText("CSS id");
+    const field = screen.getByLabelText("Anchor (ID)");
     fireEvent.change(field, { target: { value: "hero" } });
     fireEvent.blur(field);
 
@@ -1190,7 +1212,7 @@ describe("a shadowed id and a mistyped row at the same time", () => {
     fireEvent.blur(first);
     expect(editor.apply).not.toHaveBeenCalled();
 
-    const field = screen.getByLabelText("CSS id");
+    const field = screen.getByLabelText("Anchor (ID)");
     fireEvent.change(field, { target: { value: "new" } });
     fireEvent.blur(field);
 
@@ -1238,7 +1260,9 @@ describe("the panel's own write does not fight the document", () => {
     mount({ attributes: { id: "from-a-file" } });
     openAdvanced();
 
-    expect(screen.getByRole("alert").textContent).toContain("CSS id field");
+    expect(screen.getByRole("alert").textContent).toContain(
+      "Anchor (ID) field"
+    );
   });
 });
 
@@ -1272,28 +1296,28 @@ describe("undo then redo, with the panel open", () => {
     const { rerender } = render(<InspectorPanel editor={editor} />);
     openAdvanced();
 
-    const field = screen.getByLabelText("CSS id");
+    const field = screen.getByLabelText("Anchor (ID)");
     fireEvent.change(field, { target: { value: "two" } });
     fireEvent.blur(field);
     expect(editor.apply).toHaveBeenCalled();
 
     // The write echoes back through the document.
     rerender(<InspectorPanel editor={editorFor(withId("two"))} />);
-    expect((screen.getByLabelText("CSS id") as HTMLInputElement).value).toBe(
-      "two"
-    );
+    expect(
+      (screen.getByLabelText("Anchor (ID)") as HTMLInputElement).value
+    ).toBe("two");
 
     // Undo.
     rerender(<InspectorPanel editor={editorFor(withId("one"))} />);
-    expect((screen.getByLabelText("CSS id") as HTMLInputElement).value).toBe(
-      "one"
-    );
+    expect(
+      (screen.getByLabelText("Anchor (ID)") as HTMLInputElement).value
+    ).toBe("one");
 
     // Redo — the field must follow, not sit on the undone value.
     rerender(<InspectorPanel editor={editorFor(withId("two"))} />);
-    expect((screen.getByLabelText("CSS id") as HTMLInputElement).value).toBe(
-      "two"
-    );
+    expect(
+      (screen.getByLabelText("Anchor (ID)") as HTMLInputElement).value
+    ).toBe("two");
   });
 });
 
@@ -1309,7 +1333,7 @@ describe("the Advanced tab inside the entry's form", () => {
     openAdvanced();
 
     for (const label of [
-      "CSS id",
+      "Anchor (ID)",
       "Name of attribute 1",
       "Value of attribute 1",
     ]) {
@@ -1352,7 +1376,7 @@ describe("the Advanced tab inside the entry's form", () => {
     render(<InspectorPanel editor={editor} />);
     openAdvanced();
 
-    const field = screen.getByLabelText("CSS id");
+    const field = screen.getByLabelText("Anchor (ID)");
     fireEvent.change(field, { target: { value: "hero" } });
     fireEvent.blur(field);
 
@@ -1366,7 +1390,7 @@ describe("the Advanced tab inside the entry's form", () => {
     // than the silence it replaced.
     const editor = mount({});
     openAdvanced();
-    const field = screen.getByLabelText("CSS id");
+    const field = screen.getByLabelText("Anchor (ID)");
     fireEvent.change(field, { target: { value: "hero" } });
     fireEvent.blur(field);
 
@@ -1416,7 +1440,7 @@ describe("a node carrying both a css id and a legacy id attribute", () => {
     render(<InspectorPanel editor={editor} />);
     openAdvanced();
 
-    const field = screen.getByLabelText("CSS id");
+    const field = screen.getByLabelText("Anchor (ID)");
     fireEvent.change(field, { target: { value: "taken" } });
     fireEvent.blur(field);
 
@@ -1436,7 +1460,7 @@ describe("a node carrying both a css id and a legacy id attribute", () => {
     // it would let a later clear bring a dead id back to life.
     const editor = mount(both);
     openAdvanced();
-    const field = screen.getByLabelText("CSS id");
+    const field = screen.getByLabelText("Anchor (ID)");
     fireEvent.change(field, { target: { value: "fresh" } });
     fireEvent.blur(field);
 
@@ -1516,7 +1540,7 @@ describe("an attribute bag the document should not have held", () => {
     const editor = mount({ ...mixed, cssId: "old" });
     openAdvanced();
 
-    const field = screen.getByLabelText("CSS id");
+    const field = screen.getByLabelText("Anchor (ID)");
     fireEvent.change(field, { target: { value: "new" } });
     fireEvent.blur(field);
 
@@ -1553,7 +1577,7 @@ describe("a panel that was only LOOKED at", () => {
     // the id field and out of it was enough to rewrite the value.
     const editor = mount(noncanonical);
     openAdvanced();
-    fireEvent.blur(screen.getByLabelText("CSS id"));
+    fireEvent.blur(screen.getByLabelText("Anchor (ID)"));
     fireEvent.blur(screen.getByLabelText("Name of attribute 1"));
 
     expect(editor.apply).not.toHaveBeenCalled();
@@ -1610,7 +1634,7 @@ describe("a refused row when the author leaves the tab", () => {
     // The other half: leaving the tab still saves work that can be saved.
     const editor = mount({});
     openAdvanced();
-    fireEvent.change(screen.getByLabelText("CSS id"), {
+    fireEvent.change(screen.getByLabelText("Anchor (ID)"), {
       target: { value: "hero" },
     });
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
@@ -1637,7 +1661,7 @@ describe("a refusal that no longer describes anything", () => {
     render(<InspectorPanel editor={editor} />);
     openAdvanced();
 
-    const field = screen.getByLabelText("CSS id");
+    const field = screen.getByLabelText("Anchor (ID)");
     fireEvent.change(field, { target: { value: "enormous" } });
     fireEvent.blur(field);
     // The control on both tests below: the alert was there to be cleared.
@@ -1702,7 +1726,7 @@ describe("an id the editor tidied on the way in", () => {
     const editor = mount({ attributes: { "data-x": "1" } });
     openAdvanced();
 
-    const field = screen.getByLabelText("CSS id");
+    const field = screen.getByLabelText("Anchor (ID)");
     fireEvent.change(field, { target: { value: " hero " } });
     fireEvent.blur(field);
     // The control: it was stored trimmed, so there is a tidied value to lose.
@@ -1760,40 +1784,44 @@ describe("the Advanced tab stays mounted without staying on screen", () => {
     return panel as HTMLElement;
   };
 
-  it("is hidden under the Style tab, and shown again under Content", () => {
+  it("is hidden under the Style and Content tabs, and shown again under Advanced", () => {
     mount({});
     openAdvanced();
     // The control: it really is on screen when chosen, so `hidden` below is
     // a state it moved INTO rather than one it never left.
-    expect(panelOf(screen.getByLabelText("CSS id")).hidden).toBe(false);
+    expect(panelOf(screen.getByLabelText("Anchor (ID)")).hidden).toBe(false);
 
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
-    expect(panelOf(screen.getByLabelText("CSS id")).hidden).toBe(true);
+    expect(panelOf(screen.getByLabelText("Anchor (ID)")).hidden).toBe(true);
 
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Content" }));
-    expect(panelOf(screen.getByLabelText("CSS id")).hidden).toBe(false);
+    expect(panelOf(screen.getByLabelText("Anchor (ID)")).hidden).toBe(true);
+
+    openAdvanced();
+    expect(panelOf(screen.getByLabelText("Anchor (ID)")).hidden).toBe(false);
   });
 
-  it("keeps a half-typed row across a collapse of Advanced", () => {
+  it("keeps a half-typed row across a look at another tab", () => {
     mount({});
     openAdvanced();
-    fireEvent.change(screen.getByLabelText("CSS id"), {
+    fireEvent.change(screen.getByLabelText("Anchor (ID)"), {
       target: { value: "her" },
     });
 
-    fireEvent.click(screen.getByText("Advanced", { selector: "summary" }));
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Content" }));
     openAdvanced();
 
-    expect((screen.getByLabelText("CSS id") as HTMLInputElement).value).toBe(
-      "her"
-    );
+    expect(
+      (screen.getByLabelText("Anchor (ID)") as HTMLInputElement).value
+    ).toBe("her");
   });
 
-  it("names no section of either tab Advanced but Content's", () => {
-    // One "Advanced": the Style tab's sections end at Effects.
+  it("names one place Advanced: its tab, with no section of another tab called that", () => {
+    // One "Advanced": the Style tab's sections end at Effects, and Content
+    // has no Advanced fold.
     register();
     render(<InspectorPanel editor={editorFor(documentOf({}))} />);
-    expect(screen.queryByRole("tab", { name: "Advanced" })).toBeNull();
+    expect(screen.getByRole("tab", { name: "Advanced" })).toBeTruthy();
     expect(screen.getAllByText("Advanced")).toHaveLength(1);
   });
 
@@ -1806,13 +1834,15 @@ describe("the Advanced tab stays mounted without staying on screen", () => {
      */
     mount({});
     openAdvanced();
-    expect(screen.queryByRole("textbox", { name: "CSS id" })).not.toBeNull();
+    expect(
+      screen.queryByRole("textbox", { name: "Anchor (ID)" })
+    ).not.toBeNull();
 
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
-    expect(screen.queryByRole("textbox", { name: "CSS id" })).toBeNull();
+    expect(screen.queryByRole("textbox", { name: "Anchor (ID)" })).toBeNull();
     // Still MOUNTED, which is the whole point of hiding it rather than
     // removing it — the draft has to survive.
-    expect(screen.queryByLabelText("CSS id")).not.toBeNull();
+    expect(screen.queryByLabelText("Anchor (ID)")).not.toBeNull();
   });
 });
 
@@ -1843,7 +1873,7 @@ describe("a refused id while an unrelated attribute saves", () => {
     render(<InspectorPanel editor={editor} />);
     openAdvanced();
 
-    const field = screen.getByLabelText("CSS id");
+    const field = screen.getByLabelText("Anchor (ID)");
     fireEvent.change(field, { target: { value: "hero" } });
     fireEvent.blur(field);
     // The control: refused, and both the text and the reason are present to be
@@ -1861,9 +1891,9 @@ describe("a refused id while an unrelated attribute saves", () => {
       id: "a",
       patch: { attributes: { "data-x": "2" } },
     });
-    expect((screen.getByLabelText("CSS id") as HTMLInputElement).value).toBe(
-      "hero"
-    );
+    expect(
+      (screen.getByLabelText("Anchor (ID)") as HTMLInputElement).value
+    ).toBe("hero");
     expect(
       screen
         .queryAllByRole("alert")
@@ -1903,7 +1933,7 @@ describe("the block set the collision check answers about", () => {
     );
     openAdvanced();
 
-    const field = screen.getByLabelText("CSS id");
+    const field = screen.getByLabelText("Anchor (ID)");
     fireEvent.change(field, { target: { value: "hero" } });
     fireEvent.blur(field);
 
@@ -1934,10 +1964,10 @@ describe("the block set the collision check answers about", () => {
     render(<InspectorPanel editor={editor} />);
     openAdvanced();
 
-    fireEvent.change(screen.getByLabelText("CSS id"), {
+    fireEvent.change(screen.getByLabelText("Anchor (ID)"), {
       target: { value: "hero" },
     });
-    fireEvent.blur(screen.getByLabelText("CSS id"));
+    fireEvent.blur(screen.getByLabelText("Anchor (ID)"));
 
     expect(editor.apply).not.toHaveBeenCalled();
   });
@@ -2260,7 +2290,7 @@ describe("a block inside an area locked to its content", () => {
     expect(held?.getAttribute("aria-describedby")).toBe(reason.id);
   });
 
-  it("shows the Style tab and the Advanced section read-only", () => {
+  it("shows the Style and Advanced tabs read-only", () => {
     mountHeld();
 
     // Controls that change something. A section's toggle, the state
@@ -2275,10 +2305,7 @@ describe("a block inside an area locked to its content", () => {
       );
 
     openAdvanced();
-    const content = screen.getByRole("tabpanel", { name: "Content" });
-    const advanced = content.querySelector(
-      ".nx-inspector__advanced"
-    ) as Element;
+    const advanced = screen.getByRole("tabpanel", { name: "Advanced" });
     expect(editingControls(advanced).length).toBeGreaterThan(0);
     expect(
       editingControls(advanced).filter(control => !isDisabled(control))
@@ -2298,7 +2325,7 @@ describe("a block inside an area locked to its content", () => {
     expect(isDisabled(screen.getByLabelText("Align"))).toBe(false);
     expect(screen.queryByText(/locked to its content/)).toBeNull();
     openAdvanced();
-    expect(isDisabled(screen.getByLabelText("CSS id"))).toBe(false);
+    expect(isDisabled(screen.getByLabelText("Anchor (ID)"))).toBe(false);
     openCardMenu("Headline");
     expect(
       screen
@@ -2345,13 +2372,14 @@ describe("Show when, as the selection moves", () => {
     await act(async () => {
       await Promise.resolve();
     });
+    openAdvanced();
     act(() => {
       screen.getByRole("button", { name: "Add condition" }).click();
     });
     // CONTROL: the new row is open on block a.
-    expect(screen.queryByText("Always shown.")).toBeNull();
+    expect(screen.queryByText("Always shown")).toBeNull();
 
     rerender(<InspectorPanel editor={on("b")} contentServices={services} />);
-    expect(screen.getByText("Always shown.")).toBeTruthy();
+    expect(screen.getByText("Always shown")).toBeTruthy();
   });
 });

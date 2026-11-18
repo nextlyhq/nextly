@@ -13,10 +13,8 @@
 import {
   DOCUMENT_FORMAT_VERSION,
   defineNamedQuery,
-  hasBlock,
-  registerBlocks,
 } from "@nextlyhq/blocks-engine";
-import type { PluginDefinition } from "@nextlyhq/plugin-sdk";
+import { definePlugin, type PluginDefinition } from "@nextlyhq/plugin-sdk";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -30,6 +28,7 @@ import { BINDINGS_REPORT_JOB } from "../bindings-report/job";
 import { asOverwrite } from "../document-version";
 import { BLOCKS_TYPE } from "../fields/blocksField";
 import { documentKeyOf } from "../host-rewrite/contract";
+import { blockRegistry } from "../index";
 import { pageBuilder } from "../plugin";
 
 type Node = Record<string, unknown>;
@@ -57,10 +56,12 @@ const deals = defineNamedQuery({
 });
 
 /** A block whose `value` is a number and which has no `subtitle`. */
-function registerStat(): void {
-  if (hasBlock(STAT)) return;
-  registerBlocks(
-    [
+const statBlock = definePlugin({
+  name: "test",
+  version: "1.0.0",
+  nextly: ">=0.0.0",
+  init: ctx => {
+    blockRegistry(ctx).register([
       {
         name: STAT,
         version: 1,
@@ -73,10 +74,9 @@ function registerStat(): void {
         },
         defaultProps: { value: 0, caption: "" },
       },
-    ] as never,
-    { source: "test" } as never
-  );
-}
+    ] as never);
+  },
+});
 
 /** A page of these nodes. */
 const pageWith = (nodes: Node[]) => ({
@@ -149,7 +149,7 @@ describe.each(getConfiguredTestDialects())(
       pass = reportPass(plugin);
       t = await createTestNextly({
         dialect,
-        plugins: [plugin],
+        plugins: [plugin, statBlock],
         collections: [
           defineCollection({
             slug: ARTICLES,
@@ -163,7 +163,6 @@ describe.each(getConfiguredTestDialects())(
           defineSingle({ slug: BRAND, fields: [text({ name: "motto" })] }),
         ],
       });
-      registerStat();
     });
 
     afterAll(async () => {

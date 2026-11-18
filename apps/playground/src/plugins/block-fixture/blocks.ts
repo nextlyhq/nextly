@@ -51,9 +51,13 @@ const plainFixtureBlock = defineBlock<{ label?: string }>({
     ),
 });
 
-/** Where the custom block's own inspector is, as the component map imports it. */
-const CUSTOM_INSPECTOR_COMPONENT =
+/** Where the custom block's own inspector is, as `admin.tsx` registers it. */
+export const CUSTOM_INSPECTOR_COMPONENT =
   "@/plugins/block-fixture/editor#FixtureInspector";
+
+/** The module exporting the same definitions for the editor. */
+export const BLOCK_FIXTURE_EDITOR_ENTRY =
+  "@/plugins/block-fixture/editor#blockFixtureEditor";
 
 /**
  * A block whose content is edited through its own inspector, and which uses

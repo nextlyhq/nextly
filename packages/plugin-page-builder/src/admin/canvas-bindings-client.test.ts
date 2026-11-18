@@ -5,10 +5,13 @@
  * and kept per signed-in person, so no person is ever handed another's.
  */
 import {
+  clearBlocks,
   composeEntryContent,
   defineNamedQuery,
+  registerBlocks,
   type BlockDocument,
 } from "@nextlyhq/blocks-engine";
+import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
@@ -24,12 +27,24 @@ const editing = vi.hoisted(() => ({
 const writePluginRoute = vi.hoisted(() => vi.fn());
 /** What the canvas handed its change check on each render. */
 const checked = vi.hoisted(() => [] as unknown[]);
+/** The first mark the canvas handed its change check on each render. */
+const firstMarks = vi.hoisted(() => [] as unknown[]);
 
 // The change check has its own tests; here it would share the mocked route
 // with the read under test, so only what it is handed is recorded.
-vi.mock("./editor/canvas-source-check", () => ({
-  useCanvasSourceCheck: (asked: unknown) => {
+vi.mock("./editor/canvas-source-check", async importOriginal => ({
+  // The rule for when the first reads are in stays real; only the check
+  // itself is watched.
+  ...(await importOriginal<typeof import("./editor/canvas-source-check")>()),
+  useCanvasSourceCheck: (
+    asked: unknown,
+    _userId: unknown,
+    _ask: unknown,
+    _firstReadsIn: unknown,
+    firstMark: unknown
+  ) => {
     checked.push(asked);
+    firstMarks.push(firstMark);
   },
 }));
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
@@ -102,6 +117,21 @@ describe("the canvas's binding sources", () => {
       lists: [],
       locale: "en",
     });
+  });
+
+  it("asks under what the page has left, `null` where the site sets no limit", () => {
+    const ask = (allowance: number) =>
+      canvasBindingsRequest(
+        [page({ text: { $bind: "title" } })],
+        identity,
+        "en",
+        false,
+        undefined,
+        { allowance }
+      )?.allowance;
+    expect(ask(12.5)).toBe(12);
+    // JSON has no Infinity: it would arrive as a null the route refuses.
+    expect(ask(Number.POSITIVE_INFINITY)).toBeNull();
   });
 
   it("names the collections the page's lists draw", () => {
@@ -465,6 +495,101 @@ describe("the canvas's binding sources", () => {
     }
   });
 
+  it("checks the collection a bound list draws once the answer is in, not its stored fallback", async () => {
+    editing.identity = identity;
+    try {
+      checked.length = 0;
+      writePluginRoute.mockReset();
+      writePluginRoute.mockResolvedValue({
+        ...answer("Kinds"),
+        entry: { id: "p1", title: "Kinds", kind: "products" },
+      });
+      // A loop stored over posts whose collection is bound to the entry's
+      // "kind", which names products.
+      const listing: BlockDocument = {
+        formatVersion: 1,
+        kind: "page",
+        nodes: [
+          {
+            id: "l",
+            type: "core/collection-loop",
+            version: 1,
+            props: { collection: "posts" },
+            bindings: { collection: { $bind: "kind" } },
+          },
+        ],
+      } as BlockDocument;
+      registerBlocks(coreBlocks, { source: "page-builder" });
+      renderHook(() => useCanvasBindings([listing], "en"));
+      await waitFor(() =>
+        expect(
+          (checked.at(-1) as { lists?: string[] } | undefined)?.lists
+        ).toContain("products")
+      );
+    } finally {
+      clearBlocks();
+      editing.identity = null;
+    }
+  });
+
+  it("hands the change check the mark its first reads carried", async () => {
+    editing.identity = identity;
+    try {
+      firstMarks.length = 0;
+      writePluginRoute.mockReset();
+      writePluginRoute.mockResolvedValue({ ...answer("Marked"), stamp: "m1" });
+      renderHook(() =>
+        useCanvasBindings([page({ text: { $bind: "title" } })], "de")
+      );
+      await waitFor(() => expect(firstMarks.at(-1)).toBe("m1"));
+      // Nothing before the answer was in.
+      expect(firstMarks.slice(0, -1).every(mark => mark === undefined)).toBe(
+        true
+      );
+    } finally {
+      editing.identity = null;
+    }
+  });
+
+  it("hands no first mark where the check asks about more than the reads did", async () => {
+    editing.identity = identity;
+    try {
+      firstMarks.length = 0;
+      checked.length = 0;
+      writePluginRoute.mockReset();
+      writePluginRoute.mockResolvedValue({
+        ...answer("Kinds"),
+        entry: { id: "p1", title: "Kinds", kind: "products" },
+        stamp: "m2",
+      });
+      // The answer binds the list to products, which the reads did not mark.
+      const listing: BlockDocument = {
+        formatVersion: 1,
+        kind: "page",
+        nodes: [
+          {
+            id: "l",
+            type: "core/collection-loop",
+            version: 1,
+            props: { collection: "posts" },
+            bindings: { collection: { $bind: "kind" } },
+          },
+        ],
+      } as BlockDocument;
+      registerBlocks(coreBlocks, { source: "page-builder" });
+      renderHook(() => useCanvasBindings([listing], "nl"));
+      await waitFor(() =>
+        expect(
+          (checked.at(-1) as { lists?: string[] } | undefined)?.lists
+        ).toContain("products")
+      );
+      expect(firstMarks.at(-1)).toBeUndefined();
+    } finally {
+      clearBlocks();
+      editing.identity = null;
+    }
+  });
+
   it("checks a page that only lists entries for changes to them, though it binds nothing", () => {
     editing.identity = identity;
     try {
@@ -751,5 +876,54 @@ describe("the canvas's read, as the template's strip hears it", () => {
     await waitFor(() => expect(writePluginRoute).toHaveBeenCalledTimes(3));
     retries = 0;
     editing.identity = null;
+  });
+});
+
+describe("the page data limit the canvas reads its bindings under", () => {
+  /** The bodies the canvas's binding asks sent, in order. */
+  const askedBodies = (): Record<string, unknown>[] =>
+    writePluginRoute.mock.calls.map(
+      ([write]) => (write as { body: Record<string, unknown> }).body
+    );
+
+  /** The canvas's ask for a bound page under `allowance`, in `locale`. */
+  async function askUnder(
+    locale: string,
+    allowance: number | undefined
+  ): Promise<Record<string, unknown>> {
+    editing.identity = identity;
+    writePluginRoute.mockReset();
+    writePluginRoute.mockResolvedValue(answer("A title"));
+    const drawn = [page({ text: { $bind: "title" } })];
+    const { result, unmount } = renderHook(() =>
+      useCanvasBindings(drawn, locale, false, undefined, undefined, allowance)
+    );
+    try {
+      await waitFor(() =>
+        expect(result.current.entry).toEqual({ id: "p1", title: "A title" })
+      );
+      const [body] = askedBodies();
+      if (body === undefined) throw new Error("nothing asked");
+      return body;
+    } finally {
+      unmount();
+      editing.identity = null;
+    }
+  }
+
+  it("asks under the site's limit, as the published page reads its bindings", async () => {
+    expect((await askUnder("la-1", 20)).allowance).toBe(20);
+    expect((await askUnder("la-2", 1500)).allowance).toBe(1500);
+  });
+
+  it("asks with no limit, sent as null, for a site that sets none", async () => {
+    const body = await askUnder("la-3", Number.POSITIVE_INFINITY);
+    expect(body).toHaveProperty("allowance", null);
+  });
+
+  it("asks under the route's default where the site sets no limit", async () => {
+    // Absent rather than 500: the same ask as before, which the route reads
+    // as its default.
+    expect(await askUnder("la-4", undefined)).not.toHaveProperty("allowance");
   });
 });

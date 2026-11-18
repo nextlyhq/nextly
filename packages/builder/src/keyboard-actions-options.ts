@@ -10,15 +10,16 @@ import type { ComponentLookup, NestingSource } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
 import type { BlockActions, ToolbarFocusSlot } from "./block-actions-context";
-import type { EditorState } from "./editor-state";
-import type { OfferSignal, SelectionOffer } from "./selection-offer";
-import type { SharedStyleOffer } from "./shared-style-target";
+import type { BlockClipboardVerbs } from "./block-clipboard-verbs";
 import type {
   ComponentVerbsOffer,
   ToolbarAction,
   ToolbarActionId,
   TurnIntoChoice,
-} from "./toolbar-actions";
+} from "./canvas/toolbar-actions";
+import type { EditorState } from "./editor-state";
+import type { OfferSignal, SelectionOffer } from "./selection-offer";
+import type { SharedStyleOffer } from "./shared-style-target";
 
 /**
  * The verbs for the current selection, as a surface OUTSIDE the provider is
@@ -135,6 +136,22 @@ export interface BlockKeyboardActionsOptions {
    * @experimental Settles with the Design panel's Block looks group.
    */
   onEscapeWithoutSelection?: () => void;
+  /**
+   * The header or footer selected on the canvas, while one is: Delete and
+   * Backspace then remove nothing and announce `refusal`, the host's words
+   * for where it is changed ("The site header isn't part of this page.
+   * Change it in Page settings."). The other block keys have no subject.
+   */
+  selectedRegion?: { readonly refusal: string };
+  /**
+   * "/" pressed with a block selected, or with nothing selected, while no
+   * text is being typed: the host opens its in-place picker there, adding
+   * by the placement rule. Absent, "/" is left to the browser and Help does
+   * not list it.
+   *
+   * @experimental Settles with the in-place picker.
+   */
+  onAddBlockHere?: () => void;
 }
 
 /**
@@ -230,6 +247,11 @@ export interface BlockKeyboardActionsResult {
    * wherever it is pressed.
    */
   readonly canvasFrame: CanvasFrameSlot;
+  /**
+   * Copy, Cut and Paste, for the clipboard events {@link BlockKeyboardActions}
+   * listens for: the same verbs the menus run, writing to the event in hand.
+   */
+  readonly clipboard: BlockClipboardVerbs;
 }
 
 /**

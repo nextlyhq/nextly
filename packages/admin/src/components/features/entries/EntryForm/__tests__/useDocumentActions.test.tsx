@@ -11,7 +11,10 @@ import { act, renderHook } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { describe, it, expect, vi } from "vitest";
 
-import { DocumentActionsHost } from "../DocumentActionsContext";
+import {
+  DocumentActionsHost,
+  NoDocumentActions,
+} from "../DocumentActionsContext";
 import type { DocumentActionBindingsInput } from "../useDocumentActionBindings";
 import { useDocumentActions } from "../useDocumentActionHooks";
 
@@ -40,6 +43,20 @@ function hostedBy(input: Partial<DocumentActionBindingsInput>) {
 describe("useDocumentActions", () => {
   it("is null outside a document editor", () => {
     const { result } = renderHook(() => useDocumentActions());
+    expect(result.current).toBeNull();
+  });
+
+  it("is null inside an editor drawn within another document's, such as a quick create", () => {
+    // The surrounding document's actions are not this one's: a field in the
+    // modal that ran them would save the document behind the modal.
+    const Outer = hostedBy({ onSaveDraft: () => Promise.resolve(saved) });
+    const { result } = renderHook(() => useDocumentActions(), {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <Outer>
+          <NoDocumentActions>{children}</NoDocumentActions>
+        </Outer>
+      ),
+    });
     expect(result.current).toBeNull();
   });
 

@@ -1,11 +1,12 @@
 import {
   blockPartClassName,
   blockTypeClassName,
+  renderedCssClassNames,
   type BlockNode,
   type ComponentUnresolvedReason,
   type ResolvedBlockNode,
 } from "@nextlyhq/blocks-engine";
-import { Fragment, Suspense, type ReactNode } from "react";
+import { Fragment, type ReactNode } from "react";
 
 import {
   propMarker,
@@ -21,9 +22,11 @@ import {
   boundArgument,
 } from "./block-boundary-bindings";
 import {
+  asyncWaitingOf,
   checkedOutput,
   editorOutputSlot,
   AsyncBlockOutput,
+  waitingAs,
 } from "./block-boundary-output";
 import type { BlockHostPolicy, PageContext } from "./context";
 import { BlockPlaceholder } from "./placeholder";
@@ -119,7 +122,12 @@ export interface BlockBoundaryProps {
   blocks: BlockResolver;
   /** Node id to generated class, from the compiled stylesheet. */
   classes: Record<string, string>;
-  /** Shown while an async block is still producing output. */
+  /**
+   * Shown while an async block is still producing output. Given, each async
+   * block waits in a boundary of its own and streams; absent, outside an
+   * editor surface, it waits in place so the page's HTML holds it (see
+   * `AsyncWaiting`).
+   */
   fallback?: ReactNode;
   /**
    * Site-operator decisions the block enforces.
@@ -160,6 +168,13 @@ export interface BlockBoundaryProps {
  * block-type class carries the shared defaults the compiler emits once per type
  * rather than copying into every node. A block given only its node class loses
  * every default its type defines.
+ *
+ * Then the author's own names (`cssClasses`), after every generated class, so
+ * a site's stylesheet can target the block. Carried in the class the block is
+ * handed rather than attached to its root afterwards, so every block, a
+ * plugin's included, wears them on the element it already puts its class on.
+ * Only the names a save accepts are drawn; a node without any draws exactly
+ * the two classes it did before.
  */
 function classNameFor(
   node: BlockNode,
@@ -167,7 +182,9 @@ function classNameFor(
 ): string {
   const nodeClass = classes[node.id];
   const typeClass = blockTypeClassName(node.type);
-  return nodeClass ? `${nodeClass} ${typeClass}` : typeClass;
+  const generated = nodeClass ? `${nodeClass} ${typeClass}` : typeClass;
+  const own = renderedCssClassNames(node.cssClasses);
+  return own.length === 0 ? generated : `${generated} ${own.join(" ")}`;
 }
 
 /**
@@ -341,10 +358,14 @@ export function BlockBoundary({
 
   const marker = propMarker(definition, nodeAttribute === true);
 
-  // An editor render reuses the output it already has for this block as it
-  // stands: see `EDITOR_OUTPUTS`.
+  // An editor surface: one drawn with node addresses, or keeping its async
+  // outputs between draws. It reuses the output it already has for this
+  // block as it stands (see `EDITOR_OUTPUTS`), and an async block on it waits
+  // in a boundary of its own (see `AsyncWaiting`).
+  const editorSurface = nodeAttribute === true || keepAsyncOutputs === true;
+  const waiting = asyncWaitingOf(fallback, editorSurface);
   const editorSlot = editorOutputSlot(
-    nodeAttribute === true || keepAsyncOutputs === true,
+    editorSurface,
     nodeAttribute === true,
     hostPolicy,
     context,
@@ -427,7 +448,7 @@ export function BlockBoundary({
     return checkedOutput(
       output,
       node,
-      fallback,
+      waiting,
       true,
       declaresNothing,
       declaresSlots,
@@ -438,19 +459,18 @@ export function BlockBoundary({
 
   editorSlot.keep(output);
 
-  return (
-    <Suspense fallback={fallback}>
-      <AsyncBlockOutput
-        pending={output}
-        node={node}
-        fallback={fallback}
-        isBlockRoot
-        declaresNothing={declaresNothing}
-        declaresSlots={declaresSlots}
-        nodeAttribute={nodeAttribute}
-        identity={identity}
-      />
-    </Suspense>
+  return waitingAs(
+    waiting,
+    <AsyncBlockOutput
+      pending={output}
+      node={node}
+      waiting={waiting}
+      isBlockRoot
+      declaresNothing={declaresNothing}
+      declaresSlots={declaresSlots}
+      nodeAttribute={nodeAttribute}
+      identity={identity}
+    />
   );
 }
 

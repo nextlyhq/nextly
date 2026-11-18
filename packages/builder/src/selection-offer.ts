@@ -21,11 +21,13 @@
  * @module selection-offer
  */
 
-import type { BlockDocument, NestingSource } from "@nextlyhq/blocks-engine";
+import type {
+  BlockDocument,
+  DocumentLimits,
+  NestingSource,
+} from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
-import type { EditorState } from "./editor-state";
-import type { SharedStyleOffer } from "./shared-style-target";
 import {
   depthMoveActions,
   toolbarActions,
@@ -34,7 +36,9 @@ import {
   type MoveJudge,
   type MovePosition,
   type ToolbarAction,
-} from "./toolbar-actions";
+} from "./canvas/toolbar-actions";
+import type { EditorState } from "./editor-state";
+import type { SharedStyleOffer } from "./shared-style-target";
 
 /** The selection's verbs, and the depth moves the block menu adds. */
 export interface SelectionVerbs {
@@ -64,6 +68,8 @@ export interface SelectionOfferInputs {
   readonly sharedStyles: SharedStyleOffer | undefined;
   readonly movePosition: MovePosition;
   readonly placementRefusal: MoveJudge;
+  /** The editor's size limits, which the "Turn into" choices are judged under. */
+  readonly limits?: DocumentLimits;
 }
 
 /**
@@ -86,7 +92,8 @@ function selectionVerbs(
       inputs.components,
       inputs.offersEditComponent,
       inputs.sharedStyles,
-      asked
+      asked,
+      inputs.limits
     ),
     depthMoves: depthMoveActions(
       inputs.document,
@@ -119,6 +126,7 @@ export function useSelectionOffer(
     sharedStyles,
     movePosition,
     placementRefusal,
+    limits,
   } = inputs;
   return React.useMemo(() => {
     const read: SelectionOfferInputs = {
@@ -133,6 +141,7 @@ export function useSelectionOffer(
       sharedStyles,
       movePosition,
       placementRefusal,
+      ...(limits === undefined ? {} : { limits }),
     };
     let locked: SelectionVerbs | undefined;
     return {
@@ -151,6 +160,7 @@ export function useSelectionOffer(
     sharedStyles,
     movePosition,
     placementRefusal,
+    limits,
   ]);
 }
 

@@ -227,8 +227,8 @@ const USES: readonly VariableUse[] = [
   },
 ];
 
-describe("the count at the end of each row", () => {
-  it("is the places, said in words to a screen reader and in the row's tooltip", async () => {
+describe("how widely each row's variable is used", () => {
+  it("is the places, said in words to a screen reader and in the row's tooltip, never drawn on the row", async () => {
     const usage = host({
       reaches: () => ({
         "color.brand": reach(12, ["c-card", "c-hero"]),
@@ -244,30 +244,17 @@ describe("the count at the end of each row", () => {
     const brand = await screen.findByRole("button", {
       name: /^Brand.*\. Used in 14 places$/,
     });
-    const count = brand.querySelector(".nx-vars__count");
-    expect(count?.textContent).toBe("14");
-    expect(count?.hasAttribute("data-zero")).toBe(false);
-    // Said by the row's tooltip, where keyboard users meet it too, not by a
-    // title on the hidden count.
-    expect(count?.hasAttribute("title")).toBe(false);
+    // Nothing on the row itself: the tooltip says it.
+    expect(brand.textContent).not.toContain("14");
     await act(async () => {
       brand.focus();
     });
     expect((await screen.findByRole("tooltip")).textContent).toContain(
       "Used in 14 places"
     );
-
-    const text = row(/^Text.*\. Not used anywhere$/);
-    const zero = text.querySelector(".nx-vars__count");
-    expect(zero?.textContent).toBe("0");
-    expect(zero?.hasAttribute("data-zero")).toBe(true);
-
+    expect(row(/^Text.*\. Not used$/)).toBeDefined();
     expect(row(/^Body.*\. Used in 1 place$/)).toBeDefined();
-
-    const space = row(/Some pages aren't counted yet\.$/);
-    const floor = space.querySelector(".nx-vars__count");
-    expect(floor?.textContent).toBe("2+");
-    expect(floor?.hasAttribute("data-floor")).toBe(true);
+    expect(row(/Some pages aren't counted yet\.$/)).toBeDefined();
   });
 
   it("asks for each row's variable, and for a type size its line height too", async () => {
@@ -294,21 +281,23 @@ describe("the count at the end of each row", () => {
     });
     render(<Hosted usage={usage} />);
     // 1 for the size, 3 for the line height: neither alone.
-    const body = await screen.findByRole("button", {
-      name: /^Body.*\. Used in 4 places$/,
-    });
-    expect(body.querySelector(".nx-vars__count")?.textContent).toBe("4");
+    expect(
+      await screen.findByRole("button", { name: /^Body.*\. Used in 4 places$/ })
+    ).toBeDefined();
   });
 
-  it("shows nothing for a row not read yet, and no counts without the host's reads", async () => {
+  it("says nothing for a row not read yet, and nothing without the host's reads", async () => {
     const usage = host({ reaches: () => ({ "color.brand": reach(3) }) });
     const { unmount } = render(<Hosted usage={usage} />);
     await screen.findByRole("button", { name: /^Brand.*Used in 3 places$/ });
-    expect(row(/^Text/).querySelector(".nx-vars__count")).toBeNull();
+    expect(row(/^Text/).getAttribute("aria-label")).not.toMatch(
+      /used|counted/i
+    );
     unmount();
     render(<Hosted />);
-    expect(document.querySelector(".nx-vars__count")).toBeNull();
-    expect(row(/^Brand/).hasAttribute("data-counted")).toBe(false);
+    expect(row(/^Brand/).getAttribute("aria-label")).not.toMatch(
+      /used|counted/i
+    );
   });
 });
 
@@ -352,7 +341,7 @@ describe("removing a variable nothing uses", () => {
     const onChange = vi.fn();
     const usage = host({ reaches: () => ({ "color.text": reach(0) }) });
     render(<Hosted usage={usage} onChange={onChange} />);
-    const editor = await openEditor(/^Text.*Not used anywhere$/);
+    const editor = await openEditor(/^Text.*Not used$/);
     expect(within(editor).getByText("Not used anywhere")).toBeDefined();
     fireEvent.click(within(editor).getByRole("button", { name: "Remove" }));
     expect(
@@ -555,7 +544,7 @@ describe("removing a variable not counted yet", () => {
       count: async () => ({ kind: "counted", whole: true, counting: false }),
     });
     render(<Hosted usage={usage} onChange={onChange} />);
-    const editor = await openEditor(/^Text.*No uses counted yet/);
+    const editor = await openEditor(/^Text.*Not counted yet$/);
     // Nothing is counting, so the line does not say it is.
     expect(within(editor).getByText("Not counted yet")).toBeDefined();
     expect(within(editor).queryByText(/Counting where/)).toBeNull();
@@ -578,7 +567,7 @@ describe("removing a variable not counted yet", () => {
 });
 
 describe("a variable the site's code supplies", () => {
-  it("keeps Reset alone, with no usage line", async () => {
+  it("keeps Reset alone, and still says where a built-in is used", async () => {
     const supplied: SiteTokenSet = {
       tokens: [
         { name: "color.brand", kind: "color", values: { light: "#000000" } },
@@ -589,7 +578,9 @@ describe("a variable the site's code supplies", () => {
     const editor = await openEditor(/^Brand.*Used in 4 places$/);
     expect(within(editor).getByRole("button", { name: "Reset" })).toBeDefined();
     expect(within(editor).queryByRole("button", { name: "Remove" })).toBeNull();
-    expect(within(editor).queryByText("Used in 4 places")).toBeNull();
+    expect(
+      within(editor).getByRole("group", { name: "Where it's used" }).textContent
+    ).toContain("Used in 4 places");
   });
 });
 
@@ -670,7 +661,7 @@ describe("removing a type size", () => {
       }),
     });
     render(<Hosted usage={usage} />);
-    const editor = await openEditor(/^Body.*Not used anywhere$/);
+    const editor = await openEditor(/^Body.*Not used$/);
     fireEvent.click(within(editor).getByRole("button", { name: "Remove" }));
     expect(
       within(editor).getByText(/Any block using it loses that style/)
@@ -874,7 +865,7 @@ describe("a removal the save refuses", () => {
       ],
     });
     render(<Refusing usage={usage} />);
-    let editor = await openEditor(/^Text.*Not used anywhere$/);
+    let editor = await openEditor(/^Text.*Not used$/);
     fireEvent.click(within(editor).getByRole("button", { name: "Remove" }));
     // Taken before the press: the refused save reads again within it.
     const readsBefore = usage.asked.length;

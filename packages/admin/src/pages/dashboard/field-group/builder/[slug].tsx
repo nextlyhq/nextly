@@ -47,6 +47,10 @@ import { useBuilderFieldActions } from "@admin/hooks/useBuilderFieldActions";
 import { useBuilderSettingsChange } from "@admin/hooks/useBuilderSettingsChange";
 import { useDocumentTitle } from "@admin/hooks/useDocumentTitle";
 import { useFieldBuilder } from "@admin/hooks/useFieldBuilder";
+import {
+  useDiscardLetsGoOwned,
+  useFieldGroupsFirst,
+} from "@admin/hooks/useFieldGroupsFirst";
 import { useFieldGroupUsedBy } from "@admin/hooks/useFieldGroupUsedBy";
 import { useSchemaChangeConfirmation } from "@admin/hooks/useSchemaChangeConfirmation";
 import {
@@ -194,16 +198,17 @@ export default function FieldGroupBuilderEditPage({
 
   // A change of the settings is a step; an unsaved field group's address
   // moves it at once, outside the history.
-  const { onSettingsChange, unsavedAddress } = useBuilderSettingsChange({
-    kind: "field-group",
-    unsaved,
-    settings,
-    setSettings,
-    moveAddress,
-    busy: confirmation.isBusy,
-    editRoute: address =>
-      buildRoute(ROUTES.BUILDER_FIELD_GROUPS_EDIT, { slug: address }),
-  });
+  const { onSettingsChange, unsavedAddress, saveHeld } =
+    useBuilderSettingsChange({
+      kind: "field-group",
+      unsaved,
+      settings,
+      setSettings,
+      moveAddress,
+      busy: confirmation.isBusy,
+      editRoute: address =>
+        buildRoute(ROUTES.BUILDER_FIELD_GROUPS_EDIT, { slug: address }),
+    });
   // How many places use the field group, from the same query its used-by
   // list reads; an unsaved one is used nowhere yet, and asked nothing.
   const usedBy = useFieldGroupUsedBy(unsaved ? undefined : slug);
@@ -212,6 +217,9 @@ export default function FieldGroupBuilderEditPage({
   // Resolved once: the save hook refuses outright without a slug, so the
   // fallback below is only ever satisfying the type.
   const entitySlug = slug ?? "";
+  // The field groups not saved yet that this save creates first, and the ones this editor's
+  // picker made, which its save, Discard all and leave let go or release.
+  const groupsFirst = useFieldGroupsFirst("field-group", slug, builder.fields);
   const localized = settings?.i18n === true;
 
   /**
@@ -309,6 +317,8 @@ export default function FieldGroupBuilderEditPage({
             pinFields();
             // Re-pin settings baseline so the Save button disables again.
             pinSettings(settings);
+            // Landed: the groups this editor's picker made that no field uses go.
+            groupsFirst.letGoUnused();
           },
           onError: err => {
             const errorObj = err as { message?: string };
@@ -320,7 +330,7 @@ export default function FieldGroupBuilderEditPage({
         }
       );
     },
-    [slug, settings, updateFieldGroup, pinFields, pinSettings]
+    [slug, settings, updateFieldGroup, pinFields, pinSettings, groupsFirst]
   );
 
   // The first save of an unsaved field group is its create: reviewed from the
@@ -389,16 +399,20 @@ export default function FieldGroupBuilderEditPage({
     // Each changed setting is reviewed with the save, and a save of the
     // settings alone is reviewed too.
     settingChanges: pending.settingChanges,
+    fieldGroupsFirst: groupsFirst.fieldGroupsFirst,
   });
 
   // Discard all on an unsaved field group discards the field group itself: it
   // leaves this tab, and the editor returns to the list.
-  const pendingChanges = useUnsavedDiscard(
-    pending,
-    unsaved !== undefined,
-    "field-group",
-    entitySlug,
-    ROUTES.BUILDER_FIELD_GROUPS
+  const pendingChanges = useDiscardLetsGoOwned(
+    useUnsavedDiscard(
+      pending,
+      unsaved !== undefined,
+      "field-group",
+      entitySlug,
+      ROUTES.BUILDER_FIELD_GROUPS
+    ),
+    groupsFirst.letGoOwned
   );
 
   // ---------------------------- Loading / error guards ----------------------
@@ -432,11 +446,12 @@ export default function FieldGroupBuilderEditPage({
       configPath={fieldGroup?.configPath}
       unsavedCount={unsavedCount}
       pending={pendingChanges}
-      onDiscard={
-        unsaved
-          ? () => removeUnsavedEntity("field-group", entitySlug)
-          : undefined
-      }
+      onDiscard={() => {
+        // Left with its changes discarded: an unsaved entity goes, and the field groups its picker
+        // made stay as unsaved field groups of their own, which their own editor may open.
+        if (unsaved) removeUnsavedEntity("field-group", entitySlug);
+        groupsFirst.release();
+      }}
       savedFieldIds={savedFieldIds}
       onSave={handleSave}
       settings={settings}
@@ -498,6 +513,8 @@ export default function FieldGroupBuilderEditPage({
         </>
       }
       isSaving={isSaving || confirmation.isBusy}
+      // Save waits while an unsaved entity's new address is checked.
+      saveHeld={saveHeld}
       savingLabel="Saving field group changes…"
     >
       <ReconcileFieldGroupDialog
@@ -514,6 +531,7 @@ export default function FieldGroupBuilderEditPage({
         onConfirm={confirmApply}
         creating={unsaved !== undefined}
         settingChanges={reviewedSettingChanges}
+        fieldGroupCreates={groupsFirst.creates}
       />
     </BuilderPageLayout>
   );

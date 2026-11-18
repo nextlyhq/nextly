@@ -92,7 +92,7 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
       <div>
         <div data-testid="rail">{(availablePanels ?? []).join(",")}</div>
         <div data-testid="panel">
-          {renderPanel?.("design", { current: "classes", choose: () => {} })}
+          {renderPanel?.("design", { current: "styles", choose: () => {} })}
         </div>
         {/* Rendered, not merely constructed: the inspector recorder only runs
             when the element is actually drawn, and the class-creation callback
@@ -158,6 +158,10 @@ vi.mock("./site-style-read", () => ({
 }));
 
 vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
+  // Where the page opens and the pin's id, which the top bar reads; no
+  // collection is named here, so the exit goes to the form.
+  useDocumentOpensIn: () => null,
+  PIN_TO_DASHBOARD_ACTION: "pin-to-dashboard",
   // The canvas's media read, answering nothing: these cases draw no image.
   // One function for every call, as the admin's own hook keeps it.
   useMediaResolver: (

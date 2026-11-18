@@ -10,7 +10,7 @@
  * @module components/features/releases/__tests__/ScheduledReleaseBanner.test
  */
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { afterEach, describe, expect, it, vi, beforeEach } from "vitest";
 
 import { render, screen, within } from "@admin/__tests__/utils";
 import type { Release } from "@admin/types/releases";
@@ -428,5 +428,48 @@ describe("what the reader can do from the document", () => {
     const text = screen.getByRole("status").textContent ?? "";
     expect(text).toContain("your time");
     expect(text).toMatch(/Pacific\/Kiritimati \(as scheduled\)/);
+  });
+});
+
+describe("its clock", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** The minute timers started while `run` ran. */
+  function minuteTimers(run: () => void): number {
+    const started = vi.spyOn(window, "setInterval");
+    try {
+      run();
+      return started.mock.calls.filter(([, ms]) => ms === 60_000).length;
+    } finally {
+      started.mockRestore();
+    }
+  }
+
+  it("keeps no clock for a document in no release, so an open editor stays still", () => {
+    // Mounted under every entry, the builder's included: a clock moved on
+    // every minute would draw the screen again for a banner showing nothing.
+    showing([]);
+    expect(
+      minuteTimers(() => {
+        render(<ScheduledReleaseBanner document={DOC} onDefaultLocale />);
+      })
+    ).toBe(0);
+    containing.mockReturnValue({ data: undefined, isError: false });
+    expect(
+      minuteTimers(() => {
+        render(<ScheduledReleaseBanner document={DOC} onDefaultLocale />);
+      })
+    ).toBe(0);
+  });
+
+  it("keeps its clock while it shows a release, so its times move on", () => {
+    showing([release()]);
+    expect(
+      minuteTimers(() => {
+        render(<ScheduledReleaseBanner document={DOC} onDefaultLocale />);
+      })
+    ).toBe(1);
   });
 });

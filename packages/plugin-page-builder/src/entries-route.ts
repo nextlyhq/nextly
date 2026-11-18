@@ -39,7 +39,10 @@
  *
  * @module entries-route
  */
-import { ITEM_SCHEMA_MAX_DEPTH } from "@nextlyhq/blocks-engine";
+import {
+  ITEM_SCHEMA_MAX_DEPTH,
+  type BlockRegistryReader,
+} from "@nextlyhq/blocks-engine";
 import { NextlyError, type PluginRouteContext } from "@nextlyhq/plugin-sdk";
 import { respondList, type PaginationMeta, type WhereFilter } from "nextly";
 import { entryTitleField } from "nextly/config";
@@ -152,7 +155,7 @@ export function parseEntriesQuery(url: string | URL): EntriesRequest {
  * a collection by accident.
  */
 export function relationTargets(
-  blocks: readonly { props?: unknown }[] = editorVisibleBlocks()
+  blocks: readonly { props?: unknown }[]
 ): ReadonlySet<string> {
   const targets = new Set<string>();
   for (const block of blocks) collectTargets(block.props, targets, 0);
@@ -543,9 +546,12 @@ interface EntriesRouteContext {
  * a collection a block already names in code. The ROWS are read as the user,
  * through the one statement of that this package has.
  */
-function directEntriesReads(ctx: EntriesRouteContext): EntriesReads {
+function directEntriesReads(
+  ctx: EntriesRouteContext,
+  registry: BlockRegistryReader
+): EntriesReads {
   return {
-    targets: () => relationTargets(),
+    targets: () => relationTargets(editorVisibleBlocks(registry)),
     collection: slug => ctx.services.collections.getCollection(slug, {}),
     // The shared as-caller read, which every status and the caller's own
     // identity travel through.
@@ -558,7 +564,10 @@ function directEntriesReads(ctx: EntriesRouteContext): EntriesReads {
  * authenticated. Everything it decides lives in {@link readEntries} and
  * {@link parseEntriesQuery}.
  */
-export function entriesRoute(): {
+export function entriesRoute(
+  /** The site's block registry itself, whose editor blocks name the targets. */
+  registry: BlockRegistryReader
+): {
   method: "GET";
   checksAccess: true;
   path: string;
@@ -574,7 +583,7 @@ export function entriesRoute(): {
     handler: async (req, ctx) => {
       const answer = await readEntries(
         parseEntriesQuery(req.url),
-        directEntriesReads(ctx)
+        directEntriesReads(ctx, registry)
       );
       return respondList([...answer.items], answer.meta);
     },

@@ -27,10 +27,14 @@ import * as blocksEntry from "./blocks/index";
 import * as listReadModule from "./blocks/list-read";
 import * as blockPropsModule from "./blocks/props";
 import * as typographyDefaultsModule from "./blocks/typography-defaults";
+import * as formFieldsModule from "./blocks/form-fields";
+import * as headingAnchorsModule from "./blocks/heading-anchors";
 import * as containerRootModule from "./blocks/container-root";
 import * as componentSourceModule from "./component-source";
 import * as contextModule from "./context";
+import * as imageSlotModule from "./image-slot";
 import * as listCollectionsModule from "./list-collections";
+import * as outlineModule from "./outline";
 import * as richTextModule from "./rich-text";
 import * as pagePartsModule from "./page-parts";
 import * as pageReadCountModule from "./page-read-count";
@@ -99,6 +103,47 @@ const SOURCE_MODULES: ReadonlyArray<{
   internal: readonly string[];
 }> = [
   {
+    name: "blocks/form-fields",
+    module: formFieldsModule,
+    // The entry publishes the fields with their defaults applied, for the
+    // editor. The rest are the Form block's own, published from its entry.
+    internal: [
+      "FORM_CHOICE_TYPES",
+      "MAX_FIELDS",
+      "FORM_FIELD_TYPES",
+      "formFieldDrawings",
+      "receiverKeepsName",
+      "sentNameOf",
+    ],
+  },
+  {
+    name: "blocks/heading-anchors",
+    module: headingAnchorsModule,
+    // Only its `HeadingRank` type is published, as the level an outline entry
+    // carries. The slug rules and the allocator are the page outline's, and a
+    // heading's level rule is shared with `core/heading`; a host reads the
+    // anchors from `ctx.outline` rather than making its own.
+    internal: ["anchorAllocator", "headingRank", "rankOfTag"],
+  },
+  {
+    name: "outline",
+    module: outlineModule,
+    // Its types are published, for `ctx.outline`. Building the outline, and
+    // putting it on a context, are the renderer's: a block reads its anchors
+    // with `outlineAnchors`, inside this package, and an editor keeps an
+    // output by `anchorsWithin`.
+    internal: [
+      "anchorsWithin",
+      "contextBeforeOutline",
+      "headingAnchors",
+      "outlineAnchors",
+      "outlineForPart",
+      "pageOutline",
+      "passageAnchors",
+      "withOutline",
+    ],
+  },
+  {
     name: "blocks/typography-defaults",
     module: typographyDefaultsModule,
     // Both values are the consumer surface: the baseline itself, so a host
@@ -113,6 +158,25 @@ const SOURCE_MODULES: ReadonlyArray<{
     // Its one value is the consumer surface: which element a Section or Box
     // renders as its root, asked by an editor.
     internal: [],
+  },
+  {
+    name: "image-slot",
+    module: imageSlotModule,
+    // The entry publishes only the copy types a host's `imageCopies` option
+    // is written against. Working out each device's slot is the renderer's
+    // own, asked by the route and the blocks that draw images.
+    internal: [
+      "childImageContext",
+      "copiesWantedUpTo",
+      "hasDefaultColumnGap",
+      "imageSizingFor",
+      "narrowForColumns",
+      "narrowForOwnSize",
+      "narrowToWidth",
+      "rootImageSlot",
+      "siteSizesBlocks",
+      "sizesFor",
+    ],
   },
   {
     name: "component-source",
@@ -161,9 +225,12 @@ const SOURCE_MODULES: ReadonlyArray<{
     name: "blocks/props",
     module: blockPropsModule,
     // `fetchableUrl` is public, for a caller judging what a page draws by the
-    // renderer's one filter. The rest is how a block reads its own stored
-    // props: a block author's input is the render arguments, not these.
+    // renderer's one filter, and `whenClickedOf`, for the editor's panel to
+    // show what a click does as the render reads it. The rest is how a block
+    // reads its own stored props: a block author's input is the render
+    // arguments, not these.
     internal: [
+      "addressLinkFor",
       "boundImage",
       "boundText",
       "canLink",
@@ -173,12 +240,14 @@ const SOURCE_MODULES: ReadonlyArray<{
       "isTrustedOrigin",
       "LINK_PROPS",
       "linkFor",
+      "linksToEntry",
       "number",
       "oneOf",
       "readClaimOf",
       "relFor",
       "text",
       "url",
+      "WHEN_CLICKED",
     ],
   },
   {
@@ -214,7 +283,7 @@ const SOURCE_MODULES: ReadonlyArray<{
     module: listCollectionsModule,
     // The walk behind `listCollections`, shared with the route's other
     // questions about a page's lists; not a consumer surface.
-    internal: ["anyListWhere", "listCollectionsWhere", "listPropsAsBound"],
+    internal: ["anyListWhere", "listPropsAsBound"],
   },
   // Public whole: how a page and the regions of its Layout share one site
   // sheet and keep their styles apart, asked by the published route and the
@@ -231,20 +300,31 @@ const SOURCE_MODULES: ReadonlyArray<{
     // partition's bound from both sides. `drawsInteractive` is shared with the
     // rich-text block's content model in this package, not offered outside it,
     // and so is `passageHeadings`, the walk the table-of-contents block lists
-    // a passage's headings by. `VIEWS_DRAWING_CHILDREN` is exported for the
+    // a passage's headings by, and `headingsDrawn`, the same walk the page
+    // outline lists a Rich text block's headings by. `VIEWS_DRAWING_CHILDREN` is exported for the
     // test that holds every view to what it declares it draws.
+    // `RichTextParagraphContent` draws the Text block's one paragraph inside
+    // the block's own `<p>`, with the same views; a passage is drawn whole
+    // with `RichText`.
     internal: [
+      "RichTextParagraphContent",
       "drawsInteractive",
       "holdsBlockContent",
       "holdsInteractive",
       "MAX_PARTITION_DEPTH",
+      "headingsDrawn",
       "partitionPhrasing",
       "passageHeadings",
       "VIEWS_DRAWING_CHILDREN",
     ],
   },
   { name: "page-style-trace", module: pageStyleTraceModule, internal: [] },
-  { name: "resolver", module: resolverModule, internal: [] },
+  {
+    name: "resolver",
+    module: resolverModule,
+    // Read by `next.ts`'s routes alone, through the instance.
+    internal: ["offeredSitePageDataLimit"],
+  },
   {
     name: "sanitize",
     module: sanitizeModule,
@@ -444,7 +524,12 @@ const SOURCE_MODULES: ReadonlyArray<{
     // page and its Layout's regions with one site sheet between them, each
     // document compiled under the context the renderer itself would derive.
     // A host renders one document and has the renderer derive it.
+    //
+    // `outlinePartOf` is the route's: it reads each part of a page drawn in
+    // its Layout as the renderer will, so the page's one outline lists the
+    // trees the parts draw.
     internal: [
+      "outlinePartOf",
       "pageCompileContext",
       "pruneRenderedPlaceholders",
       "statedBreakpoints",
@@ -544,6 +629,8 @@ describe("the root entry", () => {
       // canvas's sheet draws by the names the renderer writes.
       "ENTRY_CONTENT_DRAWN_ATTRIBUTE",
       "ENTRY_CONTENT_NOTE_ATTRIBUTE",
+      // The most fields a simple form draws, for the editor to add no more.
+      "FORM_MAX_FIELDS",
       "INSTANCE_ATTRIBUTE",
       // The action a collection list's note offers on the editor's canvas,
       // public so the canvas acts on the name the renderer writes.
@@ -569,8 +656,19 @@ describe("the root entry", () => {
       "RichText",
       // The container marker. Public so an editor asks whether a block declares
       // slots instead of keeping a hardcoded list of container type names.
+      // Where the page builder offers a site's blocks, which a route given no
+      // `blocks` reads.
+      "SITE_BLOCKS_SERVICE",
+      // Whether site-bound blocks or queries started in this module copy.
+      "SITE_COPY",
+      // Where the page builder offers what a page's forms need, which a
+      // route reads to fill `ctx.forms`.
+      "SITE_FORMS_SERVICE",
+      "SITE_NAMED_QUERIES_SERVICE",
+      // Where the page builder offers the site's page data limit, which a
+      // route given no `maxQueries` renders under.
+      "SITE_PAGE_DATA_LIMIT_SERVICE",
       "SLOTS_ATTRIBUTE",
-      "TYPOGRAPHY_DEFAULTS",
       "UNPREVIEWABLE_CONTAINER",
       // Added deliberately: binding sources read on a server, carried to the
       // editor's canvas and read back there, by one pair of functions.
@@ -602,6 +700,9 @@ describe("the root entry", () => {
       // The image and embed blocks' one filter on an address, public so a
       // caller judging what a page draws asks what they ask.
       "fetchableUrl",
+      // Added deliberately: a simple form's fields with their sent names, for
+      // the editor to show the name each answer goes under.
+      "formFields",
       // The render-safe attribute rule. Public because the editor offering that
       // field asks it rather than keeping a copy that would drift.
       "isAllowedAttribute",
@@ -618,10 +719,17 @@ describe("the root entry", () => {
       // The collections a page's lists draw: the published route and the
       // editor's canvas ask one walk which lists a page holds.
       "listCollections",
+      // The same walk with a binding run, so the editor's change check
+      // watches the collection a bound list draws.
+      "listCollectionsWhere",
       "migrationSourceFor",
       // Whether a recorded lookup found no field a visitor may read, so the
       // editor can say a whole source is hidden from visitors.
       "noPublicFields",
+      // The one reading of the site's blocks an instance offers.
+      "offeredSiteBlocks",
+      // The one reading of the site's forms service an instance offers.
+      "offeredSiteForms",
       "pageBindingRun",
       "pageStyleTrace",
       "prepareDocumentAsDrawn",
@@ -644,12 +752,17 @@ describe("the root entry", () => {
       // so the editor judges conditions on the tree the renderer draws.
       "sanitizeDocument",
       "sharedStyleInputs",
+      // The mark a site-bound value carries, read by the routes.
+      "siteCopyOf",
       "styleTextForInjection",
       // The render's own discovery, asked from outside the render. Public so a
       // publish-time check reports the components a VISITOR will not see,
       // rather than walking stored documents for ids the resolver never
       // requests.
       "unsuppliedComponentIds",
+      // What a click on a picture does, by the Image's one reading, which the
+      // editor's panel shows.
+      "whenClickedOf",
       "withTypographyDefaults",
     ]);
   });
@@ -764,7 +877,18 @@ describe("the blocks entry", () => {
       "CORE_CATEGORIES",
       "CORE_PALETTE_ORDER",
       "FORM_FIELD_TYPES",
-      "FORM_METHODS",
+      // Added deliberately: what a file field says and the receiver answers
+      // a post to a form with one, worded once.
+      "FORM_FILE_NEEDS_SCRIPT",
+      // Added deliberately: the spam trap's name, which the page builder's
+      // receiver reads, so the form and its receiver name it once.
+      "FORM_HONEYPOT_FIELD",
+      // Added deliberately: the hidden fields a form posts beside its answers,
+      // which the receiver reads, named once.
+      "FORM_POST_FIELDS",
+      // Added deliberately: the message a sent form shows when its author
+      // wrote none, which the editor shows as the message field's hint.
+      "FORM_SENT_MESSAGE",
       "HEADING_LEVELS",
       "IMAGE_LOADING",
       "LIST_KINDS",
@@ -787,6 +911,12 @@ describe("the blocks entry", () => {
       // the entry's own blocks content.
       "entryContent",
       "form",
+      // Added deliberately: the form's fields as the one description its
+      // controls are drawn from and the receiver checks a post against.
+      "formFieldDrawings",
+      // Added deliberately: the form's fields with their defaults applied,
+      // which the receiver checks a post against as the form draws them.
+      "formFields",
       "gallery",
       "heading",
       "icon",
@@ -811,6 +941,9 @@ describe("the blocks entry", () => {
       "renderContainer",
       "richText",
       "section",
+      // Added deliberately: the name a field is sent under, made from its
+      // label, which the editor shows before the author writes one.
+      "sentNameOf",
       "spacer",
       "tableOfContents",
     ]);

@@ -165,6 +165,52 @@ describe("a column a schema hook contributed to a Single's table", () => {
     expect(payload).not.toHaveProperty("searchVector");
   });
 
+  it("leaves a contributed column out of what a write to every language is judged on", async () => {
+    const { service, adapter } = createService();
+    adapter.selectOne.mockResolvedValue({ id: "doc-1", siteName: "Old" });
+
+    const result = await service.update(
+      "site-settings",
+      { status: "published", searchVector: "a", _overwrite: true },
+      { overrideAccess: true, locale: "*" }
+    );
+
+    // Not refused as a write of field values: the contributed column is never stored, so the
+    // patch names the status alone, whatever the Single then answers about its lifecycle.
+    expect(JSON.stringify(result)).not.toMatch(
+      /accepts a 'status' patch alone/
+    );
+  });
+
+  it("still refuses a key that is no field beside a contributed one, writing nothing", async () => {
+    const { service, adapter } = createService();
+    adapter.selectOne.mockResolvedValue({ id: "doc-1", siteName: "Old" });
+
+    const refused = await service
+      .update(
+        "site-settings",
+        {
+          siteName: "New",
+          searchVector: "a",
+          notAField: "x",
+          _overwrite: true,
+        },
+        { overrideAccess: true }
+      )
+      .then(
+        result => JSON.stringify(result),
+        (error: unknown) =>
+          JSON.stringify(
+            (error as { publicData?: unknown }).publicData ?? String(error)
+          )
+      );
+
+    expect(refused).toMatch(/UNKNOWN_FIELD/);
+    expect(refused).toMatch(/notAField/);
+    expect(refused).not.toMatch(/searchVector/);
+    expect(adapter.update).not.toHaveBeenCalled();
+  });
+
   it("is not written when a stored pending change carries it", () => {
     // A pending change is promoted into the live row by a later publish, so
     // it is a write payload too, and one saved before this rule may hold it.

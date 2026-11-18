@@ -7,6 +7,7 @@
  */
 import {
   DEFAULT_LIMITS,
+  type AnyBlockDefinition,
   type DocumentLimits,
   type NamedQueryDefinition,
   type RemotePattern,
@@ -20,6 +21,7 @@ import { COMPONENTS_SLUG } from "../collections/components";
 import type { PagesCollectionOptions } from "../collections/pages";
 import { withRegisteredLooks } from "../core-looks";
 import { DEFAULT_COMPONENT_STORE, type ComponentStore } from "../library-route";
+import { MOST_PAGE_READS } from "../page-allowance";
 import { previewViewportsFromSiteStyle } from "../preview-viewports";
 import type { PublishReadinessSetup } from "../publish-readiness";
 import type { PageBuilderSiteCodeOptions } from "../site-code/route";
@@ -28,6 +30,7 @@ import type {
   resolveFontOptions,
 } from "../site-fonts/options";
 import { siteFontRoutes } from "../site-fonts/routes";
+import type { SiteHeaderFooter } from "../site-header-footer";
 import { resolveSiteStyle, type SiteStyleData } from "../site-style";
 import type { PageBuilderTemplateOptions } from "../templates/template-addresses";
 
@@ -226,6 +229,20 @@ export interface PageBuilderOptions {
    */
   limits?: DocumentLimits;
   /**
+   * The site's page data limit: how many reads (a list's entries, an image,
+   * a link to an entry, a related entry, the page's own data) one render of
+   * a page may make. Past it, the blocks that need more come up empty.
+   *
+   * A page route given no `maxQueries` of its own renders under this, and
+   * the editor's page data meter counts against it, so the two agree. A
+   * route that sets its own `maxQueries` is not reflected in the meter.
+   * A whole number from 0 to 100,000, or `Infinity` for no limit (the meter
+   * then never warns). Defaults to 500.
+   *
+   * @experimental Settles with the editor's page data meter.
+   */
+  maxQueries?: number;
+  /**
    * The site's named queries: a collection list's custom sources, made with
    * `defineNamedQuery` from `@nextlyhq/plugin-sdk/blocks`. Registered on each
    * boot beside the ones plugins declare, all or nothing.
@@ -400,6 +417,23 @@ export interface PageBuilderOptions {
   canvasPath?: string;
 
   /**
+   * Who draws the site's header and footer.
+   *
+   * - `"page-builder"` (the default): the header & footer sets authors build
+   *   in the page builder, drawn around each page by a page route given the
+   *   `layouts` option.
+   * - `"code"`: the site's own code, around its page route. Set this on a
+   *   site whose layout already draws its header and footer.
+   *
+   * It says who draws them; the page route decides what visitors get. A
+   * route draws a set only when given the `layouts` option, so a site whose
+   * code draws its own leaves that option off the route too.
+   *
+   * Read once at boot. Any other value is refused then, naming the option.
+   */
+  siteHeaderFooter?: SiteHeaderFooter;
+
+  /**
    * The viewport widths the pages preview offers.
    *
    * Defaults to **this site's own breakpoints**, read from the `site-style`
@@ -472,10 +506,11 @@ export interface PageBuilderOptions {
 export function refreshCodeTier(
   configStyle: SiteStyleData,
   configClassIds: Set<string>,
-  siteStyle: SiteStyleData | undefined
+  siteStyle: SiteStyleData | undefined,
+  registered: readonly AnyBlockDefinition[]
 ): void {
   configStyle.classes = resolveSiteStyle(
-    withRegisteredLooks(siteStyle)
+    withRegisteredLooks(siteStyle, registered)
   ).classes;
   configClassIds.clear();
   for (const entry of configStyle.classes ?? []) configClassIds.add(entry.id);
@@ -510,6 +545,7 @@ export function adminClientConfig(
     fontsOff: boolean;
   }
 ): { clientConfig?: Record<string, unknown> } {
+  const pageDataLimit = pageDataLimitOf(opts);
   const clientConfig: Record<string, unknown> = {
     // The Fonts tab offers no catalogue when the host turned it off, rather
     // than one whose routes do not exist.
@@ -526,6 +562,13 @@ export function adminClientConfig(
     // The canvas route's path, which the editor loads its frame from. A path,
     // never a secret: the route serves an empty page.
     ...(canvasPath === undefined ? {} : { canvasPath }),
+    // Who draws the site's header and footer, for the editor's notice when the
+    // canvas shows both the site's own and a set's. Written as the host
+    // stated it, after `pageBuilder` refused anything else; absent is the
+    // default.
+    ...(opts.siteHeaderFooter === undefined
+      ? {}
+      : { siteHeaderFooter: opts.siteHeaderFooter }),
     // The RESOLVED defaults tier rather than the raw option, so the canvas and
     // the validator read one answer. Plain data: tokens, fonts, classes and
     // breakpoints all serialize, and none of it is secret — a published page
@@ -544,6 +587,13 @@ export function adminClientConfig(
     ...(opts.limits === undefined
       ? {}
       : { limits: jsonSafeLimits(opts.limits) }),
+    // The page data limit the meter counts against, as the routes render
+    // under it. `null` is the wire spelling for no limit, as for `limits`.
+    ...(pageDataLimit === undefined
+      ? {}
+      : {
+          maxQueries: Number.isFinite(pageDataLimit) ? pageDataLimit : null,
+        }),
   };
   return Object.keys(clientConfig).length === 0 ? {} : { clientConfig };
 }
@@ -552,6 +602,30 @@ export function adminClientConfig(
  * The Page Builder plugin factory. Call it in a host app's
  * `defineConfig({ plugins: [pageBuilder()] })`.
  */
+/**
+ * The site's page data limit as the host set it, or `undefined` for the
+ * default. Refused when it is not a count, at boot rather than on the first
+ * page: a fractional or negative limit would have the meter and the page
+ * disagree about what it allows.
+ */
+export function pageDataLimitOf(opts: PageBuilderOptions): number | undefined {
+  const limit = opts.maxQueries;
+  if (limit === undefined) return undefined;
+  // At most what the editor's count may ask its routes to allow, so every
+  // limit a site sets can be counted.
+  if (
+    limit === Infinity ||
+    (Number.isInteger(limit) && limit >= 0 && limit <= MOST_PAGE_READS)
+  ) {
+    return limit;
+  }
+  throw new Error(
+    "[page-builder] `maxQueries` is how many reads a page may make: a whole " +
+      `number from 0 to ${MOST_PAGE_READS.toLocaleString("en-US")}, or ` +
+      `Infinity for no limit, not ${String(limit)}.`
+  );
+}
+
 /**
  * Document limits in a form that survives the client-config round trip.
  *

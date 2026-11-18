@@ -272,6 +272,11 @@ export interface SingleAdminOptions {
   /** Description text displayed below the Single title */
   description?: string;
   /**
+   * Where the admin opens this Single: `"form"`, or the path of a document
+   * view it has. Absent, the admin's one rule decides from its main field.
+   */
+  opensIn?: string;
+  /**
    * This Single's preview, as much of it as SURVIVES being stored.
    *
    * Derived from the core config type by NAMING the fields that survive, rather

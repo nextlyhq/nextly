@@ -20,7 +20,9 @@
  * @module component-variants-panel
  */
 import {
+  isRichTextValue,
   isUnsetOverride,
+  oneParagraphLines,
   variantOptions,
   type ComponentDocument,
   type ExposedProperty,
@@ -37,6 +39,7 @@ import {
   DialogHeader,
   DialogTitle,
   Input,
+  Textarea,
   Label,
   Select,
   SelectContent,
@@ -491,7 +494,15 @@ function VariantValueControl({
       return (
         <TextValue
           id={id}
-          value={typeof value === "string" ? value : ""}
+          // A Text's one paragraph, the component's own value, shows its
+          // words; a variant sets plain words in its place.
+          value={
+            typeof value === "string"
+              ? value
+              : isRichTextValue(value)
+                ? oneParagraphLines(value)
+                : ""
+          }
           onCommit={onCommit}
         />
       );
@@ -594,6 +605,18 @@ function TextValue({
   const send = () => {
     if (draft !== value) onCommit(draft);
   };
+  // Words holding lines (a Text's) are edited in a field that keeps them.
+  if (value.includes("\n")) {
+    return (
+      <Textarea
+        id={id}
+        rows={3}
+        value={draft}
+        onChange={event => setDraft(event.target.value)}
+        onBlur={send}
+      />
+    );
+  }
   return (
     <Input
       id={id}

@@ -75,7 +75,9 @@ export function nameRuleProblem(
     nested: place.nested,
     lifecycleEnabled: place.lifecycleEnabled,
   });
-  return problem ? { kind: problem.kind, message: described(name, problem) } : null;
+  return problem
+    ? { kind: problem.kind, message: described(name, problem) }
+    : null;
 }
 
 /**
@@ -105,7 +107,8 @@ export function builderNameProblem(
  */
 export function nameIsTakenAt(name: string, place: BuilderNamePlace): boolean {
   const problem = nameRuleProblem(name, place);
-  if (problem?.kind === "reserved" || problem?.kind === "lifecycle") return true;
+  if (problem?.kind === "reserved" || problem?.kind === "lifecycle")
+    return true;
   // A spelling or length problem says nothing of whether a sibling holds the name, so they are
   // asked whatever it is.
   return place.siblingNames.some(other => siblingNameClash(name, other));

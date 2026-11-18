@@ -3,7 +3,7 @@
  * beyond writing its migration: the commands that read the project find nothing left to do, a save
  * that cannot write its migration or its definition changes nothing, a save over a history the
  * commands would refuse is refused the same way, a save over a busy table changes nothing, and the
- * definition file holds what the registry holds. Two known gaps are skipped where they stand.
+ * definition file holds what the registry holds. Known gaps are skipped where they stand.
  *
  * Each case runs for a Single and a field group, through the services every Builder entry point
  * reaches, on every configured dialect.
@@ -30,6 +30,7 @@ import type { CommandContext } from "../../../../cli/program";
 import { createLogger } from "../../../../cli/utils/logger";
 import { defineConfig } from "../../../../config";
 import { createAdapter } from "../../../../database/factory";
+import { dispatchCollections } from "../../../../dispatcher/handlers/collection-dispatcher";
 import { dispatchComponents } from "../../../../dispatcher/handlers/component-dispatcher";
 import { dispatchSingles } from "../../../../dispatcher/handlers/single-dispatcher";
 import {
@@ -38,7 +39,9 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../../plugins/test-nextly";
+import type { ServiceContainer } from "../../../../services";
 import { _resetEnvCache } from "../../../../shared/lib/env";
+import { SingleRegistryService } from "../../../singles/services/single-registry-service";
 import { readTableDefinition } from "../../__tests__/helpers/table-definition";
 import { SchemaEventsRepository } from "../../events/schema-events-repository";
 import { setNonInteractive } from "../../migrate/can-prompt";
@@ -111,41 +114,51 @@ const renameResolutions = (
         ],
       };
 
+/** A Single, saved through its Schema Builder dialog. */
+const SINGLE: Kind = {
+  name: "a Single",
+  slug: "notice",
+  table: "single_notice",
+  listed: "singles",
+  create: fields =>
+    dispatchSingles(
+      "createSingle",
+      {},
+      { slug: "notice", label: "Notice", fields }
+    ),
+  change: async (t, fields, rename) =>
+    dispatchSingles(
+      "applySingleSchemaChanges",
+      { slug: "notice" },
+      {
+        fields,
+        confirmed: true,
+        // The version the Builder read, as its dialog sends it back.
+        schemaVersion: (
+          await t.getService("singleRegistryService").getSingle("notice")
+        ).schemaVersion,
+        ...renameResolutions("single_notice", rename),
+      }
+    ),
+  remove: () => dispatchSingles("deleteSingle", { slug: "notice" }, undefined),
+  row: t => t.getService("singleRegistryService").getSingleForWrite("notice"),
+  seed: async (t, value) => {
+    await t.nextly.updateSingle({
+      slug: "notice",
+      data: { heading: value, _overwrite: true },
+    } as never);
+  },
+};
+
 const KINDS: Kind[] = [
+  SINGLE,
   {
-    name: "a Single",
-    slug: "notice",
-    table: "single_notice",
-    listed: "singles",
-    create: fields =>
-      dispatchSingles(
-        "createSingle",
-        {},
-        { slug: "notice", label: "Notice", fields }
-      ),
-    change: async (t, fields, rename) =>
-      dispatchSingles(
-        "applySingleSchemaChanges",
-        { slug: "notice" },
-        {
-          fields,
-          confirmed: true,
-          // The version the Builder read, as its dialog sends it back.
-          schemaVersion: (
-            await t.getService("singleRegistryService").getSingle("notice")
-          ).schemaVersion,
-          ...renameResolutions("single_notice", rename),
-        }
-      ),
-    remove: () =>
-      dispatchSingles("deleteSingle", { slug: "notice" }, undefined),
-    row: t => t.getService("singleRegistryService").getSingleForWrite("notice"),
-    seed: async (t, value) => {
-      await t.nextly.updateSingle({
-        slug: "notice",
-        data: { heading: value, _overwrite: true },
-      } as never);
-    },
+    ...SINGLE,
+    // The same Single, its schema changed through the API's settings save, which detects a rename
+    // itself rather than being told of one.
+    name: "a Single's settings save",
+    change: (_t, fields) =>
+      dispatchSingles("updateSingleSchema", { slug: "notice" }, { fields }),
   },
   {
     name: "a field group",
@@ -309,7 +322,9 @@ describe.each(getConfiguredTestDialects())(
     /**
      * Everything a refused save must leave as it found it: every migration and snapshot with its
      * contents, the definition, every apply the ledger holds whatever its outcome, the table's
-     * columns, and the whole registry row.
+     * columns, and the whole registry row. An attempt that ended with nothing applied
+     * (`nothing_applied`) is left out: it records that the save changed nothing, as a busy table's
+     * stop records it on every road, and it resolves itself.
      */
     async function standing(t: TestNextly, kind: Kind) {
       return {
@@ -317,6 +332,7 @@ describe.each(getConfiguredTestDialects())(
         snapshots: contentsOf(join(migrationsDir(), "meta"), snapshotFiles()),
         definition: definitionText(),
         ledger: (await ledger(t).listFileApplies())
+          .filter(row => row.status !== "nothing_applied")
           .map(row => JSON.stringify(row))
           .sort(),
         columns: await columns(t, kind.table),
@@ -443,6 +459,35 @@ describe.each(getConfiguredTestDialects())(
       ).toEqual([]);
     }
 
+    describe("a Single's settings save whose registry row fails after its file applied", () => {
+      it("throws an internal error, keeps the file recorded applied, and the same save again writes the row", async () => {
+        const t = await boot();
+        const kind = KINDS[1];
+        await kind.create([text("heading")]);
+        const appliedBefore = await appliedFiles(t);
+        // The first registry write after the file is the settings save's own row.
+        const failOnce = vi
+          .spyOn(SingleRegistryService.prototype, "updateSingle")
+          .mockRejectedValueOnce(new Error("the row write was refused"));
+
+        await expect(
+          kind.change(t, [text("heading"), text("body")])
+        ).rejects.toMatchObject({ code: "INTERNAL_ERROR" });
+        failOnce.mockRestore();
+        // The file ran, and is recorded applied: the column is there, and the ledger counts it.
+        expect(await columns(t, kind.table)).toContain("body");
+        expect(await appliedFiles(t)).toHaveLength(appliedBefore.length + 1);
+
+        // The same save again: the row is written, and nothing is left for the migrate commands.
+        await kind.change(t, [text("heading"), text("body")]);
+        const fields = (await kind.row(t))?.fields as
+          | { name: string }[]
+          | undefined;
+        expect(fields?.map(field => field.name)).toEqual(["heading", "body"]);
+        await nothingLeftToDo(t);
+      }, 60_000);
+    });
+
     describe.each(KINDS)("$name", kind => {
       it("leaves nothing for migrate or migrate:check to do after its create, change and delete", async () => {
         const t = await boot();
@@ -534,6 +579,51 @@ describe.each(getConfiguredTestDialects())(
         );
         await nothingLeftToDo(t);
       }, 60_000);
+
+      // A Single's relationship to many entries keeps them in a junction table, which the save's
+      // file makes with its keys, as the file runs in place of the push.
+      it.runIf(kind.listed === "singles")(
+        "adds a relationship to many entries, its junction table made by the file",
+        async () => {
+          const t = await boot();
+          // Created as the Builder creates a collection.
+          await dispatchCollections(
+            {} as ServiceContainer,
+            "createCollection",
+            {},
+            { name: "authors", label: "Author", fields: [text("name")] }
+          );
+          await kind.create([text("heading")]);
+          const filesBefore = migrationFiles();
+
+          await kind.change(t, [
+            text("heading"),
+            {
+              name: "writers",
+              type: "relationship",
+              options: { relationType: "manyToMany", target: "authors" },
+            } as Field,
+          ]);
+
+          const up = migrationFiles()
+            .filter(f => !filesBefore.includes(f))
+            .map(
+              f =>
+                readFileSync(join(migrationsDir(), f), "utf-8").split(
+                  "-- DOWN"
+                )[0]!
+            )
+            .join("\n");
+          const junction =
+            /CREATE TABLE (?:IF NOT EXISTS )?["`]?(\w+)["`]?/i.exec(up)?.[1];
+          expect(junction, up).toBeDefined();
+          expect(await adapterOf(t).tableExists(junction!)).toBe(true);
+          // Every file recorded applied. The project-wide checks stay with the cases above: a
+          // collection created through the Builder fails `migrate:check` on its own settings.
+          expect(await appliedFiles(t)).toEqual(migrationFiles());
+        },
+        60_000
+      );
 
       it.skipIf(MODES_NOT_ENFORCED)(
         "refuses a change while the migrations folder cannot be written, and changes nothing",
@@ -698,36 +788,44 @@ describe.each(getConfiguredTestDialects())(
           await isHeld;
         }
 
-        // Known gap: on MySQL the refused save leaves its migration, snapshot and definition behind.
-        it.skipIf(dialect === "mysql")(
-          "stops with nothing changed",
-          async () => {
-            const t = await boot();
-            await kind.create([text("heading")]);
-            const before = await standing(t, kind);
-            await holdTheTable(t);
-
-            await expect(
-              kind.change(t, [text("heading"), text("body")])
-            ).rejects.toBeInstanceOf(Error);
-
-            free();
-            await holding.catch(() => {});
-            expect(await standing(t, kind)).toEqual(before);
-          },
-          30_000
-        );
-
-        // Known gap: Postgres ends as MIGRATION_APPLY_FAILED; SQLite as raw SQLITE_BUSY, no tries.
-        it.skip("waits in tries, then stops as table busy", async () => {
+        it("stops with nothing changed", async () => {
           const t = await boot();
           await kind.create([text("heading")]);
+          const before = await standing(t, kind);
           await holdTheTable(t);
 
           await expect(
             kind.change(t, [text("heading"), text("body")])
-          ).rejects.toMatchObject({ code: "NEXTLY_TABLE_BUSY" });
-        }, 30_000);
+          ).rejects.toBeInstanceOf(Error);
+
+          free();
+          await holding.catch(() => {});
+          expect(await standing(t, kind)).toEqual(before);
+
+          // What the stop recorded stands in no save's way: the same save, once the holder ends,
+          // goes through, and the commands find nothing left to do.
+          await kind.change(t, [text("heading"), text("body")]);
+          expect(await columns(t, kind.table)).toContain("body");
+          await nothingLeftToDo(t);
+        }, 60_000);
+
+        // Known gap: on SQLite the shared schema lock stops first, as a raw SQLITE_BUSY, no tries.
+        it.skipIf(dialect === "sqlite")(
+          "waits in tries, then stops as table busy",
+          async () => {
+            const t = await boot();
+            await kind.create([text("heading")]);
+            await holdTheTable(t);
+
+            await expect(
+              kind.change(t, [text("heading"), text("body")])
+            ).rejects.toMatchObject({
+              code: "NEXTLY_TABLE_BUSY",
+              statusCode: 409,
+            });
+          },
+          30_000
+        );
       });
     });
   }

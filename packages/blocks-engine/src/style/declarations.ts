@@ -161,7 +161,11 @@ const RESERVED_TOKEN_PREFIXES = ["--nx-", "--tw-"] as const;
  * own. A prefix that merely forgets the leading `--` is a quieter failure with
  * the same shape: every token reference it builds is nonsense the browser drops.
  */
-const TOKEN_PREFIX_RE = /^--[a-z0-9-]*$/;
+// At least one letter or digit after the leading dashes, and a closing dash:
+// a bare `--` writes names such as `--color-brand`, which are Tailwind's own
+// theme variables, and a prefix with no closing dash runs into every name
+// (`--brandcolor-brand`).
+const TOKEN_PREFIX_RE = /^--[a-z0-9][a-z0-9-]*-$/;
 
 /**
  * The longest custom-property prefix this engine will write.
@@ -199,6 +203,12 @@ export const MAX_TOKEN_NAME_SEGMENTS = 32;
 export function safeTokenPrefix(prefix: unknown): {
   prefix: string;
   warning?: string;
+  /**
+   * The reserved prefix a refused one starts with, so a reader that words the
+   * refusal for a person can tell which, without a second copy of the list.
+   * Absent for a prefix refused for its shape, and for one accepted.
+   */
+  reserved?: (typeof RESERVED_TOKEN_PREFIXES)[number];
 } {
   if (prefix === undefined) return { prefix: DEFAULT_TOKEN_PREFIX };
   // TYPE before length before pattern, and the parameter is `unknown` because
@@ -214,7 +224,7 @@ export function safeTokenPrefix(prefix: unknown): {
   ) {
     return {
       prefix: DEFAULT_TOKEN_PREFIX,
-      warning: `"${describeValue(prefix)}" is not a custom-property prefix, so design tokens were written under "${DEFAULT_TOKEN_PREFIX}" instead. A prefix starts with "--" and holds only lowercase letters, digits and dashes.`,
+      warning: `"${describeValue(prefix)}" is not a custom-property prefix, so design tokens were written under "${DEFAULT_TOKEN_PREFIX}" instead. A prefix starts with "--", holds only lowercase letters, digits and dashes, and ends with a dash.`,
     };
   }
   // Refused here rather than where the tokens are written, because a prefix
@@ -228,6 +238,7 @@ export function safeTokenPrefix(prefix: unknown): {
     return {
       prefix: DEFAULT_TOKEN_PREFIX,
       warning: `"${describeValue(prefix)}" starts with "${reserved}", which is reserved, so design tokens were written under "${DEFAULT_TOKEN_PREFIX}" instead. Tokens under that prefix would change the ${reserved === "--nx-" ? "admin interface" : "Tailwind internals"} as well as this site.`,
+      reserved,
     };
   }
   return { prefix };
@@ -501,7 +512,8 @@ function leafDeclarations(
 
 /**
  * A keyword no one property expresses also writes its fixed declarations,
- * each under its own descendant; a CSS-wide keyword names none of them.
+ * each under its own descendant or on the block itself; a CSS-wide keyword
+ * names none of them.
  */
 function expandedDeclarations(
   shape: KeywordLeaf,
@@ -519,7 +531,7 @@ function expandedDeclarations(
       path,
       property: each.property,
       value: each.value,
-      descendant: each.descendant,
+      ...(each.descendant === undefined ? {} : { descendant: each.descendant }),
     });
   }
 }

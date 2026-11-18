@@ -98,12 +98,12 @@ function open(section: string): void {
 }
 
 describe("an Accordion's Icon section", () => {
-  it("names its rows Icon and Position, as an author says them", () => {
+  it("names its rows Icon and Icon position, as an author says them", () => {
     mount();
     open("Icon");
     // Each control is named by its row's label.
     expect(screen.getByRole("radiogroup", { name: "Icon" })).toBeDefined();
-    expect(screen.getByRole("group", { name: "Position" })).toBeDefined();
+    expect(screen.getByRole("group", { name: "Icon position" })).toBeDefined();
   });
 
   it("offers each icon by name, and writes the one chosen", () => {
@@ -139,7 +139,7 @@ describe("an Accordion's icon position, offered where an icon is drawn", () => {
     for (const icon of ["browser", "none", "br\\6f wser"]) {
       mount({ base: { [BASE_BREAKPOINT]: { disclosureIcon: icon } } });
       open("Icon");
-      expect(screen.queryByRole("group", { name: "Position" })).toBeNull();
+      expect(screen.queryByRole("group", { name: "Icon position" })).toBeNull();
       cleanup();
       clearBlocks();
     }
@@ -148,6 +148,6 @@ describe("an Accordion's icon position, offered where an icon is drawn", () => {
   it("is offered while a chevron or a plus is drawn", () => {
     mount({ base: { [BASE_BREAKPOINT]: { disclosureIcon: "plus" } } });
     open("Icon");
-    expect(screen.getByRole("group", { name: "Position" })).toBeDefined();
+    expect(screen.getByRole("group", { name: "Icon position" })).toBeDefined();
   });
 });

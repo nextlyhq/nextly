@@ -1,13 +1,22 @@
 "use client";
 
 /**
- * The fixture's two components, drawn from nothing but the widget kit
+ * The fixture's components, drawn from nothing but the widget kit
  * `@nextlyhq/plugin-sdk/admin` exports and the props the declaration types.
+ *
+ * Registered here, by a side-effect import in the playground's admin route,
+ * rather than by the generated component map: the fixture runs only on the
+ * e2e suite's own server, and the committed map is written without it.
  */
-import { Widget } from "@nextlyhq/plugin-sdk/admin";
+import { registerComponents, Widget } from "@nextlyhq/plugin-sdk/admin";
 import type { WidgetProps } from "@nextlyhq/plugin-sdk/widgets";
 import type { JSX } from "react";
 
+import {
+  KIT_CARD_COMPONENT,
+  THROWING_CARD_COMPONENT,
+  UNLABELLED_CONTROL_COMPONENT,
+} from "./constants";
 import type * as fixture from "./plugin";
 
 /** A figure and a chart of groups, as a plugin author would compose them. */
@@ -45,4 +54,15 @@ export function UnlabelledControlCard({
       <input type="text" defaultValue={data.query} />
     </div>
   );
+}
+
+// Only with the switch on, as the plugin itself is registered, so a plain run
+// registers nothing of the fixture's. `next.config.ts` passes the switch to
+// the browser bundle.
+if (process.env.NEXTLY_E2E_STYLE_FIXTURE === "1") {
+  registerComponents({
+    [KIT_CARD_COMPONENT]: KitCard,
+    [THROWING_CARD_COMPONENT]: ThrowingCard,
+    [UNLABELLED_CONTROL_COMPONENT]: UnlabelledControlCard,
+  });
 }
