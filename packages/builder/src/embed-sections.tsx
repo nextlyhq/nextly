@@ -103,9 +103,21 @@ function EmbedSection({
       <p className="nx-inspector__note nx-embed-note" role="status">
         {linkNote(link) ?? ""}
       </p>
-      {context.rowsOf(rowsNamed(inspection, names))}
+      {context.rowsOf(
+        rowsNamed(inspection, names).map(row =>
+          // An Embed stored before Load existed loads with the page, so its
+          // unset Load reads as Right away, as the block draws it, rather
+          // than as a new Embed's When played.
+          row.name === "load" && stored.load === undefined
+            ? { ...row, defaultValue: "page" }
+            : row
+        )
+      )}
       {played && match.thumbnail !== undefined ? (
         <ThumbnailCopy
+          // One copy per block and link: a reply for another block or link
+          // is never stored here, and a new link starts with no copy pending.
+          key={`${inspection.nodeId}\n${link}`}
           link={link}
           copy={context.services?.copyEmbedThumbnail}
           disabled={!writable("poster")}
@@ -131,9 +143,19 @@ function ThumbnailCopy({
   const [state, setState] = React.useState<"idle" | "copying" | "failed">(
     "idle"
   );
-  // Only the press for the link still stored may store its answer.
-  const current = React.useRef(link);
-  current.current = link;
+  // The latest way to store the poster, read when the reply arrives: a
+  // callback from the press would write over edits made while it was
+  // pending. And whether this copy is still shown, since it is one per
+  // block and link.
+  const store = React.useRef(onCopied);
+  store.current = onCopied;
+  const shown = React.useRef(true);
+  React.useEffect(
+    () => () => {
+      shown.current = false;
+    },
+    []
+  );
   if (copy === undefined) return null;
   return (
     <div className="nx-inspector__field">
@@ -143,17 +165,15 @@ function ThumbnailCopy({
         variant="outline"
         disabled={disabled || state === "copying"}
         onClick={() => {
-          const asked = link;
           setState("copying");
-          copy(asked).then(
+          copy(link).then(
             media => {
-              if (current.current !== asked) return;
+              if (!shown.current) return;
               setState("idle");
-              onCopied(media.id);
+              store.current(media.id);
             },
             () => {
-              if (current.current !== asked) return;
-              setState("failed");
+              if (shown.current) setState("failed");
             }
           );
         }}

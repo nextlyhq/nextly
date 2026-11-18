@@ -36,6 +36,7 @@ import {
   blockIsReadOnly,
   builderContentSectionsOf,
   contentRowsOf,
+  designIsWritable,
   designReadOnlyReason,
   fieldLabel,
   lockViewOf,
@@ -147,7 +148,9 @@ export function commitProp(
   // provider's shape with it, in the same step, as a link pasted on the
   // canvas does.
   if (node.type === EMBED_BLOCK_TYPE && name === "src" && typeof value === "string") {
-    const linked = embedLinkOp(document, id, value);
+    const linked = embedLinkOp(document, id, value, {
+      shape: designIsWritable(document, id, lockViewOf(editor)),
+    });
     if (linked !== null) return editor.apply(linked);
   }
   return editor.apply({

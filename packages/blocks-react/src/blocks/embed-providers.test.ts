@@ -175,6 +175,18 @@ describe("detectEmbed: Google Maps", () => {
     );
   });
 
+  it("keeps a place's encoded name and id as the link writes them", () => {
+    const pb =
+      "!1m18!1m12!1m3!1d3022.2!2d-73.98!3d40.75!3m3!1m2!1s0x89c25855c6480299:0x55194ec5a1ae072e!2sTimes%20Square!5e0";
+    const match = matched(`https://www.google.com/maps/embed?pb=${pb}`);
+    expect(match.provider).toBe("google-maps");
+    expect(match.playerAddress(PLAIN)).toBe(
+      `https://www.google.com/maps/embed?pb=${pb}`
+    );
+    // A malformed escape is nobody's: it could not be written back as is.
+    expect(detectEmbed("https://www.google.com/maps/embed?pb=!2sBad%2")).toBeUndefined();
+  });
+
   it("does not take a link to a place, which Google does not let a site frame", () => {
     expect(detectEmbed("https://www.google.com/maps/place/Times+Square")).toBeUndefined();
     expect(detectEmbed("https://www.google.com/maps/embed")).toBeUndefined();

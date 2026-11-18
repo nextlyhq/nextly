@@ -52,6 +52,10 @@ const WATCH = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
 
 /** A page holding one Embed with `props`, and an editor recording its writes. */
 function mount(props: Record<string, unknown>, services?: ContentServices) {
+  return mountWith(props, services).editor;
+}
+
+function mountWith(props: Record<string, unknown>, services?: ContentServices) {
   if (!hasBlock(embed.name)) {
     registerBlocks([embed] as never, { source: "embed-sections-test" });
   }
@@ -75,13 +79,13 @@ function mount(props: Record<string, unknown>, services?: ContentServices) {
     lockRefusalFor: () => undefined,
     composed: () => undefined,
   } as unknown as EditorState & { apply: ReturnType<typeof vi.fn> };
-  render(
+  const view = render(
     <InspectorPanel
       editor={editor}
       {...(services === undefined ? {} : { contentServices: services })}
     />
   );
-  return editor;
+  return { editor, view };
 }
 
 /** The labels of the settings the section draws, in order. */
@@ -180,5 +184,48 @@ describe("Use the video's thumbnail", () => {
     cleanup();
     mount({ ...NEW_EMBED, src: WATCH });
     expect(screen.queryByRole("button", { name: "Use the video's thumbnail" })).toBeNull();
+  });
+});
+
+describe("an Embed stored before Load existed", () => {
+  it("reads as Right away, as the page draws it, with no Poster", () => {
+    mount({ title: "", allowFullscreen: true, src: WATCH });
+    expect(screen.getByText("Right away")).toBeTruthy();
+    expect(screen.queryByText("When played")).toBeNull();
+    expect(shownLabels()).not.toContain("Poster");
+  });
+});
+
+describe("a thumbnail copy pending when the link changes", () => {
+  it("leaves the new link's button ready, and stores nothing for the old one", async () => {
+    let finish: ((media: { id: string }) => void) | undefined;
+    const copyEmbedThumbnail = vi.fn(
+      () =>
+        new Promise<{ id: string }>(resolve => {
+          finish = resolve;
+        })
+    );
+    const services = { copyEmbedThumbnail } as unknown as ContentServices;
+    const { editor, view } = mountWith({ ...NEW_EMBED, src: WATCH }, services);
+    fireEvent.click(screen.getByRole("button", { name: "Use the video's thumbnail" }));
+    expect(screen.getByRole("button", { name: "Copying the thumbnail…" })).toBeTruthy();
+
+    // The author pastes another video while the copy is pending.
+    const other = { ...editor, document: {
+      ...editor.document,
+      nodes: [{ id: "e", type: "core/embed", version: 1, props: { ...NEW_EMBED, src: "https://youtu.be/aqz-KE-bpKQ" } }],
+    } } as unknown as EditorState;
+    view.rerender(<InspectorPanel editor={other} contentServices={services} />);
+    const ready = screen.getByRole("button", { name: "Use the video's thumbnail" });
+    expect((ready as HTMLButtonElement).disabled).toBe(false);
+
+    await act(async () => {
+      finish?.({ id: "old" });
+      await Promise.resolve();
+    });
+    const posters = editor.apply.mock.calls.filter(call =>
+      JSON.stringify(call[0]).includes("\"poster\":\"old\"")
+    );
+    expect(posters).toEqual([]);
   });
 });

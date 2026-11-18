@@ -222,39 +222,82 @@ async function earlierCopy(
   key: string
 ): Promise<EmbedThumbnailResult | undefined> {
   const name = copyName(key);
-  const { data } = await ctx.services.media.listMedia(
-    { search: name, type: "image", limit: 10 },
-    {}
-  );
   const extensions = new Set(Object.values(PICTURE_TYPES));
-  const found = data.find(file => {
-    const [base, extension, ...rest] = file.originalFilename.split(".");
+  const isCopy = (filename: string): boolean => {
+    const [base, extension, ...rest] = filename.split(".");
     return (
       rest.length === 0 &&
       base === name &&
       extension !== undefined &&
       extensions.has(extension)
     );
-  });
-  if (found === undefined) return undefined;
-  return {
-    id: found.id,
-    url: found.url,
-    filename: found.originalFilename,
-    reused: true,
   };
+  // Every page of the search, not its first: the search also matches other
+  // names, alt text and captions holding these words, newest first, so an
+  // older copy can sit behind newer files that only mention the name.
+  for (let page = 1; page <= MAX_SEARCH_PAGES; page += 1) {
+    const { data, pagination } = await ctx.services.media.listMedia(
+      { search: name, type: "image", limit: SEARCH_PAGE, page },
+      {}
+    );
+    const found = data.find(file => isCopy(file.originalFilename));
+    if (found !== undefined) {
+      return {
+        id: found.id,
+        url: found.url,
+        filename: found.originalFilename,
+        reused: true,
+      };
+    }
+    if (!pagination.hasMore) return undefined;
+  }
+  return undefined;
 }
+
+/** How many files one page of the copy's search reads. */
+const SEARCH_PAGE = 50;
+
+/** The most pages of the search read before copying anyway. */
+const MAX_SEARCH_PAGES = 20;
+
+/**
+ * The copies in progress in this server, by the video they are of: a second
+ * request for the same video while one is copying (a double press, a retry)
+ * waits for that copy and answers it, rather than making another. Copies in
+ * two servers at once can still both upload, since the library holds no
+ * unique name to refuse the second.
+ */
+export type CopiesInFlight = Map<string, Promise<EmbedThumbnailResult>>;
 
 /** Copy the link's video picture into the library, or answer the copy made. */
 export async function copyEmbedThumbnail(
   req: Request,
   ctx: EmbedThumbnailContext,
-  fetchFrom: ThumbnailFetch
+  fetchFrom: ThumbnailFetch,
+  inFlight: CopiesInFlight = new Map()
 ): Promise<EmbedThumbnailResult> {
   const { link } = await readBodyWith(req, COPY_BODY, "thumbnail copy");
   const source = detectEmbed(link)?.thumbnail;
   if (source === undefined) throw noThumbnail();
+  const pending = inFlight.get(source.key);
+  if (pending !== undefined) {
+    return { ...(await pending), reused: true };
+  }
+  const copying = copyOnce(ctx, fetchFrom, source);
+  inFlight.set(source.key, copying);
+  try {
+    return await copying;
+  } finally {
+    inFlight.delete(source.key);
+  }
+}
 
+/** The picture's earlier copy, or a new one fetched and uploaded. */
+async function copyOnce(
+  ctx: EmbedThumbnailContext,
+  fetchFrom: ThumbnailFetch,
+  source: ThumbnailSource
+): Promise<EmbedThumbnailResult> {
   const earlier = await earlierCopy(ctx, source.key);
   if (earlier !== undefined) return earlier;
 
@@ -294,12 +337,13 @@ export function embedThumbnailRoute(
 } {
   const fetchFrom: ThumbnailFetch =
     deps.fetch ?? ((address, init) => fetch(address, init));
+  const inFlight: CopiesInFlight = new Map();
   return {
     method: "POST",
     path: EMBED_THUMBNAIL_ROUTE_PATH,
     requiredPermission: "create-media",
     handler: async (req, ctx) => {
-      const item = await copyEmbedThumbnail(req, ctx, fetchFrom);
+      const item = await copyEmbedThumbnail(req, ctx, fetchFrom, inFlight);
       return Response.json({
         message: item.reused
           ? "The video's thumbnail is already in the media library."

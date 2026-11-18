@@ -25,13 +25,25 @@ interface Stored {
 function library(files: Stored[] = []) {
   const uploads: { input: Record<string, unknown>; opts: unknown }[] = [];
   const media = {
-    listMedia: vi.fn((options: { search?: string }) =>
-      Promise.resolve({
-        data: files.filter(file =>
-          file.originalFilename.includes(options.search ?? "")
-        ),
-        pagination: { total: 0, limit: 10, offset: 0, hasMore: false },
-      })
+    // Newest first, a page at a time, as the library answers a search.
+    listMedia: vi.fn(
+      (options: { search?: string; limit?: number; page?: number }) => {
+        const matching = [...files]
+          .reverse()
+          .filter(file => file.originalFilename.includes(options.search ?? ""));
+        const limit = options.limit ?? 24;
+        const offset = ((options.page ?? 1) - 1) * limit;
+        const data = matching.slice(offset, offset + limit);
+        return Promise.resolve({
+          data,
+          pagination: {
+            total: matching.length,
+            limit,
+            offset,
+            hasMore: offset + data.length < matching.length,
+          },
+        });
+      }
     ),
     upload: vi.fn((input: Record<string, unknown>, opts: unknown) => {
       uploads.push({ input, opts });
@@ -122,6 +134,45 @@ describe("copyEmbedThumbnail", () => {
     expect(asked).toEqual([]);
     expect(uploads).toEqual([]);
     expect(result).toMatchObject({ id: "m7", reused: true });
+  });
+
+  it("finds the earlier copy behind newer files that only mention its name", async () => {
+    const files: Stored[] = [
+      { id: "m1", originalFilename: "youtube-dQw4w9WgXcQ-thumbnail.jpg", url: "/media/m1" },
+      ...Array.from({ length: 60 }, (_, at) => ({
+        id: `n${String(at)}`,
+        originalFilename: `notes on youtube-dQw4w9WgXcQ-thumbnail ${String(at)}.jpg`,
+        url: `/media/n${String(at)}`,
+      })),
+    ];
+    const { ctx, uploads } = library(files);
+    const { fetchFrom, asked } = provider({});
+    const result = await copyEmbedThumbnail(request({ link: WATCH }), ctx, fetchFrom);
+    expect(result).toMatchObject({ id: "m1", reused: true });
+    expect(asked).toEqual([]);
+    expect(uploads).toEqual([]);
+  });
+
+  it("makes one copy for two requests for the same video at once", async () => {
+    const { ctx, uploads } = library();
+    let answer: (() => void) | undefined;
+    const held = new Promise<void>(resolve => {
+      answer = resolve;
+    });
+    const fetchFrom: ThumbnailFetch = async () => {
+      await held;
+      return jpeg();
+    };
+    const inFlight = new Map();
+    const first = copyEmbedThumbnail(request({ link: WATCH }), ctx, fetchFrom, inFlight);
+    const second = copyEmbedThumbnail(request({ link: "https://youtu.be/dQw4w9WgXcQ" }), ctx, fetchFrom, inFlight);
+    answer?.();
+    const [one, two] = await Promise.all([first, second]);
+    expect(uploads).toHaveLength(1);
+    expect(two.id).toBe(one.id);
+    expect(two.reused).toBe(true);
+    // Once settled, a later request is judged afresh.
+    expect(inFlight.size).toBe(0);
   });
 
   it("is not fooled by a file whose name only contains the copy's", async () => {

@@ -89,6 +89,21 @@ describe("embedLinkOp", () => {
     expect(hasStyles).toBe(false);
   });
 
+  it("writes only the link where the block's design is locked", () => {
+    const { props, hasStyles } = (() => {
+      const op = embedLinkOp(
+        page(embedNode()),
+        "e1",
+        "https://www.youtube.com/shorts/aqz-KE-bpKQ",
+        { shape: false }
+      );
+      if (op === null || op.kind !== "update") throw new Error("no write");
+      return { props: op.patch.props, hasStyles: op.patch.styles !== undefined };
+    })();
+    expect(props).toEqual({ src: "https://www.youtube.com/shorts/aqz-KE-bpKQ" });
+    expect(hasStyles).toBe(false);
+  });
+
   it("writes nothing for no link, the same link, or no Embed", () => {
     const document = page(embedNode({ src: "https://youtu.be/dQw4w9WgXcQ" }));
     expect(embedLinkOp(document, "e1", "  ")).toBeNull();

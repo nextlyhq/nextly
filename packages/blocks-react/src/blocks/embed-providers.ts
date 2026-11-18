@@ -340,12 +340,19 @@ function googleMaps(parsed: URL): EmbedMatch | undefined {
   const segments = segmentsOf(parsed);
   if (segments[0] !== "maps" || segments[1] !== "embed") return undefined;
   if (segments.length !== 2) return undefined;
-  const pb = parsed.searchParams.get("pb");
-  // The map's description, in Maps' own encoding: `!`-separated fields of
-  // letters, digits and percent-escapes. Only those characters are taken, so
-  // it goes back into the address as Maps wrote it, and nothing in it can
-  // end the address or the attribute it is written into.
-  if (pb === null || !/^[A-Za-z0-9!._~%*-]+$/.test(pb)) return undefined;
+  // The map's description as the link writes it, percent-escapes kept:
+  // `!`-separated fields whose place names and ids carry escaped spaces,
+  // colons and any script. Read from the raw query, because the decoded
+  // value is not the one Maps' player takes back. Only these characters,
+  // with well-formed escapes, so nothing in it can end the address or the
+  // attribute it is written into.
+  const pb = rawQueryValue(parsed.search, "pb");
+  if (
+    pb === undefined ||
+    !/^(?:[A-Za-z0-9!._~*:,+-]|%[0-9A-Fa-f]{2})+$/.test(pb)
+  ) {
+    return undefined;
+  }
   return {
     provider: "google-maps",
     name: "Google Maps",
@@ -354,6 +361,15 @@ function googleMaps(parsed: URL): EmbedMatch | undefined {
     privacyMode: false,
     playerAddress: () => `https://www.google.com/maps/embed?pb=${pb}`,
   };
+}
+
+/** A query parameter's value exactly as the address writes it, undecoded. */
+function rawQueryValue(search: string, name: string): string | undefined {
+  for (const part of search.replace(/^\?/, "").split("&")) {
+    const at = part.indexOf("=");
+    if (at > 0 && part.slice(0, at) === name) return part.slice(at + 1);
+  }
+  return undefined;
 }
 
 /** An address with these query parameters, encoded. */

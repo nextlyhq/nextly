@@ -151,7 +151,13 @@ function shapedStyles(
 export function embedLinkOp(
   document: BlockDocument,
   nodeId: string,
-  link: string
+  link: string,
+  /**
+   * Whether the block's design may change here. Where a lock holds it (a
+   * content-only area), only the link is written, so a link edit the lock
+   * allows is not refused for the size that would come with it.
+   */
+  options: { readonly shape: boolean } = { shape: true }
 ): BuilderOp | null {
   const node = embedNodeOf(document, nodeId);
   if (node === undefined) return null;
@@ -163,7 +169,7 @@ export function embedLinkOp(
     id: nodeId,
     patch: {
       props: { ...node.props, src: typed },
-      ...(match === undefined
+      ...(match === undefined || !options.shape
         ? {}
         : { styles: shapedStyles(node.styles, match.shape) }),
     },

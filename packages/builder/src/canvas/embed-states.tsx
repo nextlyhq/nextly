@@ -38,7 +38,7 @@ import * as React from "react";
 import { isElement } from "../dom-kind";
 import type { EditorState } from "../editor-state";
 import type { Rect } from "../geometry";
-import { lockViewOf, propIsWritable } from "../inspector";
+import { designIsWritable, lockViewOf, propIsWritable } from "../inspector";
 import { selectionModeFor, type SelectionMode } from "../selection";
 import { CANVAS_ROOT_CLASS } from "../shell-state";
 
@@ -140,7 +140,11 @@ export function EmbedStates({
     if (!propIsWritable(now.document, nodeId, "src", lockViewOf(now))) {
       return false;
     }
-    const op = embedLinkOp(now.document, nodeId, link);
+    // The provider's size only where the block's design may change: a
+    // content-only area takes the link alone.
+    const op = embedLinkOp(now.document, nodeId, link, {
+      shape: designIsWritable(now.document, nodeId, lockViewOf(now)),
+    });
     if (op === null) return false;
     select(nodeId);
     return now.apply(op) !== null;
