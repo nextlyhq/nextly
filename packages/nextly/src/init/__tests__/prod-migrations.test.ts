@@ -332,6 +332,56 @@ describe("runProdMigrationsIfEnabled", () => {
     await expect(runProdMigrationsIfEnabled(a as never)).resolves.toBe(false);
   });
 
+  it.each(["data-loss-needs-consent", "data-loss-not-covered"])(
+    "still starts when the consent refuses a migration (%s), handing the start the refusal",
+    async reason => {
+      const refused: unknown[] = [];
+      const a = args({
+        migrateCore: vi.fn(async () => {
+          throw NextlyError.invalidInput({
+            message:
+              "This would delete:\n  plugin:seo/002_drop_summary:\n    - column seo_pages.summary\nNothing was changed. To consent: --accept-data-loss=seo_pages.summary (or NEXTLY_ACCEPT_DATA_LOSS=seo_pages.summary).",
+            logContext: { files: ["plugin:seo/002_drop_summary"], reason },
+          });
+        }),
+        onDataLossRefusal: (refusal: unknown) => {
+          refused.push(refusal);
+        },
+      });
+
+      await expect(runProdMigrationsIfEnabled(a as never)).resolves.toBe(false);
+      // In a start's words: the variable a start reads, then the command's flag.
+      expect(refused).toEqual([
+        {
+          message:
+            'This would delete:\n  plugin:seo/002_drop_summary:\n    - column seo_pages.summary\nNothing was changed. To consent: start with NEXTLY_ACCEPT_DATA_LOSS=seo_pages.summary, or run "nextly migrate --accept-data-loss=seo_pages.summary".',
+        },
+      ]);
+    }
+  );
+
+  it("hands the start no consent refusal for a migration that failed any other way", async () => {
+    const onDataLossRefusal = vi.fn();
+    const failures = [
+      new Error("connection reset"),
+      NextlyError.invalidInput({
+        message: "Not a consent refusal.",
+        logContext: { reason: "something-else" },
+      }),
+    ];
+    for (const failure of failures) {
+      _resetBootMigrationsGateForTest();
+      const a = args({
+        migrateCore: vi.fn(async () => {
+          throw failure;
+        }),
+        onDataLossRefusal,
+      });
+      await expect(runProdMigrationsIfEnabled(a as never)).resolves.toBe(false);
+    }
+    expect(onDataLossRefusal).not.toHaveBeenCalled();
+  });
+
   it("still starts when an applied file was edited, logging the refusal", async () => {
     // The refusal `nextly migrate` exits 2 on: at boot it stops the
     // migrations, not the site, as any failed migration does.

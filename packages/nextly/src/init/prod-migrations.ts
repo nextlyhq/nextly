@@ -26,6 +26,7 @@ import {
   type PluginMigrationSet,
 } from "../domains/schema/migrate/plugin/run-plugin-migrations";
 import { resolveDeclaredSchema } from "../domains/schema/migrate/resolved-schema";
+import type { ConsentRefusal } from "../domains/schema/ownership/schema-version-check";
 import { NextlyError } from "../errors";
 import { describeError } from "../errors/describe-error";
 import type { PluginDefinition } from "../plugins/plugin-context";
@@ -147,6 +148,13 @@ export interface RunProdMigrationsArgs {
   lockWaitMs?: number;
   adapter: AdapterLike;
   logger: LoggerLike;
+  /**
+   * Told when the data-loss consent refused the run: a failure the app
+   * serves through, as any failed migration, and the reason a plugin with a
+   * pending module is then behind. The start hands it to the check that
+   * refuses such a plugin, so that refusal can name the consent to give.
+   */
+  onDataLossRefusal?: (refusal: ConsentRefusal) => void;
   /** Injected for tests; defaults to the real migrateCore + ledger bootstrap. */
   migrateCore?: MigrateCoreLike;
   /**
@@ -558,14 +566,34 @@ function isOlderBuildStop(err: unknown): err is NextlyError {
 }
 
 /**
+ * The data-loss consent's refusal of the run, when `err` is one
+ * (`judgeRunDeletions`, whose reasons all begin `data-loss-`), in a start's
+ * words: the consent as a start is given it.
+ */
+async function dataLossRefusalOf(
+  err: unknown
+): Promise<ConsentRefusal | undefined> {
+  if (!NextlyError.isCode(err, "INVALID_INPUT")) return undefined;
+  const reason = (err.logContext as { reason?: unknown } | undefined)?.reason;
+  if (typeof reason !== "string" || !reason.startsWith("data-loss-")) {
+    return undefined;
+  }
+  // Loaded only here: a start that refuses nothing reads none of the consent.
+  const { refusalForStart } = await import(
+    "../domains/schema/migrate/data-loss-consent"
+  );
+  return { message: refusalForStart(err.publicMessage) };
+}
+
+/**
  * Settle the gate after a failed run: refuse for a fatal failure, otherwise
  * log it and allow serving. Nothing of the registry is reloaded: the start
  * reads it after this step.
  */
-function settleFailedBootMigrations(
+async function settleFailedBootMigrations(
   err: unknown,
   args: RunProdMigrationsArgs
-): void {
+): Promise<void> {
   const { logger } = args;
   if (isOlderBuildStop(err)) {
     // Its message names each migration the build lacks.
@@ -590,6 +618,12 @@ function settleFailedBootMigrations(
     refuseBootMigrations(fatal);
     logger.error(`[Nextly] ${fatal.publicMessage}`);
     throw fatal;
+  }
+  // A refusal by the data-loss consent is served through as well, and told to
+  // the start: a plugin left behind by it is refused later, naming the consent.
+  const refusedForConsent = await dataLossRefusalOf(err);
+  if (refusedForConsent !== undefined) {
+    args.onDataLossRefusal?.(refusedForConsent);
   }
   // The operator's rendering, with the code and the context that say why: a
   // refusal's reasons travel in its context, as the command prints them.
@@ -655,7 +689,7 @@ export async function runProdMigrationsIfEnabled(
     await applyBootMigrations(args, run);
     return true;
   } catch (err) {
-    settleFailedBootMigrations(err, args);
+    await settleFailedBootMigrations(err, args);
     return false;
   }
 }

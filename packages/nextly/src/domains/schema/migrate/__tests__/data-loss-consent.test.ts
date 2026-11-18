@@ -7,6 +7,7 @@ import {
   describeDeletion,
   judgeDataLoss,
   NO_CONSENT,
+  refusalForStart,
   resolveDataLossConsent,
   type DataLossConsent,
   type Deletion,
@@ -499,5 +500,80 @@ describe("counting deletions", () => {
       "sqlite"
     );
     expect(counted).toEqual([table("posts"), column("posts", "x"), unnamed]);
+  });
+});
+
+describe("a refusal, for a production start that ran the migrations itself", () => {
+  /** The refusal of `deletions` under `consent`, with nobody to ask. */
+  async function refused(
+    deletions: Parameters<typeof judgeDataLoss>[0]["deletions"],
+    consent: DataLossConsent = NO_CONSENT,
+    flag?: boolean
+  ): Promise<string> {
+    const verdict = await judgeDataLoss({
+      deletions,
+      consent,
+      interactive: false,
+      ask: async () => false,
+      print: () => {},
+      ...(flag === undefined ? {} : { flag }),
+    });
+    if (verdict.kind !== "refused") throw new Error("expected a refusal");
+    return verdict.message;
+  }
+
+  it("names the variable a start reads, then the command's flag, keeping the listing", async () => {
+    const message = await refused([
+      { kind: "column", table: "posts", column: "summary" },
+      { kind: "table", table: "drafts" },
+    ]);
+
+    expect(refusalForStart(message)).toBe(
+      message.replace(
+        "To consent: --accept-data-loss=drafts,posts.summary (or NEXTLY_ACCEPT_DATA_LOSS=drafts,posts.summary).",
+        'To consent: start with NEXTLY_ACCEPT_DATA_LOSS=drafts,posts.summary, or run "nextly migrate --accept-data-loss=drafts,posts.summary".'
+      )
+    );
+    expect(refusalForStart(message)).not.toBe(message);
+  });
+
+  it("does so for the consent without targets", async () => {
+    const message = await refused([
+      { kind: "unnamed", description: "rows a statement removes" },
+    ]);
+
+    expect(refusalForStart(message)).toContain(
+      'To consent: start with NEXTLY_ACCEPT_DATA_LOSS=1, or run "nextly migrate --accept-data-loss".'
+    );
+  });
+
+  it("does so for a consent that leaves a deletion out", async () => {
+    const message = await refused(
+      [{ kind: "column", table: "posts", column: "summary" }],
+      {
+        ...NO_CONSENT,
+        given: {
+          from: "env",
+          targets: { tables: new Set(["drafts"]), columns: new Set() },
+        },
+      }
+    );
+
+    expect(refusalForStart(message)).toContain(
+      'To delete this too: start with NEXTLY_ACCEPT_DATA_LOSS=drafts,posts.summary, or run "nextly migrate --accept-data-loss=drafts,posts.summary".'
+    );
+  });
+
+  it("keeps a message that names the variable alone, or no consent, as it is", async () => {
+    const variableOnly = await refused(
+      [{ kind: "table", table: "drafts" }],
+      NO_CONSENT,
+      false
+    );
+
+    expect(refusalForStart(variableOnly)).toBe(variableOnly);
+    expect(refusalForStart("Refused, in other words.")).toBe(
+      "Refused, in other words."
+    );
   });
 });

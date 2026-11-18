@@ -362,6 +362,31 @@ function describeWhat(deletion: Deletion): string {
   }
 }
 
+/** The consent in both spellings, as a command's refusal ends on it. */
+const commandForms = (cli: string, env: string): string => `${cli} (or ${env})`;
+
+/** {@link commandForms} as it stands in a refusal's message, each spelling captured. */
+const COMMAND_FORMS = new RegExp(
+  commandForms(
+    `(${ACCEPT_DATA_LOSS_FLAG}(?:=[^\\s)]+)?)`,
+    `(${ACCEPT_DATA_LOSS_ENV}=[^\\s)]+)`
+  ).replace(/ \(or (.*)\)$/, " \\(or $1\\)")
+);
+
+/**
+ * A refusal's message (`judgeDataLoss`) for a production start that ran the
+ * migrations itself. A start takes no flag, so the consent the message ends
+ * on reads as a start is given it, the variable, then as `nextly migrate`
+ * takes it. A message naming no such consent is returned as it is.
+ */
+export function refusalForStart(message: string): string {
+  return message.replace(
+    COMMAND_FORMS,
+    (_forms, cli: string, env: string) =>
+      `start with ${env}, or run "nextly migrate ${cli}"`
+  );
+}
+
 /**
  * The consent that covers `deletions` as well as what the given consent
  * already named: a list when every deletion is named, the form without
@@ -384,7 +409,7 @@ function consentHint(
       value === null
         ? ACCEPT_DATA_LOSS_FLAG
         : `${ACCEPT_DATA_LOSS_FLAG}=${value}`;
-    return `${cli} (or ${env})`;
+    return commandForms(cli, env);
   };
   if (blanket) return forms(null);
   const named = consent.given?.targets;

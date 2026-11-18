@@ -105,10 +105,19 @@ function tableBusyParts(error: NextlyError): CliErrorParts {
 export function dataLossParts(message: string): CliErrorParts {
   const lines = message.split("\n");
   const header = lines[0] ?? message;
-  const last = lines.length > 1 ? lines[lines.length - 1] : "";
+  const CONSENT = /\s(To consent|To delete this too): /;
+  // The line the consent is on: the message's last, or the one before what a run says after it
+  // of the database's event triggers.
+  const consentAt = lines.findLastIndex(
+    (line, at) => at > 0 && CONSENT.test(line)
+  );
+  const lastAt = consentAt === -1 ? lines.length - 1 : consentAt;
+  const last = lines.length > 1 ? lines[lastAt] : "";
   // The deletions, one per line; their indent is the message's, and the Why line has its own.
-  const list = lines.slice(1, -1).map(line => line.trimStart());
-  const marker = /\s(To consent|To delete this too): /.exec(last);
+  const list = lines.slice(1, lastAt).map(line => line.trimStart());
+  // What the message says after its consent, which is part of why.
+  const after = lines.slice(lastAt + 1);
+  const marker = CONSENT.exec(last);
   const headerEnd = header.indexOf(". ");
   const what =
     headerEnd === -1
@@ -124,7 +133,7 @@ export function dataLossParts(message: string): CliErrorParts {
   }
   return {
     what,
-    why: [...rest, ...list, last.slice(0, marker.index)].join("\n"),
+    why: [...rest, ...list, last.slice(0, marker.index), ...after].join("\n"),
     next: last.slice(marker.index + 1),
   };
 }
