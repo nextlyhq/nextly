@@ -67,6 +67,12 @@ export interface FontFamilyFieldProps {
   fromCode: readonly FontFaceDef[];
   /** Store a choice, or `null` to clear the property. */
   onCommit: (value: StyleValue | null) => void;
+  /**
+   * Draws the family the keyboard or the pointer is on in the open list,
+   * before anything is stored; `null` once the list closes, said before a
+   * pick's commit. Absent, nothing is drawn until a family is picked.
+   */
+  onPreview?: (value: StyleValue | null) => void;
   /** Open Design's fonts, where fonts are added. Absent, no link shows. */
   onManageFonts?: () => void;
 }
@@ -262,6 +268,7 @@ export function FontFamilyField({
   faces,
   fromCode,
   onCommit,
+  onPreview,
   onManageFonts,
 }: FontFamilyFieldProps): React.JSX.Element {
   const choices = React.useMemo(
@@ -270,14 +277,15 @@ export function FontFamilyField({
   );
   const current = currentChoice(stored, choices);
   const unknown = stored !== undefined && current === undefined;
-  const [open, setOpen] = React.useState(false);
+  const { open, setOpen, close, activeProps, manage } = useFontList(
+    onPreview,
+    onManageFonts
+  );
   // The trigger, which stays when Unlink makes the family plain: focus
   // returns to it from the Unlink that goes.
   const triggerRef = React.useRef<HTMLButtonElement>(null);
   const inheritedFamily = useInheritedFamily(choices);
-  const shownValue = unknown
-    ? `${storedText(stored)} · not on this site`
-    : (current?.label ?? inheritedFamily ?? "Default");
+  const shownValue = shownFamily(unknown, stored, current, inheritedFamily);
   const held = useHeldFont(stored, tokens);
 
   return (
@@ -319,17 +327,11 @@ export function FontFamilyField({
             choices={choices}
             current={current}
             onPick={choice => {
-              setOpen(false);
+              close();
               onCommit(choice.value);
             }}
-            onManageFonts={
-              onManageFonts === undefined
-                ? undefined
-                : () => {
-                    setOpen(false);
-                    onManageFonts();
-                  }
-            }
+            {...activeProps}
+            onManageFonts={manage}
           />
         </PopoverContent>
       </Popover>
@@ -346,6 +348,63 @@ export function FontFamilyField({
       )}
     </div>
   );
+}
+
+/**
+ * Whether the list is open, and the preview of what it is on: the family the
+ * author moves to is drawn, and the list closing, by a pick or not, ends the
+ * drawing, before a pick's commit.
+ */
+function useFontList(
+  onPreview: ((value: StyleValue | null) => void) | undefined,
+  onManageFonts: (() => void) | undefined
+): {
+  open: boolean;
+  setOpen: (open: boolean) => void;
+  close: () => void;
+  activeProps: { onActive?: (choice: FontChoice) => void };
+  /** "Manage fonts…", which closes the list first; absent without a way. */
+  manage: (() => void) | undefined;
+} {
+  const [open, show] = React.useState(false);
+  const setOpen = (next: boolean): void => {
+    show(next);
+    // Closed without a pick: what is stored is drawn again.
+    if (!next) onPreview?.(null);
+  };
+  const close = (): void => setOpen(false);
+  return {
+    open,
+    setOpen,
+    close,
+    activeProps:
+      onPreview === undefined
+        ? {}
+        : { onActive: choice => onPreview(choice.value) },
+    manage:
+      onManageFonts === undefined
+        ? undefined
+        : () => {
+            close();
+            onManageFonts();
+          },
+  };
+}
+
+/**
+ * What the trigger says: the choice in force, a stored value the list does
+ * not hold as it is, or the family reaching the field from elsewhere.
+ */
+function shownFamily(
+  unknown: boolean,
+  stored: StyleValue | undefined,
+  current: FontChoice | undefined,
+  inheritedFamily: string | undefined
+): string {
+  if (unknown && stored !== undefined) {
+    return `${storedText(stored)} · not on this site`;
+  }
+  return current?.label ?? inheritedFamily ?? "Default";
 }
 
 /** Ids that describe an element, joined, or `undefined` for none. */
@@ -423,11 +482,14 @@ function FontList({
   choices,
   current,
   onPick,
+  onActive,
   onManageFonts,
 }: {
   choices: readonly FontChoice[];
   current: FontChoice | undefined;
   onPick: (choice: FontChoice) => void;
+  /** The author moved onto `choice`, by key or pointer. */
+  onActive?: (choice: FontChoice) => void;
   onManageFonts: (() => void) | undefined;
 }): React.JSX.Element {
   return (
@@ -436,6 +498,7 @@ function FontList({
         choices={choices}
         currentKey={current?.key}
         onPick={onPick}
+        {...(onActive === undefined ? {} : { onActive })}
         label="Fonts"
         searchLabel="Search fonts"
         noMatch="No fonts match this search."
