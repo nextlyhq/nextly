@@ -150,6 +150,82 @@ describe("BuilderSchemaChangeDialogs", () => {
     expect(screen.getByText(/rename to/i)).toBeInTheDocument();
   });
 
+  // The first save of a table an earlier Nextly version made also converts it, which the save
+  // writes only once confirmed, so the short confirmation's "does not affect existing data" is not
+  // the whole story: the full dialog says what it brings up to date, in the server's own words.
+  it("shows the full dialog, saying what it brings up to date, for a safe change with conversions", async () => {
+    const user = userEvent.setup();
+    const { onConfirm } = renderDialogs(
+      preview({
+        conversions: [
+          {
+            table: "dc_posts",
+            column: "dc_posts",
+            from: "as an earlier version made it",
+            to: "as Nextly declares it (add index)",
+            change: "adds an index on created_at",
+            deletesValues: false,
+          },
+          {
+            table: "dc_posts",
+            column: "body",
+            from: "text",
+            to: "varchar(255)",
+            change: "changes body from text to varchar(255)",
+            deletesValues: false,
+          },
+        ],
+      })
+    );
+
+    expect(screen.queryByText(/safe change/i)).not.toBeInTheDocument();
+    const section = screen.getByRole("region", { name: "Brought up to date" });
+    expect(
+      within(section).getByText(
+        "dc_posts was made by an earlier Nextly version. Saving brings it up to date: adds an index on created_at; changes body from text to varchar(255)."
+      )
+    ).toBeInTheDocument();
+    // Nothing to tick: Save confirms every conversion listed.
+    expect(within(section).queryByRole("checkbox")).not.toBeInTheDocument();
+    // A long list scrolls inside the dialog, from the keyboard too, so Save stays in reach.
+    expect(section).toHaveClass("max-h-48", "overflow-y-auto");
+    expect(section).toHaveAttribute("tabindex", "0");
+    // Nothing it brings up to date deletes a value: no data-loss alert, and the plain Save.
+    expect(screen.queryByText("Data loss warning")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+  });
+
+  // An older table can hold a column its fields no longer declare, which bringing it up to date
+  // removes with every value in it: shown as the data loss it is, with the destructive Apply.
+  it("shows a conversion that removes a column as data loss, with the destructive Apply", async () => {
+    const user = userEvent.setup();
+    const { onConfirm } = renderDialogs(
+      preview({
+        conversions: [
+          {
+            table: "dc_posts",
+            column: "legacy_notes",
+            from: "as an earlier version made it",
+            to: "as Nextly declares it (drop column)",
+            change: "removes the column legacy_notes",
+            deletesValues: true,
+          },
+        ],
+      })
+    );
+
+    const alert = screen.getByText("Data loss warning").closest("[role=alert]");
+    expect(alert).toHaveTextContent(
+      "Bringing dc_posts up to date removes the column legacy_notes and the values stored in it."
+    );
+    expect(
+      screen.queryByRole("button", { name: /save changes/i })
+    ).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /apply changes/i }));
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+  });
+
   // A field leaving translation moves its other languages to the archive, so the
   // short confirmation's "does not affect existing data" would be untrue.
   it("shows the full dialog, saying what moves to the archive, for a field leaving translation", () => {
@@ -880,5 +956,192 @@ describe("BuilderSchemaChangeDialogs: an unsaved entity's settings", () => {
         .getAllByRole("listitem")
         .map(item => item.textContent)
     ).toEqual(["Description: none → Long reads"]);
+  });
+});
+
+// A rename the Builder made is its own to answer (`useSchemaSave` sends it as one), so the dialog
+// shows it as a rename whose values are kept: not as a field removed beside one added, not as a
+// choice between renaming and losing the values, and not as a save that deletes data.
+describe("a rename the Builder made", () => {
+  const renaming = preview({
+    hasDestructiveChanges: true,
+    classification: "destructive",
+    changes: {
+      added: [
+        {
+          name: "abstract",
+          type: "text",
+          required: false,
+          hasDefault: false,
+          classification: "safe",
+        },
+      ],
+      removed: [
+        {
+          name: "summary",
+          type: "text",
+          rowCount: 3,
+          classification: "destructive",
+        },
+      ],
+      changed: [],
+      unchanged: [],
+    },
+    renamed: [
+      {
+        table: "dc_posts",
+        from: "summary",
+        to: "abstract",
+        fromType: "text",
+        toType: "text",
+        typesCompatible: true,
+        preservesValues: true,
+        defaultSuggestion: "rename",
+      },
+    ],
+  });
+
+  it("shows it as a rename whose values are kept, with nothing to choose and nothing lost", () => {
+    render(
+      <BuilderSchemaChangeDialogs
+        confirmation={confirmationOf(renaming)}
+        kind="collection"
+        entityName="posts"
+        onConfirm={vi.fn()}
+        draftRenames={[
+          { label: "Summary", previousName: "summary", name: "abstract" },
+        ]}
+      />
+    );
+    expect(
+      screen.getByText(/renamed to/i).closest("li, p, div")
+    ).toHaveTextContent(/summary.*renamed to.*abstract.*values are kept/is);
+    expect(screen.queryAllByRole("radio")).toHaveLength(0);
+    expect(screen.queryByText("removed")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/rows have non-null data/)
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/Remove it and add a new field/)
+    ).not.toBeInTheDocument();
+  });
+
+  // A pair from another dropped field onto the renamed field's new column is not offered: the
+  // column is the rename's.
+  it("does not offer another field's pair onto the renamed field's new column", () => {
+    render(
+      <BuilderSchemaChangeDialogs
+        confirmation={confirmationOf({
+          ...renaming,
+          renamed: [
+            ...(renaming.renamed ?? []),
+            { ...(renaming.renamed ?? [])[0], from: "body" },
+          ],
+        })}
+        kind="collection"
+        entityName="posts"
+        onConfirm={vi.fn()}
+        draftRenames={[
+          { label: "Summary", previousName: "summary", name: "abstract" },
+        ]}
+      />
+    );
+    expect(screen.queryAllByRole("radio")).toHaveLength(0);
+  });
+
+  // A required field keeps its values through the rename, so the new column needs no default: the
+  // preview's prompt for it (made before the pair was answered) is not the person's to answer, and
+  // answering it "optional" would drop the field's Required.
+  it("asks nothing about a required field's new column, and sends no answer for it", async () => {
+    const user = userEvent.setup();
+    const onConfirm = vi.fn();
+    render(
+      <BuilderSchemaChangeDialogs
+        confirmation={confirmationOf({
+          ...renaming,
+          classification: "interactive",
+          interactiveFields: [
+            {
+              name: "abstract",
+              reason: "new_required_no_default",
+              tableRowCount: 3,
+              options: ["provide_default", "mark_nullable", "cancel"],
+            },
+          ],
+        })}
+        kind="collection"
+        entityName="posts"
+        onConfirm={onConfirm}
+        draftRenames={[
+          { label: "Summary", previousName: "summary", name: "abstract" },
+        ]}
+      />
+    );
+    expect(screen.queryAllByRole("radio")).toHaveLength(0);
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+    expect(onConfirm).toHaveBeenCalledWith({}, expect.any(Array));
+  });
+
+  // A new name that keeps the column (`metaTitle` to `meta_title`) moves no value, though the
+  // preview, by name, lists one field removed and another added: shown as the rename it is, with
+  // nothing deleted and no removal to confirm.
+  it("shows a rename that keeps its column as one, with nothing deleted", async () => {
+    const user = userEvent.setup();
+    const onConfirm = vi.fn();
+    render(
+      <BuilderSchemaChangeDialogs
+        confirmation={confirmationOf(
+          preview({
+            hasDestructiveChanges: true,
+            classification: "destructive",
+            changes: {
+              added: [
+                {
+                  name: "meta_title",
+                  type: "text",
+                  required: false,
+                  hasDefault: false,
+                  classification: "safe",
+                },
+              ],
+              removed: [
+                {
+                  name: "metaTitle",
+                  type: "text",
+                  rowCount: 3,
+                  classification: "destructive",
+                },
+              ],
+              changed: [],
+              unchanged: [],
+            },
+          })
+        )}
+        kind="collection"
+        entityName="posts"
+        onConfirm={onConfirm}
+        draftRenames={[
+          {
+            label: "Meta title",
+            previousName: "metaTitle",
+            name: "meta_title",
+          },
+        ]}
+      />
+    );
+    expect(
+      screen.getByText(/renamed to/i).closest("li, p, div")
+    ).toHaveTextContent(/metaTitle.*renamed to.*meta_title.*values are kept/is);
+    expect(screen.queryByText("removed")).not.toBeInTheDocument();
+    expect(screen.queryByText(/data loss/i)).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+    expect(onConfirm).toHaveBeenCalledWith({}, []);
+  });
+
+  // The control: without the Builder's rename, the same preview asks, and shows the removal.
+  it("still asks about the pair when the Builder did not rename the field", () => {
+    renderDialogs(renaming);
+    expect(screen.getAllByRole("radio").length).toBeGreaterThan(0);
+    expect(screen.getByText("removed")).toBeInTheDocument();
   });
 });

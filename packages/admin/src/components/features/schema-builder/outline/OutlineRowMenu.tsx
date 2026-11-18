@@ -147,6 +147,11 @@ export function OutlineRowMenu({
             <DropdownMenuItem onSelect={() => actions.duplicate(id)}>
               Duplicate
             </DropdownMenuItem>
+            {actions.rename && actions.canRename?.(id) && (
+              <DropdownMenuItem onSelect={() => actions.rename?.(id)}>
+                Rename…
+              </DropdownMenuItem>
+            )}
             <DropdownMenuItem
               onSelect={() => actions.setHidden(id, !field.admin?.hidden)}
             >

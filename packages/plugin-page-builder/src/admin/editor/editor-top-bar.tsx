@@ -180,6 +180,15 @@ export function editorTopBar(
             {...(canvasRender.definitions === undefined
               ? {}
               : { definitions: canvasRender.definitions })}
+            // The site's variables, light and dark, for the contrast check.
+            {...(view.siteTokens === undefined
+              ? {}
+              : { tokens: view.siteTokens })}
+            // The site's shared styles, its edits to block types' looks
+            // among them, which a block's colours are drawn with.
+            {...(canvasRender.styleContext.namedClasses === undefined
+              ? {}
+              : { namedClasses: canvasRender.styleContext.namedClasses })}
           />
         ) : null}
         {/* Last, at the bar's far end where the header kept them: Save and

@@ -114,6 +114,43 @@ describe("the link text check", () => {
     ]);
   });
 
+  it("leaves a passage bound to a field, and a table of contents's passage", () => {
+    const content = {
+      root: {
+        type: "root",
+        children: [
+          {
+            type: "paragraph",
+            children: [
+              {
+                type: "link",
+                url: "/x",
+                children: [{ type: "text", text: "Read more" }],
+              },
+            ],
+          },
+        ],
+      },
+    };
+    expect(
+      findings(
+        block(
+          "bound",
+          "core/rich-text",
+          { content },
+          {
+            bindings: { content: { source: "entry", path: "body" } as never },
+          }
+        ),
+        block("toc", "core/table-of-contents", { content })
+      )
+    ).toEqual([]);
+    // The control: the same passage, stored and drawn, is listed.
+    expect(
+      findings(block("drawn", "core/rich-text", { content }))
+    ).toHaveLength(1);
+  });
+
   it("reads a line break inside a link as a space between its words", () => {
     const passage = block("r", "core/rich-text", {
       content: {
