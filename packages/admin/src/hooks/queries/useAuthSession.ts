@@ -70,9 +70,18 @@ async function verifyAuth(): Promise<AuthSession> {
   return { isSetup: true, ...standing };
 }
 
-/** Retries a server that could not answer, twice; never a definite answer. */
+/**
+ * Retries a server that could not answer, twice; never a definite answer.
+ * Nor a 429: the server named how long to wait, and asking again on the
+ * query's own quicker schedule would only spend more of the limit that
+ * refused it. The guard waits as told, then asks again.
+ */
 function retrySessionCheck(failureCount: number, error: Error): boolean {
-  return error instanceof SessionUnavailableError && failureCount < 2;
+  return (
+    error instanceof SessionUnavailableError &&
+    error.status !== 429 &&
+    failureCount < 2
+  );
 }
 
 /**

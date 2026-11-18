@@ -116,15 +116,21 @@ export async function writeBuilderSchemaChange(
    * busy table and on SQLite with foreign keys off, and records it applied; `afterFile` then
    * brings what the file does not reach in step (the companion's reconcile, planned from the
    * companion as the file left it). A failure of `afterFile` leaves the file recorded applied.
+   *
+   * `registry`, the caller's registry write for the save, runs inside the last file's
+   * transaction, after its ledger row, so the change and the row the registry keeps of it commit
+   * or roll back together, and a failed write leaves the save as it was. On every other road the
+   * caller writes it after this returns.
    */
   fileRoad?: {
     pushWhen: () => Promise<boolean>;
     afterFile: () => Promise<void>;
+    registry?: () => Promise<void>;
   }
-): Promise<void> {
+): Promise<{ registryWritten: boolean }> {
   if (deps === undefined) {
     await apply();
-    return;
+    return { registryWritten: false };
   }
   // Asked before the save writes anything, as a change reaching a relation's storage is judged
   // against the live table; only where the answer is used, a save the writer runs.
@@ -143,9 +149,14 @@ export async function writeBuilderSchemaChange(
   });
   const { writeEntitySave } = await loadEntitySave();
   if (runsFile) {
-    await writeEntitySave(deps, save, apply, { runsFile: true });
+    await writeEntitySave(deps, save, apply, {
+      runsFile: true,
+      ...(fileRoad.registry === undefined
+        ? {}
+        : { inLastTransaction: fileRoad.registry }),
+    });
     await fileRoad.afterFile();
-    return;
+    return { registryWritten: fileRoad.registry !== undefined };
   }
   // A failure after the push landed keeps the files, and is told as a collection's is: what the
   // database holds, the files kept and what to run next (`partWayPush`).
@@ -158,6 +169,7 @@ export async function writeBuilderSchemaChange(
   });
   const written = await writeEntitySave(deps, save, pushed.appliedBy);
   pushed.throwIfFailed(written?.files ?? []);
+  return { registryWritten: false };
 }
 
 /**
