@@ -741,6 +741,9 @@ describe.each(getConfiguredTestDialects())(
           failed += 1;
           return true;
         };
+        // And taking it back fails too, as a file the process may not remove: it stays in place.
+        kill.refuseRemoving = target =>
+          target.startsWith(join(basePath, HISTORY)) && target.endsWith(".sql");
 
         const answer = await path
           .save(t, [text("heading"), text("alpha")])
