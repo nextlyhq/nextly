@@ -169,6 +169,8 @@ saving or publishing either.
 A plugin's check runs on the server, as the person editing, so it can read what the page
 stores. Where it judges the saved page rather than your unsaved changes, its items follow
 your last save: the list asks again after each save, and each time Page settings closes.
+The [SEO plugin](/docs/plugins/seo#in-the-page-builder) adds its problem list's items for the
+page this way, under **Search**.
 
 The types come from `@nextlyhq/plugin-sdk/blocks`. Register a **page check provider** from
 your plugin's `init`, through the page builder's `pageChecks` service:
@@ -623,6 +625,18 @@ were.
 
 While you are typing in a block's text, <kbd>/</kbd> is just a character.
 
+## Wrapping blocks in a box
+
+Select blocks that sit side by side (Shift-click each) and choose **Wrap in a box** from
+the toolbar's **⋯** menu, the right-click menu or the editor's search: a new Box takes
+their place, holding them in the same order. Select a Box, Section, Column or Card and
+choose **Unwrap (keep what's inside)** to put its blocks back in its place and remove it.
+Columns, Accordion, Gallery and Collection list don't offer it.
+
+Each is one step to undo. Where the result isn't allowed, such as a Column outside
+Columns, the option says why and does nothing. Blocks in different places can't be
+wrapped together: select blocks side by side in one place.
+
 ## Copy, cut and paste
 
 Select one or more blocks and press <kbd>Ctrl</kbd>+<kbd>C</kbd> to copy them, or
@@ -758,12 +772,12 @@ with a field for the link. Paste one and it is stored at once; type one and pres
 
 The Embed knows four providers, and sizes itself for each when its link is pasted:
 
-| Provider | Links it knows | Size it takes |
-| --- | --- | --- |
-| YouTube | a video's page, a `youtu.be` share link, a Short, a live stream, a player link | 16:9, or 9:16 for a Short |
-| Vimeo | a video's page, an unlisted video's link, a player link | 16:9 |
-| Spotify | a track, album, playlist, episode, show or artist | Spotify's own player height |
-| Google Maps | the link in Maps' **Share → Embed a map** code | 4:3 |
+| Provider    | Links it knows                                                                 | Size it takes               |
+| ----------- | ------------------------------------------------------------------------------ | --------------------------- |
+| YouTube     | a video's page, a `youtu.be` share link, a Short, a live stream, a player link | 16:9, or 9:16 for a Short   |
+| Vimeo       | a video's page, an unlisted video's link, a player link                        | 16:9                        |
+| Spotify     | a track, album, playlist, episode, show or artist                              | Spotify's own player height |
+| Google Maps | the link in Maps' **Share → Embed a map** code                                 | 4:3                         |
 
 The size is written as the block's own proportion (or height), in **Style**, so you can
 change it like any other. Under **Link**, the inspector says what it found: **YouTube
@@ -1161,6 +1175,13 @@ tabs with the arrow keys.
 - Tabs other plugins add, such as the [SEO plugin](/docs/plugins/seo#in-the-page-builder)'s,
   follow, in the order the plugins declare them. A tab shows only on the pages it applies
   to: the SEO tab is there exactly where the page's own edit page shows its SEO tab.
+- **Code**, last, holds code added to this page only: a **Head** box and an **End of body**
+  box. You see it only if you may change the site's settings. **Check and keep** checks the
+  code exactly as [site code](/docs/page-builder/site-code#page-code) is checked, then keeps
+  it with the page, so it is saved in the draft on **Save**, goes live on **Publish**, and
+  comes back with an older version you restore. Anyone else sees one line on General, "This
+  page adds its own code. Only people who can change site settings can see or edit it.",
+  and never the code.
 
 If a **Save** or **Publish** is refused for a field shown in Page settings, the message names
 the field with **Show me**, which opens Page settings on that field's tab with the field

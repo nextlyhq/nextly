@@ -7,7 +7,12 @@
  *
  * @module ops-vocabulary
  */
-import type { BlockNode, ComponentDocument, DocumentSeo } from "./document";
+import type {
+  BlockNode,
+  ComponentDocument,
+  DocumentCode,
+  DocumentSeo,
+} from "./document";
 import { holdsAValue, type NodePatch, type RemovableField } from "./ops-fields";
 
 /**
@@ -247,6 +252,21 @@ export type BuilderOp =
       readonly kind: "turnInto";
       readonly id: string;
       readonly node: BlockNode;
+    }
+  | {
+      /**
+       * An edit to the code a document adds to its own page
+       * (`settings.code`): written whole, as `seo` is, so one change of the
+       * head, the end of the body and what the author acknowledged together
+       * is one undo step; `null` removes it. Judged by its shape; what the
+       * code may hold, and who may change it, is the save's question.
+       *
+       * An eighth member of a published union, as `turnInto` is the seventh.
+       *
+       * @experimental Settles with page code.
+       */
+      readonly kind: "code";
+      readonly code: DocumentCode | null;
     };
 
 /**
@@ -255,8 +275,8 @@ export type BuilderOp =
  */
 export function addressesNoNode(
   op: BuilderOp
-): op is Extract<BuilderOp, { readonly kind: "envelope" | "seo" }> {
-  return op.kind === "envelope" || op.kind === "seo";
+): op is Extract<BuilderOp, { readonly kind: "envelope" | "seo" | "code" }> {
+  return op.kind === "envelope" || op.kind === "seo" || op.kind === "code";
 }
 
 /**
