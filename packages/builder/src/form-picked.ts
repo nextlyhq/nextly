@@ -40,7 +40,9 @@ export function pickedFormOf(value: unknown): PickedForm | undefined {
  * from a provider) whose "Send to" is empty. The one rule the canvas notice
  * and the page's checks both read.
  */
-export function answersGoNowhere(props: Readonly<Record<string, unknown>>) {
+export function answersGoNowhere(
+  props: Readonly<Record<string, unknown>>
+): boolean {
   if (pickedFormOf(props.form) !== undefined) return false;
   const { action } = props;
   return typeof action !== "string" || action.trim() === "";
