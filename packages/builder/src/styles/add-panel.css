@@ -229,14 +229,16 @@
 /*
  * The retry inside a notice: a link-shaped control in the sentence that
  * explains it, rather than a button beside it, because the sentence is short
- * and the action is its last clause.
+ * and the action is its last clause. In the text colour, not the accent: the
+ * accent is a fill a brand may set too light to read as small text, and the
+ * underline already says it can be pressed.
  */
 .nx-insert-panel__retry {
   padding: 0;
   border: 0;
   background: none;
   font: inherit;
-  color: var(--nx-primary);
+  color: var(--nx-builder-text);
   text-decoration: underline;
   cursor: pointer;
 }

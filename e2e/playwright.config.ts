@@ -113,6 +113,18 @@ const DEV_SPECS_ONLY =
   SERVER === "dev" && process.env.E2E_DEV_SPECS_ONLY === "1";
 
 /**
+ * The specs of a site that draws its header and footer in code
+ * (`siteHeaderFooter: "code"`). One server answers a whole run, so they run
+ * by themselves, against a playground started in that mode
+ * (`E2E_HEADER_FOOTER_IN_CODE_ONLY=1`), and every other run leaves them out.
+ */
+const HEADER_FOOTER_IN_CODE_SPECS = ["**/*-header-footer-in-code.spec.ts"];
+
+/** Only the specs of a site that draws its header and footer in code. */
+const HEADER_FOOTER_IN_CODE_ONLY =
+  process.env.E2E_HEADER_FOOTER_IN_CODE_ONLY === "1";
+
+/**
  * Where a run writes its results and report. The dev specs' run has its own,
  * since Playwright empties its results folder as it starts, and a shared one
  * would lose the production run's traces and screenshots beside it. A run on
@@ -120,7 +132,9 @@ const DEV_SPECS_ONLY =
  */
 const RUN_OUTPUT = DEV_SPECS_ONLY
   ? "dev-specs"
-  : EVERY_DIALECT_ONLY
+  : HEADER_FOOTER_IN_CODE_ONLY
+    ? "header-footer-in-code"
+    : EVERY_DIALECT_ONLY
     ? E2E_DATABASE.dialect
     : "suite";
 
@@ -163,8 +177,12 @@ export default defineConfig({
   testIgnore: [
     "**/production/**",
     ...(SERVER === "production" ? DEV_SPECS : []),
+    ...(HEADER_FOOTER_IN_CODE_ONLY ? [] : HEADER_FOOTER_IN_CODE_SPECS),
   ],
   ...(DEV_SPECS_ONLY ? { testMatch: DEV_SPECS } : {}),
+  ...(HEADER_FOOTER_IN_CODE_ONLY
+    ? { testMatch: HEADER_FOOTER_IN_CODE_SPECS }
+    : {}),
   ...(EVERY_DIALECT_ONLY ? { grep: new RegExp(EVERY_DIALECT) } : {}),
   outputDir: `./.playwright/results/${RUN_OUTPUT}`,
 
@@ -273,6 +291,11 @@ export default defineConfig({
       // asserts against. They are off by default so a contributor's admin
       // keeps the monochrome identity a default install has.
       NEXTLY_E2E_BRANDING: "1",
+      // A site that draws its header and footer in code, for the run of its
+      // own specs only (`E2E_HEADER_FOOTER_IN_CODE_ONLY`).
+      ...(HEADER_FOOTER_IN_CODE_ONLY
+        ? { NEXTLY_E2E_SITE_HEADER_FOOTER: "code" }
+        : {}),
       // Turns off Next.js's development indicator, whose button a development
       // server injects into the canvas's frame too: a tab stop inside the
       // canvas that a production build never draws, which the keyboard specs
@@ -333,6 +356,11 @@ export default defineConfig({
       // Points the page builder's font catalogue at the stand-in global setup
       // starts, so adding a font never reaches the real catalogue.
       NEXTLY_E2E_FONT_CATALOGUE: FONT_CATALOGUE_ORIGIN,
+      // Ten times the product's REST limits (`apps/playground/src/e2e-rate-limit.ts`). The
+      // workers share one address and seed pages, styles and fonts between steps far faster
+      // than a person writes, and at the defaults a refused seed fails a spec far from its
+      // cause. The limiter still runs; admin-request-budget.spec.ts holds pages to the defaults.
+      NEXTLY_E2E_RATE_LIMIT: "1",
     },
   },
 

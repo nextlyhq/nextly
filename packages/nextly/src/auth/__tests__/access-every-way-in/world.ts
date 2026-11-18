@@ -444,6 +444,8 @@ function probePlugin() {
         action,
       }))
     ),
+    // The email deliveries are read only.
+    { slug: "email-deliveries", action: "read" as const },
   ];
   return definePlugin({
     name: "probe",
@@ -590,6 +592,7 @@ function heldByStaff(slug: string): boolean {
   return (
     /^(create|read|update|delete|publish|unpublish)-(c|s)_/.test(slug) ||
     /^(create|read|update|delete)-(roles|email-providers)$/.test(slug) ||
+    slug === "read-email-deliveries" ||
     slug === "read-refs" ||
     slug === "read-media"
   );
@@ -600,6 +603,7 @@ function heldByPartial(slug: string): boolean {
   return (
     /^(read|update|publish)-(c|s)_/.test(slug) ||
     /^(read|update)-(roles|email-providers)$/.test(slug) ||
+    slug === "read-email-deliveries" ||
     slug === "read-refs" ||
     slug === "read-media"
   );
@@ -842,6 +846,7 @@ const RESOURCE_OF: Record<Target, (rule: Rule, setup: TargetSet) => Slug> = {
   users: () => "users",
   roles: () => "roles",
   providers: () => "email-providers",
+  deliveries: () => "email-deliveries",
 };
 
 /** The actions that name a permission of their own. */
@@ -1095,6 +1100,7 @@ function registerProbeWidgets(): void {
         action => [slug, action] as [string, string]
       )
     ),
+    ["email-deliveries", "read"],
   ];
   for (const [slug, action] of named) {
     const id = widgetFor(slug, action);
