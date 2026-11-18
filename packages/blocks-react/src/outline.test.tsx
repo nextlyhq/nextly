@@ -933,3 +933,168 @@ describe("pageOutline", () => {
     expect(outline.headings.map(entry => entry.level)).toEqual([1, 2]);
   });
 });
+
+describe("which headings a table of contents lists", () => {
+  /** A site with two narrower devices and a card-sized container. */
+  const BREAKPOINTS = {
+    viewport: [
+      { id: "tablet", label: "Tablet", maxWidth: 1024 },
+      { id: "mobile", label: "Mobile", maxWidth: 640 },
+    ],
+    container: [{ id: "card-wide", label: "Card wide", maxWidth: 480 }],
+  };
+
+  const listedOf = (...list: [OutlinePart["area"], BlockNode[]][]) =>
+    pageOutline(
+      list.map(([area, nodes]) => ({ area, nodes, breakpoints: BREAKPOINTS }))
+    ).headings.map(({ text, listed }) => [text, listed]);
+
+  const holding = (type: string, children: BlockNode[]): BlockNode => ({
+    id: nextId("c"),
+    type,
+    version: 1,
+    props: {},
+    slots: { children },
+  });
+
+  /** Stored per-device visibility, as the Layers panel writes it. */
+  const shownOn = (devices: Record<string, boolean>) => ({
+    visibility: { devices },
+  });
+
+  it("lists the page's own headings, in the Heading blocks and in Rich text", () => {
+    expect(
+      listedOf([
+        "content",
+        [heading("Intro"), richText(passage(["h3", "Deeper"]))],
+      ])
+    ).toEqual([
+      ["Intro", true],
+      ["Deeper", true],
+    ]);
+  });
+
+  it("leaves out the header's and the footer's headings", () => {
+    expect(
+      listedOf(
+        ["header", [heading("Site")]],
+        ["content", [heading("Page")]],
+        ["footer", [heading("Footer")]]
+      )
+    ).toEqual([
+      ["Site", false],
+      ["Page", true],
+      ["Footer", false],
+    ]);
+  });
+
+  it("leaves out headings inside a Collection list or an accordion, however deep", () => {
+    expect(
+      listedOf([
+        "content",
+        [
+          holding("core/collection-loop", [box([heading("In a list")])]),
+          holding("core/accordion", [
+            holding("core/accordion-item", [
+              richText(passage(["h2", "In a question"])),
+            ]),
+          ]),
+          box([heading("In a box")]),
+        ],
+      ])
+    ).toEqual([
+      ["In a list", false],
+      ["In a question", false],
+      ["In a box", true],
+    ]);
+  });
+
+  it("leaves out a heading its author left out", () => {
+    expect(
+      listedOf([
+        "content",
+        [heading("Out", { props: { tocExclude: true } }), heading("In")],
+      ])
+    ).toEqual([
+      ["Out", false],
+      ["In", true],
+    ]);
+  });
+
+  it("leaves out a heading hidden on every device, or inside a block that is", () => {
+    expect(
+      listedOf([
+        "content",
+        [
+          heading("Hidden", shownOn({ base: false })),
+          box([heading("Inside hidden")], shownOn({ base: false })),
+          // Hidden from the widest device down, shown again on phones.
+          heading("Phones only", shownOn({ base: false, mobile: true })),
+          // Hidden on phones only: still read on every other device.
+          heading("Not on phones", shownOn({ mobile: false })),
+          heading("Shown", shownOn({ base: true })),
+          // A container breakpoint is about a box, not a device: it does not
+          // show again a block every device hides.
+          heading(
+            "Container only",
+            shownOn({ base: false, "card-wide": true })
+          ),
+        ],
+      ])
+    ).toEqual([
+      ["Hidden", false],
+      ["Inside hidden", false],
+      ["Phones only", true],
+      ["Not on phones", true],
+      ["Shown", true],
+      ["Container only", false],
+    ]);
+  });
+
+  it("leaves out a heading whose devices and its container's never meet", () => {
+    expect(
+      listedOf([
+        "content",
+        [
+          // The box hides it on phones, and it hides itself everywhere else.
+          box(
+            [heading("Never drawn", shownOn({ base: false, mobile: true }))],
+            shownOn({ mobile: false })
+          ),
+          // Both show on tablets, so it is read there.
+          box(
+            [heading("On tablets", shownOn({ base: false, tablet: true }))],
+            shownOn({ mobile: false })
+          ),
+          // Two boxes in turn: the inner one leaves only tablets, which the
+          // heading itself hides.
+          box(
+            [
+              box(
+                [heading("Nowhere", shownOn({ tablet: false, mobile: true }))],
+                shownOn({ base: false, tablet: true })
+              ),
+            ],
+            shownOn({ mobile: false })
+          ),
+        ],
+      ])
+    ).toEqual([
+      ["Never drawn", false],
+      ["On tablets", true],
+      ["Nowhere", false],
+    ]);
+  });
+
+  it("reads hiding from what a block stores when no breakpoints are given", () => {
+    // Shown again on phones and, with no breakpoints to say otherwise, read
+    // as the stored `true` says; a hide with no show anywhere is still read.
+    const listed = (devices: Record<string, boolean>) =>
+      pageOutline([
+        { area: "content", nodes: [heading("Words", shownOn(devices))] },
+      ]).headings.map(entry => entry.listed);
+    expect(listed({ base: false, mobile: true })).toEqual([true]);
+    expect(listed({ base: false })).toEqual([false]);
+    expect(listed({ mobile: false })).toEqual([true]);
+  });
+});

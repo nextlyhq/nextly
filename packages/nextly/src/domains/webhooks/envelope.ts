@@ -10,6 +10,7 @@
  * @module domains/webhooks/envelope
  */
 
+import { TIMESTAMP_COLUMN_NAMES } from "../../shared/lib/case-conversion";
 import { deepEqual } from "../../shared/lib/deep-equal";
 import { defineOwnProperty } from "../../shared/lib/own-property";
 import { readFieldGroupType } from "../field-groups/storage/field-group-type-key";
@@ -99,15 +100,129 @@ function stripSensitive(
  */
 export function computeChangedFields(
   previous: Record<string, unknown> | null,
-  next: Record<string, unknown>
+  next: Record<string, unknown>,
+  componentRows: readonly string[] = []
 ): string[] {
   if (previous === null) return Object.keys(next).sort();
+  const rows = new Set(componentRows);
   const keys = new Set([...Object.keys(previous), ...Object.keys(next)]);
   const changed: string[] = [];
   for (const k of keys) {
-    if (!deepEqual(previous[k], next[k])) changed.push(k);
+    if (
+      !deepEqual(
+        withoutRowStamps(previous[k], [k], rows),
+        withoutRowStamps(next[k], [k], rows)
+      )
+    ) {
+      changed.push(k);
+    }
   }
   return changed.sort();
+}
+
+/**
+ * The system timestamp columns a stored row carries, by their physical names: a component
+ * instance arrives with them as stored, and a write rewrites them whether or not its content
+ * changed. From the one system-column list, so a user field that happens to be called
+ * `updatedAt` (in a group inside a component, say) is never mistaken for one.
+ */
+const ROW_STAMPS: ReadonlySet<string> = new Set(
+  TIMESTAMP_COLUMN_NAMES.map(([column]) => column)
+);
+
+/**
+ * `value`, found at the candidate dotted `paths`, without the system timestamp
+ * columns of the component rows in it: the objects sitting at a path in `rows`
+ * (`componentRowPaths` of the schema). A write that rewrites a component row
+ * stamps it anew, and where the database keeps milliseconds that stamp differs
+ * even when no field of the row did: a field is changed when its content is,
+ * not its row's stamp. Every other object keeps every key, so `updated_at`
+ * inside a JSON or group value still counts as the content it is, and so do the
+ * document's own top-level stamps.
+ *
+ * Paths are spelled as `stripValue` spells them: array elements add no
+ * segment, and a dynamic-zone instance's children are also reachable under its
+ * type-tagged segment, where the expanded schema puts a member's own fields.
+ */
+function withoutRowStamps(
+  value: unknown,
+  paths: readonly string[],
+  rows: ReadonlySet<string>
+): unknown {
+  if (Array.isArray(value)) {
+    return value.map(entry => withoutRowStamps(entry, paths, rows));
+  }
+  if (value === null || typeof value !== "object" || value instanceof Date) {
+    return value;
+  }
+  // Nothing at or below these paths is a component row: the value is compared
+  // as it is, without walking it.
+  if (!paths.some(path => reachesRow(path, rows))) return value;
+  const isRow = paths.some(path => rows.has(path));
+  const componentType = isRow ? readFieldGroupType(value) : undefined;
+  const prefixes =
+    typeof componentType === "string"
+      ? [
+          ...paths,
+          ...paths.map(
+            path => `${path}.${componentTypeSegment(componentType)}`
+          ),
+        ]
+      : paths;
+  const out: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(value)) {
+    if (isRow && ROW_STAMPS.has(key)) continue;
+    // Defined, not assigned: a JSON value can hold a `__proto__` key.
+    defineOwnProperty(
+      out,
+      key,
+      withoutRowStamps(
+        child,
+        prefixes.map(prefix => `${prefix}.${key}`),
+        rows
+      )
+    );
+  }
+  return out;
+}
+
+/** Whether `path` is a component row path or lies above one. */
+function reachesRow(path: string, rows: ReadonlySet<string>): boolean {
+  for (const row of rows) {
+    if (row === path || row.startsWith(`${path}.`)) return true;
+  }
+  return false;
+}
+
+/**
+ * A change as an event may carry it: `data` and `previous` without the
+ * sensitive field paths, and the fields that differ between them. The one
+ * computation of the fields an event names as changed, so the outbox
+ * envelope and the in-process collection event cannot name different ones,
+ * and a stripped field is never named.
+ */
+export function sanitizedChange(input: {
+  data: Record<string, unknown>;
+  previous?: Record<string, unknown> | null;
+  sensitiveFields?: readonly string[];
+  /** The component row paths of the schema (`componentRowPaths`). */
+  componentRows?: readonly string[];
+}): {
+  data: Record<string, unknown>;
+  previous: Record<string, unknown> | null;
+  changedFields: string[];
+} {
+  const sensitiveFields = input.sensitiveFields ?? [];
+  const data = stripSensitive(input.data, sensitiveFields);
+  const previous =
+    input.previous == null
+      ? null
+      : stripSensitive(input.previous, sensitiveFields);
+  return {
+    data,
+    previous,
+    changedFields: computeChangedFields(previous, data, input.componentRows),
+  };
 }
 
 /** Input to {@link buildEnvelope}. All identity/time values are caller-supplied. */
@@ -137,6 +252,11 @@ export interface BuildEnvelopeInput {
    * occurrence of that key at any depth, including unrelated siblings.
    */
   sensitiveFields?: readonly string[];
+  /**
+   * Dotted paths whose values are component rows (`componentRowPaths`): their
+   * own system stamps are not a change. Absent, every key counts.
+   */
+  componentRows?: readonly string[];
   /** Status delta for a lifecycle event; copied verbatim onto the envelope. */
   statusChange?: { from: string | null; to: string };
   /** Every language the change involved; copied onto the envelope. */
@@ -151,12 +271,7 @@ export interface BuildEnvelopeInput {
  * and a stripped field never leaks (not even as a name).
  */
 export function buildEnvelope(input: BuildEnvelopeInput): WebhookEvent {
-  const sensitiveFields = input.sensitiveFields ?? [];
-  const data = stripSensitive(input.data, sensitiveFields);
-  const previous =
-    input.previous == null
-      ? null
-      : stripSensitive(input.previous, sensitiveFields);
+  const { data, previous, changedFields } = sanitizedChange(input);
 
   const envelope: WebhookEvent = {
     id: input.id,
@@ -166,7 +281,7 @@ export function buildEnvelope(input: BuildEnvelopeInput): WebhookEvent {
     resource: input.resource,
     data,
     previous,
-    changedFields: computeChangedFields(previous, data),
+    changedFields,
   };
 
   // Only attach optional identity fields when present, so the serialized

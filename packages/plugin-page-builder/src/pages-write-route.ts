@@ -86,6 +86,7 @@ import {
   type RenamePageRequest,
 } from "./pages-write-contract";
 import { optionalText, parseRouteParams, parseRouteQuery } from "./route-query";
+import type { StarterPagesSource } from "./starter-pages/starter-pages-route";
 
 /** The status a new or duplicated page starts in, where the collection has the lifecycle. */
 const DRAFT = "draft";
@@ -872,7 +873,8 @@ type PagesWriteRouteContext = PageCollectionsContext &
  */
 function directPagesWrites(
   ctx: PagesWriteRouteContext,
-  store: ComponentStore
+  store: ComponentStore,
+  starters: StarterPagesSource
 ): PagesWrites {
   // Resolved per call: the caller resolves its own identity once per request.
   const asUser = () => readingAsUser(ctx);
@@ -909,8 +911,12 @@ function directPagesWrites(
       const read = slugAsStored(collection, slug);
       return "slug" in read ? read.slug : slug;
     },
-    // No starter pages are offered yet: one asked for by id is refused.
-    starter: () => Promise.resolve(undefined),
+    // A copy of a starter the site offers this page now, with new ids;
+    // one it doesn't offer is refused by the create.
+    starter: async (source, id) => {
+      const document = await starters.copy(id, source.kinds);
+      return document === undefined ? undefined : { document };
+    },
   };
 }
 
@@ -918,19 +924,26 @@ function directPagesWrites(
 function directNewPageReads(
   ctx: PluginRouteContext,
   store: ComponentStore,
-  pagePath: string | undefined
+  pagePath: string | undefined,
+  starters: StarterPagesSource
 ): NewPageReads {
   const search = directPagesSearchReads(ctx, store, pagePath);
   return {
-    ...directPagesWrites(ctx, store),
+    ...directPagesWrites(ctx, store, starters),
     pageCollections: async () =>
       pageCollections(await search.collections(), search.stores()),
     pagesCollection: () => search.pagesCollection(),
     pagePath: () => pagePath,
     site: siteAddress,
-    starters: () => Promise.resolve([]),
+    starters: source => starters.list(source.kinds),
   };
 }
+
+/** No starter pages: the list is empty, and one asked for by id is refused. */
+const NO_STARTER_PAGES: StarterPagesSource = {
+  list: () => Promise.resolve([]),
+  copy: () => Promise.resolve(undefined),
+};
 
 /** One of the routes, as the plugin declares it. */
 interface PagesWriteRoute {
@@ -952,9 +965,12 @@ interface PagesWriteRoute {
 export function pagesWriteRoutes(
   store: ComponentStore = DEFAULT_COMPONENT_STORE,
   /** Where the plugin's own pages are served (`pagePreviewPath`), if stated. */
-  pagePath?: string
+  pagePath?: string,
+  /** The starter pages the site offers; none where it registers none. */
+  starters: StarterPagesSource = NO_STARTER_PAGES
 ): PagesWriteRoute[] {
-  const writesFor = (ctx: PluginRouteContext) => directPagesWrites(ctx, store);
+  const writesFor = (ctx: PluginRouteContext) =>
+    directPagesWrites(ctx, store, starters);
   return [
     {
       method: "GET",
@@ -964,7 +980,7 @@ export function pagesWriteRoutes(
         Response.json(
           await readNewPageFacts(
             parseNewPageQuery(req.url),
-            directNewPageReads(ctx, store, pagePath)
+            directNewPageReads(ctx, store, pagePath, starters)
           )
         ),
     },

@@ -481,3 +481,52 @@ describe("a picture a click enlarges", () => {
     expect(out).toMatch(/<button[^>]*popovertarget="/i);
   });
 });
+
+describe("a table of contents that highlights the section being read", () => {
+  it("highlights with CSS alone and adds no script", async () => {
+    const { createElement } = await import("react");
+    const { PageRenderer } = await import("./page-renderer");
+    const { createStandaloneContext } = await import("./context");
+    const heading = (id: string, text: string, level: string) => ({
+      id,
+      type: "core/heading",
+      version: 1,
+      props: { text, level },
+    });
+    const element = createElement(PageRenderer, {
+      document: {
+        formatVersion: 1,
+        kind: "page",
+        nodes: [
+          {
+            id: "toc",
+            type: "core/table-of-contents",
+            version: 2,
+            props: {
+              title: "On this page",
+              depth: "h2-h3",
+              marker: "numbered",
+              collapsible: true,
+              highlight: true,
+            },
+          },
+          heading("a", "First", "h2"),
+          heading("b", "Inside the first", "h3"),
+          heading("c", "Second", "h2"),
+        ],
+      } as never,
+      blocks: createBlockResolver(coreBlocks as AnyBlockDefinition[]),
+      context: createStandaloneContext({}),
+    });
+    const { renderToReadableStream } = await import("react-dom/server");
+    const stream = await renderToReadableStream(element);
+    await stream.allReady;
+    const out = await new Response(stream).text();
+    expect(out).not.toContain("<script");
+    // Must-be-found: the list, its highlight and its folding were drawn.
+    expect(out).toMatch(/<nav[^>]*aria-label="On this page"/);
+    expect(out).toContain('<a href="#inside-the-first"');
+    expect(out).toContain("scroll-target-group:auto");
+    expect(out).toContain("<details open");
+  });
+});
