@@ -451,6 +451,54 @@ describe("creating", () => {
     ).toBeNull();
   });
 
+  /** A create that lands only when `land` is called. */
+  function slowCreate(): { land: () => Promise<void> } {
+    let resolve: (page: CreatedPageItem) => void = () => {};
+    createPage.mockImplementation(
+      () =>
+        new Promise<CreatedPageItem>(done => {
+          resolve = done;
+        })
+    );
+    return {
+      land: async () => {
+        resolve(made());
+        // Let the create's continuation run.
+        await new Promise(done => setTimeout(done, 0));
+      },
+    };
+  }
+
+  it("never opens a page whose create lands after the dialog was closed", async () => {
+    const slow = slowCreate();
+    const view = mount();
+    await screen.findByText("Saved as a draft.");
+    await userEvent.type(
+      screen.getByRole("textbox", { name: "Title" }),
+      "Pricing{Enter}"
+    );
+    await waitFor(() => expect(createPage).toHaveBeenCalled());
+    // Escape, a click outside, or opening it again: the form is gone.
+    view.unmount();
+    await slow.land();
+    expect(onCreated).not.toHaveBeenCalled();
+  });
+
+  it("never opens a page whose create lands after Cancel", async () => {
+    const slow = slowCreate();
+    mount();
+    await screen.findByText("Saved as a draft.");
+    await userEvent.type(
+      screen.getByRole("textbox", { name: "Title" }),
+      "Pricing{Enter}"
+    );
+    await waitFor(() => expect(createPage).toHaveBeenCalled());
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(onCancel).toHaveBeenCalled();
+    await slow.land();
+    expect(onCreated).not.toHaveBeenCalled();
+  });
+
   it("closes on Cancel without creating", async () => {
     mount();
     await userEvent.type(screen.getByRole("textbox", { name: "Title" }), "A");
@@ -511,6 +559,25 @@ describe("unsaved work on the page on screen", () => {
     await waitFor(() =>
       expect(order).toEqual(["ask", "create", "leave without warning", "open"])
     );
+  });
+
+  it("on Discard lets nothing go unasked when the dialog closed before the create landed", async () => {
+    const { ask } = unsaved("discard");
+    let resolve: (page: CreatedPageItem) => void = () => {};
+    createPage.mockImplementation(
+      () =>
+        new Promise<CreatedPageItem>(done => {
+          resolve = done;
+        })
+    );
+    const view = mount({ unsaved: ask });
+    await press();
+    await waitFor(() => expect(createPage).toHaveBeenCalled());
+    view.unmount();
+    resolve(made());
+    await new Promise(done => setTimeout(done, 0));
+    expect(ask.leaveWithoutWarning).not.toHaveBeenCalled();
+    expect(onCreated).not.toHaveBeenCalled();
   });
 
   it("on Discard keeps the page on screen as it was when the create fails", async () => {

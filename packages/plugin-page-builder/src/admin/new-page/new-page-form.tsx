@@ -28,7 +28,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@nextlyhq/ui";
-import { useEffect, useId, useState, type JSX } from "react";
+import { useEffect, useId, useRef, useState, type JSX } from "react";
 import { useForm } from "react-hook-form";
 
 import {
@@ -199,6 +199,10 @@ function requestOf(inputs: CreateInputs): CreatePageRequest {
  * The create: asked about unsaved work first where there is any, so Keep
  * editing makes nothing; then made; and on Discard, only once made, the
  * move to it let go without the leave guard asking again.
+ *
+ * A dismissed dialog opens nothing: once Cancel is pressed or the form is
+ * gone (Escape, a click outside, the dialog opened again), a create still
+ * on its way neither opens its page nor lets a move go unasked.
  */
 function useCreate(
   unsaved: UnsavedWorkAsk | undefined,
@@ -208,30 +212,42 @@ function useCreate(
   refusal: Refusal | undefined;
   setRefusal: (refusal: Refusal | undefined) => void;
   create: (request: () => CreatePageRequest) => Promise<void>;
+  dismiss: () => void;
 } {
   const [busy, setBusy] = useState(false);
   const [refusal, setRefusal] = useState<Refusal | undefined>(undefined);
+  // Moved on by each create and by each dismissal: a create whose number
+  // has moved on was dismissed.
+  const attempt = useRef(0);
+  const dismiss = () => {
+    attempt.current += 1;
+  };
+  useEffect(() => dismiss, []);
   const create = async (request: () => CreatePageRequest): Promise<void> => {
     if (busy) return;
+    attempt.current += 1;
+    const mine = attempt.current;
+    const dismissed = () => attempt.current !== mine;
     setRefusal(undefined);
     setBusy(true);
     try {
       const answer = unsaved === undefined ? "saved" : await unsaved.ask();
-      if (answer === "keep") return;
+      if (answer === "keep" || dismissed()) return;
       let page: CreatedPageItem;
       try {
         page = await createPage(request());
       } catch (error) {
-        setRefusal(refusalOf(error));
+        if (!dismissed()) setRefusal(refusalOf(error));
         return;
       }
+      if (dismissed()) return;
       if (answer === "discard") unsaved?.leaveWithoutWarning();
       onCreated(page);
     } finally {
       setBusy(false);
     }
   };
-  return { busy, refusal, setRefusal, create };
+  return { busy, refusal, setRefusal, create, dismiss };
 }
 
 /** What the author has put in the dialog, and what the read says about it. */
@@ -290,7 +306,10 @@ export function NewPageForm({
   const id = useId();
   const inputs = useInputs(startIn, onFacts);
   const { facts } = inputs;
-  const { busy, refusal, setRefusal, create } = useCreate(unsaved, onCreated);
+  const { busy, refusal, setRefusal, create, dismiss } = useCreate(
+    unsaved,
+    onCreated
+  );
   const titled = inputs.title.trim() !== "";
 
   return (
@@ -348,7 +367,10 @@ export function NewPageForm({
         facts={facts}
         titled={titled}
         busy={busy}
-        onCancel={onCancel}
+        onCancel={() => {
+          dismiss();
+          onCancel();
+        }}
       />
     </form>
   );

@@ -80,6 +80,7 @@ function writesOver(
     ),
     remove: vi.fn(async () => undefined),
     may: vi.fn(async () => true),
+    storedSlug: (_collection: string, slug: string) => slug,
     starter: vi.fn(async () => undefined),
     ...over,
   };

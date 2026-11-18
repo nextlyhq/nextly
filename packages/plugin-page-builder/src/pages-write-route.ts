@@ -39,7 +39,7 @@ import {
   respondMutation,
   type PluginRouteContext,
 } from "@nextlyhq/plugin-sdk";
-import { slugify } from "nextly";
+import { slugAsStored, slugify } from "nextly";
 import { readPublicSiteSettings, requireNextly } from "nextly/runtime";
 import { z } from "nextly/zod";
 
@@ -182,8 +182,18 @@ export interface PagesWrites {
     data: Record<string, unknown>
   ): Promise<unknown>;
   remove(collection: string, id: string): Promise<void>;
-  /** Whether the caller may `action` entries of `collection`, as core judges it. */
+  /**
+   * Whether the caller may `action` entries of `collection` at all, as core
+   * judges the type-level question: a rule's row filter counts as yes. What
+   * to offer, never the write's authority: core judges each write on its
+   * entry.
+   */
   may(action: "create" | "update", collection: string): Promise<boolean>;
+  /**
+   * `slug` as `collection` stores it, by core's rule, or `slug` as given
+   * where it can't be stored, for the write to refuse in core's words.
+   */
+  storedSlug(collection: string, slug: string): string;
   /**
    * The document the starter page `id` gives a new page of `source`, or
    * `undefined` where none is offered under that id.
@@ -263,6 +273,21 @@ export function typedSlugOf(typed: string): string {
     .join("/")
     .slice(0, SLUG_PATH_MAX)
     .replace(/[-/]+$/, "");
+}
+
+/**
+ * A typed address as `source` will store it: read as {@link typedSlugOf},
+ * then by the collection's own rule, core's, so the address the dialog is
+ * shown, the one checked for a holder and the one written are what core
+ * stores. A collection without `db.slugPaths` drops the `/`.
+ */
+function typedAsStored(
+  source: PageCollection,
+  typed: string,
+  writes: Pick<PagesWrites, "storedSlug">
+): string {
+  const sent = typedSlugOf(typed);
+  return sent === "" ? "" : writes.storedSlug(source.slug, sent);
 }
 
 /** The slugs a write considers, in the order it tries them: `base`, `base-2`, … */
@@ -400,10 +425,23 @@ export async function writeWithSlug(
   });
 }
 
-/** `value` stored at a form path: `{ hero: { body: value } }` for `hero.body`. */
-function atPath(path: string, value: unknown): Record<string, unknown> {
+/**
+ * `data` with `value` stored at a form path, every group along it kept:
+ * `hero.body` sets `hero`'s `body` and leaves its `eyebrow` as given.
+ */
+function withAt(
+  data: Record<string, unknown>,
+  path: string,
+  value: unknown
+): Record<string, unknown> {
   const [head = path, ...rest] = path.split(".");
-  return { [head]: rest.length === 0 ? value : atPath(rest.join("."), value) };
+  if (rest.length === 0) return { ...data, [head]: value };
+  const inner = data[head];
+  const group =
+    typeof inner === "object" && inner !== null && !Array.isArray(inner)
+      ? (inner as Record<string, unknown>)
+      : {};
+  return { ...data, [head]: withAt(group, rest.join("."), value) };
 }
 
 /** The page core wrote, as the search lists it. */
@@ -545,18 +583,26 @@ export async function createPage(
   const titleName = textTitleOf(source);
   const document = await startingDocument(source, request.starter, writes);
   const write = (slug: Record<string, unknown>) =>
-    writes.create(source.slug, {
-      // The other fields first, so a name the route writes itself is the
-      // route's: the title, the address, the status and the page.
-      ...request.fields,
-      ...headerFooterOf(request),
-      ...(titleName === undefined ? {} : { [titleName]: request.title }),
-      ...slug,
-      ...draftOf(source),
-      ...atPath(source.field, document),
-    });
+    writes.create(
+      source.slug,
+      withAt(
+        {
+          // The other fields first, so a name the route writes itself is the
+          // route's: the title, the address, the status and the page.
+          ...request.fields,
+          ...headerFooterOf(request),
+          ...(titleName === undefined ? {} : { [titleName]: request.title }),
+          ...slug,
+          ...draftOf(source),
+        },
+        source.field,
+        document
+      )
+    );
   const typed =
-    request.slug === undefined ? undefined : typedSlugOf(request.slug);
+    request.slug === undefined
+      ? undefined
+      : typedAsStored(source, request.slug, writes);
   const row =
     typed === undefined || typed === ""
       ? await writeWithSlug(source, request.title, writes, write)
@@ -656,7 +702,10 @@ async function newPageAddress(
   const field = source.slugField;
   if (field === undefined) return null;
   const around = { site: await reads.site(), ...aroundAddress(source, reads) };
-  const typed = request.slug === undefined ? "" : typedSlugOf(request.slug);
+  const typed =
+    request.slug === undefined
+      ? ""
+      : typedAsStored(source, request.slug, reads);
   if (typed !== "") {
     const holder = field.unique
       ? await holderOf(source, field.name, typed, reads)
@@ -858,7 +907,11 @@ function directPagesWrites(
       await requireNextly().delete({ collection, id, ...(await asUser()) });
     },
     may: async (action, collection) =>
-      (await ctx.caller?.can(action, collection)) === true,
+      (await ctx.caller?.can(action, collection, { anyEntry: true })) === true,
+    storedSlug: (collection, slug) => {
+      const read = slugAsStored(collection, slug);
+      return "slug" in read ? read.slug : slug;
+    },
     // No starter pages are offered yet: one asked for by id is refused.
     starter: () => Promise.resolve(undefined),
   };

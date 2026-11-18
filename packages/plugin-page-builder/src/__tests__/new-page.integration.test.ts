@@ -55,6 +55,21 @@ const articles = defineCollection({
   ],
 });
 
+/** Pages an author may change only where a row filter matches them. */
+const NOTES = "notes";
+
+const notes = defineCollection({
+  slug: NOTES,
+  fields: [
+    text({ name: "title" }),
+    text({ name: "slug", unique: true }),
+    { name: "content", type: BLOCKS_TYPE } as never,
+  ],
+  // A filter: the author may update the entries it matches, which no
+  // yes-or-no without an entry can say.
+  access: { update: () => ({ id: { exists: true } }) as unknown as boolean },
+});
+
 /** The Direct API calls this suite makes staff and content with, trusted. */
 interface Direct {
   users: {
@@ -170,7 +185,7 @@ describe.each(getConfiguredTestDialects())(
     beforeAll(async () => {
       t = await createTestNextly({
         ...(dialect === "sqlite" ? {} : { dialect }),
-        collections: [articles],
+        collections: [articles, notes],
         plugins: [pageBuilder({ pagePreviewPath: "/{slug}" })],
       });
       direct = t.nextly as unknown as Direct;
@@ -216,7 +231,11 @@ describe.each(getConfiguredTestDialects())(
 
       const all = (collection: string) =>
         ["create", "read", "update"].map(action => `${action}-${collection}`);
-      editor = await keyHolding([...all(PAGES), ...all(ARTICLES)]);
+      editor = await keyHolding([
+        ...all(PAGES),
+        ...all(ARTICLES),
+        ...all(NOTES),
+      ]);
       createOnly = await keyHolding([`create-${PAGES}`]);
       reader = await keyHolding([`read-${PAGES}`]);
     }, 180_000);
@@ -373,6 +392,76 @@ describe.each(getConfiguredTestDialects())(
         id: item.id,
         category: "News",
       });
+    });
+
+    it("checks and stores a typed address as a collection without paths stores it, with no `/`", async () => {
+      await created(
+        await ask("POST", PAGES_ROUTE_PATH, editor, {
+          collection: ARTICLES,
+          title: "Docs index",
+          slug: "docsinstall",
+          fields: { category: "Docs" },
+        })
+      );
+      const read = (await (
+        await ask(
+          "GET",
+          newPagePath({
+            collection: ARTICLES,
+            title: "Install",
+            slug: "docs/install",
+          }),
+          editor
+        )
+      ).json()) as NewPageFacts;
+      expect(read.address).toMatchObject({
+        slug: "docsinstall",
+        takenBy: "Docs index",
+      });
+      expect(
+        await issues(
+          await ask("POST", PAGES_ROUTE_PATH, editor, {
+            collection: ARTICLES,
+            title: "Install",
+            slug: "docs/install",
+            fields: { category: "Docs" },
+          })
+        )
+      ).toEqual([
+        expect.objectContaining({
+          path: "slug",
+          message: "That address is used by Docs index",
+        }),
+      ]);
+      expect(await storedAt(ARTICLES, "docsinstall")).toHaveLength(1);
+
+      // The plugin's own Pages store paths (`db.slugPaths`): the `/` stays.
+      await created(
+        await ask("POST", PAGES_ROUTE_PATH, editor, {
+          collection: PAGES,
+          title: "Install",
+          slug: "docs/install",
+        })
+      );
+      expect(await storedAt(PAGES, "docs/install")).toHaveLength(1);
+    });
+
+    it("answers that an author whose update rule is a row filter may change the page they made", async () => {
+      const item = await created(
+        await ask("POST", PAGES_ROUTE_PATH, editor, {
+          collection: NOTES,
+          title: "Standup",
+        })
+      );
+      expect(item.mayUpdate).toBe(true);
+      const read = (await (
+        await ask(
+          "GET",
+          newPagePath({ collection: NOTES, title: "Retro" }),
+          editor
+        )
+      ).json()) as NewPageFacts;
+      expect(read.mayUpdate).toBe(true);
     });
 
     it("refuses a role that may not create pages, making nothing", async () => {

@@ -95,6 +95,8 @@ function readsOver(
     update: vi.fn(),
     remove: vi.fn(),
     may: vi.fn(async () => true),
+    // Every collection here stores paths, as the plugin's own Pages do.
+    storedSlug: (_collection: string, slug: string) => slug,
     starter: vi.fn(async () => undefined),
     pageCollections: vi.fn(async () => sources),
     pagesCollection: () => "pages",
@@ -267,6 +269,58 @@ describe("creating from the New page dialog", () => {
     expect(create).toHaveBeenCalledTimes(1);
   });
 
+  it("stores and checks a typed address as the collection stores it, without a `/` where it keeps none", async () => {
+    // Core's rule for a collection without `db.slugPaths`: one part, no `/`.
+    const storedSlug = (collection: string, slug: string) =>
+      collection === "landing" ? slug.replace(/\//g, "") : slug;
+    const find = holding({ docsinstall: "Docs index" });
+    const error = await refused(() =>
+      createPage(
+        { collection: "landing", title: "Install", slug: "Docs / Install" },
+        readsOver({ find, storedSlug }, [PAGES, LANDING])
+      )
+    );
+    expect(issuesOf(error)).toEqual([
+      expect.objectContaining({
+        path: "slug",
+        message: "That address is used by Docs index",
+      }),
+    ]);
+
+    const reads = readsOver({ storedSlug }, [PAGES, LANDING]);
+    await createPage(
+      { collection: "landing", title: "Install", slug: "Docs / Install" },
+      reads
+    );
+    expect(reads.create).toHaveBeenCalledWith(
+      "landing",
+      expect.objectContaining({ slug: "docsinstall" })
+    );
+  });
+
+  it("keeps the other fields beside a Page Builder field inside a group", async () => {
+    const nested: PageCollection = { ...LANDING, field: "hero.body" };
+    const reads = readsOver({}, [nested]);
+    await createPage(
+      {
+        collection: "landing",
+        title: "Launch",
+        fields: { hero: { eyebrow: "News" }, category: "c1" },
+      },
+      reads
+    );
+    expect(reads.create).toHaveBeenCalledWith(
+      "landing",
+      expect.objectContaining({
+        category: "c1",
+        hero: {
+          eyebrow: "News",
+          body: expect.objectContaining({ nodes: [] }),
+        },
+      })
+    );
+  });
+
   it("moves an address made from the title on to the first free one", async () => {
     const reads = readsOver({ find: holding({ pricing: "Pricing" }) });
     await createPage({ collection: "pages", title: "Pricing" }, reads);
@@ -420,6 +474,22 @@ describe("what the New page read tells the dialog", () => {
       takenBy: "Our prices",
     });
     expect(facts.address?.wanted).toBeUndefined();
+  });
+
+  it("says a typed address as the collection stores it, and who holds that", async () => {
+    const storedSlug = (collection: string, slug: string) =>
+      collection === "landing" ? slug.replace(/\//g, "") : slug;
+    const facts = await readNewPageFacts(
+      { collection: "landing", title: "Install", slug: "docs/install" },
+      readsOver({ find: holding({ docsinstall: "Docs index" }), storedSlug }, [
+        PAGES,
+        LANDING,
+      ])
+    );
+    expect(facts.address).toMatchObject({
+      slug: "docsinstall",
+      takenBy: "Docs index",
+    });
   });
 
   it("shows a collection without the lifecycle or the header & footer choice as it is", async () => {
