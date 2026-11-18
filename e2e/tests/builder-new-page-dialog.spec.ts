@@ -236,6 +236,13 @@ test.describe("the New page dialog", () => {
     await expect(
       form.getByRole("combobox", { name: "Header & footer" })
     ).toBeFocused();
+    // Start from is one stop, on its chosen answer: Blank.
+    await page.keyboard.press("Tab");
+    await expect(
+      form
+        .getByRole("group", { name: "Start from" })
+        .getByRole("radio", { name: "Blank" })
+    ).toBeFocused();
     await page.keyboard.press("Tab");
     await expect(form.getByRole("button", { name: "Cancel" })).toBeFocused();
     await page.keyboard.press("Tab");

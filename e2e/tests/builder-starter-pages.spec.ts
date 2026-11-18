@@ -181,7 +181,9 @@ test.describe("starter pages", () => {
 
     const title = `From a starter ${Date.now()}`;
     await form.getByRole("textbox", { name: "Title" }).fill(title);
-    await welcome.check();
+    // The radio is drawn as its tile: the tile is what a person clicks.
+    await row.locator('[data-starter="e2e-welcome"]').click();
+    await expect(welcome).toBeChecked();
     await form.getByRole("combobox", { name: "Header & footer" }).click();
     await page.getByRole("option", { name: /^None/ }).click();
     await form.getByRole("button", { name: "Create and open builder" }).click();
@@ -244,10 +246,9 @@ test.describe("starter pages", () => {
     await form
       .getByRole("textbox", { name: "Title" })
       .fill(`Offline ${Date.now()}`);
-    await form
-      .getByRole("group", { name: "Start from" })
-      .getByRole("radio", { name: STARTER.label })
-      .check();
+    const row = form.getByRole("group", { name: "Start from" });
+    await row.locator('[data-starter="e2e-welcome"]').click();
+    await expect(row.getByRole("radio", { name: STARTER.label })).toBeChecked();
     await form.getByRole("button", { name: "Create and open builder" }).click();
     await expect(page).toHaveURL(/\/builder\?field=content$/, {
       timeout: 60_000,
