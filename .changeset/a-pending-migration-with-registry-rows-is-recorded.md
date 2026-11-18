@@ -29,5 +29,4 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-
 `nextly migrate` records a pending migration the database already stands at the end of when the file writes registry rows. A migration generated for a collection, Single or component made in the admin ends with a statement that moves the stored schema version; that statement was read as a write its snapshot does not show, so the file was refused with `NEXTLY_MIGRATION_NOT_PROVEN` instead of recorded. The statement is now accepted exactly as `nextly migrate:create` writes it, after a registry row of the same file.
