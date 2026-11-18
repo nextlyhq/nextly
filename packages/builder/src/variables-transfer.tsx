@@ -298,11 +298,7 @@ export function useVariablesTransfer({
       classes: result.classes,
       // The rows laid over the variables as they are by then, so an edit
       // made meanwhile isn't lost.
-      rows: () =>
-        withRows(
-          latest.current.currentTokens() ?? into,
-          result.tokens.siteText
-        ),
+      rows: () => withRows(latest.current.currentTokens() ?? into, result.rows),
       writers: { storeNow, edit, onChange: latest.current.onChange },
       refuse,
     }).then(stored => {
@@ -704,18 +700,20 @@ async function importInSteps(steps: {
 }
 
 /**
- * The variables as they are with the import's Site text rows laid over
- * them, or `undefined` where that changes nothing. Only the rows: the
- * variables were stored by the first step, so an edit made since stands.
+ * The variables as they are with the Site text rows the import takes laid
+ * over the rows as they are then, or `undefined` where that changes
+ * nothing. Only those rows: the variables were stored by the first step and
+ * any other row edited since stands.
  */
 function withRows(
   now: SiteTokenSet,
   rows: SiteTokenSet["siteText"]
 ): SiteTokenSet | undefined {
-  if (rows === undefined || sameJsonValue(now.siteText ?? null, rows)) {
-    return undefined;
-  }
-  return { ...now, siteText: rows };
+  if (rows === undefined) return undefined;
+  const next = { ...now.siteText, ...rows };
+  return sameJsonValue(now.siteText ?? {}, next)
+    ? undefined
+    : { ...now, siteText: next };
 }
 
 /** `tokens` with the Site text rows `site` holds rather than its own. */
