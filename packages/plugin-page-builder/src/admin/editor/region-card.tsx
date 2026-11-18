@@ -147,12 +147,12 @@ export function RegionCard({
  */
 export function SelectedRegionCard({
   facts,
-  onEditComponent,
+  onEdit,
   onOpenSettings,
 }: {
   facts: RegionCardFacts;
-  /** Open a component in its own view; absent where the author may not. */
-  onEditComponent: ((componentId: string) => void) | undefined;
+  /** Edit it in place, on the page; absent where the author may not. */
+  onEdit: (() => void) | undefined;
   onOpenSettings: () => void;
 }): JSX.Element {
   const read = useComponentFacts(facts.componentId);
@@ -160,11 +160,7 @@ export function SelectedRegionCard({
     <RegionCard
       facts={facts}
       pages={read?.pages}
-      onEdit={
-        onEditComponent === undefined
-          ? undefined
-          : () => onEditComponent(facts.componentId)
-      }
+      onEdit={onEdit}
       onOpenSettings={onOpenSettings}
       {...(facts.starter
         ? {

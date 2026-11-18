@@ -10,6 +10,7 @@
  * the host's: the field is placed with `insertField` at the position the
  * picker was opened for, and the page saves it with every other edit.
  */
+import { fieldProducesColumn } from "nextly/config";
 import { MOST_USED_FIELD_TYPES } from "nextly/field-catalog";
 import { isFieldGroupFieldType } from "nextly/field-group-type";
 import type { JSX } from "react";
@@ -298,7 +299,13 @@ export function BuilderFieldPicker({
               place.siblingNames,
               name => nameIsTakenAt(name, { ...place, siblingNames: [] })
             ),
-          nameProblem: name => builderNameProblem(name, place),
+          // Judged for the type picked: a field that makes no column (a field-group field) is not
+          // held to a column's length.
+          nameProblem: (name, type) =>
+            builderNameProblem(name, {
+              ...place,
+              producesColumn: fieldProducesColumn({ type }),
+            }),
           fieldGroups: FIELD_GROUP_TYPE
             ? {
                 type: FIELD_GROUP_TYPE,

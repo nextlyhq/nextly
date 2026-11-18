@@ -44,6 +44,11 @@ expectTypeOf<{
     ) => Promise<DocumentSessionOutcome>;
     readonly record: (changes: Readonly<Record<string, unknown>>) => void;
     readonly discard: () => Promise<void>;
+    // Added: the view's tracked writes, waited for before a store.
+    readonly writesSettled: () => Promise<Extract<
+      DocumentSessionOutcome,
+      { ok: false }
+    > | null>;
   };
   // Who holds the document, by name, when someone else does.
   lock:

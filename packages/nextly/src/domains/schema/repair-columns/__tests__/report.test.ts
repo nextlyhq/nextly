@@ -468,10 +468,56 @@ describe("a fact an outcome does not have is null in the record and absent from 
     expect(r.pending).toEqual({
       applied: { type: "int4", nullable: true, typeModifier: null },
       configured: null,
+      renamedFrom: null,
     });
     expectNull(r, ["expected", "missing", ...UNCLASSED]);
     expect(formatRecord(r)).toBe(
-      'collection "posts", field "links" (dc_posts.links) [pending a migration]: int4 NULL as applied, removed as configured. Run `nextly migrate:create`, then `nextly migrate`.'
+      'collection "posts", field "links" (dc_posts.links) [pending a migration]: int4 NULL as applied, removed as configured. Run `nextly migrate:create --name="<migration-name>"`, then `nextly migrate`.'
+    );
+  });
+
+  it("a pending add: nothing applied, the column as configured", () => {
+    const r = record({
+      kind: "pending-migration",
+      location,
+      applied: null,
+      configured: { type: "text", nullable: true },
+      live: { type: "text", nullable: true },
+    });
+    expect(r.outcome).toBe("pending-migration");
+    expect(formatRecord(r)).toBe(
+      'collection "posts", field "links" (dc_posts.links) [pending a migration]: not applied as applied, text NULL as configured. Run `nextly migrate:create --name="<migration-name>"`, then `nextly migrate`.'
+    );
+  });
+
+  it("a pending rename: the table the column moves from, and no change to say beside it", () => {
+    const r = record({
+      kind: "pending-migration",
+      location: { ...location, table: "articles" },
+      renamedFrom: "dc_posts",
+      applied: { type: "text", nullable: true },
+      configured: { type: "text", nullable: true },
+      live: { type: "text", nullable: true },
+    });
+    expect(r.outcome).toBe("pending-migration");
+    expect(r.table).toBe("articles");
+    expect(r.pending?.renamedFrom).toBe("dc_posts");
+    expect(formatRecord(r)).toBe(
+      'collection "posts", field "links" (articles.links) [pending a migration]: moves from dc_posts. Run `nextly migrate:create --name="<migration-name>"`, then `nextly migrate`.'
+    );
+  });
+
+  it("a pending rename of a column whose type also changes: the move, then the change", () => {
+    const r = record({
+      kind: "pending-migration",
+      location: { ...location, table: "articles" },
+      renamedFrom: "dc_posts",
+      applied: { type: "int4", nullable: true },
+      configured: { type: "text", nullable: true },
+      live: { type: "int4", nullable: true },
+    });
+    expect(formatRecord(r)).toBe(
+      'collection "posts", field "links" (articles.links) [pending a migration]: moves from dc_posts, int4 NULL as applied, text NULL as configured. Run `nextly migrate:create --name="<migration-name>"`, then `nextly migrate`.'
     );
   });
 

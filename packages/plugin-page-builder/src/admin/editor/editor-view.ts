@@ -6,6 +6,7 @@
  * @module @nextlyhq/plugin-page-builder/admin/editor/editor-view
  */
 import type { BlockDocument } from "@nextlyhq/blocks-engine";
+import type { BlockCustomCssAccess } from "@nextlyhq/builder";
 import type {
   AppliedConditions,
   InspectorPanel,
@@ -19,6 +20,7 @@ import type {
   ReadMediaSummary,
   SearchMediaSummaries,
 } from "./media-summary-reader";
+import type { RegionEditingHost } from "./region-editing";
 import type { Reveal } from "./reveal-hidden";
 import type { ComponentView } from "./use-component-view";
 import type { EditorMount } from "./use-editor-mount";
@@ -42,6 +44,8 @@ export type EditorView = EditorMount &
     >["visitorUnreadable"];
     documentDirty: boolean;
     pageTitle: string | undefined;
+    /** A header or footer edited in place, and the way into it. */
+    regionEditing: RegionEditingHost;
     /** "Edit component", and the banner over a component's own view. */
     componentView: ComponentView;
     /** Plan a setting of a placed component, held for the page's Save. */
@@ -90,6 +94,11 @@ export type EditorView = EditorMount &
      * the inspector's read of the site's time zone is asked for.
      */
     canvasEntry: DocumentIdentity | null;
+    /**
+     * A block's own custom CSS, lent to the inspector only while the site
+     * settings read says this person may change the site's code.
+     */
+    blockCustomCss: BlockCustomCssAccess | undefined;
   };
 
 /** The block verbs the inspector's card offers, as the verbs provider shares them. */

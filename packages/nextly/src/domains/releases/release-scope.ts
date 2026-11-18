@@ -28,3 +28,10 @@ export interface ReleaseDecisions {
 
 /** Nothing is due. Shared so the common answer allocates nothing. */
 export const NO_DECISIONS: ReleaseDecisions = { reveal: [], hide: [] };
+
+/**
+ * The status a release's publish writes to each document it publishes. A read
+ * that a due release reveals a document to reports the document's languages
+ * in it before the release's own rows are written.
+ */
+export const RELEASE_PUBLISHED_STATUS = "published";
