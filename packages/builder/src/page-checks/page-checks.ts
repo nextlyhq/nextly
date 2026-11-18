@@ -16,10 +16,13 @@
  */
 import {
   getBlock,
+  resolveComponentInstances,
   walkNodes,
   type AnyBlockDefinition,
   type BlockDocument,
   type BlockNode,
+  type DefinitionsById,
+  type RegionArea,
 } from "@nextlyhq/blocks-engine";
 
 import type { AskedSetting } from "../editor-asks";
@@ -50,6 +53,32 @@ const CORE_GROUPS: readonly PageCheckGroup[] = [
 /** The groups in the list's order. */
 const GROUP_ORDER = Object.keys(GROUP_LABELS) as PageCheckGroup[];
 
+/**
+ * A header or footer drawn around the page, as its site's set places it: a
+ * check that judges the page as a visitor reads it, top to bottom, reads
+ * the header's blocks before the page's and the footer's after.
+ */
+export interface PageRegionDocument {
+  readonly area: RegionArea;
+  readonly document: BlockDocument;
+  /**
+   * The definitions its component placements are drawn from, where it is
+   * placed as a component, as a set's header is: the checks then read the
+   * blocks the component draws, not the one placement.
+   */
+  readonly definitions?: DefinitionsById;
+}
+
+/** A region as the checks read it: its placements drawn as their blocks. */
+function composedRegion(region: PageRegionDocument): PageRegionDocument {
+  if (region.definitions === undefined) return region;
+  return {
+    area: region.area,
+    document: resolveComponentInstances(region.document, region.definitions)
+      .document,
+  };
+}
+
 /** The page a check reads. */
 export interface CheckedPage {
   /** The draft as it stands, unsaved changes included, or a stored page. */
@@ -59,12 +88,16 @@ export interface CheckedPage {
    * process holds unless the caller resolves blocks its own way.
    */
   readonly blocks?: (type: string) => AnyBlockDefinition | undefined;
+  /** The header and footer drawn around it, where the caller knows them. */
+  readonly regions?: readonly PageRegionDocument[];
 }
 
 /** The page as every check is handed it, its definitions resolved. */
 export interface ResolvedPage {
   readonly document: BlockDocument;
   readonly blocks: (type: string) => AnyBlockDefinition | undefined;
+  /** The header and footer drawn around it; none where none is known. */
+  readonly regions: readonly PageRegionDocument[];
 }
 
 /** What one check reports about one problem. */
@@ -153,6 +186,7 @@ export function runPageChecks(
   const resolved: ResolvedPage = {
     document: page.document,
     blocks: page.blocks ?? getBlock,
+    regions: (page.regions ?? []).map(composedRegion),
   };
   const order = pageOrder(page.document);
   const taken = new Set<string>();

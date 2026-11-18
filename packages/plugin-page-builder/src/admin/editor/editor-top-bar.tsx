@@ -164,7 +164,13 @@ export function editorTopBar(
           attention, opening the list. Never a reason to hold Save or
           Publish back, which read nothing of it. */}
         {editor.document.kind === "page" ? (
-          <PageChecksChip editor={editor} canvas={page.canvas} />
+          <PageChecksChip
+            editor={editor}
+            canvas={page.canvas}
+            // The site's header and footer, read with the page, so their
+            // headings count in the page's order.
+            regions={view.canvasRegions}
+          />
         ) : null}
         {/* Last, at the bar's far end where the header kept them: Save and
           Publish, which say themselves whether the work is saved and
