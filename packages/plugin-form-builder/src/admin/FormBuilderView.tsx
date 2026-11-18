@@ -48,6 +48,7 @@ import {
 import { FORM_PAGES, formPageOf, type FormPageId } from "../form-pages";
 import type { AnyFormField, FormField, FormFieldTypeId } from "../types";
 import { blankConsentFields, CONSENT_TEXT_REQUIRED } from "../utils/consent";
+import { enforcedValidationRules } from "../utils/enforced-validation";
 
 import { FieldCards } from "./components/builder/FieldCards";
 import { FieldInspector } from "./components/builder/FieldInspector";
@@ -863,12 +864,20 @@ function boundValuesOf(
  * refuses by too). Without this the panel's red words were a warning this
  * save ignored: a max length of 0 was stored, and the schema the form builds
  * from it applied `.max(0)`, failing every nonempty submission.
+ *
+ * Asked only of the rules the form's checks ENFORCE for the field's type
+ * (`enforcedValidationRules`, the same answer the panel narrows its controls
+ * by): a bound a field arrived with that nothing enforces — an email's
+ * length, say, whose schema reads neither — is not this save's to judge, and
+ * refusing it would strand a form whose panel offers no control to fix.
  */
 function unsoundBoundRefusal(
   fields: readonly AnyFormField[]
 ): SaveRefusal | undefined {
   for (const field of fields) {
+    const enforced = enforcedValidationRules(field.type);
     for (const rule of NUMERIC_BOUND_RULES) {
+      if (!enforced.includes(rule)) continue;
       const problem = boundProblem(rule, boundValuesOf(field));
       if (problem) {
         return {

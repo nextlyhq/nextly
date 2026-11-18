@@ -30,8 +30,15 @@ describe("blockedBeforeSave", () => {
   });
 
   it("refuses a minimum above its maximum, as the panel says it", () => {
+    // A number field: min and max are its enforced bounds. On a text field
+    // they are nothing the form reads, so they are not this save's to judge.
     const fields = [
-      field({ name: "votes", label: "Votes", validation: { min: 10, max: 5 } }),
+      field({
+        type: "number",
+        name: "votes",
+        label: "Votes",
+        validation: { min: 10, max: 5 },
+      }),
     ] as readonly AnyFormField[];
     expect(blockedBeforeSave(fields, [])).toEqual({
       message: "Votes: Min can't be more than max.",
@@ -43,6 +50,18 @@ describe("blockedBeforeSave", () => {
     const fields = [
       field({ validation: { minLength: 2, maxLength: 10 } }),
       field({ name: "notes", label: "Notes" }),
+    ] as readonly AnyFormField[];
+    expect(blockedBeforeSave(fields, [])).toBeUndefined();
+  });
+
+  it("does not judge a bound the form's checks never enforce for the type", () => {
+    // Why: an email field arrived from the API with a length bound nothing
+    // reads — the email schema applies its own format check and a pattern,
+    // and reads neither `minLength` nor `maxLength`. Refusing it would hold
+    // the save with no control offered to fix, since the panel narrows its
+    // rules by the same enforced answer.
+    const fields = [
+      field({ type: "email", validation: { maxLength: 0 } }),
     ] as readonly AnyFormField[];
     expect(blockedBeforeSave(fields, [])).toBeUndefined();
   });

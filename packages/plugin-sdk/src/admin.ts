@@ -1296,6 +1296,8 @@ export type {
  * panel edited asks this of every bound before it persists, so a bound the
  * panel flags is never stored and read downstream as its own meaning (a max
  * length of 0 as "no limit", a schema `.max(0)` refusing every value).
+ *
+ * @experimental
  */
 export {
   boundProblem,
