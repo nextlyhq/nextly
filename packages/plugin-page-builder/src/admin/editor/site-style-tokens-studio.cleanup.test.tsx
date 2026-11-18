@@ -105,7 +105,9 @@ afterEach(cleanup);
 function renderStudio(): void {
   render(
     <TokensStudio
-      merged={{ tokens: [spare, accent], order: ["t-accent", "t-spare"] } as never}
+      merged={
+        { tokens: [spare, accent], order: ["t-accent", "t-spare"] } as never
+      }
       supplied={undefined}
       pending={false}
     >
@@ -131,9 +133,7 @@ describe("cleaning up unused colours from the studio", () => {
     // The step's second half is the section as the route left it.
     expect(calls.after).toEqual({ tokens: [accent], order: ["t-accent"] });
     expect(answer).toEqual(calls.cleaned);
-    expect(shownIds()).toEqual(
-      expect.arrayContaining(["t-accent"])
-    );
+    expect(shownIds()).toEqual(expect.arrayContaining(["t-accent"]));
     expect(shownIds()).not.toContain("t-spare");
     expect(panels.tokens?.tokens.order).toEqual(["t-accent"]);
     expect(calls.rereads).toBe(1);

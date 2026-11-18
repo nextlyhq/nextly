@@ -1152,22 +1152,17 @@ export function useSaveSiteStyle(): SiteStyleWrite {
     async (
       section: SiteStyleSection,
       change: (before: unknown) => Promise<unknown>
-    ): Promise<void> => {
-      if (history === null) {
-        await change(storedSection(stored.current, section));
-        return;
-      }
-      const slot = reserve(section);
-      try {
-        const before = await chainOf(history.settled, section).tail;
-        const after = await change(before);
-        if (after === undefined) slot.cancel();
-        else slot.stored(before, after);
-      } catch (refused) {
-        slot.cancel();
-        throw refused;
-      }
-    },
+    ): Promise<void> =>
+      changedThrough(
+        history === null
+          ? undefined
+          : {
+              slot: reserve(section),
+              tail: () => chainOf(history.settled, section).tail,
+            },
+        () => storedSection(stored.current, section),
+        change
+      ),
     [history, reserve, chainOf]
   );
 
@@ -1182,6 +1177,33 @@ export function useSaveSiteStyle(): SiteStyleWrite {
     saving: mutation.isPending,
     reread,
   };
+}
+
+/**
+ * A route's change, run after the writes before it and filled into the
+ * place taken for it: given up when it stored nothing or refused. Outside
+ * the editor it runs against the section as read, and is no step.
+ */
+async function changedThrough(
+  place:
+    | { readonly slot: SiteStyleSlot; readonly tail: () => Promise<unknown> }
+    | undefined,
+  read: () => unknown,
+  change: (before: unknown) => Promise<unknown>
+): Promise<void> {
+  if (place === undefined) {
+    await change(read());
+    return;
+  }
+  try {
+    const before = await place.tail();
+    const after = await change(before);
+    if (after === undefined) place.slot.cancel();
+    else place.slot.stored(before, after);
+  } catch (refused) {
+    place.slot.cancel();
+    throw refused;
+  }
 }
 
 /** How one section write is merged onto the newest stored copy. */

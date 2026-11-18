@@ -888,7 +888,9 @@ describe.each(getConfiguredTestDialects())(
       ]);
       expect(cleaned.status).toBe("fulfilled");
       const answer =
-        cleaned.status === "fulfilled" ? cleaned.value : { status: 0, body: {} };
+        cleaned.status === "fulfilled"
+          ? cleaned.value
+          : { status: 0, body: {} };
       expect(answer.status).toBe(200);
       const stored = await storedIds(t);
       // Spare goes whichever wins: Accent's refusal never rolls it back.

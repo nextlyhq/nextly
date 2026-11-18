@@ -1135,7 +1135,12 @@ describe("removing variables", () => {
       tokens: [brand, accent],
       order: ["t-accent", "color.brand", "color.gone"],
     });
-    await removeVariables(post({ ids: ["t-accent"] }), store, supplied, checksOf());
+    await removeVariables(
+      post({ ids: ["t-accent"] }),
+      store,
+      supplied,
+      checksOf()
+    );
     // Left there, a later colour given its free name would be listed where
     // the removed one was.
     expect(write.mock.calls[0]?.[0]).toEqual({

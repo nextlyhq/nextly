@@ -15,7 +15,7 @@
  *
  * @module colour-cleanup
  */
-import { type SiteTokenSet } from "@nextlyhq/blocks-engine";
+import type { SiteTokenSet } from "@nextlyhq/blocks-engine";
 import {
   Button,
   Checkbox,
@@ -32,9 +32,9 @@ import { colourOrder } from "./colour-groups";
 import { cleanUpCandidates } from "./colour-usage";
 import { colourHexOf } from "./style-colour";
 import type { VariableEntry, VariableGroup } from "./tokens-studio";
+import { swatchStyle } from "./variable-swatch";
 import { usageState } from "./variable-usage";
 import type { VariableUsageHere } from "./variable-usage-view";
-import { swatchStyle } from "./variable-swatch";
 
 /**
  * One colour a clean-up kept, with why in words that name it and where it
@@ -349,11 +349,7 @@ function CleanUpChoices({
 }
 
 /** What a clean-up that kept some colours did: what went, and what stayed. */
-function CleanUpSettled({
-  settled,
-}: {
-  settled: Settled;
-}): React.JSX.Element {
+function CleanUpSettled({ settled }: { settled: Settled }): React.JSX.Element {
   const one = settled.kept.length === 1;
   return (
     <div className="nx-colour-cleanup" role="status">

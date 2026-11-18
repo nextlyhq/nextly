@@ -147,7 +147,8 @@ describe("Clean up unused…", () => {
       "Spare",
       "Extra",
     ]);
-    for (const box of boxes) expect(box.getAttribute("aria-checked")).toBe("true");
+    for (const box of boxes)
+      expect(box.getAttribute("aria-checked")).toBe("true");
     // Used by a page, used on the page open now, or built in: not listed.
     for (const name of ["Primary", "Surface", "Used", "On page"]) {
       expect(within(dialog).queryByRole("checkbox", { name })).toBeNull();
@@ -181,7 +182,13 @@ describe("Clean up unused…", () => {
         onCleanUp={async () =>
           done(
             ["color.spare"],
-            [{ id: "color.extra", name: "Extra", reason: "Extra is used on Home." }]
+            [
+              {
+                id: "color.extra",
+                name: "Extra",
+                reason: "Extra is used on Home.",
+              },
+            ]
           )
         }
       />
@@ -210,9 +217,9 @@ describe("Clean up unused…", () => {
     fireEvent.click(
       within(dialog).getByRole("button", { name: "Remove 2 colours" })
     );
-    expect(
-      (await within(dialog).findByRole("alert")).textContent
-    ).toBe("You can't change this site's design.");
+    expect((await within(dialog).findByRole("alert")).textContent).toBe(
+      "You can't change this site's design."
+    );
     expect(within(dialog).getAllByRole("checkbox")).toHaveLength(2);
   });
 
@@ -252,12 +259,16 @@ describe("Clean up unused…", () => {
   it("is reached and used from the keyboard, Escape giving focus back", async () => {
     const onCleanUp = vi.fn<CleanUp>(async ids => done(ids));
     render(<Panel onCleanUp={onCleanUp} />);
-    const open = await screen.findByRole("button", { name: "Clean up unused…" });
+    const open = await screen.findByRole("button", {
+      name: "Clean up unused…",
+    });
     open.focus();
     fireEvent.keyDown(open, { key: "Enter" });
     fireEvent.click(open);
     const dialog = await screen.findByRole("dialog");
-    const spare = await within(dialog).findByRole("checkbox", { name: "Spare" });
+    const spare = await within(dialog).findByRole("checkbox", {
+      name: "Spare",
+    });
     spare.focus();
     fireEvent.keyDown(spare, { key: " " });
     fireEvent.click(spare);
@@ -271,10 +282,14 @@ describe("Clean up unused…", () => {
   it("is offered only where the host can clean up and the author may change Design", async () => {
     const { unmount } = render(<Panel />);
     await screen.findByRole("radiogroup", { name: "Show colours" });
-    expect(screen.queryByRole("button", { name: "Clean up unused…" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Clean up unused…" })
+    ).toBeNull();
     unmount();
     render(<Panel readOnly onCleanUp={async () => done([])} />);
     await screen.findByRole("radiogroup", { name: "Show colours" });
-    expect(screen.queryByRole("button", { name: "Clean up unused…" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Clean up unused…" })
+    ).toBeNull();
   });
 });

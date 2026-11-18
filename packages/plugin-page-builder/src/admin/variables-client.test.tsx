@@ -288,10 +288,17 @@ describe("cleaning up unused colours", () => {
     hiddenCount = 0
   ) => ({
     items,
-    meta: { total, page: 1, limit: 20, totalPages: 1, hasNext: false, hiddenCount },
+    meta: {
+      total,
+      page: 1,
+      limit: 20,
+      totalPages: 1,
+      hasNext: false,
+      hiddenCount,
+    },
   });
-  const answered = (kept: { id: string; name: string; reason: string }[]) =>
-    async () => ({
+  const answered =
+    (kept: { id: string; name: string; reason: string }[]) => async () => ({
       message: "1 variable was removed.",
       item: { removed: ["color.spare"], kept },
     });
@@ -304,10 +311,7 @@ describe("cleaning up unused colours", () => {
   it("sends the colours to the clean-up route, and hands back what went and what stayed", async () => {
     writeBehaviour = answered([]);
     const { result } = renderHook(() => useVariablesClient());
-    const cleaned = await cleanUpUnused(
-      ["color.spare"],
-      result.current.uses
-    );
+    const cleaned = await cleanUpUnused(["color.spare"], result.current.uses);
     expect(writes).toEqual([
       { path: VARIABLE_CLEAN_UP_ROUTE_PATH, body: { ids: ["color.spare"] } },
     ]);
@@ -353,17 +357,17 @@ describe("cleaning up unused colours", () => {
       },
     ]);
     const { result } = renderHook(() => useVariablesClient());
-    const cleaned = await cleanUpUnused(
-      ["color.accent"],
-      result.current.uses
-    );
+    const cleaned = await cleanUpUnused(["color.accent"], result.current.uses);
     expect(cleaned).toMatchObject({
       kept: [{ reason: "Accent is used by the shared style Card." }],
     });
   });
 
   it("keeps the route's own words where the list names no place, or cannot be read", async () => {
-    const named = { ...accentKept, reason: "Accent is used by the variable Lift." };
+    const named = {
+      ...accentKept,
+      reason: "Accent is used by the variable Lift.",
+    };
     writeBehaviour = answered([named]);
     readAnswer = placesOf([]);
     const { result } = renderHook(() => useVariablesClient());
@@ -384,9 +388,10 @@ describe("cleaning up unused colours", () => {
       });
     };
     const { result } = renderHook(() => useVariablesClient());
-    expect(
-      await cleanUpUnused(["color.spare"], result.current.uses)
-    ).toEqual({ kind: "refused", reason: expect.any(String) });
+    expect(await cleanUpUnused(["color.spare"], result.current.uses)).toEqual({
+      kind: "refused",
+      reason: expect.any(String),
+    });
   });
 });
 

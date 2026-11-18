@@ -175,16 +175,7 @@ export function TokensStudio({
     currentTokens,
     header,
     ...usage.props,
-    // "Clean up unused…", once what is held for the author's pause is
-    // written, so the route judges the section as they left it.
-    ...(mayChange && uses !== undefined
-      ? {
-          onCleanUp: async (ids: readonly string[]) => {
-            await held.release();
-            return cleanUp(ids, uses);
-          },
-        }
-      : {}),
+    ...cleanUpOffered(mayChange, uses, held.release, cleanUp),
   };
 
   return (
@@ -388,6 +379,26 @@ function useTokenCommits(
     show(kept);
   });
   return { edits, shownNow, issue, notice, commit, cleanUp };
+}
+
+/**
+ * "Clean up unused…" for the panel, where the author may change Design and
+ * the where-used read is in hand: made once what is held for the author's
+ * pause is written, so the route judges the section as they left it.
+ */
+function cleanUpOffered(
+  mayChange: boolean,
+  uses: Parameters<typeof cleanUpUnused>[1] | undefined,
+  release: () => Promise<void>,
+  cleanUp: CleanUpThrough
+): Pick<TokensPanelProps, "onCleanUp"> {
+  if (!mayChange || uses === undefined) return {};
+  return {
+    onCleanUp: async ids => {
+      await release();
+      return cleanUp(ids, uses);
+    },
+  };
 }
 
 /** The studio's clean-up, handed the where-used read that names a kept one. */

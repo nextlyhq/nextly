@@ -757,7 +757,7 @@ export async function removeVariables(
  * The removal itself, of every variable in `ids` or none, as
  * {@link removeVariables} describes it; throws the refusal.
  */
-export async function removeStoredVariables(
+async function removeStoredVariables(
   ids: readonly string[],
   store: VariableStore,
   supplied: ReadonlySet<string>,

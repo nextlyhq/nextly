@@ -106,9 +106,9 @@ async function openCleanUp(page: Page) {
   const panel = await openColours(page);
   await panel.getByRole("button", { name: "Clean up unused…" }).click();
   const dialog = page.getByRole("dialog", { name: "Clean up unused colours" });
-  await expect(
-    dialog.getByRole("checkbox", { name: "Spare two" })
-  ).toBeVisible({ timeout: 30_000 });
+  await expect(dialog.getByRole("checkbox", { name: "Spare two" })).toBeVisible(
+    { timeout: 30_000 }
+  );
   return { panel, dialog };
 }
 
@@ -123,9 +123,9 @@ test("lists the colours the site made that nothing uses, removes them in one ste
     await openEditorWith(page, NODES, "cleanup-text");
     // The control: Primary is a colour the list holds, read before the
     // dialog, which hides the panel from role queries while it is open.
-    await expect.poll(async () => listed(await openColours(page))).toContain(
-      "Primary"
-    );
+    await expect
+      .poll(async () => listed(await openColours(page)))
+      .toContain("Primary");
     const { panel, dialog } = await openCleanUp(page);
 
     const boxes = dialog.getByRole("checkbox");
@@ -152,9 +152,7 @@ test("lists the colours the site made that nothing uses, removes them in one ste
     await page.getByRole("button", { name: "Undo", exact: true }).click();
     await expect
       .poll(() => storedNames(page.request))
-      .toEqual(
-        expect.arrayContaining(["color.spare-one", "color.spare-two"])
-      );
+      .toEqual(expect.arrayContaining(["color.spare-one", "color.spare-two"]));
     await expect.poll(() => listed(panel)).toContain("Spare one");
     await page.getByRole("button", { name: "Redo", exact: true }).click();
     await expect
@@ -309,7 +307,10 @@ test("at the panel's narrowest the control fits and the dialog stays in the wind
         );
         return scrolled === undefined ? null : scrolled.className;
       });
-      expect(sideways, "nothing in the Colours tab scrolls sideways").toBeNull();
+      expect(
+        sideways,
+        "nothing in the Colours tab scrolls sideways"
+      ).toBeNull();
       await expectNoAxeViolations(page, {
         include: '[aria-label="Design panel"]',
       });

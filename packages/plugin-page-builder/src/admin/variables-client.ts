@@ -165,7 +165,10 @@ export type CleanUpResult = Awaited<
  * names no place, as for a colour another variable or a Site text row uses,
  * which the route's own words already name.
  */
-function whereWords(name: string, places: VariableUsesPage): string | undefined {
+function whereWords(
+  name: string,
+  places: VariableUsesPage
+): string | undefined {
   const [first] = places.items;
   if (first === undefined) return undefined;
   const at =

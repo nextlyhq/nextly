@@ -38,7 +38,8 @@
   color: var(--nx-background);
 }
 
-.nx-usage-filter__choice:focus-visible {
+.nx-usage-filter__choice:focus-visible,
+.nx-colour-cleanup__open:focus-visible {
   outline: 2px solid var(--nx-ring);
   outline-offset: 1px;
 }
@@ -73,16 +74,10 @@
   color: var(--nx-foreground);
 }
 
-.nx-colour-cleanup__open:focus-visible {
-  outline: 2px solid var(--nx-ring);
-  outline-offset: 1px;
-}
-
 .nx-colour-cleanup {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
-  min-width: 0;
 }
 
 .nx-colour-cleanup__list {
