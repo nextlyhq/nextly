@@ -274,11 +274,21 @@ describe("BlockToolbar", () => {
     const editor = editorSpy(pair(), "a");
     mount(editor);
 
-    const expected = toolbarActions(
+    const offered = toolbarActions(
       editor.document,
       editor.selectedId,
       editor.selection.ids
-    ).map(action => action.label);
+    );
+    // The verbs kept in the menu sit behind one "More actions" button, which
+    // comes last; the rest are buttons of their own, in the model's order.
+    const expected = [
+      ...offered
+        .filter(action => action.inMenu !== true)
+        .map(action => action.label),
+      ...(offered.some(action => action.inMenu === true)
+        ? ["More actions"]
+        : []),
+    ];
 
     // The control: an empty model would make the comparison vacuous.
     expect(expected.length).toBeGreaterThan(1);

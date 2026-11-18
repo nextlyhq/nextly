@@ -199,6 +199,9 @@ describe("a host built before the verb", () => {
       move: () => {},
       delete: () => {},
       duplicate: () => {},
+      copy: () => {},
+      cut: () => {},
+      paste: () => {},
       selectParent: () => {},
       saveAsPattern: () => {},
     });
