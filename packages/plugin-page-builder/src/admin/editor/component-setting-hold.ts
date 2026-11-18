@@ -41,6 +41,7 @@ import type { EditorState } from "@nextlyhq/builder/shell";
 import {
   useBeforeDocumentAction,
   useDocumentActions,
+  useDocumentLocale,
   writePluginRoute,
 } from "@nextlyhq/plugin-sdk/admin";
 import { toast } from "@nextlyhq/ui";
@@ -67,6 +68,8 @@ export interface HeldComponentSetting {
   /** The stored component the plan was made against, sent as `expect`. */
   readonly fingerprint: string;
   readonly action: Extract<DefinitionAction, { kind: "expose" }>;
+  /** The language it was planned in, and is written in. */
+  readonly locale?: string;
 }
 
 /** The held settings, one per component. */
@@ -164,9 +167,14 @@ function reasonOf(error: unknown): string {
     : "The component couldn't be saved.";
 }
 
-/** The plan of a new setting, or why it would be refused. */
+/**
+ * The plan of a new setting, or why it would be refused, in the language the
+ * page is edited in: a translated component is drawn in that language, so it
+ * is changed in it.
+ */
 async function planSetting(
-  ask: ComponentSettingAsk
+  ask: ComponentSettingAsk,
+  locale: string | undefined
 ): Promise<HeldComponentSetting | { readonly refusal: string }> {
   const action = {
     kind: "expose" as const,
@@ -176,7 +184,11 @@ async function planSetting(
   };
   let planned: DefinitionActionResult | undefined;
   try {
-    planned = await sendAction(ask.componentId, { action, dryRun: true });
+    planned = await sendAction(ask.componentId, {
+      action,
+      dryRun: true,
+      ...(locale === undefined ? {} : { locale }),
+    });
   } catch (error) {
     return { refusal: reasonOf(error) };
   }
@@ -191,6 +203,7 @@ async function planSetting(
     definition: planned.definition,
     fingerprint: planned.fingerprint,
     action,
+    ...(locale === undefined ? {} : { locale }),
   };
 }
 
@@ -212,6 +225,7 @@ async function writeHeld(
     const written = await sendAction(hold.componentId, {
       action: hold.action,
       expect: hold.fingerprint,
+      ...(hold.locale === undefined ? {} : { locale: hold.locale }),
     });
     if (written === undefined) return "The component couldn't be saved.";
     return written.targetId === hold.settingId
@@ -253,6 +267,9 @@ export function useComponentSettingHold(
   const now = useRef({ editor, held, library });
   now.current = { editor, held, library };
   const actions = useDocumentActions();
+  const locale = useDocumentLocale()?.code ?? undefined;
+  const language = useRef(locale);
+  language.current = locale;
   const run = useRef(actions?.run);
   run.current = actions?.run;
 
@@ -308,7 +325,7 @@ export function useComponentSettingHold(
       planning.current.add(ask.componentId);
       let planned: Awaited<ReturnType<typeof planSetting>>;
       try {
-        planned = await planSetting(ask);
+        planned = await planSetting(ask, language.current);
       } finally {
         planning.current.delete(ask.componentId);
       }
@@ -430,9 +447,14 @@ export function useLeavingWithHeldSettings(
   writeHeldSettings: () => true | Promise<boolean>,
   leave: () => void
 ): () => void {
+  // The leave as it is when the writes end, not as it was when they began:
+  // it commits the document it closes over, and the author may edit while
+  // they are in flight.
+  const latest = useRef(leave);
+  latest.current = leave;
   return useMemo(
-    () => leavingWithHeldSettings(writeHeldSettings, leave),
-    [writeHeldSettings, leave]
+    () => leavingWithHeldSettings(writeHeldSettings, () => latest.current()),
+    [writeHeldSettings]
   );
 }
 

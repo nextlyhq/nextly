@@ -30,3 +30,5 @@
 ---
 
 A placed component's panel can turn one of its text, link or image blocks into a new setting of the component, bound to a field for this placement, from "Make this a setting of the component" below its settings. The canvas shows the bound data at once. The component's draft gets the new setting with the page's next Save, or when you leave for the form. A Publish of a page using a setting its live component lacks asks first whether to publish the component too, saying that its other unpublished changes go live with it. Other pages that place the component keep showing what they show now. If the component can't take the setting, for example because someone else changed it since, the binding is taken off this page, the Save stops, and a message says why, with **Save again** to save the page without it.
+
+The component definition route (`POST /components/:id/definition`) takes an optional `locale`: where the component store translates its definition field, the edit reads and writes that language.

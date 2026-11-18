@@ -37,6 +37,7 @@ const form = vi.hoisted(() => ({
         store: { writesSettled(): Promise<boolean> }
       ) => unknown),
   run: vi.fn(),
+  locale: null as null | { code: string },
 }));
 
 vi.mock("@nextlyhq/plugin-sdk/admin", async importOriginal => ({
@@ -55,6 +56,7 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async importOriginal => ({
     form.before = handler;
   },
   useDocumentActions: () => ({ run: form.run }),
+  useDocumentLocale: () => form.locale,
 }));
 
 import type { ComponentLibraryRead } from "../component-library-client";
@@ -63,6 +65,7 @@ import {
   leavingWithHeldSettings,
   liveSettingHolds,
   useComponentSettingHold,
+  useLeavingWithHeldSettings,
 } from "./component-setting-hold";
 
 afterEach(() => {
@@ -70,6 +73,7 @@ afterEach(() => {
   route.answer = () => undefined;
   form.before = undefined;
   form.run.mockClear();
+  form.locale = null;
   toastError.mockClear();
 });
 
@@ -283,6 +287,25 @@ describe("making a setting from the page", () => {
   });
 });
 
+describe("a page edited in a language", () => {
+  it("plans and writes the setting in that language", async () => {
+    // A translated component is drawn in the page's language, so it is
+    // changed in that language, not the site's default.
+    form.locale = { code: "de" };
+    answers("ok");
+    const mounted = mount(pageWith());
+    await act(async () => {
+      await mounted.hook.result.current.makeComponentSetting(ASK);
+    });
+    mounted.editor.document = pageWith(BOUND);
+    mounted.hook.rerender({ doc: pageWith(BOUND) });
+    await act(async () => {
+      await form.before?.("save", settled);
+    });
+    expect(route.sent.map(sent => sent.body.locale)).toEqual(["de", "de"]);
+  });
+});
+
 describe("a plan still being made", () => {
   it("refuses a second setting of the same component until the first is planned", async () => {
     let release: () => void = () => undefined;
@@ -370,6 +393,28 @@ describe("leaving the editor for the form", () => {
     const plainLeave = vi.fn();
     leavingWithHeldSettings(() => true, plainLeave)();
     expect(plainLeave).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves with the editor as it is when the writes end", async () => {
+    // The author may edit while the writes are in flight, and the leave
+    // commits the document it closes over.
+    let written: (closes: boolean) => void = () => undefined;
+    const write = () =>
+      new Promise<boolean>(resolve => {
+        written = resolve;
+      });
+    const before = vi.fn();
+    const after = vi.fn();
+    const hook = renderHook(
+      ({ leave }: { leave: () => void }) =>
+        useLeavingWithHeldSettings(write, leave),
+      { initialProps: { leave: before } }
+    );
+    hook.result.current();
+    hook.rerender({ leave: after });
+    written(true);
+    await vi.waitFor(() => expect(after).toHaveBeenCalledTimes(1));
+    expect(before).not.toHaveBeenCalled();
   });
 
   it("closes at once when nothing is held", async () => {

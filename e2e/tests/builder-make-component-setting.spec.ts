@@ -3,9 +3,9 @@
  *
  * A Card's kicker is not one of its settings. From the placement's panel the
  * kicker's text is made a setting named after the field picked, each post's
- * Title: the canvas shows every post's own title at once, and the page's
- * Publish writes the setting to the Card and publishes both, so a visitor
- * sees the titles too. A refused component write takes the binding back off,
+ * Title: the canvas shows every post's own title at once. The page's Publish
+ * writes the setting to the Card's draft and asks to publish the Card too, as
+ * it is live without the setting; publishing both, a visitor sees the titles. A refused component write takes the binding back off,
  * says why, and "Save again" stores the page without it.
  *
  * @module tests/builder-make-component-setting.spec
@@ -185,7 +185,7 @@ async function statusOf(api: APIRequestContext, id: string): Promise<unknown> {
 test.describe("making a component's block a setting from a placement", () => {
   test.describe.configure({ timeout: 300_000 });
 
-  test("the canvas shows each post's title at once, and Publish writes the setting and shows it to visitors", async ({
+  test("the canvas shows each post's title at once, and Publish asks to publish the setting and shows it to visitors", async ({
     page,
   }) => {
     await gotoAdmin(page, "/");
@@ -206,6 +206,14 @@ test.describe("making a component's block a setting from a placement", () => {
       .locator('[data-topbar="end"]')
       .getByRole("button", { name: "Publish", exact: true })
       .click();
+    // The Card is live without the new setting, which only its draft has: the
+    // publish asks before publishing the Card, and its other changes, too.
+    const asked = page.getByRole("alertdialog");
+    await expect(asked).toContainText(
+      "uses 1 component with a new setting that isn't published",
+      { timeout: 30_000 }
+    );
+    await asked.getByRole("button", { name: "Publish both" }).click();
     await expect
       .poll(
         async () =>

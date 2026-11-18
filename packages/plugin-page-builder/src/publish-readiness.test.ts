@@ -363,6 +363,67 @@ describe("a live component whose new setting the page uses", () => {
     expect(draftsAsked).toEqual([]);
   });
 
+  it("names it when a component the page places binds the new setting", async () => {
+    // The page places A, unpublished or live, whose own definition binds a
+    // setting of live B that only B's draft has.
+    const bound = (id: string): BlockDocument => ({
+      ...component(),
+      nodes: [
+        {
+          id: `in-${id}`,
+          type: COMPONENT_INSTANCE_TYPE,
+          version: 1,
+          props: { componentId: "b" },
+          bindings: { "overrides.title": { $bind: "title", source: "entry" } },
+        },
+      ],
+    });
+    const withSettings = (exposed: readonly string[]): BlockDocument =>
+      ({
+        ...component(),
+        exposed: exposed.map(id => ({
+          id,
+          label: id,
+          nodeId: "text",
+          propPath: "text",
+          type: "text",
+        })),
+      }) as BlockDocument;
+    for (const aLive of [false, true]) {
+      const store: ReadinessReads = {
+        published: async ids =>
+          new Map(
+            ids.flatMap((id): [string, BlockDocument][] =>
+              id === "b"
+                ? [[id, withSettings([])]]
+                : id === "a" && aLive
+                  ? [[id, bound("a")]]
+                  : []
+            )
+          ),
+        stored: async ids =>
+          new Map(
+            ids.flatMap((id): [string, unknown][] =>
+              id === "a" ? [[id, bound("a")]] : []
+            )
+          ),
+        drafts: async ids =>
+          new Map(
+            ids.flatMap((id): [string, unknown][] =>
+              id === "b" ? [[id, withSettings(["title"])]] : []
+            )
+          ),
+        layout: async () => null,
+        limits: LIMITS,
+      };
+      const plan = await planPublishReadiness(
+        { documents: [page(["a"])], layout: null },
+        store
+      );
+      expect(plan.components).toEqual(aLive ? ["b"] : ["b", "a"]);
+    }
+  });
+
   it("names nothing when the working draft lacks the setting too", async () => {
     // A setting since removed: publishing the draft would not bring it back.
     const { store, placed } = settingsCase({

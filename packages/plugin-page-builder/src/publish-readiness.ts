@@ -41,6 +41,7 @@ import {
   countNodes,
   documentBytes,
   isPlainRecord,
+  MAX_COMPOSED_DEPTH,
   walkNodes,
   type BlockDocument,
   type DocumentLimits,
@@ -270,7 +271,9 @@ async function settingsOnlyDrafted(
   const found = new Map<string, unknown>();
   if (reads.drafts === undefined) return found;
   const used = new Map<string, Set<string>>();
-  for (const document of documents) settingsUsedIn(document, used);
+  for (const document of await composedFrom(documents, planned, reads)) {
+    settingsUsedIn(document, used);
+  }
   for (const id of planned.keys()) used.delete(id);
   if (used.size === 0) return found;
   const live = await reads.published([...used.keys()]);
@@ -291,6 +294,41 @@ async function settingsOnlyDrafted(
     if (missing.some(setting => draftHas.has(setting))) found.set(id, draft);
   }
   return found;
+}
+
+/**
+ * The documents, and every definition they compose: each planned one in the
+ * form it goes live in, and each live one reached, level by level to the
+ * depth the render composes. A setting bound inside a component placed on
+ * the page is one the page needs as much as its own.
+ */
+async function composedFrom(
+  documents: readonly BlockDocument[],
+  planned: ReadonlyMap<string, unknown>,
+  reads: ReadinessReads
+): Promise<BlockDocument[]> {
+  const all = [...documents];
+  for (const stored of planned.values()) {
+    const definition = asDocument(stored);
+    if (definition !== null) all.push(definition);
+  }
+  const seen = new Set(planned.keys());
+  const unseen = (from: readonly BlockDocument[]): string[] => [
+    ...new Set(
+      from.flatMap(document =>
+        componentIdsIn(document.nodes).filter(id => !seen.has(id))
+      )
+    ),
+  ];
+  let frontier = unseen(all);
+  for (let depth = 0; frontier.length > 0 && depth < MAX_COMPOSED_DEPTH; ) {
+    depth += 1;
+    for (const id of frontier) seen.add(id);
+    const live = [...(await reads.published(frontier)).values()];
+    all.push(...live);
+    frontier = unseen(live);
+  }
+  return all;
 }
 
 /** Each placement's component, with the settings it binds or sets, into `used`. */

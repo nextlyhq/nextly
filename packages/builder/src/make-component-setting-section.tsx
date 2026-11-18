@@ -161,7 +161,11 @@ function CandidateRow({
     } catch {
       answer = { refusal: "The setting could not be added. Try again." };
     }
-    if (mounted.current) setPending(false);
+    // A row gone meanwhile holds a document the editor no longer does, and a
+    // bind planned against it would undo what the author did since: the
+    // answer is dropped, and the host's plan, bound by nothing, with it.
+    if (!mounted.current) return;
+    setPending(false);
     if ("refusal" in answer) {
       setNote({ text: answer.refusal, tone: "refused" });
       return;

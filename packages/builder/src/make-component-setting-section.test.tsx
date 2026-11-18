@@ -21,6 +21,7 @@ import {
   type ComponentDocument,
 } from "@nextlyhq/blocks-engine";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -250,6 +251,27 @@ describe("making a component's prop a setting, from a placement", () => {
     expect((await screen.findByRole("status")).textContent).toContain(
       "saved with the page"
     );
+  });
+
+  it("drops an answer that comes after its row has gone", async () => {
+    // The author moved on meanwhile; the row's document is no longer the
+    // editor's, and binding against it would undo what they did since.
+    let answer: (settingId: string) => void = () => undefined;
+    const makeComponentSetting = vi.fn(
+      () =>
+        new Promise<{ settingId: string }>(resolve => {
+          answer = settingId => resolve({ settingId });
+        })
+    );
+    const editor = mount({}, { makeComponentSetting });
+    await pickTitleForKicker();
+    await waitFor(() => expect(makeComponentSetting).toHaveBeenCalled());
+    cleanup();
+    await act(async () => {
+      answer("kicker");
+      await Promise.resolve();
+    });
+    expect(editor.apply).not.toHaveBeenCalled();
   });
 
   it("says why the host refused, and changes nothing", async () => {
