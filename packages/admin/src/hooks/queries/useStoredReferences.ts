@@ -65,10 +65,16 @@ export function useStoredEntry({
   locale,
   fallbackLocale,
   draft,
+  translationStatus = false,
   enabled = true,
 }: ReadScope & {
   collectionSlug?: string;
   entryId?: string;
+  /**
+   * Ask every language's state beside the values (`_translations`), for a
+   * reader that judges whether the language read is published.
+   */
+  translationStatus?: boolean;
   /** False holds the read back, as `useEntry`'s option does. */
   enabled?: boolean;
 }): UseQueryResult<Doc, Error> {
@@ -77,6 +83,7 @@ export function useStoredEntry({
     locale,
     fallbackLocale,
     draft,
+    translationStatus,
   });
   return useQuery<Doc, Error>({
     queryKey,
@@ -91,6 +98,7 @@ export function useStoredEntry({
         ...(locale ? { locale } : {}),
         ...(fallbackLocale ? { fallbackLocale } : {}),
         ...(draft !== undefined ? { draft } : {}),
+        ...(translationStatus ? { translationStatus } : {}),
       });
     },
     enabled: enabled && !!collectionSlug && !!entryId,

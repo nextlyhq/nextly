@@ -228,6 +228,25 @@ export function variablesFor(
 }
 
 /**
+ * The variables a picker lists, without the colours the site hides (its
+ * unused built-in colours, while it hides them), keeping the one the field
+ * holds, so a field never stops naming its own value.
+ */
+export function shownVariables(
+  offered: readonly SiteVariable[],
+  hidden: ReadonlySet<string>,
+  held: string | null
+): readonly SiteVariable[] {
+  if (hidden.size === 0) return offered;
+  return offered.filter(
+    variable =>
+      variable.kind !== "color" ||
+      variable.identity === held ||
+      !hidden.has(variable.identity)
+  );
+}
+
+/**
  * Whether the leaf accepts this variable's value, in the mode asked for, by
  * the engine's own rule for the leaf, the one a typed value goes through.
  *
@@ -953,6 +972,30 @@ export function contrastObscuredIn(
   styles: NodeStyles | undefined
 ): string | undefined {
   return obscuringAnywhereIn(styles, OBSCURING_PROPERTIES);
+}
+
+/**
+ * What on one node stands over a pair, split by how far it reaches: `local`
+ * (a background image or gradient, a shadow) is painted behind the node's
+ * content and stops mattering under a child that paints an opaque
+ * background of its own; `subtree` (opacity, a filter, a blend) alters
+ * everything inside. Any state or width, as {@link contrastObscuredIn} reads.
+ */
+export function contrastObscuringIn(styles: NodeStyles | undefined): {
+  readonly local?: string;
+  readonly subtree?: string;
+} {
+  const subtree = obscuringAnywhereIn(styles, SUBTREE_OBSCURING_PROPERTIES);
+  const local = obscuringAnywhereIn(
+    styles,
+    OBSCURING_PROPERTIES.filter(
+      property => !SUBTREE_OBSCURING_PROPERTIES.includes(property)
+    )
+  );
+  return {
+    ...(local === undefined ? {} : { local }),
+    ...(subtree === undefined ? {} : { subtree }),
+  };
 }
 
 /**

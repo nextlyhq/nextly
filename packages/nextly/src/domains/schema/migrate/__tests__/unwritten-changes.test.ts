@@ -353,6 +353,35 @@ describe("compareWithNewestSnapshot", () => {
       "~ permissions @acme/forms: + export-submissions",
     ]);
   });
+
+  it("over kept slugs alone, names a declared permission added since and never one removed", () => {
+    const posts = entitiesOf(collection([TITLE]));
+    const older = snapshotOf(posts, { permissions: undefined });
+    const declares = (plugins: PermissionRecord["plugins"]) =>
+      unwrittenChangeLines(
+        compareWithNewestSnapshot({
+          entities: posts,
+          appStream: NO_APP_STREAM_TABLES,
+          permissions: { ...NO_PERMISSIONS, plugins },
+          latest: older,
+          dialect: DIALECT,
+          // A record written before owners were kept: the slugs, whoever's.
+          recorded: { permissionSlugs: ["read-posts", "import-submissions"] },
+        })
+      );
+
+    expect(
+      declares({
+        "@acme/forms": {
+          "import-submissions": exportPermission,
+          "export-submissions": exportPermission,
+        },
+      })
+    ).toEqual(["~ permissions @acme/forms: + export-submissions"]);
+    // `import-submissions` was kept and is no longer declared: a slug alone
+    // does not say whose it was, so it is not named.
+    expect(declares({ "@acme/forms": {} })).toEqual([]);
+  });
 });
 
 describe("unwrittenChangesError", () => {

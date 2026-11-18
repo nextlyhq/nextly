@@ -18,9 +18,9 @@
  *
  * A snapshot written before snapshots recorded settings or permissions says
  * nothing about them, so its silence is never a difference. There the
- * settings and permissions are compared with what the database records once
- * its first run on this release has recorded them (the registry rows, and the
- * live permissions by owner), and nothing is named before that run.
+ * settings and permissions are compared with what the database's first run on
+ * this release recorded of them, once and for good (the registry record's
+ * rows and owned permissions), and nothing is named before that run.
  *
  * **Runtime restriction (F11):** CLI and boot only; never import from runtime
  * code.
@@ -81,8 +81,18 @@ export interface RecordedInDatabase {
    * declared settings: each one's settings differ from what is recorded.
    */
   settingsDiffer?: readonly EntitySettingsChange[];
-  /** The live permissions not orphaned, the app's and each plugin's, by owner. */
+  /**
+   * The app's and each plugin's permissions, by owner: as the registry record
+   * kept them, or, where the database has no such record of them, the live
+   * ones not orphaned.
+   */
   permissions?: Pick<PermissionRecord, "app" | "plugins">;
+  /**
+   * Every permission slug a registry record kept, where it was written before
+   * owners were kept. A declared permission not among them was added since;
+   * one removed cannot be named, since a slug alone does not say whose it was.
+   */
+  permissionSlugs?: readonly string[];
 }
 
 /** Everything the declared schema holds that the newest snapshot does not. */
@@ -169,10 +179,7 @@ export function permissionDifferences(
   recorded: RecordedInDatabase | undefined
 ): Extract<PermissionChange, { kind: "owner" }>[] {
   const previous =
-    latest?.data.permissions ??
-    (recorded?.permissions === undefined
-      ? undefined
-      : { ...recorded.permissions, collections: {}, singles: {} });
+    latest?.data.permissions ?? recordedPermissions(declared, recorded);
   // Over a snapshot that predates the record and a database that records none
   // yet, there is nothing to compare: `permissionChanges` names that "recorded".
   if (previous === undefined) return [];
@@ -180,6 +187,37 @@ export function permissionDifferences(
     (change): change is Extract<PermissionChange, { kind: "owner" }> =>
       change.kind === "owner"
   );
+}
+
+/**
+ * The owners' permissions the database records, as a permission record:
+ * undefined where it records none. Over slugs alone (`permissionSlugs`), each
+ * declared permission whose slug was kept, so only an added one differs.
+ */
+function recordedPermissions(
+  declared: PermissionRecord,
+  recorded: RecordedInDatabase | undefined
+): PermissionRecord | undefined {
+  if (recorded?.permissions !== undefined) {
+    return { ...recorded.permissions, collections: {}, singles: {} };
+  }
+  if (recorded?.permissionSlugs === undefined) return undefined;
+  const keptSlugs = new Set(recorded.permissionSlugs);
+  const keptOf = (owned: OwnerPermissions): OwnerPermissions =>
+    Object.fromEntries(
+      Object.entries(owned).filter(([slug]) => keptSlugs.has(slug))
+    );
+  return {
+    app: keptOf(declared.app),
+    plugins: Object.fromEntries(
+      Object.entries(declared.plugins).map(([name, owned]) => [
+        name,
+        keptOf(owned),
+      ])
+    ),
+    collections: {},
+    singles: {},
+  };
 }
 
 /** One permission row as the database stores it, for {@link livePermissionsByOwner}. */
@@ -303,7 +341,9 @@ export type UnwrittenChangesArgs = Pick<
    * database), such a snapshot's silence names nothing.
    */
   recorded?: (
-    entities: DeclaredEntities
+    entities: DeclaredEntities,
+    /** The newest snapshot's migration, by base name; null where there is none. */
+    newest: string | null
   ) => Promise<RecordedInDatabase | undefined>;
   /**
    * Whether `config` carries everything a permission is declared from (the
@@ -358,7 +398,14 @@ export async function unwrittenChangesOf(
     latest,
     dialect: args.dialect,
     ...(predatesRecord && args.recorded !== undefined
-      ? { recorded: await args.recorded(entities) }
+      ? {
+          recorded: await args.recorded(
+            entities,
+            latest === null
+              ? null
+              : latest.filename.replace(/\.snapshot\.json$/, "")
+          ),
+        }
       : {}),
   });
   return args.comparePermissions === false
