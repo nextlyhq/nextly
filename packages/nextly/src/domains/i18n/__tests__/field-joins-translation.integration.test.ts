@@ -950,11 +950,11 @@ describeEachDialect("a shared field that becomes translated", dialect => {
   // A default given to the main column outside the history is drift, refused as `nextly migrate`
   // refuses it, before anything changes: by a Single's and a field group's file, and by a
   // collection's push, whose check before the push judges the table as the file road does. On MySQL
-  // a file road refuses it first, before the file is planned, as its TEXT companion column could
-  // take no literal default.
+  // the move's own refusal comes first wherever it is asked before the push or the file (its TEXT
+  // companion column could take no literal default).
   it.skipIf(dialect === "sqlite").each(PATHS)(
     "refuses a default given to the main column outside the history, and changes nothing, when $path",
-    async ({ table, seed, change }) => {
+    async ({ path, table, seed, change }) => {
       const id = await seed();
       await query(
         dialect === "mysql"
@@ -967,7 +967,12 @@ describeEachDialect("a shared field that becomes translated", dialect => {
         (error: unknown) => error
       );
 
-      if (dialect === "mysql" && runsItsFile(table)) {
+      // On MySQL the move's own refusal comes first, before a file is planned or a field saved
+      // alone is applied; the schema dialog's push is judged for drift before it.
+      if (
+        dialect === "mysql" &&
+        path !== "the builder applies the change with the schema dialog"
+      ) {
         expect(reportedRefusal(refusal)).toMatch(
           /own default; turning translation on moves its values into a new column/
         );
