@@ -35,9 +35,13 @@
  * @module publish-readiness
  */
 import {
+  boundSettingId,
+  COMPONENT_INSTANCE_TYPE,
   componentIdsIn,
   countNodes,
   documentBytes,
+  isPlainRecord,
+  walkNodes,
   type BlockDocument,
   type DocumentLimits,
 } from "@nextlyhq/blocks-engine";
@@ -64,7 +68,7 @@ import {
   type StoreSourceDirectApi,
   type SystemReading,
 } from "./component-store-source";
-import { asCaller } from "./composition-route-kit";
+import { asCaller, readOrNull } from "./composition-route-kit";
 import { PAGE_BUILDER_SETTINGS_SLUG } from "./default-layout/settings-single";
 import {
   readLayoutSettings,
@@ -91,6 +95,13 @@ export interface ReadinessReads {
   readonly published: ComponentSource;
   /** The stored form of each component among `ids` that exists, any state. */
   readonly stored: (ids: readonly string[]) => Promise<Map<string, unknown>>;
+  /**
+   * The working draft of each component among `ids` that has one, which a
+   * publish of the component puts live. Asked only of a live component the
+   * documents use a setting of that its live version lacks; without it, no
+   * such component is named.
+   */
+  readonly drafts?: (ids: readonly string[]) => Promise<Map<string, unknown>>;
   /** The Layout `id`: whether it is live and what its areas name; null if gone. */
   readonly layout: (
     id: string
@@ -106,6 +117,11 @@ export interface ReadinessPlan {
   readonly layout: string | null;
   /** Placed components that no longer exist. */
   readonly missing: number;
+  /**
+   * Those of `components` that are live, named because only their working
+   * draft has a setting the documents use. Absent when there are none.
+   */
+  readonly newSettings?: readonly string[];
 }
 
 /** The components and Layout a publish of `documents` would leave unpublished. */
@@ -176,9 +192,10 @@ async function namedLayout(
 async function unpublishedComponents(
   documents: readonly BlockDocument[],
   reads: ReadinessReads
-): Promise<{ components: string[]; missing: number }> {
+): Promise<Omit<ReadinessPlan, "layout">> {
   // Discovery order, kept, so the answer can be published deepest first.
   const planned = new Map<string, unknown>();
+  const newSettings: string[] = [];
   const gone = new Set<string>();
   const source = supplying(reads, planned);
   // Until a fixed point, as the render's own discovery runs, never for a
@@ -188,20 +205,129 @@ async function unpublishedComponents(
   // yet planned or gone, and both only grow, over the components the store
   // holds.
   for (;;) {
-    const asked = await askedFor(
-      documents,
-      source,
-      reads.limits,
-      id => planned.has(id) || gone.has(id)
-    );
-    if (asked.length === 0) break;
-    const stored = await reads.stored(asked);
-    for (const id of asked) {
-      if (stored.has(id)) planned.set(id, stored.get(id));
-      else gone.add(id);
+    if (await planAsked(documents, source, reads, planned, gone)) continue;
+    // Then the live components whose new settings the documents use, each
+    // supplied from its draft for the next round, which may place more.
+    const drafted = await settingsOnlyDrafted(documents, planned, reads);
+    if (drafted.size === 0) break;
+    for (const [id, draft] of drafted) {
+      planned.set(id, draft);
+      newSettings.push(id);
     }
   }
-  return { components: dependencyOrder(planned), missing: gone.size };
+  return {
+    components: dependencyOrder(planned),
+    missing: gone.size,
+    ...(newSettings.length === 0 ? {} : { newSettings }),
+  };
+}
+
+/**
+ * One round of the render's discovery: each id the documents ask for that is
+ * neither planned nor gone, planned from its stored form or counted gone.
+ * Whether the round asked for anything.
+ */
+async function planAsked(
+  documents: readonly BlockDocument[],
+  source: ComponentSource,
+  reads: ReadinessReads,
+  planned: Map<string, unknown>,
+  gone: Set<string>
+): Promise<boolean> {
+  const asked = await askedFor(
+    documents,
+    source,
+    reads.limits,
+    id => planned.has(id) || gone.has(id)
+  );
+  if (asked.length === 0) return false;
+  const stored = await reads.stored(asked);
+  for (const id of asked) {
+    if (stored.has(id)) planned.set(id, stored.get(id));
+    else gone.add(id);
+  }
+  return true;
+}
+
+/**
+ * The live components a placement in the documents uses a setting of, binds
+ * it or sets it, that only the component's working draft has, by id with
+ * that draft.
+ *
+ * A setting made from a page is written to the component's draft with the
+ * page's Save, so a page published later binds a setting its live component
+ * lacks, and a visitor would see the component as if it were not bound.
+ * Asked of what is stored at every publish rather than remembered by the
+ * editor that made it, so it holds after a Save, a reload or the form. Named
+ * as any component the page needs, and published only when the author
+ * chooses to in the dialog, which publishes the draft's other changes too.
+ */
+async function settingsOnlyDrafted(
+  documents: readonly BlockDocument[],
+  planned: ReadonlyMap<string, unknown>,
+  reads: ReadinessReads
+): Promise<Map<string, unknown>> {
+  const found = new Map<string, unknown>();
+  if (reads.drafts === undefined) return found;
+  const used = new Map<string, Set<string>>();
+  for (const document of documents) settingsUsedIn(document, used);
+  for (const id of planned.keys()) used.delete(id);
+  if (used.size === 0) return found;
+  const live = await reads.published([...used.keys()]);
+  // An unpublished component is named by the render's own discovery; only a
+  // live one lacking a setting the documents use asks for its draft.
+  const lacking = new Map<string, string[]>();
+  for (const [id, settings] of used) {
+    if (!live.has(id)) continue;
+    const liveHas = settingIdsOf(live.get(id));
+    const missing = [...settings].filter(setting => !liveHas.has(setting));
+    if (missing.length > 0) lacking.set(id, missing);
+  }
+  if (lacking.size === 0) return found;
+  const drafts = await reads.drafts([...lacking.keys()]);
+  for (const [id, missing] of lacking) {
+    const draft = drafts.get(id);
+    const draftHas = settingIdsOf(draft);
+    if (missing.some(setting => draftHas.has(setting))) found.set(id, draft);
+  }
+  return found;
+}
+
+/** Each placement's component, with the settings it binds or sets, into `used`. */
+function settingsUsedIn(
+  document: BlockDocument,
+  used: Map<string, Set<string>>
+): void {
+  walkNodes(document.nodes, node => {
+    if (node.type !== COMPONENT_INSTANCE_TYPE) return;
+    const componentId = isPlainRecord(node.props)
+      ? node.props.componentId
+      : undefined;
+    if (typeof componentId !== "string") return;
+    const settings = used.get(componentId) ?? new Set<string>();
+    const overrides = isPlainRecord(node.props) ? node.props.overrides : null;
+    if (isPlainRecord(overrides)) {
+      for (const id of Object.keys(overrides)) settings.add(id);
+    }
+    if (isPlainRecord(node.bindings)) {
+      for (const key of Object.keys(node.bindings)) {
+        const id = boundSettingId(key);
+        if (id !== undefined) settings.add(id);
+      }
+    }
+    if (settings.size > 0) used.set(componentId, settings);
+  });
+}
+
+/** The ids of the settings a component definition declares. */
+function settingIdsOf(definition: unknown): Set<string> {
+  const ids = new Set<string>();
+  const exposed = isPlainRecord(definition) ? definition.exposed : undefined;
+  if (!Array.isArray(exposed)) return ids;
+  for (const entry of exposed) {
+    if (isPlainRecord(entry) && typeof entry.id === "string") ids.add(entry.id);
+  }
+  return ids;
 }
 
 /**
@@ -236,12 +362,12 @@ function supplying(
   reads: ReadinessReads,
   planned: ReadonlyMap<string, unknown>
 ): ComponentSource {
+  // A planned component goes live in its planned form, over any live one: a
+  // live component named for its draft's new setting is drawn as that draft.
   return async ids => {
     const found = new Map(await reads.published(ids));
     for (const id of ids) {
-      if (!found.has(id) && planned.has(id)) {
-        found.set(id, planned.get(id) as BlockDocument);
-      }
+      if (planned.has(id)) found.set(id, planned.get(id) as BlockDocument);
     }
     return found;
   };
@@ -266,6 +392,7 @@ async function askedFor(
 type Reader = StoreSourceDirectApi<SystemReading> &
   Pick<DefaultLayoutDirectApi, "findSingle"> & {
     find(args: Record<string, unknown>): Promise<{ items: unknown[] }>;
+    findByID(args: Record<string, unknown>): Promise<unknown>;
   };
 
 /** The one read the reads by id need. */
@@ -348,6 +475,27 @@ export function systemReads(
         if (typeof row.id !== "string") continue;
         const stored = row[stores.componentField];
         byId.set(row.id, asDocument(stored) ?? stored);
+      }
+      return byId;
+    },
+    // One read per id, as `draft` is a read of one document; asked only of
+    // the few live components lacking a setting the page uses.
+    drafts: async ids => {
+      const byId = new Map<string, unknown>();
+      for (const id of ids) {
+        const row = await readOrNull(() =>
+          nextly.findByID({
+            ...AS_THE_SYSTEM,
+            collection: stores.components,
+            id,
+            status: "all",
+            draft: true,
+            depth: 0,
+          })
+        );
+        if (!isPlainRecord(row)) continue;
+        const stored = row[stores.componentField];
+        byId.set(id, asDocument(stored) ?? stored);
       }
       return byId;
     },
@@ -647,6 +795,7 @@ async function describePlan(
   // came from a system read, and naming it would tell them what the
   // access-enforced reads do not.
   let hidden = 0;
+  const newSettings = new Set(plan.newSettings);
   const dependencies: UnpublishedDependency[] = plan.components.map(id => {
     const title = componentTitles.get(id) ?? null;
     return title === null
@@ -656,7 +805,13 @@ async function describePlan(
           title,
           mayPublish: false,
         }
-      : { kind: "component", id, title, mayPublish: mayPublishComponents };
+      : {
+          kind: "component",
+          id,
+          title,
+          mayPublish: mayPublishComponents,
+          ...(newSettings.has(id) ? { newSettings: true } : {}),
+        };
   });
   if (plan.layout !== null) {
     const title =

@@ -60,6 +60,7 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async importOriginal => ({
 import type { ComponentLibraryRead } from "../component-library-client";
 
 import {
+  leavingWithHeldSettings,
   liveSettingHolds,
   useComponentSettingHold,
 } from "./component-setting-hold";
@@ -282,6 +283,120 @@ describe("making a setting from the page", () => {
   });
 });
 
+describe("a plan still being made", () => {
+  it("refuses a second setting of the same component until the first is planned", async () => {
+    let release: () => void = () => undefined;
+    const answered = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    answers("ok");
+    const planned = route.answer;
+    route.answer = body => answered.then(() => planned(body));
+    const { hook } = mount(pageWith());
+    let first: Promise<unknown> = Promise.resolve();
+    let second: unknown;
+    await act(async () => {
+      first = hook.result.current.makeComponentSetting(ASK);
+      second = await hook.result.current.makeComponentSetting({
+        ...ASK,
+        nodeId: "other",
+        label: "Summary",
+      });
+    });
+    expect(second).toEqual({
+      refusal: "Wait a moment: a new setting of Card is still being made.",
+    });
+    release();
+    let answer: unknown;
+    await act(async () => {
+      answer = await first;
+    });
+    expect(answer).toEqual({ settingId: "title" });
+    // One plan asked for, the first.
+    expect(route.sent).toHaveLength(1);
+  });
+});
+
+describe("leaving the editor for the form", () => {
+  async function heldAndBound(written: Parameters<typeof answers>[0]) {
+    answers(written);
+    const mounted = mount(pageWith());
+    await act(async () => {
+      await mounted.hook.result.current.makeComponentSetting(ASK);
+    });
+    mounted.editor.document = pageWith(BOUND);
+    mounted.hook.rerender({ doc: pageWith(BOUND) });
+    return mounted;
+  }
+
+  it("writes each held setting to its component's draft first, and lets the editor close", async () => {
+    // The form saves the page; the editor holding the setting is gone by then.
+    const { hook, retry } = await heldAndBound("ok");
+    let closes: unknown;
+    await act(async () => {
+      closes = await hook.result.current.writeHeldSettings();
+    });
+    expect(closes).toBe(true);
+    expect(route.sent.at(-1)?.body).toEqual({
+      action: { kind: "expose", nodeId: "k", propPath: "text", label: "Title" },
+      expect: "f1",
+    });
+    expect(retry).toHaveBeenCalled();
+    // Written: the page's next Save writes it no second time.
+    route.sent.length = 0;
+    await act(async () => {
+      await form.before?.("save", settled);
+    });
+    expect(route.sent).toEqual([]);
+  });
+
+  it("leaves only once the held settings are written", async () => {
+    const leave = vi.fn();
+    let written: (closes: boolean) => void = () => undefined;
+    const write = () =>
+      new Promise<boolean>(resolve => {
+        written = resolve;
+      });
+    leavingWithHeldSettings(write, leave)();
+    await Promise.resolve();
+    expect(leave).not.toHaveBeenCalled();
+    written(true);
+    await vi.waitFor(() => expect(leave).toHaveBeenCalledTimes(1));
+    const refusedLeave = vi.fn();
+    leavingWithHeldSettings(async () => false, refusedLeave)();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(refusedLeave).not.toHaveBeenCalled();
+    // Nothing held: the leave is the same call, as before.
+    const plainLeave = vi.fn();
+    leavingWithHeldSettings(() => true, plainLeave)();
+    expect(plainLeave).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes at once when nothing is held", async () => {
+    const { hook } = mount(pageWith());
+    let closes: unknown;
+    await act(async () => {
+      closes = await hook.result.current.writeHeldSettings();
+    });
+    expect(closes).toBe(true);
+    expect(route.sent).toEqual([]);
+  });
+
+  it("keeps the editor open, with the binding taken off, when the write is refused", async () => {
+    const { hook, editor } = await heldAndBound("conflict");
+    let closes: unknown;
+    await act(async () => {
+      closes = await hook.result.current.writeHeldSettings();
+    });
+    expect(closes).toBe(false);
+    expect(editor.document.nodes[0]?.bindings).toBeUndefined();
+    const [words] = toastError.mock.calls[0] as [string];
+    expect(words).toContain(
+      "“Title” wasn't added to Card, so this page's binding to it was taken off."
+    );
+  });
+});
+
 describe("the page's Save", () => {
   async function heldAndBound(written: Parameters<typeof answers>[0]) {
     answers(written);
@@ -321,12 +436,17 @@ describe("the page's Save", () => {
     expect(hook.result.current.library.definitions.get("card")).toBe(CARD);
   });
 
-  it("publishes the component with a page's Publish", async () => {
+  it("writes the setting to the component's draft with a page's Publish too", async () => {
+    // Publishing it here would publish the component's other unpublished
+    // changes unasked: the publish dialog asks for the component instead.
     await heldAndBound("ok");
     await act(async () => {
       await form.before?.("publish", settled);
     });
-    expect(route.sent.at(-1)?.body).toMatchObject({ publish: true });
+    expect(route.sent.at(-1)?.body).toEqual({
+      action: { kind: "expose", nodeId: "k", propPath: "text", label: "Title" },
+      expect: "f1",
+    });
   });
 
   it("writes nothing for a held change the page no longer binds", async () => {

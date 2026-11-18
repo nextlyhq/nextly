@@ -195,19 +195,23 @@ async function planSetting(
 }
 
 /**
- * Write one held setting with the page's action, or say why it was not: the
- * route refused it, the component changed since its plan, or the write minted
- * another id than the page binds.
+ * Write one held setting to its component's working draft, or say why it was
+ * not: the route refused it, the component changed since its plan, or the
+ * write minted another id than the page binds.
+ *
+ * Never published from here, a page's Publish included: the component's
+ * draft may hold other unpublished changes, which would go live on every page
+ * placing it. A page published binding a setting its live component lacks is
+ * named by the publish dialog instead, which asks before publishing the
+ * component.
  */
 async function writeHeld(
-  hold: HeldComponentSetting,
-  publish: boolean
+  hold: HeldComponentSetting
 ): Promise<string | undefined> {
   try {
     const written = await sendAction(hold.componentId, {
       action: hold.action,
       expect: hold.fingerprint,
-      ...(publish ? { publish: true } : {}),
     });
     if (written === undefined) return "The component couldn't be saved.";
     return written.targetId === hold.settingId
@@ -235,6 +239,13 @@ export function useComponentSettingHold(
   readonly makeComponentSetting: (
     ask: ComponentSettingAsk
   ) => Promise<ComponentSettingAnswer>;
+  /**
+   * Write each held setting before the editor closes for the form, where
+   * nothing holds it: `false` when one was refused and its binding taken
+   * off, so the editor stays open showing that. `true` at once when none
+   * is held, so an ordinary leave stays synchronous.
+   */
+  readonly writeHeldSettings: () => true | Promise<boolean>;
 } {
   const [held, setHeld] = useState<Holds>(() => new Map());
   // Read when an answer or the Save arrives, never from the render that
@@ -261,28 +272,46 @@ export function useComponentSettingHold(
   );
 
   const drop = useCallback((componentId: string) => {
-    setHeld(current => {
+    const without = (current: Holds): Holds => {
       if (!current.has(componentId)) return current;
       const next = new Map(current);
       next.delete(componentId);
       return next;
-    });
+    };
+    setHeld(without);
+    // Read by a later write before this render commits.
+    now.current = { ...now.current, held: without(now.current.held) };
   }, []);
+
+  // The components a plan is being made for, so a second pick of the same
+  // one waits rather than replacing the first plan's hold.
+  const planning = useRef(new Set<string>());
 
   const makeComponentSetting = useCallback(
     async (ask: ComponentSettingAsk): Promise<ComponentSettingAnswer> => {
-      const { editor: at, held: holds, library: read } = now.current;
-      if (
-        liveSettingHolds(at.document, holds).some(
+      const title = (): string =>
+        now.current.library.titleOf(ask.componentId) ?? "this component";
+      const holding = (): boolean =>
+        liveSettingHolds(now.current.editor.document, now.current.held).some(
           hold => hold.componentId === ask.componentId
-        )
-      ) {
-        const title = read.titleOf(ask.componentId) ?? "This component";
+        );
+      if (planning.current.has(ask.componentId)) {
         return {
-          refusal: `Save the page first: ${title} has a new setting waiting to be saved with it.`,
+          refusal: `Wait a moment: a new setting of ${title()} is still being made.`,
         };
       }
-      const planned = await planSetting(ask);
+      if (holding()) {
+        return {
+          refusal: `Save the page first: ${title()} has a new setting waiting to be saved with it.`,
+        };
+      }
+      planning.current.add(ask.componentId);
+      let planned: Awaited<ReturnType<typeof planSetting>>;
+      try {
+        planned = await planSetting(ask);
+      } finally {
+        planning.current.delete(ask.componentId);
+      }
       if ("refusal" in planned) return planned;
       setHeld(current => new Map(current).set(ask.componentId, planned));
       // Read by a Save before this render commits.
@@ -295,35 +324,68 @@ export function useComponentSettingHold(
     []
   );
 
+  /**
+   * Write each live hold, stopping at the first refused: its binding is
+   * taken off the page as one edit, and the words saying so are answered.
+   */
+  const writeLive = useCallback(async (): Promise<
+    { readonly words: string; readonly reason: string } | undefined
+  > => {
+    const pending = liveSettingHolds(
+      now.current.editor.document,
+      now.current.held
+    );
+    if (pending.length === 0) return undefined;
+    const read = now.current.library;
+    try {
+      for (const hold of pending) {
+        const refused = await writeHeld(hold);
+        drop(hold.componentId);
+        if (refused === undefined) continue;
+        now.current.editor.applyAll(
+          unbindOps(now.current.editor.document, hold)
+        );
+        const title = read.titleOf(hold.componentId) ?? "The component";
+        return {
+          words: `“${hold.action.label}” wasn't added to ${title}, so this page's binding to it was taken off. ${refused}`,
+          reason: refused,
+        };
+      }
+      return undefined;
+    } finally {
+      read.retry();
+    }
+  }, [drop]);
+
+  const writeHeldSettings = useCallback((): true | Promise<boolean> => {
+    const { editor: at, held: holds } = now.current;
+    if (liveSettingHolds(at.document, holds).length === 0) return true;
+    return writeLive().then(refused => {
+      if (refused === undefined) return true;
+      toast.error(refused.words, { duration: REFUSED_TOAST_MS });
+      return false;
+    });
+  }, [writeLive]);
+
   useBeforeDocumentAction(async (action, store) => {
-    const { editor: at, held: holds, library: read } = now.current;
-    const pending = liveSettingHolds(at.document, holds);
-    if (pending.length === 0) return;
+    const { editor: at, held: holds } = now.current;
+    if (liveSettingHolds(at.document, holds).length === 0) return;
     // A tracked write that failed refuses the Save anyway; the component is
     // written only with a page that will be stored.
     if (!(await store.writesSettled())) return;
-    for (const hold of pending) {
-      const refused = await writeHeld(hold, action === "publish");
-      drop(hold.componentId);
-      if (refused === undefined) continue;
-      now.current.editor.applyAll(unbindOps(now.current.editor.document, hold));
-      const title = read.titleOf(hold.componentId) ?? "The component";
-      toast.error(
-        `“${hold.action.label}” wasn't added to ${title}, so this page's binding to it was taken off. ${refused} Nothing was saved yet.`,
-        {
-          duration: REFUSED_TOAST_MS,
-          action: {
-            label: "Save again",
-            onClick: () => void run.current?.(action),
-          },
-        }
-      );
-      throw new Error(refused);
-    }
-    read.retry();
+    const refused = await writeLive();
+    if (refused === undefined) return;
+    toast.error(`${refused.words} Nothing was saved yet.`, {
+      duration: REFUSED_TOAST_MS,
+      action: {
+        label: "Save again",
+        onClick: () => void run.current?.(action),
+      },
+    });
+    throw new Error(refused.reason);
   });
 
-  return { library: drawn, makeComponentSetting };
+  return { library: drawn, makeComponentSetting, writeHeldSettings };
 }
 
 /**
@@ -344,11 +406,49 @@ export function useHeldComponentSettings<
   readonly makeComponentSetting: ReturnType<
     typeof useComponentSettingHold
   >["makeComponentSetting"];
+  readonly writeHeldSettings: ReturnType<
+    typeof useComponentSettingHold
+  >["writeHeldSettings"];
 } {
   const held = useComponentSettingHold(mount.editor, mount.componentLibrary);
   return {
     ...mount,
     componentLibrary: held.library,
     makeComponentSetting: held.makeComponentSetting,
+    writeHeldSettings: held.writeHeldSettings,
+  };
+}
+
+/**
+ * A leave for the form that writes the held settings first, and leaves only
+ * once they are written: the form saves the page, and once the editor closes
+ * nothing holds a setting the page binds.
+ *
+ * @experimental Settles with the editor's binding controls.
+ */
+export function useLeavingWithHeldSettings(
+  writeHeldSettings: () => true | Promise<boolean>,
+  leave: () => void
+): () => void {
+  return useMemo(
+    () => leavingWithHeldSettings(writeHeldSettings, leave),
+    [writeHeldSettings, leave]
+  );
+}
+
+/** `useLeavingWithHeldSettings`'s leave, outside React. */
+export function leavingWithHeldSettings(
+  writeHeldSettings: () => true | Promise<boolean>,
+  leave: () => void
+): () => void {
+  return () => {
+    const written = writeHeldSettings();
+    if (written === true) {
+      leave();
+      return;
+    }
+    void written.then(closes => {
+      if (closes) leave();
+    });
   };
 }

@@ -378,6 +378,15 @@ function headingFor(
     return `This ${subject}'s header & footer set isn't published`;
   const noun =
     components === 1 ? "1 component" : `${String(components)} components`;
+  // Live, each named for a new setting only its unpublished changes have.
+  const allNewSettings = readiness.dependencies.every(
+    entry => entry.kind !== "component" || entry.newSettings === true
+  );
+  if (allNewSettings && !layout) {
+    return `This ${subject} uses ${noun} with a new setting that ${
+      components === 1 ? "isn't" : "aren't"
+    } published`;
+  }
   return layout
     ? `This ${subject}'s header & footer set and ${noun} aren't published`
     : `This ${subject} uses ${noun} that ${
@@ -392,11 +401,17 @@ function consequenceFor(
 ): string {
   const layout = readiness.dependencies.some(entry => entry.kind === "layout");
   const components = readiness.dependencies.some(
-    entry => entry.kind === "component"
+    entry => entry.kind === "component" && entry.newSettings !== true
+  );
+  const newSettings = readiness.dependencies.some(
+    entry => entry.kind === "component" && entry.newSettings === true
   );
   const parts = [
     components
       ? `Visitors see nothing where an unpublished component sits until it's published.`
+      : null,
+    newSettings
+      ? `Visitors see a component without its new setting until it's published, and publishing it publishes its other unpublished changes too.`
       : null,
     layout
       ? `Until its header & footer set is published, the ${subject} is shown inside the site's default header & footer set.`

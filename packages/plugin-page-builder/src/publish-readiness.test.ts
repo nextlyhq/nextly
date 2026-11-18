@@ -255,6 +255,129 @@ describe("what a publish would leave unpublished", () => {
   });
 });
 
+/**
+ * A live card whose working draft may hold more settings than its live
+ * version, and a page placing it that binds or sets `used`.
+ */
+function settingsCase(input: {
+  live: readonly string[];
+  draft: readonly string[];
+  used: { readonly bound?: string; readonly set?: string };
+}) {
+  const card = (exposed: readonly string[]): BlockDocument =>
+    ({
+      ...component(),
+      exposed: exposed.map(id => ({
+        id,
+        label: id,
+        nodeId: "text",
+        propPath: "text",
+        type: "text",
+      })),
+    }) as BlockDocument;
+  const draftsAsked: string[][] = [];
+  const store: ReadinessReads = {
+    published: async ids =>
+      new Map(ids.filter(id => id === "card").map(id => [id, card(input.live)])),
+    stored: async ids =>
+      new Map(ids.filter(id => id === "card").map(id => [id, card(input.live)])),
+    drafts: async ids => {
+      draftsAsked.push([...ids]);
+      return new Map(
+        ids.filter(id => id === "card").map(id => [id, card(input.draft)])
+      );
+    },
+    layout: async () => null,
+    limits: LIMITS,
+  };
+  const placed: BlockDocument = {
+    formatVersion: DOCUMENT_FORMAT_VERSION,
+    kind: "page",
+    nodes: [
+      {
+        id: "p",
+        type: COMPONENT_INSTANCE_TYPE,
+        version: 1,
+        props: {
+          componentId: "card",
+          ...(input.used.set === undefined
+            ? {}
+            : { overrides: { [input.used.set]: "Typed" } }),
+        },
+        ...(input.used.bound === undefined
+          ? {}
+          : {
+              bindings: {
+                [`overrides.${input.used.bound}`]: {
+                  $bind: "title",
+                  source: "entry",
+                },
+              },
+            }),
+      },
+    ],
+  };
+  return { store, placed, draftsAsked };
+}
+
+describe("a live component whose new setting the page uses", () => {
+  it("names it when only its working draft has a setting the page binds", async () => {
+    const { store, placed } = settingsCase({
+      live: [],
+      draft: ["title"],
+      used: { bound: "title" },
+    });
+    const plan = await planPublishReadiness(
+      { documents: [placed], layout: null },
+      store
+    );
+    expect(plan.components).toEqual(["card"]);
+    // Said apart from an unpublished one: visitors see it, without the setting.
+    expect(plan.newSettings).toEqual(["card"]);
+  });
+
+  it("names it when only its working draft has a setting the page sets", async () => {
+    const { store, placed } = settingsCase({
+      live: [],
+      draft: ["title"],
+      used: { set: "title" },
+    });
+    const plan = await planPublishReadiness(
+      { documents: [placed], layout: null },
+      store
+    );
+    expect(plan.components).toEqual(["card"]);
+  });
+
+  it("names nothing, and reads no draft, when the live version has the setting", async () => {
+    const { store, placed, draftsAsked } = settingsCase({
+      live: ["title"],
+      draft: ["title"],
+      used: { bound: "title" },
+    });
+    const plan = await planPublishReadiness(
+      { documents: [placed], layout: null },
+      store
+    );
+    expect(plan).toEqual({ components: [], layout: null, missing: 0 });
+    expect(draftsAsked).toEqual([]);
+  });
+
+  it("names nothing when the working draft lacks the setting too", async () => {
+    // A setting since removed: publishing the draft would not bring it back.
+    const { store, placed } = settingsCase({
+      live: [],
+      draft: [],
+      used: { bound: "title" },
+    });
+    const plan = await planPublishReadiness(
+      { documents: [placed], layout: null },
+      store
+    );
+    expect(plan.components).toEqual([]);
+  });
+});
+
 describe("the reads behind the answer", () => {
   const ids = Array.from({ length: 600 }, (_, i) => `c${String(i)}`);
   const stores = {

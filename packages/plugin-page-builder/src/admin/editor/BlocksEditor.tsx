@@ -55,7 +55,10 @@ import type { OpenAt } from "./builder-address";
 import { useCanvasEntryIdentity } from "./canvas-entry";
 import { listEntryCollectionOf } from "./canvas-page-context";
 import { useDropKeptReadsOnSave } from "./canvas-source-check";
-import { useHeldComponentSettings } from "./component-setting-hold";
+import {
+  useHeldComponentSettings,
+  useLeavingWithHeldSettings,
+} from "./component-setting-hold";
 import { useConditionedPage } from "./conditioned-page";
 import { editorCanvasRegion } from "./editor-canvas-region";
 import {
@@ -660,7 +663,9 @@ function EditorBody<TFieldValues extends FieldValues>({
   });
   // The editor's one way out, for the exit arrow and the palette alike: the
   // list on an entry whose collection opens in the builder, else the form.
-  const leave = back?.go ?? done;
+  // To the form, past each held component setting written first.
+  const toForm = useLeavingWithHeldSettings(mount.writeHeldSettings, done);
+  const leave = back?.go ?? toForm;
   const {
     notices,
     componentLibrary,
@@ -729,7 +734,7 @@ function EditorBody<TFieldValues extends FieldValues>({
             pageData,
             // The form, in the ⋯ menu: the same leave as the exit to the
             // form, so it is offered exactly where that is.
-            openAsForm: shellExit(componentView, done),
+            openAsForm: shellExit(componentView, toForm),
           })}
           // Pinned above the canvas: a template's entry it is drawn with, and
           // the visitor's view while it is on.
@@ -740,7 +745,7 @@ function EditorBody<TFieldValues extends FieldValues>({
             fieldName: name,
             control: control as unknown as Control<FieldValues>,
             // At the bottom of Page settings, as in the ⋯ menu.
-            openAsForm: shellExit(componentView, done),
+            openAsForm: shellExit(componentView, toForm),
           })}
           // The shell owns the region; this fills it. Rendered unconditionally
           // rather than only when something is selected, because with nothing
