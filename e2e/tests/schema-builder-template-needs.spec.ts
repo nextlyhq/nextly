@@ -43,8 +43,13 @@ test("creates from a template, makes the collection it needs too, and saves both
   try {
     await gotoAdmin(page, "/builder/collections/new");
     const dialog = page.getByRole("dialog", { name: "New collection" });
-    await dialog.getByLabel("Name", { exact: true }).fill("Template host");
-    await dialog.getByLabel("API address").fill(slug);
+    // By role: a required field's label carries a mark beside its name.
+    await dialog
+      .getByRole("textbox", { name: "Name", exact: true })
+      .fill("Template host");
+    await dialog
+      .getByRole("textbox", { name: "API address", exact: true })
+      .fill(slug);
 
     await dialog.getByRole("button", { name: "Browse all templates" }).click();
     const gallery = page.getByRole("dialog", { name: "All templates" });
