@@ -655,7 +655,11 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
     // Not until the author is known: their own dismissal is the one to read,
     // and a card drawn before it arrives would flash for an author who
     // dismissed it.
-    enabled: clientConfig?.checklist !== false && checklistStore !== undefined,
+    // A set's own screen has no page to build, so nothing to start on.
+    enabled:
+      page.set === undefined &&
+      clientConfig?.checklist !== false &&
+      checklistStore !== undefined,
     ...(checklistStore === undefined ? {} : { store: checklistStore }),
   });
 

@@ -9,6 +9,9 @@ import type { RegionArea } from "@nextlyhq/blocks-engine";
 /** What the canvas draws where any page goes. */
 export const PAGE_PLACEHOLDER_WORDS = "Page content goes here";
 
+/** Where the bottom bar's trail starts on a set's screen. */
+export const SET_TRAIL_ROOT = "Header & footer set";
+
 /** Said when an edit is asked of the placeholder, from any surface. */
 export const SET_HAS_NO_PAGE =
   "A header & footer set has no page of its own. Edit its header or footer instead.";

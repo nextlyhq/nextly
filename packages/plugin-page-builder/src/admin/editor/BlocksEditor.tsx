@@ -104,7 +104,11 @@ import {
 import { useReveal } from "./reveal-hidden";
 import type { SelectedRegion } from "./selected-region";
 import type { SetMode } from "./set-regions";
-import { SET_HAS_NO_PAGE, setRegionRefusal } from "./set-words";
+import {
+  SET_HAS_NO_PAGE,
+  SET_TRAIL_ROOT,
+  setRegionRefusal,
+} from "./set-words";
 import { useSettingsPlace } from "./settings-place";
 import {
   SettingsTabRequestContext,
@@ -867,7 +871,8 @@ function EditorBody<TFieldValues extends FieldValues>({
             breadcrumb={editorBreadcrumb(
               editor,
               componentLibrary.titleOf,
-              place.location
+              // On a set's screen the trail starts at the set, not a page.
+              set === undefined ? place.location : SET_TRAIL_ROOT
             )}
             checklist={editorChecklist(view)}
             renderPanel={editorPanelRenderer(view)}

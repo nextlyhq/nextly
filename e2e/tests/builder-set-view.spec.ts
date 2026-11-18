@@ -224,7 +224,9 @@ test("shows each control of the set's settings with nothing selected", async ({
   await pageFor(page, "settings");
   await openSetView(page);
   const panel = settings(page);
-  await expect(panel.getByLabel("Name")).toHaveValue(SET);
+  await expect(
+    panel.getByRole("textbox", { name: "Name", exact: true })
+  ).toHaveValue(SET);
   await expect(panel.getByLabel("Header")).toContainText(`Lighthouse ${STAMP}`);
   await expect(panel.getByLabel("Footer")).toContainText(`Pier ${STAMP}`);
   await expect(
@@ -262,7 +264,9 @@ test("shows each control of the set's settings with nothing selected", async ({
     "Delete",
   ]);
   await page.getByRole("menuitem", { name: "Rename" }).click();
-  await expect(panel.getByLabel("Name")).toBeFocused();
+  await expect(
+    panel.getByRole("textbox", { name: "Name", exact: true })
+  ).toBeFocused();
 });
 
 test("Save keeps the pages unchanged; Publish asks how many pages and changes them", async ({
@@ -280,7 +284,7 @@ test("Save keeps the pages unchanged; Publish asks how many pages and changes th
 
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(
-    page.getByRole("button", { name: "Save", exact: true })
+    page.getByRole("button", { name: "Saved", exact: true })
   ).toBeDisabled({
     timeout: 30_000,
   });
@@ -303,7 +307,8 @@ test("Save keeps the pages unchanged; Publish asks how many pages and changes th
     componentId: seeded?.header,
   });
 
-  await page.getByRole("button", { name: "Publish", exact: true }).click();
+  // A published set with a saved draft offers "Publish changes".
+  await page.getByRole("button", { name: /^Publish( changes)?$/ }).click();
   const ask = page.getByRole("alertdialog", {
     name: /^Publish to (at least )?\d+ pages?\?$/,
   });
@@ -353,7 +358,9 @@ test("Back returns to the page it was opened from, asking first about unsaved ch
     .getByRole("link", { name: new RegExp(`^${SET}`) })
     .click();
   await expectSetView(page);
-  await settings(page).getByLabel("Name").fill(`${SET} renamed`);
+  await settings(page)
+    .getByRole("textbox", { name: "Name", exact: true })
+    .fill(`${SET} renamed`);
 
   const asked: string[] = [];
   page.once("dialog", dialog => {
@@ -366,7 +373,9 @@ test("Back returns to the page it was opened from, asking first about unsaved ch
   await expect(page).toHaveURL(/\/in-builder/);
 
   // Taken back, nothing unsaved: straight to the page.
-  await settings(page).getByLabel("Name").fill(SET);
+  await settings(page)
+    .getByRole("textbox", { name: "Name", exact: true })
+    .fill(SET);
   page.once("dialog", dialog => void dialog.accept());
   await back.click();
   await expect(page).toHaveURL(
