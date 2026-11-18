@@ -179,6 +179,7 @@ import {
   normalizeRelationshipFields,
   relationshipValidationView,
 } from "../../../shared/lib/field-transform";
+import { fieldWriteCaller } from "../../../shared/lib/field-write-caller";
 import { filterKeys } from "../../../shared/lib/filterable-fields";
 import { toJsonColumnValue } from "../../../shared/lib/json-column-value";
 import {
@@ -3484,15 +3485,20 @@ export class CollectionMutationService extends BaseService {
         ...(args.goesLive === true && !judgeInstances
           ? { judgeContainedComponents: false }
           : {}),
-        write: this.validationWrite(
-          args.collectionName,
-          args.id ??
-            suppliedCreateId(args.mode, args.collectionName, args.data),
-          args.tx,
-          // The language judged: each in turn where a write judges several,
-          // else the one this write is in.
-          args.readLocale ?? args.writeLocale
-        ),
+        write: {
+          ...this.validationWrite(
+            args.collectionName,
+            args.id ??
+              suppliedCreateId(args.mode, args.collectionName, args.data),
+            args.tx,
+            // The language judged: each in turn where a write judges several,
+            // else the one this write is in.
+            args.readLocale ?? args.writeLocale
+          ),
+          // Who the write is made as, from the reader its access is judged
+          // by, for a field type whose values only some callers may change.
+          caller: fieldWriteCaller(args.reader),
+        },
       }
     );
     // The document judged can hold fields the caller may not read; their
@@ -9441,27 +9447,12 @@ export class CollectionMutationService extends BaseService {
         // this transaction, once the entry has its id: nothing of it was live before. A part held
         // back refuses the create, and it rolls back; what the verdict started is settled before
         // the transaction commits, below.
-        const createdSave =
-          finalData.status === "published"
-            ? this.statusSaveOf(
-                { ...params, entryId: String(entry.id) },
-                {
-                  status: finalData.status,
-                  locale: params.locale,
-                  everyLanguage: false,
-                  withoutReview,
-                  // A new entry has no drafts.
-                  sharedDraftPending: false,
-                },
-                collection
-              )
-            : null;
-        const settleCreateGate = createdSave
-          ? await judgeStatusSave(tx, createdSave, {
-              languages: [],
-              shared: false,
-            })
-          : undefined;
+        const settleCreateGate = await this.judgeCreateOnTx(
+          tx,
+          { ...params, entryId: String(entry.id) },
+          { status: finalData.status, locale: params.locale, withoutReview },
+          collection
+        );
 
         // i18n M5: write the translatable values to the companion `_locales` row for the
         // write's locale (same transaction → rolls back with the main insert).
@@ -12974,6 +12965,43 @@ export class CollectionMutationService extends BaseService {
       parts: undefined,
       mainStatus: args.mainStatus,
     });
+  }
+
+  /**
+   * The publish gate's verdict on a create that puts its entry live, asked on `tx` once the entry
+   * has its id: nothing of it was live before. A part held back throws its refusal, so the create
+   * rolls back; else what the verdict started, to settle before the transaction commits. Undefined
+   * where the create publishes nothing. Every create door asks it, on whichever transaction holds
+   * the insert, so none reads the pool from inside a caller's transaction.
+   */
+  private async judgeCreateOnTx(
+    tx: TransactionContext,
+    params: Parameters<CollectionMutationService["statusSaveOf"]>[0],
+    create: {
+      status: unknown;
+      locale: string | undefined;
+      withoutReview: { reason: string } | undefined;
+    },
+    collection: unknown
+  ): Promise<(() => Promise<void>) | undefined> {
+    const createdSave =
+      create.status === "published"
+        ? this.statusSaveOf(
+            params,
+            {
+              status: create.status,
+              locale: create.locale,
+              everyLanguage: false,
+              withoutReview: create.withoutReview,
+              // A new entry has no drafts.
+              sharedDraftPending: false,
+            },
+            collection
+          )
+        : null;
+    return createdSave
+      ? judgeStatusSave(tx, createdSave, { languages: [], shared: false })
+      : undefined;
   }
 
   /**
@@ -22027,8 +22055,17 @@ export class CollectionMutationService extends BaseService {
       undefined
     );
     if ("refused" in provenance) return provenance.refused;
+    // A publish made without review, and why, read off the body for the publish gate and never
+    // stored; see createEntry.
+    const withoutReview = withoutReviewOfBody(body);
     // A version sent with the body is the server's to decide; see updateEntry.
     body = withoutDocumentVersionKeys(body);
+    if (WITHOUT_REVIEW_KEY in body) {
+      body = { ...body };
+      delete body[WITHOUT_REVIEW_KEY];
+    }
+    // What the publish gate's verdict on this create started, settled once it is written.
+    let settleCreateGate: (() => Promise<void>) | undefined;
     // Computed right after the row is written (before response redaction can
     // strip the slug, and before the after-hooks run) and carried on every
     // post-write return, so a committed item whose after-hook then throws still
@@ -22080,6 +22117,36 @@ export class CollectionMutationService extends BaseService {
           tx.getDrizzle()
         );
       writeRow = collection as Record<string, unknown>;
+
+      // Authorization is resolved once by the batch caller before this shared
+      // transaction (or here when called directly), so no permission read runs
+      // inside the transaction; see the transition check after the hooks.
+      const transitionAuth =
+        params.transitionAuth ??
+        (await this.resolveTransitionAuthorization({
+          collectionName: params.collectionName,
+          accessUser: params.overrideAccess ? undefined : params.user,
+          overrideAccess: params.overrideAccess,
+          // This fallback fires only for a direct caller-owned-tx write (the bulk
+          // paths always pre-resolve and pass transitionAuth), so bind the reads
+          // to this transaction's connection rather than re-entering the pool.
+          executor: tx.getDrizzle(),
+        }));
+      if (body.status === "published") {
+        // A caller who may not publish is told only that, before the publish gate is asked: what
+        // the workflow holds of an entry is not theirs to learn.
+        if (transitionAuth.publishDenied) return transitionAuth.publishDenied;
+        // The publish gate's early answer to a create that publishes, before any hook runs, as
+        // the create door asks it: a create the gate holds back runs no hook. Asked on the
+        // caller's transaction, with no entry yet, so it reads nothing from outside it; only its
+        // refusal is kept, and the verdict after the insert is the one the create settles.
+        await this.judgeCreateOnTx(
+          tx,
+          { ...params, entryId: "" },
+          { status: body.status, locale: undefined, withoutReview },
+          collection
+        );
+      }
 
       // The transaction API has always shaped the caller's own object in place;
       // the batch worker shapes a copy. Both are preserved so neither caller's
@@ -22376,20 +22443,7 @@ export class CollectionMutationService extends BaseService {
       // (hooks run unless skipped); a create has no prior status, and a trusted
       // server write bypasses via overrideAccess.
       //
-      // Authorization is resolved once by the batch caller before this shared
-      // transaction (or here on the pooled connection when called directly), so no
-      // permission read runs inside the transaction.
-      const transitionAuth =
-        params.transitionAuth ??
-        (await this.resolveTransitionAuthorization({
-          collectionName: params.collectionName,
-          accessUser: params.overrideAccess ? undefined : params.user,
-          overrideAccess: params.overrideAccess,
-          // This fallback fires only for a direct caller-owned-tx write (the bulk
-          // paths always pre-resolve and pass transitionAuth), so bind the reads
-          // to this transaction's connection rather than re-entering the pool.
-          executor: tx.getDrizzle(),
-        }));
+      // Authorization was resolved once, before the hooks (`transitionAuth`).
       const transitionDenied = await this.enforceTransitionUnderLock(tx, {
         tableName,
         nextStatus: finalData.status,
@@ -22426,7 +22480,7 @@ export class CollectionMutationService extends BaseService {
       // the row too, so a caller that catches the failure and commits its own
       // transaction keeps nothing of this create. Side effects and hooks run
       // after it, as before.
-      const entry = await underSavepoint(tx, async () => {
+      const { entry, createEffects } = await underSavepoint(tx, async () => {
         // Insert using transaction context
         const entry = await tx.insert<unknown>(tableName, entryData, {
           returning: "*",
@@ -22489,46 +22543,59 @@ export class CollectionMutationService extends BaseService {
             )
           ),
         });
-        return entry;
-      });
+        // A create that puts its entry live is a publish: the gate's verdict, on this
+        // transaction once the entry has its id. A part held back refuses the create, and the
+        // savepoint takes the row back with it.
+        settleCreateGate = await this.judgeCreateOnTx(
+          tx,
+          { ...params, entryId: String((entry as { id: unknown }).id) },
+          { status: finalData.status, locale: undefined, withoutReview },
+          collection
+        );
 
-      // The in-transaction handlers, asked once for this write: the same set
-      // decides how much of the document is assembled and which handlers run.
-      const inTransactionHandlers = this.inTransactionHandlersFor(
-        params.collectionName
-      );
-      // Junction rows, the version snapshot, the outbox event and the
-      // revalidation intent, all on the caller's transaction.
-      const createEffects = await this.recordCreateSideEffects(tx, {
-        collectionName: params.collectionName,
-        inTransactionHandlers,
-        tableName,
-        entry: entry as Record<string, unknown>,
-        collection,
-        fields,
-        manyToManyFields,
-        manyToManyData,
-        user: params.user,
-        actor: params.actor,
-        // The language this create's translatable values went into, so the
-        // version snapshot is tagged with it rather than reading as shared.
-        localeTag: localizedWrite?.writeLocale,
+        // The in-transaction handlers, asked once for this write: the same set
+        // decides how much of the document is assembled and which handlers run.
+        const inTransactionHandlers = this.inTransactionHandlersFor(
+          params.collectionName
+        );
+        // Junction rows, the version snapshot, the outbox event and the
+        // revalidation intent, all on the caller's transaction.
+        const createEffects = await this.recordCreateSideEffects(tx, {
+          collectionName: params.collectionName,
+          inTransactionHandlers,
+          tableName,
+          entry: entry as Record<string, unknown>,
+          collection,
+          fields,
+          manyToManyFields,
+          manyToManyData,
+          user: params.user,
+          actor: params.actor,
+          // The language this create's translatable values went into, so the
+          // version snapshot is tagged with it rather than reading as shared.
+          localeTag: localizedWrite?.writeLocale,
+        });
+
+        // Last of the write itself, on the caller's transaction, before the
+        // after-hooks this path runs inside it. Run whether or not hooks are:
+        // see `runInTransactionPhase`. A handler's failure is thrown, not
+        // softened, so the caller's transaction keeps nothing of this entry.
+        await this.runInTransactionPhase(tx, inTransactionHandlers, {
+          collection: params.collectionName,
+          operation: "create",
+          id: (entry as { id: string }).id,
+          data: createEffects.document,
+          user: params.user,
+          context: sharedContext,
+        });
+        // What the gate's verdict started is settled now the create is written, under the same
+        // savepoint: a settle that fails takes this create back, even where a batch carries on
+        // with the items after it.
+        if (settleCreateGate) await settleCreateGate();
+        return { entry, createEffects };
       });
       const eventRecorded = createEffects.eventRecorded;
       revalidationIntent = createEffects.revalidationIntent;
-
-      // Last of the write itself, on the caller's transaction, before the
-      // after-hooks this path runs inside it. Run whether or not hooks are:
-      // see `runInTransactionPhase`. A handler's failure is thrown, not
-      // softened, so the caller's transaction keeps nothing of this entry.
-      await this.runInTransactionPhase(tx, inTransactionHandlers, {
-        collection: params.collectionName,
-        operation: "create",
-        id: (entry as { id: string }).id,
-        data: createEffects.document,
-        user: params.user,
-        context: sharedContext,
-      });
 
       // The collection event, held for the caller's commit. Announced whether
       // or not hooks run: it is not a hook, as the outbox event is not.
