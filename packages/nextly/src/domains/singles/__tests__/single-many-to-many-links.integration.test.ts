@@ -244,6 +244,26 @@ for (const shape of SHAPES)
       expect(idsOf(last!.previous as unknown[])).toEqual([a, b].sort());
     });
 
+    it("hands the save's before and after hooks the links it replaced as the stored document's", async () => {
+      const original: Record<string, unknown> = {};
+      for (const phase of ["beforeUpdate", "afterUpdate"] as const)
+        t.hooks.register(phase, `single:${HERO}`, context => {
+          original[phase] = (
+            context.originalData as { tags?: unknown } | undefined
+          )?.tags;
+          return undefined;
+        });
+      const [a, b] = tagIds;
+      await save([a!, b!]);
+
+      // A save that sends no links leaves them, and its hooks see them stored.
+      await t.nextly.updateSingle({ slug: HERO, data: { title: "Renamed" } });
+
+      expect(await linked()).toEqual([a, b].sort());
+      expect(idsOf(original.beforeUpdate)).toEqual([a, b].sort());
+      expect(idsOf(original.afterUpdate)).toEqual([a, b].sort());
+    });
+
     it("records the links in the version the save makes", async () => {
       const [a, b] = tagIds;
 
