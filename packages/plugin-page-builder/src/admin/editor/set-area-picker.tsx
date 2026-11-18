@@ -18,6 +18,7 @@ import {
   CommandEmpty,
   CommandGroup,
   CommandInput,
+  CommandItem,
   CommandList,
 } from "@nextlyhq/ui";
 import { useMemo, useRef, useState, type JSX, type ReactNode } from "react";
@@ -30,9 +31,13 @@ import { OptionRow, PictureMenuPopover } from "../header-footer-menu";
 import { useSetPictures } from "../header-footer-pictures";
 
 import { useSetAreaChoices } from "./set-reads";
+import { alsoUsedByWords } from "./set-separate-copy";
 
 /** The value of the "None" row, which names no component. */
 const NONE_VALUE = "none";
+
+/** The value of the "+ Create a header" row, which names no component. */
+const CREATE_VALUE = "create";
 
 /** A part of the list set apart from the one above it, as a rule would. */
 const PART_APART = "mt-1 border-t pt-1";
@@ -55,6 +60,13 @@ export interface SetAreaPickerProps {
   /** Put a component in the area, or `null` for none. */
   readonly onChoose: (component: string | null) => void;
   readonly disabled: boolean;
+  /** The other sets a component is also used by, said under its name. */
+  readonly usedByOf?: (component: string) => readonly string[];
+  /**
+   * "+ Create a header" (or footer): makes a new one for the area, which is
+   * then chosen. Absent, the row is not offered.
+   */
+  readonly onCreate?: () => void;
 }
 
 /** The regions a choice draws in its picture: one instance, or none. */
@@ -82,6 +94,8 @@ export function SetAreaPicker({
   value,
   onChoose,
   disabled,
+  usedByOf,
+  onCreate,
 }: SetAreaPickerProps): JSX.Element {
   const [open, setOpen] = useState(false);
   const listRoot = useRef<HTMLDivElement>(null);
@@ -142,50 +156,124 @@ export function SetAreaPicker({
           className="max-h-80 p-1"
         >
           <CommandEmpty>No component matches.</CommandEmpty>
-          {/* Groups, not separators, set the parts apart: a list's children
-              are options and groups of them. */}
-          {groups.marked.length === 0 ? null : (
-            <CommandGroup>
-              <ChoiceRows
-                area={area}
-                rows={groups.marked}
-                value={value}
-                picture={picture}
-                onChoose={choose}
-              />
-            </CommandGroup>
-          )}
-          {groups.others.length === 0 ? null : (
-            <CommandGroup
-              heading="Other components"
-              className={groups.marked.length === 0 ? undefined : PART_APART}
-            >
-              <ChoiceRows
-                area={area}
-                rows={groups.others}
-                value={value}
-                picture={picture}
-                onChoose={choose}
-              />
-            </CommandGroup>
-          )}
-          <CommandGroup className={PART_APART}>
-            <OptionRow
-              option={{
-                value: NONE_VALUE,
-                label: "None",
-                note: `No ${area} in this set`,
-                picture: [],
-              }}
-              current={value === undefined}
-              picture={picture([])}
-              onSelect={() => choose(NONE_VALUE)}
-            />
-          </CommandGroup>
+          <ChoiceGroups
+            area={area}
+            groups={groups}
+            usedByOf={usedByOf}
+            value={value}
+            picture={picture}
+            onChoose={choose}
+          />
+          <CreateRow
+            area={area}
+            onCreate={onCreate}
+            close={() => setOpen(false)}
+          />
         </CommandList>
         <ListNote area={label} answer={answer} failed={listed.error !== null} />
       </Command>
     </PictureMenuPopover>
+  );
+}
+
+/** "+ Create a header" (or footer), last, after a separator, where offered. */
+function CreateRow({
+  area,
+  onCreate,
+  close,
+}: {
+  area: RegionArea;
+  onCreate: (() => void) | undefined;
+  /** Closes the menu first. */
+  close: () => void;
+}): JSX.Element | null {
+  if (onCreate === undefined) return null;
+  return (
+    <CommandGroup className={PART_APART}>
+      <CommandItem
+        value={CREATE_VALUE}
+        onSelect={() => {
+          close();
+          onCreate();
+        }}
+        className="px-2 py-1.5 text-sm"
+      >
+        {area === "header" ? "+ Create a header" : "+ Create a footer"}
+      </CommandItem>
+    </CommandGroup>
+  );
+}
+
+/** A row's note: the other sets that use it, if any. */
+function noteOf(usedBy: readonly string[]): { note?: string } {
+  return usedBy.length === 0 ? {} : { note: alsoUsedByWords(usedBy) };
+}
+
+/**
+ * The list's choices: the components marked for the area, then "Other
+ * components", then "None", each part a group of its own, set apart from
+ * the one above it.
+ */
+function ChoiceGroups({
+  area,
+  groups,
+  usedByOf,
+  value,
+  picture,
+  onChoose: choose,
+}: {
+  area: RegionArea;
+  groups: ReturnType<typeof groupsOf>;
+  usedByOf: ((component: string) => readonly string[]) | undefined;
+  value: string | undefined;
+  picture: (regions: readonly LayoutRegion[]) => ReactNode;
+  onChoose: (value: string) => void;
+}): JSX.Element {
+  return (
+    <>
+      {/* Groups, not separators, set the parts apart: a list's children
+        are options and groups of them. */}
+      {groups.marked.length === 0 ? null : (
+        <CommandGroup>
+          <ChoiceRows
+            area={area}
+            rows={groups.marked}
+            usedByOf={usedByOf}
+            value={value}
+            picture={picture}
+            onChoose={choose}
+          />
+        </CommandGroup>
+      )}
+      {groups.others.length === 0 ? null : (
+        <CommandGroup
+          heading="Other components"
+          className={groups.marked.length === 0 ? undefined : PART_APART}
+        >
+          <ChoiceRows
+            area={area}
+            rows={groups.others}
+            usedByOf={usedByOf}
+            value={value}
+            picture={picture}
+            onChoose={choose}
+          />
+        </CommandGroup>
+      )}
+      <CommandGroup className={PART_APART}>
+        <OptionRow
+          option={{
+            value: NONE_VALUE,
+            label: "None",
+            note: `No ${area} in this set`,
+            picture: [],
+          }}
+          current={value === undefined}
+          picture={picture([])}
+          onSelect={() => choose(NONE_VALUE)}
+        />
+      </CommandGroup>
+    </>
   );
 }
 
@@ -210,12 +298,14 @@ function triggerWords(
 function ChoiceRows({
   area,
   rows,
+  usedByOf,
   value,
   picture,
   onChoose,
 }: {
   area: RegionArea;
   rows: readonly SetAreaChoice[];
+  usedByOf: ((component: string) => readonly string[]) | undefined;
   value: string | undefined;
   picture: (regions: readonly LayoutRegion[]) => ReactNode;
   onChoose: (value: string) => void;
@@ -232,6 +322,7 @@ function ChoiceRows({
               value: rowValue(row),
               label: row.title,
               picture: regions,
+              ...noteOf(usedByOf?.(row.id) ?? []),
             }}
             current={row.id === value}
             picture={picture(regions)}

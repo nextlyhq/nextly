@@ -77,7 +77,7 @@ const panels = vi.hoisted(() => ({
 
 vi.mock("@nextlyhq/plugin-sdk/client", () => ({ useCan: () => true }));
 
-vi.mock("../site-style-client", () => {
+vi.mock("../site-style-client", async () => {
   const save = async (section: string, value: unknown, options?: object) => {
     saves.calls.push({ section, value, options });
     return saves.answer();
@@ -94,6 +94,9 @@ vi.mock("../site-style-client", () => {
     cancel: () => {},
   });
   return {
+    // Outside an editor: no history, and nothing drawn over the read.
+    SiteStyleHistoryContext: (await import("react")).createContext(null),
+    SiteStylePreviewContext: (await import("react")).createContext(new Map()),
     useSaveSiteStyle: () => ({ save, reserve, reread }),
     useHeldSiteStyle: () => ({ extend: () => {}, release: async () => {} }),
     useFontCatalogueClient: () => ({
@@ -120,6 +123,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async importOriginal => ({
   ...(await importOriginal<typeof import("@nextlyhq/plugin-sdk/admin")>()),
   useUploadMedia: () => ({ mutateAsync: vi.fn(), isPending: false }),
   usePluginClientConfig: () => undefined,
+  // The author the catalogue keeps the choice to show previews for.
+  useCurrentUserId: () => "u1",
 }));
 
 const { TokensStudio, VariablesTab, useClassSurface } = await import(

@@ -252,7 +252,13 @@ describe("the groups, nearest first", () => {
     const homepage = await within(list).findByRole("option", {
       name: "Homepage",
     });
-    expect(homepage.getAttribute("aria-expanded")).toBe("false");
+    // An option may not carry aria-expanded, so a folded row says in its
+    // description what choosing it does, and its name stays the Single's.
+    expect(homepage.hasAttribute("aria-expanded")).toBe(false);
+    const described = homepage.getAttribute("aria-describedby") ?? "";
+    expect(document.getElementById(described)?.textContent).toBe(
+      "Shows its fields here."
+    );
     fireEvent.click(homepage);
     expect(groupNames(list)).toEqual([
       "Each project in the list",

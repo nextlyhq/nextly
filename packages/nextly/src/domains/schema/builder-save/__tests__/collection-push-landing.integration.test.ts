@@ -31,7 +31,9 @@ import {
 import type { ServiceContainer } from "../../../../services";
 import { readTableDefinition } from "../../__tests__/helpers/table-definition";
 import { SchemaEventsRepository } from "../../events/schema-events-repository";
+import { CollectionRegistryService } from "../../../collections/services/collection-registry-service";
 import { RealPreCleanupExecutor } from "../../pipeline/pre-cleanup/executor";
+import { PushSchemaPipeline } from "../../pipeline/pushschema-pipeline";
 import { DrizzleStatementExecutor } from "../../services/drizzle-statement-executor";
 
 // The test's seam on the pipeline's pre-resolution phase (renames, drops, a relation's values
@@ -484,6 +486,63 @@ for (const dialect of getConfiguredTestDialects()) {
       },
       60_000
     );
+
+    // The pipeline's apply completes, which on PostgreSQL commits its transaction, and the read
+    // of the new schema versions after it fails: the change stands on every dialect, so its files
+    // stay, recorded applied nowhere, and the admin is told so.
+    it("keeps the files of a push whose apply completed before the work after it failed", async () => {
+      const filesBefore = Object.keys(filesIn(migrationsDir(), ".sql"));
+      const tableBefore = await definitionOf();
+      const run = PushSchemaPipeline.prototype.apply;
+      let applied = false;
+      const pipeline = vi
+        .spyOn(PushSchemaPipeline.prototype, "apply")
+        .mockImplementation(async function (
+          this: PushSchemaPipeline,
+          ...args: Parameters<PushSchemaPipeline["apply"]>
+        ) {
+          const result = await run.apply(this, args);
+          if (result.success) applied = true;
+          return result;
+        });
+      const read = CollectionRegistryService.prototype.getCollectionBySlug;
+      // The first registry read after the apply completed: the read of the new schema versions.
+      const versions = vi
+        .spyOn(CollectionRegistryService.prototype, "getCollectionBySlug")
+        .mockImplementation(function (
+          this: CollectionRegistryService,
+          ...args: Parameters<CollectionRegistryService["getCollectionBySlug"]>
+        ) {
+          if (applied) {
+            applied = false;
+            versions.mockRestore();
+            return Promise.reject(new Error("the version read failed"));
+          }
+          return read.apply(this, args);
+        });
+
+      const failure = await save(SWITCHED).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+      pipeline.mockRestore();
+      versions.mockRestore();
+
+      // The apply stands: the table took the change.
+      expect(await definitionOf()).not.toEqual(tableBefore);
+      const kept = Object.keys(filesIn(migrationsDir(), ".sql")).filter(
+        name => !filesBefore.includes(name)
+      );
+      expect(kept).not.toEqual([]);
+      const applies = (await ledger().listFileApplies())
+        .filter(entry => entry.status === "applied")
+        .map(entry => String(entry.filename));
+      for (const file of kept) expect(applies).not.toContain(file);
+      expect(
+        (failure as { publicMessage?: string } | undefined)?.publicMessage,
+        String(failure)
+      ).toContain("The database now holds part of this change");
+    }, 60_000);
 
     // PostgreSQL's push runs in one transaction, which the failure rolls back whole: nothing of
     // the change stays, so its files are withdrawn and the admin is not told of a part held.

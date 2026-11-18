@@ -105,16 +105,29 @@ its own view, not here.
 
 A header & footer set opens in the builder as a screen of its own: from its row in the Pages
 panel's **Header & footer** group, or from **Open in builder** on the admin's Header & footer
-list or in a set's form. The builder draws the set's header and footer around a grey **Page
-content goes here** box, where any page using the set goes. They are the set's working header
-and footer, so a change you make here shows at once, before you save.
+list or in a set's form. **+ New header & footer**, at the end of the group, asks for a name and
+what the set starts from, then opens it the same way, as a draft:
+
+- **A copy of Main**: the site default's header and footer.
+- **The starter header and footer**: a new plain header and footer of its own, published, to edit.
+- **Empty**: no header or footer yet. The builder draws the set's header and footer around a grey **Page
+  content goes here** box, where any page using the set goes. They are the set's working header
+  and footer, so a change you make here shows at once, before you save.
 
 With nothing selected, the right panel shows the set's settings:
 
 - **Name**, the set's name.
 - **Header** and **Footer**, each a menu with a picture of every published component you can
   choose. The components marked **Use as: Header** (or **Footer**) come first, then **Other
-  components**, then **None**, which leaves that area empty in this set.
+  components**, then **None**, which leaves that area empty in this set. A component another set
+  uses too says so, "Also used by Landing". Last comes **+ Create a header** (or **+ Create a
+  footer**). It makes a new header like the plain starter header (or footer), marked **Use as: Header** and
+  published, and chooses it here; the toast's **Edit header** edits it in place. Only your own
+  rights to create and publish components are needed, since the set itself changes only when you
+  save or publish it.
+- Under a header another set also uses: "Also used by Landing", with **Make a separate copy**.
+  It copies the header, as **Duplicate** does on a component, and points only this set at the
+  copy, so you can change it without changing the other set's pages.
 - **Used on 11 pages**: how many pages show this set, including the pages that follow the site
   default when this set is the default.
 - **Site default** when this set is the default. Otherwise, if you may choose the default,

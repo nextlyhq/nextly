@@ -61,7 +61,11 @@ import {
   liveCompanionShape,
 } from "../../i18n/runtime/companion-io";
 import { assertLanguageStatesAgreeWithEntry } from "../../i18n/runtime/language-states-agree";
-import { landingPush } from "../builder-save/landing-push";
+import {
+  FirstQuestionWatch,
+  landingPush,
+  type PushWatch,
+} from "../builder-save/landing-push";
 import { runStatement } from "../pipeline/_internal/run-statement";
 import {
   createApplyDesiredSchema,
@@ -162,44 +166,6 @@ class DriftWatchingDispatcher implements PromptDispatcher {
       ),
     ];
     return result;
-  }
-}
-
-/**
- * Whether a push stopped at its first question: the pipeline asks it in planning, before the
- * push runs any statement, and a later try of the same push asks only questions not asked yet, so
- * a refusal there (an answer not to proceed, or a throw) means nothing of the push ran. A refusal
- * at a later question may follow statements an earlier try kept, so it is never answered for.
- * `starting` begins each push afresh (`landingPush`).
- */
-class FirstQuestionWatch implements PromptDispatcher {
-  private asked = 0;
-  private refusedFirst = false;
-
-  constructor(private readonly inner: PromptDispatcher) {}
-
-  starting(): void {
-    this.asked = 0;
-    this.refusedFirst = false;
-  }
-
-  stopped(): boolean {
-    return this.refusedFirst;
-  }
-
-  async dispatch(
-    args: Parameters<PromptDispatcher["dispatch"]>[0]
-  ): ReturnType<PromptDispatcher["dispatch"]> {
-    const first = this.asked === 0;
-    this.asked += 1;
-    try {
-      const result = await this.inner.dispatch(args);
-      if (first && !result.proceed) this.refusedFirst = true;
-      return result;
-    } catch (error) {
-      if (first) this.refusedFirst = true;
-      throw error;
-    }
   }
 }
 
@@ -654,22 +620,33 @@ function changeApply(change: CollectionSchemaChange, deps: SchemaChangeDeps) {
         .map(resolution => resolution.eventId)
     )
   );
-  // Notes a push refused at its first question, which ran no statement (`landingPush`).
-  const firstQuestion = new FirstQuestionWatch(promptDispatcher);
+  // Notes a push refused at its first question, which ran no statement, and one whose pipeline
+  // completed its apply, which a failure after it (the version read below) does not undo
+  // (`landingPush`).
+  const firstQuestion = new FirstQuestionWatch();
+  let completed = false;
+  const watch: PushWatch = {
+    starting: () => {
+      firstQuestion.starting();
+      completed = false;
+    },
+    stopped: () => firstQuestion.stopped(),
+    completed: () => completed,
+  };
   const apply = createApplyDesiredSchema({
-    applyPipeline: (desiredArg, sourceArg, channelArg) => {
+    applyPipeline: async (desiredArg, sourceArg, channelArg) => {
       const pipeline = new PushSchemaPipeline({
         executor: new DrizzleStatementExecutor(dialect, db),
         renameDetector: new RegexRenameDetector(),
         classifier: new RealClassifier(),
-        promptDispatcher: firstQuestion,
+        promptDispatcher: firstQuestion.watching(promptDispatcher),
         preRenameExecutor: noopPreRenameExecutor,
         preCleanupExecutor: new RealPreCleanupExecutor(),
         // The real journal from DI, with a noop fallback for callers that bypass DI.
         migrationJournal: getMigrationJournalFromDI() ?? noopMigrationJournal,
         notifier: getProductionNotifier(),
       });
-      return pipeline.apply({
+      const result = await pipeline.apply({
         desired: desiredArg,
         db,
         dialect,
@@ -683,6 +660,8 @@ function changeApply(change: CollectionSchemaChange, deps: SchemaChangeDeps) {
         // after its prompts and refusals, before it drops the main column.
         defaultLocale,
       });
+      if (result.success) completed = true;
+      return result;
     },
     // Neither caller asks the pipeline for its optimistic check: the dialog checks the version
     // before calling, and the save runs under the schema lock.
@@ -697,7 +676,7 @@ function changeApply(change: CollectionSchemaChange, deps: SchemaChangeDeps) {
       return out;
     },
   });
-  return { apply, promptDispatcher, defaultLocale, firstQuestion };
+  return { apply, promptDispatcher, defaultLocale, watch };
 }
 
 /**
@@ -912,7 +891,7 @@ async function applyHoldingSchemaLock(
   // Every push below, the settings push and the companion's included, tells the caller once it
   // may have changed the database; the checks before them change nothing. A failed one changed
   // nothing where it stopped at its first question, asked before any statement.
-  const landing = landingPush(changed.apply, dialect, changed.firstQuestion);
+  const landing = landingPush(changed.apply, dialect, changed.watch);
   const apply: ApplyDesired = async (...args) => {
     try {
       return await landing.push(...args);

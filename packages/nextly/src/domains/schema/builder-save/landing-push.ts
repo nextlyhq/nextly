@@ -16,6 +16,7 @@
  */
 import { NextlyError } from "../../../errors/nextly-error";
 import { busyTableLeftNothing } from "../busy-table/report";
+import type { PromptDispatcher } from "../pipeline/pushschema-pipeline-interfaces";
 
 type Dialect = "postgresql" | "mysql" | "sqlite";
 
@@ -26,15 +27,27 @@ interface PushOutcome {
 }
 
 /**
+ * What a push's own pipeline did during one run, as `landingPush` reads it: whether the run
+ * stopped at its first question, before any statement (`FirstQuestionWatch`), and whether the
+ * pipeline's apply completed, which a failure of the work after it in the same run (a read of
+ * the new schema versions, say) does not undo. `starting` begins each run afresh.
+ */
+export interface PushWatch {
+  starting(): void;
+  stopped(): boolean;
+  completed?(): boolean;
+}
+
+/**
  * `push`, noting once one of its runs may have changed the database: a run
- * that succeeded, and outside PostgreSQL every run that failed but one known
- * to have changed nothing. That is a busy table's stop that says nothing ran
- * (`leftNothing`), or a run that `stoppedBeforeAnyStatement` answers for: one
- * refused at its first question (a rename declined, a question unanswered),
- * which the pipeline asks before it runs any statement. Any other failure
- * counts as landed, data-only statements included, so its files are kept: a
- * push that asks no question, or one refused by a check of its own before any
- * statement, keeps them too.
+ * that succeeded, or whose pipeline completed its apply before the run failed
+ * (`watch.completed`), and outside PostgreSQL every run that failed but one
+ * known to have changed nothing. That is a busy table's stop that says nothing
+ * ran (`leftNothing`), or a run refused at its first question (a rename
+ * declined, a question unanswered), which the pipeline asks before it runs any
+ * statement (`watch.stopped`). Any other failure counts as landed, data-only
+ * statements included, so its files are kept: a push that asks no question, or
+ * one refused by a check of its own before any statement, keeps them too.
  *
  * Only what wraps the push itself is judged: a refusal raised before the push
  * runs is never counted as landed.
@@ -42,23 +55,20 @@ interface PushOutcome {
 export function landingPush<A extends unknown[], R extends PushOutcome>(
   push: (...args: A) => Promise<R>,
   dialect: Dialect,
-  stoppedBeforeAnyStatement?: {
-    /** Called as each run starts, so the answer is about that run alone. */
-    starting: () => void;
-    stopped: () => boolean;
-  }
+  watch?: PushWatch
 ): {
   push: (...args: A) => Promise<R>;
   landed: () => boolean;
 } {
   let landed = false;
   const failureLanded = (stop: unknown): boolean =>
-    !rollsBackWhole(dialect) &&
-    !leftNothing(stop) &&
-    stoppedBeforeAnyStatement?.stopped() !== true;
+    watch?.completed?.() === true ||
+    (!rollsBackWhole(dialect) &&
+      !leftNothing(stop) &&
+      watch?.stopped() !== true);
   return {
     push: async (...args: A) => {
-      stoppedBeforeAnyStatement?.starting();
+      watch?.starting();
       let result: R;
       try {
         result = await push(...args);
@@ -73,6 +83,46 @@ export function landingPush<A extends unknown[], R extends PushOutcome>(
     },
     landed: () => landed,
   };
+}
+
+/**
+ * Whether a push stopped at its first question, for `landingPush`'s `stoppedBeforeAnyStatement`:
+ * the pipeline asks it in planning, before the push runs any statement, and a later try of the
+ * same push asks only questions not asked yet, so a refusal there (an answer not to proceed, or a
+ * throw) means nothing of the push ran. A refusal at a later question may follow statements an
+ * earlier try kept, so it is never answered for. The push's prompt dispatcher is handed to the
+ * pipeline through `watching`; `starting` begins each push afresh.
+ */
+export class FirstQuestionWatch {
+  private asked = 0;
+  private refusedFirst = false;
+
+  starting(): void {
+    this.asked = 0;
+    this.refusedFirst = false;
+  }
+
+  stopped(): boolean {
+    return this.refusedFirst;
+  }
+
+  /** `inner`, noting a refusal at the first question it is asked. */
+  watching(inner: PromptDispatcher): PromptDispatcher {
+    return {
+      dispatch: async args => {
+        const first = this.asked === 0;
+        this.asked += 1;
+        try {
+          const result = await inner.dispatch(args);
+          if (first && !result.proceed) this.refusedFirst = true;
+          return result;
+        } catch (error) {
+          if (first) this.refusedFirst = true;
+          throw error;
+        }
+      },
+    };
+  }
 }
 
 /**
@@ -166,14 +216,17 @@ function withKeptFiles(
  * What to run once the database holds part of a change `keptFiles` describe, in run order. Each
  * file's snapshot is the database as that file leaves it, so with several only the last describes
  * the finished change: the earlier ones are recorded without the comparison, and the last is
- * compared with the database. Reversed, the files run again from the start.
+ * compared with the database. Recording them changes no registry row, and the save stopped before
+ * writing its own, so `nextly migrate` follows: it brings the registry in step with the newest
+ * applied snapshot on every run, with no file left to apply. Reversed, the files run again from
+ * the start, by the same command.
  */
 function nextSteps(keptFiles: readonly string[]): string {
   const last = keptFiles[keptFiles.length - 1];
-  const finish =
+  const record =
     keptFiles.length === 1
-      ? `Finish the change by hand and run \`nextly migrate:resolve --applied ${last}\``
-      : `Finish the change by hand, then record the files in order: ${keptFiles
+      ? `Finish the change by hand, run \`nextly migrate:resolve --applied ${last}\``
+      : `Finish the change by hand, record the files in order: ${keptFiles
           .slice(0, -1)
           .map(
             file => `\`nextly migrate:resolve --applied ${file} --skip-verify\``
@@ -181,7 +234,7 @@ function nextSteps(keptFiles: readonly string[]): string {
           .join(
             ", "
           )}, then \`nextly migrate:resolve --applied ${last}\`, which checks the database against the last`;
-  return `${finish}${keptFiles.length === 1 ? "," : ";"} or reverse what of it ran and run \`nextly migrate\`, which runs ${keptFiles.length === 1 ? "it" : "them"} from the start.`;
+  return `${record}; then run \`nextly migrate\`, which brings the registry in step with the recorded ${keptFiles.length === 1 ? "file" : "files"}. Or reverse what of it ran and run \`nextly migrate\`, which runs ${keptFiles.length === 1 ? "it" : "them"} from the start.`;
 }
 
 /**
