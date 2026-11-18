@@ -241,7 +241,7 @@ describe("a sheet stored by the compiler before this spacing", () => {
     expect(served.css).toContain(
       `.${PAGE_ROOT_CLASS} :where(h2) { font-size: var(--site-font-size-h2); font-weight: 700; line-height: var(--site-line-height-h2); margin-block-end: 0; margin-block-start: 0 }`
     );
-    expect(served.sharedInputsId?.startsWith("v11:")).toBe(true);
+    expect(served.sharedInputsId?.startsWith("v12:")).toBe(true);
     expect(Object.keys(served.classes)).toContain("t");
   });
 
@@ -289,7 +289,7 @@ describe("a sheet stored by the compiler before this spacing", () => {
         false,
         { fetchPolicyId: POLICY, mayFetchUrl }
       );
-      expect(served.sharedInputsId?.startsWith("v11:")).toBe(true);
+      expect(served.sharedInputsId?.startsWith("v12:")).toBe(true);
       expect(served.css).not.toContain("cdn.other.test");
     });
 
@@ -315,7 +315,7 @@ describe("a sheet stored by the compiler before this spacing", () => {
       resolver
     );
     expect(served.css).not.toContain("1.5em");
-    expect(served.sharedInputsId?.startsWith("v11:")).toBe(true);
+    expect(served.sharedInputsId?.startsWith("v12:")).toBe(true);
   });
 });
 
