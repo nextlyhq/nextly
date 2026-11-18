@@ -366,6 +366,16 @@ const SETTING_READERS: readonly ((
             "The colour order must be a list of different code names, each used once.",
         };
   },
+  ({ builtInColoursShown }) => {
+    if (builtInColoursShown === undefined) return NOTHING;
+    return typeof builtInColoursShown === "boolean"
+      ? { kept: { builtInColoursShown } }
+      : {
+          kept: {},
+          issue:
+            "Whether the built-in colours are shown must be true or false.",
+        };
+  },
   // Row by row: a refused row is left out and the others are kept.
   ({ siteText }) => {
     const read = storedSiteText(siteText);
