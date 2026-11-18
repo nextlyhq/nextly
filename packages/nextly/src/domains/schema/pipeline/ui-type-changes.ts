@@ -24,6 +24,7 @@ import {
   refuseFieldTypeChanges,
 } from "../value-conversion/type-change/field-type-changes";
 
+import { introspectLiveSnapshot } from "./diff/introspect-live";
 import { builtByFor } from "./registered-collections";
 import type {
   DesiredCollection,
@@ -104,12 +105,54 @@ export async function refuseUiTypeChanges(
   dialect: SupportedDialect
 ): Promise<void> {
   for (const saved of builderSaved(desired)) {
+    const input = entityInput(saved);
+    const renamed = await landedRenames(saved, input.builtBy, db, dialect);
     await refuseFieldTypeChanges(db, dialect, {
-      ...entityInput(saved),
+      ...input,
       previous: saved.previous,
       next: saved.next,
+      ...(renamed.size > 0 ? { renamed } : {}),
     });
   }
+}
+
+/**
+ * A rename an earlier apply already made: MySQL commits a rename on its own, so an apply refused
+ * after it and before the type change that followed leaves the field's old values under its new
+ * name. Found where the save drops one recorded field and adds one new field, and the table has
+ * the new one's column and not the old one's; then the new field is judged as the old one's type
+ * change. Anything else names no rename, and reads no table.
+ */
+async function landedRenames(
+  saved: SavedEntity,
+  builtBy: EntityTypeChangeInput["builtBy"],
+  db: unknown,
+  dialect: SupportedDialect
+): Promise<Map<string, string>> {
+  const previous = fieldsStoredOnRow(saved.previous);
+  const next = fieldsStoredOnRow(saved.next);
+  const nextNames = new Set(next.map(f => f.name));
+  const previousNames = new Set(previous.map(f => f.name));
+  const dropped = previous.filter(f => !nextNames.has(f.name));
+  const added = next.filter(f => !previousNames.has(f.name));
+  if (dropped.length === 0 || added.length === 0) return new Map();
+  const live = await introspectLiveSnapshot(db, dialect, [
+    saved.entity.tableName,
+  ]);
+  const columns = new Set(
+    (live.tables[0]?.columns ?? []).map(c => c.name.toLowerCase())
+  );
+  const has = (field: FieldDefinition) =>
+    columns.has(
+      getColumnDescriptor(field, dialect, builtBy)?.name.toLowerCase() ?? ""
+    );
+  const gone = dropped.filter(f => !has(f));
+  const landed = added.filter(has);
+  const [from] = gone;
+  const [to] = landed;
+  return gone.length === 1 && landed.length === 1 && from && to
+    ? new Map([[from.name, to.name]])
+    : new Map();
 }
 
 /** A rename the save's answers confirmed, by table and column. */

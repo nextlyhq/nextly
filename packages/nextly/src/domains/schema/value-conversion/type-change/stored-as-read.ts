@@ -22,6 +22,11 @@ export interface StoredAsRead {
    * the new type keeps a list. Into a scalar, the column would hold the text `[]`.
    */
   emptyListHeld: boolean;
+  /**
+   * What the save's conversion writes for a value stored blank, where it writes one: one link
+   * becoming a list writes a blank link as the empty list `[]`, which the new field then judges.
+   */
+  blankAs?: string;
 }
 
 const NONE: StoredAsRead = { value: () => false, emptyListHeld: false };
@@ -33,7 +38,7 @@ export function storedAsRead(
 ): StoredAsRead {
   // One link becoming a list of links: every road's reference-list conversion writes the list.
   if (from.relation?.kept === "one" && keepsLinkList(to)) {
-    return { value: () => true, emptyListHeld: true };
+    return { value: () => true, emptyListHeld: true, blankAs: "[]" };
   }
   if (keepsJson(to)) {
     return {

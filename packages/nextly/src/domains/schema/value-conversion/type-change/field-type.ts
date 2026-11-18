@@ -66,7 +66,8 @@ export interface DateColumn {
 /** What a text column holds: a number of characters, or of bytes; absent where it is unbounded. */
 export type TextBound =
   | { unit: "characters"; most: number }
-  | { unit: "bytes"; most: number };
+  /** Bytes in the column's character set (`charset`, MySQL's name for it); UTF-8 where absent. */
+  | { unit: "bytes"; most: number; charset?: string };
 
 /** A relationship's targets and where its links are kept. */
 export interface RelationTarget {

@@ -106,18 +106,39 @@ export async function collectTypeChange(
       counts: { kept: 0, changed: 0, lost: 0, blocked: 0 },
     };
   }
-  const tally = new TypeChangeTally(options, storedAsRead(from, to));
+  const read = storedAsRead(from, to);
+  const tally = new TypeChangeTally(options, read);
   for await (const value of values) {
+    const stored = value.exactReal ?? value.text;
     tally.add(
       value.key,
       await withFieldRule(
-        judgeValue(from, to, decodeStored(from, value)),
+        asConverted(
+          judgeValue(from, to, decodeStored(from, value)),
+          stored,
+          read
+        ),
         accepts
       ),
-      value.exactReal ?? value.text
+      stored
     );
   }
   return tally.result();
+}
+
+/**
+ * A verdict as the save's conversion leaves the value: a blank value the rules read as empty is
+ * written as what the conversion writes for it (`blankAs`), which the new field then judges, as a
+ * required list refuses the `[]` a blank link becomes.
+ */
+function asConverted(
+  verdict: ValueVerdict,
+  stored: string | null,
+  read: StoredAsRead
+): ValueVerdict {
+  if (verdict.reason !== "empty" || stored === null) return verdict;
+  if (read.blankAs === undefined) return verdict;
+  return { outcome: "changed", reason: "new-form", readsAs: read.blankAs };
 }
 
 /** The values of one type change counted as they are judged: by outcome, by reason, and cleared. */

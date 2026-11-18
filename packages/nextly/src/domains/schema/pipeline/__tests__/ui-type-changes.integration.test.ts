@@ -165,6 +165,8 @@ function cases(
     table: string;
     seed: (scores: Record<string, string>) => Promise<void>;
     scores: () => Promise<Record<string, unknown>>;
+    /** Rename a column of the table, as an earlier apply's committed rename leaves it. */
+    rename: (from: string, to: string) => Promise<void>;
   }
 ) {
   it("refuses a change that would clear a value, naming the field and the row, and changes nothing", async () => {
@@ -232,6 +234,21 @@ function cases(
     expect(await scores()).toEqual({ p1: "5", p2: "12.5" });
   });
 
+  it("judges a field whose rename an earlier apply already made, under its new name", async () => {
+    // The table already calls the column `points`, as a MySQL apply refused after the rename leaves
+    // it; the save still records `score`, and is judged over the values `points` holds.
+    const { target, slug, table, seed, rename } = open();
+    await seed({ p1: "5", p2: "xyz" });
+    await rename("score", "points");
+
+    const result = await save(target, scoreToPoints(slug, table));
+
+    expect(result.success).toBe(false);
+    expect(result.error?.message).toContain(
+      `Collection '${slug}': field 'points' cannot change from text to number`
+    );
+  });
+
   it("goes ahead with a change every value survives", async () => {
     const { target, slug, table, seed } = open();
     await seed({ p1: "5", p2: "12" });
@@ -291,6 +308,10 @@ describe("a Schema Builder save's field type change (sqlite)", () => {
           ).map(row => [row.id, row.score])
         )
       ),
+    rename: (from, to) => {
+      sqlite.exec(`ALTER TABLE "${table}" RENAME COLUMN "${from}" TO "${to}"`);
+      return Promise.resolve();
+    },
   }));
 });
 
@@ -377,6 +398,11 @@ for (const server of SERVERS) {
               await connection.query(`SELECT id, score FROM ${quote(table)}`)
             ).map(row => [row.id, row.score])
           ),
+        rename: async (from, to) => {
+          await connection.query(
+            `ALTER TABLE ${quote(table)} RENAME COLUMN ${quote(from)} TO ${quote(to)}`
+          );
+        },
       }));
     }
   );

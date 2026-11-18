@@ -49,7 +49,10 @@ const DECODE_BY_FAMILY: Partial<
  */
 function relationOf(from: FieldTypeOnDialect, text: string): OldValue {
   const kept = from.relation?.kept;
-  if (kept === "one") return { kind: "text", text };
+  // A blank link names no entry: the relationship is empty, as every road reads it.
+  if (kept === "one") {
+    return text.trim() === "" ? { kind: "empty" } : { kind: "text", text };
+  }
   if (kept === "list" || kept === "targetList") return listOf(from, text);
   return jsonOf(text);
 }

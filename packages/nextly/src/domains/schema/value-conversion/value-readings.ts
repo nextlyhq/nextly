@@ -327,15 +327,66 @@ export function sqliteStores(
 }
 
 /**
- * The most MySQL's `text` column holds: 65,535 bytes of a value's UTF-8, not 65,535 characters.
- * PostgreSQL's and SQLite's `text` hold any length.
+ * The most MySQL's `text` column holds: 65,535 bytes of a value in the column's character set
+ * (UTF-8 where none is named), not 65,535 characters. PostgreSQL's and SQLite's `text` hold any
+ * length.
  */
 export const MYSQL_TEXT_BYTES = 65_535;
 
-/** How many UTF-8 bytes a value has, as MySQL counts a `text` column's length. */
+/** How many UTF-8 bytes a value has, as MySQL counts a `text` column's length in UTF-8. */
 export function byteLength(text: string): number {
-  return new TextEncoder().encode(text).length;
+  return byteLengthIn(text, undefined);
 }
+
+/**
+ * How many bytes a value has in a MySQL character set, as its `text` column counts them: UTF-8's
+ * own count (where none is named too), one byte a character in a single-byte set, two per UTF-16
+ * unit, four per character in UTF-32. A set this does not know is counted at four bytes a
+ * character, the most any of them takes, so a value is never judged to fit a column it overflows.
+ */
+export function byteLengthIn(
+  text: string,
+  charset: string | undefined
+): number {
+  const set = charset?.toLowerCase();
+  if (set === undefined || set.startsWith("utf8")) {
+    return new TextEncoder().encode(text).length;
+  }
+  if (SINGLE_BYTE_SETS.has(set)) return Array.from(text).length;
+  if (set === "ucs2" || set === "utf16" || set === "utf16le") {
+    return text.length * 2;
+  }
+  return Array.from(text).length * 4;
+}
+
+/** MySQL's character sets that keep each character in one byte. */
+const SINGLE_BYTE_SETS = new Set([
+  "latin1",
+  "latin2",
+  "latin5",
+  "latin7",
+  "ascii",
+  "cp1250",
+  "cp1251",
+  "cp1256",
+  "cp1257",
+  "cp850",
+  "cp852",
+  "cp866",
+  "greek",
+  "hebrew",
+  "koi8r",
+  "koi8u",
+  "armscii8",
+  "keybcs2",
+  "macce",
+  "macroman",
+  "swe7",
+  "dec8",
+  "hp8",
+  "tis620",
+  "geostd8",
+]);
 
 /** How many bits a whole-number column holds: 32 on PostgreSQL and MySQL (`int`), 64 on SQLite. */
 export function integerBits(dialect: SupportedDialect): 32 | 64 {

@@ -27,7 +27,7 @@ import { EMAIL_RE } from "../../../../shared/lib/entry-validation";
 import { readExactIsoInstant } from "../../../../shared/lib/iso-instant";
 import type { ConversionClass } from "../types";
 import {
-  byteLength,
+  byteLengthIn,
   characterLength,
   decimalFit,
   holdsNonFinite,
@@ -908,7 +908,9 @@ function holdsText(bound: TextBound | undefined, text: string): boolean {
   if (bound === undefined) return true;
   // Characters as a `varchar(N)` counts them, which the column judgement counts the same way.
   const size =
-    bound.unit === "characters" ? characterLength(text) : byteLength(text);
+    bound.unit === "characters"
+      ? characterLength(text)
+      : byteLengthIn(text, bound.charset);
   return size <= bound.most;
 }
 

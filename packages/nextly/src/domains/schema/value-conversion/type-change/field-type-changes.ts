@@ -7,10 +7,13 @@
  *
  * @module domains/schema/value-conversion/type-change/field-type-changes
  */
+import { sql } from "drizzle-orm";
+
 import { NextlyError } from "../../../../errors/nextly-error";
 import type { FieldDefinition } from "../../../../schemas/dynamic-collections";
 import { resolveLocalizedFieldNames } from "../../../i18n/classify-fields";
 import { storesPerLanguage } from "../../../i18n/per-language-storage";
+import { querySqlRows } from "../../pipeline/classifier/count-helpers";
 import { introspectLiveSnapshot } from "../../pipeline/diff/introspect-live";
 import {
   type ColumnOrigin,
@@ -135,30 +138,11 @@ export async function judgeFieldTypeChanges(args: {
 }): Promise<JudgedFieldTypeChange[]> {
   const judged: JudgedFieldTypeChange[] = [];
   const columnsOf = liveColumnReader(args.db, args.dialect);
+  const charsetOf = tableCharsetReader(args.db, args.dialect);
   for (const change of args.changes) {
-    const column = getColumnDescriptor(
-      change.from,
-      args.dialect,
-      args.builtBy
-    )?.name;
-    if (column === undefined) continue;
-    // Where the old definition keeps the value first, then the other table: a save that turns
-    // translation on or off has each value where it was, which the column's presence tells.
-    const translated =
-      args.translationsTable !== undefined &&
-      args.translated?.has(change.from.name) === true;
-    const candidates = [args.table, args.translationsTable].filter(
-      (t): t is string => t !== undefined
-    );
-    if (translated) candidates.reverse();
-    let table: string | undefined;
-    for (const candidate of candidates) {
-      if ((await columnsOf(candidate)).has(column.toLowerCase())) {
-        table = candidate;
-        break;
-      }
-    }
-    if (table === undefined) continue;
+    const held = await whereHeld(change, args, columnsOf);
+    if (held === undefined) continue;
+    const { table, column } = held;
     const perLanguage = table === args.translationsTable;
     const result = await judgeStoredTypeChange({
       db: args.db,
@@ -167,7 +151,9 @@ export async function judgeFieldTypeChanges(args: {
       column,
       keyedBy: perLanguage ? "translation" : "id",
       from: change.fromType,
-      to: change.toType,
+      // A MySQL text column counts its bytes in the table's character set, which a column the
+      // change converts takes.
+      to: withCharset(change.toType, await charsetOf(table)),
       accepts: fieldAccepts(change.toType, change.to),
       // A unique field holds each value once: two that read as one value of the new type block.
       unique: change.to.unique === true,
@@ -175,6 +161,41 @@ export async function judgeFieldTypeChanges(args: {
     judged.push({ ...change, table, column, result });
   }
   return judged;
+}
+
+/**
+ * The table and column a change's stored values are in. The table the old definition keeps the
+ * value in is asked first, then the other: a save that turns translation on or off has each value
+ * where it was, which the column's presence tells. The old field's column first, then the new
+ * one's: a MySQL apply refused part-way can have committed a rename and not the type change after
+ * it, which leaves the old values under the new name. Undefined where neither table has either.
+ */
+async function whereHeld(
+  change: FieldTypeChange,
+  args: {
+    dialect: SupportedDialect;
+    builtBy: ColumnOrigin;
+    table: string;
+    translationsTable?: string;
+    translated?: ReadonlySet<string>;
+  },
+  columnsOf: (table: string) => Promise<ReadonlySet<string>>
+): Promise<{ table: string; column: string } | undefined> {
+  const tables = [args.table, args.translationsTable].filter(
+    (t): t is string => t !== undefined
+  );
+  if (args.translated?.has(change.from.name) === true) tables.reverse();
+  const columns = [change.from, change.to]
+    .map(field => getColumnDescriptor(field, args.dialect, args.builtBy)?.name)
+    .filter((name): name is string => name !== undefined);
+  for (const column of columns) {
+    for (const table of tables) {
+      if ((await columnsOf(table)).has(column.toLowerCase())) {
+        return { table, column };
+      }
+    }
+  }
+  return undefined;
 }
 
 /** Each table's column names, lower-cased, read from the database once per table. */
@@ -199,6 +220,49 @@ function liveColumnReader(
       read.set(table, columns);
     }
     return columns;
+  };
+}
+
+/**
+ * Each MySQL table's character set, read from the database once per table: what a text column the
+ * change converts counts its bytes in. Undefined on PostgreSQL and SQLite, whose text holds any
+ * length, and where the table is not found.
+ */
+function tableCharsetReader(
+  db: unknown,
+  dialect: SupportedDialect
+): (table: string) => Promise<string | undefined> {
+  const read = new Map<string, Promise<string | undefined>>();
+  return table => {
+    if (dialect !== "mysql") return Promise.resolve(undefined);
+    let charset = read.get(table);
+    if (charset === undefined) {
+      charset = querySqlRows<{ charset: unknown }>(
+        db,
+        dialect,
+        sql`SELECT c.CHARACTER_SET_NAME AS charset FROM information_schema.TABLES t JOIN information_schema.COLLATION_CHARACTER_SET_APPLICABILITY c ON c.COLLATION_NAME = t.TABLE_COLLATION WHERE t.TABLE_SCHEMA = DATABASE() AND t.TABLE_NAME = ${table}`
+      ).then(rows =>
+        typeof rows[0]?.charset === "string" ? rows[0].charset : undefined
+      );
+      read.set(table, charset);
+    }
+    return charset;
+  };
+}
+
+/** A type whose byte-bounded text, its own or its items', is counted in `charset`. */
+function withCharset(
+  type: FieldTypeOnDialect,
+  charset: string | undefined
+): FieldTypeOnDialect {
+  if (charset === undefined) return type;
+  const bound = type.textBound;
+  return {
+    ...type,
+    ...(bound?.unit === "bytes" ? { textBound: { ...bound, charset } } : {}),
+    ...(type.item !== undefined
+      ? { item: withCharset(type.item, charset) }
+      : {}),
   };
 }
 

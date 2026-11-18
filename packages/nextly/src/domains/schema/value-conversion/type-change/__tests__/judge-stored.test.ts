@@ -278,6 +278,53 @@ describe("a type change collected over its stored values", () => {
     expect(list.judgement.class).toBe("safe");
   });
 
+  it("counts a MySQL text column's bytes in its table's character set", async () => {
+    // 40,000 ASCII characters are 40,000 UTF-8 bytes, which a text column holds, and 80,000 in
+    // UTF-16, which it does not.
+    const long = "a".repeat(40_000);
+    const into = (charset?: string) => ({
+      ...typeOf("mysql", "text"),
+      textBound: {
+        unit: "bytes" as const,
+        most: 65_535,
+        ...(charset !== undefined ? { charset } : {}),
+      },
+    });
+    const utf8 = await collectTypeChange(
+      typeOf("mysql", "textarea"),
+      into(),
+      stored(long)
+    );
+    expect(utf8.judgement.class).toBe("safe");
+    const utf16 = await collectTypeChange(
+      typeOf("mysql", "textarea"),
+      into("utf16"),
+      stored(long)
+    );
+    expect(utf16.judgement.reasons.map(r => r.kind)).toEqual(["too-long"]);
+  });
+
+  it("judges a blank link becoming a list as the empty list its conversion writes", async () => {
+    // Every road's reference-list conversion writes a blank link as `[]`: a required list refuses
+    // it, where read as `[""]` it would pass.
+    const toField = {
+      name: "f",
+      type: "relationship",
+      relationTo: "people",
+      hasMany: true,
+      required: true,
+    } as unknown as FieldDefinition;
+    const to = fieldTypeOnDialect(toField, "postgresql", "collection");
+    const result = await collectTypeChange(
+      typeOf("postgresql", "relationship", { relationTo: "people" }),
+      to,
+      stored("", "  ", "p1"),
+      fieldAccepts(to, toField)
+    );
+    expect(result.cleared).toEqual([{ id: "1" }, { id: "2" }]);
+    expect(result.counts).toMatchObject({ lost: 2, changed: 1 });
+  });
+
   it("blocks a relationship kept as a list becoming one link, where a row holds several", async () => {
     const list = typeOf("postgresql", "relationship", {
       relationTo: "people",
