@@ -390,11 +390,13 @@ export interface BuilderField extends FieldConfig {
    */
   relationTo?: string | string[];
   /**
-   * The collection a relationship stored the earlier way links to, from its stored
-   * `options.target`, when it has no `relationTo` (a many-to-many is left so by the server). Read
-   * only, so the Builder does not judge the field unlinked; a save does not write it.
+   * A relationship's stored `options` object, kept whole and written back by the save: the
+   * collection it links to (`target`, which a relationship stored the earlier way names instead of
+   * `relationTo`) and how its links are stored (`relationType`, `"manyToMany"` for one kept in a
+   * table of its own). The Builder edits neither, so a save that dropped them would make a
+   * many-to-many a single link and lose the table holding its links.
    */
-  storedRelationTarget?: string;
+  storedRelationOptions?: Readonly<Record<string, unknown>>;
   /**
    * Maximum depth for populating related documents
    */

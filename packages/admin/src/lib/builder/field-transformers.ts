@@ -285,6 +285,12 @@ export function convertToFieldDefinition(field: BuilderField): FieldDefinition {
   // Relationship properties
   if (field.type === "relationship") {
     definition.relationTo = field.relationTo;
+    // The stored `options` the Builder does not edit, written back so the field keeps how its
+    // links are stored (a many-to-many's own table) and the collection it names.
+    const relationOptions = relationshipOptionsToSave(field);
+    if (relationOptions !== undefined) {
+      Object.assign(definition, { options: relationOptions });
+    }
     definition.maxDepth = field.maxDepth;
     definition.allowCreate = field.allowCreate;
     definition.allowEdit = field.allowEdit;
@@ -535,17 +541,32 @@ export function applyCarriedOptions(
 }
 
 /**
- * The collection a relationship stored the earlier way names in `options.target`, when it has no
- * `relationTo` (the server leaves a many-to-many so), or undefined. Read only, so the Builder does
- * not judge the field to link nowhere; a save does not write it.
+ * A relationship's stored `options` object (its `target` and `relationType`), or undefined for any
+ * other field or a relationship storing none. Kept whole on the Builder field and written back by
+ * the save (`relationshipOptionsToSave`).
  */
-function storedRelationTargetOf(field: FieldDefinition): string | undefined {
-  if (field.type !== "relationship" || field.relationTo) return undefined;
+function storedRelationOptionsOf(
+  field: FieldDefinition
+): Readonly<Record<string, unknown>> | undefined {
+  if (field.type !== "relationship") return undefined;
   const stored: unknown = field.options;
-  if (!isPlainRecord(stored) || typeof stored.target !== "string") {
-    return undefined;
-  }
-  return stored.target === "" ? undefined : stored.target;
+  return isPlainRecord(stored) ? stored : undefined;
+}
+
+/**
+ * The `options` a relationship's save writes: the stored ones, with `target` following the
+ * collection the person picked (`relationTo`, one collection), so a many-to-many stays one and
+ * links to what the field now names. Undefined where none were stored.
+ */
+function relationshipOptionsToSave(
+  field: BuilderField
+): Readonly<Record<string, unknown>> | undefined {
+  const stored = field.storedRelationOptions;
+  if (stored === undefined) return undefined;
+  const picked = field.relationTo;
+  return typeof picked === "string" && picked !== ""
+    ? { ...stored, target: picked }
+    : stored;
 }
 
 /**
@@ -662,7 +683,7 @@ export function convertToBuilderField(
     }));
   }
 
-  builderField.storedRelationTarget = storedRelationTargetOf(field);
+  builderField.storedRelationOptions = storedRelationOptionsOf(field);
 
   return builderField;
 }
