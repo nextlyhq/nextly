@@ -58,6 +58,7 @@ import { z } from "nextly/zod";
 import { labelOf, pluralLabelOf } from "./collection-labels";
 import { PAGES_SLUG } from "./collections/pages";
 import { ENTRIES_LOCALE_MAX } from "./entries-contract";
+import { titleFieldIn } from "./entries-route";
 import { listFieldsFrom } from "./fields/list-query-judgement";
 import { DEFAULT_COMPONENT_STORE, type ComponentStore } from "./library-route";
 import {
@@ -86,11 +87,15 @@ const TIMESTAMP_LABELS: Readonly<Record<string, string>> = {
   updatedAt: "Updated",
 };
 
-/** A field as a registry record declares it, as far as its words go. */
+/**
+ * A field as a registry record declares it, as far as its words go, and the
+ * types an upload field accepts.
+ */
 interface DeclaredField {
   readonly name?: unknown;
   readonly label?: unknown;
   readonly options?: unknown;
+  readonly mimeTypes?: unknown;
 }
 
 /** What an author calls a field: its label, or its name in words. */
@@ -168,6 +173,23 @@ function declaredByName(
     if (typeof field.name === "string") byName.set(field.name, field);
   }
   return byName;
+}
+
+/**
+ * Whether an upload field takes images, as its accepted types say: any
+ * `image/` type named, or no types named at all. `undefined` for a field
+ * that is not an upload.
+ */
+function takesImagesOf(
+  type: string,
+  declared: DeclaredField | undefined
+): boolean | undefined {
+  if (type !== "upload") return undefined;
+  const accepted = declared?.mimeTypes;
+  if (typeof accepted !== "string" || accepted.trim() === "") return true;
+  return accepted
+    .split(",")
+    .some(part => part.trim().toLowerCase().startsWith("image/"));
 }
 
 /**
@@ -302,8 +324,29 @@ async function collectionItem(
         : { relationTo: shape.relationTo }),
       ...(shape.timeOnly === true ? { timeOnly: true as const } : {}),
       ...(shape.storage === undefined ? {} : { storage: shape.storage }),
+      ...withTakesImages(takesImagesOf(shape.type, declared.get(shape.name))),
     })),
+    // What a new list's item binds as its title: core's one title rule,
+    // offered only where visitors may read that field.
+    ...withTitleField(titleFieldIn(record)?.name, fields?.readable ?? []),
   };
+}
+
+/** `takesImages` as a member, absent where it says nothing. */
+function withTakesImages(
+  takesImages: boolean | undefined
+): { takesImages?: boolean } {
+  return takesImages === undefined ? {} : { takesImages };
+}
+
+/** The title field as a member, where visitors may read it. */
+function withTitleField(
+  name: string | undefined,
+  readable: readonly { readonly name: string }[]
+): { titleField?: string } {
+  return name !== undefined && readable.some(field => field.name === name)
+    ? { titleField: name }
+    : {};
 }
 
 /**
