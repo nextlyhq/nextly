@@ -32,7 +32,7 @@ export const QUESTION_ROOM_ATTRIBUTE = "data-nx-question-room";
  * The room's height on that accordion, in the page's pixels: the button's
  * height at the canvas's zoom, written by the canvas beside the attribute.
  */
-export const QUESTION_ROOM_PROPERTY = "--nx-question-room";
+export const QUESTION_ROOM_PROPERTY = "--nx-canvas-question-room";
 
 /** The Accordion's registered name. */
 const ACCORDION_BLOCK = "core/accordion";
