@@ -188,16 +188,24 @@ export interface ScopedStageFilter {
 }
 
 /**
- * The filter "assigned to any of `holders`, in any of the stages `within` names", or null where
- * it can match nothing. One filter for the page and its count, so the two cannot disagree.
+ * What waits for a caller in one stage of one collection or Single: parts assigned to the caller
+ * or one of their roles (`mine`), parts assigned to someone who no longer may take the stage's
+ * primary step (`orphans`), and, where `unassigned`, parts no one is assigned.
+ *
+ * @experimental
  */
-function assignedWhere(
-  holders: readonly ReviewAssignee[],
-  within: readonly ScopedStageFilter[]
-): WhereClause | null {
-  if (holders.length === 0 || within.length === 0) return null;
+export interface WaitingStageTerms extends ScopedStageFilter {
+  mine: readonly ReviewAssignee[];
+  orphans: readonly ReviewAssignee[];
+  unassigned: boolean;
+}
+
+/** "Assigned to any of `assignees`", or null where that names no one. */
+function assignedTo(assignees: readonly ReviewAssignee[]): WhereClause | null {
   const byKind = (kind: ReviewAssigneeKind) =>
-    holders.filter(holder => holder.kind === kind).map(holder => holder.id);
+    assignees
+      .filter(assignee => assignee.kind === kind)
+      .map(assignee => assignee.id);
   const assigned: WhereClause[] = (["user", "role"] as const)
     .map(kind => ({ kind, ids: byKind(kind) }))
     .filter(({ ids }) => ids.length > 0)
@@ -207,34 +215,51 @@ function assignedWhere(
         { column: "assigneeId", op: "IN", value: ids },
       ],
     }));
-  const stages: WhereClause = {
-    or: within.map(
-      (scoped): WhereClause => ({
-        and: [
-          { column: "scopeKind", op: "=", value: scoped.kind },
-          { column: "scopeSlug", op: "=", value: scoped.slug },
-          { column: "stage", op: "=", value: scoped.stage },
-        ],
-      })
-    ),
+  return assigned.length === 0 ? null : { or: assigned };
+}
+
+/** One stage of one collection or Single, as a filter. */
+function inStage(scoped: ScopedStageFilter): WhereClause {
+  return {
+    and: [
+      { column: "scopeKind", op: "=", value: scoped.kind },
+      { column: "scopeSlug", op: "=", value: scoped.slug },
+      { column: "stage", op: "=", value: scoped.stage },
+    ],
   };
-  return { and: [{ or: assigned }, stages] };
+}
+
+/** The filter "waits for the caller, by `terms`", or null where it can match nothing. */
+function waitingWhere(terms: readonly WaitingStageTerms[]): WhereClause | null {
+  const stages = terms.flatMap((term): WhereClause[] => {
+    const whose = [
+      assignedTo(term.mine),
+      assignedTo(term.orphans),
+      ...(term.unassigned
+        ? [
+            {
+              and: [{ column: "assigneeKind", op: "IS NULL", value: null }],
+            } as WhereClause,
+          ]
+        : []),
+    ].filter((clause): clause is WhereClause => clause !== null);
+    return whose.length === 0 ? [] : [{ and: [inStage(term), { or: whose }] }];
+  });
+  return stages.length === 0 ? null : { or: stages };
 }
 
 /**
- * The review states assigned to any of `holders` (a person, or roles) in any of the stages
- * `within` names, a page at a time, oldest entry into their stage first: what waits for them.
- * Filtered and paginated in the database, on the assignee index.
+ * The review states that wait for a caller, by `terms`, oldest entry into their stage first, at
+ * most `limit` of them: the candidates a waiting list is read checked and paged from.
  *
  * @experimental
  */
-export async function readAssignedReviewStates(
+export async function readWaitingReviewStates(
   db: ReviewStatesDb,
-  holders: readonly ReviewAssignee[],
-  page: { limit: number; offset: number },
-  within: readonly ScopedStageFilter[]
+  terms: readonly WaitingStageTerms[],
+  limit: number
 ): Promise<ReviewState[]> {
-  const where = assignedWhere(holders, within);
+  const where = waitingWhere(terms);
   if (where === null) return [];
   const rows = await db.select<ReviewStateRow>(REVIEW_STATES_TABLE, {
     where,
@@ -243,26 +268,64 @@ export async function readAssignedReviewStates(
       { column: "enteredAt", direction: "asc" },
       { column: "partKey", direction: "asc" },
     ],
-    limit: page.limit,
-    offset: page.offset,
+    limit,
   });
   return rows.map(fromRow);
 }
 
 /**
- * How many review states {@link readAssignedReviewStates} would list over every page.
+ * Who parts are assigned to in each of the stages `within` names, each assignee once per stage:
+ * the people and roles whose hold on a stage's primary step decides whether their work waits for
+ * everyone who may take it.
  *
  * @experimental
  */
-export async function countAssignedReviewStates(
-  db: {
-    count(table: string, options?: { where?: WhereClause }): Promise<number>;
-  },
-  holders: readonly ReviewAssignee[],
+export async function assigneesInStages(
+  db: ReviewStatesDb,
   within: readonly ScopedStageFilter[]
-): Promise<number> {
-  const where = assignedWhere(holders, within);
-  return where === null ? 0 : db.count(REVIEW_STATES_TABLE, { where });
+): Promise<(ScopedStageFilter & { assignee: ReviewAssignee })[]> {
+  if (within.length === 0) return [];
+  const rows = await db.select<
+    Pick<
+      ReviewStateRow,
+      "scopeKind" | "scopeSlug" | "stage" | "assigneeKind" | "assigneeId"
+    >
+  >(REVIEW_STATES_TABLE, {
+    columns: ["scopeKind", "scopeSlug", "stage", "assigneeKind", "assigneeId"],
+    where: {
+      and: [
+        { or: within.map(inStage) },
+        { column: "assigneeKind", op: "IS NOT NULL", value: null },
+      ],
+    },
+  });
+  const seen = new Map<
+    string,
+    ScopedStageFilter & { assignee: ReviewAssignee }
+  >();
+  for (const row of rows) {
+    if (row.assigneeKind === null || row.assigneeId === null) continue;
+    const assignee: ReviewAssignee = {
+      kind: row.assigneeKind,
+      id: row.assigneeId,
+    };
+    const key = JSON.stringify([
+      row.scopeKind,
+      row.scopeSlug,
+      row.stage,
+      assignee.kind,
+      assignee.id,
+    ]);
+    if (!seen.has(key)) {
+      seen.set(key, {
+        kind: row.scopeKind,
+        slug: row.scopeSlug,
+        stage: row.stage,
+        assignee,
+      });
+    }
+  }
+  return [...seen.values()];
 }
 
 /**

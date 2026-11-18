@@ -19,32 +19,41 @@ import { resolveUserRoles } from "../../services/lib/permissions";
 import { configuredLocales } from "../i18n/configured-locales";
 
 import { primaryStep } from "./define-workflow";
+import { holderAnswer } from "./holders";
 import { livePartsOf, partStage, pendingPartsOn } from "./implicit-stage";
 import { lastMovesOn, type LastMove } from "./last-moves";
 import { documentTableOn, partVersionOn } from "./part-versions";
-import { partsWaitingFor, type PartWaitingFor } from "./part-waits-for";
+import {
+  partsWaitingFor,
+  waitsFor,
+  type PartWaitingFor,
+} from "./part-waits-for";
 import { registeredWorkflows, workflowAttachedTo } from "./registry";
 import {
-  countAssignedReviewStates,
-  readAssignedReviewStates,
+  assigneesInStages,
   readDocumentReviewStates,
+  readWaitingReviewStates,
   type ReviewAssignee,
   type ReviewDocument,
   type ReviewState,
+  type WaitingStageTerms,
 } from "./review-state-repository";
 import {
+  accountableFor,
   allowsPublish,
   assignWorkflowParts,
   primaryAction,
   stepsTakeableBy,
   takeWorkflowStep,
+  takesStep,
   workflowCallerActor,
   type Assignment,
   type SeenPart,
   type TakeStepResult,
   type WorkflowCaller,
 } from "./steps";
-import type { Workflow, WorkflowStepKind } from "./types";
+import type { ResolvedWorkflowStep, Workflow, WorkflowStepKind } from "./types";
+import { readWorkflowSettings } from "./workflow-settings-repository";
 
 /** Error codes this module refuses with. @experimental */
 export const REVIEW_API_ERROR_CODES = {
@@ -243,7 +252,8 @@ export interface WaitingPart {
   part: string | null;
   stage: string;
   stageLabel: string;
-  assignee: ReviewAssignee;
+  /** Who it is assigned to; null for work no one is assigned, which waits for every holder. */
+  assignee: ReviewAssignee | null;
   enteredAt: Date;
   dueAt: Date | null;
 }
@@ -268,6 +278,10 @@ interface ScopedStage {
   slug: string;
   stage: string;
   action: string;
+  /** The stage's primary step, the one whose taker work in the stage waits for. */
+  step: ResolvedWorkflowStep;
+  /** The workflow's slug, whose settings name the stage's default reviewer. */
+  workflow: string;
 }
 
 /** Every stage with a step out of it, of every collection and Single a workflow is attached to. */
@@ -284,8 +298,16 @@ function attachedStages(): ScopedStage[] {
     for (const entity of entities) {
       for (const stage of registered.workflow.stages) {
         const action = primaryAction(registered.workflow, stage.name);
-        if (action !== null)
-          stages.push({ ...entity, stage: stage.name, action });
+        const step = primaryStep(registered.workflow, stage.name);
+        if (action !== null && step !== undefined) {
+          stages.push({
+            ...entity,
+            stage: stage.name,
+            action,
+            step,
+            workflow: registered.workflow.slug,
+          });
+        }
       }
     }
   }
@@ -293,11 +315,21 @@ function attachedStages(): ScopedStage[] {
 }
 
 /**
- * What waits for a caller: the parts whose next step they may take (they hold the action of the
- * part's stage's primary step on its collection or Single) and that are assigned to them or to one
- * of their roles. Only collections and Singles the caller may read are looked in, filtered and
- * paginated in the database on the assignee index; each document of the page is then asked the
- * document read check, so a document the caller may not read is left out rather than shown.
+ * How many waiting parts a list reads, read checks and pages from. A caller with more waiting than
+ * this is told the first this many's count: a floor, never a number that took in a part they may
+ * not read.
+ */
+const WAITING_SCAN_LIMIT = 1000;
+
+/**
+ * What waits for a caller: the parts whose next step they may take, by its permission on the
+ * part's collection or Single and by who may take it (no approval for an API key; no approval of
+ * work the caller brought into the stage, where the step refuses that), that wait for them by the
+ * rule a part's read names (`waitsFor`): assigned to them or one of their roles, assigned to
+ * someone who no longer may take the step, or assigned to no one where the stage's default
+ * reviewer is theirs or the stage has none who may. Only collections and Singles the caller may
+ * read are looked in; each part is then asked the document read check, and only those it passes
+ * are listed AND counted, so the count never takes in a part the caller may not read.
  *
  * @experimental
  */
@@ -315,46 +347,139 @@ export async function waitingFor(
       readsCache.set(key, await query.readsEntity(scoped.kind, scoped.slug));
     }
     if (!readsCache.get(key)) continue;
-    if (decidePermission(actor, scoped.action, scoped.slug).allowed) {
-      takeable.push(scoped);
-    }
+    if (!decidePermission(actor, scoped.action, scoped.slug).allowed) continue;
+    // A step only a person takes is never one a key may: its work never waits for the key.
+    if (!takesStep(scoped.step, query.caller, null, undefined)) continue;
+    takeable.push(scoped);
   }
   if (takeable.length === 0) return { items: [], total: 0 };
-  // The roles the caller holds now, inherited ones included: a part assigned to any of them
-  // waits for the caller.
+  // The roles the caller holds now, inherited ones included: work assigned to any of them is theirs.
   const { roleIds } = await resolveUserRoles(query.caller.userId);
-  const holders: ReviewAssignee[] = [
+  const mine: ReviewAssignee[] = [
     { kind: "user", id: query.caller.userId },
     ...[...roleIds].map(id => ({ kind: "role" as const, id })),
   ];
-  const within = takeable.map(({ kind, slug, stage }) => ({
-    kind,
-    slug,
-    stage,
-  }));
-  const rows = await readAssignedReviewStates(
+  const terms = await waitingTerms(adapter, takeable, mine);
+  const candidates = await readWaitingReviewStates(
     adapter,
-    holders,
-    { limit: query.limit, offset: query.offset },
-    within
+    terms,
+    WAITING_SCAN_LIMIT
   );
-  // Counted on the same filter. A document a row-level read rule hides is left out of its page,
-  // and still counted: the count names no document.
-  const total = await countAssignedReviewStates(adapter, holders, within);
-  const items: WaitingPart[] = [];
-  for (const row of rows) {
+  const accountable = await accountableFor(adapter, query.caller);
+  const stageOfRow = new Map(
+    takeable.map(scoped => [
+      `${scoped.kind}:${scoped.slug}:${scoped.stage}`,
+      scoped,
+    ])
+  );
+  const waiting: WaitingPart[] = [];
+  for (const row of candidates) {
+    const scoped = stageOfRow.get(
+      `${row.scopeKind}:${row.scopeSlug}:${row.stage}`
+    );
+    if (!scoped) continue;
+    // Work the caller brought into a stage whose step refuses that is not theirs to move.
+    if (!takesStep(scoped.step, query.caller, accountable, row.enteredBy))
+      continue;
     const document: ReviewDocument = {
       scopeKind: row.scopeKind,
       scopeSlug: row.scopeSlug,
       entryId: row.entryId,
     };
-    if (!row.assignee || !(await query.readable(document, row.part))) continue;
-    items.push(waitingItem(row, row.assignee));
+    if (!(await query.readable(document, row.part))) continue;
+    waiting.push(waitingItem(row, row.assignee));
   }
-  return { items, total };
+  return {
+    items: waiting.slice(query.offset, query.offset + query.limit),
+    total: waiting.length,
+  };
 }
 
-function waitingItem(row: ReviewState, assignee: ReviewAssignee): WaitingPart {
+/**
+ * Each takeable stage's terms for what waits for the caller: their own work (`mine`), work whose
+ * assignee no longer may take the stage's primary step (each assignee asked once, as a part's read
+ * asks), and unassigned work where it waits for them: the stage's default reviewer is theirs, or
+ * the stage has none who may, so it waits for every holder.
+ */
+async function waitingTerms(
+  adapter: DrizzleAdapter,
+  takeable: readonly ScopedStage[],
+  mine: readonly ReviewAssignee[]
+): Promise<WaitingStageTerms[]> {
+  const isMine = (who: ReviewAssignee) =>
+    mine.some(each => each.kind === who.kind && each.id === who.id);
+  const holds = new Map<string, boolean>();
+  const mayTake = async (who: ReviewAssignee, scoped: ScopedStage) => {
+    const key = `${who.kind}:${who.id}:${scoped.action}:${scoped.slug}`;
+    let answer = holds.get(key);
+    if (answer === undefined) {
+      answer =
+        (await holderAnswer(adapter, who, scoped.action, scoped.slug)) ===
+        "holds";
+      holds.set(key, answer);
+    }
+    return answer;
+  };
+  const settings = new Map<
+    string,
+    Record<string, ReviewAssignee> | undefined
+  >();
+  const reviewerOf = async (scoped: ScopedStage) => {
+    if (!settings.has(scoped.workflow)) {
+      settings.set(
+        scoped.workflow,
+        (await readWorkflowSettings(adapter, scoped.workflow))?.settings
+          .defaultReviewers
+      );
+    }
+    return settings.get(scoped.workflow)?.[scoped.stage];
+  };
+  const assigned = await assigneesInStages(adapter, takeable);
+  const terms: WaitingStageTerms[] = [];
+  for (const scoped of takeable) {
+    const orphans: ReviewAssignee[] = [];
+    for (const each of assigned) {
+      if (
+        each.kind !== scoped.kind ||
+        each.slug !== scoped.slug ||
+        each.stage !== scoped.stage ||
+        isMine(each.assignee)
+      ) {
+        continue;
+      }
+      const whom = waitsFor({
+        assignee: (await mayTake(each.assignee, scoped)) ? "holds" : "lacks",
+        reviewer: "none",
+      });
+      if (whom === "holders") orphans.push(each.assignee);
+    }
+    const reviewer = await reviewerOf(scoped);
+    const unassignedWaitsFor = waitsFor({
+      assignee: "none",
+      reviewer: !reviewer
+        ? "none"
+        : (await mayTake(reviewer, scoped))
+          ? "holds"
+          : "lacks",
+    });
+    terms.push({
+      kind: scoped.kind,
+      slug: scoped.slug,
+      stage: scoped.stage,
+      mine,
+      orphans,
+      unassigned:
+        unassignedWaitsFor === "holders" ||
+        (reviewer !== undefined && isMine(reviewer)),
+    });
+  }
+  return terms;
+}
+
+function waitingItem(
+  row: ReviewState,
+  assignee: ReviewAssignee | null
+): WaitingPart {
   const workflow = workflowAttachedTo(row.scopeKind, row.scopeSlug)?.workflow;
   return {
     document: {

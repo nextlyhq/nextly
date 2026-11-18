@@ -815,6 +815,35 @@ function takenBy(step: ResolvedWorkflowStep, caller: WorkflowCaller): boolean {
 }
 
 /**
+ * Whether `caller` may take `step` on a part `enteredBy` brought into its stage, as far as who
+ * takes it goes: the kind of caller the step needs (`takenBy`) and the self-approval it refuses of
+ * the one who entered the stage (`refusesSelf`). Its permission is asked apart. The one rule the
+ * steps a part offers and the work a caller is listed are judged by.
+ *
+ * @experimental
+ */
+export function takesStep(
+  step: ResolvedWorkflowStep,
+  caller: WorkflowCaller,
+  accountable: string | null,
+  enteredBy: string | null | undefined
+): boolean {
+  return takenBy(step, caller) && !refusesSelf(step, accountable, enteredBy);
+}
+
+/**
+ * The person accountable for what `caller` does: the one a step's self-approval rule asks about.
+ *
+ * @experimental
+ */
+export async function accountableFor(
+  adapter: DrizzleAdapter,
+  caller: WorkflowCaller
+): Promise<string | null> {
+  return (await resolveCaller(adapter, caller)).accountable;
+}
+
+/**
  * Whether `step` refuses the person `accountable` for the act on a part `enteredBy` brought into
  * its stage: a step that refuses self-approval, asked of the one who entered the stage.
  */
@@ -891,8 +920,7 @@ export async function stepsTakeableBy(
     if (!step.from.includes(entry.stage)) return false;
     return (
       allowedOn.get(stepAction(workflow, step))?.(part) === true &&
-      takenBy(step, caller) &&
-      !refusesSelf(step, resolved.accountable, entry.enteredBy)
+      takesStep(step, caller, resolved.accountable, entry.enteredBy)
     );
   };
 }
