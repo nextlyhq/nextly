@@ -72,6 +72,7 @@ import {
 } from "../../../revalidation/intent-builders";
 import type { RevalidationIntent } from "../../../revalidation/types";
 import type { DynamicSingleRecord } from "../../../schemas/dynamic-singles/types";
+import type { RelationshipDbExecutor } from "../../../services/collections/collection-relationship-service";
 import { expansionAccess } from "../../../services/collections/trust-bound";
 import {
   assumedBound,
@@ -3470,6 +3471,25 @@ export class SingleMutationService extends BaseService {
       // of the related row.
       normalizeRelationshipFields(currentData, fieldConfigs);
 
+      // 6.55. A many-to-many field's links are kept in its junction table, not
+      // on the Single's row, so they are taken off the row's values here and
+      // written on the save's transaction below. Read as a collection's write
+      // reads them: a list of ids, or one id; a field the save leaves out, or
+      // sends empty of any value, keeps its links, and an empty list clears
+      // them.
+      const manyToManyLinks: Record<string, string[]> = {};
+      for (const field of fieldConfigs) {
+        if (!usesJunctionTable(field)) continue;
+        const value = currentData[field.name];
+        if (value === undefined) continue;
+        delete currentData[field.name];
+        if (value) {
+          manyToManyLinks[field.name] = (
+            Array.isArray(value) ? value : [value]
+          ).map(String);
+        }
+      }
+
       // 6.6. Every repeater row gets its saved id: after the field rules and
       // the password pass have decided the value, and after references are
       // reduced to ids so an unchanged row compares equal to the stored one.
@@ -4468,7 +4488,8 @@ export class SingleMutationService extends BaseService {
                     {
                       updatePayload: mainPayload,
                       componentFieldData: attemptComponentFields,
-                      manyToManyData: {},
+                      // Links alone are a change of the document too.
+                      manyToManyData: manyToManyLinks,
                     },
                     savedBy,
                     updateTimeOf(
@@ -4932,6 +4953,20 @@ export class SingleMutationService extends BaseService {
               tx,
               componentWrite(attemptComponentData)
             );
+          }
+
+          // 9.55. Each many-to-many field's junction rows, replaced with the
+          // links the save sends, on this transaction, so a failure rolls the
+          // save back. Named from the Single's table, as its create made them.
+          // A held edit writes none, as it writes no component rows.
+          if (!holdEdit) {
+            await this.queryService.replaceManyToManyLinks({
+              executor: tx.getDrizzle<RelationshipDbExecutor>(),
+              sourceTable: singleMeta.tableName,
+              entryId: String(existingDoc.id),
+              fields: fieldConfigs,
+              links: manyToManyLinks,
+            });
           }
 
           // 9.6. i18n: upsert the companion row for the write locale in the SAME
@@ -6419,7 +6454,10 @@ export class SingleMutationService extends BaseService {
             options.overrideAccess === true && !narrows(options.trusted)
               ? "all"
               : undefined,
-        }
+        },
+        false,
+        // Its many-to-many links are in junctions named from its table.
+        singleMeta.tableName
       );
 
       // 11. Execute afterChange hooks (afterUpdate equivalent for Singles)

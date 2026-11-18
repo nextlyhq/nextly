@@ -111,6 +111,8 @@ import {
 } from "../../releases/release-visibility";
 import {
   fieldsStoredOnRow,
+  junctionLinkColumnsOf,
+  junctionTableTo,
   usesJunctionTable,
 } from "../../schema/services/field-column-descriptor";
 import {
@@ -178,10 +180,10 @@ export function junctionLinkColumns(
   sourceCollectionName: string,
   targetCollectionName: string
 ): { sourceColumn: string; targetColumn: string } {
-  return {
-    sourceColumn: `${sourceCollectionName.replace(/-/g, "_")}_id`,
-    targetColumn: `${targetCollectionName}_id`,
-  };
+  return junctionLinkColumnsOf(
+    getTableName(sourceCollectionName),
+    targetCollectionName
+  );
 }
 
 /**
@@ -493,6 +495,15 @@ function trustsTarget(
  */
 export interface RelationshipExpansionOptions
   extends Pick<RelatedRowReadContext, "targetRuleMatches" | "localeChain"> {
+  /**
+   * The table the entry's own row is in, where it is not its collection's
+   * (`dc_<slug>`): a Single's, whose many-to-many links are kept in junctions
+   * named from it. The entry's top level only; a related row's links are
+   * read from its own collection's table.
+   * @internal
+   */
+  manyToManySourceTable?: string;
+
   /**
    * Maximum depth to expand relationships (0-5).
    * - 0: No expansion, return IDs only
@@ -3404,8 +3415,8 @@ export class CollectionRelationshipService extends BaseService {
       try {
         if (relationType === "manyToMany") {
           // Fetch related entries through junction table
-          const relatedEntries = await this.fetchManyToManyRelations(
-            collectionName,
+          const relatedEntries = await this.fetchManyToManyRelationsFrom(
+            options.manyToManySourceTable ?? getTableName(collectionName),
             entry.id as string,
             field,
             undefined,
@@ -5084,6 +5095,25 @@ export class CollectionRelationshipService extends BaseService {
     field: FieldDefinition,
     executor?: RelationshipDbExecutor
   ): Promise<Map<string, string[]>> {
+    return this.fetchManyToManyTargetIdsFrom(
+      getTableName(sourceCollectionName),
+      sourceEntryIds,
+      field,
+      executor
+    );
+  }
+
+  /**
+   * {@link fetchManyToManyTargetIdsOf} for source entries in `sourceTable`,
+   * which names the junction: a Single's table, as well as a collection's.
+   * @internal
+   */
+  async fetchManyToManyTargetIdsFrom(
+    sourceTable: string,
+    sourceEntryIds: readonly string[],
+    field: FieldDefinition,
+    executor?: RelationshipDbExecutor
+  ): Promise<Map<string, string[]>> {
     const byEntry = new Map<string, string[]>(
       sourceEntryIds.map(id => [id, []])
     );
@@ -5095,15 +5125,11 @@ export class CollectionRelationshipService extends BaseService {
       );
       return byEntry;
     }
-    const junctionTableName = this.getJunctionTableName(
-      sourceCollectionName,
-      targetCollectionName,
-      field
-    );
-    const { sourceColumn, targetColumn } = junctionLinkColumns(
-      sourceCollectionName,
-      targetCollectionName
-    );
+    const {
+      table: junctionTableName,
+      sourceColumn,
+      targetColumn,
+    } = junctionFrom(sourceTable, targetCollectionName, field);
     const sourceIdCol = sql.identifier(sourceColumn);
     const targetIdCol = sql.identifier(targetColumn);
     const junctionQuery = sql`
@@ -5141,13 +5167,30 @@ export class CollectionRelationshipService extends BaseService {
     collectionName: string,
     fields: FieldDefinition[]
   ): Promise<Record<string, unknown>[]> {
+    return this.withStoredManyToManyIdsFrom(
+      entries,
+      getTableName(collectionName),
+      fields
+    );
+  }
+
+  /**
+   * {@link withStoredManyToManyIds} for entries in `sourceTable`, which names
+   * the junctions: a Single's table, as well as a collection's.
+   * @internal
+   */
+  async withStoredManyToManyIdsFrom(
+    entries: Record<string, unknown>[],
+    sourceTable: string,
+    fields: FieldDefinition[]
+  ): Promise<Record<string, unknown>[]> {
     const junctionFields = fields.filter(field => usesJunctionTable(field));
     if (junctionFields.length === 0 || entries.length === 0) return entries;
     const ids = entries.map(entry => String(entry.id));
     const withIds = entries.map(entry => ({ ...entry }));
     for (const field of junctionFields) {
-      const stored = await this.fetchManyToManyTargetIdsOf(
-        collectionName,
+      const stored = await this.fetchManyToManyTargetIdsFrom(
+        sourceTable,
         ids,
         field
       );
@@ -5179,6 +5222,27 @@ export class CollectionRelationshipService extends BaseService {
     executor?: RelationshipDbExecutor,
     access: RelatedRowAccess = { trusted: TRUSTS_EVERY_COLLECTION }
   ): Promise<Record<string, unknown>[]> {
+    return this.fetchManyToManyRelationsFrom(
+      getTableName(sourceCollectionName),
+      sourceEntryId,
+      field,
+      executor,
+      access
+    );
+  }
+
+  /**
+   * {@link fetchManyToManyRelations} for a source entry in `sourceTable`,
+   * which names the junction: a Single's table, as well as a collection's.
+   * @internal
+   */
+  async fetchManyToManyRelationsFrom(
+    sourceTable: string,
+    sourceEntryId: string,
+    field: FieldDefinition,
+    executor?: RelationshipDbExecutor,
+    access: RelatedRowAccess = { trusted: TRUSTS_EVERY_COLLECTION }
+  ): Promise<Record<string, unknown>[]> {
     // Same dual-aware target lookup as fetchManyToManyRelationsBatch above.
     // See that comment for the code-first vs UI-built shape rationale.
     const targetCollectionName = getTargetCollection(field);
@@ -5188,18 +5252,14 @@ export class CollectionRelationshipService extends BaseService {
       );
       return [];
     }
-    const junctionTableName = this.getJunctionTableName(
-      sourceCollectionName,
-      targetCollectionName,
-      field
-    );
+    const {
+      table: junctionTableName,
+      sourceColumn,
+      targetColumn,
+    } = junctionFrom(sourceTable, targetCollectionName, field);
 
     try {
       // Query junction table to get related IDs using sql tagged template
-      const { sourceColumn, targetColumn } = junctionLinkColumns(
-        sourceCollectionName,
-        targetCollectionName
-      );
       const sourceIdCol = sql.identifier(sourceColumn);
       const targetIdCol = sql.identifier(targetColumn);
 
@@ -5261,6 +5321,27 @@ export class CollectionRelationshipService extends BaseService {
     relatedIds: string[],
     executor?: RelationshipDbExecutor
   ): Promise<void> {
+    return this.insertManyToManyLinks(
+      getTableName(sourceCollectionName),
+      sourceEntryId,
+      field,
+      relatedIds,
+      executor
+    );
+  }
+
+  /**
+   * {@link insertManyToManyRelations} for a source entry in `sourceTable`,
+   * which names the junction: a Single's table, as well as a collection's.
+   * @internal
+   */
+  async insertManyToManyLinks(
+    sourceTable: string,
+    sourceEntryId: string,
+    field: FieldDefinition,
+    relatedIds: string[],
+    executor?: RelationshipDbExecutor
+  ): Promise<void> {
     if (relatedIds.length === 0) return;
 
     // Same dual-aware target lookup as fetchManyToManyRelationsBatch above.
@@ -5272,17 +5353,17 @@ export class CollectionRelationshipService extends BaseService {
       );
       return;
     }
-    const junctionTableName = this.getJunctionTableName(
-      sourceCollectionName,
-      targetCollectionName,
-      field
-    );
+    const {
+      table: junctionTableName,
+      sourceColumn,
+      targetColumn,
+    } = junctionFrom(sourceTable, targetCollectionName, field);
 
     this.logger.info(
       `[ManyToMany] Inserting into junction table: ${junctionTableName}`
     );
     this.logger.info(
-      `[ManyToMany] Source: ${sourceCollectionName}, Target: ${targetCollectionName}`
+      `[ManyToMany] Source: ${sourceTable}, Target: ${targetCollectionName}`
     );
     this.logger.info(
       `[ManyToMany] Field: ${field.name}, IDs: ${relatedIds.join(", ")}`
@@ -5342,10 +5423,6 @@ export class CollectionRelationshipService extends BaseService {
       throw error;
     }
 
-    const { sourceColumn, targetColumn } = junctionLinkColumns(
-      sourceCollectionName,
-      targetCollectionName
-    );
     const sourceIdCol = sql.identifier(sourceColumn);
     const targetIdCol = sql.identifier(targetColumn);
 
@@ -5406,6 +5483,25 @@ export class CollectionRelationshipService extends BaseService {
     field: FieldDefinition,
     executor?: RelationshipDbExecutor
   ): Promise<void> {
+    return this.deleteManyToManyLinks(
+      getTableName(sourceCollectionName),
+      sourceEntryId,
+      field,
+      executor
+    );
+  }
+
+  /**
+   * {@link deleteManyToManyRelations} for a source entry in `sourceTable`,
+   * which names the junction: a Single's table, as well as a collection's.
+   * @internal
+   */
+  async deleteManyToManyLinks(
+    sourceTable: string,
+    sourceEntryId: string,
+    field: FieldDefinition,
+    executor?: RelationshipDbExecutor
+  ): Promise<void> {
     // Same dual-aware target lookup as fetchManyToManyRelationsBatch above.
     // See that comment for the code-first vs UI-built shape rationale.
     const targetCollectionName = getTargetCollection(field);
@@ -5415,16 +5511,13 @@ export class CollectionRelationshipService extends BaseService {
       );
       return;
     }
-    const junctionTableName = this.getJunctionTableName(
-      sourceCollectionName,
+    const { table: junctionTableName, sourceColumn } = junctionFrom(
+      sourceTable,
       targetCollectionName,
       field
     );
 
-    const sourceIdCol = sql.identifier(
-      junctionLinkColumns(sourceCollectionName, targetCollectionName)
-        .sourceColumn
-    );
+    const sourceIdCol = sql.identifier(sourceColumn);
     const query = sql`
       DELETE FROM ${sql.identifier(junctionTableName)}
       WHERE ${sourceIdCol} = ${sourceEntryId}
@@ -5446,20 +5539,31 @@ export class CollectionRelationshipService extends BaseService {
     targetCollectionName: string,
     field: FieldDefinition
   ): string {
-    if (field.options?.junctionTable) {
-      return field.options.junctionTable;
-    }
-
-    // Auto-generate the junction name as the DDL does. The DDL names it from
-    // the source's TABLE, where a hyphen in the slug is an underscore, so the
-    // source side resolves through `getTableName`; a hyphen-free slug gives
-    // the same `dc_<slug>` as before. The DDL spells the target as
-    // `dc_<target slug>` as written, so the target side stays as written.
-    const sourceTableName = getTableName(sourceCollectionName);
-    const targetTableName = `dc_${targetCollectionName}`;
-    const tables = [sourceTableName, targetTableName].sort();
-    return `${tables[0]}_${tables[1]}_${field.name}`;
+    // Named as the DDL names it, from the source's TABLE, where a hyphen in
+    // the slug is an underscore; the target is spelled `dc_<target slug>` as
+    // written.
+    return junctionTableTo(
+      getTableName(sourceCollectionName),
+      targetCollectionName,
+      field
+    );
   }
+}
+
+/**
+ * The junction a many-to-many field of an entry in `sourceTable` keeps its
+ * links to `targetSlug` in, and its two link columns, named as the junction's
+ * SQL names them: a collection's table and a Single's alike.
+ */
+function junctionFrom(
+  sourceTable: string,
+  targetSlug: string,
+  field: FieldDefinition
+): { table: string; sourceColumn: string; targetColumn: string } {
+  return {
+    table: junctionTableTo(sourceTable, targetSlug, field),
+    ...junctionLinkColumnsOf(sourceTable, targetSlug),
+  };
 }
 
 /**

@@ -77,6 +77,7 @@ import type { DynamicSingleRecord } from "../../../schemas/dynamic-singles/types
 import {
   effectiveRelationshipDepth,
   type CollectionRelationshipService,
+  type RelationshipDbExecutor,
 } from "../../../services/collections/collection-relationship-service";
 import type { RelatedRowReadContext } from "../../../services/collections/related-row-read-context";
 import {
@@ -186,6 +187,7 @@ import {
   fieldsStoredOnRow,
   getColumnDescriptor,
   isTextStorageKind,
+  usesJunctionTable,
 } from "../../schema/services/field-column-descriptor";
 import { captureInTx } from "../../versions/capture-in-tx";
 import { partsCreated } from "../../versions/changed-parts";
@@ -1020,7 +1022,9 @@ export class SingleQueryService extends BaseService {
       ),
       // As the live read does: the caller is threaded, so nested targets can
       // be judged too.
-      true
+      true,
+      // Its many-to-many links, where the draft does not carry them.
+      singleMeta.tableName
     );
     // Component POPULATION is deliberately NOT re-run, mirroring the collection
     // overlay. The snapshot already carries the draft's own component values;
@@ -1133,7 +1137,9 @@ export class SingleQueryService extends BaseService {
       this.relatedRowAccess(options, enforceRelatedFieldAccess, readChain),
       // The read path threads a caller, so the target collection's field rules
       // can be evaluated for the rows this pulls in.
-      true
+      true,
+      // Its many-to-many links are in junctions named from its table.
+      singleMeta.tableName
     );
 
     if (this.fieldGroupDataService) {
@@ -3380,7 +3386,13 @@ export class SingleQueryService extends BaseService {
      * hand those rows to a response that has no way to redact them. The read
      * path, which does thread a caller, opts in.
      */
-    expandNested = false
+    expandNested = false,
+    /**
+     * The Single's table, which names the junctions its many-to-many fields
+     * keep their links in. Without it those fields are left as the document
+     * holds them.
+     */
+    sourceTable?: string
   ): Promise<SingleDocument> {
     const relationshipService = this.resolveRelationshipService();
     if (!relationshipService) {
@@ -3388,6 +3400,29 @@ export class SingleQueryService extends BaseService {
       // nothing to expand, and the caller checks separately that every stored
       // reference the rule may read actually became a row.
       return doc;
+    }
+
+    // A many-to-many field has no column on the Single's row: its links are in
+    // its junction, read here as the ids it stores, so a read that populates
+    // nothing gives them, as a collection's does. A document that already
+    // carries a value for the field (a draft, whose snapshot holds the links
+    // it was saved with) keeps its own; `null` is none, which a translated
+    // field is given by its translations, whose table has no column for it. Outside the expansion's catch: a failed read throws
+    // rather than giving an empty list, which an editor saving the document
+    // back would store, removing every link.
+    if (sourceTable !== undefined) {
+      const unread = (fields as unknown as FieldDefinition[]).filter(
+        field => usesJunctionTable(field) && doc[field.name] == null
+      );
+      if (unread.length > 0) {
+        const [withLinks] =
+          await relationshipService.withStoredManyToManyIdsFrom(
+            [doc],
+            sourceTable,
+            unread
+          );
+        doc = withLinks as SingleDocument;
+      }
     }
 
     // FieldConfig uses "relationship"; FieldDefinition (UI-created) uses "relation".
@@ -3408,6 +3443,11 @@ export class SingleQueryService extends BaseService {
         fields as unknown as FieldDefinition[],
         {
           depth: depth ?? DEFAULT_READ_DEPTH,
+          // The junctions of the Single's own many-to-many fields are named
+          // from its table, not from a collection's.
+          ...(sourceTable === undefined
+            ? {}
+            : { manyToManySourceTable: sourceTable }),
           // Set by the read path, which forwards a real caller. The mutation
           // path does not, so its response keeps the fields it already returned
           // rather than having them stripped as if nobody were asking.
@@ -3441,6 +3481,57 @@ export class SingleQueryService extends BaseService {
       // A response is better served incomplete than not at all: one relationship
       // that could not be expanded is returned as its stored reference.
       return doc;
+    }
+  }
+
+  /**
+   * Replace the links of each of the Single's many-to-many fields that `links`
+   * names with the ones it gives, in the junctions named from `sourceTable`,
+   * on `executor` (the save's transaction), so a failure rolls the save back.
+   * A field `links` leaves out keeps its links.
+   *
+   * Refused where links were sent and there is no relationship service to
+   * write them: the save would otherwise succeed with the links dropped.
+   */
+  async replaceManyToManyLinks(args: {
+    executor: RelationshipDbExecutor;
+    sourceTable: string;
+    entryId: string;
+    fields: readonly FieldConfig[];
+    links: Readonly<Record<string, readonly string[]>>;
+  }): Promise<void> {
+    const named = (args.fields as unknown as FieldDefinition[]).filter(
+      field =>
+        usesJunctionTable(field) &&
+        Object.prototype.hasOwnProperty.call(args.links, field.name)
+    );
+    if (named.length === 0) return;
+    const relationshipService = this.resolveRelationshipService();
+    if (!relationshipService) {
+      throw NextlyError.internal({
+        logContext: {
+          table: args.sourceTable,
+          reason: "many-to-many-links-unwritable",
+        },
+      });
+    }
+    for (const field of named) {
+      await relationshipService.deleteManyToManyLinks(
+        args.sourceTable,
+        args.entryId,
+        field,
+        args.executor
+      );
+      const ids = args.links[field.name] ?? [];
+      if (ids.length > 0) {
+        await relationshipService.insertManyToManyLinks(
+          args.sourceTable,
+          args.entryId,
+          field,
+          [...ids],
+          args.executor
+        );
+      }
     }
   }
 
