@@ -75,6 +75,8 @@ type Drawn =
       readonly edge: Edge;
       readonly left: number;
       readonly top: number;
+      /** At the top or bottom, too near the right to fit: grows leftwards. */
+      readonly before: boolean;
     }
   | { readonly kind: "empty"; readonly rect: Rect };
 
@@ -176,6 +178,7 @@ function edgeLabelFor(
     edge,
     left: across ? within(drawnAt.x, screen.x + EDGE_GAP, right) : sideways,
     top: across ? upright : within(drawnAt.y, screen.y + EDGE_GAP, bottom),
+    before: across && goesLeft(drawnAt.x, screen),
   };
 }
 
@@ -377,6 +380,7 @@ export function InsertionLine({
           type="button"
           className="nx-insertion-line__edge"
           data-edge={drawn.edge}
+          {...(drawn.before ? { "data-before": "" } : {})}
           style={{ left: drawn.left, top: drawn.top }}
           onPointerEnter={() => pointed(true)}
           onPointerLeave={() => pointed(false)}

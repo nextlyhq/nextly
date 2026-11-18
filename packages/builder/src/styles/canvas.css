@@ -703,6 +703,16 @@
   transform: translateY(-100%);
 }
 
+/* Near the right edge, a top or bottom label grows leftwards from the place,
+   so it is never cut off by the canvas's edge. */
+.nx-insertion-line__edge[data-edge="top"][data-before] {
+  transform: translateX(-100%);
+}
+
+.nx-insertion-line__edge[data-edge="bottom"][data-before] {
+  transform: translate(-100%, -100%);
+}
+
 /* A canvas zoomed past its region can leave the place off to a side. */
 .nx-insertion-line__edge[data-edge="left"] {
   transform: translateY(-50%);

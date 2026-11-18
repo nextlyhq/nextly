@@ -455,6 +455,35 @@ describe("the line where a highlighted tile would land", () => {
     expect(labelIn(container)?.hasAttribute("data-before")).toBe(false);
   });
 
+  it("grows a top or bottom edge label leftwards where the place is near the right edge", async () => {
+    // A row below the screen, ending at 995px of a 1000px screen.
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+      function boxOf(this: Element) {
+        if (this.hasAttribute("data-scroller")) {
+          return new DOMRect(0, 0, 1000, 500);
+        }
+        switch (this.getAttribute(NODE_ID_ATTRIBUTE)) {
+          case "hero":
+            return new DOMRect(0, 900, 1000, 100);
+          case "one":
+            return new DOMRect(0, 900, 400, 100);
+          case "two":
+            return new DOMRect(500, 900, 495, 100);
+          default:
+            return new DOMRect(0, 0, 1000, 2000);
+        }
+      }
+    );
+    const { container } = drawWith({
+      at: { parentId: "hero", slot: "children", index: 2 },
+      words: "Text goes inside Hero, at the end",
+    });
+    await act(async () => undefined);
+    const edge = edgeIn(container);
+    expect(edge?.getAttribute("data-edge")).toBe("bottom");
+    expect(edge?.hasAttribute("data-before")).toBe(true);
+  });
+
   it("anchors the label to the part of its line on screen", async () => {
     // A zoomed canvas panned right: the screen shows 300px to 1300px, and the
     // line across Hero starts at 0, off its left.
