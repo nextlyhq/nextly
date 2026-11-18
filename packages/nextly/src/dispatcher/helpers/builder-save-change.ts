@@ -21,13 +21,11 @@ import type {
   CollectionSaveDeps,
   CollectionSavePreview,
 } from "../../domains/schema/builder-save/collection-save";
+import { partWayPush } from "../../domains/schema/builder-save/landing-push";
 import {
   saveOfSchemaChange,
   type SchemaChangeAnswers,
 } from "../../domains/schema/builder-save/schema-change-save";
-import { busyTableLeftNothing } from "../../domains/schema/busy-table/report";
-import type { PipelineResult } from "../../domains/schema/pipeline/pushschema-pipeline";
-import type { DesiredSchema } from "../../domains/schema/pipeline/types";
 import { loadUiSchema } from "../../domains/schema/ui-schema/loader";
 import { NextlyError } from "../../errors/nextly-error";
 import type { UiSchemaEntity } from "../../schemas/_zod/ui-schema";
@@ -108,7 +106,8 @@ export async function writeBuilderSchemaChange(
    * Whether `apply`'s push has landed (`landingPush`): a failure after it,
    * such as a companion reconcile, leaves the main table changed, so the
    * files describing that change are kept, recorded applied nowhere, and the
-   * failure is still thrown.
+   * failure is thrown saying the database holds part of the change, naming
+   * the kept files and what to run next.
    */
   landed?: () => boolean,
   /**
@@ -159,71 +158,18 @@ export async function writeBuilderSchemaChange(
     await fileRoad.afterFile();
     return { registryWritten: fileRoad.registry !== undefined };
   }
-  // Held in an object, as the apply below sets it from inside the writer.
-  const failed: { error?: unknown } = {};
-  await writeEntitySave(deps, save, async () => {
+  // A failure after the push landed keeps the files, and is told as a collection's is: what the
+  // database holds, the files kept and what to run next (`partWayPush`).
+  const pushed = partWayPush(async onLanded => {
     try {
       await apply();
-      return undefined;
-    } catch (error) {
-      if (landed?.() !== true) throw error;
-      failed.error = error;
-      return "partly-applied";
+    } finally {
+      if (landed?.() === true) onLanded();
     }
   });
-  if ("error" in failed) throw failed.error;
+  const written = await writeEntitySave(deps, save, pushed.appliedBy);
+  pushed.throwIfFailed(written?.files ?? []);
   return { registryWritten: false };
-}
-
-/**
- * A schema dialog's push that notes once one of its pushes may have changed
- * the database, for `writeBuilderSchemaChange` to tell a failure before the
- * main table changed from one after it: a push that succeeded, and on MySQL
- * any push that failed, since MySQL commits each schema statement as it runs,
- * so a push refused part way may have left some of them applied. The one
- * exception is a busy table's stop that says itself nothing ran
- * (`leftNothing`): its files are withdrawn, as a refusal anywhere else.
- */
-export function landingPush(
-  push: (desired: DesiredSchema) => Promise<PipelineResult>,
-  dialect: "postgresql" | "mysql" | "sqlite"
-): {
-  push: (desired: DesiredSchema) => Promise<PipelineResult>;
-  landed: () => boolean;
-} {
-  let landed = false;
-  return {
-    push: async desired => {
-      try {
-        const result = await push(desired);
-        if (
-          result.success ||
-          (dialect === "mysql" && !leftNothing(result.error?.details))
-        ) {
-          landed = true;
-        }
-        return result;
-      } catch (error) {
-        if (dialect === "mysql" && !leftNothing(error)) landed = true;
-        throw error;
-      }
-    },
-    landed: () => landed,
-  };
-}
-
-/**
- * Whether `error` is a busy table's stop that left nothing of the push and
- * applied nothing before it in the run, as the stop itself records it
- * (`busyTableLeftNothing`, and the stop's `appliedBefore`), never read from
- * its message.
- */
-function leftNothing(error: unknown): boolean {
-  if (!NextlyError.is(error) || !busyTableLeftNothing(error)) return false;
-  const stop = (
-    error.logContext as { stop?: { appliedBefore?: readonly string[] } }
-  ).stop;
-  return (stop?.appliedBefore ?? []).length === 0;
 }
 
 /**

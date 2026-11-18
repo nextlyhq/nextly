@@ -370,7 +370,7 @@ describe.each(getConfiguredTestDialects())(
     });
 
     it("refuses a field type change that would clear a value before writing anything, naming the field and the row", async () => {
-      // "abc" is no number. Refused before the definition or any file is written, so a deploy never
+      // "zz#q" is no number, and no generated name (a UUID, a folder's random suffix) holds a "#". Refused before the definition or any file is written, so a deploy never
       // receives a change this database refused.
       await writeCollectionSave(deps(), {
         slug: "posts",
@@ -379,7 +379,7 @@ describe.each(getConfiguredTestDialects())(
         change: "create",
       });
       await adapter.executeQuery(
-        `INSERT INTO dc_posts (id, title, body, slug, created_at, updated_at) VALUES ('p1', 'A post', 'abc', 'p1', '2026-11-06 00:00:00', '2026-11-06 00:00:00')`
+        `INSERT INTO dc_posts (id, title, body, slug, created_at, updated_at) VALUES ('p1', 'A post', 'zz#q', 'p1', '2026-11-06 00:00:00', '2026-11-06 00:00:00')`
       );
       const before = {
         files: migrationFiles(),
@@ -413,7 +413,7 @@ describe.each(getConfiguredTestDialects())(
         },
       });
       expect(JSON.stringify(refused)).toContain("id p1");
-      expect(JSON.stringify(refused)).not.toContain("abc");
+      expect(JSON.stringify(refused)).not.toContain("zz#q");
       expect({
         files: migrationFiles(),
         snapshots: snapshotFiles(),

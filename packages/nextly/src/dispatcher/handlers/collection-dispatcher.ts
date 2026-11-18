@@ -52,6 +52,7 @@ import type {
   BuilderSaveSetup,
   writeCollectionSave,
 } from "../../domains/schema/builder-save/collection-save";
+import { partWayPush } from "../../domains/schema/builder-save/landing-push";
 import {
   saveOfSchemaChange,
   type SchemaChangeAnswers,
@@ -1158,9 +1159,14 @@ const COLLECTIONS_METHODS: Record<
               : undefined,
           };
           let pushedSummary: PushSummary | undefined;
-          const push = async (): Promise<void> => {
-            pushedSummary = (await applyCollectionSchemaChange(change)).summary;
-          };
+          // A push that fails after changing the database keeps its files, recorded applied
+          // nowhere, and the failure tells the admin so (`partWayPush`); one that fails before
+          // withdraws them.
+          const push = partWayPush(async onLanded => {
+            pushedSummary = (
+              await applyCollectionSchemaChange({ ...change, onLanded })
+            ).summary;
+          });
           const newSchemaVersion = currentVersion + 1;
           // The registry's row of the save: the fields as stored, the advanced schema version and
           // the translation state this apply ran with, written with the stored version in one
@@ -1200,7 +1206,7 @@ const COLLECTIONS_METHODS: Record<
             // Where the save runs its file, the row is written in the file's own transaction, so a
             // failed write leaves the save as it was and is answered as the failure it is.
             registry: storedFields => writeRow(storedFields, false),
-            appliedBy: push,
+            appliedBy: push.appliedBy,
             // Whether the push applies the change in development, the writer recording its
             // migration once the push has run: a translated collection, or one turning
             // translation on or off, whose push carries its values across the change; and a change
@@ -1234,6 +1240,9 @@ const COLLECTIONS_METHODS: Record<
                 : { acknowledgedConversions }),
             },
           });
+          // Thrown before the registry row is written: the row keeps the fields the database
+          // held before, as the kept files record the change still to finish.
+          push.throwIfFailed(written?.files ?? []);
           const storedFields =
             written === undefined
               ? (fields as unknown as FieldDefinition[])
@@ -2065,7 +2074,7 @@ async function writerSaveOf(change: WriterChange): Promise<
 async function saveThroughWriter(
   change: WriterChange & {
     /** Applies the change in development instead of the file (`writeCollectionSave`). */
-    appliedBy?: () => Promise<void>;
+    appliedBy?: () => Promise<void | "partly-applied">;
     /**
      * Whether `appliedBy` applies this change rather than the file. Asked only where the
      * answer is used, a save the writer runs in development, so a production save or one with
@@ -2081,7 +2090,12 @@ async function saveThroughWriter(
     registry?: (fields: FieldDefinition[]) => Promise<void>;
   }
 ): Promise<
-  | { fields: FieldDefinition[]; applied: boolean; registryWritten: boolean }
+  | {
+      fields: FieldDefinition[];
+      applied: boolean;
+      files: readonly string[];
+      registryWritten: boolean;
+    }
   | undefined
 > {
   const prepared = await writerSaveOf(change);
@@ -2109,6 +2123,7 @@ async function saveThroughWriter(
   return {
     fields: prepared.fields,
     applied: result.applied,
+    files: result.files,
     registryWritten: inFile,
   };
 }

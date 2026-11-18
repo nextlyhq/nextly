@@ -197,8 +197,9 @@ async function lockNotice(page) {
 
 /** One round of editing, as the module's header lists it. */
 async function editingRound(page, watcher, texts) {
-  await selectAndWait(page, HEADING, texts[HEADING]);
+  // The lead, then the heading, whose plain text field takes the edit below.
   await selectAndWait(page, LEAD, texts[LEAD]);
+  await selectAndWait(page, HEADING, texts[HEADING]);
 
   // The sidebar's Style tab and back to Content.
   const inspector = page.getByTestId("inspector");
@@ -213,20 +214,18 @@ async function editingRound(page, watcher, texts) {
 
   // A text edit, then the same edit taken back.
   for (const [key, expected] of [
-    ["!", `${texts[LEAD]}!`],
-    ["Backspace", texts[LEAD]],
+    ["!", `${texts[HEADING]}!`],
+    ["Backspace", texts[HEADING]],
   ]) {
     await caretAtEnd(page);
     if (key === "!") await page.keyboard.type("!");
     else await page.keyboard.press(key);
     await page.keyboard.press("Tab");
+    // The id travels as an argument: the callback runs in the browser, where
+    // this module's constants don't exist.
     await page.waitForFunction(
-      text =>
-        window.__builderSpeedChecks.canvasText({
-          id: "speed-hero-lead",
-          text,
-        }),
-      expected,
+      ({ id, text }) => window.__builderSpeedChecks.canvasText({ id, text }),
+      { id: HEADING, text: expected },
       { timeout: SHOW_LIMIT_MS, polling: 100 }
     );
   }

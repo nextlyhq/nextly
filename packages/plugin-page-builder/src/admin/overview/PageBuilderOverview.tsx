@@ -296,8 +296,8 @@ function Uses({
           No collection or Single has a Page Builder field yet.
         </p>
         <p className="mt-1 text-sm text-muted-foreground">
-          Add a Blocks field to a collection or Single, in the Schema Builder or
-          in code, and it’s listed here.
+          Add one in the Schema Builder (choose Blocks) or in code, and it’s
+          listed here.
         </p>
       </Card>
     );

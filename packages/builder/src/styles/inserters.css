@@ -409,9 +409,12 @@
  * "+ Add a question", under the selected Accordion's last question
  * (`canvas/accordion-add-question.tsx`). A full-bleed layer over the canvas
  * root that takes no presses itself, as the appenders' does; the button opts
- * back in. In the builder's own tokens, the selection colour that marks the
- * accordion, so it reads as part of the selection on a light or dark site,
- * with the ring every canvas control shows for keyboard focus.
+ * back in. Its words are in the editor's text colour on the editor's raised
+ * surface, a pair that follows the admin's theme together, so it holds its
+ * contrast on a light or dark site in either theme. The selection colour is
+ * picked for the page's colours, not the surface's, so as the words' colour
+ * it fell to 3.6:1 in a dark admin over a light page; it stays on hover, as
+ * the border. With the ring every canvas control shows for keyboard focus.
  */
 .nx-add-question {
   position: absolute;
@@ -433,7 +436,7 @@
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
   background: var(--nx-builder-surface-raised);
-  color: var(--nx-builder-select);
+  color: var(--nx-builder-text);
   font:
     500 0.8125rem/1 var(--font-sans, system-ui),
     sans-serif;
