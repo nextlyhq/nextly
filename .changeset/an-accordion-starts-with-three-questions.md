@@ -54,7 +54,8 @@ part class (a 44px minimum height and a focus ring in the text's colour), a
 One at a time accordion's `<details>` carry a `name` attribute, and the
 default icon is the plus, so a stored accordion that never set an icon, and
 one storing "Browser default", now draws the plus where it drew a chevron or
-the browser's marker.
+the browser's marker; choosing "Chevron" in Content › Icon brings the chevron
+back.
 The stylesheet encoding moves to v13, since a stored "browser" icon now
 compiles differently, so every stored sheet compiles again once.
 
