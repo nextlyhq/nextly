@@ -1,9 +1,9 @@
 /**
  * A release waits for approval, and stops when approval is withdrawn.
  *
- * Workflows' "Not approved" check judges each member going live by the publish path's per-part
- * decision, registered here as a stand-in that holds a part exactly where a current approval is
- * missing (`helpers/test-part-approval`). The cases cover what a release does with that answer:
+ * Workflows' "Not approved" check judges each member going live by the publish gate's own
+ * per-part decision; a Single, which the gate does not judge yet, by a stand-in
+ * (`helpers/test-part-approval`). The cases cover what a release does with that answer:
  * its readiness, the events that stop it before its moment, its run asking again, Publish now,
  * what a reader is shown while it is due, and what the check reads.
  *
@@ -266,7 +266,9 @@ describe.each(getConfiguredTestDialects())(
       });
 
       it("by an edit to an approved Single, whose save leaves its approval in place", async () => {
+        // The publish gate does not judge a Single yet, so a Single is judged by the stand-in.
         const t = await boot(dialect);
+        registerTestPartApproval(t.adapter);
         const banner = await saveBanner(t, "Approved");
         await approveBanner(t, banner);
         const arranged = await arrange(

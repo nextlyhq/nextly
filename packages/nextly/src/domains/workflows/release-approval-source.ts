@@ -3,16 +3,15 @@
  * and a reader shown a due release, to the same answer.
  *
  * A member going live is held when any part its run would publish is not approved by the publish
- * path's own per-part decision (`partApproval`), asked of each part and never decided here. The
+ * gate's own per-part decision (`partApproval`), asked of each part and never decided here. The
  * parts a run publishes are those a document-wide publish moves: each language kept with a status
  * of its own that holds something (stored, or a pending draft), and the shared part; a part with
  * nothing to publish (live, with no pending draft) is not asked about, as `partStage` puts it in
  * no stage. A member coming down, and a document no workflow is attached to, is never held.
  *
  * What it reads, for a batch: each member's review states (one indexed read per member); each
- * scope's stored statuses and pending drafts once for the whole batch; a workflow's settings once,
- * and only where a held part has no one assigned; and for a Single's part, its shown version only
- * when the decision opens it. Liveness is the stored status, not a due release's projection of
+ * scope's stored statuses and pending drafts once for the whole batch; and a workflow's settings
+ * once, only where a held part has no one assigned. Liveness is the stored status, not a due release's projection of
  * it: the run judges a document as it is stored before it writes it, and the projection asks this
  * hold, so reading through it would ask the hold again.
  *
@@ -40,10 +39,7 @@ import {
   type ReleaseCheckFinding,
   type ReleaseCheckSource,
 } from "../releases/readiness/check-sources";
-import {
-  VersionsRepository,
-  type VersionRow,
-} from "../versions/versions-repository";
+import { VersionsRepository } from "../versions/versions-repository";
 
 import { entityOf, partStage } from "./implicit-stage";
 import { partApproval } from "./part-approval";
@@ -178,32 +174,6 @@ async function scopeContent(
   };
 }
 
-/**
- * The version a reviewer is shown of a Single's part now: its newest recorded version, and for
- * the shared part the newest of any part, as `shownVersionOn` reads it on a step's transaction.
- * Read on the pool, without the lock a step's own read takes, since nothing here writes.
- */
-async function shownVersionOf(
-  adapter: DrizzleAdapter,
-  document: ReviewDocument,
-  part: string | null
-): Promise<VersionRow | undefined> {
-  const repo = new VersionsRepository(adapter);
-  const parts =
-    part === null
-      ? [null, ...(appLocalization()?.locales.map(locale => locale.code) ?? [])]
-      : [part];
-  const newest = await repo.newestVersionNoByLocale(document, parts);
-  if (newest.size === 0) return undefined;
-  return repo.findByVersionNo(document, Math.max(...newest.values()));
-}
-
-/** `read`, called at most once however often the result is asked for. */
-function once<T>(read: () => Promise<T>): () => Promise<T> {
-  let result: Promise<T> | undefined;
-  return () => (result ??= read());
-}
-
 /** Whom a held part waits for: see the module. */
 async function waitsFor(
   reads: BatchReads,
@@ -253,15 +223,8 @@ async function heldPartsOf(
       document,
       part,
       state,
+      content: holds,
       stage,
-      // A Single's save leaves an approval in place, so the decision may compare its content.
-      ...(document.scopeKind === "single"
-        ? {
-            shownVersion: once(() =>
-              shownVersionOf(reads.adapter, document, part)
-            ),
-          }
-        : {}),
     });
     if (!approved) {
       held.push({

@@ -187,8 +187,13 @@ function refuseEvery(
  * content puts it) must allow publishing, and it must hold an approval given under the definition
  * attached now, whose content is still what goes live (`approvedNow`; undefined where the content
  * was not compared).
+ *
+ * Exported as the one per-part decision a release asks of each part it would publish
+ * (`part-approval`), so a release and a publish hold a part for the same reasons.
+ *
+ * @experimental
  */
-function holdReason(
+export function holdReason(
   registered: RegisteredWorkflow,
   part: string | null,
   state: ReviewState | null,
@@ -221,8 +226,13 @@ function holdReason(
  */
 const SINGLES_GOVERNED = false;
 
-/** Whether the gate judges a publish of `scope` at all. */
-function governs(scope: PublishGateQuestion["scope"]): boolean {
+/**
+ * Whether the gate judges a publish of `scope` at all. Exported so a release holds back only what
+ * a publish of the same scope would.
+ *
+ * @experimental
+ */
+export function governs(scope: PublishGateQuestion["scope"]): boolean {
   return scope.kind === "collection" || SINGLES_GOVERNED;
 }
 

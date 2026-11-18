@@ -4,16 +4,18 @@
  *
  * Pages (one part) and Posts (translated, with a shared field) on `editorial`, and the Single
  * Banner on it too, in English and Spanish. Each table carries this harness's own prefix, so files
- * sharing these slugs never share a table. Every boot registers the stand-in for the publish
- * path's per-part decision (`test-part-approval`), which holds a part exactly where a current
- * approval is missing: from a plugin's start, so the checks a server's start makes already ask
- * it, as they would ask the decision the publish path registers.
+ * sharing these slugs never share a table. A release's parts are judged by the publish gate's own
+ * decision; a boot asked for `standIn` registers the Single stand-in (`test-part-approval`) instead,
+ * from a plugin's start, so the checks a server's start makes already ask it.
  *
  * Releases are arranged through the repository, as the releases suites arrange them, so an
  * instant already past can be set and a member added whatever the checks would say of it.
  */
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+
 import { grantTo } from "../../../../__tests__/fixtures/permission-holders";
 import { defineCollection, defineSingle, text } from "../../../../config";
+import { container } from "../../../../di/container";
 import { definePlugin } from "../../../../plugins/plugin-context";
 import {
   createTestNextly,
@@ -46,6 +48,7 @@ import {
   AT,
   partOf,
   person,
+  publishedPastReview,
   seedState,
   stateOf,
   versionOf,
@@ -68,7 +71,8 @@ const approvalStandIn = definePlugin({
   version: "1.0.0",
   nextly: ">=0.0.1",
   init: () => {
-    registerTestPartApproval();
+    // The adapter the boot under way registered, which the stand-in reads through.
+    registerTestPartApproval(container.get<DrizzleAdapter>("adapter"));
   },
 });
 
@@ -92,6 +96,8 @@ export async function bootApprovals(
     workflow?: Workflow | null;
     adapter?: TestNextly["adapter"];
     seedPublic?: boolean;
+    /** Judge parts by the Single stand-in rather than the publish gate's decision. */
+    standIn?: boolean;
   } = {}
 ): Promise<TestNextly> {
   const attached =
@@ -100,7 +106,7 @@ export async function bootApprovals(
       : { workflow: options.workflow ?? editorial };
   const t = await createTestNextly({
     ...(options.adapter ? { adapter: options.adapter } : { dialect }),
-    plugins: [approvalStandIn],
+    ...(options.standIn === true ? { plugins: [approvalStandIn] } : {}),
     // A visitor's read is judged by the Public role a real boot makes, which reads everything
     // here by its rule.
     seedPublic: options.seedPublic ?? true,
@@ -144,7 +150,10 @@ export async function bootApprovals(
 export const handlerOf = (t: TestNextly): CollectionsHandler =>
   t.getService("collectionsHandler") as CollectionsHandler;
 
-/** A document of `slug`, stored through the ordinary write, trusted. */
+/**
+ * A document of `slug`, stored through the ordinary write, trusted: one created published says it
+ * is published without review, as set-up code may.
+ */
 export async function doc(
   t: TestNextly,
   slug: "pages" | "posts",
@@ -152,7 +161,7 @@ export async function doc(
 ): Promise<string> {
   const created = await handlerOf(t).createEntry(
     { collectionName: slug, overrideAccess: true },
-    { title: "Hello", status }
+    publishedPastReview({ title: "Hello", status })
   );
   const id = (created.data as { id?: string } | undefined)?.id;
   if (typeof id !== "string") throw new Error(`no id from create on ${slug}`);
