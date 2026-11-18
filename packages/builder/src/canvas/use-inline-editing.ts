@@ -37,7 +37,7 @@ import {
 } from "./inline-edit-outcome";
 import {
   editedAsRichText,
-  inlinePropKind,
+  inlinePropKindAt,
   type InlinePropKind,
 } from "./inline-prop-kind";
 import { firstInlineProp } from "./inline-target";
@@ -156,7 +156,9 @@ export function useInlineEditing(
     (nodeId: string, prop: string) => {
       const node = findNode(editor.document.nodes, nodeId);
       if (node === undefined) return null;
-      return inlinePropKind(getBlock(node.type)?.props?.[prop]);
+      // By the value's name, so an item of a list of words routes as the
+      // line of text it is.
+      return inlinePropKindAt(getBlock(node.type)?.props, prop);
     },
     [editor]
   );

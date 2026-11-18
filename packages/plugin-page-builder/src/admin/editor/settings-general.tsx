@@ -4,11 +4,13 @@
  * Page settings' General tab: the page's title and its address, drawn by the
  * entry form's own renderer (so their rules and validation are the form's),
  * the address with the entry header's copy and in-place edit; then the page's
- * header & footer, and how a shared link to the page would look.
+ * header & footer, and its search and sharing: what a plugin that edits SEO
+ * says there (`settings-search`), or, where none does, the builder's own
+ * read-only preview of a shared link, built from the page itself.
  *
  * A document that is not a page (a component, a template) keeps its own
- * settings here as they were: its fields as the form draws them, then the
- * share preview.
+ * settings here as they were: its fields as the form draws them, then its
+ * search and sharing the same way.
  *
  * @module admin/editor/settings-general
  */
@@ -22,6 +24,8 @@ import type { Control, FieldValues } from "react-hook-form";
 import { PageLayoutPicker } from "../page-layout";
 
 import { useSavedAddress, type SettingsAddress } from "./settings-address";
+import type { SettingsPlace } from "./settings-place";
+import { SearchPlace } from "./settings-search";
 import type { SharePreview } from "./share-preview";
 
 export interface PageGeneralProps {
@@ -30,7 +34,11 @@ export interface PageGeneralProps {
   /** The page's header & footer menu, or null for a page without one. */
   headerFooter: ReactNode | null;
   share: SharePreview;
-  seoFields: boolean;
+  /**
+   * The Settings place, where a plugin that edits SEO draws the page's
+   * search and sharing; null for a document that offers none.
+   */
+  place: SettingsPlace | null;
   /** The saved page whose address may sit beneath another page's. */
   address: SettingsAddress | null;
   open: boolean;
@@ -41,7 +49,7 @@ export function PageGeneral({
   fieldName,
   headerFooter,
   share,
-  seoFields,
+  place,
   address,
   open,
 }: PageGeneralProps): JSX.Element {
@@ -60,7 +68,11 @@ export function PageGeneral({
         </section>
       )}
       {headerFooter}
-      <ShareSection share={share} seoFields={seoFields} />
+      <SearchPlace
+        place={place}
+        at="general"
+        plain={<ShareSection share={share} />}
+      />
     </div>
   );
 }
@@ -87,15 +99,19 @@ export function HeaderFooterMenu({
 export function DocumentGeneral({
   fieldName,
   share,
-  seoFields,
-}: Pick<PageGeneralProps, "fieldName" | "share" | "seoFields">): JSX.Element {
+  place,
+}: Pick<PageGeneralProps, "fieldName" | "share" | "place">): JSX.Element {
   const fields = useEntryFieldsPanel(fieldName, { presentation: "dialog" });
   return (
     <div className="space-y-6">
       {fields === null ? null : (
         <section className="space-y-2">{fields}</section>
       )}
-      <ShareSection share={share} seoFields={seoFields} />
+      <SearchPlace
+        place={place}
+        at="general"
+        plain={<ShareSection share={share} />}
+      />
     </div>
   );
 }
@@ -123,14 +139,11 @@ function NestedAddressHint({
   );
 }
 
-/** How a shared link to the page would look, and where it comes from. */
-function ShareSection({
-  share,
-  seoFields,
-}: {
-  share: SharePreview;
-  seoFields: boolean;
-}): JSX.Element {
+/**
+ * How a shared link to the page would look, and where it comes from: drawn
+ * only where no plugin edits SEO, so it never stands beside another preview.
+ */
+function ShareSection({ share }: { share: SharePreview }): JSX.Element {
   return (
     <section aria-labelledby="settings-share-title" className="space-y-2">
       <h3 id="settings-share-title" className="text-sm font-semibold">
@@ -140,13 +153,11 @@ function ShareSection({
       <p className="text-xs text-muted-foreground">
         {"Approximate: your site's metadata may differ."}
       </p>
-      {seoFields ? null : (
-        <p className="text-sm text-muted-foreground">
-          {
-            "Built from this page's title, first heading and first image. The SEO plugin adds fields to set the title, description and image yourself."
-          }
-        </p>
-      )}
+      <p className="text-sm text-muted-foreground">
+        {
+          "Built from this page's title, first heading and first image. The SEO plugin lets you set them yourself."
+        }
+      </p>
     </section>
   );
 }

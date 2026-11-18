@@ -16,6 +16,7 @@ import {
   ForestTooLargeError,
   MAX_ENVELOPE_ENTRIES,
 } from "./limits";
+import { remapListBindings } from "./list-binding-refs";
 import { isPlainRecord } from "./plain-record";
 import {
   type ResolvedBlockNode,
@@ -69,6 +70,13 @@ export interface InlineContext {
    * `reidForestWithMap` keeps, for the same reason.
    */
   domIds: Map<string, string>;
+  /**
+   * Each definition node's id → the id it wears in this instance, recorded
+   * as it is scoped. A node is scoped before what it holds, so a binding
+   * naming the list around it (`list`) finds that list here and follows it
+   * to its scoped id, the one the renderer records the list's entry under.
+   */
+  nodeIds: Map<string, string>;
   /** The scope INSIDE this component, for instances the definition itself holds. */
   scope: ComposedScope;
   /**
@@ -272,6 +280,15 @@ export function scopeNode(
     id: mintScopedId(ctx.run, ctx.scopeKey, node.id),
     instanceOf: ctx.owner,
   };
+  ctx.nodeIds.set(node.id, scoped.id);
+  // A binding naming a list of this definition reads that list under its
+  // scoped id; one naming a list around the instance is left as it is.
+  if (node.bindings !== undefined) {
+    scoped.bindings = remapListBindings(
+      node.bindings,
+      ctx.nodeIds
+    ) as ResolvedBlockNode["bindings"];
+  }
   // Removing the envelope rather than emptying it: `conditions` is only half of
   // what gates a node, and an instance saying "show this" means the reader
   // should stop asking.

@@ -303,6 +303,14 @@ export {
   CONTENT_WIDTH_PROPERTY,
   contentWidthTokenOf,
 } from "../style/content-width";
+// A Section's padding preset: the prop the page compile reads it from, the
+// variables each preset pads from, and the ones a node's preset names.
+export {
+  PADDING_PRESET_PROP,
+  PADDING_PRESETS,
+  paddingPresetTokensOf,
+} from "../style/padding-preset";
+export type { PaddingPreset } from "../style/padding-preset";
 export {
   compileStyleValues,
   scaledTokenText,

@@ -11,6 +11,12 @@
  * "Turn into". The verbs are the editor's own — the same ⌘B and ⌘I the keys
  * press — so a button and its shortcut cannot disagree.
  *
+ * ## "Turn into" opens its choices in the bar
+ *
+ * The types the block can become, each with what it would remove, or dimmed
+ * with why not, read from the same offer the block menu reads. Choosing one
+ * finishes the edit, so the words typed are what is turned.
+ *
  * ## It never takes the caret away by pointer
  *
  * A press on the bar keeps the focus in the passage (`mousedown` is not
@@ -32,8 +38,10 @@
 import { isLinkableUrl } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
+import { BlockActionsContext } from "../block-actions-context";
 import { isElement, isHTMLElement } from "../dom-kind";
 import type { Rect } from "../geometry";
+import { TURN_INTO_TARGETS, type TurnIntoOffer } from "../turn-into-verb";
 
 import { CANVAS_ROOT_CLASS, CHROME_ATTRIBUTE } from "./canvas";
 import { BLOCK_TOOLBAR_CLASS } from "./canvas-chrome";
@@ -122,10 +130,42 @@ function placeBar(bar: HTMLElement, target: FormatTarget): Placed | null {
   return above.y < 0 || blocked ? below : above;
 }
 
+/** "Turn into" for the passage the bar serves: its choices, and the turn. */
+interface TurnIntoAt {
+  readonly choices: () => readonly TurnIntoOffer[];
+  readonly run: (to: string) => void;
+}
+
+/**
+ * The editor's "Turn into" verbs for the passage, where both the passage and
+ * the editor offer them: judged on the words as typed, and run on the page
+ * the edit leaves once it is finished.
+ */
+function useTurnInto(target: FormatTarget): TurnIntoAt | undefined {
+  const verbs = React.useContext(BlockActionsContext)?.turnIntoIn;
+  const at = target.turnInto;
+  return React.useMemo(
+    () =>
+      verbs === undefined || at === undefined
+        ? undefined
+        : {
+            choices: () => verbs.choices(at.typedPage(), at.nodeId),
+            run: (to: string) => {
+              const page = at.finish();
+              if (page !== null) verbs.run(page, at.nodeId, to);
+            },
+          },
+    [verbs, at]
+  );
+}
+
 /** The bar's buttons, in order, for the passage it serves. */
-function drawnActions(target: FormatTarget): readonly FormatAction[] {
+function drawnActions(
+  target: FormatTarget,
+  turnInto: TurnIntoAt | undefined
+): readonly FormatAction[] {
   return target.actions.filter(
-    action => action !== "turnInto" || target.turnInto !== undefined
+    action => action !== "turnInto" || turnInto !== undefined
   );
 }
 
@@ -162,6 +202,86 @@ function linkTo(
   if (!isLinkableUrl(url)) return false;
   target.session.link(url, { newTab });
   return true;
+}
+
+/** Arrow keys move between the "Turn into" choices, wrapping. */
+function moveAmongChoices(event: React.KeyboardEvent): void {
+  if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+  const list = event.currentTarget;
+  const items = [
+    ...list.querySelectorAll<HTMLElement>("[role='menuitem']:not([disabled])"),
+  ];
+  if (items.length === 0) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const at = items.indexOf(list.ownerDocument.activeElement as HTMLElement);
+  const step = event.key === "ArrowDown" ? 1 : -1;
+  items[(at + step + items.length) % items.length]?.focus();
+}
+
+/**
+ * The "Turn into" choices: each type the block can become, with what it would
+ * remove, or dimmed with why not. Choosing one turns the block; Escape goes
+ * back to the words.
+ */
+function TurnChoices({
+  target,
+  turnInto,
+}: {
+  target: FormatTarget;
+  turnInto: TurnIntoAt;
+}): React.JSX.Element {
+  const choices = React.useMemo(() => turnInto.choices(), [turnInto]);
+  const list = React.useRef<HTMLDivElement>(null);
+  React.useEffect(() => {
+    formatBar.setHoldsFocus(true);
+    // The first open choice, or the list itself when none is open, so the
+    // focus stays in the bar and Escape still goes back to the words.
+    const first = list.current?.querySelector<HTMLElement>(
+      "[role='menuitem']:not([disabled])"
+    );
+    (first ?? list.current)?.focus();
+  }, []);
+  const close = (): void => {
+    formatBar.setTurning(false);
+    backToWords(target);
+  };
+  return (
+    <div
+      ref={list}
+      role="menu"
+      aria-label={FORMAT_BAR_WORDS.turnInto}
+      tabIndex={-1}
+      className={`${FORMAT_BAR_CLASS}__choices`}
+      onKeyDown={event => {
+        escapeCloses(event, close);
+        moveAmongChoices(event);
+      }}
+    >
+      {choices.map(choice => {
+        const said = choice.reason ?? choice.note;
+        return (
+          <button
+            key={choice.to}
+            type="button"
+            role="menuitem"
+            className={`${FORMAT_BAR_CLASS}__choice`}
+            disabled={!choice.enabled}
+            onMouseDown={keepFocus}
+            onClick={() => {
+              formatBar.setTurning(false);
+              turnInto.run(choice.to);
+            }}
+          >
+            <span>{choice.name}</span>
+            {said === undefined ? null : (
+              <span className={`${FORMAT_BAR_CLASS}__choice-note`}>{said}</span>
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
 }
 
 /** Escape in the address field closes it, and goes no further. */
@@ -342,7 +462,7 @@ function LinkButton(props: ButtonProps): React.JSX.Element {
 
 /** One button of the bar. */
 function ActionButton(props: ButtonProps): React.JSX.Element {
-  const { action, target } = props;
+  const { action } = props;
   if (action === "bold" || action === "italic") {
     return <MarkButton {...props} mark={action} />;
   }
@@ -351,7 +471,8 @@ function ActionButton(props: ButtonProps): React.JSX.Element {
     <button
       {...commonOf(props)}
       aria-haspopup="menu"
-      onClick={() => target.turnInto?.()}
+      aria-expanded={props.state.turning}
+      onClick={() => formatBar.setTurning(true)}
     >
       {FORMAT_BAR_WORDS.turnInto}
     </button>
@@ -367,6 +488,7 @@ function DroppedNotice({
 }: {
   target: FormatTarget;
 }): React.JSX.Element {
+  const turnInto = useTurnInto(target);
   return (
     <div
       className={FORMAT_NOTICE_CLASS}
@@ -375,11 +497,11 @@ function DroppedNotice({
       onMouseDown={keepFocus}
     >
       <span>{FORMAT_BAR_WORDS.dropped}</span>
-      {target.turnInto === undefined ? null : (
+      {turnInto === undefined ? null : (
         <button
           type="button"
           className={`${FORMAT_NOTICE_CLASS}__action`}
-          onClick={() => target.turnInto?.()}
+          onClick={() => turnInto.run(TURN_INTO_TARGETS["turn-into-rich-text"])}
         >
           {FORMAT_BAR_WORDS.toRichText}
         </button>
@@ -496,7 +618,14 @@ function useBarPlace(
     const element = bar.current;
     setPlaced(shown && element !== null ? placeBar(element, target) : null);
   }, [bar, shown, target]);
-  React.useLayoutEffect(measure, [measure, state.selection, state.linking]);
+  // Again when the address field or the "Turn into" choices open or close,
+  // which change the bar's size.
+  React.useLayoutEffect(measure, [
+    measure,
+    state.selection,
+    state.linking,
+    state.turning,
+  ]);
   React.useEffect(() => {
     if (!shown) return;
     return watchCanvasFor(() => bar.current, measure);
@@ -569,7 +698,8 @@ function OpenBar({
   const [focused, setFocused] = React.useState(false);
   const wanted = useFocusRequest(state.focusRequest);
   const shown = formatBarShown(state) || focused || wanted.asked;
-  const actions = drawnActions(target);
+  const turnInto = useTurnInto(target);
+  const actions = drawnActions(target, turnInto);
   const placed = useBarPlace(bar, shown, target, state);
 
   // Alt+F10 from the words: drawn first, even over a caret with nothing
@@ -581,7 +711,7 @@ function OpenBar({
   }, [wanted, placed]);
 
   const onKeyDown = (event: React.KeyboardEvent): void => {
-    if (state.linking) return;
+    if (state.linking || state.turning) return;
     if (event.key === "Escape") {
       event.preventDefault();
       event.stopPropagation();
@@ -620,6 +750,8 @@ function OpenBar({
     >
       {state.linking ? (
         <LinkField state={state} target={target} />
+      ) : state.turning && turnInto !== undefined ? (
+        <TurnChoices target={target} turnInto={turnInto} />
       ) : (
         actions.map((action, index) => (
           <ActionButton

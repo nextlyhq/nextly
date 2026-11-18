@@ -30,6 +30,7 @@ import { selectNodes } from "../select-nodes";
 import { contentWidthTokenOf } from "./content-width";
 import { customPropertiesReferenced } from "./css-value-check";
 import { MAX_TOKEN_NAME_LENGTH, MAX_TOKEN_PREFIX_LENGTH } from "./declarations";
+import { paddingPresetTokensOf } from "./padding-preset";
 
 /** Whether a value is a record a walk may descend into. */
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -203,13 +204,15 @@ function addEach(into: Set<string>, from: Iterable<string>): void {
 
 /**
  * The variables one node names through `$token`: in its styles, and as its
- * own content width, a prop the compiler writes from, so a variable it
- * names is used as one in the styles is.
+ * own content width or its padding preset, props the compiler writes from,
+ * so a variable it names is used as one in the styles is.
  */
 function nodeVariables(node: unknown, styles: unknown): Set<string> {
   const found = styleVariablesIn(styles);
   const ownWidth = contentWidthTokenOf(node);
   if (ownWidth !== undefined && namesAVariable(ownWidth)) found.add(ownWidth);
+  // And the pair a Section's padding preset pads from, written the same way.
+  for (const token of paddingPresetTokensOf(node)) found.add(token);
   return found;
 }
 

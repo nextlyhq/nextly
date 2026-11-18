@@ -5,30 +5,33 @@
  * each contribution kind as it is added, use this fixture rather than one of
  * their own.
  *
- * Minimal and inert by design, because every playground boot loads it: no
- * tables, routes, jobs, hooks or seed writes. Its one proxy handler sets a
- * header naming the fixture on every page the site's Proxy lets through, which
- * the production browser test reads on a prerendered page. It declares one entry-list
+ * Registered only on the e2e suite's own server (`NEXTLY_E2E_STYLE_FIXTURE`),
+ * like the other test fixtures, so a contributor's admin shows none of it.
+ * Minimal and inert by design all the same: no tables, routes, jobs, hooks or
+ * seed writes. Its one proxy handler sets a header naming the fixture on every
+ * page the site's Proxy lets through, which the production browser test reads
+ * on a prerendered page. It declares one entry-list
  * filter on Posts, which appears in the list's Filter menu and changes nothing
  * until someone chooses it, and contributions to admin places: a block on the
  * dashboard; on a Post's edit page a block, a block behind `update-posts`, a
  * tab and a side panel section; on Posts' list a block, a field column, a
  * column the plugin draws, a row action on drafts and a bulk action; and a
  * replacement of the edit page's `editor` scoped to an e2e-only collection.
- * Each draws a component from `components.tsx`, which the generated component
- * map imports. Every label names it a fixture, so nothing reads as product.
+ * Each draws a component from `components.tsx`, which `admin.tsx` registers:
+ * the committed component map is written with the fixture off, so it does not
+ * import them. Every label names it a fixture, so nothing reads as product.
  */
 import { definePlugin } from "@nextlyhq/plugin-sdk";
 
-/** The fixture's components, by what each contribution draws. */
-const COMPONENTS = "@/plugins/contributions-fixture/components";
-const BLOCK = `${COMPONENTS}#FixtureBlock`;
-const GATED_BLOCK = `${COMPONENTS}#FixtureGatedBlock`;
-const CELL = `${COMPONENTS}#FixtureCell`;
-const TAB = `${COMPONENTS}#FixtureTab`;
-const SECTION = `${COMPONENTS}#FixtureSection`;
-const ACTION_DIALOG = `${COMPONENTS}#FixtureActionDialog`;
-const REPLACEMENT = `${COMPONENTS}#FixtureReplacement`;
+import {
+  ACTION_DIALOG,
+  BLOCK,
+  CELL,
+  GATED_BLOCK,
+  REPLACEMENT,
+  SECTION,
+  TAB,
+} from "./constants";
 
 export const contributionsFixturePlugin = definePlugin({
   name: "contributions-fixture",

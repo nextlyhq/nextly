@@ -126,11 +126,14 @@ export function clickedEntryOf(
   return clicked?.nodeId === nodeId ? clicked.entries.get(listId) : undefined;
 }
 
-/** {@link clickedEntryOf}, drawn again when the author clicks elsewhere. */
-export function useClickedEntry(
-  nodeId: string,
-  listId: string | undefined
-): number | undefined {
+/**
+ * The entry of each list the author clicked to select `nodeId`, by list id,
+ * or `undefined` where the block was selected another way; drawn again when
+ * the author clicks elsewhere.
+ */
+export function useClickedEntries(
+  nodeId: string
+): ReadonlyMap<string, number> | undefined {
   const subscribe = React.useCallback((listener: () => void) => {
     listeners.add(listener);
     return () => {
@@ -138,6 +141,6 @@ export function useClickedEntry(
     };
   }, []);
   return React.useSyncExternalStore(subscribe, () =>
-    listId === undefined ? undefined : clickedEntryOf(nodeId, listId)
+    clicked?.nodeId === nodeId ? clicked.entries : undefined
   );
 }
