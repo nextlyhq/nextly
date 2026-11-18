@@ -6,8 +6,8 @@
  * - **Title:** the collection's title field, else its first text field named
  *   `title` or `name`. A Heading 3, linked to the entry's page when the
  *   collection's entries have pages.
- * - **Picture:** its first single upload field that takes images, or a
- *   single relation to the media library. An Image.
+ * - **Picture:** its first single upload field that takes images, never a
+ *   link or text field. An Image.
  * - **Summary:** its first text or long-text field named like `excerpt`,
  *   `summary`, `description`, `intro` or `subtitle`, else its first
  *   long-text field. A Text.
@@ -120,9 +120,18 @@ function fits(field: ItemField, blockType: string, prop: string): boolean {
   );
 }
 
-/** Whether `field` fills an Image's picture: the rule's answer, and an upload that takes images. */
+/**
+ * Whether `field` fills an Image's picture: an upload that takes images, and
+ * the rule's answer. Only an upload: the rule also lets an Image take a URL
+ * or text field, which may hold any address, such as a website's, and drawn
+ * as a picture that is a broken image. An author may still bind one by hand.
+ */
 function holdsPicture(field: ItemField): boolean {
-  return field.takesImages !== false && fits(field, "core/image", "mediaId");
+  return (
+    field.type === "upload" &&
+    field.takesImages !== false &&
+    fits(field, "core/image", "mediaId")
+  );
 }
 
 /** Whether `field` fills a Heading's words. */

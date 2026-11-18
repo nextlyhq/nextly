@@ -91,6 +91,27 @@ describe("itemFieldsOf", () => {
     ).toEqual({ title: "heading", summary: "notes", link: false });
   });
 
+  it("never takes a link field as the picture, even listed before an image upload", () => {
+    // An Image may be bound to a URL field, but a field such as a website
+    // holds a page's address: drawn as a picture, it is a broken image.
+    expect(
+      itemFieldsOf({
+        slug: "studios",
+        readable: [
+          { name: "website", type: "text" },
+          { name: "homepage", type: "url" },
+          { name: "cover", type: "upload", relationTo: "media" },
+        ],
+      }).picture
+    ).toBe("cover");
+    expect(
+      itemFieldsOf({
+        slug: "links",
+        readable: [{ name: "homepage", type: "url" }],
+      }).picture
+    ).toBeUndefined();
+  });
+
   it("takes the first single upload of images, and nothing the image binding rule refuses", () => {
     expect(
       itemFieldsOf({
