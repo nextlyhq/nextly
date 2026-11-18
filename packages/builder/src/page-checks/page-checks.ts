@@ -15,6 +15,7 @@
  * @experimental The checks and the provider point grow with later checks.
  */
 import {
+  blockDefaultsOf,
   getBlock,
   resolveComponentInstances,
   walkNodes,
@@ -24,6 +25,9 @@ import {
   type DefinitionsById,
   type RegionArea,
   type ResolvedBlockNode,
+  type NamedClass,
+  type NodeStyles,
+  type SiteTokenSet,
 } from "@nextlyhq/blocks-engine";
 
 import {
@@ -100,6 +104,17 @@ export interface CheckedPage {
    * a check that reads what the page draws can read inside them.
    */
   readonly definitions?: DefinitionsById;
+  /**
+   * The site's variables, light and dark, which a colour written as one is
+   * read through; absent where the caller has none, and a colour that needs
+   * them is then not judged.
+   */
+  readonly tokens?: SiteTokenSet;
+  /**
+   * The site's shared styles, among them its edits to a block type's own
+   * look, which a block is drawn with under its own values.
+   */
+  readonly namedClasses?: readonly NamedClass[];
 }
 
 /** The page as every check is handed it, its definitions resolved. */
@@ -117,6 +132,10 @@ export interface ResolvedPage {
   readonly regions: readonly PageRegionDocument[];
   /** The page's component definitions, where the caller knows them. */
   readonly definitions?: DefinitionsById;
+  /** The site's variables, where the caller knows them. */
+  readonly tokens?: SiteTokenSet;
+  /** The site's edits to each block type's own look, by type. */
+  readonly siteLooks: Readonly<Record<string, NodeStyles>>;
 }
 
 /** What one check reports about one problem. */
@@ -136,6 +155,11 @@ export interface PageCheckResult {
    * absent where no one setting does, and the block alone is selected.
    */
   readonly fix?: AskedSetting;
+  /**
+   * The tab of the document's own settings that fixes it, by its id, where
+   * the fix is there rather than on a block (a plugin's tab of Page settings).
+   */
+  readonly settingsTab?: string;
 }
 
 /** One check: an id, the group it reports in, and what it finds. */
@@ -260,6 +284,8 @@ function resolvedPageOf(page: CheckedPage): ResolvedPage {
     ...(page.definitions === undefined
       ? {}
       : { definitions: page.definitions }),
+    ...(page.tokens === undefined ? {} : { tokens: page.tokens }),
+    siteLooks: blockDefaultsOf(page.namedClasses ?? []),
   };
 }
 

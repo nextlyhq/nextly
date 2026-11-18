@@ -5,6 +5,7 @@
  * @module page-checks/core-checks
  * @experimental Grows as the builder's own checks are written.
  */
+import { CONTRAST_CHECK } from "./contrast-check";
 import { HEADING_CHECK } from "./heading-check";
 import { IMAGE_ALT_CHECK } from "./image-alt-check";
 import { LABELS_CHECK } from "./labels-check";
@@ -17,4 +18,5 @@ export const CORE_PAGE_CHECKS: readonly PageCheck[] = [
   HEADING_CHECK,
   LINK_TEXT_CHECK,
   LABELS_CHECK,
+  CONTRAST_CHECK,
 ];

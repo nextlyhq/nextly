@@ -644,6 +644,7 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
     availablePanels: AVAILABLE_PANELS,
     pageLayout,
     canvasRegions: layoutRegions.canvas,
+    siteTokens: page.siteTokens,
     layersRegions: layoutRegions.selectedRegion.layers,
     selectedRegion: layoutRegions.selectedRegion,
     regionCards: layoutRegions.cards,
@@ -809,6 +810,8 @@ export type EditorPanels = OfferedLibrary &
     pageLayout: ReactNode | null;
     /** The regions of the page's Layout, drawn locked around the page. */
     canvasRegions: readonly CanvasRegion[];
+    /** The site's variables as the panels offer them, once they are read. */
+    siteTokens: SiteTokenSet | undefined;
     /** The same regions, as rows in Layers that select them. */
     layersRegions: readonly LayersRegionRow[];
     /** The header or footer selected, and what reads it. */

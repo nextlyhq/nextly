@@ -168,3 +168,68 @@ test("lists a second main heading, a vague button and an untitled embed", async 
     page.locator(".nx-inspector").getByLabel("Level", { exact: true })
   ).toBeFocused();
 });
+
+test("lists text with too little contrast, and text over an image as not checked", async ({
+  page,
+}) => {
+  await gotoAdmin(page, "/");
+  const id = await idOf(
+    await page.request.post(`${API}/collections/pages/entries`, {
+      data: {
+        title: `Contrast page ${STAMP}`,
+        slug: `contrast-page-${STAMP}`,
+        content: {
+          formatVersion: 1,
+          kind: "page",
+          nodes: [
+            heading("main", "Our work", "h1"),
+            {
+              id: "pale-text",
+              type: "core/text",
+              version: 1,
+              props: { text: "Barely there" },
+              styles: { base: { base: { color: "#e5e7eb" } } },
+            },
+            {
+              id: "hero",
+              type: "core/section",
+              version: 1,
+              props: { as: "section", contained: true },
+              styles: {
+                base: {
+                  base: {
+                    backgroundGradient: "linear-gradient(#1f2937, #f9fafb)",
+                  },
+                },
+              },
+              slots: {
+                children: [
+                  {
+                    id: "over-picture",
+                    type: "core/text",
+                    version: 1,
+                    props: { text: "Over the picture" },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      },
+    }),
+    "creating the contrast page"
+  );
+  await gotoAdmin(page, `/collections/pages/${id}/builder?field=content`);
+  await expect(page.getByRole("region", { name: "Canvas" })).toBeVisible({
+    timeout: 30_000,
+  });
+  await page
+    .locator('[data-topbar="end"]')
+    .getByRole("button", { name: /^(\d+ checks?|Checks)\b/ })
+    .click();
+  const list = page.getByRole("dialog", { name: "Page checks" });
+  await expect(list).toContainText("Text contrast is too low: 1.2:1");
+  await expect(list).toContainText(
+    "Contrast not checked: text over an image or gradient"
+  );
+});
