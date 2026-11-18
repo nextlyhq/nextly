@@ -147,6 +147,22 @@ export const NO_CONSENT: DataLossConsent = {
   ignored: [],
 };
 
+/** The values the consent reads as a yes to every deletion, in lower case. */
+const YES: ReadonlySet<string> = new Set(["1", "true"]);
+
+/** The values the variable reads as no consent, in lower case. */
+const NO: ReadonlySet<string> = new Set(["0", "false"]);
+
+/**
+ * Whether the consent reads `table`, given as its only target, as a yes or a
+ * no and not as a table's name: named so, a table cannot be asked for by
+ * name, since `=false` gives no consent and `=true` consents to everything.
+ */
+function readAsYesOrNo(table: string): boolean {
+  const lowered = table.toLowerCase();
+  return YES.has(lowered) || NO.has(lowered);
+}
+
 /**
  * Whether a list of targets can spell `name`, a table's or a column's: the
  * list is cut at commas and each target at its dot, and whitespace is taken
@@ -171,12 +187,8 @@ function parseTargets(
 ): "all" | ConsentTargets | null {
   const value = raw.trim();
   const lowered = value.toLowerCase();
-  if (lowered === "1" || lowered === "true") return "all";
-  if (
-    from === "env" &&
-    (value === "" || lowered === "0" || lowered === "false")
-  )
-    return null;
+  if (YES.has(lowered)) return "all";
+  if (from === "env" && (value === "" || NO.has(lowered))) return null;
   const spelled =
     from === "flag"
       ? `${ACCEPT_DATA_LOSS_FLAG}=${raw}`
@@ -304,14 +316,15 @@ export function deletionKey(deletion: Deletion): string {
  */
 /**
  * Whether only the consent without targets covers `deletion`: one its
- * command cannot name, or one whose table or column a list of targets cannot
+ * command cannot name, one whose table or column a list of targets cannot
  * spell ({@link spellable}): a schema-qualified table, which a list cannot
- * tell from a `table.column`, among them. A refusal then asks for the consent
+ * tell from a `table.column`, among them; or one on a table whose name the
+ * consent reads as a yes or a no ({@link readAsYesOrNo}). A refusal then asks for the consent
  * without targets, never for a list the consent would refuse to read.
  */
 function onlyBlanketCovers(deletion: Deletion): boolean {
   if (deletion.kind === "unnamed") return true;
-  if (!spellable(deletion.table)) return true;
+  if (!spellable(deletion.table) || readAsYesOrNo(deletion.table)) return true;
   return deletion.kind === "column" && !spellable(deletion.column);
 }
 
@@ -533,7 +546,7 @@ export async function judgeDataLoss(args: {
   const targets = consent.given?.targets;
   if (targets !== undefined && targets !== "all") {
     const unnamedNote = uncovered.some(onlyBlanketCovers)
-      ? " A deletion its command cannot name, one on a schema-qualified table, or one whose table or column name holds a space, a comma or a dot, is covered only by the consent without targets."
+      ? " A deletion its command cannot name, one on a schema-qualified table, or one whose table or column name holds a space, a comma or a dot, or whose table is named 1, true, 0 or false, is covered only by the consent without targets."
       : "";
     return {
       kind: "refused",

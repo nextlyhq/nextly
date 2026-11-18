@@ -612,6 +612,38 @@ describe("a refusal, for a production start that ran the migrations itself", () 
     }
   );
 
+  it.each(["false", "0", "true", "1", "FALSE", "True"])(
+    "asks for the consent without targets for a table named %s, which the consent reads as yes or no",
+    async table => {
+      const deletion = { kind: "table", table } as const;
+      const message = await refused([deletion]);
+      // Never the name as a target: `=false` and `=0` give no consent, and
+      // `=true` and `=1` consent to every deletion without saying so.
+      expect(message).toContain(
+        "To consent: --accept-data-loss (or NEXTLY_ACCEPT_DATA_LOSS=1)."
+      );
+
+      const named = consentNamed(refusalForStart(message));
+      expect(named).toEqual({ env: "1", flag: true });
+      expect(
+        consentCovers(
+          resolveDataLossConsent({
+            env: { NEXTLY_ACCEPT_DATA_LOSS: named.env },
+          }),
+          deletion
+        )
+      ).toBe(true);
+      // A list naming it beside another table does not cover it either, so
+      // what the refusal asks for is the one consent that does.
+      expect(
+        consentCovers(
+          resolveDataLossConsent({ flag: `drafts,${table}`, env: {} }),
+          deletion
+        )
+      ).toBe(false);
+    }
+  );
+
   it("says that only the consent without targets covers a name a list cannot spell, to a consent that names others", async () => {
     const message = await refused(
       [{ kind: "column", table: "old notes", column: "summary" }],
