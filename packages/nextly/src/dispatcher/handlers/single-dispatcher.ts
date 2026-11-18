@@ -525,9 +525,6 @@ async function requireLiveSingleId(slug: string): Promise<string> {
   return id;
 }
 
-/** A review whose companion rename is still to be answered, judged as the push road. */
-const PUSH_JUDGED = Symbol("push road");
-
 /**
  * Whether a Single's dialog save takes the push road (`pushCarriesValues`) rather than its own
  * migration file: asked by the save (its `pushWhen`) and by its review, which on that road still
@@ -559,6 +556,37 @@ async function singleSaveTakesPush(args: {
       getSingleRowColumnDescriptor(field, args.dialect, "collection"),
     renames: renamedFieldsOf(args.renameResolutions ?? []),
   });
+}
+
+/**
+ * The fields a Single's dialog review settles, as its save will: every field the row is filled for
+ * on the file road; on the push road (`singleSaveTakesPush`) only those the push answers for itself
+ * (`settledOnPush`). A companion rename still to be answered is judged as the push road, which asks
+ * the most.
+ */
+async function settledInReview(
+  args: Omit<Parameters<typeof singleSaveTakesPush>[0], "companionRename"> & {
+    filled: readonly string[];
+    settledOnPush: ReadonlySet<string>;
+  }
+): Promise<ReadonlySet<string>> {
+  const companion = await resolveCompanionRename(args.renameResolutions, {
+    tableName: args.tableName,
+    oldFields: args.oldFields,
+    newFields: args.newFields,
+    wasLocalized: args.layout.wasStored,
+    isLocalized: args.layout.isStored,
+    dialect: args.dialect,
+    // A Single's table is built by the collection's generator.
+    builtBy: "collection",
+  }).then(
+    rename => ({ rename }),
+    () => undefined
+  );
+  const onPush =
+    companion === undefined ||
+    (await singleSaveTakesPush({ ...args, companionRename: companion.rename }));
+  return onPush ? args.settledOnPush : new Set(args.filled);
 }
 
 /**
@@ -1405,34 +1433,17 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         dialect,
         translatedAfter: layout.isStored,
       });
-      // On the push road the review settles only what the push answers for itself; a companion
-      // rename still to be answered is judged as that road, which asks the most.
-      const companionRename = await resolveCompanionRename(
-        answers.renameResolutions,
-        {
-          tableName,
-          oldFields: currentFields,
-          newFields: fields as FieldDefinition[],
-          wasLocalized: layout.wasStored,
-          isLocalized: layout.isStored,
-          dialect,
-          builtBy: "collection",
-        }
-      ).catch(() => PUSH_JUDGED);
-      const settled =
-        companionRename === PUSH_JUDGED ||
-        (await singleSaveTakesPush({
-          oldFields: currentFields,
-          newFields: fields as FieldDefinition[],
-          layout,
-          companionRename,
-          renameResolutions: answers.renameResolutions,
-          db,
-          dialect,
-          tableName,
-        }))
-          ? settledOnPush
-          : new Set((fileAnswers.rowFills ?? []).map(fill => fill.field));
+      const settled = await settledInReview({
+        tableName,
+        oldFields: currentFields,
+        newFields: fields as FieldDefinition[],
+        layout,
+        renameResolutions: answers.renameResolutions,
+        db,
+        dialect,
+        filled: (fileAnswers.rowFills ?? []).map(fill => fill.field),
+        settledOnPush,
+      });
       const reviewDeps = builderSaveDeps();
       const review = await reviewBuilderSchemaChange(reviewDeps, {
         kind: "single",
