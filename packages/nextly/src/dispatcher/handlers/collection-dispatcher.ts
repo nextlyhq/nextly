@@ -352,7 +352,11 @@ async function withFieldsAsStored(
   const collection =
     await getCollectionRegistryFromDI()?.getCollectionBySlug(collectionName);
   if (!collection) return body;
-  return { ...body, fields: fieldsAsStored(sent, collection) };
+  // A collection's stored built-in fields stay: the admin never sends them (`keepBuiltIns`).
+  return {
+    ...body,
+    fields: fieldsAsStored(sent, collection, [], { keepBuiltIns: true }),
+  };
 }
 
 /**
@@ -814,7 +818,10 @@ const COLLECTIONS_METHODS: Record<
           collection.status === true || readRequestedLifecycle(body) === true,
       });
       // Planned as the apply will write them: an earlier-shaped relationship in its stored shape.
-      const fields = fieldsAsStored(sentFields, collection);
+      // A collection's stored built-in fields stay: the admin never sends them (`keepBuiltIns`).
+      const fields = fieldsAsStored(sentFields, collection, [], {
+        keepBuiltIns: true,
+      });
       // A pair of sibling fields this save would create is refused before anything is planned;
       // one the entity already holds keeps working (judged against the stored fields).
       assertNoNewSiblingClashes(
@@ -1018,10 +1025,12 @@ const COLLECTIONS_METHODS: Record<
           // An earlier-shaped relationship the editor read is written back in its stored shape,
           // through a rename the save makes, against the row this save is checked and written
           // against.
+          // A collection's stored built-in fields stay: the admin never sends them (`keepBuiltIns`).
           const fields = fieldsAsStored(
             sentFields,
             collection,
-            renameResolutions
+            renameResolutions,
+            { keepBuiltIns: true }
           );
           // A field name the collection already holds keeps working whatever its case; one this
           // save creates is the Builder's own. Judged against the row as stored now.

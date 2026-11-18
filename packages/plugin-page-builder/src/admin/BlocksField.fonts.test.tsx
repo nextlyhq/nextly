@@ -63,6 +63,21 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
   }: {
     children?: React.ReactNode;
   }): React.JSX.Element => <>{children}</>;
+  /*
+    The Design panel opened on its Fonts screen, keeping the view the panel
+    chooses as the shell does, so the screen's way back reaches the Type tab.
+  */
+  const DesignHost = ({
+    renderPanel,
+  }: {
+    renderPanel?: (
+      panel: string,
+      view: { current: string | null; choose: (view: string) => void }
+    ) => React.ReactNode;
+  }): React.JSX.Element => {
+    const [current, choose] = React.useState<string | null>("fonts-screen");
+    return <>{renderPanel?.("design", { current, choose })}</>;
+  };
   return {
     ...real,
     /*
@@ -93,7 +108,7 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
             : `${openPanelRequest.panel}:${openPanelRequest.view ?? ""}`}
         </div>
         <div data-testid="panel">
-          {renderPanel?.("design", { current: "type", choose: () => {} })}
+          <DesignHost renderPanel={renderPanel} />
         </div>
       </div>
     ),

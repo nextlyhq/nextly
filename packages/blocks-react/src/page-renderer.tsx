@@ -1055,7 +1055,13 @@ export function PageRenderer({
     pageContext.outline === undefined
       ? withOutline(
           blockContext,
-          pageOutline([{ area: "content", nodes: stages.prepared.nodes }])
+          pageOutline([
+            {
+              area: "content",
+              nodes: stages.prepared.nodes,
+              ...breakpointsOf(pageStyleContext),
+            },
+          ])
         )
       : blockContext;
 
@@ -1294,7 +1300,7 @@ function rendererReading(
  * @internal Shared by this package's route.
  */
 export function outlinePartOf(
-  props: ReadingProps & Pick<PageRendererProps, "context">,
+  props: ReadingProps & Pick<PageRendererProps, "context" | "siteStyles">,
   area: OutlineArea
 ): OutlinePart {
   const document = props.document;
@@ -1311,7 +1317,26 @@ export function outlinePartOf(
     props.context ?? createStandaloneContext(),
     props.blocks ?? registeredBlocks()
   );
-  return { area, nodes: stages?.prepared.nodes ?? [] };
+  // The breakpoints its styles are compiled under, as this renderer derives
+  // them, so the outline reads each block's visibility as the page draws it.
+  const compiled = pageCompileContext(
+    props.styleContext,
+    props.siteStyles === false ? undefined : props.siteStyles
+  );
+  return {
+    area,
+    nodes: stages?.prepared.nodes ?? [],
+    ...breakpointsOf(compiled),
+  };
+}
+
+/** A compile context's breakpoints as an outline part takes them. */
+function breakpointsOf(
+  context: StyleCompileContext | undefined
+): Pick<OutlinePart, "breakpoints"> {
+  return context?.breakpoints === undefined
+    ? {}
+    : { breakpoints: context.breakpoints };
 }
 
 /** What a site sheet was compiled from, beyond what every draw shares. */

@@ -29,6 +29,7 @@ import * as blocksEntry from "./blocks/index";
 import * as listReadModule from "./blocks/list-read";
 import * as blockPropsModule from "./blocks/props";
 import * as typographyDefaultsModule from "./blocks/typography-defaults";
+import * as formModule from "./blocks/form";
 import * as formFieldsModule from "./blocks/form-fields";
 import * as headingAnchorsModule from "./blocks/heading-anchors";
 import * as containerRootModule from "./blocks/container-root";
@@ -116,6 +117,27 @@ const SOURCE_MODULES: ReadonlyArray<{
       "formFieldDrawings",
       "receiverKeepsName",
       "sentNameOf",
+    ],
+  },
+  {
+    name: "blocks/form",
+    module: formModule,
+    // Only `pickedForm` is public, the one reading of the form a Form block
+    // names, so the editor's page checks judge it as the block draws it. The
+    // rest are the block's own: published from the blocks entry, or its
+    // render, its words and the fields it posts.
+    internal: [
+      "FORM_FIELD_TYPES",
+      "formFieldDrawings",
+      "sentNameOf",
+      "FORM_BASE_STYLES",
+      "FORM_FILE_NEEDS_SCRIPT",
+      "FORM_REFUSALS",
+      "FORM_SENT_MESSAGE",
+      "FORM_HONEYPOT_FIELD",
+      "FORM_POST_FIELDS",
+      "renderForm",
+      "form",
     ],
   },
   {
@@ -317,8 +339,8 @@ const SOURCE_MODULES: ReadonlyArray<{
     // them at a depth React's renderer could not reach, and at the
     // partition's bound from both sides. `drawsInteractive` is shared with the
     // rich-text block's content model in this package, not offered outside it,
-    // and so is `passageHeadings`, the walk the table-of-contents block lists
-    // a passage's headings by, and `headingsDrawn`, the same walk the page
+    // and so is `passageHeadings`, the walk that anchors one passage read by
+    // itself, and `headingsDrawn`, the same walk the page
     // outline lists a Rich text block's headings by. `VIEWS_DRAWING_CHILDREN` is exported for the
     // test that holds every view to what it declares it draws.
     // `RichTextParagraphContent` draws the Text block's one paragraph inside
@@ -759,6 +781,9 @@ describe("the root entry", () => {
       // headings a page draws, for the editor's page checks to judge them by.
       "pageOutline",
       "pageStyleTrace",
+      // Added deliberately: the one reading of the form a Form block names,
+      // for the editor's page checks to judge it by.
+      "pickedForm",
       "prepareDocumentAsDrawn",
       "prepareDocumentForRead",
       "preparePageForRead",

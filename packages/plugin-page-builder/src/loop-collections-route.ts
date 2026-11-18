@@ -55,9 +55,11 @@ import { respondList, type PaginationMeta } from "nextly";
 import { humanizeFieldName } from "nextly/field-label";
 import { z } from "nextly/zod";
 
+import { blocksFieldsOf } from "./class-usage-blocks-fields";
 import { labelOf, pluralLabelOf } from "./collection-labels";
 import { PAGES_SLUG } from "./collections/pages";
 import { ENTRIES_LOCALE_MAX } from "./entries-contract";
+import { titleFieldIn } from "./entries-route";
 import { listFieldsFrom } from "./fields/list-query-judgement";
 import { DEFAULT_COMPONENT_STORE, type ComponentStore } from "./library-route";
 import {
@@ -86,11 +88,15 @@ const TIMESTAMP_LABELS: Readonly<Record<string, string>> = {
   updatedAt: "Updated",
 };
 
-/** A field as a registry record declares it, as far as its words go. */
+/**
+ * A field as a registry record declares it, as far as its words go, and the
+ * types an upload field accepts.
+ */
 interface DeclaredField {
   readonly name?: unknown;
   readonly label?: unknown;
   readonly options?: unknown;
+  readonly mimeTypes?: unknown;
 }
 
 /** What an author calls a field: its label, or its name in words. */
@@ -171,6 +177,23 @@ function declaredByName(
 }
 
 /**
+ * Whether an upload field takes images, as its accepted types say: any
+ * `image/` type named, or no types named at all. `undefined` for a field
+ * that is not an upload.
+ */
+function takesImagesOf(
+  type: string,
+  declared: DeclaredField | undefined
+): boolean | undefined {
+  if (type !== "upload") return undefined;
+  const accepted = declared?.mimeTypes;
+  if (typeof accepted !== "string" || accepted.trim() === "") return true;
+  return accepted
+    .split(",")
+    .some(part => part.trim().toLowerCase().startsWith("image/"));
+}
+
+/**
  * The public's fields first in the collection's order, then the timestamps,
  * as the admin lists a collection's columns.
  */
@@ -234,6 +257,12 @@ export interface LoopCollectionsReads {
     slug: string,
     locale?: string
   ): Promise<readonly BindingFieldShape[] | undefined>;
+  /**
+   * Whether the site serves this collection's entries at an address its
+   * code declares (`pageBuilder({ templates: { addresses } })`). Absent,
+   * none is.
+   */
+  servedInCode?(slug: string): boolean;
 }
 
 /** The meta of an answer that is the whole list on one page. */
@@ -302,8 +331,35 @@ async function collectionItem(
         : { relationTo: shape.relationTo }),
       ...(shape.timeOnly === true ? { timeOnly: true as const } : {}),
       ...(shape.storage === undefined ? {} : { storage: shape.storage }),
+      ...withTakesImages(takesImagesOf(shape.type, declared.get(shape.name))),
     })),
+    // What a new list's item binds as its title: core's one title rule,
+    // offered only where visitors may read that field.
+    ...withTitleField(titleFieldIn(record)?.name, fields?.readable ?? []),
+    // Whether a new list's item links each title to its entry: a collection
+    // whose entries are pages (it holds a Page Builder field), or one its
+    // code serves at an address. An address set only in the admin is not
+    // known here; a link to an entry with no page draws as plain words.
+    entriesHavePages:
+      blocksFieldsOf(record).length > 0 || reads.servedInCode?.(slug) === true,
   };
+}
+
+/** `takesImages` as a member, absent where it says nothing. */
+function withTakesImages(
+  takesImages: boolean | undefined
+): { takesImages?: boolean } {
+  return takesImages === undefined ? {} : { takesImages };
+}
+
+/** The title field as a member, where visitors may read it. */
+function withTitleField(
+  name: string | undefined,
+  readable: readonly { readonly name: string }[]
+): { titleField?: string } {
+  return name !== undefined && readable.some(field => field.name === name)
+    ? { titleField: name }
+    : {};
 }
 
 /**
@@ -373,9 +429,11 @@ export function internalCollections(
 /** The reads the route binds: the registry listing and the caller's permissions. */
 function directLoopCollectionsReads(
   ctx: LoopCollectionsRouteContext,
-  store: ComponentStore
+  store: ComponentStore,
+  servedInCode: ReadonlySet<string>
 ): LoopCollectionsReads {
   return {
+    servedInCode: slug => servedInCode.has(slug),
     collections: () => registryRecords(ctx),
     internal: () => internalCollections(ctx, store),
     // No caller is no reader: the route is authenticated, so this is a guard
@@ -403,7 +461,9 @@ function directLoopCollectionsReads(
  * time, and each is asked of the caller above.
  */
 export function loopCollectionsRoute(
-  store: ComponentStore = DEFAULT_COMPONENT_STORE
+  store: ComponentStore = DEFAULT_COMPONENT_STORE,
+  /** The collections the site's code serves at an address. */
+  servedInCode: ReadonlySet<string> = new Set()
 ): {
   method: "GET";
   checksAccess: true;
@@ -422,7 +482,7 @@ export function loopCollectionsRoute(
         "loop collections route"
       );
       const answer = await readLoopCollections(
-        directLoopCollectionsReads(ctx, store),
+        directLoopCollectionsReads(ctx, store, servedInCode),
         query[LOOP_COLLECTIONS_PARAMS.locale]
       );
       return respondList([...answer.items], answer.meta);

@@ -654,6 +654,47 @@ export interface PluginFieldWrite {
   readStoredOf(
     target: PluginStoredValuesTarget
   ): Promise<ReadonlyMap<string, PluginStoredValue>>;
+  /**
+   * @experimental Who is making the write, and what they may do: the caller
+   * the write itself is judged as, for a value only some callers may change
+   * (code that runs on a published page, say). Absent where the write path
+   * does not say, which a validator that needs it treats as a refusal.
+   */
+  readonly caller?: PluginFieldWriteCaller;
+  /**
+   * @experimental True where the value sits in a field-group instance, which
+   * is validated on its own, a level below the entry: {@link readStored}
+   * answers nothing stored for the instance's own fields, and removing the
+   * instance runs no validator of it. A validator that must see every change
+   * to its stored value, a removal included, refuses a value here.
+   */
+  readonly inFieldGroup?: boolean;
+}
+
+/**
+ * @experimental The caller an entry write is made as, as a field type's
+ * validator is told it. Derived from the same reader the write's own access
+ * is judged by, never rebuilt from the user alone.
+ */
+export interface PluginFieldWriteCaller {
+  /**
+   * - `user`: a staff user, signed in or acting through the Direct API
+   *   without `overrideAccess`;
+   * - `apiKey`: a request authenticated with an API key, judged on the key's
+   *   own scope;
+   * - `principal`: a plugin-defined signed-in person;
+   * - `visitor`: no one signed in;
+   * - `system`: trusted server code (`overrideAccess`), which every check
+   *   lets through, as the write's own access does.
+   */
+  readonly kind: "user" | "apiKey" | "principal" | "visitor" | "system";
+  /**
+   * Whether the caller may perform `action` on `resource`, as a plugin
+   * route's `ctx.caller.can` and a route's `requiredPermission` answer it:
+   * a key on its own scope, a user on their roles and permissions. Always
+   * yes for `system`, and no for a visitor or a person.
+   */
+  can(action: string, resource: string): Promise<boolean>;
 }
 
 /**
