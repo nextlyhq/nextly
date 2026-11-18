@@ -161,10 +161,18 @@ interface OutlineRecord {
   /** Every id the page's headings are drawn with: the authors' and the made. */
   readonly drawn: ReadonlySet<string>;
   /**
-   * Each Rich text block inside a Collection list, by node id: its place
-   * among every such block on the page, from 1, in page order.
+   * Each Rich text block inside a Collection list, by part and node id
+   * (`passageKey`): its place among every such block on the page, from 1,
+   * in page order.
    */
   readonly passageInList: ReadonlyMap<string, number>;
+  /** The part a view of the outline answers for; the page's content if none. */
+  readonly area?: OutlineArea;
+}
+
+/** A Rich text block's key among the page's entry passages. */
+function passageKey(area: OutlineArea | undefined, nodeId: string): string {
+  return `${area ?? "content"}\u0000${nodeId}`;
 }
 
 /** The record of each outline this module made, and of each part's view. */
@@ -210,11 +218,14 @@ export function pageOutline(parts: readonly OutlinePart[]): PageOutline {
       if (
         list !== undefined &&
         node.type === RICH_TEXT_BLOCK &&
-        !passageInList.has(node.id)
+        !passageInList.has(passageKey(part.area, node.id))
       ) {
         // Counted over the whole page, not per list: two lists' entries
         // share their places (`0`, `1`), so only this tells them apart.
-        passageInList.set(node.id, passageInList.size + 1);
+        passageInList.set(
+          passageKey(part.area, node.id),
+          passageInList.size + 1
+        );
       }
       const found = headingsOfBlock(node);
       if (found.length === 0) return;
@@ -267,7 +278,7 @@ export function outlineForPart(
     headings: outline.headings,
     anchorsOf: nodeId => byNode?.get(nodeId) ?? NONE,
   };
-  RECORDS.set(view, record);
+  RECORDS.set(view, { ...record, area });
   return view;
 }
 
@@ -327,7 +338,10 @@ export function passageAnchors(
   // the passage is outlined by itself.
   if (outline === undefined) {
     const alone = anchorAllocator();
-    return headingsDrawn(passage).map(heading => alone.take(heading.text));
+    return headingsDrawn(passage).map(heading => {
+      const id = alone.take(heading.text);
+      return place === undefined ? id : `${id}--${place}`;
+    });
   }
   if (place === undefined) return outlineAnchors(ctx, nodeId);
   const drawn = headingsDrawn(passage);
@@ -338,7 +352,7 @@ export function passageAnchors(
   if (asRead) return outlineAnchors(ctx, nodeId);
   const record = RECORDS.get(outline);
   const allocator = anchorAllocator(new Set(record?.drawn));
-  const block = record?.passageInList.get(nodeId) ?? 1;
+  const block = record?.passageInList.get(passageKey(record.area, nodeId)) ?? 1;
   const suffix = block > 1 ? `--p${block}` : "";
   return drawn.map(heading =>
     entryId(`${allocator.take(heading.text)}--${place}${suffix}`, record?.taken)
@@ -356,8 +370,15 @@ export function headingAnchors(
   ctx: Pick<PageContext, "outline" | "itemPosition">,
   node: BlockNode
 ): readonly string[] {
-  if (ctx.outline !== undefined) return outlineAnchors(ctx, node.id);
-  return pageOutline([{ area: "content", nodes: [node] }]).anchorsOf(node.id);
+  return outlineAnchors(
+    {
+      outline: ctx.outline ?? pageOutline([{ area: "content", nodes: [node] }]),
+      ...(ctx.itemPosition === undefined
+        ? {}
+        : { itemPosition: ctx.itemPosition }),
+    },
+    node.id
+  );
 }
 
 /**
@@ -373,15 +394,21 @@ export function anchorsWithin(
   node: BlockNode
 ): readonly string[] {
   if (ctx.outline === undefined) return NONE;
-  const passages = RECORDS.get(ctx.outline)?.passageInList;
+  const record = RECORDS.get(ctx.outline);
   const anchors: string[] = [];
+  let holdsPassage = false;
   walkNodes([node], each => {
     anchors.push(...outlineAnchors(ctx, each.id));
     // A passage an entry gives a Rich text is anchored with its block's
     // place among such blocks, which a list put before it moves.
-    const passage = passages?.get(each.id);
-    if (passage !== undefined) anchors.push(`p${passage}`);
+    const passage = record?.passageInList.get(passageKey(record.area, each.id));
+    if (passage === undefined) return;
+    anchors.push(`p${passage}`);
+    holdsPassage = true;
   });
+  // And never with an id the page's headings use, which any heading on the
+  // page may change.
+  if (holdsPassage && record !== undefined) anchors.push(...record.drawn);
   return anchors;
 }
 

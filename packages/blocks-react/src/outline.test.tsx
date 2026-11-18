@@ -26,6 +26,7 @@ import {
 import { BlockList } from "./block-boundary";
 import {
   anchorsWithin,
+  outlineForPart,
   pageOutline,
   type OutlinePart,
   type PageOutline,
@@ -295,6 +296,38 @@ describe("blocks drawn with no page outline", () => {
       />
     );
     expect(headingIds(html)).toEqual(["notes", "own", "notes", "notes-2"]);
+  });
+});
+
+describe("a list drawn with no page outline", () => {
+  it("still tells its entries' headings apart", async () => {
+    const find = vi.fn(() =>
+      Promise.resolve({ items: [{ id: "a" }, { id: "b" }], total: 2 })
+    );
+    const html = await renderToHtml(
+      <BlockList
+        nodes={[
+          {
+            id: "list",
+            type: "core/collection-loop",
+            version: 1,
+            props: { collection: "posts", limit: 10 },
+            slots: {
+              children: [heading("Title"), richText(passage(["h2", "Notes"]))],
+            },
+          },
+        ]}
+        context={createStandaloneContext({ data: { find } })}
+        blocks={resolver}
+        classes={{}}
+      />
+    );
+    expect(headingIds(html)).toEqual([
+      "title--0",
+      "notes--0",
+      "title--1",
+      "notes--1",
+    ]);
   });
 });
 
@@ -735,6 +768,39 @@ describe("pageOutline", () => {
     expect(within(list("first"), last)).not.toEqual(
       within(list("first"), list("middle"), last)
     );
+  });
+
+  it("changes what an editor keeps a list's output by when a heading outside it takes a slug its entry passages may need", () => {
+    const list: BlockNode = {
+      id: "list",
+      type: "core/collection-loop",
+      version: 1,
+      props: { collection: "posts" },
+      slots: { children: [richText(passage(), "list-text")] },
+    };
+    const within = (words: string) =>
+      anchorsWithin(
+        { outline: pageOutline(parts(["content", [heading(words), list]])) },
+        list
+      );
+    expect(within("Hello")).not.toEqual(within("Notes"));
+  });
+
+  it("numbers entry passages per part, as node ids are only unique within one", () => {
+    const list = (): BlockNode => ({
+      id: "list",
+      type: "core/collection-loop",
+      version: 1,
+      props: { collection: "posts" },
+      slots: { children: [richText(passage(), "same")] },
+    });
+    const outline = pageOutline(
+      parts(["header", [list()]], ["content", [list()]])
+    );
+    const header = outlineForPart(outline, "header");
+    const content = outlineForPart(outline, "content");
+    const key = (view: PageOutline) => anchorsWithin({ outline: view }, list());
+    expect(key(header)).not.toEqual(key(content));
   });
 
   it("reads a heading's level as the block draws it", () => {
