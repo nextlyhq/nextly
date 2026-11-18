@@ -1022,3 +1022,12 @@ export type { PageChecksListProps } from "./page-checks/page-checks-list";
  * @experimental
  */
 export { endTypingRuns, typingEpoch } from "./typing-run";
+
+/**
+ * A draft held in a field of the block settings panel, for a host's save:
+ * the page has unsaved work from the draft's first keystroke, and a store
+ * writes the draft first, as leaving the field would, with focus left in it.
+ *
+ * @experimental
+ */
+export { finishFieldEdit, useFieldDraftHeld } from "./field-edit";
