@@ -13,12 +13,14 @@ import {
   useDocumentLocale,
   useDocumentStatus,
 } from "@nextlyhq/plugin-sdk/admin";
-import { createContext, useContext } from "react";
+import { createContext, useContext, type Context } from "react";
 
 import type { SharedStyleUsageHere } from "../../library-contract";
 
 /** The blocks field the editor is bound to, provided around the editor. */
-export const UsageHereField = createContext<string | undefined>(undefined);
+export const UsageHereField: Context<string | undefined> = createContext<
+  string | undefined
+>(undefined);
 
 /**
  * What the editor has open, or `undefined` outside an editor or before the

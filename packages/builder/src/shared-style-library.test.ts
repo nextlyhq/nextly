@@ -419,6 +419,17 @@ describe("how many blocks on how many places use a style", () => {
     blocks: number,
     extra: Partial<SharedStyleReach> = {}
   ): SharedStyleReach => ({ ...reachOf(byKind), blocks, ...extra });
+  /** The open page's saved parts: a page whose open field holds them all. */
+  const page = (
+    saved: number | null,
+    alongside: number | null = 0,
+    elsewhere: number | null = 0
+  ): NonNullable<SharedStyleReach["here"]> => ({
+    saved,
+    alongside,
+    elsewhere,
+    kind: "pages",
+  });
 
   it("says blocks on pages and names a component", () => {
     // 12 saved blocks, 3 of them on the open page as saved, which now has 3
@@ -426,28 +437,79 @@ describe("how many blocks on how many places use a style", () => {
     expect(
       sharedStyleReachSentence(
         { count: 3, complete: true },
-        counted({ pages: 4, components: 1 }, 12, {
-          here: { blocks: 3, kind: "pages" },
-        })
+        counted({ pages: 4, components: 1 }, 12, { here: page(3) })
       )
     ).toBe("Used on 12 blocks on 4 pages and 1 component");
   });
 
   it("counts the open page from its live copy, not its saved one", () => {
-    // Saved: 3 blocks on 2 pages, 1 of them here. Live here: 2 more.
+    // Saved: 3 blocks on 2 pages, 1 of them here. Live here: 3.
     expect(
       sharedStyleReachSentence(
         { count: 3, complete: true },
-        counted({ pages: 2 }, 3, { here: { blocks: 1, kind: "pages" } })
+        counted({ pages: 2 }, 3, { here: page(1) })
       )
     ).toBe("Used on 5 blocks on 2 pages");
     // Taken off the open page: that page no longer counts.
     expect(
       sharedStyleReachSentence(
         { count: 0, complete: true },
-        counted({ pages: 2 }, 3, { here: { blocks: 1, kind: "pages" } })
+        counted({ pages: 2 }, 3, { here: page(1) })
       )
     ).toBe("Used on 2 blocks on 1 page");
+  });
+
+  it("keeps the open page's other fields", () => {
+    // Saved: 2 in the open field, 1 in another. Taken off the open field,
+    // the page still holds the other field's block.
+    expect(
+      sharedStyleReachSentence(
+        { count: 0, complete: true },
+        counted({ pages: 1 }, 3, { here: page(3, 1) })
+      )
+    ).toBe("Used on 1 block on 1 page");
+    expect(
+      sharedStyleReachSentence(
+        { count: 2, complete: true },
+        counted({ pages: 1 }, 3, { here: page(3, 1) })
+      )
+    ).toBe("Used on 3 blocks on 1 page");
+  });
+
+  it("keeps the copies the editor does not change", () => {
+    // The published page holds 3; its draft, open, held 1 and holds none
+    // live: the published page still wears it on 3 blocks.
+    expect(
+      sharedStyleReachSentence(
+        { count: 0, complete: true },
+        counted({ pages: 1 }, 3, { here: page(3, 0, 3) })
+      )
+    ).toBe("Used on 3 blocks on 1 page");
+    // Live, the draft outgrows it: the page is its largest copy.
+    expect(
+      sharedStyleReachSentence(
+        { count: 5, complete: true },
+        counted({ pages: 1 }, 3, { here: page(3, 0, 3) })
+      )
+    ).toBe("Used on 5 blocks on 1 page");
+  });
+
+  it("keeps the saved counts as a floor where the open page's are unknown", () => {
+    // Two pages; the open one's rows hold no count yet, so the 2 are the
+    // other page's. Its page is counted already: never added again.
+    expect(
+      sharedStyleReachSentence(
+        { count: 1, complete: true },
+        counted({ pages: 2 }, 2, { complete: false, here: page(null) })
+      )
+    ).toBe("Used on at least 2 blocks on 2 pages");
+    // Its parts unknown though its count is known: not swapped either.
+    expect(
+      sharedStyleReachSentence(
+        { count: 4, complete: true },
+        counted({ pages: 1 }, 2, { here: page(2, null) })
+      )
+    ).toBe("Used on at least 2 blocks on 1 page");
   });
 
   it("adds the open page when it is saved nowhere yet", () => {
@@ -459,12 +521,20 @@ describe("how many blocks on how many places use a style", () => {
     ).toBe("Used on 3 blocks on 2 pages");
   });
 
-  it("keeps the saved counts where the caller has no live page", () => {
+  it("counts a component open in the editor as a component", () => {
     expect(
       sharedStyleReachSentence(
-        undefined,
-        counted({ pages: 2 }, 3, { here: { blocks: 1, kind: "pages" } })
+        { count: 2, complete: true },
+        counted({ pages: 1, components: 1 }, 3, {
+          here: { saved: 1, alongside: 0, elsewhere: 0, kind: "components" },
+        })
       )
+    ).toBe("Used on 4 blocks on 1 page and 1 component");
+  });
+
+  it("keeps the saved counts where the caller has no live page", () => {
+    expect(
+      sharedStyleReachSentence(undefined, counted({ pages: 2 }, 3, { here: page(1) }))
     ).toBe("Used on 3 blocks on 2 pages");
   });
 
@@ -478,7 +548,7 @@ describe("how many blocks on how many places use a style", () => {
     expect(
       sharedStyleReachSentence(
         { count: 1, complete: false },
-        counted({ pages: 1 }, 2, { here: { blocks: 1, kind: "pages" } })
+        counted({ pages: 1 }, 2, { here: page(1) })
       )
     ).toBe("Used on at least 2 blocks on 1 page");
   });

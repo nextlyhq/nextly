@@ -26,7 +26,12 @@ import { buildClaims, signAccessToken } from "nextly/auth";
 import { createDynamicHandlers } from "nextly/runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
+import { BLOCKS_TYPE } from "../fields/blocksField";
+import {
+  PAGE_BUILDER_PLUGIN_NAME,
+  sharedStyleUsagePath,
+  type SharedStyleUsageHere,
+} from "../library-contract";
 import { pageBuilder } from "../plugin";
 import {
   lockSharedStyle,
@@ -139,13 +144,30 @@ describe.each(getConfiguredTestDialects())(
       current = undefined;
     });
 
-    /** A site storing `card` (locked), `hero` and `spare`, set as the system. */
-    async function boot() {
+    /**
+     * A site storing `card` (locked), `hero` and `spare`, set as the system;
+     * with a Single, `landing`, holding two blocks fields when asked.
+     */
+    async function boot(withLanding = false) {
       const plugin = pageBuilder();
       current = await createTestNextly({
         dialect,
         plugins: [plugin],
         seedPublic: true,
+        ...(withLanding
+          ? {
+              singles: [
+                {
+                  slug: "landing",
+                  fields: [
+                    { name: "title", type: "text" },
+                    { name: "content", type: BLOCKS_TYPE },
+                    { name: "aside", type: BLOCKS_TYPE },
+                  ],
+                } as never,
+              ],
+            }
+          : {}),
       });
       const t = current;
       // The site's first user is its owner, granted everything. Made first, so
@@ -428,6 +450,10 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
+    /** The usage read for `c-hero`, naming what the editor has open. */
+    const usageAsked = (here: SharedStyleUsageHere) =>
+      `plugins/${PAGE_BUILDER_PLUGIN_NAME}${sharedStyleUsagePath(["c-hero"], here)}`;
+
     it("counts the blocks wearing a style on the pages, and the open page's share apart", async () => {
       const { t, tick } = await boot();
       const styled = (id: string) => text(id, { classes: ["c-hero"] });
@@ -446,13 +472,17 @@ describe.each(getConfiguredTestDialects())(
         overrideAccess: true,
       });
       await tick();
-      const reader = await holding(t, "read-site-style");
+      const reader = await holding(t, "read-site-style", "read-pages");
       const homeId = String(home.item.id);
       const ask = async () =>
         (
           await call(
             "GET",
-            `${route("usage")}?id=c-hero&here=${encodeURIComponent(`pages/${homeId}`)}`,
+            usageAsked({
+              document: { collection: "pages", id: homeId },
+              field: "content",
+              variant: "published",
+            }),
             reader
           )
         ).body;
@@ -463,7 +493,7 @@ describe.each(getConfiguredTestDialects())(
             documents: 2,
             byKind: { pages: 2, components: 0, patterns: 0, layouts: 0 },
             blocks: 3,
-            here: { blocks: 2, kind: "pages" },
+            here: { saved: 2, alongside: 0, elsewhere: 0, kind: "pages" },
             complete: true,
           },
         },
@@ -482,7 +512,126 @@ describe.each(getConfiguredTestDialects())(
           "c-hero": {
             documents: 2,
             blocks: 2,
-            here: { blocks: 1, kind: "pages" },
+            here: { saved: 1, alongside: 0, elsewhere: 0, kind: "pages" },
+            complete: true,
+          },
+        },
+      });
+    });
+
+    it("tells the open page's share only to a caller who may read that page", async () => {
+      const { t, tick } = await boot();
+      const home = await t.nextly.create({
+        collection: "pages",
+        data: {
+          title: "Home",
+          slug: "home",
+          content: pageOf([text("a", { classes: ["c-hero"] })]),
+        },
+        overrideAccess: true,
+      });
+      await tick();
+      const path = usageAsked({
+        document: { collection: "pages", id: String(home.item.id) },
+        field: "content",
+        variant: "published",
+      });
+      // Site styles alone: the counts, and nothing of the page it named.
+      const styleReader = await holding(t, "read-site-style");
+      const hidden = await call("GET", path, styleReader);
+      expect(hidden.status).toBe(200);
+      const style = (hidden.body.styles as Record<string, object>)["c-hero"];
+      expect(style).toMatchObject({ documents: 1, blocks: 1 });
+      expect(style).not.toHaveProperty("here");
+      const pageReader = await holding(t, "read-site-style", "read-pages");
+      const told = await call("GET", path, pageReader);
+      expect(told.body).toMatchObject({
+        styles: {
+          "c-hero": {
+            here: { saved: 1, alongside: 0, elsewhere: 0, kind: "pages" },
+          },
+        },
+      });
+    });
+
+    it("counts a published page and its pending draft as one page, its largest copy", async () => {
+      const { t, tick } = await boot();
+      const styled = (id: string) => text(id, { classes: ["c-hero"] });
+      const live = await t.nextly.create({
+        collection: "pages",
+        data: {
+          title: "Live",
+          slug: "live",
+          status: "published",
+          content: pageOf([styled("a"), styled("b"), styled("c")]),
+        },
+        overrideAccess: true,
+      });
+      const id = String(live.item.id);
+      // An edit saved without publishing: a pending draft over the live row.
+      await t.nextly.update({
+        collection: "pages",
+        id,
+        data: { content: pageOf([styled("a"), text("b")]), _overwrite: true },
+        overrideAccess: true,
+      });
+      await t.events.settle();
+      await tick();
+      const reader = await holding(t, "read-site-style", "read-pages");
+      const answer = await call(
+        "GET",
+        usageAsked({
+          document: { collection: "pages", id },
+          field: "content",
+          variant: "draft",
+        }),
+        reader
+      );
+      // The draft open: whatever it holds live, the published page keeps 3.
+      expect(answer.body).toMatchObject({
+        styles: {
+          "c-hero": {
+            documents: 1,
+            blocks: 3,
+            here: { saved: 3, alongside: 0, elsewhere: 3, kind: "pages" },
+            complete: true,
+          },
+        },
+      });
+    });
+
+    it("keeps the open document's other blocks field apart from the one open", async () => {
+      const { t, tick } = await boot(true);
+      const styled = (id: string) => text(id, { classes: ["c-hero"] });
+      await t.nextly.updateSingle({
+        slug: "landing",
+        data: {
+          title: "Landing",
+          content: pageOf([styled("a"), styled("b")]),
+          aside: pageOf([styled("c")]),
+          _overwrite: true,
+        },
+        overrideAccess: true,
+      });
+      await t.events.settle();
+      await tick();
+      const reader = await holding(t, "read-site-style", "read-landing");
+      const answer = await call(
+        "GET",
+        usageAsked({
+          document: { single: "landing" },
+          field: "content",
+          variant: "published",
+        }),
+        reader
+      );
+      // 3 blocks on the one page; with `content` open, `aside`'s 1 stays.
+      expect(answer.body).toMatchObject({
+        styles: {
+          "c-hero": {
+            documents: 1,
+            blocks: 3,
+            here: { saved: 3, alongside: 1, elsewhere: 0, kind: "pages" },
             complete: true,
           },
         },
