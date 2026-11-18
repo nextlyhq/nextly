@@ -7,8 +7,12 @@
  * Driven through each kind's dispatcher, as the Builder's requests reach it: a collection, a Single
  * and a field group, on every configured dialect.
  */
+import { join } from "node:path";
+
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
+import { migrateCore } from "../../../../cli/commands/migrate";
+import { createLogger } from "../../../../cli/utils/logger";
 import { dispatchCollections } from "../../../../dispatcher/handlers/collection-dispatcher";
 import { dispatchComponents } from "../../../../dispatcher/handlers/component-dispatcher";
 import { dispatchSingles } from "../../../../dispatcher/handlers/single-dispatcher";
@@ -18,12 +22,14 @@ import {
   type TestNextly,
 } from "../../../../plugins/test-nextly";
 import type { ServiceContainer } from "../../../../services";
+import { NO_CONSENT } from "../../migrate/data-loss-consent";
 
 import {
   asCreatedBefore,
   execOn,
   tableOf,
   withNoHistory,
+  withStrayDefault,
 } from "./helpers/older-table";
 
 type Field = { name: string; type: string };
@@ -34,6 +40,15 @@ const FIELDS: Field[] = [
 ];
 /** The person's change: one field added. */
 const WITH_EXTRA: Field[] = [...FIELDS, { name: "extra", type: "text" }];
+
+/**
+ * The person's change that keeps the push rather than the save's file: a column's type changed,
+ * whose stored values the push judges before it alters the column.
+ */
+const VIEWS_AS_TEXT: Field[] = [
+  { name: "heading", type: "text" },
+  { name: "views", type: "text" },
+];
 
 /** What the preview tells the Builder's review. */
 interface Preview {
@@ -248,6 +263,78 @@ for (const kind of KINDS) {
         expect(after.columns.map(c => c.name)).toContain("extra");
         const next = await preview();
         expect(next.conversions).toEqual([]);
+      });
+    }
+  );
+}
+
+for (const kind of KINDS) {
+  describeEachDialect(
+    `the first Builder save of ${kind.name}'s table an earlier version made with a column default, by a change the push applies`,
+    dialect => {
+      let t: TestNextly;
+
+      beforeEach(async () => {
+        vi.stubEnv("NODE_ENV", "development");
+        t = await createTestNextly({ dialect });
+        await kind.create();
+        await asCreatedBefore(t, dialect, kind.table);
+        // An earlier create wrote a column DEFAULT for a field stating a default; today's writes
+        // none, and the field here states none, so the default is a difference to convert.
+        await withStrayDefault(t, dialect, kind.table, "heading", "untitled");
+        await withNoHistory(t, dialect);
+      });
+
+      afterEach(async () => {
+        await t.destroy();
+        vi.unstubAllEnvs();
+      });
+
+      it("converts the column default with its change, and leaves nothing for the next preview or migrate", async () => {
+        const columnOf = async (name: string) =>
+          (await tableOf(t, dialect, kind.table)).columns.find(
+            c => c.name === name
+          );
+        const viewsBefore = await columnOf("views");
+        expect((await columnOf("heading"))?.default).not.toBeNull();
+
+        const shown = await bodyOf<Preview>(await kind.preview(VIEWS_AS_TEXT));
+        const keys = (shown.conversions ?? []).map(c => c.column);
+        expect(
+          keys.some(key => key.includes("heading")),
+          JSON.stringify(shown)
+        ).toBe(true);
+
+        // A save the push applies records the files it wrote applied once the table stands as the
+        // newest one says: a default the push left would refuse it as drift, here.
+        await kind.apply(VIEWS_AS_TEXT, {
+          schemaVersion: shown.schemaVersion,
+          acknowledgedConversions: keys,
+        });
+
+        // The push recorded the save's files applied with no statement of their own run, where the
+        // file road runs the change's: so the default went with the push, not with a file.
+        const recorded = await execOn(t)<{ ran: number | string | null }>(
+          "SELECT statements_executed AS ran FROM nextly_schema_events WHERE event_type = 'file_apply' AND status = 'applied'"
+        );
+        expect(recorded.length).toBeGreaterThan(0);
+        expect(recorded.map(r => Number(r.ran))).toEqual(recorded.map(() => 0));
+        expect((await columnOf("views"))?.type).not.toBe(viewsBefore?.type);
+        expect((await columnOf("heading"))?.default ?? null).toBeNull();
+        const next = await bodyOf<Preview>(await kind.preview(VIEWS_AS_TEXT));
+        expect(next.conversions).toEqual([]);
+        const migrated = await migrateCore({
+          extensionSchema: undefined,
+          dialect,
+          db: (t.adapter as unknown as { getDrizzle(): unknown }).getDrizzle(),
+          adapter: t.adapter as never,
+          migrationsDir: join(t.basePath, "src", "db", "migrations"),
+          logger: createLogger({ quiet: true }),
+          lockMode: "fail-fast",
+          consent: NO_CONSENT,
+          interactive: false,
+        } as never);
+        expect(migrated).toMatchObject({ applied: 0 });
       });
     }
   );
