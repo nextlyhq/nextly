@@ -141,16 +141,22 @@ function projectsList(children: BlockNode[] = [HEADING]): BlockNode {
 /** The picker for the heading's `prop` in `nodes`, with the host's reads. */
 function mount(
   nodes: BlockNode[],
-  prop: PropSchema = TEXT
+  prop: PropSchema = TEXT,
+  entries: readonly ListSample[] = ENTRIES
 ): { readListSample: ReturnType<typeof vi.fn> } {
   const readListSample = vi.fn(
     async (_props: Readonly<Record<string, unknown>>, entry?: number) =>
-      ENTRIES[entry ?? 0]
+      entries[entry ?? 0]
   );
   const services: ContentServices = {
     listBindingFields: async () => SOURCES,
     listLoopCollections: async () => [PROJECTS, CATEGORIES],
     readListSample,
+    // The author's own read of a media item, as the canvas draws pictures.
+    readMedia: async id =>
+      id === "m7"
+        ? { name: "cover.jpg", thumbnail: "/media/m7-thumb.jpg" }
+        : null,
   };
   const document = { formatVersion: 1, kind: "page", nodes } as BlockDocument;
   render(
@@ -335,5 +341,21 @@ describe("each field's live value", () => {
     expect(pageCover.querySelector("img")?.getAttribute("src")).toBe(
       "/media/projects-cover-thumb.jpg"
     );
+  });
+
+  it("shows a picture stored by its id through the author's media read, never the id", async () => {
+    mount([projectsList()], IMAGE, [{ title: "Highway 9", cover: "m7" }]);
+    const list = await picker();
+    const cover = await within(
+      await within(list).findByRole("group", {
+        name: "Each project in the list",
+      })
+    ).findByRole("option", { name: /^Cover/ });
+    await vi.waitFor(() => {
+      expect(cover.querySelector("img")?.getAttribute("src")).toBe(
+        "/media/m7-thumb.jpg"
+      );
+    });
+    expect(cover.textContent).not.toContain("m7");
   });
 });

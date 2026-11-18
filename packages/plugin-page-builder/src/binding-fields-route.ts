@@ -246,7 +246,9 @@ function pickerField(shape: BindingFieldShape, read: SourceRead): PickerField {
   // The value as the person editing reads it, a draft's included and marked
   // as one: the read is their own, through core's gate, so a draft's value
   // reaches only someone that gate lets read it.
-  const preview = isPublic ? previewOf(value) : undefined;
+  // A media item stored by its id is shown by its picture, never the id.
+  const preview =
+    isPublic && shape.type !== "upload" ? previewOf(value) : undefined;
   const group = groupRead(shape, read, publicShape);
   return {
     ...own,
@@ -280,6 +282,19 @@ function shownValue(
   return Object.fromEntries(
     Object.entries(value).filter(([, shown]) => shown !== undefined)
   );
+}
+
+/**
+ * The thumbnail of the media a picture field names by its id, from the
+ * record the listing followed it to: only for a field visitors may read.
+ */
+function followedThumbnail(
+  field: PickerField,
+  record: Readonly<Record<string, unknown>>
+): Pick<PickerField, "thumbnail"> {
+  if (!field.public || field.thumbnail !== undefined) return {};
+  const thumbnail = thumbnailOf(record);
+  return thumbnail === undefined ? {} : { thumbnail };
 }
 
 /**
@@ -369,6 +384,8 @@ async function sourceFields(
       if (related === undefined || related === "failed") return field;
       return {
         ...field,
+        // A picture stored by its id shows the media it names, read here.
+        ...followedThumbnail(field, related.row),
         fields: [
           ...related.shapes.map(inner =>
             throughRelation(pickerField(inner, related), field)

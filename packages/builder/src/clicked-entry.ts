@@ -5,8 +5,9 @@
  *
  * Read from the element pressed, as the canvas draws it: a list draws each
  * entry as a box of its own, without a node id, straight inside the list's
- * element. Kept only for the block the click selected, so a block selected
- * another way (from Layers, by key) samples the first entry, as before.
+ * element. Kept only while the block the click selected stays selected, so
+ * a block selected another way (from Layers, by key) samples the first
+ * entry, as before.
  * Editor state only, never stored.
  *
  * @module clicked-entry
@@ -96,6 +97,17 @@ export function rememberClickedEntries(
   if (next === undefined && clicked === undefined) return;
   clicked = next;
   for (const listener of listeners) listener();
+}
+
+/**
+ * Keep the clicked entries only while the block they were kept for is
+ * selected: a selection made another way (Layers, the keyboard) to any
+ * other block forgets them, so coming back to the block from there samples
+ * the first entry.
+ */
+export function keepClickedEntriesFor(selected: readonly string[]): void {
+  if (clicked === undefined || selected.includes(clicked.nodeId)) return;
+  forgetClickedEntries();
 }
 
 /** Forget every clicked entry. */

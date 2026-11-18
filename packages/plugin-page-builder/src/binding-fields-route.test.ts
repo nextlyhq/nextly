@@ -525,6 +525,49 @@ describe("a field's value as a picture, or as nothing", () => {
     });
   });
 
+  it("gives a picture stored by its id the thumbnail of the media it follows", async () => {
+    const base = withPictures();
+    const media: readonly BindingFieldShape[] = [
+      { name: "url", type: "text" },
+      { name: "thumbnailUrl", type: "text" },
+      { name: "mimeType", type: "text" },
+    ];
+    const record = {
+      id: "m3",
+      url: "/uploads/hero.jpg",
+      thumbnailUrl: "/uploads/hero-thumb.jpg",
+      mimeType: "image/jpeg",
+    };
+    const row = { title: "Spring sale", subtitle: "", cover: "m3" };
+    const fields = fieldsOf(
+      await readBindingFields(
+        { source: { kind: "collection", slug: "posts", id: "p1" } },
+        {
+          ...base,
+          declared: async ref =>
+            keyOf(ref) === "collection:media" ? media : base.declared(ref),
+          publicShapes: async ref =>
+            keyOf(ref) === "collection:media" ? media : base.publicShapes(ref),
+          asEditor: vi.fn(async (ref: FieldsRef) => {
+            if (rowKey(ref) === "media:m3") return record;
+            return rowKey(ref) === "posts:p1" ? row : null;
+          }),
+          published: async ref => {
+            if (rowKey(ref) === "media:m3") return record;
+            return rowKey(ref) === "posts:p1" ? row : null;
+          },
+        }
+      ),
+      "Post"
+    );
+    expect(named(fields, "cover")).toMatchObject({
+      public: true,
+      thumbnail: "/uploads/hero-thumb.jpg",
+    });
+    // Its id is no value an author reads.
+    expect(named(fields, "cover")?.preview).toBeUndefined();
+  });
+
   it("gives no thumbnail for a picture visitors can't read", async () => {
     expect(named(await post(), "brief")?.thumbnail).toBeUndefined();
   });
