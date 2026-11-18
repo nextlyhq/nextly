@@ -51,6 +51,7 @@ import { ServiceContainer } from "../../../services/index";
 import type { ApiKeyService } from "../../auth/services/api-key-service";
 import { defineWorkflow } from "../define-workflow";
 import { workflowDefinitionHash } from "../hash";
+import { REVIEW_API_ERROR_CODES } from "../review-api";
 import { writeWorkflowSettings } from "../workflow-settings-repository";
 
 import {
@@ -937,6 +938,35 @@ describe.each(getConfiguredTestDialects())(
         );
 
         expect(refusal).toEqual({ status: 400, code: "VALIDATION_ERROR" });
+        expect((await stateOf(app(), partOf(PAGES, id, null)))?.stage).toBe(
+          "legal"
+        );
+      });
+
+      it("refuses an approval over a document its caller may not read as not found, never telling its workflow", async () => {
+        current = await bootSteps(dialect);
+        // Bob holds the sign-off on Pages and may not read them.
+        await people();
+        const id = await entry(app(), PAGES);
+        await seedState(app(), partOf(PAGES, id, null), "legal", {
+          definitionHash: HASH,
+          enteredBy: "alice",
+        });
+        const { step: _step, ...seen } = await seenPage(id, "clear", 1);
+
+        const answer = await door.stepMany(BOB, {
+          step: "clear",
+          documents: [seen],
+        });
+
+        expect(answer.moved).toEqual([]);
+        expect(answer.refused).toEqual([
+          expect.objectContaining({ id, code: "NOT_FOUND" }),
+        ]);
+        expect(JSON.stringify(answer)).not.toContain(
+          REVIEW_API_ERROR_CODES.bulkApproval
+        );
+        expect(JSON.stringify(answer)).not.toContain("editorial");
         expect((await stateOf(app(), partOf(PAGES, id, null)))?.stage).toBe(
           "legal"
         );
