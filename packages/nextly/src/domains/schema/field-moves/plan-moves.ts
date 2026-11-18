@@ -121,10 +121,7 @@ function placed(
  * whose places were swapped, or one whose field the save also renames, would carry one field's
  * values into another's place. Each is a change of its own: the move, then the rename.
  */
-function refuseUnbound(
-  request: FieldMoveRequest,
-  renames: readonly { from: string; to: string }[]
-): void {
+function refuseUnbound(request: FieldMoveRequest): void {
   const name = request.from.at(-1) ?? "";
   if (request.to.at(-1) !== name) {
     throw refused(
@@ -132,15 +129,72 @@ function refuseUnbound(
       `${request.from.join(".")} moves to ${request.to.join(".")}, a field of another name. A field keeps its name as it moves: move it, then rename it in a later save.`
     );
   }
+}
+
+/**
+ * Refuses two moves of fields of one name in the same save: with names kept, fields of one name
+ * in different groups are told apart only by their paths, so a swap of their places would pass as
+ * two moves. Saved one at a time, each move's field is the only one of its name.
+ */
+function refuseSameNames(moves: readonly FieldMoveRequest[]): void {
+  const seen = new Set<string>();
+  for (const request of moves) {
+    const name = request.from.at(-1) ?? "";
+    if (seen.has(name)) {
+      throw refused(
+        request,
+        `Two fields named ${name} move in this save. Move each in a save of its own.`
+      );
+    }
+    seen.add(name);
+  }
+}
+
+/**
+ * Refuses a move whose column the same save also renames: the copy and the rename would act on
+ * one column. Renames name columns, so only a move's own columns are matched: a field moving
+ * between groups has none.
+ */
+function refuseRenamedColumns(
+  request: FieldMoveRequest,
+  move: PlannedMove,
+  renames: readonly { from: string; to: string }[]
+): void {
+  const columns = new Set(
+    [move.from, move.to].flatMap(place =>
+      place.kind === "column" ? [place.column] : []
+    )
+  );
   const renamed = renames.find(
-    r =>
-      toSnakeCase(r.from) === toSnakeCase(name) ||
-      toSnakeCase(r.to) === toSnakeCase(name)
+    r => columns.has(toSnakeCase(r.from)) || columns.has(toSnakeCase(r.to))
   );
   if (renamed !== undefined) {
     throw refused(
       request,
-      `${name} is moved in this save and also renamed (${renamed.from} to ${renamed.to}). Move it first, then rename it in a later save.`
+      `${request.from.at(-1) ?? ""} is moved in this save and also renamed (${renamed.from} to ${renamed.to}). Move it first, then rename it in a later save.`
+    );
+  }
+}
+
+/**
+ * Refuses an optional field made required as it moves into a group: the move carries each empty
+ * value as a null the required field refuses, so the change waits for a save of its own.
+ */
+function refuseMadeRequired(
+  request: FieldMoveRequest,
+  move: PlannedMove,
+  before: readonly FieldDefinition[]
+): void {
+  const required = (field: FieldDefinition | undefined) =>
+    (field as { required?: unknown } | undefined)?.required === true;
+  if (
+    move.to.kind === "json" &&
+    required(move.field) &&
+    !required(placeOf(before, request.from)?.field)
+  ) {
+    throw refused(
+      request,
+      `${request.from.at(-1) ?? ""} is made required as it moves into a group. Move it first, then make it required in a later save.`
     );
   }
 }
@@ -160,24 +214,35 @@ function refuseHoldersNotGroups(
 ): void {
   // A name with no field on that side is a group the save makes or deletes, refused with its own
   // reason (`refuseUnplaceable`); here only one another kind of field holds.
+  // Every container on the path, not only the outermost: a nested one changes kind as well.
   const otherKind = (
     list: readonly FieldDefinition[],
-    name: string | undefined
-  ): boolean => {
-    if (name === undefined) return false;
-    const placed = placeOf(list, [name]);
-    return placed !== null && placed.field.type !== "group";
-  };
-  if (move.to.kind === "json" && otherKind(fields.before, request.to[0])) {
+    path: readonly string[]
+  ): string | undefined =>
+    path
+      .slice(0, -1)
+      .map((_, at) => path.slice(0, at + 1))
+      .find(prefix => {
+        const placed = placeOf(list, prefix);
+        return placed !== null && placed.field.type !== "group";
+      })
+      ?.join(".");
+  const into =
+    move.to.kind === "json" ? otherKind(fields.before, request.to) : undefined;
+  if (into !== undefined) {
     throw refused(
       request,
-      `${request.to[0]} was not a group before this save. Save it as a group first, then move the field into it.`
+      `${into} was not a group before this save. Save it as a group first, then move the field into it.`
     );
   }
-  if (move.from.kind === "json" && otherKind(fields.after, request.from[0])) {
+  const outOf =
+    move.from.kind === "json"
+      ? otherKind(fields.after, request.from)
+      : undefined;
+  if (outOf !== undefined) {
     throw refused(
       request,
-      `${request.from[0]} is not a group after this save. Move the field out first, then change ${request.from[0]}.`
+      `${outOf} is not a group after this save. Move the field out first, then change ${outOf}.`
     );
   }
 }
@@ -343,11 +408,12 @@ export function planEntityMoves(args: {
     after: rowColumns(args.after),
   };
   refuseOverlapping(args.moves);
+  refuseSameNames(args.moves);
   for (const request of args.moves) {
     // A field that keeps its path (moved into or out of a group with no name) keeps its place.
     if (samePath(request.from, request.to)) continue;
     refuseInsideOwnPlace(request);
-    refuseUnbound(request, args.renames ?? []);
+    refuseUnbound(request);
     refuseUnmatched(args.before, args.after, request);
     const checked = checkMove(args.before, args.after, request, {
       localized: args.localized,
@@ -356,6 +422,8 @@ export function planEntityMoves(args: {
     const { move } = checked;
     refusePerLanguage(request, move);
     refuseHoldersNotGroups(request, move, args);
+    refuseRenamedColumns(request, move, args.renames ?? []);
+    refuseMadeRequired(request, move, args.before);
     refuseUnplaceable(request, move, columns);
     // A field moving between places on one level (a group with no name) keeps its column.
     if (move.from.kind === "column" && move.to.kind === "column") continue;
