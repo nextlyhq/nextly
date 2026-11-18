@@ -46,6 +46,11 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   useDocumentLocale: () => null,
   navigateTo: vi.fn(),
   useLeaveWithoutWarning: () => () => {},
+  useDocumentActions: () => ({ run: formActions.run }),
+}));
+
+const formActions = vi.hoisted(() => ({
+  run: vi.fn(async (_action: string) => ({ ok: true }) as { ok: boolean }),
 }));
 
 vi.mock("../header-footer-pictures", () => ({
@@ -273,12 +278,38 @@ describe("a set's settings", () => {
     expect(screen.queryByText("Site default")).toBeNull();
   });
 
-  it("offers Publish it, then make default for a set never published", () => {
+  it("publishes a set never published through its own form, then makes it the default", async () => {
     choices = choicesWith("other", false);
     render();
-    expect(
+    await userEvent.click(
       screen.getByRole("button", { name: "Publish it, then make default" })
-    ).toBeTruthy();
+    );
+    // The form's own publish, so what is shown here is what goes live.
+    expect(formActions.run).toHaveBeenCalledWith("publish");
+    expect(flows.makeDefault).toHaveBeenCalledWith({
+      id: "main",
+      title: "Main",
+      published: true,
+    });
+  });
+
+  it("makes nothing the default when the set's own publish does not go through", async () => {
+    choices = choicesWith("other", false);
+    formActions.run.mockResolvedValueOnce({ ok: false });
+    render();
+    await userEvent.click(
+      screen.getByRole("button", { name: "Publish it, then make default" })
+    );
+    expect(flows.makeDefault).not.toHaveBeenCalled();
+  });
+
+  it("makes a published set the default without publishing it again", async () => {
+    choices = choicesWith("other");
+    render();
+    await userEvent.click(
+      screen.getByRole("button", { name: "Make site default" })
+    );
+    expect(formActions.run).not.toHaveBeenCalled();
   });
 
   it("offers no way to make it the default to someone who may not", () => {

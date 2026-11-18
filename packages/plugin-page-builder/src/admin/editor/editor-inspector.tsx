@@ -200,7 +200,9 @@ export function editorInspector<TFieldValues extends FieldValues>(
       // With nothing selected: the open document's own settings, editing
       // the entry's form as Settings does, saved with the page's draft.
       documentSettings={own =>
-        view.set === undefined ? (
+        view.set !== undefined ? (
+          setSettingsOf(view, view.set, own, form.control)
+        ) : (
           <DocumentSettingsPanel
             kind={view.initialDocument.kind}
             own={own}
@@ -212,14 +214,28 @@ export function editorInspector<TFieldValues extends FieldValues>(
             // The page's data at every level, so it can always be found.
             pageData={<PageReadMeter count={form.pageData} place="settings" />}
           />
-        ) : (
-          // A set's own screen: its name, header, footer and standing.
-          <SetSettingsPanel
-            set={view.set}
-            control={form.control as unknown as Control<FieldValues>}
-          />
         )
       }
+    />
+  );
+}
+
+/**
+ * With nothing selected on a set's screen: the set's settings, or while its
+ * header or footer is edited in place, that component's own, as the
+ * builder draws them, never the set's around it.
+ */
+export function setSettingsOf<TFieldValues extends FieldValues>(
+  view: Pick<EditorView, "regionEditing">,
+  set: NonNullable<EditorView["set"]>,
+  own: React.ReactNode | null,
+  control: Control<TFieldValues>
+): React.ReactNode {
+  if (view.regionEditing.area !== undefined) return own;
+  return (
+    <SetSettingsPanel
+      set={set}
+      control={control as unknown as Control<FieldValues>}
     />
   );
 }

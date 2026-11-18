@@ -13,7 +13,7 @@ import {
   type RegionArea,
 } from "@nextlyhq/blocks-engine";
 import type { CanvasRegion, LayersRegionRow } from "@nextlyhq/builder/shell";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   useWatch,
   type Control,
@@ -28,7 +28,7 @@ import {
   type RegionCardFacts,
 } from "../page-layout";
 
-import { useSetAreaChoices, useSetStanding } from "./set-reads";
+import { useRereadAll, useSetAreaChoices, useSetStanding } from "./set-reads";
 
 /** The set a set's own screen is open on. */
 export interface SetMode {
@@ -185,14 +185,11 @@ export function useSetRegions<T extends FieldValues>(
   useEffect(() => {
     if (fresh !== undefined) setShown(fresh);
   }, [fresh]);
-  const refetchHeader = header.refetch;
-  const refetchFooter = footer.refetch;
-  const rereadStanding = standing.reread;
-  const reread = useCallback(() => {
-    refetchHeader();
-    refetchFooter();
-    rereadStanding();
-  }, [refetchHeader, refetchFooter, rereadStanding]);
+  const reread = useRereadAll([
+    header.refetch,
+    footer.refetch,
+    standing.reread,
+  ]);
   const drawn = fresh ?? shown;
   const answer = useMemo(() => ({ ...drawn, reread }), [drawn, reread]);
   return set === undefined ? undefined : answer;

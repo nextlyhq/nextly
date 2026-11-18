@@ -127,11 +127,13 @@ function useSetPublishQuestion(set: SetMode): JSX.Element {
       throw new DOMException("Publishing was cancelled.", "AbortError");
     }
   });
-  const reread = standing.reread;
-  // Counted again as the question opens, so it says how many pages now.
+  const asking = question !== null;
+  const { reread } = standing;
+  // Counted again as the question opens, once, so it says how many pages
+  // now.
   useEffect(() => {
-    if (question !== null) reread();
-  }, [question, reread]);
+    if (asking) reread();
+  }, [asking, reread]);
   const words = publishToWords(standing.pages);
   return (
     <AlertDialog

@@ -516,11 +516,11 @@ export function editorCanvasRegion(view: EditorView): React.JSX.Element {
 
 /**
  * The empty page's start area and the "+" in each gap, which open the
- * in-place picker at their place; none on a set's screen, which has no page
- * to add to and draws its placeholder there.
+ * in-place picker at their place; none on a set's placeholder, which has no
+ * page to add to.
  */
 function pageInserters(view: EditorView): React.JSX.Element | null {
-  if (view.set !== undefined) return null;
+  if (editsPlaceholder(view)) return null;
   const { editor, insertPicker, componentLibrary, dragging, pageTitle } = view;
   return (
     <EditorPageInserters
@@ -556,4 +556,16 @@ function pageInserters(view: EditorView): React.JSX.Element | null {
 /** The placeholder a set's screen draws where any page goes, or nothing. */
 function placeholderOf(view: EditorView): { placeholder?: string } {
   return view.set === undefined ? {} : { placeholder: PAGE_PLACEHOLDER_WORDS };
+}
+
+/**
+ * Whether the editor is on a set's placeholder: a set's screen with neither
+ * its header nor its footer edited in place. While one is, the document
+ * edited is that component, which takes the canvas's add controls as it does
+ * edited in place from a page.
+ */
+export function editsPlaceholder(
+  view: Pick<EditorView, "set" | "editing">
+): boolean {
+  return view.set !== undefined && view.editing.target.kind === "page";
 }

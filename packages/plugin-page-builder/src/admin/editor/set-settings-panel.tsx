@@ -17,6 +17,7 @@
 import type { RegionArea } from "@nextlyhq/blocks-engine";
 import {
   navigateTo,
+  useDocumentActions,
   useLeaveWithoutWarning,
   usePluginRoute,
 } from "@nextlyhq/plugin-sdk/admin";
@@ -196,7 +197,8 @@ function useMayChooseDefault(): boolean {
 /**
  * The site default's badge, or the way to make this set the default for
  * someone who may: "Make site default", or for a set never published,
- * "Publish it, then make default".
+ * "Publish it, then make default", which publishes it through the set's own
+ * form first.
  */
 function DefaultLine({
   set,
@@ -214,6 +216,7 @@ function DefaultLine({
     askChoicesAgain();
   }, [standing, askChoicesAgain]);
   const makeDefault = useMakeDefaultFlow({ published: after, made: after });
+  const actions = useDocumentActions();
   if (standing.isDefault) {
     return (
       <div>
@@ -223,6 +226,17 @@ function DefaultLine({
   }
   if (!may || standing.set === undefined) return null;
   const published = standing.set.published;
+  // A set never published is published first through its own form, so what
+  // becomes the default is what this screen shows, its unsaved choices
+  // included, and the form's own questions are asked; then it is made the
+  // default as a published set is.
+  const choose = async () => {
+    if (!published) {
+      const outcome = await actions?.run("publish");
+      if (outcome?.ok !== true) return;
+    }
+    makeDefault.start({ id: set.id, title, published: true });
+  };
   return (
     <div>
       {makeDefault.dialog}
@@ -230,7 +244,8 @@ function DefaultLine({
         type="button"
         size="sm"
         variant="outline"
-        onClick={() => makeDefault.start({ id: set.id, title, published })}
+        disabled={!published && actions === null}
+        onClick={() => void choose()}
       >
         {published ? "Make site default" : "Publish it, then make default"}
       </Button>

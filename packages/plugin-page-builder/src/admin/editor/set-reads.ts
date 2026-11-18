@@ -8,7 +8,7 @@
  */
 import type { RegionArea } from "@nextlyhq/blocks-engine";
 import { useDocumentLocale, usePluginRoute } from "@nextlyhq/plugin-sdk/admin";
-import { useCallback } from "react";
+import { useCallback, useEffect, useRef } from "react";
 
 import {
   layoutChoicesPath,
@@ -95,12 +95,7 @@ export function useSetStanding(id: string | undefined): SetStanding {
     enabled,
     staleTime: 0,
   });
-  const refetchChoices = choices.refetch;
-  const refetchCounts = counts.refetch;
-  const reread = useCallback(() => {
-    refetchChoices();
-    refetchCounts();
-  }, [refetchChoices, refetchCounts]);
+  const reread = useRereadAll([choices.refetch, counts.refetch]);
   const data = choices.data;
   return {
     choices: data,
@@ -109,4 +104,21 @@ export function useSetStanding(id: string | undefined): SetStanding {
     isDefault: id !== undefined && data?.meta.defaultLayout === id,
     reread,
   };
+}
+
+/**
+ * One call that asks each read again, the same function for as long as the
+ * caller is mounted: a read's own `refetch` is a new function on each render,
+ * and a reader keyed on the call would otherwise ask again on every answer.
+ */
+export function useRereadAll(
+  refetches: readonly (() => unknown)[]
+): () => void {
+  const latest = useRef(refetches);
+  useEffect(() => {
+    latest.current = refetches;
+  });
+  return useCallback(() => {
+    for (const refetch of latest.current) refetch();
+  }, []);
 }
