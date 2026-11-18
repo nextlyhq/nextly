@@ -27,8 +27,10 @@ import type { CanvasEditingRegion } from "./canvas-props";
 import {
   CanvasRegionFrame,
   EditedRegionFrame,
+  EmptyRegionBand,
   REGION_ATTRIBUTE,
   type CanvasRegion,
+  type EmptyRegionBandProps,
 } from "./canvas-regions";
 
 /** A region of the page's Layout, with how it treats the site sheet. */
@@ -135,6 +137,7 @@ export function RegionsAround({
   environment,
   selection,
   editing,
+  bands,
   children,
 }: {
   drawn: LayoutParts | undefined;
@@ -148,12 +151,33 @@ export function RegionsAround({
   };
   /** The region edited in place, while one is. */
   editing: CanvasEditingRegion | undefined;
+  /**
+   * What is drawn where an area has no region, by area: the host's band
+   * saying so, with its ways to fill it. None while a region is edited.
+   */
+  bands?: Partial<Readonly<Record<RegionArea, EmptyRegionBandProps>>>;
   children: React.ReactNode;
 }): React.JSX.Element {
   const pagePart = useRef<HTMLDivElement | null>(null);
   useFocusBackOnLeaving(pagePart, editing?.area);
-  if (drawn === undefined) return <>{children}</>;
   const dimmed = editing !== undefined;
+  // An area with no region, and a band for it: the band in the region's
+  // place, while nothing is edited in place.
+  const band = (area: RegionArea) => {
+    const given = bands?.[area];
+    return given === undefined || dimmed ? null : (
+      <EmptyRegionBand area={area} band={given} />
+    );
+  };
+  if (drawn === undefined) {
+    return (
+      <>
+        {band("header")}
+        {children}
+        {band("footer")}
+      </>
+    );
+  }
   const frame = (part: DrawnRegion | undefined) =>
     part === undefined ? null : (
       <BlockEnvironmentProvider value={environment}>
@@ -180,7 +204,7 @@ export function RegionsAround({
     );
   return (
     <>
-      {frame(drawn.header)}
+      {drawn.header === undefined ? band("header") : frame(drawn.header)}
       <div
         ref={pagePart}
         className={PAGE_PART_CLASS}
@@ -189,7 +213,7 @@ export function RegionsAround({
       >
         {children}
       </div>
-      {frame(drawn.footer)}
+      {drawn.footer === undefined ? band("footer") : frame(drawn.footer)}
     </>
   );
 }

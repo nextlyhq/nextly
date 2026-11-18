@@ -333,6 +333,11 @@ export default defineConfig({
       // Points the page builder's font catalogue at the stand-in global setup
       // starts, so adding a font never reaches the real catalogue.
       NEXTLY_E2E_FONT_CATALOGUE: FONT_CATALOGUE_ORIGIN,
+      // Ten times the product's REST limits (`apps/playground/src/e2e-rate-limit.ts`). The
+      // workers share one address and seed pages, styles and fonts between steps far faster
+      // than a person writes, and at the defaults a refused seed fails a spec far from its
+      // cause. The limiter still runs; admin-request-budget.spec.ts holds pages to the defaults.
+      NEXTLY_E2E_RATE_LIMIT: "1",
     },
   },
 
