@@ -10,8 +10,12 @@ import { planEntityMoves } from "../plan-moves";
 
 const text = (name: string, extra: Record<string, unknown> = {}) =>
   ({ name, label: name, type: "text", ...extra }) as FieldDefinition;
-const group = (name: string, fields: FieldDefinition[]) =>
-  ({ name, label: name, type: "group", fields }) as FieldDefinition;
+const group = (
+  name: string,
+  fields: FieldDefinition[],
+  extra: Record<string, unknown> = {}
+) =>
+  ({ name, label: name, type: "group", fields, ...extra }) as FieldDefinition;
 
 const base = {
   table: "dc_posts",
@@ -144,9 +148,7 @@ describe("planEntityMoves", () => {
           errors: [
             expect.objectContaining({
               code: "FIELD_MOVE_REFUSED",
-              message: expect.stringContaining(
-                "does not match the save's fields"
-              ),
+              message: expect.stringContaining("a field of another name"),
             }),
           ],
         },
@@ -307,6 +309,110 @@ describe("planEntityMoves", () => {
               message: expect.stringMatching(
                 /^a cannot be moved .*inside its own place.*Move a somewhere else first, then into its new place in a later save\.$/
               ),
+            }),
+          ],
+        },
+      })
+    );
+  });
+
+  it("refuses two fields whose moves swap their places, each move keeping its field's own name", () => {
+    expect(() =>
+      planEntityMoves({
+        ...base,
+        before: [text("title"), text("subtitle"), group("meta", [])],
+        after: [group("meta", [text("title"), text("subtitle")])],
+        moves: [
+          { from: ["title"], to: ["meta", "subtitle"] },
+          { from: ["subtitle"], to: ["meta", "title"] },
+        ],
+      })
+    ).toThrow(
+      expect.objectContaining({
+        publicData: {
+          errors: [
+            expect.objectContaining({
+              code: "FIELD_MOVE_REFUSED",
+              message: expect.stringContaining("keeps its name"),
+            }),
+          ],
+        },
+      })
+    );
+  });
+
+  it("refuses a move into a group that was another kind of field before this save", () => {
+    const json = (name: string) =>
+      ({ name, label: name, type: "json" }) as FieldDefinition;
+    expect(() =>
+      planEntityMoves({
+        ...base,
+        before: [text("title"), json("meta")],
+        after: [group("meta", [text("title")])],
+        moves: [{ from: ["title"], to: ["meta", "title"] }],
+      })
+    ).toThrow(
+      expect.objectContaining({
+        publicData: {
+          errors: [
+            expect.objectContaining({
+              code: "FIELD_MOVE_REFUSED",
+              message: expect.stringContaining(
+                "was not a group before this save"
+              ),
+            }),
+          ],
+        },
+      })
+    );
+  });
+
+  it("refuses a move whose field the same save also renames", () => {
+    expect(() =>
+      planEntityMoves({
+        ...base,
+        before: [text("title"), group("meta", [])],
+        after: [text("subtitle"), group("meta", [text("title")])],
+        moves: [{ from: ["title"], to: ["meta", "title"] }],
+        renames: [{ from: "title", to: "subtitle" }],
+      })
+    ).toThrow(
+      expect.objectContaining({
+        publicData: {
+          errors: [
+            expect.objectContaining({
+              code: "FIELD_MOVE_REFUSED",
+              message: expect.stringContaining("also renamed"),
+            }),
+          ],
+        },
+      })
+    );
+  });
+
+  it("refuses a move whose values are kept for each language, which this kind of save does not carry yet", () => {
+    expect(() =>
+      planEntityMoves({
+        ...base,
+        localized: true,
+        before: [
+          text("tagline", { localized: true }),
+          group("meta", [], { localized: true }),
+        ],
+        after: [
+          group("meta", [text("tagline", { localized: true })], {
+            localized: true,
+          }),
+        ],
+        moves: [{ from: ["tagline"], to: ["meta", "tagline"] }],
+      })
+    ).toThrow(
+      expect.objectContaining({
+        publicData: {
+          errors: [
+            expect.objectContaining({
+              code: "FIELD_MOVE_REFUSED",
+              message: expect.stringContaining("kept for each language"),
             }),
           ],
         },
