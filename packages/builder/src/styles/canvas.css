@@ -819,6 +819,21 @@
 }
 
 /*
+ * Forced colours: the line and its dot in the system's Highlight, with a
+ * ring of the system's Canvas so they show on any ground. Their fill in the
+ * selection token is a background the system repaints as Canvas, which hid
+ * the line wherever forced colours were on.
+ */
+@media (forced-colors: active) {
+  .nx-drop-indicator,
+  .nx-drop-indicator::before {
+    forced-color-adjust: none;
+    background: Highlight;
+    box-shadow: 0 0 0 1px Canvas;
+  }
+}
+
+/*
  * The sentence a refusal draws, over the container that refused.
  *
  * Positioned in the canvas's own content coordinates, the space the drop
