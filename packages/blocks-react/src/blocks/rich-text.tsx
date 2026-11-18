@@ -33,6 +33,7 @@ import {
 import type { ReactElement } from "react";
 
 import type { BlockRenderArgs, PageContext } from "../context";
+import { outlineAnchors } from "../outline";
 import { drawsInteractive, RichText } from "../rich-text";
 
 import { CONTENT } from "./categories";
@@ -68,6 +69,8 @@ export function renderRichText({
   className,
   markProp,
   hostPolicy,
+  ctx,
+  node,
 }: BlockRenderArgs<RichTextBlockProps>): ReactElement {
   /*
    * The wrapper carries both the class and the mark, so the element an author
@@ -78,15 +81,14 @@ export function renderRichText({
   return (
     <div className={className} {...markProp?.("content")}>
       {/*
-       * Every heading carries its anchor, the id a table of contents bound to
-       * the same passage links to, so the two blocks agree without either
-       * being told about the other. Ids are unique within this passage;
-       * another passage on the page with the same heading repeats its id.
+       * Every heading carries its anchor from the page outline, unique on
+       * the whole page: a heading this passage shares with another, or with
+       * a Heading block, is numbered rather than repeated.
        */}
       <RichText
         value={props.content}
         hostPolicy={hostPolicy}
-        anchorHeadings={true}
+        anchors={outlineAnchors(ctx, node.id)}
       />
     </div>
   );

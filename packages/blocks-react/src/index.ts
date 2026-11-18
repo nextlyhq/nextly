@@ -72,6 +72,10 @@ export {
 } from "./context";
 
 export { PageRenderer } from "./page-renderer";
+// The page outline a page's blocks read as `ctx.outline`: every heading it
+// draws, with the anchor each is drawn with.
+export type { OutlineArea, OutlineHeading, PageOutline } from "./outline";
+export type { HeadingRank } from "./blocks/heading-anchors";
 // A simple form's fields with their defaults applied, their sent names among
 // them, for the editor to show the name a field's answer goes under.
 export {

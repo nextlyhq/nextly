@@ -1,0 +1,459 @@
+/**
+ * The page outline: every heading the page draws, in page order, each with
+ * one anchor that is unique on the whole page. Heading blocks and the
+ * headings inside Rich text take their ids from it, so these cases are read
+ * off the drawn page as well as off the outline itself.
+ */
+import {
+  composeEntryContent,
+  DOCUMENT_FORMAT_VERSION,
+  type BlockDocument,
+  type BlockNode,
+  type RichTextNode,
+  type RichTextValue,
+} from "@nextlyhq/blocks-engine";
+import type { ReactElement } from "react";
+import { renderToReadableStream } from "react-dom/server";
+import { describe, expect, it, vi } from "vitest";
+
+import { coreBlocks } from "./blocks";
+import {
+  createStandaloneContext,
+  defineBlock,
+  type PageContext,
+  type PageBindings,
+} from "./context";
+import { pageOutline, type OutlinePart, type PageOutline } from "./outline";
+import { PageRenderer } from "./page-renderer";
+import { drawWithRegions } from "./page-read-stages";
+import { createBlockResolver } from "./resolver";
+
+async function renderToHtml(element: ReactElement): Promise<string> {
+  const stream = await renderToReadableStream(element, {
+    onError(error) {
+      throw error;
+    },
+  });
+  await stream.allReady;
+  return await new Response(stream).text();
+}
+
+/** The outline a block on the page was drawn with, kept for the test. */
+let seen: PageOutline | undefined;
+
+/**
+ * The outline kept, read through a call: the compiler narrows `seen` to
+ * `undefined` after a test resets it, not knowing the render set it since.
+ */
+const outlineSeen = (): PageOutline | undefined => seen;
+
+/** A block that keeps the outline its context carries, and draws nothing. */
+const probe = defineBlock<Record<string, never>>({
+  name: "test/outline-probe",
+  version: 1,
+  description: "Keeps the page outline it is drawn with.",
+  example: { props: {} },
+  render: ({ ctx, className }) => {
+    seen = ctx.outline;
+    return <i className={className} />;
+  },
+});
+
+const resolver = createBlockResolver([...coreBlocks, probe]);
+
+const page = (...nodes: BlockNode[]): BlockDocument => ({
+  formatVersion: DOCUMENT_FORMAT_VERSION,
+  kind: "page",
+  nodes,
+});
+
+let made = 0;
+const nextId = (prefix: string) => `${prefix}${(made += 1)}`;
+
+const heading = (
+  text: string,
+  extra: Partial<BlockNode> & { props?: Record<string, unknown> } = {}
+): BlockNode => ({
+  id: nextId("h"),
+  type: "core/heading",
+  version: 1,
+  ...extra,
+  props: { text, level: "h2", ...extra.props },
+});
+
+const words = (text: string): RichTextNode => ({
+  type: "text",
+  text,
+  format: 0,
+});
+
+const passage = (
+  ...headings: [tag: string, text: string][]
+): RichTextValue => ({
+  root: {
+    type: "root",
+    children: headings.map(([tag, text]) => ({
+      type: "heading",
+      tag,
+      children: [words(text)],
+    })),
+  },
+});
+
+const richText = (value: RichTextValue, id = nextId("r")): BlockNode => ({
+  id,
+  type: "core/rich-text",
+  version: 1,
+  props: { content: value },
+});
+
+const box = (
+  children: BlockNode[],
+  extra: Partial<BlockNode> = {}
+): BlockNode => ({
+  id: nextId("b"),
+  type: "core/box",
+  version: 1,
+  props: {},
+  ...extra,
+  slots: { children },
+});
+
+const probeNode = (): BlockNode => ({
+  id: nextId("p"),
+  type: "test/outline-probe",
+  version: 1,
+  props: {},
+});
+
+/** The page drawn as a published route draws one with no Layout. */
+async function drawn(
+  document: BlockDocument,
+  extra: { bindings?: PageBindings; context?: PageContext } = {}
+): Promise<string> {
+  return await renderToHtml(
+    <PageRenderer
+      document={document}
+      blocks={resolver}
+      siteStyles={false}
+      {...(extra.context === undefined ? {} : { context: extra.context })}
+      {...(extra.bindings === undefined ? {} : { bindings: extra.bindings })}
+    />
+  );
+}
+
+/** Every heading element's id in the drawn page, in order. */
+function headingIds(html: string): (string | null)[] {
+  return [...html.matchAll(/<h[1-6]([^>]*)>/g)].map(
+    ([, attributes]) => /\sid="([^"]*)"/.exec(attributes ?? "")?.[1] ?? null
+  );
+}
+
+describe("the page outline's anchors, as the page draws them", () => {
+  it("numbers repeats across Heading blocks and Rich text, in page order", async () => {
+    const html = await drawn(
+      page(
+        heading("Notes"),
+        heading("Notes"),
+        richText(passage(["h2", "Notes"]))
+      )
+    );
+    expect(headingIds(html)).toEqual(["notes", "notes-2", "notes-3"]);
+  });
+
+  it("numbers a heading two Rich text passages share, rather than repeating its id", async () => {
+    const html = await drawn(
+      page(
+        richText(passage(["h2", "Notes"], ["h3", "Details"])),
+        richText(passage(["h2", "Notes"]))
+      )
+    );
+    expect(headingIds(html)).toEqual(["notes", "details", "notes-2"]);
+  });
+
+  it("keeps letters in any script", async () => {
+    const html = await drawn(
+      page(
+        heading("Über uns"),
+        heading("日本語"),
+        richText(passage(["h2", "Café au lait"]))
+      )
+    );
+    expect(headingIds(html)).toEqual(["über-uns", "日本語", "café-au-lait"]);
+  });
+
+  it("never makes an id the author gave any block on the page, before or after it", async () => {
+    const html = await drawn(
+      page(
+        heading("Intro"),
+        heading("About", { cssId: "intro" }),
+        box([], { cssId: "notes" }),
+        richText(passage(["h2", "Notes"]))
+      )
+    );
+    // The author's own id is the anchor of the heading that carries it.
+    expect(headingIds(html)).toEqual(["intro-2", "intro", "notes-2"]);
+  });
+
+  it("counts an id written in a block's HTML attributes as the author's", async () => {
+    const html = await drawn(
+      page(box([], { attributes: { id: "faq" } }), heading("FAQ"))
+    );
+    expect(headingIds(html)).toEqual(["faq-2"]);
+  });
+
+  it("gives a heading with no words no id", async () => {
+    const html = await drawn(page(heading("   "), heading("Kept")));
+    expect(headingIds(html)).toEqual([null, "kept"]);
+  });
+
+  it("lists a bound heading by its entry's words", async () => {
+    seen = undefined;
+    const html = await drawn(
+      page(
+        heading("Placeholder", {
+          bindings: { text: { $bind: "title" } },
+        }),
+        probeNode()
+      ),
+      { bindings: { entry: { title: "Hello, world" } } }
+    );
+    expect(headingIds(html)).toEqual(["hello-world"]);
+    expect(
+      outlineSeen()?.headings.map(({ text, anchor }) => [text, anchor])
+    ).toEqual([["Hello, world", "hello-world"]]);
+  });
+
+  it("lists a template's own headings and the entry's content field's, in place", async () => {
+    const template: BlockDocument = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "template",
+      nodes: [
+        heading("Notes", { id: "title" }),
+        {
+          id: "ec",
+          type: "core/entry-content",
+          version: 1,
+          props: { field: "body" },
+        },
+        heading("Notes", { id: "after" }),
+        probeNode(),
+      ],
+    };
+    const body = page(heading("Notes"), richText(passage(["h3", "Deeper"])));
+    seen = undefined;
+    const html = await drawn(
+      composeEntryContent(template, { valueOf: field => ({ body })[field] })
+    );
+    expect(headingIds(html)).toEqual(["notes", "notes-2", "deeper", "notes-3"]);
+    // The entry's blocks are composed in with ids of their own, so they are
+    // told apart by sitting inside the Entry content block.
+    expect(
+      outlineSeen()?.headings.map(({ text, anchor, level, within }) => [
+        text,
+        anchor,
+        level,
+        within.includes("core/entry-content"),
+      ])
+    ).toEqual([
+      ["Notes", "notes", 2, false],
+      ["Notes", "notes-2", 2, true],
+      ["Deeper", "deeper", 3, true],
+      ["Notes", "notes-3", 2, false],
+    ]);
+  });
+
+  it("is set on the context of a page drawn with no outline of its own", async () => {
+    seen = undefined;
+    await drawn(page(heading("One"), probeNode()), {
+      context: createStandaloneContext(),
+    });
+    expect(outlineSeen()?.headings.map(entry => entry.anchor)).toEqual(["one"]);
+  });
+});
+
+describe("a host's own class-based context", () => {
+  it("gets the outline without being copied: its methods keep their receiver", async () => {
+    // A method reading a native private field throws on any object but the
+    // instance itself, so a copy of the context would fail here.
+    class HostContext implements PageContext {
+      entry = null;
+      #path = "/resolved";
+      resolveMedia(): Promise<null> {
+        return Promise.resolve(null);
+      }
+      resolveEntryPath(): Promise<string> {
+        return Promise.resolve(this.#path);
+      }
+    }
+    const caller = defineBlock<Record<string, never>>({
+      name: "test/path-caller",
+      version: 1,
+      description: "Calls a context method that reads a private field.",
+      example: { props: {} },
+      render: async ({ ctx, className }) => (
+        <p className={className}>{await ctx.resolveEntryPath("posts", "1")}</p>
+      ),
+    });
+    const html = await renderToHtml(
+      <PageRenderer
+        document={page(heading("Notes"), heading("Notes"), {
+          id: "caller",
+          type: "test/path-caller",
+          version: 1,
+          props: {},
+        })}
+        blocks={createBlockResolver([...coreBlocks, caller])}
+        siteStyles={false}
+        context={new HostContext()}
+      />
+    );
+    expect(headingIds(html)).toEqual(["notes", "notes-2"]);
+    expect(html).toContain("/resolved");
+  });
+});
+
+describe("a heading left out of the table of contents", () => {
+  it("keeps its anchor, and the outline says it is left out", async () => {
+    seen = undefined;
+    const html = await drawn(
+      page(
+        heading("Kept in"),
+        heading("Left out", { props: { tocExclude: true } }),
+        probeNode()
+      )
+    );
+    expect(headingIds(html)).toEqual(["kept-in", "left-out"]);
+    expect(
+      outlineSeen()?.headings.map(({ anchor, leftOut }) => [anchor, leftOut])
+    ).toEqual([
+      ["kept-in", false],
+      ["left-out", true],
+    ]);
+  });
+});
+
+describe("the outline of a page drawn inside its Layout", () => {
+  it("runs across the header, the page and the footer, in that order", async () => {
+    const region = (area: "header" | "footer", nodes: BlockNode[]) => ({
+      region: { area, componentId: `${area}-component` },
+      document: page(...nodes),
+      prepared: null,
+    });
+    const shared = {
+      context: createStandaloneContext(),
+      blocks: resolver,
+    };
+    seen = undefined;
+    const html = await renderToHtml(
+      <>
+        {drawWithRegions({
+          regions: [
+            region("footer", [heading("Notes")]),
+            region("header", [heading("Notes")]),
+          ],
+          page: {
+            ...shared,
+            document: page(heading("Notes"), probeNode()),
+          },
+          shared,
+          siteStyles: undefined,
+          definitions: new Map(),
+        })}
+      </>
+    );
+    expect(headingIds(html)).toEqual(["notes", "notes-2", "notes-3"]);
+    expect(
+      outlineSeen()?.headings.map(({ area, anchor }) => [area, anchor])
+    ).toEqual([
+      ["header", "notes"],
+      ["content", "notes-2"],
+      ["footer", "notes-3"],
+    ]);
+  });
+});
+
+describe("a heading drawn once per entry of a Collection list", () => {
+  it("carries the entry's place after its anchor, so no two entries share an id", async () => {
+    const find = vi.fn(() =>
+      Promise.resolve({ items: [{ id: "a" }, { id: "b" }], total: 2 })
+    );
+    const html = await drawn(
+      page(heading("Title"), {
+        id: "list",
+        type: "core/collection-loop",
+        version: 1,
+        props: { collection: "posts", limit: 10 },
+        slots: { children: [heading("Title")] },
+      }),
+      { context: createStandaloneContext({ data: { find } }) }
+    );
+    expect(headingIds(html)).toEqual(["title", "title-2--0", "title-2--1"]);
+  });
+});
+
+describe("pageOutline", () => {
+  const parts = (
+    ...list: [OutlinePart["area"], BlockNode[]][]
+  ): OutlinePart[] => list.map(([area, nodes]) => ({ area, nodes }));
+
+  it("walks the parts in the order given, and each part depth first", () => {
+    const outline = pageOutline(
+      parts(
+        ["header", [heading("Site")]],
+        [
+          "content",
+          [
+            heading("First"),
+            box([heading("Inside"), richText(passage(["h3", "Passage"]))]),
+            heading("Last"),
+          ],
+        ],
+        ["footer", [heading("Footer")]]
+      )
+    );
+    expect(outline.headings.map(({ area, text }) => [area, text])).toEqual([
+      ["header", "Site"],
+      ["content", "First"],
+      ["content", "Inside"],
+      ["content", "Passage"],
+      ["content", "Last"],
+      ["footer", "Footer"],
+    ]);
+  });
+
+  it("names the blocks each heading sits inside, outermost first", () => {
+    const inner = heading("Inside");
+    const outline = pageOutline(
+      parts(["content", [box([box([inner])]), heading("Top")]])
+    );
+    expect(outline.headings.map(entry => entry.within)).toEqual([
+      ["core/box", "core/box"],
+      [],
+    ]);
+  });
+
+  it("answers each block's anchors in the order the block draws its headings", () => {
+    const passageNode = richText(
+      passage(["h2", "A"], ["h2", "A"], ["h3", "B"])
+    );
+    const single = heading("A");
+    const outline = pageOutline(parts(["content", [single, passageNode]]));
+    expect(outline.anchorsOf(single.id)).toEqual(["a"]);
+    expect(outline.anchorsOf(passageNode.id)).toEqual(["a-2", "a-3", "b"]);
+    expect(outline.anchorsOf("no-such-block")).toEqual([]);
+  });
+
+  it("reads a heading's level as the block draws it", () => {
+    const outline = pageOutline(
+      parts([
+        "content",
+        [
+          heading("Top", { props: { level: "h1" } }),
+          heading("Odd", { props: { level: "h9" } }),
+        ],
+      ])
+    );
+    expect(outline.headings.map(entry => entry.level)).toEqual([1, 2]);
+  });
+});
