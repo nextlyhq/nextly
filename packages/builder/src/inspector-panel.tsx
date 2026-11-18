@@ -447,19 +447,16 @@ function useInspectorTab(
 /** The tab list: one Tab stop, with arrows, Home and End between the tabs. */
 function InspectorTabList({
   tabs,
-  shown,
 }: {
   tabs: readonly InspectorTab[];
-  /** The tab showing, whose sections the options menu folds. */
-  shown: string;
 }): React.JSX.Element {
   // Compact underlined tabs at the start of the panel; the classes carry the
-  // inspector's own tab rules over the shared tabs'. The options menu sits at
-  // the row's end, outside the tab list, so arrows still move between tabs.
+  // inspector's own tab rules over the shared tabs'. The options menu is at
+  // the end of the search row below, after "Only changed", so the keyboard
+  // meets the panel's head in the order it reads.
   return (
     <div className="nx-inspector__tabrow">
       <InspectorTabs tabs={tabs} />
-      <PanelOptions tab={shown} />
     </div>
   );
 }
@@ -509,7 +506,14 @@ function ContentTabPanel({
 >): React.JSX.Element | null {
   if (!tabs.includes("content")) return null;
   return (
-    <TabsContent value="content" forceMount hidden={shown !== "content"}>
+    <TabsContent
+      value="content"
+      forceMount
+      hidden={shown !== "content"}
+      // No Tab stop of its own: Tab goes from the panel's head to its first
+      // control. Every tab has one, and the head names the tab.
+      tabIndex={-1}
+    >
       {status}
       <FilterNote tab="content" onChoose={onChoose} />
       <ContentTab {...content} onScreen={shown === "content"} />
@@ -756,10 +760,13 @@ function SelectionInspector({
             onValueChange={choose}
             className="nx-inspector__tabs"
           >
-            <InspectorTabList tabs={tabs} shown={shown} />
+            <InspectorTabList tabs={tabs} />
             {/* Under the tabs, on every tab; before the panels in the page's
             order, so a sticky header can hold the two together. */}
-            <SettingsSearchRow field={find.field} />
+            <SettingsSearchRow
+              field={find.field}
+              end={<PanelOptions tab={shown} />}
+            />
 
             {/*
           FORCE-MOUNTED, Content and Advanced both: a field commits on blur
@@ -789,7 +796,7 @@ function SelectionInspector({
               }}
             />
 
-            <TabsContent value="style">
+            <TabsContent value="style" tabIndex={-1}>
               <HiddenStatus {...hidden} onChoose={choose} />
               {/* That the block also has custom CSS, never the CSS: Style
                   draws plain controls only, and links to Advanced for a
@@ -837,6 +844,7 @@ function SelectionInspector({
               value="advanced"
               forceMount
               hidden={shown !== "advanced"}
+              tabIndex={-1}
             >
               {/* No "Change" here: Hide on is on this tab. */}
               <HiddenStatus {...hidden} />

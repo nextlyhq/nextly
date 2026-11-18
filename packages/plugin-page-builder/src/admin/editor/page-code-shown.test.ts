@@ -33,4 +33,17 @@ describe("what Page settings show of a page's own code", () => {
       pageCodeShown({ held: { head: "", body: "" }, mayManageSite: false })
     ).toBe("none");
   });
+
+  it("tells anyone else the page adds CSS of its own too, where it does", () => {
+    expect(
+      pageCodeShown({
+        held: undefined,
+        css: "h1 { color: teal; }",
+        mayManageSite: false,
+      })
+    ).toBe("line");
+    expect(
+      pageCodeShown({ held: undefined, css: "", mayManageSite: false })
+    ).toBe("none");
+  });
 });
