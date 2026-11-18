@@ -232,6 +232,11 @@ function builderSaveSetup(ctx: RegistrationContext): BuilderSaveSetup {
       fieldGroups: ctx.config.fieldGroups ?? [],
       plugins: ctx.config.plugins ?? [],
       localization: ctx.config.localization,
+      // The app's own custom permissions: a save's snapshot records them as
+      // `migrate:create` does, so it does not read as removing them.
+      ...(ctx.config.permissions === undefined
+        ? {}
+        : { permissions: ctx.config.permissions }),
       db,
     },
     ...(ctx.deferredExtends === undefined

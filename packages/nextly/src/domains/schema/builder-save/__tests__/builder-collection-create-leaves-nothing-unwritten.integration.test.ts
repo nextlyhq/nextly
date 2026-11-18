@@ -51,6 +51,14 @@ const PROJECT = defineConfig({
   collections: [],
   db: { migrationsDir: MIGRATIONS, uiSchemaFile: DEFINITION },
 });
+/** A permission the app declares itself, which every snapshot records beside the plugins'. */
+const APP_PERMISSION = {
+  action: "export",
+  resource: "reports",
+  label: "Export reports",
+};
+/** The project the commands read, which a case may give the app's own permissions. */
+let project = PROJECT;
 
 let instance: TestNextly | undefined;
 let basePath: string;
@@ -66,6 +74,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  project = PROJECT;
   await instance?.destroy();
   instance = undefined;
   vi.unstubAllEnvs();
@@ -84,7 +93,7 @@ afterEach(async () => {
 async function command(
   run: (context: CommandContext) => Promise<void>
 ): Promise<{ code: number | undefined; said: string[] }> {
-  loaded.config = PROJECT;
+  loaded.config = project;
   const said: string[] = [];
   const capture = (message: string) => {
     said.push(message);
@@ -122,7 +131,7 @@ async function command(
 }
 
 /** The instance, on SQLite over a file, which the commands' own connection opens as its own. */
-async function boot(): Promise<void> {
+async function boot(permissions?: (typeof APP_PERMISSION)[]): Promise<void> {
   const url = `file:${join(basePath, "test.db")}`;
   process.env.DB_DIALECT = "sqlite";
   process.env.DATABASE_URL = url;
@@ -134,7 +143,13 @@ async function boot(): Promise<void> {
     adapter,
     basePath,
     db: { migrationsDir: MIGRATIONS, uiSchemaFile: DEFINITION },
+    ...(permissions === undefined ? {} : { permissions }),
   });
+  // The commands read the project with the same permissions the instance runs with.
+  project =
+    permissions === undefined
+      ? PROJECT
+      : defineConfig({ ...PROJECT, permissions });
 }
 
 /** The migration files in the project's history folder, by name. */
@@ -251,6 +266,25 @@ describe("a collection made in the Schema Builder (sqlite)", () => {
         schemaVersion: preview.data?.schemaVersion ?? preview.schemaVersion,
       }
     );
+    await nothingLeftToCreate();
+  }, 60_000);
+
+  it("leaves migrate:create nothing to write after its create, on an app that declares its own permissions", async () => {
+    await boot([APP_PERMISSION]);
+
+    await dispatchCollections(
+      {} as ServiceContainer,
+      "createCollection",
+      {},
+      {
+        name: "authors",
+        label: "Author",
+        fields: [{ name: "name", type: "text" }],
+      }
+    );
+
+    // The save's snapshot records the app's permission as `migrate:create` does, so the command
+    // finds no permission removed and none to add back.
     await nothingLeftToCreate();
   }, 60_000);
 });
