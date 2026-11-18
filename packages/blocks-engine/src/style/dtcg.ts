@@ -97,11 +97,14 @@ import {
   type TypedValue,
   withFluidNote,
 } from "./dtcg-values";
+import { tokenCustomProperty } from "./declarations";
 import {
   MAX_TOKEN_NAME_LENGTH,
   MAX_TOKEN_NAME_SEGMENTS,
+  resolveTokenPrefix,
   type SiteToken,
   type SiteTokenSet,
+  tokenIdentity,
   tokenNamingProblem,
 } from "./site-tokens";
 
@@ -132,13 +135,17 @@ export { resolveAliases } from "./dtcg-aliases";
  * tokens missing has no way to know, and the ones that go missing are the
  * interesting ones — the `clamp()` that took an afternoon to get right.
  */
-export function tokensToDtcg(set: SiteTokenSet): {
+export function tokensToDtcg(
+  set: SiteTokenSet,
+  options: TokensToDtcgOptions = {}
+): {
   document: DtcgNode;
   issues: ValidationIssue[];
 } {
   const document: DtcgNode = {};
   const issues: ValidationIssue[] = [];
   const carried: DtcgNode = {};
+  const aliasOf = colourAliases(set.prefix, options.references ?? set.tokens);
 
   for (const token of set.tokens) {
     const naming = exportNamingRefusal(token, "it was not exported");
@@ -150,7 +157,7 @@ export function tokensToDtcg(set: SiteTokenSet): {
       issues.push(issue(naming));
       continue;
     }
-    const typed = typedValue(token);
+    const typed = typedValue(token, aliasOf);
     if (typed === undefined) {
       // Keyed by the whole name: this is extension data, not a token tree, so
       // the format's ban on a period inside a name does not reach it.
@@ -168,6 +175,41 @@ export function tokensToDtcg(set: SiteTokenSet): {
     document.$extensions = { [NEXTLY_EXTENSION]: { [CARRIED]: carried } };
   }
   return { document, issues };
+}
+
+/** How {@link tokensToDtcg} writes a set. */
+export interface TokensToDtcgOptions {
+  /**
+   * The variables a shadow's colour may name as an alias, where they are not
+   * the set written: a theme file's dark values name the light file's.
+   * Absent: the set's own.
+   */
+  readonly references?: readonly SiteToken[];
+}
+
+/**
+ * A `var()` of a colour variable's custom property, under the site's prefix,
+ * as an alias to that variable's path: how a shadow's colour variable is
+ * written. Only a colour the file writes as a DTCG colour is named, so the
+ * alias always resolves.
+ */
+function colourAliases(
+  prefix: string | undefined,
+  tokens: readonly SiteToken[]
+): (reference: string) => string | undefined {
+  const written = resolveTokenPrefix(prefix).prefix;
+  const byProperty = new Map<string, string>();
+  for (const token of tokens) {
+    if (token.kind !== "color") continue;
+    if (exportNamingRefusal(token, "") !== undefined) continue;
+    if (typedValue(token) === undefined) continue;
+    const property = tokenCustomProperty(tokenIdentity(token), written);
+    if (!byProperty.has(property)) byProperty.set(property, `{${token.name}}`);
+  }
+  return reference => {
+    const named = /^var\(\s*(--[A-Za-z0-9_-]+)\s*\)$/.exec(reference.trim());
+    return named === null ? undefined : byProperty.get(named[1] ?? "");
+  };
 }
 
 /** Where the document's own extension holds the variables the format cannot type. */

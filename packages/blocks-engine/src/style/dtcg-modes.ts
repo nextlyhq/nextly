@@ -73,7 +73,15 @@ export function tokensToResolver(
       values: { light: token.values.dark },
     });
   }
-  const dark = tokensToDtcg({ tokens: darkTokens });
+  // The dark shadows' colour variables are named as aliases to the light
+  // file's, which a reader of the theme resolves to their dark values.
+  const dark = tokensToDtcg(
+    {
+      tokens: darkTokens,
+      ...(set.prefix === undefined ? {} : { prefix: set.prefix }),
+    },
+    { references: set.tokens }
+  );
   stripExtensions(dark.document);
   // The document's own extension too: it carries the variables the format
   // cannot type, whose dark values the token file's extension already holds

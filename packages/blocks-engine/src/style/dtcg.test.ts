@@ -2369,10 +2369,11 @@ describe("every variable, whatever the format can type", () => {
         "gap.em",
         "gap.half",
         "misc.ratio",
-        "shadow.card",
         "space.paragraph",
       ].sort()
     );
+    // A shadow whose CSS reads as fields is a DTCG shadow token.
+    expect(((file.shadow as DtcgNode).card as DtcgNode).$type).toBe("shadow");
     // None of them is also written as a token with a type of its own making.
     expect((file.gap as DtcgNode).em).toBeUndefined();
     expect((file.misc as DtcgNode | undefined)?.ratio).toBeUndefined();
