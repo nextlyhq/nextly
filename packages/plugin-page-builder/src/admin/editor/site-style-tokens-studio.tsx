@@ -160,6 +160,8 @@ export function TokensStudio({
     ...(mode === undefined ? {} : { mode }),
   });
   useReportVariableMatches(edits ?? editable);
+  // Where a colour the clean-up kept is used, to name it.
+  const uses = usage.props.usage?.uses;
   const studio: TokensPanelProps = {
     tokens: edits ?? editable,
     supplied: baseline,
@@ -175,11 +177,11 @@ export function TokensStudio({
     ...usage.props,
     // "Clean up unused…", once what is held for the author's pause is
     // written, so the route judges the section as they left it.
-    ...(mayChange
+    ...(mayChange && uses !== undefined
       ? {
           onCleanUp: async (ids: readonly string[]) => {
             await held.release();
-            return cleanUp(ids, usage.props.usage.uses);
+            return cleanUp(ids, uses);
           },
         }
       : {}),
