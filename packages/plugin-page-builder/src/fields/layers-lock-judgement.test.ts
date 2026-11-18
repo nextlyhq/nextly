@@ -29,7 +29,11 @@ import type { Removal } from "../breakpoint-removal/strip";
 
 import { withRewriteScope } from "../host-rewrite/rewrite-scope";
 
-import { layersLockIssues, withLockIssues } from "./layers-lock-judgement";
+import {
+  layersLockIssues,
+  UPGRADE_DEPTH_BOUND,
+  withLockIssues,
+} from "./layers-lock-judgement";
 import { LAYERS_LOCK_CHANGED } from "./layers-lock-wording";
 
 const lockedPage = (tone: string) => ({
@@ -298,17 +302,39 @@ describe("layersLockIssues, on a locked block stored at an older version", () =>
     nodes: [{ id: "q", type: "core/quote", locked: true, ...node }],
   });
   const stored = page({ version: 1, props: { citeUrl: "/talk" } });
-  const judge = (value: unknown, migration?: MigrationSource) =>
+  const judge = (
+    value: unknown,
+    migration?: MigrationSource,
+    held: unknown = stored
+  ) =>
     layersLockIssues(
       value,
-      argsFor(writeTo(async () => ({ kind: "value" as const, value: stored }))),
+      argsFor(writeTo(async () => ({ kind: "value" as const, value: held }))),
       "Content",
       undefined,
       undefined,
-      migration === undefined
-        ? undefined
-        : { source: migration, limits: DEFAULT_LIMITS }
+      migration
     );
+
+  /** A chain of `levels` unlocked boxes, the deepest holding nothing. */
+  const boxes = (levels: number, prefix = "n"): Record<string, unknown> => {
+    let node: Record<string, unknown> = {
+      id: `${prefix}-leaf`,
+      type: "acme/box",
+      version: 1,
+      props: {},
+    };
+    for (let level = 0; level < levels; level++) {
+      node = {
+        id: `${prefix}${String(level)}`,
+        type: "acme/box",
+        version: 1,
+        props: {},
+        slots: { children: [node] },
+      };
+    }
+    return node;
+  };
 
   it("keeps a write holding it upgraded, as the editor opened it", async () => {
     // The editor upgrades every block it opens, so a save of an unrelated
@@ -326,37 +352,38 @@ describe("layersLockIssues, on a locked block stored at an older version", () =>
     expect(await judge(stored, quoteSource)).toEqual([]);
   });
 
-  it("does not upgrade a write nested past the cap", async () => {
+  it("does not walk a write nested past what the upgrade may walk", async () => {
     // Upgrading walks the tree by recursion. The field's own rules refuse a
-    // value nested past the cap, and this judgement still runs on it, so it
+    // value nested this deep, and this judgement still runs on it, so it
     // compares such a value as it came rather than walking it.
-    const nested = (levels: number) => {
-      let node: Record<string, unknown> = {
-        id: "leaf",
-        type: "acme/box",
-        version: 1,
-        props: {},
-      };
-      for (let level = 0; level < levels; level++) {
-        node = {
-          id: `n${String(level)}`,
-          type: "acme/box",
-          version: 1,
-          props: {},
-          slots: { children: [node] },
-        };
-      }
-      return { ...page({ version: 1, props: {} }), nodes: [node] };
-    };
+    const nested = (levels: number) => ({
+      ...page({ version: 1, props: {} }),
+      nodes: [boxes(levels)],
+    });
     const asked: string[] = [];
     const watching: MigrationSource = {
       get: type => (asked.push(type), quoteSource.get(type)),
     };
-    await judge(nested(DEFAULT_LIMITS.maxDepth + 5), watching);
+    await judge(nested(UPGRADE_DEPTH_BOUND + 5), watching);
     expect(asked).not.toContain("acme/box");
-    // CONTROL: within the cap, the same write is upgraded, its blocks asked.
+    // CONTROL: a shallow write is upgraded, its blocks asked.
     await judge(nested(2), watching);
     expect(asked).toContain("acme/box");
+  });
+
+  it("keeps a write that trims a page stored deeper than the site's cap", async () => {
+    // A site that lowers its cap leaves pages deeper than it. An author who
+    // removes the deep branch, leaving the locked Quote alone, is repairing
+    // the page; the locked Quote must not read as changed.
+    const deepStored = {
+      ...page({ version: 1, props: { citeUrl: "/talk" } }),
+      nodes: [
+        ...page({ version: 1, props: { citeUrl: "/talk" } }).nodes,
+        boxes(DEFAULT_LIMITS.maxDepth + 8),
+      ],
+    };
+    const trimmed = page({ version: 2, props: { href: "/talk" } });
+    expect(await judge(trimmed, quoteSource, deepStored)).toEqual([]);
   });
 
   it("still refuses a change to the locked block", async () => {

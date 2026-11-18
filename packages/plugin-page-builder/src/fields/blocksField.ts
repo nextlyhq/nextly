@@ -440,13 +440,8 @@ export function blocksFieldType(
           composition?.()?.onLayersLockUnjudged,
           composition?.()?.openBreakpointRemoval,
           // The site's blocks, so a block stored at an older version is
-          // judged upgraded, as the editor saves it, within its caps.
-          blocks === undefined
-            ? undefined
-            : {
-                source: blocks.migrationSource(),
-                limits: composition?.()?.limits,
-              }
+          // judged upgraded, as the editor saves it.
+          blocks?.migrationSource()
         ).then(locks =>
           classes().then(found =>
             withLockIssues(
