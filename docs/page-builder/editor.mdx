@@ -101,6 +101,46 @@ the canvas ([Previewing as a visitor](#previewing-as-a-visitor), below).
 and **Unpublish**, each where the entry offers it. An action you can't use right now is
 greyed out and says why. Duplicating, discarding and deleting stay on the entry's page.
 
+### Page checks
+
+Beside **Publish**, a quiet count says how many things on the page need your attention:
+**2 checks**, or **Checks** with a tick when nothing does. Choose it for **Page checks**,
+the list grouped as **Accessibility**, **Content and data** and **Publishing**, and
+**Search** where a plugin adds checks of its own. Each item says what's wrong, on which
+block, why it matters and what to do. Arrow keys move between items, and Escape closes
+the list.
+
+Choose an item to fix it: the block is selected and brought into view, and the setting
+that fixes it opens in the inspector with the cursor in it (for an image with no alt text,
+**Alt text**). The list then gives way to a slim bar under the count, **Check 2 of 5**,
+so the inspector stays clear: **‹** and **›** move to the previous and next item, and
+**All checks** opens the list again. The checks judge the page as it is on screen,
+unsaved changes included, so the count and the bar follow your fixes as you make them.
+When nothing is left, the bar says **All clear** and goes.
+
+The first check finds an image with an address but no alt text that isn't marked
+**Decorative, no alt text**. An image from the media library takes the library's alt text
+when the page stores none, so it isn't listed here.
+
+Checks never stop you saving or publishing. Automatic checks catch common problems; they
+don't replace an accessibility review.
+
+The checks are plain functions over a page's content, so a script or a route gets the same
+findings the editor lists: `runPageChecks` and `CORE_PAGE_CHECKS` from
+`@nextlyhq/builder`. They read block definitions from the blocks registered in that
+process, or from the `blocks` you pass.
+
+```ts
+import type { BlockDocument } from "@nextlyhq/blocks-engine";
+import { CORE_PAGE_CHECKS, runPageChecks } from "@nextlyhq/builder";
+
+/** What needs attention on a stored page, one line per item. */
+export function pageProblems(content: BlockDocument): string[] {
+  const { findings } = runPageChecks({ document: content }, CORE_PAGE_CHECKS);
+  return findings.map(each => `${each.what}: ${each.block ?? "the page"}`);
+}
+```
+
 ### Bindings to fix
 
 When a field, a Single or a block changes so a binding on the page no longer fits, a
@@ -1101,7 +1141,10 @@ it. A field visitors can't read says **Not public**, and one whose value is only
 draft says **Draft**.
 
 **Nearest first.** For a block inside a Collection list, the list's own entries come
-first, named for them: **Each project in the list**. Then come **This page**, then the
+first, named for them: **Each project in the list**. In a list that sits inside another
+list, the outer list's entries come next (**Each category in the list**). A field picked
+there shows, in every row of the inner list, the outer entry that row is drawn in, on the
+canvas and on the published page. Then come **This page**, then the
 Singles and the site, which start folded into one row each under **Singles · Site**
 while a list's entries are listed. Choose a row to open it, or type in **Find a field**
 to search all of them. Each list field shows its value in the entry you clicked on the

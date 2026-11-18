@@ -333,6 +333,8 @@ describe("what the Site tab reads", () => {
       // The default only: the tab names it, and the list of sets is where
       // another is chosen.
       layouts: [{ id: "main", title: "Main" }],
+      // Nothing sets a prefix here, so the pages are written under --site-.
+      prefix: { current: "--site-" },
     });
     // Published only, from the RESOLVED Layouts collection, by id.
     expect(data.finds).toEqual([
@@ -361,6 +363,7 @@ describe("what the Site tab reads", () => {
         defaultLayout: "bare",
         breakpoints: SET,
         layouts: [{ id: "bare", title: "No header or footer" }],
+        prefix: { current: "--site-" },
       });
     }
   });
