@@ -65,26 +65,46 @@ export function checkCustomCss(
     ];
   }
   const problems = new Problems();
-  textProblems(css, problems);
-  // What is inside pasted `<style>` tags is read as the CSS it would be once
-  // they are left out, so its own refusals are named with theirs.
-  const read = withoutStyleTags(css);
-  parsedProblems(read, problems);
-  fetchProblems(read, problems);
-  if (level === "block") {
-    // A placeholder selector: only whether each rule CAN be scoped is asked.
-    const scoped = scopeBlockCss(read, ".block");
-    if (!scoped.ok) {
-      // Only for lines nothing else refused: an `@import` is refused as an
-      // import, not a second time as an at-rule a block cannot scope.
-      for (const refusal of scoped.refusals) {
-        if (!problems.hasLine(refusal.line)) {
-          problems.add(refusal.line, refusal.reason);
-        }
-      }
-    }
+  const wrapped = textProblems(css, problems);
+  // Judged as written, always: what is stored and drawn is this text, so no
+  // changed copy of it ever decides what is accepted.
+  writtenProblems(css, level, problems, { tagsRefused: wrapped });
+  if (wrapped) {
+    // Already refused for its `<style>` tags. The copy with them left out
+    // only names what else would be refused once they are; it can add
+    // refusals, never take one away.
+    writtenProblems(withoutStyleTags(css), level, problems, {
+      tagsRefused: false,
+    });
   }
   return problems.inOrder();
+}
+
+/**
+ * What the parser, the fetches and, for a block, the scoping refuse in `css`.
+ * Where `tagsRefused`, the CSS is already refused for pasted `<style>` tags,
+ * and what the tags alone break (an unreadable line, a rule a block can't
+ * scope) is not said again: it changes nothing, as the CSS is refused.
+ */
+function writtenProblems(
+  css: string,
+  level: CustomCssLevel,
+  problems: Problems,
+  { tagsRefused }: { readonly tagsRefused: boolean }
+): void {
+  parsedProblems(css, problems, { unreadable: !tagsRefused });
+  fetchProblems(css, problems);
+  if (level !== "block" || tagsRefused) return;
+  // A placeholder selector: only whether each rule CAN be scoped is asked.
+  const scoped = scopeBlockCss(css, ".block");
+  if (scoped.ok) return;
+  // Only for lines nothing else refused: an `@import` is refused as an
+  // import, not a second time as an at-rule a block cannot scope.
+  for (const refusal of scoped.refusals) {
+    if (!problems.hasLine(refusal.line)) {
+      problems.add(refusal.line, refusal.reason);
+    }
+  }
 }
 
 /** A problem as the CSS boxes show it: "Line 3: @import isn't allowed." */
@@ -134,13 +154,22 @@ function lineAt(text: string, offset: number): number {
   return line;
 }
 
-/** A `<style>` or `</style>` tag, with whatever its opening tag carries. */
-const STYLE_TAG = /<\s*\/?\s*style\b[^>]*>/gi;
+/**
+ * A pasted `<style>` wrapper's opening tag, as `<style>` or `<style media=…>`:
+ * the name ends there, so `<style-x` is not one.
+ */
+const STYLE_WRAPPER = /<\s*style(?=[\s>])/i;
+
+/**
+ * A `<style>` or `</style>` tag, with whatever its opening tag carries. The
+ * name ends at the tag's end or a space, as {@link STYLE_WRAPPER}'s does.
+ */
+const STYLE_TAG = /<\s*\/?\s*style(?=[\s>])[^>]*>/gi;
 
 /**
  * The CSS with any `<style>` tags blanked to spaces, so every line and
- * offset stays where it is. Only for reading: what is stored is what the
- * author wrote, and a wrapper is refused.
+ * offset stays where it is. Only for naming what else CSS already refused
+ * for its tags holds: never what is judged, stored or drawn.
  */
 function withoutStyleTags(css: string): string {
   return css.replace(STYLE_TAG, tag => tag.replace(/[^\n]/g, " "));
@@ -149,10 +178,10 @@ function withoutStyleTags(css: string): string {
 /**
  * What is refused by its text, wherever it is, comments included: the parser
  * does not see inside a comment, and the HTML parser that ends a style element
- * does.
+ * does. Answers whether it refused a pasted `<style>` wrapper.
  */
-function textProblems(css: string, problems: Problems): void {
-  const wrapper = /<\s*style[\s>]/i.exec(css);
+function textProblems(css: string, problems: Problems): boolean {
+  const wrapper = STYLE_WRAPPER.exec(css);
   if (wrapper !== null) {
     problems.add(lineAt(css, wrapper.index), "Leave out the <style> tags.");
   }
@@ -170,15 +199,24 @@ function textProblems(css: string, problems: Problems): void {
       "expression() isn't allowed: it can run script."
     );
   }
+  return wrapper !== null;
 }
 
-/** What is refused by what the CSS says: imports, fetches, script properties. */
-function parsedProblems(css: string, problems: Problems): void {
+/**
+ * What is refused by what the CSS says: imports, fetches, script properties,
+ * and, where `unreadable`, what the parser can't read.
+ */
+function parsedProblems(
+  css: string,
+  problems: Problems,
+  { unreadable }: { readonly unreadable: boolean }
+): void {
   const ast = parse(css, {
     positions: true,
     parseAtrulePrelude: false,
-    onParseError: error =>
-      problems.add(lineOf(error), "This CSS can't be read."),
+    onParseError: error => {
+      if (unreadable) problems.add(lineOf(error), "This CSS can't be read.");
+    },
   });
   walk(ast, {
     enter(this: WalkContext, node: CssNode) {

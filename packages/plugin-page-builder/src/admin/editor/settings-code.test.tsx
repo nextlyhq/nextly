@@ -247,7 +247,7 @@ describe("the Code tab's CSS box", () => {
     [
       "a pasted <style> tag",
       "<style>p { color: red; }</style>",
-      ["Line 1: Paste the CSS without the <style> tags."],
+      ["Line 1: Leave out the <style> tags."],
     ],
     [
       "two refused lines",
