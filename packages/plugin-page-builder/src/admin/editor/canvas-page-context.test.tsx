@@ -359,8 +359,23 @@ describe("a list's sample for the binding picker", () => {
       year: "2026",
       "author.name": "Ada",
     });
-    // A value with nothing to show is left out, never shown as "null".
-    expect(sample).not.toHaveProperty("cover");
+    // A value holding nothing is said as empty, never shown as "null".
+    expect(sample).toMatchObject({ cover: { empty: true } });
+  });
+
+  it("samples the entry the author clicked, else the first", async () => {
+    await answering([
+      { id: "p1", title: "Highway 9 realignment" },
+      { id: "p2", title: "Cedar Ridge subdivision" },
+    ]);
+    const props = { collection: "posts", limit: 3, sort: "title" };
+    expect(
+      await canvasListSample(props, "en", "clicked-reader", NO_ENTRY, 1)
+    ).toMatchObject({ title: "Cedar Ridge subdivision" });
+    // An entry the list no longer shows reads the first.
+    expect(
+      await canvasListSample(props, "en", "clicked-reader", NO_ENTRY, 5)
+    ).toMatchObject({ title: "Highway 9 realignment" });
   });
 
   it("reads through the canvas's own read of the list, so asking again reads nothing new", async () => {

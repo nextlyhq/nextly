@@ -157,11 +157,13 @@ describe("the Variables studio", () => {
     expect(screen.getByRole("button", { name: "Add colour" })).toBeTruthy();
   });
 
-  it("draws its import and export menu into the Design panel's header, and no light/dark switch or Preview label", async () => {
+  it("draws its More design actions menu into the Design panel's header, and no light/dark switch or Preview label", async () => {
     can.update = true;
     renderStudio();
     expect(
-      await within(header()).findByRole("button", { name: "Import or export" })
+      await within(header()).findByRole("button", {
+        name: "More design actions",
+      })
     ).toBeTruthy();
     expectNoModeSwitchIn(header());
   });
@@ -181,18 +183,27 @@ describe("the space between blocks", () => {
 });
 
 describe("the Design panel's header", () => {
-  it("is the same on every tab: the import and export menu, and no light/dark switch", async () => {
+  it("is the same on every tab: the More design actions menu, and no light/dark switch", async () => {
     can.update = true;
     for (const tab of ["colours", "type", "spacing", "styles"]) {
       renderStudio(tab);
       expect(
         await within(header()).findByRole("button", {
-          name: "Import or export",
+          name: "More design actions",
         })
       ).toBeTruthy();
       expectNoModeSwitchIn(header());
       cleanup();
     }
+  });
+
+  it("has no box above the tabs: an export or import says so in a toast", async () => {
+    can.update = true;
+    renderStudio();
+    await within(header()).findByRole("button", {
+      name: "More design actions",
+    });
+    expect(document.querySelector(".nx-pb-design__reports")).toBeNull();
   });
 
   it("shows the editor's mode on every tab", async () => {

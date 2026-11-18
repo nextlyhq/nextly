@@ -14,7 +14,7 @@ import * as React from "react";
 
 import type { BindingFieldSource, ListSample } from "./binding-services";
 import type { ContentServices } from "./content-controls";
-import type { ItemSource } from "./item-binding-source";
+import type { ItemField, ItemSource } from "./item-binding-source";
 
 /** The language and time zone the picker previews a formatted value in. */
 export type PreviewFormatIn = Pick<BindingRunInput, "locale" | "timeZone">;
@@ -120,18 +120,21 @@ export function useBindingSources(
 }
 
 /**
- * The samples of a list's first entry, as the host reads them for the list
- * `list`: `undefined` until read, where the host has none, or where the read
- * fails, so the item's fields are then listed with no values. Read again only
- * when the list's stored props change.
+ * The samples of one of a list's entries, as the host reads them for the
+ * list `list`: the entry at `entry` (the one the author clicked on the
+ * canvas), else the first. `undefined` until read, where the host has none,
+ * or where the read fails, so the item's fields are then listed with no
+ * values. Read again only when the list's stored props or the entry change.
  */
 export function useListSample(
   read: ContentServices["readListSample"],
-  list: ItemSource["list"]
+  list: ItemSource["list"],
+  entry?: number
 ): ListSample | undefined {
   const props = list?.props;
   // By value: the document is a new object after every edit elsewhere.
-  const key = props === undefined ? undefined : JSON.stringify(props);
+  const key =
+    props === undefined ? undefined : JSON.stringify([props, entry ?? null]);
   const [found, setFound] = React.useState<{
     readonly read: NonNullable<typeof read>;
     readonly key: string;
@@ -140,7 +143,13 @@ export function useListSample(
   React.useEffect(() => {
     if (read === undefined || key === undefined) return;
     let live = true;
-    read(JSON.parse(key) as Readonly<Record<string, unknown>>).then(
+    const [stored, at] = JSON.parse(key) as [
+      Readonly<Record<string, unknown>>,
+      number | null,
+    ];
+    // The entry only where one was clicked, so a host reading the first
+    // entry is asked as before.
+    (at === null ? read(stored) : read(stored, at)).then(
       sample => {
         if (live) setFound({ read, key, sample });
       },
@@ -157,3 +166,81 @@ export function useListSample(
     ? found.sample
     : undefined;
 }
+
+/** A field holding a media item by its id, as a list's entry stores one. */
+function holdsMedia(field: ItemField): boolean {
+  return field.type === "upload";
+}
+
+/**
+ * The media ids a list's sample holds, by the field's path: each field
+ * holding a media item, and one step into a group or a relation, as far as
+ * the picker lists fields (`seo.ogImage`).
+ */
+function mediaIdsIn(
+  fields: readonly ItemField[],
+  sample: ListSample | undefined,
+  parent?: string
+): [string, string][] {
+  return fields.flatMap((field): [string, string][] => {
+    const path = parent === undefined ? field.name : `${parent}.${field.name}`;
+    const value = sample?.[path];
+    const own: [string, string][] =
+      holdsMedia(field) && typeof value === "string" ? [[path, value]] : [];
+    const inside =
+      parent === undefined && field.fields !== undefined
+        ? mediaIdsIn(field.fields, sample, path)
+        : [];
+    return [...own, ...inside];
+  });
+}
+
+/**
+ * The pictures a list's sample names by id, by the field's path: each read
+ * through the author's own media read (`readMedia`, the one the canvas draws
+ * pictures with), its small picture's address. Empty until read, where the
+ * host has no read, and for a picture the read does not find.
+ */
+export function useSamplePictures(
+  readMedia: ContentServices["readMedia"],
+  fields: readonly ItemField[] | undefined,
+  sample: ListSample | undefined
+): ReadonlyMap<string, string> {
+  const ids = mediaIdsIn(fields ?? [], sample);
+  // By value: a new sample object for the same entry asks nothing again.
+  const key = JSON.stringify(ids);
+  const [found, setFound] = React.useState<{
+    readonly key: string;
+    readonly pictures: ReadonlyMap<string, string>;
+  }>();
+  React.useEffect(() => {
+    if (readMedia === undefined) return;
+    const asked = JSON.parse(key) as [string, string][];
+    if (asked.length === 0) return;
+    let live = true;
+    Promise.all(
+      asked.map(async ([path, id]): Promise<[string, string] | undefined> => {
+        const thumbnail = (await readMedia(id).catch(() => null))?.thumbnail;
+        return thumbnail === undefined ? undefined : [path, thumbnail];
+      })
+    ).then(
+      read => {
+        if (!live) return;
+        setFound({
+          key,
+          pictures: new Map(read.filter(each => each !== undefined)),
+        });
+      },
+      () => {
+        // No pictures to show: the fields are listed without them.
+      }
+    );
+    return () => {
+      live = false;
+    };
+  }, [readMedia, key]);
+  return found?.key === key ? found.pictures : NO_PICTURES;
+}
+
+/** No pictures read. */
+const NO_PICTURES: ReadonlyMap<string, string> = new Map();

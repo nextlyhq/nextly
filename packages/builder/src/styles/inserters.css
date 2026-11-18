@@ -59,7 +59,9 @@
 
 /*
  * While an empty container is pointed at, on the canvas or at its control,
- * or its control has keyboard focus: a solid outline in the selection colour
+ * or its control has keyboard focus, or the Add panel's highlighted tile
+ * would go inside it (`.nx-insertion-line__container`, positioned by the
+ * insertion line): a solid outline in the selection colour
  * and a light tint of it over the whole box. Drawn here, as chrome over the
  * block, never as the block's own background, so the author's colour is
  * untouched underneath. Takes no presses: the block under it stays
@@ -77,7 +79,8 @@
 ),
 .nx-empty-container-appenders__area:has(
   + .nx-empty-container-appenders__button:focus-visible
-) {
+),
+.nx-insertion-line__container {
   outline: 1px solid var(--nx-builder-select);
   outline-offset: -1px;
   background: color-mix(in srgb, var(--nx-builder-select) 8%, transparent);
@@ -90,7 +93,8 @@
   ),
   .nx-empty-container-appenders__area:has(
     + .nx-empty-container-appenders__button:focus-visible
-  ) {
+  ),
+  .nx-insertion-line__container {
     outline-color: Highlight;
     background: transparent;
   }
