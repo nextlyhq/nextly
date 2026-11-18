@@ -1136,8 +1136,12 @@ export function editorPanelRenderer({
                   {...(classes.library === undefined
                     ? {}
                     : { classes: classes.library })}
-                  // An import's text styles are stored by the class writer.
+                  // An import's text styles are stored by the class writer,
+                  // matched with the site's breakpoints once they are read.
                   onEditClasses={classes.edit}
+                  {...(siteStylePending || siteStyleError !== null
+                    ? {}
+                    : { breakpoints: canvasRender.styleContext.breakpoints })}
                   // A shared style using a variable opens in its own tab; a
                   // block look, which that tab does not list, in the inspector.
                   opens={{

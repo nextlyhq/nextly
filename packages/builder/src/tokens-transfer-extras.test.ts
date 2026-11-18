@@ -286,4 +286,108 @@ describe("an import carrying the site's own design data", () => {
     const applied = applyImport(plan, SITE, new Map());
     expect(applied.ok).toBe(false);
   });
+
+  it("imports a text style locked on its own site unlocked, since a lock is set on each site", () => {
+    const locked: NamedClass = { ...eyebrow, locked: true };
+    const plan = ready(
+      planImport(files(SITE, [locked]), fresh, { textStyles: others })
+    );
+    expect(plan.extras.textStyles.added).toEqual([eyebrow]);
+    const applied = applyImport(plan, fresh, new Map());
+    if (!applied.ok) throw new Error(applied.error);
+    expect(applied.classes?.(others)).toEqual({
+      classes: [...others, eyebrow],
+    });
+  });
+
+  it("leaves a text style locked on this site as it is, saying so, and keeps a lock off where it is off", () => {
+    const changed: NamedClass = {
+      ...eyebrow,
+      locked: true,
+      styles: { base: { base: { fontSize: "2rem" } } },
+    };
+    const mine: NamedClass = { ...eyebrow, locked: true };
+    const refused = ready(
+      planImport(files(SITE, [changed]), fresh, { textStyles: [mine] })
+    );
+    expect(refused.extras.textStyles.updated).toEqual([]);
+    expect(refused.skipped).toContain(
+      "“Eyebrow” is locked on this site, so the file's version was not imported. Unlock it first."
+    );
+    // An unlocked one on this site takes the file's styles and stays
+    // unlocked.
+    const updated = ready(
+      planImport(files(SITE, [changed]), fresh, { textStyles: [eyebrow] })
+    );
+    expect(updated.extras.textStyles.updated).toEqual([
+      { ...eyebrow, styles: changed.styles },
+    ]);
+  });
+
+  it("brings in no text styles where nothing can store them, saying so", () => {
+    const plan = ready(planImport(files(SITE, [eyebrow, loose]), fresh, {}));
+    expect(plan.extras.textStyles).toEqual({
+      added: [],
+      updated: [],
+      unchanged: [],
+    });
+    expect(plan.skipped).toContain(
+      "The file's 2 text styles weren't imported: text styles can only be imported from the editor's Design panel."
+    );
+    const applied = applyImport(plan, fresh, new Map());
+    if (!applied.ok) throw new Error(applied.error);
+    expect(applied.classes).toBeUndefined();
+    expect(applied.textStyles ?? 0).toBe(0);
+  });
+
+  it("refuses a text style whose code name a shared style on this site already writes", () => {
+    const card = others[1] as NamedClass;
+    const named: NamedClass = { ...eyebrow, slug: card.slug };
+    const plan = ready(
+      planImport(files(SITE, [named]), fresh, { textStyles: others })
+    );
+    expect(plan.extras.textStyles.added).toEqual([]);
+    expect(plan.skipped).toContain(
+      "“Eyebrow” was not imported: a style on this site already uses its code name, “card”."
+    );
+  });
+
+  it("leaves out a text style's values for a breakpoint this site doesn't have, saying so", () => {
+    const responsive: NamedClass = {
+      ...eyebrow,
+      styles: {
+        base: {
+          base: { fontSize: "1rem" },
+          wide: { fontSize: "1.5rem" },
+          tablet: { fontSize: "0.875rem" },
+        },
+      },
+    };
+    const plan = ready(
+      planImport(files(SITE, [responsive]), fresh, {
+        textStyles: others,
+        breakpoints: {
+          viewport: [
+            { id: "base", label: "Desktop" },
+            { id: "tablet", label: "Tablet", maxWidth: 1024 },
+          ],
+          container: [],
+        },
+      })
+    );
+    expect(plan.extras.textStyles.added).toEqual([
+      {
+        ...eyebrow,
+        styles: {
+          base: {
+            base: { fontSize: "1rem" },
+            tablet: { fontSize: "0.875rem" },
+          },
+        },
+      },
+    ]);
+    expect(plan.skipped).toContain(
+      "“Eyebrow”'s values for the “wide” breakpoint were left out: this site has no such breakpoint."
+    );
+  });
 });

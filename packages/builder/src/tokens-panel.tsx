@@ -257,7 +257,7 @@ export function useVariablesHeader({
   mode?: TokenMode;
 } & Pick<
   Parameters<typeof useVariablesTransfer>[0],
-  "currentClasses" | "onEditClasses" | "catalogue"
+  "currentClasses" | "onEditClasses" | "catalogue" | "breakpoints"
 >): VariablesHeader {
   /*
    * Without a host's mode, the one the canvas actually draws: the marker on

@@ -11,6 +11,7 @@
 import {
   resolveSiteTokens,
   type BlockDocument,
+  type BreakpointSet,
   type ComponentLookup,
   type DocumentLimits,
   type NamedClass,
@@ -96,6 +97,7 @@ export function TokensStudio({
   pending,
   classes,
   onEditClasses,
+  breakpoints,
   opens,
   mode,
   children,
@@ -117,6 +119,11 @@ export function TokensStudio({
    * no text styles.
    */
   onEditClasses?: EditClasses;
+  /**
+   * The site's breakpoints once read, which an import's text styles are
+   * matched with. Absent while they are being read.
+   */
+  breakpoints?: BreakpointSet;
   /** Where a shared style or a block look using a variable opens. */
   opens?: StyleOpeners;
   /**
@@ -172,6 +179,7 @@ export function TokensStudio({
     readOnly: !mayChange,
     ...(mode === undefined ? {} : { mode }),
     ...useTransferInputs(classes, onEditClasses),
+    ...(breakpoints === undefined ? {} : { breakpoints }),
   });
   // Memoised, so a set whose prefix was replaced is the same object until
   // the edits or the read change, as `edits ?? editable` was.

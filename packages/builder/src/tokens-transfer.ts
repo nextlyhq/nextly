@@ -267,10 +267,22 @@ export function planImport(
   }
   const skipped = read.issues.map(entry => entry.message);
   const refusedStyles: string[] = [];
+  // Text styles are stored by the host's class writer; where there is none
+  // (`context.textStyles` absent) the file's are not imported, said so,
+  // rather than counted as imported and dropped.
+  const fileStyles = read.textStyles ?? [];
+  if (context.textStyles === undefined && fileStyles.length > 0) {
+    refusedStyles.push(
+      fileStyles.length === 1
+        ? "The file's text style wasn't imported: text styles can only be imported from the editor's Design panel."
+        : `The file's ${String(fileStyles.length)} text styles weren't imported: text styles can only be imported from the editor's Design panel.`
+    );
+  }
   const textStyles = planTextStyles(
-    read.textStyles,
+    context.textStyles === undefined ? undefined : read.textStyles,
     context.textStyles ?? [],
-    refusedStyles
+    refusedStyles,
+    context.breakpoints
   );
   const extras: ImportExtras = {
     ...(read.site === undefined ? {} : { site: read.site }),

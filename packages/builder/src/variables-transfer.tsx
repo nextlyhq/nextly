@@ -28,6 +28,7 @@
 import {
   resolveTokenPrefix,
   tokenDisplayLabel,
+  type BreakpointSet,
   type NamedClass,
   type SiteTokenSet,
 } from "@nextlyhq/blocks-engine";
@@ -134,6 +135,7 @@ export function useVariablesTransfer({
   currentClasses,
   onEditClasses,
   catalogue,
+  breakpoints,
 }: {
   onChange: (tokens: SiteTokenSet) => void;
   currentTokens: () => SiteTokenSet | undefined;
@@ -147,6 +149,11 @@ export function useVariablesTransfer({
   onEditClasses?: EditClasses;
   /** The Google Fonts catalogue, which a missing font is added from. */
   catalogue?: ImportCatalogue;
+  /**
+   * The site's breakpoints, once read: a file's text style values for one
+   * the site lacks are left out of an import, and the preview says so.
+   */
+  breakpoints?: BreakpointSet;
 }): VariablesTransfer {
   // The site's fonts, from the host's Design frame: a font the file names
   // and none of these provide is listed as missing.
@@ -167,9 +174,16 @@ export function useVariablesTransfer({
     currentTokens,
     currentClasses,
     onEditClasses,
+    breakpoints,
   });
   React.useLayoutEffect(() => {
-    latest.current = { onChange, currentTokens, currentClasses, onEditClasses };
+    latest.current = {
+      onChange,
+      currentTokens,
+      currentClasses,
+      onEditClasses,
+      breakpoints,
+    };
   });
   // Which read is the current one: a later choice supersedes an earlier read
   // still in flight, and a read finishing after the panel has gone is ignored.
@@ -621,7 +635,10 @@ function ImportPreview({
 function importContext(
   host: {
     readonly onEditClasses?: EditClasses | undefined;
-    readonly currentClasses?: (() => readonly NamedClass[] | undefined) | undefined;
+    readonly currentClasses?:
+      | (() => readonly NamedClass[] | undefined)
+      | undefined;
+    readonly breakpoints?: BreakpointSet | undefined;
   },
   fonts: FontChoices | undefined
 ): ImportContext {
@@ -632,6 +649,9 @@ function importContext(
     ...(fonts?.faces === undefined
       ? {}
       : { faces: [...fonts.faces, ...fonts.fromCode] }),
+    ...(host.breakpoints === undefined
+      ? {}
+      : { breakpoints: host.breakpoints }),
   };
 }
 

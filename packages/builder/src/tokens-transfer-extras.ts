@@ -13,8 +13,11 @@
  * @module tokens-transfer-extras
  */
 import {
+  breakpointContexts,
   forEachStyleValues,
   isTextStyle,
+  usableNamedClasses,
+  type BreakpointSet,
   sameJsonValue,
   SITE_TEXT_LABELS,
   SITE_TEXT_ROLES,
@@ -54,31 +57,62 @@ export interface ImportExtras {
 
 /** What the site holds that an import is planned against. */
 export interface ImportContext {
-  /** The site's classes, whose text styles a file's are matched with. */
+  /**
+   * The site's classes, whose text styles a file's are matched with.
+   * Absent: nothing here can store text styles, so a file's are not
+   * imported, and the preview says so.
+   */
   readonly textStyles?: readonly NamedClass[];
   /**
    * The faces the site loads. Absent: not known, so no font is listed as
    * missing.
    */
   readonly faces?: readonly FontFaceDef[];
+  /**
+   * The site's breakpoints. A text style's values for one the site doesn't
+   * define would never be drawn, so they are left out, and the preview says
+   * which. Absent: not known, so every value is kept.
+   */
+  readonly breakpoints?: BreakpointSet;
 }
 
 /** A file's text styles sorted against the site's, with what is refused. */
 export function planTextStyles(
   incoming: readonly NamedClass[] | undefined,
   library: readonly NamedClass[],
-  refused: string[]
+  refused: string[],
+  breakpoints?: BreakpointSet
 ): TextStylesPlan {
   const added: NamedClass[] = [];
   const updated: NamedClass[] = [];
   const unchanged: NamedClass[] = [];
   const byId = new Map(library.map(entry => [entry.id, entry]));
-  for (const style of incoming ?? []) {
-    const name = sharedStyleName(style);
-    const held = byId.get(style.id);
+  const known =
+    breakpoints === undefined
+      ? undefined
+      : new Set(breakpointContexts(breakpoints).map(entry => entry.id));
+  // Which of the site's classes are drawn now: an import that would stop
+  // one being drawn is refused, as the site's own save would refuse it.
+  const drawn = usableNamedClasses(library).map(entry => entry.id);
+  for (const file of incoming ?? []) {
+    const name = sharedStyleName(file);
+    const held = byId.get(file.id);
     if (held !== undefined && !isTextStyle(held)) {
       refused.push(
         `“${name}” was not imported: a style on this site that isn't a text style has the same id.`
+      );
+      continue;
+    }
+    const notes: string[] = [];
+    const style = withSiteLock(
+      withinBreakpoints(file, known, name, notes),
+      held
+    );
+    // A lock holds on the site that set it: a style locked here is left as
+    // it is until someone unlocks it, as every other write leaves it.
+    if (held?.locked === true && !sameJsonValue(held, style)) {
+      refused.push(
+        `“${name}” is locked on this site, so the file's version was not imported. Unlock it first.`
       );
       continue;
     }
@@ -95,11 +129,102 @@ export function planTextStyles(
       );
       continue;
     }
-    if (held === undefined) added.push(style);
-    else if (sameJsonValue(held, style)) unchanged.push(style);
-    else updated.push(style);
+    const taken = held === undefined ? added : updated;
+    if (held !== undefined && sameJsonValue(held, style)) {
+      unchanged.push(style);
+      refused.push(...notes);
+      continue;
+    }
+    if (!drawnTogether(library, drawn, { added, updated }, style, taken)) {
+      const owner = library.find(
+        entry => entry.id !== style.id && entry.slug === style.slug
+      );
+      refused.push(
+        owner === undefined
+          ? `“${name}” was not imported: this site couldn't draw it beside its own styles.`
+          : `“${name}” was not imported: a style on this site already uses its code name, “${style.slug}”.`
+      );
+      continue;
+    }
+    taken.push(style);
+    refused.push(...notes);
   }
   return { added, updated, unchanged };
+}
+
+/**
+ * Whether the site's classes with `style` taken as well are all still
+ * drawn, `style` among them: read by the compiler's own claim rules
+ * (`usableNamedClasses`), so a code name another style holds, of any kind,
+ * is caught as the site's save would catch it.
+ */
+function drawnTogether(
+  library: readonly NamedClass[],
+  drawn: readonly string[],
+  planned: { added: readonly NamedClass[]; updated: readonly NamedClass[] },
+  style: NamedClass,
+  taken: readonly NamedClass[]
+): boolean {
+  const trial = textStylesEdit({
+    added: taken === planned.added ? [...planned.added, style] : planned.added,
+    updated:
+      taken === planned.updated ? [...planned.updated, style] : planned.updated,
+    unchanged: [],
+  })(library);
+  if (!("classes" in trial)) return false;
+  const now = new Set(usableNamedClasses(trial.classes).map(entry => entry.id));
+  return [...drawn, ...planned.added.map(entry => entry.id), style.id].every(
+    id => now.has(id)
+  );
+}
+
+/**
+ * A text style with the lock this site gives it: a new one arrives unlocked
+ * (a lock is set on each site, through its own route), and one the site has
+ * keeps the site's lock as it is.
+ */
+function withSiteLock(
+  style: NamedClass,
+  held: NamedClass | undefined
+): NamedClass {
+  const rest: NamedClass = { ...style };
+  delete rest.locked;
+  return held?.locked === true ? { ...rest, locked: true } : rest;
+}
+
+/**
+ * A text style without its values for breakpoints the site doesn't define,
+ * each one left out said in `notes`. Unchanged where the site's breakpoints
+ * aren't known.
+ */
+function withinBreakpoints(
+  style: NamedClass,
+  known: ReadonlySet<string> | undefined,
+  name: string,
+  notes: string[]
+): NamedClass {
+  if (known === undefined) return style;
+  const left = new Set<string>();
+  const styles: Record<string, unknown> = {};
+  for (const [state, byBreakpoint] of Object.entries(style.styles)) {
+    if (byBreakpoint === null || typeof byBreakpoint !== "object") {
+      styles[state] = byBreakpoint;
+      continue;
+    }
+    const kept: Record<string, unknown> = {};
+    for (const [breakpoint, values] of Object.entries(byBreakpoint)) {
+      if (known.has(breakpoint)) kept[breakpoint] = values;
+      else left.add(breakpoint);
+    }
+    styles[state] = kept;
+  }
+  if (left.size === 0) return style;
+  for (const breakpoint of left) {
+    notes.push(
+      `“${name}”'s values for the “${breakpoint}” breakpoint were left out: this site has no such breakpoint.`
+    );
+  }
+  return { ...style, styles };
 }
 
 /**
