@@ -11,7 +11,13 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
-import { defineCollection, text } from "../../config";
+import {
+  defineCollection,
+  defineFieldGroup,
+  fieldGroup,
+  relationship,
+  text,
+} from "../../config";
 import { getEventBus, type EventEnvelope } from "../../events";
 import {
   createTestNextly,
@@ -21,6 +27,10 @@ import {
 } from "../../plugins/test-nextly";
 
 const POSTS = "ekl_posts";
+/** Records no webhook (`webhooks: false`), with a component and relations. */
+const QUIET = "ekl_quiet";
+/** QUIET's component: a visible `heading` and a hidden `internalNote`. */
+const PROFILE = "ekl_profile";
 
 const ACTOR = {
   id: "ekl-actor",
@@ -66,7 +76,25 @@ afterEach(async () => {
 async function boot(dialect: TestDialect): Promise<TestNextly> {
   current = await createTestNextly({
     dialect,
+    fieldGroups: [
+      defineFieldGroup({
+        slug: PROFILE,
+        fields: [
+          text({ name: "heading" }),
+          text({ name: "internalNote", admin: { hidden: true } }),
+        ],
+      }),
+    ],
     collections: [
+      defineCollection({
+        slug: QUIET,
+        webhooks: false,
+        fields: [
+          text({ name: "title" }),
+          fieldGroup({ name: "profile", component: PROFILE }),
+          relationship({ name: "related", relationTo: POSTS, hasMany: true }),
+        ],
+      }),
       defineCollection({
         slug: POSTS,
         localized: true,
@@ -135,11 +163,11 @@ const handlerOf = (t: TestNextly) =>
     };
   };
 
-/** Every `collection.<POSTS>.*` event heard from now until the case ends, in order. */
-function listen(): Record<string, unknown>[] {
+/** Every `collection.<slug>.*` event heard from now until the case ends, in order. */
+function listen(slug = POSTS): Record<string, unknown>[] {
   const heard: Record<string, unknown>[] = [];
   for (const action of ["created", "updated", "deleted"]) {
-    const name = `collection.${POSTS}.${action}`;
+    const name = `collection.${slug}.${action}`;
     const handler = (event: EventEnvelope) => {
       heard.push({ action, ...parsed(event.payload) });
     };
@@ -414,6 +442,77 @@ describe.each(getConfiguredTestDialects())(
       expect(listened?.changedFields).toEqual(outbox?.changedFields);
       expect(listened?.changedFields).toContain("title");
       expect(listened?.changedFields).not.toContain("secret");
+    }, 90_000);
+
+    // A collection that records no webhook still announces its in-process
+    // events. A write in a caller's transaction, one by one or in a batch,
+    // tells a listener the component and the relations it changed though
+    // nothing else reads them, and never names a component whose only change
+    // is a field hidden inside it, though the trail reads them.
+    it("tells an in-process listener what a write in a caller's transaction changed where no webhook is recorded", async () => {
+      const t = await boot(dialect);
+      const target = await inBoth(t, "published");
+      const entries = handlerOf(t).getEntryService();
+      const heard = listen(QUIET);
+      const mark = await markOf(t);
+      // A system write: no person, so no trail, and no handler in the
+      // transaction to read the relations either.
+      const system = { overrideAccess: true as const };
+
+      const created = await t.adapter.transaction(tx =>
+        entries.createEntryInTransaction(
+          tx,
+          { collectionName: QUIET, ...system },
+          { title: "Quiet", profile: { heading: "A", internalNote: "n1" } }
+        )
+      );
+      expect(created.success, JSON.stringify(created)).toBe(true);
+      const id = String((created.data as { id: unknown }).id);
+      const component = await t.adapter.transaction(tx =>
+        entries.updateEntryInTransaction(
+          tx,
+          { collectionName: QUIET, entryId: id, ...system },
+          { profile: { heading: "B", internalNote: "n1" }, _overwrite: true }
+        )
+      );
+      expect(component.success, JSON.stringify(component)).toBe(true);
+      const related = await entries.updateEntries(
+        { collectionName: QUIET, ...system },
+        [{ id, data: { related: [target], _overwrite: true } }]
+      );
+      expect(related.successful, JSON.stringify(related)).toBe(1);
+      // As the person: the trail assembles the relations itself.
+      const hidden = await t.adapter.transaction(tx =>
+        entries.updateEntryInTransaction(
+          tx,
+          { collectionName: QUIET, entryId: id, ...asActor },
+          {
+            title: "Quiet 2",
+            profile: { heading: "B", internalNote: "n2" },
+            _overwrite: true,
+          }
+        )
+      );
+      expect(hidden.success, JSON.stringify(hidden)).toBe(true);
+
+      expect(heard.map(e => e.action)).toEqual([
+        "created",
+        "updated",
+        "updated",
+        "updated",
+      ]);
+      expect(heard[0]?.changedFields).toEqual(
+        expect.arrayContaining(["title", "profile"])
+      );
+      expect(heard[1]?.changedFields).toContain("profile");
+      expect(heard[1]?.changedFields).not.toContain("related");
+      expect(heard[2]?.changedFields).toContain("related");
+      expect(heard[2]?.changedFields).not.toContain("profile");
+      expect(heard[3]?.changedFields).toContain("title");
+      expect(heard[3]?.changedFields).not.toContain("profile");
+      // Recorded nowhere: the collection opted out of webhooks.
+      const { events } = await recordedSince(t, mark);
+      expect(events.filter(e => JSON.stringify(e).includes(QUIET))).toEqual([]);
     }, 90_000);
   }
 );

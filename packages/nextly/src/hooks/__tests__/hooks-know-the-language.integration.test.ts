@@ -127,9 +127,14 @@ afterEach(async () => {
   told.length = 0;
 });
 
-async function boot(dialect: TestDialect): Promise<TestNextly> {
+async function boot(
+  dialect: TestDialect,
+  /** Keeps a shared draft beside each language's, as `experimental.perLanguageStorage` does. */
+  options: { perLanguageStorage?: boolean } = {}
+): Promise<TestNextly> {
   current = await createTestNextly({
     dialect,
+    perLanguageStorage: options.perLanguageStorage === true,
     collections: [
       defineCollection({
         slug: POSTS,
@@ -156,7 +161,11 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         status: true,
         versions: { drafts: true },
         hooks: everyHook("drafted"),
-        fields: [text({ name: "title" })],
+        fields: [
+          text({ name: "title" }),
+          // Shared: one value for every language.
+          text({ name: "code", localized: false }),
+        ],
       }),
       defineCollection({
         slug: MOVED,
@@ -231,7 +240,11 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         status: true,
         versions: { drafts: true },
         hooks: everyHook("drafted-site"),
-        fields: [text({ name: "title" })],
+        fields: [
+          text({ name: "title" }),
+          // Shared: one value for every language.
+          text({ name: "code", localized: false }),
+        ],
       }),
     ],
     localization: { locales: ["en", "es"], defaultLocale: "en" },
@@ -298,6 +311,31 @@ interface EntryWrites {
     params: Record<string, unknown>,
     entries: { id: string; data: Record<string, unknown> }[]
   ): Promise<{ successful: number }>;
+}
+
+/** The `.updated` events the outbox recorded after the ones in `before`. */
+async function updatedEventsSince(
+  t: TestNextly,
+  before: ReadonlySet<string>
+): Promise<{ type: string; shared?: unknown }[]> {
+  const rows = await t.adapter.select<{ id: string; payload: unknown }>(
+    "nextly_events"
+  );
+  return rows
+    .filter(row => !before.has(String(row.id)))
+    .map(
+      row =>
+        (typeof row.payload === "string"
+          ? JSON.parse(row.payload)
+          : row.payload) as { type: string; shared?: unknown }
+    )
+    .filter(event => event.type.endsWith(".updated"));
+}
+
+/** The ids of the outbox events recorded so far. */
+async function eventIds(t: TestNextly): Promise<Set<string>> {
+  const rows = await t.adapter.select<{ id: string }>("nextly_events");
+  return new Set(rows.map(row => String(row.id)));
 }
 
 const entryService = (t: TestNextly): EntryWrites =>
@@ -1035,6 +1073,97 @@ describe.each(getConfiguredTestDialects())(
           locales: ["es"],
           shared: false,
         });
+      }
+    }, 90_000);
+
+    // A publish of one language puts the shared draft live with its own, so
+    // its after-hooks and its event are told it moves the shared part, though
+    // the request named a status alone; one that carries no shared draft is
+    // told it does not.
+    it("tells a publish of one language that carries the shared draft that it moves the shared part", async () => {
+      const t = await boot(dialect, { perLanguageStorage: true });
+      const created = await t.nextly.create({
+        collection: DRAFTED,
+        locale: "en",
+        data: { title: "Harbour", code: "a", status: "published" },
+      });
+      const id = String(created.item.id);
+      const inSpanish = (data: Record<string, unknown>) =>
+        t.nextly.update({
+          collection: DRAFTED,
+          id,
+          locale: "es",
+          data: { ...data, _overwrite: true },
+        });
+      await inSpanish({ title: "Puerto", status: "published" });
+      for (const [held, shared] of [
+        [{ title: "Puerto 2" }, false],
+        [{ code: "b" }, true],
+      ] as const) {
+        // Held as a pending change: of Spanish, then of the shared part.
+        await inSpanish(held);
+        told.length = 0;
+        const before = await eventIds(t);
+        await inSpanish({ status: "published" });
+        expect(toldBy("drafted:afterChange"), JSON.stringify(held)).toEqual([
+          expect.objectContaining({ locale: "es", shared }),
+        ]);
+        const events = await updatedEventsSince(t, before);
+        expect(events, JSON.stringify(held)).not.toEqual([]);
+        for (const event of events) {
+          expect(event.shared, `${event.type} ${JSON.stringify(held)}`).toBe(
+            shared
+          );
+        }
+      }
+      // The shared change is live, in every language.
+      const live = await t.nextly.findByID({
+        collection: DRAFTED,
+        id,
+        locale: "en",
+      });
+      expect((live as { code?: unknown }).code).toBe("b");
+    }, 90_000);
+
+    it("tells a Single's publish of one language that carries the shared draft that it moves the shared part", async () => {
+      const t = await boot(dialect, { perLanguageStorage: true });
+      const singles = t.getService("singleEntryService") as unknown as {
+        update(
+          slug: string,
+          data: Record<string, unknown>,
+          options: Record<string, unknown>
+        ): Promise<{ success: boolean }>;
+      };
+      const save = async (locale: string, data: Record<string, unknown>) => {
+        const saved = await singles.update(
+          DRAFTED_SITE,
+          { ...data, _overwrite: true },
+          { locale, overrideAccess: true }
+        );
+        expect(saved.success, JSON.stringify(saved)).toBe(true);
+      };
+      await save("en", { title: "Site", code: "a", status: "published" });
+      await save("es", { title: "Sitio", status: "published" });
+      for (const [held, shared] of [
+        [{ title: "Sitio 2" }, false],
+        [{ code: "b" }, true],
+      ] as const) {
+        // Held as a pending change: of Spanish, then of the shared part.
+        await save("es", held);
+        told.length = 0;
+        const before = await eventIds(t);
+        await save("es", { status: "published" });
+        expect(
+          toldBy("drafted-site:afterChange"),
+          JSON.stringify(held)
+        ).toEqual([expect.objectContaining({ locale: "es", shared })]);
+        const events = await updatedEventsSince(t, before);
+        expect(events, JSON.stringify(held)).not.toEqual([]);
+        for (const event of events) {
+          expect(event.shared, `${event.type} ${JSON.stringify(held)}`).toBe(
+            shared
+          );
+        }
       }
     }, 90_000);
   }

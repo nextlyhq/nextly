@@ -3187,12 +3187,6 @@ export class SingleMutationService extends BaseService {
       // would be sanitized to SQL NULL and silently unpublish a published Single
       // without the gate.
       stripUndefinedStatus(currentData);
-      // The payload is final: the hooks after the write and its events are
-      // told what it moves, where the hooks before it were told what the body
-      // sent.
-      settleWriteParts({
-        shared: this.movesSharedPart(singleMeta, currentData, options.locale),
-      });
 
       // A status-only write was judged by its publish or unpublish gate in
       // place of update. A hook that made it an edit, naming a field or
@@ -4090,6 +4084,9 @@ export class SingleMutationService extends BaseService {
             enforceLocalizedRequired,
           };
           let promotedDraft = false;
+          // The values of the pending change this publish puts live, as the
+          // change holds them; none when it promotes nothing.
+          let promotedValues: Record<string, unknown> = {};
           // Whether the request that promoted also carried content of its
           // own, which no earlier save recorded: the trail reads that
           // publish as a save too.
@@ -4292,9 +4289,24 @@ export class SingleMutationService extends BaseService {
                 delete mainPayload.status;
               }
               promotedDraft = true;
+              promotedValues = pendingDocument;
               promotionCarriesContent = callerCarriesContent;
             }
           }
+          // The payload is final once a pending change it publishes is
+          // folded in: the hooks after the write and its events are told what
+          // it moves, a field a hook added or the promoted change carries
+          // included, where the hooks before it were told what the body sent.
+          // Settled on every attempt, so a retry that promotes nothing is not
+          // told what a lost attempt promoted. The caller's component values
+          // left `currentData` for the component save, so they are put back.
+          settleWriteParts({
+            shared: this.movesSharedPart(
+              singleMeta,
+              { ...promotedValues, ...currentData, ...attemptComponentFields },
+              options.locale
+            ),
+          });
           // A publish with nothing pending puts the live row itself live: a
           // first publication, a republish after an unpublish, or a Single
           // that keeps no drafts. The validation before this transaction saw
