@@ -316,7 +316,14 @@ test.describe("for an author who may not publish header & footer sets", () => {
     await putHeader(page, set, starter);
     const authorPage = await author.context.newPage();
     const header = await openBuilder(authorPage, id);
+    // The menu's own read, which says whether this author may choose: the
+    // card is judged once it has answered, not before.
+    const answered = authorPage.waitForResponse(
+      response =>
+        response.url().includes("/layouts/area-components") && response.ok()
+    );
     await header.click();
+    await answered;
     const shown = card(authorPage);
     await expect(
       shown.getByRole("button", { name: "Edit header" })

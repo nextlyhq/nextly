@@ -105,7 +105,11 @@ const AREA_WORDS: Readonly<Record<LayoutArea, string>> = {
   footer: "footer",
 };
 
-/** Whether the caller may update AND publish sets: the right to choose. */
+/**
+ * Whether the caller may update AND publish sets: the right to choose. Asked
+ * of any set, so a rule that lets an author change only some sets still
+ * offers the choice; the write, made as the caller, judges the set itself.
+ */
 async function mayChangeSets(
   ctx: Pick<PluginRouteContext, "caller" | "self">
 ): Promise<boolean> {
@@ -113,8 +117,8 @@ async function mayChangeSets(
   const caller = ctx.caller;
   return (
     caller !== null &&
-    (await caller.can("update", sets)) &&
-    (await caller.can("publish", sets))
+    (await caller.can("update", sets, { anyEntry: true })) &&
+    (await caller.can("publish", sets, { anyEntry: true }))
   );
 }
 
@@ -157,6 +161,9 @@ export async function readAreaComponents(
     sort: "title",
     limit: MAX_AREA_COMPONENTS,
     depth: 0,
+    // The list shows names only; a picture's definitions are read apart,
+    // and only when asked, so the documents themselves are not read here.
+    select: { id: true, title: true },
   });
   const items = found.items
     .map(row => entryOf(row, "title"))
@@ -254,6 +261,14 @@ export async function putInArea(
         });
       }
       refuseUnlessPublishedAsSaved(saved, area);
+      // The set's areas, whole: a caller who may write them but not read
+      // them gets the field withheld, and writing the one area chosen over a
+      // value it cannot see would drop the other area.
+      if (saved.areas === undefined) {
+        throw NextlyError.forbidden({
+          logContext: { reason: "layout-area-areas-unreadable" },
+        });
+      }
       return writes.update(
         setId,
         withVersionFrom(
@@ -295,6 +310,8 @@ function directLayoutAreaWrites(
         status: "published",
         limit: 1,
         depth: 0,
+        // Whether it is there and published, and its name: not its document.
+        select: { id: true, title: true },
       });
       return entryOf(found.items[0], "title") ?? null;
     },

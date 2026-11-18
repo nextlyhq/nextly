@@ -303,3 +303,24 @@ describe("Use a component ▾ on the starter's card", () => {
     );
   });
 });
+
+describe("a list that could not be read", () => {
+  it("says so, with a way to ask again, rather than hiding the menu", async () => {
+    const refetch = vi.fn();
+    read.mockImplementation(
+      () =>
+        ({
+          data: undefined,
+          error: Object.assign(new Error("Boom"), { status: 500 }),
+          pending: false,
+          refetch,
+        }) as unknown as ReturnType<typeof usePluginRoute>
+    );
+    shown();
+    const retry = screen.getByRole("button", {
+      name: /Couldn.t load the components\. Try again/,
+    });
+    fireEvent.click(retry);
+    expect(refetch).toHaveBeenCalled();
+  });
+});

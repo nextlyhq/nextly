@@ -74,6 +74,15 @@ export function UseAComponent({
     withPictures.data !== undefined
   );
   const answer = withPictures.data ?? list.data;
+  // A read that failed is said, with a way to ask again, rather than looking
+  // like a choice this author may not make.
+  if (answer === undefined && list.error !== null) {
+    return (
+      <Button type="button" size="sm" variant="ghost" onClick={list.refetch}>
+        Couldn&rsquo;t load the components. Try again
+      </Button>
+    );
+  }
   if (answer === undefined || !answer.meta.mayChoose) return null;
 
   const choose = async (component: string) => {

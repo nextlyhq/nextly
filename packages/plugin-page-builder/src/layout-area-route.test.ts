@@ -140,6 +140,15 @@ describe("putting a component in a set's area", () => {
     });
   });
 
+  it("refuses a set whose areas the caller may not read, and writes nothing", async () => {
+    const { areas: _withheld, ...redacted } = MAIN;
+    const { fake, calls } = writes({ set: redacted });
+    await expect(
+      putInArea("main", "header", "ridgeline", fake)
+    ).rejects.toSatisfy(error => NextlyError.isForbidden(error));
+    expect(calls).not.toContain("update main");
+  });
+
   it("reads the set again and makes only its own change after a save in between", async () => {
     const { fake } = writes({ stale: 1 });
     await putInArea("main", "header", "ridgeline", fake);
@@ -209,8 +218,27 @@ describe("the components marked for an area", () => {
         sort: "title",
         overrideAccess: false,
         user: { id: "ada" },
+        // Names only: the documents are not read for the list.
+        select: { id: true, title: true },
       })
     );
+  });
+
+  it("asks whether the caller may change any set, so a rule over some sets still offers the choice", async () => {
+    const given = ctx();
+    await readAreaComponents(given as never, nextly([]) as never, {
+      area: "header",
+      locale: undefined,
+      pictures: false,
+      store: { field: "content" },
+      limits: {} as never,
+    });
+    expect(given.caller.can).toHaveBeenCalledWith("update", "layouts", {
+      anyEntry: true,
+    });
+    expect(given.caller.can).toHaveBeenCalledWith("publish", "layouts", {
+      anyEntry: true,
+    });
   });
 
   it("says the caller may not choose without both update and publish on sets", async () => {
