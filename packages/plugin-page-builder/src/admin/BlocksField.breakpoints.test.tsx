@@ -921,3 +921,34 @@ describe("going to the breakpoint a value came from", () => {
     expect(box().width).toBe(1280);
   });
 });
+
+describe("a block's own custom CSS", () => {
+  /** The Site tab's read, answering for a person who may or may not manage. */
+  const siteRead = (mayManageSite: boolean) => ({
+    mayManageSite,
+    mayChooseDefaultLayout: false,
+    defaultLayout: null,
+    breakpoints: null,
+    layouts: [],
+  });
+
+  it("reaches the inspector for a person who may change the site", () => {
+    siteSettingsRead = siteRead(true);
+    openEditor();
+    const access = seen.inspector?.customCss as
+      | { check?: (css: string) => readonly string[] }
+      | undefined;
+    // The page builder's checker, refusing a rule without `selector`.
+    expect(access?.check?.("h2 { margin: 0; }")).toHaveLength(1);
+  });
+
+  it("does not reach it while the read has not said yes", () => {
+    openEditor();
+    expect(seen.inspector).toBeDefined();
+    expect(seen.inspector).not.toHaveProperty("customCss");
+    cleanup();
+    siteSettingsRead = siteRead(false);
+    openEditor();
+    expect(seen.inspector).not.toHaveProperty("customCss");
+  });
+});

@@ -270,6 +270,17 @@ describe("leaving the box or pressing Apply", () => {
     }
   );
 
+  it("writes nothing when the box is left as it was filled", () => {
+    // White space alone reads as no CSS, but leaving it untouched is no edit.
+    mount(MANAGER, "  ");
+    openSection();
+    const before = editor().undoDepth;
+    fireEvent.focus(box());
+    fireEvent.blur(box());
+    expect(editor().undoDepth).toBe(before);
+    expect(stored()).toBe("  ");
+  });
+
   it("empties the block's CSS when the box is cleared", () => {
     mount(MANAGER, STORED);
     openSection();

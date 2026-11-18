@@ -23,7 +23,7 @@ import type { BuilderOp } from "./op-vocabulary";
 export interface BlockCustomCssAccess {
   /**
    * Checks a block's CSS as the server will: every line that can't be used,
-   * each worded for the author ("Line 3: @import isn't allowed."), in line
+   * each worded for the author with its line ("Line 3: …"), in line
    * order; none when it may be stored.
    */
   readonly check: (css: string) => readonly string[];

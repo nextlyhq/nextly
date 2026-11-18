@@ -119,6 +119,8 @@ function storeDraft({
   editor: EditorState;
   nodeId: string;
 }): readonly string[] {
+  // The box as it was filled: leaving it unchanged writes nothing.
+  if (text === (held ?? "")) return [];
   // White space alone is no CSS: the block holds none.
   const next = text.trim() === "" ? undefined : text;
   if (next === held) return [];
