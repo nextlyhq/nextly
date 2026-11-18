@@ -39,6 +39,10 @@ import { emailBrandTables } from "./email-brand";
 import { EMAIL_QUEUE_TABLE } from "./email-queue/table-name";
 import { EMAIL_QUEUE_RECIPIENTS_TABLE } from "./email-queue-recipients/table-name";
 import { EMAIL_SEND_CLAIMS_TABLE } from "./email-send-claims/table-name";
+import {
+  EXTERNAL_IDENTITIES_TABLE,
+  externalIdentitiesTables,
+} from "./external-identities";
 import { fieldGroupLockTables, schemaLockTables } from "./field-group-lock";
 import { jobsTables } from "./jobs";
 import { languagesTables } from "./languages";
@@ -316,6 +320,12 @@ export function getCoreSchema(
     // `email_brand` — the site's email brand settings, one row. In the
     // snapshot for the reason every table above is.
     ...Object.values(emailBrandTables(dialect)),
+    // `nextly_external_identities` — the external identities a person signed
+    // in with, unique by provider key and by subject within the issuer that
+    // asserted it. Nothing writes them before the table exists, so
+    // core-reconcile creating it on fresh and existing databases is
+    // sufficient, as for its neighbours.
+    ...Object.values(externalIdentitiesTables(dialect)),
   ];
 
   const fieldGroupRegistry = fieldGroupRegistryFor(dialect, options);
@@ -391,6 +401,7 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   "email_templates",
   "email_deliveries",
   "email_brand",
+  EXTERNAL_IDENTITIES_TABLE,
   EMAIL_SEND_CLAIMS_TABLE,
   EMAIL_QUEUE_TABLE,
   EMAIL_QUEUE_RECIPIENTS_TABLE,

@@ -52,6 +52,7 @@ import {
 } from "../site-style-client";
 import { valueAtPath } from "../snapshot-merge";
 
+import { useBlockCustomCss } from "./block-custom-css";
 import type { OpenAt } from "./builder-address";
 import { useCanvasEntryIdentity } from "./canvas-entry";
 import { listEntryCollectionOf } from "./canvas-page-context";
@@ -613,6 +614,8 @@ function EditorBody<TFieldValues extends FieldValues>({
       timeZone: canvasRender.bindings.timeZone,
     }
   );
+  // Custom CSS for one block, only for a person who may change site code.
+  const blockCustomCss = useBlockCustomCss();
   const view: EditorView = {
     ...mount,
     ...style,
@@ -620,6 +623,7 @@ function EditorBody<TFieldValues extends FieldValues>({
     ...panels,
     canvasRender: shownRender,
     visitorUnreadable,
+    blockCustomCss,
     documentDirty,
     pageTitle,
     componentView,
