@@ -297,10 +297,13 @@ function beganTyping(
 }
 
 /**
- * The run's step after a later write of it: that write may change what the
+ * The run's step after a later write of it. That write may change what the
  * first did not, as a recognised embed link sets a style, so its inverse
- * joins the step's, applied first, and undo puts back every property the run
- * touched. The step stays the newest entry, replaced in place.
+ * joins the step's, applied first, for the fields the step does not already
+ * put back: undo then restores every property the run touched, each to its
+ * value from before the run, without replaying every keystroke. A write of
+ * fields already covered leaves the step as it is, so a long edit is still
+ * one small step. The step stays the newest entry, replaced in place.
  */
 function widenedTyping(
   held: TypingHeld | null,
@@ -310,12 +313,62 @@ function widenedTyping(
   if (held === null || entry.kind !== "ops" || held.entry.kind !== "ops") {
     return held;
   }
+  const added = uncoveredInverse(held.entry.ops, entry.ops);
+  if (added.length === 0) return held;
   const joined: HistoryEntry = {
     kind: "ops",
-    ops: [...entry.ops, ...held.entry.ops],
+    ops: [...added, ...held.entry.ops],
   };
   undo[undo.length - 1] = joined;
   return { ...held, entry: joined };
+}
+
+/**
+ * The part of a later inverse the step's own does not already restore. An
+ * update replaces each field it names whole, set or removed (`unset`), so a
+ * field the step's inverse names is put back by it, to its earlier value;
+ * only the fields it does not name are kept. Any op but an update is kept as
+ * it is, since what it restores is not a field of one node.
+ */
+function uncoveredInverse(
+  step: readonly BuilderOp[],
+  later: readonly BuilderOp[]
+): BuilderOp[] {
+  const covered = new Map<string, Set<string>>();
+  for (const op of step) {
+    if (op.kind !== "update") continue;
+    const fields = covered.get(op.id) ?? new Set<string>();
+    for (const field of updatedFields(op)) fields.add(field);
+    covered.set(op.id, fields);
+  }
+  const kept: BuilderOp[] = [];
+  for (const op of later) {
+    if (op.kind !== "update") {
+      kept.push(op);
+      continue;
+    }
+    const fields = covered.get(op.id);
+    const fresh = (field: string) => fields?.has(field) !== true;
+    const patch = Object.fromEntries(
+      Object.entries(op.patch).filter(([field]) => fresh(field))
+    );
+    const unset = (op.unset ?? []).filter(fresh);
+    if (Object.keys(patch).length === 0 && unset.length === 0) continue;
+    kept.push({
+      kind: "update",
+      id: op.id,
+      patch,
+      ...(unset.length > 0 ? { unset } : {}),
+    });
+  }
+  return kept;
+}
+
+/** The fields an update writes or removes. */
+function updatedFields(
+  op: Extract<BuilderOp, { kind: "update" }>
+): readonly string[] {
+  return [...Object.keys(op.patch), ...(op.unset ?? [])];
 }
 
 /** The history's stacks and runs, as `takeTypingBack` reads and resets them. */
