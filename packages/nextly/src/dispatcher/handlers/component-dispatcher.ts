@@ -102,6 +102,7 @@ import {
   getLoggerFromDI,
 } from "../helpers/di";
 import { readRequestLocalized } from "../helpers/request-localized";
+import { readRequestedMoves } from "../helpers/request-moves";
 import { requireParam, toNumber } from "../helpers/validation";
 import type { MethodHandler, Params } from "../types";
 
@@ -624,6 +625,8 @@ export const COMPONENTS_METHODS: Record<
         table: tableName,
         stored: fieldGroupEntity(component),
         fields: fields as FieldDefinition[],
+        // Each move checked as the save checks it, and what its column does not carry named.
+        moves: readRequestedMoves(body),
         localized:
           readRequestLocalized(body) ??
           (component as { localized?: boolean }).localized === true,
@@ -697,6 +700,8 @@ export const COMPONENTS_METHODS: Record<
       // an invalid field must fail HERE, not only at the file write, or
       // the DB and the committed manifest diverge silently.
       assertValidFieldsPayload(fields, { stored: "under-lock" });
+      // The fields the save moves, each kept by statements its migration file carries.
+      const moves = readRequestedMoves(body);
 
       return withSchemaChangeExcluded(
         {
@@ -961,6 +966,7 @@ export const COMPONENTS_METHODS: Record<
               stored: fieldGroupEntity(component),
               fields: fields as unknown as FieldDefinition[],
               localized: isLocalized,
+              moves,
               answers: {
                 renameResolutions: renameResolutions ?? [],
                 eventResolutions: eventResolutions ?? [],
@@ -1004,6 +1010,7 @@ export const COMPONENTS_METHODS: Record<
                       "fieldGroup"
                     ),
                   renames: renamedFieldsOf(renameResolutions ?? []),
+                  moved: moves,
                 }),
               afterFile: () =>
                 reconcileBuilderCompanion("component", companion),

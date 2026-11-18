@@ -436,8 +436,7 @@ async function writeSave(
   // A move that cannot keep its values is refused here, before the definition is written.
   await refuseEmptyRequiredRefills(
     deps,
-    plannedMovesOf(deps, save, plan.table),
-    plan.table
+    plannedMovesOf(deps, save, plan.table)
   );
   await settledRows(deps, save, plan.table);
 
@@ -487,8 +486,8 @@ export async function previewCollectionSave(
     ];
     const conversions = plan.adoption?.conversions ?? [];
     const planned = plannedMovesOf(deps, save, plan.table);
-    await refuseEmptyRequiredRefills(deps, planned, plan.table);
-    const moved = await moveSentencesOf(deps, plan.table, planned);
+    await refuseEmptyRequiredRefills(deps, planned);
+    const moved = await moveSentencesOf(deps, planned);
     return {
       adopts: plan.adoption !== null,
       conversions,
@@ -1361,7 +1360,7 @@ async function movesOf(
 }> {
   const moves = plannedMovesOf(deps, save, table);
   // The header names each dropped column as the move it is, with what the group does not carry.
-  const sentences = await moveSentencesOf(deps, table, moves);
+  const sentences = await moveSentencesOf(deps, moves);
   return {
     appended: addedStatements(deps, save, table, moves),
     valueMoves: moves.movedColumns.map(moved => ({
@@ -1381,18 +1380,30 @@ function carriesValues(moves: EntityMoves): boolean {
   return moves.up.first.length + moves.up.last.length > 0;
 }
 
-/** What each column `moves` drops had that its group does not carry, by column (`movedColumnSentences`). */
-function moveSentencesOf(
+/**
+ * What each column `moves` drops had that its group does not carry, by column
+ * (`movedColumnSentences`), read from the table each is dropped from: the entity's own, or its
+ * language table for a field kept per language.
+ */
+async function moveSentencesOf(
   deps: CollectionSaveDeps,
-  table: string,
   moves: EntityMoves
 ): Promise<Map<string, string>> {
-  return movedColumnSentences(
-    deps.adapter.getDrizzle(),
-    deps.adapter.getCapabilities().dialect,
-    table,
-    moves.movedColumns
-  );
+  const byTable = new Map<string, EntityMoves["movedColumns"]>();
+  for (const moved of moves.movedColumns) {
+    byTable.set(moved.table, [...(byTable.get(moved.table) ?? []), moved]);
+  }
+  const sentences = new Map<string, string>();
+  for (const [table, moved] of byTable) {
+    const read = await movedColumnSentences(
+      deps.adapter.getDrizzle(),
+      deps.adapter.getCapabilities().dialect,
+      table,
+      moved
+    );
+    for (const [column, sentence] of read) sentences.set(column, sentence);
+  }
+  return sentences;
 }
 
 /**
@@ -1420,6 +1431,8 @@ function plannedMovesOf(
     localized: save.entity.localized === true,
     table,
     dialect: deps.adapter.getCapabilities().dialect,
+    // A field group's table is made by its own generator; a Single's by the collection's.
+    builtBy: save.kind === "fieldGroup" ? "fieldGroup" : "collection",
   });
   refuseDeletesBeforeRefill(save, planned);
   return planned;
@@ -1433,8 +1446,7 @@ function plannedMovesOf(
  */
 async function refuseEmptyRequiredRefills(
   deps: CollectionSaveDeps,
-  planned: EntityMoves,
-  table: string
+  planned: EntityMoves
 ): Promise<void> {
   const dialect = deps.adapter.getCapabilities().dialect;
   for (const refill of planned.refilledColumns) {
@@ -1447,7 +1459,8 @@ async function refuseEmptyRequiredRefills(
     const [row] = await querySqlRows<{ count: string | number }>(
       deps.adapter.getDrizzle(),
       dialect,
-      sql`SELECT COUNT(*) AS count FROM ${sql.identifier(table)} WHERE NOT (${sql.raw(held)})`
+      // Counted on the table the field moves in: the entity's own, or its language table.
+      sql`SELECT COUNT(*) AS count FROM ${sql.identifier(refill.table)} WHERE NOT (${sql.raw(held)})`
     );
     const empty = Number(row?.count ?? 0);
     if (empty === 0) continue;
@@ -1459,7 +1472,7 @@ async function refuseEmptyRequiredRefills(
           message: `${empty} ${empty === 1 ? "entry holds" : "entries hold"} no value for ${refill.field} in the group it moves out of, and it is required. Give ${empty === 1 ? "that entry" : "those entries"} a value first, or move it as optional.`,
         },
       ],
-      logContext: { table, column: refill.column, empty },
+      logContext: { table: refill.table, column: refill.column, empty },
     });
   }
 }

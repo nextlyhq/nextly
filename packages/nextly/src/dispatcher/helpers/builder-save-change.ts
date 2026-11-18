@@ -24,6 +24,8 @@ import {
   saveOfSchemaChange,
   type SchemaChangeAnswers,
 } from "../../domains/schema/builder-save/schema-change-save";
+import type { FieldMoveRequest } from "../../domains/schema/field-moves/check-move";
+import { refuseMovesOffTheFile } from "../../domains/schema/field-moves/moves-road";
 import type { PipelineResult } from "../../domains/schema/pipeline/pushschema-pipeline";
 import type { DesiredSchema } from "../../domains/schema/pipeline/types";
 import { loadUiSchema } from "../../domains/schema/ui-schema/loader";
@@ -101,6 +103,8 @@ export async function writeBuilderSchemaChange(
     /** A Single's junction statements and relationship keys (`entityRelations`). */
     junctions?: NonNullable<CollectionSave["junctions"]>;
     keys?: NonNullable<CollectionSave["keys"]>;
+    /** The fields the save moves into or out of a group, whose values its file keeps. */
+    moves?: readonly FieldMoveRequest[];
   },
   /**
    * Whether `apply`'s push has landed (`landingPush`): a failure after it,
@@ -121,6 +125,17 @@ export async function writeBuilderSchemaChange(
     afterFile: () => Promise<void>;
   }
 ): Promise<void> {
+  // Asked at most once: it reads the live table.
+  let pushes: Promise<boolean> | undefined;
+  const pushesNow = () =>
+    (pushes ??= fileRoad === undefined ? Promise.resolve(true) : fileRoad.pushWhen());
+  // A save that moves fields keeps their values only through its own file: one the push would
+  // apply instead is refused before anything is written, in every environment alike.
+  await refuseMovesOffTheFile({
+    moves: change.moves ?? [],
+    writes: deps !== undefined,
+    pushReason: async () => ((await pushesNow()) ? "carries-values" : null),
+  });
   if (deps === undefined) {
     await apply();
     return;
@@ -128,8 +143,8 @@ export async function writeBuilderSchemaChange(
   // Asked before the save writes anything, as a change reaching a relation's storage is judged
   // against the live table; only where the answer is used, a save the writer runs.
   const runsFile =
-    deps.applies && fileRoad !== undefined && !(await fileRoad.pushWhen());
-  const { save } = saveOfSchemaChange({
+    deps.applies && fileRoad !== undefined && !(await pushesNow());
+  const save = withMoves(saveOfSchemaChange({
     ...change,
     row: {
       labels: change.stored.labels,
@@ -139,7 +154,7 @@ export async function writeBuilderSchemaChange(
       projectRoot: deps.projectRoot,
       uiSchemaFile: deps.config.db.uiSchemaFile,
     }),
-  });
+  }).save, change.moves);
   const { writeEntitySave } = await loadEntitySave();
   if (runsFile) {
     await writeEntitySave(deps, save, apply, { runsFile: true });
@@ -159,6 +174,14 @@ export async function writeBuilderSchemaChange(
     }
   });
   if ("error" in failed) throw failed.error;
+}
+
+/** The save with the fields it moves, whose statements its file carries; as it was without any. */
+function withMoves(
+  save: CollectionSave,
+  moves: readonly FieldMoveRequest[] | undefined
+): CollectionSave {
+  return moves === undefined || moves.length === 0 ? save : { ...save, moves };
 }
 
 /**
@@ -203,7 +226,7 @@ export async function reviewBuilderSchemaChange(
   change: Parameters<typeof writeBuilderSchemaChange>[2]
 ): Promise<string[]> {
   if (deps === undefined) return [];
-  const { save } = saveOfSchemaChange({
+  const save = withMoves(saveOfSchemaChange({
     ...change,
     row: {
       labels: change.stored.labels,
@@ -213,7 +236,7 @@ export async function reviewBuilderSchemaChange(
       projectRoot: deps.projectRoot,
       uiSchemaFile: deps.config.db.uiSchemaFile,
     }),
-  });
+  }).save, change.moves);
   const { previewCollectionSave } = await loadCollectionSave();
   return (await previewCollectionSave(deps, save)).notices;
 }

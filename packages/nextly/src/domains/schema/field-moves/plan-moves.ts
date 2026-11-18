@@ -17,6 +17,7 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { NextlyError } from "../../../errors/nextly-error";
+import { companionTableOf } from "../../i18n/migration/derive-companion-spec";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import {
   classifyFieldKind,
@@ -24,6 +25,7 @@ import {
   fieldsStoredOnRow,
   getColumnDescriptor,
   toSnakeCase,
+  type ColumnOrigin,
 } from "../services/field-column-descriptor";
 
 import {
@@ -205,14 +207,15 @@ function refuseUnmatched(
 function moveColumn(
   move: PlannedMove,
   table: string,
-  dialect: SupportedDialect
+  dialect: SupportedDialect,
+  builtBy: ColumnOrigin
 ): MoveColumn {
   return {
     table,
     dialect,
-    kind: classifyFieldKind(move.field, "collection"),
+    kind: classifyFieldKind(move.field, builtBy),
     columnType:
-      getColumnDescriptor(move.field, dialect, "collection")?.dialectType ??
+      getColumnDescriptor(move.field, dialect, builtBy)?.dialectType ??
       "text",
   };
 }
@@ -229,6 +232,8 @@ export function planEntityMoves(args: {
   localized: boolean;
   table: string;
   dialect: SupportedDialect;
+  /** Which generator made the table: a field group's makes its columns its own way. */
+  builtBy?: ColumnOrigin;
 }): EntityMoves {
   const result: EntityMoves = {
     up: { first: [], last: [] },
@@ -253,12 +258,18 @@ export function planEntityMoves(args: {
     refuseUnplaceable(request, move, columns);
     // A field moving between places on one level (a group with no name) keeps its column.
     if (move.from.kind === "column" && move.to.kind === "column") continue;
-    const statements = placed(move, moveColumn(move, args.table, args.dialect));
+    // A field kept for each language moves in the language table, each language's row its own;
+    // its translation is the same on both sides, as `checkMove` refuses a change of it.
+    const table = move.perLanguage ? companionTableOf(args.table) : args.table;
+    const statements = placed(
+      move,
+      moveColumn(move, table, args.dialect, args.builtBy ?? "collection")
+    );
     for (const way of ["up", "down"] as const) {
       result[way].first.push(...statements[way].first);
       result[way].last.push(...statements[way].last);
     }
-    recordColumns(result, move, request, args.table);
+    recordColumns(result, move, request, table);
   }
   return result;
 }

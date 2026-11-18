@@ -61,6 +61,12 @@ export async function pushCarriesValues(args: {
     /** Whether the table holds its row. */
     holdsRow: () => Promise<boolean>;
   };
+  /**
+   * The fields the save moves into or out of a group (`hints.moves`), each by its path before and
+   * after. Their values move through the file's own statements, so a field leaving the row for a
+   * group is not removed, and one arriving on it from a group is not new to it.
+   */
+  moved?: readonly MovedField[];
 }): Promise<boolean> {
   if (args.wasStored !== args.isStored) return true;
   if (args.isStored && args.wasStatus !== args.status) return true;
@@ -98,6 +104,28 @@ export async function pushCarriesValues(args: {
     after: args.newFields,
     liveTable: args.liveTable,
   });
+}
+
+/** A field the save moves, by its path before and after. */
+interface MovedField {
+  from: readonly string[];
+  to: readonly string[];
+}
+
+/** The names of the fields a move takes off the row, into a group. */
+function movedOffRow(moved: readonly MovedField[] | undefined): Set<string> {
+  return new Set(
+    (moved ?? []).flatMap(m => (m.from.length === 1 ? [m.from[0] ?? ""] : []))
+  );
+}
+
+/** The columns of the fields a move brings onto the row, out of a group. */
+function movedOntoRow(moved: readonly MovedField[] | undefined): Set<string> {
+  return new Set(
+    (moved ?? []).flatMap(m =>
+      m.to.length === 1 ? [toSnakeCase(m.to[0] ?? "")] : []
+    )
+  );
 }
 
 /**
@@ -143,12 +171,15 @@ async function fillsSingleRow(
   args: {
     oldFields: readonly FieldDefinition[];
     newFields: readonly FieldDefinition[];
+    moved?: readonly MovedField[];
   },
   row: NonNullable<Parameters<typeof pushCarriesValues>[0]["singleRow"]>
 ): Promise<boolean> {
+  // A field a move brings out of a group takes its values from there, not a fill.
   const kept = new Set([
     ...namedOnRow(args.oldFields).map(field => toSnakeCase(field.name)),
     ...row.renamedTo,
+    ...movedOntoRow(args.moved),
   ]);
   const filled = namedOnRow(args.newFields).some(
     field => !kept.has(toSnakeCase(field.name)) && row.fills(field)
@@ -161,9 +192,14 @@ function translatedFieldRenamedOrRemoved(args: {
   oldFields: readonly FieldDefinition[];
   newFields: readonly FieldDefinition[];
   renamed: FieldRename | null | undefined;
+  moved?: readonly MovedField[];
 }): boolean {
   if (args.renamed) return true;
-  const kept = new Set(namedOnRow(args.newFields).map(field => field.name));
+  // A field a move takes into a group keeps its values there, through the file's statements.
+  const kept = new Set([
+    ...namedOnRow(args.newFields).map(field => field.name),
+    ...movedOffRow(args.moved),
+  ]);
   return namedOnRow(args.oldFields).some(
     field => isFieldLocalized(field, true) && !kept.has(field.name)
   );

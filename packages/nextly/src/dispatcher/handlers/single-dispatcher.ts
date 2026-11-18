@@ -137,6 +137,7 @@ import {
   getSingleRegistryFromDI,
 } from "../helpers/di";
 import { readRequestLocalized } from "../helpers/request-localized";
+import { readRequestedMoves } from "../helpers/request-moves";
 import {
   offsetPaginationToMeta,
   unwrapServiceResult,
@@ -1353,6 +1354,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         table: tableName,
         stored: singleEntity(single),
         fields: fields as FieldDefinition[],
+        // Each move checked as the save checks it, and what its column does not carry named.
+        moves: readRequestedMoves(body),
         localized:
           readRequestLocalized(body) ??
           (single as { localized?: boolean }).localized === true,
@@ -1414,6 +1417,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // The lifecycle the Builder's pending settings ask for, read (and a malformed value refused)
       // before the lock is taken.
       const requestedLifecycle = readRequestedLifecycle(body);
+      // The fields the save moves, each kept by statements its migration file carries.
+      const moves = readRequestedMoves(body);
       assertValidFieldsPayload(sentFields, { stored: "under-lock" });
       // Only named fields at the top level, as every road that saves a Single takes them.
       assertTopLevelFieldsNamed(sentFields);
@@ -1684,6 +1689,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
               stored: singleEntity(single),
               fields: fields as unknown as FieldDefinition[],
               localized: isLocalized,
+              moves,
               answers: {
                 renameResolutions: renameResolutions ?? [],
                 eventResolutions: eventResolutions ?? [],
@@ -1726,6 +1732,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
                   columnOf: field =>
                     getSingleRowColumnDescriptor(field, dialect, "collection"),
                   renames: renamedFieldsOf(renameResolutions ?? []),
+                  moved: moves,
                 }),
               afterFile: () => reconcileBuilderCompanion("single", companion),
             }
