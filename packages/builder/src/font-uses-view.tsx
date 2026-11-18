@@ -11,6 +11,7 @@
  */
 import type {
   FontFaceDef,
+  NamedClass,
   SiteTextMap,
   SiteTokenSet,
 } from "@nextlyhq/blocks-engine";
@@ -62,14 +63,18 @@ const UNUSED: FamilyUsesHere = {
 export function useFamiliesUses(
   families: readonly SiteFamily[],
   tokens: SiteTokenSet | undefined,
-  usage: VariablesAccess | undefined
+  usage: VariablesAccess | undefined,
+  classes?: readonly NamedClass[]
 ): (key: string) => FamilyUsesHere {
   const byKey = React.useMemo(
     () =>
       new Map(
-        families.map(family => [family.key, familyUses(family.key, tokens)])
+        families.map(family => [
+          family.key,
+          familyUses(family.key, tokens, classes),
+        ])
       ),
-    [families, tokens]
+    [families, tokens, classes]
   );
   const identities = React.useMemo(
     () => [...new Set([...byKey.values()].flatMap(uses => uses.counted))],

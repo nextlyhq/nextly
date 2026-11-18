@@ -420,13 +420,20 @@ export function SiteFontsScreen({
  */
 function studioScreenProps(
   studio: ReturnType<typeof useVariablesStudio>
-): Pick<FontsScreenProps, "usage" | "onTokensChange" | "suppliedText"> {
+): Pick<
+  FontsScreenProps,
+  "usage" | "onTokensChange" | "suppliedText" | "classes" | "issue"
+> {
   if (studio === null) return {};
   const siteText = studio.supplied?.siteText;
   return {
     ...(studio.usage === undefined ? {} : { usage: studio.usage }),
     ...(studio.readOnly === true ? {} : { onTokensChange: studio.onChange }),
     ...(siteText === undefined ? {} : { suppliedText: siteText }),
+    // The text styles rows follow, so a font one supplies is guarded, and a
+    // failed save, which this screen says as the Variables tab does.
+    ...(studio.classes === undefined ? {} : { classes: studio.classes }),
+    ...(studio.issue === undefined ? {} : { issue: studio.issue }),
   };
 }
 

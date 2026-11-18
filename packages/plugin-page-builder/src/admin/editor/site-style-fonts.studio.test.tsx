@@ -17,9 +17,13 @@ import {
   screen,
   within,
 } from "@testing-library/react";
+import * as React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const saves = vi.hoisted(() => ({ calls: [] as unknown[][] }));
+const saves = vi.hoisted(() => ({
+  calls: [] as unknown[][],
+  answer: (): unknown => ({ saved: true, issues: {} }),
+}));
 
 vi.mock("@nextlyhq/plugin-sdk/client", () => ({
   useCan: (permission: string) => permission === "update-site-style",
@@ -29,7 +33,7 @@ vi.mock("../site-style-client", () => ({
   useSaveSiteStyle: () => ({
     save: (...args: unknown[]) => {
       saves.calls.push(args);
-      return Promise.resolve({ saved: true, issues: {} });
+      return Promise.resolve(saves.answer());
     },
     reread: () => undefined,
   }),
@@ -85,10 +89,12 @@ vi.mock("../variables-client", async () => {
 
 const { SiteFontsScreen } = await import("./site-style-fonts");
 const { TokensStudio } = await import("./site-style-studios");
+const { useVariablesStudio } = await import("./site-style-tokens-studio");
 
 afterEach(() => {
   cleanup();
   saves.calls = [];
+  saves.answer = () => ({ saved: true, issues: {} });
 });
 
 const LORA: FontFaceDef = {
@@ -108,6 +114,31 @@ const TOKENS: SiteTokenSet = {
     },
   ],
 };
+
+/** Saves a change to the studio's variables, as another tab of it would. */
+function EditElsewhere(): React.JSX.Element {
+  const studio = useVariablesStudio();
+  return (
+    <button
+      type="button"
+      onClick={() =>
+        studio?.onChange?.({
+          ...TOKENS,
+          tokens: [
+            ...TOKENS.tokens,
+            {
+              name: "font.quote",
+              kind: "fontFamily",
+              values: { light: "serif" },
+            },
+          ],
+        })
+      }
+    >
+      Edit elsewhere
+    </button>
+  );
+}
 
 function screenIn(studio: boolean): void {
   const fonts = (
@@ -155,5 +186,68 @@ describe("the Fonts screen in the Variables studio", () => {
     expect(
       within(details).queryByRole("list", { name: "Where it’s used" })
     ).toBeNull();
+  });
+
+  it("says on the screen when a save of the studio's variables failed", async () => {
+    saves.answer = () => ({
+      saved: false,
+      issues: { tokens: "The site style wasn't saved. Try again." },
+    });
+    render(
+      <TokensStudio merged={TOKENS} supplied={undefined} pending={false}>
+        <EditElsewhere />
+        <SiteFontsScreen
+          faces={[LORA]}
+          tokens={TOKENS}
+          absence="pending"
+          storedFaces={[LORA]}
+          storedPending={false}
+          unreadableFonts={[]}
+        />
+      </TokensStudio>
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Edit elsewhere" }));
+    });
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "The site style wasn't saved. Try again."
+    );
+  });
+
+  it("guards a font a heading row takes from one of the studio's text styles", async () => {
+    const following: SiteTokenSet = {
+      ...TOKENS,
+      siteText: { h1: { textStyle: "ts-display" } },
+    };
+    render(
+      <TokensStudio
+        merged={following}
+        supplied={undefined}
+        pending={false}
+        classes={[
+          {
+            id: "ts-display",
+            slug: "display",
+            orderIndex: 0,
+            role: "text",
+            styles: { base: { base: { fontFamily: '"Lora", serif' } } },
+          },
+        ]}
+      >
+        <SiteFontsScreen
+          faces={[LORA]}
+          tokens={following}
+          absence="pending"
+          storedFaces={[LORA]}
+          storedPending={false}
+          unreadableFonts={[]}
+        />
+      </TokensStudio>
+    );
+    const details = await loraDetails();
+    fireEvent.click(within(details).getByRole("button", { name: "Remove" }));
+    expect(
+      within(details).getByRole("group", { name: "Lora can’t be removed" })
+    ).toBeTruthy();
   });
 });

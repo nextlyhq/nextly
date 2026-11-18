@@ -112,6 +112,36 @@ describe("where a font is used", () => {
     ).toEqual(["font.display"]);
   });
 
+  it("names Headings for a font a heading row takes from the text style it follows", () => {
+    // h1 follows Display, whose font is Lora: the row's own font is not drawn.
+    const display = {
+      id: "ts-display",
+      slug: "display",
+      orderIndex: 0,
+      role: "text" as const,
+      styles: {
+        base: { base: { fontFamily: '"Lora", serif' } },
+        hover: { tablet: { fontFamily: { $token: "font.display" } } },
+      },
+    };
+    const following: SiteTokenSet = {
+      ...BASE,
+      siteText: {
+        h1: { fontFamily: "Inter, sans-serif", textStyle: "ts-display" },
+      },
+    };
+    expect(familyUses("lora", following, [display]).roles).toEqual(["heading"]);
+    expect(familyUses("inter", following, [display]).roles).toEqual([]);
+    // A variable the style names, at any state or size, is the role's own.
+    expect(
+      familyUses("lora", following, [display]).variables.map(
+        each => each.identity
+      )
+    ).toEqual(["font.quote"]);
+    // Without the style, the row's own font is the one drawn.
+    expect(familyUses("inter", following).roles).toEqual(["heading"]);
+  });
+
   it("counts the places of every variable naming it, a role's own included", () => {
     const body = withFontRole(BASE, "body", '"Lora", serif');
     const uses = familyUses("lora", body);

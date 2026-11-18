@@ -16,6 +16,7 @@ import {
   resolveSiteTokens,
   tokenDisplayLabel,
   tokenIdentity,
+  type NamedClass,
   type SiteTokenSet,
 } from "@nextlyhq/blocks-engine";
 
@@ -69,18 +70,22 @@ const BROWSER_FONT = "the browser’s own font";
  *
  * @param key - The family, lower-cased
  * @param tokens - The site's variables and Site text, or `undefined` unread
+ * @param classes - The site's classes, where the text styles rows follow are
  * @returns The roles it is, the other font variables naming it first, and
  *   every variable whose places count towards it
  */
 export function familyUses(
   key: string,
-  tokens: SiteTokenSet | undefined
+  tokens: SiteTokenSet | undefined,
+  classes?: readonly NamedClass[]
 ): FamilyUses {
   if (tokens === undefined) return { roles: [], variables: [], counted: [] };
   // Row by row and in both modes: a heading row the others disagree with,
   // or a variable's dark value, still loses the font when it goes.
   const roles = (["body", "heading"] as const).filter(role =>
-    fontRoleStacks(tokens, role).some(stack => firstFamily(stack) === key)
+    fontRoleStacks(tokens, role, classes).some(
+      stack => firstFamily(stack) === key
+    )
   );
   const naming = resolveSiteTokens(tokens)
     .tokens.filter(token => token.kind === "fontFamily")
@@ -99,7 +104,9 @@ export function familyUses(
     });
   // A role's own variable is said as the role, not a second time, and its
   // places still count: blocks may name it too.
-  const held = new Set(roles.flatMap(role => fontRoleVariables(tokens, role)));
+  const held = new Set(
+    roles.flatMap(role => fontRoleVariables(tokens, role, classes))
+  );
   return {
     roles,
     variables: naming.filter(each => !held.has(each.identity)),

@@ -246,6 +246,39 @@ describe("removing a font in use", () => {
     expect(onRemoveFamily).not.toHaveBeenCalled();
   });
 
+  it("refuses a font a heading row takes from the text style it follows", async () => {
+    const onRemoveFamily = vi.fn(async () => undefined);
+    panel({
+      tokens: {
+        ...TOKENS,
+        siteText: { h2: { textStyle: "ts-display" } },
+      },
+      classes: [
+        {
+          id: "ts-display",
+          slug: "display",
+          orderIndex: 0,
+          role: "text",
+          styles: { base: { base: { fontFamily: '"Lora", serif' } } },
+        },
+      ],
+      onRemoveFamily,
+    });
+    const open = await details("Lora");
+    fireEvent.click(within(open).getByRole("button", { name: "Remove" }));
+    expect(
+      within(open).getByRole("group", { name: "Lora can’t be removed" })
+    ).toBeTruthy();
+    expect(onRemoveFamily).not.toHaveBeenCalled();
+  });
+
+  it("says when a change to the site's fonts wasn't saved", () => {
+    panel({ issue: "The site style wasn't saved. Try again." });
+    expect(screen.getByRole("alert").textContent).toBe(
+      "The site style wasn't saved. Try again."
+    );
+  });
+
   it("refuses a font one heading row draws, though the headings are mixed", async () => {
     const onRemoveFamily = vi.fn(async () => undefined);
     panel({

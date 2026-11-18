@@ -23,6 +23,7 @@
 import { cssString, tokenDisplayLabel } from "@nextlyhq/blocks-engine";
 import type {
   FontFaceDef,
+  NamedClass,
   SiteTextMap,
   SiteTokenSet,
 } from "@nextlyhq/blocks-engine";
@@ -135,6 +136,20 @@ export interface FontsPanelProps {
    * @experimental Settles with the Fonts screen.
    */
   suppliedText?: SiteTextMap;
+  /**
+   * The site's classes, where the text styles Site text rows follow are, so
+   * a font a row takes from one counts as the role's.
+   *
+   * @experimental Settles with the Fonts screen.
+   */
+  classes?: readonly NamedClass[];
+  /**
+   * What the last save of the site's variables said, when it failed. A role
+   * chosen here is saved with them, so its failure is said here too.
+   *
+   * @experimental Settles with the Fonts screen.
+   */
+  issue?: string;
 }
 
 /** What the Fonts screen adds to the list it draws: where it opens. */
@@ -233,6 +248,8 @@ export function FontsPanel({
   onOpenRole,
   onTokensChange,
   suppliedText,
+  // The rest is what a host's studio adds: its text styles and a failed save.
+  ...studio
 }: FontsPanelProps): React.JSX.Element {
   const [view, setView] = React.useState<View>({ kind: "list" });
   // The upload editor, open or not: held here so choosing a role for a font
@@ -243,7 +260,7 @@ export function FontsPanel({
     () => (faces === undefined ? [] : siteFamilies(faces, codeFaces)),
     [faces, codeFaces]
   );
-  const usesOf = useFamiliesUses(families, tokens, usage);
+  const usesOf = useFamiliesUses(families, tokens, usage, studio.classes);
   // Asked once a font finishes adding, from the catalogue or a file.
   const useFor = useUseFor({
     tokens,
@@ -284,6 +301,7 @@ export function FontsPanel({
       faces={faces}
       tokens={tokens}
       readOnly={readOnly}
+      issue={studio.issue}
       addButton={addButton}
       onOpenTokens={onOpenTokens}
       onOpenRole={onOpenRole}
@@ -363,6 +381,7 @@ function FontsList({
   faces,
   tokens,
   readOnly,
+  issue,
   addButton,
   onOpenTokens,
   onOpenRole,
@@ -387,6 +406,7 @@ function FontsList({
   faces: readonly FontFaceDef[];
   tokens: SiteTokenSet | undefined;
   readOnly: boolean;
+  issue: string | undefined;
   addButton: React.RefObject<HTMLButtonElement | null>;
   onOpenTokens: (() => void) | undefined;
   onOpenRole: FontsPanelProps["onOpenRole"];
@@ -425,7 +445,7 @@ function FontsList({
       </div>
       <div className="nx-vars__body">
         {uploading ? null : question}
-        <ReadOnlyNote readOnly={readOnly} />
+        <ListNotes readOnly={readOnly} issue={issue} />
         <Popover open={uploading} onOpenChange={setUploading} modal>
           <section className="nx-vars__group" aria-labelledby="nx-fonts-site">
             <PopoverAnchor asChild>
@@ -499,17 +519,30 @@ function UploadEditor({
   );
 }
 
-/** What a role without the grant is told above the list. */
-function ReadOnlyNote({
+/**
+ * What a role without the grant is told above the list, and a save of the
+ * site's variables that failed, as the Variables tab says it.
+ */
+function ListNotes({
   readOnly,
+  issue,
 }: {
   readOnly: boolean;
-}): React.JSX.Element | null {
-  if (!readOnly) return null;
+  issue: string | undefined;
+}): React.JSX.Element {
   return (
-    <p className="nx-vars__note">
-      {`You can view the site’s ${words().fonts} but not change them.`}
-    </p>
+    <>
+      {readOnly ? (
+        <p className="nx-vars__note">
+          {`You can view the site’s ${words().fonts} but not change them.`}
+        </p>
+      ) : null}
+      {issue === undefined ? null : (
+        <p className="nx-vars__alert" role="alert">
+          {issue}
+        </p>
+      )}
+    </>
   );
 }
 

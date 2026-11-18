@@ -20,10 +20,12 @@ import {
   resolveSiteText,
   resolveSiteTokens,
   resolveTokenPrefix,
+  siteTextStyles,
   tokenCustomProperty,
   tokenIdentity,
   tokenRef,
   type FontFaceDef,
+  type NamedClass,
   type SiteTextEntry,
   type SiteTextMap,
   type SiteTextRole,
@@ -125,19 +127,47 @@ export function fontRoleSetting(
 }
 
 /**
+ * The fonts a row draws, as the engine writes it: a row following a text
+ * style draws the style's, at every state and size, and its own otherwise.
+ */
+function rowFonts(
+  row: SiteTextRole,
+  entry: SiteTextEntry | undefined,
+  classes: readonly NamedClass[] | undefined
+): StyleValue[] {
+  const styles = siteTextStyles(row, entry, classes) ?? {};
+  return Object.values(styles).flatMap(sizes =>
+    Object.values(sizes ?? {}).flatMap(values =>
+      values?.fontFamily === undefined ? [] : [values.fontFamily]
+    )
+  );
+}
+
+/** Every font a role's rows draw, each row on its own, as the engine reads it. */
+function roleFonts(
+  tokens: SiteTokenSet,
+  role: FontRole,
+  classes: readonly NamedClass[] | undefined
+): StyleValue[] {
+  const rows = resolveSiteText(tokens.siteText);
+  return rowsOf(role).flatMap(row => rowFonts(row, rows[row], classes));
+}
+
+/**
  * Every font a role's rows draw, each row on its own and in both modes, as
  * stacks: what removing a font takes from the role, whether its rows agree
- * or not. A row with no font of its own adds none.
+ * or not. A row with no font of its own adds none, and a row following a
+ * text style adds the style's.
+ *
+ * @param classes - the site's classes, where its text styles are
  */
 export function fontRoleStacks(
   tokens: SiteTokenSet,
-  role: FontRole
+  role: FontRole,
+  classes?: readonly NamedClass[]
 ): readonly string[] {
-  const rows = resolveSiteText(tokens.siteText);
   const stacks = new Set<string>();
-  for (const row of rowsOf(role)) {
-    const font = rows[row]?.fontFamily;
-    if (font === undefined) continue;
+  for (const font of roleFonts(tokens, role, classes)) {
     for (const mode of ["light", "dark"] as const) {
       const stack = drawnStack(tokens, font, mode);
       if (stack !== undefined) stacks.add(stack);
@@ -146,16 +176,20 @@ export function fontRoleStacks(
   return [...stacks];
 }
 
-/** The variables a role's rows point at, by identity. */
+/**
+ * The variables a role's rows point at, by identity, a followed text
+ * style's included.
+ *
+ * @param classes - the site's classes, where its text styles are
+ */
 export function fontRoleVariables(
   tokens: SiteTokenSet,
-  role: FontRole
+  role: FontRole,
+  classes?: readonly NamedClass[]
 ): readonly string[] {
-  const rows = resolveSiteText(tokens.siteText);
-  const identities = rowsOf(role).flatMap(row => {
-    const font = rows[row]?.fontFamily;
-    return font !== undefined && isTokenRef(font) ? [font.$token] : [];
-  });
+  const identities = roleFonts(tokens, role, classes).flatMap(font =>
+    isTokenRef(font) ? [font.$token] : []
+  );
   return [...new Set(identities)];
 }
 
