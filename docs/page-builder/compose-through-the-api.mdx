@@ -198,7 +198,8 @@ is the id of one of the component's own settings (`{ "$bind": "title", "source":
 and the block shows what each placement gives that setting, as the setting's own block does:
 the placement's value, else its binding, else the setting's default. Shown on its own, the
 component shows the default. A setting the component doesn't have, or one that shows or
-hides its block, is refused; on a page, where no setting is there to follow, the block shows
+hides its block, is refused, as is one whose value the prop can't hold: another type, or a
+choice the prop doesn't offer. On a page, where no setting is there to follow, the block shows
 its own value. Removing the setting leaves each block that followed it showing the
 setting's last default, unbound. The prop's own value stays, and is shown when the binding can't
 be. The write is judged as the editor's save is: a prop the block lacks, a field its source
