@@ -564,6 +564,28 @@ describe("a refusal, for a production start that ran the migrations itself", () 
     );
   });
 
+  it.each([
+    ["a closing parenthesis", "notes (old)"],
+    ["a space", "old notes"],
+    ["the words between the two spellings", "a (or b)"],
+  ])("does so for a table whose name holds %s", async (_what, table) => {
+    const message = await refused([
+      { kind: "column", table, column: "summary" },
+    ]);
+    const target = `${table}.summary`;
+    // The control: the consent check names the target as it is.
+    expect(message).toContain(
+      `To consent: --accept-data-loss=${target} (or NEXTLY_ACCEPT_DATA_LOSS=${target}).`
+    );
+
+    expect(refusalForStart(message)).toBe(
+      message.replace(
+        `To consent: --accept-data-loss=${target} (or NEXTLY_ACCEPT_DATA_LOSS=${target}).`,
+        `To consent: start with NEXTLY_ACCEPT_DATA_LOSS=${target}, or run "nextly migrate --accept-data-loss=${target}".`
+      )
+    );
+  });
+
   it("keeps a message that names the variable alone, or no consent, as it is", async () => {
     const variableOnly = await refused(
       [{ kind: "table", table: "drafts" }],

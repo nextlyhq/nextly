@@ -365,12 +365,15 @@ function describeWhat(deletion: Deletion): string {
 /** The consent in both spellings, as a command's refusal ends on it. */
 const commandForms = (cli: string, env: string): string => `${cli} (or ${env})`;
 
-/** {@link commandForms} as it stands in a refusal's message, each spelling captured. */
+/**
+ * {@link commandForms} as it stands in a refusal's message. The two spellings
+ * carry one value, so the variable's is matched as the flag's again: a target
+ * may hold any character a table or column name can, a space or a closing
+ * parenthesis among them, and is never cut short at one. The form without
+ * targets has no value on the flag and `1` on the variable.
+ */
 const COMMAND_FORMS = new RegExp(
-  commandForms(
-    `(${ACCEPT_DATA_LOSS_FLAG}(?:=[^\\s)]+)?)`,
-    `(${ACCEPT_DATA_LOSS_ENV}=[^\\s)]+)`
-  ).replace(/ \(or (.*)\)$/, " \\(or $1\\)")
+  `${ACCEPT_DATA_LOSS_FLAG}(?:=(.+?))? \\(or ${ACCEPT_DATA_LOSS_ENV}=(?:\\1|1)\\)`
 );
 
 /**
@@ -380,10 +383,10 @@ const COMMAND_FORMS = new RegExp(
  * takes it. A message naming no such consent is returned as it is.
  */
 export function refusalForStart(message: string): string {
-  return message.replace(
-    COMMAND_FORMS,
-    (_forms, cli: string, env: string) =>
-      `start with ${env}, or run "nextly migrate ${cli}"`
+  return message.replace(COMMAND_FORMS, (_forms, value?: string) =>
+    value === undefined
+      ? `start with ${ACCEPT_DATA_LOSS_ENV}=1, or run "nextly migrate ${ACCEPT_DATA_LOSS_FLAG}"`
+      : `start with ${ACCEPT_DATA_LOSS_ENV}=${value}, or run "nextly migrate ${ACCEPT_DATA_LOSS_FLAG}=${value}"`
   );
 }
 
