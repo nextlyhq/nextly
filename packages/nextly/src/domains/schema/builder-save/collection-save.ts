@@ -53,6 +53,7 @@ import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { AddressKind } from "../../../shared/address-rule";
 import { builderColumnIsUnique } from "../../dynamic-collections/services/dynamic-collection-schema-service";
+import { statedMoment } from "../../dynamic-collections/services/stated-default";
 import { appLanguageOrder } from "../../i18n/configured-locales";
 import { joinRetries } from "../../i18n/migration/archive-preflight";
 import { mainTableFields } from "../../i18n/per-language-storage";
@@ -762,11 +763,10 @@ function answeredField(
  * a Single's one row; a collection, whose rows only the person's answer settles, is refused one
  * whoever passes it, and a column the table already has keeps the values it holds.
  */
-function refuseRowFillsOutsideSingle(
+async function refuseRowFillsOutsideSingle(
   save: CollectionSave,
-  live: TableSpec | undefined,
-  dialect: SupportedDialect
-): void {
+  live: TableSpec | undefined
+): Promise<void> {
   const refusal = (path: string, code: string, message: string) =>
     NextlyError.validation({ errors: [{ path, code, message }] });
   for (const fill of save.rowFills ?? []) {
@@ -793,16 +793,23 @@ function refuseRowFillsOutsideSingle(
         `${fill.column} is already a column of the Single, so its value is kept rather than filled.`
       );
     }
-    const valid = validateDefaultValue(
-      { name: fill.column, type: field.type },
-      fill.value,
-      dialect
+    // Judged by the entry validator every write of the Single answers to, as a Single's PATCH
+    // judges the default it fills: a value its own rules refuse would be refused by every write.
+    const { validateEntryData } = await import(
+      "../../../shared/lib/entry-validation"
     );
-    if (!valid.success) {
+    const issues = await validateEntryData(
+      { [fill.column]: fill.value },
+      [field],
+      { mode: "create" }
+    );
+    if (issues.length > 0) {
       throw refusal(
-        fill.column,
-        "INVALID_DEFAULT_FOR_TYPE",
-        valid.error ?? "The fill value does not fit the field."
+        `fields.${fill.column}`,
+        "DEFAULT_FAILS_FIELD_RULES",
+        `The default "${fill.column}" states would fill the entry this Single already holds, ` +
+          `but the field's own rules refuse it. ${issues[0]?.message ?? ""} Change the default or the ` +
+          `rule, then save again.`
       );
     }
   }
@@ -823,7 +830,12 @@ function fileResolutions(
     ...(save.rowFills ?? []).map(fill => ({
       column: fill.column,
       kind: "fill" as const,
-      value: fill.value,
+      // A date is written as the moment it names, which the fill stores in the dialect's form
+      // (`storedDateValue`), as the PATCH road's fill does; never the text it was stated in.
+      value:
+        answeredField(save, fill.column)?.type === "date"
+          ? (statedMoment(fill.value) ?? fill.value)
+          : fill.value,
     })),
   ];
   if (answers.length === 0) return {};
@@ -850,7 +862,7 @@ async function settledRows(
   const live = exists
     ? (await introspectLiveSnapshot(db, dialect, [table])).tables[0]
     : undefined;
-  refuseRowFillsOutsideSingle(save, live, dialect);
+  await refuseRowFillsOutsideSingle(save, live);
   const settled: SettledRows[] = [];
   for (const resolution of save.resolutions ?? []) {
     const field = answeredField(save, resolution.column);
