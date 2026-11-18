@@ -13,6 +13,7 @@
 export { EmailTemplateForm } from "./EmailTemplateForm";
 export {
   DEFAULT_VALUES,
+  newEmailValues,
   formValuesToCreatePayload,
   formValuesToUpdatePayload,
   templateToFormValues,

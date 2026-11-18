@@ -22,30 +22,63 @@ import {
 import type { JSX } from "react";
 import { useId, useState } from "react";
 
-import { Code } from "@admin/components/icons";
+import { Code, Pencil } from "@admin/components/icons";
 import { ROUTES, withQuery } from "@admin/constants/routes";
 import { useEmailTemplates } from "@admin/hooks/queries/useEmailTemplates";
 import { navigateTo } from "@admin/lib/navigation";
+import { cn } from "@admin/lib/utils";
+import type { TemplateFormat } from "@admin/services/emailTemplateApi";
 
 import { isMessage } from "./messages-model";
 
 type StartFrom = "blank" | "copy";
 
-/** Where the editor opens for a new email with these choices. */
-export function createRouteFor(name: string, copyOf: string | null): string {
+/**
+ * Where the editor opens for a new email with these choices. A copy keeps the
+ * format of the email it copies; a blank one says how it is made when it is
+ * written (coded is the editor's own start).
+ */
+export function createRouteFor(
+  name: string,
+  copyOf: string | null,
+  format: TemplateFormat = "code"
+): string {
   return withQuery(ROUTES.EMAIL_MESSAGES_CREATE, {
     name: name.trim() || undefined,
     duplicate: copyOf ?? undefined,
+    format: copyOf === null && format === "written" ? "written" : undefined,
   });
 }
+
+/** The two ways an email is made, as the question offers them. */
+const HOW: ReadonlyArray<{
+  format: TemplateFormat;
+  title: string;
+  hint: string;
+  Icon: typeof Code;
+}> = [
+  {
+    format: "written",
+    title: "Write it",
+    hint: "Headings, text, buttons, images and lists. Variables are chips. The look comes from your brand settings.",
+    Icon: Pencil,
+  },
+  {
+    format: "code",
+    title: "Code it",
+    hint: "HTML with Liquid, in the code editor. Full control over the markup.",
+    Icon: Code,
+  },
+];
 
 /**
  * The questions a new email starts with: its name, and whether it starts
  * blank or from a copy of an existing email. The editor opens with the
  * answers filled in.
  *
- * It also says how the email is made. Only Code is offered until Write mode
- * ships, and saying so here keeps the question where it will be asked.
+ * A blank email also asks how it is made: written in blocks or coded, with
+ * neither chosen for the person. A copy keeps the format of the email it
+ * copies.
  */
 export function CreateEmailDialog({
   open,
@@ -56,18 +89,23 @@ export function CreateEmailDialog({
 }): JSX.Element {
   const nameId = useId();
   const copyId = useId();
+  const howId = useId();
   const [name, setName] = useState("");
   const [startFrom, setStartFrom] = useState<StartFrom>("blank");
   const [copyOf, setCopyOf] = useState<string | null>(null);
+  const [how, setHow] = useState<TemplateFormat | null>(null);
   const { data: templates = [] } = useEmailTemplates({ enabled: open });
   const emails = templates.filter(isMessage);
 
   const ready =
-    name.trim().length > 0 && (startFrom === "blank" || copyOf !== null);
+    name.trim().length > 0 &&
+    (startFrom === "blank" ? how !== null : copyOf !== null);
 
   const create = () => {
     if (!ready) return;
-    navigateTo(createRouteFor(name, startFrom === "copy" ? copyOf : null));
+    navigateTo(
+      createRouteFor(name, startFrom === "copy" ? copyOf : null, how ?? "code")
+    );
   };
 
   return (
@@ -130,21 +168,48 @@ export function CreateEmailDialog({
             )}
           </div>
 
-          <div className="space-y-1.5">
-            <Label>How do you want to make it?</Label>
-            <div className="flex items-start gap-3 rounded-lg border-2 border-foreground p-3">
-              <span className="rounded-md bg-muted p-2">
-                <Code className="h-4 w-4" />
-              </span>
-              <div>
-                <div className="text-sm font-medium">Code it</div>
-                <p className="text-xs text-muted-foreground">
-                  HTML with Liquid, in the code editor. Full control over the
-                  markup.
-                </p>
+          {startFrom === "blank" ? (
+            <div className="space-y-1.5">
+              <Label id={howId}>How do you want to make it?</Label>
+              <div
+                role="radiogroup"
+                aria-labelledby={howId}
+                className="grid gap-2"
+              >
+                {HOW.map(({ format, title, hint, Icon }) => (
+                  <button
+                    key={format}
+                    type="button"
+                    role="radio"
+                    aria-checked={how === format}
+                    onClick={() => setHow(format)}
+                    className={cn(
+                      "flex items-start gap-3 rounded-lg border-2 p-3 text-left",
+                      how === format ? "border-foreground" : "border-border"
+                    )}
+                  >
+                    <span className="rounded-md bg-muted p-2">
+                      <Icon className="h-4 w-4" />
+                    </span>
+                    <span>
+                      <span className="block text-sm font-medium">{title}</span>
+                      <span className="block text-xs text-muted-foreground">
+                        {hint}
+                      </span>
+                    </span>
+                  </button>
+                ))}
               </div>
+              <p className="text-xs text-muted-foreground">
+                A written email can be converted to code later. A coded email
+                can&apos;t be turned into blocks.
+              </p>
             </div>
-          </div>
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              A copy is made the way its email is: written or coded.
+            </p>
+          )}
 
           <DialogFooter>
             <Button

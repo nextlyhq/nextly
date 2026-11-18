@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { generateSlug } from "@admin/lib/fields";
 import type {
   CreateEmailTemplatePayload,
   EmailTemplateRecord,
@@ -245,6 +246,34 @@ export const DEFAULT_VALUES: TemplateFormValues = {
   cc: [],
   bcc: [],
 };
+
+/** A new written email's first blocks: a heading to start from and an empty text block. */
+const WRITTEN_START: WrittenDocument = {
+  version: 1,
+  blocks: [
+    { type: "heading", text: [{ type: "text", text: "Hello" }] },
+    { type: "text", text: [] },
+  ],
+};
+
+/**
+ * A new email's first values: its name and the slug made from it, and, for
+ * one written in blocks, the blocks it starts with. A coded one starts as the
+ * editor always has.
+ */
+export function newEmailValues(
+  name: string,
+  format: TemplateFormat
+): TemplateFormValues {
+  return {
+    ...DEFAULT_VALUES,
+    name,
+    slug: generateSlug(name),
+    ...(format === "written"
+      ? { format: "written", blocks: structuredClone(WRITTEN_START) }
+      : {}),
+  };
+}
 
 // Sentinels for "Use Default" (Radix Select rejects empty values).
 export const USE_DEFAULT_PROVIDER = "__default__";

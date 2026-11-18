@@ -14,6 +14,7 @@ import {
   DEFAULT_VALUES,
   formValuesToCreatePayload,
   formValuesToUpdatePayload,
+  newEmailValues,
   templateSchemaFor,
   templateToFormValues,
   type TemplateFormValues,
@@ -112,5 +113,28 @@ describe("a written email in the form", () => {
     expect(
       schema.safeParse({ ...written, format: "code", blocks: null }).success
     ).toBe(false);
+  });
+});
+
+describe("a new email's first values", () => {
+  it("starts a written one with a heading and an empty text block", () => {
+    const values = newEmailValues("Order paid", "written");
+    expect(values).toMatchObject({
+      name: "Order paid",
+      slug: "order-paid",
+      format: "written",
+    });
+    expect(values.blocks?.blocks.map(block => block.type)).toEqual([
+      "heading",
+      "text",
+    ]);
+  });
+
+  it("starts a coded one as the editor always has, with no blocks", () => {
+    expect(newEmailValues("Order paid", "code")).toEqual({
+      ...DEFAULT_VALUES,
+      name: "Order paid",
+      slug: "order-paid",
+    });
   });
 });
