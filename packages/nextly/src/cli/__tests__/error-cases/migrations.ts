@@ -28,6 +28,10 @@ import {
   resolveMigration,
   type ResolveMigrationArgs,
 } from "../../../domains/schema/migrate/resolve";
+import {
+  refuseUnlessProven,
+  statementsShownBySnapshot,
+} from "../../../domains/schema/migrate/snapshot-proof";
 import { uniqueColumnRepeatsError } from "../../../domains/schema/migrate/unique-column-guard";
 import { parseSnapshotFile } from "../../../domains/schema/migrate-create/snapshot-io";
 import type { NextlySchemaSnapshot } from "../../../domains/schema/pipeline/diff/types";
@@ -46,6 +50,7 @@ import {
   resolveModeRequired,
   schemaChangeWithoutMigration,
   settingsChangeWithoutMigration,
+  databaseBehindMigrations,
   snapshotWithoutMigration,
 } from "../../errors/areas/migrations";
 import { requireConsented } from "../../utils/data-loss-consent";
@@ -80,6 +85,8 @@ async function refusedVerdict(flag: string | boolean | undefined) {
 
 /** An app migration's file, and the folder it is in. */
 const FILE = "20261020_120000_add_posts.sql";
+/** The checksum `FILE`'s snapshot recorded, which it still matches. */
+const POSTS_CHECKSUM = "5f0c".repeat(16);
 const MIGRATIONS = `${PROJECT}/migrations`;
 
 /** A Schema Builder save's file, named as a save names it. */
@@ -262,6 +269,29 @@ export const MIGRATION_CASES = {
       "nextly migrate",
       ["20261020_120000_add_posts.sql"],
       []
+    ),
+  // As `refuseUnlessProven` refuses a pending file that adds a column and backfills it, the
+  // column already brought to the database through `db:sync`.
+  MIGRATION_NOT_PROVEN: () =>
+    thrown(async () =>
+      refuseUnlessProven({
+        file: { filename: FILE, sha256: POSTS_CHECKSUM },
+        proof: {
+          statements: statementsShownBySnapshot(
+            [
+              'ALTER TABLE "dc_posts" ADD COLUMN "slug" text',
+              `UPDATE "dc_posts" SET "slug" = 'untitled'`,
+            ],
+            "postgresql",
+            {
+              before: { tables: [{ name: "dc_posts", columns: [] }] },
+              target: { tables: [{ name: "dc_posts", columns: [] }] },
+            }
+          ),
+          recordedChecksum: POSTS_CHECKSUM,
+        },
+        attempt: undefined,
+      })
     ),
   // As `oldBuilderFilesChanged` in `cli/commands/migrate.ts` raises it.
   OLD_BUILDER_FILE_SNAPSHOT_ADDED: () =>
@@ -482,6 +512,11 @@ export const MIGRATION_CASES = {
     ]),
   SETTINGS_CHANGE_WITHOUT_MIGRATION: () =>
     settingsChangeWithoutMigration(1, ["~ posts: labels.singular"]),
+  DATABASE_BEHIND_MIGRATIONS: () =>
+    databaseBehindMigrations(2, [
+      "- table dc_posts (created by 20261116_120000_000_create_posts)",
+      "- column dc_tags.label (created by 20261116_120000_001_add_label)",
+    ]),
   // The runner's own check, run for real on a file that holds a statement no transaction can.
   REFUSED_STATEMENT: () => {
     try {

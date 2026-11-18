@@ -19,6 +19,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
+import { withWriteParts } from "@nextly/hooks/hook-language";
 import type { HookRegistry } from "@nextly/hooks/hook-registry";
 import type {
   RichTextOutputFormat,
@@ -37,7 +38,10 @@ import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import type { RequestActor } from "../../auth/request-actor";
 import type { RBACAccessControlService } from "../../domains/auth/services/rbac-access-control-service";
 import { assertWellFormedFilter } from "../../domains/collections/query/filter-shape";
-import type { LifecycleParts } from "../../domains/collections/services/all-locales-lifecycle";
+import {
+  type LifecycleParts,
+  movesShared,
+} from "../../domains/collections/services/all-locales-lifecycle";
 import { CollectionAccessService } from "../../domains/collections/services/collection-access-service";
 import { CollectionBulkService } from "../../domains/collections/services/collection-bulk-service";
 import { CollectionHookService } from "../../domains/collections/services/collection-hook-service";
@@ -55,8 +59,8 @@ import type {
   BulkUpdateEntry,
 } from "../../domains/collections/services/collection-types";
 import {
+  publishCallerOf,
   publishGate,
-  type PublishCaller,
 } from "../../domains/collections/services/publish-gate";
 import {
   publishParts,
@@ -70,6 +74,11 @@ import {
   type LocalizationSource,
   localizationNow,
 } from "../../domains/i18n/localization-source";
+import {
+  readInFirstPublishedLanguage,
+  readOfEveryLanguage,
+} from "../../domains/i18n/read-in-language";
+import { resolveLocaleChain } from "../../domains/i18n/resolve-locale";
 import { releaseVisibilityFor } from "../../domains/releases/release-visibility";
 import type { RetentionRunner } from "../../domains/retention/runner";
 import type { FieldSources } from "../../domains/versions/restored-from";
@@ -136,27 +145,6 @@ function refusedFilter<T>(where: unknown): CollectionServiceResult<T> | null {
   }
 }
 
-/**
- * Who asks a publish of chosen parts to move, as its gate is told: trusted code, an API key on its
- * own grants (with the owner the request carries), a person, or a visitor with neither.
- */
-function publishCallerOf(params: {
-  overrideAccess?: boolean;
-  user?: UserContext;
-  authenticatedScope?: AuthenticatedScope;
-}): PublishCaller {
-  if (params.overrideAccess === true) return { kind: "trusted" };
-  const userId = params.user?.id;
-  if (params.authenticatedScope?.actorType === "apiKey") {
-    return {
-      kind: "api-key",
-      ...(userId === undefined ? {} : { userId }),
-      scope: params.authenticatedScope,
-    };
-  }
-  return userId === undefined ? { kind: "visitor" } : { kind: "user", userId };
-}
-
 /** What publishing or unpublishing every language of an entry takes. */
 type EveryLanguageLifecycleParams = {
   collectionName: string;
@@ -197,6 +185,12 @@ type EveryLanguageLifecycleParams = {
   context?: Record<string, unknown>;
   /** The parts the transition moves, where fewer than all; see `LifecycleParts`. */
   parts?: LifecycleParts;
+  /** Who performed the transition, recorded on the events and told to the publish gate. */
+  actor?: RequestActor;
+  /** A publish made without review, with the caller's reason, told to the publish gate. */
+  withoutReview?: { reason: string };
+  /** Set by the publish of chosen parts, which asked the publish gate's early answer already. */
+  gateAskedEarly?: boolean;
 };
 
 /**
@@ -328,6 +322,7 @@ export class CollectionEntryService extends BaseService {
     fallbackLocale?: string | false;
     translationStatus?: boolean;
     where?: unknown;
+    translations?: "all";
   }) {
     return readLanguagesFor(
       this.localization,
@@ -380,7 +375,7 @@ export class CollectionEntryService extends BaseService {
     return (
       refusedFilter(params.where) ??
       withRuleLanguage(this.readLanguages(params), () =>
-        this.queryService.listEntries(params)
+        this.queryService.listEntries(readOfEveryLanguage(params))
       )
     );
   }
@@ -439,7 +434,7 @@ export class CollectionEntryService extends BaseService {
     return (
       refusedFilter(params.where) ??
       withRuleLanguage(this.readLanguages(params), () =>
-        this.queryService.countEntries(params)
+        this.queryService.countEntries(readOfEveryLanguage(params))
       )
     );
   }
@@ -535,10 +530,37 @@ export class CollectionEntryService extends BaseService {
     authenticatedScope?: AuthenticatedScope;
     /** A grant waiving the collection's read hooks, honoured by the query service. */
     hookExemptRead?: HookExemptRead;
+    /**
+     * Whole-document fallback: where the entry is not found in the requested
+     * language, answer in the first language of its fallback chain that has
+     * it, and say which (`_locale`).
+     */
+    wholeDocumentFallback?: boolean;
+    /** Attach `_sources`: for each translatable field, the language its value came from. */
+    sourceLocales?: boolean;
+    /** `"all"`: attach every language's values beside the read's own (`_allLocales`). */
+    translations?: "all";
+    /** Attach `_details`; see `CollectionQueryService.getEntry`. */
+    details?: boolean;
   }) {
-    return withRuleLanguage(this.readLanguages(params), () =>
-      this.queryService.getEntry(params)
-    );
+    // Rules are judged in the languages the read was asked in, `locale=all`
+    // included; the query reads what that request stands for.
+    const read = (locale: string | undefined) => {
+      const inLanguage = { ...params, locale };
+      return withRuleLanguage(this.readLanguages(inLanguage), () =>
+        this.queryService.getEntry(readOfEveryLanguage(inLanguage))
+      );
+    };
+    const chain = params.wholeDocumentFallback
+      ? resolveLocaleChain(
+          this.localization,
+          params.locale,
+          params.fallbackLocale
+        )
+      : null;
+    const [first, ...rest] = chain ?? [];
+    if (first === undefined) return read(params.locale);
+    return readInFirstPublishedLanguage([first, ...rest], read);
   }
 
   /**
@@ -774,6 +796,8 @@ export class CollectionEntryService extends BaseService {
     body: Record<string, unknown>,
     depth?: number
   ) {
+    // Its hooks are told it moves the shared part by the mutation service,
+    // which every create reaches.
     const result = await withRuleLanguage(
       writeLanguagesFor(this.localization, params.locale),
       () => this.mutationService.createEntry(params, body, depth)
@@ -977,8 +1001,6 @@ export class CollectionEntryService extends BaseService {
       /**
        * The fields this write restored, and the version each came from,
        * recorded per field on the version it captures (see `restored-from`).
-       *
-       * @experimental
        */
       restoredFrom?: FieldSources;
       /**
@@ -1033,9 +1055,13 @@ export class CollectionEntryService extends BaseService {
 
   /** The transition of every language (or of `params.parts`), judged by its own rules alone. */
   private async transitionEveryLanguage(params: EveryLanguageLifecycleParams) {
+    // Its hooks are told whether the transition moves the shared part.
     const result = await withRuleLanguage(
       everyLanguageOf(this.localization),
-      () => this.mutationService.publishAllLocales(params)
+      () =>
+        withWriteParts({ shared: movesShared(params.parts) }, () =>
+          this.mutationService.publishAllLocales(params)
+        )
     );
     await this.afterWriteIfRecorded(result, params.disableRevalidate);
     return result;
@@ -1170,9 +1196,19 @@ export class CollectionEntryService extends BaseService {
       gate: publishGate(),
       collection: params.collectionName,
       caller: publishCallerOf(params),
+      ...(params.actor === undefined ? {} : { actor: params.actor }),
+      ...(params.withoutReview === undefined
+        ? {}
+        : { withoutReview: params.withoutReview }),
       // The transition of every language, told which parts it moves.
       move: (direction, parts, describe) => {
-        const scoped = parts === undefined ? params : { ...params, parts };
+        // The gate's early answer was asked above, with the rest of the request: the move asks
+        // only its verdict under the lock.
+        const scoped = {
+          ...params,
+          ...(parts === undefined ? {} : { parts }),
+          gateAskedEarly: true,
+        };
         if (describe) return this.previewPublishAllLocales(scoped);
         // The value rules were judged above, with the rest of the request.
         return direction === "publish"
@@ -1196,7 +1232,10 @@ export class CollectionEntryService extends BaseService {
       params.parts === undefined
         ? everyLanguageOf(this.localization)
         : { locales: [...params.parts.locales] },
-      () => this.mutationService.unpublishAllLocales(params)
+      () =>
+        withWriteParts({ shared: movesShared(params.parts) }, () =>
+          this.mutationService.unpublishAllLocales(params)
+        )
     );
     await this.afterWriteIfRecorded(result, params.disableRevalidate);
     return result;
@@ -1228,6 +1267,8 @@ export class CollectionEntryService extends BaseService {
     /** API-key scope; judges the delete gate on the key's own grant. */
     authenticatedScope?: AuthenticatedScope;
   }) {
+    // Its hooks are told it moves the shared part by the mutation service,
+    // which every delete reaches.
     const result = await withRuleLanguage(
       everyLanguageOf(this.localization),
       () => this.mutationService.deleteEntry(params)

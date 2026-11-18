@@ -24,6 +24,7 @@ import {
 import { useEmailTemplates } from "@admin/hooks/queries/useEmailTemplates";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
+import { plural } from "@admin/lib/count-words";
 import type {
   BrandOverview,
   BrandSettings,
@@ -42,7 +43,6 @@ import {
   defaultLayoutKept,
   draftOf,
   isEmptyChange,
-  plural,
   previewChangeOf,
   previewEmailOrder,
 } from "./design-model";

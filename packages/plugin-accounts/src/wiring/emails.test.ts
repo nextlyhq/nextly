@@ -76,6 +76,23 @@ describe("the accounts email templates", () => {
     }
   });
 
+  it("say what sends each template", () => {
+    const templates = accountsEmailTemplates();
+    expect(templates).toHaveLength(Object.keys(SAMPLES).length);
+    for (const template of templates) {
+      expect(template.sentBy?.length, template.slug).toBeGreaterThan(0);
+      for (const line of template.sentBy ?? []) {
+        expect(line.trim(), template.slug).toBeTruthy();
+      }
+    }
+
+    const bySlug = new Map(templates.map(t => [t.slug, t.sentBy]));
+    expect(bySlug.get(templateSlug("verify-address"))).toEqual([
+      "Someone signs up",
+      "Someone asks for a new verification link",
+    ]);
+  });
+
   it("mark as carrying a secret every email with a link or code that acts for whoever holds it, and no other", () => {
     // A link that verifies, resets, confirms or cancels for whoever opens it,
     // or a code that does the same. The sign-in and reset links of

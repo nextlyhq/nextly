@@ -370,7 +370,7 @@ describe("a bound image", () => {
     // It says what to do, not only what is lost.
     expect(note.textContent).toMatch(/carries no alt text\./);
     expect(note.textContent).toMatch(
-      /Choose Custom to describe it for screen readers\./
+      /Type alt text to describe it for screen readers\./
     );
     // An entry's empty or unusable address shows the block's own image here
     // (no fallback kept), which the note names rather than denying all alt.
@@ -439,6 +439,71 @@ describe("a bound image", () => {
     mount({ mediaId: { $bind: "cover" } }, undefined, SOURCES, {}, [], list);
     await screen.findByText(/comes from a bound library file/);
     expect(list).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers the way back to a bound file's alt text over a stored empty alt", async () => {
+    // The field is already blank, so emptying it writes nothing: the reset
+    // is the only way to drop the page's empty alt, and the bound file's
+    // words can't be shown in the editor to make it appear.
+    mount({ mediaId: { $bind: "cover" } }, undefined, SOURCES, { alt: "" });
+    const reset = await screen.findByRole("button", {
+      name: "Use the media library's alt text",
+    });
+    applied = [];
+    fireEvent.click(reset);
+    expect(applied).toHaveLength(1);
+    expect(storedProps()).toEqual({});
+    expect(
+      await screen.findByText(/comes from a bound library file/)
+    ).toBeTruthy();
+  });
+
+  it("offers the same way back over the page's own words for a bound file", async () => {
+    mount({ mediaId: { $bind: "cover" } }, undefined, SOURCES, {
+      alt: "Our team",
+    });
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Use the media library's alt text",
+      })
+    );
+    expect(storedProps()).toEqual({});
+  });
+
+  it("offers no library alt text for a picture bound to an address", async () => {
+    // The control for the two above: an address carries no alt text, so
+    // there is nothing in the library to go back to.
+    mount(
+      { mediaId: { $bind: "bannerUrl" } },
+      undefined,
+      [
+        {
+          binding: { source: "entry" },
+          label: "Post",
+          fields: [{ name: "bannerUrl", type: "url", public: true }],
+        },
+      ],
+      { alt: "" }
+    );
+    // Once the sources are read, when the field's kind is known.
+    await screen.findByRole("button", {
+      name: /^Image: bound to .* of this post$/,
+    });
+    expect(
+      screen.queryByRole("button", {
+        name: "Use the media library's alt text",
+      })
+    ).toBeNull();
+  });
+
+  it("offers no way back while a bound picture stores no alt of its own", async () => {
+    mount({ mediaId: { $bind: "cover" } });
+    await screen.findByText(/comes from a bound library file/);
+    expect(
+      screen.queryByRole("button", {
+        name: "Use the media library's alt text",
+      })
+    ).toBeNull();
   });
 
   it("says no file is chosen where the picture is neither bound nor picked", () => {

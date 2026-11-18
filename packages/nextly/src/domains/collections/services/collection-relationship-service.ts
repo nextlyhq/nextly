@@ -1,5 +1,6 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import {
+  and,
   getColumns,
   inArray,
   sql,
@@ -17,6 +18,13 @@ import {
   type FilteredRead,
   type RuleFilter,
 } from "../../../auth/access/rule-answer";
+import {
+  currentRuleLanguage,
+  ruleLanguageKey,
+  type RuleLanguage,
+  withRuleLanguage,
+} from "../../../auth/access/rule-language";
+import { ruleLanguageKeyOf } from "../../../auth/access/rule-language-key";
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { currentPrincipal } from "../../../auth/principal-scope";
 import { canReadSystemResource } from "../../../auth/resource-readable";
@@ -69,6 +77,7 @@ import {
 } from "../../../shared/lib/field-level-registry";
 import {
   type FieldGroupReach,
+  instanceFields,
   reachesPasswordField,
   stripPasswordFieldValues,
   stripServerOnlyColumns,
@@ -81,11 +90,16 @@ import {
   type LiveFieldGroupReadPass,
 } from "../../field-groups/live-read-access";
 import { passwordReachOf } from "../../field-groups/password-reach";
+import { extractFieldGroupReferences } from "../../field-groups/storage/field-group-field-type";
 import {
   fillCompanionFields,
   populateCompanionFields,
   selectRowsWithCompanion,
 } from "../../i18n/companion-join";
+import {
+  publishedInLanguageCondition,
+  valuesBesideRow,
+} from "../../i18n/read-in-language";
 import { resolveCompanionSchemaReadiness } from "../../i18n/runtime/companion-readiness";
 import {
   NO_DECISIONS,
@@ -193,6 +207,12 @@ interface NestedHookStateBase {
   /** One schema read per collection per read, rather than per row per depth. */
   fields: Map<string, FieldDefinition[]>;
   /**
+   * One registry read per field group per read, for the same reason: a page of
+   * entries holds the same component in every row. `null` for a field group
+   * the registry does not know.
+   */
+  fieldGroups: Map<string, Promise<FieldDefinition[] | null>>;
+  /**
    * Physical table per collection, filled by the same registry read as
    * `fields`. A walked row's contributed hidden columns are keyed by this name,
    * which for a `dbName` collection is not `dc_<slug>`.
@@ -231,6 +251,14 @@ interface NestedHookStateBase {
      * its own relationships expanded where the deeper one has bare ids.
      */
     depth: number;
+    /**
+     * The language the row's rules and hooks were told when the walk reached
+     * it: the read's own, or, for a row in one language's values beside a read
+     * of every language, that language. The finalize step re-judges the row in
+     * it, and keeps its authoritative version under it, so one language's
+     * answer is never another's.
+     */
+    language: RuleLanguage;
   }>;
   /**
    * The AUTHORITATIVE version of each related row, keyed by collection and id: a
@@ -258,6 +286,7 @@ function createNestedHookState(): NestedHookState {
   return {
     visited: new Set(),
     fields: new Map(),
+    fieldGroups: new Map(),
     tables: new Map(),
     labelFields: new Map(),
     redactions: new WeakMap(),
@@ -650,6 +679,50 @@ function getNestedFields(field: FieldDefinition): FieldDefinition[] {
     return field.fields;
   }
   return [];
+}
+
+/**
+ * Whether a field's value is rows of the document's own rather than a
+ * reference: a group's or repeater's, or a component's, whose fields the
+ * component declares (`extractFieldGroupReferences` reads both spellings).
+ */
+function holdsOwnRows(field: FieldDefinition): boolean {
+  if (getNestedFields(field).length > 0) return true;
+  const { single, many } = extractFieldGroupReferences(field);
+  return single !== undefined || many !== undefined;
+}
+
+/**
+ * Each language's value of each of `fields` beside `entry` (`_allLocales`,
+ * `{ field: { code: value } }`), with the map that holds it and the rule
+ * language that value is answered in, so the walk reads it and the
+ * reprojection replaces it in the same places, each in its own language: the
+ * frame the read's own field pipeline judges that language's values in.
+ */
+function eachLanguageValue(
+  entry: Record<string, unknown>,
+  fields: readonly FieldDefinition[]
+): {
+  field: FieldDefinition;
+  values: Record<string, unknown>;
+  code: string;
+  language: RuleLanguage;
+}[] {
+  const every = valuesBesideRow(entry);
+  if (!every) return [];
+  return fieldsStoredOnRow(fields).flatMap(field => {
+    const keyed = every[field.name];
+    if (keyed === null || typeof keyed !== "object" || Array.isArray(keyed)) {
+      return [];
+    }
+    const values = keyed as Record<string, unknown>;
+    return Object.keys(values).map(code => ({
+      field,
+      values,
+      code,
+      language: { locale: code, locales: [code] },
+    }));
+  });
 }
 
 /**
@@ -1267,12 +1340,19 @@ function declaredLabelField(field: FieldDefinition): string {
 function relatedRowSnapshotKey(
   collection: string,
   id: string,
-  field: FieldDefinition
+  field: FieldDefinition,
+  /**
+   * The rule language the row was answered in (`ruleLanguageKeyOf`). A read of
+   * every language populates one target in each language's values beside it,
+   * each with that language's values, hooks and rules, so the same row is a
+   * different answer in each and keeps a version of its own per language.
+   */
+  language: string
 ): string {
   // The same NUL separator {@link relationKey} uses, and for the same reason: it
-  // cannot appear in a slug, an id, or a field name, so no two distinct triples
-  // can collapse onto one key.
-  return `${relationKey(collection, id)}\u0000${declaredLabelField(field)}`;
+  // cannot appear in a slug, an id, a field name or a language key, so no two
+  // distinct tuples can collapse onto one key.
+  return `${relationKey(collection, id)}\u0000${declaredLabelField(field)}\u0000${language}`;
 }
 
 /**
@@ -2076,7 +2156,23 @@ export class CollectionRelationshipService extends BaseService {
           );
         })
       : fetched;
-    const rows = lifecycleRows.filter(row => matching.has(row));
+    // Published in the read's language too, as a direct read of the target in
+    // that language finds it: a target withheld there is withheld here, and
+    // recorded as withheld rather than filled from a fallback language.
+    const inLanguage = statusFilter
+      ? await this.idsPublishedInReadLanguage(
+          targetCollection,
+          schema,
+          lifecycleRows,
+          statusFilter,
+          access,
+          decisions.reveal
+        )
+      : null;
+    const rows = lifecycleRows.filter(
+      row =>
+        matching.has(row) && (inLanguage === null || inLanguage.has(row.id))
+    );
     this.recordWithheld(targetCollection, fetched, rows, access);
 
     // A target whose translatable values live in its companion is read with them, in the language
@@ -2087,13 +2183,67 @@ export class CollectionRelationshipService extends BaseService {
       rows,
       statusFilter,
       access,
-      translations
+      translations,
+      revealed
     );
     // Redaction runs before any caller derives a label from a row: a label
     // copies a field's value under another key, so one taken from an unredacted
     // row survives the redaction of its own source field.
     await this.redactRelatedRows(targetCollection, rows, access);
     return rows;
+  }
+
+  /**
+   * Of `rows`, the ids published in the language the read asked for, by the
+   * rule a direct read of the target applies (`publishedInLanguageCondition`),
+   * a due release's reveals included. Null where that rule keeps nothing out:
+   * a read with no language, a system entity, a target that publishes no
+   * language on its own, or one whose translations table is not there yet.
+   */
+  private async idsPublishedInReadLanguage(
+    targetCollection: string,
+    schema: Table & { id: Column },
+    rows: Record<string, unknown>[],
+    statusFilter: StatusFilter,
+    access: RelatedRowAccess,
+    revealed: readonly string[]
+  ): Promise<ReadonlySet<unknown> | null> {
+    const localeChain = targetLocaleChain(access);
+    if (!localeChain || rows.length === 0 || isSystemEntity(targetCollection)) {
+      return null;
+    }
+    const companion = await this.resolveTargetCompanion(
+      targetCollection,
+      access
+    );
+    if (
+      !companion ||
+      (await resolveCompanionSchemaReadiness(this.adapter, companion)) !==
+        "ready"
+    ) {
+      return null;
+    }
+    const condition = publishedInLanguageCondition({
+      companion,
+      statusFilter,
+      revealed,
+      localeChain,
+      mainIdColumn: schema.id,
+    });
+    if (!condition) return null;
+    const found = (await this.db
+      .select({ id: schema.id })
+      .from(schema)
+      .where(
+        and(
+          inArray(
+            schema.id,
+            rows.map(row => row.id)
+          ),
+          condition
+        )
+      )) as { id: unknown }[];
+    return new Set(found.map(row => row.id));
   }
 
   /**
@@ -2162,7 +2312,10 @@ export class CollectionRelationshipService extends BaseService {
     statusFilter: StatusFilter | null,
     access: RelatedRowAccess,
     // The translations the rows were read with, when they came in the same statement.
-    translations: TargetTranslations | null = null
+    translations: TargetTranslations | null = null,
+    // The rows a due release reveals: their languages' rows are read whatever
+    // their status, as the release will publish them (`PopulateCompanionArgs.revealed`).
+    revealed?: ReadonlySet<unknown>
   ): Promise<void> {
     const localeChain = targetLocaleChain(access);
     if (!localeChain || rows.length === 0 || isSystemEntity(targetCollection)) {
@@ -2181,6 +2334,7 @@ export class CollectionRelationshipService extends BaseService {
         localeChain: [...translations.localeChain],
         statusValues:
           companion.hasStatus && statusFilter ? statusFilter.values : undefined,
+        revealed,
       });
       return;
     }
@@ -2194,6 +2348,7 @@ export class CollectionRelationshipService extends BaseService {
       localeChain: [...localeChain],
       statusValues:
         companion.hasStatus && statusFilter ? statusFilter.values : undefined,
+      revealed,
     });
   }
 
@@ -3771,8 +3926,58 @@ export class CollectionRelationshipService extends BaseService {
     // once every entry has been walked. One that does not is a single document,
     // so its walk is already complete here.
     const shared = state ?? createNestedHookState();
-    await this.walkNestedRows(entry, collectionName, access, shared, 0);
+    await this.walkDocument(
+      entry,
+      await this.fieldsForNestedWalk(collectionName, shared),
+      access,
+      shared
+    );
     if (!state) await this.finalizeRelatedRows(shared, access);
+  }
+
+  /**
+   * {@link applyNestedFieldHooks} for a document described by its own fields
+   * rather than by a collection: a Single, whose fields the collection registry
+   * does not hold. The same walk and the same finish, so a related row is
+   * answered alike from an entry and from a Single. One document, so its walk
+   * is finished here; the caller keeps `state` to reproject the document after
+   * each of its own hook phases ({@link reprojectDocumentRelatedRows}).
+   */
+  async applyNestedFieldHooksToDocument(
+    doc: Record<string, unknown>,
+    fields: FieldDefinition[],
+    access: RelatedRowAccess,
+    state: NestedHookState
+  ): Promise<void> {
+    if (!access.enforceFieldAccess) return;
+    await this.walkDocument(doc, fields, access, state);
+    await this.finalizeRelatedRows(state, access);
+  }
+
+  /**
+   * The top of the walk: the document's own fields, and every language's
+   * values carried beside it (`_allLocales`, `{ field: { code: value } }`).
+   *
+   * A read of every language populates the related rows inside each
+   * language's component values as it does the document's own, so each of
+   * those rows is a related row like any other and is walked by the same
+   * field. A row both places share is claimed once (`visited`).
+   */
+  private async walkDocument(
+    entry: Record<string, unknown>,
+    fields: FieldDefinition[],
+    access: RelatedRowAccess,
+    state: NestedHookState
+  ): Promise<void> {
+    await this.walkFields(entry, fields, access, state, 0);
+    for (const { field, values, code, language } of eachLanguageValue(
+      entry,
+      fields
+    )) {
+      await withRuleLanguage(language, () =>
+        this.walkFieldValue(values[code], field, access, state, 0)
+      );
+    }
   }
 
   /**
@@ -3809,12 +4014,15 @@ export class CollectionRelationshipService extends BaseService {
     access: RelatedRowAccess
   ): Promise<void> {
     if (!access.enforceFieldAccess) return;
-    for (const { row, collection } of state.pending) {
-      await this.applyRelatedRowReadAccess(
-        collection,
-        [row],
-        access,
-        state.redactions
+    // Each row re-judged in the language the walk judged it in.
+    for (const { row, collection, language } of state.pending) {
+      await withRuleLanguage(language, () =>
+        this.applyRelatedRowReadAccess(
+          collection,
+          [row],
+          access,
+          state.redactions
+        )
       );
     }
     for (const { row, collection, field } of state.pending) {
@@ -3825,9 +4033,14 @@ export class CollectionRelationshipService extends BaseService {
     // rebuilt from. Taken here rather than during the walk because a row is not
     // final until the loops above have re-judged it — a sibling parent's hooks,
     // in a listing that shares one row object between entries, run before this.
-    for (const { row, collection, field, depth } of state.pending) {
+    for (const { row, collection, field, depth, language } of state.pending) {
       if (typeof row.id !== "string") continue;
-      const key = relatedRowSnapshotKey(collection, row.id, field);
+      const key = relatedRowSnapshotKey(
+        collection,
+        row.id,
+        field,
+        ruleLanguageKeyOf(language)
+      );
       // The NEAREST occurrence wins. A row reached deeper in the document was
       // expanded with less depth remaining, so restoring that version into a
       // shallower field would strip a level of expansion the response had — and
@@ -3882,58 +4095,112 @@ export class CollectionRelationshipService extends BaseService {
     // reads, so the recorded versions are stripped either way and restoring them
     // is what removes a secret a source hook wrote back.
     if (!access.enforceFieldAccess) return;
-    const fields = await this.fieldsForNestedWalk(collectionName, state);
+    await this.reprojectDocuments(
+      entries,
+      await this.fieldsForNestedWalk(collectionName, state),
+      state
+    );
+  }
+
+  /**
+   * {@link reprojectRelatedRows} for a document described by its own fields: a
+   * Single, reprojected after each of its own hook phases with the state its
+   * walk ({@link applyNestedFieldHooksToDocument}) kept, as an entry is after
+   * its collection's.
+   */
+  async reprojectDocumentRelatedRows(
+    doc: Record<string, unknown>,
+    fields: FieldDefinition[],
+    access: RelatedRowAccess,
+    state: NestedHookState
+  ): Promise<void> {
+    if (!access.enforceFieldAccess) return;
+    await this.reprojectDocuments([doc], fields, state);
+  }
+
+  /**
+   * Rebuild the related rows of `entries` by `fields`: each document's own
+   * values and every language's values beside it (`_allLocales`), the places
+   * the walk reached them ({@link walkDocument}).
+   */
+  private async reprojectDocuments(
+    entries: Record<string, unknown>[],
+    fields: FieldDefinition[],
+    state: NestedHookState
+  ): Promise<void> {
     // Rows rebuilt during THIS pass, so a row several parents reference stays ONE
     // object across the response — the sharing batch expansion produced — instead
     // of becoming a separate copy per reference.
     const rebuilt = new Map<string, Record<string, unknown>>();
     for (const entry of entries) {
-      this.reprojectFields(entry, fields, state, rebuilt);
+      await this.reprojectFields(entry, fields, state, rebuilt);
+      for (const { field, values, code, language } of eachLanguageValue(
+        entry,
+        fields
+      )) {
+        await withRuleLanguage(language, () =>
+          this.reprojectValueAt(values, code, field, state, rebuilt)
+        );
+      }
     }
   }
 
   /**
    * Rebuild every relationship value held at one level of the response, and
-   * descend through `group`/`repeater` containers to reach the ones nested inside
-   * them.
-   *
-   * Container rows belong to the SOURCE collection, so they carry no authoritative
-   * version of their own and are descended into rather than replaced. Only a
-   * relationship value names another collection's row.
+   * descend through containers to reach the ones nested inside them.
    */
-  private reprojectFields(
+  private async reprojectFields(
     holder: Record<string, unknown>,
-    fields: FieldDefinition[],
+    fields: readonly FieldDefinition[],
     state: NestedHookState,
     rebuilt: Map<string, Record<string, unknown>>
-  ): void {
-    for (const field of fields) {
+  ): Promise<void> {
+    // The fields stored at this level, as the walk reads them (`walkFields`).
+    for (const field of fieldsStoredOnRow(fields)) {
       if (!field.name) continue;
       // A hook can hand a container or a populated hasMany back as the JSON string
       // storage keeps it as; left a string there is no value here to rebuild.
       this.decodeJsonBackedFieldInPlace(holder, field);
-      const value = holder[field.name];
-      if (value === null || value === undefined) continue;
-
-      if (isRepeaterOrGroupField(field)) {
-        const nested = getNestedFields(field);
-        if (nested.length === 0) continue;
-        for (const row of containerRowsOf(value)) {
-          this.reprojectFields(row, nested, state, rebuilt);
-        }
-        continue;
-      }
-      // An upload points at the built-in media entity, which registers no field
-      // rules and is never sanitized as a related row.
-      if (!isRelationshipField(field) || isUploadField(field)) continue;
-
-      holder[field.name] = this.reprojectRelationshipValue(
-        value,
-        field,
-        state,
-        rebuilt
-      );
+      await this.reprojectValueAt(holder, field.name, field, state, rebuilt);
     }
+  }
+
+  /**
+   * Rebuild the related rows in `holder[key]`, one value of `field`.
+   *
+   * Container rows (a group's, a repeater's or a component's, a zone's
+   * included) belong to the SOURCE document, so they carry no authoritative
+   * version of their own and are descended into rather than replaced, by the
+   * fields the walk read them with (`holdsOwnRows`, `containedFields`): a
+   * container the walk reached is one this pass reaches. Only a relationship
+   * value names another collection's row.
+   */
+  private async reprojectValueAt(
+    holder: Record<string, unknown>,
+    key: string,
+    field: FieldDefinition,
+    state: NestedHookState,
+    rebuilt: Map<string, Record<string, unknown>>
+  ): Promise<void> {
+    const value = holder[key];
+    if (value === null || value === undefined) return;
+
+    if (holdsOwnRows(field)) {
+      for (const row of containerRowsOf(value)) {
+        await this.reprojectFields(
+          row,
+          await this.containedFields(field, row, state),
+          state,
+          rebuilt
+        );
+      }
+      return;
+    }
+    // An upload points at the built-in media entity, which registers no field
+    // rules and is never sanitized as a related row.
+    if (!isRelationshipField(field) || isUploadField(field)) return;
+
+    holder[key] = this.reprojectRelationshipValue(value, field, state, rebuilt);
   }
 
   /** Rebuild one relationship field's value, mapping a list one entry at a time so
@@ -3988,7 +4255,14 @@ export class CollectionRelationshipService extends BaseService {
       id,
       discriminated: shape.discriminated,
     };
-    const key = relatedRowSnapshotKey(ref.collection, ref.id, field);
+    // The version kept in the language this value is answered in: the read's
+    // own, or the side language the reprojection entered for it.
+    const key = relatedRowSnapshotKey(
+      ref.collection,
+      ref.id,
+      field,
+      ruleLanguageKey()
+    );
 
     const already = rebuilt.get(key);
     if (already) return withReferenceIdentity(already, ref);
@@ -4150,7 +4424,8 @@ export class CollectionRelationshipService extends BaseService {
   ): Promise<void> {
     if (depth > MAX_RELATIONSHIP_DEPTH) return;
     const fields = await this.fieldsForNestedWalk(collectionName, state);
-    for (const field of fields) {
+    // The fields stored at this level, as the walk reads them (`walkFields`).
+    for (const field of fieldsStoredOnRow(fields)) {
       await this.reapplyFieldValueAccess(
         entry[field.name],
         field,
@@ -4178,12 +4453,13 @@ export class CollectionRelationshipService extends BaseService {
     );
     if (rows.length === 0) return;
 
-    const nested = getNestedFields(field);
-    if (nested.length > 0) {
+    if (holdsOwnRows(field)) {
       // A container: its rows belong to THIS collection; descend to reach any
-      // relationship inside them.
+      // relationship inside them, a component's by the walk's own fields.
       for (const row of rows) {
-        for (const inner of nested) {
+        for (const inner of fieldsStoredOnRow(
+          await this.containedFields(field, row, state)
+        )) {
           await this.reapplyFieldValueAccess(
             row[inner.name],
             inner,
@@ -4253,19 +4529,95 @@ export class CollectionRelationshipService extends BaseService {
     if (depth > MAX_RELATIONSHIP_DEPTH) return;
 
     const fields = await this.fieldsForNestedWalk(collectionName, state);
-    for (const field of fields) {
+    await this.walkFields(entry, fields, access, state, depth);
+  }
+
+  /** Visit each of `fields` on one level of a document or a related row. */
+  private async walkFields(
+    entry: Record<string, unknown>,
+    fields: readonly FieldDefinition[],
+    access: RelatedRowAccess,
+    state: NestedHookState,
+    depth: number
+  ): Promise<void> {
+    // The fields stored at this level, as the read's expansion reads them: a
+    // group with no name only lays fields out, so the fields inside it are
+    // held here, under their own names, and never under the group's.
+    for (const field of fieldsStoredOnRow(fields)) {
       this.decodeJsonBackedFieldInPlace(entry, field);
       await this.walkFieldValue(entry[field.name], field, access, state, depth);
     }
   }
 
   /**
+   * The fields one row of a container holds: a group's or a repeater's own, or
+   * those of the component the field names for this row (for a zone's row, the
+   * one its type names), read as every other walk over the read reads an
+   * instance (`instanceFields`). A component's fields are declared on the
+   * component, not on the field, so a walk that read only `field.fields` never
+   * reached a relationship inside one. Empty for a component the registry does
+   * not know, whose row then holds nothing the walk can name.
+   */
+  private async containedFields(
+    field: FieldDefinition,
+    row: Record<string, unknown>,
+    state: NestedHookState
+  ): Promise<readonly FieldDefinition[]> {
+    const nested = getNestedFields(field);
+    if (nested.length > 0) return nested;
+    const references = extractFieldGroupReferences(field);
+    const known = new Map<string, FieldDefinition[]>();
+    for (const slug of [
+      ...(references.single === undefined ? [] : [references.single]),
+      ...(references.many ?? []),
+    ]) {
+      const fields = await this.fieldGroupFieldsForNestedWalk(slug, state);
+      if (fields) known.set(slug, fields);
+    }
+    return (
+      instanceFields(row, references, {
+        reach: { fieldsOf: slug => known.get(slug) },
+        // A zone's row carrying no type is read by every component the zone
+        // allows, as the read's password strip reads it.
+        untypedZoneRows: "union",
+      }) ?? []
+    );
+  }
+
+  /**
+   * A field group's fields, read once per read from the registry the read's
+   * own component population reads. A lookup that fails rejects, and the read
+   * with it, rather than answering rows whose hooks it could not find.
+   */
+  private fieldGroupFieldsForNestedWalk(
+    slug: string,
+    state: NestedHookState
+  ): Promise<FieldDefinition[] | null> {
+    let pending = state.fieldGroups.get(slug);
+    if (!pending) {
+      const source = container.has("fieldGroupDataService")
+        ? container.get<FieldGroupDataService>("fieldGroupDataService")
+        : undefined;
+      // FieldConfig and FieldDefinition are structurally compatible for the
+      // properties the walk reads: name, type, nested fields, relationTo and
+      // the field-group references.
+      pending = source
+        ? source
+            .getComponentFields(slug)
+            .then(fields => fields as unknown as FieldDefinition[] | null)
+        : Promise.resolve(null);
+      state.fieldGroups.set(slug, pending);
+    }
+    return pending;
+  }
+
+  /**
    * Visit one field's value, whatever shape it takes.
    *
-   * A relationship can sit directly on the collection or inside a `group` or
-   * `repeater`, and `expandRelationships` populates it either way, so a walk
-   * that only looked at top-level `relationTo` fields left everything inside a
-   * container unmasked.
+   * A relationship can sit directly on the collection or inside a `group`, a
+   * `repeater` or a component (a zone's included), and the read populates it
+   * in each, so a walk that only looked at top-level `relationTo` fields left
+   * the field hooks of every related row inside a container unrun.
    */
   private async walkFieldValue(
     value: unknown,
@@ -4282,21 +4634,17 @@ export class CollectionRelationshipService extends BaseService {
     );
     if (rows.length === 0) return;
 
-    const nested = getNestedFields(field);
-    if (nested.length > 0) {
+    if (holdsOwnRows(field)) {
       // A container: its rows belong to THIS collection, so they carry no
       // hooks of their own -- only the relationships inside them do.
       for (const row of rows) {
-        for (const inner of nested) {
-          this.decodeJsonBackedFieldInPlace(row, inner);
-          await this.walkFieldValue(
-            row[inner.name],
-            inner,
-            access,
-            state,
-            depth
-          );
-        }
+        await this.walkFields(
+          row,
+          await this.containedFields(field, row, state),
+          access,
+          state,
+          depth
+        );
       }
       return;
     }
@@ -4430,6 +4778,7 @@ export class CollectionRelationshipService extends BaseService {
         collection: resolved.collection,
         field,
         depth,
+        language: currentRuleLanguage(),
       });
 
       // Secrets are stripped from a related row when it is fetched, but a hook

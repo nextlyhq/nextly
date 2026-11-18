@@ -8,6 +8,9 @@ import { describe, expect, it, vi } from "vitest";
 
 import { render, screen, within } from "@admin/__tests__/utils";
 
+import { fieldsNamedByHooks } from "@admin/lib/builder/rename-field";
+import type { StoredHookConfig } from "@admin/types/collection";
+
 import { BuilderFieldSettings } from "../BuilderFieldSettings";
 import type { BuilderField } from "../types";
 
@@ -33,7 +36,8 @@ function panel(
   fields: BuilderField[],
   fieldId: string,
   saved: string[] = ["f-summary", "f-body"],
-  startRenaming = false
+  startRenaming = false,
+  storedHooks: StoredHookConfig[] = []
 ) {
   const onFieldChange = vi.fn();
   render(
@@ -46,7 +50,10 @@ function panel(
       docked
       savedFields={fields.filter(field => saved.includes(field.id))}
       lifecycleEnabled={false}
-      startRenaming={startRenaming}
+      rename={{
+        asked: startRenaming,
+        namedByHooks: fieldsNamedByHooks(storedHooks),
+      }}
       onFieldChange={onFieldChange}
       onFieldDelete={() => {}}
       onClose={() => {}}
@@ -133,6 +140,38 @@ describe("a saved field's name", () => {
     expect(nameInput()).toBeDisabled();
     expect(renameButton()).toBeNull();
     expect(screen.getByText(/field group's own table/)).toBeInTheDocument();
+  });
+});
+
+// A stored hook reads the field it names by that name (an auto-slug's source, say), so renaming it
+// would leave the hook reading a key no entry has, and the hook would stop working unseen.
+describe("a field a stored hook names", () => {
+  it("is not offered Rename…, and says which hook names it", () => {
+    panel([SUMMARY, BODY], "f-summary", undefined, false, [
+      {
+        hookId: "auto-slug",
+        hookType: "beforeCreate",
+        enabled: true,
+        config: { sourceField: "summary", targetField: "slug" },
+        order: 0,
+      },
+    ]);
+    expect(nameInput()).toBeDisabled();
+    expect(renameButton()).toBeNull();
+    expect(screen.getByText(/hook names this field/)).toBeInTheDocument();
+  });
+
+  it("leaves a field no hook names renamable", () => {
+    panel([SUMMARY, BODY], "f-body", undefined, false, [
+      {
+        hookId: "auto-slug",
+        hookType: "beforeCreate",
+        enabled: true,
+        config: { sourceField: "summary", targetField: "slug" },
+        order: 0,
+      },
+    ]);
+    expect(renameButton()).not.toBeNull();
   });
 });
 

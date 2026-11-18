@@ -132,7 +132,7 @@ function SavePatternForm({
         fields
       );
       if (answered === undefined) return false;
-      toastMutationResult("Pattern saved", answered.warnings);
+      toastMutationResult("Saved to Saved sections", answered.warnings);
       return true;
     },
     // `saving` is in here even though it never changes: a snapshot taken once

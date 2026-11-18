@@ -18,6 +18,7 @@ import { MoreHorizontal } from "lucide-react";
 import * as React from "react";
 
 import { commitOnEnter } from "./commit-on-enter";
+import { CssHint, OptionWrites, useFieldDescription } from "./css-hint";
 import { FocalFrame } from "./focal-frame";
 import { InheritedValue } from "./inherited-value";
 import { commitRawCss } from "./raw-css";
@@ -89,6 +90,34 @@ function pointOf(stored: string): (typeof POINTS)[number] | undefined {
   return POINTS.find(point => point.x === x && point.y === y);
 }
 
+/**
+ * What the readout says: the point set here by name, an exact one as Custom
+ * with the value written, what reaches it from elsewhere, or the default when
+ * nothing does.
+ */
+function readoutOf(
+  chosen: (typeof POINTS)[number] | undefined,
+  text: string | undefined,
+  inheritedPoint: (typeof POINTS)[number] | undefined,
+  inherited: string | undefined,
+  fallback: (typeof POINTS)[number]
+): string {
+  if (chosen !== undefined) return chosen.label;
+  if (text !== undefined) return `Custom: ${text}`;
+  return inheritedPoint?.label ?? inherited ?? `${fallback.label} by default`;
+}
+
+/** The point of the nine a fallback names. */
+function pointNamed(fallback: FocalFallback): (typeof POINTS)[number] {
+  return POINTS.find(point => point.value === fallback) ?? POINTS[4];
+}
+
+/**
+ * The point CSS places at when nothing is set: the middle for an image's
+ * object position, the top left for a background's position.
+ */
+export type FocalFallback = "center" | "left top";
+
 /** What the point does for a fit: kept in view as it crops, or where it sits. */
 function hintFor(fit: string | undefined): string {
   return fit === "cover" ? "Kept in view" : "Where it sits";
@@ -118,6 +147,7 @@ export function FocalPointField({
   actionName,
   describedBy,
   onCommit,
+  fallback = "center",
 }: {
   id: string;
   labelledBy: string;
@@ -125,7 +155,14 @@ export function FocalPointField({
   actionName: string;
   describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
+  /** Where CSS places it when nothing is set; the middle unless said. */
+  fallback?: FocalFallback;
 }): React.JSX.Element {
+  const fallbackPoint = pointNamed(fallback);
+  // The refusal, and the CSS names while they are shown.
+  const described = useFieldDescription(describedBy);
+  // What each point writes, from the field it is drawn in: its tooltip.
+  const optionWrites = React.useContext(OptionWrites);
   const { picture, fit, position } = React.useContext(FocalFrame);
   const inherited = React.useContext(InheritedValue);
   const text = typeof stored === "string" ? stored : undefined;
@@ -140,8 +177,8 @@ export function FocalPointField({
   const [writing, setWriting] = React.useState(false);
   const grid = React.useRef<HTMLDivElement>(null);
   // One tab stop: the chosen point, else the one shown, else the middle.
-  const focusable = chosen ?? inheritedPoint ?? POINTS[4];
-  const invalid = describedBy === undefined ? undefined : true;
+  const focusable = chosen ?? inheritedPoint ?? fallbackPoint;
+  const invalid = refusedBy(describedBy);
 
   const choose = (point: (typeof POINTS)[number]) =>
     onCommit(point === chosen ? null : point.value);
@@ -156,14 +193,13 @@ export function FocalPointField({
       ?.focus();
   };
 
-  // The readout: the point set here by name, an exact one as written, what
-  // reaches it from elsewhere, or the default when nothing does.
-  const readout =
-    chosen?.label ??
-    text ??
-    inheritedPoint?.label ??
-    inherited ??
-    "Center by default";
+  const readout = readoutOf(
+    chosen,
+    text,
+    inheritedPoint,
+    inherited,
+    fallbackPoint
+  );
 
   return (
     <div className="nx-focal">
@@ -190,29 +226,34 @@ export function FocalPointField({
           id={id}
           role="radiogroup"
           aria-labelledby={labelledBy}
-          aria-describedby={describedBy}
+          aria-describedby={described}
           className="nx-focal__points"
         >
           {POINTS.map(point => {
             const isChosen = point === chosen;
             const isInherited = point === inheritedPoint;
             return (
-              <button
-                key={point.value}
-                type="button"
-                role="radio"
-                data-point={point.value}
-                aria-checked={isChosen}
-                aria-label={
-                  isInherited ? `${point.label}, inherited` : point.label
-                }
-                aria-invalid={invalid}
-                {...(isInherited ? { "data-inherited": "" } : {})}
-                tabIndex={point === focusable ? 0 : -1}
-                className="nx-focal__point"
-                onClick={() => choose(point)}
-                onKeyDown={event => move(event, point)}
-              />
+              <CssHint key={point.value} writes={optionWrites?.(point.value)}>
+                <button
+                  type="button"
+                  role="radio"
+                  data-point={point.value}
+                  aria-checked={isChosen}
+                  aria-label={
+                    isInherited ? `${point.label}, inherited` : point.label
+                  }
+                  aria-invalid={invalid}
+                  {...(isInherited ? { "data-inherited": "" } : {})}
+                  tabIndex={point === focusable ? 0 : -1}
+                  className="nx-focal__point"
+                  onClick={() => choose(point)}
+                  onKeyDown={event => move(event, point)}
+                  // The point's own tooltip says what it writes; kept from
+                  // the field's, which would open over it with the stored
+                  // value.
+                  onPointerMove={event => event.stopPropagation()}
+                />
+              </CssHint>
             );
           })}
         </div>
@@ -243,18 +284,26 @@ export function FocalPointField({
   );
 }
 
-/** A point written as CSS, such as `30% 70%`, once the field is left. */
-function FocalCss({
+/**
+ * A value written as CSS, such as `30% 70%`, once the field is left: the way
+ * past a picker's choices, for a point here and a background's size.
+ */
+export function FocalCss({
   stored,
   actionName,
   describedBy,
   onCommit,
+  placeholder = "30% 70%",
 }: {
   stored: string | undefined;
   actionName: string;
   describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
+  /** An example of what may be written; a point unless said. */
+  placeholder?: string;
 }): React.JSX.Element {
+  // The refusal, and the CSS names while they are shown.
+  const described = useFieldDescription(describedBy);
   const [text, setText] = React.useState(stored ?? "");
   // A stored change moves the draft with it, so leaving the field never
   // writes back the value that change replaced.
@@ -268,13 +317,18 @@ function FocalCss({
     <Input
       className="nx-focal__css"
       aria-label={`${actionName} as CSS`}
-      aria-describedby={describedBy}
-      aria-invalid={describedBy === undefined ? undefined : true}
-      placeholder="30% 70%"
+      aria-describedby={described}
+      aria-invalid={refusedBy(describedBy)}
+      placeholder={placeholder}
       value={text}
       onChange={event => setText(event.target.value)}
       onBlur={commit}
       onKeyDown={event => commitOnEnter(event, commit)}
     />
   );
+}
+
+/** `true` while a refusal describes the field, which is what invalidates it. */
+export function refusedBy(describedBy: string | undefined): true | undefined {
+  return describedBy === undefined ? undefined : true;
 }

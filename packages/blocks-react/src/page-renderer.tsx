@@ -6,11 +6,14 @@ import {
   ownLooksRead,
   PAGE_ROOT_CLASS,
   resolveSiteTokens,
+  type BindingRun,
   type BlockDocument,
   type NamedClass,
   type DefinitionsById,
   type DocumentLimits,
+  type SiteSheetArtifact,
   type SiteSheetInput,
+  type SiteTextMap,
   type StyleCompileContext,
   type BreakpointSet,
 } from "@nextlyhq/blocks-engine";
@@ -30,12 +33,19 @@ import {
   type PageContext,
   type PageIssue,
 } from "./context";
+import {
+  pageOutline,
+  withOutline,
+  type OutlineArea,
+  type OutlinePart,
+} from "./outline";
 import { BlockPlaceholder } from "./placeholder";
 import {
   heldConditionsOf,
   pageBindingRun,
   readStagesFor,
   rendersOwnMarkup,
+  type DocumentReadStages,
   type PreparedDocument,
 } from "./prepare-document";
 import { registeredBlocks, type BlockResolver } from "./resolver";
@@ -51,6 +61,7 @@ import {
   readableGatedRules,
   resolvePageStyles,
   styleTextForInjection,
+  UNIDENTIFIED_FETCH_POLICY,
   type PageStyles,
 } from "./styles";
 import { pruneNodes, type EntryJudgement } from "./visibility";
@@ -63,7 +74,12 @@ export interface PageRendererProps {
    * which is what makes a document renderable with no CMS present.
    */
   context?: PageContext;
-  /** Where block definitions come from. Defaults to the process registry. */
+  /**
+   * Where block definitions come from. Defaults to this bundle's registry,
+   * which the admin's editor fills in the browser. A server holds a registry
+   * per site and fills none here, so a server render passes its site's
+   * blocks (the Next.js routes do).
+   */
   blocks?: BlockResolver;
   /**
    * The component definitions this page may inline, at the posture the caller
@@ -128,7 +144,16 @@ export interface PageRendererProps {
    * production path.
    */
   siteStyles?: SiteSheetInput | false;
-  /** Shown in place of an asynchronous block until its output arrives. */
+  /**
+   * Shown in place of an asynchronous block until its output arrives.
+   *
+   * Given, each asynchronous block streams in a Suspense boundary of its own.
+   * Absent, as on a published page, each is drawn in place and the page waits
+   * for it, so the HTML holds every block for a visitor without JavaScript:
+   * React sends a boundary's content in a hidden part that only its script
+   * reveals. An editor surface (`nodeAttribute`, `keepAsyncOutputs`) always
+   * streams.
+   */
   blockFallback?: ReactNode;
   /**
    * The caps this site holds its documents to, used while repairing the stored
@@ -161,6 +186,19 @@ export interface PageRendererProps {
    * compiled styles receives only the block-TYPE class.
    */
   nodeAttribute?: boolean;
+  /**
+   * Keep each async block's output between draws, as the editor's canvas does
+   * for its page, so drawing again does not run the block again and blink it
+   * out while the new output settles.
+   *
+   * On wherever `nodeAttribute` is. This turns it on for an editor surface that
+   * draws without node addresses: a Layout's header and footer around the
+   * canvas, a page's small preview. The outputs are kept per `context`, so the
+   * surface hands the same context to each draw. Never on a published page,
+   * which is rendered per request: an output kept across requests would serve
+   * one request's data to the next.
+   */
+  keepAsyncOutputs?: boolean;
   /**
    * What the page's bindings read, already read with the public's access.
    *
@@ -300,9 +338,6 @@ export function pruneRenderedPlaceholders(
  *   site's predicate, or the reconciliation is over a value it never saw.
  * - `fonts` and `tokens` are the sheet's alone: it emits `@font-face` and the
  *   token blocks, and the page compile emits neither and reads neither.
- * - `spacingMode` is read by neither. Every page compiles with container gaps,
- *   so a site style still stating one changes nothing: it is never reconciled
- *   onto the page context, and the sheet writes nothing for it.
  */
 interface SiteInputRoles {
   breakpoints: "reconciled-here";
@@ -311,7 +346,6 @@ interface SiteInputRoles {
   tokenPrefix: "reconciled-here";
   previewContainer: "reconciled-here";
   previewStates: "reconciled-here";
-  spacingMode: "read-by-neither";
   mayFetchUrl: "reconciled-elsewhere";
   fonts: "sheet-only";
   tokens: "sheet-only";
@@ -345,6 +379,14 @@ type ResolvedShared = {
   [K in ReconciledHere as ContextKey<K>]:
     | NonNullable<Required<SiteSheetInput>[K]>
     | undefined;
+} & {
+  /**
+   * The site's text, which the sheet's token set carries and the page compile
+   * reads: its element tier and the blocks drawing a button or a caption are
+   * compiled from it. Reconciled here although `tokens` is the sheet's,
+   * because only this one part of the set is read by both compiles.
+   */
+  siteText: SiteTextMap | undefined;
 };
 
 /**
@@ -429,6 +471,7 @@ export function withoutStatedNulls(
     tokenPrefix: shared.tokenPrefix ?? undefined,
     previewContainer: shared.previewContainer ?? undefined,
     previewStates: shared.previewStates ?? undefined,
+    siteText: shared.siteText ?? undefined,
   };
 }
 
@@ -519,6 +562,10 @@ export function sharedStyleInputs(
     // stored tier describes the site. A site record has no business turning
     // forceable states on for a published page.
     previewStates: firstStated(route.previewStates, stored.previewStates),
+    // The site's own text first, as its stored bases are: the rows describe
+    // the site, and a route context's map is the fallback for a host that
+    // states its text in code rather than on a token set.
+    siteText: firstStated(stored.tokens?.siteText, route.siteText),
   });
 }
 
@@ -657,6 +704,7 @@ export function PageRenderer({
   styleContext,
   siteStyles,
   nodeAttribute,
+  keepAsyncOutputs,
   blockFallback,
   limits,
   hostPolicy,
@@ -675,7 +723,7 @@ export function PageRenderer({
 
   // Migrated against the SAME resolver that will render, so the versions nodes
   // are upgraded to are the versions the definitions doing the rendering
-  // expect. Reading migrations from the global registry while rendering from a
+  // expect. Reading migrations from another registry while rendering from a
   // fixture set would produce props no one asked for and no error to explain
   // them.
   // The shape is made sound before anything walks it. The engine's migrator,
@@ -722,32 +770,20 @@ export function PageRenderer({
   // tree that renders — which reads those states rather than recomputing them.
   // One pass for the whole render, shared by the page's bindings and every
   // list item's, so each formatter is built once.
-  const bindingRun =
-    bindings === undefined
-      ? undefined
-      : pageBindingRun(
-          bindings,
-          pageContext.locale,
-          resolver,
-          pageContext.namedQueries
-        );
-  const stages = readStagesFor(
-    document,
+  const { bindingRun, stages } = rendererReading(
     {
-      resolver,
+      document,
+      blocks,
+      definitions,
       limits,
       styleContext,
-      definitions,
-      ...(bindingRun === undefined ? {} : { bindings: bindingRun }),
-      // An editor drawing a list item's hidden block keeps such blocks for
-      // the list to judge; a published page's route decides them itself.
-      ...(itemHiddenAs === undefined ? {} : { itemsDecided: true }),
-      // An editor showing the page as a visitor reading an entry judges
-      // every block for it, the route's way, drawing its own node in place of
-      // one hidden.
-      ...(entryJudged === undefined ? {} : { entryJudged }),
+      bindings,
+      prepared,
+      itemHiddenAs,
+      entryJudged,
     },
-    prepared
+    pageContext,
+    resolver
   );
   // `null` here means only an unreadable ENVELOPE, which the two guards above
   // already answered. Kept because unreachability is a property of the current
@@ -984,6 +1020,17 @@ export function PageRenderer({
       : { itemRules, itemRulesServed: new Set<string>() }),
   };
   const rootClassName = scope ? `${PAGE_ROOT_CLASS} ${scope}` : PAGE_ROOT_CLASS;
+  // The blocks draw with the page's outline on their context: the one the
+  // host set for a page drawn in parts, else this document's own, read off
+  // the tree this render draws (after its bindings, without placeholders).
+  const blockContext = blockContextOf(pageContext, scope, mayFetchUrl);
+  const drawnContext =
+    pageContext.outline === undefined
+      ? withOutline(
+          blockContext,
+          pageOutline([{ area: "content", nodes: stages.prepared.nodes }])
+        )
+      : blockContext;
 
   // Tokens LAYERED over the defaults, never replacing them: a site supplying
   // one brand colour must not thereby lose `content.width` and `space.4`, and
@@ -1070,14 +1117,21 @@ export function PageRenderer({
   // `--site-*` onto a host that asked this renderer for markup alone. It is also
   // what stops a stylesheet withheld as untrustworthy from acquiring a companion
   // sheet that the withholding was meant to suppress.
+  //
+  // Kept by what it is compiled from (`keptSiteSheet`), so drawing the page
+  // again for a selection, a hover or an insert does not compile it again.
   const siteSheet =
     siteStyles === false
       ? undefined
       : siteBreakpoints === undefined
         ? css === ""
           ? undefined
-          : compileSiteTokenSheet(siteSheetInput)
-        : compileSiteSheet(
+          : keptSiteSheet(
+              { siteInput, styleContext, fetchPolicyId, parts: undefined },
+              () => compileSiteTokenSheet(siteSheetInput)
+            )
+        : keptPageSiteSheet(
+            { siteInput, styleContext, fetchPolicyId },
             { ...siteSheetInput, breakpoints: siteBreakpoints },
             // The parts of the types this page draws, over the composed tree
             // the page sheet reads, so the classes in the shared sheet route a
@@ -1111,17 +1165,230 @@ export function PageRenderer({
       ) : null}
       <BlockList
         nodes={bound.nodes}
-        context={pageContext}
+        context={drawnContext}
         blocks={resolver}
         classes={classes}
         fallback={blockFallback}
         {...(hostPolicy === undefined ? {} : { hostPolicy })}
         {...(nodeAttribute === undefined ? {} : { nodeAttribute })}
+        {...(keepAsyncOutputs === true ? { keepAsyncOutputs } : {})}
         {...(boundaryBindings === undefined
           ? {}
           : { bindings: boundaryBindings })}
         conditions={boundaryConditions}
       />
     </div>
+  );
+}
+
+/**
+ * The context the page's blocks draw with: the page's own, plus, where the page
+ * sizes images, the scope its rules are anchored under and the fetch policy
+ * its stylesheet was compiled with, so the first block's background copies
+ * are written at the page's own anchor and under its own policy
+ * (`image-sources`).
+ */
+function blockContextOf(
+  pageContext: PageContext,
+  scope: string | undefined,
+  mayFetchUrl: ((url: string) => boolean) | undefined
+): PageContext {
+  if (pageContext.imageCopies === undefined) return pageContext;
+  if (!scope && mayFetchUrl === undefined) return pageContext;
+  return {
+    ...pageContext,
+    ...(scope ? { pageScope: scope } : {}),
+    ...(mayFetchUrl === undefined ? {} : { pageMayFetchUrl: mayFetchUrl }),
+  };
+}
+
+/** The props a renderer reads its document by. */
+type ReadingProps = Pick<
+  PageRendererProps,
+  | "document"
+  | "blocks"
+  | "definitions"
+  | "limits"
+  | "styleContext"
+  | "bindings"
+  | "prepared"
+  | "itemHiddenAs"
+  | "entryJudged"
+>;
+
+/**
+ * What a renderer reads its document into: its binding pass and the read
+ * stages. One derivation for the render and for the outline of a page drawn
+ * in parts (`outlinePartOf`), so the outline lists the very tree each part
+ * draws.
+ */
+function rendererReading(
+  props: ReadingProps,
+  pageContext: PageContext,
+  resolver: BlockResolver
+): { bindingRun: BindingRun | undefined; stages: DocumentReadStages | null } {
+  const { bindings, itemHiddenAs, entryJudged } = props;
+  const bindingRun =
+    bindings === undefined
+      ? undefined
+      : pageBindingRun(
+          bindings,
+          pageContext.locale,
+          resolver,
+          pageContext.namedQueries
+        );
+  const stages = readStagesFor(
+    props.document,
+    {
+      resolver,
+      limits: props.limits,
+      styleContext: props.styleContext,
+      definitions: props.definitions,
+      ...(bindingRun === undefined ? {} : { bindings: bindingRun }),
+      // An editor drawing a list item's hidden block keeps such blocks for
+      // the list to judge; a published page's route decides them itself.
+      ...(itemHiddenAs === undefined ? {} : { itemsDecided: true }),
+      // An editor showing the page as a visitor reading an entry judges
+      // every block for it, the route's way, drawing its own node in place of
+      // one hidden.
+      ...(entryJudged === undefined ? {} : { entryJudged }),
+    },
+    props.prepared
+  );
+  return { bindingRun, stages };
+}
+
+/**
+ * One part of a page as a renderer given these props draws it, for the
+ * outline of a page drawn in parts: its tree after the read pipeline, with
+ * the blocks drawn as placeholders gone. An unreadable document draws no
+ * headings.
+ *
+ * @internal Shared by this package's route.
+ */
+export function outlinePartOf(
+  props: ReadingProps & Pick<PageRendererProps, "context">,
+  area: OutlineArea
+): OutlinePart {
+  const document = props.document;
+  if (
+    typeof document !== "object" ||
+    document === null ||
+    Array.isArray(document) ||
+    document.formatVersion !== DOCUMENT_FORMAT_VERSION
+  ) {
+    return { area, nodes: [] };
+  }
+  const { stages } = rendererReading(
+    props,
+    props.context ?? createStandaloneContext(),
+    props.blocks ?? registeredBlocks()
+  );
+  return { area, nodes: stages?.prepared.nodes ?? [] };
+}
+
+/** What a site sheet was compiled from, beyond what every draw shares. */
+interface SiteSheetKey {
+  /** The site's own input, as the host handed it. */
+  readonly siteInput: SiteSheetInput | undefined;
+  /** The route's compile context, as the host handed it. */
+  readonly styleContext: StyleCompileContext | undefined;
+  /**
+   * The fetch policy the sheet is judged by. A predicate derived from the
+   * host's patterns is a new function per draw, so it is kept by the label
+   * that names those patterns; a caller's own predicate rides on one of the
+   * two inputs above, kept by their identity.
+   */
+  readonly fetchPolicyId: string | undefined;
+  /** The parts of the types drawn, as text, or none for the token tier. */
+  readonly parts: string | undefined;
+}
+
+interface KeptSiteSheet extends SiteSheetKey {
+  readonly sheet: SiteSheetArtifact;
+}
+
+/**
+ * The site sheets compiled, kept by what each was compiled from, so a page
+ * drawn again from the same inputs is not compiled again. The editor draws its
+ * page, and the header and footer around it, again for a selection, a hover or
+ * an insert, and none of those changes the site's styles; compiling the sheet
+ * on each of them was the costliest part of a header's draw.
+ *
+ * Kept under the site's input (or the route's compile context, where the host
+ * gives no site input) and weakly, so a sheet goes when what it was compiled
+ * from does. The compile context is compared field by field: a surface
+ * drawing a page and its regions rebuilds each part's scoped context with
+ * the same values whenever its other inputs are handed again. The inputs are read as values: a host hands a new object for a
+ * new style, as the page builder does, rather than changing one in place. A
+ * sheet is CSS text, the same for every request with the same inputs, so
+ * keeping it shares nothing between visitors.
+ */
+const KEPT_SITE_SHEETS = new WeakMap<object, KeptSiteSheet[]>();
+
+/** How many sheets one input keeps: a page and its regions, each scoped. */
+const KEPT_PER_INPUT = 4;
+
+/** The sheet compiled from `key`, compiling it only the first time. */
+function keptSiteSheet(
+  key: SiteSheetKey,
+  compile: () => SiteSheetArtifact
+): SiteSheetArtifact {
+  const owner = key.siteInput ?? key.styleContext;
+  // A caller's own predicate with no stated id may answer differently next
+  // time, and nothing here can tell: such a sheet is never reused, as a
+  // stored one under that label is never trusted (`effectiveCompile`).
+  if (owner === undefined || key.fetchPolicyId === UNIDENTIFIED_FETCH_POLICY)
+    return compile();
+  const kept = KEPT_SITE_SHEETS.get(owner) ?? [];
+  const found = kept.find(
+    entry =>
+      entry.siteInput === key.siteInput &&
+      sameFields(entry.styleContext, key.styleContext) &&
+      entry.fetchPolicyId === key.fetchPolicyId &&
+      entry.parts === key.parts
+  );
+  if (found !== undefined) return found.sheet;
+  const sheet = compile();
+  // Newest first, the oldest dropped past the bound.
+  KEPT_SITE_SHEETS.set(
+    owner,
+    [{ ...key, sheet }, ...kept].slice(0, KEPT_PER_INPUT)
+  );
+  return sheet;
+}
+
+/** Whether two compile contexts hold the same values under the same keys. */
+function sameFields(
+  before: StyleCompileContext | undefined,
+  after: StyleCompileContext | undefined
+): boolean {
+  if (before === after) return true;
+  if (before === undefined || after === undefined) return false;
+  const keys = Object.keys(before) as (keyof StyleCompileContext)[];
+  return (
+    keys.length === Object.keys(after).length &&
+    keys.every(key => Object.hasOwn(after, key) && before[key] === after[key])
+  );
+}
+
+/**
+ * The full site sheet for `input` and the parts of the types drawn, kept by
+ * the parts' text. Parts that cannot be written as text (a cycle, a bigint)
+ * are compiled afresh rather than kept.
+ */
+function keptPageSiteSheet(
+  key: Omit<SiteSheetKey, "parts">,
+  input: SiteSheetInput,
+  parts: Parameters<typeof compileSiteSheet>[1]
+): SiteSheetArtifact {
+  let text: string;
+  try {
+    text = JSON.stringify(parts);
+  } catch {
+    return compileSiteSheet(input, parts);
+  }
+  return keptSiteSheet({ ...key, parts: text }, () =>
+    compileSiteSheet(input, parts)
   );
 }

@@ -44,8 +44,12 @@ import {
   fieldsWithDeleted,
   markPending,
 } from "@admin/lib/builder/outline/pending-rows";
-import { renameOffered } from "@admin/lib/builder/rename-field";
+import {
+  fieldsNamedByHooks,
+  renameOffered,
+} from "@admin/lib/builder/rename-field";
 import { navigateTo } from "@admin/lib/navigation";
+import type { PendingAddress } from "@admin/services/addressCheckApi";
 import type { StoredHookConfig } from "@admin/types/collection";
 
 import type { BuilderConfig } from "./builder-config";
@@ -58,7 +62,7 @@ import { crumbsByPointer } from "./outline/FocusCrumbs";
 import { LazyFormPreview } from "./outline/LazyFormPreview";
 import { Outline, type OutlineCallbacks } from "./outline/Outline";
 import { useBuilderOutline } from "./outline/useBuilderOutline";
-import type { BuilderFieldsApi } from "./types";
+import type { BuilderField, BuilderFieldsApi } from "./types";
 import { useMoveContext } from "./useMoveContext";
 
 type Props = {
@@ -80,7 +84,15 @@ type Props = {
   savedFieldIds: ReadonlySet<string>;
   onSave: () => void;
   settings: BuilderSettingsValues;
-  onSettingsChange: (next: BuilderSettingsValues) => void;
+  /**
+   * The settings the modal hands back. `leaveWithoutWarning` is the leave
+   * guard's: a change that moves the editor to a new route (an unsaved
+   * entity's new address) states that move deliberate with it.
+   */
+  onSettingsChange: (
+    next: BuilderSettingsValues,
+    leaveWithoutWarning?: () => void
+  ) => void;
   /**
    * Whether the save judges names with Draft/Published on: on as stored, or as the pending settings
    * turn it on. Its columns stand until the save that turns it off lands, after the fields, so a
@@ -89,6 +101,10 @@ type Props = {
   lifecycleEnabled?: boolean;
   /** A collection's stored hooks, shown read-only in its settings modal. */
   storedHooks?: readonly StoredHookConfig[];
+  /** An unsaved entity's address stays editable, checked against these. */
+  unsavedAddress?: { otherAddresses: readonly PendingAddress[] };
+  /** How many places use a field group, said beside its fixed address. */
+  usedByCount?: number;
   active: ActiveOverlay;
   onActiveChange: (next: ActiveOverlay) => void;
   /** Copy a field to right after itself, named clear of what is beside it. */
@@ -99,6 +115,8 @@ type Props = {
   isSaving: boolean;
   /** What the live region announces during that save. */
   savingLabel: string;
+  /** Why Save waits, while it does: shown beside it, and Save is held. */
+  saveHeld?: string;
   /**
    * Runs when the editor is left through the leave guard's Discard Changes,
    * before the navigation: an unsaved entity is let go with its changes.
@@ -125,14 +143,27 @@ export function BuilderPageLayout(props: Props): JSX.Element {
     settings,
     onSettingsChange,
     storedHooks,
+    unsavedAddress,
+    usedByCount,
     active,
     onActiveChange,
     isSaving,
     savingLabel,
+    saveHeld,
     onDiscard,
     pageBuilderHref,
     children,
   } = props;
+  // The fields the save would refuse, from the map the outline marks its rows from, in its order.
+  const errorIds = useMemo(
+    () => [
+      ...builderFieldErrors(
+        builder.fields.filter(field => !field.isSystem),
+        builder.fields
+      ).keys(),
+    ],
+    [builder.fields]
+  );
   // While changes are pending, every way out asks first: an in-app link, the
   // field group's editor, the browser's back, a reload and closing the tab.
   // The guard is the admin's one, which entries use too. A read-only entity
@@ -143,7 +174,9 @@ export function BuilderPageLayout(props: Props): JSX.Element {
     <UnsavedChangesGuard
       isDirty={unsavedCount > 0 || isSaving}
       disabled={locked}
-      busy={isSaving}
+      // Nor while an unsaved entity's new address is checked: discarding then
+      // would let the entity go before the move renames it.
+      busy={isSaving || saveHeld !== undefined}
       onDiscard={onDiscard}
     >
       <div className="flex flex-col min-h-screen bg-background">
@@ -157,7 +190,10 @@ export function BuilderPageLayout(props: Props): JSX.Element {
           onAddField={() => onActiveChange({ kind: "picker", position: {} })}
           onOpenSettings={() => onActiveChange({ kind: "settings" })}
           onSave={onSave}
+          saveHeld={saveHeld}
           pageBuilderHref={pageBuilderHref}
+          errorIds={errorIds}
+          onShowError={fieldId => onActiveChange({ kind: "edit", fieldId })}
         />
         <BuilderWorkspace {...props} />
 
@@ -170,6 +206,8 @@ export function BuilderPageLayout(props: Props): JSX.Element {
           onSettingsChange={onSettingsChange}
           readOnly={locked}
           storedHooks={storedHooks}
+          unsavedAddress={unsavedAddress}
+          usedByCount={usedByCount}
           savedFields={pending.saved}
           lifecycleEnabled={props.lifecycleEnabled}
         />
@@ -209,9 +247,15 @@ function BuilderWorkspace(
     | "settings"
     | "pending"
     | "lifecycleEnabled"
+    | "storedHooks"
   >
 ): JSX.Element {
   const { builder, pending } = props;
+  // The field names the stored hooks name, which neither the panel nor a row offers to rename.
+  const namedByHooks = useMemo(
+    () => fieldsNamedByHooks(props.storedHooks),
+    [props.storedHooks]
+  );
   // Drawn with every pending delete shown where it was saved, marked, so a
   // delete stays in sight until it is saved or undone. Only drawn: the save
   // sends the builder's fields as they are.
@@ -249,6 +293,15 @@ function BuilderWorkspace(
     <div className="flex flex-1 items-start">
       <FieldListRegion
         {...props}
+        renameCallbacks={renameCallbacksOf(
+          builder.fields,
+          {
+            savedFieldIds: props.savedFieldIds,
+            locked: props.locked,
+            namedByHooks,
+          },
+          props.onActiveChange
+        )}
         moveContext={moveContext}
         outline={outline}
         fieldGroups={fieldGroups}
@@ -257,6 +310,7 @@ function BuilderWorkspace(
       />
       <EditedFieldSettings
         {...props}
+        namedByHooks={namedByHooks}
         outline={outline}
         openFieldGroup={openFieldGroup}
       />
@@ -283,6 +337,7 @@ function EditedFieldSettings({
   openFieldGroup,
   pending,
   lifecycleEnabled,
+  namedByHooks,
 }: Pick<
   Props,
   | "active"
@@ -294,6 +349,8 @@ function EditedFieldSettings({
   | "pending"
   | "lifecycleEnabled"
 > & {
+  /** The field names the stored hooks name (`fieldsNamedByHooks`). */
+  namedByHooks: ReadonlyMap<string, string>;
   outline: readonly OutlineNode[];
   openFieldGroup: (slug: string) => void;
 }): JSX.Element | null {
@@ -317,7 +374,7 @@ function EditedFieldSettings({
       kind={config.kind}
       fields={builder.fields}
       fieldId={active.fieldId}
-      startRenaming={active.renaming !== undefined}
+      rename={{ asked: active.renaming !== undefined, namedByHooks }}
       savedFieldIds={savedFieldIds}
       readOnly={locked}
       docked={docked}
@@ -343,18 +400,55 @@ function EditedFieldSettings({
   );
 }
 
+/** Each row's Rename… request, numbered, so asking again on the same field asks again. */
+let renameRequests = 0;
+
+/**
+ * The outline's Rename… for a row: whether its field offers it (as the settings panel asks, so the
+ * two never disagree), and opening the field's settings with the rename asked for.
+ */
+function renameCallbacksOf(
+  fields: readonly BuilderField[],
+  {
+    savedFieldIds,
+    locked,
+    namedByHooks,
+  }: {
+    savedFieldIds: ReadonlySet<string>;
+    locked: boolean;
+    namedByHooks: ReadonlyMap<string, string>;
+  },
+  onActiveChange: (next: ActiveOverlay) => void
+): Pick<OutlineCallbacks, "rename" | "canRename"> {
+  return {
+    rename: fieldId => {
+      renameRequests += 1;
+      onActiveChange({ kind: "edit", fieldId, renaming: renameRequests });
+    },
+    canRename: fieldId => {
+      const placement = findFieldPlacement(fields, fieldId);
+      return (
+        placement !== null &&
+        renameOffered(
+          placement.field,
+          placement.ancestors,
+          savedFieldIds.has(fieldId),
+          locked,
+          namedByHooks
+        )
+      );
+    },
+  };
+}
+
 /**
  * The field list and what sits above it: the read-only notice a code-first
  * entity gets, the page's own region, and the drag context around the list.
  */
-/** Each row's Rename… request, numbered, so asking again on the same field asks again. */
-let renameRequests = 0;
-
 function FieldListRegion({
   config,
   builder,
   entitySlug,
-  savedFieldIds,
   outline,
   fieldGroups,
   fieldGroupsLoad,
@@ -366,13 +460,13 @@ function FieldListRegion({
   onDuplicateField,
   moveContext,
   openFieldGroup,
+  renameCallbacks,
 }: Pick<
   Props,
   | "config"
   | "builder"
   | "entitySlug"
   | "locked"
-  | "savedFieldIds"
   | "configPath"
   | "beforeFieldList"
   | "active"
@@ -381,6 +475,8 @@ function FieldListRegion({
 > & {
   /** What the move rule needs beyond the fields, for every way of moving one. */
   moveContext: MoveContext;
+  /** Each row's Rename…: whether its field offers it, and asking for it. */
+  renameCallbacks: Pick<OutlineCallbacks, "rename" | "canRename">;
   outline: readonly OutlineNode[];
   fieldGroups: ReadonlyMap<string, LoadedFieldGroup>;
   fieldGroupsLoad: FieldGroupsLoad;
@@ -404,22 +500,7 @@ function FieldListRegion({
 
   const callbacks: OutlineCallbacks = {
     select: fieldId => onActiveChange({ kind: "edit", fieldId }),
-    rename: fieldId => {
-      renameRequests += 1;
-      onActiveChange({ kind: "edit", fieldId, renaming: renameRequests });
-    },
-    canRename: fieldId => {
-      const placement = findFieldPlacement(builder.fields, fieldId);
-      return (
-        placement !== null &&
-        renameOffered(
-          placement.field,
-          placement.ancestors,
-          savedFieldIds.has(fieldId),
-          locked
-        )
-      );
-    },
+    ...renameCallbacks,
     addAt: position => onActiveChange({ kind: "picker", position }),
     fields: builder.fields,
     judgeMove: (fieldId, target) =>

@@ -15,7 +15,7 @@
  * @module components/features/versions/history-address
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { useSearchParams } from "@admin/hooks/useSearchParams";
 import { setSearchParams } from "@admin/lib/navigation";
@@ -24,6 +24,11 @@ import { setSearchParams } from "@admin/lib/navigation";
 export const HISTORY_PARAM = "history";
 /** The key that names the version chosen in it. */
 export const VERSION_PARAM = "version";
+/**
+ * Set by the comparison page's "Restore…": opens the restore list for the
+ * version the address names, once, in the editor that takes the values.
+ */
+export const RESTORE_PARAM = "restore";
 
 /**
  * Every key the panel keeps, so a check that tells a move within the document
@@ -32,6 +37,7 @@ export const VERSION_PARAM = "version";
 export const HISTORY_ADDRESS_PARAMS: readonly string[] = [
   HISTORY_PARAM,
   VERSION_PARAM,
+  RESTORE_PARAM,
 ];
 
 /** Whether the address names history open right now. */
@@ -51,6 +57,15 @@ function openerEntry(search: string): string {
   params.sort();
   return params.toString();
 }
+
+/**
+ * The entry an open added, which closing can step back off while it is still
+ * the one showing. One for the page, not one per reader of the address: the
+ * side panel's History may open the panel and the document bar's sheet close
+ * it, and a close that did not know of the open would leave a closed copy of
+ * it for Back to land on. Forgotten once the address is closed by any means.
+ */
+const added: { entry: string | null } = { entry: null };
 
 /** A version number from the address, or null for anything else. */
 function readVersion(raw: string | string[] | undefined): number | null {
@@ -86,13 +101,9 @@ export function useHistoryAddress(available = true): HistoryAddress {
 
   const [open, setOpenState] = useState(addressOpen);
   const [version, setVersionState] = useState(addressVersion);
-  // The entry this hook added on opening, which closing can step back off
-  // while it is still the one showing. Forgotten once the address is closed
-  // by any means.
-  const addedOpenEntry = useRef<string | null>(null);
   useEffect(() => {
     setOpenState(addressOpen);
-    if (!addressOpen) addedOpenEntry.current = null;
+    if (!addressOpen) added.entry = null;
   }, [addressOpen]);
   useEffect(() => setVersionState(addressVersion), [addressVersion]);
 
@@ -103,29 +114,37 @@ export function useHistoryAddress(available = true): HistoryAddress {
       // already open, by a link, adds none, and stepping back would leave the
       // editor.
       if (!readOpenFromAddress()) {
-        addedOpenEntry.current = openerEntry(window.location.search);
+        added.entry = openerEntry(window.location.search);
         setSearchParams({ [HISTORY_PARAM]: "1" });
       }
       return;
     }
     setVersionState(null);
-    const added = addedOpenEntry.current;
-    addedOpenEntry.current = null;
+    const opened = added.entry;
+    added.entry = null;
     // Stepping back from any other entry would undo that move, not close.
-    if (added !== null && added === openerEntry(window.location.search)) {
+    if (opened !== null && opened === openerEntry(window.location.search)) {
       window.history.back();
       return;
     }
+    // A restore the comparison page asked for goes with it: the ask is for
+    // the version the address named, once, and left behind it would open a
+    // restore list unasked the next time history opens on a version.
     setSearchParams(
-      { [HISTORY_PARAM]: null, [VERSION_PARAM]: null },
+      { [HISTORY_PARAM]: null, [VERSION_PARAM]: null, [RESTORE_PARAM]: null },
       { replace: true }
     );
   }, []);
 
+  // Choosing another version, or going back to the list, abandons a restore
+  // asked for the version the address named, for the same reason.
   const setVersion = useCallback((next: number | null) => {
     setVersionState(next);
     setSearchParams(
-      { [VERSION_PARAM]: next === null ? null : String(next) },
+      {
+        [VERSION_PARAM]: next === null ? null : String(next),
+        [RESTORE_PARAM]: null,
+      },
       { replace: true }
     );
   }, []);

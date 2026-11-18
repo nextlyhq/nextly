@@ -105,6 +105,10 @@
       "types": "./dist/domains/widgets/card-geometry.d.mts",
       "import": "./dist/domains/widgets/card-geometry.mjs"
     },
+    "./comparison-baseline-name": {
+      "types": "./dist/domains/versions/comparison-baseline-name.d.mts",
+      "import": "./dist/domains/versions/comparison-baseline-name.mjs"
+    },
     "./field-label": {
       "types": "./dist/collections/fields/field-label.d.mts",
       "import": "./dist/collections/fields/field-label.mjs"

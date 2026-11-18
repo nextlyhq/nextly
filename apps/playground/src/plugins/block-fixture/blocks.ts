@@ -11,6 +11,8 @@ import { defineBlock } from "@nextlyhq/plugin-sdk/blocks";
 import type { SupportDefinition } from "@nextlyhq/plugin-sdk/blocks";
 import { createElement } from "react";
 
+import { EnvironmentProbe } from "./environment-probe";
+
 /*
  * The fixture's support key, added to the vocabulary `defineBlock` checks, as
  * a plugin registering a support does.
@@ -49,9 +51,13 @@ const plainFixtureBlock = defineBlock<{ label?: string }>({
     ),
 });
 
-/** Where the custom block's own inspector is, as the component map imports it. */
-const CUSTOM_INSPECTOR_COMPONENT =
+/** Where the custom block's own inspector is, as `admin.tsx` registers it. */
+export const CUSTOM_INSPECTOR_COMPONENT =
   "@/plugins/block-fixture/editor#FixtureInspector";
+
+/** The module exporting the same definitions for the editor. */
+export const BLOCK_FIXTURE_EDITOR_ENTRY =
+  "@/plugins/block-fixture/editor#blockFixtureEditor";
 
 /**
  * A block whose content is edited through its own inspector, and which uses
@@ -100,8 +106,36 @@ const teaserFixtureBlock = defineBlock<{ post?: string }>({
     ),
 });
 
+/**
+ * A block whose code measures itself, reads the viewport and listens to the
+ * window through `useBlockEnvironment()`, so the e2e suite can check that in
+ * the editor it finds the canvas frame's document and window, never the
+ * admin's. Its root is a plain element, as a block's must be; the probe is a
+ * client component inside it.
+ */
+const probeFixtureBlock = defineBlock<Record<string, never>>({
+  name: "fixture/probe",
+  version: 1,
+  description:
+    "Exists for the e2e suite: a contributed block that measures the window it is drawn in.",
+  editor: { label: "Test fixture: environment probe", category: "Fixtures" },
+  props: {},
+  example: { props: {} },
+  render: ({ className }) =>
+    createElement(
+      "div",
+      { className, "data-fixture": "probe" },
+      createElement(EnvironmentProbe)
+    ),
+});
+
 /** Everything the fixture contributes, as the declaration and the editor entry both list it. */
 export const blockFixtureContribution = {
-  blocks: [plainFixtureBlock, customFixtureBlock, teaserFixtureBlock],
+  blocks: [
+    plainFixtureBlock,
+    customFixtureBlock,
+    teaserFixtureBlock,
+    probeFixtureBlock,
+  ],
   supports: [fixtureToneSupport],
 };

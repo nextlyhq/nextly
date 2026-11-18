@@ -36,18 +36,23 @@ import {
 } from "@admin/hooks/queries";
 import { useBuilderEntityState } from "@admin/hooks/useBuilderEntityState";
 import { useBuilderFieldActions } from "@admin/hooks/useBuilderFieldActions";
+import { useBuilderSettingsChange } from "@admin/hooks/useBuilderSettingsChange";
 import { useDocumentTitle } from "@admin/hooks/useDocumentTitle";
 import { useFieldBuilder } from "@admin/hooks/useFieldBuilder";
+import {
+  useDiscardLetsGoOwned,
+  useFieldGroupsFirst,
+} from "@admin/hooks/useFieldGroupsFirst";
 import { useSchemaChangeConfirmation } from "@admin/hooks/useSchemaChangeConfirmation";
 import {
   displayLabel,
   mirrorSchemaFile,
   useSchemaSave,
 } from "@admin/hooks/useSchemaSave";
+import { useUnsavedDiscard } from "@admin/hooks/useUnsavedDiscard";
 import { createPreview } from "@admin/lib/builder/create-preview";
 import { singleCreatePayload } from "@admin/lib/builder/create-request";
 import { draftRenamesOf } from "@admin/lib/builder/rename-answers";
-import { settingsAreDirty } from "@admin/lib/builder/settings-dirty";
 import { singleEntityFromSettings } from "@admin/lib/builder/settings-to-manifest";
 import { hasPageBuilderField } from "@admin/lib/builder/starting-field";
 import {
@@ -55,7 +60,7 @@ import {
   type UnsavedEntity,
   useUnsavedEntity,
 } from "@admin/lib/builder/unsaved-entities";
-import { navigateTo } from "@admin/lib/navigation";
+import { useDocumentAddress } from "@admin/lib/navigation/useDocumentAddress";
 import { schemaFileApi } from "@admin/services/schemaFileApi";
 import { singleApi } from "@admin/services/singleApi";
 import type { FieldDefinition } from "@admin/types/collection";
@@ -116,7 +121,9 @@ function singleSettings(single: ApiSingle): BuilderSettingsValues {
  */
 function unsavedSingle(entity: UnsavedEntity): ApiSingle {
   return {
-    id: `unsaved:single:${entity.address}`,
+    // The token, not the address: it is kept when the address moves, so
+    // the editor knows the entity as the same one under its new address.
+    id: `unsaved:single:${entity.token}`,
     slug: entity.address,
     label: entity.settings.singularName,
     tableName: "",
@@ -152,6 +159,7 @@ export default function SingleBuilderEditPage({
   );
   // The tab names the Single being edited once it has arrived.
   useDocumentTitle(single ? singleName(single) : undefined);
+  const addressOf = useDocumentAddress();
 
   const builder = useFieldBuilder<FormData>({
     resolver: zodResolver(singleFormSchema),
@@ -177,13 +185,13 @@ export default function SingleBuilderEditPage({
     savedFieldIds,
     pinFields,
     pinSettings,
+    moveAddress,
   } = useBuilderEntityState({
     entity: single,
     builder,
     toFields: loaded => loaded.fields ?? [],
     // An unsaved Single opens with what the dialog set.
     toSettings: loaded => unsaved?.settings ?? singleSettings(loaded),
-    isDirty: settingsAreDirty,
     onLoad: loaded => builder.form.reset({ singularName: singleName(loaded) }),
     // A saved Single is known by its slug, which an unsaved one shares; its
     // id tells them apart, so once saved the editor loads the server's afresh.
@@ -191,10 +199,27 @@ export default function SingleBuilderEditPage({
     unsaved: unsaved !== undefined,
   });
 
+  // A change of the settings is a step; an unsaved single's address
+  // moves it at once, outside the history.
+  const { onSettingsChange, unsavedAddress, saveHeld } =
+    useBuilderSettingsChange({
+      kind: "single",
+      unsaved,
+      settings,
+      setSettings,
+      moveAddress,
+      busy: confirmation.isBusy,
+      editRoute: address =>
+        buildRoute(ROUTES.BUILDER_SINGLES_EDIT, { slug: address }),
+    });
+
   const isLocked = single?.locked === true;
   // Resolved once: the save hook refuses outright without a slug, so the
   // fallback below is only ever satisfying the type.
   const entitySlug = slug ?? "";
+  // The field groups not saved yet that this save creates first, and the ones this editor's
+  // picker made, which its save, Discard all and leave let go or release.
+  const groupsFirst = useFieldGroupsFirst("single", slug, builder.fields);
   const localized = settings?.i18n === true;
   // The pending Draft/Published toggle rides with the fields, as `localized` does, so the save
   // refuses a field taking one of the lifecycle's names in the save that turns it on.
@@ -301,6 +326,8 @@ export default function SingleBuilderEditPage({
             pinFields();
             // Re-pin settings baseline so the Save button disables again.
             pinSettings(settings);
+            // Landed: the groups this editor's picker made that no field uses go.
+            groupsFirst.letGoUnused();
             // Mirror the settings change (notably Draft/Published) into the
             // committable ui-schema.json. Not awaited: the mutation callback
             // stays synchronous, and the mirror is best-effort anyway.
@@ -322,7 +349,7 @@ export default function SingleBuilderEditPage({
         }
       );
     },
-    [slug, settings, updateSingle, pinFields, pinSettings]
+    [slug, settings, updateSingle, pinFields, pinSettings, groupsFirst]
   );
 
   // i18n: preview and apply carry the same toggle, so the resolutions the user
@@ -359,12 +386,7 @@ export default function SingleBuilderEditPage({
     [settings, entitySlug]
   );
 
-  // The saved fields the draft renamed, which the save answers as renames itself.
-  const draftRenames = useMemo(
-    () => draftRenamesOf(pending.changes),
-    [pending.changes]
-  );
-  const { handleSave, confirmApply } = useSchemaSave({
+  const { handleSave, confirmApply, reviewedSettingChanges } = useSchemaSave({
     slug,
     missingSlugMessage: "Single slug is missing",
     label: displayLabel(settings, entitySlug),
@@ -372,11 +394,13 @@ export default function SingleBuilderEditPage({
     // Judged against the fields as last saved, so a draft that changes a
     // saved field's storage level is refused before it can lose values.
     getValidatedFields: () => getValidatedFields(pending.saved),
+    // Its renames of saved fields are the save's to answer, as renames.
+    pendingChanges: pending.changes,
     preview: fields =>
       unsaved
         ? Promise.resolve(createPreview(fields))
         : singleApi.previewSchemaChanges(entitySlug, fields, localized, drafts),
-    apply: (fields, version, resolutions, renames) =>
+    apply: (fields, version, resolutions, renames, acknowledged) =>
       unsaved
         ? createUnsaved(fields)
         : singleApi.applySchemaChanges(
@@ -386,29 +410,29 @@ export default function SingleBuilderEditPage({
             resolutions,
             renames,
             localized,
-            drafts
+            drafts,
+            acknowledged
           ),
     onNoChanges: saveSettingsOnly,
     onApplied: unsaved ? onCreated : onSchemaApplied,
     previewedWith: { localized },
-    draftRenames,
+    // Each changed setting is reviewed with the save, and a save of the
+    // settings alone is reviewed too.
+    settingChanges: pending.settingChanges,
+    fieldGroupsFirst: groupsFirst.fieldGroupsFirst,
   });
 
   // Discard all on an unsaved Single discards the Single itself: it leaves
   // this tab, and the editor returns to the list.
-  const pendingChanges = useMemo(
-    () =>
-      unsaved
-        ? {
-            ...pending,
-            discardLeaves: true,
-            discardAll: () => {
-              removeUnsavedEntity("single", entitySlug);
-              navigateTo(ROUTES.BUILDER_SINGLES);
-            },
-          }
-        : pending,
-    [unsaved, pending, entitySlug]
+  const pendingChanges = useDiscardLetsGoOwned(
+    useUnsavedDiscard(
+      pending,
+      unsaved !== undefined,
+      "single",
+      entitySlug,
+      ROUTES.BUILDER_SINGLES
+    ),
+    groupsFirst.letGoOwned
   );
 
   // ---------------------------- Loading / error guards ----------------------
@@ -444,21 +468,30 @@ export default function SingleBuilderEditPage({
       pending={pendingChanges}
       pageBuilderHref={
         // Once saved, an entity laid out from blocks opens in the Page Builder
-        // from a new entry (a Single, from its document).
+        // from a new entry (a Single, from its document, where the admin's one
+        // rule opens it: the builder when that is its main field, as the
+        // sidebar opens it, else its form, whose card leads on).
         !unsaved && hasPageBuilderField(pending.saved)
-          ? buildRoute(ROUTES.SINGLE_EDIT, { slug: entitySlug })
+          ? addressOf(
+              { kind: "single", slug: entitySlug },
+              savedSingle === undefined ? {} : { collection: savedSingle }
+            )
           : undefined
       }
-      onDiscard={
-        unsaved ? () => removeUnsavedEntity("single", entitySlug) : undefined
-      }
+      onDiscard={() => {
+        // Left with its changes discarded: an unsaved entity goes, and the field groups its picker
+        // made stay as unsaved field groups of their own, which their own editor may open.
+        if (unsaved) removeUnsavedEntity("single", entitySlug);
+        groupsFirst.release();
+      }}
       savedFieldIds={savedFieldIds}
       onSave={handleSave}
       settings={settings}
       // As the save judges names: Draft/Published on as stored, or as the pending settings turn it
       // on, since its columns stand until the save that turns it off lands.
       lifecycleEnabled={single.status === true || drafts}
-      onSettingsChange={setSettings}
+      onSettingsChange={onSettingsChange}
+      unsavedAddress={unsavedAddress}
       active={active}
       onActiveChange={setActive}
       onDuplicateField={handleDuplicateField}
@@ -471,15 +504,19 @@ export default function SingleBuilderEditPage({
         />
       }
       isSaving={isSaving || confirmation.isBusy}
+      // Save waits while an unsaved entity's new address is checked.
+      saveHeld={saveHeld}
       savingLabel="Saving Single changes…"
     >
       <BuilderSchemaChangeDialogs
-        draftRenames={draftRenames}
+        draftRenames={draftRenamesOf(pending.changes)}
         confirmation={confirmation}
         kind={SINGLE_BUILDER_CONFIG.kind}
         entityName={slug}
         onConfirm={confirmApply}
         creating={unsaved !== undefined}
+        settingChanges={reviewedSettingChanges}
+        fieldGroupCreates={groupsFirst.creates}
       />
     </BuilderPageLayout>
   );

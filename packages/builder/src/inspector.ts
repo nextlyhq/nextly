@@ -22,6 +22,7 @@ import {
   isLinkableUrl,
   locateNode,
   nodeLocks,
+  propPlace,
   registryBlockSource,
   type ActiveSlotLock,
   type AnyBlockDefinition,
@@ -29,22 +30,26 @@ import {
   type BlockNode,
   type ComponentPath,
   type NodeLock,
+  type PropGroup,
   type PropSchema,
   type SlotDefaultSource,
 } from "@nextlyhq/blocks-engine";
 
+import type { RefusalWording } from "./canvas/drag-refusal";
+import { COLUMNS_ROW } from "./columns-layout";
 import {
   CONTENT_CONTROL_TYPES,
   hasContentControl,
 } from "./content-control-types";
-import type { RefusalWording } from "./drag-refusal";
 import type { EditorState } from "./editor-state";
-import { blockLabel, insertionPropSets } from "./inserter";
-import { layerLabel } from "./layers";
+import { GALLERY_BLOCK } from "./gallery-pictures";
+import { INSPECTOR_SECTIONS } from "./inspector-sections";
 import { lockRefusalWording } from "./lock-refusal";
 import { isLocked, lockBlockingEdit, lockedAncestorOf } from "./locking";
 import { refusalAnnouncement } from "./move-refusal";
 import type { BuilderOp, NodePatch } from "./op-vocabulary";
+import { blockLabel, insertionPropSets } from "./panels/add/inserter";
+import { layerLabel } from "./panels/layers/layers";
 
 /**
  * The prop types this inspector can draw a control for.
@@ -145,6 +150,24 @@ export interface BlockHtml {
 }
 
 /** The selected block, as something to edit. */
+/** One section of a tab's settings: its name and its rows. @experimental */
+export interface InspectionSection {
+  /** What the section is called. */
+  readonly label: string;
+  /** For a Style section, its key, which the Style tab draws it under. */
+  readonly key?: string;
+  /** Its settings, in the order the block declares them. */
+  readonly rows: readonly EditableProp[];
+}
+
+/** A block's settings by the tab each is edited in. @experimental */
+export interface InspectionSections {
+  readonly content: readonly InspectionSection[];
+  readonly advanced: readonly InspectionSection[];
+  /** The block's own props a Style section draws, beside its styles. */
+  readonly styleProps: readonly InspectionSection[];
+}
+
 export interface BlockInspection {
   readonly nodeId: string;
   readonly blockName: string;
@@ -169,6 +192,17 @@ export interface BlockInspection {
    * alphabetical order rearranges a form somebody designed.
    */
   readonly props: readonly EditableProp[];
+  /**
+   * The same props by the tab and section each is edited in, as the block
+   * declares them (`group` and `section` on each prop): Content first in a
+   * section named after the block, Advanced in "HTML", and Style in the Style
+   * tab's section a prop names. Sections and their rows keep declaration
+   * order. A block that declares no places has one Content section holding
+   * every prop.
+   *
+   * @experimental
+   */
+  readonly sections: InspectionSections;
   /**
    * The block's own inspector component (`editor.component`), when it names
    * one, drawn in place of the controls generated from {@link props}.
@@ -272,20 +306,35 @@ export type LockState = "locked" | "unlocked" | "mixed";
  * Whether a prop is offered at all.
  *
  * Left out: a prop that applies only while others are empty
- * (`onlyWithout`), once any of them is set, as a button's "Acts as" means
+ * (`onlyWithout`), once any of them is set, as a button's "Button type" means
  * nothing once the button links to a URL or an entry. Each entry names one
  * prop, or several that only together are something, as an entry link is a
- * collection and an entry. Also left out: a choice with fewer than two
- * options, which offers nothing to pick, as a column's one HTML tag, unless
- * what is stored is not that option, since the choice is then how it is put
- * back.
+ * collection and an entry. Left out too: a prop that applies only to some
+ * values of another (`onlyWhen`), while that one holds none of them, as a
+ * list's "Start at" means nothing on a bulleted list. Also left out: a choice
+ * with fewer than two options, which offers nothing to pick, as a column's one
+ * HTML tag, unless what is stored is not that option, since the choice is then
+ * how it is put back.
  */
 function offered(
   schema: PropSchema,
   value: unknown,
   values: Readonly<Record<string, unknown>>,
   declared: Readonly<Partial<Record<string, PropSchema>>>,
-  options: readonly string[]
+  options: readonly string[],
+  defaults: Readonly<Record<string, unknown>> | undefined
+): boolean {
+  if (hiddenByOnlyWithout(schema, values, declared)) return false;
+  if (!appliesToValues(schema, values, defaults)) return false;
+  if (schema.type !== "select" || options.length >= 2) return true;
+  return propIsSet(undefined, value) && !options.includes(String(value));
+}
+
+/** Whether a prop's `onlyWithout` names a prop, or a set of them, that is set. */
+function hiddenByOnlyWithout(
+  schema: PropSchema,
+  values: Readonly<Record<string, unknown>>,
+  declared: Readonly<Partial<Record<string, PropSchema>>>
 ): boolean {
   const without = schema.onlyWithout;
   const entries: readonly unknown[] =
@@ -296,14 +345,34 @@ function offered(
         : [];
   const setHere = (name: unknown): boolean =>
     typeof name === "string" && propIsSet(declared[name], values[name]);
-  const hidden = entries.some(entry =>
+  return entries.some(entry =>
     Array.isArray(entry)
       ? entry.length > 0 && entry.every(setHere)
       : setHere(entry)
   );
-  if (hidden) return false;
-  if (schema.type !== "select" || options.length >= 2) return true;
-  return propIsSet(undefined, value) && !options.includes(String(value));
+}
+
+/**
+ * Whether a prop's `onlyWhen`, `{ kind: ["ordered"] }`, holds: each prop it
+ * names has one of the values listed, read as stored, else as the block's
+ * default, since that is the value that applies. A prop without one always
+ * applies; a malformed one, naming no list, never matches.
+ */
+function appliesToValues(
+  schema: PropSchema,
+  values: Readonly<Record<string, unknown>>,
+  defaults: Readonly<Record<string, unknown>> | undefined
+): boolean {
+  const when = schema.onlyWhen;
+  if (typeof when !== "object" || when === null || Array.isArray(when)) {
+    return true;
+  }
+  return Object.entries(when).every(([name, allowed]) => {
+    const current = propIsSet(undefined, values[name])
+      ? values[name]
+      : defaults?.[name];
+    return Array.isArray(allowed) && allowed.includes(current);
+  });
 }
 
 /**
@@ -402,7 +471,8 @@ export function inspectSelection(
             node.props[name],
             node.props,
             declared,
-            optionsOf(schema)
+            optionsOf(schema),
+            definition.defaultProps as Record<string, unknown> | undefined
           ),
           readOnly: designLock !== undefined && !content.has(name),
         },
@@ -438,9 +508,143 @@ export function inspectSelection(
         ? definition.editor.icon
         : undefined,
     props,
+    sections: sectionsOf(props, blockLabel(node.type)),
     inspector: inspectorOf(definition),
     designLock,
     placedWith: insertionPropSets(definition),
+  };
+}
+
+/** One of the block panel's tabs, named as a block places a setting in it. */
+export type InspectorTab = PropGroup;
+
+/**
+ * The block panel's tabs, in the order an author reads them: what the block
+ * says, how it looks, then how it is built into the page.
+ */
+const INSPECTOR_TAB_ORDER: readonly InspectorTab[] = [
+  "content",
+  "style",
+  "advanced",
+];
+
+/** Every row of a tab's sections, in the order the sections hold them. */
+function rowsIn(
+  sections: readonly InspectionSection[]
+): readonly EditableProp[] {
+  return sections.flatMap(section => section.rows);
+}
+
+/**
+ * The block's own settings the Content tab draws: those it places in
+ * Content, read from its sections so the tab and the placement are one
+ * answer. A setting placed in Style or Advanced is drawn there instead.
+ */
+export function contentRowsOf(
+  inspection: Pick<BlockInspection, "sections">
+): readonly EditableProp[] {
+  return rowsIn(inspection.sections.content);
+}
+
+/**
+ * The block's own settings the Advanced tab draws above the ones the builder
+ * draws for every block: those it places in Advanced.
+ */
+export function advancedRowsOf(
+  inspection: Pick<BlockInspection, "sections">
+): readonly EditableProp[] {
+  return rowsIn(inspection.sections.advanced);
+}
+
+/**
+ * The tabs the selected block has, in order: a tab that would hold nothing is
+ * left out.
+ *
+ * Style and Advanced are there for every block. Style always offers a shared
+ * style, which any block can carry, and Advanced always holds the settings
+ * the builder draws for every block (where it shows, when, its CSS id and its
+ * attributes). Content is there when the block declares a setting placed in
+ * it, names its own inspector to draw it, or is a core block whose Content
+ * sections the builder draws ({@link builderContentSectionsOf}). Judged by
+ * what the block declares rather than by which settings show right now, so
+ * a setting a condition hides does not make the tab come and go under the
+ * author.
+ */
+export function inspectorTabsOf(
+  inspection: Pick<BlockInspection, "sections" | "inspector" | "blockName">
+): readonly InspectorTab[] {
+  const holdsContent =
+    inspection.inspector !== undefined ||
+    contentRowsOf(inspection).length > 0 ||
+    builderContentSectionsOf(inspection.blockName).length > 0;
+  return INSPECTOR_TAB_ORDER.filter(tab => tab !== "content" || holdsContent);
+}
+
+/**
+ * The Content sections the builder draws itself for a core block, by block,
+ * in the order they are drawn: Columns' layout, which writes the row's
+ * styles and adds or removes its columns, so it is no prop a generated field
+ * could draw (Content, because how many columns a row holds is its
+ * structure); and a Gallery's Pictures, which adds Image children, and its
+ * Layout, whose Columns and On mobile write the gallery's styles. A section
+ * named as one the block places props in is drawn as one, the builder's
+ * controls first.
+ */
+const BUILDER_CONTENT_SECTIONS: Readonly<Record<string, readonly string[]>> = {
+  [COLUMNS_ROW]: ["Columns"],
+  [GALLERY_BLOCK]: ["Pictures", "Layout"],
+};
+
+/** The Content sections the builder draws for a block, none for most. */
+export function builderContentSectionsOf(blockName: string): readonly string[] {
+  return Object.hasOwn(BUILDER_CONTENT_SECTIONS, blockName)
+    ? (BUILDER_CONTENT_SECTIONS[blockName] ?? [])
+    : [];
+}
+
+/** What a Style section is called, by its key, as the Style tab names it. */
+function styleSectionLabel(key: string): string {
+  return INSPECTOR_SECTIONS.find(section => section.key === key)?.label ?? key;
+}
+
+/** One section being filled: its rows are added as props are read. */
+interface FillingSection {
+  readonly label: string;
+  readonly key?: string;
+  readonly rows: EditableProp[];
+}
+
+/**
+ * The props by tab and section, in declaration order: a section is placed
+ * where its first prop is declared, and each prop joins its section's rows.
+ */
+function sectionsOf(
+  props: readonly EditableProp[],
+  label: string
+): InspectionSections {
+  const tabs = {
+    content: [] as FillingSection[],
+    advanced: [] as FillingSection[],
+    style: [] as FillingSection[],
+  };
+  for (const prop of props) {
+    const place = propPlace(prop.schema, label);
+    const tab = tabs[place.tab];
+    const named =
+      place.tab === "style"
+        ? { label: styleSectionLabel(place.section), key: place.section }
+        : { label: place.section };
+    let section = tab.find(each => each.label === named.label);
+    if (section === undefined) {
+      section = { ...named, rows: [] };
+      tab.push(section);
+    }
+    section.rows.push(prop);
+  }
+  return {
+    content: tabs.content,
+    advanced: tabs.advanced,
+    styleProps: tabs.style,
   };
 }
 

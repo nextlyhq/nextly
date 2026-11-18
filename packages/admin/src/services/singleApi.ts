@@ -32,11 +32,18 @@ import type {
   PublishAllLanguageOutcome,
   PublishAllPreview,
 } from "./publishAllPreview";
-import type {
-  FieldResolution,
-  SchemaApplyResponse,
-  SchemaPreviewResponse,
-  SchemaRenameResolution,
+import {
+  publishPartsBody,
+  type PublishPartsChoice,
+  type PublishPartsDirection,
+  type PublishPartsResult,
+} from "./publishParts";
+import {
+  acknowledgedConversionsBody,
+  type FieldResolution,
+  type SchemaApplyResponse,
+  type SchemaPreviewResponse,
+  type SchemaRenameResolution,
 } from "./schemaApi";
 
 /**
@@ -122,7 +129,8 @@ type SingleApiType = {
     resolutions?: Record<string, FieldResolution>,
     renameResolutions?: SchemaRenameResolution[],
     localized?: boolean,
-    status?: boolean
+    status?: boolean,
+    acknowledgedConversions?: readonly string[]
   ) => Promise<SchemaApplyResponse>;
   readonly remove: (slug: string) => Promise<{ message: string }>;
   readonly getDocument: (
@@ -160,6 +168,12 @@ type SingleApiType = {
   readonly previewPublishAllLocales: (
     slug: string
   ) => Promise<PublishAllPreview>;
+  /** @experimental Until publishing per language is complete. */
+  readonly publishParts: (
+    slug: string,
+    direction: PublishPartsDirection,
+    choice: PublishPartsChoice
+  ) => Promise<PublishPartsResult>;
 };
 
 /**
@@ -278,7 +292,9 @@ export const singleApi: SingleApiType = {
     // flag. Undefined leaves the persisted value untouched.
     localized?: boolean,
     // The pending Draft/Published toggle, judged with as the preview is (see above).
-    status?: boolean
+    status?: boolean,
+    // The keys of the conversions the review listed and its Save confirmed.
+    acknowledgedConversions?: readonly string[]
   ): Promise<SchemaApplyResponse> => {
     const result = await protectedApi.post<
       ActionResponse<{ newSchemaVersion: number; toastSummary?: string }>
@@ -290,6 +306,7 @@ export const singleApi: SingleApiType = {
       renameResolutions,
       ...(localized !== undefined ? { localized } : {}),
       ...(status !== undefined ? { status } : {}),
+      ...acknowledgedConversionsBody(acknowledgedConversions),
     });
     return {
       success: true,
@@ -423,6 +440,23 @@ export const singleApi: SingleApiType = {
    */
   previewPublishAllLocales: async (slug: string): Promise<PublishAllPreview> =>
     protectedApi.get<PublishAllPreview>(`/singles/${slug}/publish-all`),
+
+  /**
+   * Publish or unpublish the parts of a Single a person chose: some of its languages, and
+   * separately its shared fields. With `describe`, say what that would do and change nothing.
+   * Hits `POST /api/singles/{slug}/publish` (or `/unpublish`).
+   */
+  publishParts: async (
+    slug: string,
+    direction: PublishPartsDirection,
+    choice: PublishPartsChoice
+  ): Promise<PublishPartsResult> => {
+    const result = await protectedApi.post<{
+      message: string;
+      item: PublishPartsResult;
+    }>(`/singles/${slug}/${direction}`, publishPartsBody(choice));
+    return result.item;
+  },
 } as const;
 
 // ============================================================

@@ -11,7 +11,9 @@
  */
 import type { JSX } from "react";
 
+import { useLeaveWithoutWarning } from "@admin/components/features/entries/EntryForm/UnsavedChangesGuard";
 import type { FieldInsertPosition } from "@admin/lib/builder/insert-field";
+import type { PendingAddress } from "@admin/services/addressCheckApi";
 import type { StoredHookConfig } from "@admin/types/collection";
 
 import type { BuilderConfig } from "./builder-config";
@@ -46,11 +48,23 @@ type Props = {
   builder: BuilderFieldsApi;
   /** Current settings values; the modal edits a copy of these. */
   settings: BuilderSettingsValues;
-  onSettingsChange: (next: BuilderSettingsValues) => void;
+  /**
+   * The settings the modal hands back. `leaveWithoutWarning` is the leave
+   * guard's: a change that moves the editor to a new route (an unsaved
+   * entity's new address) states that move deliberate with it.
+   */
+  onSettingsChange: (
+    next: BuilderSettingsValues,
+    leaveWithoutWarning?: () => void
+  ) => void;
   /** Code-first entities render every editing affordance disabled. */
   readOnly: boolean;
   /** A collection's stored hooks, which the settings modal shows read-only. */
   storedHooks?: readonly StoredHookConfig[];
+  /** An unsaved entity's address stays editable, checked against these. */
+  unsavedAddress?: { otherAddresses: readonly PendingAddress[] };
+  /** How many places use a field group, said beside its fixed address. */
+  usedByCount?: number;
   /** The fields as last saved, where a pending delete still holds its name until the save. */
   savedFields?: readonly BuilderField[];
   /** Whether the save judges names with Draft/Published on: as stored, or as the pending settings set it. */
@@ -66,10 +80,14 @@ export function BuilderOverlays({
   onSettingsChange,
   readOnly,
   storedHooks,
+  unsavedAddress,
+  usedByCount,
   savedFields,
   lifecycleEnabled = false,
 }: Props): JSX.Element {
   const close = () => onActiveChange({ kind: "none" });
+  // Rendered inside the leave guard, so this is the guard's own escape.
+  const leaveWithoutWarning = useLeaveWithoutWarning();
 
   return (
     <>
@@ -82,9 +100,11 @@ export function BuilderOverlays({
           initialValues={settings}
           readOnly={readOnly}
           storedHooks={storedHooks}
+          unsavedAddress={unsavedAddress}
+          usedByCount={usedByCount}
           onCancel={close}
           onSubmit={next => {
-            onSettingsChange(next);
+            onSettingsChange(next, leaveWithoutWarning);
             close();
           }}
         />

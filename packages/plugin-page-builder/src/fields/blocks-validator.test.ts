@@ -1,8 +1,11 @@
-import { clearBlocks, registerBlocks } from "@nextlyhq/blocks-engine";
+import { createBlockRegistry } from "@nextlyhq/blocks-engine";
 import type { BreakpointSet } from "@nextlyhq/blocks-engine";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { validateBlocksValue } from "./blocks-validator";
+
+/** The site's block registry these tests seed and judge against. */
+const blocks = createBlockRegistry();
 
 /** A minimal valid page document. */
 function page(nodes: unknown[] = []) {
@@ -16,10 +19,12 @@ function node(type: string, id: string) {
 
 describe("validateBlocksValue", () => {
   it("accepts an absent document, leaving required-ness to the shared rules", () => {
-    expect(validateBlocksValue(null, "content", "Content", {})).toEqual([]);
-    expect(validateBlocksValue(undefined, "content", "Content", {})).toEqual(
+    expect(validateBlocksValue(null, "content", "Content", {}, blocks)).toEqual(
       []
     );
+    expect(
+      validateBlocksValue(undefined, "content", "Content", {}, blocks)
+    ).toEqual([]);
   });
 
   it("accepts a well-formed page document", () => {
@@ -28,14 +33,21 @@ describe("validateBlocksValue", () => {
         page([node("core/heading", "11111111-1111-4111-8111-111111111111")]),
         "content",
         "Content",
-        {}
+        {},
+        blocks
       )
     ).toEqual([]);
   });
 
   it("rejects a value that is not a document", () => {
     for (const value of ["text", 42, [], true]) {
-      const issues = validateBlocksValue(value, "content", "Content", {});
+      const issues = validateBlocksValue(
+        value,
+        "content",
+        "Content",
+        {},
+        blocks
+      );
       expect(issues.map(issue => issue.code)).toEqual(["INVALID_TYPE"]);
     }
   });
@@ -45,7 +57,8 @@ describe("validateBlocksValue", () => {
       { formatVersion: 1, kind: "page", nodes: "not-a-list" },
       "content",
       "Content",
-      {}
+      {},
+      blocks
     );
     expect(issues.length).toBeGreaterThan(0);
     // Kebab-case codes come from the engine's documented issue vocabulary.
@@ -57,7 +70,8 @@ describe("validateBlocksValue", () => {
       page([{ id: "", type: "core/heading", version: 1, props: {} }]),
       "content",
       "Content",
-      {}
+      {},
+      blocks
     );
     expect(issues.length).toBeGreaterThan(0);
     // The admin renders a blocks field as one control, so every issue lands on
@@ -74,7 +88,8 @@ describe("validateBlocksValue", () => {
         { formatVersion: 1, kind: "pattern", nodes: [] },
         "content",
         "Content",
-        {}
+        {},
+        blocks
       );
       expect(issues.map(issue => issue.code)).toContain(
         "DISALLOWED_DOCUMENT_KIND"
@@ -87,7 +102,8 @@ describe("validateBlocksValue", () => {
           { formatVersion: 1, kind: "pattern", nodes: [] },
           "content",
           "Content",
-          { kinds: ["page", "pattern"] }
+          { kinds: ["page", "pattern"] },
+          blocks
         )
       ).toEqual([]);
     });
@@ -100,13 +116,21 @@ describe("validateBlocksValue", () => {
     ]);
 
     it("permits every block when the field names none", () => {
-      expect(validateBlocksValue(doc, "content", "Content", {})).toEqual([]);
+      expect(
+        validateBlocksValue(doc, "content", "Content", {}, blocks)
+      ).toEqual([]);
     });
 
     it("rejects a block the field does not accept", () => {
-      const issues = validateBlocksValue(doc, "content", "Content", {
-        allow: ["core/heading"],
-      });
+      const issues = validateBlocksValue(
+        doc,
+        "content",
+        "Content",
+        {
+          allow: ["core/heading"],
+        },
+        blocks
+      );
       expect(issues.map(issue => issue.code)).toEqual([
         "DISALLOWED_BLOCK_TYPE",
       ]);
@@ -115,13 +139,25 @@ describe("validateBlocksValue", () => {
 
     it("matches a namespace through a trailing star", () => {
       expect(
-        validateBlocksValue(doc, "content", "Content", {
-          allow: ["core/*", "acme/*"],
-        })
+        validateBlocksValue(
+          doc,
+          "content",
+          "Content",
+          {
+            allow: ["core/*", "acme/*"],
+          },
+          blocks
+        )
       ).toEqual([]);
-      const issues = validateBlocksValue(doc, "content", "Content", {
-        allow: ["core/*"],
-      });
+      const issues = validateBlocksValue(
+        doc,
+        "content",
+        "Content",
+        {
+          allow: ["core/*"],
+        },
+        blocks
+      );
       expect(issues[0]?.message).toContain("acme/pricing");
     });
 
@@ -131,9 +167,15 @@ describe("validateBlocksValue", () => {
         node("acme/a", "22222222-2222-4222-8222-222222222222"),
         node("acme/b", "33333333-3333-4333-8333-333333333333"),
       ]);
-      const issues = validateBlocksValue(many, "content", "Content", {
-        allow: ["core/*"],
-      });
+      const issues = validateBlocksValue(
+        many,
+        "content",
+        "Content",
+        {
+          allow: ["core/*"],
+        },
+        blocks
+      );
       expect(issues[0]?.message).toContain("acme/a, acme/b");
     });
 
@@ -151,9 +193,15 @@ describe("validateBlocksValue", () => {
           },
         },
       ]);
-      const issues = validateBlocksValue(nested, "content", "Content", {
-        allow: ["core/*"],
-      });
+      const issues = validateBlocksValue(
+        nested,
+        "content",
+        "Content",
+        {
+          allow: ["core/*"],
+        },
+        blocks
+      );
       expect(issues.map(issue => issue.code)).toEqual([
         "DISALLOWED_BLOCK_TYPE",
       ]);
@@ -167,7 +215,8 @@ describe("validateBlocksValue", () => {
       page([node("core/heading", "11111111-1111-4111-8111-111111111111")]),
       "content",
       "Content",
-      { allow: [] }
+      { allow: [] },
+      blocks
     );
     expect(issues.map(issue => issue.code)).toEqual(["DISALLOWED_BLOCK_TYPE"]);
     expect(issues[0]?.message).toContain("Accepted: none");
@@ -178,13 +227,25 @@ describe("validateBlocksValue", () => {
     // rejected document into a server error.
     for (const nodes of [[null], [42], ["text"], [{ id: "a" }]]) {
       expect(() =>
-        validateBlocksValue(page(nodes), "content", "Content", {
-          allow: ["core/*"],
-        })
+        validateBlocksValue(
+          page(nodes),
+          "content",
+          "Content",
+          {
+            allow: ["core/*"],
+          },
+          blocks
+        )
       ).not.toThrow();
-      const issues = validateBlocksValue(page(nodes), "content", "Content", {
-        allow: ["core/*"],
-      });
+      const issues = validateBlocksValue(
+        page(nodes),
+        "content",
+        "Content",
+        {
+          allow: ["core/*"],
+        },
+        blocks
+      );
       // The structural failure is reported; the allow-list rule stays quiet
       // until there is a well-formed tree to check.
       expect(issues.length).toBeGreaterThan(0);
@@ -205,7 +266,13 @@ describe("validateBlocksValue", () => {
         props: {},
       }))
     );
-    const issues = validateBlocksValue(broken, "content", "Content", {});
+    const issues = validateBlocksValue(
+      broken,
+      "content",
+      "Content",
+      {},
+      blocks
+    );
     expect(issues.length).toBe(21);
     expect(issues.at(-1)?.code).toBe("TOO_MANY_ISSUES");
     expect(issues.at(-1)?.message).toMatch(/further problems? not listed/);
@@ -215,7 +282,7 @@ describe("validateBlocksValue", () => {
     const hostile: Record<string, unknown> = { formatVersion: 1, kind: "page" };
     hostile.nodes = [{ id: "a", type: "core/x", version: 1, props: hostile }];
     expect(() =>
-      validateBlocksValue(hostile, "content", "Content", {})
+      validateBlocksValue(hostile, "content", "Content", {}, blocks)
     ).not.toThrow();
   });
 });
@@ -246,7 +313,7 @@ describe("the breakpoint set a blocks field is validated against", () => {
   }
 
   const check = (doc: unknown, breakpoints: BreakpointSet) =>
-    validateBlocksValue(doc, "content", "Content", {}, breakpoints);
+    validateBlocksValue(doc, "content", "Content", {}, blocks, breakpoints);
 
   it("reaches the breakpoint level of the walk at all", () => {
     // The positive control for the two absences below: a fixture that never
@@ -295,7 +362,7 @@ describe("a slot its block locks", () => {
   const HEADING = "33333333-3333-4333-8333-333333333333";
 
   beforeEach(() => {
-    registerBlocks(
+    blocks.register(
       [
         { ...base, name: "acme/locked-heading" },
         {
@@ -314,7 +381,7 @@ describe("a slot its block locks", () => {
   });
 
   afterEach(() => {
-    clearBlocks();
+    blocks.clear();
   });
 
   /** A page holding the hero, with these children stored in its locked slot. */
@@ -330,7 +397,8 @@ describe("a slot its block locks", () => {
         heroWith([node("acme/locked-heading", HEADING)]),
         "content",
         "Content",
-        {}
+        {},
+        blocks
       )
     ).toEqual([]);
   });
@@ -338,7 +406,13 @@ describe("a slot its block locks", () => {
   it("refuses the save once the locked slot no longer holds it", () => {
     // Every writer's save reaches this path, so refusing here is what holds
     // the API, an import and an agent to the lock as well as the editor.
-    const issues = validateBlocksValue(heroWith([]), "content", "Content", {});
+    const issues = validateBlocksValue(
+      heroWith([]),
+      "content",
+      "Content",
+      {},
+      blocks
+    );
 
     expect(issues.map(issue => issue.code)).toEqual(["locked-slot-altered"]);
     expect(issues[0]?.message).toContain(

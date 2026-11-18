@@ -1,8 +1,8 @@
 /**
  * The declaration of `nextly migrate`: its options and help, with the action
- * loaded from `./migrate` only when the command runs.
+ * loaded from `./migrate-action` only when the command runs.
  */
-import type { Command } from "commander";
+import { Option, type Command } from "commander";
 
 import { ACCEPT_DATA_LOSS_HELP } from "../../domains/schema/migrate/data-loss-consent-help";
 import { withBusyTableBounds } from "../busy-table-options";
@@ -34,10 +34,26 @@ export function registerMigrateCommand(program: Command): void {
       false
     )
     .option("--accept-data-loss [targets]", ACCEPT_DATA_LOSS_HELP)
+    // Read only on a database that still keeps its migration records the way
+    // an earlier release did: the run moves them once a backup is confirmed.
+    .option(
+      "--backup-confirmed",
+      "Confirm the database is backed up, so the migration records of an earlier Nextly release can be moved (required without a terminal; ignored when there are none)",
+      false
+    )
+    // The earlier spelling, honoured for one release with a notice naming
+    // --backup-confirmed, and kept out of the help.
+    .addOption(
+      new Option("--confirm-backed-up", "Deprecated: use --backup-confirmed")
+        .default(false)
+        .hideHelp()
+    )
     .option(
       "--repair-localization",
       "Copy existing content into the translation tables of localized entities that have no record of transitioning (for installs that enabled localization before Nextly recorded it)",
       false
     )
-    .action(lazyAction(async () => (await import("./migrate")).migrateAction));
+    .action(
+      lazyAction(async () => (await import("./migrate-action")).migrateAction)
+    );
 }

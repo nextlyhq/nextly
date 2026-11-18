@@ -126,7 +126,9 @@ test("chooses a named query as a list's source, writing it only once it can run"
   const inspector = page.locator(".nx-inspector");
 
   // 1. Under Custom sources, above the collections, tagged.
-  await inspector.getByRole("button", { name: "Source Blog posts" }).click();
+  await inspector
+    .getByRole("button", { name: "Show entries from Blog posts" })
+    .click();
   const sources = page.getByRole("listbox", { name: "Sources" });
   await expect(
     sources.getByRole("group", { name: "Custom sources" })
@@ -143,7 +145,7 @@ test("chooses a named query as a list's source, writing it only once it can run"
 
   // 2. Chosen on screen, nothing written, the canvas tagged.
   await expect(
-    inspector.getByRole("button", { name: "Source Posts by title" })
+    inspector.getByRole("button", { name: "Show entries from Posts by title" })
   ).toBeVisible();
   await expect(
     inspector.getByText("Enter title words. Posts by title needs it to run.")

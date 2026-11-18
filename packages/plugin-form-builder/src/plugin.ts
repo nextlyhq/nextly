@@ -39,6 +39,8 @@ import { asFormDocument, asSubmissionDocument } from "./document-shapes";
 import { submissionAnswers } from "./emails/answers";
 import { formsEmailTemplates } from "./emails/starter-messages";
 import { addressedFormPages, FORM_EDITOR_VIEW } from "./form-pages";
+import { botCheckScriptRoute } from "./form-provider/bot-check-script";
+import { registerFormProvider } from "./form-provider/register";
 import {
   botCheckDefaults,
   botCheckHosts,
@@ -123,6 +125,10 @@ import {
   isConsentAnswer,
   storedConsentNames,
 } from "./utils/consent";
+import {
+  formTemplateReferences,
+  type TemplateReference,
+} from "./utils/email-template-references";
 import { parseFieldRef } from "./utils/field-references";
 import { normalizeFormSettings } from "./utils/form-settings";
 import {
@@ -424,6 +430,9 @@ export function formBuilder(
         // What a submissions list shows, as CSV or JSON; see
         // `routes/submissions-export`.
         submissionsExportRoute(resolvedConfig),
+        // The script that draws a form's bot check on a page builder page;
+        // see `form-provider/bot-check-script`.
+        botCheckScriptRoute(),
         {
           // The builder UI reads the host's resolved field enable/disable map
           // from here, so the plugin option actually gates the type picker.
@@ -531,6 +540,12 @@ export function formBuilder(
       // one-response key is taken inside its write's transaction, where a
       // first use is refused.
       await nextly.security.digests.prepare();
+
+      // The forms, offered to the page builder's Form block: drawn on a page
+      // and sent there as a plain HTML form, with every rule of this plugin.
+      // Through its cross-plugin service, so neither package imports the
+      // other; without the page builder there is nowhere to offer them.
+      registerFormProvider(nextly, resolvedConfig);
 
       // Hook/event subscriptions are idempotent across HMR — the platform
       // clears a plugin's prior subscriptions before re-init (B2), so the old
@@ -652,6 +667,42 @@ export function formBuilder(
       const declaredFormsSlug = resolvedConfig.formOverrides.slug;
       const formsSlug =
         nextly.self.collections[declaredFormsSlug] ?? declaredFormsSlug;
+
+      // What sends each email: the admin shows a template's senders, and
+      // names them before it is deleted. A form's notification rules name
+      // templates by slug, so every form is read; with notifications off, no
+      // form sends anything. Rules live in a JSON field, which can't be
+      // queried by template, so the forms are paged through.
+      //
+      // Read as the plugin's own bookkeeping (`ownCollections`, no read
+      // hooks, no caller): a host's list-query filter or stored read hook
+      // may narrow what the forms UI shows a given reader, and references
+      // collected through that narrowed read would silently miss forms the
+      // rules still send — while the answer claimed to be complete.
+      nextly.filters.add(
+        "email.templateReferences",
+        async (references: TemplateReference[]) => {
+          if (!resolvedConfig.notifications.enabled) return references;
+          const forms: Array<Record<string, unknown>> = [];
+          const pageSize = 200;
+          for (let page = 1; ; page += 1) {
+            // A stable order across pages: without one, the database owes no
+            // ordering, and a row edited between two page reads can be
+            // skipped or repeated — a referencing form the delete guard then
+            // never names, while the answer claims completeness.
+            const result = await nextly.services.ownCollections.listEntries(
+              formsSlug,
+              {
+                pagination: { limit: pageSize, page },
+                sort: { field: "id", direction: "asc" },
+              }
+            );
+            forms.push(...(result.data as Array<Record<string, unknown>>));
+            if (result.data.length < pageSize) break;
+          }
+          return [...references, ...formTemplateReferences(forms)];
+        }
+      );
 
       // `beforeChange` rather than `beforeCreate`: it is the last
       // COLLECTION-level mutating phase before the insert. Core runs stored

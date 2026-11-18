@@ -13,6 +13,7 @@ import { compileStyleValues, safeTokenPrefix } from "./declarations";
 import type { SiteToken, SiteTokenSet } from "./site-tokens";
 import {
   checkTokenKind,
+  tokenKindExample,
   DARK_MODE_ATTRIBUTE,
   defaultSiteTokens,
   resolveSiteTokens,
@@ -261,6 +262,30 @@ describe("a value that cannot be its kind", () => {
     ["fontFamily", "system-ui"],
     ["shadow", "0 1px 2px rgba(0,0,0,.2)"],
     ["custom", "anything at all"],
+    // Every hex length CSS reads.
+    ["color", "#abc"],
+    ["color", "#abcd"],
+    ["color", "#aabbcc"],
+    ["color", "#aabbccdd"],
+    // A hex with an escaped digit: CSS reads it, though the contrast parser
+    // does not.
+    ["color", "#\\66 ff"],
+    // Words a property that takes a length variable accepts in its place, in
+    // any case, as CSS reads keywords.
+    ["dimension", "auto"],
+    ["dimension", "AUTO"],
+    ["dimension", "max-content"],
+    ["dimension", "large"],
+    ["dimension", "thin"],
+    ["dimension", "inherit"],
+    // The same words with an escaped letter, as CSS reads identifiers.
+    ["dimension", "a\\75 to"],
+    ["dimension", "in\\68 erit"],
+    // A function this check does not know still passes: it may be next
+    // year's CSS.
+    ["dimension", "fit-content(20rem)"],
+    ["dimension", "anchor-size(width)"],
+    ["color", "hwb(120 10% 10%)"],
   ] as const)("stays quiet about a valid %s value %s", (kind, value) => {
     // The check is one-sided on purpose. A false positive here would tell an
     // author their perfectly good `oklch()` is wrong, which is worse than the
@@ -311,8 +336,54 @@ describe("a value that cannot be its kind", () => {
     ["duration", "0deg"],
     ["number", "1e3px"],
     ["fontWeight", "2e3"],
+    // Words where a length belongs: no property a length variable is read
+    // by takes them, so the declaration is dropped where it is used.
+    ["dimension", "the spacing"],
+    ["dimension", "big"],
+    ["dimension", "1px wide"],
+    ["dimension", "12pxred"],
+    // A hex colour with a length CSS does not read, or a digit that is not hex.
+    ["color", "#12345"],
+    ["color", "#12"],
+    ["color", "#1234567"],
+    ["color", "#ggg"],
   ] as const)("names what is wrong with %s value %s", (kind, value) => {
     expect(checkTokenKind(kind, value), `${kind}: ${value}`).toBeDefined();
+  });
+
+  it("says what to type instead of a word or a bad hex", () => {
+    expect(checkTokenKind("dimension", "the spacing")).toBe(
+      "is words, not a length"
+    );
+    expect(tokenKindExample("dimension")).toBe(
+      "a number with a unit, such as 16px or 1.5rem"
+    );
+    expect(checkTokenKind("color", "#12345")).toBe(
+      "is not a hex colour, which has 3, 4, 6 or 8 digits from 0-9 and a-f"
+    );
+    expect(tokenKindExample("color")).toBe("a colour, such as #1d4ed8");
+    // A kind that takes any value has nothing to suggest.
+    expect(tokenKindExample("custom")).toBeUndefined();
+  });
+
+  it("reports a mismatch without claiming where the value went", () => {
+    // The same report is a warning while a page renders and a refusal when a
+    // save is checked, so the message holds only what is true in both; what
+    // a render does with the value is the suggestion's to say.
+    const { issues } = emitTokenBlocks(
+      {
+        tokens: [
+          { name: "space.gap", kind: "dimension", values: { light: "big" } },
+        ],
+      },
+      SCOPE
+    );
+    expect(issues[0]?.message).toBe(
+      '"space.gap" is a dimension token, but its light value "big" is words, not a length. Type a number with a unit, such as 16px or 1.5rem.'
+    );
+    expect(issues[0]?.suggestion).toBe(
+      "It was written as given, and will do nothing where the token is used."
+    );
   });
 });
 
@@ -493,6 +564,36 @@ describe("emitTokenBlocks", () => {
     expect(css).toContain("--brand-space-4:1rem");
   });
 
+  it("writes a length token's unitless zero as 0px", () => {
+    // A bare `0` is a length where a property takes one, but a token is also
+    // read inside `max()`, where it is a number and makes the declaration
+    // invalid: a contained block's padding would then fall to nothing.
+    const { css } = emitTokenBlocks(
+      {
+        tokens: [
+          {
+            name: "space.gutter",
+            kind: "dimension",
+            values: { light: "0", dark: " -0.0 " },
+          },
+          { name: "space.4", kind: "dimension", values: { light: "1rem" } },
+          { name: "line.height", kind: "number", values: { light: "0" } },
+          { name: "time.fast", kind: "duration", values: { light: "0" } },
+        ],
+      },
+      SCOPE
+    );
+    expect(css).toContain("--site-space-gutter:0px");
+    expect(css).not.toContain("--site-space-gutter:0;");
+    expect(css).not.toMatch(/--site-space-gutter: -0\.0 /);
+    expect(css).toContain("--site-space-4:1rem");
+    // Only lengths: a number and a duration keep their unitless zero, which
+    // is what those take.
+    expect(css).toContain("--site-line-height:0");
+    expect(css).toContain("--site-time-fast:0");
+    expect(css).not.toMatch(/--site-(line-height|time-fast):0px/);
+  });
+
   it("writes a dark block behind an attribute the host controls", () => {
     // The host owns the document and may already have a toggle, so the values
     // are emitted under a switch rather than under a decision about when to
@@ -519,6 +620,86 @@ describe("emitTokenBlocks", () => {
     expect(css).toContain(`[${DARK_MODE_ATTRIBUTE}="dark"] :is(${SCOPE})`);
     expect(css).toContain(`:is(${SCOPE})[${DARK_MODE_ATTRIBUTE}="dark"]`);
     expect(css).toContain("--site-color-text:#eee");
+  });
+
+  describe("a shadow coloured by a colour variable", () => {
+    // A custom property's `var()` is resolved where it is DECLARED and then
+    // inherited as the result. Declared once on the root, a shadow keeps the
+    // light colour under a dark marker on <body> or a wrapper, where only the
+    // colour is declared again. So it is declared again wherever modes switch.
+    const set: SiteTokenSet = {
+      tokens: [
+        {
+          name: "color.text",
+          kind: "color",
+          values: { light: "#111111", dark: "#eeeeee" },
+        },
+        {
+          name: "shadow.card",
+          kind: "shadow",
+          values: { light: "0 4px 12px var(--site-color-text)" },
+        },
+        {
+          name: "shadow.plain",
+          kind: "shadow",
+          values: { light: "0 1px 2px #000" },
+        },
+      ],
+    };
+    /** Each block's selector and its declarations, as the sheet lists them. */
+    function blocksOf(css: string): { selector: string; body: string }[] {
+      return [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map(match => ({
+        selector: (match[1] ?? "").replace(/^@media[^{]*\{/, "").trim(),
+        body: match[2] ?? "",
+      }));
+    }
+    const SHADOW = "--site-shadow-card:0 4px 12px var(--site-color-text)";
+
+    it.each([":root", SCOPE])(
+      "is declared in the light, device-dark, dark and light-marker blocks under %s",
+      selector => {
+        const blocks = blocksOf(emitTokenBlocks(set, selector).css);
+        expect(blocks).toHaveLength(4);
+        for (const block of blocks) {
+          expect(block.body, block.selector).toContain(SHADOW);
+          // The colour it reads is declared beside it in every block, so
+          // the two resolve on the same element.
+          expect(block.body, block.selector).toMatch(/--site-color-text:#/);
+        }
+      }
+    );
+
+    it("is not declared again where it reads no variable", () => {
+      const [light, ...modes] = blocksOf(emitTokenBlocks(set, ":root").css);
+      expect(light?.body).toContain("--site-shadow-plain:0 1px 2px #000");
+      for (const block of modes) {
+        expect(block.body).not.toContain("--site-shadow-plain");
+      }
+    });
+
+    it("writes its own dark value in dark, and its light one again for light", () => {
+      const own: SiteTokenSet = {
+        tokens: [
+          set.tokens[0] as SiteToken,
+          {
+            name: "shadow.card",
+            kind: "shadow",
+            values: {
+              light: "0 4px 12px var(--site-color-text)",
+              dark: "0 4px 12px #000",
+            },
+          },
+        ],
+      };
+      const blocks = blocksOf(emitTokenBlocks(own, ":root").css);
+      expect(blocks[1]?.body).toContain("--site-shadow-card:0 4px 12px #000");
+      expect(blocks[2]?.body).toContain("--site-shadow-card:0 4px 12px #000");
+      expect(blocks[3]?.body).toContain(SHADOW);
+      // Once per block: never its own dark value and the re-declaration both.
+      for (const block of blocks) {
+        expect(block.body.split("--site-shadow-card:")).toHaveLength(2);
+      }
+    });
   });
 
   it("qualifies every member of a scoped selector LIST", () => {
@@ -561,12 +742,79 @@ describe("emitTokenBlocks", () => {
       ":root"
     );
     expect(css).toContain(
-      `[${DARK_MODE_ATTRIBUTE}="dark"]{--site-color-text:#eee}`
+      `[${DARK_MODE_ATTRIBUTE}="dark"]{--site-color-text:#eee;color-scheme:dark}`
     );
     // Not anchored to the root, which is the form that only works on `<html>`.
     expect(css).not.toContain(`:root[${DARK_MODE_ATTRIBUTE}="dark"]`);
     // And the light block still declares on the root itself.
-    expect(css).toContain(":root{--site-color-text:#111}");
+    expect(css).toContain(":root{--site-color-text:#111;color-scheme:light}");
+  });
+
+  describe("the colour scheme native controls are drawn in", () => {
+    // A checkbox, a radio, a select's list and a scrollbar are drawn by the
+    // browser in the colour scheme the page states, not from the site's
+    // variables. A site with dark values says which scheme each block is, so
+    // its controls follow the same switch its colours do.
+    const tokens: SiteToken[] = [
+      {
+        name: "color.text",
+        kind: "color",
+        values: { light: "#111", dark: "#eee" },
+      },
+      { name: "space.4", kind: "dimension", values: { light: "1rem" } },
+    ];
+
+    // The declarations alone: the media query's `prefers-color-scheme:dark`
+    // is a condition, not a scheme a block states.
+    const schemesIn = (css: string) =>
+      [...css.matchAll(/[{;]color-scheme:(light|dark)[;}]/g)].map(
+        match => `color-scheme:${match[1]}`
+      );
+
+    it("writes exactly what it wrote before for a site with no dark values", () => {
+      // Pinned byte for byte, on the root and on a scope: a site with no dark
+      // values has no second scheme to state, so its sheet does not change.
+      const light: SiteToken[] = [
+        {
+          name: "color.text",
+          kind: "color",
+          values: { light: "#111" },
+        },
+        { name: "space.4", kind: "dimension", values: { light: "1rem" } },
+      ];
+      expect(emitTokenBlocks({ tokens: light }, ":root").css).toBe(
+        ":root{--site-color-text:#111;--site-space-4:1rem}"
+      );
+      expect(emitTokenBlocks({ tokens: light }, SCOPE).css).toBe(
+        `${SCOPE}{--site-color-text:#111;--site-space-4:1rem}`
+      );
+    });
+
+    it("states light on the light blocks and dark on both dark blocks", () => {
+      const { css } = emitTokenBlocks({ tokens }, ":root");
+      // The order is the cascade's: the root, the device's dark, the host's
+      // dark marker, then the light marker that undoes it nearer in.
+      expect(schemesIn(css)).toEqual([
+        "color-scheme:light",
+        "color-scheme:dark",
+        "color-scheme:dark",
+        "color-scheme:light",
+      ]);
+      expect(css).toContain(
+        ":root{--site-color-text:#111;--site-space-4:1rem;color-scheme:light}"
+      );
+    });
+
+    it("states it on a scoped sheet's blocks too", () => {
+      const { css } = emitTokenBlocks({ tokens }, SCOPE);
+      expect(css.startsWith(`${SCOPE}{`)).toBe(true);
+      expect(schemesIn(css)).toEqual([
+        "color-scheme:light",
+        "color-scheme:dark",
+        "color-scheme:dark",
+        "color-scheme:light",
+      ]);
+    });
   });
 
   it("follows the device's dark preference unless the marker pins light", () => {
@@ -588,10 +836,10 @@ describe("emitTokenBlocks", () => {
       ":root"
     );
     expect(css).toBe(
-      ":root{--site-color-text:#111}" +
-        `@media (prefers-color-scheme:dark){:root:not([${DARK_MODE_ATTRIBUTE}="light"]){--site-color-text:#eee}}` +
-        `[${DARK_MODE_ATTRIBUTE}="dark"]{--site-color-text:#eee}` +
-        `[${DARK_MODE_ATTRIBUTE}="light"]{--site-color-text:#111}`
+      ":root{--site-color-text:#111;color-scheme:light}" +
+        `@media (prefers-color-scheme:dark){:root:not([${DARK_MODE_ATTRIBUTE}="light"]){--site-color-text:#eee;color-scheme:dark}}` +
+        `[${DARK_MODE_ATTRIBUTE}="dark"]{--site-color-text:#eee;color-scheme:dark}` +
+        `[${DARK_MODE_ATTRIBUTE}="light"]{--site-color-text:#111;color-scheme:light}`
     );
   });
 
@@ -613,7 +861,7 @@ describe("emitTokenBlocks", () => {
       },
       ":root"
     );
-    const light = `[${DARK_MODE_ATTRIBUTE}="light"]{--site-color-text:#111}`;
+    const light = `[${DARK_MODE_ATTRIBUTE}="light"]{--site-color-text:#111;color-scheme:light}`;
     expect(css).toContain(light);
     expect(css.indexOf(light)).toBeGreaterThan(
       css.indexOf(`[${DARK_MODE_ATTRIBUTE}="dark"]{`)
@@ -636,10 +884,10 @@ describe("emitTokenBlocks", () => {
       ".scope"
     );
     expect(css).toContain(
-      ':is(.scope)[data-nx-theme="dark"],[data-nx-theme="dark"] :is(.scope):not([data-nx-theme="light"],[data-nx-theme="dark"] [data-nx-theme="light"] *){--site-color-text:#eee}'
+      ':is(.scope)[data-nx-theme="dark"],[data-nx-theme="dark"] :is(.scope):not([data-nx-theme="light"],[data-nx-theme="dark"] [data-nx-theme="light"] *){--site-color-text:#eee;color-scheme:dark}'
     );
     expect(css).toContain(
-      ':is(.scope)[data-nx-theme="light"],[data-nx-theme="light"] :is(.scope):not([data-nx-theme="dark"],[data-nx-theme="light"] [data-nx-theme="dark"] *){--site-color-text:#111}'
+      ':is(.scope)[data-nx-theme="light"],[data-nx-theme="light"] :is(.scope):not([data-nx-theme="dark"],[data-nx-theme="light"] [data-nx-theme="dark"] *){--site-color-text:#111;color-scheme:light}'
     );
   });
 
@@ -658,7 +906,7 @@ describe("emitTokenBlocks", () => {
     );
     expect(
       css.endsWith(
-        `:is(${SCOPE})[${DARK_MODE_ATTRIBUTE}="light"],[${DARK_MODE_ATTRIBUTE}="light"] :is(${SCOPE}):not([${DARK_MODE_ATTRIBUTE}="dark"],[${DARK_MODE_ATTRIBUTE}="light"] [${DARK_MODE_ATTRIBUTE}="dark"] *){--site-color-text:#111}`
+        `:is(${SCOPE})[${DARK_MODE_ATTRIBUTE}="light"],[${DARK_MODE_ATTRIBUTE}="light"] :is(${SCOPE}):not([${DARK_MODE_ATTRIBUTE}="dark"],[${DARK_MODE_ATTRIBUTE}="light"] [${DARK_MODE_ATTRIBUTE}="dark"] *){--site-color-text:#111;color-scheme:light}`
       )
     ).toBe(true);
   });
@@ -677,7 +925,7 @@ describe("emitTokenBlocks", () => {
       SCOPE
     );
     expect(css).toContain(
-      `@media (prefers-color-scheme:dark){:is(${SCOPE}):not([${DARK_MODE_ATTRIBUTE}="light"],[${DARK_MODE_ATTRIBUTE}="light"] *){--site-color-text:#eee}}`
+      `@media (prefers-color-scheme:dark){:is(${SCOPE}):not([${DARK_MODE_ATTRIBUTE}="light"],[${DARK_MODE_ATTRIBUTE}="light"] *){--site-color-text:#eee;color-scheme:dark}}`
     );
   });
 
@@ -982,6 +1230,91 @@ describe("stored data reaching the stylesheet", () => {
 });
 
 describe("resolveSiteTokens", () => {
+  it("keeps the site's colour order, a site-wide setting like the prefix", () => {
+    const resolved = resolveSiteTokens({
+      tokens: [],
+      order: ["color.text", "color.primary"],
+    });
+    expect(resolved.order).toEqual(["color.text", "color.primary"]);
+    expect(resolveSiteTokens({ tokens: [] })).not.toHaveProperty("order");
+  });
+
+  it("names the built-in colours in words an author reads", () => {
+    const labels = resolveSiteTokens()
+      .tokens.filter(token => token.kind === "color")
+      .map(token => tokenDisplayLabel(token));
+    expect(labels).toEqual([
+      "Primary",
+      "Text",
+      "Background",
+      "Surface",
+      "Border",
+      "Strong border",
+      "Muted text",
+    ]);
+  });
+
+  it("starts a site's colours in two groups: Brand, and Text and surfaces", () => {
+    const groups = Object.fromEntries(
+      resolveSiteTokens()
+        .tokens.filter(token => token.kind === "color")
+        .map(token => [token.name, token.group])
+    );
+    expect(groups).toEqual({
+      "color.primary": "Brand",
+      "color.text": "Text and surfaces",
+      "color.muted": "Text and surfaces",
+      "color.background": "Text and surfaces",
+      "color.surface": "Text and surfaces",
+      "color.border": "Text and surfaces",
+      "color.border-strong": "Text and surfaces",
+    });
+  });
+
+  it("keeps a built-in colour's group and name where the site's own value of it says neither", () => {
+    // A site that set its own text and muted colours before colours had
+    // groups stores them with neither a group nor a label.
+    const resolved = resolveSiteTokens({
+      tokens: [
+        { name: "color.text", kind: "color", values: { light: "#111111" } },
+        { name: "color.muted", kind: "color", values: { light: "#555555" } },
+        {
+          name: "color.border",
+          kind: "color",
+          label: "Hairline",
+          group: "Lines",
+          values: { light: "#dddddd" },
+        },
+      ],
+    });
+    const of = (name: string) =>
+      resolved.tokens.find(token => token.name === name);
+    expect(of("color.text")).toMatchObject({
+      group: "Text and surfaces",
+      values: { light: "#111111" },
+    });
+    expect(of("color.muted")?.group).toBe("Text and surfaces");
+    const muted = of("color.muted");
+    expect(muted && tokenDisplayLabel(muted)).toBe("Muted text");
+    // A group or name of the site's own is kept.
+    expect(of("color.border")).toMatchObject({
+      label: "Hairline",
+      group: "Lines",
+    });
+  });
+
+  it("keeps the site's fluid range, a site-wide setting like the prefix", () => {
+    // Dropped here, a reopened editor read the default range while the stored
+    // sizes were made across the site's own, and the next "Make fluid" used
+    // the wrong widths.
+    const resolved = resolveSiteTokens({
+      tokens: [],
+      fluidRange: { min: 320, max: 1440 },
+    });
+    expect(resolved.fluidRange).toEqual({ min: 320, max: 1440 });
+    expect(resolveSiteTokens({ tokens: [] })).not.toHaveProperty("fluidRange");
+  });
+
   it("returns the defaults when a site defines nothing", () => {
     expect(
       resolveSiteTokens()
@@ -1549,12 +1882,38 @@ describe("the default spacing", () => {
     ["space.stack", [16, 18, 20]],
     ["space.section-y", [48, 63, 80]],
     ["space.gutter", [16, 31, 32]],
+    // A Section's Compact and Roomy padding: tighter and airier above and
+    // below, the same beside.
+    ["space.section-y-compact", [24, 31, 40]],
+    ["space.gutter-compact", [16, 31, 32]],
+    ["space.section-y-roomy", [72, 94, 120]],
+    ["space.gutter-roomy", [16, 31, 32]],
     ["space.columns", [16, 23, 32]],
     ["space.card", [16, 20, 24]],
   ] as const)("resolves %s to %j px at 375, 768 and 1280", (name, px) => {
     expect(
       widths.map(width => Math.round(pixelsAt(valueOf(name), width)))
     ).toEqual(px);
+  });
+
+  it("names the Section padding presets' variables as an author reads them", () => {
+    const label = (name: string): string | undefined => {
+      const token = defaultSiteTokens().find(entry => entry.name === name);
+      return token === undefined ? undefined : tokenDisplayLabel(token);
+    };
+    expect(
+      [
+        "space.section-y-compact",
+        "space.gutter-compact",
+        "space.section-y-roomy",
+        "space.gutter-roomy",
+      ].map(label)
+    ).toEqual([
+      "Section padding, compact (top and bottom)",
+      "Section padding, compact (sides)",
+      "Section padding, roomy (top and bottom)",
+      "Section padding, roomy (sides)",
+    ]);
   });
 
   it("pads a button 12 by 20 at every width", () => {
@@ -1576,5 +1935,53 @@ describe("the default spacing", () => {
       "--site-space-section-y:clamp(3rem, 2rem + 4vw, 5rem)"
     );
     expect(css).toContain("--site-button-padding-x:1.25rem");
+  });
+});
+
+describe("the built-in type sizes", () => {
+  /** A built-in variable's light value, by name. */
+  const builtIn = (name: string): string | undefined =>
+    defaultSiteTokens().find(token => token.name === name)?.values.light;
+
+  it.each([
+    // The heading sizes the block library drew before, at a 16px root, as
+    // `rem`: a heading inside a container with its own size no longer scales.
+    ["h1", "2.25rem", "1.15"],
+    ["h2", "1.75rem", "1.2"],
+    ["h3", "1.375rem", "1.3"],
+    ["h4", "1.125rem", "1.4"],
+    ["h5", "1rem", "1.45"],
+    ["h6", "0.875rem", "1.5"],
+    ["small", "0.875rem", "1.5"],
+  ])(
+    "gives %s its size and the line height it pairs with",
+    (name, size, line) => {
+      expect(builtIn(`font-size.${name}`)).toBe(size);
+      expect(builtIn(`line-height.${name}`)).toBe(line);
+    }
+  );
+
+  it("names them as an author reads them", () => {
+    const label = (name: string): string | undefined => {
+      const token = defaultSiteTokens().find(entry => entry.name === name);
+      return token === undefined ? undefined : tokenDisplayLabel(token);
+    };
+    expect(label("font-size.h2")).toBe("H2");
+    expect(label("font-size.small")).toBe("Small");
+  });
+
+  it("are sizes and numbers, so each field offers them", () => {
+    const kinds = defaultSiteTokens()
+      .filter(token => /^(font-size|line-height)\./.test(token.name))
+      .map(token => `${token.name}:${token.kind}`);
+    expect(kinds).toContain("font-size.h1:dimension");
+    expect(kinds).toContain("line-height.h1:number");
+  });
+
+  it("passes a site's text through a resolve, as it passes its fluid range", () => {
+    const siteText = { h2: { fontSize: "40px" } };
+    expect(resolveSiteTokens({ tokens: [], siteText }).siteText).toEqual(
+      siteText
+    );
   });
 });

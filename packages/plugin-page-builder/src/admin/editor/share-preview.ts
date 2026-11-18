@@ -2,9 +2,9 @@
  * What a link to this page will look like when it is shared, approximately.
  *
  * Built from the same answers the published page's metadata is: the SEO
- * fields first, then what the page itself offers (its first heading, prose and
- * image, read by the engine's `deriveSeoFromDocument`, which the published
- * route uses), then the page's title. Approximate, because the site's own
+ * fields first, then what the page itself offers (its prose and image, read
+ * by the engine's `deriveSeoFromDocument`, which the published route uses;
+ * never a title), then the page's title. Approximate, because the site's own
  * metadata callback decides the published tags in the end.
  *
  * @module admin/editor/share-preview
@@ -79,10 +79,23 @@ function seoImage(value: unknown): ShareImage | undefined {
 }
 
 /**
- * The preview for a page: the SEO fields, then the document, then the title.
+ * The preview for a page: the SEO fields, then the document (its description
+ * and image, never a title), then the page's title.
  * Only content every visitor sees speaks for the page, as on the published
  * route: a block behind a condition is not read.
  */
+/**
+ * The title a search result or a shared link shows: the page's SEO title,
+ * else its own title, trimmed; nothing in the design offers the title, as on
+ * the published page.
+ */
+export function shareTitle(
+  seo: ShareSeoFields | undefined,
+  pageTitle: string
+): string {
+  return text(seo?.metaTitle) ?? text(pageTitle) ?? "Untitled";
+}
+
 export function sharePreview(args: {
   seo: ShareSeoFields | undefined;
   /**
@@ -104,11 +117,7 @@ export function sharePreview(args: {
           args.definitions ?? (type => getBlock(type)),
           node => !isConditionGated(node)
         );
-  const title =
-    text(seo.metaTitle) ??
-    text(derived.title) ??
-    text(args.pageTitle) ??
-    "Untitled";
+  const title = shareTitle(args.seo, args.pageTitle);
   const description = text(seo.metaDescription) ?? text(derived.description);
   const first = derived.image?.[0];
   const image =

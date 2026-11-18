@@ -30,7 +30,8 @@ import {
  * Why a second Entry content block cannot be added: the words the Add panel's
  * tile and the toolbar's Duplicate say.
  */
-const ENTRY_CONTENT_ONE_REASON = "A template holds one Entry content block.";
+export const ENTRY_CONTENT_ONE_REASON =
+  "A template holds one Entry content block.";
 
 /**
  * Why an Entry content block cannot be added yet: the template's
@@ -80,9 +81,15 @@ export function duplicationRefusal(
     : undefined;
 }
 
+/** Where a refused selection would have been saved, in the author's words. */
+const KIND_PLACE: Readonly<Record<"pattern" | "component", string>> = {
+  pattern: "to Saved sections",
+  component: "in a component",
+};
+
 /**
  * Why the blocks `ids` of `document` cannot become a `kind`, a pattern or a
- * component (Save as pattern, Update a pattern, Turn into component), or
+ * component (Save as section…, Update a saved section, Turn into component…), or
  * `undefined` where none of them holds Entry content. Asked of the save's own
  * rule (`entryContentIssues`), with the blocks as that kind would hold them:
  * it refuses Entry content anywhere but a template, and neither is one.
@@ -100,7 +107,7 @@ export function compositionEntryContentRefusal(
     issue => issue.code === "entry-content-outside-template"
   );
   return refused
-    ? `Entry content belongs in its template, so it can’t be saved in a ${kind}.`
+    ? `Entry content belongs in its template, so it can’t be saved ${KIND_PLACE[kind]}.`
     : undefined;
 }
 

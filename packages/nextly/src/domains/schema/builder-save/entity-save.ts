@@ -60,8 +60,8 @@ export async function checkEntitySaveHistory(
  * `save` written and `apply` run: by the writer in development, which then
  * records the files applied; once they are written elsewhere. A failure of
  * `apply` withdraws them in both. Without a writer,
- * `apply` alone runs. The history was checked first
- * (`checkEntitySaveHistory`).
+ * `apply` alone runs. With `runsFile`, development runs the files instead of
+ * `apply`. The history was checked first (`checkEntitySaveHistory`).
  *
  * `apply` answers `"partly-applied"` where it changed the database and then
  * failed part way: the files are kept and recorded applied nowhere (see
@@ -70,10 +70,24 @@ export async function checkEntitySaveHistory(
 export async function writeEntitySave(
   deps: CollectionSaveDeps | undefined,
   save: CollectionSave,
-  apply: () => Promise<unknown>
+  apply: () => Promise<unknown>,
+  options: {
+    /**
+     * In development, the writer runs the files themselves in place of
+     * `apply`, as `nextly migrate` runs them: in tries over a busy table,
+     * stopping with `NEXTLY_TABLE_BUSY` and the files withdrawn, and on SQLite
+     * with foreign keys off and the dangling-reference check after. Elsewhere
+     * `apply` still runs once they are written.
+     */
+    runsFile?: boolean;
+  } = {}
 ): Promise<void> {
   if (deps === undefined) {
     await apply();
+    return;
+  }
+  if (deps.applies && options.runsFile === true) {
+    await writeCollectionSave(deps, save, { historyChecked: true });
     return;
   }
   // Only a part-way failure is the writer's to know; anything else `apply`

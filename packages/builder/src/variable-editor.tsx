@@ -18,7 +18,9 @@
  * @module variable-editor
  */
 import {
-  sameSiteToken,
+  resolveTokenPrefix,
+  tokenCustomProperty,
+  tokenIdentity,
   type SiteToken,
   type SiteTokenSet,
   type TokenMode,
@@ -27,26 +29,49 @@ import { Button, ColorPicker, Input } from "@nextlyhq/ui";
 import { Undo2 } from "lucide-react";
 import * as React from "react";
 
-import { VARIABLE_LOSS_WORDS } from "./editor-words";
+import { FluidButton, type FluidHook } from "./fluid-popover";
+import { useRecentColours } from "./recent-colours";
+import { siteTextUseWords } from "./site-text-rows";
 import { colourHexOf } from "./style-colour";
 import {
   clearDarkValue,
+  labelNewVariable,
+  fluidRangeOf,
+  setFluidRange,
+  setFluidSize,
   relabelToken,
-  removeToken,
-  setTokenValue,
   variableLabelIssue,
   writeTokenValue,
   type VariableEntry,
 } from "./tokens-studio";
-import { swatchStyle } from "./variable-swatch";
 import {
-  combinedReach,
-  variableRemoval,
-  variableStatus,
-  type VariableReach,
-  type VariableRemoval,
-} from "./variable-usage";
+  CodeName,
+  ColourContrast,
+  ModeIcon,
+  UsageLine,
+  VariableDescription,
+} from "./variable-popup-parts";
+import {
+  partsOf,
+  removalPlan,
+  resetParts,
+  withoutParts,
+  type RemovalPlan,
+} from "./variable-removal";
+import { ShadowValue, ShadowVariables } from "./variable-shadow-value";
+import { swatchStyle } from "./variable-swatch";
+import type { VariableRemoval } from "./variable-usage";
 import { VariableRefusal, type VariableUsageHere } from "./variable-usage-view";
+import {
+  LineHeightHint,
+  LineHeightInput,
+  SizeInput,
+  useDraft,
+  unwritableValue,
+  valueFieldFor,
+  variableCss,
+  type ValueFieldProps,
+} from "./variable-value-controls";
 
 export interface VariableEditorProps {
   entry: VariableEntry;
@@ -66,6 +91,16 @@ export interface VariableEditorProps {
    * as it always has.
    */
   usage?: VariableUsageHere;
+  /**
+   * Opened by the row's Remove: the removal starts as the editor opens, so
+   * its confirm, or why it cannot go ahead, is what the author meets.
+   */
+  removing?: boolean;
+  /**
+   * Never saved: just added or copied. Its code name follows its name as it
+   * is typed, until the editor closes and it is saved under one.
+   */
+  isNew?: boolean;
 }
 
 export function VariableEditor({
@@ -76,9 +111,11 @@ export function VariableEditor({
   onChange,
   onRemoved,
   usage,
+  removing = false,
+  isNew = false,
 }: VariableEditorProps): React.JSX.Element {
   const id = React.useId();
-  const { row, lineHeight } = entry;
+  const { row } = entry;
   const token = tokens.tokens[row.at];
   const [nameIssue, setNameIssue] = React.useState<string | undefined>();
   const [name, setName] = useDraft(entry.label);
@@ -97,14 +134,7 @@ export function VariableEditor({
   const saidId = `${id}-said`;
   const refused: Refused = { fields: refusals, describedBy: saidId };
 
-  const said = [
-    ...(nameIssue === undefined ? [] : [nameIssue]),
-    // Once each: two fields refused for the same reason say it once.
-    ...new Set([...refusals.values()].map(refusal => refusal.message)),
-    ...(note === undefined ? [] : [note]),
-    ...row.issues,
-    ...(lineHeight?.issues ?? []),
-  ];
+  const said = saidUnder({ nameIssue, refusals, note, entry });
 
   return (
     <div
@@ -133,10 +163,13 @@ export function VariableEditor({
             if (event.key === "Enter") commitName(event.currentTarget.value);
           }}
         />
-        <p className="nx-vars-editor__code" id={`${id}-code`}>
-          {row.name}
-        </p>
+        <CodeName
+          id={`${id}-code`}
+          property={codeNameOf(tokens, row.at, name, isNew)}
+          isNew={isNew}
+        />
       </div>
+      <VariableDescription token={token} supplied={suppliedOf(row.identity)} />
       {token === undefined ? null : (
         <Values
           entry={entry}
@@ -148,6 +181,13 @@ export function VariableEditor({
           refused={refused}
         />
       )}
+      <EditorDetails
+        entry={entry}
+        token={token}
+        tokens={tokens}
+        suppliedOf={suppliedOf}
+        usage={usage}
+      />
       {said.length > 0 ? (
         <p className="nx-vars-editor__issue" id={saidId} role="status">
           {said.join(" ")}
@@ -162,10 +202,89 @@ export function VariableEditor({
           onChange={onChange}
           onRemoved={onRemoved}
           usage={usage}
+          removing={removing}
         />
       )}
     </div>
   );
+}
+
+/**
+ * What is said under the fields, in order: why the name was refused, why a
+ * value was (once each: two fields refused for the same reason say it
+ * once), what a write changed beyond its own field, and what the engine
+ * reports about the variable and its line height.
+ */
+function saidUnder({
+  nameIssue,
+  refusals,
+  note,
+  entry,
+}: {
+  nameIssue: string | undefined;
+  refusals: ReadonlyMap<string, { readonly message: string }>;
+  note: string | undefined;
+  entry: VariableEntry;
+}): string[] {
+  return [
+    ...(nameIssue === undefined ? [] : [nameIssue]),
+    ...new Set([...refusals.values()].map(refusal => refusal.message)),
+    ...(note === undefined ? [] : [note]),
+    ...entry.row.issues,
+    ...(entry.lineHeight?.issues ?? []),
+  ];
+}
+
+/**
+ * What the editor says about the variable below its values: how widely it
+ * is used, where the host reads it, and, for a colour, its contrast.
+ */
+function EditorDetails({
+  entry,
+  token,
+  tokens,
+  suppliedOf,
+  usage,
+}: {
+  entry: VariableEntry;
+  token: SiteToken | undefined;
+  tokens: SiteTokenSet;
+  suppliedOf: (identity: string) => SiteToken | undefined;
+  usage: VariableUsageHere | undefined;
+}): React.JSX.Element {
+  return (
+    <>
+      {usage === undefined || token === undefined ? null : (
+        // The parts Remove acts on, so a type size's line height is counted
+        // and listed under its own name, as it is there.
+        <UsageLine
+          parts={partsOf(entry, token, tokens, suppliedOf)}
+          usage={usage}
+        />
+      )}
+      {token?.kind === "color" ? (
+        <ColourContrast token={token} tokens={tokens} suppliedOf={suppliedOf} />
+      ) : null}
+    </>
+  );
+}
+
+/**
+ * The custom property a variable is written under. For one never saved, the
+ * one its name as typed would give it, so it follows each keystroke; a
+ * saved variable's never changes.
+ */
+function codeNameOf(
+  tokens: SiteTokenSet,
+  at: number,
+  typed: string,
+  isNew: boolean
+): string {
+  const named = isNew ? labelNewVariable(tokens, at, typed) : tokens;
+  const token = named.tokens[at];
+  if (token === undefined) return "";
+  const { prefix } = resolveTokenPrefix(tokens.prefix);
+  return tokenCustomProperty(tokenIdentity(token), prefix);
 }
 
 /**
@@ -221,6 +340,15 @@ function useValueWrites(
     const next = value.trim();
     if (tokens.tokens[at]?.values[mode] === next) {
       refuse(at, mode);
+      return;
+    }
+    // Refused where it is typed when the site's stylesheet would not write
+    // it, a value that would load a file among them, rather than at the save.
+    const token = tokens.tokens[at];
+    const unwritable =
+      token === undefined ? undefined : unwritableValue(tokens, token, next);
+    if (unwritable !== undefined) {
+      refuse(at, mode, unwritable);
       return;
     }
     const written = writeTokenValue(tokens, at, mode, next);
@@ -317,13 +445,18 @@ function Values({
 }): React.JSX.Element {
   const { row, lineHeight } = entry;
   const pair = (at: number, held: SiteToken): React.JSX.Element => (
-    <ModeValues
-      token={held}
-      readOnly={readOnly}
-      onCommit={(mode, value) => write(at, mode, value)}
-      onClear={() => onChange(clearDarkValue(tokens, at))}
-      refusedIn={mode => refusalAt(refused, at, mode)}
-    />
+    // A shadow's Colour offers the site's colour variables.
+    <ShadowVariables.Provider value={tokens}>
+      <ModeValues
+        token={held}
+        cssOf={value => variableCss(tokens, held, value)}
+        readOnly={readOnly}
+        onCommit={(mode, value) => write(at, mode, value)}
+        onClear={() => onChange(clearDarkValue(tokens, at))}
+        refusedIn={mode => refusalAt(refused, at, mode)}
+        fluid={fluidHookOf({ token: held, tokens, at, onChange, readOnly })}
+      />
+    </ShadowVariables.Provider>
   );
   const lineToken =
     lineHeight === undefined ? undefined : tokens.tokens[lineHeight.at];
@@ -343,6 +476,30 @@ function Values({
       refused={refused}
     />
   );
+}
+
+/** "Fluid…" for a type size's size, where it can be changed. */
+function TypeSizeFluid({
+  size,
+  sizeAt,
+  tokens,
+  onChange,
+  readOnly,
+}: {
+  size: SiteToken;
+  sizeAt: number;
+  tokens: SiteTokenSet;
+  onChange: (tokens: SiteTokenSet) => void;
+  readOnly: boolean;
+}): React.JSX.Element | null {
+  const hook = fluidHookOf({
+    token: size,
+    tokens,
+    at: sizeAt,
+    onChange,
+    readOnly,
+  });
+  return hook === undefined ? null : <FluidButton hook={hook} />;
 }
 
 /**
@@ -395,13 +552,15 @@ function TypePair({
           Light
         </span>
         {halves.map(half => (
-          <CommitInput
+          <HalfInput
             key={half.name}
+            half={half.name}
             label={`${half.name}, light`}
             value={half.token.values.light}
             readOnly={readOnly}
             refusedBy={refusalAt(refused, half.at, "light")}
             onCommit={value => write(half.at, "light", value)}
+            css={variableCss(tokens, half.token, half.token.values.light)}
           />
         ))}
         {hasDark ? (
@@ -411,10 +570,16 @@ function TypePair({
             </span>
             {halves.map(half => (
               <div key={half.name} className="nx-vars-editor__cell">
-                <CommitInput
+                <HalfInput
+                  half={half.name}
                   label={`${half.name}, dark`}
                   value={half.token.values.dark ?? ""}
                   placeholder={half.token.values.light}
+                  css={variableCss(
+                    tokens,
+                    half.token,
+                    half.token.values.dark ?? half.token.values.light
+                  )}
                   readOnly={readOnly}
                   refusedBy={refusalAt(refused, half.at, "dark")}
                   onCommit={value => write(half.at, "dark", value)}
@@ -437,6 +602,29 @@ function TypePair({
           </>
         ) : null}
       </div>
+      <LineHeightHint
+        value={line.values.light}
+        mode="light"
+        readOnly={readOnly}
+        onCommit={value => write(lineAt, "light", value)}
+      />
+      {/* "Fluid…" for the size: a type size is where a fluid size is most
+          wanted. */}
+      <TypeSizeFluid
+        size={size}
+        sizeAt={sizeAt}
+        tokens={tokens}
+        onChange={onChange}
+        readOnly={readOnly}
+      />
+      {line.values.dark === undefined ? null : (
+        <LineHeightHint
+          value={line.values.dark}
+          mode="dark"
+          readOnly={readOnly}
+          onCommit={value => write(lineAt, "dark", value)}
+        />
+      )}
       {hasDark ? (
         readOnly ||
         halves.some(half => half.token.values.dark === undefined) ? null : (
@@ -449,36 +637,65 @@ function TypePair({
               onChange(clearDarkValue(clearDarkValue(tokens, sizeAt), lineAt))
             }
           >
-            Use light values
+            Remove dark value
           </Button>
         )
-      ) : (
-        <div className="nx-vars-editor__same">
-          <span>Same as light</span>
-          {readOnly ? null : (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="nx-vars-editor__button"
-              onClick={() =>
-                onChange(
-                  setTokenValue(
-                    setTokenValue(tokens, sizeAt, "dark", size.values.light),
-                    lineAt,
-                    "dark",
-                    line.values.light
-                  )
-                )
-              }
-            >
-              Add dark values
-            </Button>
-          )}
-        </div>
-      )}
+      ) : null}
     </div>
   );
+}
+
+/**
+ * One half of a type size's pair: the size with its unit menu, or the line
+ * height as a multiple of the text size.
+ */
+function HalfInput({
+  half,
+  ...field
+}: {
+  half: string;
+  label: string;
+  value: string;
+  placeholder?: string;
+  readOnly: boolean;
+  refusedBy: string | undefined;
+  onCommit: (value: string) => void;
+  css: string;
+}): React.JSX.Element {
+  return half === "Size" ? (
+    <SizeInput {...field} />
+  ) : (
+    <LineHeightInput {...field} />
+  );
+}
+
+/**
+ * "Fluid…" for a size that can be changed: what it needs to read the
+ * value's sizes and to store a size made fluid from two. Nothing for any
+ * other kind, or where the variables are read-only.
+ */
+function fluidHookOf({
+  token,
+  tokens,
+  at,
+  onChange,
+  readOnly,
+}: {
+  token: SiteToken;
+  tokens: SiteTokenSet;
+  at: number;
+  onChange: (tokens: SiteTokenSet) => void;
+  readOnly: boolean;
+}): FluidHook | undefined {
+  if (readOnly || token.kind !== "dimension") return undefined;
+  const range = fluidRangeOf(tokens);
+  return {
+    sizes: token.fluid,
+    value: token.values.light,
+    range,
+    onFluid: sizes => onChange(setFluidSize(tokens, at, sizes, range)),
+    onRange: next => onChange(setFluidRange(tokens, next)),
+  };
 }
 
 /**
@@ -487,19 +704,25 @@ function TypePair({
  */
 function ModeValues({
   token,
+  cssOf,
   readOnly,
   onCommit,
   onClear,
   refusedIn,
+  fluid,
 }: {
   token: SiteToken;
+  /** The CSS a value of this variable writes. */
+  cssOf: (value: string) => string;
   readOnly: boolean;
   onCommit: (mode: TokenMode, value: string) => void;
   onClear: () => void;
   /** The reason's element while a mode's field holds a refused value. */
   refusedIn: (mode: TokenMode) => string | undefined;
+  /** "Fluid…" on a size's light value, where it can be changed. */
+  fluid: FluidHook | undefined;
 }): React.JSX.Element {
-  const Field = token.kind === "color" ? ColourValue : TextValue;
+  const Field = fieldFor(token);
   return (
     <>
       <Field
@@ -508,9 +731,13 @@ function ModeValues({
         readOnly={readOnly}
         refusedBy={refusedIn("light")}
         onCommit={value => onCommit("light", value)}
+        css={cssOf(token.values.light)}
+        mode="light"
       />
+      {fluid === undefined ? null : <FluidButton hook={fluid} />}
       <DarkValue
         token={token}
+        cssOf={cssOf}
         readOnly={readOnly}
         refusedBy={refusedIn("dark")}
         onCommit={value => onCommit("dark", value)}
@@ -521,91 +748,15 @@ function ModeValues({
   );
 }
 
-/** A text field that commits when it loses focus or on Enter. */
-function TextValue({
-  label,
-  value,
-  readOnly,
-  refusedBy,
-  onCommit,
-}: {
-  label: string;
-  value: string;
-  readOnly: boolean;
-  refusedBy?: string | undefined;
-  onCommit: (value: string) => void;
-}): React.JSX.Element {
-  const id = React.useId();
-  return (
-    <div className="nx-vars-editor__field">
-      <label className="nx-vars-editor__label" htmlFor={id}>
-        {label}
-      </label>
-      <CommitInput
-        id={id}
-        value={value}
-        readOnly={readOnly}
-        refusedBy={refusedBy}
-        onCommit={onCommit}
-      />
-    </div>
-  );
-}
-
 /**
- * A value field that commits on blur or Enter, and only a real change: an
- * empty field or the value it already holds writes nothing. While it holds a
- * refused value, the value it held before is committed too, since putting it
- * back is how the author answers the refusal.
+ * The field a variable's values are edited with: a colour's swatch and
+ * picker, a shadow's layers, and every other kind's own field.
  */
-function CommitInput({
-  id,
-  label,
-  value,
-  placeholder,
-  readOnly,
-  refusedBy,
-  onCommit,
-}: {
-  id?: string;
-  /** The field's name where no visible label points at it. */
-  label?: string;
-  value: string;
-  placeholder?: string;
-  readOnly: boolean;
-  /** The id of the reason, while this field holds a value that was refused. */
-  refusedBy?: string | undefined;
-  onCommit: (value: string) => void;
-}): React.JSX.Element {
-  const [draft, setDraft] = useDraft(value);
-  const commit = (next: string): void => {
-    if (
-      !readOnly &&
-      next.trim() !== "" &&
-      (next.trim() !== value || refusedBy !== undefined)
-    ) {
-      onCommit(next);
-    }
-  };
-  return (
-    <Input
-      id={id}
-      aria-label={label}
-      // A value, not words: no list of earlier entries over the field.
-      autoComplete="off"
-      aria-invalid={refusedBy === undefined ? undefined : true}
-      aria-describedby={refusedBy}
-      className="nx-vars-editor__mono"
-      value={draft}
-      placeholder={placeholder}
-      onChange={event => setDraft(event.currentTarget.value)}
-      readOnly={readOnly}
-      onBlur={event => commit(event.currentTarget.value)}
-      onKeyDown={event => {
-        if (event.key === "Enter") commit(event.currentTarget.value);
-      }}
-    />
-  );
+function fieldFor(
+  token: SiteToken
+): (props: ValueFieldProps) => React.JSX.Element {
+  if (token.kind === "color") return ColourValue;
+  return token.kind === "shadow" ? ShadowValue : valueFieldFor(token);
 }
 
 /**
@@ -615,13 +766,17 @@ function CommitInput({
  * stays in one dialog. What it composes is held as a draft and written once,
  * when the picker is closed or this editor goes away, so dragging across it
  * is one save rather than one per pointer move.
+ *
+ * Its picker lists the author's Recent colours, as a block's does; a colour
+ * written here, typed or picked, joins them.
  */
-function ColourValue({
+export function ColourValue({
   label,
   value,
   readOnly,
   refusedBy,
   onCommit,
+  mode = "light",
 }: {
   label: string;
   value: string;
@@ -629,6 +784,8 @@ function ColourValue({
   /** The id of the reason, while this field holds a value that was refused. */
   refusedBy?: string | undefined;
   onCommit: (value: string) => void;
+  /** Which mode's value this is, drawn ☀ or ☾ beside the label. */
+  mode?: TokenMode | undefined;
 }): React.JSX.Element {
   const id = React.useId();
   const [picking, setPicking] = React.useState(false);
@@ -637,23 +794,53 @@ function ColourValue({
   // What the picker shows while a gesture is under way, handed back to it as
   // its colour so each step builds on the last; written only when it closes.
   const [shown, setShown] = React.useState<string | null>(null);
-  const latest = React.useRef({ value, onCommit });
+  const [recentColours, remember] = useRecentColours();
+  const latest = React.useRef({ value, onCommit, remember });
   React.useEffect(() => {
-    latest.current = { value, onCommit };
+    latest.current = { value, onCommit, remember };
   });
   const flush = React.useCallback((): void => {
     const pending = draft.current;
     draft.current = null;
     if (pending !== null && pending !== latest.current.value) {
       latest.current.onCommit(pending);
+      latest.current.remember(pending);
     }
   }, []);
   // A picker still open when the popover closes writes what it showed.
   React.useEffect(() => flush, [flush]);
-  const hex = shown ?? colourHexOf(value, undefined);
+  // The value it holds commits too while a refusal is shown: putting it
+  // back is how a refused value is corrected, and clears the refusal.
+  const commit = (typed: string): boolean => {
+    const next = typed.trim();
+    const writes =
+      !readOnly && next !== "" && (next !== value || refusedBy !== undefined);
+    if (writes) onCommit(next);
+    return writes;
+  };
+  // A typed colour joins Recent colours; text that is none is refused.
+  const commitTyped = (typed: string): void => {
+    if (commit(typed) && isColour(typed.trim())) remember(typed.trim());
+  };
+  // A recent colour is one choice, written as it is listed, as on a block,
+  // and moves to the front even where it is already the value.
+  const pickRecent = (colour: string): void => {
+    draft.current = null;
+    setShown(null);
+    setText(colour);
+    setPicking(false);
+    commit(colour);
+    remember(colour);
+  };
+  const { hex, paint, invalid, said } = colourFieldState(
+    text.trim(),
+    value,
+    shown
+  );
   return (
     <div className="nx-vars-editor__field">
       <label className="nx-vars-editor__label" htmlFor={id}>
+        <ModeIcon mode={mode} />
         {label}
       </label>
       <div className="nx-vars-editor__colour">
@@ -661,15 +848,17 @@ function ColourValue({
           <span
             className="nx-vars__swatch"
             aria-hidden="true"
-            style={swatchStyle(hex)}
+            data-invalid={invalid ? "" : undefined}
+            style={swatchStyle(paint)}
           />
         ) : (
           <button
             type="button"
             className="nx-vars__swatch nx-vars-editor__swatch"
-            aria-label={`Pick the ${label.toLowerCase()} colour`}
+            data-invalid={invalid ? "" : undefined}
+            aria-label={`Pick the ${label.toLowerCase()} colour${said}`}
             aria-expanded={picking}
-            style={swatchStyle(hex)}
+            style={swatchStyle(paint)}
             onClick={() => {
               if (picking) {
                 flush();
@@ -684,33 +873,34 @@ function ColourValue({
           className="nx-vars-editor__mono"
           // A value, not words: no list of earlier entries over the field.
           autoComplete="off"
-          aria-invalid={refusedBy === undefined ? undefined : true}
+          aria-invalid={refusedBy === undefined && !invalid ? undefined : true}
           aria-describedby={refusedBy}
           value={text}
-          onChange={event => setText(event.currentTarget.value)}
-          readOnly={readOnly}
-          onBlur={event => {
-            const next = event.currentTarget.value.trim();
-            if (!readOnly && next !== "" && next !== value) onCommit(next);
+          onChange={event => {
+            setText(event.currentTarget.value);
+            // Typing takes over from a picker gesture: its colour is no
+            // longer shown, and closing the picker writes nothing over the
+            // typed text.
+            draft.current = null;
+            setShown(null);
           }}
+          readOnly={readOnly}
+          onBlur={event => commitTyped(event.currentTarget.value)}
           onKeyDown={event => {
-            const next = event.currentTarget.value.trim();
-            if (
-              event.key === "Enter" &&
-              !readOnly &&
-              next !== "" &&
-              next !== value
-            ) {
-              onCommit(next);
-            }
+            if (event.key === "Enter") commitTyped(event.currentTarget.value);
           }}
         />
       </div>
       {picking ? (
         <ColorPicker
           className="nx-vars-editor__picker"
-          color={hex ?? "#000000"}
+          // A value the picker cannot read starts it from white, not from
+          // black, which it would claim the value is; opaque, so a colour
+          // picked from there is seen.
+          color={hex ?? NO_COLOUR}
           showAlpha
+          recentColors={[...recentColours]}
+          onRecentSelect={pickRecent}
           onColorChange={next => {
             draft.current = next;
             setShown(next);
@@ -721,9 +911,71 @@ function ColourValue({
   );
 }
 
+/** Where the picker starts for a value it cannot read: white. */
+const NO_COLOUR = "#ffffff";
+
+/**
+ * What a colour field shows for the text in it: the colour the picker reads,
+ * what the swatch paints, and whether the text is no colour at all.
+ *
+ * The swatch follows what is typed, so a value that is not a colour shows as
+ * one at once, rather than as the last colour or as black. It is painted only
+ * with a colour resolved here (`colourHexOf`), as every swatch is: `var()`,
+ * `currentcolor` or `inherit` painted in the panel would take the panel's
+ * colours rather than the site's. A colour the browser reads but this package
+ * cannot resolve (`oklch()`, a named colour, a variable) leaves the swatch
+ * empty and unmarked; only text no browser reads as a colour is marked
+ * invalid, and said so in the swatch button's name. While a picker gesture is
+ * under way, the picker's colour is what is shown, and the text is not judged.
+ */
+function colourFieldState(
+  typed: string,
+  value: string,
+  shown: string | null
+): {
+  hex: string | undefined;
+  paint: string | undefined;
+  invalid: boolean;
+  said: string;
+} {
+  const current = typed === "" ? value : typed;
+  const invalid = shown === null && typed !== "" && !isColour(current);
+  const hex = shown ?? colourHexOf(current, undefined);
+  return {
+    hex,
+    paint: hex,
+    invalid,
+    said: invalid ? " (not a valid colour)" : "",
+  };
+}
+
+/**
+ * Whether `text` is a colour: one this package reads, or the browser does.
+ * The one answer both the field's invalid mark and Recent colours read.
+ */
+function isColour(text: string): boolean {
+  return colourHexOf(text, undefined) !== undefined || isCssColour(text);
+}
+
+/**
+ * Whether the browser reads `text` as a CSS colour: any colour a stylesheet
+ * takes, beyond the hex and `rgb()` the picker reads. False where the
+ * browser cannot say.
+ */
+function isCssColour(text: string): boolean {
+  const css = globalThis.CSS as { supports?: unknown } | undefined;
+  return typeof css?.supports === "function"
+    ? CSS.supports("color", text)
+    : false;
+}
+
 /** The dark value: its field, or a line saying it follows light. */
+/** The kinds a dark value is offered on; one already held is kept on any. */
+const DARK_KINDS: ReadonlySet<string> = new Set(["color", "shadow"]);
+
 function DarkValue({
   token,
+  cssOf,
   readOnly,
   refusedBy,
   onCommit,
@@ -731,17 +983,24 @@ function DarkValue({
   onClear,
 }: {
   token: SiteToken;
+  cssOf: (value: string) => string;
   readOnly: boolean;
   refusedBy: string | undefined;
   onCommit: (value: string) => void;
   onAdd: () => void;
   onClear: () => void;
-}): React.JSX.Element {
+}): React.JSX.Element | null {
   const dark = token.values.dark;
   if (dark === undefined) {
+    // Offered on what reads differently in dark mode, colours and shadows;
+    // a size or a duration has no reason to change with the mode.
+    if (!DARK_KINDS.has(token.kind)) return null;
     return (
       <div className="nx-vars-editor__field">
-        <span className="nx-vars-editor__label">Dark</span>
+        <span className="nx-vars-editor__label">
+          <ModeIcon mode="dark" />
+          Dark
+        </span>
         <div className="nx-vars-editor__same">
           <span>Same as light</span>
           {readOnly ? null : (
@@ -760,7 +1019,7 @@ function DarkValue({
       </div>
     );
   }
-  const Field = token.kind === "color" ? ColourValue : TextValue;
+  const Field = fieldFor(token);
   return (
     <>
       <Field
@@ -769,6 +1028,8 @@ function DarkValue({
         readOnly={readOnly}
         refusedBy={refusedBy}
         onCommit={onCommit}
+        css={cssOf(dark)}
+        mode="dark"
       />
       {readOnly ? null : (
         <Button
@@ -778,7 +1039,7 @@ function DarkValue({
           className="nx-vars-editor__button nx-vars-editor__inline-action"
           onClick={onClear}
         >
-          Use light value
+          Remove dark value
         </Button>
       )}
     </>
@@ -806,6 +1067,7 @@ function Actions({
   onChange,
   onRemoved,
   usage,
+  removing,
 }: {
   entry: VariableEntry;
   token: SiteToken;
@@ -814,18 +1076,37 @@ function Actions({
   onChange: (tokens: SiteTokenSet) => void;
   onRemoved: () => void;
   usage: VariableUsageHere | undefined;
+  removing: boolean;
 }): React.JSX.Element | null {
   const plan = removalPlan(
     entry,
     partsOf(entry, token, tokens, suppliedOf),
     usage
   );
-  const { step, setStep, remove } = useRemoveStep(plan);
+  // A Site text row pointing at what Remove takes away holds it: the row
+  // would lose its size on every page, so the removal is refused here as
+  // the server refuses it, naming the row.
+  const heldBy = siteTextUseWords(
+    tokens,
+    plan.removable.map(part => part.identity)
+  );
+  const { step, setStep, remove } = useRemoveStep(plan, removing, heldBy);
   const shown = shownStep(step, plan.removal);
+  if (shown === "held" && heldBy !== undefined) {
+    return (
+      <HeldRemoval
+        plan={plan}
+        heldBy={heldBy}
+        onReset={() => onChange(resetParts(tokens, plan.changed))}
+        onRemove={remove}
+      />
+    );
+  }
   if (shown === "confirm" && plan.removable.length > 0) {
     return (
       <ConfirmRemove
         what={plan.what}
+        focused={removing}
         onKeep={() => setStep("idle")}
         onRemove={() => {
           onChange(withoutParts(tokens, plan.removable));
@@ -858,83 +1139,34 @@ function Actions({
   );
 }
 
-/** What Reset and Remove act on, and what Remove may do. */
-interface RemovalPlan {
-  /** The halves the site's code supplies that the author changed. */
-  readonly changed: readonly Part[];
-  /** The halves the site added, which Remove takes away. */
-  readonly removable: readonly Part[];
-  /** What the confirm names: the variable, or the half that goes. */
-  readonly what: string;
-  /**
-   * What the refusal names: the variable, or the half that goes, as its
-   * heading says it ("Body's line height").
-   */
-  readonly named: string;
-  /** What the places would lose, by what goes: "colour", "line height". */
-  readonly loss: string;
-  /** Remove's own words: "Remove", or "Remove line height". */
-  readonly label: string;
-  /** The usage that gates Remove, where the host reads it. */
-  readonly gate: VariableUsageHere | undefined;
-  /**
-   * How widely what Remove takes away is used, together: a type size and
-   * its line height when both go, so either one in use refuses.
-   */
-  readonly reach: VariableReach | undefined;
-  readonly removal: VariableRemoval;
-}
-
-/** The plan for an entry's halves, under the usage the host read. */
-function removalPlan(
-  entry: VariableEntry,
-  parts: readonly Part[],
-  usage: VariableUsageHere | undefined
-): RemovalPlan {
-  const changed = parts.filter(
-    part =>
-      part.from !== undefined &&
-      (part.held === undefined || !sameSiteToken(part.held, part.from))
+/**
+ * Remove refused because a Site text row uses what it takes away: the row
+ * named, and what to do first.
+ */
+function HeldRemoval({
+  plan,
+  heldBy,
+  onReset,
+  onRemove,
+}: {
+  plan: RemovalPlan;
+  heldBy: string;
+  onReset: () => void;
+  onRemove: () => void;
+}): React.JSX.Element {
+  return (
+    <>
+      <ActionRow
+        plan={plan}
+        checking={false}
+        onReset={onReset}
+        onRemove={onRemove}
+      />
+      <p className="nx-vars-editor__issue" role="status">
+        {`${plan.named} is used by ${heldBy}, so it can't be removed. Point that row at another type size first.`}
+      </p>
+    </>
   );
-  const removable = parts.filter(part => part.from === undefined);
-  const gate = removable.length === 0 ? undefined : usage;
-  const reach =
-    gate === undefined
-      ? undefined
-      : combinedReach(removable.map(part => gate.reachOf(part.identity)));
-  // The whole variable when every half is the site's own; otherwise only the
-  // half that is, named, since the other stays.
-  const halves = removable.map(part => part.name).join(" and ");
-  const whole = removable.length === parts.length;
-  const [alone] = removable;
-  return {
-    changed,
-    removable,
-    what: whole ? entry.label : `${halves} of ${entry.label}`,
-    named: whole ? entry.label : `${entry.label}'s ${halves}`,
-    // A half going on its own loses what that half is; the whole, what the
-    // variable's kind is.
-    loss:
-      !whole && removable.length === 1 && alone !== undefined
-        ? alone.loss
-        : VARIABLE_LOSS_WORDS[entry.row.kind],
-    label: whole ? "Remove" : `Remove ${halves}`,
-    gate,
-    reach,
-    removal: variableRemoval(reach),
-  };
-}
-
-/** The set with each changed half put back to what the site's code supplies. */
-function resetParts(
-  tokens: SiteTokenSet,
-  changed: readonly Part[]
-): SiteTokenSet {
-  const next = [...tokens.tokens];
-  for (const part of changed) {
-    if (part.from !== undefined) next[part.at] = part.from;
-  }
-  return { ...tokens, tokens: next };
 }
 
 /** How widely it is used, then Reset and Remove, as the plan offers them. */
@@ -952,11 +1184,11 @@ function ActionRow({
 }): React.JSX.Element {
   return (
     <div className="nx-vars-editor__actions">
-      {plan.gate === undefined ? null : (
-        <span className="nx-vars-editor__status" role="status">
-          {checking ? "Checking where it's used…" : variableStatus(plan.reach)}
-        </span>
-      )}
+      {/* How widely it is used is said above; here only that Remove is
+          reading it again. */}
+      <span className="nx-vars-editor__status" role="status">
+        {checking ? "Checking where it's used…" : ""}
+      </span>
       {plan.changed.length === 0 ? null : (
         <Button
           type="button"
@@ -988,7 +1220,7 @@ function ActionRow({
  * Where Remove has got to: nothing yet, reading where it is used again, its
  * confirm, or why it cannot.
  */
-type RemoveStep = "idle" | "checking" | "confirm" | "refused";
+type RemoveStep = "idle" | "checking" | "confirm" | "refused" | "held";
 
 /**
  * Remove's steps. Counts read earlier may say a variable is used when it no
@@ -997,7 +1229,12 @@ type RemoveStep = "idle" | "checking" | "confirm" | "refused";
  * confirm once nothing uses it. Nothing stale is shown while it reads; a
  * read that fails answers on the counts already kept.
  */
-function useRemoveStep(plan: RemovalPlan): {
+function useRemoveStep(
+  plan: RemovalPlan,
+  removing: boolean,
+  /** The Site text rows holding what Remove takes away, in words, if any. */
+  heldBy: string | undefined
+): {
   step: RemoveStep;
   setStep: (step: RemoveStep) => void;
   remove: () => void;
@@ -1005,6 +1242,10 @@ function useRemoveStep(plan: RemovalPlan): {
   const [step, setStep] = React.useState<RemoveStep>("idle");
   const { gate, removal, removable } = plan;
   const remove = (): void => {
+    if (heldBy !== undefined) {
+      setStep("held");
+      return;
+    }
     if (!refuses(removal) || gate === undefined) {
       setStep("confirm");
       return;
@@ -1014,12 +1255,19 @@ function useRemoveStep(plan: RemovalPlan): {
       setStep(current => (current === "checking" ? "refused" : current));
     gate.readAgain(removable.map(part => part.identity)).then(answer, answer);
   };
+  // Started once, as the editor opens for the row's Remove; the latest
+  // `remove` through a ref, so the start does not repeat with each render.
+  const start = React.useRef(remove);
+  start.current = remove;
+  React.useEffect(() => {
+    if (removing) start.current();
+  }, [removing]);
   return { step, setStep, remove };
 }
 
 /** Whether Remove opens why it cannot go ahead rather than the confirm. */
 function refuses(removal: VariableRemoval): boolean {
-  return removal === "in-use" || removal === "not-whole";
+  return removal === "in-use";
 }
 
 /**
@@ -1033,13 +1281,20 @@ function shownStep(step: RemoveStep, removal: VariableRemoval): RemoveStep {
 /** Remove's confirm, naming what goes. */
 function ConfirmRemove({
   what,
+  focused,
   onKeep,
   onRemove,
 }: {
   what: string;
+  /** Takes focus, on Keep, as the row's Remove opened it. */
+  focused: boolean;
   onKeep: () => void;
   onRemove: () => void;
 }): React.JSX.Element {
+  const keep = React.useRef<HTMLButtonElement>(null);
+  React.useEffect(() => {
+    if (focused) keep.current?.focus();
+  }, [focused]);
   return (
     <div
       className="nx-vars-editor__confirm"
@@ -1052,6 +1307,7 @@ function ConfirmRemove({
       </p>
       <div className="nx-vars-editor__actions">
         <Button
+          ref={keep}
           type="button"
           variant="ghost"
           size="sm"
@@ -1072,76 +1328,4 @@ function ConfirmRemove({
       </div>
     </div>
   );
-}
-
-/** One stored variable behind an entry, with what the site's code supplies. */
-interface Part {
-  name: string;
-  /** The variable's identity, which its usage is read by. */
-  identity: string;
-  /** What a place would lose with this part alone. */
-  loss: string;
-  at: number;
-  held: SiteToken | undefined;
-  from: SiteToken | undefined;
-}
-
-/**
- * The variables behind an entry: the row and, for a type size, its line
- * height, which has no row of its own and is acted on from here or nowhere.
- */
-function partsOf(
-  entry: VariableEntry,
-  token: SiteToken,
-  tokens: SiteTokenSet,
-  suppliedOf: (identity: string) => SiteToken | undefined
-): Part[] {
-  const own: Part = {
-    name: "size",
-    identity: entry.row.identity,
-    loss: VARIABLE_LOSS_WORDS[entry.row.kind],
-    at: entry.row.at,
-    held: token,
-    from: suppliedOf(entry.row.identity),
-  };
-  if (entry.lineHeight === undefined) return [own];
-  return [
-    own,
-    {
-      name: "line height",
-      identity: entry.lineHeight.identity,
-      loss: VARIABLE_LOSS_WORDS.lineHeight,
-      at: entry.lineHeight.at,
-      held: tokens.tokens[entry.lineHeight.at],
-      from: suppliedOf(entry.lineHeight.identity),
-    },
-  ];
-}
-
-/** The set without these variables, the later positions first. */
-function withoutParts(
-  tokens: SiteTokenSet,
-  parts: readonly Part[]
-): SiteTokenSet {
-  return parts
-    .map(part => part.at)
-    .sort((a, b) => b - a)
-    .reduce(removeToken, tokens);
-}
-
-/**
- * What a field shows: the author's typing, until the stored value changes
- * underneath it (a reset, a refused save, an undo), which replaces it.
- *
- * A field keyed by its value would do the second by remounting, and would
- * then also remount after its own commit and drop the focus it had.
- */
-function useDraft(value: string): [string, (next: string) => void] {
-  const [draft, setDraft] = React.useState(value);
-  const [shown, setShown] = React.useState(value);
-  if (shown !== value) {
-    setShown(value);
-    setDraft(value);
-  }
-  return [draft, setDraft];
 }

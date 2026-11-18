@@ -22,6 +22,94 @@ type SourceDemand = NonNullable<BindingDemand["entry"]>;
 /** Where the canvas reads its binding sources, under this plugin's namespace. */
 export const CANVAS_BINDINGS_ROUTE_PATH = "/canvas-bindings";
 
+/**
+ * Where the canvas asks whether the sources it reads have changed, under
+ * this plugin's namespace.
+ */
+export const CANVAS_SOURCES_CHANGED_ROUTE_PATH = "/canvas-sources/changed";
+
+/**
+ * What the change check takes as a collection's or a Single's slug, and the
+ * editor asks it about only names that are: one name that is not would have
+ * the whole check refused, and every source on the page go unchecked.
+ */
+export function isSourceSlug(name: string): boolean {
+  return (
+    name.length >= 1 && name.length <= 128 && /^[A-Za-z0-9_-]+$/.test(name)
+  );
+}
+
+/**
+ * What the change check asks about: the sources a bindings ask reads, by
+ * name only. Derived from that ask ({@link sourcesChangedAskOf}), so the
+ * check always names exactly what the canvas reads.
+ */
+export interface CanvasSourcesChangedRequest {
+  readonly source: CanvasBindingsRequest["source"];
+  /** The Singles the page's bindings read. */
+  readonly singles: readonly string[];
+  /** The collections the page's lists draw. */
+  readonly lists: readonly string[];
+  /**
+   * The relations the page's bindings follow, by the field they leave from:
+   * on the page's own entry, and on each Single. An entry reached through
+   * one (an author's name) is read too, so a save to it changes the mark.
+   */
+  readonly follows?: {
+    readonly entry: readonly string[];
+    readonly singles: Readonly<Record<string, readonly string[]>>;
+  };
+  /**
+   * The language being edited, read in: a save to that language's own
+   * fields changes only its own version.
+   */
+  readonly locale?: string;
+  /**
+   * The page reads the site's settings: a binding names one, or a date is
+   * shown in the site's time zone.
+   */
+  readonly site?: true;
+}
+
+/**
+ * When the sources last changed, as one opaque mark: a different mark means
+ * something the canvas reads was saved, added or removed since.
+ */
+export interface CanvasSourcesChangedResponse {
+  readonly stamp: string;
+}
+
+/** The change check's ask for the sources `request` reads. */
+export function sourcesChangedAskOf(
+  request: CanvasBindingsRequest
+): CanvasSourcesChangedRequest {
+  const entry = Object.keys(request.demand.entry?.follows ?? {}).sort();
+  const singles = Object.fromEntries(
+    Object.keys(request.demand.singles)
+      .sort()
+      .flatMap(slug => {
+        const followed = Object.keys(
+          request.demand.singles[slug]?.follows ?? {}
+        ).sort();
+        return followed.length === 0 ? [] : [[slug, followed] as const];
+      })
+  );
+  const follows =
+    entry.length === 0 && Object.keys(singles).length === 0
+      ? undefined
+      : { entry, singles };
+  return {
+    source: request.source,
+    singles: Object.keys(request.demand.singles).sort(),
+    lists: [...request.lists].sort(),
+    ...(follows === undefined ? {} : { follows }),
+    ...(request.locale === undefined ? {} : { locale: request.locale }),
+    ...(request.demand.site || request.demand.formatsDates
+      ? { site: true as const }
+      : {}),
+  };
+}
+
 /** What one source is read for, as JSON carries it. */
 export interface CanvasSourceDemand {
   readonly fields: readonly string[];
@@ -61,9 +149,10 @@ export interface CanvasBindingsRequest {
   /**
    * The reads the page has left when its bindings are read, so they are read
    * under the allowance the published page reads them under; the default
-   * allowance when absent.
+   * allowance when absent, and no limit when `null`, for a site that sets
+   * none.
    */
-  readonly allowance?: number;
+  readonly allowance?: number | null;
 }
 
 /** What a page's conditions read, as JSON carries it. */
@@ -96,7 +185,15 @@ export function conditionsFromWire(
 }
 
 /** What the route answers: the sources, read as the caller. */
-export type CanvasBindingsResponse = WireBindings;
+export type CanvasBindingsResponse = WireBindings & {
+  /**
+   * The change check's mark of the sources the ask names
+   * ({@link sourcesChangedAskOf}), taken before they were read, so the
+   * editor's check starts from it rather than asking once the canvas is
+   * drawn. Left out when the mark could not be read: the editor then asks.
+   */
+  readonly stamp?: string;
+};
 
 /** One source's demand as JSON carries it. */
 function sourceToWire(demand: SourceDemand): CanvasSourceDemand {

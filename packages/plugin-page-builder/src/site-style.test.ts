@@ -11,6 +11,7 @@ import {
   resolveSiteStyle,
   siteBreakpoints,
   siteSheet,
+  tokenOverrideOf,
   type SiteStyleData,
 } from "./site-style";
 
@@ -237,6 +238,29 @@ describe("siteSheet", () => {
       breakpoints: VIEWPORT_ONLY,
     });
   });
+
+  it("answers the same sheet for the same style, so a draw from it can be kept", () => {
+    // The canvas, its regions and the entry page's miniature each keep their
+    // drawn page while its inputs keep their identity; a new sheet object per
+    // render made every one of them draw again for a selection or a keystroke.
+    const style: SiteStyleData = {
+      tokens: tokens([{ name: "color.primary", light: "#123456" }]),
+      breakpoints: VIEWPORT_ONLY,
+    };
+    expect(siteSheet(style)).toBe(siteSheet(style));
+    expect(siteSheet()).toBe(siteSheet());
+    expect(siteSheet(undefined)).toBe(siteSheet());
+  });
+
+  it("answers a new sheet for a new style", () => {
+    const style: SiteStyleData = { breakpoints: VIEWPORT_ONLY };
+    const changed: SiteStyleData = {
+      ...style,
+      classes: [cls("a", "card", 0)],
+    };
+    expect(siteSheet(changed)).not.toBe(siteSheet(style));
+    expect(siteSheet(changed)).toHaveProperty("classes", changed.classes);
+  });
 });
 
 describe("a spacing model left in a host's options or a stored document", () => {
@@ -267,5 +291,134 @@ describe("removedSiteStyleOption", () => {
   it("says nothing for options without it", () => {
     expect(removedSiteStyleOption(undefined)).toBeUndefined();
     expect(removedSiteStyleOption({ tokens: { tokens: [] } })).toBeUndefined();
+  });
+});
+
+describe("the site's fluid range across the tiers", () => {
+  it("is stored only where it differs from the code's, and the stored one wins", () => {
+    const defaults = { tokens: [], fluidRange: { min: 360, max: 1280 } };
+    expect(
+      tokenOverrideOf(defaults, {
+        tokens: [],
+        fluidRange: { min: 360, max: 1280 },
+      }).fluidRange
+    ).toBeUndefined();
+    expect(
+      tokenOverrideOf(defaults, {
+        tokens: [],
+        fluidRange: { min: 320, max: 1440 },
+      }).fluidRange
+    ).toEqual({ min: 320, max: 1440 });
+    expect(
+      resolveSiteStyle(
+        { tokens: defaults },
+        { tokens: { tokens: [], fluidRange: { min: 320, max: 1440 } } }
+      ).tokens?.fluidRange
+    ).toEqual({ min: 320, max: 1440 });
+  });
+
+  it("is stored with a size made with Fluid…, whatever the code's is, so the stored sizes say what they were made across", () => {
+    // A merge of two authors' saves writes a fluid size again from its sizes
+    // and the range. It reads the stored tier alone, so that tier holds the
+    // range its fluid sizes were made across rather than leave it implied.
+    const lead = {
+      name: "font-size.lead",
+      kind: "dimension" as const,
+      values: { light: "clamp(1rem, 0.9167rem + 0.3704vw, 1.25rem)" },
+      fluid: { small: 16, large: 20 },
+    };
+    const coded = { tokens: [], fluidRange: { min: 320, max: 1440 } };
+    expect(
+      tokenOverrideOf(coded, {
+        tokens: [lead],
+        fluidRange: { min: 320, max: 1440 },
+      }).fluidRange
+    ).toEqual({ min: 320, max: 1440 });
+    // Neither tier sets one: the range it was made across is the default.
+    expect(
+      tokenOverrideOf({ tokens: [] }, { tokens: [lead] }).fluidRange
+    ).toEqual({ min: 360, max: 1280 });
+  });
+});
+
+describe("the site's text across the two tiers", () => {
+  const defaults = {
+    tokens: {
+      tokens: [],
+      siteText: {
+        h1: { fontSize: "50px" },
+        body: { fontSize: "17px" },
+      },
+    },
+  };
+
+  it("lays a stored row over the code's, row by row", () => {
+    const merged = resolveSiteStyle(defaults, {
+      tokens: { tokens: [], siteText: { h1: { fontSize: "60px" } } },
+    });
+    expect(merged.tokens?.siteText).toEqual({
+      h1: { fontSize: "60px" },
+      body: { fontSize: "17px" },
+    });
+  });
+
+  it("stores only the rows that differ from the code's", () => {
+    const stored = tokenOverrideOf(defaults.tokens, {
+      tokens: [],
+      siteText: { h1: { fontSize: "60px" }, body: { fontSize: "17px" } },
+    });
+    expect(stored.siteText).toEqual({ h1: { fontSize: "60px" } });
+  });
+
+  it("stores no site text where every row is the code's", () => {
+    const stored = tokenOverrideOf(defaults.tokens, {
+      tokens: [],
+      siteText: { h1: { fontSize: "50px" }, body: { fontSize: "17px" } },
+    });
+    expect(stored).not.toHaveProperty("siteText");
+  });
+
+  it("stores the range a fluid row was made across, though no variable is fluid", () => {
+    const range = { min: 360, max: 1280 };
+    const stored = tokenOverrideOf(
+      { tokens: [], fluidRange: range },
+      {
+        tokens: [],
+        fluidRange: range,
+        siteText: {
+          h2: {
+            fontSize: "clamp(1.5rem, 1.2rem + 1.4vw, 2.5rem)",
+            fluid: { small: 24, large: 40 },
+          },
+        },
+      }
+    );
+    expect(stored.fluidRange).toEqual(range);
+  });
+
+  it("keeps an empty row, which leaves that text to the site's own CSS", () => {
+    const stored = tokenOverrideOf(undefined, {
+      tokens: [],
+      siteText: { h3: {} },
+    });
+    expect(stored.siteText).toEqual({ h3: {} });
+  });
+});
+
+describe("the site's colour order across the tiers", () => {
+  it("is stored where the site set one, and read back over the code's", () => {
+    const order = ["color.text", "color.primary"];
+    expect(
+      tokenOverrideOf({ tokens: [] }, { tokens: [], order }).order
+    ).toEqual(order);
+    expect(tokenOverrideOf({ tokens: [] }, { tokens: [] })).not.toHaveProperty(
+      "order"
+    );
+    expect(
+      resolveSiteStyle(
+        { tokens: { tokens: [] } },
+        { tokens: { tokens: [], order } }
+      ).tokens?.order
+    ).toEqual(order);
   });
 });

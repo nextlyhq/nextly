@@ -18,6 +18,7 @@
  */
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import { z } from "zod";
 
 import {
   assertBuilderFieldNames,
@@ -38,6 +39,7 @@ import {
   assertComparisonRequest,
   resolveSingleDocumentId,
 } from "../../api/versions-access";
+import { nextlyValidationFromZod } from "../../api/zod-to-nextly-error";
 import type { FieldConfig } from "../../collections/fields/types";
 import { container } from "../../di/container";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
@@ -54,11 +56,16 @@ import { resolveCompanionRename } from "../../domains/i18n/migration/companion-r
 import { translationLayoutChange } from "../../domains/i18n/per-language-storage";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
 import { assertLanguageStatesAgreeWithEntry } from "../../domains/i18n/runtime/language-states-agree";
-import type { SchemaChangeAnswers } from "../../domains/schema/builder-save/schema-change-save";
+import { pushCarriesValues } from "../../domains/schema/builder-save/push-carries-values";
+import {
+  renamedFieldsOf,
+  type SchemaChangeAnswers,
+} from "../../domains/schema/builder-save/schema-change-save";
 import { entityRelations } from "../../domains/schema/builder-save/single-relations";
 import { singleEntity } from "../../domains/schema/builder-save/stored-entity";
 import { refuseCompanionRenameSwitch } from "../../domains/schema/pipeline/companion-shape-switches";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
+import { introspectLiveSnapshot } from "../../domains/schema/pipeline/diff/introspect-live";
 import type { BrowserRenameResolution } from "../../domains/schema/pipeline/prompt-dispatcher/browser";
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
 import type { DesiredSingle } from "../../domains/schema/pipeline/types";
@@ -67,6 +74,7 @@ import {
   fieldsAsStored,
   recordedFieldsOf,
 } from "../../domains/schema/services/collection-schema-apply";
+import { getSingleRowColumnDescriptor } from "../../domains/schema/services/field-column-descriptor";
 import { generateRuntimeSchema } from "../../domains/schema/services/runtime-schema-generator";
 import { withSchemaChangeExcluded } from "../../domains/schema/services/schema-change-exclusion";
 import type { FieldResolution } from "../../domains/schema/services/schema-change-types";
@@ -113,7 +121,9 @@ import {
   builderSchemaPush,
   leavingSettingsStep,
   pushAndReconcileCompanion,
+  reconcileBuilderCompanion,
   refuseRefusedLeavingSettings,
+  type BuilderCompanionReconcile,
 } from "../helpers/builder-schema-push";
 import { refuseChangeDefinedInCode } from "../helpers/defined-in-code";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
@@ -135,7 +145,9 @@ import {
   parseRichTextFormat,
   parseRichTextStyles,
   isTruthyParam,
+  parseFallbackParam,
   parseStatusParam,
+  parseTranslationsParam,
   requireParam,
   toNumber,
 } from "../helpers/validation";
@@ -149,6 +161,7 @@ import type { MethodHandler, Params } from "../types";
 import { respondAddressCheck } from "./address-check-route";
 import { readListOffset } from "./list-offset";
 import { readListOwner, slugListsForOwner } from "./list-owner";
+import { PublishPartsBody } from "./publish-parts-body";
 import { readAccessCallerForDispatch } from "./read-access-caller";
 import { assertSchemaVersionMatch } from "./schema-version-guard";
 import { assertSingleTablesUnowned } from "./single-table-family";
@@ -508,6 +521,53 @@ async function requireLiveSingleId(slug: string): Promise<string> {
   return id;
 }
 
+/**
+ * Publishing or unpublishing the parts of a Single the body chooses (@experimental): the Single's
+ * counterpart of a collection entry's, read from the same body and forwarded the same way, with
+ * the caller's identity and scope, `routeAuthorized` false, and the version the move was made
+ * from.
+ */
+function singlePartsLifecycle(
+  direction: "publish" | "unpublish",
+  successMessage: string
+): MethodHandler<SinglesServices> {
+  return {
+    execute: async (svc, p, body, request) => {
+      const slug = requireParam(p, "slug", "Single slug");
+      let parts: z.infer<typeof PublishPartsBody>;
+      try {
+        parts = PublishPartsBody.parse(body ?? {});
+      } catch (error) {
+        if (error instanceof z.ZodError) throw nextlyValidationFromZod(error);
+        throw error;
+      }
+      const result = await svc.entry.publishParts(
+        {
+          slug,
+          user: readAuthenticatedUser(),
+          request,
+          actor: readAuthenticatedActor(),
+          overrideAccess: false,
+          routeAuthorized: false,
+          authenticatedScope: readAuthenticatedScope(),
+          data: versionInputOf(body),
+          ...(parts.withoutReview === undefined
+            ? {}
+            : { withoutReview: parts.withoutReview }),
+        },
+        {
+          direction,
+          locales: parts.locales,
+          shared: parts.shared,
+          describe: parts.describe,
+        }
+      );
+      const answer = unwrapServiceResult(result, { slug });
+      return respondMutation(result.message ?? successMessage, answer);
+    },
+  };
+}
+
 const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
   ...SINGLE_VERSION_METHODS,
   listSingles: {
@@ -770,12 +830,24 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         // the language pills. All no-op for non-localized singles.
         locale: p.locale,
         fallbackLocale: p["fallback-locale"],
+        // `?fallback=document`: answer in the first published language of the
+        // chain where the Single is not published in the requested one.
+        wholeDocumentFallback: parseFallbackParam(p.fallback),
+        // `?source-locales=1` attaches `_sources`, each translatable value's language.
+        sourceLocales: isTruthyParam(p["source-locales"]),
+        // `?translations=all` attaches every language's values (`_allLocales`).
+        translations: parseTranslationsParam(p.translations),
         translationStatus: p["translation-status"] === "1",
         // `?draft=1` opts into the working-draft overlay, matching the entry
         // read. Gated server-side on an actual update-capability probe, so a
         // read-only caller passing it still sees the published document.
         includeWorkingDraft: isTruthyParam(p.draft),
         status,
+        // `?details=1` attaches `_details` (who changed it, where it is
+        // served), only for a signed-in admin user: anyone else gets the
+        // plain Single.
+        details:
+          isTruthyParam(p.details) && readAuthenticatedActor()?.type === "user",
       });
 
       // Transform rich text fields to requested format when not JSON.
@@ -876,6 +948,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       });
     },
   },
+
+  publishSingleParts: singlePartsLifecycle("publish", "Published."),
+  unpublishSingleParts: singlePartsLifecycle("unpublish", "Unpublished."),
 
   previewPublishAllSingleLocales: {
     // What publishing every language would do, language by language, without
@@ -1272,7 +1347,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // confirm, as a collection's does: each conversion an adoption makes, each fill and delete.
       const answers = body as SchemaChangeAnswers;
       const reviewDeps = builderSaveDeps();
-      const notices = await reviewBuilderSchemaChange(reviewDeps, {
+      const review = await reviewBuilderSchemaChange(reviewDeps, {
         kind: "single",
         slug,
         table: tableName,
@@ -1301,7 +1376,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
               fields as FieldDefinition[]
             )),
       });
-      return respondData({ ...preview, notices });
+      return respondData({ ...preview, ...review });
     },
   },
 
@@ -1558,50 +1633,50 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           // changes (mirrors collections).
           // The change applied by the push and written as the Single's migration, so its table
           // stands on record for every migration after it, as a collection's Builder save leaves it.
+          const companion: BuilderCompanionReconcile = {
+            slug,
+            tableName,
+            oldFields: single.fields as unknown as FieldDefinition[],
+            newFields: fields as unknown as FieldDefinition[],
+            localized: layout.isStored,
+            wasLocalized: layout.wasStored,
+            // Read from the same persisted record as `wasLocalized`: the companion's per-language
+            // `_status` before and after this apply.
+            status: layout.isPublishedPerLanguage,
+            wasStatus: layout.wasPublishedPerLanguage,
+            statusFromEntryInEveryLanguage:
+              layout.statusFromEntryInEveryLanguage,
+            adapter,
+            renamed: companionRename ?? undefined,
+            // The settings the first push left off, once the shared columns hold the default
+            // language's values. A new desired schema rather than an edit of the first: the pipeline
+            // keeps the last one it applied, by reference, to skip a push that changes nothing.
+            settleLeaving: settingsDeferred
+              ? leavingSettingsStep({
+                  adapter,
+                  entity: slug,
+                  tableName,
+                  builtBy: "collection",
+                  oldFields: single.fields as unknown as FieldDefinition[],
+                  newFields: fields as unknown as FieldDefinition[],
+                  renamed: companionRename,
+                  push: () =>
+                    push({
+                      ...desired,
+                      singles: {
+                        ...desired.singles,
+                        [slug]: {
+                          ...desired.singles[slug],
+                          fields: fields as DesiredSingle["fields"],
+                        },
+                      },
+                    }),
+                })
+              : undefined,
+          };
           await writeBuilderSchemaChange(
             builderSave,
-            () =>
-              pushAndReconcileCompanion(push, desired, "single", {
-                slug,
-                tableName,
-                oldFields: single.fields as unknown as FieldDefinition[],
-                newFields: fields as unknown as FieldDefinition[],
-                localized: layout.isStored,
-                wasLocalized: layout.wasStored,
-                // Read from the same persisted record as `wasLocalized`: the companion's per-language
-                // `_status` before and after this apply.
-                status: layout.isPublishedPerLanguage,
-                wasStatus: layout.wasPublishedPerLanguage,
-                statusFromEntryInEveryLanguage:
-                  layout.statusFromEntryInEveryLanguage,
-                adapter,
-                renamed: companionRename ?? undefined,
-                // The settings the first push left off, once the shared columns hold the default
-                // language's values. A new desired schema rather than an edit of the first: the pipeline
-                // keeps the last one it applied, by reference, to skip a push that changes nothing.
-                settleLeaving: settingsDeferred
-                  ? leavingSettingsStep({
-                      adapter,
-                      entity: slug,
-                      tableName,
-                      builtBy: "collection",
-                      oldFields: single.fields as unknown as FieldDefinition[],
-                      newFields: fields as unknown as FieldDefinition[],
-                      renamed: companionRename,
-                      push: () =>
-                        push({
-                          ...desired,
-                          singles: {
-                            ...desired.singles,
-                            [slug]: {
-                              ...desired.singles[slug],
-                              fields: fields as DesiredSingle["fields"],
-                            },
-                          },
-                        }),
-                    })
-                  : undefined,
-              }),
+            () => pushAndReconcileCompanion(push, desired, "single", companion),
             {
               kind: "single",
               slug,
@@ -1629,7 +1704,31 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
                     fields as unknown as FieldDefinition[]
                   )),
             },
-            landing.landed
+            landing.landed,
+            {
+              // The push where the save carries values across its change; its own migration file,
+              // run in tries as `nextly migrate` runs it, where it carries none. No `singleRow`:
+              // this dialog's push does not fill the Single's row for a field it adds either (an
+              // optional field's default stays out of it, and a required field is refused unless
+              // the dialog answers with a value), so keeping the push for one would fill nothing.
+              pushWhen: () =>
+                pushCarriesValues({
+                  oldFields: single.fields as unknown as FieldDefinition[],
+                  newFields: fields as unknown as FieldDefinition[],
+                  wasStored: layout.wasStored,
+                  isStored: layout.isStored,
+                  wasStatus: layout.wasPublishedPerLanguage,
+                  status: layout.isPublishedPerLanguage,
+                  renamed: companionRename,
+                  liveTable: async () =>
+                    (await introspectLiveSnapshot(db, dialect, [tableName]))
+                      .tables[0],
+                  columnOf: field =>
+                    getSingleRowColumnDescriptor(field, dialect, "collection"),
+                  renames: renamedFieldsOf(renameResolutions ?? []),
+                }),
+              afterFile: () => reconcileBuilderCompanion("single", companion),
+            }
           );
 
           const newSchemaVersion = currentVersion + 1;

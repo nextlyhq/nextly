@@ -23,8 +23,9 @@ import {
   TabsTrigger,
 } from "@nextlyhq/ui";
 import type { JSX } from "react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
+import type { PendingAddress } from "@admin/services/addressCheckApi";
 import type { StoredHookConfig } from "@admin/types/collection";
 
 // The title and description name the kind through the shared table, so the
@@ -33,10 +34,18 @@ import {
   BUILDER_KIND_NOUN,
   type BasicsField,
   type BuilderConfig,
+  type BuilderKind,
 } from "./builder-config";
 import { AdvancedTab } from "./builder-settings-modal/AdvancedTab";
-import { BasicsTab } from "./builder-settings-modal/BasicsTab";
+import {
+  BasicsTab,
+  descriptionTooLong,
+} from "./builder-settings-modal/BasicsTab";
 import { StoredHooksView } from "./HooksEditor/StoredHooksView";
+import {
+  type AddressCheckState,
+  useAddressCheck,
+} from "./new-entity/useAddressCheck";
 
 /**
  * Form-state shape shared by both modes. Optional fields are present so the
@@ -116,9 +125,110 @@ type Props = {
    * carries them, so a settings save leaves them as they are stored.
    */
   storedHooks?: readonly StoredHookConfig[];
+  /**
+   * The entity is not saved yet, so its address can still change: editable,
+   * and checked as it is typed against `otherAddresses`, every other unsaved
+   * entity's in this tab (its own left out, so it is not used against itself).
+   */
+  unsavedAddress?: { otherAddresses: readonly PendingAddress[] };
+  /**
+   * How many places use this field group that the reader can read, counted as
+   * its used-by view counts them, said beside its fixed address.
+   */
+  usedByCount?: number;
   onCancel: () => void;
   onSubmit: (values: BuilderSettingsValues) => void;
 };
+
+/**
+ * Why a saved address is fixed: what refers to it, which changing it would
+ * break. A collection's or Single's routes and the clients that call them; a
+ * field group's, the fields that use it, counted where the page knows.
+ */
+function fixedAddressNote(kind: BuilderKind, usedByCount?: number): string {
+  if (kind !== "field-group") {
+    return "Fixed once saved: its API routes, and every client that calls them, use this address.";
+  }
+  const used =
+    usedByCount === undefined
+      ? ""
+      : ` Used in ${usedByCount} ${usedByCount === 1 ? "place" : "places"} you can read.`;
+  return `Fixed once saved: the fields that use this field group refer to it by this address.${used}`;
+}
+
+/** What is said under an unsaved entity's address, from its check. */
+function unsavedAddressNote(check: AddressCheckState): {
+  text: string;
+  refused: boolean;
+} {
+  if (check.status === "refused") return { text: check.message, refused: true };
+  if (check.status === "unknown")
+    return { text: check.message, refused: false };
+  return {
+    text: "Its API routes use this address. It can be changed until the first save.",
+    refused: false,
+  };
+}
+
+/**
+ * What the dialog does with the address, decided once: editable while the
+ * entity is created or not saved yet; the note said under it (why a saved
+ * one is fixed, what the check says of an unsaved one); and whether Save
+ * waits for the check, which it does while an unsaved address is refused or
+ * still being checked.
+ */
+function addressState(
+  mode: "create" | "edit",
+  kind: BuilderKind,
+  unsaved: boolean,
+  check: AddressCheckState,
+  usedByCount: number | undefined
+): {
+  editable: boolean;
+  note: { text: string; refused: boolean } | undefined;
+  held: boolean;
+} {
+  if (mode === "create")
+    return { editable: true, note: undefined, held: false };
+  if (!unsaved) {
+    return {
+      editable: false,
+      note: { text: fixedAddressNote(kind, usedByCount), refused: false },
+      held: false,
+    };
+  }
+  return {
+    editable: true,
+    note: unsavedAddressNote(check),
+    held: check.status === "checking" || check.status === "refused",
+  };
+}
+
+/**
+ * The live check of an unsaved entity's address, drawn only for one: a saved
+ * entity's address is fixed and asked about nothing. Hands its answer up.
+ */
+function UnsavedAddressCheck({
+  kind,
+  address,
+  otherAddresses,
+  onAnswer,
+}: {
+  kind: BuilderKind;
+  address: string;
+  otherAddresses: readonly PendingAddress[];
+  onAnswer: (state: AddressCheckState) => void;
+}): null {
+  const state = useAddressCheck(kind, address, otherAddresses);
+  // Handed up when what it says changes, not on every render: the check
+  // answers "checking" as a new object each time it is drawn.
+  const said = JSON.stringify(state);
+  useEffect(
+    () => onAnswer(JSON.parse(said) as AddressCheckState),
+    [said, onAnswer]
+  );
+  return null;
+}
 
 /**
  * The answers as everything downstream should see them.
@@ -145,7 +255,13 @@ type Props = {
 export function normalizedSettings(
   values: BuilderSettingsValues
 ): BuilderSettingsValues {
-  return { ...values, description: values.description?.trim() };
+  return {
+    ...values,
+    description: values.description?.trim(),
+    // The address as it is checked: the check asks about it trimmed, so the
+    // one that moves the entity, names its route and creates it is the same.
+    slug: values.slug.trim(),
+  };
 }
 
 const EMPTY_VALUES: BuilderSettingsValues = {
@@ -212,11 +328,25 @@ export function BuilderSettingsModal({
   initialValues,
   readOnly = false,
   storedHooks,
+  unsavedAddress,
+  usedByCount,
   onCancel,
   onSubmit,
 }: Props): JSX.Element {
   const [values, setValues] = useState<BuilderSettingsValues>(() =>
     computeInitialValues(mode, config, initialValues)
+  );
+  // An unsaved entity's address is checked as it is typed; until answered it
+  // reads as being checked, so Save waits for the answer.
+  const [addressCheck, setAddressCheck] = useState<AddressCheckState>({
+    status: "checking",
+  });
+  const address = addressState(
+    mode,
+    config.kind,
+    unsavedAddress !== undefined,
+    addressCheck,
+    usedByCount
   );
   const [tab, setTab] = useState<"basics" | "advanced" | "hooks">("basics");
   const hookCount = storedHooks?.length ?? 0;
@@ -230,6 +360,14 @@ export function BuilderSettingsModal({
 
   return (
     <Dialog open={open} onOpenChange={next => !next && onCancel()}>
+      {unsavedAddress && (
+        <UnsavedAddressCheck
+          kind={config.kind}
+          address={values.slug.trim()}
+          otherAddresses={unsavedAddress.otherAddresses}
+          onAnswer={setAddressCheck}
+        />
+      )}
       <DialogContent className="max-w-2xl">
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
@@ -261,7 +399,10 @@ export function BuilderSettingsModal({
                 // editable it accepts a value that is silently dropped, and
                 // for the kinds whose dirty check compares it, enables Save
                 // and re-pins the baseline as though it had been written.
-                slugEditable={mode === "create"}
+                // An unsaved entity's has nothing under it yet, so it stays
+                // editable until the first save.
+                slugEditable={address.editable}
+                slugNote={address.note}
               />
             </fieldset>
           </TabsContent>
@@ -292,7 +433,14 @@ export function BuilderSettingsModal({
               <Button variant="outline" onClick={onCancel}>
                 Cancel
               </Button>
-              <Button onClick={() => onSubmit(normalizedSettings(values))}>
+              <Button
+                // Held past the description limit too: the field says so
+                // beneath itself, and nothing over it is cut on its way out.
+                disabled={
+                  address.held || descriptionTooLong(values.description)
+                }
+                onClick={() => onSubmit(normalizedSettings(values))}
+              >
                 {primaryLabel}
               </Button>
             </>

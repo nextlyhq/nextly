@@ -18,7 +18,7 @@
  */
 
 import type { JSX } from "react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   Alert,
@@ -44,6 +44,7 @@ import {
   versionChangesOf,
   type NoChanges,
 } from "../version-changes";
+import { baselineLabel } from "../version-pairing";
 import { changeAnchorId } from "../VersionChangesForm";
 
 import {
@@ -51,7 +52,9 @@ import {
   ChangesLayoutToggle,
   layoutFor,
   useChangesLayoutPreference,
+  type ChangesLayout,
 } from "./changes-layout";
+import { fieldPathLabel } from "./field-path";
 import { childKey, FieldDiffNode, SystemFieldsProvider } from "./FieldDiffNode";
 
 export interface VersionDiffViewProps {
@@ -60,6 +63,33 @@ export interface VersionDiffViewProps {
   from: number;
   /** Newer version being compared. */
   to: number;
+  /**
+   * The view an address names: inline, or side by side. Absent, the reader's
+   * own remembered choice decides.
+   */
+  view?: "inline" | "side";
+  /**
+   * Hears the reader switch the view, for a page whose address names it;
+   * absent, the switch is remembered as the reader's own choice.
+   */
+  onViewChange?: (layout: ChangesLayout) => void;
+  /**
+   * Hears this pair's comparison reach the screen, once its fields are drawn,
+   * and `null` once it no longer is. Told only from here, where the fields
+   * are drawn, so a host that marks what the reader has seen cannot mark a
+   * comparison it decided was showing while something else filled the space.
+   * The report carries the language the comparison's answer names, which is
+   * authoritative where the host's own address names none.
+   */
+  onShown?: (
+    pair: { from: number; to: number; locale: string | null } | null
+  ) => void;
+  /**
+   * The baseline whose answer already holds this pair's comparison, when the
+   * host drew it from one: the pair is then not asked for again (see
+   * `useVersionDiff`).
+   */
+  seededBy?: string;
 }
 
 function DiffSkeleton() {
@@ -171,8 +201,7 @@ function BaselineNote({
 }): JSX.Element | null {
   const baseline = diff?.baseline;
   if (!baseline) return null;
-  const words = baseline.name.replace(/-/g, " ");
-  const name = words.charAt(0).toUpperCase() + words.slice(1);
+  const name = baselineLabel(baseline.name);
   // A baseline whose version retention removed names the one standing in for it.
   const which =
     baseline.replaces === undefined
@@ -189,13 +218,28 @@ export function VersionDiffView({
   scope,
   from,
   to,
+  view,
+  onViewChange,
+  onShown,
+  seededBy,
 }: VersionDiffViewProps): JSX.Element {
-  const [preference, setLayout] = useChangesLayoutPreference();
+  const [remembered, remember] = useChangesLayoutPreference();
+  // The address's view wins over the remembered one, so a shared link opens
+  // the comparison as its sender saw it.
+  const preference: ChangesLayout =
+    view === undefined ? remembered : view === "side" ? "split" : "inline";
+  const setLayout = onViewChange ?? remember;
   const [showUnchanged, setShowUnchanged] = useState(false);
   const [showSystem, setShowSystem] = useState(false);
   // Every field, so the count and the fold are of the whole document: the
   // unchanged ones are folded here rather than left out by the server.
-  const diff = useVersionDiff({ scope, from, to, modifiedOnly: false });
+  const diff = useVersionDiff({
+    scope,
+    from,
+    to,
+    modifiedOnly: false,
+    ...(seededBy !== undefined ? { seededBy } : {}),
+  });
   const arranged = arrangeFields(diff.data?.fields ?? []);
   const changes = diff.data ? versionChangesOf(diff.data) : null;
   const order = arranged.changed.map(node => node.name);
@@ -207,6 +251,34 @@ export function VersionDiffView({
     changes?.byField.values() ?? []
   );
   const nav = useChangeNavigation(order);
+  // The change the position is on, named as its field is in the list.
+  const currentChange = arranged.changed[nav.position];
+  const currentChangeLabel = currentChange
+    ? fieldPathLabel(currentChange, 0)
+    : undefined;
+  // Which of the body's states is drawn, decided once so the body and the
+  // report below cannot disagree about it.
+  const body = diff.isLoading
+    ? "loading"
+    : diff.isError
+      ? "error"
+      : diff.data
+        ? "fields"
+        : "empty";
+  // This pair is on screen only when its own fields are: another pair's
+  // answer kept while this one loads draws fields that are not this pair's.
+  const drawn = body === "fields" && !diff.isPlaceholderData;
+  // Read through a ref, so a host that hands a new callback each render does
+  // not report the same showing again.
+  const onShownRef = useRef(onShown);
+  onShownRef.current = onShown;
+  // The drawn comparison's own language, read once it is drawn.
+  const drawnLocale = drawn ? (diff.data?.locale ?? null) : null;
+  useEffect(() => {
+    if (!drawn) return;
+    onShownRef.current?.({ from, to, locale: drawnLocale });
+    return () => onShownRef.current?.(null);
+  }, [drawn, from, to, drawnLocale]);
 
   return (
     // The container the field rows query. Their columns are a function of the
@@ -242,6 +314,7 @@ export function VersionDiffView({
                 changed={arranged.changed.length}
                 position={nav.position}
                 onMove={nav.move}
+                currentLabel={currentChangeLabel}
               />
             ) : null}
             <ChangesLayoutToggle
@@ -269,9 +342,9 @@ export function VersionDiffView({
         ) : null}
 
         <div className="min-h-0 flex-1 overflow-y-auto">
-          {diff.isLoading ? (
+          {body === "loading" ? (
             <DiffSkeleton />
-          ) : diff.isError ? (
+          ) : body === "error" ? (
             <div className="p-4 flex flex-col gap-3">
               <Alert variant="destructive">
                 <AlertDescription>
@@ -287,7 +360,7 @@ export function VersionDiffView({
                 Try again
               </Button>
             </div>
-          ) : diff.data ? (
+          ) : body === "fields" ? (
             <SystemFieldsProvider value={showSystem}>
               <div className="flex flex-col px-4 pb-4">
                 {note ? (

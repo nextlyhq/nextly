@@ -10,6 +10,7 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { userWhoMay } from "../../../__tests__/fixtures/permission-holders";
 import {
   defineCollection,
   defineFieldGroup,
@@ -95,6 +96,9 @@ async function documentWithRules(dialect: TestDialect) {
       _overwrite: true,
     }
   );
+  // The reader may read the document: a version read asks the document's read
+  // gate as its caller, which a reader without the permission does not pass.
+  await userWhoMay(current, READER.id, "read", ["posts"]);
   return id;
 }
 

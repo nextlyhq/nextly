@@ -11,6 +11,7 @@ import type {
   StyleValue,
 } from "@nextlyhq/blocks-engine";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -201,18 +202,14 @@ describe("FontFamilyField", () => {
     const onManageFonts = vi.fn();
     mount({ onManageFonts });
     open();
-    fireEvent.click(
-      screen.getByRole("button", { name: "Add or manage fonts…" })
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Manage fonts…" }));
     expect(onManageFonts).toHaveBeenCalledTimes(1);
   });
 
   it("offers no way to manage fonts where the host has none", () => {
     mount();
     open();
-    expect(
-      screen.queryByRole("button", { name: "Add or manage fonts…" })
-    ).toBeNull();
+    expect(screen.queryByRole("button", { name: "Manage fonts…" })).toBeNull();
   });
 
   it("moves through the options with the arrow keys, picks with Enter and closes with Escape", async () => {
@@ -258,5 +255,67 @@ describe("FontFamilyField", () => {
         .getAllByRole("option")
         .map(o => o.textContent)
     ).toEqual(["Face C"]);
+  });
+});
+
+describe("a font variable chosen", () => {
+  it("shows in green, says what it is in the trigger's tooltip, and unlinks to its family", async () => {
+    const onCommit = mount({ stored: { $token: "font.heading" } });
+    const pick = document.querySelector(".nx-font-pick") as HTMLElement;
+    // Green is the stylesheet's, for this mark: see variable-choice-styles.test.
+    expect(pick.hasAttribute("data-bound")).toBe(true);
+    fireEvent.keyDown(document.body, { key: "Tab" });
+    act(() => trigger().focus());
+    expect((await screen.findAllByRole("tooltip"))[0]?.textContent).toBe(
+      "Font variable Heading font · Georgia, serif · --site-font-heading"
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Unlink Font" }));
+    // One commit, the family as a plain value.
+    expect(onCommit.mock.calls).toEqual([["Georgia, serif"]]);
+  });
+
+  it("keeps focus on the Font control once Unlink has made the family plain", async () => {
+    const onCommit = vi.fn();
+    const { rerender } = render(
+      <FontFamilyField
+        stored={{ $token: "font.heading" }}
+        tokens={TOKENS}
+        faces={[INTER, LORA]}
+        fromCode={[]}
+        onCommit={onCommit}
+      />
+    );
+    const unlink = screen.getByRole("button", { name: "Unlink Font" });
+    act(() => unlink.focus());
+    fireEvent.click(unlink);
+    // The document answers with the plain family, and Unlink is gone.
+    rerender(
+      <FontFamilyField
+        stored="Georgia, serif"
+        tokens={TOKENS}
+        faces={[INTER, LORA]}
+        fromCode={[]}
+        onCommit={onCommit}
+      />
+    );
+    expect(screen.queryByRole("button", { name: "Unlink Font" })).toBeNull();
+    await waitFor(() => expect(document.activeElement).toBe(trigger()));
+  });
+
+  it("is described by its tooltip as well as by its label while the tooltip shows", async () => {
+    mount({ stored: { $token: "font.heading" }, labelledBy: "font-label" });
+    fireEvent.keyDown(document.body, { key: "Tab" });
+    act(() => trigger().focus());
+    const tip = (await screen.findAllByRole("tooltip"))[0];
+    const described = trigger().getAttribute("aria-describedby") ?? "";
+    expect(described.split(" ")).toContain("font-label");
+    expect(described.split(" ")).toContain(tip?.id);
+  });
+
+  it("is not green and offers no Unlink for a family chosen as itself", () => {
+    mount({ stored: '"Inter", sans-serif' });
+    const pick = document.querySelector(".nx-font-pick") as HTMLElement;
+    expect(pick.hasAttribute("data-bound")).toBe(false);
+    expect(screen.queryByRole("button", { name: "Unlink Font" })).toBeNull();
   });
 });

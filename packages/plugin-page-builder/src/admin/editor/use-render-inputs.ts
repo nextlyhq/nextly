@@ -67,12 +67,13 @@ import {
 } from "react";
 
 import { classUsageOf } from "../../class-usage";
-import { withBlockLooks } from "../../core-looks";
+import { withRegisteredLooks } from "../../core-looks";
 import {
   hostFetchPolicy,
   readRemotePatterns,
   type HostFetchPolicy,
 } from "../../host-policy";
+import { readPageDataLimit } from "../../page-allowance";
 import { siteSheet, type SiteStyleData } from "../../site-style";
 import { readSiteStyleRecord } from "../../site-style-record";
 import { useCanvasBindings } from "../canvas-bindings-client";
@@ -156,10 +157,14 @@ export function useSiteStyleInputs(
    */
   // With every registered block's looks, other plugins' among them: the
   // published config is a copy taken before those blocks registered, so the
-  // editor reads them from its own registry, by the same rule the server does.
+  // editor reads them from its own registry, through the one function the
+  // published page's site style takes its looks from too.
   const configSiteStyle = useMemo(
     () =>
-      withBlockLooks(readSiteStyleRecord(clientConfig?.siteStyle), allBlocks()),
+      withRegisteredLooks(
+        readSiteStyleRecord(clientConfig?.siteStyle),
+        allBlocks()
+      ),
     [clientConfig]
   );
   const {
@@ -275,9 +280,15 @@ export type SiteStyleInputs = {
 };
 
 /** The canvas's render context, as `useCanvasRender` returns it. */
-type CanvasRender = {
+export type CanvasRender = {
   canvasRender: PageRenderInputs;
   classSummaryContext: StyleCompileContext;
+  /**
+   * The site's page data limit (`pageBuilder({ maxQueries })`), which the
+   * canvas draws under and the page data meter counts against: `Infinity`
+   * for none, `undefined` for the default.
+   */
+  pageDataLimit: number | undefined;
 };
 
 /** Nothing marked: no sources read yet, or none of their shapes known. */
@@ -377,6 +388,10 @@ function useCanvasRender({
   // The list the page splits into pages draws its links on the canvas, as
   // on its first published page, so an author sees and styles them.
   const pagedList = paginatedList(editor.document.nodes)?.id;
+  // The site's page data limit, which its page routes render under where
+  // they set none of their own: the canvas draws under it too, so a block
+  // past it comes up empty here as on the live page.
+  const pageDataLimit = readPageDataLimit(clientConfig);
   // While the conditions are applied, the lists read as a visitor of the
   // document, and those a visitor sees fewer entries of say so.
   const canvasContext = useCanvasPageContext(
@@ -385,7 +400,8 @@ function useCanvasRender({
     initialDocument,
     pagedList,
     editor.listsStillShowing,
-    asVisitor
+    asVisitor,
+    pageDataLimit
   );
   const pageInputs = useMemo(
     () =>
@@ -441,7 +457,7 @@ function useCanvasRender({
     [canvasRender.styleContext, stylePolicy]
   );
 
-  return { canvasRender, classSummaryContext };
+  return { canvasRender, classSummaryContext, pageDataLimit };
 }
 
 /** What `useCanvasViewport` returns. */
@@ -457,13 +473,61 @@ type CanvasViewport = {
   appliedScale: number;
   setAppliedScale: Dispatch<SetStateAction<number>>;
   editedBreakpoint: string;
+  /** The width the device being edited is laid out at. */
+  deviceWidth: number;
+  /**
+   * The width previewed in place of the device's own, `null` at the device's
+   * own. Session state: never stored, and gone with a device choice.
+   */
+  previewWidth: number | null;
+  /** Previews another width, or the device's own with `null`. */
+  setPreviewWidth: (width: number | null) => void;
   /** The width the canvas frame lays the page out at. */
   frameWidth: number;
   liveBreakpoints: string[];
 };
 
-/** The device being edited, the width it is shown at, and the zoom. */
-function useCanvasViewport({
+/**
+ * A width the author previews the page at in place of the device's own, from
+ * the frame's handles or the width typed beside the device buttons.
+ *
+ * Session state, never stored, and kept with the device it was set on, so it
+ * is the device's own width again once another device is edited, whether
+ * chosen here or reported by the shell, and going back to the first device
+ * shows its own width too. It goes too once it is wider than the widest a
+ * preview reaches, `widest`, as when the site's breakpoints change under it.
+ * A page switch or a reload mounts the editor afresh, without it.
+ */
+function usePreviewWidth(
+  editedBreakpoint: string,
+  widest: number
+): {
+  previewWidth: number | null;
+  setPreviewWidth: (width: number | null) => void;
+} {
+  const [preview, setPreview] = useState<{
+    width: number;
+    device: string;
+  } | null>(null);
+  const kept =
+    preview?.device === editedBreakpoint && preview.width <= widest
+      ? preview
+      : null;
+  if (preview !== null && kept === null) setPreview(null);
+  const setPreviewWidth = useCallback(
+    (width: number | null): void => {
+      setPreview(width === null ? null : { width, device: editedBreakpoint });
+    },
+    [editedBreakpoint]
+  );
+  return { previewWidth: kept?.width ?? null, setPreviewWidth };
+}
+
+/**
+ * The device being edited, the width it is shown at, and the zoom. Exported
+ * for its own test.
+ */
+export function useCanvasViewport({
   canvasRender,
   siteStyleCurrent,
 }: Pick<CanvasRender, "canvasRender"> &
@@ -485,7 +549,7 @@ function useCanvasViewport({
   const [deviceRequest, setDeviceRequest] = useState<
     { breakpoint: string | null; count: number } | undefined
   >(undefined);
-  const chooseDevice = useCallback((breakpoint: BreakpointId | null): void => {
+  const requestDevice = useCallback((breakpoint: BreakpointId | null): void => {
     // The base breakpoint is stored as null, its name for "no breakpoint".
     const stored = breakpoint === BASE_BREAKPOINT ? null : breakpoint;
     setDeviceRequest(current => ({
@@ -517,8 +581,8 @@ function useCanvasViewport({
     // Only a device that WAS being edited and is gone now moves.
     if (editingBreakpointOf(before, chosenDevice) !== chosenDevice) return;
     if (editingBreakpointOf(breakpoints, chosenDevice) === chosenDevice) return;
-    chooseDevice(fallbackBreakpoint(before, breakpoints, chosenDevice));
-  }, [breakpoints, siteStyleCurrent, chosenDevice, chooseDevice]);
+    requestDevice(fallbackBreakpoint(before, breakpoints, chosenDevice));
+  }, [breakpoints, siteStyleCurrent, chosenDevice, requestDevice]);
 
   /*
    * Which breakpoint an edit lands in: the device the author chose, and
@@ -533,8 +597,27 @@ function useCanvasViewport({
    * desktop width on a site that declares no viewport breakpoints, where
    * there is no device to simulate and the page is shown as a laptop would.
    */
-  const frameWidth =
+  const deviceWidth =
     previewWidth(breakpoints, editedBreakpoint) ?? DESKTOP_PREVIEW_WIDTH;
+  const { previewWidth: previewedWidth, setPreviewWidth } = usePreviewWidth(
+    editedBreakpoint,
+    // The widest a preview reaches: the Desktop preview width.
+    previewWidth(breakpoints, BASE_BREAKPOINT) ?? DESKTOP_PREVIEW_WIDTH
+  );
+  const chooseDevice = useCallback(
+    (breakpoint: BreakpointId | null): void => {
+      // A device pressed shows its own width, even the device being edited.
+      setPreviewWidth(null);
+      requestDevice(breakpoint);
+    },
+    [setPreviewWidth, requestDevice]
+  );
+  /*
+   * The width the frame lays the page out at: the previewed width while
+   * there is one, else the device's own. Only the layout follows it: the
+   * edits still go to `editedBreakpoint`.
+   */
+  const frameWidth = previewedWidth ?? deviceWidth;
 
   /*
    * The zoom the SHELL owns, mirrored here only to draw the canvas with it,
@@ -547,7 +630,8 @@ function useCanvasViewport({
   /*
    * Which breakpoints apply on the canvas: those at the frame's width, which
    * is the width of the frame's viewport and so the width every media query
-   * in it answers for.
+   * in it answers for. A previewed width counts, so a Desktop value Tablet
+   * overrides at 900px reads as overridden, as on screen.
    */
   const liveBreakpoints = useMemo(
     () => breakpointsAtWidth(breakpoints, frameWidth),
@@ -563,6 +647,9 @@ function useCanvasViewport({
     appliedScale,
     setAppliedScale,
     editedBreakpoint,
+    deviceWidth,
+    previewWidth: previewedWidth,
+    setPreviewWidth,
     frameWidth,
     liveBreakpoints,
   };
@@ -1040,7 +1127,12 @@ export function useBoundCanvasRender(
   },
   locale: string | undefined,
   /** Whether the document is a component's own, which has no entry. */
-  component: boolean
+  component: boolean,
+  /**
+   * The site's page data limit, which the bindings are read under as the
+   * published page reads them: `Infinity` for none, the default when absent.
+   */
+  pageDataLimit?: number
 ): {
   /**
    * The canvas's render inputs with the sources its bindings read, the
@@ -1112,7 +1204,8 @@ export function useBoundCanvasRender(
     locale,
     component,
     canvasRender.context?.namedQueries,
-    conditions
+    conditions,
+    pageDataLimit
   );
   const bound = useMemo(
     () => ({ ...canvasRender, bindings }),

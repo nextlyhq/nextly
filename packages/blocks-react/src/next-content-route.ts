@@ -16,6 +16,7 @@ import {
   createContentRoute,
   createPublicContentRoute,
   deferToRequest,
+  isDraftModeRequest,
   isReadRefusal,
   nextlyTags,
   releaseBoundedRevalidate,
@@ -42,6 +43,7 @@ import type { ReactElement } from "react";
 
 import { blocksRouteConfig, perRequestNotFound } from "./next-blocks-route";
 import { linkLanguageOf } from "./next-entry-paths";
+import { FORM_DOCUMENT_KEY } from "./next-forms";
 import type {
   BlocksPageConfig,
   ContentAddressHolder,
@@ -128,6 +130,16 @@ async function contentRedirect(path: string): Promise<never> {
   return permanentRedirect(path);
 }
 
+/**
+ * The site's handler a content route answers its misses with: the route's
+ * own, else its pages route's.
+ */
+export function contentMissHandler(
+  config: ContentPageConfig
+): ContentPageConfig["notFound"] {
+  return config.notFound ?? config.pages.notFound;
+}
+
 export function buildContentRoute(
   config: ContentPageConfig,
   isPublic: boolean
@@ -138,10 +150,7 @@ export function buildContentRoute(
    * How the route answers a miss: the site's handler, where it passed one
    * and the route answers misses per request.
    */
-  const notFound = perRequestNotFound(
-    config.notFound ?? config.pages.notFound,
-    isPublic
-  );
+  const notFound = perRequestNotFound(contentMissHandler(config), isPublic);
   /**
    * The tags a cached read of the address store carries: every collection
    * whose writes change who holds an address (the pages', the templates', and
@@ -368,6 +377,10 @@ export function buildContentRoute(
     const decision = pages.draft;
     if (decision === undefined || decision === false) return false;
     if (decision === true) return true;
+    // The public route asks its gate only on a draft-mode request, as the
+    // pages route under it does, so an ordinary visit reads no cookie and its
+    // answer stays static and cached.
+    if (isPublic && !(await isDraftModeRequest())) return false;
     for (const collection of pageCollections) {
       const grant = await decision({
         collection,
@@ -486,7 +499,6 @@ export function buildContentRoute(
     });
     if (entry === null) return null;
     const route = entryRouteOf(holder.collection);
-    const drawn = { ...entry, [TEMPLATE_DOCUMENT_KEY]: template.document };
     // A later page's lookup was answered with the entry's space; its own
     // address, and the first page's second spelling, ask the store.
     const paged =
@@ -495,6 +507,22 @@ export function buildContentRoute(
     // The entry's own address in the request's language, which its list's
     // later pages extend.
     const first = await servedAddress(pathOf(place.segments), language);
+    const drawn = {
+      ...entry,
+      [TEMPLATE_DOCUMENT_KEY]: template.document,
+      // The entry drawn by its design: a form on the design, or in the
+      // entry's own blocks the design draws, posts naming the entry, which
+      // the receiver draws as this page does.
+      [FORM_DOCUMENT_KEY]: {
+        collection: holder.collection,
+        id: holder.id,
+        field: "",
+        design: true,
+        // The entry's own address as this route serves it, its mount
+        // included, which a visitor sending a form comes back to.
+        returnTo: first,
+      },
+    };
     // The addresses of the entry's list pages, as this route serves them, so
     // the list's links name exactly the pages the store gives the entry, and
     // none while it gives the entry none: the list is then drawn unpaged.

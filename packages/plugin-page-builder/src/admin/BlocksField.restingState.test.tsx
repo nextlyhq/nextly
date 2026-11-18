@@ -33,18 +33,49 @@ import {
   type BlockDocument,
 } from "@nextlyhq/blocks-engine";
 import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import * as React from "react";
 import { useForm } from "react-hook-form";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { OPEN_BUILDER_ACTION } from "./PageBuilderCard";
+import {
+  OPEN_BUILDER_LABEL,
+  SAVE_AND_OPEN_LABEL,
+  SAVE_DRAFT_AND_OPEN_LABEL,
+} from "./PageBuilderCard";
 
 /** Where the builder opens for this file's field: a saved page's `body`. */
 const BUILDER_HREF = "/admin/collections/pages/p1/builder?field=body";
 
 /** Each address the card moved to through the admin's own navigation. */
 const navigated: string[] = [];
+
+/** A saved page around the field, as most cases draw it. */
+const SAVED_PAGE = {
+  kind: "collection" as const,
+  slug: "pages",
+  documentId: "p1",
+};
+/** The document the form holds; a case drawing a new entry drops its id. */
+let identity: {
+  kind: "collection";
+  slug: string;
+  documentId?: string;
+} = SAVED_PAGE;
+
+/** What a document's actions answer a field; none outside a form. */
+interface ActionsStub {
+  actions: { id: string }[];
+  run: (id: string) => Promise<unknown>;
+  saveWithoutPublishing?: () => Promise<unknown>;
+}
+let documentActions: ActionsStub | null = null;
 
 /** What the stored-style read answers with for the test in hand. */
 let siteStyleRead: { data: unknown; isPending: boolean; error: Error | null } =
@@ -95,11 +126,7 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   usePluginClientConfig: () => undefined,
   // A saved page around the field, so the card has the builder's address to
   // link to; outside a document, or before a first save, it has none.
-  useDocumentIdentity: () => ({
-    kind: "collection",
-    slug: "pages",
-    documentId: "p1",
-  }),
+  useDocumentIdentity: () => identity,
   // The field's address as the admin gives it outside repeaters: its form
   // path. No case here draws a field inside a repeater's row.
   useFieldAddress: (_control: unknown, path: string) => ({ address: path }),
@@ -140,9 +167,9 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   useSuppressAdminChrome: () => {},
   useBeforeDocumentAction: () => {},
   // The header's controls the bar places; drawn by the admin, not here.
-  DocumentSaveIndicator: () => null,
-  DocumentPrimaryAction: () => null,
-  useDocumentActions: () => null,
+  DocumentSaveAndPublish: () => null,
+  useDocumentLifeStage: () => null,
+  useDocumentActions: () => documentActions,
   useDocumentStatus: () => null,
   useUpdateSingleDocument: () => ({
     mutateAsync: async () => ({ success: true }),
@@ -181,7 +208,19 @@ const MINIATURE = '[data-slot="page-miniature-surface"]';
 // The preview's part of the entry view. The section list beneath it names each
 // section by its first line, so "is the page's text on screen" has to be asked
 // of the preview alone to say anything about whether the page was drawn.
-const PREVIEW = '[data-slot="page-entry-preview"]';
+const PREVIEW = '[data-slot="page-builder-card"]';
+
+/**
+ * What the card shows: its text, leaving out the folded section list, which
+ * names each section by its first line and is in the page, hidden, until the
+ * fold is opened.
+ */
+function shownText(card: Element | null): string {
+  if (card === null) return "";
+  const shown = card.cloneNode(true) as Element;
+  for (const hidden of shown.querySelectorAll("[hidden]")) hidden.remove();
+  return shown.textContent ?? "";
+}
 
 function drawn(container: HTMLElement): string {
   return container.querySelector(MINIATURE)?.textContent ?? "";
@@ -316,7 +355,7 @@ describe("the entry form at rest", () => {
     const { container } = render(<Host />);
 
     expect(container.querySelector(MINIATURE)).toBeNull();
-    expect(container.querySelector(PREVIEW)?.textContent).not.toContain(
+    expect(shownText(container.querySelector(PREVIEW))).not.toContain(
       PAGE_TEXT
     );
   });
@@ -326,7 +365,7 @@ describe("the entry form at rest", () => {
 
     const { container } = render(<Host />);
 
-    expect(container.textContent).toContain("1 section");
+    expect(container.textContent).toContain("Sections (1)");
   });
 
   /*
@@ -347,7 +386,7 @@ describe("the entry form at rest", () => {
     const { container } = render(<Host />);
 
     expect(container.querySelector(MINIATURE)).toBeNull();
-    expect(container.querySelector(PREVIEW)?.textContent).not.toContain(
+    expect(shownText(container.querySelector(PREVIEW))).not.toContain(
       PAGE_TEXT
     );
   });
@@ -365,7 +404,7 @@ describe("the entry form at rest", () => {
     // disabled action with a reason beside it is also a control on the card.
     expect(
       screen
-        .getByRole("link", { name: OPEN_BUILDER_ACTION })
+        .getByRole("link", { name: OPEN_BUILDER_LABEL })
         .getAttribute("href")
     ).toBe(BUILDER_HREF);
   });
@@ -373,7 +412,7 @@ describe("the entry form at rest", () => {
   it("moves to the builder within the admin on a plain click", () => {
     render(<Host />);
 
-    fireEvent.click(screen.getByRole("link", { name: OPEN_BUILDER_ACTION }), {
+    fireEvent.click(screen.getByRole("link", { name: OPEN_BUILDER_LABEL }), {
       button: 0,
     });
 
@@ -387,11 +426,9 @@ describe("the entry form at rest", () => {
 
     // Neither the link nor a disabled stand-in for it: there is nothing for
     // this author to open.
+    expect(screen.queryByRole("link", { name: OPEN_BUILDER_LABEL })).toBeNull();
     expect(
-      screen.queryByRole("link", { name: OPEN_BUILDER_ACTION })
-    ).toBeNull();
-    expect(
-      screen.queryByRole("button", { name: OPEN_BUILDER_ACTION })
+      screen.queryByRole("button", { name: OPEN_BUILDER_LABEL })
     ).toBeNull();
   });
 
@@ -399,5 +436,166 @@ describe("the entry form at rest", () => {
     const { container } = render(<Host readOnly />);
 
     expect(container.querySelector(MINIATURE)).not.toBeNull();
+  });
+});
+
+describe("the entry form on an entry never saved", () => {
+  const NEW_PAGE = { kind: "collection" as const, slug: "pages" };
+
+  beforeEach(() => {
+    identity = NEW_PAGE;
+  });
+
+  afterEach(() => {
+    identity = SAVED_PAGE;
+    documentActions = null;
+  });
+
+  /** The form drawn again at the saved entry's own address. */
+  function drawnAgainAt(documentId: string): void {
+    cleanup();
+    identity = { ...NEW_PAGE, documentId };
+    render(<Host />);
+  }
+
+  it("saves the draft with the form's own save, then opens the builder at the new entry", async () => {
+    const save = vi.fn(async () => ({ ok: true, item: { id: "p9" } }));
+    documentActions = {
+      actions: [{ id: "save" }],
+      run: vi.fn(),
+      saveWithoutPublishing: save,
+    };
+    render(<Host />);
+
+    const action = screen.getByRole("button", {
+      name: SAVE_DRAFT_AND_OPEN_LABEL,
+    }) as HTMLButtonElement;
+    expect(action.disabled).toBe(false);
+    fireEvent.click(action);
+    await waitFor(() => expect(action.disabled).toBe(false));
+
+    expect(save).toHaveBeenCalledTimes(1);
+    // Not from the create screen, which moves to the entry's address itself.
+    expect(navigated).toEqual([]);
+
+    drawnAgainAt("p9");
+    expect(navigated).toEqual([
+      "/admin/collections/pages/p9/builder?field=body",
+    ]);
+  });
+
+  it("leaves the author on the form when the form's rules refuse the save", async () => {
+    const save = vi.fn(async () => ({
+      ok: false,
+      reason: "invalid",
+      message: "Title is required.",
+    }));
+    documentActions = {
+      actions: [{ id: "save" }],
+      run: vi.fn(),
+      saveWithoutPublishing: save,
+    };
+    render(<Host />);
+
+    const action = screen.getByRole("button", {
+      name: SAVE_DRAFT_AND_OPEN_LABEL,
+    }) as HTMLButtonElement;
+    fireEvent.click(action);
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(action.disabled).toBe(false));
+
+    // Still offered, and nothing waits to open: a later save of some other
+    // entry does not carry the author off to the builder.
+    expect(navigated).toEqual([]);
+    drawnAgainAt("p9");
+    expect(navigated).toEqual([]);
+  });
+
+  it("runs the one Save where the collection keeps no drafts, worded for it", async () => {
+    const run = vi.fn(async () => ({ ok: true, item: { id: "t3" } }));
+    documentActions = { actions: [{ id: "save" }], run };
+    render(<Host />);
+
+    const action = screen.getByRole("button", {
+      name: SAVE_AND_OPEN_LABEL,
+    }) as HTMLButtonElement;
+    fireEvent.click(action);
+    await waitFor(() => expect(run).toHaveBeenCalledWith("save"));
+    await waitFor(() => expect(action.disabled).toBe(false));
+
+    drawnAgainAt("t3");
+    expect(navigated).toEqual([
+      "/admin/collections/pages/t3/builder?field=body",
+    ]);
+  });
+
+  it.each([
+    ["a form that offers no save", { actions: [], run: vi.fn() }],
+    // A quick create inside another document's form: that document's actions
+    // are not this one's, and the editor answers none.
+    ["an editor with no actions of its own", null],
+  ])("offers no save in %s, and says when it opens", (_, actions) => {
+    documentActions = actions;
+    render(<Host />);
+
+    expect(
+      screen.queryByRole("button", { name: SAVE_DRAFT_AND_OPEN_LABEL })
+    ).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: SAVE_AND_OPEN_LABEL })
+    ).toBeNull();
+    expect(
+      (
+        screen.getByRole("button", {
+          name: OPEN_BUILDER_LABEL,
+        }) as HTMLButtonElement
+      ).disabled
+    ).toBe(true);
+    expect(
+      screen.getByText("Opens in the builder once this entry is saved.")
+    ).toBeDefined();
+  });
+
+  it("says why a save was refused where nothing else on screen does", async () => {
+    const save = vi.fn(async () => ({
+      ok: false,
+      reason: "busy",
+      message: "Another save is still running.",
+    }));
+    documentActions = {
+      actions: [{ id: "save" }],
+      run: vi.fn(),
+      saveWithoutPublishing: save,
+    };
+    render(<Host />);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: SAVE_DRAFT_AND_OPEN_LABEL })
+    );
+    expect(
+      await screen.findByText("Another save is still running.")
+    ).toBeDefined();
+  });
+
+  it("leaves the form's own validation errors to the form", async () => {
+    const save = vi.fn(async () => ({
+      ok: false,
+      reason: "invalid",
+      message: "Please fix the errors.",
+    }));
+    documentActions = {
+      actions: [{ id: "save" }],
+      run: vi.fn(),
+      saveWithoutPublishing: save,
+    };
+    render(<Host />);
+
+    const action = screen.getByRole("button", {
+      name: SAVE_DRAFT_AND_OPEN_LABEL,
+    }) as HTMLButtonElement;
+    fireEvent.click(action);
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(action.disabled).toBe(false));
+    expect(screen.queryByText("Please fix the errors.")).toBeNull();
   });
 });

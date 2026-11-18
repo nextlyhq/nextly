@@ -110,6 +110,10 @@ vi.mock("./site-style-read", () => ({
 }));
 
 vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
+  // Where the page opens and the pin's id, which the top bar reads; no
+  // collection is named here, so the exit goes to the form.
+  useDocumentOpensIn: () => null,
+  PIN_TO_DASHBOARD_ACTION: "pin-to-dashboard",
   // The canvas's media read, answering nothing: these cases draw no image.
   // One function for every call, as the admin's own hook keeps it.
   useMediaResolver: (
@@ -126,6 +130,9 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   WEB_FONT_FORMATS: (await import("nextly/config")).WEB_FONT_FORMATS,
   // The media library, drawn as nothing: these cases never open it.
   MediaPickerDialog: () => null,
+  // The media library's upload, which an Image's empty state offers: these
+  // cases upload nothing.
+  useUploadMedia: () => ({ mutateAsync: () => new Promise<never>(() => {}) }),
   loadInlineRichTextEditor: () => new Promise<never>(() => {}),
   usePluginClientConfig: () => ({}),
   // No document around the field: the state every case here was written
@@ -146,7 +153,7 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   // mock that omitted it would fail the import rather than the assertion.
   usePluginRouteMutation: () => ({
     write: async () => ({
-      message: "Pattern created.",
+      message: "Saved section created.",
       item: { id: "p1" },
       ...(saveWarnings.length === 0 ? {} : { warnings: saveWarnings }),
     }),
@@ -162,8 +169,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   useTrackedWrite: () => () => {},
   useBeforeDocumentAction: () => {},
   // The header's controls the bar places; drawn by the admin, not here.
-  DocumentSaveIndicator: () => null,
-  DocumentPrimaryAction: () => null,
+  DocumentSaveAndPublish: () => null,
+  useDocumentLifeStage: () => null,
   useDocumentActions: () => null,
   // No preview here: the top bar's Preview draws nothing.
   useDocumentPreview: () => null,
@@ -255,7 +262,7 @@ describe("reaching the save-as-pattern form", () => {
     });
 
     expect(
-      screen.getByRole("heading", { name: /save as pattern/i })
+      screen.getByRole("heading", { name: /save as section/i })
     ).toBeTruthy();
   });
 
@@ -271,7 +278,7 @@ describe("reaching the save-as-pattern form", () => {
     fireEvent.click(screen.getByRole("button", { name: /cancel/i }));
 
     expect(
-      screen.queryByRole("heading", { name: /save as pattern/i })
+      screen.queryByRole("heading", { name: /save as section/i })
     ).toBeNull();
   });
 });
@@ -286,10 +293,10 @@ describe("a save that committed and then partly failed", () => {
       target: { value: name },
     });
     fireEvent.click(screen.getByRole("radio", { name: "Section" }));
-    fireEvent.click(screen.getByRole("button", { name: /save pattern/i }));
+    fireEvent.click(screen.getByRole("button", { name: /save section/i }));
     await vi.waitFor(() =>
       expect(
-        screen.queryByRole("heading", { name: /save as pattern/i })
+        screen.queryByRole("heading", { name: /save as section/i })
       ).toBeNull()
     );
   }
@@ -336,6 +343,8 @@ describe("a save that committed and then partly failed", () => {
 
     await saveAs("Hero");
 
-    expect(reported).toEqual([{ message: "Pattern saved", warnings: [] }]);
+    expect(reported).toEqual([
+      { message: "Saved to Saved sections", warnings: [] },
+    ]);
   });
 });

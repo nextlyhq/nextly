@@ -19,6 +19,7 @@ import {
 } from "drizzle-orm/mysql-core";
 
 import type { ContentEventActorKind, ContentEventSubjectKind } from "./types";
+import { CONTENT_EVENT_ACTOR_PRINCIPAL_KIND_LENGTH } from "./widths";
 
 export const nextlyContentEventsMysql = mysqlTable(
   "nextly_content_events",
@@ -42,7 +43,9 @@ export const nextlyContentEventsMysql = mysqlTable(
       .$type<ContentEventActorKind>()
       .notNull(),
     actorId: varchar("actor_id", { length: 255 }),
-    actorPrincipalKind: varchar("actor_principal_kind", { length: 64 }),
+    actorPrincipalKind: varchar("actor_principal_kind", {
+      length: CONTENT_EVENT_ACTOR_PRINCIPAL_KIND_LENGTH,
+    }),
     actorName: varchar("actor_name", { length: 255 }),
 
     occurredAt: datetime("occurred_at", { fsp: 3 }).notNull(),

@@ -17,6 +17,7 @@ import {
   renameAnswers,
   type DraftRename,
 } from "@admin/lib/builder/rename-answers";
+import type { SettingChange } from "@admin/lib/builder/settings-changes";
 import type {
   FieldResolution,
   SchemaPreviewResponse,
@@ -25,8 +26,10 @@ import type {
 
 import type { BuilderKind } from "./builder-config";
 import { CreateEntityConfirmDialog } from "./CreateEntityConfirmDialog";
+import type { FieldGroupCreate } from "./FieldGroupCreatesList";
 import { SafeChangeConfirmDialog } from "./SafeChangeConfirmDialog";
 import { SchemaChangeDialog } from "./SchemaChangeDialog";
+import { SettingsChangeConfirmDialog } from "./SettingsChangeConfirmDialog";
 import type { SchemaChangeConfirmation } from "./types";
 
 type Props = {
@@ -51,12 +54,21 @@ type Props = {
   creating?: boolean;
   /** The saved fields the draft renamed, which the save answers as renames itself. */
   draftRenames?: readonly DraftRename[];
+  /** The entity's settings the save changes, each reviewed with it. */
+  settingChanges?: readonly SettingChange[];
+  /**
+   * The field groups not saved yet that the save creates before the entity:
+   * every review lists them first.
+   */
+  fieldGroupCreates?: readonly FieldGroupCreate[];
 };
 
 /**
  * Whether a preview can be applied without asking the user to resolve
  * anything: additive, with no rename the server wants a decision on, no
- * field leaving or joining translation, and no field removed. The short
+ * field leaving or joining translation, no field removed, and nothing
+ * brought up to date in a table an earlier version made (a conversion the
+ * save writes only once the full dialog has listed it and Save confirmed it). The short
  * confirmation says the change does not affect existing data, which is untrue
  * when a field's other languages move to the archive, when a field's values
  * become the default language's, and when a field is removed:
@@ -69,7 +81,8 @@ export function isSafeChange(preview: SchemaPreviewResponse): boolean {
     preview.changes.removed.length === 0 &&
     !(preview.renamed && preview.renamed.length > 0) &&
     !(preview.leavingTranslation && preview.leavingTranslation.length > 0) &&
-    !(preview.joiningTranslation && preview.joiningTranslation.length > 0)
+    !(preview.joiningTranslation && preview.joiningTranslation.length > 0) &&
+    !(preview.conversions && preview.conversions.length > 0)
   );
 }
 
@@ -80,6 +93,8 @@ export function BuilderSchemaChangeDialogs({
   onConfirm,
   creating = false,
   draftRenames = [],
+  settingChanges = [],
+  fieldGroupCreates = [],
 }: Props): JSX.Element | null {
   const {
     preview: previewed,
@@ -91,8 +106,16 @@ export function BuilderSchemaChangeDialogs({
 
   if (!previewed) return null;
   // The Builder's own renames are decided, not asked: shown as renames whose values are kept.
-  const decided = renameAnswers(draftRenames, previewed.renamed ?? []).decided;
-  const preview = previewWithDecidedRenames(previewed, decided);
+  const { decided, sameColumn } = renameAnswers(
+    draftRenames,
+    previewed.renamed ?? []
+  );
+  const preview = previewWithDecidedRenames(previewed, decided, sameColumn);
+  // Each rename the save keeps, by its columns, and one that keeps its column by its names.
+  const keptRenames = [
+    ...decided,
+    ...sameColumn.map(r => ({ from: r.previousName, to: r.name })),
+  ];
 
   if (creating) {
     return (
@@ -103,13 +126,36 @@ export function BuilderSchemaChangeDialogs({
         kind={kind}
         entityName={entityName}
         changes={preview.changes}
+        fieldGroupCreates={fieldGroupCreates}
+        settingChanges={settingChanges}
         onConfirm={() => onConfirm({}, [])}
         isApplying={isApplying}
       />
     );
   }
 
-  if (isSafeChange(preview) && decided.length === 0) {
+  // No field changes, only settings or field groups to create: reviewed as
+  // such, saved without a migration or a restart.
+  if (
+    !preview.hasChanges &&
+    (settingChanges.length > 0 || fieldGroupCreates.length > 0)
+  ) {
+    return (
+      <SettingsChangeConfirmDialog
+        key={previewId}
+        open={isOpen}
+        onOpenChange={setOpen}
+        kind={kind}
+        entityName={entityName}
+        settingChanges={settingChanges}
+        fieldGroupCreates={fieldGroupCreates}
+        onConfirm={() => onConfirm({}, [])}
+        isApplying={isApplying}
+      />
+    );
+  }
+
+  if (isSafeChange(preview) && keptRenames.length === 0) {
     return (
       <SafeChangeConfirmDialog
         key={previewId}
@@ -118,6 +164,8 @@ export function BuilderSchemaChangeDialogs({
         kind={kind}
         entityName={entityName}
         changes={preview.changes}
+        settingChanges={settingChanges}
+        fieldGroupCreates={fieldGroupCreates}
         onConfirm={() => onConfirm({}, [])}
         isApplying={isApplying}
       />
@@ -135,11 +183,14 @@ export function BuilderSchemaChangeDialogs({
       classification={preview.classification}
       changes={preview.changes}
       renamed={preview.renamed}
-      decidedRenames={decided}
+      decidedRenames={keptRenames}
       warnings={preview.warnings}
       interactiveFields={preview.interactiveFields}
       leavingTranslation={preview.leavingTranslation}
       joiningTranslation={preview.joiningTranslation}
+      conversions={preview.conversions}
+      settingChanges={settingChanges}
+      fieldGroupCreates={fieldGroupCreates}
       onConfirm={onConfirm}
       isApplying={isApplying}
     />

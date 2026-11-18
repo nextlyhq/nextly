@@ -103,6 +103,8 @@ export async function find<TSlug extends CollectionSlug>(
     // i18n M4: forward the content locale + fallback so localized fields resolve.
     locale: config.locale,
     fallbackLocale: config.fallbackLocale,
+    sourceLocales: args.sourceLocales,
+    translations: args.translations,
     context: config.context,
   });
 
@@ -163,6 +165,9 @@ export async function findByID<TSlug extends CollectionSlug>(
       // i18n M4: forward the content locale + fallback so localized fields resolve.
       locale: config.locale,
       fallbackLocale: config.fallbackLocale,
+      sourceLocales: args.sourceLocales,
+      translations: args.translations,
+      wholeDocumentFallback: args.wholeDocumentFallback,
       context: config.context,
     });
 
@@ -361,6 +366,9 @@ async function moveParts(
         context: config.context,
         disableRevalidate: config.disableRevalidate,
         data: args.data,
+        ...(args.withoutReview === undefined
+          ? {}
+          : { withoutReview: args.withoutReview }),
       },
       {
         direction,

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * Removing a breakpoint in Settings' Site tab, through the real breakpoint
+ * Removing a breakpoint in Site settings, through the real breakpoint
  * editor: the dry run first, the confirmation and its Back, the confirmed
  * save, a removal followed to done or to what it left, a refusal and its
  * Reload, and a removal Settings finds still going when it opens.
@@ -106,7 +106,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   },
 }));
 
-const { SettingsDialog } = await import("./settings-dialog");
+const { SiteSettingsDialog } = await import("./settings-site");
+const { usePluginRoute } = await import("@nextlyhq/plugin-sdk/admin");
 const { RemovalStepPanel } = await import("./breakpoint-removal-step");
 const { WATCH_MS } = await import("./use-breakpoint-removal");
 
@@ -175,26 +176,31 @@ const writer = vi.fn(async () => undefined);
 const refresh = vi.fn();
 const onOpenChange = vi.fn();
 
-function show(): void {
-  // Built afresh each time, so a re-render asks the dialog again.
-  const element = () => (
-    <SettingsDialog
+/** Site settings, handed the site's read as Page settings hands it. */
+function SiteHost(): React.JSX.Element {
+  const site = usePluginRoute<SiteSettingsRead>({
+    plugin: "@nextlyhq/plugin-page-builder",
+    path: "/site/settings",
+  });
+  return (
+    <SiteSettingsDialog
       open
       onOpenChange={onOpenChange}
-      returnFocus={() => null}
-      pageFields={null}
-      share={{ title: "Home" }}
-      seoFields
+      site={site}
       breakpoints={{ value: SET, onSave: writer, status: "ready", refresh }}
     />
   );
+}
+
+function show(): void {
+  // Built afresh each time, so a re-render asks the dialog again.
+  const element = () => <SiteHost />;
   const { rerender } = render(element());
   reshow = () => rerender(element());
 }
 
 /** Open the Site tab and remove Mobile in the editor, then Save. */
 async function removeMobile(): Promise<void> {
-  await userEvent.click(screen.getByRole("tab", { name: "Site" }));
   await userEvent.click(
     screen.getByRole("button", { name: "Edit breakpoints" })
   );
@@ -279,7 +285,9 @@ describe("removing a breakpoint in Settings", () => {
     // Focus followed the step, rather than falling back to the page.
     expect(stepOf("confirm").parentElement).toBe(document.activeElement);
     // The step has the tab to itself.
-    expect(screen.queryByText("Default Layout")).toBeNull();
+    expect(
+      screen.queryByRole("region", { name: "Site default header & footer" })
+    ).toBeNull();
 
     await userEvent.click(screen.getByRole("button", { name: "Back" }));
     // The editor again, Mobile still removed in the draft, nothing saved.
@@ -316,7 +324,9 @@ describe("removing a breakpoint in Settings", () => {
     expect(
       screen.getByRole("button", { name: "Edit breakpoints" })
     ).toBeTruthy();
-    expect(screen.getByText("Default Layout")).toBeTruthy();
+    expect(
+      screen.getByRole("region", { name: "Site default header & footer" })
+    ).toBeTruthy();
   });
 
   it("follows a removal its save did not finish, and says what it left", async () => {
@@ -475,7 +485,6 @@ describe("removing a breakpoint in Settings", () => {
     carryOnAnswers = [() => new Promise(resolve => (carried = resolve))];
     statusRead = reads([]);
     show();
-    await userEvent.click(screen.getByRole("tab", { name: "Site" }));
     expect(
       screen.getByText("Mobile's styles are still being removed")
     ).toBeTruthy();
@@ -514,7 +523,6 @@ describe("removing a breakpoint in Settings", () => {
       ],
     };
     show();
-    await userEvent.click(screen.getByRole("tab", { name: "Site" }));
     expect(
       screen.getByText(
         "Phone was removed, except from 2 entries it couldn't change"
@@ -540,7 +548,6 @@ describe("removing a breakpoint in Settings", () => {
 
   it("saves a set that drops nothing as it always has, with no dry run", async () => {
     show();
-    await userEvent.click(screen.getByRole("tab", { name: "Site" }));
     await userEvent.click(
       screen.getByRole("button", { name: "Edit breakpoints" })
     );
@@ -678,7 +685,6 @@ describe("removing a breakpoint in Settings", () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     try {
       show();
-      await userEvent.click(screen.getByRole("tab", { name: "Site" }));
       refetch.mockClear();
       // Nothing new: the read is not asked again.
       vi.advanceTimersByTime(WATCH_MS);
@@ -841,7 +847,6 @@ describe("undoing a breakpoint removal in Settings", () => {
 
   /** Open the Site tab, press Undo on the offered removal, and confirm. */
   async function undoMobile(): Promise<void> {
-    await userEvent.click(screen.getByRole("tab", { name: "Site" }));
     await userEvent.click(await screen.findByRole("button", { name: "Undo" }));
     expect(
       await screen.findByRole("heading", { name: "Put Mobile back?" })
@@ -855,7 +860,6 @@ describe("undoing a breakpoint removal in Settings", () => {
     siteRead = { ...siteRead, undoable: OFFERED };
     undoAnswer = undone(true);
     show();
-    await userEvent.click(screen.getByRole("tab", { name: "Site" }));
     // Offered with when it was made and until when it can be undone.
     expect(
       screen.getByText(/You can undo this until 6 December\./)
@@ -1112,7 +1116,6 @@ describe("undoing a breakpoint removal in Settings", () => {
       ],
     };
     show();
-    await userEvent.click(screen.getByRole("tab", { name: "Site" }));
     expect(
       await screen.findByText("Mobile is back, except on 2 live versions")
     ).toBeTruthy();
@@ -1183,7 +1186,6 @@ describe("undoing a breakpoint removal in Settings", () => {
     };
     carryOnAnswers = [() => new Promise(() => undefined)];
     show();
-    await userEvent.click(screen.getByRole("tab", { name: "Site" }));
     expect(
       await screen.findByText("Mobile's styles are still being put back")
     ).toBeTruthy();

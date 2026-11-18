@@ -40,6 +40,8 @@ import {
   readStyleValue,
   styleClearOp,
   styleWriteOp,
+  styleWriteOps,
+  type StyleWriteRequest,
   type StyleAddress,
   type StylePolicy,
 } from "./style-values";
@@ -191,6 +193,23 @@ export function batchStyleWriteOps(
   const shared = batchPolicy(policy);
   return collect(nodes, node =>
     styleWriteOp(node.id, node.styles, address, value, shared)
+  );
+}
+
+/**
+ * The ops that set several addresses, each to its own value, across a
+ * selection: the sides of a margin set together, or two parts of one value.
+ * One op per block, the writes folded into it, so the gesture is one entry in
+ * the history.
+ */
+export function batchStyleWritesOps(
+  nodes: readonly BlockNode[],
+  writes: readonly StyleWriteRequest[],
+  policy?: StylePolicy
+): BatchStyleWrite {
+  const shared = batchPolicy(policy);
+  return collect(nodes, node =>
+    styleWriteOps(node.id, node.styles, writes, shared)
   );
 }
 

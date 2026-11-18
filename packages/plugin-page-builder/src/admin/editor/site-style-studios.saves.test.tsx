@@ -121,8 +121,10 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async importOriginal => ({
   usePluginClientConfig: () => undefined,
 }));
 
-const { FontsPanelWithUpload, TokensStudio, VariablesTab, useClassSurface } =
-  await import("./site-style-studios");
+const { TokensStudio, VariablesTab, useClassSurface } = await import(
+  "./site-style-studios"
+);
+const { FontsPanelWithUpload } = await import("./site-style-fonts");
 
 const brand = {
   name: "color.brand",
@@ -540,5 +542,98 @@ describe("a save stored over someone else's change", () => {
       await panels.fonts?.onRemoveFamily({ key: "inter", family: "Inter" });
     });
     expect(saves.calls[1]?.options?.base).toEqual([lora, inter]);
+  });
+});
+
+describe("a block style action's whole-list write", () => {
+  const text = {
+    id: "look:core/button:text",
+    slug: "button-text",
+    label: "Text",
+    orderIndex: 0,
+    blockType: "core/button",
+    styles: {},
+  } as NamedClass;
+  const ghost = {
+    id: "ghost",
+    slug: "button-ghost",
+    label: "Ghost",
+    orderIndex: 1,
+    blockType: "core/button",
+    styles: {},
+  } as NamedClass;
+
+  it("stores what differs from the site's code, as one place in the history", async () => {
+    // The code supplies Text; hiding it stores only the override.
+    const read = { classes: [text] as NamedClass[] };
+    const { result } = renderHook(() =>
+      useClassSurface(read, false, null, { classes: [text] })
+    );
+    let refused: string | undefined = "not answered";
+    await act(async () => {
+      refused = await result.current.edit(existing => ({
+        classes: existing.map(entry => ({ ...entry, hidden: true as const })),
+      }));
+    });
+    expect(refused).toBeUndefined();
+    expect(saves.calls).toHaveLength(1);
+    expect(saves.calls[0]?.section).toBe("classes");
+    expect(saves.calls[0]?.value).toEqual([{ ...text, hidden: true }]);
+    // Composed against the list it read: nothing stored before.
+    expect(saves.calls[0]?.options?.base).toEqual([]);
+  });
+
+  it("composes against the write queued before it, never the list both started from", async () => {
+    const read = { classes: [ghost] as NamedClass[] };
+    const { result } = renderHook(() =>
+      useClassSurface(read, false, null, undefined)
+    );
+    await act(async () => {
+      await Promise.all([
+        result.current.edit(existing => ({
+          classes: existing.map(entry => ({ ...entry, label: "Soft" })),
+        })),
+        result.current.edit(existing => ({
+          classes: [...existing, { ...ghost, id: "copy", slug: "button-copy" }],
+        })),
+      ]);
+    });
+    expect(saves.calls.map(call => call.value)).toEqual([
+      [{ ...ghost, label: "Soft" }],
+      [
+        { ...ghost, label: "Soft" },
+        { ...ghost, id: "copy", slug: "button-copy" },
+      ],
+    ]);
+  });
+
+  it("answers a plan's refusal without storing, and a refused save in its words", async () => {
+    const read = { classes: [ghost] as NamedClass[] };
+    const { result } = renderHook(() =>
+      useClassSurface(read, false, null, undefined)
+    );
+    let planned: string | undefined;
+    await act(async () => {
+      planned = await result.current.edit(() => ({ reason: "Taken." }));
+    });
+    expect(planned).toBe("Taken.");
+    expect(saves.calls).toHaveLength(0);
+
+    saves.answer = () => ({
+      saved: false,
+      issues: {
+        classes:
+          'classes[0] is a built-in block style, "Text", so it can\'t be renamed.',
+      },
+    });
+    let stored: string | undefined;
+    await act(async () => {
+      stored = await result.current.edit(existing => ({
+        classes: [...existing],
+      }));
+    });
+    expect(stored).toBe(
+      'classes[0] is a built-in block style, "Text", so it can\'t be renamed.'
+    );
   });
 });

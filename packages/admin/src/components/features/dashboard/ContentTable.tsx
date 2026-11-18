@@ -64,10 +64,12 @@ import { useMeasuredWidth } from "@admin/components/shared/preview/useMeasuredWi
 import { Link } from "@admin/components/ui/link";
 import { buildRoute, ROUTES } from "@admin/constants/routes";
 import { formatDateWithAdminTimezone } from "@admin/hooks/useAdminDateFormatter";
+import { countWord, plural } from "@admin/lib/count-words";
 import {
   describeActivityActor,
   formatRelativeTime,
 } from "@admin/lib/dashboard";
+import { useDocumentAddress } from "@admin/lib/navigation/useDocumentAddress";
 import { cn } from "@admin/lib/utils";
 
 /**
@@ -237,10 +239,15 @@ function formAt(tier: SizeTier, bodyWidth: number | null): ContentForm {
     : "table";
 }
 
-/** Where a row's name leads: a collection's list, or a Single's editor. */
-function rowHref(row: ContentRow): string {
+/**
+ * Where a row leads: a collection's list, or the Single, where the admin's one
+ * rule opens it (a Homepage whose main field is a page layout opens in the
+ * Page Builder, as from the sidebar).
+ */
+function useRowHref(row: ContentRow): string {
+  const addressOf = useDocumentAddress();
   return row.kind === "single"
-    ? buildRoute(ROUTES.SINGLE_EDIT, { slug: row.slug })
+    ? addressOf({ kind: "single", slug: row.slug })
     : buildRoute(ROUTES.COLLECTION_ENTRIES, { slug: row.slug });
 }
 
@@ -277,7 +284,8 @@ function DraftCount({
   return (
     <Link
       href={href}
-      aria-label={`${draft} drafts in ${label}`}
+      // "1 draft in Posts", "2 drafts in Posts".
+      aria-label={`${plural(draft, "draft")} in ${label}`}
       // A 24px target however few digits it holds, its figure kept at the cell's right edge.
       className="inline-flex min-h-6 min-w-6 items-center justify-end font-medium text-foreground hover:underline"
     >
@@ -347,9 +355,10 @@ function UpdatedTime({
 
 /**
  * A row's one action: + to a new entry where the reader may create, or a Single's Edit where
- * they may update it and View where they may only read it. Edit and View open the same page,
- * which is read-only for a reader who may not update. In a narrow table each is drawn smaller,
- * the + an icon named for the entry it creates ("Create Post"), so the name keeps its room.
+ * they may update it and View where they may only read it. Edit and View open the Single where
+ * its name does, its form read-only for a reader who may not update. In a narrow table each is
+ * drawn smaller, the + an icon named for the entry it creates ("Create Post"), so the name keeps
+ * its room.
  */
 function RowAction({
   row,
@@ -358,6 +367,9 @@ function RowAction({
   row: ContentRow;
   narrow?: boolean;
 }): JSX.Element | null {
+  // Read before the kind is asked, as a hook must be: a Single's Edit or
+  // View opens it where its name does.
+  const href = useRowHref(row);
   if (row.kind === "single") {
     const verb = row.canUpdate ? "Edit" : "View";
     return (
@@ -367,10 +379,7 @@ function RowAction({
         variant="outline"
         className={narrow ? "h-6 px-2 text-xs" : "h-7"}
       >
-        <Link
-          href={buildRoute(ROUTES.SINGLE_EDIT, { slug: row.slug })}
-          aria-label={`${verb} ${row.label}`}
-        >
+        <Link href={href} aria-label={`${verb} ${row.label}`}>
           {verb}
         </Link>
       </Button>
@@ -406,7 +415,7 @@ function RowName({
 }): JSX.Element {
   return (
     <Link
-      href={rowHref(row)}
+      href={useRowHref(row)}
       className={cn(
         // A 24px line, so the name is a target a finger can hit.
         "block truncate leading-6 hover:underline",
@@ -554,7 +563,7 @@ function rowDetails(row: ContentRow, now: number): ReactNode[] {
   if (row.kind === "single") return ["Single", ...updated];
   const entries = (
     <Fragment key="entries">
-      <Count value={row.count} /> {row.count === 1 ? "entry" : "entries"}
+      <Count value={row.count} /> {countWord(row.count, "entry", "entries")}
     </Fragment>
   );
   const drafts =
@@ -563,7 +572,7 @@ function rowDetails(row: ContentRow, now: number): ReactNode[] {
       : [
           <Fragment key="drafts">
             <DraftCount slug={row.slug} label={row.label} draft={row.draft} />{" "}
-            {row.draft === 1 ? "draft" : "drafts"}
+            {countWord(row.draft, "draft")}
           </Fragment>,
         ];
   return [entries, ...drafts, ...updated];

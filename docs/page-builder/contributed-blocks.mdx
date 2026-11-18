@@ -81,6 +81,16 @@ sees a block registered that way: nothing can name its module before the plugin 
 the component map cannot import it. In development, the first registration of each such
 block logs a warning naming it. Declare it instead.
 
+### Where a clicked block lands
+
+A block is placed from the Add panel by what it already declares, with no field of its
+own. A block in the `"layout"` category that has slots is a layout block: added with a
+container selected, it goes after the container. Any other block is a content block and
+goes inside a selected container that takes it, at the end. A block that holds blocks of
+its own kind, like a list of cards, belongs in its own category rather than `"layout"`,
+so content added with it selected goes inside it. See
+[Where a clicked block lands](/docs/page-builder/editor#where-a-clicked-block-lands).
+
 ## Prop types and their controls
 
 The inspector's Content tab draws one control per prop, from the prop's `type`:
@@ -149,6 +159,55 @@ id. Only collections that a registered block's `relation` prop names can be sear
 this way. The page stores the id, so your block's `render` looks the entry up when it
 draws.
 
+### Where each setting goes
+
+<Callout type="info">
+  The `group`, `section` and `code` hints are **experimental**: their names and
+  shape may change before they are marked stable.
+</Callout>
+
+By default every prop is a setting on the block's Content tab, in a section named after
+the block. Say where a setting belongs with `group` and `section`:
+
+- **`group`** is the tab: `"content"` for what the block says, shows or links to,
+  `"style"` for how it looks, or `"advanced"`. Left out, it's `"content"`.
+- **`section`** is the section inside that tab, in plain words, such as `"Link"` or
+  `"Behaviour"`. Left out, a Content setting is in the section named after the block,
+  and an Advanced one is in "HTML". A Style setting must name one of the Style tab's
+  sections: `icon`, `layout`, `spacing`, `size`, `position`, `typography`,
+  `background`, `border` or `effects`.
+
+```ts
+props: {
+  href: { type: "url", label: "Link to", role: "content", section: "Link" },
+  newTab: { type: "checkbox", label: "Open in a new tab", section: "Link" },
+  as: { type: "select", options: ["div", "section"], group: "advanced" },
+},
+```
+
+The site refuses to start with a block that places a setting where it can't be right,
+and the error names the block and the setting:
+
+- a setting marked `role: "content"`, which is what the block says, outside Content;
+- a `group` other than the three tabs;
+- in Style, a setting that holds text, rich text, media, an upload, an address, a
+  relation, an entry field or a list of items, all of which are content;
+- a Style setting whose `section` isn't one of the Style sections.
+
+`code` says what a setting writes to the page, for an author who reads HTML or CSS: one
+string for the setting, or one per option of a select. A select shows each option's
+code beside its words:
+
+```ts
+as: {
+  type: "select",
+  label: "HTML tag",
+  options: ["div", "section"],
+  optionLabels: { div: "Generic box", section: "Section" },
+  code: { div: "div", section: "section" },
+},
+```
+
 ## Give a block its own inspector
 
 By default a block's inspector is generated from its `props`. To draw your own, name a
@@ -199,10 +258,12 @@ while it draws, the block gets its generated controls instead.
 
 ## Block code inside the editor's canvas
 
-The editor draws blocks in its canvas, which is meant to become a frame of its own. A
-block whose code measures itself, listens to the window, or reads the viewport must use
-the document and window it is drawn in, not the globals: either its own element's
-`ownerDocument` and `defaultView`, or `useBlockEnvironment()`.
+The editor draws blocks in its canvas, a frame of its own laid out at the width of the
+device being previewed. A block whose code measures itself, listens to the window, or
+reads the viewport must use the document and window it is drawn in, not the globals:
+either its own element's `ownerDocument` and `defaultView`, or `useBlockEnvironment()`.
+Inside the frame, `innerWidth` and `matchMedia` answer for the device, and the window
+fires `resize` when the author changes device.
 
 ```tsx
 "use client";
@@ -225,11 +286,12 @@ export function ViewportWidth() {
 }
 ```
 
-In the editor the hook returns the canvas's document and window. On the published site it
-returns the page's own once the block has mounted, and `undefined` while it renders on the
-server, so read it in an effect. A block that reads the globals still renders in both
-places; only its measurements and listeners would target the admin page instead of the
-canvas.
+In the editor the hook returns the frame's document and window once the canvas has
+mounted. On the published site it returns the page's own once the block has mounted, and
+`undefined` while it renders on the server, so read it in an effect keyed on the value, as
+above, and remove every listener the effect adds when it cleans up. A block that reads the
+globals still renders in both places; only its measurements and listeners would target the
+admin page instead of the canvas.
 
 ## Related
 

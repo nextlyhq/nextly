@@ -16,10 +16,16 @@ const group = (name: string, fields: FieldDefinition[]) =>
 describe("moveCandidates", () => {
   it("finds a field moved into a group, and one moved out", () => {
     expect(
-      moveCandidates([text("title"), group("meta", [])], [group("meta", [text("title")])])
+      moveCandidates(
+        [text("title"), group("meta", [])],
+        [group("meta", [text("title")])]
+      )
     ).toEqual([{ from: ["title"], to: ["meta", "title"] }]);
     expect(
-      moveCandidates([group("meta", [text("title")])], [text("title"), group("meta", [])])
+      moveCandidates(
+        [group("meta", [text("title")])],
+        [text("title"), group("meta", [])]
+      )
     ).toEqual([{ from: ["meta", "title"], to: ["title"] }]);
   });
 
@@ -34,7 +40,10 @@ describe("moveCandidates", () => {
 
   it("offers nothing for a field whose type changed, or that stayed where it was", () => {
     expect(
-      moveCandidates([text("title"), group("meta", [])], [group("meta", [text("title", "textarea")])])
+      moveCandidates(
+        [text("title"), group("meta", [])],
+        [group("meta", [text("title", "textarea")])]
+      )
     ).toEqual([]);
     expect(moveCandidates([text("title")], [text("title")])).toEqual([]);
   });
@@ -72,7 +81,10 @@ describe("moveCandidates", () => {
 
   it("takes a renamed group's fields for the rename, not as moves", () => {
     expect(
-      moveCandidates([group("meta", [text("title")])], [group("info", [text("title")])])
+      moveCandidates(
+        [group("meta", [text("title")])],
+        [group("info", [text("title")])]
+      )
     ).toEqual([]);
   });
 });

@@ -332,8 +332,10 @@ describe.each(getConfiguredTestDialects())(
       const rows = await versionsFor(current, "posts");
       expect(rows.map(r => r.versionNo)).toContain(german!.versionNo);
       // The cap still holds for everything that is not protected: the three
-      // newest English saves, plus German's published version.
-      expect(rows).toHaveLength(4);
+      // newest English saves, plus German's published version, plus the
+      // create (v1), the latest publish of the shared part, since German's
+      // publish and every English save changed only their own language.
+      expect(rows.map(r => r.versionNo)).toEqual([1, 2, 5, 6, 7]);
     });
 
     it.each(["draft", "unpublished"])(
@@ -363,6 +365,9 @@ describe.each(getConfiguredTestDialects())(
           ],
           localization,
         });
+        // The comparison asks the document's read gate as its caller, which
+        // looks the caller up: the super-admin it is handed must be stored.
+        await superAdminUser(current, "tester");
         const handler =
           current.getService<CollectionsHandler>("collectionsHandler");
         const save = (locale: string, title: string, id?: string) =>

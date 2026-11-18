@@ -21,6 +21,28 @@ const fields = [
   { name: "body", type: "text", label: "Body" },
   { name: "views", type: "number", label: "Views" },
   { name: "tags", type: "json", label: "Tags" },
+  {
+    name: "seo",
+    type: "group",
+    label: "SEO",
+    fields: [
+      { name: "metaTitle", type: "text" },
+      { name: "keywords", type: "json" },
+    ],
+  },
+  {
+    name: "author",
+    type: "relationship",
+    label: "Author",
+    relationTo: "users",
+  },
+  {
+    name: "related",
+    type: "relationship",
+    label: "Related",
+    relationTo: "posts",
+    hasMany: true,
+  },
 ] as unknown as FieldConfig[];
 
 function input(overrides: Partial<RestorePlanInput> = {}): RestorePlanInput {
@@ -49,11 +71,11 @@ describe("restorePlan", () => {
   it("does not list an empty group the version never held", () => {
     const rows = restorePlan(
       input({
-        snapshot: { title: "New", views: 2, tags: null },
+        snapshot: { title: "New", views: 2, seo: null },
         current: {
           title: "New",
           views: 2,
-          tags: { metaTitle: "", keywords: [] },
+          seo: { metaTitle: "", keywords: [] },
         },
       })
     );
@@ -70,6 +92,55 @@ describe("restorePlan", () => {
     );
 
     expect(names(rows)).toEqual(["tags"]);
+  });
+
+  it("tells a JSON field's distinct empty values apart", () => {
+    for (const [then, now] of [
+      [[], {}],
+      ["", []],
+      ["", {}],
+    ]) {
+      const rows = restorePlan(
+        input({
+          snapshot: { title: "New", tags: then },
+          current: { title: "New", tags: now },
+        })
+      );
+      expect(names(rows)).toEqual(["tags"]);
+    }
+  });
+
+  it("takes a relationship held as its id and as the document it names as the same", () => {
+    const rows = restorePlan(
+      input({
+        snapshot: { title: "New", author: "u1", related: ["p1", "p2"] },
+        current: {
+          title: "New",
+          author: { id: "u1", name: "Ann" },
+          related: [
+            { id: "p1", title: "One" },
+            { id: "p2", title: "Two" },
+          ],
+        },
+      })
+    );
+
+    expect(rows).toEqual([]);
+  });
+
+  it("lists a relationship that names another document", () => {
+    const rows = restorePlan(
+      input({
+        snapshot: { title: "New", author: "u1", related: ["p1", "p2"] },
+        current: {
+          title: "New",
+          author: { id: "u2", name: "Bo" },
+          related: [{ id: "p2" }, { id: "p1" }],
+        },
+      })
+    );
+
+    expect(names(rows)).toEqual(["author", "related"]);
   });
 
   it("marks a field whose unsaved edit the restore replaces", () => {
@@ -101,6 +172,8 @@ describe("restorePlan", () => {
       chosen: false,
       disabled: "read-only",
       reason: "You can't edit this field",
+      // Carried, so the field can be offered again once it may be changed.
+      value: 1,
     });
   });
 

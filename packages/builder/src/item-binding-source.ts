@@ -4,13 +4,12 @@
  * list fed by a named query, that query's rows: a collection's entries, or
  * the fields the query declares for rows of its own.
  *
- * The binding field picker lists the page's entry, its Singles and the site,
- * never a list's item, which is a different entry on every row; yet the
- * inspector still names an item binding's field and judges its Format. Both
- * read the list's items here: a collection's by the fields visitors may read
- * (`LoopCollection.readable`), a named query's own rows by the fields it
- * declares, as a save judges a list's bindings, so a format offered is one
- * the save keeps.
+ * The list's item is the source nearest a block inside a list: the binding
+ * field picker lists its fields first, the inspector names an item binding's
+ * field, and judges its Format. All three read the list's items here: a
+ * collection's by the fields visitors may read (`LoopCollection.readable`), a
+ * named query's own rows by the fields it declares, as a save judges a list's
+ * bindings, so a field offered, and a format, is one the save keeps.
  *
  * @module item-binding-source
  */
@@ -21,8 +20,14 @@ import {
   type Binding,
   type BindingFieldShape,
   type BlockDocument,
+  type BlockNode,
 } from "@nextlyhq/blocks-engine";
 
+import type {
+  BindingFieldChoice,
+  ListSample,
+  ListSampleValue,
+} from "./binding-services";
 import { useLoopCollections } from "./collection-loop-controls";
 import type { ContentServices, LoopCollection } from "./content-controls";
 import { useCustomSources } from "./list-query-controls";
@@ -39,6 +44,13 @@ export interface ItemSource {
   readonly one: string;
   /** Its fields, once the host has listed the collection; none before. */
   readonly fields: readonly ItemField[];
+  /**
+   * The list whose entries the item is, as the document stores it; absent
+   * for an item binding left outside every list.
+   */
+  readonly list?: BlockNode;
+  /** Whether the host is still listing the list's collections. */
+  readonly loading: boolean;
 }
 
 /**
@@ -96,10 +108,103 @@ function listItems(
   };
 }
 
+/** The most lists one block may sit inside, as a document's depth bounds it. */
+const MOST_LISTS = 64;
+
+/**
+ * Every list whose entries `id` is drawn in, innermost first: the list
+ * {@link outerListOf} finds, then the one around it, and so on out.
+ *
+ * @param nodes - the document's nodes
+ * @param id - the block
+ * @returns the lists, nearest first; none outside every list's entries
+ */
+function enclosingLists(nodes: BlockNode[], id: string): readonly BlockNode[] {
+  const lists: BlockNode[] = [];
+  // Bounded: each step moves one list out, and no document is this deep.
+  for (
+    let list = outerListOf(nodes, id);
+    list !== undefined && lists.length < MOST_LISTS;
+    list = outerListOf(nodes, list.id)
+  ) {
+    lists.push(list);
+  }
+  return lists;
+}
+
+/** One list's item, named, from the collections and queries read. */
+function itemOf(
+  list: BlockNode,
+  collections: ReturnType<typeof useLoopCollections>,
+  customs: readonly CustomSource[] | undefined
+): ItemSource {
+  const query = readListQuery(list.props).query;
+  const { found, fields } = listItems(
+    query,
+    collections?.kind === "ready" ? collections.collections : [],
+    customs
+  );
+  const one = (found?.singular ?? found?.label ?? "entry").toLowerCase();
+  return {
+    name: `Each ${one} in the list`,
+    one,
+    fields,
+    list,
+    loading: collections?.kind === "loading",
+  };
+}
+
+/**
+ * The item of every list block `nodeId` sits in, nearest first: none outside
+ * every list's entries. Asks the host for the collections, and for its named
+ * queries, only while `wanted`, and only for a block in a list.
+ *
+ * @param document - the document the block is in
+ * @param nodeId - the block
+ * @param services - the host's reads
+ * @param wanted - whether the items are asked for at all
+ * @returns each list's item source, named, with its fields once read
+ */
+export function useListItems(
+  document: BlockDocument,
+  nodeId: string,
+  services: ContentServices | undefined,
+  wanted: boolean
+): readonly ItemSource[] {
+  // Found in the document first, so a block outside every list asks the
+  // host for nothing.
+  const lists = wanted ? enclosingLists(document.nodes, nodeId) : [];
+  const listed = useLoopCollections(
+    lists.length === 0 ? undefined : services?.listLoopCollections
+  );
+  // The site's named queries only for a list fed by one: a collection's list
+  // has no need of them, and their read is retried while it fails.
+  const named = lists.some(
+    list => readListQuery(list.props).query.namedQuery !== undefined
+  );
+  const customs = useCustomSources(
+    named ? services?.listCustomSources : undefined
+  );
+  return lists.map(list => itemOf(list, listed, customs));
+}
+
+/**
+ * The item of the list block `nodeId` sits in, nearest first, or `undefined`
+ * outside every list's entries: the first of {@link useListItems}.
+ */
+export function useListItem(
+  document: BlockDocument,
+  nodeId: string,
+  services: ContentServices | undefined,
+  wanted: boolean
+): ItemSource | undefined {
+  return useListItems(document, nodeId, services, wanted)[0];
+}
+
 /**
  * The source of an item binding on block `nodeId`, or `undefined` for a
- * binding to another source. Asks the host for the collections, and for its
- * named queries, only for an item binding.
+ * binding to another source: the item of the list it names (`list`), else
+ * of the nearest list, asked for only for an item binding.
  */
 export function useItemSource(
   binding: Binding,
@@ -108,19 +213,69 @@ export function useItemSource(
   services: ContentServices | undefined
 ): ItemSource | undefined {
   const item = binding.source === "item";
-  const listed = useLoopCollections(
-    item ? services?.listLoopCollections : undefined
-  );
-  const customs = useCustomSources(
-    item ? services?.listCustomSources : undefined
-  );
+  const items = useListItems(document, nodeId, services, item);
   if (!item) return undefined;
-  const outer = outerListOf(document.nodes, nodeId);
-  const { found, fields } = listItems(
-    outer === undefined ? undefined : readListQuery(outer.props).query,
-    listed?.kind === "ready" ? listed.collections : [],
-    customs
-  );
-  const one = (found?.singular ?? found?.label ?? "entry").toLowerCase();
-  return { name: `Each ${one} in the list`, one, fields };
+  const named = "list" in binding ? binding.list : undefined;
+  const found =
+    named === undefined
+      ? items[0]
+      : items.find(each => each.list?.id === named);
+  if (found !== undefined) return found;
+  // An item binding outside every list, or naming a list it is not inside,
+  // still names its source, with no fields to name its field from: the save
+  // refuses it there.
+  return {
+    name: "Each entry in the list",
+    one: "entry",
+    fields: [],
+    loading: false,
+  };
+}
+
+/**
+ * A sampled value as a field choice says it: its start as text, a picture's
+ * thumbnail, or that the field holds nothing.
+ */
+function sampled(
+  value: ListSampleValue | undefined,
+  field: ItemField,
+  picture: string | undefined
+): Pick<BindingFieldChoice, "preview" | "thumbnail" | "empty"> {
+  if (picture !== undefined) return { thumbnail: picture };
+  if (value === undefined) return {};
+  // A media item stored by its id: its picture, once read, never the id.
+  if (typeof value === "string") {
+    return field.type === "upload" ? {} : { preview: value };
+  }
+  return "thumbnail" in value
+    ? { thumbnail: value.thumbnail }
+    : { empty: true as const };
+}
+
+/**
+ * A list item's fields as the picker lists them: each one visitors may read
+ * (only those are listed for an item), with its value in the sampled entry
+ * (the one the author clicked, else the first) where the host read one, one
+ * step into a group or a relation.
+ */
+export function itemChoices(
+  fields: readonly ItemField[],
+  sample: ListSample | undefined,
+  parent?: string,
+  /** The pictures the sample names by id, read, by the field's path. */
+  pictures?: ReadonlyMap<string, string>
+): readonly BindingFieldChoice[] {
+  return fields.map(field => {
+    const { fields: inside, ...own } = field;
+    const path = parent === undefined ? field.name : `${parent}.${field.name}`;
+    return {
+      ...own,
+      public: true,
+      ...sampled(sample?.[path], field, pictures?.get(path)),
+      // One step in, as the host lists a source's fields.
+      ...(inside === undefined || parent !== undefined
+        ? {}
+        : { fields: itemChoices(inside, sample, path, pictures) }),
+    };
+  });
 }

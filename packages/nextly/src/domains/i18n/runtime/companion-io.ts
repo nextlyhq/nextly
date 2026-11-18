@@ -17,11 +17,12 @@ import type {
   SupportedDialect,
   TransactionContext,
 } from "@nextlyhq/adapter-drizzle/types";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, getTableColumns, isTable, sql } from "drizzle-orm";
 
 import type { RequestActor } from "../../../auth/request-actor";
 import { isUniqueViolation } from "../../../database/errors";
 import { NextlyError } from "../../../errors/nextly-error";
+import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type { VersionScopeKind } from "../../../schemas/versions/types";
 import { readsOnTransaction } from "../../../shared/lib/read-transaction-scope";
 import type { ColumnSpec } from "../../schema/pipeline/diff/types";
@@ -32,7 +33,10 @@ import {
 import { quoteIdent } from "../../schema/pipeline/sql-templates/identifier-quoting";
 import { restatedColumn } from "../../schema/pipeline/sql-templates/mysql-live-restate";
 import type { ColumnOrigin } from "../../schema/services/field-column-descriptor";
-import { toSnakeCase as toCanonicalSnakeCase } from "../../schema/services/field-column-descriptor";
+import {
+  classifyFieldKind,
+  toSnakeCase as toCanonicalSnakeCase,
+} from "../../schema/services/field-column-descriptor";
 import { languageRevisionTable } from "../../schema/services/runtime-schema-generator";
 import {
   CHANGED_AT_COLUMN,
@@ -84,6 +88,7 @@ interface CompanionFieldLike {
   name: string;
   type: string;
   localized?: boolean;
+  unique?: boolean;
 }
 
 /**
@@ -126,6 +131,61 @@ export interface CompanionSchema {
  */
 function toColumn(name: string): string {
   return toCanonicalSnakeCase(name);
+}
+
+/**
+ * The translatable fields of `fields`, each with its companion column, and
+ * marked where it is unique, so a read never fills it from another language
+ * (`LocalizedFieldRef.unique`). The one mapping every companion schema is
+ * built with.
+ */
+export function localizedFieldRefs(
+  fields: readonly CompanionFieldLike[]
+): LocalizedFieldRef[] {
+  const unique = new Set(
+    fields.filter(field => field.unique === true).map(field => field.name)
+  );
+  // Read off the descriptor every column is built from, as the companion's own column spec reads
+  // it: a field whose storage is JSON, which some databases hand back as text.
+  const json = new Set(
+    fields
+      .filter(
+        field =>
+          classifyFieldKind(field as FieldDefinition, "codeFirst") === "json"
+      )
+      .map(field => field.name)
+  );
+  return resolveLocalizedFieldNames([...fields], true).map(name => ({
+    name,
+    column: toColumn(name),
+    ...(unique.has(name) ? { unique: true } : {}),
+    ...(json.has(name) ? { json: true } : {}),
+  }));
+}
+
+/**
+ * `fields` with each one whose companion column does not store text on this
+ * dialect marked `nonText`, read off the companion table built for them: a
+ * number, a boolean, a date or JSON is never blank text, and comparing such a
+ * column with an empty string fails the query on PostgreSQL and is coerced on
+ * MySQL, where it can read `0` or `false` as blank.
+ */
+export function markNonTextFields(
+  fields: readonly LocalizedFieldRef[],
+  table: unknown
+): LocalizedFieldRef[] {
+  const nonText = new Set(
+    isTable(table)
+      ? Object.values(getTableColumns(table))
+          // Drizzle spells a text column's data type `string` alone; a
+          // decimal is `string numeric`, and every other type names its own.
+          .filter(column => column.dataType !== "string")
+          .map(column => column.name)
+      : []
+  );
+  return fields.map(field =>
+    nonText.has(field.column) ? { ...field, nonText: true } : field
+  );
 }
 
 /**
@@ -184,10 +244,7 @@ function companionSchemaOf(args: {
   dialect: SupportedDialect;
   status?: boolean;
 }): CompanionSchema | null {
-  const localizedFields: LocalizedFieldRef[] = resolveLocalizedFieldNames(
-    args.fields,
-    true
-  ).map(name => ({ name, column: toColumn(name) }));
+  const localizedFields = localizedFieldRefs(args.fields);
   if (localizedFields.length === 0) return null;
 
   const companion = buildCompanionRuntimeTable({
@@ -203,7 +260,7 @@ function companionSchemaOf(args: {
   return {
     table: companion.table,
     companionTableName: companion.companionTableName,
-    localizedFields,
+    localizedFields: markNonTextFields(localizedFields, companion.table),
     hasStatus: args.status === true,
     hasUpdatedAt: true,
   };
@@ -426,11 +483,29 @@ export async function upsertCompanionRow(
   const ph = () =>
     adapter.dialect === "postgresql" ? `$${params.length}` : "?";
 
+  // A date field's value is bound as its column stores it, the UTC wall clock, as every write
+  // through the translation table's model binds it (`fieldColumnDriverValue`). Bound as a bare
+  // `Date`, node-postgres sends the Node process's local wall clock, which a `timestamp` column
+  // keeps; mysql2 is pinned to UTC and SQLite stores epoch seconds, so only PostgreSQL differs.
+  const { fieldColumnDriverValue } = await import(
+    "../../schema/services/runtime-schema-generator"
+  );
+  const bound = (value: unknown): unknown =>
+    adapter.dialect === "postgresql" && value instanceof Date
+      ? fieldColumnDriverValue("postgresql", "timestamp", value)
+      : value;
+
   const allCols = ["_parent", "_locale", ...cols];
   const valuePlaceholders = allCols
     .map(c => {
       params.push(
-        c === "_parent" ? parentId : c === "_locale" ? locale : withChanger[c]
+        c === "_parent"
+          ? parentId
+          : c === "_locale"
+            ? locale
+            : c === COMPANION_UPDATED_AT_COLUMN
+              ? withChanger[c]
+              : bound(withChanger[c])
       );
       return ph();
     })

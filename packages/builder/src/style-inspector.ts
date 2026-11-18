@@ -19,18 +19,22 @@
  * are the `supports` vocabulary block authors declare, so they decide WHICH
  * properties a block has; `inspector-sections.ts` decides where an author
  * finds each one — eight sections, Layout to Effects, every property placed
- * once. A property the table has not met yet still appears, behind "+ More"
- * in its group's section.
+ * once. A property the table has not met yet still appears, as one the author
+ * adds from "Add CSS property".
  *
  * **Every supported property is offered; the common ones show at once.** Each
- * property carries whether it shows without being asked for (`common`), from
- * its tier and the block in hand. The rest wait behind the section's "+ More",
- * which is the panel's to draw. A property holding a value here always shows.
+ * property carries whether it has an effect on the block in hand (`applies`,
+ * the engine's answer, judged by the block's own arrangement, its parent's and
+ * what it renders) and whether it shows without being asked for (`common`):
+ * its tier is common and it applies. The rest are the author's to add from
+ * "Add CSS property", which is the panel's to draw. A property holding a value
+ * here always shows, whether or not it still has an effect.
  *
  * @module style-inspector
  */
 
 import {
+  applies,
   asciiLower,
   BASE_BREAKPOINT,
   breakpointContexts,
@@ -38,10 +42,14 @@ import {
   DISCLOSURE_ICON_PROPERTY,
   getBlock,
   getStyleProperty,
+  locateNode,
+  statePropagatesToAncestors,
   STYLE_CATALOG,
   stylePropertiesForSupports,
   trimCssWhitespace,
+  type AppliesContext,
   type BlockDocument,
+  type BlockNode,
   type BreakpointId,
   type BreakpointSet,
   type NodeStyles,
@@ -51,6 +59,7 @@ import {
   type StyleValue,
 } from "@nextlyhq/blocks-engine";
 
+import type { ParentArrangement } from "./plain-layout";
 import { liveBreakpointsFor } from "./breakpoints";
 import { fieldLabel, selectedNode } from "./inspector";
 import {
@@ -101,8 +110,10 @@ export interface StyleInspectionOptions extends StyleControlOptions {
   readonly breakpoint?: BreakpointId;
   /**
    * Whether the block renders a replaced element (an image, a video, an
-   * embed), which is where the media fit properties show without being asked
-   * for. The canvas knows what a block renders as; the document does not.
+   * embed), which is where the media fit properties have an effect. The canvas
+   * knows what a block renders as; the document does not. `false` counts as
+   * known only where the canvas has been read (the cascade's subject names the
+   * element drawn); before that, every property is treated as applying.
    */
   readonly media?: boolean;
   /**
@@ -163,8 +174,25 @@ export interface InspectedStyleProperty {
    */
   readonly offered: boolean;
   /**
-   * Whether it shows without being asked for: its tier holds for this block,
-   * or it holds a value here. False puts it behind its section's "+ More".
+   * Whether it has an effect on this block, as the engine answers it: true
+   * wherever what the block is could not be read.
+   */
+  readonly applies: boolean;
+  /**
+   * Whether its tier shows it without being asked for while the block is
+   * edited this way, whether or not it applies. False makes it a property the
+   * author adds from "Add CSS property", drawn in "CSS properties" once added
+   * or holding a value.
+   */
+  readonly tierShows: boolean;
+  /**
+   * The engine's answer for each field of an object property that answers
+   * per field (`position`'s `zIndex`), where one does.
+   */
+  readonly fieldApplies?: Readonly<Record<string, boolean>>;
+  /**
+   * Whether it shows without being asked for: its tier holds for this block
+   * and it applies, or it holds a value here.
    */
   readonly common: boolean;
 }
@@ -195,9 +223,15 @@ export interface StyleInspection {
    */
   readonly sections: readonly StyleSection[];
   /**
+   * How the block's parent arranges it at the edited device, which decides
+   * what "Inside its parent" offers; absent where the parent isn't known.
+   */
+  readonly parent?: ParentArrangement;
+  /** The parent's way of laying the block out, beside its arrangement. */
+  readonly parentLayout?: ParentLayout;
+  /**
    * The `object-fit` keyword in force here, lowercased, or `undefined` when
-   * nothing sets one: what decides whether the focal point shows, and what it
-   * says it does.
+   * nothing sets one: what decides what the focal point says it does.
    */
   readonly objectFit?: string | undefined;
 }
@@ -268,10 +302,10 @@ export function inspectStyle(
     breakpoints: options?.breakpoints,
     cascade: options?.cascade,
   };
+  const objectFit = cascadedKeyword(styles, at, "object-fit", "objectFit");
+  const context = appliesContextOf(document, node, styles, at, options);
   const tiers: TierContext = {
-    display: cascadedKeyword(styles, at, "display", "display"),
-    media: options?.media === true,
-    objectFit: cascadedKeyword(styles, at, "object-fit", "objectFit"),
+    replaced: context.replaced,
     // Read as the engine reads the keyword, escapes and all, so the icon a
     // page draws is the one the tier judges.
     disclosureIcon: keywordIdentity(
@@ -287,9 +321,18 @@ export function inspectStyle(
       state,
       breakpoint,
     });
+    const has = applies(property, context);
+    const shows = tierShows(placement.tier, tiers);
+    const fields = fieldAnswers(property, context);
     return {
       placement,
-      row: { ...row, common: row.set || tierShows(placement.tier, tiers) },
+      row: {
+        ...row,
+        applies: has,
+        tierShows: shows,
+        ...(fields === undefined ? {} : { fieldApplies: fields }),
+        common: row.set || (has && shows),
+      },
     };
   });
   const sections: StyleSection[] = [];
@@ -305,13 +348,281 @@ export function inspectStyle(
     }
   }
 
+  const parentLayout = laidOutBy(document, node, at, options, {
+    position: context.position,
+    sized: offered.has("width"),
+  });
   return {
     nodeId: node.id,
     state,
     breakpoint,
     sections,
-    ...(tiers.objectFit === undefined ? {} : { objectFit: tiers.objectFit }),
+    ...(objectFit === undefined ? {} : { objectFit }),
+    ...parentFields(parentLayout),
   };
+}
+
+/**
+ * The engine's answer for each field a catalog property answers for on its
+ * own, or `undefined` where it answers only as a whole.
+ */
+function fieldAnswers(
+  property: string,
+  context: AppliesContext
+): Readonly<Record<string, boolean>> | undefined {
+  const fields = getStyleProperty(property)?.fieldAppliesWhen;
+  if (fields === undefined) return undefined;
+  return Object.fromEntries(
+    Object.keys(fields).map(field => [field, applies(property, context, field)])
+  );
+}
+
+/** Where a property is read: the edited address, and how to read it. */
+interface ReadAt {
+  readonly state: StyleState;
+  readonly breakpoint: BreakpointId;
+  readonly breakpoints: BreakpointSet | undefined;
+  readonly cascade: StyleInspectionOptions["cascade"];
+}
+
+/**
+ * What the block is, for the engine's `applies`: its own display, wrap and
+ * position, its parent's display, and whether it renders a replaced element.
+ *
+ * Through the compiled cascade a keyword nothing sets is known: the CSS
+ * initial value, since nothing else reaches the box. Without one only what
+ * the document stores is known, and a keyword it does not store is left
+ * `undefined`, which the engine reads as "applies": a class or the block's
+ * defaults may set it, and hiding a property wrongly is the worse mistake.
+ */
+function appliesContextOf(
+  document: BlockDocument,
+  node: BlockNode,
+  styles: NodeStyles | undefined,
+  at: ReadAt,
+  options: StyleInspectionOptions | undefined
+): AppliesContext {
+  const known = at.cascade !== undefined;
+  const own = (
+    cssProperty: string,
+    property: string,
+    initial: string,
+    path: readonly string[] = []
+  ) =>
+    cascadedKeyword(styles, at, cssProperty, property, path) ??
+    (known ? initial : undefined);
+  return {
+    display: own("display", "display", IN_FLOW),
+    flexWrap: own("flex-wrap", "flexWrap", "nowrap"),
+    // A position is stored as an object; its type is the keyword in force.
+    position: own("position", "position", "static", ["type"]),
+    parentDisplay: parentDisplayOf(document, node, at, options),
+    // Known not to be media only once the canvas has said what it draws.
+    replaced:
+      options?.media === true
+        ? true
+        : at.cascade?.subject.tag === undefined
+          ? undefined
+          : false,
+  };
+}
+
+/**
+ * How the block's parent lays it out, for a block with a size of its own to
+ * set and in its parent's flow. One that no longer offers a size keeps what
+ * it stores as clear-only rows; one its position takes out of the flow isn't
+ * laid out by its parent at all.
+ */
+function laidOutBy(
+  document: BlockDocument,
+  node: BlockNode,
+  at: ReadAt,
+  options: StyleInspectionOptions | undefined,
+  block: { readonly position: string | undefined; readonly sized: boolean }
+): ParentLayout | undefined {
+  if (!block.sized || OUT_OF_FLOW.has(block.position ?? "")) return undefined;
+  return parentLayoutOf(document, node, at, options);
+}
+
+/** How the parent lays the block out, as the inspection says it. */
+function parentFields(
+  layout: ParentLayout | undefined
+): Pick<StyleInspection, "parent" | "parentLayout"> {
+  return layout === undefined
+    ? {}
+    : { parent: layout.arrangement, parentLayout: layout };
+}
+
+/** The positions that take a block out of its parent's layout. */
+const OUT_OF_FLOW: ReadonlySet<string> = new Set(["absolute", "fixed"]);
+
+/** A display that lays children out in flow, for a box nothing gives one. */
+const IN_FLOW = "block";
+
+/** The document kinds whose top-level blocks sit in the page's own flow. */
+const PAGE_ROOTED: ReadonlySet<string> = new Set(["page", "template"]);
+
+/**
+ * The box that lays this block out: its parent, or past a `display:
+ * contents` parent, the nearest ancestor that draws a box; read as the
+ * keywords in force on it. `inFlow` says a keyword it doesn't set is known to
+ * be the initial one (the cascade reached it), rather than unknown.
+ */
+interface ParentBox {
+  readonly read: (cssProperty: string, property: string) => string | undefined;
+  readonly inFlow: boolean;
+}
+
+/**
+ * The block's parent box, read in the state the canvas puts the parent in:
+ * the edited one for a state that reaches ancestors (hover, active), the base
+ * state otherwise. A top-level block of a page or a template sits in the page
+ * root, laid out as the page's settings say; one of a component or a pattern
+ * goes wherever it is placed, so its parent is not known. Nor is it for a
+ * shared style or a look, which many blocks wear wherever each one sits.
+ */
+function parentBoxOf(
+  document: BlockDocument,
+  node: BlockNode,
+  at: ReadAt,
+  options: StyleInspectionOptions | undefined
+): ParentBox | undefined {
+  // The state the canvas forces up the chain while the child is edited in
+  // one: hover and active reach every ancestor, the others only the block.
+  const base: ReadAt = statePropagatesToAncestors(at.state)
+    ? at
+    : { ...at, state: "base" };
+  // A shared style or a look is worn by many blocks, wherever each one sits:
+  // the selected block's parent says nothing about the others.
+  if (options?.styles !== undefined) return undefined;
+  // The page root lays out its top-level blocks as the page's own settings
+  // say, which is in flow unless they give it a display.
+  const atRoot: ParentBox | undefined = PAGE_ROOTED.has(document.kind)
+    ? {
+        read: (cssProperty, property) =>
+          cascadedKeyword(
+            document.settings?.styles,
+            { ...base, cascade: undefined },
+            cssProperty,
+            property
+          ),
+        inFlow: true,
+      }
+    : undefined;
+  return at.cascade === undefined
+    ? storedParentBox(document.nodes, node.id, base, atRoot)
+    : cascadedParentBox(at.cascade, base, atRoot);
+}
+
+/** The display of the box that lays this block out, as {@link parentBoxOf}. */
+function parentDisplayOf(
+  document: BlockDocument,
+  node: BlockNode,
+  at: ReadAt,
+  options: StyleInspectionOptions | undefined
+): string | undefined {
+  const box = parentBoxOf(document, node, at, options);
+  if (box === undefined) return undefined;
+  return box.read("display", "display") ?? (box.inFlow ? IN_FLOW : undefined);
+}
+
+/**
+ * How the block's parent arranges it at the edited device, by the display and
+ * direction in force on the parent there: a Row stacked here is a column.
+ * `undefined` where the parent isn't known (a shared style, a component's
+ * top level) or arranges another way (a table).
+ */
+function parentLayoutOf(
+  document: BlockDocument,
+  node: BlockNode,
+  at: ReadAt,
+  options: StyleInspectionOptions | undefined
+): ParentLayout | undefined {
+  const box = parentBoxOf(document, node, at, options);
+  if (box === undefined) return undefined;
+  const arrangement = arrangementOf(
+    keywordIdentity(box.read("display", "display")) ?? IN_FLOW,
+    keywordIdentity(box.read("flex-direction", "flexDirection"))
+  );
+  if (arrangement === undefined) return undefined;
+  const keyword = (cssProperty: string, property: string) =>
+    keywordIdentity(box.read(cssProperty, property));
+  return {
+    arrangement,
+    alignItems: keyword("align-items", "alignItems"),
+    justifyItems: keyword("justify-items", "justifyItems"),
+  };
+}
+
+/**
+ * How the block's parent lays it out: its arrangement, and the alignment it
+ * gives its items, which a child's automatic self-alignment defers to.
+ */
+export interface ParentLayout {
+  readonly arrangement: ParentArrangement;
+  readonly alignItems: string | undefined;
+  readonly justifyItems: string | undefined;
+}
+
+/** The arrangement a display and a direction lay a box's children out in. */
+function arrangementOf(
+  display: string,
+  direction: string | undefined
+): ParentArrangement | undefined {
+  if (display === "grid" || display === "inline-grid") return "grid";
+  if (display === "flex" || display === "inline-flex") {
+    return direction?.startsWith("column") === true ? "column" : "row";
+  }
+  return display === "block" || display === "flow-root" ? "flow" : undefined;
+}
+
+/**
+ * The parent box through the cascade. The subject already names its
+ * ancestors, outermost first; one that does not say is not taken for a
+ * top-level block.
+ */
+function cascadedParentBox(
+  cascade: NonNullable<StyleInspectionOptions["cascade"]>,
+  base: ReadAt,
+  atRoot: ParentBox | undefined
+): ParentBox | undefined {
+  const ancestors = cascade.subject.ancestors;
+  if (ancestors === undefined) return undefined;
+  for (let index = ancestors.length - 1; index >= 0; index -= 1) {
+    const subject = {
+      ...ancestors[index],
+      ancestors: ancestors.slice(0, index),
+    };
+    const at = { ...base, cascade: { trace: cascade.trace, subject } };
+    const read = (cssProperty: string, property: string) =>
+      cascadedKeyword(undefined, at, cssProperty, property);
+    const display = read("display", "display") ?? IN_FLOW;
+    if (keywordIdentity(display) !== "contents") return { read, inFlow: true };
+  }
+  return atRoot;
+}
+
+/** The parent box as the document stores it, guarded against a cycle. */
+function storedParentBox(
+  nodes: BlockDocument["nodes"],
+  nodeId: string,
+  base: ReadAt,
+  atRoot: ParentBox | undefined
+): ParentBox | undefined {
+  const seen = new Set<string>([nodeId]);
+  let parent = locateNode(nodes, nodeId)?.parent;
+  while (parent !== undefined && !seen.has(parent.id)) {
+    seen.add(parent.id);
+    const styles = parent.styles;
+    const read = (cssProperty: string, property: string) =>
+      cascadedKeyword(styles, base, cssProperty, property);
+    if (keywordIdentity(read("display", "display")) !== "contents") {
+      return { read, inFlow: false };
+    }
+    parent = locateNode(nodes, parent.id)?.parent;
+  }
+  // Out of parents: the page's own flow, unless the walk met a node twice.
+  return parent === undefined ? atRoot : undefined;
 }
 
 /** A keyword as the engine identifies it: trimmed, unescaped, lowercased. */
@@ -322,8 +633,8 @@ function keywordIdentity(value: string | undefined): string | undefined {
 }
 
 /**
- * The keyword a property takes at this address, lowercased: the display that
- * decides the flex and grid tiers, the fit that decides the focal point's.
+ * The keyword a property takes at this address, lowercased: the display, wrap
+ * and position that decide what applies, the fit the focal point describes.
  *
  * Asked of the compiled cascade when there is one, through the same ranking
  * the provenance dots use: a class or the block's defaults can make a block a
@@ -337,15 +648,11 @@ function keywordIdentity(value: string | undefined): string | undefined {
  * specific), so the whole state comes first.
  */
 function cascadedKeyword(
-  styles: Parameters<typeof readStyleValue>[0],
-  at: {
-    state: StyleState;
-    breakpoint: BreakpointId;
-    breakpoints: BreakpointSet | undefined;
-    cascade: StyleInspectionOptions["cascade"];
-  },
+  styles: NodeStyles | undefined,
+  at: ReadAt,
   cssProperty: string,
-  property: string
+  property: string,
+  path: readonly string[] = []
 ): string | undefined {
   const tiers = tiersFrom(at.breakpoint, at.breakpoints);
   if (at.cascade !== undefined) {
@@ -370,7 +677,7 @@ function cascadedKeyword(
         state: atState,
         breakpoint: atBreakpoint,
         property,
-        path: [],
+        path,
       });
       if (typeof value === "string") return value.trim().toLowerCase();
     }
@@ -420,7 +727,7 @@ const SHORT_LABELS: Readonly<Record<string, string>> = {
   // In an Accordion's own Icon section, where "Disclosure" says nothing an
   // author does not already see.
   disclosureIcon: "Icon",
-  disclosurePosition: "Position",
+  disclosurePosition: "Icon position",
   // In the Background section, where "Background" already says whose it is;
   // the whole name was cut to "Background gradi…".
   backgroundGradient: "Gradient",
@@ -429,6 +736,18 @@ const SHORT_LABELS: Readonly<Record<string, string>> = {
   // Rows is shortened with Columns so the pair reads as one in Layout.
   gridTemplateColumns: "Column sizes",
   gridTemplateRows: "Row sizes",
+  // A child's share of a Row or a Grid, in the words of what each one does:
+  // "Flex grow" says how CSS spells it, "Grow" what the block does.
+  flexGrow: "Grow",
+  flexShrink: "Shrink",
+  flexBasis: "Starting size",
+  // The room between a container's blocks, as an author asks for it; rows
+  // and columns apart where a Grid sets them separately.
+  gap: "Space between",
+  rowGap: "Between rows",
+  columnGap: "Between columns",
+  // What it is in an author's words: an entrance animation.
+  appear: "Animation when it appears",
 };
 
 /**
@@ -448,7 +767,10 @@ function inspectProperty(
     state: StyleState;
     breakpoint: BreakpointId;
   }
-): Omit<InspectedStyleProperty, "common"> {
+): Omit<
+  InspectedStyleProperty,
+  "common" | "applies" | "tierShows" | "fieldApplies"
+> {
   // Present by construction: the name came out of `stylePropertiesForSupports`,
   // which reads the same catalog. Asked again rather than threaded through so
   // this function takes a name, which is what makes it callable from a test

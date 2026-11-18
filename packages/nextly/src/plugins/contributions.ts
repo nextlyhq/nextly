@@ -11,6 +11,7 @@ import type { AuthorableFieldConfig } from "../collections/fields/types/plugin-f
 import type { JsonValue as JobJsonValue } from "../direct-api/types/jobs";
 import type { GeneratedTypes } from "../direct-api/types/shared";
 import type { RegisteredEmailProvider } from "../domains/email/provider-definition";
+import type { WrittenDocument } from "../domains/email/written/document";
 import type { AnyJobDefinition } from "../domains/jobs/job-registry";
 import type { LimitRule } from "../domains/limits/limit-rules";
 import type { SchemaHook } from "../domains/schema/extension/draft";
@@ -208,8 +209,20 @@ export interface PluginEmailTemplate {
   name: string;
   /** Subject line; supports `{{variable}}` interpolation. */
   subject: string;
-  /** HTML body; supports `{{variable}}` interpolation. */
-  htmlContent: string;
+  /**
+   * HTML body; supports `{{variable}}` interpolation. Give this or `blocks`,
+   * never both.
+   */
+  htmlContent?: string;
+  /**
+   * @experimental The template written in blocks instead of HTML, as the
+   * admin's written editor stores it (`{ version: 1, blocks }`). Its HTML and
+   * plain text are written from the blocks, so give neither with it. Both or
+   * neither of `htmlContent` and `blocks`, blocks that don't pass the
+   * written rules, or `engine: "legacy"` with blocks (a written template is
+   * always Liquid) are refused at startup.
+   */
+  blocks?: WrittenDocument;
   plainTextContent?: string;
   /**
    * The variables the template uses, as core's own are declared; a plugin
@@ -227,6 +240,14 @@ export interface PluginEmailTemplate {
    * password").
    */
   description?: string;
+  /**
+   * @experimental What sends the template, each in a sentence the admin shows
+   * as one of its senders (for example "A customer asks to reset their
+   * password"). Shown with the settings that send it, such as a form's
+   * notification rules. Left out, an email the plugin owns reads "Not known:
+   * may be sent from code".
+   */
+  sentBy?: string[];
   /**
    * @experimental Mark a template that carries a secret: a sign-in, reset or
    * verification link or code. Such a template takes no `cc` or `bcc`, and
@@ -622,6 +643,17 @@ export interface PluginFieldWrite {
    * in a group kept per language is not.
    */
   readStored(target: PluginStoredValueTarget): Promise<PluginStoredValue>;
+  /**
+   * @experimental Read one stored field of several entries of one collection,
+   * by the rules of {@link readStored}: what it answers for each id, keyed by
+   * id, read in one query for the rows and one for their working drafts
+   * rather than a pair per entry. An id that names no stored entry is absent
+   * from the map. A refusal refuses the whole read, since the field, and
+   * whether it may be read, is the same for every entry.
+   */
+  readStoredOf(
+    target: PluginStoredValuesTarget
+  ): Promise<ReadonlyMap<string, PluginStoredValue>>;
 }
 
 /**
@@ -660,6 +692,17 @@ export interface PluginStoredEntryTarget extends PluginStoredFieldTarget {
   readonly collection: string;
   /** The entry's id. */
   readonly id: string;
+}
+
+/**
+ * @experimental One field of several entries of a collection, read by
+ * {@link PluginFieldWrite.readStoredOf}.
+ */
+export interface PluginStoredValuesTarget extends PluginStoredFieldTarget {
+  /** The collection's slug. */
+  readonly collection: string;
+  /** The entries' ids. */
+  readonly ids: readonly string[];
 }
 
 /** @experimental A field of a single, which has one document and no id. */

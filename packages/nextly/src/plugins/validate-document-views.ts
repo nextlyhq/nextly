@@ -43,6 +43,10 @@ interface ContributedViewBase {
   path: string;
   component: ComponentPath;
   label?: string;
+  /** The words of a way into the view, carried only when declared. */
+  openLabel?: string;
+  /** The dialog "+ New" opens, carried only when declared. */
+  createDialog?: ComponentPath;
   /** The contributing plugin's name, for the admin's diagnostics. */
   plugin: string;
 }
@@ -52,7 +56,17 @@ interface ContributedViewBase {
  * routed under, after the plugin's rename map, or on a field type.
  */
 export type ContributedDocumentView = ContributedViewBase &
-  ({ slug: string } | { fieldType: string });
+  (
+    | { slug: string }
+    | {
+        fieldType: string;
+        /** Carried only when the view asks to open first for a main field. */
+        opensFirst?: "mainField";
+      }
+  );
+
+/** The one value `opensFirst` takes. */
+const OPENS_FIRST_MAIN_FIELD = "mainField";
 
 /**
  * A view as the admin receives it, without its owner. Distributed over the
@@ -83,6 +97,27 @@ function labelOf(view: { label?: string }): { label?: string } {
   return view.label === undefined ? {} : { label: view.label };
 }
 
+/** The words of a way into the view, carried only when declared. */
+function openLabelOf(view: { openLabel?: string }): { openLabel?: string } {
+  return view.openLabel === undefined ? {} : { openLabel: view.openLabel };
+}
+
+/** The dialog "+ New" opens, carried only when declared. */
+function createDialogOf(view: { createDialog?: ComponentPath }): {
+  createDialog?: ComponentPath;
+} {
+  return view.createDialog === undefined
+    ? {}
+    : { createDialog: view.createDialog };
+}
+
+/** `opensFirst`, carried only when it asks to open first for a main field. */
+function opensFirstOf(view: object): { opensFirst?: "mainField" } {
+  return "opensFirst" in view && view.opensFirst === OPENS_FIRST_MAIN_FIELD
+    ? { opensFirst: OPENS_FIRST_MAIN_FIELD }
+    : {};
+}
+
 /** Every view one plugin declares, slug-scoped then field-type-scoped. */
 function viewsOf(plugin: PluginDefinition): ContributedDocumentView[] {
   const admin = plugin.contributes?.admin;
@@ -93,6 +128,8 @@ function viewsOf(plugin: PluginDefinition): ContributedDocumentView[] {
         path: documentView.path,
         component: documentView.component,
         ...labelOf(documentView),
+        ...openLabelOf(documentView),
+        ...createDialogOf(documentView),
         plugin: plugin.name,
       }))
   );
@@ -101,6 +138,9 @@ function viewsOf(plugin: PluginDefinition): ContributedDocumentView[] {
     path: documentView.path,
     component: documentView.component,
     ...labelOf(documentView),
+    ...openLabelOf(documentView),
+    ...createDialogOf(documentView),
+    ...opensFirstOf(documentView),
     plugin: plugin.name,
   }));
   return [...bySlug, ...byFieldType];
@@ -113,11 +153,8 @@ function scopeOf(view: ContributedDocumentView): string {
     : `on every document with a "${view.fieldType}" field`;
 }
 
-/** Why one view is refused on its own, or `undefined` when it is not. */
-function unroutableReason(view: ContributedDocumentView): string | undefined {
-  if (typeof view.component !== "string" || view.component === "") {
-    return `${scopeOf(view)} at "${view.path}" names no component to draw`;
-  }
+/** Why a view's words (`label`, `openLabel`) are refused, or `undefined`. */
+function wordsReason(view: ContributedDocumentView): string | undefined {
   // Read through `unknown`: a JavaScript plugin or a setup transformer is not
   // held to the type. The label is published in the admin metadata, sent as
   // JSON, where anything but text fails the whole response, not this view.
@@ -125,6 +162,42 @@ function unroutableReason(view: ContributedDocumentView): string | undefined {
   if (label !== undefined && typeof label !== "string") {
     return `${scopeOf(view)} at "${view.path}" has a label that is not text`;
   }
+  // The words are the whole of the way into the view a row or the bar
+  // offers, so text with none in it would be an entry nobody can read.
+  const openLabel: unknown = view.openLabel;
+  if (
+    openLabel !== undefined &&
+    (typeof openLabel !== "string" || openLabel.trim() === "")
+  ) {
+    return `${scopeOf(view)} at "${view.path}" has an openLabel that is not text with words in it`;
+  }
+  return undefined;
+}
+
+/** Why a view's `createDialog` is refused, or `undefined` when it is not. */
+function createDialogReason(view: ContributedDocumentView): string | undefined {
+  // Read through `unknown`, as the words are: the list opens the dialog by
+  // this path, so one naming no component would leave "+ New" opening
+  // nothing.
+  const createDialog: unknown = view.createDialog;
+  if (
+    createDialog !== undefined &&
+    (typeof createDialog !== "string" || createDialog.trim() === "")
+  ) {
+    return `${scopeOf(view)} at "${view.path}" has a createDialog that names no component`;
+  }
+  return undefined;
+}
+
+/** Why one view is refused on its own, or `undefined` when it is not. */
+function unroutableReason(view: ContributedDocumentView): string | undefined {
+  if (typeof view.component !== "string" || view.component === "") {
+    return `${scopeOf(view)} at "${view.path}" names no component to draw`;
+  }
+  const words = wordsReason(view);
+  if (words !== undefined) return words;
+  const dialog = createDialogReason(view);
+  if (dialog !== undefined) return dialog;
   if (typeof view.path !== "string" || !VIEW_PATH.test(view.path)) {
     return (
       `${scopeOf(view)} has the path ${JSON.stringify(view.path)}, which is ` +
@@ -174,17 +247,78 @@ function collisionWith(
   return declared.find(earlier => meet(earlier, view));
 }
 
+/**
+ * Why a declared `opensFirst` is refused, or `undefined` when it is not.
+ * Read from the declaration through `unknown`, since a JavaScript plugin is
+ * not held to the type: on a slug view there is no field type for a main field
+ * to match, and any value but `"mainField"` asks for something this version
+ * does not know, which would otherwise be ignored without a word.
+ */
+function opensFirstReason(
+  declared: object,
+  view: ContributedDocumentView
+): string | undefined {
+  if (!("opensFirst" in declared) || declared.opensFirst === undefined) {
+    return undefined;
+  }
+  if ("slug" in view) {
+    return (
+      `${scopeOf(view)} at "${view.path}" with \`opensFirst\`, which only a ` +
+      "view scoped to a field type may declare"
+    );
+  }
+  if (declared.opensFirst !== OPENS_FIRST_MAIN_FIELD) {
+    return (
+      `${scopeOf(view)} at "${view.path}" with \`opensFirst\` ` +
+      `${JSON.stringify(declared.opensFirst)}; the one value is "mainField"`
+    );
+  }
+  return undefined;
+}
+
+/** Each declaration, in the order `viewsOf` lists the views made from them. */
+function declarationsOf(plugin: PluginDefinition): object[] {
+  const admin = plugin.contributes?.admin;
+  return [
+    ...Object.values(admin?.views ?? {}).flatMap(
+      view => view.documentViews ?? []
+    ),
+    ...(admin?.documentViews ?? []),
+  ];
+}
+
 /** One plugin's views checked on their own, before any comparison. */
 function assertOwnViews(plugin: PluginDefinition): ContributedDocumentView[] {
   const views = viewsOf(plugin);
-  for (const view of views) {
+  const declarations = declarationsOf(plugin);
+  views.forEach((view, index) => {
     const reason =
-      unroutableReason(view) ?? unownedFieldTypeReason(plugin, view);
+      unroutableReason(view) ??
+      unownedFieldTypeReason(plugin, view) ??
+      opensFirstReason(declarations[index] ?? {}, view);
     if (reason !== undefined) {
       throw documentViewError(plugin.name, reason, { path: view.path });
     }
-  }
+  });
   return views;
+}
+
+/**
+ * The view already declared that asks to open first on `view`'s field type,
+ * when `view` asks too. Two would be two answers to where an entry opens, with
+ * nothing to choose between them.
+ */
+function opensFirstRival(
+  view: ContributedDocumentView,
+  declared: readonly ContributedDocumentView[]
+): ContributedDocumentView | undefined {
+  if (!("fieldType" in view) || view.opensFirst === undefined) return undefined;
+  return declared.find(
+    earlier =>
+      "fieldType" in earlier &&
+      earlier.fieldType === view.fieldType &&
+      earlier.opensFirst !== undefined
+  );
 }
 
 /**
@@ -207,6 +341,16 @@ export function assertDocumentViews(plugins: PluginDefinition[]): void {
         { path: view.path, other: earlier.plugin }
       );
     }
+    const rival = opensFirstRival(view, declared);
+    if (rival !== undefined) {
+      throw documentViewError(
+        view.plugin,
+        `${scopeOf(view)} at "${view.path}" that asks to open first, as ` +
+          `"${rival.plugin}"'s view at "${rival.path}" already does. One ` +
+          "field type can open in one view",
+        { path: view.path, other: rival.plugin }
+      );
+    }
     declared.push(view);
   }
 }
@@ -219,4 +363,16 @@ export function contributedDocumentViews(
   plugins: PluginDefinition[]
 ): ContributedDocumentView[] {
   return plugins.filter(plugin => plugin.enabled !== false).flatMap(viewsOf);
+}
+
+/**
+ * Every document view any plugin declares, disabled plugins' included: what a
+ * collection's `admin.opensIn` is judged against at boot, so switching a
+ * plugin off never stops a start (the admin then opens the form, since a
+ * disabled plugin's views are not published).
+ */
+export function declaredDocumentViews(
+  plugins: PluginDefinition[]
+): ContributedDocumentView[] {
+  return plugins.flatMap(viewsOf);
 }

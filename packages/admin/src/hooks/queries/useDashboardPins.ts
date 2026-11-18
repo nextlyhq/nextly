@@ -4,10 +4,9 @@
  * across devices.
  *
  * The server decides what a reader is shown (a pin they may no longer read is
- * left out) and refuses a pin past the limit; this hook only reads that answer
- * and writes the reader's choices, then reads the answer again.
- *
- * @experimental Until the dashboard draws its pins.
+ * left out of the titled list and only counted, never named) and refuses a
+ * pin past the limit; this hook only reads that answer and writes
+ * the reader's choices, then reads the answer again.
  */
 import {
   useMutation,
@@ -32,13 +31,38 @@ export type PinTarget =
   | { targetType: "single"; targetSlug: string };
 
 /** One pin as the reader is shown it. */
-interface ShownPin {
+export interface ShownPin {
   targetType: "collection" | "single";
   targetSlug: string;
   /** The pinned entry's id; "" for a Single. */
   entryId: string;
   title: string;
+  /** Its collection's or Single's icon, where it names one. */
+  icon?: string;
   pinnedAt: string;
+}
+
+/** The reader's pins: those they may read, and how many they no longer may. */
+interface ReaderPins {
+  /** Newest first, titled. */
+  shown: ShownPin[];
+  /**
+   * How many of their pins name documents they may no longer read. A count
+   * alone: the server names none of them, and removes them itself
+   * ({@link useRemoveUnreadablePins}).
+   */
+  unreadableCount: number;
+}
+
+/** What a shown pin names, as a pin or an unpin sends it. */
+export function targetOfPin(pin: ShownPin): PinTarget {
+  return pin.targetType === "single"
+    ? { targetType: "single", targetSlug: pin.targetSlug }
+    : {
+        targetType: "collection",
+        targetSlug: pin.targetSlug,
+        entryId: pin.entryId,
+      };
 }
 
 /** Whether a shown pin names `target`. */
@@ -50,13 +74,33 @@ function pinNames(pin: ShownPin, target: PinTarget): boolean {
   );
 }
 
-/** The reader's pins they may read, newest first. */
-function useDashboardPins() {
+/**
+ * The reader's pins they may read, newest first, and how many they may no
+ * longer read. An answer without `unreadableCount` (a server before it)
+ * counts none.
+ */
+export function useDashboardPins() {
   return useQuery({
     queryKey: DASHBOARD_PINS_KEY,
-    queryFn: async () =>
-      (await protectedApi.get<{ items: ShownPin[] }>(PINS_PATH)).items,
+    queryFn: async (): Promise<ReaderPins> => {
+      const answer = await protectedApi.get<{
+        items: ShownPin[];
+        unreadableCount?: number;
+      }>(PINS_PATH);
+      return {
+        shown: answer.items,
+        unreadableCount: answer.unreadableCount ?? 0,
+      };
+    },
   });
+}
+
+/** Read the reader's pins and the dashboard's cards again, after a write. */
+function invalidatePins(queryClient: ReturnType<typeof useQueryClient>) {
+  return Promise.all([
+    queryClient.invalidateQueries({ queryKey: DASHBOARD_PINS_KEY }),
+    queryClient.invalidateQueries({ queryKey: WIDGET_QUERIES_KEY }),
+  ]);
 }
 
 /**
@@ -75,11 +119,26 @@ export function useSetPinned(): UseMutationResult<
       pinned
         ? protectedApi.post(PINS_PATH, target)
         : protectedApi.delete(PINS_PATH, target),
-    onSettled: () =>
-      Promise.all([
-        queryClient.invalidateQueries({ queryKey: DASHBOARD_PINS_KEY }),
-        queryClient.invalidateQueries({ queryKey: WIDGET_QUERIES_KEY }),
-      ]),
+    onSettled: () => invalidatePins(queryClient),
+  });
+}
+
+/**
+ * Remove every pin the reader may no longer open, in one request that names
+ * none of them: the server finds them, asking again per pin whether the
+ * reader may read it, and removes the reader's own alone. Once it has
+ * answered, either way, the pins are read again; a failure is the caller's
+ * to say.
+ */
+export function useRemoveUnreadablePins(): UseMutationResult<
+  unknown,
+  Error,
+  void
+> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => protectedApi.delete(`${PINS_PATH}?unreadable=1`),
+    onSettled: () => invalidatePins(queryClient),
   });
 }
 
@@ -100,7 +159,7 @@ export function usePinned(target: PinTarget | null): {
   const pinned =
     target === null || pins.data === undefined
       ? null
-      : pins.data.some(pin => pinNames(pin, target));
+      : pins.data.shown.some(pin => pinNames(pin, target));
   const { mutateAsync } = setPinned;
   const set = useCallback(
     (wanted: boolean) =>

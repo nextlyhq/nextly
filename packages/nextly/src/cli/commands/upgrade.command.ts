@@ -2,7 +2,7 @@
  * The declaration of `nextly upgrade`: its options and help, with the action
  * loaded from `./upgrade` only when the command runs.
  */
-import type { Command } from "commander";
+import { Option, type Command } from "commander";
 
 import { ACCEPT_DATA_LOSS_HELP } from "../../domains/schema/migrate/data-loss-consent-help";
 import { withDryRun } from "../dry-run";
@@ -14,7 +14,7 @@ export function registerUpgradeCommand(program: Command): void {
     program
       .command("upgrade")
       .description(
-        "Bring an existing database up to date: move the migration records into nextly_schema_events, hash passwords stored before this release, and remove passwords kept in version history"
+        "Bring an existing database up to date: hash passwords stored before this release, and remove passwords kept in version history"
       )
   )
     .option(
@@ -23,9 +23,14 @@ export function registerUpgradeCommand(program: Command): void {
       false
     )
     .option("-f, --force", "Skip the interactive backup prompt", false)
-    .option(
-      "--target-table-name <name>",
-      "Override the events table name on a collision"
+    // It named another table for the migration records, which `nextly
+    // migrate` now moves: still accepted, answered with a notice, and kept
+    // out of the help.
+    .addOption(
+      new Option(
+        "--target-table-name <name>",
+        "No longer does anything: `nextly migrate` moves the migration records"
+      ).hideHelp()
     )
     .option(
       "--reconcile-core",

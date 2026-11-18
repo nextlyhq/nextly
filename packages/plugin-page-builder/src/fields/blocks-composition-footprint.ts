@@ -16,8 +16,6 @@ import {
   contentModelKeyOf,
   nodeLocks,
   readListQuery,
-  registryBlockSource,
-  registryNestingSource,
   resolveComponentInstances,
   variantNamesIn,
   type BlockDocument,
@@ -102,7 +100,7 @@ export async function footprintOf(
   // The lock each node sits under, by the rule a save enforces. Part of what
   // a placement's values and slot content are held to, so moving a node under
   // a lock, everything else kept, is a change a host can be judged against.
-  const locks = nodeLocks(document.nodes, registryBlockSource());
+  const locks = nodeLocks(document.nodes, setup.blocks.blockSource());
   const library = heldLibrary(new Map([[self, document]]));
   const selections = new Map<string, SelectionFootprint>();
   let complete = true;
@@ -194,8 +192,8 @@ function placementFacts(
   setup: CompositionSetup
 ): string {
   const sources = {
-    nesting: registryNestingSource(),
-    definitions: registryBlockSource(),
+    nesting: setup.blocks.nestingSource(),
+    definitions: setup.blocks.blockSource(),
   };
   const facts = new Set<string>();
   // Per node, by id and by where it sits: a set of type/model pairs alone

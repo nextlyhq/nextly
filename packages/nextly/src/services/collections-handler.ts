@@ -87,6 +87,8 @@ type EveryLanguageLifecycleHandlerParams = {
   authenticatedScope?: AuthenticatedScope;
   /** Acting identity from the transport, forwarded to the recorded event. */
   actor?: RequestActor;
+  /** A publish made without review, with the caller's reason, told to the publish gate. */
+  withoutReview?: { reason: string };
   /**
    * Skip cache revalidation for this move (the outbox drain still runs), for a caller that owns
    * its cache strategy.
@@ -866,6 +868,10 @@ export class CollectionsHandler {
     fallbackLocale?: string | false;
     /** i18n M7: attach a per-locale `_translations` overview map to each row. */
     translationStatus?: boolean;
+    /** Attach `_sources`: for each translatable field, the language its value came from. */
+    sourceLocales?: boolean;
+    /** `"all"`: attach every language's values beside the read's own (`_allLocales`). */
+    translations?: "all";
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
     /** The HTTP request behind this operation, when one produced it. */
@@ -989,6 +995,10 @@ export class CollectionsHandler {
     fallbackLocale?: string | false;
     /** i18n M7: attach a per-locale `_translations` overview map to the entry. */
     translationStatus?: boolean;
+    /** Attach `_sources`: for each translatable field, the language its value came from. */
+    sourceLocales?: boolean;
+    /** `"all"`: attach every language's values beside the read's own (`_allLocales`). */
+    translations?: "all";
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
     /** The HTTP request behind this operation, when one produced it. */
@@ -1004,6 +1014,10 @@ export class CollectionsHandler {
      * read grant, so a super-admin-owned key gets no session bypass.
      */
     authenticatedScope?: AuthenticatedScope;
+    /** Whole-document fallback; see `CollectionEntryService.getEntry`. */
+    wholeDocumentFallback?: boolean;
+    /** Attach `_details`; see `CollectionQueryService.getEntry`. */
+    details?: boolean;
   }) {
     return this.entryService.getEntry(params);
   }
@@ -1166,8 +1180,6 @@ export class CollectionsHandler {
       /**
        * The fields this write restored, and the version each came from,
        * recorded per field on the version it captures (see `restored-from`).
-       *
-       * @experimental
        */
       restoredFrom?: FieldSources;
       /**

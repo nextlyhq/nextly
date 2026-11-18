@@ -35,7 +35,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { EditorState } from "./editor-state";
 import { applyOps, type BuilderOp } from "./ops";
-import { NoticeSinkProvider } from "./builder-notices";
+import { NoticeSinkProvider } from "./shell/builder-notices";
 import { FocalFrame } from "./focal-frame";
 import { InspectorPanel } from "./inspector-panel";
 import {
@@ -44,9 +44,31 @@ import {
   describeProvenance,
   StyleInspectorPanel,
 } from "./style-inspector-panel";
+import { SettingsFilterProvider, StyleReportContext } from "./settings-filter";
 import { keywordLabel } from "./style-keyword-labels";
 import type { SharedStylesHost } from "./style-target";
 import type { StylePolicy } from "./style-values";
+
+/**
+ * What a field's tooltip says, as an author hovering it reads it: what the
+ * control does in words, then what it writes.
+ */
+async function hintOf(label: string): Promise<string> {
+  const field = screen.getByText(label).closest(".nx-inspector__field");
+  if (field === null) throw new Error(`no field for ${label}`);
+  fireEvent.pointerMove(field);
+  const tip = await screen.findByRole("tooltip", {}, { timeout: 2000 });
+  return tip.textContent ?? "";
+}
+
+/**
+ * Open a section of the panel unless it is open already: sections fold on
+ * their own, and one holding a value, or the first, starts open.
+ */
+function openSection(name: RegExp): void {
+  const header = screen.getByRole("button", { name });
+  if (header.getAttribute("aria-expanded") !== "true") fireEvent.click(header);
+}
 
 afterEach(() => {
   cleanup();
@@ -155,25 +177,53 @@ function mount(
 }
 
 /**
- * Bring a property out from its section's "+ More", as an author does.
- *
- * Opened from the keyboard because that is a route Radix's menu takes in
- * jsdom without pointer capture, and the item is chosen by its name.
+ * Add a property from "CSS properties"' "+ Add CSS property", as an author
+ * does: the section opened, the list opened, the property chosen by its CSS
+ * name.
  */
-function reveal(section: string, label: string): void {
-  fireEvent.keyDown(
-    screen.getByRole("button", { name: `More ${section} properties` }),
-    { key: "Enter" }
+function reveal(cssName: string): void {
+  const section = screen.getByRole("button", { name: /^CSS properties/ });
+  if (section.getAttribute("aria-expanded") === "false") {
+    fireEvent.click(section);
+  }
+  fireEvent.click(screen.getByRole("button", { name: "+ Add CSS property" }));
+  fireEvent.click(
+    screen.getByRole("option", { name: new RegExp(`^${cssName} `) })
   );
-  fireEvent.click(screen.getByRole("menuitem", { name: label }));
 }
 
 /** The fields of one property, scoped so two properties sharing a side name do not collide. */
 function fieldsOf(property: string) {
-  return within(
-    document.querySelector(`[data-property="${property}"]`) as HTMLElement
-  );
+  return within(propertyRow(property) as HTMLElement);
 }
+
+/**
+ * A property's row, its section opened first where it is closed: a block
+ * with a size opens "Inside its parent", the tab's first, before Size.
+ */
+function propertyRow(property: string): HTMLElement | null {
+  const row = () =>
+    document.querySelector<HTMLElement>(`[data-property="${property}"]`);
+  if (row() !== null) return row();
+  for (const header of document.querySelectorAll<HTMLElement>(
+    '[data-section] [data-slot="accordion-trigger"][aria-expanded="false"]'
+  )) {
+    fireEvent.click(header);
+    if (row() !== null) return row();
+  }
+  return row();
+}
+
+/**
+ * A container's layout drawn as its raw rows. Arrange draws a container's
+ * Display, Direction and Justify in plain words, and leaves them to the raw
+ * rows only while it reads "Arrange: Custom": a baseline alignment has no
+ * 3×3 point, and a flow-root display no plain choice.
+ */
+const RAW_LAYOUT = { alignItems: "baseline" } as const;
+const CUSTOM_DISPLAY = {
+  base: { [BASE_BREAKPOINT]: { display: "flow-root" } },
+} as NodeStyles;
 
 describe("the Style tab beside Content", () => {
   it("offers both tabs and shows Content first", () => {
@@ -218,7 +268,9 @@ describe("the Style tab beside Content", () => {
     render(<InspectorPanel editor={editorFor(documentOf(), null)} />);
 
     expect(screen.queryByRole("tab", { name: "Style" })).toBeNull();
-    expect(screen.getByText("Select a block to edit it.")).toBeDefined();
+    expect(
+      document.querySelector('[data-empty="no-selection"]')
+    ).not.toBeNull();
   });
 });
 
@@ -226,8 +278,8 @@ describe("when there is nothing to style", () => {
   it("says to select a block, rather than rendering an empty panel", () => {
     /*
      * Not covered by the wrapper's own no-selection case: that one renders
-     * `InspectorPanel`, which says "Select a block to edit it." This panel says
-     * "style", and a query matching one does not match the other.
+     * `InspectorPanel`, which shows the document's own settings. This panel
+     * says "style", and draws alone, so it says what to do.
      */
     register({ spacing: true });
     const { container } = render(
@@ -394,26 +446,41 @@ describe("the shared style target", () => {
   }
 
   const bar = () => screen.getByRole("region", { name: "What you're editing" });
-  const chip = (name: string) =>
-    within(bar()).getByRole("button", { name, pressed: undefined });
+  /** The target chip: the one menu button that says what an edit changes. */
+  const targetChip = () =>
+    within(bar()).getByRole("button", { name: /^Editing: / });
+  /** Open the target chip's menu, as a pointer press does. */
+  const openTargetMenu = (): HTMLElement => {
+    fireEvent.pointerDown(targetChip(), { button: 0, ctrlKey: false });
+    return screen.getByRole("menu");
+  };
+  /** A target in the open menu; jsdom joins its words with no space. */
+  const targetItem = (name: string) =>
+    within(screen.getByRole("menu")).getByRole("menuitemradio", {
+      name: new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`),
+    });
+  /** Make a target of a worn style (or "This block") from the chip's menu. */
+  const chooseTarget = (name: string): void => {
+    openTargetMenu();
+    fireEvent.click(targetItem(name));
+  };
 
   it("lists every shared style a block wears, in library order, after This block", () => {
     mountTarget({ classes: ["c-promo", "c-card", "c-hero"] });
-    const chips = within(bar())
-      .getAllByRole("button")
-      .filter(button => button.hasAttribute("aria-pressed"));
-    expect(chips.map(button => button.textContent)).toEqual([
-      "This block",
-      "hero",
-      "Card",
-      "promo",
-    ]);
-    expect(chip("This block").getAttribute("aria-pressed")).toBe("true");
-    // Each chip's tooltip names the class the page carries.
-    expect(chip("Card").title).toBe("Edit shared style Card, .nx-c-card");
+    const menu = openTargetMenu();
+    const targets = within(menu).getAllByRole("menuitemradio");
+    expect(
+      targets.map(
+        item =>
+          item.querySelector(".nx-editing-bar__item-words > span")?.textContent
+      )
+    ).toEqual(["● This block", "◆ hero", "◆ Card", "◆ promo"]);
+    expect(targetItem("This block").getAttribute("aria-checked")).toBe("true");
+    // Each style says the class the page carries.
+    expect(targetItem("Card").textContent).toContain(".nx-c-card");
   });
 
-  it("makes a chip the target: pressed, named with its reach, and announced", async () => {
+  it("makes a worn style the target: named green, with its reach, and announced", async () => {
     const usage = vi.fn(async () => ({
       whole: false,
       mayLock: false,
@@ -430,16 +497,16 @@ describe("the shared style target", () => {
     }));
     mountTarget({ classes: ["c-card"], usage });
     const device = bar().querySelector("[data-edit-device]")?.textContent;
-    fireEvent.click(chip("Card"));
+    chooseTarget("Card");
 
-    expect(chip("Card").getAttribute("aria-pressed")).toBe("true");
-    expect(chip("This block").getAttribute("aria-pressed")).toBe("false");
-    expect(bar().textContent).toContain(
-      "Editing shared style Card · .nx-c-card"
+    expect(targetChip().getAttribute("aria-label")).toBe(
+      "Editing: shared style Card"
     );
+    expect(targetChip().dataset.tone).toBe("shared");
+    expect(targetChip().title).toBe("Shared style Card, .nx-c-card");
     expect(
       await within(bar()).findByText(
-        "3 blocks on this page · on at least 4 pages and 1 component"
+        "Shared style · 3 blocks on this page · on at least 4 pages and 1 component. Changes here change all of them."
       )
     ).toBeDefined();
     expect(within(bar()).getByRole("status").textContent).toBe(
@@ -452,108 +519,91 @@ describe("the shared style target", () => {
     );
   });
 
-  it("holds the shared style chips while the block's design is held, and every field with them", async () => {
+  it("holds the worn styles while the block's design is held, and every field with them", () => {
     // A locked or contentOnly block's design is fixed on this page. Editing
     // the shared style it wears from here would change that design all the
-    // same, so the chip says why it is held and the target stays the block.
+    // same, so the menu says why it is held and the target stays the block.
     mountTarget({ classes: ["c-card"], locked: true });
-    const card = chip("Card");
+    openTargetMenu();
+    const card = targetItem("Card");
     expect(card.getAttribute("aria-disabled")).toBe("true");
-    // Why, as its description, heard without opening anything.
-    const why = document.getElementById(
-      card.getAttribute("aria-describedby") ?? ""
-    );
-    expect(why?.textContent).toMatch(
+    // Why, under its name, heard as part of it.
+    expect(card.textContent).toMatch(
       /Locked: it can't be moved, deleted or edited/
     );
-    // And shown: the editor's tooltip on focus, as on hover, not a native
-    // title, which focus never shows.
-    expect(card.getAttribute("title")).toBeNull();
-    fireEvent.focus(card);
-    expect((await screen.findByRole("tooltip")).textContent).toMatch(
-      /Locked: it can't be moved, deleted or edited/
-    );
-    fireEvent.blur(card);
+
+    // No write the menu offers: Save as and Apply held.
+    const menu = within(screen.getByRole("menu"));
+    expect(
+      menu
+        .getByRole("menuitem", { name: /^Save as shared style…/ })
+        .getAttribute("aria-disabled")
+    ).toBe("true");
+    expect(
+      menu
+        .getByRole("menuitem", { name: /^Apply a shared style…/ })
+        .getAttribute("aria-disabled")
+    ).toBe("true");
 
     fireEvent.click(card);
-    expect(chip("This block").getAttribute("aria-pressed")).toBe("true");
-    expect(card.getAttribute("aria-pressed")).toBe("false");
-    expect(bar().textContent).not.toContain("Editing shared style");
+    expect(targetChip().dataset.editTarget).toBe("block");
+    expect(bar().textContent).not.toContain("Shared style ·");
     expect(
       (screen.getByLabelText("Opacity") as HTMLInputElement).matches(
         ":disabled"
       )
     ).toBe(true);
-    // No write the bar offers: no Save as, no Move to.
-    expect(screen.queryByText(/Save as shared style/)).toBeNull();
     expect(screen.queryByText(/Move to/)).toBeNull();
   });
 
-  it("lets the shared style chip be chosen on a block nothing holds", () => {
+  it("lets a worn style be chosen on a block nothing holds", () => {
     // The positive control for the hold above.
     mountTarget({ classes: ["c-card"] });
-    expect(chip("Card").getAttribute("aria-disabled")).toBeNull();
-    fireEvent.click(chip("Card"));
-    expect(chip("Card").getAttribute("aria-pressed")).toBe("true");
+    openTargetMenu();
+    expect(targetItem("Card").getAttribute("aria-disabled")).toBeNull();
+    fireEvent.click(targetItem("Card"));
+    expect(targetChip().dataset.editTarget).toBe("shared");
   });
 
-  it("returns to This block on Escape, and with Edit this block only", () => {
+  it("returns to This block on Escape, and from the menu", () => {
     mountTarget({ classes: ["c-card"] });
-    fireEvent.click(chip("Card"));
-    fireEvent.keyDown(chip("Card"), { key: "Escape" });
-    expect(chip("This block").getAttribute("aria-pressed")).toBe("true");
+    chooseTarget("Card");
+    fireEvent.keyDown(targetChip(), { key: "Escape" });
+    expect(targetChip().dataset.editTarget).toBe("block");
     expect(within(bar()).getByRole("status").textContent).toBe(
       "Now editing this block"
     );
 
-    fireEvent.click(chip("Card"));
-    fireEvent.click(
-      within(bar()).getByRole("button", { name: "Edit this block only" })
-    );
-    expect(chip("This block").getAttribute("aria-pressed")).toBe("true");
+    chooseTarget("Card");
+    chooseTarget("This block");
+    expect(targetChip().dataset.editTarget).toBe("block");
   });
 
   it("takes Escape only when it switches back, so the editor's own Escape stands down", () => {
     // The editor's Escape (select the parent block) skips a key already
     // answered, so the bar marks the one it answers and leaves the rest.
     mountTarget({ classes: ["c-card"] });
-    fireEvent.click(chip("Card"));
-    expect(fireEvent.keyDown(chip("Card"), { key: "Escape" })).toBe(false);
-    expect(chip("This block").getAttribute("aria-pressed")).toBe("true");
+    chooseTarget("Card");
+    expect(fireEvent.keyDown(targetChip(), { key: "Escape" })).toBe(false);
+    expect(targetChip().dataset.editTarget).toBe("block");
     // Already on this block: nothing to answer, so the editor's Escape runs.
-    expect(fireEvent.keyDown(chip("This block"), { key: "Escape" })).toBe(true);
+    expect(fireEvent.keyDown(targetChip(), { key: "Escape" })).toBe(true);
   });
 
-  it("lets the chip's menu take Escape without leaving the shared target", async () => {
+  it("lets the target menu take Escape without leaving the shared target", async () => {
     mountTarget({ classes: ["c-card"] });
-    fireEvent.click(chip("Card"));
-    const menu = within(bar()).getByRole("button", {
-      name: "Actions for shared style Card",
-    });
-    fireEvent.pointerDown(menu, { button: 0, ctrlKey: false });
+    chooseTarget("Card");
+    openTargetMenu();
     const item = await screen.findByRole("menuitem", { name: /^Detach/ });
     fireEvent.keyDown(item, { key: "Escape" });
     await vi.waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
     // The menu closed; the target is still the shared style.
-    expect(chip("Card").getAttribute("aria-pressed")).toBe("true");
-  });
-
-  it("moves between the chips with the arrow keys, one tab stop for the group", () => {
-    mountTarget({ classes: ["c-card", "c-hero"] });
-    expect(chip("This block").tabIndex).toBe(0);
-    expect(chip("Card").tabIndex).toBe(-1);
-    chip("This block").focus();
-    fireEvent.keyDown(chip("This block"), { key: "ArrowRight" });
-    expect(document.activeElement).toBe(chip("hero"));
-    fireEvent.keyDown(chip("hero"), { key: "End" });
-    expect(document.activeElement).toBe(chip("Card"));
-    fireEvent.keyDown(chip("Card"), { key: "ArrowRight" });
-    expect(document.activeElement).toBe(chip("This block"));
+    expect(targetChip().dataset.editTarget).toBe("shared");
   });
 
   it("shows the style's value and writes the style, never the block", async () => {
     const { editor, writeStyles } = mountTarget({ classes: ["c-card"] });
-    fireEvent.click(chip("Card"));
+    chooseTarget("Card");
     const field = screen.getByRole("textbox", {
       name: "Opacity",
     }) as HTMLInputElement;
@@ -575,12 +625,12 @@ describe("the shared style target", () => {
       supports: { effects: true, spacing: true },
       writeStyles: host.writeStyles as never,
     });
-    fireEvent.click(chip("Card"));
+    chooseTarget("Card");
     const side = fieldsOf("padding").getByLabelText("Block start");
     fireEvent.change(side, { target: { value: "12px" } });
     fireEvent.blur(side);
     // The second edit is made before the first has been stored and read back.
-    fireEvent.click(screen.getByRole("button", { name: /^Effects/ }));
+    openSection(/^Effects/);
     const opacity = screen.getByRole("textbox", { name: "Opacity" });
     fireEvent.change(opacity, { target: { value: "80" } });
     fireEvent.blur(opacity);
@@ -600,7 +650,7 @@ describe("the shared style target", () => {
       classes: ["c-card"],
       writeStyles: host.writeStyles as never,
     });
-    fireEvent.click(chip("Card"));
+    chooseTarget("Card");
     const field = screen.getByRole("textbox", { name: "Opacity" });
     fireEvent.change(field, { target: { value: "80" } });
     fireEvent.blur(field);
@@ -626,8 +676,8 @@ describe("the shared style target", () => {
           store = resolve;
         }),
     });
-    fireEvent.click(chip("Card"));
-    fireEvent.click(screen.getByRole("button", { name: /^Effects/ }));
+    chooseTarget("Card");
+    openSection(/^Effects/);
     fireEvent.click(
       screen.getByRole("button", { name: "Move Opacity to Card" })
     );
@@ -665,7 +715,7 @@ describe("the shared style target", () => {
           store = resolve;
         }),
     });
-    fireEvent.click(chip("Card"));
+    chooseTarget("Card");
     fireEvent.click(
       screen.getByRole("button", { name: "Move Opacity to Card" })
     );
@@ -684,15 +734,8 @@ describe("the shared style target", () => {
     const raise = vi.fn();
     const { editor } = mountTarget({ classes: ["c-card"], raise });
     editor.applyAll.mockReturnValue(null);
-    fireEvent.pointerDown(
-      within(bar()).getByRole("button", {
-        name: "Actions for shared style Card",
-      }),
-      { button: 0, ctrlKey: false }
-    );
-    fireEvent.click(
-      screen.getByRole("menuitem", { name: /^Detach: keep the look/ })
-    );
+    openTargetMenu();
+    fireEvent.click(screen.getByRole("menuitem", { name: /^Detach\s*Card/ }));
     expect(raise).toHaveBeenCalledWith(
       "Card could not be detached from this block: the page could not take the change."
     );
@@ -722,15 +765,8 @@ describe("the shared style target", () => {
         container: [{ id: "cq-sm", label: "Small", maxWidth: 400 }],
       } as BreakpointSet,
     });
-    fireEvent.pointerDown(
-      within(bar()).getByRole("button", {
-        name: "Actions for shared style Card",
-      }),
-      { button: 0, ctrlKey: false }
-    );
-    const item = screen.getByRole("menuitem", {
-      name: /^Detach: keep the look/,
-    });
+    openTargetMenu();
+    const item = screen.getByRole("menuitem", { name: /^Detach\s*Card/ });
     expect(item.getAttribute("aria-disabled")).toBe("true");
     expect(item.textContent).toContain(
       "This look depends on screen and container width together, so it can't be detached yet."
@@ -739,7 +775,7 @@ describe("the shared style target", () => {
     expect(editor.applyAll).not.toHaveBeenCalled();
   });
 
-  describe("the Look row", () => {
+  describe("the Block style tiles", () => {
     const outline = {
       id: "look:acme/box:outline",
       slug: "box-outline",
@@ -748,7 +784,7 @@ describe("the shared style target", () => {
       blockType: "acme/box",
       styles: { base: { [BASE_BREAKPOINT]: { opacity: 0.5 } } } as NodeStyles,
     };
-    const looks = () => screen.getByRole("radiogroup", { name: "Look" });
+    const looks = () => screen.getByRole("radiogroup", { name: "Block style" });
 
     it("offers the block's own look and its type's looks, its own chosen", () => {
       mountTarget({ library: [card, outline] });
@@ -760,6 +796,36 @@ describe("the shared style target", () => {
         )
       ).toEqual(["Default", "Outline"]);
       expect(radios[0]?.getAttribute("aria-checked")).toBe("true");
+    });
+
+    it("leaves a hidden look out of the tiles", () => {
+      const hidden = { ...outline, hidden: true as const };
+      mountTarget({
+        library: [
+          card,
+          hidden,
+          {
+            ...outline,
+            id: "look:acme/box:soft",
+            slug: "box-soft",
+            label: "Soft",
+          },
+        ],
+      });
+      expect(
+        within(looks())
+          .getAllByRole("radio")
+          .map(radio => radio.querySelector(".nx-look-tile__name")?.textContent)
+      ).toEqual(["Default", "Soft"]);
+    });
+
+    it("keeps a hidden look on the block already wearing it, saying Hidden", () => {
+      const hidden = { ...outline, hidden: true as const };
+      mountTarget({ classes: [hidden.id], library: [card, hidden] });
+      const worn = within(looks()).getByRole("radio", { checked: true });
+      expect(worn.querySelector(".nx-look-tile__name")?.textContent).toBe(
+        "OutlineHidden"
+      );
     });
 
     it("wears the chosen look and keeps the block's shared style", () => {
@@ -795,18 +861,20 @@ describe("the shared style target", () => {
       orderIndex: 1,
     };
 
-    it("names the look the canvas applies when the block lists two", () => {
-      // Written in library order, Filled is the one drawn, so the bar's line
-      // and its action are about Filled, whatever order the block lists them.
+    it("says in the target menu what choosing each worn look edits", () => {
+      // Each look is a style shared by every block of the type wearing it,
+      // so choosing one as the target says so before the author edits it.
       mountTarget({
         classes: [filled.id, outline.id],
         library: [card, outline, filled],
       });
-      expect(
-        within(bar()).getByRole("button", {
-          name: "Edit Filled for every box that uses it",
-        })
-      ).toBeDefined();
+      openTargetMenu();
+      expect(targetItem("Filled").textContent).toContain(
+        "Edit Filled for every box that uses it"
+      );
+      expect(targetItem("Outline").textContent).toContain(
+        "Edit Outline for every box that uses it"
+      );
     });
 
     it("takes a look the library hides off when another is chosen", () => {
@@ -856,9 +924,10 @@ describe("the shared style target", () => {
 
     it("keeps Apply on offer while the block wears only a look", () => {
       mountTarget({ classes: [outline.id], library: [card, outline] });
-      expect(
-        within(bar()).getByRole("button", { name: "Apply shared style" })
-      ).toBeDefined();
+      const apply = within(openTargetMenu()).getByRole("menuitem", {
+        name: /^Apply a shared style…/,
+      });
+      expect(apply.getAttribute("aria-disabled")).toBeNull();
     });
 
     it("marks the chosen tile with a check, not by its ring alone", () => {
@@ -873,20 +942,21 @@ describe("the shared style target", () => {
       ).toHaveLength(1);
     });
 
-    it("says an edit changes this block only, and switches to the look everywhere", () => {
+    it("keeps the bar to one line with a look on, and switches to the look from the menu", () => {
       mountTarget({ classes: [outline.id], library: [card, outline] });
-      expect(bar().textContent).toContain("Changes this box only");
-      fireEvent.click(
-        within(bar()).getByRole("button", {
-          name: "Edit Outline for every box that uses it",
-        })
+      // Wearing a look adds no line: the bar says only what an edit changes.
+      expect(bar().querySelectorAll("p:not(.nx-sr-only)")).toHaveLength(0);
+      chooseTarget("Outline");
+      expect(targetChip().getAttribute("aria-label")).toBe(
+        "Editing: shared style Outline"
       );
-      expect(bar().textContent).toMatch(/Editing shared style Outline/);
     });
 
     it("draws no row for a type with no looks", () => {
       mountTarget({ library: [card] });
-      expect(screen.queryByRole("radiogroup", { name: "Look" })).toBeNull();
+      expect(
+        screen.queryByRole("radiogroup", { name: "Block style" })
+      ).toBeNull();
     });
   });
 
@@ -901,12 +971,12 @@ describe("the shared style target", () => {
           refuse = resolve;
         }),
     });
-    fireEvent.click(chip("Card"));
+    chooseTarget("Card");
     const field = screen.getByRole("textbox", { name: "Opacity" });
     fireEvent.change(field, { target: { value: "0.8" } });
     fireEvent.blur(field);
     // The author goes back to this block while Card's write is on its way.
-    fireEvent.click(chip("This block"));
+    chooseTarget("This block");
 
     await act(async () => {
       refuse("Card is locked.");
@@ -920,7 +990,7 @@ describe("the shared style target", () => {
   it("says a later refusal of the style's write beside the field", async () => {
     const writeStyles = vi.fn(async () => "Card is locked.");
     mountTarget({ classes: ["c-card"], writeStyles });
-    fireEvent.click(chip("Card"));
+    chooseTarget("Card");
     const field = screen.getByRole("textbox", { name: "Opacity" });
     fireEvent.change(field, { target: { value: "0.8" } });
     fireEvent.blur(field);
@@ -934,8 +1004,13 @@ describe("the shared style target", () => {
       classes: ["c-card"],
       library: [{ ...card, locked: true } as typeof card],
     });
-    // The chip carries a lock, named in words.
-    fireEvent.click(chip("Card, locked"));
+    // The style carries a lock, named in words, in the menu and on the chip.
+    openTargetMenu();
+    expect(targetItem("Card").textContent).toContain(", locked");
+    fireEvent.click(targetItem("Card"));
+    expect(targetChip().getAttribute("aria-label")).toBe(
+      "Editing: shared style Card, locked"
+    );
     expect(bar().textContent).toContain(
       "Card is locked. Its properties can't be changed."
     );
@@ -963,7 +1038,7 @@ describe("the shared style target", () => {
       classes: ["c-card"],
       mayChange: false,
     });
-    fireEvent.click(chip("Card"));
+    chooseTarget("Card");
     expect(bar().textContent).toContain("You can't change this site's design.");
     expect(
       screen.getAllByText("You can't change this site's design.")
@@ -1013,7 +1088,7 @@ describe("the shared style target", () => {
     });
     expect(words?.contains(reset)).toBe(false);
 
-    fireEvent.click(chip("Card"));
+    chooseTarget("Card");
     const move = document.querySelector('[data-shared-line="move"]');
     expect(move?.querySelector("[data-shared-line-text]")?.textContent).toBe(
       "Set on this block"
@@ -1044,7 +1119,7 @@ describe("the shared style target", () => {
       classes: ["c-card"],
       styles: { base: { [BASE_BREAKPOINT]: { opacity: 0.2 } } },
     });
-    fireEvent.click(chip("Card"));
+    chooseTarget("Card");
     fireEvent.click(
       screen.getByRole("button", { name: "Move Opacity to Card" })
     );
@@ -1067,7 +1142,7 @@ describe("the shared style target", () => {
       styles: { base: { [BASE_BREAKPOINT]: { opacity: 0.2 } } },
       writeStyles,
     });
-    fireEvent.click(chip("Card"));
+    chooseTarget("Card");
     fireEvent.click(
       screen.getByRole("button", { name: "Move Opacity to Card" })
     );
@@ -1075,12 +1150,15 @@ describe("the shared style target", () => {
     expect(editor.applyAll).not.toHaveBeenCalled();
   });
 
-  it("applies an existing style to a block that wears none, and offers no new empty one", () => {
+  it("applies an existing style to a block that wears none, and offers no new empty one", async () => {
     const { editor } = mountTarget({});
     fireEvent.click(
-      within(bar()).getByRole("button", { name: "Apply shared style" })
+      within(openTargetMenu()).getByRole("menuitem", {
+        name: /^Apply a shared style…/,
+      })
     );
-    const search = screen.getByRole("combobox", {
+    // Opened once the menu has handed focus back, under the target chip.
+    const search = await screen.findByRole("combobox", {
       name: "Search shared styles",
     });
     fireEvent.change(search, { target: { value: "brand-new" } });
@@ -1094,22 +1172,21 @@ describe("the shared style target", () => {
     });
   });
 
-  it("offers no second style while the block wears one", () => {
+  it("holds Apply, saying why, while the block wears a shared style", () => {
     mountTarget({ classes: ["c-card"] });
-    expect(
-      within(bar()).queryByRole("button", { name: "Apply shared style" })
-    ).toBeNull();
+    const apply = within(openTargetMenu()).getByRole("menuitem", {
+      name: /^Apply a shared style…/,
+    });
+    expect(apply.getAttribute("aria-disabled")).toBe("true");
+    expect(apply.textContent).toContain("This block already uses Card.");
   });
 
-  it("takes a style off the block, or detaches it, from the chip's menu", () => {
+  it("detaches a style from the block from the target menu", () => {
     const { editor } = mountTarget({ classes: ["c-card"] });
-    const menu = within(bar()).getByRole("button", {
-      name: "Actions for shared style Card",
-    });
-    fireEvent.pointerDown(menu, { button: 0, ctrlKey: false });
+    openTargetMenu();
     fireEvent.click(
       screen.getByRole("menuitem", {
-        name: /Detach: keep the look on this block only/,
+        name: /^Detach\s*Card.*Keep the look on this block only/,
       })
     );
     expect(editor.applyAll.mock.calls[0]?.[0]?.[0]).toEqual({
@@ -1122,21 +1199,38 @@ describe("the shared style target", () => {
 });
 
 describe("sections", () => {
-  it("opens one section at a time", () => {
+  it("opens the first section and folds each on its own", () => {
     mount({ spacing: true, effects: true });
 
     // The first section is open and the second is not, without either being
-    // clicked: an accordion that opened nothing would show a block's style
+    // clicked: a panel that opened nothing would show a block's style
     // surface as a column of headings.
     const spacing = screen.getByRole("button", { name: /Spacing/ });
     const effects = screen.getByRole("button", { name: /Effects/ });
     expect(spacing.getAttribute("aria-expanded")).toBe("true");
     expect(effects.getAttribute("aria-expanded")).toBe("false");
 
+    // Opening one leaves the other as it was: both can be open together.
     fireEvent.click(effects);
+    expect(spacing.getAttribute("aria-expanded")).toBe("true");
+    expect(effects.getAttribute("aria-expanded")).toBe("true");
 
+    // And closing one leaves the other open.
+    fireEvent.click(spacing);
     expect(spacing.getAttribute("aria-expanded")).toBe("false");
     expect(effects.getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("opens a section that holds a value, whatever its place", () => {
+    const styles = {
+      base: { [BASE_BREAKPOINT]: { opacity: 0.5 } },
+    } as NodeStyles;
+    mount({ spacing: true, effects: true }, styles);
+    expect(
+      screen
+        .getByRole("button", { name: /Effects/ })
+        .getAttribute("aria-expanded")
+    ).toBe("true");
   });
 
   it("marks each section that holds values, in words as well as a dot", () => {
@@ -1149,8 +1243,8 @@ describe("sections", () => {
     // which sections they have touched without opening each one.
     const spacing = screen.getByRole("button", { name: /Spacing/ });
     const effects = screen.getByRole("button", { name: /Effects/ });
-    expect(spacing.textContent).toContain("has values");
-    expect(effects.textContent).not.toContain("has values");
+    expect(spacing.textContent).toContain("has changes");
+    expect(effects.textContent).not.toContain("has changes");
   });
 
   it("draws a section's dot beside its name, in a heading the panel styles as its own", () => {
@@ -1172,13 +1266,13 @@ describe("sections", () => {
     ).toBeTruthy();
   });
 
-  it("shows a section's common properties and lists the rest under More", () => {
+  it("shows a section's common properties and adds the rest in CSS properties", () => {
     mount({ effects: true });
 
     expect(document.querySelector('[data-property="opacity"]')).not.toBeNull();
     expect(document.querySelector('[data-property="mixBlendMode"]')).toBeNull();
 
-    reveal("effects", "Mix blend mode");
+    reveal("mix-blend-mode");
 
     expect(
       document.querySelector('[data-property="mixBlendMode"]')
@@ -1244,9 +1338,9 @@ describe("controls", () => {
 
   it("draws a keyword leaf as a select over the catalog's own vocabulary", () => {
     mount({ effects: true });
-    reveal("effects", "Mix blend mode");
+    reveal("mix-blend-mode");
 
-    const trigger = screen.getByLabelText("Mix blend mode");
+    const trigger = screen.getByLabelText("mix-blend-mode");
     fireEvent.click(trigger);
 
     // `multiply` is the catalog's, not a list written here — a value absent
@@ -1472,7 +1566,7 @@ describe("controls", () => {
     // From the row's reset: a select cannot offer "unset" as an item.
     fireEvent.click(
       fieldsOf("mixBlendMode").getByRole("button", {
-        name: /^Reset Mix blend mode/,
+        name: /^Reset mix-blend-mode/,
       })
     );
 
@@ -1560,7 +1654,7 @@ describe("controls", () => {
     } as NodeStyles;
     const editor = mount({ spacing: true, typography: false }, styles);
 
-    fireEvent.click(screen.getByRole("button", { name: /Typography/ }));
+    openSection(/^Text(has changes)?$/);
     const fontSize = fieldsOf("fontSize");
 
     expect(fontSize.queryByRole("textbox")).toBeNull();
@@ -1598,15 +1692,20 @@ describe("controls", () => {
   });
 
   it("draws a nested form's toggle just above its own control", () => {
-    // Position's z-index is the last of its controls: a toggle drawn above
-    // them all left the number field at the bottom with no visible name.
-    mount({ position: true });
+    // A z-index is a number or auto: a toggle drawn anywhere but just above
+    // its field left the number field with no visible name. Positioned, so a
+    // z-index has an effect and is offered.
+    mount(
+      { position: true },
+      { base: { [BASE_BREAKPOINT]: { position: { type: "relative" } } } }
+    );
+    reveal("z-index");
     const toggleRow = screen
       .getByRole("radiogroup", { name: "Z index" })
       .closest("[data-form-choice]");
     const next = toggleRow?.nextElementSibling;
     const label = next?.querySelector("label");
-    expect(label?.textContent).toContain("Z index");
+    expect(label?.textContent).toContain("z-index");
     expect(label?.hasAttribute("data-named-above")).toBe(true);
   });
 
@@ -1704,11 +1803,15 @@ describe("controls", () => {
     expect(fieldsOf("color").getByPlaceholderText("Name or hex")).toBeDefined();
   });
 
-  it("sets alignment with icons that follow the container's direction", () => {
+  it("sets alignment with icons that follow the container's direction", async () => {
     // A column's main axis runs down the page, so "start" points up, not left.
     const styles = {
       base: {
-        [BASE_BREAKPOINT]: { display: "flex", flexDirection: "column" },
+        [BASE_BREAKPOINT]: {
+          display: "flex",
+          flexDirection: "column",
+          ...RAW_LAYOUT,
+        },
       },
     } as NodeStyles;
     const editor = mount({ layout: true }, styles);
@@ -1716,9 +1819,7 @@ describe("controls", () => {
     // "Justify", its CSS name in the label's tooltip: "Justify content" was cut
     // short in the 7rem label column.
     const group = screen.getByRole("radiogroup", { name: "Justify" });
-    expect(screen.getByText("Justify").closest("label")?.title).toMatch(
-      /^Justify content/
-    );
+    expect(await hintOf("Justify")).toMatch(/^Justify content/);
     const start = within(group).getByRole("radio", { name: "Start" });
     expect(start.getAttribute("data-icon")).toBe("AlignVerticalJustifyStart");
 
@@ -1732,7 +1833,13 @@ describe("controls", () => {
     // A label's `for` would CLICK a radio button, choosing or clearing a value;
     // this label only moves focus to the group's tab stop.
     const styles = {
-      base: { [BASE_BREAKPOINT]: { display: "flex", justifyContent: "end" } },
+      base: {
+        [BASE_BREAKPOINT]: {
+          display: "flex",
+          justifyContent: "end",
+          ...RAW_LAYOUT,
+        },
+      },
     } as NodeStyles;
     const editor = mount({ layout: true }, styles);
 
@@ -1748,7 +1855,7 @@ describe("controls", () => {
     // and a Reset line under it besides, and none at all where the panel was
     // mounted without a cascade to say where values come from.
     const styles = {
-      base: { [BASE_BREAKPOINT]: { display: "flex" } },
+      base: { [BASE_BREAKPOINT]: { display: "flex", ...RAW_LAYOUT } },
     } as NodeStyles;
     const editor = mount({ layout: true }, styles);
 
@@ -1761,7 +1868,7 @@ describe("controls", () => {
     const reset = within(field).getByRole("button", { name: /^Reset Display/ });
     expect(reset.textContent).toBe("");
     fireEvent.click(reset);
-    // The only value goes, and with it the node's styles.
+    // The value goes; the alignment that kept the layout raw stays.
     expect(editor.applyAll).toHaveBeenCalledTimes(1);
     expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).not.toContain(
       "flex"
@@ -1811,9 +1918,11 @@ describe("controls", () => {
     ).toBeDefined();
   });
 
-  it("names a token's clear action for its property, not just 'Clear'", () => {
+  it("names a held token's Reset for its property, not just the side", () => {
     // Several token-valued properties on one panel would otherwise be a column
     // of identical buttons, and the label pointed at an id nothing carried.
+    // A token the site lacks has no value to unlink to, so Reset is the way
+    // to remove it.
     const styles = {
       base: {
         [BASE_BREAKPOINT]: {
@@ -1824,19 +1933,16 @@ describe("controls", () => {
     } as NodeStyles;
     mount({ spacing: true }, styles);
 
-    // Each names the PROPERTY it clears, not just the side: `padding` and
+    // Each names the PROPERTY it resets, not just the side: `padding` and
     // `margin` both have a block start, so a name built from the side alone
     // says the same thing twice.
     expect(
-      screen.getByRole("button", {
-        name: "Clear Padding block start",
-      })
+      screen.getByRole("button", { name: /^Reset Padding block start at / })
     ).toBeDefined();
     expect(
-      screen.getByRole("button", {
-        name: "Clear Margin block start",
-      })
+      screen.getByRole("button", { name: /^Reset Margin block start at / })
     ).toBeDefined();
+    expect(screen.queryByRole("button", { name: /^Clear / })).toBeNull();
   });
 
   it("names every reset for its own property", () => {
@@ -1852,9 +1958,9 @@ describe("controls", () => {
     mount({ effects: true }, styles);
 
     expect(
-      screen.getByRole("button", { name: /^Reset Mix blend mode/ })
+      screen.getByRole("button", { name: /^Reset mix-blend-mode/ })
     ).toBeDefined();
-    expect(screen.getByRole("button", { name: /^Reset Filter/ })).toBeDefined();
+    expect(screen.getByRole("button", { name: /^Reset filter/ })).toBeDefined();
   });
 
   it("does not read NBSP-only text as an empty field, which would DELETE the value", () => {
@@ -1943,10 +2049,9 @@ describe("controls", () => {
     expect(padding.getByText("space.4")).toBeDefined();
     expect(padding.queryByDisplayValue("space.4")).toBeNull();
 
+    // The row's Reset removes it.
     fireEvent.click(
-      padding.getByRole("button", {
-        name: "Clear Padding block start",
-      })
+      padding.getByRole("button", { name: /^Reset Padding block start at / })
     );
 
     expect(editor.applyAll).toHaveBeenCalledTimes(1);
@@ -1966,7 +2071,7 @@ describe("the site's host-fetch policy", () => {
 
   it("refuses a URL naming a host the site does not load from", () => {
     const editor = mount({ background: { image: true } }, undefined, REFUSE);
-    const field = fieldsOf("background").getByLabelText("Url");
+    const field = fieldsOf("background").getByLabelText("Image link");
 
     fireEvent.change(field, { target: { value: REMOTE } });
     fireEvent.blur(field);
@@ -1987,7 +2092,7 @@ describe("the site's host-fetch policy", () => {
     // from "the panel refuses every URL". Both halves produce a refused write
     // in the test above; only this one distinguishes them.
     const editor = mount({ background: { image: true } }, undefined, ALLOW);
-    const field = fieldsOf("background").getByLabelText("Url");
+    const field = fieldsOf("background").getByLabelText("Image link");
 
     fireEvent.change(field, { target: { value: REMOTE } });
     fireEvent.blur(field);
@@ -2001,7 +2106,7 @@ describe("the site's host-fetch policy", () => {
     // scheme allowlist is the only limit. Passing an empty policy here rather
     // than a refusing one is what makes that distinct from a lockdown.
     const editor = mount({ background: { image: true } });
-    const field = fieldsOf("background").getByLabelText("Url");
+    const field = fieldsOf("background").getByLabelText("Image link");
 
     fireEvent.change(field, { target: { value: REMOTE } });
     fireEvent.blur(field);
@@ -2018,13 +2123,145 @@ describe("the site's host-fetch policy", () => {
     render(<InspectorPanel editor={editor} policy={REFUSE} />);
 
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
-    const field = fieldsOf("background").getByLabelText("Url");
+    const field = fieldsOf("background").getByLabelText("Image link");
 
     fireEvent.change(field, { target: { value: REMOTE } });
     fireEvent.blur(field);
 
     expect(editor.applyAll).not.toHaveBeenCalled();
     expect(field.getAttribute("aria-invalid")).toBe("true");
+  });
+});
+
+describe("the background image and gradient, which both write background-image", () => {
+  it("draws the image picker for the image only, and the gradient as its own field", () => {
+    // Both rows set `background-image`; only the image is a file to choose.
+    mount({ background: { image: true, gradient: true } });
+    expect(
+      fieldsOf("background").getByRole("group", { name: "Image" })
+    ).toBeTruthy();
+    const gradient = fieldsOf("backgroundGradient");
+    expect(gradient.queryByRole("textbox", { name: "Image link" })).toBeNull();
+    expect(gradient.queryByRole("button", { name: /Choose/ })).toBeNull();
+    // The gradient keeps the CSS value field it had.
+    expect(gradient.getAllByRole("textbox")).toHaveLength(1);
+  });
+});
+
+describe("the background image in the Inspector's Style tab", () => {
+  it("reaches the host's media library, as the Content tab's controls do", () => {
+    // Without the host's services the Style tab offers only a link, so a
+    // Choose button here is the services reaching the tab.
+    register({ background: { image: true } });
+    const editor = editorFor(documentOf());
+    const MediaPicker = () => null;
+    render(
+      <InspectorPanel
+        editor={editor}
+        contentServices={{ MediaPicker } as never}
+      />
+    );
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
+    expect(
+      fieldsOf("background").getByRole("button", {
+        name: "Choose Background image",
+      })
+    ).toBeTruthy();
+  });
+});
+
+describe("the background size choices", () => {
+  const withImage = {
+    base: { [BASE_BREAKPOINT]: { background: { url: "/a.png" } } },
+  } as NodeStyles;
+
+  it("writes Fit's size and repeat on the block as ONE edit", () => {
+    // One applied group is one entry in the history, so one undo takes both
+    // back; a size written alone would leave the image tiling.
+    const editor = mount({ background: { image: true } }, withImage);
+    fireEvent.click(fieldsOf("background").getByRole("radio", { name: "Fit" }));
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
+    const ops = editor.applyAll.mock.calls[0]?.[0] as BuilderOp[];
+    expect(ops).toHaveLength(1);
+    expect(ops[0]).toEqual({
+      kind: "update",
+      id: "a",
+      patch: {
+        styles: {
+          base: {
+            [BASE_BREAKPOINT]: {
+              background: {
+                url: "/a.png",
+                size: "contain",
+                repeat: "no-repeat",
+              },
+            },
+          },
+        },
+      },
+    });
+  });
+
+  it("moves focus into a group of buttons from its label", () => {
+    // The group is named by a container that takes no focus, so the label
+    // hands focus to the group's tab stop: the choice in force, or the first.
+    mount({ background: { image: true } }, withImage);
+    const row = fieldsOf("background");
+    const labelOf = (words: string) =>
+      row
+        .getByText(words, { selector: ".nx-style-inspector__field-label-text" })
+        .closest("label") as HTMLElement;
+    fireEvent.click(labelOf("Size"));
+    expect(document.activeElement).toBe(
+      row.getByRole("radio", { name: "Cover" })
+    );
+    fireEvent.click(labelOf("Position"));
+    expect(document.activeElement).toBe(
+      row.getByRole("radio", { name: "Top left" })
+    );
+  });
+
+  it("sends Cover's size and repeat to a shared style as ONE change", () => {
+    register({ background: { image: true } });
+    const editor = editorFor(documentOf());
+    const write = vi.fn(async (_change: unknown) => undefined);
+    const target = {
+      kind: "shared" as const,
+      worn: [],
+      style: {
+        id: "c-card",
+        name: "Card",
+        slug: "card",
+        className: ".nx-c-card",
+        locked: false,
+        inCode: false,
+        styles: withImage,
+      } as never,
+      readOnly: undefined,
+      write,
+    };
+    render(<StyleInspectorPanel editor={editor} target={target} />);
+    fireEvent.click(
+      fieldsOf("background").getByRole("radio", { name: "Cover" })
+    );
+    expect(editor.applyAll).not.toHaveBeenCalled();
+    expect(write).toHaveBeenCalledTimes(1);
+    const change = write.mock.calls[0]?.[0];
+    if (typeof change !== "function") throw new Error("no change");
+    expect((change as (styles: NodeStyles) => unknown)(withImage)).toEqual({
+      kind: "write",
+      styles: {
+        base: {
+          [BASE_BREAKPOINT]: {
+            background: {
+              url: "/a.png",
+              size: "cover",
+              repeat: "no-repeat",
+            },
+          },
+        },
+      },
+    });
   });
 });
 
@@ -2574,7 +2811,7 @@ describe("dragging a number field's label", () => {
   it("ends a drag unwritten when another block is selected under it", () => {
     // The drag's value came from the old block, so neither block is
     // written and the field shows the new one's, whether the row is drawn
-    // afresh for it (sections are keyed by block) or reused.
+    // afresh for it (section bodies are keyed by block) or reused.
     register({ spacing: true });
     const document = {
       formatVersion: 1,
@@ -3281,7 +3518,7 @@ describe("where a control's value came from", () => {
       ],
     } as never);
     const cardStyles = {
-      base: { [BASE_BREAKPOINT]: { display: "flex" } },
+      base: { [BASE_BREAKPOINT]: { display: "flex", ...RAW_LAYOUT } },
     } as NodeStyles;
     const target = {
       kind: "shared" as const,
@@ -3577,9 +3814,13 @@ describe("where a control's value came from", () => {
   });
 
   it("marks an inherited Display's icon, without choosing it", () => {
-    mountCarded([fromCard({ property: "display", value: "flex" })], {
-      layout: true,
-    });
+    mountCarded(
+      [
+        fromCard({ property: "display", value: "flex" }),
+        fromCard({ property: "align-items", value: "baseline" }),
+      ],
+      { layout: true }
+    );
     const flex = screen.getByRole("radio", { name: "Flex, inherited" });
     expect(flex.getAttribute("aria-checked")).toBe("false");
     expect(sourceIn("display")).toBe("From .card");
@@ -4133,7 +4374,9 @@ describe("where a control's value came from", () => {
      * value, so the absent dot is the ambiguity being respected rather than the
      * panel having failed to render the field at all.
      */
-    expect(fieldsOf("background").getByLabelText("Url")).toBeTruthy();
+    expect(
+      fieldsOf("background").getByRole("group", { name: "Image" })
+    ).toBeTruthy();
     expect(dotIn("background")).toBeNull();
   });
 
@@ -4500,6 +4743,28 @@ describe("naming the place a value came from", () => {
       );
     });
 
+    it("names the Site text row a heading's size or the page's text came from", () => {
+      expect(
+        sourceFor({ kind: "element", tag: "h2" }, at({ property: "font-size" }))
+      ).toBe("From Site text: Heading 2");
+      const text = describeProvenance(
+        {
+          kind: "inherited",
+          entry: at({ property: "line-height" }),
+          from: { kind: "element", tag: "root" },
+        } as never,
+        editing as never
+      )?.text;
+      expect(text).toBe("From Site text: Body");
+      // A heading's weight is the element's own default, not a row's.
+      expect(
+        sourceFor(
+          { kind: "element", tag: "h2" },
+          at({ property: "font-weight" })
+        )
+      ).toBe("From H2 defaults");
+    });
+
     it("names no breakpoint after defaults, which no breakpoint edits", () => {
       // "From H2 defaults · Desktop" sends an author to a tier where the value
       // is not, since defaults are no tier's to edit.
@@ -4664,7 +4929,9 @@ describe("the action a control's breakpoint provenance earns", () => {
      */
     register({ layout: true });
     const editor = editorFor(
-      documentOf({ base: { tablet: { display: "flex" } } } as NodeStyles)
+      documentOf({
+        base: { tablet: { display: "flex", ...RAW_LAYOUT } },
+      } as NodeStyles)
     );
     render(
       <StyleInspectorPanel
@@ -4680,6 +4947,13 @@ describe("the action a control's breakpoint provenance earns", () => {
                 origin: { kind: "node", id: "a" },
                 property: "display",
                 value: "flex",
+                state: "base",
+                breakpoint: "tablet",
+              },
+              {
+                origin: { kind: "node", id: "a" },
+                property: "align-items",
+                value: "baseline",
                 state: "base",
                 breakpoint: "tablet",
               },
@@ -4985,7 +5259,7 @@ describe("a segmented keyword control behaves as a toggle", () => {
    */
   const allOptions = () =>
     within(
-      fieldsOf("fontStyle").getByRole("group", { name: "Font style" })
+      fieldsOf("fontStyle").getByRole("group", { name: "font-style" })
     ).getAllByRole("button") as HTMLButtonElement[];
 
   /**
@@ -5024,7 +5298,7 @@ describe("a segmented keyword control behaves as a toggle", () => {
         : ({ base: { [BASE_BREAKPOINT]: { fontStyle: stored } } } as NodeStyles)
     );
     // Behind Typography's More until it holds a value.
-    if (stored === undefined) reveal("typography", "Font style");
+    if (stored === undefined) reveal("font-style");
     return editor;
   };
 
@@ -5043,9 +5317,9 @@ describe("a segmented keyword control behaves as a toggle", () => {
       mountWith(stored);
 
       for (const button of allOptions()) {
-        // The button's keyword is its tooltip; its words are its text.
+        // The button's words are the keyword's plain name.
         expect(button.getAttribute("aria-pressed")).toBe(
-          String(button.getAttribute("title") === stored)
+          String(button.textContent === keywordLabel("font-style", stored))
         );
       }
     }
@@ -5114,7 +5388,7 @@ describe("a segmented keyword control behaves as a toggle", () => {
      * reading as valid parts of a control that is not.
      */
     const editor = mount({ typography: true });
-    reveal("typography", "Font style");
+    reveal("font-style");
 
     // The positive control, BEFORE the refusal. Without it an implementation
     // that marks every button invalid unconditionally passes — and that
@@ -5163,7 +5437,7 @@ describe("a segmented keyword control behaves as a toggle", () => {
         <StyleInspectorPanel editor={editor} />
       </form>
     );
-    reveal("typography", "Font style");
+    reveal("font-style");
 
     fireEvent.click(optionButton("italic"));
 
@@ -5185,7 +5459,7 @@ describe("a segmented keyword control behaves as a toggle", () => {
 
     // The field's own label: the form toggle's row says the name as well.
     fireEvent.click(
-      fieldsOf("fontStyle").getByText("Font style", { selector: "label *" })
+      fieldsOf("fontStyle").getByText("font-style", { selector: "label *" })
     );
 
     expect(editor.applyAll).not.toHaveBeenCalled();
@@ -5280,25 +5554,6 @@ describe("a per-side property is drawn as a box", () => {
     expect(field.closest("[data-side]")?.getAttribute("data-side")).toBe(
       "inlineStart"
     );
-  });
-
-  it("commits a side typed with its unit, and keeps each side compact", () => {
-    // No unit menu in the box: a side takes "12px" or "2rem" as typed, and a
-    // short dash says it is unset rather than a hint that cannot fit.
-    const { editor, box } = mountSpacingBox(LTR);
-    const field = within(box as HTMLElement).getByLabelText(
-      "Padding top"
-    ) as HTMLInputElement;
-
-    expect(box?.querySelector(".nx-style-inspector__unit")).toBeNull();
-    expect(field.placeholder).toBe("–");
-
-    fireEvent.change(field, { target: { value: "12px" } });
-    fireEvent.blur(field);
-
-    const ops = JSON.stringify(editor.applyAll.mock.calls[0]?.[0]);
-    expect(ops).toContain("padding");
-    expect(ops).toContain('"blockStart":"12px"');
   });
 
   it("marks each side with WHICH side it is, not with its position", () => {
@@ -5425,40 +5680,6 @@ describe("a per-side property is drawn as a box", () => {
     expect(editor.applyAll).not.toHaveBeenCalled();
   });
 
-  it("does not reset a side from the variables list it opened", () => {
-    /*
-     * The list is drawn in a layer at the end of the page, but React carries
-     * a key press from it back through the side that opened it. Alt+Backspace
-     * there (delete a word, in the list's search) is not the side's reset.
-     */
-    const styles = {
-      base: { [BASE_BREAKPOINT]: { margin: { blockStart: "8px" } } },
-    } as unknown as NodeStyles;
-    register({ spacing: true });
-    const editor = editorFor(documentOf(styles));
-    render(
-      <StyleInspectorPanel
-        editor={editor}
-        sideOrientation={LTR}
-        tokens={{
-          tokens: [
-            { name: "space.sm", kind: "dimension", values: { light: "8px" } },
-          ],
-        }}
-      />
-    );
-    fireEvent.click(
-      screen.getByRole("button", { name: "Variables for Margin top" })
-    );
-    const list = screen.getByRole("listbox", { name: "Variables" });
-    // The control: the list really is outside the side's field.
-    expect(list.closest(".nx-spacing-box")).toBeNull();
-
-    fireEvent.keyDown(list, { key: "Backspace", altKey: true });
-
-    expect(editor.applyAll).not.toHaveBeenCalled();
-  });
-
   it("goes round the box mirrored on a right-to-left element", () => {
     // The order is the sides' logical one: top, inline end, bottom, inline
     // start, which on a right-to-left element is top, left, bottom, right.
@@ -5467,10 +5688,10 @@ describe("a per-side property is drawn as a box", () => {
       direction: "rtl",
     });
     const names = Array.from(
-      box?.querySelectorAll<HTMLInputElement>(
-        "[data-ring='margin'] > [data-side] input"
+      box?.querySelectorAll<HTMLButtonElement>(
+        "[data-ring='margin'] > [data-side] .nx-spacing-side"
       ) ?? [],
-      input => input.labels?.[0]?.textContent?.trim() ?? ""
+      side => side.labels?.[0]?.textContent?.trim() ?? ""
     );
 
     expect(names).toEqual([
@@ -5570,24 +5791,6 @@ describe("a per-side property is drawn as a box", () => {
     expect(
       within(box as HTMLElement).getByLabelText("Inline start")
     ).toBeDefined();
-  });
-
-  it("names a side's whole value in its tooltip, for a value its cell cannot show", () => {
-    // A value wider than its cell was cut short with no way to read it.
-    register({ spacing: true });
-    const styles = {
-      base: { [BASE_BREAKPOINT]: { padding: { inlineStart: "12.375rem" } } },
-    } as NodeStyles;
-    render(
-      <StyleInspectorPanel
-        editor={editorFor(documentOf(styles))}
-        sideOrientation={{ writingMode: "horizontal-tb", direction: "ltr" }}
-      />
-    );
-    const side = document.querySelector(
-      '[data-property="padding"] [data-side="inlineStart"] input'
-    ) as HTMLInputElement;
-    expect(side.getAttribute("title")).toBe("12.375rem");
   });
 
   it("resolves the axes from the CANVAS, through the panel that owns it", () => {
@@ -5720,10 +5923,10 @@ describe("opacity in percent", () => {
     expect(submitted).not.toHaveBeenCalled();
   });
 
-  it("says in its label's tooltip that it is in percent", () => {
+  it("says in its label's tooltip that it is in percent", async () => {
     // The catalog's summary reads "0 to 1", which the field no longer takes.
     mount({ effects: true });
-    const title = screen.getByText("Opacity").closest("label")?.title ?? "";
+    const title = await hintOf("Opacity");
     expect(title).toMatch(/percent/);
     expect(title).not.toMatch(/0 to 1/);
   });
@@ -5790,6 +5993,7 @@ describe("an image's focal point", () => {
     // Scale down is None or Contain, whichever is smaller: it sits too.
     for (const fit of ["cover", "contain", "none", "scale-down"]) {
       mountImage(fit);
+      openSection(/^Size/);
       expect(
         screen.getByRole("radiogroup", { name: "Focal point" })
       ).toBeDefined();
@@ -5798,12 +6002,16 @@ describe("an image's focal point", () => {
     }
   });
 
-  it("waits behind More where the fit stretches the picture, or none is set", () => {
+  it("shows on an image whatever its fit, as anything an image uses does", () => {
+    // Where it shows is the engine's answer, which is about the element: a
+    // replaced one takes an object position. The fit decides only what the
+    // point says it does.
     for (const fit of ["fill", undefined]) {
       mountImage(fit);
+      openSection(/^Size/);
       expect(
-        screen.queryByRole("radiogroup", { name: "Focal point" })
-      ).toBeNull();
+        screen.getByRole("radiogroup", { name: "Focal point" })
+      ).toBeDefined();
       cleanup();
       clearBlocks();
     }
@@ -5829,17 +6037,22 @@ describe("an image's focal point", () => {
 });
 
 describe("an image's fit", () => {
-  it("is named Fit, its CSS name in the label's tooltip", () => {
+  it("is named Fit, its CSS name in the label's tooltip", async () => {
     // "Object fit" is how CSS names it. Plain "Fit", since the same row fits
     // a video, an embed or a canvas as well as an image.
     mount(
       { dimensions: true },
       { base: { [BASE_BREAKPOINT]: { objectFit: "cover" } } }
     );
+    openSection(/^Size/);
     expect(screen.getByRole("radiogroup", { name: "Fit" })).toBeDefined();
-    expect(screen.getByText("Fit").closest("label")?.title).toMatch(
-      /^Object fit/
-    );
+    // Size's own Fit, not Inside its parent's Fill / Fit / Fixed choice.
+    const row = document.querySelector<HTMLElement>(
+      '[data-property="objectFit"]'
+    )!;
+    fireEvent.pointerMove(row.querySelector(".nx-inspector__field")!);
+    const tip = await screen.findByRole("tooltip", {}, { timeout: 2000 });
+    expect(tip.textContent).toMatch(/^Object fit/);
   });
 });
 
@@ -5934,16 +6147,15 @@ describe("text decoration", () => {
 });
 
 describe("letter case", () => {
-  it("is named in plain words, its CSS name in the label's tooltip", () => {
-    // "Text transform" says how CSS does it; "Letter case" says what it is.
+  it("is named by its CSS name in CSS properties, its plain words in the tooltip", async () => {
+    // Added in "CSS properties", where the CSS name is what a developer
+    // looks for; "Letter case" says what it is.
     mount(
       { typography: true },
       { base: { [BASE_BREAKPOINT]: { textTransform: "uppercase" } } }
     );
-    const group = screen.getByRole("radiogroup", { name: "Letter case" });
-    expect(screen.getByText("Letter case").closest("label")?.title).toMatch(
-      /^Text transform/
-    );
+    const group = screen.getByRole("radiogroup", { name: "text-transform" });
+    expect(await hintOf("text-transform")).toMatch(/^Letter case/);
     expect(
       within(group).getByRole("radio", { name: "Uppercase" })
     ).toBeDefined();
@@ -5970,7 +6182,7 @@ describe("a font size's unit menu", () => {
 
 describe("the Baseline gate on the panel", () => {
   it("offers no control for a withheld keyword", () => {
-    mount({ layout: true });
+    mount({ layout: true }, CUSTOM_DISPLAY);
 
     fireEvent.click(screen.getByLabelText("More Display values"));
 
@@ -5980,7 +6192,7 @@ describe("the Baseline gate on the panel", () => {
 
   it("names a keyword in words, with its CSS spelling in the tooltip", () => {
     // "inline-flex" read as code; the words are what an author picks from.
-    mount({ layout: true });
+    mount({ layout: true }, CUSTOM_DISPLAY);
     fireEvent.click(screen.getByLabelText("More Display values"));
     const option = screen.getByRole("option", { name: "Inline flex" });
     expect(option.getAttribute("title")).toBe("inline-flex");
@@ -5996,7 +6208,7 @@ describe("the Baseline gate on the panel", () => {
       },
     } as NodeStyles;
     mount({ layout: true }, styles);
-    fireEvent.click(screen.getByRole("combobox", { name: /^Grid auto flow/ }));
+    fireEvent.click(screen.getByRole("combobox", { name: /^grid-auto-flow/ }));
     const options = screen.getAllByRole("option", { name: "Row, fill gaps" });
     expect(options).toHaveLength(1);
     expect(options[0]?.getAttribute("title")).toBe("DENSE ROW");
@@ -6033,12 +6245,13 @@ describe("the Baseline gate on the panel", () => {
 });
 
 describe("a read-only design", () => {
-  // Effects alone, so its section is the open one and its More is drawn
-  // whenever it is allowed: the locked case then cannot pass by absence.
+  // Effects alone, so its section is the open one and "+ Add CSS property"
+  // is drawn whenever it is allowed: the locked case then cannot pass by
+  // absence.
   const opacityInput = () =>
     fieldsOf("opacity").getByLabelText("Opacity") as HTMLInputElement;
 
-  it("says why and disables every control, More included, while the block is locked", () => {
+  it("says why and disables every control, adding included, while the block is locked", () => {
     register({ effects: true });
     const document = documentOf();
     const locked = {
@@ -6051,21 +6264,20 @@ describe("a read-only design", () => {
       screen.getByText(/Locked: it can't be moved, deleted or edited/)
     ).toBeDefined();
     expect(opacityInput().matches(":disabled")).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: /^CSS properties/ }));
     expect(
-      screen.queryByRole("button", { name: "More effects properties" })
+      screen.queryByRole("button", { name: "+ Add CSS property" })
     ).toBeNull();
   });
 
-  it("leaves the editor around the More menu in the accessibility tree", async () => {
-    // A modal menu marks everything outside it aria-hidden while those
+  it("leaves the editor around the property list in the accessibility tree", async () => {
+    // A modal list would mark everything outside it aria-hidden while those
     // controls stay focusable (axe: aria-hidden-focus). Nothing is hidden.
     register({ effects: true });
     render(<StyleInspectorPanel editor={editorFor(documentOf())} />);
-    fireEvent.keyDown(
-      screen.getByRole("button", { name: "More effects properties" }),
-      { key: "Enter" }
-    );
-    await screen.findByRole("menu");
+    fireEvent.click(screen.getByRole("button", { name: /^CSS properties/ }));
+    fireEvent.click(screen.getByRole("button", { name: "+ Add CSS property" }));
+    await screen.findByRole("listbox");
 
     expect(document.querySelector('[data-aria-hidden="true"]')).toBeNull();
   });
@@ -6076,8 +6288,9 @@ describe("a read-only design", () => {
     render(<StyleInspectorPanel editor={editorFor(documentOf())} />);
 
     expect(opacityInput().matches(":disabled")).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: /^CSS properties/ }));
     expect(
-      screen.getByRole("button", { name: "More effects properties" })
+      screen.getByRole("button", { name: "+ Add CSS property" })
     ).toBeDefined();
   });
 
@@ -6106,12 +6319,17 @@ describe("a read-only design", () => {
 describe("which elements count as media for the fit controls", () => {
   const fitShown = (renderedTag: string) => {
     register({ dimensions: true });
+    const editor = editorFor(documentOf());
+    // With the page's cascade, as the canvas reads it: before that, what the
+    // block draws is not known and nothing is hidden for it.
     const { unmount } = render(
       <StyleInspectorPanel
-        editor={editorFor(documentOf())}
+        editor={editor}
         renderedTag={renderedTag}
+        cascade={{ nodes: editor.document.nodes, entries: [] } as never}
       />
     );
+    openSection(/^Size/);
     const shown =
       document.querySelector('[data-property="objectFit"]') !== null;
     unmount();
@@ -6124,6 +6342,15 @@ describe("which elements count as media for the fit controls", () => {
     // A `<picture>` only chooses a source; the image inside it is what fits.
     expect(fitShown("picture")).toBe(false);
     expect(fitShown("div")).toBe(false);
+  });
+
+  it("shows them before the canvas has said what the block draws", () => {
+    register({ dimensions: true });
+    render(<StyleInspectorPanel editor={editorFor(documentOf())} />);
+    openSection(/^Size/);
+    expect(
+      document.querySelector('[data-property="objectFit"]')
+    ).not.toBeNull();
   });
 });
 
@@ -6214,9 +6441,55 @@ describe("the Font control", () => {
     fireEvent.click(
       fieldsOf("fontFamily").getByRole("button", { name: /^Font, / })
     );
-    fireEvent.click(
-      screen.getByRole("button", { name: "Add or manage fonts…" })
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Manage fonts…" }));
     expect(onManageFonts).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("what the Style tab tells the panel's filter", () => {
+  it("reports the shared style's own values while one is the target", () => {
+    // The block holds a background; Card, the target, holds a colour. The
+    // filter keeps what these controls show: Card's.
+    register({ color: true, background: true });
+    const editor = editorFor(
+      documentOf({
+        base: { [BASE_BREAKPOINT]: { backgroundColor: "#123456" } },
+      } as NodeStyles)
+    );
+    const target = {
+      kind: "shared" as const,
+      worn: [],
+      style: {
+        id: "cls-1",
+        name: "Card",
+        styles: { base: { [BASE_BREAKPOINT]: { color: "#ff0000" } } },
+      } as never,
+      readOnly: undefined,
+      write: async () => undefined,
+    };
+    const report = vi.fn();
+    render(
+      <SettingsFilterProvider initial={{ onlyChanged: true }}>
+        <StyleReportContext.Provider value={report}>
+          <StyleInspectorPanel editor={editor} target={target} />
+        </StyleReportContext.Provider>
+      </SettingsFilterProvider>
+    );
+    const sections = report.mock.lastCall?.[0]?.sections as
+      | readonly { properties: readonly { property: string; set: boolean }[] }[]
+      | undefined;
+    const set = (sections ?? [])
+      .flatMap(section => section.properties)
+      .filter(property => property.set)
+      .map(property => property.property);
+    expect(set).toContain("color");
+    expect(set).not.toContain("backgroundColor");
+    // And says a shared style is the target, which draws no block shortcuts.
+    expect(report.mock.lastCall?.[0]?.shared).toBe(true);
+    // And reports the style's own values at every state and device, which
+    // "Also changed on" reads, not the block's.
+    expect(report.mock.lastCall?.[0]?.styles).toEqual({
+      base: { [BASE_BREAKPOINT]: { color: "#ff0000" } },
+    });
   });
 });

@@ -31,11 +31,14 @@ export function consentFlagFor(table: string, column: string): string {
 /**
  * Whether `consent` names `table`.`column`, matched exactly as the report prints it: the same match
  * every command makes of the one consent, so one list covers the same columns whichever reads it.
+ * `subject` is what the consent would allow, as its notices name it: a repair, or the type change
+ * `db:sync` and the development push offer, which take the consent by the same rule.
  */
 export function consentForColumn(
   consent: DataLossConsent,
   table: string,
-  column: string
+  column: string,
+  subject = "a repair"
 ): ColumnConsent {
   const flag = consentFlagFor(table, column);
   const given = consent.given;
@@ -43,7 +46,7 @@ export function consentForColumn(
   if (given.targets === "all") {
     return {
       covered: false,
-      notice: `${ACCEPT_DATA_LOSS_FLAG} without a list does not cover a repair: name the column, ${flag}`,
+      notice: `${ACCEPT_DATA_LOSS_FLAG} without a list does not cover ${subject}: name the column, ${flag}`,
       flag,
     };
   }
@@ -53,7 +56,7 @@ export function consentForColumn(
   if (given.targets.tables.has(table)) {
     return {
       covered: false,
-      notice: `${ACCEPT_DATA_LOSS_FLAG} names the table ${table}, not the column: a repair clears values only in a column named, ${flag}`,
+      notice: `${ACCEPT_DATA_LOSS_FLAG} names the table ${table}, not the column: ${subject} clears values only in a column named, ${flag}`,
       flag,
     };
   }

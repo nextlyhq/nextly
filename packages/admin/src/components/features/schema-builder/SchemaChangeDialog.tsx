@@ -23,12 +23,18 @@ import {
 } from "@nextlyhq/ui";
 import { AlertTriangle } from "lucide-react";
 import type { JSX } from "react";
-import { useMemo, useState } from "react";
+import { useId, useMemo, useState } from "react";
 
+import {
+  broughtUpToDateLines,
+  lossLinesOf,
+} from "@admin/lib/builder/brought-up-to-date";
 import { useFieldTypeLabel } from "@admin/lib/builder/field-type-label";
 import { reviewDeletesData } from "@admin/lib/builder/review-deletes-data";
+import type { SettingChange } from "@admin/lib/builder/settings-changes";
 import type {
   SchemaPreviewChange,
+  SchemaPreviewConversion,
   SchemaPreviewJoiningTranslation,
   SchemaPreviewLeavingTranslation,
   SchemaPreviewRenameCandidate,
@@ -39,9 +45,14 @@ import type {
 
 import { BUILDER_KIND_NOUN, type BuilderKind } from "./builder-config";
 import {
+  FieldGroupCreatesList,
+  type FieldGroupCreate,
+} from "./FieldGroupCreatesList";
+import {
   JoiningTranslationNotice,
   LeavingTranslationNotice,
 } from "./LeavingTranslationNotice";
+import { SettingChangesList } from "./SettingChangesList";
 
 interface SchemaChangeDialogProps {
   open: boolean;
@@ -56,14 +67,23 @@ interface SchemaChangeDialogProps {
   // F4 Option E PR 5: rename candidates from the preview endpoint.
   // Empty array (or undefined) = no candidates, no rename UI rendered.
   renamed?: SchemaPreviewRenameCandidate[];
-  /** Renames the Builder decided itself: shown as renames whose values are kept, not asked. */
-  decidedRenames?: readonly SchemaPreviewRenameCandidate[];
+  /**
+   * Renames the Builder decided itself, from what to what: shown as renames whose values are kept,
+   * not asked.
+   */
+  decidedRenames?: readonly KeptRename[];
   warnings: string[];
   interactiveFields: InteractiveField[];
   // Fields that stop being translated: what moves to the archive, or why the change is refused.
   leavingTranslation?: SchemaPreviewLeavingTranslation[];
   // Fields that become translated: how many values become the default language's.
   joiningTranslation?: SchemaPreviewJoiningTranslation[];
+  // What the save brings up to date in a table an earlier version made; Save confirms each.
+  conversions?: SchemaPreviewConversion[];
+  /** The entity's settings saved with the fields, each listed. */
+  settingChanges?: readonly SettingChange[];
+  /** The field groups not saved yet that this save creates first, listed before all else. */
+  fieldGroupCreates?: readonly FieldGroupCreate[];
   onConfirm: (
     resolutions: Record<string, FieldResolution>,
     renameResolutions: SchemaRenameResolution[]
@@ -85,6 +105,9 @@ export function SchemaChangeDialog({
   interactiveFields,
   leavingTranslation = [],
   joiningTranslation = [],
+  conversions = [],
+  settingChanges = [],
+  fieldGroupCreates = [],
   onConfirm,
   isApplying,
 }: SchemaChangeDialogProps): JSX.Element {
@@ -143,7 +166,11 @@ export function SchemaChangeDialog({
   // Whether saving deletes stored values, answered once from the preview's
   // rows and read by both the confirm's colour and the data-loss notice, so the
   // two cannot disagree. A refused save applies nothing, so it deletes nothing.
-  const deletesData = reviewDeletesData(changes) && !refused;
+  // What bringing an older table up to date deletes: a column or table it removes, with its values.
+  const conversionLosses = lossLinesOf(conversions);
+  const fieldsDeleteData = reviewDeletesData(changes);
+  const deletesData =
+    (fieldsDeleteData || conversionLosses.length > 0) && !refused;
   const promptedFields = interactiveFields.filter(
     f => !refusedColumns.has(f.name)
   );
@@ -223,6 +250,8 @@ export function SchemaChangeDialog({
           refused={refused}
         />
 
+        <FieldGroupCreatesList groups={fieldGroupCreates} />
+
         {/* Changes list */}
         {hasChanges && (
           <div className="max-h-64 overflow-y-auto rounded-md  border border-border bg-primary/5 p-3">
@@ -290,6 +319,10 @@ export function SchemaChangeDialog({
         <DecidedRenames renames={decidedRenames} />
         <LeavingTranslationNotice fields={leavingTranslation} />
         <JoiningTranslationNotice fields={joiningTranslation} />
+        <BroughtUpToDate conversions={conversions} />
+        {/* The settings saved with these fields, translation turned off
+            among them beside what leaving it moves. */}
+        <SettingChangesList changes={settingChanges} />
 
         {/* Rename candidates - one section per dropped column with a list
             of "rename to X" radios + a "drop and add new" option.
@@ -463,17 +496,23 @@ export function SchemaChangeDialog({
             <AlertTriangle className="h-4 w-4" />
             <AlertTitle>Data loss warning</AlertTitle>
             <AlertDescription>
-              {warnings.length > 0 ? (
-                warnings.map((w, i) => (
-                  <span key={i} className="block">
-                    {w}
-                  </span>
-                ))
-              ) : (
-                <span className="block">
-                  Saving deletes the values stored in the fields removed above.
+              {warnings.length > 0
+                ? warnings.map((w, i) => (
+                    <span key={i} className="block">
+                      {w}
+                    </span>
+                  ))
+                : fieldsDeleteData && (
+                    <span className="block">
+                      Saving deletes the values stored in the fields removed
+                      above.
+                    </span>
+                  )}
+              {conversionLosses.map(line => (
+                <span key={line} className="block">
+                  {line}
                 </span>
-              )}
+              ))}
             </AlertDescription>
           </Alert>
         ) : warnings.length > 0 ? (
@@ -613,6 +652,12 @@ function SchemaChangeDialogFooter({
   );
 }
 
+/** A rename the save keeps: its column's old and new names, or the field's when the column stays. */
+interface KeptRename {
+  from: string;
+  to: string;
+}
+
 /**
  * The renames the Builder decided, once each: a field renamed on its own table and its
  * translations table is one rename to the person.
@@ -620,7 +665,7 @@ function SchemaChangeDialogFooter({
 function DecidedRenames({
   renames,
 }: {
-  renames: readonly SchemaPreviewRenameCandidate[];
+  renames: readonly KeptRename[];
 }): JSX.Element | null {
   const once = [
     ...new Map(renames.map(c => [`${c.from}->${c.to}`, c])).values(),
@@ -636,5 +681,36 @@ function DecidedRenames({
         </li>
       ))}
     </ul>
+  );
+}
+
+/**
+ * What the save also brings up to date in a table an earlier Nextly version made, in the server's
+ * own words. Nothing to tick: Save confirms every conversion listed, and Cancel confirms none.
+ * Bounded in height, as the change list is, so a long list scrolls inside the dialog and its Save
+ * and Cancel stay in reach; focusable, so the list scrolls from the keyboard too.
+ */
+function BroughtUpToDate({
+  conversions,
+}: {
+  conversions: readonly SchemaPreviewConversion[];
+}): JSX.Element | null {
+  const headingId = useId();
+  if (conversions.length === 0) return null;
+  return (
+    <section
+      aria-labelledby={headingId}
+      tabIndex={0}
+      className="max-h-48 space-y-1.5 overflow-y-auto rounded-md border border-border bg-primary/5 p-3"
+    >
+      <h3 id={headingId} className="text-sm font-medium">
+        Brought up to date
+      </h3>
+      {broughtUpToDateLines(conversions).map(line => (
+        <p key={line} className="text-sm text-muted-foreground">
+          {line}
+        </p>
+      ))}
+    </section>
   );
 }

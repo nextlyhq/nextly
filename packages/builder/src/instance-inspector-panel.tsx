@@ -34,8 +34,11 @@ import {
   isRichTextValue,
   isUnsetOverride,
   neededFor,
+  oneParagraphLines,
   richTextToPlainText,
+  settingBindingKey,
   type BlockDocument,
+  type BuilderOp,
   type ComponentDocument,
   type OverrideValue,
 } from "@nextlyhq/blocks-engine";
@@ -49,6 +52,7 @@ import {
   SelectTrigger,
   SelectValue,
   Switch,
+  Textarea,
 } from "@nextlyhq/ui";
 import {
   CircleSlash,
@@ -58,26 +62,32 @@ import {
   PenLine,
   RotateCcw,
   SquarePen,
+  Unlink,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import * as React from "react";
 
+import { BindableField } from "./binding-controls";
+import { unbindOp } from "./binding-ops";
+import type { UnbindPlanAnswer } from "./binding-services";
 import { BlockCard, type CardVerbs } from "./block-card";
-import { CanvasPassageContext } from "./canvas-passage";
+import { CanvasPassageContext } from "./canvas/canvas-passage";
+import { markExposedParts } from "./canvas/exposed-outline";
 import {
   ChosenMedia,
   ContentServicesContext,
   MediaChoice,
   RichTextField,
+  type ContentServices,
   type PickedMedia,
 } from "./content-controls";
 import type { EditorState } from "./editor-state";
-import { markExposedParts } from "./exposed-outline";
 import { HeldByLock, HeldHere } from "./held-by-lock";
 import { lockOp, lockStatusOf, lockViewOf, renameOp } from "./inspector";
 import {
   resetOverrideOp,
   setOverrideOp,
+  withPlacementLists,
   type ExposedRow,
   type InstanceInspection,
   type OrphanedOverride,
@@ -215,6 +225,8 @@ export function InstanceInspectorPanel({
     [editor, nodeNow]
   );
 
+  const bind = useSettingBinding(editor, inspection);
+
   const headingId = React.useId();
   // The selected placement's editable parts, outlined on the canvas while it
   // is selected: after every render, since the canvas redraws with the
@@ -320,6 +332,7 @@ export function InstanceInspectorPanel({
                     row={row}
                     onSet={set}
                     onReset={reset}
+                    bind={bind}
                   />
                 ))}
               </div>
@@ -360,10 +373,13 @@ function ExposedField({
   row,
   onSet,
   onReset,
+  bind,
 }: {
   row: ExposedRow;
   onSet: SetExposed;
   onReset: (id: string) => void;
+  /** What binding a setting to data needs; absent, no setting is bound. */
+  bind?: SettingBinding | undefined;
 }): React.JSX.Element {
   // Unique per MOUNTED ROW, not per property: a page can hold two blocks
   // fields, each with its own editor, and a fixed id per property made both
@@ -414,7 +430,9 @@ function ExposedField({
           lets the page drop, so the way back is never closed.
         */}
         <HeldByLock reasonId={row.heldBy === undefined ? undefined : reasonId}>
-          <ExposedControl id={id} row={row} onSet={onSet} />
+          <BindableSetting row={row} bind={bind}>
+            <ExposedControl id={id} row={row} onSet={onSet} />
+          </BindableSetting>
         </HeldByLock>
         {/*
           Why the row is held, UNDER the field as its helper text: the field
@@ -427,6 +445,7 @@ function ExposedField({
             <span>{refusalAnnouncement(row.heldBy)}</span>
           </p>
         )}
+        <HeldBindingRemoval row={row} bind={bind} />
       </div>
       {/* Kept when empty, so every control ends at one edge, set or not. */}
       <span className="nx-inspector__exposed-reset-slot">
@@ -445,6 +464,148 @@ function ExposedField({
         ) : null}
       </span>
     </div>
+  );
+}
+
+/**
+ * The way back from a binding the page gave a setting its component has since
+ * locked: the field and its chip are held, but removing the binding gives
+ * the component's own value back, which the lock allows, so it is offered
+ * here, outside the held controls.
+ */
+function HeldBindingRemoval({
+  row,
+  bind,
+}: {
+  row: ExposedRow;
+  bind: SettingBinding | undefined;
+}): React.JSX.Element | null {
+  if (bind === undefined || row.heldBy === undefined) return null;
+  if (row.binding === undefined) return null;
+  const remove = (): void => {
+    const op = unbindOp(bind.document, bind.nodeId, settingBindingKey(row.id), {
+      set: {},
+    });
+    if (op !== null) bind.onApply(op);
+  };
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="sm"
+      aria-label={`Unbind ${row.label}`}
+      disabled={bind.locked}
+      onClick={remove}
+    >
+      <Unlink size={14} aria-hidden="true" />
+      Unbind
+    </Button>
+  );
+}
+
+/** What binding one of the placement's settings to data needs. */
+interface SettingBinding {
+  readonly nodeId: string;
+  /** The component's name, as the panel titles it. */
+  readonly label: string;
+  readonly document: BlockDocument;
+  readonly services: ContentServices | undefined;
+  /** Whether the placement is locked, which holds every bind. */
+  readonly locked: boolean;
+  readonly onApply: (op: BuilderOp) => boolean;
+}
+
+/**
+ * The binding controls' services for a setting: the host's, with an unbind
+ * that keeps the value the placement stores for the setting. A setting's
+ * value is the placement's own, stored as it was before the bind, so the
+ * unbind writes nothing in its place.
+ */
+function settingServices(
+  services: ContentServices | undefined
+): ContentServices | undefined {
+  if (services === undefined) return undefined;
+  return {
+    ...services,
+    planUnbind: (): Promise<UnbindPlanAnswer> =>
+      Promise.resolve({
+        kept: { set: {} },
+        answer: { kept: "own", reason: "The setting keeps its own value." },
+      }),
+  };
+}
+
+/** What the setting rows of the selected placement bind with. */
+function useSettingBinding(
+  editor: EditorState,
+  inspection: InstanceInspection
+): SettingBinding {
+  const contentServices = React.useContext(ContentServicesContext);
+  const services = React.useMemo(
+    () => settingServices(contentServices),
+    [contentServices]
+  );
+  // Each list item binding a setting row writes names its list.
+  const onApply = React.useCallback(
+    (op: BuilderOp) =>
+      editor.apply(withPlacementLists(editor.document, op)) !== null,
+    [editor]
+  );
+  return {
+    nodeId: inspection.nodeId,
+    label: inspection.label,
+    document: editor.document,
+    services,
+    locked: inspection.identity.locked,
+    onApply,
+  };
+}
+
+/**
+ * A setting's control inside the binding controls, where it may be bound: a
+ * bind button beside it, and once bound, the field in its place. Written on
+ * the placement under the setting's key (`overrides.<id>`), which composing
+ * the component writes onto the prop the setting fills.
+ */
+function BindableSetting({
+  row,
+  bind,
+  children,
+}: {
+  row: ExposedRow;
+  bind: SettingBinding | undefined;
+  children: React.ReactNode;
+}): React.JSX.Element {
+  // A shadowed row is not what the page shows, so a binding of it would be
+  // a value nobody sees.
+  if (
+    bind === undefined ||
+    row.bindable === undefined ||
+    row.shadowedBy !== undefined
+  ) {
+    return <>{children}</>;
+  }
+  return (
+    <BindableField
+      nodeId={bind.nodeId}
+      prop={{
+        name: settingBindingKey(row.id),
+        schema: row.bindable,
+        value: row.value,
+        supported: true,
+        options: [],
+        offered: true,
+        readOnly: row.heldBy !== undefined,
+      }}
+      blockLabel={bind.label}
+      binding={row.binding}
+      document={bind.document}
+      services={bind.services}
+      disabled={bind.locked || row.heldBy !== undefined}
+      onApply={bind.onApply}
+    >
+      {children}
+    </BindableField>
   );
 }
 
@@ -481,7 +642,7 @@ function ExposedControl({
   // replaces the whole value with what was typed into that blank. Shown rather
   // than offered for editing, so nothing is lost to a control that cannot hold
   // it.
-  if (!row.supported || !representable(row)) return <NotEditable row={row} />;
+  if (!row.supported || !editableRow(row)) return <NotEditable row={row} />;
   if (row.type === "visibility") {
     return <ExposedVisibilityField id={id} row={row} onSet={onSet} />;
   }
@@ -652,6 +813,19 @@ function ExposedRichTextField({
   );
 }
 
+/**
+ * A Text's one paragraph, exposed as text: its words are what a text field
+ * holds, and what a placement sets in its place (`textRowValue`).
+ */
+function textParagraph(row: ExposedRow): boolean {
+  return row.type === "text" && isRichTextValue(row.value);
+}
+
+/** Whether a row's value is one its control can hold. */
+function editableRow(row: ExposedRow): boolean {
+  return representable(row) || textParagraph(row);
+}
+
 function representable(row: ExposedRow): boolean {
   if (row.type === "visibility" || row.type === "select") return true;
   const { value } = row;
@@ -761,6 +935,63 @@ function storedText(value: OverrideValue): string {
  * a field that wrote `""` would leave them with a value the definition may
  * treat as meaningful and no way to say "nothing".
  */
+/**
+ * What a text row's field holds: the stored words, or, for a value in force
+ * that is a Text's one paragraph (the component's own, with its marks), its
+ * words. A placement then sets plain words in its place, as a placement's
+ * text always is; an untouched field writes nothing.
+ */
+function textRowValue(value: OverrideValue): string {
+  return isRichTextValue(value) ? oneParagraphLines(value) : storedText(value);
+}
+
+/** Words with lines, edited in a field that keeps them; leaving commits. */
+function LinesField({
+  id,
+  draft,
+  problem,
+  onDraft,
+  onLeave,
+}: {
+  id: string;
+  draft: string;
+  problem: string | null;
+  onDraft: (next: string) => void;
+  onLeave: () => void;
+}): React.JSX.Element {
+  const problemId = `${id}-problem`;
+  return (
+    <>
+      <Textarea
+        id={id}
+        rows={3}
+        value={draft}
+        aria-invalid={problem === null ? undefined : true}
+        aria-describedby={problem === null ? undefined : problemId}
+        onChange={event => onDraft(event.target.value)}
+        onBlur={onLeave}
+      />
+      <RefusedValue id={problemId} problem={problem} />
+    </>
+  );
+}
+
+/** Why a typed value was refused, under its field, while it is. */
+function RefusedValue({
+  id,
+  problem,
+}: {
+  id: string;
+  problem: string | null;
+}): React.JSX.Element | null {
+  if (problem === null) return null;
+  return (
+    <p id={id} className="nx-inspector__problem" role="alert">
+      {problem}
+    </p>
+  );
+}
+
 function ExposedTextField({
   id,
   row,
@@ -773,7 +1004,7 @@ function ExposedTextField({
   // Only a primitive becomes text, for the reason the block inspector gives:
   // an unrepresentable value shows empty, and because `send` compares against
   // this, an untouched field writes nothing.
-  const stored = storedText(row.value);
+  const stored = textRowValue(row.value);
   const [draft, setDraft] = useStoredDraft(stored);
   // A value the store would refuse is held here with the reason rather than
   // written: a link the renderer would not draw is the case a text field can
@@ -802,6 +1033,19 @@ function ExposedTextField({
     onSet(row.id, next);
   };
 
+  // A Text's lines, or words already holding one, are edited in a field that
+  // keeps them; Enter is a new line there, and leaving the field commits.
+  if (textParagraph(row) || stored.includes("\n")) {
+    return (
+      <LinesField
+        id={id}
+        draft={draft}
+        problem={problem}
+        onDraft={setDraft}
+        onLeave={send}
+      />
+    );
+  }
   return (
     <>
       <Input

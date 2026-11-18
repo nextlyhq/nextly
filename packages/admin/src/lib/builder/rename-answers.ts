@@ -34,6 +34,8 @@ export interface DraftRename {
   previousName: string;
   /** Its name in the draft. */
   name: string;
+  /** Whether the same draft turns its Required on or off. */
+  requiredChanged?: boolean;
 }
 
 /** The renames among a draft's pending changes: every saved field whose name changed. */
@@ -46,44 +48,67 @@ export function draftRenamesOf(
       label: change.label || change.name,
       previousName: change.previousName ?? "",
       name: change.name,
+      requiredChanged: change.requiredChanged === true,
     }));
 }
 
-/** A rename the save cannot keep as one, and why: the pair is not offered, or it changes values. */
+/**
+ * A rename the save cannot keep as one, and why: the pair is not offered, it changes values, or the
+ * same save makes the field required.
+ */
 export interface RenameNotKept {
   rename: DraftRename;
   /** The pair is offered, but the column's values would not come through it unchanged. */
   valuesChange: boolean;
+  /**
+   * The same save turns the field's Required on or off. The save converts the pair as a rename,
+   * which keeps the column's not-null as it was, so the field would be saved required over a column
+   * that allows empty values, or optional over one that still refuses them.
+   */
+  requiredChanged?: boolean;
   /** The preview's reason the values change, when it gives one. */
   reason?: string;
 }
 
 /**
- * The preview's candidates the Builder answers as renames, and the first rename it cannot keep as
- * one: a pair the preview does not offer, or one whose values would not come through unchanged
- * (types that do not fit, or a conversion that rewrites them). A rename whose column stays the
- * same is not looked for.
+ * The preview's candidates the Builder answers as renames, the renames whose column stays the same
+ * (`sameColumn`, which need no pair), and the first rename it cannot keep as one: a pair the
+ * preview does not offer, or one whose values would not come through unchanged (types that do not
+ * fit, or a conversion that rewrites them).
  */
 export function renameAnswers(
   renames: readonly DraftRename[],
   candidates: readonly SchemaPreviewRenameCandidate[]
 ): {
   decided: SchemaPreviewRenameCandidate[];
+  sameColumn: DraftRename[];
   missing: RenameNotKept | null;
 } {
   const decided: SchemaPreviewRenameCandidate[] = [];
+  const sameColumn: DraftRename[] = [];
   for (const rename of renames) {
     const from = fieldColumnName(rename.previousName);
     const to = fieldColumnName(rename.name);
-    if (from === to) continue;
+    if (from === to) {
+      sameColumn.push(rename);
+      continue;
+    }
+    if (rename.requiredChanged === true) {
+      return {
+        decided,
+        sameColumn,
+        missing: { rename, valuesChange: false, requiredChanged: true },
+      };
+    }
     const pairs = candidates.filter(c => c.from === from && c.to === to);
     if (pairs.length === 0) {
-      return { decided, missing: { rename, valuesChange: false } };
+      return { decided, sameColumn, missing: { rename, valuesChange: false } };
     }
     const changing = pairs.find(c => !c.typesCompatible || !c.preservesValues);
     if (changing) {
       return {
         decided,
+        sameColumn,
         missing: {
           rename,
           valuesChange: true,
@@ -93,7 +118,7 @@ export function renameAnswers(
     }
     decided.push(...pairs);
   }
-  return { decided, missing: null };
+  return { decided, sameColumn, missing: null };
 }
 
 /** Whether `c` shares a decided pair's dropped column or its new column, on the same table. */
@@ -144,34 +169,36 @@ export function withDecidedRenames(
 export function renameNotOffered(notKept: RenameNotKept): string {
   const { rename } = notKept;
   const renamed = `${rename.label} was renamed from ${rename.previousName} to ${rename.name}`;
+  if (notKept.requiredChanged === true) {
+    return `${renamed} and its Required changed, which one save cannot do while keeping its values. Save the rename on its own, then change Required.`;
+  }
   const why = notKept.valuesChange
     ? `, but this save would not carry its values over unchanged${notKept.reason ? ` (${notKept.reason})` : ""}`
-    : ", but this save does not see the two as one field, so saving would drop its values";
+    : ", but this save does not see the two as one field, so saving would not keep its values with it";
   return `${renamed}${why}. Save the rename on its own, before other changes to the field.`;
 }
 
 /**
- * `preview` as the schema dialog shows it once the Builder's renames are decided: a decided rename
- * is no field removed beside one added, and no pair left to choose for, so its columns leave those
- * lists, and the save is called destructive only when something else still deletes values.
+ * `preview` as the schema dialog shows it once the Builder's renames are decided: a decided rename,
+ * and a rename that keeps its column (`sameColumn`), is no field removed beside one added, and no
+ * pair left to choose for, so its fields leave those lists. Its new column needs no default either:
+ * the preview asks for one for a required field's column before the pair is answered, but the
+ * rename brings the field's values with it (a field whose Required the same save changes is
+ * refused before the review, by `renameAnswers`). The save is then called destructive only when
+ * something else still deletes values, and asks only what is still the person's to answer.
  */
 export function previewWithDecidedRenames(
   preview: SchemaPreviewResponse,
-  decided: readonly SchemaPreviewRenameCandidate[]
+  decided: readonly SchemaPreviewRenameCandidate[],
+  sameColumn: readonly DraftRename[] = []
 ): SchemaPreviewResponse {
-  if (decided.length === 0) return preview;
-  const fromColumns = new Set(decided.map(c => c.from));
+  if (decided.length === 0 && sameColumn.length === 0) return preview;
+  const changes = withoutRenamedFields(preview.changes, decided, sameColumn);
   const toColumns = new Set(decided.map(c => c.to));
-
-  const changes = {
-    ...preview.changes,
-    removed: preview.changes.removed.filter(
-      field => !fromColumns.has(fieldColumnName(field.name))
-    ),
-    added: preview.changes.added.filter(
-      field => !toColumns.has(fieldColumnName(field.name))
-    ),
-  };
+  const interactiveFields = preview.interactiveFields.filter(
+    field =>
+      !(field.reason === "new_required_no_default" && toColumns.has(field.name))
+  );
   const deletesData = reviewDeletesData(changes);
   return {
     ...preview,
@@ -181,10 +208,52 @@ export function previewWithDecidedRenames(
     renamed: (preview.renamed ?? []).filter(
       c => !competesWithDecided(c, decided)
     ),
+    interactiveFields,
     hasDestructiveChanges: preview.hasDestructiveChanges && deletesData,
-    classification:
-      preview.classification === "destructive" && !deletesData
-        ? "safe"
-        : preview.classification,
+    classification: classificationOf(
+      preview.classification,
+      deletesData,
+      // Still interactive unless the prompts left were the renames' alone.
+      interactiveFields.length > 0 ||
+        interactiveFields.length === preview.interactiveFields.length
+    ),
   };
+}
+
+/** The preview's field changes without the renamed fields' removal beside their addition. */
+function withoutRenamedFields(
+  changes: SchemaPreviewResponse["changes"],
+  decided: readonly SchemaPreviewRenameCandidate[],
+  sameColumn: readonly DraftRename[]
+): SchemaPreviewResponse["changes"] {
+  const fromColumns = new Set(decided.map(c => c.from));
+  const toColumns = new Set(decided.map(c => c.to));
+  const previousNames = new Set(sameColumn.map(r => r.previousName));
+  const newNames = new Set(sameColumn.map(r => r.name));
+  return {
+    ...changes,
+    removed: changes.removed.filter(
+      field =>
+        !fromColumns.has(fieldColumnName(field.name)) &&
+        !previousNames.has(field.name)
+    ),
+    added: changes.added.filter(
+      field =>
+        !toColumns.has(fieldColumnName(field.name)) && !newNames.has(field.name)
+    ),
+  };
+}
+
+/**
+ * How the review judges the save once the renames are decided: interactive while something is
+ * still the person's to answer, destructive while something still deletes values, else safe.
+ */
+function classificationOf(
+  previewed: SchemaPreviewResponse["classification"],
+  deletesData: boolean,
+  stillAsks: boolean
+): SchemaPreviewResponse["classification"] {
+  if (previewed === "interactive" && stillAsks) return "interactive";
+  if (previewed === "safe") return "safe";
+  return deletesData ? "destructive" : "safe";
 }

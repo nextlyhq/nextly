@@ -21,6 +21,7 @@
  *
  * @module domains/collections/services/publish-parts
  */
+import type { RequestActor } from "../../../auth/request-actor";
 import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
 import { NextlyError } from "../../../errors/nextly-error";
 import type { ValidationPublicData } from "../../../errors/public-data";
@@ -112,6 +113,12 @@ export interface PartsReads {
   languageRefusals: ReadonlyMap<string, string>;
   /** Why the caller may not move the shared part, when asked about it, or null. */
   sharedRefusal: string | null;
+  /**
+   * For a publish of every language, the languages it moves: those that go live, and those
+   * already live whose pending change goes live. Absent where the reads do not say, and every
+   * configured language is asked about instead.
+   */
+  everyLanguageMoves?: readonly string[];
 }
 
 /** What a request is carried out with, bound to the entry and the caller. */
@@ -124,11 +131,22 @@ export interface PublishPartsEngines {
     /** The languages whose refusal is asked, or every language the site has. */
     locales: readonly string[] | "all";
     shared: boolean;
+    /** Whether the request names every language rather than choosing some. */
+    everyLanguage: boolean;
   }): Promise<PartsReads | CollectionServiceResult>;
   gate: PublishGate;
   /** The entry's collection and who asks, for the gate. */
   collection: string;
+  /**
+   * Whether `collection` names a collection or a Single, as the gate is told; a collection where
+   * absent.
+   */
+  scopeKind?: "collection" | "single";
   caller: PublishCaller;
+  /** Who makes the move, as its write records it, so the gate names the same actor. */
+  actor?: RequestActor;
+  /** A publish made without review, with the caller's reason, told to the gate. */
+  withoutReview?: { reason: string };
   /**
    * The transition of `parts` (every part, where absent) in `direction`, in one transaction; or,
    * where `describe`, what a publish of them would do, changing nothing.
@@ -286,21 +304,48 @@ async function gateIssues(
   judged: Judged,
   engines: PublishPartsEngines
 ): Promise<Issue[]> {
+  // Unpublishing is never gated: what holds a publish back does not keep a part live.
+  if (judged.direction !== "publish") return [];
+  // Languages only where the entry keeps them: an untranslated one moves its shared part alone,
+  // whatever languages the site has. A publish of every language is asked only of the languages
+  // it moves, where the reads name them: one holding nothing, or live with no change, stays as it
+  // is, and the transition's verdict under the row lock judges the same set.
+  const languages =
+    judged.everyLanguage && judged.reads.everyLanguageMoves !== undefined
+      ? judged.reads.everyLanguageMoves
+      : judged.chosen;
   const parts: PublishPart[] = [
-    ...judged.chosen.map(locale => ({ kind: "language" as const, locale })),
+    ...(judged.reads.state.translated ? languages : []).map(locale => ({
+      kind: "language" as const,
+      locale,
+    })),
     ...(judged.sharedPart ? [{ kind: "shared" as const }] : []),
   ];
+  const { state } = judged.reads;
   const held = await engines.gate.refusals({
-    collection: engines.collection,
+    scope: {
+      kind: engines.scopeKind ?? "collection",
+      slug: engines.collection,
+    },
     entryId: judged.id,
     direction: judged.direction,
     parts,
+    live: {
+      languages: [...state.languages]
+        .filter(([, language]) => language.live)
+        .map(([locale]) => locale),
+      shared: state.sharedLive,
+    },
     caller: engines.caller,
+    ...(engines.actor === undefined ? {} : { actor: engines.actor }),
+    ...(engines.withoutReview === undefined
+      ? {}
+      : { withoutReview: engines.withoutReview }),
   });
-  return held.map(({ part, message }) =>
+  return held.map(({ part, code, message }) =>
     part.kind === "shared"
-      ? { path: SHARED_PATH, code: "HELD", message }
-      : { path: part.locale, code: "HELD", locale: part.locale, message }
+      ? { path: SHARED_PATH, code, message }
+      : { path: part.locale, code, locale: part.locale, message }
   );
 }
 
@@ -377,9 +422,12 @@ async function refusalsOf(
 ): Promise<Issue[]> {
   const untranslated = untranslatedIssues(judged);
   if (untranslated.length > 0) return untranslated;
+  // A caller refused a part the request moves is told that alone: the gate is not asked, since
+  // its answer names a workflow's stages and approvals, and nothing else of the entry is judged.
+  const access = [...languageIssues(judged), ...sharedIssues(judged)];
+  if (access.some(issue => issue.code === "FORBIDDEN")) return access;
   return [
-    ...languageIssues(judged),
-    ...sharedIssues(judged),
+    ...access,
     ...(await gateIssues(judged, engines)),
     ...stillLiveIssues(judged),
     ...sharedEditIssues(judged),
@@ -574,6 +622,7 @@ export async function publishParts(
   const reads = await engines.reads({
     locales: askedForAccess,
     shared: !everyLanguage,
+    everyLanguage,
   });
   if ("success" in reads) return reads;
   const { state } = reads;
