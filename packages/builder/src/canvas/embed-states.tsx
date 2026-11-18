@@ -198,6 +198,14 @@ function FrameCover({
       aria-hidden="true"
       style={{ left: x, top: y, width, height }}
       onClick={event => onSelect(selectionModeFor(event))}
+      // A secondary press or a touch selects the Embed before its menu
+      // opens, which the menu around the canvas then opens for: the menu
+      // never acts on the block selected before.
+      onPointerDown={event => {
+        if (event.button === 2 || event.pointerType === "touch") {
+          onSelect(selectionModeFor(event));
+        }
+      }}
     />
   );
 }

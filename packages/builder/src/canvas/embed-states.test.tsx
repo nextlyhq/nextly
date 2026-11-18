@@ -139,4 +139,14 @@ describe("an Embed with a link", () => {
     expect(select.mock.calls[0]?.[0]).toBe("e1");
     expect(apply).not.toHaveBeenCalled();
   });
+
+  it("selects the Embed on a secondary press, before its menu opens", () => {
+    const { select } = mount(
+      page({ ...EMBED, props: { ...EMBED.props, src: "https://youtu.be/dQw4w9WgXcQ" } }),
+      '<iframe data-nx-node="e1" title="YouTube video"></iframe>'
+    );
+    const cover = document.querySelector('[data-embed-state="frame"]');
+    fireEvent.pointerDown(cover as Element, { button: 2 });
+    expect(select.mock.calls[0]?.[0]).toBe("e1");
+  });
 });

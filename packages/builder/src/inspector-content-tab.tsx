@@ -324,9 +324,11 @@ function ContentSurface({
   });
   // The Embed's section: its Link, which writes the provider's shape with
   // the link, and the settings that apply to what the link is.
+  const embedNode = findNode(editor.document.nodes, inspection.nodeId);
   const embedBodies = embedSectionBodies({
     inspection,
-    stored: findNode(editor.document.nodes, inspection.nodeId)?.props ?? {},
+    stored: embedNode?.props ?? {},
+    linkBound: embedNode?.bindings?.src !== undefined,
     services,
     writable: name =>
       propIsWritable(

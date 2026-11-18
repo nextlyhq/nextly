@@ -51,6 +51,8 @@ export interface EmbedSectionsContext {
   readonly onCommit: (name: string, value: unknown) => void;
   /** The generated rows for `rows`, as the tab draws any section's. */
   readonly rowsOf: (rows: readonly EditableProp[]) => React.JSX.Element;
+  /** Whether the block's link is bound to a field. */
+  readonly linkBound?: boolean;
 }
 
 /**
@@ -84,15 +86,20 @@ function EmbedSection({
   readonly context: EmbedSectionsContext;
 }): React.JSX.Element {
   const { inspection, stored, writable } = context;
-  const link = typeof stored.src === "string" ? stored.src : "";
+  // A link bound to a field is the field's, known only where the page is
+  // drawn: every setting a provider's link takes is offered, and nothing is
+  // judged from the stored literal it no longer shows.
+  const bound = context.linkBound === true;
+  const link = !bound && typeof stored.src === "string" ? stored.src : "";
   const match = detectEmbed(link);
+  const provider = bound || match !== undefined;
   // As the block reads them: a new Embed stores When played; one stored
   // before the choice reads as Right away.
-  const played = match !== undefined && stored.load === "click";
+  const played = provider && stored.load === "click";
   const names = [
     "title",
-    ...(match === undefined ? [] : ["load"]),
-    ...(match?.privacyMode === true ? ["privacy"] : []),
+    ...(provider ? ["load"] : []),
+    ...(bound || match?.privacyMode === true ? ["privacy"] : []),
     ...(played ? ["poster"] : []),
   ];
   return (
@@ -113,7 +120,10 @@ function EmbedSection({
             : row
         )
       )}
-      {played && match.thumbnail !== undefined ? (
+      {/* Only for a link the panel knows: a bound link's video is the
+          field's, and copying the stored literal's picture would be the
+          wrong one. */}
+      {played && match?.thumbnail !== undefined ? (
         <ThumbnailCopy
           // One copy per block and link: a reply for another block or link
           // is never stored here, and a new link starts with no copy pending.

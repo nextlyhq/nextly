@@ -56,14 +56,26 @@ function mount(props: Record<string, unknown>, services?: ContentServices) {
   return mountWith(props, services).editor;
 }
 
-function mountWith(props: Record<string, unknown>, services?: ContentServices) {
+function mountWith(
+  props: Record<string, unknown>,
+  services?: ContentServices,
+  bindings?: BlockNode["bindings"]
+) {
   if (!hasBlock(embed.name)) {
     registerBlocks([embed] as never, { source: "embed-sections-test" });
   }
   const document = {
     formatVersion: 1,
     kind: "page",
-    nodes: [{ id: "e", type: "core/embed", version: 1, props } as BlockNode],
+    nodes: [
+      {
+        id: "e",
+        type: "core/embed",
+        version: 1,
+        props,
+        ...(bindings === undefined ? {} : { bindings }),
+      } as BlockNode,
+    ],
   } as BlockDocument;
   const editor = {
     document,
@@ -271,5 +283,26 @@ describe("a thumbnail copy under Strict Mode", () => {
     });
     const op = editor.apply.mock.calls.at(-1)?.[0] as { patch: { props: Record<string, unknown> } };
     expect(op.patch.props.poster).toBe("m9");
+  });
+});
+
+describe("an Embed whose link is bound to a field", () => {
+  it("offers every setting a provider's link takes, and no thumbnail copy", () => {
+    mountWith(
+      { ...NEW_EMBED, src: "https://example.com/stale" },
+      { copyEmbedThumbnail: vi.fn() } as unknown as ContentServices,
+      { src: { $bind: "video", source: "entry" } }
+    );
+    expect(shownLabels()).toEqual([
+      "Link",
+      "Screen reader label",
+      "Load",
+      "Privacy mode",
+      "Poster",
+    ]);
+    // The stored literal is not the link the page draws, so no word about it
+    // and no copy of its picture.
+    expect(screen.queryByText("Shown as a plain frame")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Use the video's thumbnail" })).toBeNull();
   });
 });
