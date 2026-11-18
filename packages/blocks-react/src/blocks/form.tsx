@@ -138,8 +138,14 @@ export const FORM_POST_FIELDS: {
   item: "_item",
 };
 
-/** The provider form `value` names, or `undefined` for the block's own fields. */
-function pickedForm(value: unknown): FormReference | undefined {
+/**
+ * The provider form `value` names, or `undefined` for the block's own fields.
+ * Exported so the editor reads a Form's picked form by this same rule, not a
+ * copy of it.
+ *
+ * @experimental
+ */
+export function pickedForm(value: unknown): FormReference | undefined {
   if (typeof value !== "object" || value === null) return undefined;
   const { provider, ref } = value as Record<string, unknown>;
   // `simple` is the page builder's own provider: the block's own fields.

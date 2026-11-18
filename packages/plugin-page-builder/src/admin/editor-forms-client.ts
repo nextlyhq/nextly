@@ -21,7 +21,6 @@ import {
   EDITOR_FORMS_ROUTE_PATH,
   type EditorFormProvider,
   type EditorFormResponse,
-  type EditorFormsResponse,
 } from "../forms/editor-forms-contract";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 
@@ -92,13 +91,18 @@ export function forgetEditorForms(): void {
   keptFor = null;
 }
 
+/** The list route's answer: the canonical list envelope, a provider per item. */
+interface EditorFormsList {
+  readonly items: readonly EditorFormProvider[];
+}
+
 /** Whether `body` is the list route's answer. */
-function isListAnswer(body: unknown): body is EditorFormsResponse {
+function isListAnswer(body: unknown): body is EditorFormsList {
   if (typeof body !== "object" || body === null) return false;
-  const { providers } = body as Partial<EditorFormsResponse>;
+  const { items } = body as { items?: unknown };
   return (
-    Array.isArray(providers) &&
-    providers.every(
+    Array.isArray(items) &&
+    items.every(
       (provider: Partial<EditorFormProvider>) =>
         typeof provider?.id === "string" &&
         typeof provider.label === "string" &&
@@ -125,12 +129,12 @@ export function readEditorForms(
   userId: string | null
 ): Promise<readonly EditorFormProvider[]> {
   return keptAnswer(userId, "list", async () => {
-    const body = await readPluginRoute<EditorFormsResponse>({
+    const body = await readPluginRoute<EditorFormsList>({
       plugin: PAGE_BUILDER_PLUGIN_NAME,
       path: EDITOR_FORMS_ROUTE_PATH,
     });
     if (!isListAnswer(body)) throw new Error("Forms could not be listed.");
-    return body.providers;
+    return body.items;
   });
 }
 

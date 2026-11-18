@@ -23,8 +23,17 @@ import {
   readEditorForms,
 } from "./editor-forms-client";
 
+// The list route answers in the canonical list envelope, `{ items, meta }`.
 const LISTED = {
-  providers: [{ id: "forms", label: "Forms", forms: [] }],
+  items: [{ id: "forms", label: "Forms", forms: [] }],
+  meta: {
+    total: 1,
+    page: 1,
+    limit: 1,
+    totalPages: 1,
+    hasNext: false,
+    hasPrev: false,
+  },
 };
 
 beforeEach(() => {
@@ -39,7 +48,7 @@ afterEach(() => {
 describe("listing the site's forms", () => {
   it("is read once while kept, and again once it has aged", async () => {
     read.mockResolvedValue(LISTED);
-    expect(await readEditorForms("u1")).toEqual(LISTED.providers);
+    expect(await readEditorForms("u1")).toEqual(LISTED.items);
     vi.advanceTimersByTime(EDITOR_FORMS_KEPT_MS - 1);
     await readEditorForms("u1");
     expect(read).toHaveBeenCalledTimes(1);
@@ -63,7 +72,7 @@ describe("listing the site's forms", () => {
     read.mockResolvedValueOnce({ nope: true });
     await expect(readEditorForms("u1")).rejects.toThrow(/could not be listed/);
     read.mockResolvedValueOnce(LISTED);
-    expect(await readEditorForms("u1")).toEqual(LISTED.providers);
+    expect(await readEditorForms("u1")).toEqual(LISTED.items);
   });
 });
 

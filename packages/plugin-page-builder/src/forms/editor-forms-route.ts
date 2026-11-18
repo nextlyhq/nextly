@@ -22,6 +22,7 @@ import type {
   FormListing,
   FormProvider,
 } from "@nextlyhq/plugin-sdk/blocks";
+import { respondList } from "nextly";
 import { z } from "nextly/zod";
 
 import { ENTRIES_LOCALE_MAX } from "../entries-contract";
@@ -166,8 +167,21 @@ export function editorFormsRoutes(providers: FormProviders): {
       method: "GET",
       path: EDITOR_FORMS_ROUTE_PATH,
       checksAccess: true, // Each provider reads as the caller.
-      handler: async (_req, ctx) =>
-        Response.json(await listEditorForms(providers, authorAccess(ctx))),
+      // The canonical list envelope, `{ items, meta }`: one provider per item.
+      handler: async (_req, ctx) => {
+        const { providers: listed } = await listEditorForms(
+          providers,
+          authorAccess(ctx)
+        );
+        return respondList([...listed], {
+          total: listed.length,
+          page: 1,
+          limit: Math.max(listed.length, 1),
+          totalPages: 1,
+          hasNext: false,
+          hasPrev: false,
+        });
+      },
     },
     describe: {
       method: "GET",

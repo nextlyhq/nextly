@@ -5,12 +5,10 @@
  *
  * @module form-picked
  */
+import { pickedForm } from "@nextlyhq/blocks-react";
 
 /** The Form block, whose `form` this is. */
 export const FORM_BLOCK = "core/form";
-
-/** The page builder's own provider, which a block with no picked form uses. */
-const SIMPLE_PROVIDER = "simple";
 
 /** A form a block picked from a provider. */
 export interface PickedForm {
@@ -19,21 +17,12 @@ export interface PickedForm {
 }
 
 /**
- * The picked form `value` names, or `undefined` for a simple form: the rule
- * the Form block draws by, so the panel and the canvas agree with the page.
+ * The picked form `value` names, or `undefined` for a simple form: the
+ * renderer's own rule (`pickedForm`), so the panel, the canvas and the page
+ * the visitor gets can never read one Form two ways.
  */
-export function pickedFormOf(value: unknown): PickedForm | undefined {
-  if (typeof value !== "object" || value === null) return undefined;
-  const { provider, ref } = value as Record<string, unknown>;
-  if (
-    typeof provider !== "string" ||
-    provider === "" ||
-    provider === SIMPLE_PROVIDER
-  ) {
-    return undefined;
-  }
-  return { provider, ref: typeof ref === "string" ? ref : "" };
-}
+export const pickedFormOf: (value: unknown) => PickedForm | undefined =
+  pickedForm;
 
 /**
  * Whether a Form's answers have nowhere to go: a simple form (no form picked

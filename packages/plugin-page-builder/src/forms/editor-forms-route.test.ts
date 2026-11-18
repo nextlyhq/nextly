@@ -218,6 +218,22 @@ describe("describing a picked form for the canvas", () => {
 });
 
 describe("the routes", () => {
+  it("lists in the canonical list envelope", async () => {
+    const routes = editorFormsRoutes(registered());
+    const answer = await routes.list.handler(
+      new Request("http://local.test/forms"),
+      { user: AUTHOR } as never
+    );
+    const body = (await answer.json()) as {
+      items?: unknown;
+      meta?: { total?: unknown };
+    };
+    // `{ items, meta }`, as every list the API answers: no shape of its own.
+    expect(Array.isArray(body.items)).toBe(true);
+    expect(body.meta?.total).toBe(0);
+    expect(body).not.toHaveProperty("providers");
+  });
+
   it("are signed-in routes whose providers judge each caller", () => {
     const routes = editorFormsRoutes(registered());
     expect(routes.list).toMatchObject({ method: "GET", checksAccess: true });

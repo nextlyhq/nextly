@@ -91,3 +91,40 @@ describe("a form the check leaves alone", () => {
     expect(findingsOn([form("f1", { action: "" })])).toHaveLength(1);
   });
 });
+
+describe("a simple form inside a placed component", () => {
+  it("is listed on the placement that draws it", () => {
+    const signup: BlockDocument = {
+      formatVersion: 1,
+      kind: "component",
+      nodes: [form("inner", { action: "" })],
+    };
+    const placed: BlockNode = {
+      id: "p1",
+      type: "nextly/component-instance",
+      version: 1,
+      props: { componentId: "signup" },
+    };
+    const document: BlockDocument = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [placed],
+    };
+    const found = runPageChecks(
+      {
+        document,
+        blocks: type => (type === FORM.name ? FORM : undefined),
+        definitions: new Map([["signup", signup]]),
+      },
+      [FORM_NOWHERE_CHECK]
+    ).findings;
+    // The component's Form is drawn on the page, so the page lists it; the
+    // finding sits on the placement, the block the author can select.
+    expect(found).toEqual([
+      expect.objectContaining({
+        nodeId: "p1",
+        what: "Form answers have nowhere to go",
+      }),
+    ]);
+  });
+});
