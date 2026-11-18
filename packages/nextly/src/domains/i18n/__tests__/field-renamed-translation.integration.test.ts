@@ -1745,7 +1745,7 @@ describeEachDialect("a translated field that is renamed", dialect => {
       },
     },
   ])(
-    "finishes, or refuses as drift, a rename to shared an earlier apply completed before the registry recorded it, when $path",
+    "refuses as drift, with the recovery steps, a rename to shared an earlier apply completed before the registry recorded it, when $path",
     async ({ table, seed, change }) => {
       const id = await seed();
       // The state the earlier apply left: the value on main, the companion column gone.
@@ -1759,20 +1759,19 @@ describeEachDialect("a translated field that is renamed", dialect => {
         `ALTER TABLE ${quote(dialect, `${table}_locales`)} DROP COLUMN ${quote(dialect, "heading")}`
       );
 
-      if (runsItsFile(table)) {
-        // The history still records `heading` on the translations table: drift, nothing changed.
-        expect(await refusalOf(change)).toMatchObject({
-          code: "NEXTLY_MIGRATION_DRIFT",
-        });
-        expect(await mainValue(table, "title2", id)).toBe("Hello");
-        return;
-      }
-      await change();
-
+      // The history still records `heading` on the translations table: drift, refused on every
+      // path before anything changes, the file's reconcile and the push's check before it alike,
+      // each with the steps `nextly migrate` gives to recover.
+      const refusal = await refusalOf(change);
+      // Read as text: a path that answers rather than throws hands its answer on in an Error.
+      const told = `${refusal instanceof Error ? refusal.message : String(refusal)} ${String(
+        (refusal as { publicMessage?: unknown } | undefined)?.publicMessage
+      )}`;
+      expect(told).toContain("schema drift detected");
+      expect(told).toContain("pnpm nextly db:sync");
+      expect(told).toContain("pnpm nextly migrate:resolve --applied");
       expect(await mainValue(table, "title2", id)).toBe("Hello");
-      const companion = await columnsOf(`${table}_locales`);
-      expect(companion).not.toContain("title2");
-      expect(companion).not.toContain("heading");
+      expect(await columnsOf(`${table}_locales`)).not.toContain("title2");
     }
   );
 

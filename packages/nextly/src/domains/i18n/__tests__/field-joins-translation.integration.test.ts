@@ -947,13 +947,13 @@ describeEachDialect("a shared field that becomes translated", dialect => {
    */
   const runsItsFile = (table: string) => !table.startsWith("dc_");
 
-  // A collection's save moves a joining field's values on the live database, so the companion
-  // column it adds takes what the live main column carries, as the code-first apply's does. A
-  // Single's and a field group's run their migration file, planned from the history: a default
-  // given to the main column outside it is drift, refused as `nextly migrate` refuses it, before
-  // anything changes.
+  // A default given to the main column outside the history is drift, refused as `nextly migrate`
+  // refuses it, before anything changes: by a Single's and a field group's file, and by a
+  // collection's push, whose check before the push judges the table as the file road does. On MySQL
+  // a file road refuses it first, before the file is planned, as its TEXT companion column could
+  // take no literal default.
   it.skipIf(dialect === "sqlite").each(PATHS)(
-    "gives the companion column the main column's default, or refuses where it cannot take it, when $path",
+    "refuses a default given to the main column outside the history, and changes nothing, when $path",
     async ({ table, seed, change }) => {
       const id = await seed();
       await query(
@@ -967,28 +967,22 @@ describeEachDialect("a shared field that becomes translated", dialect => {
         (error: unknown) => error
       );
 
-      // MySQL refuses it first, as below, before the file is planned.
-      if (runsItsFile(table) && dialect !== "mysql") {
-        expect(refusal).toMatchObject({ code: "NEXTLY_MIGRATION_DRIFT" });
-        expect(await mainHeading(table, id)).toBe("Hello");
-        expect(await columnsOf(`${table}_locales`)).not.toContain("heading");
-        return;
-      }
-
-      // MySQL gives the field's TEXT companion column no literal default, so there the move is
-      // refused before anything runs and the value stays where it was.
-      if (dialect === "mysql") {
+      if (dialect === "mysql" && runsItsFile(table)) {
         expect(reportedRefusal(refusal)).toMatch(
           /own default; turning translation on moves its values into a new column/
         );
         expect(await mainHeading(table, id)).toBe("Hello");
         return;
       }
-      expect(refusal).toBeUndefined();
-      expect((await companionHeadings(table, id)).en).toBe("Hello");
-      expect(
-        String(await columnDefault(`${table}_locales`, "heading"))
-      ).toMatch(/none/);
+      // Read as text: a path that answers rather than throws hands its answer on in an Error.
+      const told = `${refusal instanceof Error ? refusal.message : String(refusal)} ${String(
+        (refusal as { publicMessage?: unknown } | undefined)?.publicMessage
+      )}`;
+      expect(told).toContain("schema drift detected");
+      expect(told).toContain("pnpm nextly db:sync");
+      expect(told).toContain("pnpm nextly migrate:resolve --applied");
+      expect(await mainHeading(table, id)).toBe("Hello");
+      expect(await columnsOf(`${table}_locales`)).not.toContain("heading");
     }
   );
 

@@ -450,9 +450,9 @@ for (const dialect of getConfiguredTestDialects()) {
             author: (writer.item as { id: string }).id,
           },
         } as never);
-        // An older table whose relation column carries no index: the switch then drops none, and
-        // what runs before the failure is the values' rewrite alone.
-        await exec('DROP INDEX "idx_dc_posts_author"');
+        // The table as the history records it, its relation column's index included: a table
+        // changed by hand would be refused as drift before the push ran at all. The values' rewrite
+        // runs before the executor's first statement, which fails here.
         const rows = () => exec("SELECT * FROM dc_posts");
         const rowsBefore = await rows();
         const filesBefore = Object.keys(filesIn(migrationsDir(), ".sql"));
