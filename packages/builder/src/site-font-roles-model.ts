@@ -132,7 +132,9 @@ function withRoleVariable(
   identity: string,
   stack: string
 ): SiteTokenSet {
-  const at = tokens.tokens.findIndex(token => tokenIdentity(token) === identity);
+  const at = tokens.tokens.findIndex(
+    token => tokenIdentity(token) === identity
+  );
   if (at === -1) {
     return {
       ...tokens,
@@ -191,6 +193,105 @@ export function withFontRole(
     : withRoleVariable(withRows, identity, stack);
 }
 
+/** One of the site's variables, as a token set stores it. */
+type StoredToken = SiteTokenSet["tokens"][number];
+
+/**
+ * A role as a set holds it, to put back later exactly: its variable as
+ * stored, both modes included, and each of its rows as stated.
+ */
+export interface RoleSnapshot {
+  readonly role: FontRole;
+  /** The role's variable as stored; `undefined` where the set holds none. */
+  readonly variable: StoredToken | undefined;
+  /** Each of the role's rows as stated; a row the set states not, absent. */
+  readonly rows: Readonly<Partial<Record<SiteTextRole, SiteTextEntry>>>;
+}
+
+/** The role as `tokens` holds it, for {@link withRoleSnapshot}. */
+export function roleSnapshot(
+  tokens: SiteTokenSet,
+  role: FontRole
+): RoleSnapshot {
+  const identity = FONT_ROLE_TOKEN[role];
+  const rows: Partial<Record<SiteTextRole, SiteTextEntry>> = {};
+  for (const row of rowsOf(role)) {
+    const stated = tokens.siteText?.[row];
+    if (stated !== undefined) rows[row] = stated;
+  }
+  return {
+    role,
+    variable: tokens.tokens.find(token => tokenIdentity(token) === identity),
+    rows,
+  };
+}
+
+/**
+ * A role's row put back as a snapshot stated it, onto the row as it is now:
+ * only its font, so another change to the row since is kept. A row the
+ * snapshot did not state, left with its built-in values, is left out again,
+ * unless the site's code supplies it.
+ */
+function restoredRow(
+  row: SiteTextRole,
+  was: SiteTextEntry | undefined,
+  now: SiteTextEntry | undefined,
+  supplied: SiteTextMap | undefined
+): SiteTextEntry | undefined {
+  const base = now ?? was;
+  if (was !== undefined && Object.hasOwn(was, "fontFamily")) {
+    return { ...base, fontFamily: was.fontFamily };
+  }
+  if (base === undefined) return undefined;
+  const { fontFamily: _font, ...rest } = base;
+  const builtIn =
+    was === undefined &&
+    sameRow(rest, DEFAULT_SITE_TEXT[row] ?? {}) &&
+    (supplied === undefined || !Object.hasOwn(supplied, row));
+  return builtIn ? undefined : rest;
+}
+
+/**
+ * The set with a role put back as a snapshot held it, onto the set as it is
+ * now: the role's variable exactly as it was (or taken away where there was
+ * none) and its rows' fonts, leaving every other variable and row, the other
+ * role's included, as they are.
+ *
+ * @param supplied - the rows the site's code supplies
+ */
+export function withRoleSnapshot(
+  tokens: SiteTokenSet,
+  snapshot: RoleSnapshot,
+  supplied?: SiteTextMap
+): SiteTokenSet {
+  const identity = FONT_ROLE_TOKEN[snapshot.role];
+  const stated: Partial<Record<SiteTextRole, SiteTextEntry>> = {
+    ...tokens.siteText,
+  };
+  for (const row of rowsOf(snapshot.role)) {
+    const next = restoredRow(row, snapshot.rows[row], stated[row], supplied);
+    if (next === undefined) delete stated[row];
+    else stated[row] = next;
+  }
+  const others = tokens.tokens.filter(
+    token => tokenIdentity(token) !== identity
+  );
+  const at = tokens.tokens.findIndex(
+    token => tokenIdentity(token) === identity
+  );
+  const { variable } = snapshot;
+  let variables: StoredToken[] = others;
+  if (variable !== undefined) {
+    variables =
+      at === -1
+        ? [...tokens.tokens, variable]
+        : tokens.tokens.map((token, index) =>
+            index === at ? variable : token
+          );
+  }
+  return { ...tokens, tokens: variables, siteText: stated };
+}
+
 /** The element a role's font is written on, as a developer names it. */
 const ROLE_SELECTOR: Readonly<Record<FontRole, string>> = {
   body: ".nx-pb-page",
@@ -199,7 +300,11 @@ const ROLE_SELECTOR: Readonly<Record<FontRole, string>> = {
 
 /** A font as the compiler writes it: a variable's `var()`, else as given. */
 function writtenFont(value: StyleValue, prefix: string): string {
-  const { declarations } = compileStyleValues({ fontFamily: value }, "", prefix);
+  const { declarations } = compileStyleValues(
+    { fontFamily: value },
+    "",
+    prefix
+  );
   return declarationsText(declarations);
 }
 
@@ -240,7 +345,10 @@ export function fontRoleWrites(tokens: SiteTokenSet, role: FontRole): string {
     return `${variableDeclared(tokens, first[1], prefix)}${ROLE_SELECTOR[role]} { ${writtenFont(first[1], prefix)} }`;
   }
   return held
-    .map(([row, font]) => `${variableDeclared(tokens, font, prefix)}${row} { ${writtenFont(font, prefix)} }`)
+    .map(
+      ([row, font]) =>
+        `${variableDeclared(tokens, font, prefix)}${row} { ${writtenFont(font, prefix)} }`
+    )
     .join(" ");
 }
 

@@ -26,9 +26,10 @@ import {
   type FamilyUses,
 } from "./font-uses";
 import {
-  fontRoleSetting,
   roleFamilies,
+  roleSnapshot,
   withFontRole,
+  withRoleSnapshot,
   type FontRole,
 } from "./site-font-roles-model";
 import {
@@ -96,7 +97,9 @@ export function useFamiliesUses(
 
 /** The places a font's variables reach, when any do. */
 function placesUsed(reach: VariableReach | undefined): string | undefined {
-  return variableRemoval(reach) === "in-use" ? variableStatus(reach) : undefined;
+  return variableRemoval(reach) === "in-use"
+    ? variableStatus(reach)
+    : undefined;
 }
 
 /**
@@ -215,8 +218,7 @@ export function FallbackList({
   return (
     <>
       <p>
-        Remove <strong>{family}</strong>?{reach} These variables will fall
-        back:
+        Remove <strong>{family}</strong>?{reach} These variables will fall back:
       </p>
       <ul className="nx-fonts__fallbacks">
         {here.uses.variables.map(variable => (
@@ -273,6 +275,8 @@ export function useUseFor(host: UseForHost): {
   readonly asked: Asked | null;
   readonly ask: (family: string, category?: string) => void;
   readonly answer: (roles: readonly FontRole[] | null) => void;
+  /** Stop asking about a family once it is removed: it has no faces now. */
+  readonly dismiss: (family: string) => void;
 } {
   const [asked, setAsked] = React.useState<Asked | null>(null);
   // The variables as last drawn, so an Undo pressed later builds on them.
@@ -292,6 +296,9 @@ export function useUseFor(host: UseForHost): {
       roleFamilies(host.faces ?? [], host.codeFaces).find(
         each => each.family.toLowerCase() === asked.family.toLowerCase()
       )?.stack ?? roleStack(asked.family, asked.category);
+    // Each role as it was, its variable whole and its rows' fonts, so Undo
+    // puts back exactly these and nothing changed since.
+    const before = roles.map(role => roleSnapshot(now, role));
     const set = roles.reduce(
       (tokens, role) => withFontRole(tokens, role, stack, host.suppliedText),
       now
@@ -301,40 +308,25 @@ export function useUseFor(host: UseForHost): {
       action: {
         label: "Undo",
         onClick: () => {
-          const current = latest.current ?? set;
           onTokensChange(
-            roles.reduce(
-              (tokens, role) =>
-                withRoleFrom(tokens, now, role, host.suppliedText),
-              current
+            before.reduce(
+              (tokens, snapshot) =>
+                withRoleSnapshot(tokens, snapshot, host.suppliedText),
+              latest.current ?? set
             )
           );
         },
       },
     });
   };
-  return { asked, ask, answer };
-}
-
-/**
- * The set with a role put back as `before` held it: set to the font it was,
- * or taken away where it was unset. A role whose rows held different fonts
- * is put back from `before` whole, which is the only way to hold all of them.
- */
-function withRoleFrom(
-  tokens: SiteTokenSet,
-  before: SiteTokenSet,
-  role: FontRole,
-  supplied: SiteTextMap | undefined
-): SiteTokenSet {
-  const was = fontRoleSetting(before, role);
-  if (was.kind === "mixed") return before;
-  return withFontRole(
-    tokens,
-    role,
-    was.kind === "set" ? was.stack : undefined,
-    supplied
-  );
+  const dismiss = (family: string): void => {
+    setAsked(current =>
+      current !== null && current.family.toLowerCase() === family.toLowerCase()
+        ? null
+        : current
+    );
+  };
+  return { asked, ask, answer, dismiss };
 }
 
 /**

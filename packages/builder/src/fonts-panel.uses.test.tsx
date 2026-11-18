@@ -174,7 +174,9 @@ describe("where a font is used", () => {
   it("says nothing of places for a font no variable names", async () => {
     panel({ usage: access({ "font.display": reach(9) }) });
     const open = await details("Inter");
-    expect(within(open).queryByRole("list", { name: "Where it’s used" })).toBeNull();
+    expect(
+      within(open).queryByRole("list", { name: "Where it’s used" })
+    ).toBeNull();
   });
 });
 
@@ -273,15 +275,38 @@ describe("using a font once it is added", () => {
   /** The panel with a writer for the site's variables, re-drawn on each write. */
   function Writable({
     onWrite,
+    initial = TOKENS,
+    edits,
   }: {
     onWrite: (tokens: SiteTokenSet) => void;
+    initial?: SiteTokenSet;
+    /** Handed the way to write the variables, as another edit would. */
+    edits?: (
+      write: (next: (tokens: SiteTokenSet) => SiteTokenSet) => void
+    ) => void;
   }): React.JSX.Element {
-    const [tokens, setTokens] = React.useState(TOKENS);
+    const [tokens, setTokens] = React.useState(initial);
+    // The site's faces as the host reads them back: an upload adds one, a
+    // removal takes the family away.
+    const [faces, setFaces] = React.useState<FontFaceDef[]>([INTER, LORA]);
+    edits?.(next => setTokens(next));
     return (
       <FontsPanel
-        faces={[INTER, LORA]}
+        faces={faces}
         tokens={tokens}
-        onAddFace={async () => undefined}
+        onAddFace={async request => {
+          setFaces(current => [
+            ...current,
+            { family: request.family, src: file("up"), weight: "400" },
+          ]);
+          return undefined;
+        }}
+        onRemoveFamily={async family => {
+          setFaces(current =>
+            current.filter(face => face.family.toLowerCase() !== family.key)
+          );
+          return undefined;
+        }}
         onTokensChange={next => {
           onWrite(next);
           setTokens(next);
@@ -289,6 +314,102 @@ describe("using a font once it is added", () => {
       />
     );
   }
+
+  /** The last toast's Undo. */
+  function undoLast(): void {
+    const [, options] = toasts.success.mock.lastCall as [
+      string,
+      { action: { onClick: () => void } },
+    ];
+    act(() => options.action.onClick());
+  }
+
+  it("takes back only the role it set, leaving a later change to the other role", async () => {
+    // Headings drawn in two fonts, so it is set back row by row.
+    const mixed = withFontRole(TOKENS, "heading", '"Lora", serif');
+    const initial: SiteTokenSet = {
+      ...mixed,
+      siteText: { ...mixed.siteText, h2: { fontFamily: "monospace" } },
+    };
+    const onWrite = vi.fn();
+    let write:
+      | ((next: (tokens: SiteTokenSet) => SiteTokenSet) => void)
+      | undefined;
+    render(
+      <Writable
+        onWrite={onWrite}
+        initial={initial}
+        edits={each => {
+          write = each;
+        }}
+      />
+    );
+    expect(fontRoleSetting(initial, "heading")).toEqual({ kind: "mixed" });
+    await upload("Brand");
+    fireEvent.click(screen.getByRole("button", { name: "Headings" }));
+    // Then Body is changed elsewhere, as the Type tab's picker would.
+    act(() =>
+      write?.(tokens => withFontRole(tokens, "body", '"Inter", sans-serif'))
+    );
+    undoLast();
+    const undone = onWrite.mock.lastCall?.[0] as SiteTokenSet;
+    expect(fontRoleSetting(undone, "body")).toEqual({
+      kind: "set",
+      stack: '"Inter", sans-serif',
+    });
+    expect(undone.siteText?.h2).toEqual({ fontFamily: "monospace" });
+    expect(fontRoleSetting(undone, "heading")).toEqual({ kind: "mixed" });
+  });
+
+  it("puts a role's variable back whole on Undo, its dark value included", async () => {
+    const initial: SiteTokenSet = {
+      tokens: [
+        ...TOKENS.tokens,
+        {
+          name: "font.body",
+          kind: "fontFamily",
+          values: { light: '"Inter", sans-serif', dark: '"Lora", serif' },
+        },
+      ],
+      siteText: { body: { fontFamily: { $token: "font.body" } } },
+    };
+    const onWrite = vi.fn();
+    render(<Writable onWrite={onWrite} initial={initial} />);
+    await upload("Brand");
+    fireEvent.click(screen.getByRole("button", { name: "Body" }));
+    undoLast();
+    const undone = onWrite.mock.lastCall?.[0] as SiteTokenSet;
+    expect(undone.tokens.find(token => token.name === "font.body")).toEqual({
+      name: "font.body",
+      kind: "fontFamily",
+      values: { light: '"Inter", sans-serif', dark: '"Lora", serif' },
+    });
+    expect(undone.siteText).toEqual(initial.siteText);
+  });
+
+  it("stops asking about a font once it is removed", async () => {
+    const onWrite = vi.fn();
+    render(<Writable onWrite={onWrite} />);
+    await upload("Brand");
+    // The upload editor closed with the question unanswered.
+    fireEvent.keyDown(document.activeElement ?? document.body, {
+      key: "Escape",
+    });
+    await waitFor(() =>
+      expect(screen.getByRole("group", { name: "Use Brand for:" })).toBeTruthy()
+    );
+    const open = await details("Brand");
+    fireEvent.click(within(open).getByRole("button", { name: "Remove" }));
+    await act(async () => {
+      fireEvent.click(
+        within(open).getByRole("button", { name: "Remove Brand" })
+      );
+    });
+    await waitFor(() =>
+      expect(screen.queryByRole("group", { name: "Use Brand for:" })).toBeNull()
+    );
+    expect(onWrite).not.toHaveBeenCalled();
+  });
 
   it("asks in place how to use it: Body, Headings, Both or Not now", async () => {
     render(<Writable onWrite={vi.fn()} />);

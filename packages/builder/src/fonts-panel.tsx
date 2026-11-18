@@ -282,11 +282,27 @@ export function FontsPanel({
       onOpenTokens={onOpenTokens}
       onOpenRole={onOpenRole}
       usesOf={usesOf}
-      onRemoveFamily={onRemoveFamily}
+      onRemoveFamily={removalDismissing(onRemoveFamily, useFor.dismiss)}
       onBrowse={browseOf(readOnly, catalogue, setView)}
       upload={uploadAsking(readOnly, onAddFace, acceptFiles, useFor.ask)}
     />
   );
+}
+
+/**
+ * The host's removal, which stops asking how to use the family once it is
+ * removed: answering then would make a font with no faces the site's own.
+ */
+function removalDismissing(
+  onRemoveFamily: FontsPanelProps["onRemoveFamily"],
+  dismiss: (family: string) => void
+): FontsPanelProps["onRemoveFamily"] {
+  if (onRemoveFamily === undefined) return undefined;
+  return async family => {
+    const refusal = await onRemoveFamily(family);
+    if (refusal === undefined) dismiss(family.family);
+    return refusal;
+  };
 }
 
 /** Back from the catalogue, with focus where the catalogue was opened. */
