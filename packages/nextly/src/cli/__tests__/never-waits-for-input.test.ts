@@ -617,9 +617,11 @@ describe("a command run with no terminal", () => {
   /**
    * A role holding a retired `manage-` permission, as an earlier release
    * stored one: work for `nextly migrate`'s data steps. Each row is a copy of one the
-   * migrated database already holds, so it has every column the table needs.
+   * migrated database already holds, so it has every column the table needs. A
+   * database made by `db:sync` holds no role yet, so there the role is made
+   * first (`ownRole`), with the columns that have no default.
    */
-  function giveARoleARetiredManagePermission() {
+  function giveARoleARetiredManagePermission(ownRole = false) {
     const db = new Database(dbFile);
     try {
       const copy = (table: string, change: Record<string, unknown>) => {
@@ -640,6 +642,15 @@ describe("a command run with no terminal", () => {
         action: "manage",
         resource: "media",
       });
+      if (ownRole) {
+        db.prepare(
+          `INSERT INTO "roles" ("id", "name", "slug", "level", "is_system", "created_at", "updated_at") VALUES ('nw-role', 'Media desk', 'nw-media-desk', 0, 0, unixepoch(), unixepoch())`
+        ).run();
+        db.prepare(
+          `INSERT INTO "role_permissions" ("id", "role_id", "permission_id", "created_at") VALUES ('nw-holds-manage-media', 'nw-role', 'nw-manage-media', unixepoch())`
+        ).run();
+        return;
+      }
       copy("role_permissions", {
         id: "nw-holds-manage-media",
         permission_id: "nw-manage-media",
@@ -659,6 +670,59 @@ describe("a command run with no terminal", () => {
       await expectRefusal(["migrate"], "nextly migrate --backup-confirmed");
     },
     NEXTLY_RUN_TIMEOUT
+  );
+
+  /** Whether a role still holds the retired `manage-media` permission planted above. */
+  const holdsRetiredManage = () =>
+    (databaseState(dbFile)?.role_permissions ?? []).some(
+      row =>
+        (row as { permission_id?: unknown }).permission_id === "nw-manage-media"
+    );
+
+  it(
+    "db:sync does not ask whether the database is backed up before its data steps, and names --backup-confirmed",
+    async () => {
+      // A synced development database where one of the data steps has work,
+      // and a configuration the sync would add a column for.
+      await syncedPosts();
+      giveARoleARetiredManagePermission(true);
+      writeFileSync(
+        join(project, "nextly.config.ts"),
+        CONFIG_WITH(POSTS.replace("]", `, { name: "summary", type: "text" }]`))
+      );
+      // Refused before the sync changes anything, the new column included.
+      await expectRefusal(["db:sync"], "nextly db:sync --backup-confirmed");
+      expect(holdsRetiredManage()).toBe(true);
+    },
+    NEXTLY_RUN_TIMEOUT
+  );
+
+  it(
+    "db:sync --backup-confirmed syncs and takes its data steps, and a later sync asks for nothing",
+    async () => {
+      await syncedPosts();
+      giveARoleARetiredManagePermission(true);
+      // The fixture's control: the role holds the retired permission.
+      expect(holdsRetiredManage()).toBe(true);
+
+      const dryRun = await nextly(["db:sync", "--dry-run"]);
+      expect(dryRun.status, `${dryRun.stdout}\n${dryRun.stderr}`).toBe(0);
+      expect(dryRun.stdout).toMatch(
+        /Would give roles holding a retired manage permission the plain permissions: 1/
+      );
+      expect(holdsRetiredManage()).toBe(true);
+
+      const confirmed = await nextly(["db:sync", "--backup-confirmed"]);
+      expect(confirmed.status, `${confirmed.stdout}\n${confirmed.stderr}`).toBe(
+        0
+      );
+      expect(holdsRetiredManage()).toBe(false);
+
+      // Nothing of the kind is left: no confirmation is needed, with nobody to ask.
+      const again = await nextly(["db:sync"]);
+      expect(again.status, `${again.stdout}\n${again.stderr}`).toBe(0);
+    },
+    NEXTLY_RUN_TIMEOUT * 2
   );
 
   it(

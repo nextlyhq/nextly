@@ -1,14 +1,16 @@
 /**
- * `nextly migrate`'s part in bringing data an earlier release stored up to
- * date: the steps of `MIGRATE_DATA_STEPS`, run once the migrations have
- * applied (`runDataSteps`), and the run's one backup question.
+ * What a command that brings a database's schema up to date does with the
+ * data an earlier release stored: `nextly migrate`, once its migrations have
+ * applied, and `nextly db:sync`, once it has synced. Both take the steps of
+ * `MIGRATE_DATA_STEPS` (`runDataSteps`) and share the run's one backup
+ * question.
  *
- * One value per run (`migrateStoredData`) holds what the run has learned: a
+ * One value per run (`storedDataOfRun`) holds what the run has learned: a
  * yes at the backup question, which holds for the rest of the run so nobody
  * is asked twice; whether the steps were taken; and the backup refusal they
- * ended with where the work could only be seen after the migrations applied.
+ * ended with where the work could only be seen after the schema changed.
  *
- * @module cli/commands/migrate-stored-data
+ * @module cli/commands/stored-data-of-run
  */
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
@@ -42,19 +44,29 @@ interface StoredDataLogger {
   newline: () => void;
 }
 
-/** What `nextly migrate` does with the data an earlier release stored, over one run. */
-export interface MigrateStoredData {
+/** What a command does with the data an earlier release stored, over one run. */
+export interface StoredDataOfRun {
   /** The run's one backup question; a yes holds for the rest of the run. */
   askBackedUp: () => Promise<boolean>;
   /** `--dry-run`: lists each step with work, read-only. */
   preview: (stepped: boolean) => Promise<void>;
-  /** Before any migration applies: refuses work whose backup nobody confirmed. */
-  confirmBeforeMigrations: (step: number | undefined) => Promise<void>;
-  /** Once every migration has applied: runs the steps. */
-  takeAfterMigrations: () => Promise<void>;
+  /**
+   * `--dry-run`, for a command that reports one plan: the steps' work as
+   * that plan's changes, refusals and notes, read-only. A count that cannot
+   * be read, on a database whose tables the run creates, is a note.
+   */
+  plan: () => Promise<DryRunPlan>;
+  /**
+   * Before the command changes the schema: refuses work whose backup nobody
+   * confirmed. Not made for a run limited by `--step`, which may stop before
+   * the steps.
+   */
+  confirmBeforeSchemaChanges: (step?: number) => Promise<void>;
+  /** Once the schema is up to date: runs the steps. */
+  takeAfterSchemaChanges: () => Promise<void>;
   /** Where the steps were not taken: names passwords still stored as given. */
   warnOfPasswordsLeft: () => Promise<void>;
-  /** The backup refusal the steps ended with after the migrations applied, if any. */
+  /** The backup refusal the steps ended with after the schema changed, if any. */
   refusal: () => NextlyError | null;
 }
 
@@ -67,7 +79,9 @@ function reportPlan(
   const refusals = plan.refusals ?? [];
   if (plan.changes.length === 0 && refusals.length === 0) return;
   logger.newline();
-  logger.info("Data stored by an earlier release, once the migrations apply:");
+  logger.info(
+    "Data stored by an earlier release, once the schema is up to date:"
+  );
   for (const { action, target } of plan.changes) {
     logger.info(`  • would ${action} ${target}`);
   }
@@ -85,14 +99,23 @@ function reportPlan(
   for (const note of plan.notes ?? []) logger.info(`  ${note}`);
 }
 
-export function migrateStoredData(args: {
+export function storedDataOfRun(args: {
   adapter: DrizzleAdapter;
+  /** The command, as a refusal and the schema lock's holder name it: "nextly migrate". */
+  command: string;
+  /**
+   * Puts back the table resolver the command runs with. The count before the
+   * schema changes registers the tables it reads as they stand then, and the
+   * command must not go on to read one in that shape. Absent, the CLI's
+   * registry resolver is installed.
+   */
+  restoreResolver?: () => void;
   logger: StoredDataLogger;
   /** The operator's `--backup-confirmed`. */
   backupConfirmed: boolean;
   /** The schema lock's lease, in seconds, as the configuration sets it. */
   lockTtlSeconds: number | undefined;
-}): MigrateStoredData {
+}): StoredDataOfRun {
   const { adapter, logger } = args;
   let confirmed = args.backupConfirmed;
   let taken = false;
@@ -105,11 +128,11 @@ export function migrateStoredData(args: {
     if (yes) confirmed = true;
     return yes;
   };
-  /** What the steps are run with, before or after the run's migrations. */
+  /** What the steps are run with, before or after the run's schema changes. */
   const deps = (afterMigrations: boolean): DataStepsDeps => ({
     afterMigrations,
     adapter: adapter as unknown as DataStepsDeps["adapter"],
-    command: "nextly migrate",
+    command: args.command,
     steps: MIGRATE_DATA_STEPS,
     backupConfirmed: confirmed,
     interactive: canPrompt(),
@@ -124,6 +147,19 @@ export function migrateStoredData(args: {
   return {
     askBackedUp,
     refusal: () => refused,
+
+    plan: async () => {
+      try {
+        return await previewDataSteps(deps(false));
+      } catch (error) {
+        return {
+          changes: [],
+          notes: [
+            `Data stored by an earlier release could not be counted: ${describeError(error)}`,
+          ],
+        };
+      }
+    },
 
     // A count that cannot be read, on a database whose tables the pending
     // migrations create, is said so rather than guessed.
@@ -141,11 +177,10 @@ export function migrateStoredData(args: {
     },
 
     // Asked before anything changes, so a run that would be refused for the
-    // steps leaves the migrations unapplied too. Not under `--step`, which
-    // may stop before the steps run. A count that cannot be read yet, on a
-    // database whose tables the migrations create, is taken again after
-    // them; a refusal made then says that the migrations had applied.
-    confirmBeforeMigrations: async step => {
+    // steps leaves the schema as it was too. A count that cannot be read
+    // yet, on a database whose tables the run creates, is taken again after
+    // it; a refusal made then says that the schema changes had applied.
+    confirmBeforeSchemaChanges: async step => {
       if (step !== undefined) return;
       try {
         const before = deps(false);
@@ -154,18 +189,17 @@ export function migrateStoredData(args: {
           await firstDataStepWithWork(before).catch(() => undefined)
         );
       } finally {
-        // The count registers the tables it reads as they stand before the
-        // migrations. The run goes on with the resolver it started with, so
-        // nothing after reads a table in the shape it had before them.
-        installRegistryResolver(adapter);
+        // The run goes on with the resolver it started with, so nothing
+        // after reads a table in the shape it had before the schema changed.
+        (args.restoreResolver ?? (() => installRegistryResolver(adapter)))();
       }
     },
 
     // A backup nobody confirmed is refused here only where the check before
-    // the migrations could not see the work. The migrations have applied, so
+    // the schema changes could not see the work. Those have applied, so
     // the refusal is kept for the run to end with once its remaining deploy
     // work is done, rather than thrown past it.
-    takeAfterMigrations: async () => {
+    takeAfterSchemaChanges: async () => {
       try {
         await runDataSteps(deps(true));
         taken = true;
