@@ -1196,10 +1196,10 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
-    // MySQL runs each statement as it comes: the run stops at the copy, the column it added
-    // before stays, and the group keeps every date, since the key is cleared only after.
+    // MySQL runs each statement as it comes, so the file's stop runs before its schema changes:
+    // nothing is added, and the group keeps every date.
     it.runIf(dialect === "mysql")(
-      "stops a replayed move of a date its TIMESTAMP column does not hold before the group loses it",
+      "stops a replayed move of a date its TIMESTAMP column does not hold before anything changes",
       async () => {
         const first = await boot(dialect);
         await createPosts(first);
@@ -1230,11 +1230,11 @@ describe.each(getConfiguredTestDialects())(
         expect(await columnsOf(second)).not.toContain("published");
 
         await expect(migrateFolder(second)).rejects.toThrow(
-          /Incorrect datetime value/
+          /cannot_keep_published/
         );
 
         expect(await storedGroups(second)).toEqual(groups);
-        expect(await columnsOf(second)).toContain("published");
+        expect(await columnsOf(second)).not.toContain("published");
       }
     );
 
