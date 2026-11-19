@@ -308,6 +308,67 @@ describe("the environment files the CLI reads, as Next.js reads them", () => {
   });
 });
 
+describe("a second project folder's environment files", () => {
+  /** What a run started in `ranIn` holds once it has also read `other`'s files. */
+  function readsBoth(ranIn: string, other: string, env: NodeJS.ProcessEnv) {
+    const script = `
+      const { loadCliEnvironment, readFurtherEnvironment, setModeLineWriter, announceMode } = await import(${JSON.stringify(ENVIRONMENT)});
+      loadCliEnvironment(undefined);
+      readFurtherEnvironment(${JSON.stringify(other)});
+      const printed = [];
+      setModeLineWriter(line => printed.push(line));
+      announceMode();
+      process.stdout.write(JSON.stringify({
+        databaseUrl: process.env.DATABASE_URL,
+        extra: process.env.EXTRA_SETTING,
+        printed,
+      }));
+    `;
+    const out = execFileSync(
+      process.execPath,
+      ["--import", TSX, "--input-type=module", "--eval", script],
+      { cwd: ranIn, env, encoding: "utf8" }
+    );
+    return JSON.parse(out) as {
+      databaseUrl?: string;
+      extra?: string;
+      printed: string[];
+    };
+  }
+
+  it("are read as the mode's files are, `.env.local` over `.env`, where nothing has set the value", () => {
+    const other = project({
+      ".env": "file:./other-env.db",
+      ".env.local": "file:./other-env-local.db",
+    });
+    const read = readsBoth(project({}), other, childEnv(undefined));
+    expect(read.databaseUrl).toBe("file:./other-env-local.db");
+    // Named with the file it came from, by its path from where the CLI ran.
+    expect(read.printed).toHaveLength(1);
+    expect(read.printed[0]).toMatch(
+      /^Database: SQLite \S+other-env-local\.db \(development; DATABASE_URL from \S*\.env\.local\)$/
+    );
+  });
+
+  it("never replace a value the first folder's files or the process environment set", () => {
+    const other = project({ ".env.local": "file:./other.db" });
+    writeFileSync(join(other, ".env"), "EXTRA_SETTING=from-other\n");
+    const ranIn = project({ ".env": "file:./ran-in.db" });
+
+    const fromFile = readsBoth(ranIn, other, childEnv(undefined));
+    expect(fromFile.databaseUrl).toBe("file:./ran-in.db");
+    // What the first folder did not set, the second does.
+    expect(fromFile.extra).toBe("from-other");
+
+    const fromProcess = readsBoth(
+      project({}),
+      other,
+      childEnv(undefined, "file:./from-process.db")
+    );
+    expect(fromProcess.databaseUrl).toBe("file:./from-process.db");
+  });
+});
+
 describe("the --mode option and the mode line, through the program", () => {
   // A fresh copy of the CLI's modules for each case: the mode line is printed
   // once a run, and a run here is one case.

@@ -95,14 +95,7 @@ export function loadCliEnvironment(
   // for the run, as `next build` and `next dev` do for theirs.
   Object.assign(process.env, { NODE_ENV: mode });
   const preset = new Set(Object.keys(process.env));
-  // `@next/env` is a bundled CommonJS file whose exports Node's ESM loader
-  // cannot name, so it is loaded through `require`, typed from its own
-  // declarations. Loaded here, not when this module is imported: the app's dev
-  // boot imports the database check that prints the mode line, and never
-  // reads environment files through the CLI.
-  const { loadEnvConfig } = createRequire(import.meta.url)(
-    "@next/env"
-  ) as typeof NextEnv;
+  const { loadEnvConfig } = nextEnv();
   // The loader announces each file it reads; the CLI prints its own mode line
   // instead, so only a file it could not read is reported.
   const { loadedEnvFiles } = loadEnvConfig(folder, mode === "development", {
@@ -119,6 +112,49 @@ export function loadCliEnvironment(
     ),
     preset,
     values: loadedEnvFiles.map(file => file.env),
+  };
+}
+
+/** Next.js's own loader of environment files, typed from its declarations. */
+function nextEnv(): typeof NextEnv {
+  // `@next/env` is a bundled CommonJS file whose exports Node's ESM loader
+  // cannot name, so it is loaded through `require`. Loaded when asked, not
+  // when this module is imported: the app's dev boot imports the database
+  // check that prints the run's line, and never reads environment files
+  // through the CLI.
+  return createRequire(import.meta.url)("@next/env") as typeof NextEnv;
+}
+
+/**
+ * Reads the environment files of a second project folder, for a command told
+ * to work in another folder than the one the CLI ran in: the files Next.js
+ * reads there for the run's mode, in its order of precedence, each setting
+ * only what nothing has set yet. A value the first folder's files or the
+ * process environment gave stays as it is.
+ */
+export function readFurtherEnvironment(folder: string): void {
+  if (!current) return;
+  const { loadEnvConfig, updateInitialEnv } = nextEnv();
+  // The loader starts a second reading from the environment it first saw.
+  // Told that what is set now is that environment, it keeps every value
+  // already read and adds only what is missing.
+  updateInitialEnv({ ...process.env });
+  const { loadedEnvFiles } = loadEnvConfig(
+    folder,
+    current.mode === "development",
+    { info: () => {}, error: (...args: unknown[]) => console.error(...args) },
+    true
+  );
+  // Recorded after the first folder's files, which won where both set a value.
+  current = {
+    ...current,
+    files: [
+      ...current.files,
+      ...loadedEnvFiles.map(file =>
+        relative(current?.folder ?? folder, resolve(folder, file.path))
+      ),
+    ],
+    values: [...current.values, ...loadedEnvFiles.map(file => file.env)],
   };
 }
 

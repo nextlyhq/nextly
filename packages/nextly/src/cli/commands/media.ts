@@ -1,10 +1,9 @@
-import { existsSync, realpathSync } from "node:fs";
+import { realpathSync } from "node:fs";
 import path from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import type { Command } from "commander";
-import { config as loadEnvFile } from "dotenv";
 
 import {
   storedKeysOn,
@@ -38,7 +37,7 @@ import type { IStorageAdapter } from "../../storage/types";
 import { createContext } from "../context";
 import { reportDryRun, type DryRunPlan } from "../dry-run";
 import { plannedOrRefused } from "../dry-run-refusal";
-import { environmentFilesRead } from "../environment";
+import { environmentFilesRead, readFurtherEnvironment } from "../environment";
 import { exitWithError, printCliError, type CliError } from "../errors";
 import {
   mediaApplyOutsideProject,
@@ -395,7 +394,8 @@ const REINDEX_USAGE: ProjectGuard = {
  * another project's. So from another directory a command with a `guard`, one
  * that changes the database or what it describes, is refused, and a listing
  * warns naming each environment file the run read there; the project's own
- * `.env` sets what nothing has set yet.
+ * environment files, the ones Next.js reads for the run's mode, set what
+ * nothing has set yet.
  */
 function enterProject(
   cwd: string,
@@ -416,8 +416,8 @@ function enterProject(
         `The environment was read from ${loaded.join(", ")}, not from ${cwd}, so the database it names may be another project's.`
       );
     }
-    const projectEnv = path.join(cwd, ".env");
-    if (existsSync(projectEnv)) loadEnvFile({ path: projectEnv });
+    // The project's own files, read as the CLI reads the folder it runs in.
+    readFurtherEnvironment(cwd);
   }
   process.chdir(cwd);
 }
