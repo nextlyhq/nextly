@@ -1014,8 +1014,11 @@ async function writeSave(
   // named as written (a file its generation could not take back), keeps the record. Read before
   // anything of the save is written, so a read that fails has changed nothing.
   let sqlBefore: string[];
+  // And the snapshots, so a save overtaken as its generation published tells what it placed.
+  let snapshotsBefore: string[];
   try {
     sqlBefore = await sqlFiles(deps.migrationsDir);
+    snapshotsBefore = await snapshotFiles(deps.migrationsDir);
   } catch (error) {
     // Nothing of the save is written yet: there is nothing to settle, so the record clears with
     // the save's failure.
@@ -1068,13 +1071,38 @@ async function writeSave(
     if (isWriterOvertaken(error)) {
       // Another writer took the folder: what the save put there stays, since a migration file in
       // the folder may already be applied. The record stays with it, for the save to be compared
-      // and made again; a save overtaken before it put anything there has nothing to settle, and
-      // its record goes.
-      if (names.length === 0) started.withdrawn();
-      else started.left();
+      // and made again. Only a save whose folder holds nothing new has nothing to settle, and its
+      // record goes: its generation may have published a file and been refused after, before
+      // naming it, so the folder is what is read, not the files named.
+      const placed =
+        names.length > 0 ||
+        (await folderGrewSince(deps, sqlBefore, snapshotsBefore));
+      if (placed) started.left();
+      else started.withdrawn();
       throw overtakenSaveError(error, names);
     }
     return undoThenThrow(error, [{ files: names, undo: () => undo(error) }]);
+  }
+}
+
+/**
+ * Whether the migration folder holds a migration file or a snapshot it did not hold before the
+ * save, whoever wrote it: a folder that cannot be read is taken as having grown.
+ */
+async function folderGrewSince(
+  deps: CollectionSaveDeps,
+  sqlBefore: readonly string[],
+  snapshotsBefore: readonly string[]
+): Promise<boolean> {
+  try {
+    const sql = await sqlFiles(deps.migrationsDir);
+    const snapshots = await snapshotFiles(deps.migrationsDir);
+    return (
+      sql.some(file => !sqlBefore.includes(file)) ||
+      snapshots.some(file => !snapshotsBefore.includes(file))
+    );
+  } catch {
+    return true;
   }
 }
 
