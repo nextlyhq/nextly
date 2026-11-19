@@ -273,24 +273,7 @@ export async function dueComponentsHolding(
       for (const document of frontier) components.giveUp(walkKeyOf(document));
       break;
     }
-    const holding = await dueReleasesHolding(reads, frontier, now);
-    // Joined to the documents it was found by, every release, a known one too: a release given
-    // up on is never read in full, so its edge to a document reached again is how what it joins
-    // learns it is past the bound. And joined before members are read, so a component past the
-    // bound is known first.
-    for (const { release, naming } of holding) {
-      for (const document of naming) {
-        components.join(releaseKeyOf(release.id), walkKeyOf(document));
-      }
-    }
-    const found = holding.filter(({ release }) => !releases.has(release.id));
-    for (const { release } of found) releases.set(release.id, release);
-    components.giveUpOversized(releases.keys());
-    const added = await reads.listMembersOf(
-      found
-        .map(({ release }) => release.id)
-        .filter(id => !components.isBeyond(releaseKeyOf(id)))
-    );
+    const added = await walkRound(reads, frontier, now, components, releases);
     members.push(...added);
     frontier = [];
     for (const member of added) {
@@ -308,6 +291,38 @@ export async function dueComponentsHolding(
       components.isBeyond(walkKeyOf(document))
     ),
   };
+}
+
+/**
+ * One round of a walk: the due releases holding `frontier`, each joined to the documents it was
+ * found by, added to `releases` when new, and the members of each new one not in a component
+ * given up on. Split from `dueComponentsHolding` so each reads as one step.
+ */
+async function walkRound(
+  reads: ComponentReads,
+  frontier: readonly ReleaseRecheckDocument[],
+  now: Date,
+  components: WalkedComponents,
+  releases: Map<string, DueRelease>
+): Promise<DrainMemberRow[]> {
+  const holding = await dueReleasesHolding(reads, frontier, now);
+  // Joined to the documents it was found by, every release, a known one too: a release given
+  // up on is never read in full, so its edge to a document reached again is how what it joins
+  // learns it is past the bound. And joined before members are read, so a component past the
+  // bound is known first.
+  for (const { release, naming } of holding) {
+    for (const document of naming) {
+      components.join(releaseKeyOf(release.id), walkKeyOf(document));
+    }
+  }
+  const found = holding.filter(({ release }) => !releases.has(release.id));
+  for (const { release } of found) releases.set(release.id, release);
+  components.giveUpOversized(releases.keys());
+  return reads.listMembersOf(
+    found
+      .map(({ release }) => release.id)
+      .filter(id => !components.isBeyond(releaseKeyOf(id)))
+  );
 }
 
 /**
