@@ -80,7 +80,11 @@ export function ReviewChanges({
   if (judged.length === 0 && approval === undefined) return null;
   // Each part is named where more than one is shown: the shared fields'
   // changes are approved with the language's, so they are shown with them.
-  const titled = judged.length > 1;
+  // A lone part is named too where it is not the part on screen: the shared
+  // fields alone waiting for this person under a language's editor.
+  const titled =
+    judged.length > 1 ||
+    (judged[0] !== undefined && judged[0].part !== parts[0]?.part);
   return (
     <section
       aria-labelledby="review-changes-heading"

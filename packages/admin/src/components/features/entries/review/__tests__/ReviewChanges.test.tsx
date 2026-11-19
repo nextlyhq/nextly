@@ -320,6 +320,50 @@ describe("ReviewChanges", () => {
     expect(baselineSpy).toHaveBeenCalledWith(SCOPE, "published", { to: 8 });
   });
 
+  it("names the shared fields when they alone wait for this person under a language's editor", async () => {
+    versionsMock.mockImplementation(({ locale }: { locale?: string }) => ({
+      data: {
+        pages: [
+          {
+            items:
+              locale === "en"
+                ? [version(7), version(5, "published")]
+                : [version(4, "draft", null), version(2, "published", null)],
+            meta: {},
+          },
+        ],
+      },
+      isError: false,
+    }));
+    // English is on screen but is not this person's to approve.
+    const english = inReview({
+      steps: [
+        {
+          name: "approve",
+          label: "Approve",
+          kind: "approve",
+          to: "approved",
+          mayTake: false,
+          primary: true,
+          commentRequired: false,
+        },
+      ],
+    } as Partial<PartReview>);
+
+    render(
+      <ReviewChanges
+        scope={SCOPE}
+        parts={[english, inReview({ part: null, version: "s4" })]}
+      />
+    );
+
+    expect(
+      screen.getByRole("heading", { name: "Shared fields" })
+    ).toBeVisible();
+    expect(await screen.findByText("comparing 2 with 4")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "English" })).toBeNull();
+  });
+
   it("offers no approval of every language where only one part waits", () => {
     listing([version(7), version(5, "published")]);
 
