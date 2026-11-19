@@ -29,10 +29,11 @@ import { notStoredLabel } from "./activity-choices";
 import {
   attemptText,
   detailState,
+  emptyTimelineText,
   failureKindOf,
   versionText,
 } from "./activity-detail-model";
-import { RECIPIENT_KIND_LABELS, dueText } from "./activity-model";
+import { RECIPIENT_KIND_LABELS, dueText, isUnsettled } from "./activity-model";
 import type { ActivityNames } from "./ActivityList";
 
 export interface ActivityDetailSheetProps {
@@ -150,7 +151,9 @@ function Timeline({ data }: { data: ActivityDetail }): JSX.Element {
         </p>
       )}
       {timeline.length === 0 ? (
-        <p className="text-sm text-muted-foreground">No attempt yet.</p>
+        <p className="text-sm text-muted-foreground">
+          {emptyTimelineText(data.source === "queued" ? data.detail : null)}
+        </p>
       ) : (
         <ol className="space-y-3 border-l border-border pl-4">
           {shown.map(attempt => {
@@ -256,7 +259,14 @@ function Details({
   now: Date;
 }): JSX.Element {
   const slug = data.detail.templateSlug;
-  const version = versionText(data.detail.templateVersion);
+  // "Not sent yet" only for an email still to be sent that has had no
+  // attempt: one attempted before has had its version pruned, not never sent.
+  const version = versionText(
+    data.detail.templateVersion,
+    data.source === "queued" &&
+      isUnsettled(data.detail.state) &&
+      data.detail.attempts === 0
+  );
   return (
     <dl className="grid grid-cols-1 gap-3 sm:grid-cols-2">
       <Detail term="Time">{timeText(data.detail.createdAt)}</Detail>
@@ -287,7 +297,13 @@ function fixHrefOf(
 ): string | undefined {
   // Only a queued email's failure is known to have come from its template:
   // a direct send that failed to render left no record to open.
-  if (data?.source !== "queued" || !data.detail.templateCaused)
+  // The marker stays on a queued email after a later attempt succeeds, so the
+  // action is offered only while the failure is its current state.
+  if (
+    data?.source !== "queued" ||
+    !data.detail.templateCaused ||
+    (data.detail.state !== "retrying" && data.detail.state !== "failed")
+  )
     return undefined;
   const slug = data.detail.templateSlug;
   return slug ? fixTemplateHref(slug) : undefined;
