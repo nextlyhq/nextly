@@ -41,7 +41,7 @@ import { HideOn, type BreakpointsStatus } from "./hide-on";
 import {
   designReadOnlyReason,
   lockViewOf,
-  propIsWritable,
+  writablePropsOf,
   type BlockInspection,
   type EditableProp,
 } from "./inspector";
@@ -104,6 +104,12 @@ function DrawnAdvancedTab({
     block.nodeId,
     lockViewOf(editor)
   );
+  // Which props the block's locks leave writable, read once per document and
+  // block rather than once per field the tab draws.
+  const writable = React.useMemo(
+    () => writablePropsOf(editor.document, block.nodeId, lockViewOf(editor)),
+    [editor, block.nodeId]
+  );
   // The block's own Advanced settings, by section: those in HTML are drawn
   // above the anchor, the others in sections of their own after it.
   const { htmlRows, visibilityRows, others } = advancedRowsBySection(
@@ -117,9 +123,7 @@ function DrawnAdvancedTab({
       services={services}
       reasonId={reasonId}
       fields={fields}
-      writable={name =>
-        propIsWritable(editor.document, block.nodeId, name, lockViewOf(editor))
-      }
+      writable={writable}
       onCommitMany={changes => commitLinkChanges(editor, block.nodeId, changes)}
       onApply={op => editor.apply(op) !== null}
       document={editor.document}

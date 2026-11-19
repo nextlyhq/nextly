@@ -49,7 +49,9 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { FieldConfig } from "@nextly/collections";
 
 import { assertTopLevelFieldsNamed } from "../../../api/fields-payload";
+import { toDbError } from "../../../database/errors";
 import { NextlyError } from "../../../errors";
+import { bumpSchemaVersion } from "../../../route-handler/schema-version";
 import type { UiSchemaEntity } from "../../../schemas/_zod/ui-schema";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type {
@@ -61,6 +63,7 @@ import { assertGlobalResourceSlugAvailable } from "../../../services/lib/resourc
 import { assertAddressAllowed } from "../../../shared/address-rule";
 import { addressableFields } from "../../../shared/addressable-fields";
 import type { Logger } from "../../../shared/types";
+import type { TeardownAdapter } from "../../collections/services/teardown-adapter-in-transaction";
 import { collectionTablesBySlug } from "../../dynamic-collections/services/collection-tables";
 import type { DynamicCollectionSchemaService } from "../../dynamic-collections/services/dynamic-collection-schema-service";
 import { fieldGroupSlugList } from "../../field-groups/storage/field-group-field-type";
@@ -106,7 +109,10 @@ import { calculateSchemaHash } from "../../schema/services/schema-hash";
 import { assertNoNewSiblingClashes } from "../../schema/sibling-fields";
 
 import { singleTableFamiliesCollide } from "./resolve-single-table-name";
-import type { SingleRegistryService } from "./single-registry-service";
+import type {
+  SingleRegistryService,
+  UnregisteredSingleRow,
+} from "./single-registry-service";
 
 /**
  * The Builder save writer, loaded where a save runs: it brings the migration
@@ -668,33 +674,9 @@ export class SingleMetadataService {
       });
     }
 
-    const adapter = this.adapter;
-    const remove = async (): Promise<void> => {
-      if (tableName && adapter) {
-        // Its many-to-many junction tables first: each holds a key into the Single's table, and
-        // the delete is not done while any stands, so its migration is never recorded applied
-        // with them left.
-        await this.dropJunctionTables(
-          tableName,
-          current?.fields ?? [],
-          adapter
-        );
-        await this.dropSingleStorage(slug, tableName, adapter);
-      }
-
-      // A row a concurrent delete already took is the state this method exists to reach, so it
-      // completes rather than failing.
-      //
-      // The tolerance covers this one call and nothing above it. A teardown or a drop that fails
-      // has to surface even when its message mentions something missing, because answering
-      // "deleted" to it would leave the registry row present and the storage half removed — the
-      // exact state the ordering above is arranged to prevent.
-      try {
-        await this.registry.deleteSingle(slug, { force: true });
-      } catch (error) {
-        if (!NextlyError.isNotFound(error)) throw error;
-      }
-    };
+    // `committed` marks the moment the delete is the database's, where it runs in one transaction.
+    const remove = (committed: () => void = () => undefined): Promise<void> =>
+      this.removeSingle(slug, tableName, current, committed);
 
     // Where a Builder save writer is set up, the delete is written as the Single's migration,
     // inside this same exclusion, with its junction tables and relationship keys, so no snapshot
@@ -722,15 +704,151 @@ export class SingleMetadataService {
           []
         )),
       },
-      remove
+      remove,
+      // A failure undone whole changed nothing, so the delete's files are withdrawn with it.
+      { rollsBackWhole: this.wholeDeleteAdapter() !== undefined }
     );
+  }
+
+  /**
+   * The adapter a Single's delete runs in one transaction on, or undefined where it runs in steps.
+   *
+   * On PostgreSQL and SQLite the storage and the registry row go in one transaction, as a
+   * collection's delete does: those databases undo a table drop with the rest, so a failure at
+   * any step leaves the whole Single, its translations and its row. MySQL commits each drop as it
+   * runs, so there the steps run one by one, ordered so a failure stays retryable.
+   */
+  private wholeDeleteAdapter(): DrizzleAdapter | undefined {
+    const adapter = this.adapter;
+    return adapter !== undefined &&
+      adapter.getCapabilities().dialect !== "mysql"
+      ? adapter
+      : undefined;
+  }
+
+  /**
+   * A Single's junction tables, storage and registry row removed, whole or in steps. `stored` is
+   * its record as the delete read it, absent where the row is already gone.
+   */
+  private removeSingle(
+    slug: string,
+    tableName: string | undefined,
+    stored: { fields?: readonly unknown[] } | null | undefined,
+    committed: () => void
+  ): Promise<void> {
+    const fields = stored?.fields ?? [];
+    const whole = this.wholeDeleteAdapter();
+    return whole !== undefined
+      ? this.removeSingleWhole(whole, slug, tableName, fields, committed, {
+          rowRead: stored !== undefined && stored !== null,
+        })
+      : this.removeSingleInSteps(this.adapter, slug, tableName, fields);
+  }
+
+  /**
+   * A Single's junction tables, storage and registry row removed one step at a time, each
+   * committing as it runs: on MySQL, which commits a table drop and what ran before it, and where
+   * no adapter is set up. The order keeps a failure retryable: storage first, the row last.
+   */
+  private async removeSingleInSteps(
+    adapter: DrizzleAdapter | undefined,
+    slug: string,
+    tableName: string | undefined,
+    fields: readonly unknown[]
+  ): Promise<void> {
+    if (tableName && adapter) {
+      // Its many-to-many junction tables first: each holds a key into the Single's table, and
+      // the delete is not done while any stands, so its migration is never recorded applied
+      // with them left.
+      await this.dropJunctionTables(tableName, fields, adapter);
+      await this.dropSingleStorage(slug, tableName, adapter);
+    }
+
+    // A row a concurrent delete already took is the state this method exists to reach, so it
+    // completes rather than failing.
+    //
+    // The tolerance covers this one call and nothing above it. A teardown or a drop that fails
+    // has to surface even when its message mentions something missing, because answering
+    // "deleted" to it would leave the registry row present and the storage half removed — the
+    // exact state the ordering above is arranged to prevent.
+    try {
+      await this.registry.deleteSingle(slug, { force: true });
+    } catch (error) {
+      if (!NextlyError.isNotFound(error)) throw error;
+    }
+  }
+
+  /**
+   * A Single's junction tables, storage and registry row removed in one transaction: the
+   * teardowns and drops run through an adapter bound to it (`teardownAdapterIn`), and the row goes
+   * on it too (`unregisterSingleIn`). What this process remembers about the Single is forgotten
+   * only once the transaction has committed. A row already gone is not an error, as the delete is
+   * idempotent; any other failure undoes the whole delete and is thrown.
+   */
+  private async removeSingleWhole(
+    adapter: DrizzleAdapter,
+    slug: string,
+    tableName: string | undefined,
+    fields: readonly unknown[],
+    committed: () => void,
+    /** Whether the delete read the Single's registry row before it began. */
+    options: { rowRead: boolean }
+  ): Promise<void> {
+    const [{ teardownAdapterIn }, { forgetCompanionReadiness }] =
+      await Promise.all([
+        import("../../collections/services/teardown-adapter-in-transaction"),
+        import("../../i18n/runtime/companion-readiness"),
+      ]);
+    let unregistered: UnregisteredSingleRow | undefined;
+    try {
+      // The row's removal counts the registry write on the same transaction (`unregisterSingleIn`).
+      await adapter.transaction(async tx => {
+        const through = teardownAdapterIn(adapter, tx);
+        if (tableName) {
+          await this.dropJunctionTables(tableName, fields, through);
+          await this.dropSingleStorage(slug, tableName, through);
+        }
+        unregistered = await this.registry.unregisterSingleIn(tx, slug);
+        // A row the delete read, which its removal then did not remove (a row-level rule or a
+        // trigger keeping it), would describe storage this transaction dropped: refused here, so
+        // the drops roll back with it and the Single stays whole.
+        if (options.rowRead && unregistered.removed === 0) {
+          throw NextlyError.conflict({
+            reason: "state",
+            message:
+              "The Single's registry entry could not be removed, so nothing was deleted. Check what " +
+              "keeps the entry (a row-level rule or a trigger on the registry), then delete again.",
+            logContext: { reason: "single-registry-row-not-removed", slug },
+          });
+        }
+      });
+    } catch (error) {
+      // Mapped as the registry's own delete maps a driver's failure, so every road reports one
+      // kind of error.
+      if (NextlyError.is(error)) throw error;
+      throw NextlyError.fromDatabaseError(
+        toDbError(adapter.getCapabilities().dialect, error)
+      );
+    }
+    // The delete is the database's from here: a failure of what follows it no longer undoes it.
+    committed();
+    // Committed: this process serves the new version at once rather than after its read interval,
+    // as a registry write's commit does (`writeRegistryRows`).
+    bumpSchemaVersion();
+    // What the teardown recorded about the translations table it dropped was recorded against the
+    // transaction's adapter, so it is forgotten here against this one, once the drop is durable: a
+    // Single made again under the name starts from nothing remembered.
+    if (tableName) forgetCompanionReadiness(adapter, `${tableName}_locales`);
+    if (unregistered !== undefined) {
+      await this.registry.forgetUnregisteredSingle(slug, unregistered);
+    }
   }
 
   /** Drop the junction tables of a Single's many-to-many fields, each where it stands. */
   private async dropJunctionTables(
     tableName: string,
     fields: readonly unknown[],
-    adapter: DrizzleAdapter
+    adapter: TeardownAdapter
   ): Promise<void> {
     // Loaded on demand, as this service loads the column descriptor elsewhere.
     const { junctionTablesOf } = await import(
@@ -759,7 +877,8 @@ export class SingleMetadataService {
   private async dropSingleStorage(
     slug: string,
     tableName: string,
-    adapter: DrizzleAdapter
+    // The adapter itself, or one bound to a delete's transaction.
+    adapter: TeardownAdapter
   ): Promise<void> {
     // Embedded field-group instances point back at this table by a plain string with no foreign
     // key, so the drop below cascades nothing and would strand them. Sweep first.
@@ -1151,9 +1270,9 @@ export class SingleMetadataService {
 
   /**
    * Whether this save carries values across its change, which the service's own statements do and
-   * the migration file does not (`pushCarriesValues`): translation turned on or off, its
-   * per-language Draft/Published turned on or off, a field joining or leaving translation, or a
-   * change reaching a relation's storage. Asked before the save writes anything.
+   * the migration file does not (`pushCarriesValues`): a Required or Unique field leaving
+   * translation, a column changing type, a field its row is filled in, or a change reaching a
+   * relation's storage. Asked before the save writes anything.
    */
   private async carriesValues(
     input: UpdateSingleSchemaInput,
@@ -1206,8 +1325,7 @@ export class SingleMetadataService {
       newFields: after,
       wasStored: input.wasLocalized,
       isStored: input.isLocalized,
-      wasStatus: input.layout?.wasPublishedPerLanguage ?? input.wasStatus,
-      status: input.layout?.isPublishedPerLanguage ?? input.hasStatus,
+      statusChanges: input.wasStatus !== input.hasStatus,
       renamed: companion?.rename,
       liveTable: async () =>
         (
@@ -2295,6 +2413,33 @@ export class SingleMetadataService {
    *
    * @throws NextlyError `NEXTLY_MIGRATION_APPLY_FAILED` when the database refuses the RENAME
    */
+  /**
+   * The moves made before the main table changes: a field becoming translated takes its value to
+   * the default language's companion row (the main ALTER drops its column), and a translated
+   * field's companion column is renamed (`renameTranslatedColumnFirst`). The save's migration file
+   * makes both itself, so after it neither is made again, and the companion reconcile plans from
+   * the companion as the file left it.
+   */
+  private async movesBeforeMain(
+    adapter: DrizzleAdapter,
+    input: UpdateSingleSchemaInput,
+    plan: UpdateDdlPlan,
+    main: "statements" | "file"
+  ): Promise<{ joinedBefore: string[]; undoRename: string[] }> {
+    if (main === "file") return { joinedBefore: [], undoRename: [] };
+    const joinedBefore = await this.moveJoiningFieldValues(
+      adapter,
+      input,
+      plan
+    );
+    const undoRename = await this.renameTranslatedColumnFirst(
+      adapter,
+      input,
+      plan
+    );
+    return { joinedBefore, undoRename };
+  }
+
   private async renameTranslatedColumnFirst(
     adapter: DrizzleAdapter,
     input: UpdateSingleSchemaInput,
@@ -2516,19 +2661,13 @@ export class SingleMetadataService {
       };
     }
 
-    // A field becoming translated takes its value to the default language's companion row first:
-    // the main ALTER below drops its column. Before the try below, as the migration is: a failure
-    // here stops the save before the main table changes.
-    const joinedBefore = await this.moveJoiningFieldValues(
+    // Before the try below, as the migration is: a failure here stops the save before the main
+    // table changes.
+    const { joinedBefore, undoRename } = await this.movesBeforeMain(
       adapter,
       input,
-      plan
-    );
-
-    const undoRename = await this.renameTranslatedColumnFirst(
-      adapter,
-      input,
-      plan
+      plan,
+      main
     );
 
     // Before the try below, which records what it catches: a refusal here has changed nothing

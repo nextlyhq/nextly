@@ -51,11 +51,16 @@ import {
   type PageReference,
   type PagesSearchResponse,
 } from "../../pages-search-contract";
+import {
+  HEADER_FOOTER_IN_CODE_LINE,
+  useHeaderFooterInCode,
+} from "../header-footer-in-code";
 import { useNewPageDialog } from "../new-page/new-page-dialog";
 import { deletePage, duplicatePage, renamePage } from "../pages-client";
 
 import { builderAddress } from "./builder-address";
 import { CollectionTemplatesGroup } from "./collection-templates-group";
+import { SITE_HEADER_FOOTER_DOCS_HREF } from "./double-header-notice";
 import { pagesFoldsStoreFor } from "./editor-preference-stores";
 import { useGroupFolds } from "./group-folds";
 import { HeaderFooterGroup } from "./header-footer-group";
@@ -99,15 +104,25 @@ export interface PagesPanelMount {
  */
 export function usePagesPanel(
   /** Whether the document being edited is a page, not a component or pattern. */
-  editingPage: boolean
+  editingPage: boolean,
+  /** The header & footer set whose own screen this is, by id, if it is one. */
+  currentSetId?: string
 ): PagesPanelMount {
   const identity = useDocumentIdentity();
-  const currentPage: PageReference | null =
-    editingPage &&
-    identity?.kind === "collection" &&
-    identity.documentId !== undefined
-      ? { collection: identity.slug, id: identity.documentId }
-      : null;
+  const collection =
+    editingPage && identity?.kind === "collection" ? identity.slug : undefined;
+  const documentId =
+    collection === undefined ? undefined : identity?.documentId;
+  // One object while it names the same page: the page checks, the provided
+  // checks and the doubled-header notice are each read again when it changes,
+  // and a new one each render ran every page check on every click and key.
+  const currentPage = React.useMemo(
+    (): PageReference | null =>
+      collection !== undefined && documentId !== undefined
+        ? { collection, id: documentId }
+        : null,
+    [collection, documentId]
+  );
   const [settingsRequest, setSettingsRequest] = React.useState<
     { readonly count: number } | undefined
   >(() => (arrivedForSettings() ? { count: 1 } : undefined));
@@ -134,6 +149,7 @@ export function usePagesPanel(
         unsavedWork={unsavedWork}
         onOpenSettings={openSettings}
         reveal={{ count: revealRequest, met: revealsMet }}
+        {...(currentSetId === undefined ? {} : { currentSetId })}
       />
     ),
   };
@@ -181,6 +197,8 @@ interface PagesPanelProps {
   onOpenSettings: () => void;
   /** Requests to show the Header & footer sets, and the last one met. */
   reveal?: { readonly count: number; readonly met: { current: number } };
+  /** The header & footer set whose own screen this is, by id, if any. */
+  currentSetId?: string;
 }
 
 function PagesPanel({
@@ -188,6 +206,7 @@ function PagesPanel({
   unsavedWork,
   onOpenSettings,
   reveal,
+  currentSetId,
 }: PagesPanelProps): React.JSX.Element {
   const [query, setQuery] = React.useState("");
   const list = usePagesList(query);
@@ -210,16 +229,17 @@ function PagesPanel({
   const pagesOpen = !folds.folded.has(PAGES_GROUP);
   const setsRef = React.useRef<HTMLDivElement>(null);
   useRevealSets(reveal, folds, setsRef);
-  const newPage = useNewPageDialog({
-    unsavedWork,
-    title: useOnScreenTitle(list, current),
-  });
+  // What the document open here is called: said by the New page dialog, and
+  // by Back on a set's own screen opened from here.
+  const onScreenTitle = useOnScreenTitle(list, current);
+  const newPage = useNewPageDialog({ unsavedWork, title: onScreenTitle });
 
   return (
     // In the builder's panel text; the surface is the panel region's own.
     // The panel scrolls as one, so every group stays reachable however long
     // the one above it is.
     <div className="text-[color:var(--nx-builder-text)] flex h-full flex-col gap-4 overflow-auto p-3">
+      <HeaderFooterInCodeLine />
       <section aria-label="Pages" className="grid gap-3">
         <div className="flex items-center justify-between">
           <GroupToggle
@@ -267,9 +287,13 @@ function PagesPanel({
           </>
         ) : null}
       </section>
-      <div ref={setsRef}>
-        <HeaderFooterGroup folds={folds} currentPageId={current?.id ?? null} />
-      </div>
+      <HeaderFooterSets
+        setsRef={setsRef}
+        folds={folds}
+        currentPageId={current?.id ?? null}
+        here={onScreenTitle}
+        {...(currentSetId === undefined ? {} : { currentSetId })}
+      />
       <CollectionTemplatesGroup folds={folds} />
       {newPage.dialog}
       <DeletePageDialog
@@ -901,5 +925,48 @@ function DeletePageDialog({
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
+  );
+}
+
+/**
+ * The Header & footer group, in its place for a reveal to scroll to. None on a
+ * site that draws its own in code: its sets would change nothing it shows.
+ * They are kept, not removed.
+ */
+function HeaderFooterSets({
+  setsRef,
+  ...group
+}: {
+  setsRef: React.RefObject<HTMLDivElement | null>;
+} & React.ComponentProps<typeof HeaderFooterGroup>): React.JSX.Element | null {
+  if (useHeaderFooterInCode()) return null;
+  return (
+    <div ref={setsRef}>
+      <HeaderFooterGroup {...group} />
+    </div>
+  );
+}
+
+/**
+ * The line at the top of the Pages panel on a site that draws its header and
+ * footer in code, saying why there is no Header & footer group, with the docs.
+ * Nothing on any other site.
+ */
+function HeaderFooterInCodeLine(): React.JSX.Element | null {
+  if (!useHeaderFooterInCode()) return null;
+  return (
+    <p className="nx-inspector__note" data-pages-note="header-footer-in-code">
+      {HEADER_FOOTER_IN_CODE_LINE}{" "}
+      <a
+        href={SITE_HEADER_FOOTER_DOCS_HREF}
+        target="_blank"
+        rel="noreferrer"
+        className="underline underline-offset-2"
+        // The visible word first, so a voice user can say what they see.
+        aria-label="Details about a site that draws its header and footer in code (opens in a new tab)"
+      >
+        Details
+      </a>
+    </p>
   );
 }

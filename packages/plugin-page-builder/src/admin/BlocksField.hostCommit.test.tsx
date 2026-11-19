@@ -32,6 +32,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import * as React from "react";
+import { flushSync } from "react-dom";
 import {
   useForm,
   useWatch,
@@ -65,6 +66,25 @@ let passage: BlockDocument | null = null;
 
 /** Replaces the open editor's document, as one undoable edit would. */
 let edit: ((next: BlockDocument) => void) | undefined;
+
+/**
+ * The document a panel field's draft makes once written, or `null` while no
+ * field holds one: the field writes it when it is left, or when a store
+ * finishes it first.
+ */
+let fieldDraft: BlockDocument | null = null;
+const draftListeners = new Set<() => void>();
+function subscribeDraft(listener: () => void): () => void {
+  draftListeners.add(listener);
+  return () => draftListeners.delete(listener);
+}
+/** A panel field holds `next` as its draft, typed and not yet written. */
+function holdDraft(next: BlockDocument): void {
+  act(() => {
+    fieldDraft = next;
+    for (const listener of draftListeners) listener();
+  });
+}
 
 /** Takes the open editor's last edit back, one step down its history. */
 let undoEdit: (() => void) | undefined;
@@ -193,6 +213,22 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
         canRedo: false,
         undoDepth,
       };
+    },
+    /*
+     * The builder's field edit, as the host reads it: a draft held while
+     * `fieldDraft` is set, and finishing it writes it as the field's blur
+     * does, drawn by the time the call returns.
+     */
+    useFieldDraftHeld: () =>
+      React.useSyncExternalStore(subscribeDraft, () => fieldDraft !== null),
+    finishFieldEdit: () => {
+      const draft = fieldDraft;
+      if (draft === null) return;
+      flushSync(() => {
+        fieldDraft = null;
+        for (const listener of draftListeners) listener();
+        edit?.(draft);
+      });
     },
     useInlineEditing: () => ({
       editing: passage === null ? null : { id: "h1" },
@@ -441,6 +477,8 @@ beforeEach(() => {
   chromeRequests.length = 0;
   saved = undefined;
   edit = undefined;
+  fieldDraft = null;
+  draftListeners.clear();
   passage = null;
   heldAtExit.length = 0;
   undoEdit = undefined;
@@ -608,6 +646,50 @@ describe("leaving", () => {
     // moment: the hand-back is part of leaving, and the edit form the view
     // returns to draws the field from what the form holds.
     expect(heldAtExit).toEqual([EDITED]);
+  });
+});
+
+describe("a panel field holding a draft", () => {
+  /** The page once the draft a panel field holds is written into it. */
+  const DRAFTED: BlockDocument = {
+    formatVersion: 1,
+    kind: "page",
+    nodes: [
+      { id: "h1", type: "core/heading", props: { text: "Typed in the panel" } },
+    ],
+  } as BlockDocument;
+
+  it("reports work from the draft's first keystroke, before the field is left", () => {
+    openEditor();
+    holdDraft(DRAFTED);
+
+    expect(reports.at(-1)).toEqual({ key: "blocks:body", hasWork: true });
+  });
+
+  it("stores the draft when the page is stored with focus still in the field", () => {
+    openEditor();
+    holdDraft(DRAFTED);
+    // The handlers the editor registered through `useBeforeDocumentAction`,
+    // run as the admin's Save runs them before every store: the Save
+    // button's and the Save shortcut's alike, Command+S on a Mac among them
+    // (`DocumentSaveShortcuts.mac.test` in the admin drives that binding and
+    // the real hook). Here the hook is this file's stand-in, which keeps
+    // what the editor registers: the admin exports no document actions host
+    // a plugin test could mount the real hook inside.
+    expect(storeHandlers.size).toBeGreaterThan(0);
+    store();
+
+    expect(saved).toEqual(DRAFTED);
+    expect(reports.at(-1)).toEqual({ key: "blocks:body", hasWork: false });
+  });
+
+  it("hands the draft to the form when the author leaves from the field", () => {
+    openEditor();
+    holdDraft(DRAFTED);
+    fireEvent.click(screen.getByRole("button", { name: "Leave editor" }));
+
+    expect(saved).toEqual(DRAFTED);
+    expect(heldAtExit).toEqual([DRAFTED]);
   });
 });
 

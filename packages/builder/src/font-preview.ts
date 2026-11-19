@@ -40,17 +40,24 @@ function loadPreview(id: string, url: string, doc: Document): Promise<boolean> {
 
 /**
  * Whether a row's preview has loaded. Starts loading the first time the row
- * is on screen.
+ * is on screen, and never while `url` is null: the author has not yet
+ * agreed to their browser loading previews from the catalogue's file host.
  */
 export function usePreview(
   target: Element | null,
   id: string,
-  url: string,
+  url: string | null,
   doc: Document = document
 ): boolean {
   const [ready, setReady] = React.useState(false);
   React.useEffect(() => {
-    if (target === null || typeof IntersectionObserver === "undefined") return;
+    if (
+      url === null ||
+      target === null ||
+      typeof IntersectionObserver === "undefined"
+    ) {
+      return;
+    }
     let live = true;
     const observer = new IntersectionObserver(entries => {
       if (!entries.some(entry => entry.isIntersecting)) return;

@@ -4,6 +4,7 @@
 
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { isFieldLocalized } from "../../i18n/classify-fields";
+import { usesJunctionTable } from "../field-rules";
 
 // A single field change: what the field was and what it became
 export interface FieldChange {
@@ -117,7 +118,8 @@ function getChangeReason(
     return "constraint_changed";
   if (
     oldField.relationTo !== newField.relationTo ||
-    isSet(oldField.hasMany) !== isSet(newField.hasMany)
+    isSet(oldField.hasMany) !== isSet(newField.hasMany) ||
+    movesLinkStorage(oldField, newField)
   )
     return "relation_changed";
   return "options_changed";
@@ -152,8 +154,22 @@ function hasFieldChanged(
   // Compare relationship config
   if (oldField.relationTo !== newField.relationTo) return true;
   if (isSet(oldField.hasMany) !== isSet(newField.hasMany)) return true;
+  // A many-to-many keeps its links in a link table of its own: moving into or out of one moves
+  // every link, whatever else the field keeps.
+  if (movesLinkStorage(oldField, newField)) return true;
 
   return false;
+}
+
+/**
+ * Whether a relationship's links move into or out of a link table of their own, by the one rule
+ * that says which fields have one (`usesJunctionTable`).
+ */
+function movesLinkStorage(
+  oldField: FieldDefinition,
+  newField: FieldDefinition
+): boolean {
+  return usesJunctionTable(oldField) !== usesJunctionTable(newField);
 }
 
 // Whether a yes-or-no setting is on. A field made through the REST API, the Direct API or code may

@@ -19,8 +19,15 @@
  */
 import {
   BASE_BREAKPOINT,
+  collectStyleProperties,
+  DEFAULT_LIMITS,
+  documentTokenUsage,
   isComponentDocument,
+  onlySiteProperties,
   resolveSiteTokens,
+  resolveTokenPrefix,
+  styleSitePropertiesIn,
+  tokenCustomProperty,
   tokenIdentity,
   usableNamedClasses,
   type BlockDocument,
@@ -145,14 +152,21 @@ async function exportItem(
     ...root.patterns.map(item => item.content),
     ...[...components.values()].map(item => item.content),
   ];
+  // The custom properties the documents' CSS text reads through `var()`: a
+  // shadow keeps its colour that way. Read by the usage index's own walk.
+  const properties = new Set<string>();
   for (const document of documents) {
     collectDocumentReferences(document, references, {
       mediaProps: type => registryMediaProps(setup.blocks, type),
       imageExposures: componentId => images.get(componentId) ?? new Set(),
     });
+    for (const property of documentTokenUsage(document, DEFAULT_LIMITS)
+      .properties) {
+      properties.add(property);
+    }
   }
 
-  const style = await siteStyleFor(ctx, reads, references);
+  const style = await siteStyleFor(ctx, reads, references, properties);
   const media = await mediaFor(ctx, reads, references);
 
   const file: TransferFile = {
@@ -365,11 +379,15 @@ function isDocument(value: unknown): value is BlockDocument {
   );
 }
 
-/** What the file carries from the site style: only what its documents use. */
+/**
+ * What the file carries from the site style: only what its documents use,
+ * by `$token` and by `var()` of a variable's custom property (`properties`).
+ */
 async function siteStyleFor(
   ctx: ExportContext,
   reads: ExportReads,
-  references: TransferReferences
+  references: TransferReferences,
+  properties: Set<string>
 ): Promise<{
   classes: NamedClass[];
   tokens: SiteToken[];
@@ -379,7 +397,8 @@ async function siteStyleFor(
   if (
     references.classes.size === 0 &&
     references.tokens.size === 0 &&
-    references.breakpoints.size === 0
+    references.breakpoints.size === 0 &&
+    properties.size === 0
   ) {
     return { classes: [], tokens: [], breakpoints: [] };
   }
@@ -389,16 +408,53 @@ async function siteStyleFor(
     references.classes.has(entry.id)
   );
   // A shared style's own styles name variables and breakpoints too.
-  for (const entry of classes) collectStyleReferences(entry.styles, references);
+  for (const entry of classes) {
+    collectStyleReferences(entry.styles, references);
+    for (const property of styleSitePropertiesIn(entry.styles)) {
+      properties.add(property);
+    }
+  }
   references.breakpoints.delete(BASE_BREAKPOINT);
-  const tokens = resolveSiteTokens(style.tokens).tokens.filter(token =>
-    references.tokens.has(tokenIdentity(token))
-  );
+  const tokens = tokensCarried(style, references.tokens, properties);
   return {
     classes,
     tokens: [...tokens],
     breakpoints: breakpointsUsed(style.breakpoints, references.breakpoints),
   };
+}
+
+/**
+ * The site's variables a file carries: each one named by identity or through
+ * `var()` of its custom property, and each one those name in their own
+ * values in turn (a shadow variable naming its colour), in the site's order.
+ */
+function tokensCarried(
+  style: SiteStyleData,
+  identities: ReadonlySet<string>,
+  properties: ReadonlySet<string>
+): SiteToken[] {
+  const all = resolveSiteTokens(style.tokens).tokens;
+  const prefix = resolveTokenPrefix(style.tokens?.prefix).prefix;
+  const propertyOf = (token: SiteToken): string =>
+    tokenCustomProperty(tokenIdentity(token), prefix);
+  const carried = new Set<SiteToken>();
+  const named = new Set(properties);
+  let queue = all.filter(
+    token =>
+      identities.has(tokenIdentity(token)) || named.has(propertyOf(token))
+  );
+  while (queue.length > 0) {
+    const found = new Set<string>();
+    for (const token of queue) {
+      carried.add(token);
+      collectStyleProperties(token.values, found);
+    }
+    for (const property of onlySiteProperties(found)) named.add(property);
+    queue = all.filter(
+      token => !carried.has(token) && named.has(propertyOf(token))
+    );
+  }
+  return all.filter(token => carried.has(token));
 }
 
 /**

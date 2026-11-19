@@ -576,6 +576,39 @@ describe("a select pointed at another select", () => {
     expect(edit.retired.properties).toEqual([]);
   });
 
+  it("refuses keeping the id when a block following it lacks a new choice", () => {
+    // The shade's `dim` would be copied into the echo's tone, which offers
+    // only light and dark, as the save refuses.
+    const base = withTone();
+    const followedTone: ComponentDocument = {
+      ...base.document,
+      nodes: base.document.nodes.map(node =>
+        node.id === "b1"
+          ? {
+              ...node,
+              slots: {
+                children: [
+                  {
+                    ...card("echo"),
+                    bindings: { tone: { $bind: base.id, source: "setting" } },
+                  } as BlockNode,
+                ],
+              },
+            }
+          : node
+      ),
+    };
+
+    const edit = planRetargetExposure(
+      followedTone,
+      base.id,
+      { nodeId: "c1", propPath: "shade" },
+      sources()
+    );
+
+    expect(edit).toMatchObject({ problem: "invalid-exposure" });
+  });
+
   it("retires the id when a stored choice would no longer be one", () => {
     // `dark` stored on a placement would be written into a prop that offers
     // only sizes: the values belong to the old choices, so the field is new.

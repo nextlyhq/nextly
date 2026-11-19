@@ -7,6 +7,15 @@
   align-items: center;
   gap: 0.5rem;
   min-inline-size: 0;
+  /*
+   * Sized by the row it sits in, never by its name. A style row's control
+   * column is at least its content's narrowest width, and a name on one
+   * line, a library file's long generated name above all, made that column
+   * as wide as the name, so the row ran past the panel's edge and its
+   * ellipsis never showed. Contained, the row adds no width of its own, and
+   * the name is cut where the panel ends.
+   */
+  contain: inline-size;
 }
 
 .nx-inspector__media-thumb {
@@ -262,16 +271,23 @@
 }
 
 /*
- * A background's size: Cover, Fit and Tile as one row of buttons with "…"
- * beside them for a size written as CSS, and the readout under them at the
- * field's full width.
+ * A background's size: Cover, Fit and Tile as one row of buttons across the
+ * field's whole width, and under them the readout with "…" at its end for a
+ * size written as CSS. Beside the buttons, "…" left the three words 30px
+ * each at the default width and cut "Cover" to "Cov"; across the column they
+ * read whole and start and end where every other control does.
  */
 .nx-background-size {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  /*
+   * The first column is at least the buttons' words' width, so where even the
+   * whole column is too narrow, the label gives way rather than a word being
+   * cut; past that, it takes what is left.
+   */
+  grid-template-columns: minmax(min-content, 1fr) auto;
   grid-template-areas:
-    "choices more"
-    "readout readout"
+    "choices choices"
+    "readout more"
     "css css";
   align-items: start;
   column-gap: 0.5rem;
@@ -285,6 +301,15 @@
 
 .nx-background-size__more {
   grid-area: more;
+}
+
+/*
+ * Each choice is at least as wide as its word. A toggle's buttons may shrink
+ * to nothing so most strips fit any column; these hold their words instead.
+ * Named through the field as well, to outweigh the toggle's own rule.
+ */
+.nx-background-size .nx-background-size__choices > button {
+  min-width: max-content;
 }
 
 /* Inherited: drawn, but not pressed, so it never reads as set here. */
@@ -373,9 +398,16 @@
   overflow: hidden;
 }
 
+/*
+ * An option is at least a control tall and grows to hold its words: in a
+ * narrow panel two words ("Fit content") wrap to two lines, and a fixed
+ * height let the second line spill under the row below. One line stays a
+ * control tall, since the block padding and line height fit inside it.
+ */
 .nx-segment__option {
-  block-size: var(--nx-builder-control-height);
-  padding: 0 0.625rem;
+  min-block-size: var(--nx-builder-control-height);
+  padding: 0.25rem 0.625rem;
+  line-height: 1.2;
   border: 0;
   border-inline-end: 1px solid var(--nx-builder-border);
   background: transparent;
