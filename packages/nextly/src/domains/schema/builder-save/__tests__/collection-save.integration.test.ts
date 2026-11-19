@@ -1408,6 +1408,78 @@ describe.each(getConfiguredTestDialects())(
       expect(await appliedRows()).toEqual(applied);
     });
 
+    // The applied history ends before the collection was made, and its files are recorded applied
+    // nowhere: that end has no record of the translations table, which is not a match while one
+    // stands. The newer end records it, and a column it does not record is drift there too.
+    it("refuses a pushed translated save whose applied history predates the collection, where the translations table matches neither end", async () => {
+      const title = text("title", { localized: true });
+      await writeCollectionSave(translatedDeps(), {
+        slug: "notes",
+        previous: null,
+        entity: { ...posts([text("body")]), slug: "notes" } as UiSchemaEntity,
+        change: "create",
+      });
+      await writeCollectionSave(translatedDeps(), {
+        slug: "posts",
+        previous: null,
+        entity: translated([title]),
+        change: "create",
+      });
+      await adapter.executeQuery(
+        `DELETE FROM nextly_schema_events WHERE filename LIKE '%posts%'`
+      );
+      await adapter.executeQuery(
+        `ALTER TABLE dc_posts_locales ADD COLUMN extra text`
+      );
+      const push = vi.fn(() => Promise.resolve());
+
+      const refused: unknown = await writeCollectionSave(
+        translatedDeps(),
+        {
+          slug: "posts",
+          previous: translated([title]),
+          entity: translated([title, text("subtitle")]),
+          change: "update",
+        },
+        { appliedBy: push }
+      ).catch((error: unknown) => error);
+
+      expect(refused).toMatchObject({ code: "NEXTLY_MIGRATION_DRIFT" });
+      expect(
+        String((refused as { publicMessage?: unknown }).publicMessage)
+      ).toContain("dc_posts_locales present in DB");
+      expect(push).not.toHaveBeenCalled();
+    });
+
+    // A translations table already there is taken as the enable's own only where it has the
+    // structure translated writes rely on: here one made by hand without `_parent` or its key.
+    it("refuses a pushed save turning translation on over a translations table without its structure, and changes nothing", async () => {
+      await writeCollectionSave(translatedDeps(), {
+        slug: "posts",
+        previous: null,
+        entity: posts([text("title")]),
+        change: "create",
+      });
+      await adapter.executeQuery(
+        `CREATE TABLE dc_posts_locales (${adapter.getCapabilities().dialect === "mysql" ? "`_locale`" : '"_locale"'} varchar(16), title text)`
+      );
+      const push = vi.fn(() => Promise.resolve());
+
+      const refused: unknown = await writeCollectionSave(
+        translatedDeps(),
+        enableTitle,
+        { appliedBy: push }
+      ).catch((error: unknown) => error);
+
+      expect(refused).toMatchObject({ code: "NEXTLY_MIGRATION_DRIFT" });
+      const told = String(
+        (refused as { publicMessage?: unknown }).publicMessage
+      );
+      expect(told).toContain("dc_posts_locales._parent absent from DB");
+      expect(told).toContain("primary key");
+      expect(push).not.toHaveBeenCalled();
+    });
+
     it("refuses a pushed save over a column the history does not record before the push, naming it, and changes nothing", async () => {
       await writeCollectionSave(deps(), {
         slug: "posts",

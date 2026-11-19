@@ -659,6 +659,52 @@ for (const dialect of getConfiguredTestDialects()) {
       );
     });
 
+    // A translated Single that lost both its tables is rebuilt as a pair: the push building the
+    // whole table makes its translations table too, so the missing one is not drift.
+    it("rebuilds a translated Single's missing table pair through a settings save that fills its row", async () => {
+      current = await createTestNextly({
+        dialect,
+        localization: { locales: ["en", "es"], defaultLocale: "en" },
+      });
+      await dispatchSingles(
+        "createSingle",
+        {},
+        {
+          slug: plain,
+          label: "Plain",
+          localized: true,
+          fields: [{ name: "body", type: "text", localized: true }],
+        }
+      );
+      await current.adapter.executeQuery(`DROP TABLE single_${plain}_locales`);
+      await current.adapter.executeQuery(`DROP TABLE single_${plain}`);
+
+      await dispatchSingles(
+        "updateSingleSchema",
+        { slug: plain },
+        {
+          localized: true,
+          fields: [
+            { name: "body", type: "text", localized: true },
+            {
+              name: "subtitle",
+              type: "text",
+              required: true,
+              defaultValue: "Untitled",
+            },
+          ],
+        }
+      );
+
+      expect(await current.adapter.tableExists(`single_${plain}`)).toBe(true);
+      expect(await current.adapter.tableExists(`single_${plain}_locales`)).toBe(
+        true
+      );
+      expect((await registryRow(current, plain))?.migrationStatus).toBe(
+        "applied"
+      );
+    });
+
     /**
      * 🔴 A LOCALIZED single's interrupted create is repaired the same way: by rebuilding.
      *

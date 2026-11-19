@@ -64,7 +64,9 @@ import {
   readStoredFieldGroupTables,
 } from "../../field-groups/services/field-group-stored-tables";
 import {
+  COMPANION_KEY_COLUMNS,
   COMPANION_LOCALE_COLUMN,
+  COMPANION_OPTIONAL_STRUCTURAL_COLUMNS,
   COMPANION_STRUCTURAL_COLUMNS,
 } from "../../i18n/companion-columns";
 import { appLanguageOrder } from "../../i18n/configured-locales";
@@ -117,8 +119,10 @@ import {
   type GenerateArgs,
 } from "../migrate-create/generate";
 import {
+  isOlderFormatSnapshot,
   type LatestSnapshot,
   loadLatestSnapshot,
+  newestSnapshotName,
   parseSnapshotFile,
 } from "../migrate-create/snapshot-io";
 import { isWriterOvertaken } from "../migrate-create/writer-hold";
@@ -596,6 +600,7 @@ async function writeSave(
   if (options.runsFile === true || options.pushes === true) {
     await refuseCompanionDrift(deps, save, plan.table, {
       runsFile: options.runsFile === true,
+      buildsWholeTable: options.buildsWholeTable === true,
     });
   }
 
@@ -1675,10 +1680,17 @@ async function companionDriftItems(
   const liveExists = await companionTableExists(deps.adapter, companion);
   const takenByEnable =
     pushTarget?.translated === true && liveExists && recordedExists === false;
+  // A push building the whole table again (`buildsWholeTable`) creates the translations table
+  // beside it: one missing with its main table is the pair it rebuilds.
+  const rebuiltWithMain =
+    pushTarget?.buildsWholeTable === true &&
+    recordedExists === true &&
+    !liveExists;
   if (
     recordedExists !== undefined &&
     recordedExists !== liveExists &&
-    !takenByEnable
+    !takenByEnable &&
+    !rebuiltWithMain
   ) {
     return [
       {
@@ -1688,6 +1700,12 @@ async function companionDriftItems(
     ];
   }
   if (!liveExists) return [];
+  // Taken as the enable's own only where it has a translations table's structure: a table made by
+  // hand, or left without its keys, would meet writes that match rows on them.
+  if (takenByEnable) {
+    const shape = await companionShapeItems(deps, companion);
+    if (shape.length > 0) return shape;
+  }
   const taken = new Set([...(pushTarget?.columns ?? [])].map(key));
 
   const recorded = recordedTable.localizedColumns ?? [];
@@ -1834,20 +1852,38 @@ async function refuseCompanionDrift(
   deps: CollectionSaveDeps,
   save: CollectionSave,
   table: string,
-  road: { runsFile: boolean }
+  road: { runsFile: boolean; buildsWholeTable: boolean }
 ): Promise<void> {
   if (save.previous?.localized !== true && save.entity?.localized !== true) {
     return;
   }
-  const pushTarget = road.runsFile ? undefined : pushTargetOf(deps, save);
+  const pushTarget = road.runsFile
+    ? undefined
+    : pushTargetOf(deps, save, road.buildsWholeTable);
+  const metaDir = join(deps.migrationsDir, "meta");
   const reached = await newestReachedSnapshot(deps);
-  const newest = await loadLatestSnapshot(join(deps.migrationsDir, "meta"));
-  const ends =
-    reached?.filename === newest?.filename ? [reached] : [reached, newest];
+  const newestName = await newestSnapshotName(metaDir);
+  const newest =
+    newestName === undefined
+      ? null
+      : ((await snapshotEnd(metaDir, newestName)) ?? null);
+  const ends = (
+    reached?.filename === newest?.filename ? [reached] : [reached, newest]
+  ).filter(
+    (end): end is LatestSnapshot => end !== null && recordsTranslations(end)
+  );
+  // A table no end records is adopted from the database: nothing judges it.
+  if (!ends.some(end => recordedTableOf(end, table) !== undefined)) return;
   let named: { snapshot: LatestSnapshot; items: DriftItem[] } | undefined;
   for (const end of ends) {
-    const items = await companionDriftAgainst(deps, end, table, pushTarget);
-    if (end === null || items.length === 0) return;
+    // An end that does not record the table (a history from before the entity, or a kept delete)
+    // says it has no translations table: a match only where there is none.
+    const recordedTable = recordedTableOf(end, table);
+    const items =
+      recordedTable === undefined
+        ? await companionPresentItems(deps, table)
+        : await companionDriftItems(deps, table, recordedTable, pushTarget);
+    if (items.length === 0) return;
     named ??= { snapshot: end, items };
   }
   if (named === undefined) return;
@@ -1865,17 +1901,21 @@ interface PushTarget {
   translated: boolean;
   /** The translations columns of the fields the save leaves translated. */
   columns: ReadonlySet<string>;
+  /** Whether the push builds the whole table again, its translations table with it. */
+  buildsWholeTable: boolean;
 }
 
 /** The push's target of `save`, its translated columns named by the kind's column rule. */
 function pushTargetOf(
   deps: CollectionSaveDeps,
-  save: CollectionSave
+  save: CollectionSave,
+  buildsWholeTable: boolean
 ): PushTarget {
   const entity = save.entity;
   const translated = entity?.localized === true;
   return {
     translated,
+    buildsWholeTable,
     columns: new Set(
       entity === null
         ? []
@@ -1890,23 +1930,94 @@ function pushTargetOf(
   };
 }
 
-/**
- * The translations table's differences from `end`, or none where `end` cannot judge it: no
- * snapshot, one that does not record the table, or one from before translations were recorded.
- */
-async function companionDriftAgainst(
-  deps: CollectionSaveDeps,
-  end: LatestSnapshot | null,
-  table: string,
-  pushTarget: PushTarget | undefined
-): Promise<DriftItem[]> {
-  const recordedTable = end?.data.snapshot.tables.find(t => t.name === table);
-  if (end === null || recordedTable === undefined) return [];
-  const recordsTranslations =
+/** Whether `end` says which of its tables were translated, so it can judge a translations table. */
+function recordsTranslations(end: LatestSnapshot): boolean {
+  return (
     end.data.translatedFieldsRecorded === true ||
-    end.data.snapshot.tables.some(t => t.localized === true);
-  if (!recordsTranslations) return [];
-  return companionDriftItems(deps, table, recordedTable, pushTarget);
+    end.data.snapshot.tables.some(t => t.localized === true)
+  );
+}
+
+/** `table` as `end` records it, where it does. */
+function recordedTableOf(
+  end: LatestSnapshot,
+  table: string
+): TableSpec | undefined {
+  return end.data.snapshot.tables.find(t => t.name === table);
+}
+
+/** The translations table of `table`, where it stands: drift against an end recording none. */
+async function companionPresentItems(
+  deps: CollectionSaveDeps,
+  table: string
+): Promise<DriftItem[]> {
+  const companion = `${table}_locales`;
+  return (await companionTableExists(deps.adapter, companion))
+    ? [{ kind: "+", detail: `${companion} present in DB` }]
+    : [];
+}
+
+/**
+ * Where a translations table standing in the database lacks the structure every translated write
+ * relies on: each structural column a healthy one must have (`COMPANION_STRUCTURAL_COLUMNS` less
+ * `COMPANION_OPTIONAL_STRUCTURAL_COLUMNS`, the field group plan's rule), and a primary key of
+ * exactly `(_parent, _locale)`, the target a translated write matches rows on.
+ */
+async function companionShapeItems(
+  deps: CollectionSaveDeps,
+  companion: string
+): Promise<DriftItem[]> {
+  const dialect = deps.adapter.getCapabilities().dialect;
+  const key = (name: string) => identifierKey(dialect, name);
+  const spec = (await liveTables(deps, [companion])).tables.find(
+    t => t.name === companion
+  );
+  const columns = spec?.columns ?? [];
+  const present = new Set(columns.map(c => key(c.name)));
+  const missing = [...COMPANION_STRUCTURAL_COLUMNS]
+    .filter(column => !COMPANION_OPTIONAL_STRUCTURAL_COLUMNS.has(column))
+    .filter(column => !present.has(key(column)))
+    .map(column => ({
+      kind: "-" as const,
+      detail: `${companion}.${column} absent from DB`,
+    }));
+  const liveKey = columns.filter(c => c.primaryKey === true).map(c => c.name);
+  const keyMatches =
+    liveKey.length === COMPANION_KEY_COLUMNS.length &&
+    COMPANION_KEY_COLUMNS.every(column =>
+      liveKey.some(name => key(name) === key(column))
+    );
+  return keyMatches
+    ? missing
+    : [
+        ...missing,
+        {
+          kind: "?" as const,
+          detail: `${companion} has the primary key (${liveKey.join(", ") || "none"}) in DB, not (${COMPANION_KEY_COLUMNS.join(", ")})`,
+        },
+      ];
+}
+
+/**
+ * `name`'s snapshot as an end a translations table is judged against: undefined where there is no
+ * such file, and null where it cannot judge one. An older-format snapshot a template starts from
+ * is read as tables made untranslated (`templateStartFor`), so it says nothing of a translations
+ * table, and the parser refuses it as it stands.
+ */
+async function snapshotEnd(
+  metaDir: string,
+  name: string
+): Promise<LatestSnapshot | null | undefined> {
+  const content = await readIfPresent(join(metaDir, name));
+  if (content === undefined) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    // Not JSON: `parseSnapshotFile` says so.
+  }
+  if (isOlderFormatSnapshot(parsed)) return null;
+  return { filename: name, data: parseSnapshotFile(content, name) };
 }
 
 /**
@@ -1915,7 +2026,7 @@ async function companionDriftAgainst(
  * part-way keeps its files so, and the database then stands between the applied history and that
  * file's target: judged against the kept file, the table the save left would read as drift, and
  * no later save could get past it. Where the ledger records no file applied, the newest snapshot
- * stands.
+ * stands. Null where the end cannot judge a translations table (`snapshotEnd`).
  *
  * Read by migration, as the runner groups the folder (`groupMigrationFiles`): a migration written
  * only as a dialect's variant (`<name>.mysql.sql`) is recorded under its base name, and its
@@ -1932,20 +2043,18 @@ async function newestReachedSnapshot(
     deps.adapter.getDrizzle(),
     deps.adapter.getCapabilities().dialect
   );
-  let reached: number | undefined;
+  let reached = -1;
   for (let at = migrations.length - 1; at >= 0; at -= 1) {
     if (await repo.isFileApplied(`${migrations[at]}.sql`)) {
       reached = at;
       break;
     }
   }
-  if (reached === undefined) return loadLatestSnapshot(metaDir);
-  for (const migration of migrations.slice(0, reached + 1).reverse()) {
-    const name = `${migration}.snapshot.json`;
-    const content = await readIfPresent(join(metaDir, name));
-    if (content !== undefined) {
-      return { filename: name, data: parseSnapshotFile(content, name) };
-    }
+  const candidates =
+    reached === -1 ? migrations : migrations.slice(0, reached + 1);
+  for (const migration of [...candidates].reverse()) {
+    const end = await snapshotEnd(metaDir, `${migration}.snapshot.json`);
+    if (end !== undefined) return end;
   }
   return null;
 }
