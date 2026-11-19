@@ -22051,10 +22051,9 @@ export class CollectionMutationService extends BaseService {
    */
   async createEntryInTransaction(
     tx: TransactionContext,
-    requested: CreateEntryWriteParams,
+    params: CreateEntryWriteParams,
     body: Record<string, unknown>
   ): Promise<CollectionServiceResult<unknown>> {
-    const params = this.inConfiguredLocale(requested);
     // The scope this write runs under becomes the ambient one for the whole
     // operation, not an argument handed to its first gate.
     //
@@ -22902,10 +22901,9 @@ export class CollectionMutationService extends BaseService {
    */
   async updateEntryInTransaction(
     tx: TransactionContext,
-    requested: UpdateEntryWriteParams & { entryId: string },
+    params: UpdateEntryWriteParams & { entryId: string },
     body: Record<string, unknown>
   ): Promise<CollectionServiceResult<unknown>> {
-    const params = this.inConfiguredLocale(requested);
     // The scope this write runs under becomes the ambient one for the whole
     // operation, not an argument handed to its first gate.
     //
