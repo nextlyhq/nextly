@@ -37,6 +37,7 @@ import {
   IDS_PER_LOOKUP,
   ReleasesRepository,
 } from "../../releases/releases-repository";
+import { ReleasesService } from "../../releases/services/releases-service";
 import { updateReviewState } from "../review-state-repository";
 import { writeWorkflowSettings } from "../workflow-settings-repository";
 
@@ -657,6 +658,55 @@ describe.each(getConfiguredTestDialects())(
 
       expect(await releaseState(t, arranged.releaseId)).toBe("scheduled");
       expect(planned).not.toHaveBeenCalled();
+    });
+
+    it("plans only the component of the due release it stops, never every due release", async () => {
+      // The stopped release shares a page with a second, so both form one component; a third due
+      // release shares nothing and is no part of the stop's question.
+      const t = await boot(dialect);
+      const page = await doc(t, "pages");
+      const shared = await doc(t, "pages");
+      const apart = await doc(t, "pages");
+      for (const id of [page, shared, apart]) await approve(t, "pages", id);
+      const stopping = await arrange(
+        t,
+        [publishPage(page), publishPage(shared)],
+        PAST
+      );
+      const beside = await arrange(t, [publishPage(shared)], PAST);
+      const unrelated = await arrange(t, [publishPage(apart)], PAST);
+      const dueRead = vi.spyOn(ReleasesRepository.prototype, "findDueReleases");
+      const membersRead = vi.spyOn(
+        ReleasesRepository.prototype,
+        "listMembersOf"
+      );
+      // Only the stop's own reads: the step's read of the page walks the components of every page
+      // a due release decides, as any reader's does.
+      const readByStop: string[] = [];
+      const stop = ReleasesService.prototype.stopOnHardProblems;
+      vi.spyOn(
+        ReleasesService.prototype,
+        "stopOnHardProblems"
+      ).mockImplementation(async function (this: ReleasesService, ...args) {
+        const from = membersRead.mock.calls.length;
+        try {
+          return await stop.apply(this, args);
+        } finally {
+          readByStop.push(
+            ...membersRead.mock.calls.slice(from).flatMap(([ids]) => ids)
+          );
+        }
+      });
+
+      await takeStep(t, "pages", page, null, "bounce", "Not yet.");
+
+      expect(new Set(readByStop)).toEqual(
+        new Set([stopping.releaseId, beside.releaseId])
+      );
+      expect(dueRead).not.toHaveBeenCalled();
+      expect(await releaseState(t, stopping.releaseId)).toBe("blocked");
+      expect(await releaseState(t, beside.releaseId)).toBe("blocked");
+      expect(await releaseState(t, unrelated.releaseId)).toBe("scheduled");
     });
 
     it("binds no more ids in one statement than every dialect accepts, however many documents it judges", async () => {

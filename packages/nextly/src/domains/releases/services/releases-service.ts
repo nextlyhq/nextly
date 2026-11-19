@@ -76,7 +76,7 @@ import {
 import type { VersionScopeKind } from "../../../schemas/versions/types";
 import type { Logger } from "../../../services/shared";
 import { isUniqueViolation } from "../../../shared/lib/unique-violation";
-import { begunReleases } from "../component-hold";
+import { begunReleases, dueComponentsHolding } from "../component-hold";
 import {
   componentsToStop,
   planReleaseMaterialisation,
@@ -145,6 +145,7 @@ import {
 import type {
   BlockRequest,
   DocumentRef,
+  DrainMemberRow,
   MembersWrite,
   MembersWritten,
   NewRelease,
@@ -2916,7 +2917,8 @@ export class ReleasesService {
     const now = new Date();
     const failing: FailingRelease[] = [];
     const affected = await this.deps.repository.scheduledMembersFor(target);
-    // The drain's own plan of what is due now, read once and only when a due release is named.
+    // The drain's own plan of the due components reached so far, read only when a due release
+    // has a problem, and grown only by a due release outside it.
     let due: DuePlan | undefined;
     let judged = 0;
     for (const { release, members } of affected) {
@@ -2927,8 +2929,9 @@ export class ReleasesService {
       if (hard.length === 0) continue;
       if (isDueAt(release.scheduledAt, now)) {
         // Only a due release with a problem pays for the drain's plan, as stopping one always
-        // has: a recheck that finds nothing wrong reads no other release.
-        due ??= await this.duePlan(now);
+        // has: a recheck that finds nothing wrong reads no other release. And only of its own
+        // component, followed through shared documents, never of every due release.
+        due = await this.duePlanReaching(release.id, members, now, due);
         // Judged again as the run judges it: only the actions it would take, the winning action
         // on each document and not one an earlier pass already wrote. A losing publish is never
         // made, so its approval holds nothing back.
@@ -2959,6 +2962,8 @@ export class ReleasesService {
     }
     const dueFailing = failing.filter(f => isDueAt(f.scheduledAt, now));
     if (dueFailing.length > 0) {
+      // Every due release failing was planned above, with its component; the plan of every due
+      // release stands in only should that ever not hold.
       due ??= await this.duePlan(now);
       stopped.push(...(await this.stopDueComponents(dueFailing, due)));
     }
@@ -2966,8 +2971,8 @@ export class ReleasesService {
   }
 
   /**
-   * What the drain would do now: its plan of the due releases, the members whose actions it would
-   * take (winning and not yet applied), and the releases of components an earlier pass began.
+   * The drain's plan of every due release: what `duePlanReaching` falls back to for a component
+   * too large to walk, since the run plans every due release and a stop must plan as it does.
    */
   private async duePlan(now: Date): Promise<DuePlan> {
     const repository = this.deps.repository;
@@ -2979,24 +2984,50 @@ export class ReleasesService {
     const members = await repository.listMembersOf(
       releases.map(release => release.id)
     );
-    const plan = planReleaseMaterialisation({ releases, members, now });
-    return {
-      plan,
-      releases,
-      acting: new Set(
-        plan.actions
-          .filter(action => !action.applied)
-          .map(action => action.memberId)
-      ),
-      begun: begunReleases(plan, members, releases),
-    };
+    return duePlanOf(releases, members, now);
+  }
+
+  /**
+   * `known`, grown by the due components holding this release's documents (`members`) when the
+   * release is not already in it: read by walking shared documents (`dueComponentsHolding`), so
+   * a stop reads the components it may stop and not the whole due backlog. Components never
+   * overlap, so the plan of what is known and what was reached plans each as the drain would.
+   */
+  private async duePlanReaching(
+    releaseId: string,
+    members: readonly ReleaseMemberRow[],
+    now: Date,
+    known: DuePlan | undefined
+  ): Promise<DuePlan> {
+    if (known?.releases.some(release => release.id === releaseId) === true) {
+      return known;
+    }
+    const reached = await dueComponentsHolding(
+      this.deps.repository,
+      members,
+      now
+    );
+    if (reached === null) return this.duePlan(now);
+    const releases = new Map(
+      [...(known?.releases ?? []), ...reached.releases].map(release => [
+        release.id,
+        release,
+      ])
+    );
+    const read = new Map(
+      [...(known?.members ?? []), ...reached.members].map(member => [
+        member.id,
+        member,
+      ])
+    );
+    return duePlanOf([...releases.values()], [...read.values()], now);
   }
 
   /**
    * Stop these due releases with every release they share a component with,
    * one component per `blockReleases` call: the components the drain would
-   * settle them in, from the drain's own plan of what is due now, so the two
-   * paths cannot come to stop different sets.
+   * settle them in, from the drain's own plan of their due components, so the
+   * two paths cannot come to stop different sets.
    *
    * Each failing release is fenced on the revision its check judged; the
    * rest of its component on the revision read for the plan. A release that
@@ -4603,10 +4634,36 @@ function assertKnownAction(action: unknown): void {
 interface DuePlan {
   plan: ReturnType<typeof planReleaseMaterialisation>;
   releases: { id: string; scheduledAt: Date; revision: number }[];
+  /** Every member of those releases, as planned, so a plan grown by another component keeps them. */
+  members: DrainMemberRow[];
   /** The members whose actions the drain would take: the winning ones, not yet applied. */
   acting: ReadonlySet<string>;
   /** The releases of components an earlier pass began (`begunReleases`). */
   begun: ReadonlySet<string>;
+}
+
+/**
+ * What the drain would do with these due releases and their members: its plan, the members whose
+ * actions it would take (winning and not yet applied), and the releases of components an earlier
+ * pass began.
+ */
+function duePlanOf(
+  releases: DuePlan["releases"],
+  members: DrainMemberRow[],
+  now: Date
+): DuePlan {
+  const plan = planReleaseMaterialisation({ releases, members, now });
+  return {
+    plan,
+    releases,
+    members,
+    acting: new Set(
+      plan.actions
+        .filter(action => !action.applied)
+        .map(action => action.memberId)
+    ),
+    begun: begunReleases(plan, members, releases),
+  };
 }
 
 /** A release an early stop found a hard problem in, and whether a missing approval was all. */
