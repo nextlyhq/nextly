@@ -247,7 +247,12 @@ describe("useEmailActivity searching by address", () => {
   const NOTICE =
     "Only records sent under the current secret, or a previous secret still configured, can be found by address.";
   const ANY = { outcome: "any" as const, window: "7d" as const };
-  const search = { id: 1, address: "ada@example.test", filter: ANY };
+  const search = {
+    scope: "s1",
+    id: 1,
+    address: "ada@example.test",
+    filter: ANY,
+  };
 
   it("searches the address under the list's filters, and passes the server's notice on", async () => {
     searchActivityByAddress.mockResolvedValue({
@@ -337,6 +342,38 @@ describe("useEmailActivity searching by address", () => {
     );
   });
 
+  it("never takes over another mount's search under the same number", async () => {
+    searchActivityByAddress.mockResolvedValue({
+      items: [entry("sent")],
+      meta: { ...EMPTY_META, notice: NOTICE },
+    });
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const shared = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    );
+    const { rerender, result } = renderHook(
+      ({ scope, address }: { scope: string; address: string }) =>
+        useEmailActivity(ANY, {
+          search: { scope, id: 1, address, filter: ANY },
+        }),
+      {
+        wrapper: shared,
+        initialProps: { scope: "s1", address: "ada@example.test" },
+      }
+    );
+    await waitFor(() => expect(result.current.rows).toHaveLength(1));
+    // A screen mounted again numbers its searches from 1 too.
+    rerender({ scope: "s2", address: "bob@example.test" });
+    await waitFor(() =>
+      expect(searchActivityByAddress).toHaveBeenCalledTimes(2)
+    );
+    expect(searchActivityByAddress.mock.calls[1][0]).toMatchObject({
+      address: "bob@example.test",
+    });
+  });
+
   it("reads the same address again when it is searched again", async () => {
     searchActivityByAddress.mockResolvedValue({
       items: [entry("sent")],
@@ -352,7 +389,14 @@ describe("useEmailActivity searching by address", () => {
       ({ id }: { id: number }) =>
         useEmailActivity(
           { outcome: "any", window: "7d" },
-          { search: { id, address: "ada@example.test", filter: ANY } }
+          {
+            search: {
+              scope: "s1",
+              id,
+              address: "ada@example.test",
+              filter: ANY,
+            },
+          }
         ),
       { wrapper: shared, initialProps: { id: 1 } }
     );

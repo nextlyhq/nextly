@@ -67,8 +67,8 @@ const emailActivityKeys = {
   // A search is keyed by the screen's count of searches alone, never the
   // address, so the address is in no cache key a devtool or a log could show,
   // and nothing but a new search, never a filter edit, makes a new key.
-  search: (searchId: number) =>
-    [...emailActivityKeys.all(), "search", searchId] as const,
+  search: (scope: string, searchId: number) =>
+    [...emailActivityKeys.all(), "search", scope, searchId] as const,
   overdue: () => [...emailActivityKeys.all(), "overdue"] as const,
   detail: (source: "delivery" | "queued", id: string) =>
     [...emailActivityKeys.all(), "detail", source, id] as const,
@@ -100,6 +100,11 @@ interface ActivityPage {
  * filters it was made with, so it reads only what was asked when it was made.
  */
 export interface AddressSearchRequest {
+  /**
+   * The screen that made it, one value per mount, so a screen mounted again
+   * never takes over an earlier mount's search still in flight.
+   */
+  scope: string;
   /** Bumped by each search, so the same address searched again reads again. */
   id: number;
   address: string;
@@ -205,7 +210,7 @@ export function useEmailActivity(
     ActivityCursor | null
   >({
     queryKey: search
-      ? emailActivityKeys.search(search.id)
+      ? emailActivityKeys.search(search.scope, search.id)
       : emailActivityKeys.list(query, window),
     initialPageParam: null,
     queryFn: ({ pageParam }) =>

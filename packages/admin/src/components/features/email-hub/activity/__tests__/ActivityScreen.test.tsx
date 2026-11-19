@@ -199,11 +199,11 @@ describe("searching by address", () => {
     expect(vi.mocked(useEmailActivity)).toHaveBeenLastCalledWith(
       expect.anything(),
       {
-        search: {
+        search: expect.objectContaining({
           id: 1,
           address: "ada@example.test",
           filter: { outcome: "any", window: "7d" },
-        },
+        }),
       }
     );
     expect(
@@ -220,13 +220,43 @@ describe("searching by address", () => {
     expect(vi.mocked(useEmailActivity)).toHaveBeenLastCalledWith(
       expect.anything(),
       {
-        search: {
+        search: expect.objectContaining({
           id: 2,
           address: "ada@example.test",
           filter: { outcome: "any", window: "30d" },
-        },
+        }),
       }
     );
+  });
+
+  it("asks nothing again when a choice changes nothing, as the window already chosen", () => {
+    activity({ rows: [ROW] });
+    render(<ActivityScreen />);
+    searchFor("ada@example.test");
+    fireEvent.click(screen.getByRole("button", { name: "7 days" }));
+    expect(vi.mocked(useEmailActivity)).toHaveBeenLastCalledWith(
+      expect.anything(),
+      { search: expect.objectContaining({ id: 1 }) }
+    );
+  });
+
+  it("shows no count for a search not answered yet, or one that failed with nothing found", () => {
+    activity({ rows: [], isLoading: true });
+    const { rerender } = render(<ActivityScreen />);
+    searchFor("ada@example.test");
+    expect(
+      screen.getByText(/found for this address/).closest("[hidden]")
+    ).not.toBeNull();
+    activity({ rows: [], isError: true, error: new Error("Network down") });
+    rerender(<ActivityScreen />);
+    expect(
+      screen.getByText(/found for this address/).closest("[hidden]")
+    ).not.toBeNull();
+    activity({ rows: [ROW] });
+    rerender(<ActivityScreen />);
+    expect(
+      screen.getByText(/found for this address/).closest("[hidden]")
+    ).toBeNull();
   });
 
   it("searches the same address again as a new search, and clears back to the whole Activity", () => {

@@ -2,7 +2,7 @@
 
 import { Alert, AlertDescription, AlertTitle, Button } from "@nextlyhq/ui";
 import type { JSX } from "react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 
 import { AlertCircle } from "@admin/components/icons";
 import {
@@ -73,12 +73,17 @@ export function ActivityScreen(): JSX.Element {
   // is held only here, never in the page's address or a cache key.
   const [search, setSearch] = useState<AddressSearchRequest | null>(null);
   const searches = useRef(0);
+  // This mount's own name for its searches, so a screen mounted again never
+  // reads an earlier mount's search under the same number.
+  const scope = useId();
   const activity = useEmailActivity(filter, { search: search ?? undefined });
   // A filter changed on a search's results asks again, as a search of its
   // own: each is recorded, so none is made but by the reader's own change.
   const changeFilter = (next: ActivityFilter) => {
     setFilter(next);
-    if (search) {
+    // A choice that changes nothing (the window already chosen, say) asks
+    // nothing again.
+    if (search && !sameFilter(next, search.filter)) {
       searches.current += 1;
       setSearch({ ...search, id: searches.current, filter: next });
     }
@@ -96,7 +101,7 @@ export function ActivityScreen(): JSX.Element {
         searching={search !== null}
         onSearch={address => {
           searches.current += 1;
-          setSearch({ id: searches.current, address, filter });
+          setSearch({ scope, id: searches.current, address, filter });
         }}
         onClear={() => setSearch(null)}
       />
@@ -124,6 +129,13 @@ export function ActivityScreen(): JSX.Element {
         shown={activity.rows.length}
         more={activity.hasMore}
         searching={search !== null}
+        // No count for a search not answered yet, or one that failed with
+        // nothing found: it has found nothing to count.
+        pending={
+          search !== null &&
+          (activity.isLoading ||
+            (activity.isError && activity.rows.length === 0))
+        }
         filtered={filtered}
         onClear={() =>
           changeFilter({ ...DEFAULT_ACTIVITY_FILTER, window: filter.window })
@@ -217,18 +229,20 @@ function ActivityCount({
   shown,
   more,
   searching,
+  pending,
   filtered,
   onClear,
 }: {
   shown: number;
   more: boolean;
   searching: boolean;
+  pending: boolean;
   filtered: boolean;
   onClear: () => void;
 }): JSX.Element {
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
-      <span>
+      <span hidden={pending}>
         {shown}
         {more ? "+" : ""} {searching ? "found for this address" : "shown"},
         newest first
@@ -323,5 +337,16 @@ function ActivityBody({
         onOpen={onOpen}
       />
     </>
+  );
+}
+
+/** Whether two filter choices ask the same of the Activity. */
+function sameFilter(a: ActivityFilter, b: ActivityFilter): boolean {
+  return (
+    a.outcome === b.outcome &&
+    a.template === b.template &&
+    a.providerType === b.providerType &&
+    a.providerOrigin === b.providerOrigin &&
+    a.window === b.window
   );
 }
