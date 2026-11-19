@@ -37,7 +37,7 @@ process.env.NEXTLY_SECRET =
 
 import { randomUUID } from "node:crypto";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { apiKeyScope } from "../../../auth/authenticated-scope";
 import { buildClaims } from "../../../auth/jwt/claims";
@@ -53,6 +53,7 @@ import { createDynamicHandlers } from "../../../routeHandler";
 import { ServiceContainer } from "../../../services/index";
 import { listRoleSlugsForUserOrRefuse } from "../../../services/lib/permissions";
 import type { ApiKeyService } from "../../auth/services/api-key-service";
+import { storedSchemaSeq } from "../../schema/stored-schema-seq";
 import { defineWorkflow } from "../define-workflow";
 import { workflowDefinitionHash } from "../hash";
 import { REVIEW_API_ERROR_CODES } from "../review-api";
@@ -1514,6 +1515,64 @@ describe.each(getConfiguredTestDialects())(
         ]);
         expect(page.meta).toMatchObject({ total: 1 });
         expect(page.meta.totalCapped).toBeUndefined();
+      });
+
+      it("asks whether each assignee may take the step in batches, never one by one", async () => {
+        // Every part here is assigned to someone who may not take Clear: people who no longer
+        // exist, and people without the step. Each such part waits for every holder, so Sam sees
+        // them all. Asked assignee by assignee, 15 distinct assignees cost five times what 3 do;
+        // asked in batches, the same.
+        current = await bootSteps(dialect);
+        await people();
+        await person(app(), "sam", [
+          ["read", PAGES],
+          ["sign-off", PAGES],
+        ]);
+        let made = 0;
+        const seed = async (count: number) => {
+          for (let n = 0; n < count; n += 1) {
+            made += 1;
+            // Every third assignee is a real person who reads pages but may not sign off.
+            const id = `assignee-${made}`;
+            if (made % 3 === 0) await person(app(), id, [["read", PAGES]]);
+            await seedState(
+              app(),
+              partOf(PAGES, await entry(app(), PAGES), null),
+              "legal",
+              { definitionHash: HASH, assignee: { kind: "user", id } }
+            );
+          }
+        };
+        const SAM: Who = { kind: "person", id: "sam" };
+        const statements = async () => {
+          // The stored schema count is read again once SCHEMA_VERSION_READ_INTERVAL_MS has passed,
+          // so a slower call could count that read too. Its clock is frozen and the count read once
+          // on it, so neither call below reads it again.
+          vi.useFakeTimers({ toFake: ["performance"] });
+          try {
+            await storedSchemaSeq(app().adapter, { fresh: true });
+            // Once to warm what a first call caches, then counted.
+            await door.waiting(SAM, { page: 1, limit: 50 });
+            return await statementsOf(dialect, () =>
+              door.waiting(SAM, { page: 1, limit: 50 })
+            );
+          } finally {
+            vi.useRealTimers();
+          }
+        };
+
+        await seed(3);
+        const few = await statements();
+        await seed(12);
+        const many = await statements();
+        expect(
+          (await door.waiting(SAM, { page: 1, limit: 50 })).meta
+        ).toMatchObject({ total: 15 });
+        // Both lists in the message, so a failure names the statements that differ.
+        expect(
+          many.length,
+          `3 assignees:\n${few.join("\n")}\n\n15 assignees:\n${many.join("\n")}`
+        ).toBe(few.length);
       });
 
       it("marks the total a floor when there is more waiting than it reads", async () => {
