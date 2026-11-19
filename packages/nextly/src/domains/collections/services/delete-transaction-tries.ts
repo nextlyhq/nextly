@@ -109,19 +109,17 @@ async function hasRewriteRules(
 }
 
 /**
- * Why a try that ended may not run again, or undefined where all of it may. A delete drops tables
- * and changes rows across many tables (registry rows, the rows it sweeps, field-group values), so
- * this is asked of the database as a whole rather than of each statement: a plugin's handler that
- * ran (`ranUnknownCode`); on PostgreSQL a DDL event trigger that fires on `DROP TABLE`, or a
- * rewrite rule on a table; any row trigger, or triggers this account cannot all see. Each read that fails answers no-retry, failing
- * closed: what is lost is only the retry, and the delete changed nothing.
+ * The database's own code a delete's try may run, as a reason it may not run again, or undefined
+ * where there is none. A delete drops tables and changes rows across many tables (registry rows,
+ * the rows it sweeps, field-group values), so this is asked of the database as a whole rather than
+ * of each statement: on PostgreSQL a DDL event trigger that fires on `DROP TABLE`, or a rewrite
+ * rule on a table; any row trigger, or triggers this account cannot all see. Each read that fails
+ * answers no-retry, failing closed: what is lost is only the retry, and the delete changed nothing.
  */
-async function noRetryOf(
+async function databaseCodeOf(
   adapter: DrizzleAdapter,
-  dialect: "postgresql" | "sqlite",
-  ranUnknownCode: boolean
+  dialect: "postgresql" | "sqlite"
 ): Promise<NoRetryReason | undefined> {
-  if (ranUnknownCode) return "unknown-code";
   const tags = await ddlEventTriggerTags(adapter, dialect);
   if (tags === "all" || (tags !== "none" && tags.has("DROP TABLE"))) {
     return "event-trigger";
@@ -157,6 +155,9 @@ export async function deleteTransactionInTries<T>(
 ): Promise<T> {
   const { dialect } = adapter.getCapabilities();
   if (dialect === "mysql") return adapter.transaction(work);
+  // Read before the first try, as the busy-table engine reads its trigger catalog, and kept: code
+  // that stood when a try began may have run in it even where it is gone once the try has ended.
+  const codeBefore = await databaseCodeOf(adapter, dialect);
   return withBusyTableTries(
     {
       bounds: busyTableBounds({ env: process.env }),
@@ -193,12 +194,12 @@ export async function deleteTransactionInTries<T>(
       } catch (error) {
         if (!endedWaiting(error, dialect, false)) throw error;
         // Rolled back whole: nothing of this try stays, and all of it may run again, unless it may
-        // have run code the system does not know, from its first step on.
-        const reason = await noRetryOf(
-          adapter,
-          dialect,
+        // have run code the system does not know, from its first step on: a plugin's handler that
+        // ran, or the database's own code as it stood before the first try or stands now.
+        const reason =
           options.ranUnknownCode?.() === true
-        );
+            ? "unknown-code"
+            : (codeBefore ?? (await databaseCodeOf(adapter, dialect)));
         return {
           kind: "ended",
           ended: { table: null, holder: HOLDER_NOT_LOOKED_UP },

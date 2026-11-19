@@ -429,6 +429,47 @@ describe.each(getConfiguredTestDialects())(
       );
     }
 
+    it.runIf(dialect === "postgresql")(
+      "a collection's, whose database trigger is dropped while it waits, still stops without trying again",
+      async () => {
+        const t = await boot();
+        const entity = await anEntity(t, "collection");
+        const companion = `${entity.table}_locales`;
+        const removeTrigger = await siteTrigger(t, "row");
+        try {
+          const release = await holdTable(t, companion);
+          try {
+            vi.stubEnv("NEXTLY_LOCK_TIMEOUT", "1");
+            vi.stubEnv("NEXTLY_LOCK_TIMEOUT_TOTAL", "5");
+            const deleting = remove(entity).then(
+              () => "deleted",
+              (error: unknown) => error
+            );
+            // Another session drops the trigger while the first try waits: what the try may have
+            // run is judged by the trigger as it stood when the try began, not as it stands after.
+            await new Promise(resolve => setTimeout(resolve, 300));
+            await removeTrigger();
+
+            const stopped = await deleting;
+
+            expect(stopped).toMatchObject({
+              code: "NEXTLY_TABLE_BUSY",
+              publicMessage: expect.stringContaining(
+                "stopped without trying again: table busy."
+              ),
+            });
+            expectChecksFirst(stopped);
+            expect(await registryRowCount(t, entity)).toBe(1);
+          } finally {
+            await release();
+          }
+        } finally {
+          await removeTrigger();
+        }
+      },
+      30_000
+    );
+
     for (const kind of KINDS) {
       it.runIf(dialect === "postgresql")(
         `a ${kind}'s, against a held translations table, stops busy having changed nothing`,
