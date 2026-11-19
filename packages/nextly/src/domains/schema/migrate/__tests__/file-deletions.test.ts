@@ -58,6 +58,8 @@ interface Facts {
    * "unreadable": not read for any table.
    */
   notNull?: Record<string, readonly string[]> | "unreadable";
+  /** Per table, each column with a foreign key and the tables it references; none when left out. */
+  keys?: Record<string, Record<string, readonly string[]>>;
 }
 
 /** Live facts answering exactly from `facts`, with no case folding. */
@@ -87,6 +89,7 @@ function fake(facts: Facts = {}): DeletionFacts {
         : false;
     },
     descendantsOf: answer(facts.descendants),
+    keyTargets: table => new Map(Object.entries(facts.keys?.[table] ?? {})),
     liveTable: table =>
       facts.live === "unreadable"
         ? undefined
@@ -168,6 +171,67 @@ describe("tables dropped", () => {
       ).toEqual([table("posts"), table("pages")]);
     }
   );
+
+  it.each(["postgresql", "mysql", "sqlite"] as const)(
+    "names a dropped translations table the table it translates on %s, by its key to it and not its name",
+    dialect => {
+      const statements = [
+        "DROP TABLE IF EXISTS posts_locales",
+        "DROP TABLE IF EXISTS pages_locales",
+        "DROP TABLE IF EXISTS notes_locales",
+        "DROP TABLE IF EXISTS cards_locales",
+        "DROP TABLE posts",
+      ];
+      const translations = { _parent: "text", _locale: "text", title: "text" };
+      const deletions = read(dialect, statements, {
+        columns: {
+          // `_locale`, and `_parent` a key to `posts`: `posts`' translations table.
+          posts_locales: translations,
+          // Named so, but an entity's own table.
+          pages_locales: { id: "text", title: "text" },
+          // Laid out as one, but `_parent` keys nothing.
+          notes_locales: translations,
+          // Laid out as one, but `_parent` keys another table.
+          cards_locales: translations,
+          posts: { id: "text" },
+        },
+        keys: {
+          posts_locales: { _parent: ["posts"] },
+          cards_locales: { _parent: ["decks"] },
+        },
+      });
+      expect(deletions).toEqual([
+        { kind: "table", table: "posts_locales", translates: "posts" },
+        table("pages_locales"),
+        table("notes_locales"),
+        table("cards_locales"),
+        table("posts"),
+      ]);
+    }
+  );
+
+  it("names a dropped translations table the database does not have the table it would translate, by its name", () => {
+    // Absent, it holds nothing: the drop of a delete file's `IF EXISTS` loses nothing, however named.
+    expect(
+      read(
+        "postgresql",
+        ["DROP TABLE IF EXISTS posts_locales", "DROP TABLE posts"],
+        {
+          columns: { posts: { id: "text" } },
+        }
+      )
+    ).toEqual([
+      { kind: "table", table: "posts_locales", translates: "posts" },
+      table("posts"),
+    ]);
+    // A plain drop is not written to do nothing where the table is missing: facts read from a
+    // snapshot never hold a translations table, and turning translation off drops it so.
+    expect(
+      read("postgresql", ["DROP TABLE posts_locales"], {
+        columns: { posts: { id: "text" } },
+      })
+    ).toEqual([table("posts_locales")]);
+  });
 
   it("counts a table created IF NOT EXISTS as live: it may have been there", () => {
     expect(

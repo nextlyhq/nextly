@@ -149,6 +149,10 @@ import {
 } from "./declared-permissions";
 import { buildInverseOperations } from "./down-generator";
 import {
+  droppedTranslations,
+  translationsDropsPlaced,
+} from "./dropped-translations";
+import {
   describeSettingsChange,
   settingsChangesFor,
   settingsRecordOf,
@@ -1198,6 +1202,23 @@ export async function generateMigration(
     args.dialect,
     previousSnapshot.tables
   );
+  // 7a'. A translated table this file drops takes its translations table with it, dropped first
+  //      so nothing references the main table when it goes; the DOWN makes it again, empty, once
+  //      the main table is back (`droppedTranslations`). The snapshot records no translations
+  //      table, so the diff above never drops one.
+  const translations = droppedTranslations({
+    operations,
+    previous: previousSnapshot,
+    previousEntities: previous?.data.entities,
+    dialect: args.dialect,
+    defaultLocale: args.defaultLocale ?? "en",
+  });
+  sqlStatements.splice(
+    0,
+    sqlStatements.length,
+    ...translationsDropsPlaced(sqlStatements, translations.up, args.dialect)
+  );
+  downSqlStatements.push(...translations.down);
   // A renamed field group's rows move once its tables are as the file leaves them, and move back
   // before the DOWN takes those tables back.
   sqlStatements.push(...groupRenames.up);
