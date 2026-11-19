@@ -676,6 +676,7 @@ describe.each(getConfiguredTestDialects())(
         const t = await boot();
         await path.create([text("heading")]);
         const definitionBefore = definitionText();
+        const folderBefore = filesBelow(join(basePath, HISTORY));
         let refused = 0;
         kill.refuse = point => {
           if (point !== `file:${join(basePath, DEFINITION)}`) return false;
@@ -693,6 +694,9 @@ describe.each(getConfiguredTestDialects())(
           "the save was not refused"
         ).toBe(false);
         expect(definitionText()).toBe(definitionBefore);
+        // The migration files and snapshots written before it are taken back with it: nothing of
+        // the save is left for a later `nextly migrate` or `migrate:create`.
+        expect(filesBelow(join(basePath, HISTORY))).toEqual(folderBefore);
         expect(await recordRow(t, path)).toBeUndefined();
         expect(recordMarker(path)).toBeUndefined();
       }, 300_000);
