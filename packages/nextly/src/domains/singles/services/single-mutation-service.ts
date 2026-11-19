@@ -571,6 +571,35 @@ function fieldsWrittenIn(
 }
 
 /**
+ * What a Single save is judged with: its values, the Single's fields, and who
+ * makes it. Kept as one value so the judgement before the transaction and the
+ * one under the row lock are the same call.
+ */
+interface SaveJudgement {
+  slug: string;
+  data: Record<string, unknown>;
+  fieldConfigs: DynamicSingleRecord["fields"];
+  localizedFieldNames: ReadonlySet<string>;
+  enforceLocalizedRequired: boolean;
+  /** The Single's stored document id, which a read rule is handed. */
+  entryId: string;
+  /**
+   * The language the save is in, where the Single is kept per language;
+   * validators reading what it already stores read this language's value.
+   */
+  writeLocale: string | undefined;
+  user: UpdateSingleOptions["user"];
+  /** Who the refusal is told to, with the scope a key arrived with. */
+  reader: IssueReader;
+  /**
+   * The paths that hold a value kept from the stored row because a rule
+   * denies it to this writer; the whole-number rule skips them — a legacy
+   * stored fraction under one is the row's own content, not this save's.
+   */
+  storedProvenancePaths?: ReadonlySet<string>;
+}
+
+/**
  * SingleMutationService
  *
  * Handles the write-path for Single documents. The get-style helpers
@@ -2366,35 +2395,43 @@ export class SingleMutationService extends BaseService {
   }
 
   /**
+   * {@link assertSaveValid} on the row as committed: the Single's main row
+   * locked first, then the same judgement with every stored read on `tx`.
+   *
+   * The lock is taken before any read the judgement makes, so on MySQL's
+   * repeatable read the reads that follow see the row as last committed
+   * rather than a snapshot from before another writer's save. Every write to
+   * a Single takes this lock, so none can land between the judgement and the
+   * write it guards.
+   */
+  private async assertSaveValidUnderLock(
+    tx: TransactionContext,
+    row: { readonly tableName: string; readonly id: string },
+    judgement: SaveJudgement
+  ): Promise<void> {
+    await tx.selectOne(row.tableName, {
+      where: this.whereEq("id", row.id),
+      forUpdate: true,
+    });
+    await this.assertSaveValid({ ...judgement, tx });
+  }
+
+  /**
    * Refuse a save whose values break the Single's declared rules: the same
    * gate the collection write paths run. Singles updates are PATCH
    * semantics, so absent keys stay untouched and provided keys must hold. An
    * issue on a field the caller may not read is told without naming it or
    * its value.
    */
-  private async assertSaveValid(args: {
-    slug: string;
-    data: Record<string, unknown>;
-    fieldConfigs: DynamicSingleRecord["fields"];
-    localizedFieldNames: ReadonlySet<string>;
-    enforceLocalizedRequired: boolean;
-    /** The Single's stored document id, which a read rule is handed. */
-    entryId: string;
-    /**
-     * The language the save is in, where the Single is kept per language;
-     * validators reading what it already stores read this language's value.
-     */
-    writeLocale: string | undefined;
-    user: UpdateSingleOptions["user"];
-    /** Who the refusal is told to, with the scope a key arrived with. */
-    reader: IssueReader;
-    /**
-     * The paths that hold a value kept from the stored row because a rule
-     * denies it to this writer; the whole-number rule skips them — a legacy
-     * stored fraction under one is the row's own content, not this save's.
-     */
-    storedProvenancePaths?: ReadonlySet<string>;
-  }): Promise<void> {
+  private async assertSaveValid(
+    args: SaveJudgement & {
+      /**
+       * The transaction the judgement reads stored values on: absent before
+       * one opens, when it reads on the pool.
+       */
+      tx?: TransactionContext;
+    }
+  ): Promise<void> {
     const { slug, fieldConfigs } = args;
     const validationView = relationshipValidationView(args.data, fieldConfigs);
     const judgedIssues = await validateEntryData(
@@ -2407,17 +2444,20 @@ export class SingleMutationService extends BaseService {
           ? { storedProvenancePaths: args.storedProvenancePaths }
           : {}),
         // A component inside a group or repeater is judged here, since no
-        // component write reaches it. On the pool, as this is.
+        // component write reaches it. Its schema read on the connection the
+        // judgement reads on: the pool, or the transaction.
         componentFields: await containedComponentResolver(
           fieldConfigs,
           async componentSlug =>
             (await this.fieldGroupDataService?.getComponentFields(
-              componentSlug
+              componentSlug,
+              args.tx?.getDrizzle()
             )) ?? null
         ),
         localizedFieldNames: args.localizedFieldNames,
         enforceLocalizedRequired: args.enforceLocalizedRequired,
-        // Before the transaction opens, so on the pool.
+        // On the pool before the transaction opens, and on the transaction
+        // under the row lock, so a stored read sees the row as committed.
         write: {
           ...storedFieldRead.entryWriteContext({
             kind: "single",
@@ -2425,11 +2465,17 @@ export class SingleMutationService extends BaseService {
             ...(args.writeLocale === undefined
               ? {}
               : { locale: args.writeLocale }),
-            connection: {
-              db: this.adapter,
-              executor: undefined,
-              defaultLocale: this.localization?.defaultLocale ?? null,
-            },
+            connection: args.tx
+              ? {
+                  db: args.tx,
+                  executor: args.tx.getDrizzle(),
+                  defaultLocale: this.localization?.defaultLocale ?? null,
+                }
+              : {
+                  db: this.adapter,
+                  executor: undefined,
+                  defaultLocale: this.localization?.defaultLocale ?? null,
+                },
           }),
           // Who the write is made as, from the reader its access is judged
           // by, as a collection entry's write is told it.
@@ -3173,7 +3219,9 @@ export class SingleMutationService extends BaseService {
       // 6.2. Enforce the schema's declared rules on the server — the same
       // gate the collection write paths run. Singles updates are PATCH
       // semantics: absent keys stay untouched, provided keys must hold.
-      await this.assertSaveValid({
+      // Kept, so a save the version check does not cover is judged again by
+      // the same call under the row lock (see the transaction below).
+      const saveJudgement: SaveJudgement = {
         slug,
         data: currentData,
         fieldConfigs,
@@ -3191,7 +3239,8 @@ export class SingleMutationService extends BaseService {
           authenticatedScope: options.authenticatedScope,
           grants: writeGrants,
         },
-      });
+      };
+      await this.assertSaveValid(saveJudgement);
 
       // 6.3. A publish promotes the held pending change, and that content has
       // been judged only once, when it was SAVED. The gate that judges it
@@ -3757,6 +3806,21 @@ export class SingleMutationService extends BaseService {
                 reason: "single row missing after auto-create",
               },
             });
+          }
+
+          // A save no version check covers (`_overwrite`, or no `_rev`) is
+          // judged again on the row as committed, under its lock. Its values
+          // were judged on the pool before this transaction, against the row
+          // as it stood then; another writer's save in between (a manager's
+          // page code, say) would otherwise be replaced by a value judged
+          // against what it replaced, its permission never asked. A save
+          // carrying `_rev` is refused for that race by its version check.
+          if (versionCheck.kind !== "judge") {
+            await this.assertSaveValidUnderLock(
+              tx,
+              { tableName: singleMeta.tableName, id: existingDoc.id },
+              saveJudgement
+            );
           }
 
           // TOCTOU-safe transition enforcement: reclassify the publish/unpublish
