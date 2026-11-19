@@ -137,6 +137,26 @@ function runDuePass(t: TestNextly) {
   });
 }
 
+/** The values every `<column> IN (...)` condition of a read's filter names, at any depth. */
+function inValues(where: unknown, column: string): unknown[] {
+  if (typeof where !== "object" || where === null) return [];
+  if (
+    "column" in where &&
+    where.column === column &&
+    "op" in where &&
+    where.op === "IN" &&
+    "value" in where &&
+    Array.isArray(where.value)
+  ) {
+    return where.value;
+  }
+  return Object.values(where).flatMap(nested =>
+    Array.isArray(nested)
+      ? nested.flatMap(item => inValues(item, column))
+      : inValues(nested, column)
+  );
+}
+
 /** The repository's flush of a release's documents, private to it, watched from here. */
 interface FlushesMembers {
   revalidateMembersOf(releaseId: string): Promise<void>;
@@ -970,21 +990,19 @@ describe.each(getConfiguredTestDialects())(
       expect(count(REVIEW_STATES_TABLE)).toBe(1);
       expect(count(VERSIONS_TABLE)).toBe(1);
       expect(count(pagesTable)).toBe(1);
-      // Every batch read names every member, each once.
-      const readsOf = (table: string | undefined) =>
-        select.mock.calls
-          .filter(([name]) => name === table)
-          .map(([, options]) => JSON.stringify(options ?? {}));
-      const reviewReads = readsOf(REVIEW_STATES_TABLE);
-      expect(
-        pages.map(
-          page => reviewReads.filter(read => read.includes(`"${page}"`)).length
-        )
-      ).toEqual(pages.map(() => 1));
-      for (const page of pages) {
-        expect(readsOf(VERSIONS_TABLE)[0]).toContain(`"${page}"`);
-        expect(readsOf(pagesTable)[0]).toContain(`"${page}"`);
-      }
+      // Every batch read names every member in its filter's own `IN` on the document's column,
+      // not merely somewhere in the statement.
+      const namedBy = (table: string | undefined, column: string) =>
+        new Set(
+          select.mock.calls
+            .filter(([name]) => name === table)
+            .flatMap(([, options]) =>
+              inValues((options as { where?: unknown })?.where, column)
+            )
+        );
+      expect(namedBy(REVIEW_STATES_TABLE, "entryId")).toEqual(new Set(pages));
+      expect(namedBy(VERSIONS_TABLE, "entryId")).toEqual(new Set(pages));
+      expect(namedBy(pagesTable, "id")).toEqual(new Set(pages));
     });
   }
 );
