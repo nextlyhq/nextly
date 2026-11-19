@@ -232,12 +232,27 @@ describe.each(getConfiguredTestDialects())(
       const { id } = await t.nextly.email.queue({ ...message, to: ADA });
       expect(await queued(t, id)).toMatchObject({ state: "waiting" });
 
-      // Its next attempt is backed off: a trigger now sends nothing.
-      await trigger(t);
+      // Its next attempt is backed off: a trigger just before it is due
+      // sends nothing.
+      const [{ jobId }] = await t.adapter.select<{ jobId: string }>(
+        "email_queue",
+        { where: { and: [{ column: "id", op: "=", value: id }] } }
+      );
+      const [job] = await t.adapter.select<{ nextAttemptAt: Date | string }>(
+        "nextly_jobs",
+        { where: { and: [{ column: "id", op: "=", value: jobId }] } }
+      );
+      const before = new Date(new Date(job.nextAttemptAt).getTime() - 1);
+      const passAt = (at: Date) =>
+        runJobsPass(t.adapter, container.get<JobRegistry>("jobRegistry"), {
+          now: () => at,
+        });
+      await passAt(before);
       expect(calls).toHaveLength(1);
 
+      // Retried, it is due at that same moment.
       await t.nextly.email.retryQueued({ id });
-      await trigger(t);
+      await passAt(before);
       expect(await queued(t, id)).toMatchObject({ state: "sent" });
       expect(calls).toHaveLength(2);
     });
@@ -265,6 +280,38 @@ describe.each(getConfiguredTestDialects())(
       // The attempt in flight decided it, and only it went to the provider.
       expect(await queued(t, sending.id)).toMatchObject({ state: "sent" });
       expect(calls).toHaveLength(1);
+    });
+
+    it("takes a person's cancel during an attempt in flight as a request, which ends cancelled if it fails and sent if it succeeds", async () => {
+      const t = await boot(dialect);
+      for (const outcome of ["fails", "succeeds"] as const) {
+        const arrived = latch();
+        const held = latch();
+        behaviour.gate = held.promise;
+        behaviour.reached = arrived.open;
+        const queuing = t.nextly.email.queue({ ...message, to: ADA });
+        await arrived.promise;
+        const [sending] = await t.adapter.select<QueueRow>("email_queue", {
+          where: { and: [{ column: "state", op: "=", value: "sending" }] },
+        });
+
+        // A request: the attempt with the provider decides.
+        const asked = await t.nextly.email.cancelQueued({ id: sending.id });
+        expect(asked.item).toEqual({ id: sending.id, state: "sending" });
+        // And no retry can overtake it.
+        await expect(
+          t.nextly.email.retryQueued({ id: sending.id })
+        ).rejects.toMatchObject({ code: "CONFLICT" });
+
+        behaviour.gate = undefined;
+        if (outcome === "fails") behaviour.refusals = 1;
+        held.open();
+        await queuing;
+        expect(await queued(t, sending.id)).toMatchObject({
+          state: outcome === "fails" ? "cancelled" : "sent",
+          message: null,
+        });
+      }
     });
 
     it("refuses a retry of an email sent, cancelled or cleared, and of none", async () => {
