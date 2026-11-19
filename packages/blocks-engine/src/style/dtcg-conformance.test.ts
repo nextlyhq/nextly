@@ -328,6 +328,45 @@ describe("the written design-token file", () => {
     expect(types).toContain("typography");
   });
 
+  it("stays valid with text styles that scale a variable, of its part's type or another", () => {
+    const scaling = (
+      id: string,
+      part: string,
+      token: string,
+      times: number
+    ): NamedClass => ({
+      id,
+      slug: id,
+      orderIndex: 0,
+      role: "text",
+      styles: { base: { base: { [part]: { $token: token, times } } } },
+    });
+    const { document, keptTextStyles } = tokensToDtcg(
+      { tokens: [...defaultSiteTokens(), ...ONE_OF_EACH] },
+      {
+        textStyles: [
+          scaling("size-of-size", "fontSize", "font-size.h2", 1.5),
+          scaling("size-of-number", "fontSize", "type.ratio", 2),
+          scaling("line-of-number", "lineHeight", "type.ratio", 1.1),
+          scaling("line-of-size", "lineHeight", "font-size.h2", 1.5),
+          scaling("weight-past-range", "fontWeight", "type.heavy", 2),
+        ],
+      }
+    );
+    const file = JSON.parse(JSON.stringify(document)) as DtcgNode;
+    expect(problemsOf(file)).toEqual([]);
+    // The ones of their part's type are typed; the others kept for Nextly.
+    expect(Object.keys(file.textStyles as DtcgNode).sort()).toEqual([
+      "line-of-number",
+      "size-of-size",
+    ]);
+    expect(keptTextStyles.sort()).toEqual([
+      "line-of-size",
+      "size-of-number",
+      "weight-past-range",
+    ]);
+  });
+
   it("is checked by a check that finds what isn't valid", () => {
     expect(
       problemsOf({

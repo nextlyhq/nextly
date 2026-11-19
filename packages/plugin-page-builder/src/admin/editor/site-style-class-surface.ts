@@ -6,16 +6,33 @@
  *
  * @module @nextlyhq/plugin-page-builder/admin/editor/site-style-class-surface
  */
-import type { NamedClass } from "@nextlyhq/blocks-engine";
+import {
+  withFluidSizesBack,
+  withoutStaleFluidSizes,
+  type NamedClass,
+  type SiteTokenSet,
+} from "@nextlyhq/blocks-engine";
 import {
   sharedStyleNameTaken,
   type ClassListEdit,
   type ClassRenameOutcome,
   type SharedStyleChange,
 } from "@nextlyhq/builder/shell";
-import { useCallback, useContext, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
-import { classOverrideOf, resolveSiteStyle } from "../../site-style";
+import {
+  classOverrideOf,
+  configuredClassesAt,
+  resolveSiteStyle,
+  type SiteStyleData,
+} from "../../site-style";
 import { readSiteStyleRecord } from "../../site-style-record";
 import { useSaveSiteStyle, type SiteStyleReplayed } from "../site-style-client";
 
@@ -151,6 +168,11 @@ function classReadFailed(pending: boolean, error: unknown): boolean {
   return !pending && error !== null && error !== undefined;
 }
 
+/** Which absence a library that is not known is in: failed, or not yet read. */
+function classAbsence(failed: boolean): ClassSurface["absence"] {
+  return failed ? "failed" : "pending";
+}
+
 /**
  * The empty library, as ONE value rather than a fresh array each time.
  *
@@ -181,6 +203,38 @@ function readableClassLibrary(
   // `undefined` above and `NO_CLASSES` here stay distinct: the first is a read
   // that has not answered, the second is one that answered with nothing.
   return siteStyle?.classes ?? NO_CLASSES;
+}
+
+/**
+ * The site's code classes as the library holds them: across the range the
+ * merged tokens give, the same derivation the merge makes.
+ *
+ * Every write compares its list with these to store only what differs, and
+ * an undo puts a code style back as these give it. Compared with the code's
+ * own list instead, a code text style the site's range moved would differ
+ * from it, and the first save of any class list would store it as the
+ * site's override, masking the code from then on.
+ *
+ * Kept while the range's two widths are the same, so a fresh read of the
+ * same range does not hand every writer a new list.
+ */
+function useConfiguredClasses(
+  config: Pick<SiteStyleData, "classes" | "tokens"> | undefined,
+  /** The merged style the library is read from, whose tokens hold the range. */
+  merged: { tokens?: SiteTokenSet } | undefined
+): readonly NamedClass[] | undefined {
+  const min = merged?.tokens?.fluidRange?.min;
+  const max = merged?.tokens?.fluidRange?.max;
+  return useMemo(
+    () =>
+      configuredClassesAt(
+        config,
+        min === undefined || max === undefined
+          ? undefined
+          : { fluidRange: { min, max } }
+      ),
+    [config, min, max]
+  );
 }
 
 /** What {@link useClassSurface} returns, and what the editor hands on as its `classes`. */
@@ -224,18 +278,20 @@ export type ClassSurface = {
 };
 
 export function useClassSurface(
-  siteStyle: { classes?: readonly NamedClass[] } | undefined,
+  siteStyle:
+    | { classes?: readonly NamedClass[]; tokens?: SiteTokenSet }
+    | undefined,
   pending: boolean,
   error: unknown,
   /** The site's own config, whose classes storage layers over. */
-  config: { classes?: readonly NamedClass[] } | undefined
+  config: Pick<SiteStyleData, "classes" | "tokens"> | undefined
 ): ClassSurface {
   // Derived outside the hook, so this decides nothing and only distributes what
   // was decided — which is what keeps the component rendering the inspector
   // free of the branch.
   const failed = classReadFailed(pending, error);
   const library = readableClassLibrary(siteStyle, pending, failed);
-  const configured = config?.classes;
+  const configured = useConfiguredClasses(config, siteStyle);
   /*
    * ONE writer for both edits. Creating and renaming are the same
    * read-modify-write over the same list, so two independent queues let a
@@ -309,7 +365,7 @@ export function useClassSurface(
      * finish, and a surface that goes on saying "loading" describes a state
      * the site is not in — the distinction the tokens studio already draws.
      */
-    absence: failed ? ("failed" as const) : ("pending" as const),
+    absence: classAbsence(failed),
     /*
      * Withheld while the library is unknown. A failed read leaves
      * `useSiteStyle` answering with the config defaults alone, so creating
@@ -423,10 +479,30 @@ function classRemovedFrom(
 }
 
 /**
+ * A style with an edit's styles, without the fluid sizes of each size the
+ * edit changed; on Undo, with those `undoneFrom` had back for each size put
+ * back as it was then.
+ */
+function editedClass(
+  entry: NamedClass,
+  styles: NamedClass["styles"],
+  undoneFrom: NamedClass | undefined
+): NamedClass {
+  const edited = withoutStaleFluidSizes({ ...entry, styles }, entry);
+  return undoneFrom === undefined
+    ? edited
+    : withFluidSizesBack(edited, undoneFrom);
+}
+
+/**
  * One style's change applied to the stored classes as a replay finds them:
  * the stored tier with that style changed, nothing to write, or nothing it
  * can do once the style is neither stored nor in the site's code (a removed
  * style is not recreated).
+ *
+ * As a forward write does, it drops the fluid sizes of each size it changes.
+ * An Undo hands the style as it was before the edit, and each size put back
+ * as it was then gets the fluid sizes it had then back with it.
  */
 function classChangeOn(
   held: unknown,
@@ -435,7 +511,9 @@ function classChangeOn(
   /** The site's code as it is now, when the step is replayed. */
   configured: readonly NamedClass[] | undefined,
   classId: string,
-  change: SharedStyleChange
+  change: SharedStyleChange,
+  /** On Undo, the style before the edit undone. */
+  undoneFrom?: NamedClass
 ): SiteStyleReplayed {
   const entries = (Array.isArray(held) ? held : []).filter(
     (entry): entry is NamedClass => typeof entry === "object" && entry !== null
@@ -475,10 +553,11 @@ function classChangeOn(
   if (out.kind === "unchanged" && (stored === undefined || stored === entry)) {
     return { kind: "unchanged" };
   }
-  const changed = {
-    ...entry,
-    styles: out.kind === "write" ? out.styles : entry.styles,
-  };
+  const changed = editedClass(
+    entry,
+    out.kind === "write" ? out.styles : entry.styles,
+    undoneFrom
+  );
   const next =
     at === -1
       ? [...entries, changed]
@@ -620,8 +699,16 @@ function useWriteClassStyles(
         if (changed.kind !== "write") slot.cancel();
         if (changed.kind === "refused") return { result: changed.reason };
         if (changed.kind === "unchanged") return { result: undefined };
+        /*
+         * A size changed here is the author's own: the fluid sizes it was
+         * made from are dropped in the same write, so nothing takes them for
+         * the ones it was made from (a copy, a range change) and makes the
+         * size again from them.
+         */
         const next = existing.map(each =>
-          each.id === classId ? { ...each, styles: changed.styles } : each
+          each.id === classId
+            ? withoutStaleFluidSizes({ ...each, styles: changed.styles }, each)
+            : each
         );
         /*
          * Undone and redone as a change to this one style, composed against
@@ -657,10 +744,17 @@ function useWriteClassStyles(
          */
         let baseline = configured;
         const replay =
-          (step: SharedStyleChange) =>
+          (step: SharedStyleChange, undoneFrom?: NamedClass) =>
           (held: unknown): SiteStyleReplayed => {
             const now = configuredNow.current;
-            const out = classChangeOn(held, baseline, now, classId, step);
+            const out = classChangeOn(
+              held,
+              baseline,
+              now,
+              classId,
+              step,
+              undoneFrom
+            );
             if (out.kind !== "gone") baseline = now;
             return out;
           };
@@ -671,7 +765,7 @@ function useWriteClassStyles(
               const step = undoOf(replaced);
               return step === REMOVED_BY_THEM
                 ? classRemovedFrom(held, configuredNow.current, classId)
-                : replay(step)(held);
+                : replay(step, entry)(held);
             },
             redo: replay(change),
           },

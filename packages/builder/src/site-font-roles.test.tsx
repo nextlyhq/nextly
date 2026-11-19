@@ -23,6 +23,7 @@ import * as React from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { CssNamesContext } from "./css-names-context";
+import { labelNotInName } from "./label-in-name.fixture";
 import { SiteFontRoles, type SiteFontRolesProps } from "./site-font-roles";
 import { withFontRole } from "./site-font-roles-model";
 
@@ -91,6 +92,17 @@ describe("the Body and Headings fonts", () => {
     ).toBeTruthy();
   });
 
+  it("names each row by its own text, with no label laid over the Aa it draws", () => {
+    render(<Hosted />);
+    for (const name of [/^Body font,/, /^Headings font,/]) {
+      const row = screen.getByRole("button", { name });
+      // A label over the row would have to hold the "Aa" specimen too, so
+      // the row is named by text inside it, heard as it was before.
+      expect(row.getAttribute("aria-label")).toBeNull();
+      expect(labelNotInName(row)).toBeNull();
+    }
+  });
+
   it("lists the entry writing nothing, the site's fonts and the system's", () => {
     render(<Hosted />);
     const list = openList(/^Body font,/);
@@ -101,7 +113,9 @@ describe("the Body and Headings fonts", () => {
     expect(options).toContain("Lora");
     expect(options).toContain("System UI");
     expect(options).toContain("Serif");
-    expect(within(list).getByRole("group", { name: "On this site" })).toBeTruthy();
+    expect(
+      within(list).getByRole("group", { name: "On this site" })
+    ).toBeTruthy();
     expect(within(list).getByRole("group", { name: "System" })).toBeTruthy();
   });
 
@@ -116,7 +130,9 @@ describe("the Body and Headings fonts", () => {
   it("writes a pick as one set: the variable and the rows pointing at it", () => {
     const onSet = vi.fn();
     render(<Hosted onSet={onSet} />);
-    fireEvent.click(within(openList(/^Body font,/)).getByRole("option", { name: "Lora" }));
+    fireEvent.click(
+      within(openList(/^Body font,/)).getByRole("option", { name: "Lora" })
+    );
     expect(onSet).toHaveBeenCalledTimes(1);
     const set = onSet.mock.calls[0]?.[0] as SiteTokenSet;
     expect(
@@ -131,10 +147,7 @@ describe("the Body and Headings fonts", () => {
   it("takes Headings back to the same as body", () => {
     const onSet = vi.fn();
     render(
-      <Hosted
-        tokens={withFontRole(SITE, "heading", "serif")}
-        onSet={onSet}
-      />
+      <Hosted tokens={withFontRole(SITE, "heading", "serif")} onSet={onSet} />
     );
     expect(
       screen.getByRole("button", { name: "Headings font, Serif" })
@@ -187,13 +200,17 @@ describe("a Headings font with no bold", () => {
       />
     );
     fireEvent.click(screen.getByRole("button", { name: "Add Bold" }));
-    expect(
-      (await screen.findByRole("alert")).textContent
-    ).toBe("The font service could not be reached.");
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "The font service could not be reached."
+    );
   });
 
   it("offers no Add Bold for an uploaded font, and says nothing once it has a bold", () => {
-    const uploaded: FontFaceDef = { ...LORA, family: "Mine", source: { kind: "upload" } };
+    const uploaded: FontFaceDef = {
+      ...LORA,
+      family: "Mine",
+      source: { kind: "upload" },
+    };
     const { unmount } = render(
       <Hosted
         faces={[uploaded]}

@@ -4,6 +4,7 @@
  * row, named by its path, with hashes, sizes and counts and never the code;
  * and none for a write that leaves the code as it was.
  */
+import { DEFAULT_LIMITS, type DocumentLimits } from "@nextlyhq/blocks-engine";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -24,8 +25,11 @@ function doc(head?: string): Record<string, unknown> {
   };
 }
 
-/** The hook, registered as the plugin registers it, and what it writes. */
-function hooked() {
+/**
+ * The hook, registered as the plugin registers it on a site with these
+ * limits where given, and what it writes.
+ */
+function hooked(limits?: DocumentLimits) {
   const handlers: ((context: unknown) => unknown)[] = [];
   const write = vi.fn(
     async (_event: { metadata?: Record<string, unknown> }) => {}
@@ -40,6 +44,7 @@ function hooked() {
     mayHoldBlocks: () => true,
     options: undefined,
     siteOrigin: () => "https://site.test",
+    ...(limits === undefined ? {} : { limits }),
   });
   const commit = async (
     data: Record<string, unknown>,
@@ -175,5 +180,31 @@ describe("the custom CSS audit", () => {
       (write.mock.calls[0]?.[0] as { metadata: Record<string, unknown> })
         .metadata
     ).toMatchObject({ blocksWithCss: 2, blocksWithCssBefore: 1 });
+  });
+
+  it("records CSS on a block past the default count that the site's own count draws", async () => {
+    const count = DEFAULT_LIMITS.maxNodes + 1;
+    const { commit, write } = hooked({ ...DEFAULT_LIMITS, maxNodes: count });
+    // Only the last block holds CSS, so a read that stops at the engine's
+    // default count sees no change at all.
+    const page = (css: string | undefined) => ({
+      ...doc(),
+      nodes: Array.from({ length: count }, (_, index) => ({
+        id: `b${index}`,
+        type: "core/text",
+        version: 1,
+        props: {},
+        ...(index === count - 1 && css !== undefined ? { customCss: css } : {}),
+      })),
+    });
+    await commit({ content: page(BLOCK_CSS) }, { content: page(undefined) });
+    expect(write).toHaveBeenCalledTimes(1);
+    const event = write.mock.calls[0]?.[0] as
+      | { metadata?: Record<string, unknown> }
+      | undefined;
+    expect(event?.metadata).toMatchObject({
+      blocksWithCss: 1,
+      blocksWithCssBefore: 0,
+    });
   });
 });

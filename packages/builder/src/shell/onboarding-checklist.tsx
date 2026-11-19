@@ -130,7 +130,9 @@ export function useBuilderChecklist({
     setOpening({ key: documentKey, empty: openedEmpty });
   }
 
-  const steps = builderChecklist(document);
+  // Once per page: the steps read every block, and the editor renders this on
+  // every click, which changes no block. An edit makes a new document.
+  const steps = useMemo(() => builderChecklist(document), [document]);
   return { steps, visible: enabled && openedEmpty && !dismissed, dismiss };
 }
 

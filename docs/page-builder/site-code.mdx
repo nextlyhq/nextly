@@ -42,7 +42,8 @@ domain. Leaving Settings with unsaved code asks first.
 
 Anyone who may change the site's settings (the **Manage page builder site settings**
 permission) may add site code. Code here runs on every page, with the access of
-whoever views it, signed-in staff included. Only add code from sources you trust.
+whoever views it, signed-in staff included. Only add code from sources you trust, and
+never put a secret in it: it is printed into every page's HTML.
 
 - A save is a signed-in person's alone. An API key can read site code but never save
   it, so a leaked key can't put a script on every page.
@@ -87,6 +88,14 @@ permission and from any API key, refuses what the rules can't store, and keeps c
 site's declared policy would block only where the author acknowledged exactly those
 findings. Each committed change writes an audit row with the page, the field, and the
 code's hashes, sizes and counts, never the code.
+
+The permission guards **changing** page code, not reading it. Anyone who may edit the page
+can read its code: the draft's, the published version's and every version in its history,
+through the API and in the document the builder loads, even though the builder only shows
+the **Code** tab to people with the permission. The published code is also printed into the
+page's HTML for every visitor. So never put a secret in page code, or in site code: an API
+token, a private key or a password belongs in your server's environment, read by your own
+server code, never in code a browser runs.
 
 Published pages carry it with no change of your own where the route spreads
 `pageBuilderContent()` into `createPublicContentPage` or `createContentPage`: the route draws

@@ -5,11 +5,14 @@
  * a row using it would then read nothing, and the site's guard refuses a
  * text style naming a variable it doesn't hold, which would refuse the
  * whole class save. So each is left out instead, the site's own row kept,
- * and named; the rest still land.
+ * and named; the rest still land. So is a text style naming, by `$token`, a
+ * variable neither the file nor the site holds, which the same guard
+ * refuses.
  *
  * @module tokens-transfer-reach
  */
 import {
+  resolveSiteTokens,
   resolveTokenPrefix,
   SITE_TEXT_LABELS,
   SITE_TEXT_ROLES,
@@ -56,15 +59,24 @@ export function reachingVariables(
       ? undefined
       : owner.name;
   };
+  // Every variable the site will hold, its built-in ones included, as the
+  // site's guard judges a text style's `$token` against them.
+  const held = new Set(resolveSiteTokens(merged).tokens.map(tokenIdentity));
+  // A `$token` naming no variable of the file's or the site's. A `var()`
+  // property is CSS the site draws or not, and no guard judges it.
+  const unknown = (key: string): boolean =>
+    !key.startsWith("--") && !owners.has(key) && !held.has(key);
   const left = new Map<string, string>();
   const keep = (style: NamedClass): boolean => {
-    const name = keysUsed(style.styles)
-      .map(missing)
-      .find(found => found !== undefined);
-    if (name === undefined) return true;
+    const keys = keysUsed(style.styles);
+    const name = keys.map(missing).find(found => found !== undefined);
+    const nowhere = name === undefined ? keys.find(unknown) : undefined;
+    if (name === undefined && nowhere === undefined) return true;
     left.set(style.id, sharedStyleName(style));
     refused.push(
-      `“${sharedStyleName(style)}” was not imported: a variable it uses, “${name}”, wasn't imported.`
+      name === undefined
+        ? `“${sharedStyleName(style)}” was not imported: a variable it uses, “${nowhere ?? ""}”, isn't on this site or in the file.`
+        : `“${sharedStyleName(style)}” was not imported: a variable it uses, “${name}”, wasn't imported.`
     );
     return false;
   };

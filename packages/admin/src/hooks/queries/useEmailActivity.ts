@@ -1,16 +1,13 @@
 /**
  * The Email hub's Activity reads, as TanStack Query hooks.
  *
- * `useEmailActivity` answers one newest-first list of the delivery log and
- * queued email, a page at a time. The server answers each as a list paged by
- * its own cursor, so each page here reads the next page of every list that
- * has more, and the rows are merged by `mergeNewestFirst`, which holds back
- * what a list still loading could precede. The screen sees one list, and
- * does not change when the server answers one merged list itself.
+ * `useEmailActivity` answers the server's merged Activity, newest first: queued
+ * email and the deliveries of sends that were not queued, under one cursor
+ * and one set of filters, a page at a time.
  *
  * Query keys:
  * - `["emailActivity"]`, the base key
- * - `["emailActivity", "list", sources]`, one filtered list
+ * - `["emailActivity", "list", query, window]`, one filtered list
  * - `["emailActivity", "overdue"]`, whether queued email is overdue
  *
  * @module hooks/queries/useEmailActivity
@@ -25,29 +22,26 @@ import {
 import { useMemo } from "react";
 
 import {
-  deliveryRow,
+  activityQuery,
+  activityRow,
   holdsUnsettledQueued,
   isUnsettled,
-  mergeNewestFirst,
-  queuedRow,
-  sourcesFor,
+  windowStart,
   type ActivityFilter,
   type ActivityRow,
-  type LoadedSource,
+  type TimeWindow,
 } from "@admin/components/features/email-hub/activity/activity-model";
-import type { ListResponse } from "@admin/lib/api/response-types";
 import {
   getDeliveryDetail,
   getQueuedEmailDetail,
   getQueuedEmailOverdue,
-  listDeliveryActivity,
-  listQueuedEmailActivity,
+  listActivity,
   type DeliveryDetail,
   type QueuedEmailDetail,
   type QueuedEmailOverdue,
 } from "@admin/services/emailActivityApi";
 
-/** How many records each list answers per page. */
+/** How many rows each page answers. */
 const ACTIVITY_PAGE_SIZE = 50;
 
 /**
@@ -65,76 +59,53 @@ const SETTLED_POLL_MS = 60_000;
 /** How often the overdue check is asked again while the hub is open. */
 const OVERDUE_POLL_MS = 60_000;
 
-type Sources = ReturnType<typeof sourcesFor>;
-
 const emailActivityKeys = {
   all: () => ["emailActivity"] as const,
-  list: (sources: Sources) =>
-    [...emailActivityKeys.all(), "list", sources] as const,
+  list: (query: ReturnType<typeof activityQuery>, window: TimeWindow) =>
+    [...emailActivityKeys.all(), "list", query, window] as const,
   overdue: () => [...emailActivityKeys.all(), "overdue"] as const,
   detail: (source: "delivery" | "queued", id: string) =>
     [...emailActivityKeys.all(), "detail", source, id] as const,
 };
 
 /**
- * Where each list's next page starts: `undefined` for its first page, its
- * cursor after that, and `null` once it has nothing more or is not asked.
+ * Where a page after the first starts: the cursor the page before it gave,
+ * and the window's start that page was read with, so paging further never
+ * moves the window under rows already shown.
  */
 interface ActivityCursor {
-  deliveries: string | undefined | null;
-  queued: string | undefined | null;
+  before: string;
+  from: string;
 }
 
-/** One page: each list's rows read for it, and where each goes on from. */
+/** One page: its rows, where the next starts, and the window it was read in. */
 interface ActivityPage {
-  deliveries: ActivityRow[];
-  queued: ActivityRow[];
-  next: ActivityCursor;
+  rows: ActivityRow[];
+  next: string | null;
+  from: string;
 }
 
 /**
- * One list's next page, or `null` for a list the filters leave out or that
- * has nothing more.
+ * One page of the merged Activity. The first page measures its window's
+ * start when it is read, so each refresh, which reads the first page again,
+ * rolls the window forward; a later page keeps the start its first page had.
  */
-function readListPage<Q extends object, T>(
-  query: Q | null,
-  cursor: string | undefined | null,
-  list: (
-    query: Q & { before?: string; limit: number }
-  ) => Promise<ListResponse<T>>
-): Promise<ListResponse<T> | null> {
-  if (query === null || cursor === null) return Promise.resolve(null);
-  return list({
+async function readActivityPage(
+  query: ReturnType<typeof activityQuery>,
+  window: TimeWindow,
+  cursor: ActivityCursor | null
+): Promise<ActivityPage> {
+  const from = cursor?.from ?? windowStart(window, new Date());
+  const page = await listActivity({
     ...query,
-    ...(cursor ? { before: cursor } : {}),
+    from,
+    ...(cursor ? { before: cursor.before } : {}),
     limit: ACTIVITY_PAGE_SIZE,
   });
-}
-
-/** A page's rows as the list shows them, and where that list goes on from. */
-function rowsOf<T>(
-  page: ListResponse<T> | null,
-  toRow: (record: T) => ActivityRow
-): { rows: ActivityRow[]; next: string | null } {
-  if (page === null) return { rows: [], next: null };
-  return { rows: page.items.map(toRow), next: page.meta.nextBefore ?? null };
-}
-
-/** The next page of every list that has more, read together. */
-async function readActivityPage(
-  sources: Sources,
-  cursor: ActivityCursor
-): Promise<ActivityPage> {
-  const [deliveryPage, queuedPage] = await Promise.all([
-    readListPage(sources.deliveries, cursor.deliveries, listDeliveryActivity),
-    readListPage(sources.queued, cursor.queued, listQueuedEmailActivity),
-  ]);
-  const deliveries = rowsOf(deliveryPage, deliveryRow);
-  const queued = rowsOf(queuedPage, queuedRow);
   return {
-    deliveries: deliveries.rows,
-    queued: queued.rows,
-    next: { deliveries: deliveries.next, queued: queued.next },
+    rows: page.items.map(activityRow),
+    next: page.meta.nextBefore ?? null,
+    from,
   };
 }
 
@@ -147,7 +118,7 @@ function refreshEvery(
   pages: readonly ActivityPage[] | undefined
 ): number | false {
   if (!pages || pages.length > 1) return false;
-  return pages.some(page => holdsUnsettledQueued(page.queued))
+  return pages.some(page => holdsUnsettledQueued(page.rows))
     ? UNSETTLED_POLL_MS
     : SETTLED_POLL_MS;
 }
@@ -165,42 +136,34 @@ export interface EmailActivityResult {
 }
 
 /**
- * One newest-first list of the delivery log and queued email, narrowed by
- * `filter`. The time window is measured from when the filter was chosen, so
- * paging further does not move it.
+ * The merged Activity, newest first, narrowed by `filter`. Its window ends
+ * when its first page is read, and moves forward with each refresh.
  */
 export function useEmailActivity(
   filter: ActivityFilter,
   options: { enabled?: boolean } = {}
 ): EmailActivityResult {
-  const filterKey = JSON.stringify(filter);
-  // Measured once per filter: the key holds the window's start, and a key
-  // that moved with the clock would never stay cached.
+  const filterKey = JSON.stringify(activityQuery(filter));
   // Read back from the key, so the memo depends on the filter's value and
   // not on a new object with the same value each render.
-  const sources = useMemo(
-    () => sourcesFor(JSON.parse(filterKey) as ActivityFilter, new Date()),
+  const query = useMemo(
+    () => JSON.parse(filterKey) as ReturnType<typeof activityQuery>,
     [filterKey]
   );
+  const window = filter.window;
 
-  const firstPage: ActivityCursor = {
-    deliveries: sources.deliveries ? undefined : null,
-    queued: sources.queued ? undefined : null,
-  };
-  const query = useInfiniteQuery<
+  const read = useInfiniteQuery<
     ActivityPage,
     Error,
-    InfiniteData<ActivityPage, ActivityCursor>,
+    InfiniteData<ActivityPage, ActivityCursor | null>,
     ReturnType<typeof emailActivityKeys.list>,
-    ActivityCursor
+    ActivityCursor | null
   >({
-    queryKey: emailActivityKeys.list(sources),
-    initialPageParam: firstPage,
-    queryFn: ({ pageParam }) => readActivityPage(sources, pageParam),
+    queryKey: emailActivityKeys.list(query, window),
+    initialPageParam: null,
+    queryFn: ({ pageParam }) => readActivityPage(query, window, pageParam),
     getNextPageParam: last =>
-      last.next.deliveries === null && last.next.queued === null
-        ? undefined
-        : last.next,
+      last.next === null ? undefined : { before: last.next, from: last.from },
     enabled: options.enabled ?? true,
     // Read again sooner while a loaded queued email can still change by
     // itself, and every minute otherwise, for email sent or queued since.
@@ -211,29 +174,21 @@ export function useEmailActivity(
       (current.state.data?.pages.length ?? 0) <= 1,
   });
 
-  const pages = query.data?.pages;
-  const rows = useMemo(() => {
-    if (!pages || pages.length === 0) return [];
-    const last = pages[pages.length - 1];
-    const loaded = (key: "deliveries" | "queued"): LoadedSource => ({
-      rows: pages.flatMap(page => page[key]),
-      more: last.next[key] !== null,
-    });
-    return mergeNewestFirst([loaded("deliveries"), loaded("queued")]);
-  }, [pages]);
+  const pages = read.data?.pages;
+  const rows = useMemo(() => (pages ?? []).flatMap(page => page.rows), [pages]);
 
   return {
     rows,
-    isLoading: query.isLoading,
-    isError: query.isError,
-    error: query.error,
-    hasMore: query.hasNextPage,
-    isLoadingMore: query.isFetchingNextPage,
+    isLoading: read.isLoading,
+    isError: read.isError,
+    error: read.error,
+    hasMore: read.hasNextPage,
+    isLoadingMore: read.isFetchingNextPage,
     loadMore: () => {
-      void query.fetchNextPage();
+      void read.fetchNextPage();
     },
     refetch: () => {
-      void query.refetch();
+      void read.refetch();
     },
   };
 }
@@ -283,6 +238,11 @@ export function useActivityDetail(
         : { source: "queued", detail: await getQueuedEmailDetail(open.id) };
     },
     enabled: open !== null,
+    // Never fresh, so a sheet reads its email again whenever it opens, also
+    // when the same sheet closes and reopens on a row without remounting: a
+    // cached detail may say an email is still retrying after the list has
+    // seen it settle.
+    staleTime: 0,
     refetchInterval: current => {
       const data = current.state.data;
       return data?.source === "queued" && isUnsettled(data.detail.state)

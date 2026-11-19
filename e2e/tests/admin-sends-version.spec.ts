@@ -128,9 +128,9 @@ test.describe("the admin sends a version", { tag: EVERY_DIALECT }, () => {
       .click();
     await sent;
     await readAfterPublish;
-    // The entry's status chip sits in the page's bar, beside the breadcrumb.
+    // The entry's status pill sits beside its title, in the page's main area.
     await expect(
-      page.getByRole("banner").getByText("Published", { exact: true }).first()
+      page.getByRole("main").getByText("Published", { exact: true }).first()
     ).toBeVisible({ timeout: 30_000 });
 
     // A held working-draft save, of the published entry.
@@ -176,7 +176,11 @@ test.describe("the admin sends a version", { tag: EVERY_DIALECT }, () => {
       .getByRole("alertdialog")
       .getByRole("button", { name: /^Restore \d+ fields?$/ })
       .click();
-    await expect(page.getByText(/^\d+ fields? restored from /)).toBeVisible({
+    // The toast, the first of the two places the words are written: the
+    // second is the screen reader's copy of the same notice.
+    await expect(
+      page.getByText(/^\d+ fields? restored from /).first()
+    ).toBeVisible({
       timeout: 30_000,
     });
     sent = nextWrite(page, toThis);

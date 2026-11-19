@@ -50,6 +50,7 @@ export type {
   TimeseriesArgs,
   BulkDeleteArgs,
   DuplicateArgs,
+  CreateFromSourceArgs,
   CountResult,
   GroupResult,
   TimeseriesResult,

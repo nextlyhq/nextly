@@ -45,7 +45,9 @@ export function GroupToggle({
         size={14}
         className="nx-vars__group-chevron"
       />
-      <span className="nx-vars__group-label">{heading}</span>
+      {/* A real space between heading and count, which the flex row does not
+          draw: the words drawn stay apart, so the name holds them. */}
+      <span className="nx-vars__group-label">{heading}</span>{" "}
       <span className="nx-vars__group-count">{count}</span>
     </button>
   );

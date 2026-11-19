@@ -31,6 +31,7 @@ import {
   vi,
 } from "vitest";
 
+import { labelNotInName } from "./label-in-name.fixture";
 import { useVariablesTransfer } from "./variables-transfer";
 
 /** The menu and its dialogs, hosted as the Design panel hosts them. */
@@ -156,6 +157,9 @@ async function openMenu(): Promise<HTMLElement> {
   return screen.findByRole("menu");
 }
 
+/** The design token export's name: its words, then the format it draws. */
+const EXPORT_TOKENS = "Export design tokens (.json), DTCG 2025.10";
+
 async function choose(item: string): Promise<void> {
   await openMenu();
   fireEvent.click(await screen.findByRole("menuitem", { name: item }));
@@ -185,22 +189,24 @@ describe("the More design actions menu", () => {
     expect(button.querySelector("svg")).not.toBeNull();
   });
 
-  it("holds the four actions in order, the export's format only as a hint", async () => {
+  it("holds the four actions in order, the export's format drawn as a hint and said in its name", async () => {
     render(<Host tokens={WITH_DARK} />);
     const menu = await openMenu();
     const items = within(menu).getAllByRole("menuitem");
     expect(items.map(nameOf)).toEqual([
       "Import design tokens…",
-      "Export design tokens (.json)",
+      EXPORT_TOKENS,
       "Export for Figma",
       "Copy CSS variables",
     ]);
     const tokensItem = items[1] as HTMLElement;
-    const hint = document.getElementById(
-      tokensItem.getAttribute("aria-describedby") ?? ""
-    );
+    const hint = tokensItem.querySelector(".nx-design-more__hint");
     expect(hint?.textContent).toBe("DTCG 2025.10");
-    expect(tokensItem.contains(hint)).toBe(true);
+    // Every word the item draws, the hint's included, is in its name in
+    // order, so a speech-input user saying what they see reaches it; and the
+    // format is said once, not again as a description.
+    expect(labelNotInName(tokensItem)).toBeNull();
+    expect(tokensItem.hasAttribute("aria-describedby")).toBe(false);
     // "DTCG" is the hint and nowhere else.
     for (const item of items) {
       if (item === tokensItem) continue;
@@ -226,7 +232,7 @@ describe("the More design actions menu", () => {
     render(<Host tokens={WITH_DARK} readOnly />);
     const menu = await openMenu();
     expect(within(menu).getAllByRole("menuitem").map(nameOf)).toEqual([
-      "Export design tokens (.json)",
+      EXPORT_TOKENS,
       "Export for Figma",
       "Copy CSS variables",
     ]);
@@ -236,7 +242,7 @@ describe("the More design actions menu", () => {
 describe("an export ends with a toast", () => {
   it("names the files in words, and leaves no box behind", async () => {
     render(<Host tokens={WITH_DARK} />);
-    await choose("Export design tokens (.json)");
+    await choose(EXPORT_TOKENS);
     await toastSaying(
       "Design tokens exported: variables, and dark values in a theme file (2 files)"
     );
@@ -255,7 +261,7 @@ describe("an export ends with a toast", () => {
         }}
       />
     );
-    await choose("Export design tokens (.json)");
+    await choose(EXPORT_TOKENS);
     await toastSaying("Design tokens exported: variables (1 file)");
   });
 
@@ -318,7 +324,7 @@ describe("What wasn't exported", () => {
         }}
       />
     );
-    await choose("Export design tokens (.json)");
+    await choose(EXPORT_TOKENS);
     const toast = await toastSaying(
       "Design tokens exported: variables (1 file)"
     );
