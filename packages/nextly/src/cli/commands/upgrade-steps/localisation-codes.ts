@@ -226,27 +226,20 @@ async function convertVersions(
       { and: [{ column: "id", op: "=", value: row.id }] }
     );
   }
-  // The languages a version records it changed, stored as a JSON list of codes.
-  const changed = await adapter.select<{ id: string; changedLocales: unknown }>(
-    VERSIONS_TABLE,
-    {
-      columns: ["id", "changedLocales"],
-      where: {
-        and: [
-          {
-            column: "changedLocales",
-            op: "LIKE",
-            value: `%${JSON.stringify(from)}%`,
-          },
-        ],
-      },
-    }
+  // The languages a version records it changed, stored as a JSON list of codes: a JSON column on
+  // PostgreSQL and MySQL, so it is matched as its text, which every dialect can compare with LIKE.
+  const asText = sql.raw(adapter.dialect === "mysql" ? "CHAR" : "TEXT");
+  const changed = await adapter.queryStatement<{
+    id: string;
+    changed_locales: unknown;
+  }>(
+    sql`SELECT ${sql.identifier("id")} AS ${sql.identifier("id")}, ${sql.identifier("changed_locales")} AS ${sql.identifier("changed_locales")} FROM ${sql.identifier(VERSIONS_TABLE)} WHERE CAST(${sql.identifier("changed_locales")} AS ${asText}) LIKE ${`%${JSON.stringify(from)}%`}`
   );
   for (const row of changed) {
     const list: unknown =
-      typeof row.changedLocales === "string"
-        ? JSON.parse(row.changedLocales)
-        : row.changedLocales;
+      typeof row.changed_locales === "string"
+        ? JSON.parse(row.changed_locales)
+        : row.changed_locales;
     if (!Array.isArray(list)) continue;
     await adapter.update(
       VERSIONS_TABLE,

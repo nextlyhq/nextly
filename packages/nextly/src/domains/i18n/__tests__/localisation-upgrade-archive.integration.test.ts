@@ -1,5 +1,5 @@
 /**
- * `nextly upgrade`'s dry run lists the archived translations no entity can be found for (an
+ * `nextly migrate`'s dry run lists the archived translations no entity can be found for (an
  * archive row of unknown or unresolved kind), with the restore that would claim them, and leaves
  * them in place: nothing about them is guessed, and nothing deletes them.
  *

@@ -1,5 +1,5 @@
 /**
- * `nextly upgrade` brings a language code that is not in BCP 47 form (`pt_BR`) to its standard
+ * `nextly migrate`'s data steps bring a language code that is not in BCP 47 form (`pt_BR`) to its standard
  * form (`pt-BR`) in every stored row, lists each conversion in its dry run, and serves the old
  * code as the new one; where two configured codes would become the same code it stops, names
  * both, and changes nothing (R-1).
@@ -22,6 +22,8 @@ import {
   WORKING_DRAFT_SHAPE,
   type VersionRow,
 } from "../../versions/versions-repository";
+import { normalizeLocalization } from "../config/normalize";
+import { ensureI18nArchive } from "../migration/ensure-archive";
 import { _resetPerLanguageStorage } from "../per-language-storage";
 
 import {
@@ -132,9 +134,13 @@ describeEachDialect(
 
       // The conversion alone: a later step that rewrites whole-document drafts gives them new
       // keys, which would hide a key this one left under the older code.
-      await migrateData(database!.adapter as never, UNDERSCORED, MIGRATE_DATA_STEPS.filter(step =>
-            step.title.startsWith("convert language codes")
-          ));
+      await migrateData(
+        database!.adapter as never,
+        UNDERSCORED,
+        MIGRATE_DATA_STEPS.filter(step =>
+          step.title.startsWith("convert language codes")
+        )
+      );
 
       expect(await storedLanguages()).toEqual(["en", "pt-BR"]);
       const ref = {
@@ -145,6 +151,76 @@ describeEachDialect(
       expect(await pendingChanges(id)).toEqual([
         { locale: "pt-BR", draftKey: workingDraftKey(ref, "pt-BR") },
       ]);
+    });
+
+    it("reads a configuration the loader read, whose codes it holds in standard form", async () => {
+      await legacyArticle();
+      // As `nextly migrate` hands the steps the configuration: each code in standard form, with
+      // the codes it wrote the earlier way named beside them.
+      const loaded = {
+        ...UNDERSCORED,
+        localization: normalizeLocalization({
+          locales: [...UNDERSCORED.localization.locales],
+          defaultLocale: UNDERSCORED.localization.defaultLocale,
+        }),
+      };
+
+      await migrateData(database!.adapter as never, loaded);
+
+      expect(await storedLanguages()).toEqual(["en", "pt-BR"]);
+    });
+
+    it("rewrites the languages each version records it changed", async () => {
+      const id = await legacyArticle();
+      const recorded = async () =>
+        (
+          await database!.adapter.select<{ changedLocales: unknown }>(
+            VERSIONS_TABLE,
+            {
+              columns: ["changedLocales"],
+              where: {
+                and: [
+                  { column: "entryId", op: "=", value: id },
+                  { column: "changedLocales", op: "IS NOT NULL" },
+                ],
+              },
+            }
+          )
+        ).map(row => JSON.stringify(row.changedLocales));
+      expect((await recorded()).join()).toMatch(/pt_BR/);
+
+      await migrateData(database!.adapter as never, UNDERSCORED);
+
+      const after = (await recorded()).join();
+      expect(after).toMatch(/pt-BR/);
+      expect(after).not.toMatch(/pt_BR/);
+    });
+
+    it("converts a code an archived translation alone still holds", async () => {
+      database = await openUpgradeDatabase(dialect);
+      await bootSite(database, "legacy", STANDARD);
+      await ensureI18nArchive(database.adapter as never, dialect);
+      await database.adapter.insert(
+        "nextly_i18n_archive",
+        {
+          collection: ARTICLES,
+          entityKind: "collection",
+          entryId: "e1",
+          locale: "pt_BR",
+          field: "title",
+          value: "olá",
+          archivedAt: new Date("2026-08-01T10:00:00Z"),
+        },
+        { returning: [] }
+      );
+
+      await migrateData(database.adapter as never, UNDERSCORED);
+
+      const rows = await database.adapter.select<{ locale: string }>(
+        "nextly_i18n_archive",
+        { columns: ["locale"] }
+      );
+      expect(rows.map(row => row.locale)).toEqual(["pt-BR"]);
     });
 
     it("serves the old code as the standard one once upgraded", async () => {
@@ -167,7 +243,10 @@ describeEachDialect(
     it("lists each conversion in a dry run", async () => {
       await legacyArticle();
 
-      const plan = await previewMigrateData(database!.adapter as never, UNDERSCORED);
+      const plan = await previewMigrateData(
+        database!.adapter as never,
+        UNDERSCORED
+      );
 
       expect(plan.report?.move).toContainEqual(
         expect.stringMatching(/pt_BR.*pt-BR/)
@@ -240,7 +319,7 @@ describeEachDialect(
       // The site would read Portuguese under `pt-BR` and find nothing.
       await expect(
         bootSite(database!, "legacy", UNDERSCORED, warningsKept().logger)
-      ).rejects.toThrow(/pt_BR[\s\S]*nextly upgrade/);
+      ).rejects.toThrow(/pt_BR[\s\S]*nextly migrate/);
     });
 
     it("starts once upgraded, saying which code the configuration should name", async () => {

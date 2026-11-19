@@ -144,6 +144,24 @@ function savedAt(draft: VersionRow): number {
 }
 
 /**
+ * Whether a draft's value for `key` is an edit of a shared field: a shared field whose value
+ * differs from live. A value equal to live is a copy the whole-document draft carried; a draft
+ * already shared keeps every shared value it holds, each saved as an edit.
+ */
+function isSharedEdit(
+  document: DocumentToSplit,
+  live: Record<string, unknown> | undefined,
+  alreadyShared: boolean,
+  key: string,
+  value: unknown
+): boolean {
+  if (!document.keys.shared.has(key)) return false;
+  if (alreadyShared || !live) return true;
+  const column = toSnakeCase(key);
+  return !(column in live && sameSharedValue(live[column], value));
+}
+
+/**
  * Split one document's drafts against its live row (`live`, by column): oldest save first, so a
  * later save's shared value replaces an earlier one, each such disagreement recorded.
  */
@@ -168,12 +186,7 @@ function splitDrafts(
         languages.set(slot, { ...languages.get(slot), [key]: value });
         continue;
       }
-      if (!document.keys.shared.has(key)) continue;
-      if (!alreadyShared && live) {
-        const column = toSnakeCase(key);
-        // Equal to live: a copy the whole-document draft carried, not an edit.
-        if (column in live && sameSharedValue(live[column], value)) continue;
-      }
+      if (!isSharedEdit(document, live, alreadyShared, key, value)) continue;
       const earlier = shared.get(key);
       if (earlier && !sameSharedValue(earlier.value, value)) {
         conflicts.push({ field: key, earlier: earlier.from, later: slot });

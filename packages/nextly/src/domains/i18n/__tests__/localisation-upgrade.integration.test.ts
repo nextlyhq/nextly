@@ -1,5 +1,5 @@
 /**
- * `nextly upgrade` moves an installation from before per-language storage into the model without
+ * `nextly migrate`'s data steps move an installation from before per-language storage into the model without
  * losing anything:
  * - every reader sees, in every language, what it saw before (R-11);
  * - a pending change kept as a whole document in one language is split by comparing it with what
@@ -24,6 +24,7 @@ import {
   WORKING_DRAFT_SHAPE,
   type VersionRow,
 } from "../../versions/versions-repository";
+import { introspectLiveColumns } from "../../schema/pipeline/diff/introspect-live";
 import { _resetPerLanguageStorage } from "../per-language-storage";
 
 import {
@@ -64,7 +65,7 @@ describeEachDialect(
       return { seeded, before: await whatEachReaderSees(site, seeded) };
     }
 
-    /** Upgrade the database as `nextly upgrade --confirm-backed-up` does, for the site's config. */
+    /** Run `nextly migrate`'s data steps over the database, a backup confirmed, for the site's config. */
     async function upgrade(): Promise<void> {
       await migrateData(database!.adapter as never, SITE);
     }
@@ -179,6 +180,39 @@ describeEachDialect(
       for (const row of await durable()) {
         expect(row.changedLocales ?? null).toBeNull();
         expect(row.sharedChanged ?? null).toBeNull();
+      }
+    });
+
+    it("moves the values of each entity not translated, and touches no translated one", async () => {
+      await legacySite();
+      const columnsOf = async (table: string) => {
+        const { tables } = await introspectLiveColumns(
+          database!.adapter.getDrizzle(),
+          database!.adapter.dialect,
+          [table]
+        );
+        return (tables[0]?.columns ?? []).map(column => column.name).sort();
+      };
+      const translated = ["dc_articles", "single_banner"];
+      const before = Object.fromEntries(
+        await Promise.all(
+          translated.map(
+            async table => [table, await columnsOf(table)] as const
+          )
+        )
+      );
+      expect(await columnsOf("dc_notes")).toContain("title");
+      expect(await columnsOf("single_footer")).toContain("title");
+
+      await upgrade();
+
+      // Every entity keeps its translatable values per language: the ones that were not
+      // translated had theirs moved off their main tables.
+      expect(await columnsOf("dc_notes")).not.toContain("title");
+      expect(await columnsOf("single_footer")).not.toContain("title");
+      // A translated entity already kept them per language, so its main table is as it was.
+      for (const table of translated) {
+        expect(await columnsOf(table)).toEqual(before[table]);
       }
     });
   }

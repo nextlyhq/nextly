@@ -1,5 +1,5 @@
 /**
- * `nextly upgrade` refuses, naming the one-time recovery, where it cannot tell which copy of a
+ * `nextly migrate`'s data steps refuse, naming the one-time recovery, where it cannot tell which copy of a
  * translated entity's values is current: its translations table is there, its main table still
  * holds the translatable columns, and no record says whether the values were ever copied across
  * (an `untracked` transition). `nextly migrate --repair-localization` supplies the one missing fact,

@@ -1,5 +1,5 @@
 /**
- * `nextly upgrade` gives every pending change its key: a working draft stored before pending
+ * `nextly migrate`'s data steps give every pending change its key: a working draft stored before pending
  * changes were keyed (`draft_key` NULL) gets the key its document and language make, and where a
  * document holds two drafts for one language the later save is kept, the earlier one listed for an
  * editor. Afterwards the count of pending changes in a language agrees with the drafts there.
@@ -8,6 +8,7 @@
  * over a later one; one that keys every duplicate, which the unique key refuses; and one that
  * leaves keyless drafts, which the count of pending changes does not see.
  */
+import { sql } from "drizzle-orm";
 import { afterEach, expect, it, vi } from "vitest";
 
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
@@ -179,6 +180,45 @@ describeEachDialect(
       expect((await draftsOf(id)).every(row => row.draftKey === null)).toBe(
         true
       );
+    });
+
+    it("refuses two saves of one language at the same moment, naming them, and keeps both", async () => {
+      database = await openUpgradeDatabase(dialect);
+      const t = await bootSite(database, "legacy");
+      const created = await entriesOf(t).createEntry(
+        { collectionName: ARTICLES, overrideAccess: true, locale: "en" },
+        { title: "hello", summary: "s", code: "code-1", status: "published" }
+      );
+      const id = (created.data as { id: string }).id;
+      const at = new Date("2026-08-01T10:00:00Z");
+      await storeKeylessDraft(id, "es", "hola, one", at);
+      await storeKeylessDraft(id, "es", "hola, two", at);
+
+      await expect(
+        migrateData(database.adapter as never, SITE)
+      ).rejects.toThrow(/same moment[\s\S]*nextly migrate/);
+      expect(
+        (await draftsOf(id)).filter(row => row.locale === "es")
+      ).toHaveLength(2);
+    });
+
+    it("refuses pending changes in a version history laid out by an earlier release", async () => {
+      const id = await legacyArticle();
+      // The version history as an earlier release laid it out: without the column recording which
+      // parts each version changed.
+      const drop = sql`ALTER TABLE ${sql.identifier(VERSIONS_TABLE)} DROP COLUMN ${sql.identifier("changed_locales")}`;
+      if (dialect === "sqlite") {
+        database!.adapter.getDrizzle<{ run(q: unknown): unknown }>().run(drop);
+      } else {
+        await database!.adapter
+          .getDrizzle<{ execute(q: unknown): Promise<unknown> }>()
+          .execute(drop);
+      }
+
+      await expect(
+        migrateData(database!.adapter as never, SITE)
+      ).rejects.toThrow(/changed_locales[\s\S]*nextly migrate/);
+      expect(id).toBeTruthy();
     });
   }
 );

@@ -17,7 +17,7 @@ export function getDefaultLocale(cfg: SanitizedLocalizationConfig): string {
  * The older spelling is accepted for one release; a caller answering over HTTP says so with a
  * deprecation header (`requestedCodeAlias`).
  */
-export function configuredCodeOf(
+function configuredCodeOf(
   cfg: SanitizedLocalizationConfig,
   code: string
 ): string | undefined {

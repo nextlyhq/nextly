@@ -8,6 +8,8 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { sql } from "drizzle-orm";
 
+import { MEDIA_USAGE_TABLE } from "../../schemas/media-usage/table-name";
+import { TRANSLATION_PROVENANCE_TABLE } from "../../schemas/translation-provenance/table-name";
 import { VERSIONS_TABLE } from "../../schemas/versions/types";
 
 /** Whether `table` holds a row whose `column` is `code`. */
@@ -25,7 +27,7 @@ async function holdsRowIn(
 
 /**
  * The tables still holding a row under `code`: each of the translation tables `translationTables`
- * keeps its language in `_locale`, and the versions table, which keeps it in `locale`.
+ * keeps its language in `_locale`, and every other table the code is stored in.
  */
 export async function tablesHoldingCode(
   adapter: DrizzleAdapter,
@@ -36,11 +38,24 @@ export async function tablesHoldingCode(
   for (const table of translationTables) {
     if (await holdsRowIn(adapter, table, "_locale", code)) holding.push(table);
   }
-  if (
-    (await adapter.tableExists(VERSIONS_TABLE)) &&
-    (await holdsRowIn(adapter, VERSIONS_TABLE, "locale", code))
-  ) {
-    holding.push(VERSIONS_TABLE);
+  // Every other table the code is stored in, by the column that holds it: the versions and the
+  // releases' members (`locale`), a pinned base kept for a language's pending change (its slot),
+  // each translation's record of where it came from, the archive of removed translations, and
+  // each media use and preview link in a language.
+  const others: readonly [table: string, column: string, value: string][] = [
+    [VERSIONS_TABLE, "locale", code],
+    ["nextly_version_pins", "slot", `pending:${code}`],
+    [TRANSLATION_PROVENANCE_TABLE, "locale", code],
+    [TRANSLATION_PROVENANCE_TABLE, "source_locale", code],
+    ["nextly_i18n_archive", "locale", code],
+    ["nextly_release_members", "locale", code],
+    [MEDIA_USAGE_TABLE, "locale", code],
+    ["nextly_preview_links", "locale", code],
+  ];
+  for (const [table, column, value] of others) {
+    if (holding.includes(table)) continue;
+    if (!(await adapter.tableExists(table))) continue;
+    if (await holdsRowIn(adapter, table, column, value)) holding.push(table);
   }
   return holding;
 }

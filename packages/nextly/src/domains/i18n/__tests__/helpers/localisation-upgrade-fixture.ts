@@ -18,6 +18,17 @@ import { sql, type SQL } from "drizzle-orm";
 import { vi } from "vitest";
 
 import {
+  previewDataSteps,
+  runDataSteps,
+  type DataStepsDeps,
+} from "../../../../cli/commands/data-steps";
+import type {
+  UpgradeSite,
+  UpgradeStep,
+} from "../../../../cli/commands/upgrade-step";
+import { MIGRATE_DATA_STEPS } from "../../../../cli/commands/upgrade-steps";
+import type { DryRunPlan } from "../../../../cli/dry-run";
+import {
   defineCollection,
   defineSingle,
   text,
@@ -489,6 +500,30 @@ export async function storeUnderCode(
         ...(row.draftKey === null
           ? {}
           : { draftKey: workingDraftKey(ref, old) }),
+      },
+      { and: [{ column: "id", op: "=", value: row.id }] }
+    );
+  }
+  // The languages each version records it changed, under the older code too.
+  const changed = await database.adapter.select<{
+    id: string;
+    changedLocales: unknown;
+  }>(VERSIONS_TABLE, {
+    columns: ["id", "changedLocales"],
+    where: { and: [{ column: "changedLocales", op: "IS NOT NULL" }] },
+  });
+  for (const row of changed) {
+    const list: unknown =
+      typeof row.changedLocales === "string"
+        ? JSON.parse(row.changedLocales)
+        : row.changedLocales;
+    if (!Array.isArray(list) || !list.includes(standard)) continue;
+    await database.adapter.update(
+      VERSIONS_TABLE,
+      {
+        changedLocales: JSON.stringify(
+          list.map(code => (code === standard ? old : code))
+        ),
       },
       { and: [{ column: "id", op: "=", value: row.id }] }
     );

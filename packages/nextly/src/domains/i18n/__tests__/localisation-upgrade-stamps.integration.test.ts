@@ -1,5 +1,5 @@
 /**
- * `nextly upgrade` back-fills each Single's translation stamps (`_updated_at`) from its version
+ * `nextly migrate`'s data steps back-fill each Single's translation stamps (`_updated_at`) from its version
  * history, as collections' already are: a translation written before the stamp was kept would
  * otherwise have no time to be judged out of date by, and an out-of-date Spanish Single would
  * never be found.

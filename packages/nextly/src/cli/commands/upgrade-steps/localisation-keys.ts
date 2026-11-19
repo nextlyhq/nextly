@@ -18,6 +18,7 @@ import {
   type VersionRef,
 } from "../../../domains/versions/versions-repository";
 import { workingDraftKey } from "../../../domains/versions/working-draft-key";
+import { NextlyError } from "../../../errors/nextly-error";
 import { VERSIONS_TABLE } from "../../../schemas/versions/types";
 import type { UpgradeReport, UpgradeStepContext } from "../upgrade-step";
 
@@ -54,52 +55,86 @@ function savedAt(row: DraftRow): number {
   return at === null || at === undefined ? 0 : new Date(at as string).getTime();
 }
 
+/** The working drafts of `entity`, grouped by document and language. */
+async function draftsBySlot(
+  adapter: DrizzleAdapter,
+  entity: LaidOutEntity
+): Promise<DraftRow[][]> {
+  const rows = await adapter.select<DraftRow>(VERSIONS_TABLE, {
+    columns: ["id", "entryId", "locale", "draftKey", "createdAt", "updatedAt"],
+    where: {
+      and: [
+        { column: "scopeKind", op: "=", value: entity.kind },
+        { column: "scopeSlug", op: "=", value: entity.slug },
+        ...WORKING_DRAFT_SHAPE,
+      ],
+    },
+  });
+  const bySlot = new Map<string, DraftRow[]>();
+  for (const row of rows) {
+    const slot = JSON.stringify([row.entryId, row.locale]);
+    bySlot.set(slot, [...(bySlot.get(slot) ?? []), row]);
+  }
+  return [...bySlot.values()];
+}
+
+/**
+ * What one document's language's drafts need: a slot to key, nothing (`undefined`, already one
+ * keyed draft), or a description of the tie that leaves which to keep unknown.
+ */
+function slotOf(
+  entity: LaidOutEntity,
+  drafts: DraftRow[]
+): SlotToKey | { tie: string } | undefined {
+  const [kept, ...earlier] = [...drafts].sort(
+    (a, b) => savedAt(b) - savedAt(a)
+  );
+  if (!kept) return undefined;
+  // Two saves of one language at the same moment: nothing tells which one the editor last saw,
+  // so neither is let go on a guess.
+  const tied = earlier.filter(row => savedAt(row) === savedAt(kept));
+  if (tied.length > 0) {
+    return {
+      tie: `the ${entity.kind} "${entity.slug}" entry ${kept.entryId} in ${kept.locale ?? "its shared part"} (${[kept, ...tied].map(row => row.id).join(", ")})`,
+    };
+  }
+  const ref: VersionRef = {
+    scopeKind: entity.kind,
+    scopeSlug: entity.slug,
+    entryId: kept.entryId,
+  };
+  const keyed = kept.draftKey === workingDraftKey(ref, kept.locale);
+  if (keyed && earlier.length === 0) return undefined;
+  return { entity, ref, locale: kept.locale, kept, earlier };
+}
+
 /** Each document's language whose pending changes lack their key or number more than one. */
 async function slotsToKey(context: UpgradeStepContext): Promise<SlotToKey[]> {
   const adapter = context.adapter as unknown as DrizzleAdapter;
   const slots: SlotToKey[] = [];
+  const unresolved: string[] = [];
   // An earlier release's version history is keyed only once it is laid out as this one keeps it.
   await assertVersionHistoryReady(context);
   if (!(await versionHistoryReady(context))) return slots;
   for (const entity of await siteEntities(context)) {
     // Only collection entries and Singles keep pending changes.
     if (entity.kind === "component") continue;
-    const rows = await adapter.select<DraftRow>(VERSIONS_TABLE, {
-      columns: [
-        "id",
-        "entryId",
-        "locale",
-        "draftKey",
-        "createdAt",
-        "updatedAt",
-      ],
-      where: {
-        and: [
-          { column: "scopeKind", op: "=", value: entity.kind },
-          { column: "scopeSlug", op: "=", value: entity.slug },
-          ...WORKING_DRAFT_SHAPE,
-        ],
-      },
+    for (const drafts of await draftsBySlot(adapter, entity)) {
+      const slot = slotOf(entity, drafts);
+      if (slot === undefined) continue;
+      if ("tie" in slot) unresolved.push(slot.tie);
+      else slots.push(slot);
+    }
+  }
+  if (unresolved.length > 0) {
+    throw new NextlyError({
+      code: "NEXTLY_UPGRADE_LOCALISATION_UNRESOLVED",
+      publicMessage:
+        `More than one pending change was saved at the same moment for ${unresolved.join("; ")}, ` +
+        "so which one to keep cannot be told. Delete all but one of them from nextly_versions (by " +
+        "the ids named), then run `nextly migrate` again. Nothing was changed.",
+      logContext: { drafts: unresolved },
     });
-    const bySlot = new Map<string, DraftRow[]>();
-    for (const row of rows) {
-      const slot = JSON.stringify([row.entryId, row.locale]);
-      bySlot.set(slot, [...(bySlot.get(slot) ?? []), row]);
-    }
-    for (const drafts of bySlot.values()) {
-      const [kept, ...earlier] = [...drafts].sort(
-        (a, b) => savedAt(b) - savedAt(a)
-      );
-      if (!kept) continue;
-      const ref: VersionRef = {
-        scopeKind: entity.kind,
-        scopeSlug: entity.slug,
-        entryId: kept.entryId,
-      };
-      const keyed = kept.draftKey === workingDraftKey(ref, kept.locale);
-      if (keyed && earlier.length === 0) continue;
-      slots.push({ entity, ref, locale: kept.locale, kept, earlier });
-    }
   }
   return slots;
 }
