@@ -20,6 +20,7 @@
 import { Button } from "@nextlyhq/ui";
 import type { JSX } from "react";
 
+import { StagePill } from "@admin/components/features/settings/workflows/StagePill";
 import { toast } from "@admin/components/ui";
 import {
   useAssignPart,
@@ -42,7 +43,7 @@ import { PanelSection } from "../EntryForm/panels/PanelSection";
 
 import { waitingForWords } from "./review-words";
 import { approves, hidesALanguage, SHARED_APPROVAL_HELD } from "./shared-hold";
-import { StageShape, stageShapeOf } from "./StageShape";
+import { stageShapeOf } from "./StageShape";
 import { useAnnouncedStepTaker } from "./step-announcement";
 import { StepRefusalNote } from "./StepRefusalNote";
 import type { StepTaker } from "./useStepTaker";
@@ -124,11 +125,22 @@ function PartBlock({
       {title === null ? null : (
         <p className="text-xs font-medium text-muted-foreground">{title}</p>
       )}
-      <p className="font-medium text-foreground">
-        {/* The stage as words with the shape of its kind, as the line under
-            the title draws it, so the two read alike. */}
-        <PartStage part={part} />
-      </p>
+      {part.stage === null ? (
+        <p className="font-medium text-foreground">
+          Live, nothing waiting for review
+        </p>
+      ) : (
+        <p>
+          {/* The stage as Settings shows it, its saved label on its colour,
+              with the shape of its kind, as the line under the title draws it:
+              so it never rests on colour, and reads as a fact, never a control. */}
+          <StagePill
+            label={part.stageLabel ?? part.stage}
+            colour={part.stageColour}
+            shape={stageShapeOf(part) ?? undefined}
+          />
+        </p>
+      )}
       {part.stage === null ? null : (
         <>
           <p className="text-xs text-muted-foreground">
@@ -146,15 +158,6 @@ function PartBlock({
       <LastMove part={part} />
     </div>
   );
-}
-
-/** The part's stage, with its shape; a live part with nothing waiting says so. */
-function PartStage({ part }: { part: PartReview }): JSX.Element {
-  const shape = stageShapeOf(part);
-  if (shape === null || part.stage === null) {
-    return <>Live, nothing waiting for review</>;
-  }
-  return <StageShape shape={shape} label={part.stageLabel ?? part.stage} />;
 }
 
 /** The steps this person may take on the part alone, primary first. */
