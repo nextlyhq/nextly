@@ -7,6 +7,7 @@
  * @module collections/config/declared-config
  */
 import { columnsDeclaredBy } from "../../domains/schema/services/field-column-descriptor";
+import { markSystemField } from "../../shared/lib/declared-entity-trace";
 import type { AuthorableFieldConfig, FieldConfig } from "../fields/types";
 
 /**
@@ -54,6 +55,9 @@ export function asDeclaredFields(
  * Both are SHARED (`localized: false`): localizing the title or slug is a deliberate opt-in
  * through a field the author declares, not a side effect of text fields localizing by default,
  * which would move the identity columns into the companion `_locales` table.
+ *
+ * Each is recorded as a system field (`markSystemField`), so the configuration's check can tell
+ * an entity that declares no field of its own from one whose plugin added a field of that name.
  */
 export function systemFieldsBeside(
   fields: readonly AuthorableFieldConfig[]
@@ -61,23 +65,27 @@ export function systemFieldsBeside(
   const owned = columnsDeclaredBy(fields);
   const systemFields: Array<FieldConfig & { name: string }> = [];
   if (!owned.has("title")) {
-    systemFields.push({
-      type: "text",
-      name: "title",
-      label: "Title",
-      required: true,
-      localized: false,
-    });
+    systemFields.push(
+      markSystemField({
+        type: "text",
+        name: "title",
+        label: "Title",
+        required: true,
+        localized: false,
+      })
+    );
   }
   if (!owned.has("slug")) {
-    systemFields.push({
-      type: "text",
-      name: "slug",
-      label: "Slug",
-      required: true,
-      unique: true,
-      localized: false,
-    });
+    systemFields.push(
+      markSystemField({
+        type: "text",
+        name: "slug",
+        label: "Slug",
+        required: true,
+        unique: true,
+        localized: false,
+      })
+    );
   }
   return systemFields;
 }

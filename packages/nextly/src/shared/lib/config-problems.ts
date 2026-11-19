@@ -19,7 +19,7 @@ import type { SingleConfig } from "../../singles/config/types";
 import { validateSingleConfig } from "../../singles/config/validate-single";
 
 import { fieldDeclarationIssues } from "./assert-plugin-field-declarations";
-import { declaredPlaceOf } from "./declared-entity-trace";
+import { declaredPlaceOf, isSystemField } from "./declared-entity-trace";
 
 /** One problem in a configuration: where it is, which rule it breaks, and what the rule says. */
 export interface ConfigProblem {
@@ -43,64 +43,54 @@ export interface ConfigEntities {
 }
 
 /**
- * The mark a `define*` function leaves on every entity it returns, holding the names of the
- * system fields it added. A registered symbol, so a second copy of this module (the
- * configuration's bundle beside the runtime's) reads the same one; not enumerable, so no
- * comparison, serialisation or settings record of the entity sees it. The configuration keeps the
- * entity objects the app declared, so the mark is read on them.
+ * The mark a `define*` function leaves on every entity it returns. A registered symbol, so a
+ * second copy of this module (the configuration's bundle beside the runtime's) reads the same
+ * one; not enumerable, so no comparison, serialisation or settings record of the entity sees it.
+ * The configuration keeps the entity objects the app declared, so the mark is read on them.
  */
 const DECLARED_BY_DEFINE = Symbol.for("nextly.config.declaredByDefine");
 
-/** What the mark records of the `define*` call that returned the entity. */
-interface DefineRecord {
-  /** The system fields the call added, by name; each was put before the author's fields. */
-  systemFields: readonly string[];
-}
-
-/**
- * `entity`, marked as one its `define*` function returned, having added `systemFields` (by
- * name) to the fields its author declared.
- */
-export function markDeclaredByDefine<T extends object>(
-  entity: T,
-  systemFields: readonly string[] = []
-): T {
-  const record: DefineRecord = Object.freeze({
-    systemFields: Object.freeze([...systemFields]),
-  });
-  Object.defineProperty(entity, DECLARED_BY_DEFINE, { value: record });
+/** `entity`, marked as one its `define*` function returned. */
+export function markDeclaredByDefine<T extends object>(entity: T): T {
+  Object.defineProperty(entity, DECLARED_BY_DEFINE, { value: true });
   return entity;
 }
 
-/** The record `markDeclaredByDefine` left on `entity`, or undefined where it left none. */
-function defineRecordOf(entity: unknown): DefineRecord | undefined {
-  if (typeof entity !== "object" || entity === null) return undefined;
-  const record = (entity as Record<symbol, unknown>)[DECLARED_BY_DEFINE];
-  return typeof record === "object" && record !== null
-    ? (record as DefineRecord)
-    : undefined;
+/** Whether `entity` carries the mark `markDeclaredByDefine` leaves. */
+function declaredByDefine(entity: unknown): boolean {
+  return (
+    typeof entity === "object" &&
+    entity !== null &&
+    (entity as Record<symbol, unknown>)[DECLARED_BY_DEFINE] === true
+  );
 }
 
 /**
- * `entry` as its author declared it: without the system fields its `define*` call added. The
- * rules judge what an author wrote, as they did when the call threw; a collection declared with
- * no fields breaks the rule that it declare one, whatever the call added beside it. The first
- * field of each added name is the added one, which the call put first.
+ * The problems of `entry` its validator finds, judged as the commands use it, system fields and
+ * all: a field a plugin's setup gives the name of one stands beside it, and is reported as the
+ * same field declared twice. Where nothing but system fields is left (each known by what it is,
+ * `isSystemField`, not by its name), the author declared no field of their own, which is the
+ * one rule judged of the author's fields alone: the validator is asked of those, and its
+ * `FIELDS_EMPTY` is reported with the rest.
  */
-function asAuthored(entry: unknown, systemFields: readonly string[]): unknown {
-  if (systemFields.length === 0) return entry;
+function entryProblems<P extends { code: string }>(
+  entry: unknown,
+  validate: (entry: unknown) => readonly P[]
+): P[] {
+  const problems = [...validate(entry)];
   const fields = (entry as { fields?: unknown } | null)?.fields;
-  if (!Array.isArray(fields)) return entry;
-  const added = new Set(systemFields);
-  return {
-    ...(entry as object),
-    fields: fields.filter((field: unknown) => {
-      const name = (field as { name?: unknown } | null)?.name;
-      if (typeof name !== "string" || !added.has(name)) return true;
-      added.delete(name);
-      return false;
-    }),
-  };
+  if (
+    Array.isArray(fields) &&
+    fields.length > 0 &&
+    fields.every(field => isSystemField(field))
+  ) {
+    problems.push(
+      ...validate({ ...(entry as object), fields: [] }).filter(
+        problem => problem.code === "FIELDS_EMPTY"
+      )
+    );
+  }
+  return problems;
 }
 
 /** `path` within the entity at `kind[index]`, as a path in the whole configuration. */
@@ -220,11 +210,8 @@ export function configurationProblems(
     const declaredEntries = declared[kind] ?? [];
     entries.forEach((entry, index) => {
       // The mark is on the entity the app declared; a setup's copy of it does not carry it.
-      const record = defineRecordOf(declaredEntries[index]);
-      const byDefine = record !== undefined;
-      for (const error of validate(
-        asAuthored(entry, record?.systemFields ?? [])
-      )) {
+      const byDefine = declaredByDefine(declaredEntries[index]);
+      for (const error of entryProblems(entry, validate)) {
         problems.push({
           ...error,
           path: within(kind, index, error.path),

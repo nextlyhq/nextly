@@ -192,3 +192,48 @@ describe("a field with no type", () => {
     ]);
   });
 });
+
+describe("a define* collection a plugin's setup gives a field of a system field's name", () => {
+  // The setup's own `title` stands beside the one `defineCollection` added, so the collection
+  // declares that column twice; the system field is known by what it is, not by its name.
+  it("is reported as declaring the field twice", () => {
+    const declared = {
+      collections: [
+        defineCollection({
+          slug: "notes",
+          fields: [{ name: "body", type: "text" }],
+        }),
+      ],
+    };
+    const [notes] = setupTransformerInput(declared, []).collections;
+    const effective = {
+      collections: [
+        {
+          ...notes,
+          fields: [{ name: "title", type: "text" }, ...notes.fields],
+        },
+      ],
+    };
+
+    expect(
+      configurationProblems(declared, effective).map(problem => problem.path)
+    ).toEqual(["collections[0].fields"]);
+  });
+});
+
+describe("a define* collection with no fields, copied for the plugins' setups", () => {
+  // The copy a setup is handed keeps which of its fields are the system ones.
+  it("is still reported as declaring no field of its own", () => {
+    const declared = {
+      collections: [defineCollection({ slug: "notes", fields: [] })],
+    };
+    const effective = setupTransformerInput(declared, []);
+
+    expect(configurationProblems(declared, effective)).toContainEqual(
+      expect.objectContaining({
+        path: "collections[0].fields",
+        code: "FIELDS_EMPTY",
+      })
+    );
+  });
+});

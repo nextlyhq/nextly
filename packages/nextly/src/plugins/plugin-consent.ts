@@ -271,7 +271,7 @@ export function setupTransformerInput<C extends object>(
   const input = copyPlainValues(setupConfigKeysOf(config));
   // Each entity's copy carries the place the app declared it, into whatever a transformer returns
   // for it, so the configuration's check finds it there even when a transformer renamed it.
-  traceDeclaredEntities(input);
+  traceDeclaredEntities(input, config);
   input.plugins = copyPluginDefinitions(plugins);
   const db = input.db;
   if (isPlainObject(db) && Array.isArray(db.rawSqlPlugins)) {

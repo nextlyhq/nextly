@@ -15,18 +15,55 @@
 
 const DECLARED_AT = Symbol.for("nextly.config.declaredAt");
 
+/**
+ * The system fields (`title`, `slug`) a `define*` function added, by identity: what tells
+ * them apart from a field of the same name a plugin's setup adds. Held on `globalThis` under a
+ * registered symbol, so the configuration's bundle and the runtime, each with its own copy of
+ * this module, share one; weak, so it holds no field past its configuration.
+ */
+const SYSTEM_FIELDS_KEY = Symbol.for("nextly.config.systemFields");
+
+function systemFields(): WeakSet<object> {
+  const holder = globalThis as unknown as Record<
+    symbol,
+    WeakSet<object> | undefined
+  >;
+  holder[SYSTEM_FIELDS_KEY] ??= new WeakSet<object>();
+  return holder[SYSTEM_FIELDS_KEY];
+}
+
+/** Record `field` as a system field its entity's `define*` function added. */
+export function markSystemField<T extends object>(field: T): T {
+  systemFields().add(field);
+  return field;
+}
+
+/** Whether `field` is one `markSystemField` recorded, or the setups' copy of one. */
+export function isSystemField(field: unknown): boolean {
+  return (
+    typeof field === "object" && field !== null && systemFields().has(field)
+  );
+}
+
 /** The entity kinds of a configuration, as its keys name them. */
 const KINDS = ["collections", "singles", "fieldGroups"] as const;
 
 /**
- * Stamp each collection, Single and field group in `config` with its place, as
- * `collections[0]`. Called on the copy the setups are handed, never on the app's own objects.
+ * Stamp each collection, Single and field group in `copy` with its place, as `collections[0]`,
+ * and record each copy of a system field `source` holds as one too. Called on the copy the
+ * setups are handed (`copy`, made from `source` in the same order), never on the app's own
+ * objects.
  */
-export function traceDeclaredEntities(config: object): void {
+export function traceDeclaredEntities(copy: object, source: object): void {
   for (const kind of KINDS) {
-    const entities = (config as Partial<Record<string, unknown>>)[kind];
+    const entities = (copy as Partial<Record<string, unknown>>)[kind];
     if (!Array.isArray(entities)) continue;
+    const originals = (source as Partial<Record<string, unknown>>)[kind];
     entities.forEach((entity: unknown, index) => {
+      carrySystemFields(
+        entity,
+        Array.isArray(originals) ? originals[index] : undefined
+      );
       if (
         typeof entity === "object" &&
         entity !== null &&
@@ -41,6 +78,22 @@ export function traceDeclaredEntities(config: object): void {
       }
     });
   }
+}
+
+/** Record each of `copy`'s top-level fields whose original in `source` is a system field. */
+function carrySystemFields(copy: unknown, source: unknown): void {
+  const copied = (copy as { fields?: unknown } | null)?.fields;
+  const original = (source as { fields?: unknown } | null)?.fields;
+  if (!Array.isArray(copied) || !Array.isArray(original)) return;
+  copied.forEach((field: unknown, index) => {
+    if (
+      isSystemField(original[index]) &&
+      typeof field === "object" &&
+      field !== null
+    ) {
+      markSystemField(field);
+    }
+  });
 }
 
 /** The place `traceDeclaredEntities` stamped on `entity`, or undefined where it carries none. */
