@@ -81,7 +81,34 @@ const leftovers = vi.hoisted(() => ({
   earlier: false,
   stop: false,
   labelling: false,
+  /** A collection whose registry row the next registry write leaves unwritten, as a row that failed. */
+  unwritten: undefined as string | undefined,
 }));
+// `unwritten` writes every registry row the newest applied snapshot records but that collection's,
+// once: the rest of the write, the removal of dropped entities' rows included, is as it was.
+vi.mock("../registry-writer", async importOriginal => {
+  const actual = await importOriginal<typeof import("../registry-writer")>();
+  return {
+    ...actual,
+    writeRegistryFromSource: (
+      ...args: Parameters<typeof actual.writeRegistryFromSource>
+    ) => {
+      const [source, ...rest] = args;
+      const skipped = leftovers.unwritten;
+      if (skipped === undefined) return actual.writeRegistryFromSource(...args);
+      leftovers.unwritten = undefined;
+      const collections = Object.fromEntries(
+        Object.entries(source.entities.collections).filter(
+          ([slug]) => slug !== skipped
+        )
+      );
+      return actual.writeRegistryFromSource(
+        { ...source, entities: { ...source.entities, collections } },
+        ...rest
+      );
+    },
+  };
+});
 // `labelling` fails the older archived translations' labelling once, as a database error would.
 vi.mock(
   "../../../i18n/migration/label-legacy-archive-rows",
@@ -113,7 +140,7 @@ vi.mock("../dropped-entity-leftovers", async importOriginal => {
       ...args: Parameters<typeof actual.removeDroppedEntityLeftovers>
     ) =>
       leftovers.earlier
-        ? Promise.resolve([])
+        ? Promise.resolve({ removed: [], left: [] })
         : actual.removeDroppedEntityLeftovers(...args),
   };
 });
@@ -274,6 +301,7 @@ afterEach(async () => {
   leftovers.earlier = false;
   leftovers.stop = false;
   leftovers.labelling = false;
+  leftovers.unwritten = undefined;
   setNonInteractive(false);
   await shutdownServices().catch(() => {});
   for (const close of closers.splice(0)) await close();
@@ -718,8 +746,8 @@ describe.each(getConfiguredTestDialects())(
 
     /** NOTES and KEPT deployed (`deployNotes`), then NOTES deleted in the Builder and the delete applied by `nextly migrate`. */
     async function deleteNotesOnTheDeployedDatabase(
-      /** Run just before the delete is applied: a switch armed for that run alone. */
-      arm: () => void = () => {},
+      /** Run just before the delete is applied, on the deployed database: a switch armed for that run alone. */
+      arm: (deployed: DrizzleAdapter) => void | Promise<void> = () => {},
       /** Archive the translation as a release before the archive recorded kinds did. */
       options: { legacyArchive?: boolean } = {}
     ) {
@@ -732,7 +760,7 @@ describe.each(getConfiguredTestDialects())(
 
       reach(dialect, deployed.url);
       await start(deployed.adapter);
-      arm();
+      await arm(deployed.adapter);
       const deleted = await migrate();
       const after = await sharedLeftOf(deployed.adapter);
       return { deployed, before, deleted, after };
@@ -1011,6 +1039,63 @@ describe.each(getConfiguredTestDialects())(
       },
       180_000
     );
+
+    // The removal of what a deleted entity left labels nothing: its registry row is gone, and the
+    // archive's other rows wait for a labelling that can place them. Here another collection's
+    // registry row is missing and its write fails, so a labelling run by the removal would settle
+    // that collection's older archived translation as unresolved for good.
+    it("leaves another collection's older archived translation unlabelled when it removes what a deleted one left", async () => {
+      const { deployed, deleted } = await deleteNotesOnTheDeployedDatabase(
+        async adapter => {
+          await adapter.insert("nextly_i18n_archive", {
+            collection: KEPT,
+            entityKind: "unknown",
+            entryId: "a-kept-entry",
+            locale: "es",
+            field: "title",
+            value: "Guardado",
+            archivedAt: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000),
+          });
+          await adapter.executeQuery(
+            `DELETE FROM ${q("dynamic_collections")} WHERE ${q("slug")} = '${KEPT}'`
+          );
+          leftovers.unwritten = KEPT;
+        }
+      );
+      // Positive controls: the deleted collection's leftovers were removed, and the other
+      // collection's registry row was not written back.
+      expect(deleted.code, deleted.said).toBeUndefined();
+      expect(deleted.said).toMatch(removedLine);
+      const [held] = await deployed.adapter.executeQuery<{ n: unknown }>(
+        `SELECT COUNT(*) AS n FROM ${q("dynamic_collections")} WHERE ${q("slug")} = '${KEPT}'`
+      );
+      expect(Number(held?.n)).toBe(0);
+
+      const [kept] = await deployed.adapter.executeQuery<{ k: unknown }>(
+        `SELECT ${q("entity_kind")} AS k FROM ${q("nextly_i18n_archive")} WHERE ${q("collection")} = '${KEPT}'`
+      );
+      expect(kept?.k).toBe("unknown");
+    }, 180_000);
+
+    // A run with nothing to apply that could not remove what a deleted collection left says so,
+    // and does not report the database up to date: the next run owes the removal.
+    it("does not report a run with nothing to apply up to date when what a deleted collection left could not be removed", async () => {
+      await deleteNotesOnTheDeployedDatabase(() => {
+        leftovers.earlier = true;
+      });
+      leftovers.earlier = false;
+      leftovers.stop = true;
+
+      const later = await migrate();
+
+      expect(leftovers.stop, "the stop was reached").toBe(false);
+      expect(later.code, later.said).toBeUndefined();
+      expect(later.said).toContain(
+        `Could not remove what the deleted collection "${NOTES}" left`
+      );
+      expect(later.said).not.toContain("Database is up to date");
+      expect(later.said).toContain("No migration files to apply.");
+    }, 180_000);
 
     it("removes none of its rows in a run stopped part-way through them, and all of them in the next", async () => {
       const { deployed, before, deleted, after } =
