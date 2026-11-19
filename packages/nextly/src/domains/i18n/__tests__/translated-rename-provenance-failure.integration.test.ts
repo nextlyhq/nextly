@@ -376,7 +376,11 @@ describeEachDialect(
       await refuseVersionBump();
       const logged = captureErrorLog();
 
-      const { failed, said, message } = await applyRename();
+      // The save also adds a shared field, which only the main table's running shape can write.
+      const { failed, said, message } = await applyRename(undefined, [
+        ...RENAMED,
+        { name: "rank", type: "number", localized: false },
+      ]);
 
       expect(failed, `the rename answered: ${said}`).toBe(true);
       expect(message).toBe(
@@ -384,7 +388,7 @@ describeEachDialect(
       );
       // Control: the version write was refused, so the row keeps its version.
       expect(await recorded(), "the registry row").toEqual({
-        fields: ["title2", "views"],
+        fields: ["title2", "views", "rank"],
         schemaVersion: before.schemaVersion,
         localized: true,
       });
@@ -395,15 +399,30 @@ describeEachDialect(
       expect(log, "the server log").toContain(
         `The registry row of '${SLUG}' was not written after its rename, so its version did not move on`
       );
-      // The running shape follows the table, so a read in this process finds the renamed field.
+      // The running shape follows the table, so this process reads the renamed field and writes
+      // the added one.
       const singles: SingleEntryService = t.getService("singleEntryService");
-      const read = await singles.get(SLUG, {
+      const written = await singles.update(
+        SLUG,
+        { title2: "Hello", views: 7, rank: 3, _overwrite: true },
+        { locale: "en", overrideAccess: true }
+      );
+      expect(written.success, JSON.stringify(written)).toBe(true);
+      const english = await singles.get(SLUG, {
+        locale: "en",
+        overrideAccess: true,
+      });
+      expect(
+        (english.data as Record<string, unknown> | undefined)?.rank,
+        `the read after the failure: ${JSON.stringify(english)}`
+      ).toBe(3);
+      const spanish = await singles.get(SLUG, {
         locale: "es",
         overrideAccess: true,
       });
       expect(
-        (read.data as Record<string, unknown> | undefined)?.title2,
-        `the read after the failure: ${JSON.stringify(read)}`
+        (spanish.data as Record<string, unknown> | undefined)?.title2,
+        `the read after the failure: ${JSON.stringify(spanish)}`
       ).toBe("Hola");
     });
 
