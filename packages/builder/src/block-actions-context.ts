@@ -49,6 +49,13 @@ export interface BlockActions {
   readonly cut: () => void;
   /** Paste copied blocks where a clicked block would land. */
   readonly paste: () => void;
+  /**
+   * Take the one selected block's look: its own values and the styles it
+   * wears. Optional, so a host built before it keeps compiling.
+   */
+  readonly copyStyle?: () => void;
+  /** Give every selected block the copied look, as one undo step. */
+  readonly pasteStyle?: () => void;
   /** Select the container holding the selection. */
   readonly selectParent: () => void;
   /**
@@ -89,6 +96,10 @@ export interface BlockActions {
   readonly detachComponent?: () => void;
   readonly duplicateComponent?: () => void;
   readonly updatePattern?: () => void;
+  /** Put the selected blocks in a new Box at their place, as one step. */
+  readonly wrapInBox?: () => void;
+  /** Replace the selected container by its blocks, as one step. */
+  readonly unwrap?: () => void;
   /**
    * Turn the selected block into another type (`"core/heading"`), as one undo
    * step, saying what it removes or why it cannot. Optional, so a host built

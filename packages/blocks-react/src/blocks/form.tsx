@@ -138,8 +138,14 @@ export const FORM_POST_FIELDS: {
   item: "_item",
 };
 
-/** The provider form `value` names, or `undefined` for the block's own fields. */
-function pickedForm(value: unknown): FormReference | undefined {
+/**
+ * The provider form `value` names, or `undefined` for the block's own fields.
+ * Exported so the editor reads a Form's picked form by this same rule, not a
+ * copy of it.
+ *
+ * @experimental
+ */
+export function pickedForm(value: unknown): FormReference | undefined {
   if (typeof value !== "object" || value === null) return undefined;
   const { provider, ref } = value as Record<string, unknown>;
   // `simple` is the page builder's own provider: the block's own fields.
@@ -296,16 +302,40 @@ function providerSentMessage(props: FormProps, drawing: FormDrawing): string {
 }
 
 /**
+ * The attribute on the box a picked form that is gone draws where an author
+ * is looking, so the editor can say so over it.
+ */
+const FORM_UNAVAILABLE_ATTRIBUTE = "data-nx-form-unavailable";
+
+/**
+ * What a picked form that is gone draws: nothing on a page a visitor is
+ * served; where an author is looking (`diagnostics`), an empty box in the
+ * block's own classes, the place the editor says "This form was deleted."
+ * over, so the block is not lost from the canvas.
+ */
+function gone(ctx: PageContext, className: string): ReactElement | null {
+  if (ctx.diagnostics !== true) return null;
+  return (
+    <div
+      className={className}
+      {...{ [FORM_UNAVAILABLE_ATTRIBUTE]: "missing" }}
+    />
+  );
+}
+
+/**
  * A provider's form, as the page's reader sees it: drawn from its
  * description; its closed message where it takes no answers now; nothing
- * where it is gone, or where this page cannot read it.
+ * where it is gone (an empty box where an author is looking), or where this
+ * page cannot read it.
  */
 async function renderPicked(
   picked: FormReference,
   args: BlockRenderArgs<FormProps>
 ): Promise<ReactElement | null> {
   const { ctx, props, className, partClass } = args;
-  // The editor's canvas draws a picked form through its own routes.
+  // Nowhere to read it from: the canvas reads one through the editor's own
+  // route, as the person editing.
   if (ctx.forms === undefined) return null;
   let drawing: Awaited<
     ReturnType<NonNullable<PageContext["forms"]>["describe"]>
@@ -325,7 +355,7 @@ async function renderPicked(
   )
     return null;
   if ("unavailable" in drawing) {
-    if (drawing.unavailable !== "closed") return null;
+    if (drawing.unavailable !== "closed") return gone(ctx, className);
     return (
       <div className={className}>
         <p className={partClass("message")}>
@@ -369,19 +399,21 @@ export function renderForm(
 
 /**
  * Version 1 to 2: forms always post to the page builder's receiver, so
- * `method` goes. A version 1 form drew "Submit" on a button with no words
- * stored, so that is what it keeps; everything else it stored is kept as it
- * is, "Send to" among it.
+ * `method` goes, with any binding on it (`VERSION_1_DROPS`). A version 1 form
+ * drew "Submit" on a button with no words stored, so that is what it keeps;
+ * everything else it stored is kept as it is, "Send to" among it.
  */
 function fromVersion1(props: Record<string, unknown>): Record<string, unknown> {
-  const { method: _method, ...rest } = props;
-  const upgraded = Array.isArray(rest.fields)
-    ? { ...rest, fields: rest.fields.map(namedAsVersion1) }
-    : rest;
+  const upgraded = Array.isArray(props.fields)
+    ? { ...props, fields: props.fields.map(namedAsVersion1) }
+    : props;
   return text(upgraded.submitText).trim() === ""
     ? { ...upgraded, submitText: "Submit" }
     : upgraded;
 }
+
+/** The props version 1 to 2 drops: the send method. */
+const VERSION_1_DROPS = { 1: ["method"] } as const;
 
 /**
  * A version 1 field with the name it was sent under written down: one with
@@ -420,6 +452,7 @@ export const form: BlockDefinition<FormProps, PageContext> = defineBlock({
   name: "core/form",
   version: 2,
   migrate: { 1: fromVersion1 },
+  drops: VERSION_1_DROPS,
   // What an author reads, in the Add panel and the block card: one plain line.
   description:
     "A form visitors fill in and send, with a message once it's sent.",

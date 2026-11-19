@@ -1841,6 +1841,17 @@ type, which types those are is known only once the site starts, so both are offe
 holding `manage-seo` instead. Neither counts a redirect that takes more than one hop: a card's
 read can't ask for `manage-seo`, so those are on the list itself.
 
+### In the page builder
+
+Where the [Page Builder](/docs/page-builder) runs too, the page you are editing lists its
+problems in the builder's [Page checks](/docs/page-builder/editor#checks-from-plugins), under
+**Search**: the ones the list shows you for that page, in the language you are editing, in the
+list's words. A problem whose fix is in the page's SEO tab opens the builder's **SEO** tab of
+Page settings. They are read as the cards read the list, so a page you may not read is never
+compared with yours, and a redirect that takes more than one hop stays on the list. The items
+follow the page's last save, when the list checks the page again: a title you change shows its
+problems once you save.
+
 ### When the list is checked
 
 - **A page is checked again when it is saved**, after the save, so a check never slows or undoes
@@ -1854,6 +1865,10 @@ read can't ask for `manage-seo`, so those are on the list itself.
 - **The whole site is checked when the list opens** and its last full check is over 24 hours old,
   and whenever someone chooses **Check again**. The list says when it was last checked. No scheduler
   is needed, so this works the same on a self-hosted server.
+- **A check writes only what changed.** Where a check finds a page as it was, the page's kept result
+  is left alone, so a full check of a site that hasn't changed writes nothing for its pages. A
+  page's own `checkedAt` in the plugin's list of checks says when a check last found that page
+  changed; when the whole site was last checked is kept on the site's own row.
 - **Serving a page runs no check.** What each check found is kept, and the list reads it.
 - **A full check waits for the plugin's record of addresses** to be brought up to date after a
   start; until then the list asks to check again in a minute, as the sitemap asks crawlers.

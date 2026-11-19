@@ -145,8 +145,11 @@ export interface EditorState {
    * Nothing is applied: a surface shows the plan's steps and, once the
    * author confirms, applies it as one edit. No steps when there is nothing
    * to repair.
+   *
+   * Planned for `document` when given, which a surface rendering one passes
+   * so its plan is the one it shows; else for the document as it stands.
    */
-  planRepair: () => RepairPlan;
+  planRepair: (document?: BlockDocument) => RepairPlan;
   /**
    * The document as it stands with every component placement composed in,
    * through the composition the edits themselves are judged on (each document
@@ -178,6 +181,16 @@ export interface EditorState {
    * @experimental
    */
   recordStep: (step: HistoryStep) => () => void;
+  /**
+   * Put back what a run of typing changed, and record nothing: the document
+   * as it was before the run's first write, with the history as it was then,
+   * redo branch included. For Escape in a field that writes as the author
+   * types. Answers whether there was a run to put back: only while the run's
+   * step is the newest, so once another edit, an undo or a blur has ended
+   * the run it is an ordinary step of the history.
+   * @experimental
+   */
+  cancelTyping: (run: object) => boolean;
   canUndo: boolean;
   canRedo: boolean;
   /**
@@ -691,11 +704,11 @@ function useLockQuestions(
   );
 
   const planRepair = useCallback(
-    (): RepairPlan =>
+    (document: BlockDocument = latestDocument.current): RepairPlan =>
       // The lock rule first and the placement rule after it, so a block a
       // lock repair moves is judged where the lock rule put it.
       planDocumentRepair(
-        latestDocument.current,
+        document,
         lockSourcesOf(hostLocksOf(definitions, nesting), baseline, limits),
         REPAIR_RULES
       ),
@@ -1029,7 +1042,7 @@ function useDocumentState({
   };
   const composition = useRef(atApply(host, initialDocument));
   composition.current = atApply(host, initialDocument);
-  const { depths, push, pop, remove, record, settle, clear } =
+  const { depths, push, pop, remove, withdrawTyping, record, settle, clear } =
     useHistoryStacks();
   const { document, setDocument, selection, setSelection } = useSessionDocument(
     initialDocument,
@@ -1106,7 +1119,8 @@ function useDocumentState({
   const run = useCallback(
     (
       ops: readonly BuilderOp[],
-      into: "undo" | "redo" | "new"
+      // "none": applied and recorded nowhere, for a run of typing put back.
+      into: "undo" | "redo" | "new" | "none"
     ): BlockDocument | null => {
       let group;
       try {
@@ -1190,7 +1204,7 @@ function useDocumentState({
       const applied = { document: group.document, inverse: group.inverses };
       const entry: HistoryEntry = { kind: "ops", ops: applied.inverse };
 
-      push(entry, into);
+      if (into !== "none") push(entry, into);
       // Ahead of `setDocument`, which does not take effect until the next
       // render: two ops applied in one tick must see each other, or the second
       // is folded onto the document the first already replaced.
@@ -1246,6 +1260,16 @@ function useDocumentState({
   const redo = useCallback(() => replay("redo"), [replay]);
   // Recorded by the history, which knows the session it belongs to.
   const recordStep = record;
+  const cancelTyping = useCallback(
+    (typingRun: object): boolean => {
+      const entry = withdrawTyping(typingRun);
+      // A typing run's step is always a document edit; the guard keeps the
+      // type honest rather than assuming it.
+      if (entry === undefined || entry.kind !== "ops") return false;
+      return run(entry.ops, "none") !== null;
+    },
+    [withdrawTyping, run]
+  );
 
   const select = useCallback(
     (id: string | null, mode: SelectionMode = "replace") =>
@@ -1271,6 +1295,7 @@ function useDocumentState({
       undo,
       redo,
       recordStep,
+      cancelTyping,
       canUndo: depths.undo > 0,
       canRedo: depths.redo > 0,
       limits,
@@ -1289,6 +1314,7 @@ function useDocumentState({
       undo,
       redo,
       recordStep,
+      cancelTyping,
       depths,
       limits,
     ]

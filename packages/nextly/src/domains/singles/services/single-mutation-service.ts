@@ -39,6 +39,7 @@ import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
 import { NextlyError } from "../../../errors/nextly-error";
 import { rethrowIfRuleCouldNotRun } from "../../../errors/rule-could-not-run";
 import {
+  settleWriteParts,
   type SharedPartOf,
   withWriteParts,
   writeMovesSharedPart,
@@ -72,6 +73,7 @@ import {
 } from "../../../revalidation/intent-builders";
 import type { RevalidationIntent } from "../../../revalidation/types";
 import type { DynamicSingleRecord } from "../../../schemas/dynamic-singles/types";
+import type { RelationshipDbExecutor } from "../../../services/collections/collection-relationship-service";
 import { expansionAccess } from "../../../services/collections/trust-bound";
 import {
   assumedBound,
@@ -106,6 +108,7 @@ import {
   normalizeRelationshipFields,
   relationshipValidationView,
 } from "../../../shared/lib/field-transform";
+import { fieldWriteCaller } from "../../../shared/lib/field-write-caller";
 import {
   carryStoredPasswords,
   type FieldGroupReach,
@@ -187,6 +190,7 @@ import {
 } from "../../i18n/per-language-storage";
 import {
   assertClaimsAllowed,
+  assertCopySources,
   provenanceClaimsOf,
   type ProvenanceClaims,
 } from "../../i18n/provenance/provenance-claims";
@@ -271,6 +275,10 @@ import {
   sharedFieldsJudged,
   storePartDrafts,
 } from "../../versions/part-drafts";
+import {
+  languagesTold,
+  pendingChangesInSaveOrder,
+} from "../../versions/publish-all-plan";
 import { hasLifecycle } from "../../versions/recorded-status";
 import { removePendingChangeJudged } from "../../versions/remove-pending-change";
 import { resolveComponentSchemas } from "../../versions/restore-version";
@@ -328,6 +336,7 @@ import {
   recordSingleSaveActivity,
 } from "../../webhooks/record-mutation-event";
 import { isOutboxRecordingActive } from "../../webhooks/recording-activation";
+import { componentRowPaths } from "../../webhooks/sensitive-fields";
 import type { WebhookResource } from "../../webhooks/types";
 import { workflowAttachedTo } from "../../workflows/registry";
 import { closeReviewOnDiscard } from "../../workflows/review-state-cleanup";
@@ -847,6 +856,8 @@ export class SingleMutationService extends BaseService {
       withoutReview: { reason: string } | undefined;
       /** Whether a pending shared draft goes live with the language this save publishes. */
       sharedDraftPending: boolean;
+      /** For a save of every language that publishes, the languages it moves. */
+      languagesMoved?: readonly string[] | undefined;
       options: UpdateSingleOptions;
     }
   ): StatusSave | null {
@@ -871,7 +882,66 @@ export class SingleMutationService extends BaseService {
         ? {}
         : { withoutReview: save.withoutReview }),
       sharedDraftPending: save.sharedDraftPending,
+      ...(save.languagesMoved === undefined
+        ? {}
+        : { languagesMoved: save.languagesMoved }),
     };
+  }
+
+  /**
+   * The languages a save of every language that publishes moves, read on `reader`: on the pool for
+   * the publish gate's early answer, on the save's transaction under the row lock for its verdict.
+   * Those `languagesTold` tells: the save's sweep publishes the translations stored and never
+   * invents one, so a language holding nothing, or live with no change, is not among them, as a
+   * collection entry's save of every language is judged. Undefined for any other save, and where
+   * the translations keep no status of their own or their table is not there to read.
+   */
+  private async everyLanguageSaveMoves(
+    reader: TransactionContext | DrizzleAdapter,
+    singleMeta: DynamicSingleRecord,
+    args: {
+      entryId: string;
+      status: unknown;
+      everyLanguage: boolean;
+      /** The translations, where their table is there to read; null otherwise. */
+      companion: CompanionSchema | null;
+      readiness: CompanionReadiness | undefined;
+      /** The Single's own status as `reader` reads it. */
+      mainStatus: unknown;
+    }
+  ): Promise<string[] | undefined> {
+    if (
+      !args.everyLanguage ||
+      args.status !== "published" ||
+      args.companion?.hasStatus !== true
+    ) {
+      return undefined;
+    }
+    const prior = await readCompanionLocaleStatusAll(
+      reader.getDrizzle<Parameters<typeof readCompanionLocaleStatusAll>[0]>(),
+      args.companion.table,
+      args.entryId,
+      args.readiness
+    );
+    const pending =
+      singleMeta.versions?.drafts?.enabled === true
+        ? await pendingChangesInSaveOrder(reader, {
+            scopeKind: "single",
+            scopeSlug: singleMeta.slug,
+            entryId: args.entryId,
+          })
+        : [];
+    return languagesTold({
+      configured: new Set(this.localization?.locales.map(l => l.code) ?? []),
+      defaultLocale: this.localization?.defaultLocale ?? "",
+      prior,
+      promoted: new Set(
+        pending.flatMap(change =>
+          change.locale === null ? [] : [change.locale]
+        )
+      ),
+      mainStatus: args.mainStatus,
+    }).map(language => language.locale);
   }
 
   /**
@@ -2348,18 +2418,23 @@ export class SingleMutationService extends BaseService {
         localizedFieldNames: args.localizedFieldNames,
         enforceLocalizedRequired: args.enforceLocalizedRequired,
         // Before the transaction opens, so on the pool.
-        write: storedFieldRead.entryWriteContext({
-          kind: "single",
-          slug,
-          ...(args.writeLocale === undefined
-            ? {}
-            : { locale: args.writeLocale }),
-          connection: {
-            db: this.adapter,
-            executor: undefined,
-            defaultLocale: this.localization?.defaultLocale ?? null,
-          },
-        }),
+        write: {
+          ...storedFieldRead.entryWriteContext({
+            kind: "single",
+            slug,
+            ...(args.writeLocale === undefined
+              ? {}
+              : { locale: args.writeLocale }),
+            connection: {
+              db: this.adapter,
+              executor: undefined,
+              defaultLocale: this.localization?.defaultLocale ?? null,
+            },
+          }),
+          // Who the write is made as, from the reader its access is judged
+          // by, as a collection entry's write is told it.
+          caller: fieldWriteCaller(args.reader),
+        },
       }
     );
     const validationIssues = await issuesTheReaderMaySee(judgedIssues, {
@@ -2398,21 +2473,37 @@ export class SingleMutationService extends BaseService {
       slug,
       this.logger
     );
-    const shared =
+    return withWriteParts(
+      { shared: this.movesSharedPart(meta, data, rawOptions.locale) },
+      () => this.updateInParts(slug, data, rawOptions)
+    );
+  }
+
+  /**
+   * Whether an update of `body` in `locale` moves the Single's shared part:
+   * asked of the body as sent before the hooks run (`update`), and of the
+   * payload as persisted once they have (`settleWriteParts`). The whole
+   * document where the Single is gone.
+   */
+  private movesSharedPart(
+    meta: DynamicSingleRecord | null | undefined,
+    body: Record<string, unknown>,
+    locale: string | undefined
+  ): boolean {
+    return (
       meta === null ||
       meta === undefined ||
       writeMovesSharedPart(
         {
+          hasLifecycle: hasLifecycle(meta),
           fields: (meta.fields ?? []) as unknown as SharedPartOf["fields"],
           localized: meta.localized === true,
           publishesPerLanguage: publishesPerLanguage(meta),
           defaultLocale: this.localization?.defaultLocale,
         },
-        data,
-        rawOptions.locale
-      );
-    return withWriteParts({ shared }, () =>
-      this.updateInParts(slug, data, rawOptions)
+        body,
+        locale
+      )
     );
   }
 
@@ -2452,6 +2543,14 @@ export class SingleMutationService extends BaseService {
         provenanceClaims,
         actorForWrite(rawOptions.actor, rawOptions.user)
       );
+      // A copy's source must be another of the site's languages, as for a collection's save.
+      assertCopySources(provenanceClaims, {
+        configured: this.localization?.locales.map(l => l.code) ?? [],
+        target:
+          rawOptions.locale === EVERY_LOCALE
+            ? null
+            : (rawOptions.locale ?? this.localization?.defaultLocale ?? null),
+      });
     } catch (error) {
       return buildSingleErrorResult(error, "Failed to update Single document");
     }
@@ -2869,6 +2968,18 @@ export class SingleMutationService extends BaseService {
           existingDoc.id,
           data.status
         ),
+        languagesMoved: await this.everyLanguageSaveMoves(
+          this.adapter,
+          singleMeta,
+          {
+            entryId: existingDoc.id,
+            status: data.status,
+            everyLanguage: sweepAllLocales,
+            companion: companionPhysicallyExists ? companion : null,
+            readiness: companionReadiness,
+            mainStatus: (existingDoc as { status?: unknown }).status,
+          }
+        ),
         options,
       });
       if (earlySave) {
@@ -2897,6 +3008,15 @@ export class SingleMutationService extends BaseService {
       const hookOriginal = {
         ...existingDeserialized,
         ...(await this.translationIn(existingDoc.id, companion, writeLocale)),
+        // The links its many-to-many fields hold, which neither its row nor
+        // its translations have a column for (a translated one reads null
+        // there), so a hook comparing old with new sees them as stored.
+        ...(await this.queryService.readManyToManyLinks({
+          executor: this.adapter.getDrizzle<RelationshipDbExecutor>(),
+          sourceTable: singleMeta.tableName,
+          entryId: String(existingDoc.id),
+          fields: singleMeta.fields,
+        })),
       };
       const beforeCall: SingleBeforeHookCall = {
         slug,
@@ -3378,6 +3498,23 @@ export class SingleMutationService extends BaseService {
       // of the related row.
       normalizeRelationshipFields(currentData, fieldConfigs);
 
+      // 6.55. A many-to-many field's links are kept in its junction table, not
+      // on the Single's row, so they are taken off the row's values here and
+      // written on the save's transaction below. Read as a collection's update
+      // reads them: a list of ids, or one id; a field the save leaves out keeps
+      // its links, and an empty list or `null` clears them.
+      const manyToManyLinks: Record<string, string[]> = {};
+      for (const field of fieldConfigs) {
+        const name = "name" in field ? field.name : undefined;
+        if (typeof name !== "string" || !usesJunctionTable(field)) continue;
+        const value = currentData[name];
+        if (value === undefined) continue;
+        delete currentData[name];
+        manyToManyLinks[name] = (
+          Array.isArray(value) ? value : value === null ? [] : [value]
+        ).map(String);
+      }
+
       // 6.6. Every repeater row gets its saved id: after the field rules and
       // the password pass have decided the value, and after references are
       // reduced to ids so an unchanged row compares equal to the stored one.
@@ -3815,6 +3952,22 @@ export class SingleMutationService extends BaseService {
               existingDoc.id,
               finalStatus
             ),
+            languagesMoved: await this.everyLanguageSaveMoves(tx, singleMeta, {
+              entryId: existingDoc.id,
+              status: finalStatus,
+              everyLanguage: sweepAllLocales,
+              companion:
+                companion && companionPhysicallyExists ? companion : null,
+              // Read, not resolved: a query against a missing relation on this transaction would
+              // abort it on PostgreSQL.
+              readiness: companion
+                ? cachedCompanionReadiness(
+                    this.adapter,
+                    companion.companionTableName
+                  )
+                : undefined,
+              mainStatus: preRowMainStatus,
+            }),
             options,
           });
           const settleGate = lockedSave
@@ -4105,6 +4258,9 @@ export class SingleMutationService extends BaseService {
             enforceLocalizedRequired,
           };
           let promotedDraft = false;
+          // The values of the pending change this publish puts live, as the
+          // change holds them; none when it promotes nothing.
+          let promotedValues: Record<string, unknown> = {};
           // Whether the request that promoted also carried content of its
           // own, which no earlier save recorded: the trail reads that
           // publish as a save too.
@@ -4307,9 +4463,24 @@ export class SingleMutationService extends BaseService {
                 delete mainPayload.status;
               }
               promotedDraft = true;
+              promotedValues = pendingDocument;
               promotionCarriesContent = callerCarriesContent;
             }
           }
+          // The payload is final once a pending change it publishes is
+          // folded in: the hooks after the write and its events are told what
+          // it moves, a field a hook added or the promoted change carries
+          // included, where the hooks before it were told what the body sent.
+          // Settled on every attempt, so a retry that promotes nothing is not
+          // told what a lost attempt promoted. The caller's component values
+          // left `currentData` for the component save, so they are put back.
+          settleWriteParts({
+            shared: this.movesSharedPart(
+              singleMeta,
+              { ...promotedValues, ...currentData, ...attemptComponentFields },
+              options.locale
+            ),
+          });
           // A publish with nothing pending puts the live row itself live: a
           // first publication, a republish after an unpublish, or a Single
           // that keeps no drafts. The validation before this transaction saw
@@ -4360,7 +4531,8 @@ export class SingleMutationService extends BaseService {
                     {
                       updatePayload: mainPayload,
                       componentFieldData: attemptComponentFields,
-                      manyToManyData: {},
+                      // Links alone are a change of the document too.
+                      manyToManyData: manyToManyLinks,
                     },
                     savedBy,
                     updateTimeOf(
@@ -4677,21 +4849,31 @@ export class SingleMutationService extends BaseService {
 
           const previousDoc =
             assembleDocuments && preRow
-              ? await buildSingleWebhookDoc(
-                  this.fieldGroupDataService,
-                  tx,
-                  existingDoc.id,
-                  singleMeta.tableName,
-                  preRow,
-                  fieldConfigs,
-                  companion,
-                  companionPhysicallyExists,
-                  eventLocale != null
-                    ? previousCompanionValues
-                    : defaultViewCompanion,
-                  payloadLocale,
-                  overlayLocaleStatus ? previousLocaleStatus : undefined
-                )
+              ? {
+                  ...(await buildSingleWebhookDoc(
+                    this.fieldGroupDataService,
+                    tx,
+                    existingDoc.id,
+                    singleMeta.tableName,
+                    preRow,
+                    fieldConfigs,
+                    companion,
+                    companionPhysicallyExists,
+                    eventLocale != null
+                      ? previousCompanionValues
+                      : defaultViewCompanion,
+                    payloadLocale,
+                    overlayLocaleStatus ? previousLocaleStatus : undefined
+                  )),
+                  // The links its many-to-many fields held, read before this
+                  // save replaces them, over the translations laid on it.
+                  ...(await this.queryService.readManyToManyLinks({
+                    executor: tx.getDrizzle<RelationshipDbExecutor>(),
+                    sourceTable: singleMeta.tableName,
+                    entryId: String(existingDoc.id),
+                    fields: fieldConfigs,
+                  })),
+                }
               : null;
 
           // On a restore, read the CURRENT component subtrees before the save
@@ -4826,6 +5008,35 @@ export class SingleMutationService extends BaseService {
             );
           }
 
+          // 9.55. Each many-to-many field's junction rows, replaced with the
+          // links the save sends, on this transaction, so a failure rolls the
+          // save back. Named from the Single's table, as its create made them.
+          // A held edit writes none, as it writes no component rows.
+          //
+          // The links the junctions hold once it has, `savedLinks`, are put on
+          // each document the save hands on: the written row, which its field
+          // hooks get, and its event and version, after their translations are
+          // laid over them, since a translated field has no column there either.
+          let savedLinks: Record<string, string[]> = {};
+          if (!holdEdit) {
+            await this.queryService.replaceManyToManyLinks({
+              executor: tx.getDrizzle<RelationshipDbExecutor>(),
+              sourceTable: singleMeta.tableName,
+              entryId: String(existingDoc.id),
+              fields: fieldConfigs,
+              links: manyToManyLinks,
+            });
+            savedLinks = await this.queryService.readManyToManyLinks({
+              executor: tx.getDrizzle<RelationshipDbExecutor>(),
+              sourceTable: singleMeta.tableName,
+              entryId: String(existingDoc.id),
+              fields: fieldConfigs,
+            });
+            if (Object.keys(savedLinks).length > 0) {
+              rows[0] = { ...rows[0], ...savedLinks };
+            }
+          }
+
           // 9.6. i18n: upsert the companion row for the write locale in the SAME
           // transaction, stamping the per-locale `_status`. Fires even when only
           // status changed (companionData empty) so a per-locale unpublish still
@@ -4931,6 +5142,7 @@ export class SingleMutationService extends BaseService {
               locale: writeLocale,
               values: companionData,
               localizedFields: companion.localizedFields,
+              languagesTable: companion.companionTableName,
               savedBy,
               claims: provenanceClaims,
               promotesDraft: promotedDraft,
@@ -5049,6 +5261,7 @@ export class SingleMutationService extends BaseService {
                 locale: singleDraftLocale,
                 values: companionData,
                 localizedFields: companion.localizedFields,
+                languagesTable: companion.companionTableName,
                 savedBy,
                 claims: provenanceClaims,
                 partState: "draft",
@@ -5692,6 +5905,9 @@ export class SingleMutationService extends BaseService {
             if (singleHasStatus && isLocaleSpecificSnapshot) {
               parentRow.status = dataLocaleStatus;
             }
+            // Its many-to-many links, over the translations laid on it
+            // (`savedLinks`).
+            Object.assign(parentRow, savedLinks);
 
             const savedStatus =
               singleHasStatus && isLocaleSpecificSnapshot
@@ -5829,21 +6045,25 @@ export class SingleMutationService extends BaseService {
           // populateComponentData(strict) read the opt-out must skip. When off,
           // recordMutationEvent ignores `data`, so the raw written row stands in.
           const dataDoc = assembleDocuments
-            ? await buildSingleWebhookDoc(
-                this.fieldGroupDataService,
-                tx,
-                existingDoc.id,
-                singleMeta.tableName,
-                rows[0],
-                fieldConfigs,
-                companion,
-                companionPhysicallyExists,
-                eventLocale != null
-                  ? dataCompanionValues
-                  : defaultViewCompanion,
-                payloadLocale,
-                overlayLocaleStatus ? dataLocaleStatus : undefined
-              )
+            ? {
+                ...(await buildSingleWebhookDoc(
+                  this.fieldGroupDataService,
+                  tx,
+                  existingDoc.id,
+                  singleMeta.tableName,
+                  rows[0],
+                  fieldConfigs,
+                  companion,
+                  companionPhysicallyExists,
+                  eventLocale != null
+                    ? dataCompanionValues
+                    : defaultViewCompanion,
+                  payloadLocale,
+                  overlayLocaleStatus ? dataLocaleStatus : undefined
+                )),
+                // Over the translations laid on it (`savedLinks`).
+                ...savedLinks,
+              }
             : rows[0];
 
           // The single's field tree with component references expanded, so the
@@ -5937,7 +6157,13 @@ export class SingleMutationService extends BaseService {
             // Compared for the fields the save changed only when both were
             // assembled; the raw row stands in otherwise, and names none.
             ...(assembleDocuments
-              ? { data: dataDoc, previous: previousDoc }
+              ? {
+                  data: dataDoc,
+                  previous: previousDoc,
+                  // The component rows of the field tree the event strips by,
+                  // so the trail and the event name the same fields changed.
+                  componentRows: componentRowPaths(webhookFields),
+                }
               : {}),
             // This language's own statuses, as the transitions above read
             // them, and whether the save promoted the pending edits, which
@@ -6309,7 +6535,10 @@ export class SingleMutationService extends BaseService {
             options.overrideAccess === true && !narrows(options.trusted)
               ? "all"
               : undefined,
-        }
+        },
+        false,
+        // Its many-to-many links are in junctions named from its table.
+        singleMeta.tableName
       );
 
       // 11. Execute afterChange hooks (afterUpdate equivalent for Singles)
@@ -7128,6 +7357,7 @@ export class SingleMutationService extends BaseService {
       locale: translatedIn,
       values: translation,
       localizedFields: companion.localizedFields,
+      languagesTable: companion.companionTableName,
       savedBy: args.actor,
     });
   }
@@ -7200,6 +7430,18 @@ export class SingleMutationService extends BaseService {
       );
       if (own !== null) parentRow.status = own;
     }
+    // Its many-to-many fields' links, which neither the row nor its
+    // translations have a column for, as every version of the Single records
+    // them.
+    Object.assign(
+      parentRow,
+      await this.queryService.readManyToManyLinks({
+        executor: tx.getDrizzle<RelationshipDbExecutor>(),
+        sourceTable: singleMeta.tableName,
+        entryId,
+        fields,
+      })
+    );
     applyReadShape(
       parentRow,
       fields,
@@ -7324,6 +7566,8 @@ export class SingleMutationService extends BaseService {
       actor,
       data,
       previous,
+      // The Single's component rows, whose own stamps are not a change.
+      componentRows: componentRowPaths(singleMeta.fields),
       publication: {
         statusAfter: undefined,
         statusBefore: undefined,

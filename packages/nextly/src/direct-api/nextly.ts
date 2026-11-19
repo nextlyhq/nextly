@@ -103,6 +103,7 @@ import {
   createJobsNamespace,
   createNoticesNamespace,
   createVersionsNamespace,
+  createWorkflowsNamespace,
   createReleasesNamespace,
   createFieldGroupsNamespace,
   createEmailDeliveriesNamespace,
@@ -121,6 +122,7 @@ import {
   type JobsNamespace,
   type NoticesNamespace,
   type VersionsNamespace,
+  type WorkflowsNamespace,
   type ReleasesNamespace,
   type FieldGroupsNamespace,
   type EmailDeliveriesNamespace,
@@ -211,6 +213,11 @@ import type {
   FindEmailTemplateByIDArgs,
   FindEmailTemplateBySlugArgs,
   FindEmailTemplatesArgs,
+  FindEmailActivityArgs,
+  FindEmailDeliveriesArgs,
+  FindQueuedEmailsArgs,
+  EmailLastSentArgs,
+  EmailOverdueArgs,
   FindFormBySlugArgs,
   FindFormsArgs,
   FindMediaArgs,
@@ -313,6 +320,8 @@ export class Nextly implements NextlyContext {
   public readonly versions: VersionsNamespace;
   /** A subject's content events: a document's or a release's. */
   public readonly contentEvents: ContentEventsNamespace;
+  /** @experimental Review state under a workflow: read it, take steps, assign, what waits. */
+  public readonly workflows: WorkflowsNamespace;
   /** @experimental Recognising a plugin's kind of signed-in person. */
   public readonly principals: NextlyPrincipals;
 
@@ -358,6 +367,7 @@ export class Nextly implements NextlyContext {
     this.contentEvents = withLanguagesPinned(
       createContentEventsNamespace(this)
     );
+    this.workflows = withLanguagesPinned(createWorkflowsNamespace(this));
     this.principals = createNextlyPrincipals();
 
     // The instance its callers reach: only the collection and Single
@@ -1211,6 +1221,28 @@ export const nextly = {
       (await requireNextlyOnceStarted()).releases.delete(args),
   } satisfies ReleasesNamespace,
 
+  workflows: {
+    reviewState: async args =>
+      (await requireNextlyOnceStarted()).workflows.reviewState(args),
+    takeStep: async args =>
+      (await requireNextlyOnceStarted()).workflows.takeStep(args),
+    assign: async args =>
+      (await requireNextlyOnceStarted()).workflows.assign(args),
+    stepMany: async args =>
+      (await requireNextlyOnceStarted()).workflows.stepMany(args),
+    assignMany: async args =>
+      (await requireNextlyOnceStarted()).workflows.assignMany(args),
+    waiting: async args =>
+      (await requireNextlyOnceStarted()).workflows.waiting(args),
+    list: async args => (await requireNextlyOnceStarted()).workflows.list(args),
+    settings: {
+      read: async args =>
+        (await requireNextlyOnceStarted()).workflows.settings.read(args),
+      update: async args =>
+        (await requireNextlyOnceStarted()).workflows.settings.update(args),
+    },
+  } satisfies WorkflowsNamespace,
+
   users: {
     find: async (args?: FindUsersArgs) =>
       (await requireNextlyOnceStarted()).users.find(args),
@@ -1351,14 +1383,22 @@ export const nextly = {
 
   /** @experimental */
   emailDeliveries: {
-    find: async args =>
+    // Optional, as the namespace declares them: `satisfies` alone would
+    // infer required parameters that merely accept undefined.
+    activity: async (args?: FindEmailActivityArgs) =>
+      (await requireNextlyOnceStarted()).emailDeliveries.activity(args),
+    find: async (args?: FindEmailDeliveriesArgs) =>
       (await requireNextlyOnceStarted()).emailDeliveries.find(args),
-    findQueued: async args =>
+    findQueued: async (args?: FindQueuedEmailsArgs) =>
       (await requireNextlyOnceStarted()).emailDeliveries.findQueued(args),
-    lastSent: async args =>
+    lastSent: async (args?: EmailLastSentArgs) =>
       (await requireNextlyOnceStarted()).emailDeliveries.lastSent(args),
-    overdue: async args =>
+    overdue: async (args?: EmailOverdueArgs) =>
       (await requireNextlyOnceStarted()).emailDeliveries.overdue(args),
+    findByID: async args =>
+      (await requireNextlyOnceStarted()).emailDeliveries.findByID(args),
+    findQueuedByID: async args =>
+      (await requireNextlyOnceStarted()).emailDeliveries.findQueuedByID(args),
   } satisfies EmailDeliveriesNamespace,
 
   userFields: {

@@ -7,6 +7,7 @@ import {
   describeDeletion,
   judgeDataLoss,
   NO_CONSENT,
+  refusalForStart,
   resolveDataLossConsent,
   type DataLossConsent,
   type Deletion,
@@ -122,6 +123,29 @@ describe("what a consent covers", () => {
 
   it("covers nothing when none was given", () => {
     expect(consentCovers(NO_CONSENT, table("posts"))).toBe(false);
+  });
+
+  it("covers a translations table's drop by the table it translates", () => {
+    // `posts_locales` holds the translations of `posts`' entries: naming `posts` loses both.
+    const consent = flag("posts");
+    const translations = table("posts_locales", { translates: "posts" });
+    expect(consentCovers(consent, translations)).toBe(true);
+    // Not the other way round, not another table's, and not by a column of it.
+    expect(consentCovers(flag("posts_locales"), table("posts"))).toBe(false);
+    expect(
+      consentCovers(consent, table("pages_locales", { translates: "pages" }))
+    ).toBe(false);
+    expect(consentCovers(flag("posts.title"), translations)).toBe(false);
+  });
+
+  it("covers a table named as a translations table by its own name only, unless proven one", () => {
+    // An entity's own table may be named `posts_locales`: the name proves nothing.
+    const consent = flag("posts");
+    expect(consentCovers(consent, table("posts_locales"))).toBe(false);
+    expect(consentCovers(consent, column("posts_locales", "title"))).toBe(
+      false
+    );
+    expect(consentCovers(consent, rows("posts_locales"))).toBe(false);
   });
 });
 
@@ -350,6 +374,44 @@ describe("judging a run's deletions", () => {
     expect(verdict).toEqual({ kind: "proceed" });
   });
 
+  it("lists each translations table right after the table it translates, in the same file", async () => {
+    // A file drops every translations table first; the listing reads each beside its table.
+    const notesLocales = table("notes_locales", { translates: "notes" });
+    const pagesLocales = table("pages_locales", { translates: "pages" });
+    const notes = table("notes");
+    const pages = table("pages");
+    const otherLocales = table("other_locales", { translates: "other" });
+    const elsewhere = table("other");
+    const sources = new Map<Deletion, string>([
+      [notesLocales, "a.sql"],
+      [pagesLocales, "a.sql"],
+      [notes, "a.sql"],
+      [pages, "a.sql"],
+      [otherLocales, "a.sql"],
+      [elsewhere, "b.sql"],
+    ]);
+    const { verdict, printed } = await judge(
+      [notesLocales, pagesLocales, notes, pages, otherLocales, elsewhere],
+      flag(true),
+      false,
+      false,
+      { sourceOf: deletion => sources.get(deletion) }
+    );
+    expect(verdict).toEqual({ kind: "proceed" });
+    expect(printed).toEqual([
+      "Deleting 6 items, with consent:",
+      "  a.sql:",
+      "    - table notes",
+      "    - table notes_locales",
+      "    - table pages",
+      "    - table pages_locales",
+      // Its table is another file's, so it stays where its own file put it.
+      "    - table other_locales",
+      "  b.sql:",
+      "    - table other",
+    ]);
+  });
+
   it("covers a deletion on a schema-qualified table only by the consent without targets, and says so", async () => {
     const qualified: Deletion = { kind: "rows", table: "archive.comments" };
     const named = resolveDataLossConsent({ flag: "archive.comments", env: {} });
@@ -499,5 +561,180 @@ describe("counting deletions", () => {
       "sqlite"
     );
     expect(counted).toEqual([table("posts"), column("posts", "x"), unnamed]);
+  });
+});
+
+describe("a refusal, for a production start that ran the migrations itself", () => {
+  /** The refusal of `deletions` under `consent`, with nobody to ask. */
+  async function refused(
+    deletions: Parameters<typeof judgeDataLoss>[0]["deletions"],
+    consent: DataLossConsent = NO_CONSENT,
+    flag?: boolean
+  ): Promise<string> {
+    const verdict = await judgeDataLoss({
+      deletions,
+      consent,
+      interactive: false,
+      ask: async () => false,
+      print: () => {},
+      ...(flag === undefined ? {} : { flag }),
+    });
+    if (verdict.kind !== "refused") throw new Error("expected a refusal");
+    return verdict.message;
+  }
+
+  it("names the variable a start reads, then the command's flag, keeping the listing", async () => {
+    const message = await refused([
+      { kind: "column", table: "posts", column: "summary" },
+      { kind: "table", table: "drafts" },
+    ]);
+
+    expect(refusalForStart(message)).toBe(
+      message.replace(
+        "To consent: --accept-data-loss=drafts,posts.summary (or NEXTLY_ACCEPT_DATA_LOSS=drafts,posts.summary).",
+        'To consent: start with NEXTLY_ACCEPT_DATA_LOSS=drafts,posts.summary, or run "nextly migrate --accept-data-loss=drafts,posts.summary".'
+      )
+    );
+    expect(refusalForStart(message)).not.toBe(message);
+  });
+
+  it("does so for the consent without targets", async () => {
+    const message = await refused([
+      { kind: "unnamed", description: "rows a statement removes" },
+    ]);
+
+    expect(refusalForStart(message)).toContain(
+      'To consent: start with NEXTLY_ACCEPT_DATA_LOSS=1, or run "nextly migrate --accept-data-loss".'
+    );
+  });
+
+  it("does so for a consent that leaves a deletion out", async () => {
+    const message = await refused(
+      [{ kind: "column", table: "posts", column: "summary" }],
+      {
+        ...NO_CONSENT,
+        given: {
+          from: "env",
+          targets: { tables: new Set(["drafts"]), columns: new Set() },
+        },
+      }
+    );
+
+    expect(refusalForStart(message)).toContain(
+      'To delete this too: start with NEXTLY_ACCEPT_DATA_LOSS=drafts,posts.summary, or run "nextly migrate --accept-data-loss=drafts,posts.summary".'
+    );
+  });
+
+  /**
+   * The consent a start's refusal ends on, read back as the start and the
+   * command would be given it: the variable's value, and the flag's (`true`
+   * for the flag alone).
+   */
+  function consentNamed(message: string): {
+    env: string;
+    flag: string | true;
+  } {
+    const named =
+      /start with NEXTLY_ACCEPT_DATA_LOSS=(.*), or run "nextly migrate --accept-data-loss(?:=(.*))?"\.$/.exec(
+        message
+      );
+    if (named === null) throw new Error("the message names no consent");
+    return { env: named[1], flag: named[2] ?? true };
+  }
+
+  it.each([
+    ["a plain name", "notes", "summary", "notes.summary"],
+    ["a closing parenthesis", "notes(old)", "summary", "notes(old).summary"],
+    ["a space in the table's name", "old notes", "summary", undefined],
+    ["a space in the column's name", "notes", "old summary", undefined],
+    ["the words between the two spellings", "a (or b)", "summary", undefined],
+    ["a comma", "notes,drafts", "summary", undefined],
+    ["a dot in the column's name", "notes", "a.b", undefined],
+  ])(
+    "ends on a consent that, given back, covers the deletion: %s",
+    async (_what, table, column, target) => {
+      const deletion = { kind: "column", table, column } as const;
+      const message = refusalForStart(await refused([deletion]));
+      const named = consentNamed(message);
+
+      // A name a list of targets can spell is named; any other is covered
+      // only by the consent without targets, which is then what is asked for.
+      expect(named).toEqual(
+        target === undefined
+          ? { env: "1", flag: true }
+          : { env: target, flag: target }
+      );
+      const fromEnv = resolveDataLossConsent({
+        env: { NEXTLY_ACCEPT_DATA_LOSS: named.env },
+      });
+      const fromFlag = resolveDataLossConsent({ flag: named.flag, env: {} });
+      expect(consentCovers(fromEnv, deletion)).toBe(true);
+      expect(consentCovers(fromFlag, deletion)).toBe(true);
+    }
+  );
+
+  it.each(["false", "0", "true", "1", "FALSE", "True"])(
+    "asks for the consent without targets for a table named %s, which the consent reads as yes or no",
+    async table => {
+      const deletion = { kind: "table", table } as const;
+      const message = await refused([deletion]);
+      // Never the name as a target: `=false` and `=0` give no consent, and
+      // `=true` and `=1` consent to every deletion without saying so.
+      expect(message).toContain(
+        "To consent: --accept-data-loss (or NEXTLY_ACCEPT_DATA_LOSS=1)."
+      );
+
+      const named = consentNamed(refusalForStart(message));
+      expect(named).toEqual({ env: "1", flag: true });
+      expect(
+        consentCovers(
+          resolveDataLossConsent({
+            env: { NEXTLY_ACCEPT_DATA_LOSS: named.env },
+          }),
+          deletion
+        )
+      ).toBe(true);
+      // A list naming it beside another table does not cover it either, so
+      // what the refusal asks for is the one consent that does.
+      expect(
+        consentCovers(
+          resolveDataLossConsent({ flag: `drafts,${table}`, env: {} }),
+          deletion
+        )
+      ).toBe(false);
+    }
+  );
+
+  it("says that only the consent without targets covers a name a list cannot spell, to a consent that names others", async () => {
+    const message = await refused(
+      [{ kind: "column", table: "old notes", column: "summary" }],
+      {
+        ...NO_CONSENT,
+        given: {
+          from: "env",
+          targets: { tables: new Set(["drafts"]), columns: new Set() },
+        },
+      }
+    );
+
+    expect(message).toContain(
+      "whose table or column name holds a space, a comma or a dot"
+    );
+    expect(refusalForStart(message)).toContain(
+      'To delete this too: start with NEXTLY_ACCEPT_DATA_LOSS=1, or run "nextly migrate --accept-data-loss".'
+    );
+  });
+
+  it("keeps a message that names the variable alone, or no consent, as it is", async () => {
+    const variableOnly = await refused(
+      [{ kind: "table", table: "drafts" }],
+      NO_CONSENT,
+      false
+    );
+
+    expect(refusalForStart(variableOnly)).toBe(variableOnly);
+    expect(refusalForStart("Refused, in other words.")).toBe(
+      "Refused, in other words."
+    );
   });
 });

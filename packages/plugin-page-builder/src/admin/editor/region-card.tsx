@@ -69,6 +69,7 @@ export function RegionCard({
   onEdit,
   onOpenSettings,
   replace,
+  onShowSetSettings,
 }: {
   facts: RegionCardFacts;
   pages: PagesShown;
@@ -78,6 +79,12 @@ export function RegionCard({
   onOpenSettings: () => void;
   /** The way to replace the starter, beside Edit; absent for any other. */
   replace?: ReactNode;
+  /**
+   * On a set's own screen, where the header is chosen in the set's settings
+   * rather than a page's: shows them. Absent, the card says where a page
+   * chooses a different one.
+   */
+  onShowSetSettings?: (() => void) | undefined;
 }): JSX.Element {
   const headingId = useId();
   const name = siteRegionName(facts.area);
@@ -125,18 +132,43 @@ export function RegionCard({
           {replace}
         </div>
       )}
-      <p className="text-[color:var(--nx-builder-text-muted)] m-0 text-xs leading-relaxed">
-        {`To use a different ${word} on this page, change it in `}
-        <button
-          type="button"
-          className="text-[color:var(--nx-builder-text)] cursor-pointer border-0 bg-transparent p-0 font-medium underline underline-offset-2"
-          onClick={onOpenSettings}
-        >
-          Page settings
-        </button>
-        .
-      </p>
+      <ChooseAnother
+        word={word}
+        onOpenSettings={onOpenSettings}
+        onShowSetSettings={onShowSetSettings}
+      />
     </section>
+  );
+}
+
+/**
+ * Where a different header (or footer) is chosen: a page's settings, or on a
+ * set's own screen, the set's settings, each a link that shows them.
+ */
+function ChooseAnother({
+  word,
+  onOpenSettings,
+  onShowSetSettings,
+}: {
+  word: "header" | "footer";
+  onOpenSettings: () => void;
+  onShowSetSettings: (() => void) | undefined;
+}): JSX.Element {
+  const inSet = onShowSetSettings !== undefined;
+  return (
+    <p className="text-[color:var(--nx-builder-text-muted)] m-0 text-xs leading-relaxed">
+      {inSet
+        ? `To use a different ${word} in this set, choose one in `
+        : `To use a different ${word} on this page, change it in `}
+      <button
+        type="button"
+        className="text-[color:var(--nx-builder-text)] cursor-pointer border-0 bg-transparent p-0 font-medium underline underline-offset-2"
+        onClick={onShowSetSettings ?? onOpenSettings}
+      >
+        {inSet ? "its settings" : "Page settings"}
+      </button>
+      .
+    </p>
   );
 }
 
@@ -147,26 +179,28 @@ export function RegionCard({
  */
 export function SelectedRegionCard({
   facts,
-  onEditComponent,
+  onEdit,
   onOpenSettings,
+  onShowSetSettings,
 }: {
   facts: RegionCardFacts;
-  /** Open a component in its own view; absent where the author may not. */
-  onEditComponent: ((componentId: string) => void) | undefined;
+  /** Edit it in place, on the page; absent where the author may not. */
+  onEdit: (() => void) | undefined;
   onOpenSettings: () => void;
+  /** On a set's own screen: shows the set's settings, where it is chosen. */
+  onShowSetSettings?: (() => void) | undefined;
 }): JSX.Element {
   const read = useComponentFacts(facts.componentId);
   return (
     <RegionCard
       facts={facts}
       pages={read?.pages}
-      onEdit={
-        onEditComponent === undefined
-          ? undefined
-          : () => onEditComponent(facts.componentId)
-      }
+      onEdit={onEdit}
       onOpenSettings={onOpenSettings}
-      {...(facts.starter
+      onShowSetSettings={onShowSetSettings}
+      // On a set's own screen the starter is replaced in its settings'
+      // picker, as any header is, not by a write to the published set.
+      {...(facts.starter && onShowSetSettings === undefined
         ? {
             replace: (
               <UseAComponent

@@ -230,6 +230,40 @@ export interface StyleCompileContext {
    * walk over the page.
    */
   trace?: boolean;
+  /**
+   * The host's judgement of custom CSS, and the site's own.
+   *
+   * Absent draws no custom CSS at all, at any level: whether author-written CSS
+   * is safe to put on a page is the host's question (its checker refuses an
+   * `@import`, a fetch from another origin, anything that could end the style
+   * element or run script), and an engine with no checker to ask cannot answer
+   * it. A value the checker refuses stays in the document and is left out of
+   * the sheet.
+   *
+   * @experimental
+   */
+  customCss?: CustomCssPolicy;
+}
+
+/** Where a piece of custom CSS was written. */
+export type CustomCssLevel = "site" | "page" | "block";
+
+/**
+ * The host's checker for custom CSS, with the site's own.
+ *
+ * @experimental
+ */
+export interface CustomCssPolicy {
+  /**
+   * Which checker this is, for a stored sheet's stamp: a sheet compiled under
+   * one checker is not the sheet another would write, so a stored one is
+   * compiled again when this changes.
+   */
+  readonly id: string;
+  /** Whether this CSS may be drawn at this level. */
+  accepts(css: string, level: CustomCssLevel): boolean;
+  /** The site's custom CSS, drawn on every page before the page's own. */
+  readonly site?: string;
 }
 
 /** A library entry's id, for a record that may not have one. */

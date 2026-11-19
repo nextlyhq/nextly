@@ -1355,11 +1355,17 @@ describe("controls", () => {
      * publishing the entry when the author meant to finish one field; and
      * preventing without committing loses the edit silently. Nothing covered
      * this before, which is how the handler came to be refactored unguarded.
+     *
+     * An emptied field is the draft typing leaves unwritten (it clears only
+     * when the edit ends), so it is what Enter has left to write.
      */
-    const editor = mount({ spacing: true });
+    const styles = {
+      base: { [BASE_BREAKPOINT]: { padding: { blockStart: "12px" } } },
+    } as NodeStyles;
+    const editor = mount({ spacing: true }, styles);
     const field = fieldsOf("padding").getByLabelText("Block start");
 
-    fireEvent.change(field, { target: { value: "12px" } });
+    fireEvent.change(field, { target: { value: "" } });
     expect(editor.applyAll).not.toHaveBeenCalled();
 
     const event = new KeyboardEvent("keydown", {
@@ -1373,13 +1379,14 @@ describe("controls", () => {
     expect(event.defaultPrevented).toBe(true);
   });
 
-  it("writes through the store on blur, not on every keystroke", () => {
+  it("writes through the store as it is typed, and not again on blur", () => {
     const editor = mount({ spacing: true });
     const field = fieldsOf("padding").getByLabelText("Block start");
 
     fireEvent.change(field, { target: { value: "12px" } });
-    expect(editor.applyAll).not.toHaveBeenCalled();
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
 
+    // The keystroke wrote the value the edit ends on: nothing left to write.
     fireEvent.blur(field);
 
     expect(editor.applyAll).toHaveBeenCalledTimes(1);
@@ -1603,9 +1610,13 @@ describe("controls", () => {
 
     const field = fieldsOf("padding").getByLabelText("Block start");
     fireEvent.change(field, { target: { value: "12px" } });
-    fireEvent.blur(field);
 
+    // Said as it is typed, and still said once the field is left.
     expect(editor.applyAll).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("alert").textContent).toContain(
+      "could not be applied"
+    );
+    fireEvent.blur(field);
     expect(screen.getByRole("alert").textContent).toContain(
       "could not be applied"
     );
@@ -2702,12 +2713,13 @@ describe("dragging a number field's label", () => {
     expect(label.getAttribute("data-slot")).toBe("label");
   });
 
-  it("shows the value live while dragging and writes it ONCE, on release", () => {
+  it("shows the value in the field at once, and writes the release's value", () => {
     const editor = mount({ spacing: true }, withPadding("12px"));
     const { label, field } = side("Block start");
 
     drag(label, [6, 10, 20], {}, false);
-    // Live in the field, and nothing in the document yet.
+    // In the field at once. The document follows at the next frame
+    // (`inspector-panel.live-typing.test`), and no frame has run here.
     expect(field.value).toBe("32");
     expect(editor.applyAll).not.toHaveBeenCalled();
 
@@ -2903,15 +2915,15 @@ describe("what the arrow keys do and do not claim", () => {
     fireEvent.change(field, { target: { value: "20px" } });
     fireEvent.keyDown(field, { key: "ArrowUp" });
 
-    expect(editor.applyAll.mock.calls[0]?.[0]?.[0]).toMatchObject({
+    // The typed 20px, written as it was typed, then ONE op for the step.
+    expect(editor.applyAll).toHaveBeenCalledTimes(2);
+    expect(editor.applyAll.mock.calls[1]?.[0]?.[0]).toMatchObject({
       patch: {
         styles: {
           base: { [BASE_BREAKPOINT]: { padding: { blockStart: "21px" } } },
         },
       },
     });
-    // One op, not a commit of the draft followed by a step of the result.
-    expect(editor.applyAll).toHaveBeenCalledTimes(1);
     expect(field).toHaveProperty("value", "21");
   });
 
@@ -3193,17 +3205,35 @@ describe("a length field's unit", () => {
     return trigger;
   }
 
-  it("writes one step when a number is typed and then a unit chosen", () => {
-    // Committing on the way to the menu wrote "20px" and then "20rem": two
-    // undo steps for one gesture, the first a value nobody asked for.
+  it("writes the number with the unit chosen after it", () => {
+    // The typed "20" is written as "20px" as it is typed, and the unit picked
+    // next writes "20rem" in the same run of typing: one undo step for the
+    // gesture, which `inspector-panel.live-typing.test.tsx` counts against
+    // the real history.
     const editor = mount({ dimensions: true });
     const trigger = typeThenFocusUnit("20");
     fireEvent.click(trigger);
     fireEvent.click(screen.getByRole("option", { name: "rem" }));
-    expect(editor.applyAll).toHaveBeenCalledTimes(1);
-    expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).toContain(
-      '"width":"20rem"'
-    );
+    expect(editor.applyAll).toHaveBeenCalledTimes(2);
+    // Both writes are the block's width, in order: the number as typed, then
+    // the unit chosen for it.
+    const widthWritten = (call: number) =>
+      editor.applyAll.mock.calls[call]?.[0];
+    const widthOp = (value: string) => [
+      expect.objectContaining({
+        kind: "update",
+        id: "a",
+        patch: expect.objectContaining({
+          styles: expect.objectContaining({
+            base: expect.objectContaining({
+              base: expect.objectContaining({ width: value }),
+            }),
+          }),
+        }),
+      }),
+    ];
+    expect(widthWritten(0)).toEqual(widthOp("20px"));
+    expect(widthWritten(1)).toEqual(widthOp("20rem"));
   });
 
   it("still writes the typed number when the menu closes with no choice", () => {
@@ -3284,9 +3314,11 @@ describe("a length field's unit", () => {
         base: { [BASE_BREAKPOINT]: { width: "50px" } },
       } as NodeStyles)
     );
+    // The typing itself was written as it went in.
+    expect(before.applyAll).toHaveBeenCalledTimes(1);
     view.rerender(<StyleInspectorPanel editor={after} />);
     fireEvent.blur(trigger, { relatedTarget: document.body });
-    expect(before.applyAll).not.toHaveBeenCalled();
+    expect(before.applyAll).toHaveBeenCalledTimes(1);
     expect(after.applyAll).not.toHaveBeenCalled();
   });
 
@@ -6303,12 +6335,12 @@ describe("a read-only design", () => {
     const editor = editorFor(document);
     render(<StyleInspectorPanel editor={editor} />);
     const input = fieldsOf("margin").getByLabelText("Block start");
-    fireEvent.change(input, { target: { value: "8px" } });
 
     editor.document = {
       ...document,
       nodes: [{ ...document.nodes[0], locked: true }],
     } as BlockDocument;
+    fireEvent.change(input, { target: { value: "8px" } });
     fireEvent.blur(input);
 
     expect(editor.applyAll).not.toHaveBeenCalled();

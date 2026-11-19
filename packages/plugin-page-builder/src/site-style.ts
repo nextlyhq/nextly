@@ -203,28 +203,37 @@ export function classOverrideOf(
 }
 
 /**
+ * The fields of a class compared as they are. The block type a look is bound
+ * to: the same styles on another type is another look. `isDefault`: a block's
+ * own look edits its type's base, and the same entry without the mark is a
+ * look blocks wear instead. The block style marks: an override that only
+ * moves the default ★ or hides a built-in style is a difference worth storing.
+ */
+const SAME_CLASS_FIELDS = [
+  "id",
+  "slug",
+  "label",
+  "locked",
+  "orderIndex",
+  "blockType",
+  "isDefault",
+  "starred",
+  "hidden",
+] as const satisfies readonly (keyof NamedClass)[];
+
+/**
  * Whether two classes are the same class, to the byte: every key an entry
  * stores, so an override that only names a supplied class, or only locks it,
  * is a difference worth storing.
  */
 function sameNamedClass(a: NamedClass, b: NamedClass): boolean {
   return (
-    a.id === b.id &&
-    a.slug === b.slug &&
-    a.label === b.label &&
-    a.locked === b.locked &&
-    a.orderIndex === b.orderIndex &&
-    // The block type a look is bound to: the same styles on another type is
-    // another look.
-    a.blockType === b.blockType &&
-    // A block's own look edits its type's base; the same entry without the
-    // mark is a look blocks wear instead.
-    a.isDefault === b.isDefault &&
-    // The block style marks: an override that only moves the default ★ or
-    // hides a built-in style is a difference worth storing.
-    a.starred === b.starred &&
-    a.hidden === b.hidden &&
-    sameJsonValue(a.styles, b.styles)
+    SAME_CLASS_FIELDS.every(field => a[field] === b[field]) &&
+    sameJsonValue(a.styles, b.styles) &&
+    // The sizes a text style's fluid size was made from: an override that
+    // only records them is what lets a configured style follow the range.
+    // Compared as JSON records, so a key order a database chose is no change.
+    sameJsonValue(a.fluidSizes, b.fluidSizes)
   );
 }
 
@@ -274,8 +283,24 @@ export function tokenOverrideOf(
     sameJsonValue(edited.order, defaults?.order)
       ? {}
       : { order: edited.order }),
+    ...storedBuiltInColoursShown(defaults, edited),
     ...rows,
   };
+}
+
+/**
+ * Whether the built-in colours are shown, as the stored tier holds it: only
+ * where it differs from the code's, so a site that never hides them, or
+ * hides them as its code does, stores nothing. Unset reads as shown.
+ */
+function storedBuiltInColoursShown(
+  defaults: SiteTokenSet | undefined,
+  edited: SiteTokenSet
+): Pick<SiteTokenSet, "builtInColoursShown"> {
+  const shown = edited.builtInColoursShown ?? true;
+  return shown === (defaults?.builtInColoursShown ?? true)
+    ? {}
+    : { builtInColoursShown: shown };
 }
 
 /**
@@ -459,6 +484,7 @@ const SITE_WIDE_SETTINGS = [
   "darkMode",
   "fluidRange",
   "order",
+  "builtInColoursShown",
 ] as const satisfies readonly (keyof SiteTokenSet)[];
 
 /** Each site-wide setting the stored tier or the code sets, the stored first. */

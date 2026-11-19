@@ -7,19 +7,24 @@
  *
  * @module @nextlyhq/plugin-page-builder/admin/editor/editor-canvas-region
  */
+import type { RegionArea } from "@nextlyhq/blocks-engine";
 import { blockNameOf } from "@nextlyhq/builder";
 import {
+  AccordionAddQuestion,
   BlockContextMenu,
   BlockToolbar,
   Canvas,
+  type CanvasEditingRegion,
+  canvasEditingOf,
   CanvasFrame,
   CanvasMarks,
   InsertionLine,
   DropIndicator,
   DropRefusal,
   elementAnchor,
+  EmbedStates,
   EmptyContainerAppenders,
-  PageInserters,
+  RegionEditingScrim,
   RepairNotice,
   SpacingOverlay,
   VisitorUnreadableBadges,
@@ -27,14 +32,20 @@ import {
 import { Button } from "@nextlyhq/ui";
 
 import { siteSheet } from "../../site-style";
+import { loopCollectionsIn } from "../loop-collections-client";
+import { canvasNamedQueriesIn } from "../named-queries-client";
 import type { LibraryReadState } from "../pattern-library-client";
 
 import { CanvasFirstAddChoosers } from "./canvas-first-add-choosers";
+import { CanvasFormStates } from "./canvas-form-states";
 import { CanvasImageStates } from "./canvas-image-states";
 import { previewedCanvas } from "./canvas-preview-mode";
 import { DoubleHeaderNotice } from "./double-header-notice";
 import type { EditorView } from "./editor-view";
+import { EmptyRegionBandsOverlay } from "./empty-region-bands";
+import { PAGE_PLACEHOLDER_WORDS } from "./set-words";
 import { SiteLayoutNote } from "./site-canvas";
+import { EditorPageInserters } from "./starter-pages-client";
 
 /**
  * What stands where the canvas will be, while a read it cannot draw without is
@@ -128,6 +139,25 @@ const COMPONENT_READ_NOTES: Readonly<
 };
 
 /** The canvas, or what stands in its place while a read it needs is out. */
+/** The region edited in place, or nothing while the page is edited. */
+function editedArea(view: EditorView): RegionArea | undefined {
+  const { target } = view.editing;
+  return target.kind === "region" ? target.area : undefined;
+}
+
+/** The canvas's way into editing a region in place, and the region edited. */
+function regionEditingProps(view: EditorView): {
+  onEditRegion?: (area: RegionArea) => void;
+  editingRegion?: CanvasEditingRegion;
+} {
+  const { requestEdit } = view.regionEditing;
+  const editingRegion = canvasEditingOf(view.editing);
+  return {
+    ...(requestEdit === undefined ? {} : { onEditRegion: requestEdit }),
+    ...(editingRegion === undefined ? {} : { editingRegion }),
+  };
+}
+
 export function editorCanvasRegion(view: EditorView): React.JSX.Element {
   const {
     componentLibrary,
@@ -266,6 +296,21 @@ export function editorCanvasRegion(view: EditorView): React.JSX.Element {
             pinned={previewed.tags}
             overlay={
               <>
+                {/* While a header or footer is edited in place, the dim over
+                    the rest of the canvas: a press on it changes nothing and
+                    highlights Done. First, so the header's marks are drawn
+                    over it. */}
+                <RegionEditingScrim
+                  area={editedArea(view)}
+                  onPress={view.editing.pulseDone}
+                />
+                {/* "Use a component", opened from an empty area's band,
+                    anchored where the band's button is. */}
+                <EmptyRegionBandsOverlay
+                  bands={view.emptyRegionBands}
+                  cards={view.regionCards}
+                  requestEdit={view.regionEditing.requestEdit}
+                />
                 {/* An Image with no picture: "Add an image" with Upload,
                     Media library and Link, and a file dropped on it, through
                     the admin's media library. First, so the marks, the drop
@@ -279,6 +324,16 @@ export function editorCanvasRegion(view: EditorView): React.JSX.Element {
                       })}
                   dragging={dragging}
                 />
+                {/* A picked form that is a draft, closed or deleted, and a
+                    simple form with nowhere to send answers. */}
+                <CanvasFormStates
+                  editor={editor}
+                  locale={locale}
+                  hidden={dragging}
+                />
+                {/* An Embed with no link: "Paste a YouTube, Vimeo or other
+                    link", stored with the provider's shape. */}
+                <EmbedStates editor={editor} dragging={dragging} />
                 {/* A selected block the page hides on this device is drawn
                     anyway, and its ring says so. */}
                 <CanvasMarks
@@ -366,41 +421,41 @@ export function editorCanvasRegion(view: EditorView): React.JSX.Element {
                   says where a block lands. The start area's "＋ Add a block"
                   opens the picker at the page's top level, and "Insert a
                   saved section" opens Add on its Saved sections tab, with
-                  its search ready.
+                  its search ready. An empty page's row of starter pages
+                  fills the page from the one picked, as one undo step.
                 */}
-                <PageInserters
-                  document={editor.document}
-                  selectedId={editor.selectedId}
-                  componentTitle={componentLibrary.titleOf}
-                  dragging={dragging}
-                  start={{
-                    ...(pageTitle === undefined ? {} : { title: pageTitle }),
-                    onStart: control =>
-                      insertPicker.open(
-                        {
-                          kind: "place",
-                          place: {
-                            at: { index: editor.document.nodes.length },
-                          },
-                        },
-                        elementAnchor(control)
-                      ),
-                    onSavedSection: () =>
-                      view.openInsertPanel(undefined, "sections"),
-                  }}
-                  onAddAfter={(nodeId, control) =>
-                    insertPicker.open(
-                      { kind: "place", place: { after: nodeId } },
-                      elementAnchor(control)
-                    )
-                  }
-                />
+                {/* The empty page's start area and the "+" in each gap; on
+                    a set's screen, none, its placeholder standing there. */}
+                {pageInserters(view)}
                 {/* A block just added that asks for a choice (Columns: its
                     layout) draws its chooser in place of its body until the
                     author picks or skips. Last, so it covers the "+" of the
                     block's own empty columns; hidden mid-drag. A store
                     of the page ends it. */}
-                <CanvasFirstAddChoosers editor={editor} hidden={dragging} />
+                <CanvasFirstAddChoosers
+                  editor={editor}
+                  hidden={dragging}
+                  // A Collection list's first step lists what this author
+                  // may show, read as they would read it.
+                  services={{
+                    listLoopCollections: loopCollectionsIn(
+                      view.locale,
+                      view.userId
+                    ),
+                    listCustomSources: canvasNamedQueriesIn(
+                      view.locale,
+                      view.userId
+                    ).sources,
+                  }}
+                />
+                {/* "+ Add a question" under a selected Accordion: it adds the
+                    next question, opens it and puts the cursor in its title.
+                    Hidden mid-drag, as the other controls are. */}
+                <AccordionAddQuestion
+                  editor={editor}
+                  hidden={dragging}
+                  onEditText={view.preview.onEditText}
+                />
               </>
             }
           >
@@ -429,8 +484,16 @@ export function editorCanvasRegion(view: EditorView): React.JSX.Element {
               // The regions of the page's layout, drawn around it from the
               // published set, as a visitor gets them, and the one selected.
               regions={view.canvasRegions}
+              // Where the site default shows no header or footer: the band
+              // saying so, with its ways to fill it.
+              emptyRegions={view.emptyRegionBands.bands}
               selectedRegion={view.selectedRegion.selection.area}
               onSelectRegion={view.selectedRegion.selection.select}
+              // A double-click on a region, or Enter on it while selected,
+              // edits it in place, for someone who may edit components; and
+              // the region being edited, drawn from its live document with
+              // its blocks addressed, the page around it inert under the dim.
+              {...regionEditingProps(view)}
               // The conditioned blocks visitors never see, because the page
               // can't check their conditions: badged in red on the canvas.
               conditionsUnchecked={view.conditionsUnchecked}
@@ -451,10 +514,69 @@ export function editorCanvasRegion(view: EditorView): React.JSX.Element {
               // counterpart is the Enter binding, registered in the same
               // place so a surface cannot gain one without the other.
               onDoubleClick={view.preview.onDoubleClick}
+              // On a set's own screen, where any page goes, between its
+              // header and footer.
+              {...placeholderOf(view)}
             />
           </CanvasFrame>
         </BlockContextMenu>
       )}
     </>
   );
+}
+
+/**
+ * The empty page's start area and the "+" in each gap, which open the
+ * in-place picker at their place; none on a set's placeholder, which has no
+ * page to add to.
+ */
+function pageInserters(view: EditorView): React.JSX.Element | null {
+  if (editsPlaceholder(view)) return null;
+  const { editor, insertPicker, componentLibrary, dragging, pageTitle } = view;
+  return (
+    <EditorPageInserters
+      view={view}
+      document={editor.document}
+      selectedId={editor.selectedId}
+      componentTitle={componentLibrary.titleOf}
+      dragging={dragging}
+      start={{
+        ...(pageTitle === undefined ? {} : { title: pageTitle }),
+        onStart: control =>
+          insertPicker.open(
+            {
+              kind: "place",
+              place: {
+                at: { index: editor.document.nodes.length },
+              },
+            },
+            elementAnchor(control)
+          ),
+        onSavedSection: () => view.openInsertPanel(undefined, "sections"),
+      }}
+      onAddAfter={(nodeId, control) =>
+        insertPicker.open(
+          { kind: "place", place: { after: nodeId } },
+          elementAnchor(control)
+        )
+      }
+    />
+  );
+}
+
+/** The placeholder a set's screen draws where any page goes, or nothing. */
+function placeholderOf(view: EditorView): { placeholder?: string } {
+  return view.set === undefined ? {} : { placeholder: PAGE_PLACEHOLDER_WORDS };
+}
+
+/**
+ * Whether the editor is on a set's placeholder: a set's screen with neither
+ * its header nor its footer edited in place. While one is, the document
+ * edited is that component, which takes the canvas's add controls as it does
+ * edited in place from a page.
+ */
+export function editsPlaceholder(
+  view: Pick<EditorView, "set" | "editing">
+): boolean {
+  return view.set !== undefined && view.editing.target.kind === "page";
 }

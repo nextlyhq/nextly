@@ -26,8 +26,9 @@ import {
   DesignFonts,
   DesignGroup,
   DesignPanel,
+  DesignReveal,
+  FONTS_SCREEN_VIEW,
   ReportStylesMatches,
-  SITE_FONTS_GROUP,
   designViewOf,
   useDesignBrowse,
   useDesignHeaderSlot,
@@ -421,36 +422,41 @@ describe("Manage fonts… from a Font control in Design", () => {
     );
   }
 
-  it("opens the Type tab and the site's Fonts group, even folded", () => {
-    let folded = "";
-    const store = {
-      read: () => folded || null,
-      write: (next: string) => {
-        folded = next;
-      },
-    };
+  /** The Design panel with a Font control in its Type tab, and the screen. */
+  function renderFonts(current: string): {
+    choose: ReturnType<typeof vi.fn>;
+    rerender: (current: string) => void;
+  } {
     const choose = vi.fn();
-    render(
+    const panel = (view: string): React.JSX.Element => (
       <DesignPanel
-        view={{ current: "type", choose }}
-        foldStore={store}
+        view={{ current: view, choose }}
         frame={designTabs => (
           <DesignFonts
             faces={[]}
             fromCode={[]}
-            onManageFonts={() => choose("type")}
+            onManageFonts={() => choose(FONTS_SCREEN_VIEW)}
           >
             {designTabs}
           </DesignFonts>
+        )}
+        fonts={close => (
+          <section aria-label="Fonts">
+            <ManageFontsInScreen />
+            <button type="button" onClick={close}>
+              Back to Design
+            </button>
+          </section>
         )}
         tabs={{
           colours: () => null,
           type: () => (
             <>
-              <DesignGroup id={SITE_FONTS_GROUP} heading="Fonts" count={1}>
-                <p>font rows</p>
-              </DesignGroup>
+              <p>type rows</p>
               <ManageFonts />
+              <button type="button" data-fonts-manage="">
+                Manage fonts from Type
+              </button>
             </>
           ),
           spacing: () => null,
@@ -458,89 +464,138 @@ describe("Manage fonts… from a Font control in Design", () => {
         }}
       />
     );
-    fireEvent.click(screen.getByRole("button", { name: /^Fonts/ }));
-    expect(screen.queryByText("font rows")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Manage fonts…" }));
-    expect(choose).toHaveBeenCalledWith("type");
-    expect(screen.getByText("font rows")).toBeTruthy();
-  });
-
-  /** The Type tab with the Fonts group and a Font control's way to it. */
-  function renderFonts(): { choose: ReturnType<typeof vi.fn> } {
-    const choose = vi.fn();
-    render(
-      <DesignPanel
-        view={{ current: "type", choose }}
-        frame={designTabs => (
-          <DesignFonts
-            faces={[]}
-            fromCode={[]}
-            onManageFonts={() => choose("type")}
-          >
-            {designTabs}
-          </DesignFonts>
-        )}
-        tabs={{
-          colours: () => null,
-          type: () => (
-            <>
-              <DesignGroup id={SITE_FONTS_GROUP} heading="Fonts" count={1}>
-                <p>font rows</p>
-              </DesignGroup>
-              <ManageFonts />
-            </>
-          ),
-          spacing: () => null,
-          styles: () => null,
-        }}
-      />
-    );
-    return { choose };
+    const view = render(panel(current));
+    return { choose, rerender: next => view.rerender(panel(next)) };
   }
 
-  it("brings the Fonts group into view", async () => {
-    const scrolled: Element[] = [];
-    // jsdom draws nothing, so it has no scrollIntoView to spy on.
-    if (!("scrollIntoView" in window.Element.prototype)) {
-      Object.defineProperty(window.Element.prototype, "scrollIntoView", {
-        configurable: true,
-        writable: true,
-        value: () => undefined,
-      });
-    }
-    const scroll = vi
-      .spyOn(window.Element.prototype, "scrollIntoView")
-      .mockImplementation(function (this: Element) {
-        scrolled.push(this);
-      });
-    try {
-      renderFonts();
-      fireEvent.click(screen.getByRole("button", { name: "Manage fonts…" }));
-      // Once the opened group is drawn.
-      await waitFor(() =>
-        expect(
-          scrolled.some(
-            element =>
-              element instanceof HTMLElement &&
-              element.dataset.group === SITE_FONTS_GROUP
-          )
-        ).toBe(true)
-      );
-    } finally {
-      scroll.mockRestore();
-    }
+  /** Reads the frame's font choices from inside the screen. */
+  function ManageFontsInScreen(): React.JSX.Element {
+    const fonts = React.useContext(FontChoicesContext);
+    return <p>{fonts === null ? "no fonts" : "the site's fonts"}</p>;
+  }
+
+  it("opens the Fonts screen in the panel's place", () => {
+    const { choose, rerender } = renderFonts("type");
+    fireEvent.click(screen.getByRole("button", { name: "Manage fonts…" }));
+    expect(choose).toHaveBeenCalledWith(FONTS_SCREEN_VIEW);
+    rerender(FONTS_SCREEN_VIEW);
+    expect(screen.getByRole("region", { name: "Fonts" })).toBeTruthy();
+    // Over the tabs: none of Design's own controls are left beside it.
+    expect(screen.queryByRole("tab", { name: "Type" })).toBeNull();
+    expect(screen.queryByText("type rows")).toBeNull();
   });
 
-  it("puts a Design search away, which would hide the Fonts group", () => {
-    renderFonts();
-    const search = screen.getByRole("searchbox", { name: "Search Design" });
-    fireEvent.change(search, { target: { value: "heading" } });
-    expect(screen.queryByText("font rows")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Manage fonts…" }));
-    expect((search as HTMLInputElement).value).toBe("");
-    expect(screen.getByText("font rows")).toBeTruthy();
+  it("draws the screen inside the panel's frame, so it reads what the tabs read", () => {
+    renderFonts(FONTS_SCREEN_VIEW);
+    expect(screen.getByText("the site's fonts")).toBeTruthy();
+  });
+
+  it("goes back to the Type tab it opened from", () => {
+    const { choose } = renderFonts(FONTS_SCREEN_VIEW);
+    fireEvent.click(screen.getByRole("button", { name: "Back to Design" }));
+    expect(choose).toHaveBeenCalledWith("type");
+  });
+
+  it('hands focus back to Type\'s "Manage fonts…" once the tab is drawn again', async () => {
+    const { rerender } = renderFonts(FONTS_SCREEN_VIEW);
+    fireEvent.click(screen.getByRole("button", { name: "Back to Design" }));
+    rerender("type");
+    await waitFor(() =>
+      expect(document.activeElement?.getAttribute("data-fonts-manage")).toBe("")
+    );
+  });
+
+  it("goes back to Type with focus on the Body or Headings picker it is sent to", async () => {
+    // A font's "Headings font" link: back to Type, onto that role's picker.
+    const choose = vi.fn();
+    const panel = (view: string): React.JSX.Element => (
+      <DesignPanel
+        view={{ current: view, choose }}
+        fonts={close => (
+          <button
+            type="button"
+            onClick={() => close('[data-font-role="heading"]')}
+          >
+            Headings font
+          </button>
+        )}
+        tabs={{
+          colours: () => null,
+          type: () => (
+            <>
+              <button type="button" data-font-role="body">
+                Body picker
+              </button>
+              <button type="button" data-font-role="heading">
+                Headings picker
+              </button>
+              <button type="button" data-fonts-manage="">
+                Manage fonts…
+              </button>
+            </>
+          ),
+          spacing: () => null,
+          styles: () => null,
+        }}
+      />
+    );
+    const view = render(panel(FONTS_SCREEN_VIEW));
+    fireEvent.click(screen.getByRole("button", { name: "Headings font" }));
+    expect(choose).toHaveBeenCalledWith("type");
+    view.rerender(panel("type"));
+    await waitFor(() =>
+      expect(document.activeElement?.textContent).toBe("Headings picker")
+    );
+  });
+
+  it("puts a Design search away when the screen sends the author to a variable", () => {
+    // The screen's "Edit this variable": back to Type, onto the fonts group.
+    // A search kept from before the screen opened would hide that group.
+    const choose = vi.fn();
+    const panel = (view: string): React.JSX.Element => (
+      <DesignPanel
+        view={{ current: view, choose }}
+        fonts={() => (
+          <DesignReveal>
+            {reveal => (
+              <button type="button" onClick={() => reveal("fonts")}>
+                Edit this variable
+              </button>
+            )}
+          </DesignReveal>
+        )}
+        tabs={{
+          colours: () => null,
+          type: () => <p>type rows</p>,
+          spacing: () => null,
+          styles: () => null,
+        }}
+      />
+    );
+    const view = render(panel("type"));
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search Design" }), {
+      target: { value: "hero" },
+    });
+    view.rerender(panel(FONTS_SCREEN_VIEW));
+    fireEvent.click(screen.getByRole("button", { name: "Edit this variable" }));
+    view.rerender(panel("type"));
+    expect(
+      (
+        screen.getByRole("searchbox", {
+          name: "Search Design",
+        }) as HTMLInputElement
+      ).value
+    ).toBe("");
+  });
+
+  it('is named apart from every tab, and an older stored "fonts" tab still opens Colours', () => {
+    expect(DESIGN_TABS_NAMES).not.toContain(FONTS_SCREEN_VIEW);
+    expect(designViewOf("fonts")).toBe("colours");
   });
 });
+
+/** The four tabs' names, which the screen's view must not be one of. */
+const DESIGN_TABS_NAMES = ["colours", "type", "spacing", "styles"];
 
 describe("a group asked for from outside the panel", () => {
   // The block panel's "Edit block styles" asks for one block type's styles:

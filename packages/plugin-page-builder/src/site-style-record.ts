@@ -24,13 +24,16 @@
  * @module @nextlyhq/plugin-page-builder/site-style-record
  */
 import {
+  MAX_BREAKPOINT_ID_LENGTH,
   MAX_BREAKPOINTS_PER_AXIS,
   MAX_NAMED_CLASSES,
   TOKEN_KINDS,
   emitTokenBlocks,
   isPlainRecord,
   isDefaultLook,
+  isFluidSizes as fluidSizesUsable,
   isLook,
+  isTextStyle,
   isUsableNamedClass,
   MAX_TOKEN_NAME_LENGTH,
   ownLooksRead,
@@ -208,7 +211,9 @@ function isColourOrder(value: unknown): value is readonly string[] {
  * smallest screen below the largest, or a fluid size would grow across no
  * width at all.
  */
-function isFluidRange(value: unknown): value is { min: number; max: number } {
+export function isFluidRange(
+  value: unknown
+): value is { min: number; max: number } {
   return (
     isPlainRecord(value) &&
     typeof value.min === "number" &&
@@ -364,6 +369,16 @@ const SETTING_READERS: readonly ((
           kept: {},
           issue:
             "The colour order must be a list of different code names, each used once.",
+        };
+  },
+  ({ builtInColoursShown }) => {
+    if (builtInColoursShown === undefined) return NOTHING;
+    return typeof builtInColoursShown === "boolean"
+      ? { kept: { builtInColoursShown } }
+      : {
+          kept: {},
+          issue:
+            "Whether the built-in colours are shown must be true or false.",
         };
   },
   // Row by row: a refused row is left out and the others are kept.
@@ -1007,6 +1022,49 @@ function withUsableMarks(
   };
 }
 
+/** The most devices a site has: every breakpoint on both axes. */
+const MAX_FLUID_DEVICES = 2 * MAX_BREAKPOINTS_PER_AXIS;
+
+/**
+ * Whether a text style's fluid sizes can be kept: a record of devices, at most
+ * one per device a site can have, each holding two sizes by the engine's one
+ * rule (`isFluidSizes`, the bound "Fluid…" itself applies), on a text
+ * style only. Bounded before it is walked, as stored data reaches here.
+ */
+function usableFluidSizes(entry: NamedClass): boolean {
+  const sizes: unknown = (entry as { readonly fluidSizes?: unknown })
+    .fluidSizes;
+  if (!isPlainRecord(sizes) || !isTextStyle(entry)) return false;
+  let devices = 0;
+  for (const device in sizes) {
+    if (!Object.hasOwn(sizes, device)) continue;
+    devices += 1;
+    if (devices > MAX_FLUID_DEVICES) return false;
+    if (device === "" || device.length > MAX_BREAKPOINT_ID_LENGTH) return false;
+    if (!fluidSizesUsable(sizes[device])) return false;
+  }
+  return true;
+}
+
+/**
+ * A class entry with its fluid sizes checked. Absent, the entry comes back as
+ * it is. Sizes that cannot be used add an issue, which refuses a write, and
+ * are left out of the entry a read keeps: a range change would otherwise make
+ * a size again from nonsense.
+ */
+function withUsableFluidSizes(
+  entry: NamedClass,
+  index: number,
+  issues: string[]
+): NamedClass {
+  if (entry.fluidSizes === undefined || usableFluidSizes(entry)) return entry;
+  issues.push(
+    `classes[${index}] has fluid sizes that cannot be used: each device's two sizes must be numbers of px above zero, on a text style.`
+  );
+  const { fluidSizes: _unusable, ...rest } = entry;
+  return rest;
+}
+
 /**
  * The stored class library.
  *
@@ -1118,7 +1176,9 @@ export function checkStoredClasses(
     }
     issues.push(...blockStyleMarkIssues(named, index));
     issues.push(...builtInRenameIssues(entry, index, policy));
-    classes.push(withUsableMarks(entry, index, issues));
+    classes.push(
+      withUsableFluidSizes(withUsableMarks(entry, index, issues), index, issues)
+    );
   });
   issues.push(...mergedLibraryIssues(classes, policy));
   issues.push(...secondStarIssues(classes, policy));

@@ -17,18 +17,19 @@ This page covers the common deploy patterns. Pick whichever fits your stack.
 
 ## The CLI commands you'll use
 
-| Command                                  | Purpose                                                                                                                                                                                                                                                                                                                                                       |
-| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `nextly migrate:baseline`                | Run **once**, when a project developed with `db:sync` starts using migrations. Records the schema the database already has as the starting point. See [Graduating from `db:sync`](#graduating-from-dbsync-to-migrations).                                                                                                                                     |
-| `nextly migrate:create [name]`           | After you edit `nextly.config.ts`, generate a `.sql` file capturing the change. Commit it to git.                                                                                                                                                                                                                                                             |
-| `nextly migrate:check`                   | CI gate. Verifies migration file integrity and config drift. Does NOT connect to a database.                                                                                                                                                                                                                                                                  |
-| `nextly migrate`                         | Applies pending `.sql` files to the target database. Run from CI or your laptop.                                                                                                                                                                                                                                                                              |
-| `nextly migrate:status`                  | Shows applied / pending / failed / unfinished migrations with their checksums and durations. An unfinished one's last attempt recorded no outcome: the process running it stopped, or is still running. Also names [where the registry and the tables disagree](#where-the-registry-and-the-tables-disagree).                                                 |
-| `nextly migrate:resolve`                 | Recovery: mark a file applied/rolled-back or clean up a failed attempt without running SQL. See [Recovering from a failed migration](#recovering-from-a-failed-migration).                                                                                                                                                                                    |
-| `nextly migrate:fresh`                   | Wipes all tables and re-applies every migration. Local-dev only. Confirmation required.                                                                                                                                                                                                                                                                       |
-| `nextly migrate:down`                    | Rolls back the most-recently-applied migration(s) using their `-- DOWN` section. CLI-only; never runs on boot. See [Rolling back a migration](#rolling-back-a-migration).                                                                                                                                                                                     |
-| `nextly upgrade`                         | Run after upgrading Nextly, once every instance serves the new release. Brings an existing database up to date in steps: it hashes passwords stored before this release, and removes passwords kept in version history. Says "Already upgraded. Nothing to do." when no step has work. See [Upgrading an existing database](#upgrading-an-existing-database). |
-| `nextly users:clear-plaintext-passwords` | Finds accounts an earlier release left holding a password stored as typed and, with `--apply --confirm-default-hasher`, clears it and ends their sessions. Previews by default. See [Clearing passwords stored as typed](#clearing-passwords-stored-as-typed).                                                                                                |
+| Command                                  | Purpose                                                                                                                                                                                                                                                                                                       |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `nextly migrate:baseline`                | Run **once**, when a project developed with `db:sync` starts using migrations. Records the schema the database already has as the starting point. See [Graduating from `db:sync`](#graduating-from-dbsync-to-migrations).                                                                                     |
+| `nextly migrate:create [name]`           | After you edit `nextly.config.ts`, generate a `.sql` file capturing the change. Commit it to git.                                                                                                                                                                                                             |
+| `nextly migrate:check`                   | CI gate. Verifies migration file integrity and config drift. Does NOT connect to a database.                                                                                                                                                                                                                  |
+| `nextly migrate`                         | Applies pending `.sql` files to the target database. Run from CI or your laptop.                                                                                                                                                                                                                              |
+| `nextly migrate:status`                  | Shows applied / pending / failed / unfinished migrations with their checksums and durations. An unfinished one's last attempt recorded no outcome: the process running it stopped, or is still running. Also names [where the registry and the tables disagree](#where-the-registry-and-the-tables-disagree). |
+| `nextly migrate:resolve`                 | Recovery: mark a file applied/rolled-back or clean up a failed attempt without running SQL. See [Recovering from a failed migration](#recovering-from-a-failed-migration).                                                                                                                                    |
+| `nextly migrate:fresh`                   | Wipes all tables and re-applies every migration. Local-dev only. Confirmation required.                                                                                                                                                                                                                       |
+| `nextly migrate:down`                    | Rolls back the most-recently-applied migration(s) using their `-- DOWN` section. CLI-only; never runs on boot. See [Rolling back a migration](#rolling-back-a-migration).                                                                                                                                     |
+| `nextly i18n:convert-zoned-dates`        | PostgreSQL only. Run once after upgrading, when every instance serves the new release: converts translated date columns an earlier release made with a time zone. See [Translated date fields on PostgreSQL](#translated-date-fields-on-postgresql).                                                          |
+| `nextly upgrade`                         | With `--reconcile-core` only: see [Core schema drift after an upgrade](#core-schema-drift-after-an-upgrade). Its other database work is now part of `nextly migrate`; run without the flag it changes nothing and exits 1 with `UPGRADE_WORK_MOVED`.                                                          |
+| `nextly users:clear-plaintext-passwords` | Finds accounts an earlier release left holding a password stored as typed and, with `--apply --confirm-default-hasher`, clears it and ends their sessions. Previews by default. See [Clearing passwords stored as typed](#clearing-passwords-stored-as-typed).                                                |
 
 Global flags inherited from the root `nextly` command: `--config <path>` (custom `nextly.config.ts` path), `--cwd <path>`, `--verbose`, `-q/--quiet`, `--non-interactive` (never prompt; a command that needs an answer stops and names the flag).
 
@@ -36,14 +37,15 @@ Global flags inherited from the root `nextly` command: `--config <path>` (custom
 
 ### Per-command flags
 
-- `nextly migrate` -- `--dry-run` (list what a run would apply, without executing: each plugin's pending migration modules by `plugin:<name>/<module>`, then the app's pending files with the SQL each would run, in run order and within `--step`, with anything a run would refuse; the rows in the way of a column made required are counted only for the first migration a run applies, and a later one says they are counted when the run reaches it, since the migrations before it may fill them), `--step <n>` (apply only N pending migrations, counting a plugin's migration modules, which run first, together with the app's files; a step never ends inside the files that move a field between translated and shared, and the run says when it goes on through them), `--force-unlock` (clear a stale migrate lock left by a crashed run, then migrate), `--backup-confirmed` (your statement that the database is backed up, needed outside a terminal before the [migration records of an earlier release](#migration-records-of-an-earlier-release) are moved; ignored when there are none).
+- `nextly migrate` -- `--dry-run` (list what a run would apply, without executing: each plugin's pending migration modules by `plugin:<name>/<module>`, then the app's pending files with the SQL each would run, in run order and within `--step`, with anything a run would refuse; the rows in the way of a column made required are counted only for the first migration a run applies, and a later one says they are counted when the run reaches it, since the migrations before it may fill them), `--step <n>` (apply only N pending migrations, counting a plugin's migration modules, which run first, together with the app's files; a step never ends inside the files that move a field between translated and shared, and the run says when it goes on through them), `--force-unlock` (clear a stale migrate lock left by a crashed run, then migrate), `--backup-confirmed` (your statement that the database is backed up, needed outside a terminal before the [migration records of an earlier release](#migration-records-of-an-earlier-release) are moved or [data an earlier release stored](#upgrading-an-existing-database) is brought up to date; ignored when there is neither).
 - `nextly migrate:baseline` -- `--name <name>` (the migration's name; defaults to `baseline`), `--force-unlock`, `--dry-run` (name the migration and snapshot it would write, whether it would create the ledger table, and the ledger row it would record, without writing any of them or taking the migrate lock; where a run would refuse, it says why and still exits 0).
 - `nextly migrate:create` -- `[name]` positional or `--name <name>` flag, `--blank` (empty file for custom SQL), `--no-transaction` (with `--blank`, a file whose first line is the [no-transaction marker](#running-a-file-outside-a-transaction); with `--plugin`, a module with `transaction: false`), `--non-interactive` (a global option every command accepts), `--accept-renames` (with no terminal, accept every possible [rename](#renaming-a-field), a field group's included, instead of declining them), `--accept-data-loss[=targets]` (write a migration that [deletes data](#a-migration-that-deletes-data) without being asked), `--record-snapshot` (a migration that changes nothing, whose snapshot records which fields are translated as the database holds them, for a project whose snapshots [predate that record](/docs/localization#when-your-migrations-predate-the-record-of-translated-fields); it reads the database, so run it against one that has applied every migration), `--dry-run` (print the migration it would write and name it and its snapshot, or with `--plugin` the module and its barrel, without writing any of them; it still asks about possible renames, whose answers shape the migration, and where a run would refuse, it says why and still exits 0).
 - `nextly migrate:status` -- `--json` (machine-readable output for CI scripting), `--plugin <name>` (list that plugin's migration modules instead of the app's files).
 - `nextly migrate:resolve` -- exactly one of `--applied <file>`, `--rolled-back <file>`, `--failed-cleanup <file>`, `--removed <file>` (record an applied migration's file removed on purpose; it stays applied); `--file-missing` (with `--rolled-back`, say the file is gone from the folder, so it is not read); `--skip-verify` (with `--applied`, skip the live-vs-snapshot check; a file with no snapshot is recorded without it when it is marked `-- nextly:no-transaction`, or on MySQL when its newest attempt failed or never finished); `--dry-run` (run the same checks and name the ledger rows it would record, recording none).
 - `nextly migrate:fresh` -- `--accept-data-loss` (skip confirmation; `-f, --force` still works for one release, with a notice, and `--yes` is refused), `--seed` (run seeders after migrations), `--dry-run` (name every table it would drop and each migration it would run again, needing no consent and dropping nothing).
 - `nextly migrate:down` -- `--step <n>` (roll back the last N migrations, going on through the files that move a field between translated and shared when the step would end inside them), `--allow-data-loss` (required when the DOWN drops a table or column), `--yes` (required in production), `--dry-run` (show targets + DOWN SQL without executing), `--plugin <name>` (roll back that plugin's modules instead of the app's files), `--force-unlock`.
-- `nextly upgrade` -- `--confirm-backed-up` (required outside a terminal, when a step has work: your statement that the database is backed up), `-f, --force` (skip the backup prompt), `--reconcile-core` (see [Core schema drift after `nextly upgrade`](#core-schema-drift-after-nextly-upgrade)), `--accept-data-loss [targets]` (with `--reconcile-core`: the consent for what it deletes from Nextly's own tables), `--force-unlock`, `--dry-run` (count each step's pending work, all taken before any step runs, and name what a run would refuse, with no backup question and no lock; with `--reconcile-core`, name each statement the reconcile would run, each column it would delete, and the consent a run with nobody to ask needs).
+- `nextly upgrade` -- `--reconcile-core` (see [Core schema drift after an upgrade](#core-schema-drift-after-an-upgrade)), `--accept-data-loss [targets]` (the consent for what the reconcile deletes from Nextly's own tables), `--force-unlock`, `--dry-run` (name each statement the reconcile would run, each column it would delete, and the consent a run with nobody to ask needs). `--confirm-backed-up` and `-f, --force` no longer do anything: the work they confirmed is part of `nextly migrate`.
+- `nextly i18n:convert-zoned-dates` -- `--backup-confirmed` (your statement that the database is backed up, needed outside a terminal when there is a column to convert; ignored when there is none), `--force-unlock`, `--dry-run` (count the columns it would convert and name what a run would refuse, with no backup question and no lock).
 - `nextly users:clear-plaintext-passwords` -- `--apply` (clear the values and end those accounts' sessions, an access token already issued being refused within about ten seconds; without it the command only counts them), `--confirm-default-hasher` (required with `--apply`: your statement that no stored password was written by a custom `passwordHasher`, now or earlier).
 
 ### A migration that deletes data
@@ -60,6 +62,9 @@ names only.
 - With no terminal (CI, `--non-interactive`), it writes nothing and exits 1 unless
   `--accept-data-loss` (or `NEXTLY_ACCEPT_DATA_LOSS`) covers every deletion. Give it alone to
   cover them all, or name tables and columns: `--accept-data-loss=dc_posts,dc_pages.summary`.
+  A table or column whose name holds a space, a comma or a dot cannot be named in the list, nor
+  can a table named `1`, `true`, `0` or `false`, which the consent reads as a yes or a no: only
+  the consent given alone covers it, and a refusal asks for that.
 
 The file it writes is marked in its header, so the deletion is visible in review:
 
@@ -956,8 +961,8 @@ commands warn, naming its kind and slug: the code-first definition wins.
 
 Two things to know before relying on it:
 
-- **The Builder's own `.sql` file is ignored.** Saving a Collection writes a timestamped migration
-  but no `meta/*.snapshot.json`. Every command ignores such a file, naming it with "ignored:
+- **A file an earlier Schema Builder wrote is ignored.** Before Builder saves wrote their snapshot,
+  saving a Collection wrote a timestamped migration but no `meta/*.snapshot.json`. Every command ignores such a file, naming it with "ignored:
   written by an earlier Schema Builder", so run `nextly migrate:create` to write the change as a
   migration with its snapshot, and commit that pair. Only a file with the whole signature is
   ignored. A file with the Builder's name and no snapshot that lacks another part of it, for
@@ -972,39 +977,25 @@ Two things to know before relying on it:
   collection and save it once before generating the migration.
 
 It is input, not a deployment artifact. `nextly migrate` never reads `ui-schema.json`; it applies
-`.sql` files. An entity's registry row reaches another database only when a migration file carries
-its upsert, and `migrate:create` appends that upsert **only for entities whose table the migration
-actually changes**. So the manifest gets an entity into the generator's view; a DDL change to that
-entity is what gets its row into production.
+`.sql` files. An entity's registry row reaches another database in those files: every Builder save
+writes a migration carrying it, a save that changes settings alone included (see
+[What a Builder save writes](/docs/schema-builder#what-a-builder-save-writes)).
 
 The manifest is written by a development-only route, so it is a dev-time artifact you commit rather
 than something production generates.
 
-### What does not travel
+### What travels with a Builder save
 
-- A **metadata-only** edit — a label, a description, or the Versions, Revalidate or Webhooks switch,
-  with no column change for that entity — produces no upsert, because `migrate:create` writes a file
-  only for DDL and filters metadata upserts to the tables that file touches. With no DDL anywhere in
-  the run it writes nothing at all (`No changes detected`, exit code 0). The value stays in the
-  manifest until some later migration changes that entity's table and carries the row with it.
-  A **cleared** description is the exception, because it never travels: the manifest records an
-  empty description as absent, and the upsert leaves a column the manifest does not carry as it
-  was, so the other database keeps the old text through every later migration.
-- Status and Internationalization are **not** metadata: both change columns. Note that an
-  Internationalization toggle whose column moves are emitted as a companion migration can still
-  leave the `localized` registry value behind, because the upsert is filtered by the same
-  touched-table set the companion file does not populate. Check the registry row after toggling
-  localization on an existing entity.
-- **A deletion leaves the registry row behind.** Deleting a Collection, a Single or a Field Group
-  in the Builder writes the migration that drops its table, with a snapshot that no longer records
-  the entity, so the next `migrate:create` and `migrate:check` find nothing lost. Removing the
-  entry from `ui-schema.json` by hand is not a deletion: both commands refuse it, as above. The
-  table goes. Its registry row does not: `migrate:create`
-  builds registry upserts only for entities still in the manifest, and nothing on the
-  `nextly migrate` path removes a row. The other environment keeps a row describing a table that no
-  longer exists. There is no supported way to remove it through `nextly migrate` today, and
-  `nextly prune` does not apply — it only removes `plugin:` provenance and always retains Builder
-  entities.
+- A **metadata-only** edit — a description, or a switch such as Versions, with no column change —
+  writes a settings-only migration that carries the registry row. A **cleared** description travels
+  the same way, as the empty text it is.
+- Status and Internationalization are **not** metadata: both change columns, and their migrations
+  carry the registry row with them, its `localized` value included.
+- **A deletion removes the registry row.** Deleting a Collection, a Single or a Field Group in the
+  Builder writes the migration that drops its table and removes its row, with a snapshot that no
+  longer records the entity, so the next `migrate:create` and `migrate:check` find nothing lost.
+  Removing the entry from `ui-schema.json` by hand is not a deletion: both commands refuse it, as
+  above.
 
 ### What `migrate` repairs
 
@@ -1019,11 +1010,10 @@ reach a Builder entity is narrower than it sounds:
 | A missing **collection** or **single** row from a `migrate:create` deployment      | **No** — a `migrate:create` snapshot records tables, not entities, so registration finds nothing to insert. Only an entity-level snapshot, such as a scaffolded template's, restores a row |
 | A missing **field group** row                                                      | No — registration covers collections and singles only                                                                                                                                      |
 | An existing row with stale labels, descriptions or fields                          | No — the pass promotes status; it does not refresh content                                                                                                                                 |
-| A metadata-only edit that produced no file                                         | No — there is no artifact to read                                                                                                                                                          |
-| The row of a **deleted** entity                                                    | No — nothing on this path removes a row                                                                                                                                                    |
+| The row of a **deleted** entity                                                    | Removed by the delete's own migration, not by this pass                                                                                                                                    |
 
-So run `nextly migrate` to settle a pending status, but do not rely on it to recreate a registry row
-that a Builder deployment is missing.
+So run `nextly migrate` to settle a pending status. A Builder entity's row does not depend on this
+pass: each Builder save's migration writes it.
 
 ### Moving an entity into code
 
@@ -1278,33 +1268,35 @@ A database from an early alpha keeps its migration records in `nextly_migrations
 
 It does this only once a backup is confirmed. Pass `--backup-confirmed`, or answer yes when it asks at a terminal. With no terminal attached and no flag, it changes nothing and stops with `MIGRATE_BACKUP_NOT_CONFIRMED`; a no at the prompt stops it with `MIGRATE_BACKUP_DECLINED`. The flag is ignored on a database with no such records, so a deploy script can always pass it. `--confirm-backed-up` still works for one release, with a notice. `nextly migrate --dry-run` on such a database lists the move and stops there: the pending migrations are listed once the records are moved.
 
-It reads `nextly_migrations` in both shapes `nextly migrate` and `nextly db:sync` kept it, including the empty one an earlier `nextly db:sync` created on SQLite. A record of a run that never finished is skipped and named. It reads every record before writing any, so a record it cannot read stops it with nothing changed (`MIGRATE_LEDGER_UNREADABLE`), and so does a table of another shape under the name `nextly_schema_events` (`MIGRATE_EVENTS_TABLE_TAKEN`). A run stopped part-way keeps the old tables, and the next run finishes the move without writing a record twice. The other commands that need the history (`migrate:baseline`, `nextly upgrade`) stop with `LEGACY_BOOKKEEPING_FOUND` until it has run.
+It reads `nextly_migrations` in both shapes `nextly migrate` and `nextly db:sync` kept it, including the empty one an earlier `nextly db:sync` created on SQLite. A record of a run that never finished is skipped and named. It reads every record before writing any, so a record it cannot read stops it with nothing changed (`MIGRATE_LEDGER_UNREADABLE`), and so does a table of another shape under the name `nextly_schema_events` (`MIGRATE_EVENTS_TABLE_TAKEN`). A run stopped part-way keeps the old tables, and the next run finishes the move without writing a record twice. The other commands that need the history (`migrate:baseline`, `nextly upgrade --reconcile-core`, `nextly i18n:convert-zoned-dates`) stop with `LEGACY_BOOKKEEPING_FOUND` until it has run.
 
 ### Upgrading an existing database
 
-`nextly upgrade` is a list of steps, each of which brings one part of an existing database up to date. It takes the steps in order: it counts what a step would change and, when that is more than nothing, runs it and prints its count, before it looks at the next step. So when a later step stops the upgrade, the earlier ones have already been applied; run it again once the cause is fixed, and it carries on. It asks for a backup before the first step that has work. When no step has anything, it prints `Already upgraded. Nothing to do.` and asks for nothing. Running it again after it finishes changes nothing. A database that still keeps its migration records the way an early alpha did is refused, with nothing changed, until `nextly migrate --backup-confirmed` has moved them: run `nextly migrate` first, then `nextly upgrade`.
+`nextly migrate` also brings data an earlier release stored up to date. Once its migrations have applied, it takes a list of steps in order: it counts what a step would change and, when that is more than nothing, runs it and prints its count, before it looks at the next step. So when a later step stops the run, the earlier ones have already been applied; run it again once the cause is fixed, and it carries on. A run with `--step` that leaves migrations pending skips the steps, and the run that applies the last migration takes them.
 
 - **Hash passwords stored before this release.** A password inside a group or repeater that is not yet a hash is stored as a hash of itself, so it keeps working. A value already in a password hasher's format is left alone. The step prints a count for each collection, Single and field group, never a value.
-- **Convert translated date columns kept with a time zone (PostgreSQL).** Each date column an earlier release made with a time zone in a translations table becomes a plain `timestamp`, each value keeping the date Nextly showed; see [Translated date fields on PostgreSQL](#translated-date-fields-on-postgresql). The step prints each column and the time zone it read the values in.
 - **Remove passwords kept in version history.** A version's snapshot never keeps a password. The step strips any it finds from a snapshot captured by an earlier release, leaving the rest of the version as it was, and prints how many versions of each collection and Single it changed.
+- **Convert roles holding a retired manage permission.** A role an earlier release gave `manage-media`, `manage-settings`, `manage-email-providers` or `manage-email-templates` is given the plain read, create, update and delete permissions there instead.
 
-`nextly migrate` prints how many passwords are not yet hashed, and names `nextly upgrade`.
+The steps rewrite stored values in place, so the run needs a backup confirmed when one of them has work. Pass `--backup-confirmed`, or answer yes when it asks at a terminal. With no terminal attached and no flag, `nextly migrate` stops with `DATA_STEPS_BACKUP_NOT_CONFIRMED` before it applies anything, its pending migrations included; a no at the prompt stops it with `DATA_STEPS_BACKUP_DECLINED`. The flag is ignored when no step has work, so a deploy script can always pass it. The check before the migrations is not made under `--step`, and cannot see work on a table the pending migrations create: a run that finds the work only after its migrations applied stops with the same code, says that the migrations applied, and leaves the stored data as it was. `nextly migrate --dry-run` lists each step with work and its count. A database with nothing of the kind is never asked.
 
-Run `nextly upgrade` once the new release serves every instance. An instance still running the earlier release can store a password as it was written after the step has passed its row, so if you ran it during a rollout, run it again after the last earlier instance has stopped. A run that finds nothing left says so.
+An instance still running the earlier release can store a password as it was written after the step has passed its row. If earlier instances were still serving while `nextly migrate` ran, run it again after the last one has stopped; a run that finds nothing left changes nothing.
+
+Earlier releases did this work in `nextly upgrade`. That command now changes nothing without `--reconcile-core` and exits 1 with `UPGRADE_WORK_MOVED`, so replace it with `nextly migrate` in a deploy script.
 
 ### Translated date fields on PostgreSQL
 
 A translated date field is kept in the translations table (`<table>_locales`) as a plain `timestamp` holding the UTC time, the same way the main table keeps it. Earlier releases kept it as `timestamp with time zone`. On a server not in UTC, a date moved there by turning translation on was stored shifted by the server's time zone, and a date written there while translated was shown in Nextly shifted by it.
 
-`nextly upgrade` converts each such column once, and prints it with the time zone it read the values in. Run it once the new release serves every instance: an instance of the earlier release still running writes a date in a non-default language as its own local time, which a converted column would keep shifted. Each value keeps the date Nextly showed. On a server not in UTC, a date written in a translation before `nextly upgrade` converts its column, by the earlier release or by this one after it is deployed, was shown, and is kept, shifted by the zone's offset: run it as soon as the release serves every instance, and check recent translated dates after it. The conversion reads each value in the time zone of the connection it runs on, so run it with the same time zone as the app: a runner whose `PGTZ` or connection options set another zone moves every value by the difference. A second run finds nothing to convert.
+`nextly i18n:convert-zoned-dates` converts each such column once, and prints it with the time zone it read the values in. It is a command of its own, not a part of `nextly migrate`, because it must run after the deploy. Run it once the new release serves every instance: an instance of the earlier release still running writes a date in a non-default language as its own local time, which a converted column would keep shifted. Each value keeps the date Nextly showed. On a server not in UTC, a date written in a translation before `nextly i18n:convert-zoned-dates` converts its column, by the earlier release or by this one after it is deployed, was shown, and is kept, shifted by the zone's offset: run it as soon as the release serves every instance, and check recent translated dates after it. The conversion reads each value in the time zone of the connection it runs on, so run it with the same time zone as the app: a runner whose `PGTZ` or connection options set another zone moves every value by the difference. It rewrites the column in place, so it needs a backup confirmed when there is a column to convert: pass `--backup-confirmed`, or answer yes at a terminal. `--dry-run` counts the columns and changes nothing. A second run finds nothing to convert.
 
-Until then, `nextly migrate` and a production start leave these columns as they are, and name each one with `nextly upgrade`. In development the sync and `next dev` convert them, since no earlier instance runs beside them. A server in UTC is unaffected.
+Until then, `nextly migrate` and a production start leave these columns as they are, and name each one with `nextly i18n:convert-zoned-dates`. In development the sync and `next dev` convert them, since no earlier instance runs beside them. A server in UTC is unaffected.
 
 ### Core tables missing after an upgrade
 
 A release can add tables to Nextly's own core schema. An existing database gets them only through `nextly migrate` (or a boot run with `db.runMigrationsOnBoot`); a production boot never creates tables. Until you run it, every boot logs one warning naming each missing core table, and whatever reads or writes those tables fails: deleting a document, for one, rolls back. Run `nextly migrate` after every upgrade, and the warning goes away.
 
-### Core schema drift after `nextly upgrade`
+### Core schema drift after an upgrade
 
 User migration files contain **user-schema only** — core system tables are owned by the Nextly package version and reconciled by `nextly migrate` Phase 1. If `nextly migrate` reports core schema drift after upgrading from a very early alpha (e.g. a hand-edited bundled file), run `nextly upgrade --reconcile-core`. It brings Nextly's own tables up to date as `nextly migrate` does, with the same consent for what it deletes: at a terminal it lists each deletion and asks once; with nobody to ask it refuses unless `--accept-data-loss` (or `NEXTLY_ACCEPT_DATA_LOSS`) covers it. A retired column agreed to is dropped once the rest has applied. `nextly upgrade --reconcile-core --dry-run` names the statements it would run, each column it would delete, and the consent a run with nobody to ask needs, changing nothing. Use it only when migrate reports core drift.
 
@@ -1578,7 +1570,7 @@ limits are accepted:
 
 | Code                            | Meaning                                                                                                                                                                                                                                                                                                    |
 | ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `PLUGIN_SCHEMA_BEHIND`          | The plugin expects a newer schema than the database has. Run `nextly migrate`.                                                                                                                                                                                                                             |
+| `PLUGIN_SCHEMA_BEHIND`          | The plugin expects a newer schema than the database has. Run `nextly migrate`. Where migrations at start were refused for the data-loss consent, the error lists each deletion and the consent to give.                                                                                                    |
 | `PLUGIN_NOT_INSTALLED`          | An enabled plugin in your config has not been installed on this database. Run `nextly plugins install <name>` for each one it names, or `nextly plugins install --all`. A disabled plugin is not required to be installed: its tables exist, but its `onInstall` runs only when you enable and install it. |
 | `PLUGIN_SCHEMA_UNINSTALLED`     | The plugin was uninstalled, with or without `--keep-data`, but is still in your config. Reinstall it or remove the line.                                                                                                                                                                                   |
 | `PLUGIN_UNINSTALL_UNFINISHED`   | An uninstall of the plugin began and did not finish. Run it again, the way it began, to finish it, or reinstall the plugin.                                                                                                                                                                                |

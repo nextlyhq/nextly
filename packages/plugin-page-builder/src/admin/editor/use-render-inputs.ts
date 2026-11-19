@@ -50,6 +50,7 @@ import {
   previewWidth,
   selectionIsInspectable,
   useCanvasDrag,
+  useFormsShownAgain,
   type CanvasDrag,
   type CanvasZoom,
   type PageClassBlocks,
@@ -57,6 +58,7 @@ import {
 } from "@nextlyhq/builder/shell";
 import {
   useCallback,
+  useDeferredValue,
   useEffect,
   useMemo,
   useRef,
@@ -78,10 +80,16 @@ import { siteSheet, type SiteStyleData } from "../../site-style";
 import { readSiteStyleRecord } from "../../site-style-record";
 import { useCanvasBindings } from "../canvas-bindings-client";
 import { pageRenderInputs, type PageRenderInputs } from "../page-render-inputs";
+import { useDrawnSiteCss } from "../site-css-read";
 import { useSiteStyle } from "../site-style-client";
 import { useStoredSiteStyle } from "../site-style-read";
 
-import { useCanvasPageContext, type VisitorLists } from "./canvas-page-context";
+import {
+  useCanvasPageContext,
+  useRenewedForForms,
+  type VisitorLists,
+} from "./canvas-page-context";
+import { listPreviewsOf } from "./list-previews";
 import { useSharedStyleVerb, type SharedStyleVerb } from "./shared-style-verb";
 import { useSiteCanvas, type SiteCanvas } from "./site-canvas";
 import {
@@ -403,6 +411,8 @@ function useCanvasRender({
     asVisitor,
     pageDataLimit
   );
+  // The site's own CSS, drawn before the page's as on the live page.
+  const siteCss = useDrawnSiteCss();
   const pageInputs = useMemo(
     () =>
       pageRenderInputs({
@@ -412,6 +422,9 @@ function useCanvasRender({
         // sheet is compiled exactly as the published route compiles it.
         previewContainer: undefined,
         previewStates: true,
+        // A frame of its own, so the page's custom CSS is drawn, as live.
+        framed: true,
+        ...(siteCss === undefined ? {} : { siteCss }),
         limits: documentLimits,
         // The map's identity changes only when the read does, so this memo —
         // and the resolution the canvas runs from it — is not redone per
@@ -423,6 +436,7 @@ function useCanvasRender({
       clientConfig,
       documentLimits,
       componentLibrary.definitions,
+      siteCss,
     ]
   );
   // The page as the canvas draws it, before the sources its bindings read
@@ -900,6 +914,35 @@ function useStyleReadings({
    * declaration in the trace, so every value from a named class reads as set by
    * nobody, and a `url(...)` this host refuses reads as active.
    */
+  /*
+   * What the trace is compiled from, kept together and handed over deferred.
+   *
+   * The canvas draws each keystroke at once, and this second compile of the
+   * same page served only the inspector's provenance dots, so it delayed every
+   * letter reaching the canvas. Deferred as ONE value, the inputs never mix one
+   * render's document with another's context: a render that types reuses the
+   * last trace, and React compiles the new one straight after, once for a
+   * burst of keys rather than once per key.
+   */
+  const traceInputs = useMemo(
+    () => ({
+      document: editor.document,
+      canvasRender,
+      canvasSiteStyle,
+      remotePatterns,
+      siteStylePending,
+      siteStyleError,
+    }),
+    [
+      editor.document,
+      canvasRender,
+      canvasSiteStyle,
+      remotePatterns,
+      siteStylePending,
+      siteStyleError,
+    ]
+  );
+  const traced = useDeferredValue(traceInputs);
   const styleCascade = useMemo(
     () =>
       /*
@@ -922,31 +965,26 @@ function useStyleReadings({
        * withheld the trace unconditionally, which meant no provenance dot ever
        * appeared. The same test the canvas below uses.
        */
-      siteStylePending || siteStyleError !== null
+      traced.siteStylePending || traced.siteStyleError !== null
         ? undefined
         : pageStyleTrace(
-            editor.document,
-            canvasRender.styleContext,
-            siteSheet(canvasSiteStyle),
+            traced.document,
+            traced.canvasRender.styleContext,
+            siteSheet(traced.canvasSiteStyle),
             {
-              ...(remotePatterns === undefined ? {} : { remotePatterns }),
+              ...(traced.remotePatterns === undefined
+                ? {}
+                : { remotePatterns: traced.remotePatterns }),
               // The SAME map the canvas resolves against, under the SAME
               // caps, so the cascade the inspector reads describes the
               // composed tree on screen: neither one with every instance
               // left unresolved, nor one composed past a cap the canvas
               // stopped at.
-              definitions: canvasRender.definitions,
-              limits: canvasRender.limits,
+              definitions: traced.canvasRender.definitions,
+              limits: traced.canvasRender.limits,
             }
           ),
-    [
-      editor.document,
-      canvasRender,
-      canvasSiteStyle,
-      remotePatterns,
-      siteStylePending,
-      siteStyleError,
-    ]
+    [traced]
   );
 
   /*
@@ -978,8 +1016,12 @@ export function useCanvasInputs(
   /** The document the lists are read as a visitor of, while they are. */
   asVisitor?: VisitorLists
 ): CanvasInputs {
+  // The page's lists, read as the page: a header edited in place leaves the
+  // page's list choices as they were. The lists previewed are the edited
+  // document's own, its ids its own.
   const render = useCanvasRender({
     ...mount,
+    editor: { ...mount.page, ...listPreviewsOf(mount.editor) },
     ...style,
     ...(asVisitor === undefined ? {} : { asVisitor }),
   });
@@ -1207,9 +1249,19 @@ export function useBoundCanvasRender(
     conditions,
     pageDataLimit
   );
+  // A new round each time the author comes back to a page drawing a picked
+  // form, which may have changed in its own tab: the canvas draws its Forms
+  // again. Asked of the trees drawn, so a Form inside a placed component or
+  // in the Layout's header or footer counts, not only the page's own.
+  const formsRound = useFormsShownAgain(trees);
+  const context = useRenewedForForms(canvasRender.context, formsRound);
   const bound = useMemo(
-    () => ({ ...canvasRender, bindings }),
-    [canvasRender, bindings]
+    () => ({
+      ...canvasRender,
+      ...(context === undefined ? {} : { context }),
+      bindings,
+    }),
+    [canvasRender, context, bindings]
   );
   // Judged on the page's tree as the canvas draws it (repaired, composed and
   // gated by the renderer's own pipeline), so a mark lands on the block that

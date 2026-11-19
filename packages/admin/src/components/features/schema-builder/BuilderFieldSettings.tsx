@@ -30,6 +30,7 @@ import {
   SheetFooter,
   SheetTitle,
 } from "@nextlyhq/ui";
+import { fieldProducesColumn } from "nextly/config";
 import type { JSX } from "react";
 import { useState } from "react";
 
@@ -56,9 +57,15 @@ import {
   type ReadOnlyReason,
 } from "@admin/lib/builder/outline/outline-model";
 import { fieldsWithDeleted } from "@admin/lib/builder/outline/pending-rows";
+import {
+  RENAME_HOW,
+  renameOffered,
+  renameUnavailableReason,
+} from "@admin/lib/builder/rename-field";
 
 import { BUILDER_KIND_NOUN, type BuilderKind } from "./builder-config";
 import { AdvancedTab } from "./builder-field-settings/AdvancedTab";
+import { RenameFieldAction } from "./builder-field-settings/RenameFieldAction";
 import { FieldErrorNotice } from "./FieldErrorNotice";
 import type { BuilderField } from "./types";
 
@@ -139,6 +146,8 @@ type Props = {
   savedFields?: readonly BuilderField[];
   /** Whether Draft/Published is on, as stored or as the pending settings set it. */
   lifecycleEnabled?: boolean;
+  /** How Rename… stands for the field (`FieldRename`). */
+  rename?: FieldRename;
 };
 
 /** The names of the named containers above a field, outermost first: the path the save finds it by. */
@@ -177,6 +186,8 @@ function nameCheckFor(
     // Inside a named container the field is a key in its value.
     nested: level !== null,
     lifecycleEnabled,
+    // A field that makes no column (a field-group field) is not held to a column's length.
+    producesColumn: fieldProducesColumn(field),
     siblingNames: siblings
       .filter(other => other.id !== field.id)
       .map(other => other.name),
@@ -216,21 +227,82 @@ function readOnlyReasonOf(
 function panelStateOf(
   placement: FieldPlacement,
   given: ReadOnlyReason | null | undefined,
-  entityReadOnly: boolean
+  entityReadOnly: boolean,
+  saved: boolean,
+  /** Absent for an entity with no stored hooks: none names a field. */
+  namedByHooks: ReadonlyMap<string, string> | undefined
 ): {
   reason: ReadOnlyReason | null;
   fieldReadOnly: boolean;
   canDelete: boolean;
   fieldTitle: string;
+  /** Whether Rename… is offered: a saved, changeable field with a column of its own. */
+  renamable: boolean;
+  /** What the panel says beside a saved field's fixed name. */
+  nameFixedReason: string;
 } {
   const reason = readOnlyReasonOf(placement, given, entityReadOnly);
   const fieldReadOnly = reason !== null;
+  const { field, ancestors } = placement;
+  const unavailable = renameUnavailableReason(field, ancestors, namedByHooks);
   return {
     reason,
     fieldReadOnly,
-    canDelete: !fieldReadOnly && placement.field.isSystem !== true,
-    fieldTitle: placement.field.label || "Untitled field",
+    canDelete: !fieldReadOnly && field.isSystem !== true,
+    fieldTitle: field.label || "Untitled field",
+    renamable: renameOffered(
+      field,
+      ancestors,
+      saved,
+      fieldReadOnly,
+      namedByHooks
+    ),
+    nameFixedReason: unavailable ?? RENAME_HOW,
   };
+}
+
+/** The panel's header actions: Rename… for a field it can rename, and Delete. */
+function FieldActions({
+  field,
+  renamable,
+  startRenaming,
+  checkName,
+  onRename,
+  canDelete,
+  onDelete,
+}: {
+  field: BuilderField;
+  renamable: boolean;
+  startRenaming: boolean;
+  checkName: (name: string) => string | null;
+  onRename: (name: string) => void;
+  canDelete: boolean;
+  onDelete: () => void;
+}): JSX.Element {
+  return (
+    <>
+      {renamable && (
+        <RenameFieldAction
+          field={field}
+          initiallyOpen={startRenaming}
+          checkName={checkName}
+          onRename={onRename}
+        />
+      )}
+      {canDelete && (
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          aria-label="Delete field"
+          className="h-7 w-7 text-muted-foreground hover:text-destructive"
+          onClick={onDelete}
+        >
+          <Trash2 className="h-4 w-4" />
+        </Button>
+      )}
+    </>
+  );
 }
 
 /**
@@ -262,6 +334,17 @@ function DefinedAt({
   );
 }
 
+/** How Rename… stands for the field the panel edits. */
+interface FieldRename {
+  /** Opened from a row's Rename…: the rename is asked for at once, where it is offered. */
+  asked?: boolean;
+  /**
+   * The field names the entity's stored hooks name, each with the hook (`fieldsNamedByHooks`): a
+   * field one names is not offered Rename….
+   */
+  namedByHooks?: ReadonlyMap<string, string>;
+}
+
 export function BuilderFieldSettings({
   kind,
   fields,
@@ -277,16 +360,28 @@ export function BuilderFieldSettings({
   onOpenFieldGroup,
   savedFields,
   lifecycleEnabled = false,
+  rename,
 }: Props): JSX.Element | null {
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
   const placement = findFieldPlacement(fields, fieldId) ?? fallbackPlacement;
   if (!placement) return null;
 
   const { field, ancestors, siblings } = placement;
-  const { reason, fieldReadOnly, canDelete, fieldTitle } = panelStateOf(
+  const saved = savedFieldIds.has(field.id);
+  const state = panelStateOf(
     placement,
     readOnlyReason,
-    readOnly
+    readOnly,
+    saved,
+    rename?.namedByHooks
+  );
+  const { reason, fieldReadOnly, canDelete, fieldTitle } = state;
+  const checkName = nameCheckFor(
+    kind,
+    placement,
+    fields,
+    savedFields,
+    lifecycleEnabled
   );
 
   // Above the panel: where a read-only field is defined, and what the field lacks that the save
@@ -302,34 +397,29 @@ export function BuilderFieldSettings({
     <FieldSettingsPanel
       surface={{
         ...BUILDER_SURFACES[kind],
-        checkName: nameCheckFor(
-          kind,
-          placement,
-          fields,
-          savedFields,
-          lifecycleEnabled
-        ),
+        checkName,
+        // A saved field's name changes only through Rename…, where it can change at all.
+        fixed: [
+          { setting: "name", when: "saved", reason: state.nameFixedReason },
+        ],
       }}
       field={field}
       ancestors={ancestors}
       siblings={siblings}
-      saved={savedFieldIds.has(field.id)}
+      saved={saved}
       readOnly={fieldReadOnly}
       onChange={onFieldChange}
       onClose={onClose}
       actions={
-        canDelete && (
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            aria-label="Delete field"
-            className="h-7 w-7 text-muted-foreground hover:text-destructive"
-            onClick={() => setConfirmDeleteOpen(true)}
-          >
-            <Trash2 className="h-4 w-4" />
-          </Button>
-        )
+        <FieldActions
+          field={field}
+          renamable={state.renamable}
+          startRenaming={rename?.asked === true}
+          checkName={checkName}
+          onRename={name => onFieldChange({ ...field, name })}
+          canDelete={canDelete}
+          onDelete={() => setConfirmDeleteOpen(true)}
+        />
       }
     />
   );

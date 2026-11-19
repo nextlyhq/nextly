@@ -2087,6 +2087,7 @@ function parseEmailTemplateRoutes(
 /** `/api/email-deliveries/<read>`, each a GET, by its URL token. */
 const EMAIL_DELIVERY_READS: Record<string, string> = {
   queued: "listQueuedEmails",
+  activity: "listActivity",
   "last-sent": "lastSentByTemplate",
   overdue: "overdueQueuedEmails",
 };
@@ -2097,24 +2098,44 @@ const EMAIL_DELIVERY_READS: Record<string, string> = {
  * `read-email-deliveries`:
  * - GET /api/email-deliveries → delivery records, newest first, filtered
  * - GET /api/email-deliveries/queued → queued emails, newest first, filtered
+ * - GET /api/email-deliveries/activity → queued emails and the deliveries of
+ *   sends not queued, merged under one cursor and one set of filters
  * - GET /api/email-deliveries/last-sent → when each template was last sent
  * - GET /api/email-deliveries/overdue → whether queued email is overdue
+ * - GET /api/email-deliveries/[id] → one delivery's detail and timeline
+ * - GET /api/email-deliveries/queued/[id] → one queued email's detail
  */
 function parseEmailDeliveryRoutes(
   id: string | undefined,
   subresource: string | undefined,
+  subId: string | undefined,
   httpMethod: string,
   routeParams: Record<string, string>
 ): ParsedRoute | null {
-  if (httpMethod !== "GET" || subresource) return null;
-  const method = id === undefined ? "listDeliveries" : EMAIL_DELIVERY_READS[id];
-  if (!method) return null;
-  return {
+  // Every route here is a read, and none has a segment past its id.
+  if (httpMethod !== "GET" || subId !== undefined) return null;
+  const read = (operation: OperationType, method: string): ParsedRoute => ({
     service: "email",
-    operation: id === undefined ? "list" : "single",
+    operation,
     method,
     routeParams,
-  };
+  });
+  if (id === undefined) return read("list", "listDeliveries");
+  // GET /api/email-deliveries/queued/[id] → one queued email's detail
+  if (id === "queued" && subresource) {
+    routeParams.queuedId = subresource;
+    return read("single", "findQueuedEmail");
+  }
+  if (subresource) return null;
+  const named = EMAIL_DELIVERY_READS[id];
+  if (named) {
+    const list = named === "listQueuedEmails" || named === "listActivity";
+    return read(list ? "list" : "single", named);
+  }
+  // GET /api/email-deliveries/[id] → one delivery's detail. After the named
+  // reads, which are routes rather than ids.
+  routeParams.deliveryId = id;
+  return read("single", "findDelivery");
 }
 
 // ============================================================================
@@ -2595,6 +2616,105 @@ const RELEASE_ROUTES: ReleaseRoute[] = [
     method: "getReleaseReadiness",
   },
 ];
+
+/**
+ * The workflow routes, by path and verb (@experimental). Documents are named in the query or the
+ * body, as an entry of a collection or a Single, so one route serves both.
+ */
+const WORKFLOW_ROUTES: readonly {
+  path: readonly [string, string | null];
+  verb: string;
+  operation: OperationType;
+  method: string;
+}[] = [
+  {
+    path: ["review-state", null],
+    verb: "GET",
+    operation: "single",
+    method: "getReviewState",
+  },
+  {
+    path: ["waiting", null],
+    verb: "GET",
+    operation: "list",
+    method: "listWaiting",
+  },
+  {
+    path: ["steps", null],
+    verb: "POST",
+    operation: "update",
+    method: "takeStep",
+  },
+  {
+    path: ["steps", "bulk"],
+    verb: "POST",
+    operation: "update",
+    method: "stepMany",
+  },
+  {
+    path: ["assignments", null],
+    verb: "POST",
+    operation: "update",
+    method: "assign",
+  },
+  {
+    path: ["assignments", "bulk"],
+    verb: "POST",
+    operation: "update",
+    method: "assignMany",
+  },
+];
+
+/**
+ * A workflow route, or null; a longer path than the table's names none. Beside the table:
+ * `/workflows` lists the registered workflows, and `/workflows/:slug/settings` reads or changes
+ * one's settings, the slug put in `routeParams`. The table's fixed paths are matched first, so a
+ * workflow cannot shadow one by its slug.
+ */
+function parseWorkflowRoutes(
+  id: string | undefined,
+  subresource: string | undefined,
+  subId: string | undefined,
+  httpMethod: string,
+  routeParams: Record<string, string>
+): Omit<ParsedRoute, "routeParams"> | null {
+  if (subId !== undefined) return null;
+  if (id === undefined) {
+    return httpMethod === "GET"
+      ? { service: "workflows", operation: "list", method: "listWorkflows" }
+      : null;
+  }
+  const route = WORKFLOW_ROUTES.find(
+    candidate =>
+      candidate.path[0] === id &&
+      candidate.path[1] === (subresource ?? null) &&
+      candidate.verb === httpMethod
+  );
+  if (route) {
+    return {
+      service: "workflows",
+      operation: route.operation,
+      method: route.method,
+    };
+  }
+  if (subresource !== "settings") return null;
+  const settings: Record<string, Omit<ParsedRoute, "routeParams">> = {
+    GET: {
+      service: "workflows",
+      operation: "single",
+      method: "getWorkflowSettings",
+    },
+    PATCH: {
+      service: "workflows",
+      operation: "update",
+      method: "updateWorkflowSettings",
+    },
+  };
+  const parsed = settings[httpMethod];
+  if (!parsed) return null;
+  routeParams.slug = id;
+  return parsed;
+}
 
 /**
  * `/api/releases` — the content-release surface.
@@ -3407,6 +3527,7 @@ export function parseRestRoute(
     const result = parseEmailDeliveryRoutes(
       id,
       subresource,
+      subId,
       httpMethod,
       routeParams
     );
@@ -3451,6 +3572,18 @@ export function parseRestRoute(
   if (resource === "api-keys") {
     const result = parseApiKeyRoutes(id, subresource, httpMethod, routeParams);
     if (result) return result;
+  }
+
+  // Review state, steps, assignments and settings under a workflow (@experimental).
+  if (resource === "workflows") {
+    const result = parseWorkflowRoutes(
+      id,
+      subresource,
+      subId,
+      httpMethod,
+      routeParams
+    );
+    if (result) return { ...result, routeParams };
   }
 
   // Handle content releases

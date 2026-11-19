@@ -7,6 +7,7 @@
  *
  * @module @nextlyhq/plugin-page-builder/admin/editor/editor-top-bar
  */
+import type { PageCheck, PageFacts } from "@nextlyhq/builder";
 import { BreakpointSwitcher, PageChecksChip } from "@nextlyhq/builder/shell";
 import { DocumentSaveAndPublish } from "@nextlyhq/plugin-sdk/admin";
 
@@ -22,6 +23,7 @@ import { HistoryButtons } from "./history-buttons";
 import { PageReadMeter, type PageDataCount } from "./page-read-meter";
 import { PageTitleSwitcher } from "./page-title-switcher";
 import { PreviewButton, type VisitorPreview } from "./preview-button";
+import { RegionSaveAndPublish } from "./region-done-dialog";
 import { siteStyleStatus } from "./site-style-studios";
 
 /**
@@ -74,6 +76,12 @@ export function editorTopBar(
     visitor: VisitorPreview;
     pageData: PageDataCount | null;
     openAsForm: (() => void) | undefined;
+    /** The checks the Page checks count runs: the builder's and plugins'. */
+    pageChecks: readonly PageCheck[];
+    /** What those checks read of the page beyond its document. */
+    pageFacts: PageFacts;
+    /** Opens Page settings at a tab, for a plugin's fix found there. */
+    openSettingsTab: (tab: string) => void;
   }
 ): {
   topBar: React.JSX.Element;
@@ -91,6 +99,8 @@ export function editorTopBar(
     editor,
     inline,
   } = view;
+  if (view.set !== undefined)
+    return setTopBar(view, page.title, page.openAsForm);
   return {
     topBar: (
       <>
@@ -108,6 +118,8 @@ export function editorTopBar(
                 }
           }
           userId={view.userId}
+          // "+ New page…" asks about it before leaving the page.
+          unsavedWork={view.documentDirty}
           onAllPages={() => view.requestPanel("pages")}
         />
         {page.location === undefined ? null : (
@@ -117,7 +129,7 @@ export function editorTopBar(
         {/* The page's bindings that no longer fit, beside its status: shown
             only when it has one. */}
         <BindingsToFixChip
-          editor={editor}
+          editor={view.page}
           field={page.field}
           canvas={page.canvas}
           requestPanel={view.requestPanel}
@@ -170,7 +182,30 @@ export function editorTopBar(
           attention, opening the list. Never a reason to hold Save or
           Publish back, which read nothing of it. */}
         {editor.document.kind === "page" ? (
-          <PageChecksChip editor={editor} canvas={page.canvas} />
+          <PageChecksChip
+            editor={editor}
+            canvas={page.canvas}
+            // The builder's checks and other plugins', in their own groups.
+            checks={page.pageChecks}
+            facts={page.pageFacts}
+            onOpenSettingsTab={page.openSettingsTab}
+            // The site's header and footer, read with the page, so their
+            // headings count in the page's order.
+            regions={view.canvasRegions}
+            // The components the canvas draws the page's placements with.
+            {...(canvasRender.definitions === undefined
+              ? {}
+              : { definitions: canvasRender.definitions })}
+            // The site's variables, light and dark, for the contrast check.
+            {...(view.siteTokens === undefined
+              ? {}
+              : { tokens: view.siteTokens })}
+            // The site's shared styles, its edits to block types' looks
+            // among them, which a block's colours are drawn with.
+            {...(canvasRender.styleContext.namedClasses === undefined
+              ? {}
+              : { namedClasses: canvasRender.styleContext.namedClasses })}
+          />
         ) : null}
         {/* Last, at the bar's far end where the header kept them: Save and
           Publish, which say themselves whether the work is saved and
@@ -178,11 +213,77 @@ export function editorTopBar(
           it again. Publish's arrow keeps the other ways to publish, which
           the builder's taking the window would otherwise leave reachable
           only from the keyboard. */}
-        <DocumentSaveAndPublish />
+        {/* While a header or footer is edited in place, they act on it:
+          "Save header" and "Publish header". */}
+        {view.regionEditing.topBar === undefined ? (
+          <DocumentSaveAndPublish />
+        ) : (
+          <RegionSaveAndPublish bar={view.regionEditing.topBar} />
+        )}
         {/* After them, as the entry page's own ⋯ follows its Publish: the
           form and the pin, which a page that opens here would otherwise
           leave out of reach. */}
         <EditorMoreMenu onOpenAsForm={page.openAsForm} />
+      </>
+    ),
+  };
+}
+
+/**
+ * The top bar on a header & footer set's own screen: the set's name and
+ * state with its history at the start, the devices in the centre, and Save
+ * and Publish at the end, which store the set (or, while its header or
+ * footer is edited in place, that). Nothing of a page's: no page switcher,
+ * checks, data meter or preview, since the set has no page of its own.
+ */
+function setTopBar(
+  view: EditorView,
+  title: string | undefined,
+  openAsForm: (() => void) | undefined
+): {
+  topBar: React.JSX.Element;
+  topBarCenter: React.JSX.Element;
+  topBarEnd: React.JSX.Element;
+} {
+  const shown = title === undefined || title === "" ? "Untitled set" : title;
+  return {
+    topBar: (
+      <>
+        <span
+          title={shown}
+          className="min-w-0 max-w-[20rem] shrink truncate text-sm font-medium"
+          data-testid="builder-set-title"
+        >
+          {shown}
+        </span>
+        <span className="shrink-0 text-xs text-muted-foreground">
+          Header & footer set
+        </span>
+        <DocumentStatusPill />
+        <HistoryButtons editor={view.editor} inline={view.inline} />
+      </>
+    ),
+    topBarCenter: (
+      <>
+        <BreakpointSwitcher
+          breakpoints={view.canvasRender.styleContext.breakpoints}
+          selected={view.editedBreakpoint}
+          onSelect={view.chooseDevice}
+          status={siteStyleStatus(view.siteStylePending, view.siteStyleError)}
+          previewWidth={view.previewWidth}
+          onPreviewWidth={view.setPreviewWidth}
+        />
+        <CanvasModeSwitch preview={view.previewMode} />
+      </>
+    ),
+    topBarEnd: (
+      <>
+        {view.regionEditing.topBar === undefined ? (
+          <DocumentSaveAndPublish />
+        ) : (
+          <RegionSaveAndPublish bar={view.regionEditing.topBar} />
+        )}
+        <EditorMoreMenu onOpenAsForm={openAsForm} />
       </>
     ),
   };

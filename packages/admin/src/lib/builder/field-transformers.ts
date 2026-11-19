@@ -14,6 +14,7 @@ import type {
 } from "@admin/components/features/schema-builder/types";
 import type { FieldDefinition } from "@admin/types/collection";
 
+import { SYSTEM_FIELD_NAMES } from "./constants";
 import { insertField } from "./insert-field";
 
 /**
@@ -284,6 +285,12 @@ export function convertToFieldDefinition(field: BuilderField): FieldDefinition {
   // Relationship properties
   if (field.type === "relationship") {
     definition.relationTo = field.relationTo;
+    // The stored `options` the Builder does not edit, written back so the field keeps how its
+    // links are stored (a many-to-many's own table) and the collection it names.
+    const relationOptions = relationshipOptionsToSave(field);
+    if (relationOptions !== undefined) {
+      Object.assign(definition, { options: relationOptions });
+    }
     definition.maxDepth = field.maxDepth;
     definition.allowCreate = field.allowCreate;
     definition.allowEdit = field.allowEdit;
@@ -534,17 +541,125 @@ export function applyCarriedOptions(
 }
 
 /**
- * The collection a relationship stored the earlier way names in `options.target`, when it has no
- * `relationTo` (the server leaves a many-to-many so), or undefined. Read only, so the Builder does
- * not judge the field to link nowhere; a save does not write it.
+ * A relationship's stored `options` object, kept on the Builder field and written back by the save
+ * (`relationshipOptionsToSave`): how its links are stored (`relationType`, `junctionTable`) and
+ * what else the Builder does not edit. Two keys are left to the Builder's own controls, so a save
+ * never restores a value the person changed:
+ * - `target` is kept only for a relationship stored the earlier way, with no `relationTo`; any
+ *   other's collection is the picker's, and emptying the picker leaves it naming none;
+ * - `maxDepth` is the Max depth control's (`convertToBuilderField` shows a stored one there).
+ * Undefined for any other field, or a relationship storing nothing else.
  */
-function storedRelationTargetOf(field: FieldDefinition): string | undefined {
-  if (field.type !== "relationship" || field.relationTo) return undefined;
+function storedRelationOptionsOf(
+  field: FieldDefinition
+): Readonly<Record<string, unknown>> | undefined {
+  if (field.type !== "relationship") return undefined;
   const stored: unknown = field.options;
-  if (!isPlainRecord(stored) || typeof stored.target !== "string") {
-    return undefined;
+  if (!isPlainRecord(stored)) return undefined;
+  const picked =
+    (typeof field.relationTo === "string" && field.relationTo !== "") ||
+    (Array.isArray(field.relationTo) && field.relationTo.length > 0);
+  const { target, maxDepth: _maxDepth, ...rest } = stored;
+  const kept = picked || target === undefined ? rest : { ...rest, target };
+  return Object.keys(kept).length > 0 ? kept : undefined;
+}
+
+/**
+ * The Max depth the Builder's control shows: the field's own, else for a relationship a depth it
+ * stored in its `options`, which the save then writes as the field's own.
+ */
+function builderMaxDepthOf(field: FieldDefinition): number | undefined {
+  if (field.maxDepth !== undefined || field.type !== "relationship") {
+    return field.maxDepth;
   }
-  return stored.target === "" ? undefined : stored.target;
+  const stored: unknown = field.options;
+  return isPlainRecord(stored) && typeof stored.maxDepth === "number"
+    ? stored.maxDepth
+    : undefined;
+}
+
+/**
+ * What the Builder keeps of how a relationship is stored, for its save to write back: its stored
+ * options (`storedRelationOptionsOf`), and whether Allow multiple (`storedHasMany`) and Unique
+ * (`storedUnique`) were stored on.
+ */
+function storedRelationStateOf(
+  field: FieldDefinition
+): Pick<
+  BuilderField,
+  "storedRelationOptions" | "storedHasMany" | "storedUnique"
+> {
+  const relationship = field.type === "relationship";
+  return {
+    storedRelationOptions: storedRelationOptionsOf(field),
+    ...(relationship && field.hasMany === true
+      ? { storedHasMany: true as const }
+      : {}),
+    ...(relationship && field.unique === true
+      ? { storedUnique: true as const }
+      : {}),
+  };
+}
+
+/**
+ * The `options` a relationship's save writes: the stored ones, with `target` following the one
+ * collection the person picked (`onlyCollection`), so a many-to-many stays one and links to what
+ * the field now names, and with the relation type the person's controls leave it
+ * (`withCardinalityAsSet`). Undefined where none were stored. The Builder's check of a
+ * relationship (`needsTarget`) judges these options, so it refuses what the save would send.
+ */
+export function relationshipOptionsToSave(
+  field: BuilderField
+): Readonly<Record<string, unknown>> | undefined {
+  const stored = field.storedRelationOptions;
+  if (stored === undefined) return undefined;
+  const picked = onlyCollection(field.relationTo);
+  return withCardinalityAsSet(
+    field,
+    picked === undefined ? stored : { ...stored, target: picked }
+  );
+}
+
+/** The one collection a relationship names, whether the picker holds it alone or in a list. */
+function onlyCollection(
+  relationTo: BuilderField["relationTo"]
+): string | undefined {
+  const only =
+    Array.isArray(relationTo) && relationTo.length === 1
+      ? relationTo[0]
+      : relationTo;
+  return typeof only === "string" && only !== "" ? only : undefined;
+}
+
+/**
+ * A relationship's stored relation type, as the controls the person turned off leave it, so it
+ * never outlives the control that says otherwise:
+ * - Allow multiple turned off on a field stored with it on (`storedHasMany`) makes a many-to-many
+ *   link one entry (`manyToOne`), with no link table;
+ * - Unique turned off on one stored with it on (`storedUnique`) makes a one-to-one `manyToOne`,
+ *   which the database no longer holds unique.
+ * One stored with the control off keeps its relation type, since nothing was changed.
+ */
+function withCardinalityAsSet(
+  field: BuilderField,
+  options: Readonly<Record<string, unknown>>
+): Readonly<Record<string, unknown>> {
+  if (
+    options.relationType === "manyToMany" &&
+    field.storedHasMany === true &&
+    field.hasMany !== true
+  ) {
+    const { junctionTable: _linkTable, ...single } = options;
+    return { ...single, relationType: "manyToOne" };
+  }
+  if (
+    options.relationType === "oneToOne" &&
+    field.storedUnique === true &&
+    field.advanced?.unique !== true
+  ) {
+    return { ...options, relationType: "manyToOne" };
+  }
+  return options;
 }
 
 /**
@@ -555,11 +670,16 @@ function storedRelationTargetOf(field: FieldDefinition): string | undefined {
  *   rows) or a field group, rather than at the entity's top level. Only a
  *   top-level `title` or `slug` is one of the entity's own built-in fields; a
  *   field of that name anywhere else is an ordinary field of its container.
+ * @param builtInNames - The names the entity's kind holds as built-in fields
+ *   (`builtInFieldNamesOf`): a collection's and a Single's title and slug, by
+ *   default; none for a field group, whose top-level fields of those names are
+ *   its own.
  */
 export function convertToBuilderField(
   field: FieldDefinition,
   index: number | string,
-  nested = false
+  nested = false,
+  builtInNames: readonly string[] = SYSTEM_FIELD_NAMES
 ): BuilderField {
   const id = generateFieldId();
 
@@ -568,7 +688,7 @@ export function convertToBuilderField(
     name: field.name,
     label: field.label || field.name,
     type: field.type,
-    isSystem: !nested && (field.name === "title" || field.name === "slug"),
+    isSystem: !nested && builtInNames.includes(field.name),
     // Provenance (P8): carry the plugin tag through so the Builder renders a
     // plugin-contributed field locked + badged instead of as an editable field.
     source: field.source,
@@ -599,7 +719,7 @@ export function convertToBuilderField(
     },
     // Relationship properties
     relationTo: field.relationTo,
-    maxDepth: field.maxDepth,
+    maxDepth: builderMaxDepthOf(field),
     allowCreate: field.allowCreate,
     allowEdit: field.allowEdit,
     isSortable: field.isSortable,
@@ -656,7 +776,7 @@ export function convertToBuilderField(
     }));
   }
 
-  builderField.storedRelationTarget = storedRelationTargetOf(field);
+  Object.assign(builderField, storedRelationStateOf(field));
 
   return builderField;
 }

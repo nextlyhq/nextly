@@ -29,10 +29,12 @@ import {
   getLoggerFromDI,
   getMigrationJournalFromDI,
 } from "../../../dispatcher/helpers/di";
-import { NextlyError } from "../../../errors";
+import { NextlyError, type ValidationPublicData } from "../../../errors";
+import { reservedSystemFieldNames } from "../../../lib/system-columns";
 import { getProductionNotifier } from "../../../runtime/notifications/index";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { consoleLogger } from "../../../shared/types";
+import { withSystemTextFields } from "../../collections/system-text-fields";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import {
   appLanguageOrder,
@@ -59,6 +61,11 @@ import {
   liveCompanionShape,
 } from "../../i18n/runtime/companion-io";
 import { assertLanguageStatesAgreeWithEntry } from "../../i18n/runtime/language-states-agree";
+import {
+  FirstQuestionWatch,
+  landingPush,
+  type PushWatch,
+} from "../builder-save/landing-push";
 import { runStatement } from "../pipeline/_internal/run-statement";
 import {
   createApplyDesiredSchema,
@@ -93,10 +100,15 @@ import { RegexRenameDetector } from "../pipeline/rename-detector";
 import type { Resolution } from "../pipeline/resolution/types";
 import { recoverInterruptedSqliteRebuilds } from "../pipeline/sqlite-rebuild-recovery";
 import type { DesiredCollection, DesiredSchema } from "../pipeline/types";
+import {
+  entityLabel,
+  perLanguageBefore,
+  refuseFieldTypeChanges,
+} from "../value-conversion/type-change/field-type-changes";
 
 import { DrizzleStatementExecutor } from "./drizzle-statement-executor";
 import { withStoredRelationshipOptions } from "./editor-relationship-fields";
-import { toSnakeCase } from "./field-column-descriptor";
+import { fieldsStoredOnRow, toSnakeCase } from "./field-column-descriptor";
 import { withSchemaChangeExcluded } from "./schema-change-exclusion";
 
 /**
@@ -324,6 +336,13 @@ export interface CollectionSchemaChange {
    * would run before the column it fills exists.
    */
   fills?: ReadonlyArray<{ field: string; value: unknown; required: boolean }>;
+  /**
+   * Called once a push this change runs may have changed the database (`landingPush`): one that
+   * succeeded, or outside PostgreSQL one that failed, whose earlier statements may have stayed.
+   * A caller writing the change's migration keeps its files when the change fails after this,
+   * and withdraws them when it fails before, as a refusal before the push leaves nothing.
+   */
+  onLanded?: () => void;
 }
 
 /**
@@ -359,27 +378,57 @@ export async function applyCollectionSchemaChange(
 /**
  * The fields a schema save sends, as it writes them: each relationship the editor read from an
  * earlier-shaped one written back in its stored shape (`withStoredRelationshipOptions`), matched
- * through the renames the save accepted.
+ * through the renames the save accepted; and, where asked, each stored built-in field the save
+ * left out, kept as stored (`storedBuiltInsLeftOut`).
  *
  * @param sent the field list the save sends
  * @param entity the collection's or Single's row the save is checked and written against
  * @param renames the dialog's answers to the renames its preview paired, when it has any
+ * @param options.keepBuiltIns keep each stored built-in field the save left out: a collection's,
+ *   which can hold one a demote stored. A Single never stores one (a demote moves collections
+ *   only, the admin's Singles store none, and a code-first Single is read-only here).
  */
 export function fieldsAsStored<F>(
   sent: readonly F[],
   entity: { tableName: string; fields?: readonly unknown[] | null },
-  renames: readonly BrowserRenameResolution[] = []
+  renames: readonly BrowserRenameResolution[] = [],
+  options: { keepBuiltIns?: boolean } = {}
 ): F[] {
   const stored = (entity.fields ?? []) as unknown as FieldDefinition[];
-  return withStoredRelationshipOptions(
-    sent,
-    stored,
-    acceptedFieldRenames(
-      renames,
-      entity.tableName,
+  const kept = options.keepBuiltIns ? storedBuiltInsLeftOut(stored, sent) : [];
+  return [
+    ...(kept as unknown as F[]),
+    ...withStoredRelationshipOptions(
+      sent,
       stored,
-      sent as unknown as FieldDefinition[]
-    )
+      acceptedFieldRenames(
+        renames,
+        entity.tableName,
+        stored,
+        sent as unknown as FieldDefinition[]
+      )
+    ),
+  ];
+}
+
+/**
+ * The stored top-level fields named as a built-in (`reservedSystemFieldNames("builder")`: a
+ * collection's and a Single's `title`, `slug` and the rest) that `sent` leaves out. The admin
+ * shows these as built-in rows and never sends them, so a save leaving one out has not removed
+ * it: a `title` a code-first config declared and `nextly db:sync --demote` stored, translated as a
+ * text field is on a translated collection, would otherwise read as leaving translation, offered
+ * as renamed into a field the save adds or dropped with its translations.
+ */
+function storedBuiltInsLeftOut(
+  stored: readonly FieldDefinition[],
+  sent: readonly unknown[]
+): FieldDefinition[] {
+  const builtIn = new Set(reservedSystemFieldNames("builder"));
+  const sentNames = new Set(
+    sent.map(field => (field as { name?: unknown } | null)?.name)
+  );
+  return stored.filter(
+    field => builtIn.has(field.name) && !sentNames.has(field.name)
   );
 }
 
@@ -461,7 +510,18 @@ export async function refuseUniqueOverRepeats(args: {
     adapter.dialect,
     [tableName]
   );
-  const oldFields = onMain(args.oldFields ?? [], args.wasLocalized);
+  // The stored fields leave out the `title` and `slug` every table is built with, so they are added
+  // back: a title made unique is then a column the table holds, whose repeats are counted, not a
+  // field the save adds, which every entry would hold as NULL. One the author declared stays theirs.
+  // The two added back are columns of the shared row, so they stay shared on a translated
+  // collection, where a text field without a `localized` setting would read as translated.
+  const stored = args.oldFields ?? [];
+  const oldFields = onMain(
+    withSystemTextFields(stored).map(field =>
+      stored.includes(field) ? field : { ...field, localized: false }
+    ),
+    args.wasLocalized
+  );
   const newFields = onMain(args.newFields, args.isLocalized);
   const refusals = await refusalsForCollectionSave({
     adapter,
@@ -565,20 +625,33 @@ function changeApply(change: CollectionSchemaChange, deps: SchemaChangeDeps) {
         .map(resolution => resolution.eventId)
     )
   );
+  // Notes a push refused at its first question, which ran no statement, and one whose pipeline
+  // completed its apply, which a failure after it (the version read below) does not undo
+  // (`landingPush`).
+  const firstQuestion = new FirstQuestionWatch();
+  let completed = false;
+  const watch: PushWatch = {
+    starting: () => {
+      firstQuestion.starting();
+      completed = false;
+    },
+    stopped: () => firstQuestion.stopped(),
+    completed: () => completed,
+  };
   const apply = createApplyDesiredSchema({
-    applyPipeline: (desiredArg, sourceArg, channelArg) => {
+    applyPipeline: async (desiredArg, sourceArg, channelArg) => {
       const pipeline = new PushSchemaPipeline({
         executor: new DrizzleStatementExecutor(dialect, db),
         renameDetector: new RegexRenameDetector(),
         classifier: new RealClassifier(),
-        promptDispatcher,
+        promptDispatcher: firstQuestion.watching(promptDispatcher),
         preRenameExecutor: noopPreRenameExecutor,
         preCleanupExecutor: new RealPreCleanupExecutor(),
         // The real journal from DI, with a noop fallback for callers that bypass DI.
         migrationJournal: getMigrationJournalFromDI() ?? noopMigrationJournal,
         notifier: getProductionNotifier(),
       });
-      return pipeline.apply({
+      const result = await pipeline.apply({
         desired: desiredArg,
         db,
         dialect,
@@ -592,6 +665,8 @@ function changeApply(change: CollectionSchemaChange, deps: SchemaChangeDeps) {
         // after its prompts and refusals, before it drops the main column.
         defaultLocale,
       });
+      if (result.success) completed = true;
+      return result;
     },
     // Neither caller asks the pipeline for its optimistic check: the dialog checks the version
     // before calling, and the save runs under the schema lock.
@@ -606,18 +681,21 @@ function changeApply(change: CollectionSchemaChange, deps: SchemaChangeDeps) {
       return out;
     },
   });
-  return { apply, promptDispatcher, defaultLocale };
+  return { apply, promptDispatcher, defaultLocale, watch };
 }
 
 /**
  * The refusal of an apply the pipeline did not complete: another table's drift named, with the
- * way on, or else the push's own words, under the code its status already was.
+ * way on, or else the push's own words, under the code its status already was. A precondition the
+ * push refused carries each refusal by field and code, which the admin reads to say which field
+ * and why; those are passed on.
  */
 function refusedApply(
   slug: string,
   drifted: readonly string[],
-  message: string
+  error: { code: string; message: string; details?: unknown }
 ): NextlyError {
+  const { message } = error;
   // Another table stopped it: named, with what differs and the way on, so the change is not
   // taken for the one refused.
   if (drifted.length > 0) {
@@ -634,7 +712,32 @@ function refusedApply(
   return new NextlyError({
     code: "NEXTLY_MIGRATION_APPLY_FAILED",
     publicMessage: message,
+    ...(error.code === "PRECONDITION_FAILED" && isValidationData(error.details)
+      ? { publicData: error.details }
+      : {}),
   });
+}
+
+/** Whether a refused precondition's payload is the validation errors, each by path and code. */
+function isValidationData(data: unknown): data is ValidationPublicData {
+  if (data === null || typeof data !== "object" || !("errors" in data)) {
+    return false;
+  }
+  const { errors } = data;
+  return (
+    Array.isArray(errors) &&
+    errors.every(
+      (e: unknown) =>
+        e !== null &&
+        typeof e === "object" &&
+        "path" in e &&
+        typeof e.path === "string" &&
+        "code" in e &&
+        typeof e.code === "string" &&
+        "message" in e &&
+        typeof e.message === "string"
+    )
+  );
 }
 
 /** `desired` with this collection's fields replaced, as a new schema the pipeline has not seen. */
@@ -788,7 +891,19 @@ async function applyHoldingSchemaLock(
   // managed table: without the others, tables of other entity types in the live database are
   // absent from the desired snapshot and are offered as rename candidates for this collection.
   const desired = await buildFullDesiredSchema();
-  const { apply, promptDispatcher, defaultLocale } = changeApply(change, deps);
+  const changed = changeApply(change, deps);
+  const { promptDispatcher, defaultLocale } = changed;
+  // Every push below, the settings push and the companion's included, tells the caller once it
+  // may have changed the database; the checks before them change nothing. A failed one changed
+  // nothing where it stopped at its first question, asked before any statement.
+  const landing = landingPush(changed.apply, dialect, changed.watch);
+  const apply: ApplyDesired = async (...args) => {
+    try {
+      return await landing.push(...args);
+    } finally {
+      if (landing.landed()) change.onLanded?.();
+    }
+  };
 
   const oldFields = (collection.fields ?? []) as unknown as FieldDefinition[];
   // The answer on a translated field's rename, refused when it does not say, before anything
@@ -813,6 +928,27 @@ async function applyHoldingSchemaLock(
     newFields: fields,
     subject: `Collection '${slug}'`,
   });
+  // A translated field renamed and retyped at once: the companion's rename carries each language's
+  // value to the new name, which the push, blind to the companion, never pairs. A rename is offered
+  // only between fields of one type and one storage today, so none carries a type change; were one
+  // offered across a type change, it is judged here, over the companion's values, before anything
+  // runs.
+  if (companionRename) {
+    await refuseFieldTypeChanges(adapter.getDrizzle(), dialect, {
+      label: entityLabel("collection", slug),
+      table: tableName,
+      translationsTable: `${tableName}_locales`,
+      ...perLanguageBefore({ localized: wasLocalized }, tableName, oldFields),
+      previous: fieldsStoredOnRow(oldFields).filter(
+        field => field.name === companionRename.from
+      ),
+      next: fieldsStoredOnRow(fields).filter(
+        field => field.name === companionRename.to
+      ),
+      renamed: new Map([[companionRename.from, companionRename.to]]),
+      builtBy: builtByFor("collection", true),
+    });
+  }
   // A column made unique over entries that already repeat a value is refused before anything
   // runs, naming the field and how many values repeat.
   await refuseUniqueOverRepeats({
@@ -885,7 +1021,7 @@ async function applyHoldingSchemaLock(
 
   const result = await apply(desired, "ui", { promptChannel: "auto" });
   if (!result.success) {
-    throw refusedApply(slug, promptDispatcher.drifted, result.error.message);
+    throw refusedApply(slug, promptDispatcher.drifted, result.error);
   }
   const filled = await fillAddedFields({
     adapter,
@@ -897,7 +1033,7 @@ async function applyHoldingSchemaLock(
       }),
   });
   if (filled !== undefined && !filled.success) {
-    throw refusedApply(slug, promptDispatcher.drifted, filled.error.message);
+    throw refusedApply(slug, promptDispatcher.drifted, filled.error);
   }
 
   // The push excludes companion `_locales` tables from its diff: the localization layer owns
@@ -1012,6 +1148,7 @@ async function reconcileCompanion(args: {
       kind: "collection",
       slug,
       tableName,
+      renamed: args.companionRename,
     });
   } catch (err) {
     // A refused setting and a busy-table stop are passed on as they are. Anything else: the

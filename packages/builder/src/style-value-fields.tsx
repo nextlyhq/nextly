@@ -10,6 +10,7 @@ import {
   APPEAR_DELAY_PROPERTY,
   APPEAR_DURATION_PROPERTY,
   isStyleLeaf,
+  isTokenRef,
   OVERLAY_STRENGTH,
   STYLE_CATALOG,
   trimCssWhitespace,
@@ -42,6 +43,8 @@ import { FocalPointField } from "./focal-point-field";
 import { IconChoiceField } from "./icon-choice-field";
 import { InheritedValue, useUnsetHint } from "./inherited-value";
 import { useLabelScrub } from "./label-scrub";
+import { typedStyleText } from "./live-draft";
+import { useLiveGesture } from "./live-gesture";
 import { SectionHeld } from "./section-held";
 import {
   alignmentGroupFor,
@@ -69,7 +72,12 @@ import {
 } from "./style-numeric";
 import { textNumber, UnitWords, NumericField } from "./style-numeric-field";
 import { BOX_SHADOW, drawsShadow, ShadowField } from "./style-shadow-field";
-import { useDraft, arrowStep, storedText } from "./style-text-field";
+import {
+  useDraft,
+  arrowStep,
+  storedText,
+  useTypesLive,
+} from "./style-text-field";
 import { tokenForTypedName } from "./style-variables";
 import {
   focusVariableAfterPick,
@@ -78,6 +86,21 @@ import {
   VariableChoice,
   VariableSelectItems,
 } from "./variable-choice";
+
+/**
+ * The leaf a catalog property's variables are offered for, outside the style
+ * panel: its own leaf, or, for a union such as line height or weight, the one
+ * folded leaf over its forms the panel's field uses. `undefined` for a
+ * property the catalog does not list, or one with no form a variable fits.
+ */
+export function propertyVariableLeaf(property: string): StyleLeaf | undefined {
+  const shape = STYLE_CATALOG.find(entry => entry.property === property)?.shape;
+  if (shape === undefined) return undefined;
+  if (isStyleLeaf(shape)) return shape;
+  if (shape.kind !== "union") return undefined;
+  const first = shape.of.find(isStyleLeaf);
+  return first === undefined ? undefined : foldedLeafFor(property, first);
+}
 
 /**
  * The leaf a field's variables are offered for: the control's own, or, for a
@@ -336,8 +359,9 @@ function OptionSelect({
 
 /**
  * A field taking a number or a length as typed: "1.5" is stored as a number,
- * "24px" or "150%" as written. Committed on blur and on Enter, as every text
- * field in the panel is, so one undo removes one value, not one character.
+ * "24px" or "150%" as written. Written as it is typed, as every text field in
+ * the panel is, and the stretch of typing is one undo step, ended on blur and
+ * on Enter. A shared style is written only when the edit ends.
  */
 function LengthOrNumberField({
   id,
@@ -357,19 +381,33 @@ function LengthOrNumberField({
 }): React.JSX.Element {
   // The refusal, and the CSS names while they are shown.
   const described = useFieldDescription(describedBy);
-  const { draft, setDraft } = useDraft(stored);
+  const { draft, setDraft, live } = useDraft(stored);
+  const typedLive = useTypesLive();
   const mode = useCanvasTokenMode();
   const hint = useUnsetHint("1.5, 24px or 150%");
+  // A variable's name typed here is that variable, asked before the text is
+  // read as a number or a length, as every text field asks it.
+  const valueOf = (text: string): StyleValue | null => {
+    const named = tokenForTypedName(leaf, tokens, text, mode);
+    return named === undefined ? lineHeightFromText(text) : { $token: named };
+  };
   const commit = () => {
-    if (draft === storedText(stored)) return;
-    // A variable's name typed here is that variable, asked before the text is
-    // read as a number or a length, as every text field asks it.
-    const named = tokenForTypedName(leaf, tokens, draft, mode);
-    const value =
-      named === undefined ? lineHeightFromText(draft) : { $token: named };
-    if (onCommit(value) === "unchanged") {
-      setDraft(storedText(stored));
-    }
+    live.join(() => {
+      if (draft === storedText(stored) || live.written(draft)) return;
+      if (onCommit(valueOf(draft)) === "unchanged") {
+        setDraft(storedText(stored));
+      }
+    });
+    live.end();
+  };
+  // A keystroke writes nothing while emptied or refused, so the canvas keeps
+  // the last valid value. Nor while it names a variable: a whole name can be
+  // on its way to a longer one, and storing it would swap the field for the
+  // variable mid-word. The name is matched when the field is left.
+  const write = (text: string): boolean => {
+    if (typedStyleText(text) === undefined) return false;
+    const value = valueOf(text);
+    return !isTokenRef(value) && onCommit(value) === "applied";
   };
   const owning = useLineHeightLabelScrub({ draft, setDraft, stored, onCommit });
   return (
@@ -381,7 +419,10 @@ function LengthOrNumberField({
       autoComplete="off"
       aria-describedby={described}
       aria-invalid={describedBy === undefined ? undefined : true}
-      onChange={event => setDraft(event.target.value)}
+      onChange={event => {
+        if (typedLive) live.type(event.target.value, write);
+        else setDraft(event.target.value);
+      }}
       // Nothing of its own is written while a drag on the label owns it.
       onBlur={() => owning() || commit()}
       onKeyDown={event => {
@@ -406,7 +447,8 @@ function LengthOrNumberField({
 
 /**
  * A line height offered to its row's label to drag, as its kind steps: a
- * number or a length. Written once on release, as a typed value is.
+ * number or a length. Written as it moves where the panel writes as it is
+ * typed, and on release, as a typed value is: the drag is one undo step.
  *
  * @returns whether a drag owns the value now, so the field writes nothing of
  *   its own meanwhile
@@ -423,6 +465,7 @@ function useLineHeightLabelScrub({
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): () => boolean {
   const inherited = React.useContext(InheritedValue);
+  const typesLive = useTypesLive();
   return useLabelScrub({
     origin: lineHeightScrubOrigin(draft, inherited),
     at: (from, delta) => {
@@ -435,6 +478,9 @@ function useLineHeightLabelScrub({
     commit: value => {
       if (onCommit(value) === "unchanged") setDraft(storedText(stored));
     },
+    ...(typesLive
+      ? { preview: (value: string | number) => onCommit(value) }
+      : {}),
   });
 }
 
@@ -911,8 +957,10 @@ function percentReading(
 }
 
 /**
- * A percent's slider, 0 to 100: the thumb follows a drag, and the value is
- * written once it settles.
+ * A percent's slider, 0 to 100: the thumb follows a drag, and so does the
+ * canvas where the panel writes as it is typed, at most once a frame; the
+ * value it settles on is written in the same run, so the drag is one undo
+ * step. Elsewhere the value is written once it settles.
  */
 function PercentSlider({
   resting,
@@ -931,6 +979,8 @@ function PercentSlider({
   // Held with its section, as the fieldset holds the form controls; a
   // slider's thumb is not one, so it is told.
   const held = React.useContext(SectionHeld);
+  const typesLive = useTypesLive();
+  const gesture = useLiveGesture();
   const at = preview ?? resting;
   return (
     <Slider
@@ -939,10 +989,15 @@ function PercentSlider({
       max={100}
       step={1}
       disabled={held}
-      onValueChange={([next]) => setPreview(next)}
+      onValueChange={([next]) => {
+        setPreview(next);
+        if (typesLive && next !== undefined) gesture.move(() => onCommit(next));
+      }}
       onValueCommit={([next]) => {
         setPreview(undefined);
-        if (next !== undefined) onCommit(next);
+        if (next === undefined) gesture.end();
+        else if (typesLive) gesture.end(() => onCommit(next));
+        else onCommit(next);
       }}
       thumbs={[
         {

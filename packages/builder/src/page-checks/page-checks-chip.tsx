@@ -16,7 +16,13 @@
  * @module page-checks/page-checks-chip
  */
 import { Popover, PopoverContent, PopoverTrigger } from "@nextlyhq/ui";
-import { Check, ChevronLeft, ChevronRight, X } from "lucide-react";
+import {
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  ExternalLink,
+  X,
+} from "lucide-react";
 import * as React from "react";
 
 import { revealNode } from "../canvas/reveal-node";
@@ -52,6 +58,18 @@ export interface PageChecksChipProps {
   readonly checks?: readonly PageCheck[];
   /** The page's block definitions; the registry by default. */
   readonly blocks?: CheckedPage["blocks"];
+  /** The header and footer drawn around the page, read with it. */
+  readonly regions?: CheckedPage["regions"];
+  /** The definitions the page's component placements are drawn from. */
+  readonly definitions?: CheckedPage["definitions"];
+  /** The site's variables, which colours written as one are read through. */
+  readonly tokens?: CheckedPage["tokens"];
+  /** The site's shared styles, its edits to block types' looks among them. */
+  readonly namedClasses?: CheckedPage["namedClasses"];
+  /** Opens the document's settings at a tab, for a fix found there. */
+  readonly onOpenSettingsTab?: (tab: string) => void;
+  /** What the editor knows of the page beyond its document (`page-facts`). */
+  readonly facts?: CheckedPage["facts"];
 }
 
 /** Whether the list, the bar, or neither is open. */
@@ -141,6 +159,20 @@ function FixBar({
         ) : null}
         {fixStepWords(step)}
       </span>
+      {/* A check whose fix is in another editor (a header's block): the
+          way there, beside where the author is, as the list offers it. */}
+      {step.kind === "at" && step.finding.opens !== undefined ? (
+        <a
+          className="nx-page-checks-bar__open"
+          href={step.finding.opens.href}
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label={`${step.finding.what}. ${step.finding.opens.name}`}
+        >
+          {step.finding.opens.text}
+          <ExternalLink aria-hidden="true" />
+        </a>
+      ) : null}
       {clear ? null : (
         <>
           <span className="nx-page-checks-bar__steps">
@@ -203,15 +235,42 @@ export function PageChecksChip({
   canvas,
   checks = CORE_PAGE_CHECKS,
   blocks,
+  regions,
+  definitions,
+  tokens,
+  namedClasses,
+  onOpenSettingsTab,
+  facts,
 }: PageChecksChipProps): React.JSX.Element {
-  const { document } = editor;
+  // Checked a moment after each edit rather than inside it. The count only
+  // informs, and Save and Publish read nothing of it, while running every
+  // check over a large page delayed each keystroke reaching the canvas.
+  // Every edit is still checked; keys typed in quick succession together.
+  const document = React.useDeferredValue(editor.document);
   const report = React.useMemo(
     () =>
       runPageChecks(
-        { document, ...(blocks === undefined ? {} : { blocks }) },
+        {
+          document,
+          ...(blocks === undefined ? {} : { blocks }),
+          ...(regions === undefined ? {} : { regions }),
+          ...(definitions === undefined ? {} : { definitions }),
+          ...(tokens === undefined ? {} : { tokens }),
+          ...(namedClasses === undefined ? {} : { namedClasses }),
+          ...(facts === undefined ? {} : { facts }),
+        },
         checks
       ),
-    [document, blocks, checks]
+    [
+      document,
+      blocks,
+      regions,
+      definitions,
+      tokens,
+      namedClasses,
+      facts,
+      checks,
+    ]
   );
   const { findings } = report;
   const [opened, setOpened] = React.useState<Opened>("closed");
@@ -224,8 +283,13 @@ export function PageChecksChip({
   // list, so Previous and Next leave no stale mark for its next close.
   const fixing = React.useRef(false);
   const fix = (finding: PageFinding): void => {
-    const { nodeId, fix: setting } = finding;
-    if (nodeId !== undefined) {
+    const { nodeId, fix: setting, settingsTab } = finding;
+    // A fix in another editor selects nothing here: the bar offers the way
+    // there, and no block of the page is left looking like the problem.
+    if (finding.opens !== undefined) editor.select(null);
+    // A fix in the document's settings opens them at its tab.
+    else if (settingsTab !== undefined) onOpenSettingsTab?.(settingsTab);
+    else if (nodeId !== undefined) {
       if (setting === undefined) editor.select(nodeId);
       else {
         showInspector?.();
@@ -273,7 +337,7 @@ export function PageChecksChip({
           }}
         >
           <PageChecksList
-            groups={pageCheckGroups(findings, checks)}
+            groups={pageCheckGroups(findings, checks, report.notes)}
             notRun={report.notRun}
             onFix={fix}
           />

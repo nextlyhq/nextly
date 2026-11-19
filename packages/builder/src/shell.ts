@@ -181,8 +181,15 @@ export { useModalKeyboardHold } from "./shell/modal-keyboard-hold";
 export type { CanvasProps } from "./canvas/canvas";
 // The regions of a page's layout around the page on the canvas, and which one
 // is selected.
-export type { CanvasRegion } from "./canvas/canvas-regions";
-export { REGION_ATTRIBUTE } from "./canvas/canvas-regions";
+export type {
+  CanvasRegion,
+  EmptyRegionAnchor,
+  EmptyRegionBandProps,
+} from "./canvas/canvas-regions";
+export {
+  EMPTY_REGION_ATTRIBUTE,
+  REGION_ATTRIBUTE,
+} from "./canvas/canvas-regions";
 export {
   useRegionSelection,
   type RegionSelection,
@@ -518,6 +525,26 @@ export type { EmptyContainerAppendersProps } from "./canvas/empty-container-appe
  */
 export { ImageStates } from "./canvas/image-states";
 export type { ImageStatesProps } from "./canvas/image-states";
+export { EmbedStates } from "./canvas/embed-states";
+export type { EmbedStatesProps } from "./canvas/embed-states";
+/**
+ * What the canvas says over a Form block: a picked form that is a draft,
+ * closed or deleted, with "Pick another form", and a simple form whose
+ * answers have nowhere to go. A canvas overlay composed like the one above,
+ * given the host's reads of the author's forms.
+ *
+ * @experimental
+ */
+export { FormStates } from "./canvas/form-states";
+export type { FormStatesProps } from "./canvas/form-states";
+/**
+ * The round a page's picked forms are drawn in, which goes up each time the
+ * author comes back to the editor while the page picks a form: a host draws
+ * its Forms afresh for each, so a form changed in its own tab shows as it is.
+ *
+ * @experimental
+ */
+export { useFormsShownAgain } from "./form-source-control";
 /**
  * The chooser a block just added asks for, drawn over it on the canvas while
  * the editor's first-add step holds: the Columns layouts with Skip. A canvas
@@ -527,6 +554,15 @@ export type { ImageStatesProps } from "./canvas/image-states";
  */
 export { FirstAddChoosers } from "./canvas/first-add-choosers";
 export type { FirstAddChoosersProps } from "./canvas/first-add-choosers";
+/**
+ * "+ Add a question" under a selected Accordion's last question, drawn over
+ * the canvas: it adds the next numbered question, opens it and types its
+ * title, through the host's way into a block's text.
+ *
+ * @experimental
+ */
+export { AccordionAddQuestion } from "./canvas/accordion-add-question";
+export type { AccordionAddQuestionProps } from "./canvas/accordion-add-question";
 /**
  * The badge on a block whose bound value a visitor will not see, drawn in the
  * canvas's overlay from the host's `visitorUnreadableBindings` answer.
@@ -540,6 +576,12 @@ export { VisitorUnreadableProvider } from "./visitor-unreadable-context";
  * a colour variable's, reads and adds to the one list.
  */
 export { RecentColoursStore } from "./recent-colours";
+/**
+ * @experimental The colours every colour picker in the builder leaves out
+ * while the site hides its unused built-in colours, provided once around
+ * the shell, and the read a host provides it from.
+ */
+export { HiddenColours, useHiddenColoursRead } from "./built-in-colours";
 /**
  * @experimental A template's document with an entry's own blocks composed
  * into its Entry content block, as the canvas draws it, for a host asking
@@ -584,6 +626,12 @@ export {
 export { PageInserters } from "./canvas/page-inserters";
 export type { PageInsertersProps, StartOptions } from "./canvas/page-inserters";
 export type { StarterPage } from "./canvas/page-start-area";
+// Starting an empty page from a starter page's blocks, as one undo step.
+export {
+  applyStarterPage,
+  planStarterPage,
+  type StarterPageSources,
+} from "./starter-page";
 
 /**
  * The editor's document state, published beside the canvas because it is a hook
@@ -800,6 +848,7 @@ export type { DesignTab, VariableGroup } from "./tokens-studio";
 export type {
   VariableReach,
   VariablesAccess,
+  VariablesTogether,
   VariablesUsage,
   VariableUse,
   VariableUseKind,
@@ -864,6 +913,13 @@ export { sharedStyleNameTaken } from "./shared-style-target";
 export { useNoticeQueue } from "./shell/builder-notices";
 export type { NoticeQueue, RaiseNotice } from "./shell/builder-notices";
 export { SharedStylesPanel } from "./shared-styles-panel";
+/**
+ * Design → Type → "Text styles": the site's text styles and their parts.
+ *
+ * @experimental Settles with text styles.
+ */
+export { TextStylesSection } from "./text-styles-section";
+export type { TextStylesSectionProps } from "./text-styles-section";
 // The whole-list class write the Styles tab's Block styles make, copy,
 // rename and hide block styles and move ★ through.
 export type { ClassListEdit, EditClasses } from "./block-style-actions";
@@ -917,11 +973,19 @@ export type {
  * @experimental The catalogue's shapes may change while the feature settles.
  */
 export { FontsPanel } from "./fonts-panel";
+/**
+ * The one Fonts screen around that list: what the builder opens over its
+ * Design panel and the admin draws as its Fonts page.
+ *
+ * @experimental Its props may change while the screen settles.
+ */
+export { FontsScreen } from "./fonts-panel";
 export type {
   CatalogueAddRequest,
   CatalogueFamilyView,
   FontCatalogue,
   FontsPanelProps,
+  FontsScreenProps,
   FontFaceUpload,
 } from "./fonts-panel";
 export {
@@ -956,3 +1020,22 @@ export { PageChecksChip } from "./page-checks/page-checks-chip";
 export type { PageChecksChipProps } from "./page-checks/page-checks-chip";
 export { PageChecksList } from "./page-checks/page-checks-list";
 export type { PageChecksListProps } from "./page-checks/page-checks-list";
+
+/**
+ * Ending every run of typing at once, for a host's save: a field still being
+ * typed in when the page is stored keeps writing into a new step, so undo
+ * after the save takes back only what came after it. `typingEpoch` says which
+ * stretch of typing the editor is in.
+ *
+ * @experimental
+ */
+export { endTypingRuns, typingEpoch } from "./typing-run";
+
+/**
+ * A draft held in a field of the block settings panel, for a host's save:
+ * the page has unsaved work from the draft's first keystroke, and a store
+ * writes the draft first, as leaving the field would, with focus left in it.
+ *
+ * @experimental
+ */
+export { finishFieldEdit, useFieldDraftHeld } from "./field-edit";

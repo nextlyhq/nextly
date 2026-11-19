@@ -57,6 +57,20 @@ export function designFoldsStoreFor(
 }
 
 /**
+ * Where an author's choice to show Google Fonts previews is kept: under their
+ * own key, so they are asked once, in the builder or on the admin's Fonts
+ * page alike. With no author known there is none, and they are asked on
+ * every visit.
+ */
+export function fontPreviewsStoreFor(
+  userId: string | null
+): PreferenceStore | undefined {
+  return userId === null
+    ? undefined
+    : devicePreferenceStore(`nx-pb-font-previews:${userId}`);
+}
+
+/**
  * Where the Pages panel's folded groups are kept: under the author's own
  * key, as the Design panel's are, so "Pages", "Header & footer" and
  * "Collection templates" open as that author left them on this site.

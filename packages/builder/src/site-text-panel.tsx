@@ -29,7 +29,9 @@ import {
   type SiteTokenSet,
   type StyleLeaf,
   type TokenMode,
+  type NamedClass,
   STYLE_CATALOG,
+  textStylesOf,
 } from "@nextlyhq/blocks-engine";
 import { Button, Popover, PopoverContent, PopoverTrigger } from "@nextlyhq/ui";
 import * as React from "react";
@@ -38,12 +40,14 @@ import { CssHint, CssNamesLine } from "./css-hint";
 import { commitFocusedField } from "./editor-field-commit";
 import { EDITOR_WORDS } from "./editor-words";
 import { FluidButton, type FluidHook } from "./fluid-popover";
+import { sharedStyleName } from "./shared-style-library";
 import {
   pairWords,
   SITE_OWN_WORDS,
   siteTextRowViews,
   siteTextWrites,
   typeSizeChoices,
+  withRowTextStyle,
   withSiteTextRow,
   withTypeSize,
   type SiteTextRowView,
@@ -67,6 +71,11 @@ export interface SiteTextSectionProps {
   readonly mode: TokenMode;
   /** The rows the site's code supplies, which Reset returns a row to. */
   readonly supplied?: SiteTextMap | undefined;
+  /**
+   * The site's class library, whose text styles a row may follow
+   * ("Heading 1 uses Display"). Absent: none is offered.
+   */
+  readonly classes?: readonly NamedClass[] | undefined;
 }
 
 /** The words each underline is offered by. */
@@ -111,9 +120,10 @@ export function SiteTextSection({
   readOnly,
   mode,
   supplied,
+  classes,
 }: SiteTextSectionProps): React.JSX.Element {
   const id = React.useId();
-  const rows = siteTextRowViews(tokens, mode);
+  const rows = siteTextRowViews(tokens, mode, classes);
   return (
     <section className="nx-vars__group nx-site-text" aria-labelledby={id}>
       <div className="nx-vars__group-head">
@@ -131,6 +141,7 @@ export function SiteTextSection({
             readOnly={readOnly}
             mode={mode}
             resetTo={supplied?.[row.role]}
+            classes={classes}
           />
         ))}
       </ul>
@@ -146,6 +157,7 @@ function SiteTextRow({
   readOnly,
   mode,
   resetTo,
+  classes,
 }: {
   row: SiteTextRowView;
   tokens: SiteTokenSet;
@@ -153,75 +165,111 @@ function SiteTextRow({
   readOnly: boolean;
   mode: TokenMode;
   resetTo: SiteTextEntry | undefined;
+  classes: readonly NamedClass[] | undefined;
 }): React.JSX.Element {
   const [open, setOpen] = React.useState(false);
   const namesId = React.useId();
   const words = rowWords(row);
   const heading = /^h[1-6]$/.test(row.role);
   return (
+    <PopupRow open={open} onOpen={setOpen}>
+      <div className="nx-vars__line">
+        <CssHint writes={siteTextWrites(tokens, row.role, row.entry, classes)}>
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              className="nx-vars__row nx-site-text__row"
+              data-site-text={row.role}
+              data-open={open ? "" : undefined}
+            >
+              <span
+                className="nx-vars__name"
+                title={row.label}
+                aria-hidden="true"
+              >
+                {row.label}
+              </span>
+              <span
+                className="nx-site-text__preview"
+                aria-hidden="true"
+                style={{
+                  fontSize: `${String(previewPx(row))}px`,
+                  fontWeight: heading ? 700 : 400,
+                }}
+              >
+                {SAMPLE}
+              </span>
+              <span className="nx-vars__chip" title={words} aria-hidden="true">
+                {words}
+              </span>
+              {/* The row's name, in one element, named with its section so
+                  "Body" here is never taken for a type size of the same name
+                  in the list below. Text rather than an aria-label, which
+                  would have to hold every drawn word, the sample included. */}
+              <span className="nx-sr-only">
+                {row.follows === undefined
+                  ? `${EDITOR_WORDS.siteText}: ${row.label}, ${words}`
+                  : `${EDITOR_WORDS.siteText}: ${row.label} uses ${row.follows.name}`}
+              </span>
+            </button>
+          </PopoverTrigger>
+        </CssHint>
+      </div>
+      <CssNamesLine id={namesId} names={cssNamesOf(row.role)} />
+      <PopoverContent
+        side="right"
+        align="start"
+        sideOffset={12}
+        collisionPadding={8}
+        className="nx-vars-editor nx-site-text__editor"
+        aria-label={`${readOnly ? "" : "Edit "}${row.label}`}
+      >
+        <CloseVariableEditor.Provider value={() => setOpen(false)}>
+          <SiteTextEditor
+            row={row}
+            tokens={tokens}
+            onChange={onChange}
+            readOnly={readOnly}
+            mode={mode}
+            resetTo={resetTo}
+            classes={classes}
+          />
+        </CloseVariableEditor.Provider>
+      </PopoverContent>
+    </PopupRow>
+  );
+}
+
+/**
+ * A Design row with a popup beside the panel: the row's line and its popup
+ * inside, and what follows the row (a refusal) after it. A field still being
+ * typed in commits before the popup closes. Shared by Site text's rows and
+ * the text styles'.
+ */
+export function PopupRow({
+  open,
+  onOpen,
+  after,
+  children,
+}: {
+  open: boolean;
+  onOpen: (open: boolean) => void;
+  after?: React.ReactNode;
+  children: React.ReactNode;
+}): React.JSX.Element {
+  return (
     <li className="nx-vars__item" data-open={open ? "" : undefined}>
       <Popover
         open={open}
         onOpenChange={next => {
-          // A field still being typed in commits before the popup closes.
           if (!next) commitFocusedField(globalThis.document);
-          setOpen(next);
+          onOpen(next);
         }}
         modal
       >
-        <div className="nx-vars__line">
-          <CssHint writes={siteTextWrites(tokens, row.role, row.entry)}>
-            <PopoverTrigger asChild>
-              <button
-                type="button"
-                className="nx-vars__row nx-site-text__row"
-                data-site-text={row.role}
-                // Named with its section, so "Body" here is never taken
-                // for a type size of the same name in the list below.
-                aria-label={`${EDITOR_WORDS.siteText}: ${row.label}, ${words}`}
-                data-open={open ? "" : undefined}
-              >
-                <span className="nx-vars__name" title={row.label}>
-                  {row.label}
-                </span>
-                <span
-                  className="nx-site-text__preview"
-                  aria-hidden="true"
-                  style={{
-                    fontSize: `${String(previewPx(row))}px`,
-                    fontWeight: heading ? 700 : 400,
-                  }}
-                >
-                  {SAMPLE}
-                </span>
-                <span className="nx-vars__chip" title={words}>
-                  {words}
-                </span>
-              </button>
-            </PopoverTrigger>
-          </CssHint>
-        </div>
-        <CssNamesLine id={namesId} names={cssNamesOf(row.role)} />
-        <PopoverContent
-          side="right"
-          align="start"
-          sideOffset={12}
-          collisionPadding={8}
-          className="nx-vars-editor nx-site-text__editor"
-          aria-label={`${readOnly ? "" : "Edit "}${row.label}`}
-        >
-          <CloseVariableEditor.Provider value={() => setOpen(false)}>
-            <SiteTextEditor
-              row={row}
-              tokens={tokens}
-              onChange={onChange}
-              readOnly={readOnly}
-              mode={mode}
-              resetTo={resetTo}
-            />
-          </CloseVariableEditor.Provider>
-        </PopoverContent>
+        {children}
       </Popover>
+      {after}
     </li>
   );
 }
@@ -235,6 +283,8 @@ function SiteTextEditor(props: {
   mode: TokenMode;
   /** The row the site's code supplies, or none: the built-in one. */
   resetTo: SiteTextEntry | undefined;
+  /** The site's classes, whose text styles a text row may follow. */
+  classes: readonly NamedClass[] | undefined;
 }): React.JSX.Element {
   const { row, tokens, onChange, readOnly, resetTo } = props;
   return (
@@ -269,8 +319,12 @@ function SiteTextEditor(props: {
  */
 type SizeWay = string;
 
+/** The way a text style is chosen by, beside a type size's identity. */
+const TEXT_STYLE_WAY = "text:";
+
 /** The way a row's values say it is set. */
 function wayOf(row: SiteTextRowView): SizeWay {
+  if (row.follows !== undefined) return `${TEXT_STYLE_WAY}${row.follows.id}`;
   const size = row.entry?.fontSize;
   if (isTokenRef(size)) return size.$token;
   return size === undefined && row.entry?.lineHeight === undefined
@@ -285,15 +339,19 @@ function SizeFields({
   onChange,
   readOnly,
   mode,
+  classes,
 }: {
   row: SiteTextRowView;
   tokens: SiteTokenSet;
   onChange: (tokens: SiteTokenSet) => void;
   readOnly: boolean;
   mode: TokenMode;
+  classes: readonly NamedClass[] | undefined;
 }): React.JSX.Element {
   const name = React.useId();
   const choices = typeSizeChoices(tokens, mode);
+  // The text styles the row may follow in place of a size of its own.
+  const followable = textStylesOf(classes);
   const stored = wayOf(row);
   // "Custom size" chosen shows its fields before anything is typed.
   const [typing, setTyping] = React.useState(false);
@@ -301,6 +359,12 @@ function SizeFields({
   const pick = (next: SizeWay): void => {
     setTyping(next === "custom");
     if (next === "custom") return;
+    if (next.startsWith(TEXT_STYLE_WAY)) {
+      onChange(
+        withRowTextStyle(tokens, row.role, next.slice(TEXT_STYLE_WAY.length))
+      );
+      return;
+    }
     onChange(
       next === "own"
         ? withSiteTextRow(tokens, row.role, {})
@@ -314,6 +378,10 @@ function SizeFields({
       label: `${choice.name} · ${choice.pair}`,
     })),
     { value: "custom", label: "Custom size" },
+    ...followable.map(style => ({
+      value: `${TEXT_STYLE_WAY}${style.id}`,
+      label: `Text style: ${sharedStyleName(style)}`,
+    })),
   ];
   return (
     <>
@@ -366,9 +434,9 @@ function TypedSize({
   readOnly: boolean;
   choices: readonly TypeSizeChoice[];
 }): React.JSX.Element {
-  const entry: SiteTextEntry = isTokenRef(row.entry?.fontSize)
-    ? {}
-    : (row.entry ?? {});
+  // Typing a size of its own takes the row off a text style it followed.
+  const { textStyle: _followed, ...own } = row.entry ?? {};
+  const entry: SiteTextEntry = isTokenRef(own.fontSize) ? {} : own;
   const write = (next: SiteTextEntry): void =>
     onChange(withSiteTextRow(tokens, row.role, next));
   const range = fluidRangeOf(tokens);

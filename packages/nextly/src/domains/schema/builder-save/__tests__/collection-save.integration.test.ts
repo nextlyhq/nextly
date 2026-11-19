@@ -24,7 +24,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { defineConfig } from "../../../../config";
 import { createAdapter } from "../../../../database/factory";
@@ -66,7 +66,45 @@ beforeEach(() => {
   previousUrl = process.env.DATABASE_URL;
 });
 
+/**
+ * A database that refuses part of a save, for the tests that need a later file to fail after an
+ * earlier one applied. Each file the writer runs is counted (`seen`); where `pick` answers for one,
+ * only that many of its statements run, and the database refuses the next. A failure planted in the
+ * database itself would now be refused as drift before any file runs.
+ */
+const fault = vi.hoisted(() => ({
+  seen: 0,
+  pick: undefined as
+    | ((statements: readonly string[], nth: number) => number | undefined)
+    | undefined,
+}));
+
+vi.mock("../../busy-table/run-unit", async original => {
+  const actual = await original<typeof import("../../busy-table/run-unit")>();
+  return {
+    ...actual,
+    runUnitInTries: async (
+      ...args: Parameters<typeof actual.runUnitInTries>
+    ) => {
+      const [adapter, statements, unit, after, run] = args;
+      fault.seen += 1;
+      const keep = fault.pick?.(statements, fault.seen);
+      if (keep === undefined) return actual.runUnitInTries(...args);
+      return actual.runUnitInTries(
+        adapter,
+        statements.slice(0, keep),
+        unit,
+        () =>
+          Promise.reject(new Error("the database refused the next statement")),
+        run
+      );
+    },
+  };
+});
+
 afterEach(async () => {
+  fault.seen = 0;
+  fault.pick = undefined;
   await instance?.destroy();
   instance = undefined;
   if (previousDialect === undefined) delete process.env.DB_DIALECT;
@@ -204,6 +242,31 @@ describe.each(getConfiguredTestDialects())(
       );
     });
 
+    it("previews a change after the first migration from that migration's snapshot", async () => {
+      await writeCollectionSave(deps(), {
+        slug: "posts",
+        previous: null,
+        entity: posts([text("body")]),
+        change: "create",
+      });
+
+      const preview = await previewCollectionSave(deps(), {
+        slug: "posts",
+        previous: posts([text("body")]),
+        entity: posts([text("body"), text("subtitle")]),
+        change: "update",
+      });
+
+      // The column added to the table that exists, not the table made again.
+      expect(preview.files).toHaveLength(1);
+      const { sql } = preview.files[0]!;
+      const up = sql.split(/^-- DOWN/m)[0]!;
+      expect(up, sql).toMatch(/ADD (COLUMN )?[`"]?subtitle/);
+      expect(up, sql).not.toMatch(/CREATE TABLE/);
+      // And nothing written where the app reads.
+      expect(migrationFiles()).toHaveLength(1);
+    });
+
     it("writes each later change as its own applied file, and renames what the person renamed", async () => {
       await writeCollectionSave(deps(), {
         slug: "posts",
@@ -304,6 +367,145 @@ describe.each(getConfiguredTestDialects())(
         definition: definition(),
         columns: await columns(),
       }).toEqual(before);
+    });
+
+    it("refuses a field type change that would clear a value before writing anything, naming the field and the row", async () => {
+      // "zz#q" is no number, and no generated name (a UUID, a folder's random suffix) holds a "#". Refused before the definition or any file is written, so a deploy never
+      // receives a change this database refused.
+      await writeCollectionSave(deps(), {
+        slug: "posts",
+        previous: null,
+        entity: posts([text("body")]),
+        change: "create",
+      });
+      await adapter.executeQuery(
+        `INSERT INTO dc_posts (id, title, body, slug, created_at, updated_at) VALUES ('p1', 'A post', 'zz#q', 'p1', '2026-11-06 00:00:00', '2026-11-06 00:00:00')`
+      );
+      const before = {
+        files: migrationFiles(),
+        snapshots: snapshotFiles(),
+        definition: definition(),
+        columns: await columns(),
+      };
+
+      const refused = await writeCollectionSave(deps(), {
+        slug: "posts",
+        previous: posts([text("body")]),
+        entity: posts([text("content", { type: "number" })]),
+        change: "update",
+        renamedFields: [{ from: "body", to: "content" }],
+      }).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+
+      expect(refused).toMatchObject({
+        publicData: {
+          errors: [
+            {
+              path: "fields.content",
+              code: "TYPE_CHANGE_LOSES_VALUES",
+              message: expect.stringContaining(
+                "Collection 'posts': field 'content' cannot change from text to number"
+              ) as unknown,
+            },
+          ],
+        },
+      });
+      expect(JSON.stringify(refused)).toContain("id p1");
+      expect(JSON.stringify(refused)).not.toContain("zz#q");
+      expect({
+        files: migrationFiles(),
+        snapshots: snapshotFiles(),
+        definition: definition(),
+        columns: await columns(),
+      }).toEqual(before);
+    });
+
+    it("refuses a type change while an earlier save's file for the collection is not applied yet", async () => {
+      // Outside development a save's file waits for the deploy's `nextly migrate`: the columns do
+      // not hold what the definition says yet, so no value can be judged against it.
+      await writeCollectionSave(deps(), {
+        slug: "posts",
+        previous: null,
+        entity: posts([text("body")]),
+        change: "create",
+      });
+      await writeCollectionSave(deps({ applies: false }), {
+        slug: "posts",
+        previous: posts([text("body")]),
+        entity: posts([text("body"), text("subtitle")]),
+        change: "update",
+      });
+      const before = { files: migrationFiles(), definition: definition() };
+
+      const refused = await writeCollectionSave(deps({ applies: false }), {
+        slug: "posts",
+        previous: posts([text("body"), text("subtitle")]),
+        entity: posts([text("body", { type: "number" }), text("subtitle")]),
+        change: "update",
+      }).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+
+      expect(refused).toMatchObject({
+        publicData: {
+          errors: [
+            {
+              path: "fields.body",
+              code: "TYPE_CHANGE_BLOCKED",
+              message:
+                "Finish the pending migration of Collection 'posts' first, then change the field's type.",
+            },
+          ],
+        },
+      });
+      expect({ files: migrationFiles(), definition: definition() }).toEqual(
+        before
+      );
+    });
+
+    it("refuses a type change of a field inside a group with no name, before writing anything", async () => {
+      // The group has no name, so its field is kept on the row by its own name: judged as any other.
+      const grouped = (type: string) =>
+        posts([
+          {
+            type: "group",
+            fields: [text("heading", { type })],
+          } as unknown as UiSchemaEntity["fields"][number],
+        ]);
+      await writeCollectionSave(deps(), {
+        slug: "posts",
+        previous: null,
+        entity: grouped("text"),
+        change: "create",
+      });
+      await adapter.executeQuery(
+        `INSERT INTO dc_posts (id, title, heading, slug, created_at, updated_at) VALUES ('p1', 'A post', 'abc', 'p1', '2026-11-06 00:00:00', '2026-11-06 00:00:00')`
+      );
+      const before = { files: migrationFiles(), definition: definition() };
+
+      const refused = await writeCollectionSave(deps(), {
+        slug: "posts",
+        previous: grouped("text"),
+        entity: grouped("number"),
+        change: "update",
+      }).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+
+      expect(refused).toMatchObject({
+        publicData: {
+          errors: [
+            { path: "fields.heading", code: "TYPE_CHANGE_LOSES_VALUES" },
+          ],
+        },
+      });
+      expect({ files: migrationFiles(), definition: definition() }).toEqual(
+        before
+      );
     });
 
     it("outside development writes the definition, file and snapshot, and runs nothing", async () => {
@@ -839,6 +1041,37 @@ describe.each(getConfiguredTestDialects())(
       expect(await nullable("subtitle")).toBe(false);
     });
 
+    // A row fill gives a Single's one row a field's default. A collection holds any number of rows,
+    // which only the person's own answer settles, so a save of a collection carrying one is
+    // refused whoever passes it, and nothing is written.
+    it("refuses a row fill on a collection's save, writing nothing", async () => {
+      await writeCollectionSave(deps(), {
+        slug: "posts",
+        previous: null,
+        entity: posts([text("body")]),
+        change: "create",
+      });
+      const files = migrationFiles();
+      const written = definition();
+
+      await expect(
+        writeCollectionSave(deps(), {
+          slug: "posts",
+          previous: posts([text("body")]),
+          entity: posts([text("body"), text("subtitle")]),
+          change: "update",
+          rowFills: [{ column: "subtitle", value: "Hello" }],
+        })
+      ).rejects.toMatchObject({
+        publicData: {
+          errors: [expect.objectContaining({ code: "ROW_FILL_NOT_SINGLE" })],
+        },
+      });
+      expect(migrationFiles()).toEqual(files);
+      expect(definition()).toBe(written);
+      expect(await columns()).not.toContain("subtitle");
+    });
+
     it("deletes the rows that do not fit a field made required, here, and asks consent on replay", async () => {
       await writeCollectionSave(deps(), {
         slug: "posts",
@@ -947,6 +1180,8 @@ describe.each(getConfiguredTestDialects())(
                 column: "body",
                 from: "text",
                 to: "varchar(255)",
+                change: "changes body from text to varchar(255)",
+                deletesValues: false,
               },
             ]
           : []
@@ -954,7 +1189,7 @@ describe.each(getConfiguredTestDialects())(
       expect(preview.notices).toEqual(
         converts
           ? [
-              "This save also converts body from text to varchar(255), from an earlier Nextly version.",
+              "dc_posts was made by an earlier Nextly version. This save brings it up to date: changes body from text to varchar(255).",
             ]
           : []
       );
@@ -1012,7 +1247,7 @@ describe.each(getConfiguredTestDialects())(
           code: "NEXTLY_SCHEMA_CONVERSION_UNCONFIRMED",
           statusCode: 409,
           publicMessage: expect.stringContaining(
-            "converts body from text to varchar(255)"
+            "brings it up to date: changes body from text to varchar(255)"
           ),
         });
 
@@ -1077,6 +1312,39 @@ describe.each(getConfiguredTestDialects())(
       change: "update" as const,
     };
 
+    // Turning translation off puts `body` back on the main table before the main file runs, and the
+    // main file's snapshot records that table: the runner checks the main table against its two
+    // ends. On MySQL the field is `text` there, and a column put back wider (LONGTEXT) was at
+    // neither end, which the runner refused as drift.
+    it("turns translation off through its files, the main table put back as the main file's snapshot records it", async () => {
+      const body = (extra: Record<string, unknown> = {}) => text("body", extra);
+      await writeCollectionSave(translatedDeps(), {
+        slug: "posts",
+        previous: null,
+        entity: translated([body({ localized: true })]),
+        change: "create",
+      });
+      await adapter.executeQuery(
+        "INSERT INTO dc_posts (id, title, slug, created_at, updated_at) VALUES ('p1', 'A post', 'p1', '2026-11-06 00:00:00', '2026-11-06 00:00:00')"
+      );
+      await adapter.executeQuery(
+        "INSERT INTO dc_posts_locales (_parent, _locale, body) VALUES ('p1', 'en', 'Hello'), ('p1', 'es', 'Hola')"
+      );
+
+      await writeCollectionSave(translatedDeps(), {
+        slug: "posts",
+        previous: translated([body({ localized: true })]),
+        entity: posts([body()]),
+        change: "update",
+      });
+
+      expect(
+        await adapter.executeQuery<{ body: string }>(
+          "SELECT body FROM dc_posts WHERE id = 'p1'"
+        )
+      ).toEqual([{ body: "Hello" }]);
+    });
+
     it("refuses to record a translation change whose push left the table short of its file, and records nothing", async () => {
       await writeCollectionSave(translatedDeps(), {
         slug: "posts",
@@ -1096,6 +1364,88 @@ describe.each(getConfiguredTestDialects())(
       expect(await appliedRows()).toEqual(applied);
     });
 
+    // A save that applies its change by a push (`appliedBy`) is judged against the history before
+    // the push runs, as the file road's own reconcile judges it: a column added by hand, which the
+    // history does not record, refuses the save naming it, with the push never run and nothing kept.
+    // A translated save's push changes its translations table too, so that table is judged before
+    // the push as the file road judges it: a column added there by hand refuses the save, naming it.
+    it("refuses a pushed translated save over a translations table the history does not record, naming it, and changes nothing", async () => {
+      const title = text("title", { localized: true });
+      await writeCollectionSave(translatedDeps(), {
+        slug: "posts",
+        previous: null,
+        entity: translated([title]),
+        change: "create",
+      });
+      await adapter.executeQuery(
+        `ALTER TABLE dc_posts_locales ADD COLUMN extra text`
+      );
+      const files = migrationFiles();
+      const snapshots = snapshotFiles();
+      const defined = definition();
+      const applied = await appliedRows();
+      const push = vi.fn(() => Promise.resolve());
+
+      const refused: unknown = await writeCollectionSave(
+        translatedDeps(),
+        {
+          slug: "posts",
+          previous: translated([title]),
+          entity: translated([title, text("subtitle")]),
+          change: "update",
+        },
+        { appliedBy: push }
+      ).catch((error: unknown) => error);
+
+      expect(refused).toMatchObject({ code: "NEXTLY_MIGRATION_DRIFT" });
+      expect(
+        String((refused as { publicMessage?: unknown }).publicMessage)
+      ).toContain("dc_posts_locales.extra present in DB");
+      expect(push).not.toHaveBeenCalled();
+      expect(migrationFiles()).toEqual(files);
+      expect(snapshotFiles()).toEqual(snapshots);
+      expect(definition()).toEqual(defined);
+      expect(await appliedRows()).toEqual(applied);
+    });
+
+    it("refuses a pushed save over a column the history does not record before the push, naming it, and changes nothing", async () => {
+      await writeCollectionSave(deps(), {
+        slug: "posts",
+        previous: null,
+        entity: posts([text("title")]),
+        change: "create",
+      });
+      await adapter.executeQuery(`ALTER TABLE dc_posts ADD COLUMN extra text`);
+      const files = migrationFiles();
+      const snapshots = snapshotFiles();
+      const defined = definition();
+      const applied = await appliedRows();
+      const live = await columns();
+      const push = vi.fn(() => Promise.resolve());
+
+      const refused: unknown = await writeCollectionSave(
+        deps(),
+        {
+          slug: "posts",
+          previous: posts([text("title")]),
+          entity: posts([text("title"), text("subtitle")]),
+          change: "update",
+        },
+        { appliedBy: push }
+      ).catch((error: unknown) => error);
+
+      expect(refused).toMatchObject({ code: "NEXTLY_MIGRATION_DRIFT" });
+      expect(
+        String((refused as { publicMessage?: unknown }).publicMessage)
+      ).toContain("dc_posts.extra present in DB");
+      expect(push).not.toHaveBeenCalled();
+      expect(migrationFiles()).toEqual(files);
+      expect(snapshotFiles()).toEqual(snapshots);
+      expect(definition()).toEqual(defined);
+      expect(await appliedRows()).toEqual(applied);
+      expect(await columns()).toEqual(live);
+    });
+
     it("keeps every file and the new definition when an earlier file applied and a later one failed", async () => {
       await writeCollectionSave(translatedDeps(), {
         slug: "posts",
@@ -1106,13 +1456,10 @@ describe.each(getConfiguredTestDialects())(
       await adapter.executeQuery(
         "INSERT INTO dc_posts (id, title, slug, created_at, updated_at) VALUES ('p1', 'Hello', 'p1', '2026-11-06 00:00:00', '2026-11-06 00:00:00')"
       );
-      // A translations table of another shape: the file's CREATE ... IF NOT EXISTS keeps it, and
-      // its copy of the rows into it fails, after the main file applied.
-      const key = dialect === "mysql" ? "VARCHAR(36)" : "TEXT";
-      await adapter.executeQuery(
-        `CREATE TABLE dc_posts_locales (_parent ${key} NOT NULL, _locale VARCHAR(20) NOT NULL)`
-      );
+      // The save's second file refused, after its first applied.
       const before = migrationFiles();
+      fault.seen = 0;
+      fault.pick = (_statements, nth) => (nth === 2 ? 0 : undefined);
 
       await expect(
         writeCollectionSave(translatedDeps(), enableTitle)
@@ -1140,11 +1487,16 @@ describe.each(getConfiguredTestDialects())(
           entity: translated([text("title", { localized: true })]),
           change: "create",
         });
-        // A column the save's second addition collides with, after its first has committed.
-        await adapter.executeQuery(
-          "ALTER TABLE dc_posts_locales ADD COLUMN b TEXT NULL"
-        );
+        // The translations file's second addition refused, after its first has committed.
         const before = migrationFiles();
+        fault.pick = statements => {
+          const first = statements.findIndex(
+            statement =>
+              /ADD COLUMN/i.test(statement) &&
+              statement.includes("dc_posts_locales")
+          );
+          return first === -1 ? undefined : first + 1;
+        };
 
         await expect(
           writeCollectionSave(translatedDeps(), {

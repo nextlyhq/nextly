@@ -12,6 +12,10 @@
  *   the file is recorded with `migrate:resolve --applied`, later runs go on.
  * - `two` with a trigger beside its column, its snapshot's checksum matching, is refused naming
  *   the trigger's statement; no trigger exists afterwards and the ledger is unchanged.
+ * - On MySQL, `two` restating a column with `MODIFY` is refused where the column keeps a
+ *   collation and a comment a run would put back, and recorded where it keeps nothing.
+ * - On PostgreSQL and MySQL, `two` creating a table whose key the database assigns is refused
+ *   where the table stands with a plain integer key, and recorded where the key is assigned.
  * - At `two`'s start, the edited `two` runs whole and backfills the column.
  * - A pending data-only file and one that drops an index and creates it again, each starting and
  *   ending at the same schema, both run and are recorded applied by a run.
@@ -39,6 +43,8 @@ import { NO_CONSENT } from "../../../domains/schema/migrate/data-loss-consent";
 import { resolveMigration } from "../../../domains/schema/migrate/resolve";
 import { introspectLiveSnapshot } from "../../../domains/schema/pipeline/diff/introspect-live";
 import type { NextlySchemaSnapshot } from "../../../domains/schema/pipeline/diff/types";
+import { schemaVersionStoreSql } from "../../../domains/schema/schema-version";
+import { buildCollectionMetadataUpsert } from "../../../domains/schema/ui-schema/metadata-sql";
 import { NextlyError } from "../../../errors/nextly-error";
 import { clearCachedSnapshot } from "../../../init/schema-snapshot-cache";
 import {
@@ -265,6 +271,32 @@ describe.each(getConfiguredTestDialects())(
       ]);
     });
 
+    it("records a file that writes its collection's registry row and moves the stored schema version after it, as migrate:create writes one for a collection made in the admin", async () => {
+      // What `registryRowsFor` adds to the UP of a file whose entity was made in the admin: its
+      // registry row, then the statement moving the stored schema version.
+      const row = buildCollectionMetadataUpsert(
+        {
+          slug: SLUG,
+          labels: { singular: "Note", plural: "Notes" },
+          fields: [
+            { name: "title", type: "text" },
+            { name: "summary", type: "text", index: true },
+          ],
+        } as never,
+        dialect
+      ).replace(/;\s*$/, "");
+      const version = schemaVersionStoreSql(dialect).replace(/;\s*$/, "");
+      const text = await withUp(two, [row, version]);
+      await writeFile(sqlPath(two), text);
+      await rehash(two, text);
+      await dbSync(true);
+
+      await migrate();
+      expect(await ledger(two)).toEqual([
+        { status: "applied", statementsExecuted: 0 },
+      ]);
+    });
+
     it("refuses an edited file whose backfill the snapshot cannot show, then goes on once it is run by hand and resolved", async () => {
       const backfill = `UPDATE ${q(TABLE)} SET ${q("summary")} = 'backfilled'`;
       await writeFile(sqlPath(two), await withUp(two, [backfill]));
@@ -461,6 +493,128 @@ describe.each(getConfiguredTestDialects())(
           `ADD COLUMN ${q("note")} varchar (rows it fills with its default are still NULL)`
         );
         expect(await ledger(two)).toEqual([]);
+      }
+    );
+
+    it.runIf(dialect === "mysql").each([
+      [
+        "refuses it where the column keeps a collation and a comment set by hand, then records it once it is run by hand",
+        "kept",
+      ],
+      ["records it where the column holds nothing it would reset", "plain"],
+    ] as const)(
+      "a file restating a column with MODIFY: %s",
+      async (_case, column) => {
+        await dbSync(true);
+        // The column already at the file's type: brought there by the file's own statement, or
+        // by hand with a collation and a comment, which a run of the file would put back.
+        const widen = `ALTER TABLE ${q(TABLE)} MODIFY COLUMN ${q("title")} varchar(300)`;
+        await query(
+          column === "kept"
+            ? `${widen} COLLATE utf8mb4_bin COMMENT 'kept by hand'`
+            : widen
+        );
+        const text = await withUp(two, [widen]);
+        await writeFile(sqlPath(two), text);
+        await rehash(two, text);
+        await retarget(two);
+        const titleSettings = async () =>
+          (await query(
+            `SELECT COLLATION_NAME AS collation, COLUMN_COMMENT AS comment FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '${TABLE}' AND COLUMN_NAME = 'title'`
+          )) as Array<{ collation: string; comment: string }>;
+
+        if (column === "kept") {
+          const error = await refusal();
+          expect(error.code).toBe("NEXTLY_MIGRATION_NOT_PROVEN");
+          expect(error.publicMessage).toContain(
+            "the database's columns keep settings 1 statement would reset"
+          );
+          expect(error.publicMessage).toContain(
+            `MODIFY COLUMN ${q("title")} varchar (the column keeps settings it would reset)`
+          );
+          expect(await ledger(two)).toEqual([]);
+          expect(await titleSettings()).toEqual([
+            { collation: "utf8mb4_bin", comment: "kept by hand" },
+          ]);
+          // The next step the refusal names: the statement run by hand resets both, and the
+          // file is then one the database truly stands at the end of.
+          await query(widen);
+          const [after] = await titleSettings();
+          expect(after.collation).not.toBe("utf8mb4_bin");
+          expect(after.comment).toBe("");
+        }
+        await migrate();
+        expect(await ledger(two)).toEqual([
+          { status: "applied", statementsExecuted: 0 },
+        ]);
+      }
+    );
+
+    it.runIf(dialect === "mysql")(
+      "refuses a file whose only statement restates a column that keeps a comment set by hand",
+      async () => {
+        // The whole UP of a type change as migrate:create writes it on MySQL: one MODIFY, which
+        // makes and removes no object.
+        const widen = `ALTER TABLE ${q(TABLE)} MODIFY COLUMN ${q("title")} varchar(300)`;
+        await query(`${widen} COMMENT 'kept by hand'`);
+        const generated = await readFile(sqlPath(two), "utf8");
+        const up = generated.indexOf("-- UP");
+        const down = generated.indexOf("-- DOWN");
+        expect(up).toBeGreaterThan(-1);
+        expect(down).toBeGreaterThan(up);
+        const upLine = generated.slice(up, generated.indexOf("\n", up) + 1);
+        const text = `${generated.slice(0, up)}${upLine}${widen};\n\n${generated.slice(down)}`;
+        await writeFile(sqlPath(two), text);
+        await rehash(two, text);
+        await retarget(two);
+
+        const error = await refusal();
+        expect(error.code).toBe("NEXTLY_MIGRATION_NOT_PROVEN");
+        expect(error.publicMessage).toContain(
+          `MODIFY COLUMN ${q("title")} varchar (the column keeps settings it would reset)`
+        );
+        expect(await ledger(two)).toEqual([]);
+      }
+    );
+
+    it.runIf(dialect !== "sqlite").each([
+      ["refuses it where the table's key is a plain integer", "plain"],
+      ["records it where the database assigns the key", "assigned"],
+    ] as const)(
+      "a file creating a table whose key the database assigns: %s",
+      async (_case, key) => {
+        await dbSync(true);
+        const counters = `${SLUG}_counters`;
+        const create =
+          dialect === "postgresql"
+            ? `CREATE TABLE ${q(counters)} (${q("id")} serial PRIMARY KEY, ${q("label")} text)`
+            : `CREATE TABLE ${q(counters)} (${q("id")} int NOT NULL AUTO_INCREMENT PRIMARY KEY, ${q("label")} text)`;
+        // The table the file creates, already there: made by the file's own statement, or by
+        // hand with an ordinary integer key, which reads as the same column.
+        const byHand = `CREATE TABLE ${q(counters)} (${q("id")} ${dialect === "postgresql" ? "integer" : "int NOT NULL"} PRIMARY KEY, ${q("label")} text)`;
+        await query(key === "assigned" ? create : byHand);
+        try {
+          const text = await withUp(two, [create]);
+          await writeFile(sqlPath(two), text);
+          await rehash(two, text);
+          await retarget(two, [TABLE, counters]);
+
+          if (key === "assigned") {
+            await migrate();
+            expect(await ledger(two)).toEqual([
+              { status: "applied", statementsExecuted: 0 },
+            ]);
+            return;
+          }
+          const error = await refusal();
+          expect(error.code).toBe("NEXTLY_MIGRATION_NOT_PROVEN");
+          expect(error.publicMessage).toContain(
+            `CREATE TABLE ${q(counters)} (the database does not stand as it leaves it)`
+          );
+          expect(await ledger(two)).toEqual([]);
+        } finally {
+          await query(`DROP TABLE IF EXISTS ${q(counters)}`);
+        }
       }
     );
 

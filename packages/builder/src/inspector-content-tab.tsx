@@ -18,6 +18,9 @@ import type { PageStyleCascade } from "@nextlyhq/blocks-react";
 import { useIsomorphicLayoutEffect } from "@nextlyhq/ui";
 import * as React from "react";
 
+import { ACCORDION_BLOCK } from "./accordion-icon";
+import { accordionContentSections } from "./accordion-icon-field";
+import { EMBED_BLOCK_TYPE, embedLinkOp } from "./canvas/embed-states-model";
 import { columnsContentSection } from "./columns-layout-field";
 import {
   PropExposeControl,
@@ -25,17 +28,22 @@ import {
 } from "./component-fields-panel";
 import type { ContentServices } from "./content-controls";
 import type { EditorState } from "./editor-state";
-import { formSectionBodies } from "./form-sections";
+import { embedSectionBodies } from "./embed-sections";
+import { FORM_BLOCK } from "./form-picked";
+import { formSectionBodies, formSourceSections } from "./form-sections";
+import { useFormSources } from "./form-source-control";
 import { galleryContentSections } from "./gallery-fields";
 import {
   blockIsReadOnly,
   builderContentSectionsOf,
   contentRowsOf,
+  designIsWritable,
   designReadOnlyReason,
   fieldLabel,
   lockViewOf,
   propIsWritable,
   propPatch,
+  writablePropsOf,
   type BlockInspection,
   type EditableProp,
 } from "./inspector";
@@ -138,6 +146,19 @@ export function commitProp(
   if (!propIsWritable(document, id, name, lockViewOf(editor))) return null;
   const node = findNode(document.nodes, id);
   if (node === undefined) return null;
+  // An Embed's link, typed or pasted into its Link field, takes the
+  // provider's shape with it, in the same step, as a link pasted on the
+  // canvas does.
+  if (
+    node.type === EMBED_BLOCK_TYPE &&
+    name === "src" &&
+    typeof value === "string"
+  ) {
+    const linked = embedLinkOp(document, id, value, {
+      shape: designIsWritable(document, id, lockViewOf(editor)),
+    });
+    if (linked !== null) return editor.apply(linked);
+  }
   return editor.apply({
     kind: "update",
     id,
@@ -177,6 +198,8 @@ function builderSectionsOf(
     labels
   );
   if (gallery.length > 0) return gallery;
+  // An Accordion's Icon is drawn after the block's own Behaviour, below.
+  if (inspection.blockName === ACCORDION_BLOCK) return [];
   const [label] = labels;
   if (label === undefined) return [];
   const section = columnsContentSection({
@@ -253,6 +276,13 @@ function ContentSurface({
   // so beside one, every such binding on the block is said above it.
   const unreadable = useVisitorUnreadable(inspection.nodeId);
   const filterOn = useSettingsMatch().active;
+  // Which props the block's locks leave writable, read once per document and
+  // block rather than once per field the tab draws.
+  const writable = React.useMemo(
+    () =>
+      writablePropsOf(editor.document, inspection.nodeId, lockViewOf(editor)),
+    [editor, inspection.nodeId]
+  );
   const fieldsFor = (rows: readonly EditableProp[]): React.JSX.Element => (
     <ContentFields
       inspection={inspection}
@@ -261,14 +291,7 @@ function ContentSurface({
       services={services}
       reasonId={reasonId}
       fields={fields}
-      writable={name =>
-        propIsWritable(
-          editor.document,
-          inspection.nodeId,
-          name,
-          lockViewOf(editor)
-        )
-      }
+      writable={writable}
       onCommitMany={changes =>
         commitLinkChanges(editor, inspection.nodeId, changes)
       }
@@ -281,17 +304,17 @@ function ContentSurface({
   );
   // The Form's Fields and After sending, which the builder draws in place
   // of their generated rows.
+  const stored =
+    findNode(editor.document.nodes, inspection.nodeId)?.props ?? {};
+  // Where a Form's form comes from, read only while a Form is inspected.
+  const formSources = useFormSources(
+    inspection.blockName === FORM_BLOCK ? services?.listForms : undefined
+  );
   const formBodies = formSectionBodies({
     inspection,
-    stored: findNode(editor.document.nodes, inspection.nodeId)?.props ?? {},
+    stored,
     services,
-    writable: name =>
-      propIsWritable(
-        editor.document,
-        inspection.nodeId,
-        name,
-        lockViewOf(editor)
-      ),
+    writable,
     onCommit: (name, value) => {
       onCommit(name, value);
     },
@@ -307,19 +330,78 @@ function ContentSurface({
             />
           ),
   });
+  // The Embed's section: its Link, which writes the provider's shape with
+  // the link, and the settings that apply to what the link is.
+  const embedNode = findNode(editor.document.nodes, inspection.nodeId);
+  const embedBodies = embedSectionBodies({
+    inspection,
+    stored: embedNode?.props ?? {},
+    linkBound: embedNode?.bindings?.src !== undefined,
+    services,
+    writable,
+    onCommit: (name, value) => {
+      onCommit(name, value);
+    },
+    rowsOf: fieldsFor,
+  });
   // Each section the block places in Content, folding on its own, after
   // the ones the builder draws for a core block (Columns' layout, a
   // Gallery's Pictures and Layout); a block
   // with none draws the fields' own note that there is nothing to set.
-  const sections = joinedSections(
-    builderSectionsOf(inspection, editor, around, reasonId, services),
-    inspection.sections.content.map(section => ({
-      key: section.label,
-      label: section.label,
-      holdsValue: rowsHoldValue(section.rows),
-      body: formBodies?.get(section.label) ?? fieldsFor(section.rows),
-    }))
-  );
+  const sections = [
+    ...joinedSections(
+      [
+        ...formSourceSections({
+          inspection,
+          stored,
+          sources: formSources,
+          writable,
+          onCommit: (name, value) => {
+            onCommit(name, value);
+          },
+        }),
+        ...builderSectionsOf(inspection, editor, around, reasonId, services),
+      ],
+      // A section the builder draws as `null` is one the block has no use
+      // for as it stands: a picked form's own fields.
+      inspection.sections.content.flatMap(section => {
+        const body =
+          formBodies?.has(section.label) === true
+            ? formBodies.get(section.label)
+            : (embedBodies?.get(section.label) ?? fieldsFor(section.rows));
+        return body === null || body === undefined
+          ? []
+          : [
+              {
+                key: section.label,
+                label: section.label,
+                holdsValue: rowsHoldValue(section.rows),
+                body,
+              },
+            ];
+      })
+    ),
+    // An Accordion's Icon, after its Behaviour: what the questions show,
+    // read after how they open. Held by a design lock, as it writes styles.
+    ...accordionContentSections(
+      {
+        editor,
+        nodeId: inspection.nodeId,
+        designHeldBy:
+          designReadOnlyReason(
+            editor.document,
+            inspection.nodeId,
+            lockViewOf(editor)
+          ) === undefined
+            ? undefined
+            : reasonId,
+        breakpoints: around?.breakpoints,
+        cascade: around?.cascade,
+        renderedTag: around?.renderedTag,
+      },
+      builderContentSectionsOf(inspection.blockName)
+    ),
+  ];
   const generated =
     sections.length === 0 ? (
       fieldsFor(contentRowsOf(inspection))

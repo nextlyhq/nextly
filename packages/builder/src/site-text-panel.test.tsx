@@ -21,6 +21,7 @@ import * as React from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { CssNamesContext } from "./css-names-context";
+import { labelNotInName } from "./label-in-name.fixture";
 import { TokensPanel, type TokensPanelProps } from "./tokens-panel";
 
 type HostedProps = Omit<TokensPanelProps, "currentTokens" | "onChange"> &
@@ -106,6 +107,23 @@ function enter(field: HTMLElement, value: string): void {
 }
 
 describe("the Site text rows", () => {
+  it("names each row by its own text, with no label laid over the sample it draws", () => {
+    render(<Hosted tokens={SITE} groups={["type", "fonts"]} />);
+    const rows = within(section()).getAllByRole("button", {
+      name: /^Site text: /,
+    });
+    expect(rows).toHaveLength(10);
+    for (const row of rows) {
+      // A label over the row would have to hold its drawn sample sentence
+      // too, so the row is named by text inside it, heard as it was before.
+      expect(row.getAttribute("aria-label")).toBeNull();
+      expect(labelNotInName(row)).toBeNull();
+    }
+    expect(
+      siteRow(/^Heading 1, \d+ \/ [\d.]+$/).getAttribute("data-site-text")
+    ).toBe("h1");
+  });
+
   it("has one row each for Body, the six headings, Links, Buttons and Captions, each with its pair", () => {
     render(<Hosted tokens={SITE} groups={["type", "fonts"]} />);
     const rows = within(section()).getAllByRole("button", {
@@ -354,5 +372,82 @@ describe("removing a type size a row uses", () => {
       within(editor).queryByRole("button", { name: /^Remove Display/ })
     ).toBeNull();
     expect(onChange).not.toHaveBeenCalled();
+  });
+});
+
+describe("a row following a text style", () => {
+  const display = {
+    id: "ts-display",
+    slug: "display",
+    label: "Display",
+    orderIndex: 0,
+    role: "text" as const,
+    styles: { base: { base: { fontSize: "56px", lineHeight: 1.05 } } },
+  };
+
+  it("is chosen in its popup, keeping the row's own values, and says so", async () => {
+    const onChange = vi.fn();
+    render(
+      <Hosted
+        tokens={{
+          ...SITE,
+          siteText: { h1: { fontSize: "40px", lineHeight: 1.1 } },
+        }}
+        groups={["type", "fonts"]}
+        classes={[display]}
+        onChange={onChange}
+      />
+    );
+    const popup = await openRow(/^Heading 1/);
+    fireEvent.click(
+      within(popup).getByRole("radio", { name: "Text style: Display" })
+    );
+    const last = onChange.mock.lastCall?.[0] as SiteTokenSet;
+    expect(last.siteText?.h1).toEqual({
+      fontSize: "40px",
+      lineHeight: 1.1,
+      textStyle: "ts-display",
+    });
+    fireEvent.keyDown(document.activeElement ?? document.body, {
+      key: "Escape",
+    });
+    await waitFor(() =>
+      expect(
+        within(section()).getByRole("button", {
+          name: "Site text: Heading 1 uses Display",
+        })
+      ).toBe(siteRow(/^Heading 1/))
+    );
+  });
+
+  it("offers no text style to the Links row", async () => {
+    render(
+      <Hosted tokens={SITE} groups={["type", "fonts"]} classes={[display]} />
+    );
+    const popup = await openRow(/^Links/);
+    expect(
+      within(popup).queryByRole("radio", { name: /^Text style:/ })
+    ).toBeNull();
+  });
+
+  it("goes back to a type size, which takes the row off the text style", async () => {
+    const onChange = vi.fn();
+    render(
+      <Hosted
+        tokens={{ ...SITE, siteText: { h2: { textStyle: "ts-display" } } }}
+        groups={["type", "fonts"]}
+        classes={[display]}
+        onChange={onChange}
+      />
+    );
+    const popup = await openRow(/^Heading 2/);
+    expect(
+      within(popup).getByRole("radio", { name: "Text style: Display" })
+    ).toHaveProperty("checked", true);
+    fireEvent.click(
+      within(popup).getByRole("radio", { name: "H2 · 28 / 1.2" })
+    );
+    const last = onChange.mock.lastCall?.[0] as SiteTokenSet;
+    expect(last.siteText?.h2).not.toHaveProperty("textStyle");
   });
 });

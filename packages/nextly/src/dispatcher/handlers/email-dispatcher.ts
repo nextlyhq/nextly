@@ -760,6 +760,16 @@ const DELIVERY_FILTER_KEYS = [
   "before",
   "limit",
 ] as const;
+const ACTIVITY_FILTER_KEYS = [
+  "status",
+  "template",
+  "providerType",
+  "providerOrigin",
+  "from",
+  "to",
+  "before",
+  "limit",
+] as const;
 const QUEUED_FILTER_KEYS = [
   "state",
   "template",
@@ -782,14 +792,34 @@ function queryOf(
   return picked;
 }
 
+/** A detail that was found, or the not-found every unknown id answers. */
+function found<T>(detail: T | null): T {
+  if (detail === null) throw NextlyError.notFound();
+  return detail;
+}
+
 /** Each Activity read, by the method the route parser names. */
 const EMAIL_DELIVERY_READS: Record<
   string,
-  (activity: EmailDeliveryActivity, query: URLSearchParams) => Promise<Response>
+  (
+    activity: EmailDeliveryActivity,
+    query: URLSearchParams,
+    params: Record<string, string>
+  ) => Promise<Response>
 > = {
+  findDelivery: async (activity, _query, params) =>
+    respondDoc(found(await activity.findDelivery(params.deliveryId ?? ""))),
+  findQueuedEmail: async (activity, _query, params) =>
+    respondDoc(found(await activity.findQueuedEmail(params.queuedId ?? ""))),
   listDeliveries: async (activity, query) => {
     const { items, meta } = await activity.listDeliveries(
       queryOf(query, DELIVERY_FILTER_KEYS)
+    );
+    return respondList(items, meta);
+  },
+  listActivity: async (activity, query) => {
+    const { items, meta } = await activity.listActivity(
+      queryOf(query, ACTIVITY_FILTER_KEYS)
     );
     return respondList(items, meta);
   },
@@ -820,7 +850,8 @@ const EMAIL_DELIVERY_READS: Record<
  */
 export function handleEmailDeliveryRequest(
   req: Request,
-  method: string
+  method: string,
+  params: Record<string, string> = {}
 ): Promise<Response> {
   return withErrorHandler(async (request: Request): Promise<Response> => {
     const read = EMAIL_DELIVERY_READS[method];
@@ -845,7 +876,8 @@ export function handleEmailDeliveryRequest(
         adapter,
         container.get<EmailDeliveryService>("emailDeliveryService")
       ),
-      new URL(request.url).searchParams
+      new URL(request.url).searchParams,
+      params
     );
   })(req);
 }

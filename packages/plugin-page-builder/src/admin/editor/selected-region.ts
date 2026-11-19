@@ -26,6 +26,7 @@ import {
 } from "../page-layout";
 
 import type { EditedLook, LookEditingState } from "./look-editing";
+import { useSetRegions, type SetMode } from "./set-regions";
 
 /** The selected region and what reads it. */
 export interface SelectedRegion {
@@ -79,7 +80,7 @@ export function useLookBesideRegion(
 
 /** What follows from the region selected, for the regions drawn. */
 function useSelectedRegion(
-  editor: Pick<EditorState, "select">,
+  editors: RegionEditors,
   drawn: PageLayoutRegions,
   selection: RegionSelection
 ): SelectedRegion {
@@ -102,13 +103,16 @@ function useSelectedRegion(
     () => drawn.cards.find(facts => facts.area === area),
     [drawn.cards, area]
   );
-  const { select: selectBlock } = editor;
+  // Inside a header being edited, a block is chosen in the header and the
+  // header stays chosen behind it; on the page, choosing a block leaves it.
+  const editingRegion = editors.active !== editors.page;
+  const { select: selectBlock } = editors.active;
   const selectOnCanvas = useCallback<EditorState["select"]>(
     (id, mode) => {
-      clear();
+      if (!editingRegion) clear();
       selectBlock(id, mode);
     },
-    [clear, selectBlock]
+    [editingRegion, clear, selectBlock]
   );
   return useMemo(
     () => ({ selection, layers, card, selectOnCanvas }),
@@ -120,25 +124,41 @@ function useSelectedRegion(
  * The regions drawn around the page, from the form's unsaved values, with
  * the one selected and what reads it.
  */
+/**
+ * The page's state, which the region selection follows, and the state of
+ * what is being edited, which a block chosen on the canvas is chosen in:
+ * the same state, or a header's while it is edited in place.
+ */
+export interface RegionEditors {
+  readonly page: Pick<EditorState, "selectedId" | "select">;
+  readonly active: Pick<EditorState, "select">;
+}
+
 export function usePageRegions<T extends FieldValues>(
   control: Control<T>,
   canvasRoot: HTMLElement | null,
-  editor: Pick<EditorState, "selectedId" | "select">,
+  editors: RegionEditors,
   /** The look edited on its own, which a selected region leaves. */
-  look: LookEditingState
-): PageLayoutRegions & {
+  look: LookEditingState,
+  /**
+   * The header & footer set whose own screen this is: its regions are its
+   * form's working areas, rather than a page's Layout's.
+   */
+  set?: SetMode
+): ReturnType<typeof usePageLayoutRegions> & {
   readonly selectedRegion: SelectedRegion;
   /** The look edited on its own, leaving the region when one is chosen. */
   readonly lookEditing: LookEditingState;
 } {
-  const drawn = usePageLayoutRegions(control, canvasRoot);
+  const pageDrawn = usePageLayoutRegions(control, canvasRoot);
+  const drawn = useSetRegions(control, set, canvasRoot) ?? pageDrawn;
   const areas = useMemo(
     (): readonly RegionArea[] => drawn.canvas.map(region => region.area),
     [drawn.canvas]
   );
-  const region = useRegionSelection(editor, areas);
+  const region = useRegionSelection(editors.page, areas);
   const { lookEditing, selection } = useLookBesideRegion(look, region);
-  const selectedRegion = useSelectedRegion(editor, drawn, selection);
+  const selectedRegion = useSelectedRegion(editors, drawn, selection);
   return useMemo(
     () => ({ ...drawn, selectedRegion, lookEditing }),
     [drawn, selectedRegion, lookEditing]

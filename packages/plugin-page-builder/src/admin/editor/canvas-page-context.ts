@@ -10,10 +10,13 @@
  * ONE object for the editor's life. The renderer keeps an async block's
  * output per context, so the page drawn again for a selection does not run an
  * image or a button again and blink; a context made afresh per render would
- * be a different one each time and keep nothing. The one exception is the
- * set of lists an author chose to see empty: choosing is a deliberate act,
- * and the page is drawn again under a context naming them, while none being
- * chosen is the editor's one object again, with everything it kept.
+ * be a different one each time and keep nothing. A host makes a copy of it
+ * for a new round of picked forms (`useRenewedForForms`), when the author comes
+ * back to a page drawing one, so a form changed in its own tab is drawn as it
+ * now is. The one exception is the set of lists an author chose to see empty:
+ * choosing is a deliberate act, and the page is drawn again under a context
+ * naming them, while none being chosen is the editor's one object again,
+ * with everything it kept.
  *
  * A collection list draws the entries the person editing may read, their
  * drafts included (the list entries route reads as them), in the
@@ -51,6 +54,7 @@ import { canvasListReadsIn } from "../list-entries-client";
 import { canvasNamedQueriesIn } from "../named-queries-client";
 
 import { useCanvasEntryIdentity } from "./canvas-entry";
+import { canvasForms } from "./canvas-forms";
 
 /**
  * An icon as the canvas draws it, from the set a published page draws with.
@@ -240,8 +244,12 @@ export function useCanvasPageContext(
           : { entry: { id: entryId }, entryCollection }),
         ...(namedQueries === undefined ? {} : { namedQueries }),
         ...(drawn.report === undefined ? {} : { listShown: drawn.report }),
+        // A picked form, as the person editing reads it.
+        forms: canvasForms(locale, userId),
       }),
     [
+      locale,
+      userId,
       readMedia,
       entryCollection,
       entryId,
@@ -287,6 +295,24 @@ export function useCanvasPageContext(
           }),
     };
   }, [base, listsShowingEmpty, listsStillShowing, pagedList, visitorNotes]);
+}
+
+/**
+ * The canvas's context for a round of picked forms (`useFormsShownAgain`):
+ * the same object in round 0, and a copy of it made once for each later
+ * round. The renderer keeps a Form's drawn output per context, so a copy
+ * draws the Forms again from what their providers now say, while a context
+ * that has not changed keeps everything it kept.
+ */
+export function useRenewedForForms(
+  context: PageContext | undefined,
+  formsRound: number
+): PageContext | undefined {
+  return useMemo(
+    () =>
+      formsRound === 0 || context === undefined ? context : { ...context },
+    [context, formsRound]
+  );
 }
 
 /** The document a canvas reads its lists as a visitor of, and its blocks. */

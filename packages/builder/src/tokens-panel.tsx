@@ -56,8 +56,8 @@ import {
   useColourGroupDrop,
   useColourGroupHost,
 } from "./colour-group-ui";
-import { colourGroups, inColourGroup } from "./colour-groups";
-import { useColourFilter } from "./colour-usage-filter";
+import { colourGroups } from "./colour-groups";
+import { ColoursTabEnd, useColoursOfView } from "./colours-of-view";
 import {
   GroupToggle,
   OwnSearch,
@@ -66,31 +66,27 @@ import {
   useListedGroups,
   useViewSearch,
 } from "./design-group-toggle";
-import { commitFocusedField } from "./editor-field-commit";
+import { HOW_TEXT_WORKS_DOCS_HREF } from "./docs-links";
 import { FluidRangeFields } from "./fluid-popover";
 import { ShowMore, withOpenRow } from "./panel-actions";
 import { SiteTextSection } from "./site-text-panel";
+import { useOpenVariable, type OnAddTo } from "./tokens-panel-open-variable";
 import {
-  addVariable,
-  duplicateVariable,
   fluidRangeOf,
   setFluidRange,
-  labelNewVariable,
   searchVariableGroups,
   type VariableEntry,
   type VariableGroup,
 } from "./tokens-studio";
 import { ADDS, AddRows, EmptyGroup, type OnAdd } from "./variable-adds";
 import { VariableRow } from "./variable-row";
-import {
-  combinedReach,
-  type VariableReach,
-  type VariablesAccess,
-} from "./variable-usage";
+import { useReachTogether } from "./variable-together-reads";
+import type { VariableReach, VariablesAccess } from "./variable-usage";
 import {
   useVariableUsage,
   type VariableUsageHere,
 } from "./variable-usage-view";
+import { VariablePreview } from "./variable-value-controls";
 import { useVariablesTransfer } from "./variables-transfer";
 
 /** A save's note to the author, and the way to read the variables again. */
@@ -107,6 +103,13 @@ export interface TokensPanelProps {
   tokens: SiteTokenSet | undefined;
   /** An edit. The host owns the site style and decides when to persist. */
   onChange: (tokens: SiteTokenSet) => void;
+  /**
+   * Draws a variable's value on the canvas while it is typed or picked,
+   * without storing it: the whole set with the value in it, or `null` once
+   * the edit ends, said before the edit's one `onChange`. Absent, a value is
+   * drawn once it is handed to `onChange`.
+   */
+  onPreview?: (tokens: SiteTokenSet | null) => void;
   /**
    * The author is still at work here: typing in a field before it commits.
    * For a host that waits for a pause before persisting, so a save is not
@@ -243,15 +246,10 @@ export interface VariablesHeader {
  * mode the canvas draws by itself.
  */
 export function useVariablesHeader({
-  onChange,
-  currentTokens,
-  readOnly,
   prefersDark,
   mode: hosted,
-}: {
-  onChange: (tokens: SiteTokenSet) => void;
-  currentTokens: () => SiteTokenSet | undefined;
-  readOnly: boolean;
+  ...transferring
+}: Parameters<typeof useVariablesTransfer>[0] & {
   prefersDark?: boolean;
   mode?: TokenMode;
 }): VariablesHeader {
@@ -263,7 +261,8 @@ export function useVariablesHeader({
    */
   const drawn = useCanvasTokenModeAt(null);
   const mode: TokenMode = hosted ?? statedMode(prefersDark) ?? drawn;
-  const transfer = useVariablesTransfer({ onChange, currentTokens, readOnly });
+  // The writers, and what an export and import carry beyond the variables.
+  const transfer = useVariablesTransfer(transferring);
   return {
     mode,
     controls: <div className="nx-vars__controls">{transfer.menu}</div>,
@@ -276,10 +275,16 @@ const PAGE_SIZE = 50;
 
 export function TokensPanel(props: TokensPanelProps): React.JSX.Element {
   const { header } = props;
-  if (header !== undefined) {
-    return <VariablesView {...props} header={header} placed={false} />;
-  }
-  return <OwnHeader {...props} />;
+  // The editors draw what is typed through the host's preview.
+  return (
+    <VariablePreview.Provider value={props.onPreview}>
+      {header === undefined ? (
+        <OwnHeader {...props} />
+      ) : (
+        <VariablesView {...props} header={header} placed={false} />
+      )}
+    </VariablePreview.Provider>
+  );
 }
 
 /** The view holding its header itself, where no host draws one. */
@@ -339,15 +344,18 @@ function VariablesView({
   // search would hide it: added where the author is, it is not lost.
   const { shown: matched, held } = searched(groups, needle, fresh);
   const usage = useUsageOfRows(hosted, groups, issue);
-  // The Colours tab's usage filter, over what the search matched.
-  const colourFilter = useColourFilter({
+  // The Colours tab's usage filter, over what the search matched, without
+  // the built-in colours the site hides.
+  const colourFilter = useColoursOfView({
     shown: matched,
+    groups,
     tokens,
     usage,
+    builtIn: identity => suppliedFor(supplied, identity) !== undefined,
     usedOnPage: hosted.usedOnPage,
     openKey,
   });
-  const { shown } = colourFilter;
+  const { shown, hidden, marksBuiltIn } = colourFilter;
 
   if (tokens === undefined) {
     return <Unread absence={absence} />;
@@ -383,6 +391,7 @@ function VariablesView({
         }
         overlays={placedOverlays(placed, header)}
       >
+        <TypeTabHelp groups={hosted.groups} />
         <TypeTabSiteText
           groups={hosted.groups}
           tokens={tokens}
@@ -390,6 +399,8 @@ function VariablesView({
           readOnly={readOnly}
           mode={mode}
           supplied={supplied?.siteText}
+          // The text styles a row may follow ("Heading 1 uses Display").
+          classes={hosted.classes}
         />
         <TypeTabRange
           groups={hosted.groups}
@@ -427,10 +438,41 @@ function VariablesView({
             forget,
             search,
             focus,
+            hidden,
+            marksBuiltIn,
           })}
+        />
+        <ColoursTabEnd
+          groups={groups}
+          tokens={tokens}
+          readOnly={readOnly}
+          onChange={commitFrom(BUILT_IN_COLOURS_KEY)}
         />
       </ViewBody>
     </div>
+  );
+}
+
+/**
+ * "How text works", first where the view lists the type scale: the docs page
+ * on how its parts fit together, in a new tab so the panel stays as it was.
+ * Drawn as "Manage fonts…" above it is, a target at least 24px tall.
+ */
+function TypeTabHelp({
+  groups,
+}: {
+  groups: readonly VariableGroup[] | undefined;
+}): React.JSX.Element | null {
+  if (groups !== undefined && !groups.includes("type")) return null;
+  return (
+    <a
+      className="nx-vars__link nx-fonts-manage"
+      href={HOW_TEXT_WORKS_DOCS_HREF}
+      target="_blank"
+      rel="noreferrer"
+    >
+      How text works
+    </a>
   );
 }
 
@@ -546,6 +588,10 @@ interface RowsHost {
   readonly fresh: string | null;
   /** Focuses a row once it is drawn, wherever it is drawn now. */
   readonly focus: (key: string) => void;
+  /** The built-in colours the site hides, left out with any group they empty. */
+  readonly hidden: ReadonlySet<string>;
+  /** Whether a built-in colour's row says so: while the site hides the rest. */
+  readonly marksBuiltIn: boolean;
 }
 
 /** The groups a search leaves, or that none match. */
@@ -583,7 +629,13 @@ function VariableGroups({
     >
       {shown
         .flatMap(group =>
-          sectionsOf(group, rows.tokens, searching, colours.pending)
+          sectionsOf(
+            group,
+            rows.tokens,
+            searching,
+            colours.pending,
+            rows.hidden
+          )
         )
         .map(section => (
           <React.Fragment key={section.key}>
@@ -617,6 +669,10 @@ function VariableGroups({
                   }
                   usage={rows.usage}
                   reach={rowReach(entry, rows.usage)}
+                  builtIn={
+                    rows.marksBuiltIn &&
+                    rows.suppliedOf(entry.row.identity) !== undefined
+                  }
                   onRemoved={() => rows.onRemoved(entry.row.key)}
                 />
               )}
@@ -647,12 +703,8 @@ function movedInto(
 /** What the Colours tab's group changes commit under: no row's editor. */
 const COLOUR_GROUPS_KEY = "colour-groups";
 
-/** An add, with the named group of colours whose list its add row ends. */
-type OnAddTo = (
-  what: Parameters<OnAdd>[0],
-  from: Parameters<OnAdd>[1],
-  group?: string
-) => void;
+/** What the built-in colours setting commits under: no row's editor. */
+const BUILT_IN_COLOURS_KEY = "built-in-colours";
 
 /** One section of the list: a group, or one named group of colours. */
 interface ListSection {
@@ -677,7 +729,9 @@ function sectionsOf(
   tokens: SiteTokenSet,
   searching: boolean,
   /** Groups made with "+ New group" that hold no colour yet. */
-  pending: readonly string[] = []
+  pending: readonly string[] = [],
+  /** The built-in colours the site hides: a group of only these is left out. */
+  hidden: ReadonlySet<string> = new Set()
 ): ListSection[] {
   const whole: ListSection = { ...group, key: group.group };
   if (group.group !== "colours" || group.entries.length === 0) return [whole];
@@ -687,13 +741,23 @@ function sectionsOf(
   const named = colourGroups(tokens)
     .map(colourGroup => ({
       name: colourGroup.name,
+      identities: colourGroup.identities,
       entries: colourGroup.identities.flatMap(identity => {
         const entry = byIdentity.get(identity);
         return entry === undefined ? [] : [entry];
       }),
     }))
     .filter(colourGroup => !searching || colourGroup.entries.length > 0)
-    .concat(searching ? [] : pending.map(name => ({ name, entries: [] })));
+    .filter(
+      colourGroup =>
+        colourGroup.identities.length === 0 ||
+        !colourGroup.identities.every(identity => hidden.has(identity))
+    )
+    .concat(
+      searching
+        ? []
+        : pending.map(name => ({ name, identities: [], entries: [] }))
+    );
   return named.map((colourGroup, at) => ({
     key: colourGroupFoldKey(colourGroup.name),
     group: group.group,
@@ -721,44 +785,6 @@ function ColourGroupHeadIf({
 /** What a named group of colours keeps its fold under. */
 function colourGroupFoldKey(name: string): string {
   return `colour-group:${name}`;
-}
-
-/**
- * Each editor's commit, settling where the author's work has already ended,
- * and a settle when the view goes away.
- *
- * Going away ends the author's work here as closing an editor does: a tab
- * change or the panel closing. An edit committed by an editor that is
- * already closed, such as a colour picker writing what it held as it
- * unmounts, comes after the settle its closing made, so it settles again
- * rather than wait for a pause the author has already ended.
- */
-function useCommitsSettled(
-  onChange: (tokens: SiteTokenSet) => void,
-  onSettle: (() => void) | undefined,
-  openKey: string | null
-): (key: string) => (next: SiteTokenSet) => void {
-  // The latest callback, so the effect runs only on unmount rather than on
-  // every render that hands a new one.
-  const settle = React.useRef(onSettle);
-  settle.current = onSettle;
-  // Which editor is open as of the latest render, and whether the panel is
-  // still mounted: read when an editor commits, which it may do as it goes
-  // away, after the close or the unmount has already settled.
-  const openNow = React.useRef(openKey);
-  openNow.current = openKey;
-  const mounted = React.useRef(true);
-  React.useEffect(() => {
-    mounted.current = true;
-    return () => {
-      mounted.current = false;
-      settle.current?.();
-    };
-  }, []);
-  return key => next => {
-    onChange(next);
-    if (!mounted.current || openNow.current !== key) settle.current?.();
-  };
 }
 
 /**
@@ -790,6 +816,12 @@ function useUsageOfRows(
   );
   const reads = useVariableUsage(access, identities);
   const { values, reread, readAgain } = reads;
+  // Each row's variables, counted together where it stands for two.
+  const rows = React.useMemo(
+    () => groups.flatMap(group => group.entries.map(rowIdentities)),
+    [groups]
+  );
+  const reachTogether = useReachTogether(access, rows, values);
   // The identities as of the latest render, read when a refusal arrives
   // rather than closed over, so the effect follows the issue alone.
   const listed = React.useRef(identities);
@@ -805,11 +837,12 @@ function useUsageOfRows(
         ? undefined
         : {
             reachOf: id => values.get(id),
+            reachTogether,
             readAgain,
             access,
             classes,
           },
-    [access, values, readAgain, classes]
+    [access, values, reachTogether, readAgain, classes]
   );
 }
 
@@ -826,7 +859,7 @@ function rowReach(
   usage: VariableUsageHere | undefined
 ): VariableReach | undefined {
   if (usage === undefined) return undefined;
-  return combinedReach(rowIdentities(entry).map(usage.reachOf));
+  return usage.reachTogether(rowIdentities(entry));
 }
 
 /** What shows while the variables are being read, or after a read failed. */
@@ -902,175 +935,6 @@ function PanelNotes({
       )}
     </>
   );
-}
-
-/**
- * Which variable's editor is open, what opening and closing one does, and
- * each editor's commit, which settles once the editor has closed.
- *
- * A variable added from a "+" opens straight away, and is "fresh" until its
- * editor closes: nothing can reference it yet, so its code name may still
- * follow the name it was given, which happens on close. The row is keyed by
- * that code name, so focus is put back on it once it has re-rendered.
- */
-function useOpenVariable({
-  tokens,
-  onChange,
-  currentTokens,
-  onSettle,
-}: {
-  tokens: SiteTokenSet | undefined;
-  onChange: (tokens: SiteTokenSet) => void;
-  currentTokens: () => SiteTokenSet | undefined;
-  /** The author is done with a variable; see `TokensPanelProps.onSettle`. */
-  onSettle: (() => void) | undefined;
-}): {
-  /** The panel's element, which rows are found in to be focused. */
-  root: React.RefObject<HTMLDivElement | null>;
-  openKey: string | null;
-  /** The row just added, while its editor is open; a search keeps it. */
-  fresh: string | null;
-  toggle: (key: string, open: boolean) => void;
-  add: OnAddTo;
-  duplicate: (entry: VariableEntry) => void;
-  forget: (key: string) => void;
-  /** Each row editor's commit; see {@link useCommitsSettled}. */
-  commitFrom: (key: string) => (next: SiteTokenSet) => void;
-  /** Focuses a row once it is drawn, as after a move to another group. */
-  focus: (key: string) => void;
-} {
-  const root = React.useRef<HTMLDivElement>(null);
-  const [openKey, setOpenKey] = React.useState<string | null>(null);
-  const [focusKey, setFocusKey] = React.useState<string | null>(null);
-  const fresh = React.useRef(new Set<string>());
-  const [freshOpen, setFreshOpen] = React.useState<string | null>(null);
-  // What was pressed to add a variable: where focus goes back to when the
-  // new row is not drawn once its editor closes, as under a search it does
-  // not match.
-  const origin = React.useRef<HTMLElement | null>(null);
-  // Focus a row after its key changed under it (a just-added variable named
-  // after its label) or after the editor closed onto a new row.
-  React.useEffect(() => {
-    if (focusKey === null) return;
-    const find = (): HTMLElement | null | undefined =>
-      root.current?.querySelector<HTMLElement>(
-        `[data-variable-key="${CSS.escape(focusKey)}"]`
-      );
-    const row = find();
-    if (row) {
-      row.focus();
-      // A row drawn anew, as one moved into another group is, has its button
-      // replaced once just after it mounts, as its editor's anchor registers.
-      // Focus follows the new one, unless it has gone elsewhere since.
-      window.setTimeout(() => {
-        const owner = row.ownerDocument;
-        if (row.isConnected || owner.activeElement !== owner.body) return;
-        find()?.focus();
-      }, 0);
-    } else if (origin.current?.isConnected === true) origin.current.focus();
-    setFocusKey(null);
-  }, [focusKey, tokens]);
-
-  // A variable just added is brought into view before its editor is placed
-  // beside it: added at the end of a long list, it would otherwise open its
-  // editor below the window, far from the "+" pressed.
-  React.useLayoutEffect(() => {
-    if (openKey === null || !fresh.current.has(openKey)) return;
-    root.current
-      ?.querySelector<HTMLElement>(
-        `[data-variable-key="${CSS.escape(openKey)}"]`
-      )
-      ?.scrollIntoView({ block: "nearest" });
-  }, [openKey, tokens]);
-
-  // A variable just made, new or a copy, opens; its code name follows its
-  // name until the editor closes.
-  const opened = (made: { tokens: SiteTokenSet; at: number }): void => {
-    const added = made.tokens.tokens[made.at];
-    if (added === undefined) return;
-    onChange(made.tokens);
-    const key = tokenIdentity(added);
-    fresh.current.add(key);
-    setFreshOpen(key);
-    setOpenKey(key);
-  };
-
-  // The search is kept: the new row is added where the author is, in the
-  // named group of colours its add row ends.
-  const add: OnAddTo = (what, from, group) => {
-    origin.current = from;
-    const made = addVariable(currentTokens() ?? tokens, what);
-    opened({ ...made, tokens: inColourGroup(made.tokens, made.at, group) });
-  };
-
-  const duplicate = (entry: VariableEntry): void => {
-    const set = currentTokens() ?? tokens;
-    if (set === undefined) return;
-    origin.current = null;
-    opened(duplicateVariable(set, entry.row.at, entry.label));
-  };
-
-  const close = (key: string): void => {
-    // A field still being typed in commits first, as leaving it does: a
-    // click outside closes the editor before the field's own blur, and the
-    // name typed there would otherwise miss the code name made below.
-    commitFocusedField(root.current?.ownerDocument);
-    setOpenKey(null);
-    setFreshOpen(null);
-    // Settled after the renaming below, so a just-added variable's code name
-    // is part of what is persisted with the rest of its edit.
-    if (fresh.current.delete(key)) {
-      const named = namedAfterLabel(currentTokens(), key);
-      if (named !== undefined) onChange(named.tokens);
-      // Its row once drawn again, or what added it where a search hides it.
-      setFocusKey(named?.key ?? key);
-    }
-    onSettle?.();
-  };
-
-  const forget = (key: string): void => {
-    fresh.current.delete(key);
-    setOpenKey(null);
-    setFreshOpen(null);
-    onSettle?.();
-  };
-
-  const toggle = (key: string, open: boolean): void => {
-    if (open) setOpenKey(key);
-    else close(key);
-  };
-
-  const commitFrom = useCommitsSettled(onChange, onSettle, openKey);
-  return {
-    root,
-    openKey,
-    fresh: freshOpen,
-    toggle,
-    add,
-    duplicate,
-    forget,
-    commitFrom,
-    focus: setFocusKey,
-  };
-}
-
-/**
- * A just-added variable given a code name made from the name the author gave
- * it, with the row key it now has; nothing when it has no name of its own or
- * the code name would not change.
- */
-function namedAfterLabel(
-  set: SiteTokenSet | undefined,
-  key: string
-): { tokens: SiteTokenSet; key: string } | undefined {
-  if (set === undefined) return undefined;
-  const at = set.tokens.findIndex(token => tokenIdentity(token) === key);
-  const token = set.tokens[at];
-  if (token?.label === undefined) return undefined;
-  const named = labelNewVariable(set, at, token.label);
-  const renamed = named.tokens[at];
-  if (renamed === undefined || renamed.name === token.name) return undefined;
-  return { tokens: named, key: tokenIdentity(renamed) };
 }
 
 /**

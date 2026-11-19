@@ -4,7 +4,12 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { areaRowsOf, withArea } from "./layout-area-rows";
+import {
+  areaComponentOf,
+  areaRowsOf,
+  withArea,
+  withoutArea,
+} from "./layout-area-rows";
 
 describe("a set's areas with one area given a component", () => {
   it("names the component in that area's own row, keeping its place and its row id", () => {
@@ -55,5 +60,46 @@ describe("a set's stored areas as rows", () => {
     expect(areaRowsOf([null, "x", { area: "footer" }])).toEqual([
       { area: "footer" },
     ]);
+  });
+});
+
+describe("a set's areas with one area emptied", () => {
+  it("drops that area's rows and keeps every other row as it was", () => {
+    const rows = [
+      { id: "r1", area: "header", component: "h" },
+      { id: "r2", area: "footer", component: "f" },
+    ];
+    expect(withoutArea(rows, "header")).toEqual([
+      { id: "r2", area: "footer", component: "f" },
+    ]);
+  });
+});
+
+describe("the component an area names", () => {
+  it("reads an id, as stored, or the related row a form holds", () => {
+    expect(
+      areaComponentOf([{ area: "header", component: "h" }], "header")
+    ).toBe("h");
+    expect(areaComponentOf([{ area: "header", component: 7 }], "header")).toBe(
+      "7"
+    );
+    expect(
+      areaComponentOf(
+        [{ area: "footer", component: { id: "f", title: "F" } }],
+        "footer"
+      )
+    ).toBe("f");
+  });
+
+  it("names none for an area with no row, or a row naming nothing", () => {
+    expect(
+      areaComponentOf([{ area: "footer", component: "f" }], "header")
+    ).toBeUndefined();
+    expect(
+      areaComponentOf([{ area: "header", component: "" }], "header")
+    ).toBeUndefined();
+    expect(
+      areaComponentOf([{ area: "header", component: null }], "header")
+    ).toBeUndefined();
   });
 });

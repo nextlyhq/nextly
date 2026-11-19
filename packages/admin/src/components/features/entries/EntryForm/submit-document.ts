@@ -109,8 +109,8 @@ export async function submitDocument(args: {
       // restore set, before validation's transforms.
       const sources = args.restore?.restoredFromForSave(submitted);
       // And the fields a copy from another language filled, still as copied.
-      const copies = copiedValuesFor(form.control);
-      const copied = copies.provenanceForSave(submitted);
+      const copies = copiedValuesFor(form.control).beginSave(submitted);
+      const copied = copies.claims;
       try {
         const written = await write({
           ...payload,
@@ -118,7 +118,8 @@ export async function submitDocument(args: {
           ...(copied ? { [PROVENANCE_KEY]: copied } : {}),
         });
         // Stored: the next save restores nothing unless another restore does,
-        // and claims no copy unless another copy is made.
+        // and claims no copy this save carried; one made while it was on its
+        // way is still claimed.
         args.restore?.saved();
         copies.saved();
         // Only where the editor still shows what was written: after a move

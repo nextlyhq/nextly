@@ -9,11 +9,12 @@
  * be the one before with only the named change applied (`helpers/table-definition.ts`), so a
  * property nobody listed here is held too.
  *
- * Every road a Builder save takes to the database is driven: a collection's save, a Single's and a
- * field group's schema dialog, and a Single's settings save run the migration file the save writes
- * where the save moves no values; a translated collection's runs the development push. A SQLite rebuild that cannot keep what it would drop must refuse, say
- * why, and leave the table as it was. A file over a default given by hand, which its snapshot does
- * not record, is refused as drift and changes nothing.
+ * Every road a Builder save takes to the database is driven: an untranslated collection's schema
+ * dialog, a Single's and a field group's schema dialog, and a Single's settings save run the
+ * migration file the save writes where the save moves no values; a collection's settings save and a
+ * translated collection's dialog run the development push. A SQLite rebuild that cannot keep what
+ * it would drop must refuse, say why, and leave the table as it was. A file over a default given by
+ * hand, which its snapshot does not record, is refused as drift and changes nothing.
  *
  * A road that still loses something names each such case as known (`known`): it runs, and fails
  * here, as the case would; fixed, it turns red, and the entry goes.
@@ -77,6 +78,19 @@ interface Road {
   save(t: TestNextly, fields: Field[], renamed?: string): Promise<unknown>;
 }
 
+/**
+ * The known losses of a collection road the push still applies: the push restates the table from
+ * its declared schema, and the road keeps it because the file road lacks checks only the push's
+ * apply makes (`why`).
+ */
+const pushedCollection = (why: string): NonNullable<Road["known"]> =>
+  Object.fromEntries(
+    [RENAME, RENAME_NOT_NULL, HAND_DEFAULT].map(name => [
+      name,
+      { on: ["sqlite", "postgresql", "mysql"] as const, why },
+    ])
+  );
+
 /** The Single both of its roads change. */
 async function createHero(_t: TestNextly, fields: Field[]): Promise<void> {
   await dispatchSingles(
@@ -126,17 +140,39 @@ const ROADS: Road[] = [
       ),
   },
   {
+    name: "a collection's settings save (the push)",
+    table: "dc_posts",
+    known: pushedCollection(
+      "the update road stays on the push for the checks its apply makes and the file road lacks: " +
+        "index names held elsewhere (refuseIndexNamesTaken), a unique index left under another " +
+        "name (dropUniquenessLeftOn), the part-applied recoveries, keeping or refusing a column " +
+        "no field made, the fills from stated defaults, and a many-to-many made one-to-one unique"
+    ),
+    async create(t, fields) {
+      await t
+        .getService("collectionService")
+        .createCollection(
+          { name: "posts", label: "Post", fields } as Parameters<
+            CollectionService["createCollection"]
+          >[0],
+          {}
+        );
+    },
+    // The update road (`updateCollection`), which detects its own renames.
+    save: (_t, fields) =>
+      dispatchCollections(
+        {} as ServiceContainer,
+        "updateCollection",
+        { collectionName: "posts" },
+        { fields }
+      ),
+  },
+  {
     name: "a translated collection's shared field (the push)",
     table: "dc_posts",
-    // Every translated collection's save is pushed, a shared field's included.
-    known: Object.fromEntries(
-      [RENAME, RENAME_NOT_NULL, HAND_DEFAULT].map(name => [
-        name,
-        {
-          on: ["sqlite", "postgresql", "mysql"],
-          why: "the push restates the table from its declared schema",
-        },
-      ])
+    known: pushedCollection(
+      "a translated collection stays on the push until the file road judges its companion " +
+        "against the live one, as the push does"
     ),
     async create(t, fields) {
       await t.getService("collectionService").createCollection(
@@ -187,6 +223,39 @@ const ROADS: Road[] = [
           fields,
           confirmed: true,
           // The version the Single stands at, as the Builder sends it.
+          schemaVersion: (
+            await t.getService("singleRegistryService").getSingle("hero")
+          ).schemaVersion,
+          ...(renamed === undefined
+            ? {}
+            : {
+                renameResolutions: [
+                  {
+                    tableName: "single_hero",
+                    fromColumn: "heading",
+                    toColumn: renamed,
+                    choice: "rename",
+                  },
+                ],
+              }),
+        }
+      ),
+  },
+  {
+    // Translation turned on in the same save: the fields here are shared, so no value moves and
+    // the save's own file runs, the companion brought in step after it.
+    name: "a Single's schema dialog turning translation on (its migration file)",
+    table: "single_hero",
+    runsFile: true,
+    create: createHero,
+    save: async (t, fields, renamed) =>
+      dispatchSingles(
+        "applySingleSchemaChanges",
+        { slug: "hero" },
+        {
+          fields,
+          confirmed: true,
+          localized: true,
           schemaVersion: (
             await t.getService("singleRegistryService").getSingle("hero")
           ).schemaVersion,
@@ -258,6 +327,44 @@ const ROADS: Road[] = [
                 renameResolutions: [
                   {
                     tableName: "comp_card",
+                    fromColumn: "heading",
+                    toColumn: renamed,
+                    choice: "rename",
+                  },
+                ],
+              }),
+        }
+      ),
+  },
+  {
+    // Translation turned on in the same save, as for the Single above.
+    name: "a field group turning translation on (its migration file)",
+    table: "comp_band",
+    runsFile: true,
+    async create(_t, fields) {
+      await dispatchComponents(
+        "createComponent",
+        {},
+        { slug: "band", label: "Band", fields }
+      );
+    },
+    save: async (t, fields, renamed) =>
+      dispatchComponents(
+        "applyComponentSchemaChanges",
+        { slug: "band" },
+        {
+          fields,
+          confirmed: true,
+          localized: true,
+          schemaVersion: (
+            await t.getService("fieldGroupRegistryService").getComponent("band")
+          ).schemaVersion,
+          ...(renamed === undefined
+            ? {}
+            : {
+                renameResolutions: [
+                  {
+                    tableName: "comp_band",
                     fromColumn: "heading",
                     toColumn: renamed,
                     choice: "rename",

@@ -60,6 +60,13 @@ export const emailDeliveriesSqlite = sqliteTable(
     // The keyed digest of the idempotency key the send carried, on every
     // record of that send; cleared on all of them when any one is erased.
     keyDigest: text("key_digest"),
+    queuedId: text("queued_id"),
+    templateOwner: text("template_owner"),
+    templateOverridden: integer("template_overridden", { mode: "boolean" }),
+    templateDigest: text("template_digest"),
+    failureKind: text("failure_kind"),
+    failureStatus: integer("failure_status"),
+    providerOrigin: text("provider_origin"),
 
     /**
      * `timestamp_ms`, not `timestamp`.
@@ -89,10 +96,20 @@ export const emailDeliveriesSqlite = sqliteTable(
     index("email_deliveries_principal_idx").on(t.principalKind, t.principalId),
     // Erasure clears a send's key digest from all its records.
     index("email_deliveries_key_idx").on(t.keyDigest),
+    index("email_deliveries_queued_idx").on(t.queuedId),
+    index("email_deliveries_provider_origin_idx").on(
+      t.providerOrigin,
+      t.createdAt
+    ),
     index("email_deliveries_template_idx").on(
       t.templateSlug,
       t.status,
       t.createdAt
+    ),
+    index("email_deliveries_template_created_idx").on(
+      t.templateSlug,
+      t.createdAt,
+      t.id
     ),
   ]
 );

@@ -8,6 +8,10 @@
  * the field's tab; Enter and Escape that stay with the field. Then Site
  * settings in its own dialog: live at once, and asking before a draft goes.
  */
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import {
   act,
   cleanup,
@@ -19,9 +23,19 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { getBrandingCss } from "nextly/config";
 import { useContext, type ReactElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import {
+  compositeOver,
+  contrastRatio,
+} from "../../../../ui/src/styles/contrast/color";
+import {
+  parseThemeScale,
+  parseThemeTokens,
+} from "../../../../ui/src/styles/contrast/parse-theme";
+import { resolveColor } from "../../../../ui/src/styles/contrast/resolve";
 import type { SiteCodeRead, SiteSettingsRead } from "../../library-contract";
 import type { PageAddressResponse } from "../../pages-search-contract";
 import {
@@ -278,6 +292,8 @@ const PAGE_PLACE: SettingsPlace = {
     holdEdit: () => () => {},
   },
   flushHeld: () => null,
+  pageCode: { value: undefined, set: () => true },
+  pageCss: { value: undefined, set: () => true },
 };
 
 /** A tab another plugin adds to the place. */
@@ -300,6 +316,7 @@ interface Shown {
   address?: SettingsAddress | null;
   place?: SettingsPlace | null;
   openAsForm?: () => void;
+  fieldName?: string;
 }
 
 function show({
@@ -309,6 +326,7 @@ function show({
   address = null,
   place = PAGE_PLACE,
   openAsForm,
+  fieldName = "layout",
 }: Shown = {}) {
   // Built afresh each time: React skips a child whose element is unchanged,
   // so re-rendering the same tree would never ask the dialog again.
@@ -321,7 +339,7 @@ function show({
         returnFocus={() => null}
         kind={kind}
         pageTitle="Pricing"
-        fieldName="layout"
+        fieldName={fieldName}
         headerFooter={
           kind === "page" ? <HeaderFooterMenu control={{} as never} /> : null
         }
@@ -384,7 +402,7 @@ describe("Page settings", () => {
     expect(
       screen.getByRole("dialog", { name: "Page settings · Pricing" })
     ).toBeTruthy();
-    expect(tabNames()).toEqual(["General", "Fields"]);
+    expect(tabNames()).toEqual(["General", "Fields", "Code"]);
   });
 
   it("lifts the place's tabs into the same row, after Fields, in the order delivered", () => {
@@ -393,7 +411,7 @@ describe("Page settings", () => {
       placeTab("acme-reviews.tab", "Reviews"),
     ];
     show();
-    expect(tabNames()).toEqual(["General", "Fields", "SEO", "Reviews"]);
+    expect(tabNames()).toEqual(["General", "Fields", "SEO", "Reviews", "Code"]);
     // Handed the place, its context and the page's props, with a way back
     // to General.
     expect(placeAsked.at(-1)).toMatchObject({
@@ -419,6 +437,89 @@ describe("Page settings", () => {
     expect(
       screen.getByRole("tab", { name: "General" }).getAttribute("aria-selected")
     ).toBe("true");
+  });
+
+  it("ends the row with Code for a role that may manage the site, and says only that a page adds code to anyone else", async () => {
+    delivered = [placeTab("acme-reviews.tab", "Reviews")];
+    const place = {
+      ...PAGE_PLACE,
+      pageCode: {
+        value: { head: "<meta name=a content=b>" },
+        set: () => true,
+      },
+    };
+    show({ place });
+    expect(tabNames()).toEqual(["General", "Fields", "Reviews", "Code"]);
+    await userEvent.click(screen.getByRole("tab", { name: "Code" }));
+    // Found once it is drawn: the Code tab is fetched when first opened.
+    expect(
+      await screen.findByText(
+        "Code added to this page only. Site-wide code lives in Site settings."
+      )
+    ).toBeTruthy();
+    expect(screen.queryByText(/This page adds its own code/)).toBeNull();
+    cleanup();
+
+    siteRead = { ...MANAGER, mayManageSite: false, layouts: [] };
+    show({ place });
+    expect(tabNames()).toEqual(["General", "Fields", "Reviews"]);
+    expect(
+      screen.getByText(
+        "This page adds its own code or CSS. Only people who can change site settings can see or edit it."
+      )
+    ).toBeTruthy();
+    expect(screen.queryByText("<meta name=a content=b>")).toBeNull();
+    cleanup();
+
+    // A page with no code of its own says nothing of it.
+    show();
+    expect(screen.queryByText(/This page adds its own code/)).toBeNull();
+  });
+
+  it("shows page CSS in the Code tab's CSS box to a role that may manage the site, and to an editor only General's line, never the CSS", async () => {
+    const CSS = "h1 { color: rebeccapurple; }";
+    const place = {
+      ...PAGE_PLACE,
+      pageCss: { value: CSS, set: () => true },
+    };
+    show({ place });
+    await userEvent.click(screen.getByRole("tab", { name: "Code" }));
+    expect(
+      (screen.getByRole("textbox", { name: "CSS" }) as HTMLTextAreaElement)
+        .value
+    ).toBe(CSS);
+    expect(
+      screen.getByText(
+        "CSS for this page only. Site-wide CSS lives in Site settings."
+      )
+    ).toBeTruthy();
+    cleanup();
+
+    // An editor: a page with CSS and no code is said to add its own, and
+    // the CSS is shown nowhere.
+    siteRead = { ...MANAGER, mayManageSite: false, layouts: [] };
+    show({ place });
+    expect(tabNames()).not.toContain("Code");
+    expect(
+      screen.getByText(
+        "This page adds its own code or CSS. Only people who can change site settings can see or edit it."
+      )
+    ).toBeTruthy();
+    expect(document.body.textContent).not.toContain("rebeccapurple");
+    expect(screen.queryByRole("textbox", { name: "CSS" })).toBeNull();
+  });
+
+  it("offers no Code tab where the builder's field isn't a page's own top-level field, which the server refuses code on", () => {
+    delivered = [placeTab("acme-reviews.tab", "Reviews")];
+    for (const fieldName of ["hero.body", "sections[0].body"]) {
+      show({ fieldName });
+      expect(tabNames()).not.toContain("Code");
+      expect(screen.queryByText(/This page adds its own code/)).toBeNull();
+      cleanup();
+    }
+    // CONTROL: the page's own top-level field offers it.
+    show({ fieldName: "body" });
+    expect(tabNames()).toContain("Code");
   });
 
   it("offers Site settings apart from the tabs, only to a role that may manage the site", () => {
@@ -551,7 +652,7 @@ describe("Page settings", () => {
       placeTab("acme-reviews.tab", "Reviews"),
     ];
     show();
-    expect(tabNames()).toEqual(["General", "Fields", "Reviews"]);
+    expect(tabNames()).toEqual(["General", "Fields", "Reviews", "Code"]);
     // Mounted, hidden, so it can bring itself back.
     expect(screen.getByText("SEO panel", { selector: "p" })).toBeTruthy();
   });
@@ -595,7 +696,7 @@ describe("Page settings", () => {
   it("leaves Fields out where nothing is left for it", () => {
     contentLeft = false;
     show();
-    expect(tabNames()).toEqual(["General"]);
+    expect(tabNames()).toEqual(["General", "Code"]);
   });
 
   it("keeps a component's own settings on General, with no Fields tab", () => {
@@ -956,6 +1057,55 @@ describe("Site settings", () => {
     expect(change.getAttribute("target")).toBe("_blank");
   });
 
+  // `--nx-primary` is a fill a site's brand may set to any colour. As the
+  // words of a link, the e2e suite's indigo read 4.35:1 on the light page and
+  // 4.19:1 on the dark one, under AA's 4.5:1 for small text. Both forms of
+  // the line's way to the sets read in the text colour, underlined.
+  it("draws Change in Pages in a colour that reads on any surface, in light and dark, under an indigo brand", async () => {
+    show();
+    await openSite();
+    const link = within(
+      screen.getByRole("region", { name: "Site default header & footer" })
+    ).getByRole("link", { name: /^Change in Pages/ });
+    cleanup();
+
+    render(
+      <ManageSetsContext.Provider value={vi.fn()}>
+        <SettingsDialog
+          open
+          onOpenChange={vi.fn()}
+          returnFocus={() => null}
+          kind="page"
+          pageTitle="Pricing"
+          fieldName="layout"
+          place={null}
+          share={{ title: "Who we are", description: "We build tools." }}
+          address={null}
+          breakpoints={{
+            value: { viewport: [], container: [] },
+            onSave: vi.fn(),
+            status: "ready",
+            refresh: vi.fn(),
+          }}
+        />
+      </ManageSetsContext.Provider>
+    );
+    await openSite();
+    const button = within(
+      screen.getByRole("region", { name: "Site default header & footer" })
+    ).getByRole("button", { name: "Change in Pages ▸ Header & footer" });
+
+    for (const way of [link, button]) {
+      const classes = (way.getAttribute("class") ?? "").split(/\s+/);
+      const lowest = lowestRatioUnderIndigo(classes);
+      expect(
+        lowest.ratio,
+        `${way.tagName} ${lowest.ink} reads ${lowest.ratio.toFixed(2)}:1 on ${lowest.where}`
+      ).toBeGreaterThanOrEqual(4.5);
+      expect(classes).toContain("underline");
+    }
+  });
+
   it("opens the builder's own list of sets from the site default line, inside the builder", async () => {
     const openSets = vi.fn();
     const onOpenChange = vi.fn();
@@ -1168,3 +1318,57 @@ describe("Site settings", () => {
     expect(screen.queryByRole("button", { name: "Site settings" })).toBeNull();
   });
 });
+
+/**
+ * The lowest contrast the colour of the element's `text-<token>` class
+ * reaches on the page, a card and a popover, in light and dark, with the
+ * admin's theme branded the way its server stylesheet brands it for the e2e
+ * suite's indigo `#6366f1`. jsdom computes no stylesheet, so the colours are
+ * resolved from the theme file.
+ */
+function lowestRatioUnderIndigo(classes: string[]): {
+  ink: string;
+  ratio: number;
+  where: string;
+} {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const css = readFileSync(
+    resolve(here, "../../../../ui/src/styles/theme.css"),
+    "utf8"
+  );
+  const theme = parseThemeTokens(css);
+  const scale = parseThemeScale(css);
+  // The class that paints the words: `text-sm` sizes them, so only a class
+  // naming a theme colour counts.
+  const ink =
+    classes.find(name => scale.has(`--color-${name.replace(/^text-/, "")}`)) ??
+    "";
+  if (!ink.startsWith("text-")) throw new Error("no text colour class");
+  const token = ink.replace(/^text-/, "");
+  const brand = [
+    ...(getBrandingCss({ colors: { primary: "#6366f1" } }) ?? "").matchAll(
+      /(--nx-[\w-]+)\s*:\s*([^;]+);/g
+    ),
+  ].map(([, name, value]): [string, string] => [
+    name ?? "",
+    (value ?? "").trim(),
+  ]);
+  const measured = (["light", "dark"] as const).flatMap(mode => {
+    const ctx = { tokens: new Map([...theme[mode], ...brand]), scale };
+    return ["background", "card", "popover"].map(surface => {
+      const ground = resolveColor(`var(--color-${surface})`, ctx);
+      const ink = compositeOver(
+        resolveColor(`var(--color-${token})`, ctx),
+        ground
+      );
+      return {
+        ratio: contrastRatio(ink, ground),
+        where: `${mode} ${surface}`,
+      };
+    });
+  });
+  measured.sort((a, b) => a.ratio - b.ratio);
+  const [lowest] = measured;
+  if (!lowest) throw new Error("nothing measured");
+  return { ink, ...lowest };
+}

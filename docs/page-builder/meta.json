@@ -3,13 +3,17 @@
   "pages": [
     "index",
     "editor",
+    "design-panel",
+    "how-text-works",
     "placement",
     "locked-areas",
     "layouts",
     "site-code",
+    "custom-css",
     "moving-between-sites",
     "compose-through-the-api",
     "named-queries",
+    "starter-pages",
     "contributed-blocks",
     "forms"
   ]

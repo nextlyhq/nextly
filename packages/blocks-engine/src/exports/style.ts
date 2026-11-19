@@ -210,7 +210,7 @@ export {
   tokensToFigma,
   tokensToResolver,
 } from "../style/dtcg-modes";
-export type { ModeFile } from "../style/dtcg-modes";
+export type { ModeFile, ModesRead } from "../style/dtcg-modes";
 // Whether two tokens say the same thing: one answer for a stored override and
 // for an editor's Reset.
 export { sameJsonValue, sameSiteToken } from "../style/same-token";
@@ -222,6 +222,7 @@ export { isRawColour } from "../style/raw-colour";
 export {
   GENERIC_FONT_FAMILIES,
   NEXTLY_EXTENSION,
+  TEXT_STYLES_GROUP,
   dtcgToTokens,
   isKind,
   resolveAliases,
@@ -232,6 +233,8 @@ export {
 } from "../style/dtcg";
 export type {
   DtcgNode,
+  DtcgSiteData,
+  TokensToDtcgOptions,
   FamilyListKind,
   FamilyListReading,
   FamilyPart,
@@ -265,8 +268,19 @@ export {
 } from "../style/inline-style";
 export type {
   CompiledPageCss,
+  // A host's checker for author-written CSS, which the compile asks before it
+  // draws any; and the level a piece of it was written at. @experimental
+  CustomCssLevel,
+  CustomCssPolicy,
   StyleCompileContext,
 } from "../style/compile-page";
+// A block's custom CSS scoped to the block, so a host's checker can name the
+// lines that cannot be, as the compile would refuse them. @experimental
+export {
+  scopeBlockCss,
+  type CustomCssRefusal,
+  type ScopedBlockCss,
+} from "../style/custom-css-scope";
 export {
   blockPartClassName,
   blockTypeClassName,
@@ -358,11 +372,12 @@ export {
   styleSupportDefinitions,
   stylePropertiesForSupports,
   supportsAllowStyleProperty,
+  supportedStylesOf,
   styleGroupKeys,
 } from "../style/supports-map";
 
+export { migrateDocument } from "../migrate-document";
 export {
-  migrateDocument,
   migrateProps,
   migrationInfoOf,
   findMigrationGaps,
@@ -373,6 +388,7 @@ export type {
   MigratedNode,
   MigrateFn,
   MigrateResult,
+  MigrationDrops,
   MigrationFailure,
   MigrationMap,
   MigrationRenames,
@@ -482,9 +498,22 @@ export { authoredBreakpoints, inCascadeOrder } from "../style/breakpoint-set";
 export {
   DEFAULT_FLUID_RANGE,
   fluidValue,
+  isFluidSize,
+  isFluidSizes,
   type FluidRangeWidths,
   type FluidSizes,
 } from "../style/fluid-value";
+
+/**
+ * Text styles' fluid sizes made again across a new fluid range, and dropped
+ * where an edit leaves them beside a size they no longer make. Public because
+ * the site style's save and the editor's class writes apply them.
+ */
+export {
+  classesAcrossFluidRange,
+  withFluidSizesBack,
+  withoutStaleFluidSizes,
+} from "../style/fluid-classes";
 
 /**
  * Site text: the size and line height of body text, each heading level,

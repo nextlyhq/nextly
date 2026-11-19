@@ -53,20 +53,34 @@ import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { AddressKind } from "../../../shared/address-rule";
 import { builderColumnIsUnique } from "../../dynamic-collections/services/dynamic-collection-schema-service";
+import { statedMoment } from "../../dynamic-collections/services/stated-default";
+import {
+  COMPANION_LOCALE_COLUMN,
+  COMPANION_STRUCTURAL_COLUMNS,
+} from "../../i18n/companion-columns";
 import { appLanguageOrder } from "../../i18n/configured-locales";
 import { joinRetries } from "../../i18n/migration/archive-preflight";
+import { companionUniqueIndexName } from "../../i18n/migration/companion-unique-indexes";
+import { ensureI18nArchive } from "../../i18n/migration/ensure-archive";
 import { mainTableFields } from "../../i18n/per-language-storage";
+import {
+  companionColumnNames,
+  companionTableExists,
+  liveColumnsOf,
+} from "../../i18n/runtime/companion-io";
 import { busyTableBounds, type BusyTableBounds } from "../busy-table/bounds";
 import { runUnitInTries } from "../busy-table/run-unit";
 import { boundedStopRecord } from "../busy-table/stopped-record";
 import { unresolvedAttempts } from "../events/migration-state";
 import { SchemaEventsRepository } from "../events/schema-events-repository";
 import { checksumOf } from "../migrate/applied-checksums";
+import { migrationDriftError, type DriftItem } from "../migrate/drift-error";
 import {
   reconcileFile,
   recordAlreadyApplied,
   runRecordedAttempt,
   snapshotsEquivalent,
+  toDriftItem,
 } from "../migrate/drift-reconcile";
 import { refuseRequiredColumnsOverNulls } from "../migrate/required-column-guard";
 import { resolveMigration } from "../migrate/resolve";
@@ -85,6 +99,7 @@ import {
   type GenerateArgs,
 } from "../migrate-create/generate";
 import { loadLatestSnapshot } from "../migrate-create/snapshot-io";
+import { isWriterOvertaken } from "../migrate-create/writer-hold";
 import { countRowsBreakingNotNull } from "../pipeline/classifier/count-helpers";
 import { diffSnapshots } from "../pipeline/diff/diff";
 import { introspectLiveSnapshot } from "../pipeline/diff/introspect-live";
@@ -94,6 +109,11 @@ import type {
   Operation,
   TableSpec,
 } from "../pipeline/diff/types";
+import {
+  readIndexColumns,
+  readIndexUniqueness,
+  uniqueIndexNames,
+} from "../pipeline/live-table-facts";
 import { assertDeleteWithinThreshold } from "../pipeline/pre-cleanup/executor";
 import { validateDefaultValue } from "../pipeline/pre-cleanup/validate-default";
 import type { RenameCandidate } from "../pipeline/pushschema-pipeline-interfaces";
@@ -101,6 +121,7 @@ import { builtByFor } from "../pipeline/registered-collections";
 import { generateStatements } from "../pipeline/sql-templates/index";
 import { plainMysqlEquivalents } from "../pipeline/sql-templates/mysql-live-restate";
 import type { ColumnResolution } from "../pipeline/sql-templates/resolution-statements";
+import { identifierKey } from "../rename-target";
 import {
   classifyFieldKind,
   fieldsStoredOnRow,
@@ -116,6 +137,19 @@ import {
 import { loadUiSchema } from "../ui-schema/loader";
 import { uiToMinimal } from "../ui-schema/merge";
 import { mutateManifest, type ManifestKind } from "../ui-schema/mutate";
+import {
+  entityLabel,
+  fieldTypeChangesOf,
+  perLanguageBefore,
+  refuseFieldTypeChanges,
+} from "../value-conversion/type-change/field-type-changes";
+
+import {
+  openSaveRecords,
+  recordSaveStarted,
+  withSaveRecords,
+  type StartedSave,
+} from "./save-in-progress";
 
 /** What the writer works with: the app's database, config and folders. */
 export interface CollectionSaveDeps {
@@ -127,6 +161,12 @@ export interface CollectionSaveDeps {
   projectRoot: string;
   /** Absolute path to `db.migrationsDir`. */
   migrationsDir: string;
+  /**
+   * The database the app's saves write to, as a save's record that it is in progress names it
+   * (`savedDatabase`). Unknown where not given, which the commands reading the record take as
+   * this machine's database.
+   */
+  database?: string;
   /** Whether a save runs its migration here: in development. */
   applies: boolean;
   logger: {
@@ -166,6 +206,12 @@ export interface CollectionSave {
    */
   acknowledgedConversions?: readonly string[];
   /**
+   * The registry row's migration status before the save, where the caller read the row: a field
+   * type change while the definition still awaits its migration is refused, since the columns do
+   * not hold what the definition says yet. Absent, the history checks are what stand for it.
+   */
+  migrationStatus?: string | null;
+  /**
    * The statements that take the collection's many-to-many junction tables
    * from before the save to after it, and back
    * (`DynamicCollectionService.junctionStatements`): written into the change's
@@ -196,6 +242,13 @@ export interface CollectionSave {
     | { column: string; kind: "fill"; value: unknown }
     | { column: string; kind: "delete_nonconforming" }
   >;
+  /**
+   * A Single's one row given the default each field new to its table states (`singleRowFills`):
+   * written into the change's file as a fill, and the column left as its field declares it.
+   * Accepted for a Single alone, whose table holds one row; a collection's rows are settled only
+   * by the person's own answer (`resolutions`).
+   */
+  rowFills?: ReadonlyArray<{ column: string; value: unknown }>;
   /**
    * The other collections deleted with this one: gone from the definition
    * the save writes, so the links between them do not hold this one's delete
@@ -294,35 +347,77 @@ export async function writeCollectionSave(
      * that was refused; `"partly-applied"` keeps them, recorded nowhere.
      */
     appliedAfter?: () => Promise<void | "partly-applied">;
+    /**
+     * In development, where the file runs, work done inside the last file's own transaction, after
+     * its ledger row: a caller's registry write, so the change, its ledger row and the registry row
+     * commit or roll back together, and a failed write is withdrawn as a failed statement is
+     * (`undoUnapplied`). It joins that transaction through the adapter, as `nextly migrate`'s
+     * registry rows do (`writesInFileTransaction`); a file run outside a transaction has none to
+     * join, and the work then runs on its own after the file.
+     */
+    inLastTransaction?: () => Promise<void>;
   } = {}
 ): Promise<CollectionSaveResult> {
-  const bounds = boundsFor(deps);
-  const written = await writeSave(deps, save, options);
-  // Once a push has run, the database changed outside the files: they stay.
-  let pushed = false;
-  try {
-    if (deps.applies && options.appliedBy !== undefined) {
-      const applied = await options.appliedBy();
-      pushed = true;
-      if (applied === "partly-applied") {
-        return { files: [...written.names], applied: false };
+  // The save's record that it is in progress is cleared when this scope ends, or the caller's
+  // where one is open around it (`withSaveRecords`), as its outcome allows.
+  return withSaveRecords(async () => {
+    const bounds = boundsFor(deps);
+    const written = await writeSave(deps, save, {
+      ...options,
+      // The file runs here, planned from the history: a translations table
+      // the history does not describe would meet statements written for
+      // another one.
+      runsFile: deps.applies && options.appliedBy === undefined,
+      pushes: deps.applies && options.appliedBy !== undefined,
+    });
+    // Once a push has run, the database changed outside the files: they stay.
+    let pushed = false;
+    try {
+      if (deps.applies && options.appliedBy !== undefined) {
+        // Judged before the push, as the file road's reconcile judges a file before its statements:
+        // a push over a table the history does not describe would change it and leave the files
+        // unrecordable.
+        await refuseDriftBeforePush(deps, written.files, written.table);
+        const applied = await options.appliedBy();
+        pushed = true;
+        if (applied === "partly-applied") {
+          // Kept recorded applied nowhere: nothing says what committed, so the record stays.
+          written.started.left();
+          return { files: [...written.names], applied: false };
+        }
+        await recordWhatWasPushed(deps, written.files, written.table);
+      } else if (deps.applies) {
+        // A translated entity's file archives the languages it takes out of translation into
+        // `nextly_i18n_archive`, which a database `nextly migrate` has not prepared lacks. Made
+        // ready here, under the schema lock the file's statements run under.
+        if (save.previous?.localized === true) {
+          await ensureI18nArchive(
+            deps.adapter,
+            deps.adapter.getCapabilities().dialect
+          );
+        }
+        await runWritten(
+          deps,
+          written.files,
+          written.table,
+          bounds,
+          options.inLastTransaction
+        );
+      } else if (options.appliedAfter !== undefined) {
+        const applied = await options.appliedAfter();
+        pushed = true;
+        if (applied === "partly-applied") written.started.left();
       }
-      await recordWhatWasPushed(deps, written.files, written.table);
-    } else if (deps.applies) {
-      await runWritten(deps, written.files, written.table, bounds);
-    } else if (options.appliedAfter !== undefined) {
-      await options.appliedAfter();
-      pushed = true;
+      return { files: [...written.names], applied: deps.applies };
+    } catch (error) {
+      if (!pushed) {
+        await undoThenThrow(error, [
+          { files: written.names, undo: () => written.undo(error) },
+        ]);
+      }
+      throw error;
     }
-    return { files: [...written.names], applied: deps.applies };
-  } catch (error) {
-    if (!pushed) {
-      await undoThenThrow(error, [
-        { files: written.names, undo: () => written.undo(error) },
-      ]);
-    }
-    throw error;
-  }
+  }, deps.logger);
 }
 
 /**
@@ -387,15 +482,28 @@ export async function prepareCollectionSave(
   // Read before anything is written, and so before the caller's own work between the two (a
   // delete's teardown): a bound out of range refuses the save while it still changes nothing.
   const bounds = boundsFor(deps);
-  const written = await writeSave(deps, save, options);
+  // The save ends after this returns, once the caller runs or withdraws it: its record is
+  // cleared then, or by the caller's scope where one is open around it.
+  const records = openSaveRecords(deps.logger);
+  let written: Awaited<ReturnType<typeof writeSave>>;
+  try {
+    written = await records.run(() => writeSave(deps, save, options));
+  } catch (error) {
+    await records.end(false);
+    throw error;
+  }
   return {
     files: [...written.names],
     run: async () => {
       if (deps.applies) {
         await runWritten(deps, written.files, written.table, bounds);
       }
+      await records.end(true);
     },
-    withdraw: () => written.undo(undefined),
+    withdraw: async () => {
+      await written.undo(undefined);
+      await records.end(false);
+    },
   };
 }
 
@@ -408,34 +516,177 @@ export async function prepareCollectionSave(
 async function writeSave(
   deps: CollectionSaveDeps,
   save: CollectionSave,
-  options: { historyChecked?: boolean }
+  options: {
+    historyChecked?: boolean;
+    runsFile?: boolean;
+    /** The change is applied by a push (`appliedBy`), which reaches the translations table too. */
+    pushes?: boolean;
+  }
 ): Promise<{
   files: SaveFiles;
   names: readonly string[];
   table: string;
   undo(error: unknown): Promise<void>;
+  /** The save's record that it is in progress, told how the save ended. */
+  started: StartedSave;
 }> {
   if (options.historyChecked !== true) await checkSaveHistory(deps);
   const plan = await planSave(deps, save);
+  // Each field whose type the save changes is judged over the values its column holds, before any
+  // file is written: a blocked change, or a lossy one not consented to, refuses the save.
+  await refuseSaveTypeChanges(deps, save, plan.table);
   refuseUnconfirmedConversions(plan, save);
   refuseUnenforceableUniques(deps, save, plan.table);
   await settledRows(deps, save, plan.table);
+  // The translations table is judged before anything is written wherever the change reaches it:
+  // the file's statements are planned from the history's record of it, and a push changes it too,
+  // after which only the main table is compared (`recordWhatWasPushed`).
+  if (options.runsFile === true || options.pushes === true) {
+    await refuseCompanionDrift(deps, save, plan.table);
+  }
 
   const definitionPath = resolve(deps.projectRoot, deps.config.db.uiSchemaFile);
   const before = await readIfPresent(definitionPath);
-  await writeAtomically(definitionPath, serializeUiSchema(plan.next));
+  // Recorded before the first write, so a process stopped at any write after it leaves a record
+  // of the save and of the definition it started from.
+  const started = await recordSaveStarted({
+    adapter: deps.adapter,
+    projectRoot: deps.projectRoot,
+    kind: kindOf(save).kind,
+    slug: save.slug,
+    definitionFile: definitionPath,
+    definitionBefore: before,
+    database: deps.database,
+    notify: line => deps.logger.warn(line),
+  });
+  // The migration files there before the save: one the save left that is not among them, and not
+  // named as written (a file its generation could not take back), keeps the record. Read before
+  // the definition is replaced, so a read that fails has changed nothing.
+  let sqlBefore: string[];
+  try {
+    sqlBefore = await sqlFiles(deps.migrationsDir);
+    await writeAtomically(definitionPath, serializeUiSchema(plan.next));
+  } catch (error) {
+    // A failed read or replace leaves the definition whole and nothing else of the save is
+    // written yet: there is nothing to settle, so the record clears with the save's failure.
+    started.withdrawn();
+    throw error;
+  }
 
   const names: string[] = [];
-  const undo = (error: unknown) =>
-    undoUnapplied(deps, names, before, definitionPath, error);
+  const undo = async (error: unknown) => {
+    // Only a save that withdrew everything it wrote has nothing left to settle.
+    if (
+      (await undoUnapplied(deps, names, before, definitionPath, error)) ===
+        "withdrawn" &&
+      (await sqlFiles(deps.migrationsDir)).every(file =>
+        sqlBefore.includes(file)
+      )
+    ) {
+      started.withdrawn();
+    }
+  };
   try {
     const files = await writeFiles(deps, save, plan, written =>
       names.push(...written)
     );
-    return { files, names, table: plan.table, undo };
+    return { files, names, table: plan.table, undo, started };
   } catch (error) {
     return undoThenThrow(error, [{ files: names, undo: () => undo(error) }]);
   }
+}
+
+/**
+ * Refuse the save's blocked and lossy field type changes, judged over the values the entity's
+ * table holds (`refuseFieldTypeChanges`). A create or a delete changes no field's type. The fields
+ * are the whole lists, so a field a group with no name holds is judged by its own name. Where an
+ * earlier save's file for the table is not applied yet (outside development, before the deploy's
+ * `nextly migrate`), the columns do not hold what the definition says, and a type change is
+ * refused until it is.
+ */
+async function refuseSaveTypeChanges(
+  deps: CollectionSaveDeps,
+  save: CollectionSave,
+  table: string
+): Promise<void> {
+  if (save.previous === null || save.entity === null) return;
+  const kind = kindOf(save);
+  const dialect = deps.adapter.getCapabilities().dialect;
+  const previous = save.previous.fields as unknown as FieldDefinition[];
+  const next = save.entity.fields as unknown as FieldDefinition[];
+  const renamed = new Map(
+    (save.renamedFields ?? []).map(r => [r.from, r.to] as const)
+  );
+  // A field group keeps its fields on its component rows, where a many-to-many has a column.
+  const componentRow = kind.kind === "fieldGroup" ? { componentRow: true } : {};
+  // Asked only of a save that changes a field's type, so no other save reads its folder.
+  const changes = fieldTypeChangesOf({
+    previous,
+    next,
+    renamed,
+    dialect,
+    builtBy: kind.builtBy,
+    ...componentRow,
+  });
+  if (changes.length === 0) return;
+  await refuseFieldTypeChanges(deps.adapter.getDrizzle(), dialect, {
+    label: entityLabel(kind.kind, save.slug),
+    table,
+    ...perLanguageBefore(save.previous, table, previous),
+    previous,
+    next,
+    renamed,
+    ...(await migrationStatusOf(deps, save, table)),
+    // No consent is taken here: a lossy type change is refused until the save clears the
+    // consented values before it converts the column.
+    builtBy: kind.builtBy,
+    ...componentRow,
+  });
+}
+
+/**
+ * The status the save's entity is judged under: the registry row's, where the caller read it;
+ * `pending` where a file not yet applied changes the table; none otherwise.
+ */
+async function migrationStatusOf(
+  deps: CollectionSaveDeps,
+  save: CollectionSave,
+  table: string
+): Promise<{ migrationStatus?: string | null }> {
+  if (save.migrationStatus !== undefined) {
+    return { migrationStatus: save.migrationStatus };
+  }
+  return (await unappliedFileChanges(deps, table))
+    ? { migrationStatus: "pending" }
+    : {};
+}
+
+/**
+ * Whether a migration file in the folder that is not recorded applied changes `table`, or may: one
+ * whose statements name tables this reading cannot tell is taken as changing it.
+ */
+async function unappliedFileChanges(
+  deps: CollectionSaveDeps,
+  table: string
+): Promise<boolean> {
+  const dialect = deps.adapter.getCapabilities().dialect;
+  const repo = new SchemaEventsRepository(deps.adapter.getDrizzle(), dialect);
+  const applied = new Set(
+    (await repo.listFileApplies())
+      .filter(row => row.status === "applied")
+      .map(row => row.filename)
+  );
+  for (const filename of await sqlFiles(deps.migrationsDir)) {
+    if (applied.has(filename)) continue;
+    const tables = tablesChangedBy(await unitOf(deps, filename), dialect);
+    if (
+      tables === undefined ||
+      tables.some(name => name.toLowerCase() === table.toLowerCase())
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -454,6 +705,12 @@ export async function previewCollectionSave(
     const meta = join(deps.migrationsDir, "meta");
     if (existsSync(meta)) {
       await cp(meta, join(scratch, "meta"), { recursive: true });
+      // And each snapshot's migration file beside it: a snapshot counts as
+      // written only with its file there (`recordedSnapshotNames`), so
+      // without them the preview would start from no snapshot at all.
+      for (const file of await sqlFiles(deps.migrationsDir)) {
+        await cp(join(deps.migrationsDir, file), join(scratch, file));
+      }
     }
     const files = await writeFiles(
       { ...deps, migrationsDir: scratch },
@@ -488,9 +745,20 @@ export async function previewCollectionSave(
 /** A column a save brings from how an earlier version made it to the one mapping. */
 export interface ColumnConversion {
   table: string;
+  /** The key a save confirms the conversion by (`acknowledgedConversions`). */
   column: string;
   from: string;
   to: string;
+  /**
+   * What the conversion does, in plain words ("adds an index on created_at"): the review's line
+   * and the refusal's both read it as it is, so a conversion is worded in one place.
+   */
+  change: string;
+  /**
+   * Whether it deletes stored values (it removes a column or a table), which the review shows as
+   * the data loss it is before the person confirms it.
+   */
+  deletesValues: boolean;
 }
 
 /** What a save would do, for the person to review before confirming it. */
@@ -587,14 +855,93 @@ async function adoptionFor(
     conversions:
       mapped === undefined
         ? []
-        : diffSnapshots({ tables: [live] }, { tables: [mapped] }).map(op =>
-            conversionOf(table, op)
-          ),
+        : diffSnapshots({ tables: [live] }, { tables: [mapped] }).map(op => ({
+            ...conversionOf(table, op),
+            ...whatItDoes(op),
+          })),
   };
 }
 
-/** One difference between an adopted table and the mapping, as a conversion. */
-function conversionOf(table: string, op: Operation): ColumnConversion {
+/** The columns an index covers, or what it covers when it is over an expression. */
+const indexedOn = (index: { columns: string[] }) =>
+  index.columns.length > 0 ? index.columns.join(", ") : "an expression";
+
+/** What a conversion does: its words, and whether it deletes stored values. */
+type WhatItDoes = Pick<ColumnConversion, "change" | "deletesValues">;
+/** A difference that keeps every stored value. */
+const keeps = (change: string): WhatItDoes => ({
+  change,
+  deletesValues: false,
+});
+/** A difference that deletes stored values: a column or a table removed. */
+const deletes = (change: string): WhatItDoes => ({
+  change,
+  deletesValues: true,
+});
+
+/**
+ * What each kind of difference does: in plain words, completing "Saving brings it up to date:", and
+ * whether it deletes stored values. Keyed by every operation type, so a new one cannot reach the
+ * review unworded or unjudged.
+ */
+const WHAT_EACH_DOES: {
+  [K in Operation["type"]]: (op: Extract<Operation, { type: K }>) => WhatItDoes;
+} = {
+  add_table: op => keeps(`creates the table ${op.table.name}`),
+  drop_table: op => deletes(`removes the table ${op.tableName}`),
+  rename_table: op => keeps(`renames the table ${op.fromName} to ${op.toName}`),
+  add_column: op => keeps(`adds the column ${op.column.name}`),
+  drop_column: op => deletes(`removes the column ${op.columnName}`),
+  rename_column: op => keeps(`renames ${op.fromColumn} to ${op.toColumn}`),
+  change_column_type: op =>
+    keeps(`changes ${op.columnName} from ${op.fromType} to ${op.toType}`),
+  change_column_nullable: op =>
+    keeps(
+      op.toNullable
+        ? `lets ${op.columnName} be empty`
+        : `requires a value in ${op.columnName}`
+    ),
+  change_column_default: op =>
+    keeps(
+      op.toDefault === undefined
+        ? `removes the default of ${op.columnName}`
+        : `sets the default of ${op.columnName} to ${op.toDefault}`
+    ),
+  add_index: op =>
+    keeps(
+      `adds ${op.index.unique ? "a unique index" : "an index"} on ${indexedOn(op.index)}`
+    ),
+  drop_index: op =>
+    keeps(
+      `removes the ${op.index.unique ? "unique index" : "index"} on ${indexedOn(op.index)}`
+    ),
+  add_check: op => keeps(`adds the check ${op.check.name}`),
+  drop_check: op => keeps(`removes the check ${op.check.name}`),
+  add_foreign_key: op =>
+    keeps(
+      `adds a reference from ${op.foreignKey.columns.join(", ")} to ${op.foreignKey.referencesTable}`
+    ),
+  drop_foreign_key: op =>
+    keeps(
+      `removes the reference from ${op.foreignKey.columns.join(", ")} to ${op.foreignKey.referencesTable}`
+    ),
+  change_foreign_key_action: op =>
+    keeps(
+      `changes what ${op.columnName} does when the ${op.referencesTable} row it points to is deleted or updated`
+    ),
+};
+
+/** What `op` does: a conversion's `change` and `deletesValues`. */
+function whatItDoes(op: Operation): WhatItDoes {
+  const judge = WHAT_EACH_DOES[op.type] as (op: Operation) => WhatItDoes;
+  return judge(op);
+}
+
+/** One difference between an adopted table and the mapping, as a conversion keyed for confirming. */
+function conversionOf(
+  table: string,
+  op: Operation
+): Omit<ColumnConversion, keyof WhatItDoes> {
   switch (op.type) {
     case "change_column_type":
       return { table, column: op.columnName, from: op.fromType, to: op.toType };
@@ -659,6 +1006,100 @@ function answeredField(
   );
 }
 
+/**
+ * Refuses a save's row fills that are not a Single's fields new to its table, each with a value
+ * the field takes, before anything is written. A row fill is the default a field states, given to
+ * a Single's one row; a collection, whose rows only the person's answer settles, is refused one
+ * whoever passes it, and a column the table already has keeps the values it holds.
+ */
+async function refuseRowFillsOutsideSingle(
+  save: CollectionSave,
+  live: TableSpec | undefined
+): Promise<void> {
+  const refusal = (path: string, code: string, message: string) =>
+    NextlyError.validation({ errors: [{ path, code, message }] });
+  for (const fill of save.rowFills ?? []) {
+    if (save.kind !== "single") {
+      throw refusal(
+        fill.column,
+        "ROW_FILL_NOT_SINGLE",
+        "Only a Single's row is filled with a field's default; a collection's rows are settled by the answer given for them."
+      );
+    }
+    const field = answeredField(save, fill.column);
+    if (field === undefined) {
+      throw refusal(
+        fill.column,
+        "RESOLUTION_FIELD_UNKNOWN",
+        `${fill.column} is not a field of the saved Single.`
+      );
+    }
+    const column = toSnakeCase(fill.column);
+    if (live?.columns.some(c => c.name === column) === true) {
+      throw refusal(
+        fill.column,
+        "ROW_FILL_NOT_NEW",
+        `${fill.column} is already a column of the Single, so its value is kept rather than filled.`
+      );
+    }
+    // Judged by the entry validator every write of the Single answers to, as a Single's PATCH
+    // judges the default it fills: a value its own rules refuse would be refused by every write.
+    const { validateEntryData } = await import(
+      "../../../shared/lib/entry-validation"
+    );
+    const issues = await validateEntryData(
+      { [fill.column]: fill.value },
+      [field],
+      { mode: "create" }
+    );
+    if (issues.length > 0) {
+      throw refusal(
+        `fields.${fill.column}`,
+        "DEFAULT_FAILS_FIELD_RULES",
+        `The default "${fill.column}" states would fill the entry this Single already holds, ` +
+          `but the field's own rules refuse it. ${issues[0]?.message ?? ""} Change the default or the ` +
+          `rule, then save again.`
+      );
+    }
+  }
+}
+
+/**
+ * The fills and deletes a save's file writes between a column's creation and its NOT NULL: the
+ * person's answers, and a Single's row fills (`CollectionSave.rowFills`) as fills, each a column
+ * of `table`. A structured value (a JSON, chips or plugin JSON field's) is written as the JSON
+ * text its column stores.
+ */
+function fileResolutions(
+  save: CollectionSave,
+  table: string
+): { resolutions?: ColumnResolution[] } {
+  const answers = [
+    ...(save.resolutions ?? []),
+    ...(save.rowFills ?? []).map(fill => ({
+      column: fill.column,
+      kind: "fill" as const,
+      // A date is written as the moment it names, which the fill stores in the dialect's form
+      // (`storedDateValue`), as the PATCH road's fill does; never the text it was stated in.
+      value:
+        answeredField(save, fill.column)?.type === "date"
+          ? (statedMoment(fill.value) ?? fill.value)
+          : fill.value,
+    })),
+  ];
+  if (answers.length === 0) return {};
+  return {
+    resolutions: answers.map(r => ({
+      ...r,
+      tableName: table,
+      columnName: toSnakeCase(r.column),
+      ...(r.kind === "fill" && storesJson(save, r.column)
+        ? { json: true }
+        : {}),
+    })),
+  };
+}
+
 async function settledRows(
   deps: CollectionSaveDeps,
   save: CollectionSave,
@@ -670,6 +1111,7 @@ async function settledRows(
   const live = exists
     ? (await introspectLiveSnapshot(db, dialect, [table])).tables[0]
     : undefined;
+  await refuseRowFillsOutsideSingle(save, live);
   const settled: SettledRows[] = [];
   for (const resolution of save.resolutions ?? []) {
     const field = answeredField(save, resolution.column);
@@ -750,7 +1192,8 @@ async function settledRows(
 
 /** Whether field `name` of the saved collection keeps its value as JSON. */
 function storesJson(save: CollectionSave, name: string): boolean {
-  const field = save.entity?.fields.find(f => f.name === name);
+  // Found as the answer it serializes was: among the row's fields, inside a group with no name too.
+  const field = answeredField(save, name);
   return (
     field !== undefined &&
     classifyFieldKind(field as FieldDefinition, kindOf(save).builtBy) === "json"
@@ -814,9 +1257,9 @@ function refuseUnenforceableUniques(
   }
 }
 
-/** The line the review shows for a conversion. */
+/** The line the review and the refusal show for a conversion, around its `change` as it is. */
 function conversionNotice(conversion: ColumnConversion): string {
-  return `This save also converts ${conversion.column} from ${conversion.from} to ${conversion.to}, from an earlier Nextly version.`;
+  return `${conversion.table} was made by an earlier Nextly version. This save brings it up to date: ${conversion.change}.`;
 }
 
 /**
@@ -965,20 +1408,7 @@ async function writeFiles(
     table: plan.table,
     now: new Date(now.getTime() + offset),
     appended: addedStatements(deps, save, plan.table),
-    ...(save.resolutions === undefined
-      ? {}
-      : {
-          resolutions: save.resolutions.map(r => ({
-            ...r,
-            tableName: plan.table,
-            columnName: toSnakeCase(r.column),
-            // A structured value (a JSON, chips or plugin JSON field's) is
-            // written as the JSON text its column stores.
-            ...(r.kind === "fill" && storesJson(save, r.column)
-              ? { json: true }
-              : {}),
-          })),
-        }),
+    ...fileResolutions(save, plan.table),
     ...(save.keys === undefined
       ? {}
       : { newTableKeys: new Map([[plan.table, save.keys.after]]) }),
@@ -1140,6 +1570,201 @@ function collectionOf(save: CollectionSave): UiSchemaEntity {
   return entity;
 }
 
+/**
+ * Where the translations table of `table`, and the main table's translated columns, differ from
+ * what the newest snapshot records of them (`recordedTable`), for `refuseCompanionDrift`.
+ *
+ * The table's presence is a fact of its own: one holding only its structural columns has no
+ * translated column to tell it from a missing one, and a file planned from a history that records
+ * none creates it again. Names are compared as the dialect compares them (`identifierKey`), since
+ * MySQL and SQLite take `TITLE` and `title` for one column, and the file's statements would too.
+ */
+async function companionDriftItems(
+  deps: CollectionSaveDeps,
+  table: string,
+  recordedTable: TableSpec
+): Promise<DriftItem[]> {
+  const dialect = deps.adapter.getCapabilities().dialect;
+  const key = (name: string) => identifierKey(dialect, name);
+  const companion = `${table}_locales`;
+  // The snapshot records a translations table as a list of its translated columns, empty where it
+  // holds none, and an untranslated table as none. A translated table recorded without the list
+  // has none too, or, in a snapshot from before empty lists were written, may have one the
+  // migration files made; `migrate:create` asks those files then, so its presence is not judged.
+  const recordedExists =
+    recordedTable.localized !== true
+      ? false
+      : recordedTable.localizedColumns !== undefined || undefined;
+  const liveExists = await companionTableExists(deps.adapter, companion);
+  if (recordedExists !== undefined && recordedExists !== liveExists) {
+    return [
+      {
+        kind: liveExists ? "+" : "-",
+        detail: `${companion} ${liveExists ? "present in" : "absent from"} DB`,
+      },
+    ];
+  }
+  if (!liveExists) return [];
+
+  const recorded = recordedTable.localizedColumns ?? [];
+  const recordedKeys = new Set(recorded.map(key));
+  // The structural columns by the same key, so `_LOCALE` is the structural `_locale` where the
+  // dialect compares without case.
+  const structural = new Set([...COMPANION_STRUCTURAL_COLUMNS].map(key));
+  const live = (await companionColumnNames(deps.adapter, table)).filter(
+    column => !structural.has(key(column))
+  );
+  const liveKeys = new Set(live.map(key));
+  // A translated column the main table holds too, where the history records it on the
+  // translations table alone: turning translation off would add it to the main table again.
+  const recordedOnMain = new Set(recordedTable.columns.map(c => key(c.name)));
+  const onMain =
+    recorded.length === 0
+      ? []
+      : (await liveColumnsOf(deps.adapter, table))
+          .map(c => c.name)
+          .filter(
+            column =>
+              recordedKeys.has(key(column)) && !recordedOnMain.has(key(column))
+          );
+  return [
+    ...live
+      .filter(column => !recordedKeys.has(key(column)))
+      .map(column => ({
+        kind: "+" as const,
+        detail: `${companion}.${column} present in DB`,
+      })),
+    ...recorded
+      .filter(column => !liveKeys.has(key(column)))
+      .map(column => ({
+        kind: "-" as const,
+        detail: `${companion}.${column} absent from DB`,
+      })),
+    ...onMain.map(column => ({
+      kind: "+" as const,
+      detail: `${table}.${column} present in DB`,
+    })),
+    ...(await companionIndexDriftItems(deps, companion, recordedTable)),
+  ];
+}
+
+/**
+ * The per-language unique indexes of the translated columns the history records, where the
+ * database holds another set: a recorded one missing, not unique, or standing on whole columns
+ * other than its column and the language (`-`), or one under a translated column's index name the
+ * history does not record (`+`). An index of that name on `(title, _parent)` lets a title repeat
+ * within a language, and the file, which drops it by name and creates the right one, could fail
+ * on the create after its earlier statements committed. A text column's index is an expression
+ * (PostgreSQL, MySQL) or partial (SQLite), whose column the catalog does not name, so one of
+ * those under the name is taken as the per-language index. The file drops and creates
+ * these indexes by name, without asking the database first, so it would fail part way over either.
+ * Only the translated columns' own index names are judged: the table's structural indexes are not
+ * the history's to record here.
+ */
+async function companionIndexDriftItems(
+  deps: CollectionSaveDeps,
+  companion: string,
+  recordedTable: TableSpec
+): Promise<DriftItem[]> {
+  const dialect = deps.adapter.getCapabilities().dialect;
+  const key = (name: string) => identifierKey(dialect, name);
+  const db = deps.adapter.getDrizzle();
+  const indexes = await readIndexUniqueness(db, dialect, companion);
+  const liveAny = new Set([...indexes.keys()].map(key));
+  const liveUnique = new Set([...uniqueIndexNames(indexes)].map(key));
+  // What each index stands on, where it stands on whole columns, by the same keys. An expression
+  // or partial index is not among them.
+  const keysOf = new Map(
+    [...(await readIndexColumns(db, dialect, companion))].map(
+      ([name, columns]) => [key(name), columns.map(key).sort()] as const
+    )
+  );
+  const perLanguage = (name: string, column: string): boolean => {
+    if (!liveUnique.has(key(name))) return false;
+    const keys = keysOf.get(key(name));
+    return (
+      keys === undefined ||
+      keys.join("\u0000") ===
+        [key(column), key(COMPANION_LOCALE_COLUMN)].sort().join("\u0000")
+    );
+  };
+  const recordedUnique = new Set(
+    (recordedTable.uniqueLocalizedColumns ?? []).map(entry =>
+      key(typeof entry === "string" ? entry : entry.column)
+    )
+  );
+  return (recordedTable.localizedColumns ?? []).flatMap(
+    (column): DriftItem[] => {
+      const name = companionUniqueIndexName(companion, column);
+      if (recordedUnique.has(key(column))) {
+        return perLanguage(name, column)
+          ? []
+          : [
+              {
+                kind: "-" as const,
+                detail: `${companion} index ${name} absent from DB`,
+              },
+            ];
+      }
+      return liveAny.has(key(name))
+        ? [
+            {
+              kind: "+" as const,
+              detail: `${companion} index ${name} present in DB`,
+            },
+          ]
+        : [];
+    }
+  );
+}
+
+/**
+ * Refuse a save whose translations table (`<table>_locales`) is not, in the
+ * database, what the migration history records of it, before anything is
+ * written: the save's file is planned from that record, and run over another
+ * table it would fail part way or translate the wrong columns. The refusal is
+ * the one `nextly migrate` gives a database that matches neither end of a
+ * migration (`NEXTLY_MIGRATION_DRIFT`), naming each column the database has
+ * that the history does not (`+`) and each it lacks (`-`). A translated
+ * column the main table holds as well, which the history records on the
+ * translations table alone, is drift too: turning translation off would add
+ * it to the main table again. So are a translations table there or missing
+ * against the history, and a per-language unique index that is
+ * (`companionDriftItems`).
+ *
+ * Judged only for a save that is translated before or after, and only where
+ * the newest snapshot records the table and says which of its tables were
+ * translated: a table no snapshot records is adopted from the database, and a
+ * snapshot from before that record says nothing of its translations table.
+ */
+async function refuseCompanionDrift(
+  deps: CollectionSaveDeps,
+  save: CollectionSave,
+  table: string
+): Promise<void> {
+  if (save.previous?.localized !== true && save.entity?.localized !== true) {
+    return;
+  }
+  const latest = await loadLatestSnapshot(join(deps.migrationsDir, "meta"));
+  const recordedTable = latest?.data.snapshot.tables.find(
+    t => t.name === table
+  );
+  if (latest === null || recordedTable === undefined) return;
+  const recordsTranslations =
+    latest.data.translatedFieldsRecorded === true ||
+    latest.data.snapshot.tables.some(t => t.localized === true);
+  if (!recordsTranslations) return;
+
+  const driftItems = await companionDriftItems(deps, table, recordedTable);
+  if (driftItems.length === 0) return;
+  const migration = latest.filename.replace(/\.snapshot\.json$/, "");
+  throw migrationDriftError({
+    migration,
+    file: join(deps.migrationsDir, `${migration}.sql`),
+    driftItems,
+  });
+}
+
 /** A slug as a migration name spells it. */
 const migrationSlug = (slug: string) => slug.replace(/-/g, "_");
 
@@ -1257,7 +1882,9 @@ async function generateFor(
   try {
     result = await generated;
   } catch (error) {
-    await removeWritten();
+    // Overtaken by another writer, the generation put nothing of its own in
+    // the folder, and what is new there is that writer's: it stays.
+    if (!isWriterOvertaken(error)) await removeWritten();
     throw error;
   }
   if (result === null) return [];
@@ -1467,7 +2094,8 @@ async function runWritten(
   deps: CollectionSaveDeps,
   files: SaveFiles,
   table: string,
-  boundsRead: BusyTableBounds | undefined
+  boundsRead: BusyTableBounds | undefined,
+  inLastTransaction?: () => Promise<void>
 ): Promise<void> {
   const db = deps.adapter.getDrizzle();
   const dialect = deps.adapter.getCapabilities().dialect;
@@ -1476,6 +2104,8 @@ async function runWritten(
   // The record of a file a busy table stopped waits for the ledger table one try at most.
   const recordStopped = boundedStopRecord(deps.adapter, bounds.tryMs);
   const applied: string[] = [];
+  // The file being run, so the last one's transaction also takes `inLastTransaction`.
+  let running: string | undefined;
   const executeSql = (
     sql: string,
     unit: { source: string; transaction: boolean },
@@ -1485,7 +2115,12 @@ async function runWritten(
       deps.adapter,
       splitSqlStatements(sql, dialect, unit),
       unit,
-      after,
+      inLastTransaction !== undefined && running === ordered.at(-1)
+        ? async (handle: unknown, statementsExecuted: number) => {
+            await after(handle, statementsExecuted);
+            await inLastTransaction();
+          }
+        : after,
       {
         bounds,
         notify: line => deps.logger.warn(line),
@@ -1510,6 +2145,7 @@ async function runWritten(
     // as part-way, and a refusal that ran nothing was reported as a failure
     // whose statements stayed applied, its files kept for `migrate:resolve`.
     await refuseBeforeAnyStatement(filename);
+    running = filename;
     await runJudgingWhatStayed(deps, table, filename, () => runOne(filename));
     applied.push(filename);
   }
@@ -1680,6 +2316,33 @@ async function liveTable(
 }
 
 /**
+ * Refuse a save that applies its change by a push (`appliedBy`) where the collection's table is
+ * not, in the database, what the history before the save's files records of it: a column added by
+ * hand, say. Asked before the push, as the file road's reconcile asks before a file's statements
+ * (`reconcileFile`), with the same baseline (`scopedSnapshotBefore`) and the same refusal
+ * (`NEXTLY_MIGRATION_DRIFT`, naming each difference). Pushed over such a table, the change would
+ * stand in the database while no file could be recorded for it. A save that adopts its table
+ * writes a file describing the table as it stands, so it has nothing to judge.
+ */
+async function refuseDriftBeforePush(
+  deps: CollectionSaveDeps,
+  files: SaveFiles,
+  table: string
+): Promise<void> {
+  const first = files.change[0];
+  if (files.adopt !== undefined || first === undefined) return;
+  const before = await scopedSnapshotBefore(deps, first, table);
+  const live = await liveTable(deps, table);
+  if (snapshotsEquivalent(live, before)) return;
+  const migration = first.replace(/\.sql$/, "");
+  throw migrationDriftError({
+    migration,
+    file: join(deps.migrationsDir, first),
+    driftItems: diffSnapshots(before, live).map(toDriftItem),
+  });
+}
+
+/**
  * Record each written file applied after a push applied its change: one with
  * a snapshot where the collection's table stands as that snapshot says, and a
  * companion, which describes what the push itself did to the translation
@@ -1805,12 +2468,12 @@ async function undoUnapplied(
   definition: string | undefined,
   definitionPath: string,
   error: unknown
-): Promise<void> {
+): Promise<"withdrawn" | "kept"> {
   if (partlyApplied(error)) {
     deps.logger.error(
       "The save's migration failed part-way, so its files stay for `nextly migrate:resolve`."
     );
-    return;
+    return "kept";
   }
   const repo = new SchemaEventsRepository(
     deps.adapter.getDrizzle(),
@@ -1831,7 +2494,7 @@ async function undoUnapplied(
     deps.logger.error(
       `${applied.join(", ")} applied before the save failed, so the save's files and its definition stay: \`nextly migrate\` runs the rest once the cause is fixed.`
     );
-    return;
+    return "kept";
   }
   for (const filename of written) {
     await settleAttempts(deps, repo, filename);
@@ -1847,6 +2510,7 @@ async function undoUnapplied(
   }
   if (definition === undefined) await rm(definitionPath, { force: true });
   else await writeAtomically(definitionPath, definition);
+  return "withdrawn";
 }
 
 /**

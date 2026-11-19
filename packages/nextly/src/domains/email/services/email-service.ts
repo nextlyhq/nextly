@@ -48,11 +48,14 @@ import { rowLockServer } from "../../audit/audit-log-writer";
 import { pluginSettingsSecrets } from "../../plugins/settings-service";
 import { warnQuietly } from "../../retention/safe-log";
 import {
+  deliveryFailureOf,
   isRecognisedMessageId,
   mailboxOf,
   refusedMailboxes,
   messageIdWithoutRecipients,
+  type DeliveryTemplateVersion,
   type EmailDeliveryInput,
+  type ProviderSource,
   type EmailDeliveryRecipientKind,
 } from "../delivery-record";
 import { EmailErrorCode } from "../errors";
@@ -94,13 +97,20 @@ import {
   renderTemplateReplyTo,
   withTemplateCopies,
 } from "../template-envelope";
-import { CODE_TEMPLATE_KEYS, sendSource } from "../template-ownership";
+import { templateCaused } from "../template-failure";
+import {
+  CODE_TEMPLATE_KEYS,
+  sendSource,
+  storedVersionDigest,
+  versionOf,
+} from "../template-ownership";
 import type {
   EmailAttachmentInput,
   EmailConfig,
   EmailProviderAdapter,
   ResolvedAttachment,
 } from "../types";
+import { storedFormat } from "../written/fields";
 
 import { getAttachmentLimits } from "./attachment-limits";
 import type {
@@ -292,6 +302,10 @@ interface DispatchContext {
   resolvedProviderId?: string;
   providerId?: string;
   templateSlug?: string;
+  /** The template version sent, `none`, or undefined when not known. */
+  templateVersion?: DeliveryTemplateVersion;
+  /** The queued email this send is an attempt of. */
+  queuedId?: string;
   person: PrincipalRef | null;
   resolvedAttachments?: ResolvedAttachment[];
   /** The claim a keyed send holds, and the key its calls are derived from. */
@@ -443,6 +457,48 @@ function afterSendAddressing(
   };
 }
 
+/**
+ * The version of a stored template a send records: the version as saved,
+ * never what it rendered to, and for a test of the editor's unsaved fields a
+ * draft with no digest. Undefined, recorded as not recorded, when the record
+ * cannot be read for it: the version is a note on the delivery, and reading
+ * it must never fail the send.
+ */
+function sentVersion(
+  template: EmailTemplateRecord,
+  draft: TemplateTestDraft | undefined
+): DeliveryTemplateVersion | undefined {
+  try {
+    return {
+      owner: ownerName(template.owner),
+      overridden: template.overridden === true,
+      digest:
+        draft !== undefined
+          ? null
+          : storedVersionDigest(
+              versionOf(template),
+              storedFormat(template).blocks
+            ),
+      ...(draft !== undefined ? { draft: true as const } : {}),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+/** The provider a send goes through, as `withProviderReport` hands it. */
+export interface SentProvider {
+  type: string;
+  /** The stored provider's id; null for the site's configured one. */
+  id: string | null;
+  origin: ProviderSource;
+}
+
+/** A template's owner as the delivery log names it. */
+function ownerName(owner: EmailTemplateRecord["owner"]): string {
+  return owner.kind === "plugin" ? `plugin:${owner.name}` : owner.kind;
+}
+
 /** The fields every delivery record of a message shares. */
 function rowBase(
   recipient: ReturnType<typeof deliveryRecipients>[number],
@@ -455,6 +511,12 @@ function rowBase(
     providerType: context.providerType,
     templateSlug: context.templateSlug ?? null,
     keyDigest: context.keyed?.claim.keyDigest ?? null,
+    queuedId: context.queuedId ?? null,
+    // A stored provider row carried it, or the site's configured one.
+    providerOrigin: context.resolvedProviderId
+      ? ("stored" as const)
+      : ("code" as const),
+    templateVersion: context.templateVersion,
   };
 }
 
@@ -480,6 +542,14 @@ function acceptedRow(
       : wasRefused
         ? refusedRecordError(refusalOf(facts.result, recipient.to))
         : "Send returned unsuccessful",
+    // The provider's answer, structured, never its text.
+    failure: delivered
+      ? null
+      : deliveryFailureOf(
+          wasRefused
+            ? refusalOf(facts.result, recipient.to)
+            : notAcceptedFailure()
+        ),
   };
 }
 
@@ -499,8 +569,14 @@ export class EmailService extends BaseService {
    * set (`withTemplateCopies`).
    */
   private frozenCopies?: { cc: string[]; bcc: string[] };
+  /** Set on a view made by `withProviderReport`. */
+  private providerReport?: (provider: SentProvider) => void;
   /** Set on a view made by `withRecipientReport`. */
   private recipientReport?: (recipients: FinalRecipient[]) => void;
+  /** Set on a view made by `withQueuedAttempt`. */
+  private queuedAttempt?: string;
+  /** Set on the view a template send sends through. */
+  private sendingVersion?: DeliveryTemplateVersion;
 
   constructor(
     adapter: DrizzleAdapter,
@@ -574,6 +650,17 @@ export class EmailService extends BaseService {
   }
 
   /**
+   * @internal This service, handing `report` the provider each send it makes
+   * goes through, as it resolves it: a queued email notes it on its row
+   * whether or not the delivery log keeps a record of the send.
+   */
+  withProviderReport(report: (provider: SentProvider) => void): EmailService {
+    const view = Object.create(this) as EmailService;
+    view.providerReport = report;
+    return view;
+  }
+
+  /**
    * @internal This service, handing `report` every final recipient of each
    * send it makes, with what became of it: what a queued email's attempt
    * tells the plugin that queued it (`queued-send-changes`).
@@ -639,6 +726,25 @@ export class EmailService extends BaseService {
     excluded: Parameters<typeof finalRecipients>[2]
   ): void {
     this.recipientReport?.(finalRecipients(envelope, outcomes, excluded));
+  }
+
+  /**
+   * @internal This service, recording each delivery it makes as an attempt
+   * of the queued email `queuedId`, so the attempts read as its timeline.
+   */
+  withQueuedAttempt(queuedId: string): EmailService {
+    const view = Object.create(this) as EmailService;
+    view.queuedAttempt = queuedId;
+    return view;
+  }
+
+  /** This service, recording `version` as the template version it sends. */
+  private sendingTemplate(
+    version: DeliveryTemplateVersion | undefined
+  ): EmailService {
+    const view = Object.create(this) as EmailService;
+    view.sendingVersion = version;
+    return view;
   }
 
   /**
@@ -763,8 +869,13 @@ export class EmailService extends BaseService {
   ): Promise<EmailSendOutcome> {
     // A test send is told which provider took it; any other calls `send` as
     // every send does.
-    const deliver = (message: Parameters<EmailService["send"]>[0]) =>
-      observe ? this.send(message, observe) : this.send(message);
+    const deliver = (
+      message: Parameters<EmailService["send"]>[0],
+      version: DeliveryTemplateVersion | undefined
+    ) => {
+      const sender = this.sendingTemplate(version);
+      return observe ? sender.send(message, observe) : sender.send(message);
+    };
 
     // Whitespace-only overrides must not shadow the template/provider
     // defaults or reach a provider as malformed headers.
@@ -817,13 +928,34 @@ export class EmailService extends BaseService {
       // the engine each renders with, are resolved by the template service. A
       // template that cannot be rendered throws here, before any provider is
       // asked, and the send fails; retrying cannot fix a template.
-      const {
-        subject,
-        html,
-        text: plainText,
-      } = await this.templateService.renderStored(dbTemplate, variables, {
-        appName: this.getAppName(),
-      });
+      //
+      // Either failure is the template's, which "Fix template" mends.
+      let rendered: Awaited<ReturnType<EmailTemplateService["renderStored"]>>;
+      let envelope: ReturnType<EmailService["templateEnvelope"]>;
+      try {
+        rendered = await this.templateService.renderStored(
+          dbTemplate,
+          variables,
+          { appName: this.getAppName() }
+        );
+        envelope = this.templateEnvelope(dbTemplate, templateSlug, variables, {
+          to,
+          from: fromOverride,
+          replyTo: replyToOverride,
+          cc: options?.cc,
+          bcc: options?.bcc,
+          templateCopies,
+        });
+      } catch (error) {
+        // A render or an envelope the template got wrong is refused as the
+        // caller's (4xx); a database that failed reading the layout or the
+        // brand is not the template's, and "Fix template" cannot mend it.
+        if (NextlyError.is(error) && error.statusCode < 500) {
+          throw templateCaused(error);
+        }
+        throw error;
+      }
+      const { subject, html, text: plainText } = rendered;
 
       // Merge template-default attachments with per-send attachments.
       // Dedupe by mediaId — per-send entries win on conflict.
@@ -832,30 +964,26 @@ export class EmailService extends BaseService {
         options?.attachments
       );
 
-      return deliver({
-        to,
-        subject,
-        html,
-        plainText,
-        ...this.templateEnvelope(dbTemplate, templateSlug, variables, {
+      return deliver(
+        {
           to,
-          from: fromOverride,
-          replyTo: replyToOverride,
-          cc: options?.cc,
-          bcc: options?.bcc,
-          templateCopies,
-        }),
-        providerId: options?.providerId ?? dbTemplate.providerId ?? undefined,
-        // Which template this was, for the delivery log. Without it every
-        // password reset, verification and welcome message -- the entire
-        // reason the log exists -- records no template at all.
-        templateSlug,
-        person: options?.person,
-        attachments:
-          mergedAttachments.length > 0 ? mergedAttachments : undefined,
-        idempotencyKey: options?.idempotencyKey,
-        excludeRecipients: options?.excludeRecipients,
-      });
+          subject,
+          html,
+          plainText,
+          ...envelope,
+          providerId: options?.providerId ?? dbTemplate.providerId ?? undefined,
+          // Which template this was, for the delivery log. Without it every
+          // password reset, verification and welcome message -- the entire
+          // reason the log exists -- records no template at all.
+          templateSlug,
+          person: options?.person,
+          attachments:
+            mergedAttachments.length > 0 ? mergedAttachments : undefined,
+          idempotencyKey: options?.idempotencyKey,
+          excludeRecipients: options?.excludeRecipients,
+        },
+        sentVersion(dbTemplate, draft)
+      );
     }
 
     // The site's code version.
@@ -864,16 +992,23 @@ export class EmailService extends BaseService {
       // strings, so only a string reaches it.
       const text = (value: unknown) =>
         typeof value === "string" ? value : undefined;
-      const result = codeFn({
-        user: {
-          name: text(variables.userName) ?? null,
-          // A code-first template renders for one user; with several `to`
-          // addresses it is given the first, and `send` delivers to all.
-          email: firstAddress(to),
-        },
-        token: text(variables.token),
-        url: text(variables.resetLink) ?? text(variables.verifyLink),
-      });
+      // A code version that throws is the template's failure, as a stored
+      // template that cannot render is.
+      let result: ReturnType<typeof codeFn>;
+      try {
+        result = codeFn({
+          user: {
+            name: text(variables.userName) ?? null,
+            // A code-first template renders for one user; with several `to`
+            // addresses it is given the first, and `send` delivers to all.
+            email: firstAddress(to),
+          },
+          token: text(variables.token),
+          url: text(variables.resetLink) ?? text(variables.verifyLink),
+        });
+      } catch (error) {
+        throw templateCaused(error);
+      }
 
       // The code supplies the content; how it is delivered (provider, From,
       // Reply-To, attachments) stays the stored template's settings, which
@@ -888,29 +1023,41 @@ export class EmailService extends BaseService {
         options?.attachments
       );
 
-      return deliver({
-        to,
-        subject: result.subject,
-        html: result.html,
-        providerId: options?.providerId ?? settings?.providerId ?? undefined,
-        templateSlug,
-        person: options?.person,
-        // Forward cc/bcc/from/replyTo here too — the DB-template path already
-        // does, and omitting them on this branch silently dropped them for
-        // code-first templates.
-        ...this.templateEnvelope(settings, templateSlug, variables, {
+      // Forward cc/bcc/from/replyTo here too — the DB-template path already
+      // does, and omitting them on this branch silently dropped them for
+      // code-first templates. A From or Reply-To that cannot be sent is the
+      // template's failure.
+      let envelope: ReturnType<EmailService["templateEnvelope"]>;
+      try {
+        envelope = this.templateEnvelope(settings, templateSlug, variables, {
           to,
           from: fromOverride,
           replyTo: replyToOverride,
           cc: options?.cc,
           bcc: options?.bcc,
           templateCopies,
-        }),
-        attachments:
-          mergedAttachments.length > 0 ? mergedAttachments : undefined,
-        idempotencyKey: options?.idempotencyKey,
-        excludeRecipients: options?.excludeRecipients,
-      });
+        });
+      } catch (error) {
+        throw templateCaused(error);
+      }
+
+      return deliver(
+        {
+          to,
+          subject: result.subject,
+          html: result.html,
+          providerId: options?.providerId ?? settings?.providerId ?? undefined,
+          templateSlug,
+          person: options?.person,
+          ...envelope,
+          attachments:
+            mergedAttachments.length > 0 ? mergedAttachments : undefined,
+          idempotencyKey: options?.idempotencyKey,
+          excludeRecipients: options?.excludeRecipients,
+        },
+        // The site's code version: it has no saved version to digest.
+        { owner: "code", overridden: false, digest: null }
+      );
     }
 
     // 3. Neither exists — keep the public sentence free of identifiers per
@@ -1189,12 +1336,25 @@ export class EmailService extends BaseService {
     // A keyed send's records are kept, to commit with its claim's outcome;
     // any other send's are written as each message is answered, as before.
     const records: EmailDeliveryInput[] | undefined = claimed ? [] : undefined;
+    // Reported only now that it is sent: a repeat answered from its claim
+    // dispatched nothing, and its provider is the one that sent it before.
+    this.providerReport?.({
+      type: providerType,
+      id: resolvedProviderId ?? null,
+      origin: resolvedProviderId ? "stored" : "code",
+    });
     const calls = await this.dispatchAll(messages, {
       adapter,
       providerType,
       resolvedProviderId,
       providerId: options.providerId,
       templateSlug: options.templateSlug,
+      // A send with no template had none; one naming a template outside a
+      // template send leaves its version unrecorded.
+      templateVersion:
+        this.sendingVersion ??
+        (options.templateSlug === undefined ? "none" : undefined),
+      queuedId: this.queuedAttempt,
       person,
       resolvedAttachments,
       keyed: claimed?.keyed,
@@ -1777,6 +1937,10 @@ export class EmailService extends BaseService {
     startedAt: number
   ): Promise<SendOutcome> {
     const recipients = deliveryRecipients(message);
+    const failure = thrownFailure(
+      error,
+      recipients.map(recipient => recipient.to)
+    );
     // Recorded before the action seam, for the reason given in the success
     // path: a plugin handler that blocks must not be able to cost us the
     // record of an attempt. A throw here is the case where the record
@@ -1802,6 +1966,9 @@ export class EmailService extends BaseService {
         // The cause is not lost -- the log line below records it, which is
         // where a provider's own diagnostic belongs.
         error: describeProviderFailure(error).message,
+        // The provider's answer, structured: its kind and status, which say
+        // what to do about it without any of its text.
+        failure: deliveryFailureOf(failure),
       }))
     );
 
@@ -1813,10 +1980,6 @@ export class EmailService extends BaseService {
       messageId: undefined,
     });
 
-    const failure = thrownFailure(
-      error,
-      recipients.map(recipient => recipient.to)
-    );
     try {
       this.logger.error("email.failed", {
         event: "email.failed",

@@ -44,7 +44,9 @@ import { BuilderFirstPages } from "./src/collections/builder-first-pages";
 import { EntryArticles } from "./src/collections/entry-articles";
 import { ContributionStories } from "./src/collections/contribution-stories";
 import { ListStories } from "./src/collections/list-stories";
+import { e2eRateLimit } from "./src/e2e-rate-limit";
 import { E2E_NAMED_QUERIES } from "./src/named-queries";
+import { E2E_STARTER_PAGES } from "./src/starter-pages";
 import { Categories } from "./src/collections/categories";
 import { DevReloadProbe } from "./src/collections/dev-reload-probe";
 import { HistoryNotes } from "./src/collections/history-notes";
@@ -58,6 +60,7 @@ import { LinkCard, LinkQuote } from "./src/field-groups/related-link-groups";
 import { Seo } from "./src/field-groups/seo";
 import { SITE_STYLE_DEFAULTS } from "./src/lib/site-style-defaults";
 import { blockFixturePlugin } from "./src/plugins/block-fixture/plugin";
+import { pageCheckFixturePlugin } from "./src/plugins/page-check-fixture/plugin";
 import { contributionsFixturePlugin } from "./src/plugins/contributions-fixture/plugin";
 import { missingWidgetFixturePlugin } from "./src/plugins/missing-widget-fixture/plugin";
 import { pageSummaryFixturePlugin } from "./src/plugins/page-summary-fixture/plugin";
@@ -181,10 +184,21 @@ const speedExtraCollections = Array.from(
  */
 export const pageBuilderPlugin = pageBuilder({
   siteStyle: SITE_STYLE_DEFAULTS,
+  // A site that draws its header and footer in code, for the browser tests
+  // of that mode alone (`NEXTLY_E2E_SITE_HEADER_FOOTER=code`); the Page
+  // Builder's own sets otherwise, as a default install has.
+  ...(process.env.NEXTLY_E2E_SITE_HEADER_FOOTER === "code"
+    ? { siteHeaderFooter: "code" as const }
+    : {}),
   // The browser tests' custom sources, registered by the same switch as
   // the collections and the Single they read.
   ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1"
     ? { namedQueries: [...E2E_NAMED_QUERIES] }
+    : {}),
+  // The browser tests' starter page, by the same switch: a new page made
+  // from it in the New page dialog, and an empty page started from it.
+  ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1"
+    ? { starterPages: [...E2E_STARTER_PAGES] }
     : {}),
   pagePreviewPath: "/{slug}",
   // Each post is served at `/blog/<its slug>` by the same route as the pages,
@@ -421,6 +435,11 @@ export default defineConfig({
     ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1"
       ? [blockFixturePlugin]
       : []),
+    // A plugin's own page check, listed in the builder's Page checks, for
+    // builder-plugin-page-checks.spec.ts. Fixtures only.
+    ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1"
+      ? [pageCheckFixturePlugin]
+      : []),
     // The plugin contributions fixture (the dashed card on the dashboard, its
     // pieces on Posts, its proxy header), for the contributions specs, by the
     // same switch; `contributions-fixture/admin.tsx` registers its components.
@@ -464,6 +483,9 @@ export default defineConfig({
   typescript: {
     outputFile: "./src/types/nextly-types.ts",
   },
+  // The product's REST limits, unless the browser suite's server asks for
+  // its higher ones (`NEXTLY_E2E_RATE_LIMIT=1`; see `src/e2e-rate-limit.ts`).
+  ...e2eRateLimit(process.env.NEXTLY_E2E_RATE_LIMIT),
   db: {
     schemasDir: "./src/db/schemas/collections",
     migrationsDir: "./src/db/migrations",

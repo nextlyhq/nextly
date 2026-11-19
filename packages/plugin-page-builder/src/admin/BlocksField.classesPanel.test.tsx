@@ -32,6 +32,8 @@ import {
   SHARED_STYLE_REMOVE_ROUTE_PATH,
   sharedStyleUsagePath,
 } from "../library-contract";
+import { closedDocumentSession } from "../__tests__/closed-document-session";
+import { PUBLISH_READINESS_ROUTE_PATH } from "../publish-readiness-contract";
 
 const DOCUMENT = { formatVersion: 1, kind: "page", nodes: [] };
 
@@ -226,6 +228,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   // The form's storing gate, which site style writes are tracked with.
   useTrackedWrite: () => () => {},
   useBeforeDocumentAction: () => {},
+  // The session a header edited in place opens; none is opened here.
+  useDocumentSession: () => closedDocumentSession(),
   // The header's controls the bar places; drawn by the admin, not here.
   DocumentSaveAndPublish: () => null,
   useDocumentLifeStage: () => null,
@@ -370,6 +374,21 @@ function commitName(dialog: HTMLElement, value: string): void {
   fireEvent.keyDown(field, { key: "Enter" });
 }
 
+/**
+ * An element's accessible name, as a screen reader hears it: read through the
+ * role query, which computes the name the same way for every button it finds.
+ */
+function nameOf(element: Element | null | undefined): string | undefined {
+  let heard: string | undefined;
+  screen.queryAllByRole("button", {
+    name: (name, each) => {
+      if (each === element) heard = name;
+      return false;
+    },
+  });
+  return heard;
+}
+
 describe("the Shared styles tab reaching an author", () => {
   it("offers the Design panel, whose Shared styles tab this is, at all", () => {
     // The slot was reserved and dark: the shell named it and nothing rendered
@@ -436,7 +455,11 @@ describe("the Shared styles tab reaching an author", () => {
         within(dialog).getByRole("button", { name: "Remove card" })
       );
     });
-    expect(routeWrites).toEqual([
+    // The style's own writes: Page checks also asks which parts aren't
+    // published, a separate ask that is no write of the class list.
+    expect(
+      routeWrites.filter(write => write.path !== PUBLISH_READINESS_ROUTE_PATH)
+    ).toEqual([
       { path: SHARED_STYLE_REMOVE_ROUTE_PATH, body: { ids: ["id-card"] } },
     ]);
     expect(saved).toEqual([]);
@@ -527,14 +550,10 @@ describe("the Shared styles tab reaching an author", () => {
     openEditor();
     await settle();
     expect(
-      screen
-        .getByRole("button", { name: /^card, \.nx-c-card/ })
-        .getAttribute("aria-label")
+      nameOf(screen.getByRole("button", { name: /^card, \.nx-c-card/ }))
     ).toContain("At least 1 block on this page");
     expect(
-      screen
-        .getByRole("button", { name: /^hero, \.nx-c-hero/ })
-        .getAttribute("aria-label")
+      nameOf(screen.getByRole("button", { name: /^hero, \.nx-c-hero/ }))
     ).not.toContain("on this page");
   });
 
@@ -551,7 +570,7 @@ describe("the Shared styles tab reaching an author", () => {
     openEditor();
     await settle();
     const row = screen.getByRole("button", { name: /^card, \.nx-c-card/ });
-    expect(row.getAttribute("aria-label")).not.toContain("block on this page");
+    expect(nameOf(row)).not.toContain("block on this page");
   });
 
   /*

@@ -23,10 +23,13 @@ import { describe, expect, it } from "vitest";
 
 import * as bindingWireModule from "./binding-wire";
 import * as boundaryModule from "./block-boundary";
+import * as embedModule from "./blocks/embed";
+import * as embedProvidersModule from "./blocks/embed-providers";
 import * as blocksEntry from "./blocks/index";
 import * as listReadModule from "./blocks/list-read";
 import * as blockPropsModule from "./blocks/props";
 import * as typographyDefaultsModule from "./blocks/typography-defaults";
+import * as formModule from "./blocks/form";
 import * as formFieldsModule from "./blocks/form-fields";
 import * as headingAnchorsModule from "./blocks/heading-anchors";
 import * as containerRootModule from "./blocks/container-root";
@@ -117,6 +120,43 @@ const SOURCE_MODULES: ReadonlyArray<{
     ],
   },
   {
+    name: "blocks/form",
+    module: formModule,
+    // Only `pickedForm` is public, the one reading of the form a Form block
+    // names, so the editor's page checks judge it as the block draws it. The
+    // rest are the block's own: published from the blocks entry, or its
+    // render, its words and the fields it posts.
+    internal: [
+      "FORM_FIELD_TYPES",
+      "formFieldDrawings",
+      "sentNameOf",
+      "FORM_BASE_STYLES",
+      "FORM_FILE_NEEDS_SCRIPT",
+      "FORM_REFUSALS",
+      "FORM_SENT_MESSAGE",
+      "FORM_HONEYPOT_FIELD",
+      "FORM_POST_FIELDS",
+      "renderForm",
+      "form",
+    ],
+  },
+  {
+    name: "blocks/embed-providers",
+    module: embedProvidersModule,
+    // `detectEmbed` is public, so the editor and the thumbnail copy answer
+    // from the table the block renders by. The player origins and the
+    // origin check are the block's own frame-trust rule.
+    internal: ["EMBED_PLAYER_ORIGINS", "isPlayerOf"],
+  },
+  {
+    name: "blocks/embed",
+    module: embedModule,
+    // The empty box's attribute is public, so the editor's canvas finds the
+    // box by the name the block writes. The block itself is published from
+    // the blocks entry; its render and its poster document are its own.
+    internal: ["embed", "posterDocument", "renderEmbed"],
+  },
+  {
     name: "blocks/heading-anchors",
     module: headingAnchorsModule,
     // Only its `HeadingRank` type is published, as the level an outline entry
@@ -128,17 +168,17 @@ const SOURCE_MODULES: ReadonlyArray<{
   {
     name: "outline",
     module: outlineModule,
-    // Its types are published, for `ctx.outline`. Building the outline, and
-    // putting it on a context, are the renderer's: a block reads its anchors
-    // with `outlineAnchors`, inside this package, and an editor keeps an
-    // output by `anchorsWithin`.
+    // Its types are published, for `ctx.outline`, and `pageOutline`, for a
+    // caller judging a page's headings without drawing it. Putting it on a
+    // context is the renderer's: a block reads its anchors with
+    // `outlineAnchors`, inside this package, and an editor keeps an output
+    // by `anchorsWithin`.
     internal: [
       "anchorsWithin",
       "contextBeforeOutline",
       "headingAnchors",
       "outlineAnchors",
       "outlineForPart",
-      "pageOutline",
       "passageAnchors",
       "withOutline",
     ],
@@ -299,8 +339,8 @@ const SOURCE_MODULES: ReadonlyArray<{
     // them at a depth React's renderer could not reach, and at the
     // partition's bound from both sides. `drawsInteractive` is shared with the
     // rich-text block's content model in this package, not offered outside it,
-    // and so is `passageHeadings`, the walk the table-of-contents block lists
-    // a passage's headings by, and `headingsDrawn`, the same walk the page
+    // and so is `passageHeadings`, the walk that anchors one passage read by
+    // itself, and `headingsDrawn`, the same walk the page
     // outline lists a Rich text block's headings by. `VIEWS_DRAWING_CHILDREN` is exported for the
     // test that holds every view to what it declares it draws.
     // `RichTextParagraphContent` draws the Text block's one paragraph inside
@@ -625,6 +665,9 @@ describe("the root entry", () => {
       // The read budget's default: see `createQueryBudget`.
       "DEFAULT_MAX_QUERIES",
       "EDITOR_NAMESPACE",
+      // The box an Embed with no link draws on the editor's canvas, public so
+      // the canvas draws its link field over the box the block writes.
+      "EMBED_EMPTY_ATTRIBUTE",
       // The Entry content block's marks on the editor's canvas, public so the
       // canvas's sheet draws by the names the renderer writes.
       "ENTRY_CONTENT_DRAWN_ATTRIBUTE",
@@ -695,6 +738,9 @@ describe("the root entry", () => {
       "defineBlock",
       // The definitions a document reaches, discovered as the render does.
       "definitionsFor",
+      // Which provider an Embed's link is from, by the block's own table:
+      // the editor says what it found and the thumbnail copy fetches from it.
+      "detectEmbed",
       "emptyDataProvider",
       "fetchPolicyLabel",
       // The image and embed blocks' one filter on an address, public so a
@@ -731,7 +777,13 @@ describe("the root entry", () => {
       // The one reading of the site's forms service an instance offers.
       "offeredSiteForms",
       "pageBindingRun",
+      // Added deliberately: the page outline, the one reading of which
+      // headings a page draws, for the editor's page checks to judge them by.
+      "pageOutline",
       "pageStyleTrace",
+      // Added deliberately: the one reading of the form a Form block names,
+      // for the editor's page checks to judge it by.
+      "pickedForm",
       "prepareDocumentAsDrawn",
       "prepareDocumentForRead",
       "preparePageForRead",

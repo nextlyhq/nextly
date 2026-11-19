@@ -6,9 +6,12 @@
  * deletion of the run, and the run prints each one before deleting it. Given
  * a comma-separated list (`--accept-data-loss=posts,pages.summary`) it covers
  * only those tables and columns: a named table covers every deletion in it —
- * dropping it, dropping any of its columns, removing its rows — and a named
- * `table.column` covers dropping that column. Anything it does not cover is
- * refused, named, before anything changes.
+ * dropping it, dropping any of its columns, removing its rows — and the drop
+ * of its translations table (`<table>_locales`, where the command proved it
+ * one: `translates`), which goes with a translated entity's delete; a named
+ * `table.column` covers dropping that column. A column or rows of a
+ * translations table are covered by its own name.
+ * Anything it does not cover is refused, named, before anything changes.
  *
  * Without consent an interactive run lists every deletion, with its count
  * when the database can be read, and asks; a run with no terminal refuses at
@@ -91,6 +94,12 @@ export type Deletion =
       core?: boolean;
       count?: number;
       alongside?: string;
+      /**
+       * The table this one holds the translations of, where the command
+       * proved it that table's translations table (`<table>_locales`, keyed
+       * by `_parent` and `_locale`): naming that table covers this one.
+       */
+      translates?: string;
       reason?: string;
     }
   | {
@@ -147,6 +156,32 @@ export const NO_CONSENT: DataLossConsent = {
   ignored: [],
 };
 
+/** The values the consent reads as a yes to every deletion, in lower case. */
+const YES: ReadonlySet<string> = new Set(["1", "true"]);
+
+/** The values the variable reads as no consent, in lower case. */
+const NO: ReadonlySet<string> = new Set(["0", "false"]);
+
+/**
+ * Whether the consent reads `table`, given as its only target, as a yes or a
+ * no and not as a table's name: named so, a table cannot be asked for by
+ * name, since `=false` gives no consent and `=true` consents to everything.
+ */
+function readAsYesOrNo(table: string): boolean {
+  const lowered = table.toLowerCase();
+  return YES.has(lowered) || NO.has(lowered);
+}
+
+/**
+ * Whether a list of targets can spell `name`, a table's or a column's: the
+ * list is cut at commas and each target at its dot, and whitespace is taken
+ * for a mistyped list, so a name holding any of them cannot be given. The one
+ * rule for reading a list and for naming a deletion in one.
+ */
+function spellable(name: string): boolean {
+  return name !== "" && !/[\s,.]/.test(name);
+}
+
 /**
  * The tables and columns a consent's list names, or `all` for the values
  * that mean "every deletion" (`1`, `true`). The environment's `0`, `false`
@@ -161,12 +196,8 @@ function parseTargets(
 ): "all" | ConsentTargets | null {
   const value = raw.trim();
   const lowered = value.toLowerCase();
-  if (lowered === "1" || lowered === "true") return "all";
-  if (
-    from === "env" &&
-    (value === "" || lowered === "0" || lowered === "false")
-  )
-    return null;
+  if (YES.has(lowered)) return "all";
+  if (from === "env" && (value === "" || NO.has(lowered))) return null;
   const spelled =
     from === "flag"
       ? `${ACCEPT_DATA_LOSS_FLAG}=${raw}`
@@ -177,9 +208,7 @@ function parseTargets(
   for (const item of items) {
     const parts = item.split(".");
     const wellFormed =
-      item !== "" &&
-      parts.length <= 2 &&
-      parts.every(part => part !== "" && !/\s/.test(part));
+      item !== "" && parts.length <= 2 && parts.every(spellable);
     if (!wellFormed) {
       throw NextlyError.invalidInput({
         message:
@@ -296,11 +325,16 @@ export function deletionKey(deletion: Deletion): string {
  */
 /**
  * Whether only the consent without targets covers `deletion`: one its
- * command cannot name, or one on a schema-qualified table, which a target
- * list cannot tell from a `table.column`.
+ * command cannot name, one whose table or column a list of targets cannot
+ * spell ({@link spellable}): a schema-qualified table, which a list cannot
+ * tell from a `table.column`, among them; or one on a table whose name the
+ * consent reads as a yes or a no ({@link readAsYesOrNo}). A refusal then asks for the consent
+ * without targets, never for a list the consent would refuse to read.
  */
 function onlyBlanketCovers(deletion: Deletion): boolean {
-  return deletion.kind === "unnamed" || deletion.table.includes(".");
+  if (deletion.kind === "unnamed") return true;
+  if (!spellable(deletion.table) || readAsYesOrNo(deletion.table)) return true;
+  return deletion.kind === "column" && !spellable(deletion.column);
 }
 
 export function consentCovers(
@@ -316,9 +350,48 @@ export function consentCovers(
   if (given.targets === "all") return true;
   if (deletion.kind === "unnamed" || onlyBlanketCovers(deletion)) return false;
   if (given.targets.tables.has(deletion.table)) return true;
+  // A translations table is part of the table whose entries it translates: naming that table
+  // consents to losing both, as deleting a translated entity's table loses both. Only where the
+  // command proved it one (`translates`); a name alone proves nothing.
+  if (
+    deletion.kind === "table" &&
+    deletion.translates !== undefined &&
+    given.targets.tables.has(deletion.translates)
+  ) {
+    return true;
+  }
   return (
     deletion.kind === "column" &&
     given.targets.columns.has(`${deletion.table}.${deletion.column}`)
+  );
+}
+
+/**
+ * `deletions` in their order, but with each translations table's drop listed
+ * right after the drop of the table it translates (`translates`), when the
+ * same run (and the same file, where `sourceOf` names one) drops both: a file
+ * drops every translations table first, and the person asked reads each
+ * table's rows and its translations together.
+ */
+function translationsBesideTheirTables(
+  deletions: readonly Deletion[],
+  sourceOf: ((deletion: Deletion) => string | undefined) | undefined
+): Deletion[] {
+  const place = (deletion: Deletion, table: string) =>
+    `${sourceOf?.(deletion) ?? ""}\u0000${table}`;
+  const dropped = new Set(
+    deletions.flatMap(d => (d.kind === "table" ? [place(d, d.table)] : []))
+  );
+  // Where each translations table goes: after its table, where this list drops that too.
+  const ownerOf = (d: Deletion): string | undefined =>
+    d.kind === "table" && d.translates !== undefined
+      ? [place(d, d.translates)].find(owner => dropped.has(owner))
+      : undefined;
+  const placed = deletions.filter(d => ownerOf(d) === undefined);
+  return placed.flatMap(d =>
+    d.kind === "table"
+      ? [d, ...deletions.filter(m => ownerOf(m) === place(d, d.table))]
+      : [d]
   );
 }
 
@@ -362,6 +435,34 @@ function describeWhat(deletion: Deletion): string {
   }
 }
 
+/** The consent in both spellings, as a command's refusal ends on it. */
+const commandForms = (cli: string, env: string): string => `${cli} (or ${env})`;
+
+/**
+ * {@link commandForms} as it stands in a refusal's message. The two spellings
+ * carry one value, so the variable's is matched as the flag's again: a target
+ * may hold any character a table or column name can, a space or a closing
+ * parenthesis among them, and is never cut short at one. The form without
+ * targets has no value on the flag and `1` on the variable.
+ */
+const COMMAND_FORMS = new RegExp(
+  `${ACCEPT_DATA_LOSS_FLAG}(?:=(.+?))? \\(or ${ACCEPT_DATA_LOSS_ENV}=(?:\\1|1)\\)`
+);
+
+/**
+ * A refusal's message (`judgeDataLoss`) for a production start that ran the
+ * migrations itself. A start takes no flag, so the consent the message ends
+ * on reads as a start is given it, the variable, then as `nextly migrate`
+ * takes it. A message naming no such consent is returned as it is.
+ */
+export function refusalForStart(message: string): string {
+  return message.replace(COMMAND_FORMS, (_forms, value?: string) =>
+    value === undefined
+      ? `start with ${ACCEPT_DATA_LOSS_ENV}=1, or run "nextly migrate ${ACCEPT_DATA_LOSS_FLAG}"`
+      : `start with ${ACCEPT_DATA_LOSS_ENV}=${value}, or run "nextly migrate ${ACCEPT_DATA_LOSS_FLAG}=${value}"`
+  );
+}
+
 /**
  * The consent that covers `deletions` as well as what the given consent
  * already named: a list when every deletion is named, the form without
@@ -384,7 +485,7 @@ function consentHint(
       value === null
         ? ACCEPT_DATA_LOSS_FLAG
         : `${ACCEPT_DATA_LOSS_FLAG}=${value}`;
-    return `${cli} (or ${env})`;
+    return commandForms(cli, env);
   };
   if (blanket) return forms(null);
   const named = consent.given?.targets;
@@ -458,8 +559,13 @@ export async function judgeDataLoss(args: {
   approved?: readonly Deletion[];
   sourceOf?: (deletion: Deletion) => string | undefined;
 }): Promise<DataLossVerdict> {
-  const { deletions, consent } = args;
-  if (deletions.length === 0) return { kind: "proceed" };
+  const { consent } = args;
+  if (args.deletions.length === 0) return { kind: "proceed" };
+  // Listed, and refused, with each translations table beside the table it translates.
+  const deletions = translationsBesideTheirTables(
+    args.deletions,
+    args.sourceOf
+  );
   const approved = new Set((args.approved ?? []).map(deletionKey));
   const uncovered = deletions.filter(
     d => !consentCovers(consent, d) && !approved.has(deletionKey(d))
@@ -493,7 +599,7 @@ export async function judgeDataLoss(args: {
   const targets = consent.given?.targets;
   if (targets !== undefined && targets !== "all") {
     const unnamedNote = uncovered.some(onlyBlanketCovers)
-      ? " A deletion its command cannot name, or one on a schema-qualified table, is covered only by the consent without targets."
+      ? " A deletion its command cannot name, one on a schema-qualified table, or one whose table or column name holds a space, a comma or a dot, or whose table is named 1, true, 0 or false, is covered only by the consent without targets."
       : "";
     return {
       kind: "refused",

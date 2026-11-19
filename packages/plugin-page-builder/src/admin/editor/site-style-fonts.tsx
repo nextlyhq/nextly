@@ -8,14 +8,15 @@
  */
 import { validateFontFace, type FontFaceDef } from "@nextlyhq/blocks-engine";
 import {
-  FontsPanel,
+  FontsScreen,
   withoutFamily,
   type FontCatalogue,
   type FontFaceUpload,
-  type FontsPanelProps,
+  type FontsScreenProps,
   type SiteFamily,
 } from "@nextlyhq/builder/shell";
 import {
+  useCurrentUserId,
   usePluginClientConfig,
   useUploadMedia,
   WEB_FONT_FORMATS,
@@ -28,6 +29,8 @@ import { readSiteStyleRecord } from "../../site-style-record";
 import { useFontCatalogueClient, useSaveSiteStyle } from "../site-style-client";
 
 import { toastSaveConflicts } from "./conflict-toast";
+import { fontPreviewsStoreFor } from "./editor-preference-stores";
+import { useVariablesStudio } from "./site-style-tokens-studio";
 import { PLUGIN_SOURCE } from "./stored-document";
 
 /**
@@ -331,6 +334,9 @@ export function useFontCatalogue(): FontCatalogue | undefined {
   // exist only once a read has answered, so it is set before it is asked.
   const previewBase = useRef("");
   const off = config?.fontCatalogue === false;
+  // The author's choice to show previews, kept under their own key.
+  const userId = useCurrentUserId();
+  const previewConsent = useMemo(() => fontPreviewsStoreFor(userId), [userId]);
   return useMemo(
     () =>
       off
@@ -350,29 +356,42 @@ export function useFontCatalogue(): FontCatalogue | undefined {
                 style,
               }),
             add: client.add,
+            ...(previewConsent === undefined ? {} : { previewConsent }),
           },
-    [off, client]
+    [off, client, previewConsent]
   );
 }
 
 /**
- * The Fonts tab, with the writers that add and remove a face and the
- * catalogue.
+ * The one Fonts screen, with the writers that add and remove a face and the
+ * catalogue: what the builder opens over its Design panel and the admin's
+ * Fonts page draws, so every way in writes through the same site-style client.
  *
- * Its own component rather than more hooks in the editor: a panel that needs
+ * Its own component rather than more hooks in the editor: a screen that needs
  * writers is the thing that should own them. Shown read-only to a role
  * without `update-site-style`, which the server would refuse anyway.
  */
-export function FontsPanelWithUpload({
+export function SiteFontsScreen({
   faces,
   codeFaces,
   tokens,
   absence,
-  onOpenTokens,
   storedFaces,
   storedPending,
   unreadableFonts,
-}: FontsPanelProps & {
+  // Where the screen sends the author and how it closes, passed through.
+  ...ways
+}: Pick<
+  FontsScreenProps,
+  | "faces"
+  | "codeFaces"
+  | "tokens"
+  | "absence"
+  | "onOpenTokens"
+  | "onOpenRole"
+  | "onClose"
+  | "labelledBy"
+> & {
   storedFaces: readonly FontFaceDef[] | undefined;
   storedPending: boolean;
   unreadableFonts: readonly string[];
@@ -380,8 +399,9 @@ export function FontsPanelWithUpload({
   const mayChange = useCan("update-site-style");
   const writer = useFontFaceWriter(storedFaces, storedPending, unreadableFonts);
   const catalogue = useFontCatalogue();
+  const studio = useVariablesStudio();
   return (
-    <FontsPanel
+    <FontsScreen
       absence={absence}
       acceptFiles={FONT_FILE_ACCEPT}
       faces={faces}
@@ -390,10 +410,37 @@ export function FontsPanelWithUpload({
       onAddFace={writer.add}
       onRemoveFamily={writer.remove}
       catalogue={catalogue}
-      onOpenTokens={onOpenTokens}
-      tokens={tokens}
+      tokens={studio?.tokens ?? tokens}
+      {...studioScreenProps(studio)}
+      {...ways}
     />
   );
+}
+
+/**
+ * What the screen takes from the Variables studio it is mounted in, as the
+ * Design panel and the admin's Fonts page mount it: the variables' usage,
+ * so a font says how many places use it, and the studio's writer, so a
+ * role set here is one variable edit the studio saves (and, in the builder,
+ * undoes). Nothing outside a studio, and no writer for a read-only one.
+ */
+function studioScreenProps(
+  studio: ReturnType<typeof useVariablesStudio>
+): Pick<
+  FontsScreenProps,
+  "usage" | "onTokensChange" | "suppliedText" | "classes" | "issue"
+> {
+  if (studio === null) return {};
+  const siteText = studio.supplied?.siteText;
+  return {
+    ...(studio.usage === undefined ? {} : { usage: studio.usage }),
+    ...(studio.readOnly === true ? {} : { onTokensChange: studio.onChange }),
+    ...(siteText === undefined ? {} : { suppliedText: siteText }),
+    // The text styles rows follow, so a font one supplies is guarded, and a
+    // failed save, which this screen says as the Variables tab does.
+    ...(studio.classes === undefined ? {} : { classes: studio.classes }),
+    ...(studio.issue === undefined ? {} : { issue: studio.issue }),
+  };
 }
 
 /**

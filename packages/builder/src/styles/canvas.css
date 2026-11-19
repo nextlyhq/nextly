@@ -221,7 +221,16 @@
  * The drop container is DASHED and OUTSIDE, where the selection is solid and
  * inside, so the two are told apart by shape as well as by moment.
  */
-.nx-canvas-marks {
+/*
+ * The canvas's overlay layers, which share one place: over the canvas root's
+ * content box, taking no presses themselves. The marks, an Image's empty
+ * state (`image-states.css`) and what is said over a Form (`form-states.css`)
+ * each opt back in only where they draw.
+ */
+.nx-canvas-marks,
+.nx-image-states,
+.nx-embed-states,
+.nx-form-states {
   position: absolute;
   inset: 0;
   z-index: 1;
@@ -807,6 +816,21 @@
 .nx-drop-indicator[data-axis="x"]::before {
   top: -4px;
   left: -3px;
+}
+
+/*
+ * Forced colours: the line and its dot in the system's Highlight, with a
+ * ring of the system's Canvas so they show on any ground. Their fill in the
+ * selection token is a background the system repaints as Canvas, which hid
+ * the line wherever forced colours were on.
+ */
+@media (forced-colors: active) {
+  .nx-drop-indicator,
+  .nx-drop-indicator::before {
+    forced-color-adjust: none;
+    background: Highlight;
+    box-shadow: 0 0 0 1px Canvas;
+  }
 }
 
 /*

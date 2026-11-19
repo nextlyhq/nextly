@@ -51,6 +51,7 @@ import type {
   UndoEmailTemplateUpdateArgs,
 } from "../types/email";
 import type {
+  ActivityEntry,
   ActivityPage,
   CancelQueuedEmailArgs,
   CreateEmailProviderArgs,
@@ -60,10 +61,13 @@ import type {
   DeleteEmailTemplateArgs,
   DeleteUserFieldArgs,
   DeliveryActivity,
+  DeliveryDetail,
   DirectAPIConfig,
   EmailLastSentArgs,
   EmailOverdueArgs,
+  FindEmailActivityArgs,
   FindEmailDeliveriesArgs,
+  FindEmailDeliveryByIDArgs,
   FindEmailProviderByIDArgs,
   FindEmailProvidersArgs,
   FindEmailTemplateByIDArgs,
@@ -78,6 +82,7 @@ import type {
   ReorderUserFieldsArgs,
   QueuedEmail,
   QueuedEmailActivity,
+  QueuedEmailDetail,
   QueuedEmailOverdue,
   QueueEmailArgs,
   QueueTemplateEmailArgs,
@@ -268,6 +273,11 @@ export function createEmailNamespace(ctx: NextlyContext): EmailNamespace {
 export interface EmailDeliveriesNamespace {
   /** Delivery records, newest first, by outcome, template, provider and time. */
   find(args?: FindEmailDeliveriesArgs): Promise<ActivityPage<DeliveryActivity>>;
+  /**
+   * Queued emails and the deliveries of sends not queued, merged newest
+   * first under one cursor, by status, template, provider and time.
+   */
+  activity(args?: FindEmailActivityArgs): Promise<ActivityPage<ActivityEntry>>;
   /** Queued emails, newest first, by state, template and time. */
   findQueued(
     args?: FindQueuedEmailsArgs
@@ -276,6 +286,12 @@ export interface EmailDeliveriesNamespace {
   lastSent(args?: EmailLastSentArgs): Promise<TemplatesLastSent>;
   /** Whether queued email is overdue because the jobs trigger is not running. */
   overdue(args?: EmailOverdueArgs): Promise<QueuedEmailOverdue>;
+  /** One delivery's detail and timeline; null for an id that names none. */
+  findByID(args: FindEmailDeliveryByIDArgs): Promise<DeliveryDetail | null>;
+  /** One queued email's detail and attempts; null for an id that names none. */
+  findQueuedByID(
+    args: FindEmailDeliveryByIDArgs
+  ): Promise<QueuedEmailDetail | null>;
 }
 
 /**
@@ -297,6 +313,10 @@ export function createEmailDeliveriesNamespace(
       await checked(args);
       return ctx.emailDeliveryActivity.listDeliveries(args);
     },
+    async activity(args = {}) {
+      await checked(args);
+      return ctx.emailDeliveryActivity.listActivity(args);
+    },
     async findQueued(args = {}) {
       await checked(args);
       return ctx.emailDeliveryActivity.listQueuedEmails(args);
@@ -308,6 +328,14 @@ export function createEmailDeliveriesNamespace(
     async overdue(args = {}) {
       await checked(args);
       return ctx.emailDeliveryActivity.overdue();
+    },
+    async findByID(args) {
+      await checked(args);
+      return ctx.emailDeliveryActivity.findDelivery(args.id);
+    },
+    async findQueuedByID(args) {
+      await checked(args);
+      return ctx.emailDeliveryActivity.findQueuedEmail(args.id);
     },
   };
 }

@@ -21,7 +21,10 @@ vi.mock("@nextlyhq/plugin-sdk/client", () => ({
     permission === "update-site-style" ? can.update : false,
 }));
 
-vi.mock("../site-style-client", () => ({
+vi.mock("../site-style-client", async () => ({
+  // Outside an editor: no history, and nothing drawn over the read.
+  SiteStyleHistoryContext: (await import("react")).createContext(null),
+  SiteStylePreviewContext: (await import("react")).createContext(new Map()),
   useSaveSiteStyle: () => ({
     save: vi.fn(() => Promise.resolve({ saved: true, issues: [] })),
   }),
@@ -36,6 +39,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async importOriginal => ({
   ...(await importOriginal<typeof import("@nextlyhq/plugin-sdk/admin")>()),
   useUploadMedia: () => ({ mutateAsync: vi.fn(), isPending: false }),
   usePluginClientConfig: () => undefined,
+  // The author the catalogue keeps the choice to show previews for.
+  useCurrentUserId: () => "u1",
 }));
 
 import type { SiteTokenSet, TokenMode } from "@nextlyhq/blocks-engine";
@@ -52,7 +57,7 @@ import {
   useCanvasPreviewMode,
 } from "./canvas-preview-mode";
 import { DesignPanel } from "./design-panel";
-import { FontsPanelWithUpload } from "./site-style-fonts";
+import { SiteFontsScreen } from "./site-style-fonts";
 import { TokensStudio, VariablesTab } from "./site-style-studios";
 
 afterEach(() => {
@@ -289,6 +294,21 @@ function canvasElement(): HTMLIFrameElement {
   return frame;
 }
 
+/**
+ * An element's accessible name, as a screen reader hears it: read through the
+ * role query, which computes the name the same way for every button it finds.
+ */
+function nameOf(element: Element | null | undefined): string | undefined {
+  let heard: string | undefined;
+  screen.queryAllByRole("button", {
+    name: (name, each) => {
+      if (each === element) heard = name;
+      return false;
+    },
+  });
+  return heard;
+}
+
 /** The gap's row, which shows the value of the mode the panel shows. */
 const gapRow = (): Promise<HTMLElement> =>
   screen.findByRole("button", { name: /^Gap, / });
@@ -297,14 +317,14 @@ describe("the canvas previewed in the mode the top bar's switch picks", () => {
   it("draws the canvas and the swatches light first, and both dark once the switch is pressed", async () => {
     can.update = true;
     render(<PreviewedEditor />);
-    expect((await gapRow()).getAttribute("aria-label")).toMatch(/^Gap, 8px/);
+    expect(nameOf(await gapRow())).toMatch(/^Gap, 8px/);
     expect(canvasElement().style.colorScheme).toBe("light");
     expect(darkSwitch()?.getAttribute("aria-pressed")).toBe("false");
 
     fireEvent.click(darkSwitch() as HTMLElement);
 
     expect(canvasElement().style.colorScheme).toBe("dark");
-    expect((await gapRow()).getAttribute("aria-label")).toMatch(/^Gap, 12px/);
+    expect(nameOf(await gapRow())).toMatch(/^Gap, 12px/);
     expect(darkSwitch()?.getAttribute("aria-pressed")).toBe("true");
     // No tag over the canvas and no switch in the panel: the top bar says it.
     expect(document.querySelector(".nx-canvas-tags")).toBeNull();
@@ -312,7 +332,7 @@ describe("the canvas previewed in the mode the top bar's switch picks", () => {
 
     fireEvent.click(darkSwitch() as HTMLElement);
     expect(canvasElement().style.colorScheme).toBe("light");
-    expect((await gapRow()).getAttribute("aria-label")).toMatch(/^Gap, 8px/);
+    expect(nameOf(await gapRow())).toMatch(/^Gap, 8px/);
   });
 
   it("hides the switch and returns the canvas and the swatches to light when the last dark value goes while previewing dark", async () => {
@@ -351,7 +371,7 @@ describe("the canvas previewed in the mode the top bar's switch picks", () => {
 
     expect(darkSwitch()).toBeNull();
     expect(canvasElement().style.colorScheme).toBe("light");
-    expect((await gapRow()).getAttribute("aria-label")).toMatch(/^Gap, 8px/);
+    expect(nameOf(await gapRow())).toMatch(/^Gap, 8px/);
   });
 
   it("keeps the variant's tag over the canvas alone, whichever mode is previewed", async () => {
@@ -372,7 +392,7 @@ describe("the canvas previewed in the mode the top bar's switch picks", () => {
 describe("the Fonts tab", () => {
   function renderFonts(): void {
     render(
-      <FontsPanelWithUpload
+      <SiteFontsScreen
         faces={[]}
         tokens={{ tokens: [] }}
         storedFaces={[]}

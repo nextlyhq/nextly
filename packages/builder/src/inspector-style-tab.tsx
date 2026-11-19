@@ -36,6 +36,7 @@ import {
   type BlockSample,
 } from "./look-tiles-view";
 import { FirstSectionAbove } from "./panel-folds-context";
+import { RenderedLengths, type RenderedLengthsValue } from "./rendered-lengths";
 import { deviceOptions, tierIcon } from "./shell/breakpoint-switcher";
 import { StyleStateField } from "./state-switcher";
 import {
@@ -44,6 +45,9 @@ import {
   type StyleInspectorPanelProps,
 } from "./style-inspector-panel";
 import { StyleTargetBar, useStyleTarget } from "./style-target";
+
+/** No sizes read: the block isn't drawn, or not yet. */
+const NO_LENGTHS: RenderedLengthsValue = {};
 
 /**
  * Where an edit lands, as the bar's device chip says it: the device the top
@@ -136,7 +140,10 @@ export function StyleTab({
   styleNode: ReturnType<typeof selectedNode>;
   renderedTag: StyleInspectorPanelProps["renderedTag"];
   /** What the canvas draws of the block: its picture, where it places it, and its quotation. */
-  rendered: Pick<CanvasReading, "picture" | "picturePosition" | "words">;
+  rendered: Pick<
+    CanvasReading,
+    "picture" | "picturePosition" | "words" | "lengths"
+  >;
   sideOrientation: StyleInspectorPanelProps["sideOrientation"];
 }): React.JSX.Element {
   const state = editedStyleState(styleState);
@@ -199,25 +206,31 @@ export function StyleTab({
               position: rendered.picturePosition,
             }}
           >
-            <StyleInspectorPanel
-              editor={editor}
-              tokenMode={tokenMode}
-              // The block card above says why a held block can't be changed.
-              showReadOnlyReason={false}
-              renderedTag={renderedTag}
-              sideOrientation={sideOrientation}
-              policy={policy}
-              state={state}
-              breakpoint={breakpoint}
-              cascade={cascade}
-              breakpoints={breakpoints}
-              previewContainer={previewContainer}
-              liveBreakpoints={liveBreakpoints}
-              onJumpToBreakpoint={onJumpToBreakpoint}
-              tokens={tokens}
-              target={target}
-              fonts={fonts}
-            />
+            {/* The sizes the block is drawn at, for a size field a variable
+                reaches (Site text's): shown as that size, never as its CSS. */}
+            <RenderedLengths.Provider value={rendered.lengths ?? NO_LENGTHS}>
+              <StyleInspectorPanel
+                editor={editor}
+                tokenMode={tokenMode}
+                // The block card above says why a held block can't be changed.
+                showReadOnlyReason={false}
+                renderedTag={renderedTag}
+                sideOrientation={sideOrientation}
+                policy={policy}
+                state={state}
+                breakpoint={breakpoint}
+                cascade={cascade}
+                breakpoints={breakpoints}
+                previewContainer={previewContainer}
+                liveBreakpoints={liveBreakpoints}
+                onJumpToBreakpoint={onJumpToBreakpoint}
+                tokens={tokens}
+                target={target}
+                fonts={fonts}
+                // The Text section's "Text style" picker lists from it.
+                classLibrary={shared.classLibrary}
+              />
+            </RenderedLengths.Provider>
           </FocalFrame.Provider>
         </StateTinted>
       </FirstSectionAbove.Provider>

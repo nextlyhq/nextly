@@ -108,6 +108,13 @@ export {
 export { useReportUnsavedWork } from "../components/features/entries/EntryForm/UnsavedWorkContext";
 
 /**
+ * Says the next leave is deliberate, so the unsaved-changes guard lets it go
+ * without asking: for a surface that has just asked the author itself.
+ * Exported for the plugin surface.
+ */
+export { useLeaveWithoutWarning } from "../components/features/entries/EntryForm/UnsavedChangesGuard";
+
+/**
  * The document's actions, for a surface drawn inside its editor: the actions
  * the header draws and running one with a true answer, the one save state,
  * committing work a surface holds before a save, and counting a write the
@@ -196,6 +203,25 @@ export {
   type UseDocumentCheckpointResult,
   type AutosaveStatus,
 } from "../hooks/useDocumentCheckpoint";
+
+/**
+ * A session on a second document, opened from inside the view of another:
+ * its latest version, its lock, a draft save, a publish, a recovery point and
+ * letting it go, each the admin's own. Exported for the plugin surface: a
+ * view that edits another document in place (a site header from a page) has
+ * no other way to lock, save or publish it.
+ *
+ * @experimental Settles with editing a second document in place.
+ */
+export {
+  useDocumentSession,
+  type DocumentSession,
+  type DocumentSessionLock,
+  type DocumentSessionOpen,
+  type DocumentSessionOutcome,
+  type DocumentSessionRefusal,
+  type DocumentSessionTarget,
+} from "../hooks/useDocumentSession";
 
 export type { DocumentLockGates } from "../components/features/entries/EntryForm/document-lock-affordances";
 

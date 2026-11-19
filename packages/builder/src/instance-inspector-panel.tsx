@@ -36,7 +36,9 @@ import {
   neededFor,
   oneParagraphLines,
   richTextToPlainText,
+  settingBindingKey,
   type BlockDocument,
+  type BuilderOp,
   type ComponentDocument,
   type OverrideValue,
 } from "@nextlyhq/blocks-engine";
@@ -60,10 +62,14 @@ import {
   PenLine,
   RotateCcw,
   SquarePen,
+  Unlink,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import * as React from "react";
 
+import { BindableField } from "./binding-controls";
+import { unbindOp } from "./binding-ops";
+import type { UnbindPlanAnswer } from "./binding-services";
 import { BlockCard, type CardVerbs } from "./block-card";
 import { CanvasPassageContext } from "./canvas/canvas-passage";
 import { markExposedParts } from "./canvas/exposed-outline";
@@ -72,6 +78,7 @@ import {
   ContentServicesContext,
   MediaChoice,
   RichTextField,
+  type ContentServices,
   type PickedMedia,
 } from "./content-controls";
 import type { EditorState } from "./editor-state";
@@ -80,10 +87,12 @@ import { lockOp, lockStatusOf, lockViewOf, renameOp } from "./inspector";
 import {
   resetOverrideOp,
   setOverrideOp,
+  withPlacementLists,
   type ExposedRow,
   type InstanceInspection,
   type OrphanedOverride,
 } from "./instance-inspector";
+import { MakeSettingSection } from "./make-component-setting-section";
 import { refusalAnnouncement } from "./move-refusal";
 import { useStoredDraft } from "./stored-draft";
 import { VariantPicker } from "./variant-picker";
@@ -217,6 +226,8 @@ export function InstanceInspectorPanel({
     [editor, nodeNow]
   );
 
+  const bind = useSettingBinding(editor, inspection);
+
   const headingId = React.useId();
   // The selected placement's editable parts, outlined on the canvas while it
   // is selected: after every render, since the canvas redraws with the
@@ -322,12 +333,26 @@ export function InstanceInspectorPanel({
                     row={row}
                     onSet={set}
                     onReset={reset}
+                    bind={bind}
                   />
                 ))}
               </div>
             </HeldByLock>
           </section>
         )}
+
+        <MakeSettingSection
+          nodeId={inspection.nodeId}
+          componentId={inspection.componentId}
+          label={inspection.label}
+          usedOn={inspection.usedOn}
+          definition={definition}
+          definitionFound={inspection.definitionFound}
+          locked={locked}
+          document={editor.document}
+          services={bind.services}
+          onApply={bind.onApply}
+        />
 
         {inspection.orphaned.length > 0 ? (
           // Held by the same Layers lock as the rows: discarding a stored value
@@ -362,10 +387,13 @@ function ExposedField({
   row,
   onSet,
   onReset,
+  bind,
 }: {
   row: ExposedRow;
   onSet: SetExposed;
   onReset: (id: string) => void;
+  /** What binding a setting to data needs; absent, no setting is bound. */
+  bind?: SettingBinding | undefined;
 }): React.JSX.Element {
   // Unique per MOUNTED ROW, not per property: a page can hold two blocks
   // fields, each with its own editor, and a fixed id per property made both
@@ -416,7 +444,9 @@ function ExposedField({
           lets the page drop, so the way back is never closed.
         */}
         <HeldByLock reasonId={row.heldBy === undefined ? undefined : reasonId}>
-          <ExposedControl id={id} row={row} onSet={onSet} />
+          <BindableSetting row={row} bind={bind}>
+            <ExposedControl id={id} row={row} onSet={onSet} />
+          </BindableSetting>
         </HeldByLock>
         {/*
           Why the row is held, UNDER the field as its helper text: the field
@@ -429,6 +459,7 @@ function ExposedField({
             <span>{refusalAnnouncement(row.heldBy)}</span>
           </p>
         )}
+        <HeldBindingRemoval row={row} bind={bind} />
       </div>
       {/* Kept when empty, so every control ends at one edge, set or not. */}
       <span className="nx-inspector__exposed-reset-slot">
@@ -447,6 +478,148 @@ function ExposedField({
         ) : null}
       </span>
     </div>
+  );
+}
+
+/**
+ * The way back from a binding the page gave a setting its component has since
+ * locked: the field and its chip are held, but removing the binding gives
+ * the component's own value back, which the lock allows, so it is offered
+ * here, outside the held controls.
+ */
+function HeldBindingRemoval({
+  row,
+  bind,
+}: {
+  row: ExposedRow;
+  bind: SettingBinding | undefined;
+}): React.JSX.Element | null {
+  if (bind === undefined || row.heldBy === undefined) return null;
+  if (row.binding === undefined) return null;
+  const remove = (): void => {
+    const op = unbindOp(bind.document, bind.nodeId, settingBindingKey(row.id), {
+      set: {},
+    });
+    if (op !== null) bind.onApply(op);
+  };
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="sm"
+      aria-label={`Unbind ${row.label}`}
+      disabled={bind.locked}
+      onClick={remove}
+    >
+      <Unlink size={14} aria-hidden="true" />
+      Unbind
+    </Button>
+  );
+}
+
+/** What binding one of the placement's settings to data needs. */
+interface SettingBinding {
+  readonly nodeId: string;
+  /** The component's name, as the panel titles it. */
+  readonly label: string;
+  readonly document: BlockDocument;
+  readonly services: ContentServices | undefined;
+  /** Whether the placement is locked, which holds every bind. */
+  readonly locked: boolean;
+  readonly onApply: (op: BuilderOp) => boolean;
+}
+
+/**
+ * The binding controls' services for a setting: the host's, with an unbind
+ * that keeps the value the placement stores for the setting. A setting's
+ * value is the placement's own, stored as it was before the bind, so the
+ * unbind writes nothing in its place.
+ */
+function settingServices(
+  services: ContentServices | undefined
+): ContentServices | undefined {
+  if (services === undefined) return undefined;
+  return {
+    ...services,
+    planUnbind: (): Promise<UnbindPlanAnswer> =>
+      Promise.resolve({
+        kept: { set: {} },
+        answer: { kept: "own", reason: "The setting keeps its own value." },
+      }),
+  };
+}
+
+/** What the setting rows of the selected placement bind with. */
+function useSettingBinding(
+  editor: EditorState,
+  inspection: InstanceInspection
+): SettingBinding {
+  const contentServices = React.useContext(ContentServicesContext);
+  const services = React.useMemo(
+    () => settingServices(contentServices),
+    [contentServices]
+  );
+  // Each list item binding a setting row writes names its list.
+  const onApply = React.useCallback(
+    (op: BuilderOp) =>
+      editor.apply(withPlacementLists(editor.document, op)) !== null,
+    [editor]
+  );
+  return {
+    nodeId: inspection.nodeId,
+    label: inspection.label,
+    document: editor.document,
+    services,
+    locked: inspection.identity.locked,
+    onApply,
+  };
+}
+
+/**
+ * A setting's control inside the binding controls, where it may be bound: a
+ * bind button beside it, and once bound, the field in its place. Written on
+ * the placement under the setting's key (`overrides.<id>`), which composing
+ * the component writes onto the prop the setting fills.
+ */
+function BindableSetting({
+  row,
+  bind,
+  children,
+}: {
+  row: ExposedRow;
+  bind: SettingBinding | undefined;
+  children: React.ReactNode;
+}): React.JSX.Element {
+  // A shadowed row is not what the page shows, so a binding of it would be
+  // a value nobody sees.
+  if (
+    bind === undefined ||
+    row.bindable === undefined ||
+    row.shadowedBy !== undefined
+  ) {
+    return <>{children}</>;
+  }
+  return (
+    <BindableField
+      nodeId={bind.nodeId}
+      prop={{
+        name: settingBindingKey(row.id),
+        schema: row.bindable,
+        value: row.value,
+        supported: true,
+        options: [],
+        offered: true,
+        readOnly: row.heldBy !== undefined,
+      }}
+      blockLabel={bind.label}
+      binding={row.binding}
+      document={bind.document}
+      services={bind.services}
+      disabled={bind.locked || row.heldBy !== undefined}
+      onApply={bind.onApply}
+    >
+      {children}
+    </BindableField>
   );
 }
 

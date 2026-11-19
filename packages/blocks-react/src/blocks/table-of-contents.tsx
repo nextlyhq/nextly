@@ -1,18 +1,20 @@
 /**
- * `core/table-of-contents` — the headings of a passage, as links to them.
+ * `core/table-of-contents` — the page's own headings, as links to them.
  *
- * It lists a rich-text value's headings, nested as the passage nests them, each
- * linking to the anchor `core/rich-text` gives that heading. On a collection
- * template its `content` is bound to the same field as the article's body, so a
- * post's contents sit beside the post and follow it as it is edited.
+ * It lists the headings the page draws, in page order, each linking to the
+ * anchor that heading is drawn with: Heading blocks, the headings inside Rich
+ * text, and on a collection template the entry's own content. There is
+ * nothing to fill in: a heading added, renamed or moved changes the list.
  *
- * ## One reading of the passage
+ * ## One reading of the page
  *
- * The headings, their words and their anchors come from
- * {@link passageHeadings}: the walk `RichText` draws a passage with, through
- * the same partition that moves a heading's block content out of it. So a
- * contents block lists exactly the headings `core/rich-text` draws, in the
- * words they draw, and links to the ids they carry.
+ * The headings, their words and their anchors come from the page outline
+ * (`ctx.outline`, built once per page after bindings), the same reading the
+ * headings take their ids from, so a link and the heading it names cannot
+ * disagree. The outline says which headings a table of contents lists
+ * (`listed`): the page's own, not the header's or footer's, not inside a
+ * Collection list or an accordion, not left out by their author, and not
+ * hidden on every device.
  *
  * ## Nested, not indented
  *
@@ -22,12 +24,22 @@
  * only. A heading deeper than the one before it by more than a level nests one
  * level, so no list item is ever drawn empty to make room.
  *
+ * ## Numbers, bullets and the section being read, with no script
+ *
+ * Numbers are CSS counters on the nested lists (1, 2, 2.1), drawn before each
+ * entry with an empty alternative text, so a screen reader, which already
+ * announces each item's place, never reads them twice. Where the browser
+ * knows scroll-linked targets, the entry of the section being read is
+ * highlighted (`scroll-target-group` on the list, `:target-current` on its
+ * links); elsewhere the list works the same, unhighlighted. Folding is the
+ * browser's own `<details>`.
+ *
  * ## When there is nothing to list
  *
  * A visitor gets nothing at all: an empty contents box is noise above an
  * article. An author, on the canvas or a preview, sees the block's frame with a
- * line saying why it is empty, so a block bound to a post with no headings yet
- * can still be found, selected and styled.
+ * line saying what to add, so the block can still be found, selected and
+ * styled.
  *
  * @module blocks/table-of-contents
  */
@@ -36,16 +48,13 @@ import {
   defineBlock,
   DISCLOSURE_ICON_CLASS,
   DISCLOSURE_TITLE_CLASS,
-  RICH_TEXT_PROP_TYPE,
-  type RichTextValue,
 } from "@nextlyhq/blocks-engine";
 import type { ReactElement, ReactNode } from "react";
 
 import type { BlockRenderArgs, PageContext } from "../context";
-import { passageHeadings } from "../rich-text";
+import type { OutlineHeading } from "../outline";
 
 import { CONTENT } from "./categories";
-import type { HeadingAnchor } from "./heading-anchors";
 import { flag, oneOf, text } from "./props";
 
 /** This block's registered name. */
@@ -55,6 +64,11 @@ const TABLE_OF_CONTENTS_BLOCK = "core/table-of-contents";
 export const TABLE_OF_CONTENTS_DEPTHS = ["h2", "h2-h3", "h2-h4"] as const;
 
 export type TableOfContentsDepth = (typeof TABLE_OF_CONTENTS_DEPTHS)[number];
+
+/** How each entry is marked: numbered (1, 2, 2.1) or with a bullet. */
+const TABLE_OF_CONTENTS_MARKERS = ["numbered", "bullets"] as const;
+
+type TableOfContentsMarker = (typeof TABLE_OF_CONTENTS_MARKERS)[number];
 
 /** The deepest heading level each depth lists. */
 const DEEPEST: Readonly<Record<TableOfContentsDepth, number>> = {
@@ -68,42 +82,89 @@ const DEFAULT_TITLE = "On this page";
 
 /** What an author reads on a block with nothing to list. */
 const NOTHING_TO_LIST =
-  "No headings to list yet. Bind Content to the rich text this lists; its headings appear here.";
+  "Add H2 headings to this page and they'll be listed here.";
+
+/** The mark on the top list naming its markers, which the rules below read. */
+const MARKER_ATTRIBUTE = "data-nx-toc";
+
+/** The mark on the top list asking for the section being read to show. */
+const HIGHLIGHT_ATTRIBUTE = "data-nx-toc-highlight";
+
+/**
+ * The mark on the folding title's `<summary>`: the one thing a visitor taps
+ * to fold the contents, so a target at least 44px tall, as each link is.
+ */
+const TOGGLE_ATTRIBUTE = "data-nx-toc-toggle";
+
+/**
+ * The markers and the highlight, which no stored style can say: a counter
+ * per list, joined down the nesting (`2.1`), or a bullet, each drawn before
+ * the entry's link with an empty alternative text (the second `content`;
+ * a browser without that syntax keeps the first, and its screen reader may
+ * read the number); and, where the browser knows scroll-linked targets, the
+ * link to the section being read set in a heavier weight. A browser that
+ * does not know `:target-current` drops that one rule and no other.
+ * Attribute selectors at a class's weight, so an author's own styles on the
+ * block's parts still win. Hoisted and deduped by React, one per page.
+ */
+const TABLE_OF_CONTENTS_CSS = [
+  `:is([${MARKER_ATTRIBUTE}],[${MARKER_ATTRIBUTE}] ol){counter-reset:nx-toc}`,
+  `[${MARKER_ATTRIBUTE}] li{counter-increment:nx-toc}`,
+  `[${MARKER_ATTRIBUTE}] li::before{margin-inline-end:0.5em;font-variant-numeric:tabular-nums}`,
+  `[${MARKER_ATTRIBUTE}="numbered"] li::before{content:counters(nx-toc,".");content:counters(nx-toc,".")/""}`,
+  `[${MARKER_ATTRIBUTE}="bullets"] li::before{content:"\\2022";content:"\\2022"/""}`,
+  `[${MARKER_ATTRIBUTE}="bullets"] li li::before{content:"\\25E6";content:"\\25E6"/""}`,
+  `[${HIGHLIGHT_ATTRIBUTE}]{scroll-target-group:auto}`,
+  `[${HIGHLIGHT_ATTRIBUTE}] a:target-current{font-weight:600}`,
+  // A floor, under `:where`, so an author's own minimum height on the title
+  // replaces it; a smaller `height` cannot take the target below 44px. Only
+  // the folding title takes it: a title that cannot fold is a label, not a
+  // target.
+  `:where([${TOGGLE_ATTRIBUTE}]){min-height:44px}`,
+].join("");
+
+/** The key the contents' rules are hoisted under. */
+const TABLE_OF_CONTENTS_STYLE_KEY = "nx-table-of-contents";
 
 export interface TableOfContentsProps {
-  /** The passage whose headings are listed, usually bound to the entry's body. */
-  content?: RichTextValue;
   /** The label above the list, and the name of the navigation landmark. */
   title?: string;
   /** Which heading levels are listed. */
   depth?: TableOfContentsDepth;
+  /**
+   * Numbers or bullets. Unset reads as bullets: a block from before this
+   * setting drew no numbers, and a new block stores `numbered`.
+   */
+  marker?: TableOfContentsMarker;
   /** Whether the list folds away under its title, starting open. */
   collapsible?: boolean;
+  /** Whether the entry of the section being read is highlighted. */
+  highlight?: boolean;
 }
 
 /** One listed heading and the headings listed inside it. */
 interface OutlineItem {
-  readonly anchor: HeadingAnchor;
+  readonly heading: OutlineHeading;
   readonly children: OutlineItem[];
 }
 
 /**
  * The listed headings as a tree. Each heading goes inside the nearest heading
- * before it of a higher level, so a level skipped in the passage (an h4 after
- * an h2) nests one level, not two.
+ * before it of a higher level, so a level skipped on the page (an h4 after an
+ * h2) nests one level, not two.
  */
-function outline(anchors: readonly HeadingAnchor[]): OutlineItem[] {
+function outlineTree(headings: readonly OutlineHeading[]): OutlineItem[] {
   const top: OutlineItem[] = [];
-  const open: { rank: number; children: OutlineItem[] }[] = [
-    { rank: 0, children: top },
+  const open: { level: number; children: OutlineItem[] }[] = [
+    { level: 0, children: top },
   ];
-  for (const anchor of anchors) {
-    while (open.length > 1 && open[open.length - 1].rank >= anchor.rank) {
+  for (const heading of headings) {
+    while (open.length > 1 && open[open.length - 1].level >= heading.level) {
       open.pop();
     }
-    const item: OutlineItem = { anchor, children: [] };
+    const item: OutlineItem = { heading, children: [] };
     open[open.length - 1].children.push(item);
-    open.push({ rank: anchor.rank, children: item.children });
+    open.push({ level: heading.level, children: item.children });
   }
   return top;
 }
@@ -111,28 +172,29 @@ function outline(anchors: readonly HeadingAnchor[]): OutlineItem[] {
 function OutlineList({
   items,
   partClass,
-  nested,
+  top,
 }: {
   items: readonly OutlineItem[];
   partClass: (name: string) => string;
-  nested: boolean;
+  /** The marks the top list carries; none on a nested list. */
+  top?: Readonly<Record<string, string>>;
 }): ReactElement {
   // `role="list"` restates what `<ol>` already is: Safari's screen reader
   // drops list semantics from a list whose markers a stylesheet removed, which
   // this block's own defaults do.
   return (
-    <ol role="list" className={partClass(nested ? "sublist" : "list")}>
+    <ol
+      role="list"
+      className={partClass(top === undefined ? "sublist" : "list")}
+      {...top}
+    >
       {items.map(item => (
-        <li key={item.anchor.id} className={partClass("item")}>
-          <a href={`#${item.anchor.id}`} className={partClass("link")}>
-            {item.anchor.text}
+        <li key={item.heading.anchor} className={partClass("item")}>
+          <a href={`#${item.heading.anchor}`} className={partClass("link")}>
+            {item.heading.text}
           </a>
           {item.children.length > 0 ? (
-            <OutlineList
-              items={item.children}
-              partClass={partClass}
-              nested={true}
-            />
+            <OutlineList items={item.children} partClass={partClass} />
           ) : null}
         </li>
       ))}
@@ -140,18 +202,28 @@ function OutlineList({
   );
 }
 
-export function renderTableOfContents({
+/** The headings this block lists from the page's outline, to its depth. */
+function listedHeadings(
+  ctx: PageContext,
+  depth: TableOfContentsDepth
+): OutlineHeading[] {
+  const deepest = DEEPEST[depth];
+  // Level 1 is the page's own title, never an entry in its contents.
+  return (ctx.outline?.headings ?? []).filter(
+    heading => heading.listed && heading.level >= 2 && heading.level <= deepest
+  );
+}
+
+function renderTableOfContents({
   props,
   ctx,
   className,
   partClass,
   markProp,
 }: BlockRenderArgs<TableOfContentsProps>): ReactElement | null {
-  const deepest =
-    DEEPEST[oneOf(props.depth, TABLE_OF_CONTENTS_DEPTHS, "h2-h3")];
-  // Level 1 is the page's own title, never an entry in its contents.
-  const listed = passageHeadings(props.content).filter(
-    anchor => anchor.rank >= 2 && anchor.rank <= deepest
+  const listed = listedHeadings(
+    ctx,
+    oneOf(props.depth, TABLE_OF_CONTENTS_DEPTHS, "h2-h3")
   );
   const authorLooking = ctx.diagnostics === true;
   if (listed.length === 0 && !authorLooking) return null;
@@ -159,13 +231,26 @@ export function renderTableOfContents({
   const ownTitle = text(props.title).trim();
   const title = ownTitle === "" ? DEFAULT_TITLE : ownTitle;
   const titleClass = partClass("title");
+  const marks: Record<string, string> = {
+    [MARKER_ATTRIBUTE]: oneOf(
+      props.marker,
+      TABLE_OF_CONTENTS_MARKERS,
+      "bullets"
+    ),
+    ...(flag(props.highlight, true) ? { [HIGHLIGHT_ATTRIBUTE]: "" } : {}),
+  };
   const body: ReactNode =
     listed.length > 0 ? (
-      <OutlineList
-        items={outline(listed)}
-        partClass={partClass}
-        nested={false}
-      />
+      <>
+        <style href={TABLE_OF_CONTENTS_STYLE_KEY} precedence="default">
+          {TABLE_OF_CONTENTS_CSS}
+        </style>
+        <OutlineList
+          items={outlineTree(listed)}
+          partClass={partClass}
+          top={marks}
+        />
+      </>
     ) : (
       <p className={partClass("note")}>{NOTHING_TO_LIST}</p>
     );
@@ -180,7 +265,7 @@ export function renderTableOfContents({
            * which Style › Icon paints and places; with no icon chosen it is
            * nothing, and the browser's marker shows.
            */}
-          <summary className={titleClass}>
+          <summary className={titleClass} {...{ [TOGGLE_ATTRIBUTE]: "" }}>
             <span className={DISCLOSURE_ICON_CLASS} aria-hidden="true" />
             <span className={DISCLOSURE_TITLE_CLASS} {...markProp?.("title")}>
               {title}
@@ -210,11 +295,12 @@ const NO_MARGIN = {
 } as const;
 
 /**
- * The parts' defaults: lists without markers or a browser's gutter, since the
- * nesting is what shows the structure; a nested list set in by one `em`; one
- * line's breathing room between entries; and a title in the weight of a
- * label; links underlined in the text's colour, with hover and keyboard
- * focus states; the note an author sees on an empty block, slanted and quieter.
+ * The parts' defaults: lists without the browser's markers or gutter (the
+ * block draws its own numbers or bullets), since the nesting is what shows
+ * the structure; a nested list set in by one `em`; a title in the weight of a
+ * label; links underlined in the text's colour, each a 44px target, with
+ * hover and keyboard focus states; the note an author sees on an empty block,
+ * slanted and quieter.
  * Everything else inherits from the block, so a template styles the contents
  * by styling the block.
  */
@@ -248,15 +334,24 @@ const TABLE_OF_CONTENTS_PARTS = {
   },
   item: {
     baseStyles: {
-      base: { base: { margin: { ...NO_MARGIN, blockStart: "0.5em" } } },
+      // No space between entries: each link is a target 44px tall.
+      base: { base: { margin: NO_MARGIN } },
     },
   },
   // Links that read as links on a site that styles none: a thin underline in
   // the text's own colour, thicker under the pointer, and a ring in that
   // colour for keyboard focus, which a reset stylesheet may have taken away.
+  // Each is 44px tall, a target a finger can hit, its words centred in it.
   link: {
     baseStyles: {
-      base: { base: { textDecoration: "underline 1px" } },
+      base: {
+        base: {
+          textDecoration: "underline 1px",
+          display: "inline-flex",
+          alignItems: "center",
+          minHeight: "2.75rem",
+        },
+      },
       hover: { base: { textDecoration: "underline 2px" } },
       focus: {
         base: {
@@ -282,29 +377,28 @@ const TABLE_OF_CONTENTS_PARTS = {
   },
 } as const;
 
-/** A passage with headings, so a newly placed block shows what it does. */
-const EXAMPLE_PASSAGE: RichTextValue = {
-  root: {
-    type: "root",
-    children: [
-      {
-        type: "heading",
-        tag: "h2",
-        children: [{ type: "text", text: "Getting started", format: 0 }],
-      },
-      {
-        type: "heading",
-        tag: "h3",
-        children: [{ type: "text", text: "Install", format: 0 }],
-      },
-      {
-        type: "heading",
-        tag: "h2",
-        children: [{ type: "text", text: "Next steps", format: 0 }],
-      },
-    ],
-  },
-};
+/**
+ * Version 1 to 2: the list is built from the page's headings, so the passage
+ * it read (`content`) goes, with any binding on it and any component setting
+ * exposing it (`VERSION_1_DROPS`), and no fallback to it. Nothing else
+ * changes: `marker` stays unset, which reads as bullets, as version 1 drew
+ * no numbers.
+ */
+function fromVersion1(props: Record<string, unknown>): Record<string, unknown> {
+  return props;
+}
+
+/** The props version 1 to 2 drops: the bound passage. */
+const VERSION_1_DROPS = { 1: ["content"] } as const;
+
+/** What a new block stores: the defaults the settings show. */
+const NEW_BLOCK_PROPS = {
+  title: DEFAULT_TITLE,
+  depth: "h2-h3",
+  marker: "numbered",
+  collapsible: true,
+  highlight: true,
+} as const satisfies TableOfContentsProps;
 
 // Defined against the ENGINE's `defineBlock`, not the plugin SDK's: the engine
 // declares the contract and the SDK re-exports it for third parties. The
@@ -315,9 +409,11 @@ export const tableOfContents: BlockDefinition<
   PageContext
 > = defineBlock({
   name: TABLE_OF_CONTENTS_BLOCK,
-  version: 1,
+  version: 2,
+  migrate: { 1: fromVersion1 },
+  drops: VERSION_1_DROPS,
   // What an author reads, in the Add panel and the block card: one plain line.
-  description: "Links to the headings of a passage of rich text.",
+  description: "Links to the headings on the page.",
   editor: {
     label: "Table of contents",
     icon: "list",
@@ -326,9 +422,6 @@ export const tableOfContents: BlockDefinition<
   },
   parts: TABLE_OF_CONTENTS_PARTS,
   props: {
-    // Not inline and not content: the passage is read, never typed here. It
-    // takes its value from a binding, as any rich-text prop can.
-    content: { label: "Content", type: RICH_TEXT_PROP_TYPE },
     title: { label: "Title", role: "content", type: "text", inline: true },
     depth: {
       label: "Headings",
@@ -340,17 +433,18 @@ export const tableOfContents: BlockDefinition<
       type: "select",
       options: [...TABLE_OF_CONTENTS_DEPTHS],
     },
-    collapsible: { label: "Can be folded", type: "checkbox" },
-  },
-  defaultProps: { title: DEFAULT_TITLE, depth: "h2-h3", collapsible: true },
-  example: {
-    props: {
-      title: DEFAULT_TITLE,
-      depth: "h2-h3",
-      collapsible: true,
-      content: EXAMPLE_PASSAGE,
+    marker: {
+      label: "List as",
+      optionLabels: { numbered: "Numbers", bullets: "Bullets" },
+      type: "select",
+      options: [...TABLE_OF_CONTENTS_MARKERS],
     },
+    collapsible: { label: "Can be folded", type: "checkbox" },
+    highlight: { label: "Highlight the section being read", type: "checkbox" },
   },
+  defaultProps: NEW_BLOCK_PROPS,
+  // No headings of its own: placed on a page, it lists the page's.
+  example: { props: NEW_BLOCK_PROPS },
   supports: {
     typography: true,
     color: true,
