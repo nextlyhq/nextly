@@ -7,7 +7,7 @@
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { render, screen, waitFor } from "@admin/__tests__/utils";
+import { render, screen } from "@admin/__tests__/utils";
 import type { VersionMeta } from "@admin/services/versionApi";
 import type { PartReview } from "@admin/types/workflows";
 
@@ -40,7 +40,11 @@ vi.mock("@admin/components/features/versions/diff/VersionDiffView", () => ({
 vi.mock("@admin/hooks/useLocalization", () => ({
   useLocalization: () => ({
     getLocale: (code: string | undefined) =>
-      code === "en" ? { code: "en", label: "English" } : undefined,
+      code === "en"
+        ? { code: "en", label: "English" }
+        : code === "fr"
+          ? { code: "fr", label: "French" }
+          : undefined,
   }),
 }));
 
@@ -323,16 +327,46 @@ describe("ReviewChanges", () => {
     expect(await screen.findByText("comparing 5 with 7")).toBeInTheDocument();
     // The shared part's versions are the document's, read in no language.
     expect(await screen.findByText("comparing 2 with 4")).toBeInTheDocument();
-    await waitFor(() =>
-      expect(baselineSpy).toHaveBeenCalledWith(SCOPE, "published", { to: 4 })
-    );
   });
 
-  it("reviews the shared fields in the document's newest version, in any language", async () => {
-    // A Spanish save newer than any shared-only row carries the shared
-    // fields too: it is the shared part's version under review.
+  it("compares the shared fields within their newest version's language, from before the approval", async () => {
+    // A shared change saved in English after the approval, then French saves:
+    // the newest (French 11) carries it, and so does French 10, saved after
+    // it. The baseline is French's version at or before the approval (7),
+    // never one after, so the English change is in what is shown.
+    const at = (time: string) => `2026-11-19T${time}:00.000Z`;
     listing([
-      version(8, "draft", "es"),
+      { ...version(11, "draft", "fr"), createdAt: at("12:00") },
+      { ...version(10, "draft", "fr"), createdAt: at("11:30") },
+      { ...version(9, "draft", "en"), createdAt: at("11:00") },
+      { ...version(7, "draft", "fr"), createdAt: at("09:00") },
+    ]);
+
+    render(
+      <ReviewChanges
+        scope={SCOPE}
+        parts={[
+          inReview({
+            part: null,
+            version: "s11",
+            approval: { versionNo: 7, by: "rita", at: at("10:00") },
+          }),
+        ]}
+      />
+    );
+
+    expect(await screen.findByText("comparing 7 with 11")).toBeInTheDocument();
+    expect(screen.queryByText("comparing 10 with 11")).toBeNull();
+    expect(
+      screen.getByText(
+        "Compared within French; shared fields may include earlier changes."
+      )
+    ).toBeVisible();
+  });
+
+  it("shows the shared fields' version whole where its language has nothing from before", async () => {
+    listing([
+      version(8, "draft", "fr"),
       version(4, "draft", null),
       version(2, "published", null),
     ]);
@@ -344,8 +378,12 @@ describe("ReviewChanges", () => {
       />
     );
 
-    expect(await screen.findByText("comparing 6 with 8")).toBeInTheDocument();
-    expect(baselineSpy).toHaveBeenCalledWith(SCOPE, "published", { to: 8 });
+    expect(
+      await screen.findByText(
+        "Nothing was published or approved before: all of it is new."
+      )
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/^comparing/)).toBeNull();
   });
 
   it("names the shared fields when they alone wait for this person under a language's editor", async () => {

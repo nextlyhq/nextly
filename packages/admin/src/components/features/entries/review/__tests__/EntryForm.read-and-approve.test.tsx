@@ -211,8 +211,20 @@ beforeEach(() => {
       pages: [
         {
           items: [
-            { versionNo: 3, status: "draft", isAutosave: false },
-            { versionNo: 1, status: "published", isAutosave: false },
+            {
+              versionNo: 3,
+              status: "draft",
+              isAutosave: false,
+              locale: null,
+              createdAt: "2026-11-19T10:00:00.000Z",
+            },
+            {
+              versionNo: 1,
+              status: "published",
+              isAutosave: false,
+              locale: null,
+              createdAt: "2026-11-19T09:00:00.000Z",
+            },
           ],
           meta: {},
         },

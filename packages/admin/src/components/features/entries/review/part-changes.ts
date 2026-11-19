@@ -9,6 +9,8 @@
  * @module components/features/entries/review/part-changes
  */
 
+import { useEffect } from "react";
+
 import { useBaselineDiff, useVersions } from "@admin/hooks/queries/useVersions";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { validationIssues } from "@admin/lib/api/parseApiError";
@@ -16,12 +18,23 @@ import type { VersionScope } from "@admin/services/versionApi";
 import type { ReleaseDocumentRef } from "@admin/types/releases";
 import type { PartReview } from "@admin/types/workflows";
 
-import { reviewPlan, type ReviewPair, type ReviewPlan } from "./review-pair";
+import {
+  reviewPlan,
+  sharedPlan,
+  type ReviewPair,
+  type ReviewPlan,
+  type SharedPlan,
+} from "./review-pair";
 
 /** A part's comparison, while its versions are read, and whether reading them failed. */
 export interface PartPair {
   pair: ReviewPair | undefined;
   isError: boolean;
+  /**
+   * What the comparison cannot say, where it says less than the part's own
+   * changes: the shared fields compared within one language.
+   */
+  note?: string;
 }
 
 /**
@@ -47,6 +60,82 @@ const PUBLISHED = "published";
  * `enabled` is false.
  */
 export function usePartPair(
+  scope: VersionScope,
+  part: PartReview | undefined,
+  enabled: boolean
+): PartPair {
+  // Both are asked on every render, each idle where the part is not its own.
+  const shared = useSharedPair(scope, part, enabled && part?.part === null);
+  const language = useLanguagePair(
+    scope,
+    part?.part === null ? undefined : part,
+    enabled
+  );
+  return part?.part === null ? shared : language;
+}
+
+/**
+ * The shared part's pair, from the document's versions (`sharedPlan`): read
+ * page after page until the baseline it needs is found or the history ends.
+ */
+function useSharedPair(
+  scope: VersionScope,
+  part: PartReview | undefined,
+  enabled: boolean
+): PartPair {
+  const nameOf = usePartName();
+  const versions = useVersions({
+    scope,
+    enabled: enabled && part !== undefined,
+  });
+  const rows = versions.data?.pages.flatMap(page => page.items);
+  const plan =
+    rows === undefined || part === undefined
+      ? undefined
+      : sharedPlan(rows, versions.hasNextPage !== true, part.approval);
+  const { fetchNextPage, isFetchingNextPage, hasNextPage } = versions;
+  const needsMore = plan?.kind === "more";
+  useEffect(() => {
+    if (needsMore && hasNextPage === true && !isFetchingNextPage) {
+      void fetchNextPage();
+    }
+  }, [needsMore, hasNextPage, isFetchingNextPage, fetchNextPage]);
+  const within =
+    plan?.kind === "pair" || plan?.kind === "first" ? plan.within : null;
+  return {
+    pair: sharedPairOf(plan),
+    isError: versions.isError,
+    ...(within === null
+      ? {}
+      : {
+          note: `Compared within ${nameOf(within)}; shared fields may include earlier changes.`,
+        }),
+  };
+}
+
+/** The pair the shared part's plan comes to; undefined while more is read. */
+function sharedPairOf(plan: SharedPlan | undefined): ReviewPair | undefined {
+  if (plan === undefined) return undefined;
+  switch (plan.kind) {
+    case "none":
+    case "unchanged":
+      return plan;
+    case "pair":
+      return {
+        kind: "pair",
+        from: plan.from,
+        to: plan.to,
+        since: plan.since,
+      };
+    case "first":
+      return { kind: "first", to: plan.to };
+    case "more":
+      return undefined;
+  }
+}
+
+/** A language's pair, resolved by the server's baselines (see `usePartPair`). */
+function useLanguagePair(
   scope: VersionScope,
   part: PartReview | undefined,
   enabled: boolean

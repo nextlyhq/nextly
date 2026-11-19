@@ -170,6 +170,9 @@ function PartChanges({
         <h3 className="text-xs font-medium text-muted-foreground">{title}</h3>
       )}
       <p className="text-xs text-muted-foreground">{partPairWords(read)}</p>
+      {read.note === undefined ? null : (
+        <p className="text-xs text-muted-foreground">{read.note}</p>
+      )}
       {open && pair?.kind === "pair" ? (
         <VersionDiffView
           scope={scope}
