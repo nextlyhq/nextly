@@ -15,36 +15,6 @@
 
 const DECLARED_AT = Symbol.for("nextly.config.declaredAt");
 
-/**
- * The mark of a system field (`title`, `slug`) a `define*` function added: what tells it apart
- * from a field of the same name a plugin's setup adds. Carried by the field itself, under a
- * registered symbol (one for the configuration's bundle and the runtime alike) that is
- * enumerable, so every copy of the field keeps it: the setups' copy (`copyPlainValues`), and a
- * setup's own `{ ...field }`. Symbol keys are outside `Object.keys`, JSON and every listing of
- * a field's settings, so nothing that reads the field sees it.
- */
-const SYSTEM_FIELD = Symbol.for("nextly.config.systemField");
-
-/** `field`, marked as a system field its entity's `define*` function added. */
-export function markSystemField<T extends object>(field: T): T {
-  Object.defineProperty(field, SYSTEM_FIELD, {
-    value: true,
-    enumerable: true,
-    writable: true,
-    configurable: true,
-  });
-  return field;
-}
-
-/** Whether `field` carries the mark `markSystemField` leaves, as it or a copy of it. */
-export function isSystemField(field: unknown): boolean {
-  return (
-    typeof field === "object" &&
-    field !== null &&
-    (field as Record<symbol, unknown>)[SYSTEM_FIELD] === true
-  );
-}
-
 /** The entity kinds of a configuration, as its keys name them. */
 const KINDS = ["collections", "singles", "fieldGroups"] as const;
 

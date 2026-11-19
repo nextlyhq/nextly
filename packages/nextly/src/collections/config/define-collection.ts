@@ -1368,7 +1368,7 @@ export function defineCollection<
 
     // Marked as declared through this function, so a start refuses it should the configuration's
     // load find a problem this call could not, such as a field type nothing registers.
-    return markDeclaredByDefine(normalized);
+    return markDeclaredByDefine(normalized, systemFields);
   } catch (error) {
     if (accepted) throw error;
     return markDeclaredByDefine({ ...config }) as unknown as CollectionConfig;
