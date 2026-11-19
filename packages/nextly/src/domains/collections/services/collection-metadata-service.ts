@@ -53,6 +53,7 @@ import {
   refuseNewCollectionIndexNamesTaken,
 } from "../../schema/services/collection-schema-apply";
 import { withSchemaChangeExcluded } from "../../schema/services/schema-change-exclusion";
+import { calculateSchemaHash } from "../../schema/services/schema-hash";
 import { loadUiSchema } from "../../schema/ui-schema/loader";
 import { withSystemTextFields } from "../system-text-fields";
 
@@ -1345,7 +1346,18 @@ export class CollectionMetadataService extends BaseService {
                 params.collectionName,
                 {
                   ...updateArtifacts.metadataUpdates,
-                  ...(applied === undefined ? {} : { fields: applied }),
+                  // With the hash of those fields, as the update's own is of the fields it
+                  // asked for (`calculateSchemaHash`, as `generateCollectionUpdate` computes it).
+                  ...(applied === undefined
+                    ? {}
+                    : {
+                        fields: applied,
+                        schemaHash: calculateSchemaHash(
+                          applied as unknown as Parameters<
+                            typeof calculateSchemaHash
+                          >[0]
+                        ),
+                      }),
                   ...(updateArtifacts.migrationSQL || applied !== undefined
                     ? { migrationStatus: "applied" as const }
                     : {}),
