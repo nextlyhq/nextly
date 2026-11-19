@@ -38,14 +38,14 @@ import * as React from "react";
 import { isInput } from "./dom-kind";
 import { FontChoicesContext, FontFamilyField } from "./font-family-field";
 import { NAMED_WEIGHTS, weightName, weightsDrawn } from "./font-library";
-import { InheritedValue } from "./inherited-value";
-import { styleControlsFor, type StyleControl } from "./style-controls";
+import { InheritedValue } from "./inspector/style-inspector/inherited-value";
 import {
   TypesLiveContext,
   type CommitOutcome,
-} from "./style-field-surroundings";
+} from "./inspector/style-inspector/style-field-surroundings";
+import { NumericField } from "./inspector/style-inspector/style-numeric-field";
+import { styleControlsFor, type StyleControl } from "./style-controls";
 import { CSS_NUMBER, lineHeightAsPixels } from "./style-numeric";
-import { NumericField } from "./style-numeric-field";
 import { typeScaleProperty } from "./tokens-studio";
 
 /** What every value field is given. */

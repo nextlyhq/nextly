@@ -38,7 +38,10 @@ import {
 import * as React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { MediaPickerProps, PickedMedia } from "../content-services";
+import type {
+  MediaPickerProps,
+  PickedMedia,
+} from "../inspector/content/content-services";
 import type { EditorState } from "../editor-state";
 import { CANVAS_ROOT_CLASS } from "../shell-state";
 

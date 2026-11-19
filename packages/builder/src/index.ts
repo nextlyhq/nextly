@@ -145,7 +145,7 @@ export type { BuilderShellProps, PanelView } from "./shell/builder-shell";
  * (`InspectorPanelProps.customCss`): its checker, given only to a person who
  * may change the site's code. A type, so it costs this entry nothing.
  */
-export type { BlockCustomCssAccess } from "./custom-css";
+export type { BlockCustomCssAccess } from "./inspector/custom-css";
 
 /**
  * @experimental The shell's own decisions: which panels the rail offers, the
@@ -324,7 +324,7 @@ export { isLocked, lockBlockingDelete, lockBlockingMove } from "./locking";
  * inspector uses. A surface that collapsed "some of these" into on or off would
  * tell an author something false about half of what they selected.
  */
-export { lockStateOf, type LockState } from "./inspector";
+export { lockStateOf, type LockState } from "./inspector/inspector";
 
 /**
  * @experimental What a selected component instance exposes for editing, and
@@ -347,7 +347,7 @@ export {
   type ExposedRow,
   type InstanceInspection,
   type OrphanedOverride,
-} from "./instance-inspector";
+} from "./inspector/instance-inspector";
 
 /**
  * @experimental Duplicating a block: the copy, and where it goes.
@@ -601,7 +601,7 @@ export {
   type StyleInspection,
   type StyleInspectionOptions,
   type StyleSection,
-} from "./style-inspector";
+} from "./inspector/style-inspector/style-inspector";
 
 /**
  * What a SELECTION of blocks shares at one style address, and what changes it.
