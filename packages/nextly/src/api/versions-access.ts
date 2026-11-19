@@ -36,7 +36,10 @@ import {
   singleDocumentEditable,
 } from "../domains/singles/services/single-document-access";
 import type { UserContext } from "../domains/singles/types";
-import { resolveComparisonPair } from "../domains/versions/comparison-baselines";
+import {
+  resolveComparisonPair,
+  sharedPartVersions,
+} from "../domains/versions/comparison-baselines";
 import {
   applyComponentReadAccess,
   fieldsCarryingReadRules,
@@ -61,6 +64,8 @@ import {
   type VersionRef,
 } from "../domains/versions/versions-repository";
 import type { VersionListOptions } from "../domains/versions/versions-service";
+import { documentTableOn } from "../domains/workflows/part-versions";
+import { sharedValuesOf } from "../domains/workflows/shared-values";
 import { NextlyError } from "../errors/nextly-error";
 import { rethrowIfRuleCouldNotRun } from "../errors/rule-could-not-run";
 import type {
@@ -1158,16 +1163,50 @@ export interface ComparisonQuery {
   baseline?: string;
   /** The part to open on when no `to` is named. */
   locale?: string;
+  /**
+   * `shared` compares the shared part: the fields every language shares, across
+   * languages, from the shared part's own baselines. Absent, a comparison is of
+   * one language as it always was, and a pair in two languages is refused.
+   */
+  part?: ComparisonPart;
   modifiedOnly: boolean;
 }
+
+/** The workflow part a comparison may name: the shared fields. */
+const comparisonPartSchema = z.literal("shared");
+
+/** A comparison's `part`: `shared`, the fields every language shares. */
+export type ComparisonPart = z.infer<typeof comparisonPartSchema>;
 
 const comparisonQuerySchema = z.object({
   from: z.string().trim().optional(),
   to: z.string().trim().optional(),
   baseline: z.string().trim().optional(),
   locale: z.string().trim().optional(),
+  part: z.string().trim().optional(),
   modifiedOnly: z.string().optional(),
 });
+
+/**
+ * A comparison's `part` parameter: absent, or `shared`. Anything else is
+ * refused naming the parameter, rather than compared as one language.
+ */
+function parseComparisonPart(
+  value: string | undefined
+): ComparisonPart | undefined {
+  if (value === undefined) return undefined;
+  const parsed = comparisonPartSchema.safeParse(value);
+  if (parsed.success) return parsed.data;
+  throw NextlyError.validation({
+    errors: [
+      {
+        path: "part",
+        code: "INVALID_VALUE",
+        message: 'part must be "shared", the fields every language shares.',
+      },
+    ],
+  });
+}
 
 /**
  * Parse a comparison's query parameters, the same way for the REST routes,
@@ -1186,6 +1225,7 @@ export function parseComparisonQuery(
     to: text(input.to),
     baseline: text(input.baseline),
     locale: text(input.locale),
+    part: text(input.part),
     modifiedOnly: text(input.modifiedOnly),
   });
   const present = (value: string | undefined) =>
@@ -1199,6 +1239,7 @@ export function parseComparisonQuery(
     to: number(query.to),
     baseline: present(query.baseline),
     locale: present(query.locale),
+    part: parseComparisonPart(present(query.part)),
     modifiedOnly: query.modifiedOnly === "1" || query.modifiedOnly === "true",
   };
 }
@@ -1210,6 +1251,19 @@ export function parseComparisonQuery(
  * baseline, each optional; not a `from` and a `baseline` together.
  */
 export function assertComparisonRequest(query: ComparisonQuery): void {
+  // The shared part spans every language, so a language to pair in has no
+  // meaning beside it.
+  if (query.part !== undefined && query.locale !== undefined) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "locale",
+          code: "INVALID_VALUE",
+          message: "Name either `part` or `locale`, not both.",
+        },
+      ],
+    });
+  }
   if (query.from !== undefined) {
     if (query.baseline !== undefined) {
       throw NextlyError.validation({
@@ -1289,6 +1343,11 @@ export async function withLastViewedMarks<
  * A baseline is told who is comparing only when that is a person: an API key,
  * a principal or the system compares with no user, so a baseline that reads a
  * person's own records never reaches the key owner's.
+ *
+ * With `part: "shared"` the pair is the shared part's: found over every
+ * language's versions, its baselines the shared part's own (its approval pin,
+ * the newest publish in any language), and only the shared fields compared.
+ * Without it, nothing changes: one language's pair, as before.
  */
 export async function compareDocumentVersions(args: {
   scopeKind: VersionScopeKind;
@@ -1350,7 +1409,7 @@ export async function compareDocumentVersions(args: {
         // without the lifecycle every version was served, whatever it says.
         lifecycle: hasLifecycle(entity),
       },
-      partVersions
+      query.part === "shared" ? sharedPartVersions(partVersions) : partVersions
     );
     pair = { from: resolved.from, to: resolved.to };
     baseline = resolved.baseline;
@@ -1366,6 +1425,7 @@ export async function compareDocumentVersions(args: {
     to: pair.to,
     modifiedOnly: query.modifiedOnly,
     authenticatedScope: args.authenticatedScope,
+    ...(query.part === undefined ? {} : { part: query.part }),
   });
   return baseline ? { ...diff, baseline } : diff;
 }
@@ -1450,8 +1510,11 @@ async function partIsLiveNow(
  * Both snapshots are redacted for the caller before the pure engine sees them,
  * so the diff can never surface a field the caller may not read. The two
  * versions must share a locale: each snapshot records one locale's values, so a
- * cross-locale comparison is meaningless. The schema is enriched with component
- * sub-schemas so nested component fields diff field-by-field.
+ * cross-locale comparison is meaningless. The shared part (`part: "shared"`) is
+ * the exception: every language's snapshot carries the fields all languages
+ * share, so its two versions may be in two languages, and only those fields are
+ * compared. The schema is enriched with component sub-schemas so nested
+ * component fields diff field-by-field.
  */
 export async function diffDocumentVersions(args: {
   scopeKind: VersionScopeKind;
@@ -1463,7 +1526,10 @@ export async function diffDocumentVersions(args: {
   to: number;
   modifiedOnly?: boolean;
   authenticatedScope?: AuthenticatedScope;
+  /** `shared`: the shared fields alone, across languages (see above). */
+  part?: ComparisonPart;
 }): Promise<VersionDiff> {
+  const shared = args.part === "shared";
   const versions = getService("versionsService");
   const ref = {
     scopeKind: args.scopeKind,
@@ -1489,6 +1555,7 @@ export async function diffDocumentVersions(args: {
   }
 
   if (
+    !shared &&
     !(await onePart(args.scopeKind, args.slug, fromRow.locale, toRow.locale))
   ) {
     throw NextlyError.validation({
@@ -1509,8 +1576,10 @@ export async function diffDocumentVersions(args: {
     });
   }
 
-  // The pair's language: either's tag, since they name one part.
-  const pairLocale = fromRow.locale ?? toRow.locale;
+  // The pair's language: either's tag, since they name one part. The shared
+  // part's two versions may be in two languages: the target's names the
+  // language its references are labelled in.
+  const pairLocale = shared ? toRow.locale : (fromRow.locale ?? toRow.locale);
 
   // Redact each snapshot for the caller BEFORE diffing, so the diff can never
   // surface a field the caller may not read. What either side withheld is
@@ -1540,20 +1609,27 @@ export async function diffDocumentVersions(args: {
   // callers, so anything else resolves as a collection for field lookup.
   const lookupKind = args.scopeKind === "single" ? "single" : "collection";
   const fields = await resolveEnrichedFields(lookupKind, args.slug);
+  const compared = shared
+    ? await sharedFieldsView({
+        scopeKind: lookupKind,
+        scopeSlug: args.slug,
+        entryId: args.entryId,
+      })
+    : wholeSnapshotView;
 
   // Loaded here, by the one request that compares two versions: no other
   // route needs the diff engine.
   const { computeVersionDiff } = await import("../domains/versions/diff");
   const body = computeVersionDiff(
-    snapshotObject(fromRow.snapshot),
-    snapshotObject(toRow.snapshot),
+    compared.snapshot(fromRow.snapshot),
+    compared.snapshot(toRow.snapshot),
     fields,
     {
       modifiedOnly: args.modifiedOnly,
       // Each version's own: a list row is named by its index in that
       // version, so merging the two would hide a field in the wrong row.
-      withheldFrom,
-      withheldTo,
+      withheldFrom: compared.withheld(withheldFrom),
+      withheldTo: compared.withheld(withheldTo),
       // `redactSnapshotForUser` ran each component's own read rules.
       componentRulesApplied: true,
       entity: lookupKind,
@@ -1581,8 +1657,43 @@ export async function diffDocumentVersions(args: {
     from: args.from,
     to: args.to,
     locale: pairLocale,
+    ...(shared ? { part: "shared" as const } : {}),
     hasChanges: body.hasChanges,
     incomplete: body.incomplete,
     fields: body.fields,
+  };
+}
+
+/** What a comparison reads of each snapshot, and of what was withheld from it. */
+interface ComparedView {
+  snapshot(snapshot: unknown): Record<string, unknown>;
+  withheld(paths: ReadonlySet<string>): ReadonlySet<string>;
+}
+
+/** A comparison of one language: each snapshot whole. */
+const wholeSnapshotView: ComparedView = {
+  snapshot: snapshotObject,
+  withheld: paths => paths,
+};
+
+/**
+ * A comparison of the shared part: each snapshot's shared values, with the
+ * fields each language keeps on its own named as a workflow's review names them
+ * (`documentTableOn`, `sharedValuesOf`), so the shared fields compared are the
+ * ones their approval covers. A field withheld under a translated field goes
+ * with it. A document without languages shares every field.
+ */
+async function sharedFieldsView(document: {
+  scopeKind: "collection" | "single";
+  scopeSlug: string;
+  entryId: string;
+}): Promise<ComparedView> {
+  const { translated } = await documentTableOn(document);
+  if (translated === null) return wholeSnapshotView;
+  const own = new Set(translated);
+  return {
+    snapshot: snapshot => sharedValuesOf(document, snapshot, translated),
+    withheld: paths =>
+      new Set([...paths].filter(path => !own.has(path.split(".")[0] ?? ""))),
   };
 }

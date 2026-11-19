@@ -314,6 +314,18 @@ registerComparisonBaseline({
       : "This is the version you last looked at, so nothing has changed since.",
 });
 
+/**
+ * The shared part's versions: every language's, each named as the shared part (null), since each
+ * language's version carries the fields every language shares. A comparison of the shared part
+ * resolves its pair over these, so its baselines read the shared part's own records (workflows'
+ * `approved:*` pin, the newest publish in any language) rather than one language's.
+ */
+export function sharedPartVersions(
+  versions: readonly PartVersion[]
+): PartVersion[] {
+  return versions.map(version => ({ ...version, locale: null }));
+}
+
 /** What a comparison request names, before its pair is resolved. */
 export interface ComparisonRequest {
   ref: VersionRef;
