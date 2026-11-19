@@ -34,7 +34,7 @@ export function customMarkerAt(
       ? Object.keys(devices).flatMap(breakpoint => {
           const at = {
             state: state as StyleState,
-            breakpoint: breakpoint as BreakpointId,
+            breakpoint,
           };
           return readStyleValue(styles, { ...at, property: MARKER, path: [] }) ===
             undefined

@@ -37,12 +37,19 @@ export interface LocalizableEntity {
  * "prefix + slug" rule would point at a table the runtime never created: `dbName: "forms"` on a
  * collection lives at `dc_forms`, so its companion would be built as `forms_locales` with a
  * foreign key to a table that does not exist.
+ *
+ * `fieldGroupTable`, where the caller read the registry, names the table each field group is
+ * stored in: on a site whose field-group storage was migrated that is `fg_<slug>`, which no slug
+ * rule derives. Absent, a field group's table is derived as before.
  */
-export function localizableConfigEntities(config: {
-  collections?: readonly unknown[];
-  singles?: readonly unknown[];
-  fieldGroups?: readonly unknown[];
-}): [
+export function localizableConfigEntities(
+  config: {
+    collections?: readonly unknown[];
+    singles?: readonly unknown[];
+    fieldGroups?: readonly unknown[];
+  },
+  fieldGroupTable?: (slug: string) => string
+): [
   I18nTransitionKind,
   LocalizableEntity[],
   (e: LocalizableEntity) => string,
@@ -61,7 +68,7 @@ export function localizableConfigEntities(config: {
     [
       "fieldGroup",
       (config.fieldGroups ?? []) as LocalizableEntity[],
-      e => resolveComponentTableName(e.slug!),
+      e => fieldGroupTable?.(e.slug!) ?? resolveComponentTableName(e.slug!),
     ],
   ];
 }

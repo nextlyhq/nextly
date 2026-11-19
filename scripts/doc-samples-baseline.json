@@ -412,7 +412,7 @@
     "docs/plugins/lifecycle.mdx": 2,
     "packages/blocks-react/README.md": 1,
     "packages/builder/README.md": 1,
-    "docs/api-reference/direct-api.mdx": 4,
+    "docs/api-reference/direct-api.mdx": 3,
     "docs/database/mysql.mdx": 3,
     "docs/guides/isr-caching.mdx": 1,
     "docs/plugins/services.mdx": 7
@@ -453,7 +453,6 @@
       "reader-name #0 error TS2304: Cannot find name 'MyCanvas'.": 1
     },
     "docs/api-reference/direct-api.mdx": {
-      "#31 error TS2554: Expected 1 arguments, but got 0.": 1,
       "#9 error TS18004: No value exists in scope for the shorthand property 'id'. Either declare one or provide an initializer.": 2,
       "#9 error TS18047: 'page' is possibly 'null'.": 1,
       "suppressed #45 error TS2322: Type 'unknown' is not assignable to type 'Key | null | undefined'.": 1,
@@ -465,7 +464,6 @@
       "suppressed #9 error TS2322: Type 'unknown' is not assignable to type 'string'.": 2,
       "context #9 error TS18004: No value exists in scope for the shorthand property 'id'. Either declare one or provide an initializer.": 2,
       "context #9 error TS18047: 'page' is possibly 'null'.": 1,
-      "context #31 error TS2554: Expected 1 arguments, but got 0.": 1,
       "reader-file #0 error TS2307: Cannot find module '../../nextly.config' or its corresponding type declarations.": 1,
       "reader-file #45 error TS2307: Cannot find module '../../nextly.config' or its corresponding type declarations.": 1
     },

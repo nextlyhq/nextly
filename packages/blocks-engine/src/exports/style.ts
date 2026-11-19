@@ -342,6 +342,10 @@ export type { CompiledDeclarations, Declaration } from "../style/declarations";
 // importing it: the one remap a design token file and a transfer file share.
 export { cssTextProperties, remapTokenReferences } from "../style/token-remap";
 export type { TokenRemap } from "../style/token-remap";
+
+// What a colour order the site can store is: the stored site style and a
+// design token file's reader ask the same rule.
+export { isColourOrder } from "../style/colour-order";
 /**
  * A background overlay's two custom properties, for an editor drawing their
  * controls.
@@ -502,9 +506,22 @@ export { authoredBreakpoints, inCascadeOrder } from "../style/breakpoint-set";
 export {
   DEFAULT_FLUID_RANGE,
   fluidValue,
+  isFluidSize,
+  isFluidSizes,
   type FluidRangeWidths,
   type FluidSizes,
 } from "../style/fluid-value";
+
+/**
+ * Text styles' fluid sizes made again across a new fluid range, and dropped
+ * where an edit leaves them beside a size they no longer make. Public because
+ * the site style's save and the editor's class writes apply them.
+ */
+export {
+  classesAcrossFluidRange,
+  withFluidSizesBack,
+  withoutStaleFluidSizes,
+} from "../style/fluid-classes";
 
 /**
  * Site text: the size and line height of body text, each heading level,
