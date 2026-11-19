@@ -1091,6 +1091,29 @@ describe.each(getConfiguredTestDialects())(
       180_000
     );
 
+    // Columns named as a translations table's key are not its key: a table of the same name keyed
+    // otherwise is not one, and is neither listed nor dropped.
+    it.skipIf(dialect !== "postgresql")(
+      "leaves a table named as its translations table, with its key's columns, but keyed otherwise",
+      async () => {
+        const { deployed } =
+          await deleteNotesOnTheDeployedDatabase(asAnOlderDeleteFile);
+        await deployed.adapter.executeQuery(
+          `DROP TABLE "${notes.table}_locales"`
+        );
+        await deployed.adapter.executeQuery(
+          `CREATE TABLE "${notes.table}_locales" ("id" integer PRIMARY KEY, "_parent" text, "_locale" text, "note" text)`
+        );
+
+        const later = await migrate();
+
+        expect(later.code, later.said).toBeUndefined();
+        expect(later.said).not.toContain(`- table ${notes.table}_locales`);
+        expect(await translationsStand(deployed.adapter)).toBe(true);
+      },
+      180_000
+    );
+
     it.skipIf(dialect !== "postgresql")(
       "refuses the run, keeping it, where no consent covers it",
       async () => {
