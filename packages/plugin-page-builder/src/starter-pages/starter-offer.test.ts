@@ -1,8 +1,9 @@
 /**
  * Which starter pages a site offers now, and the copy one gives a new page:
- * a starter needing a block or a variable the site no longer has is left out
- * of the list and refused at create, and a copy is the page's own, under new
- * ids, leaving the starter as it was.
+ * a starter needing a block, a variable or a shared style the site no longer
+ * has is listed as unavailable with why, and refused at create in the same
+ * words, and a copy is the page's own, under new ids, leaving the starter as
+ * it was.
  *
  * @module starter-pages/starter-offer.test
  */
@@ -15,11 +16,8 @@ import {
 import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import { describe, expect, it } from "vitest";
 
-import {
-  offeredStarterPages,
-  starterPageCopy,
-  takesPages,
-} from "./starter-offer";
+import { starterMisfitReason, type StarterSite } from "./starter-fit";
+import { starterOffers, starterPageCopy, takesPages } from "./starter-offer";
 import { FIXTURE_VARIABLE, fixtureStarter } from "./starter-pages.fixture";
 import type { RegisteredStarterPage } from "./starter-pages";
 import { starterPagesSource } from "./starter-pages-route";
@@ -70,58 +68,72 @@ function wearing(id: string): RegisteredStarterPage {
   };
 }
 
+/** Each starter as offered: its id, and why it isn't available, if it isn't. */
+function offers(
+  registeredList: readonly RegisteredStarterPage[],
+  site: StarterSite
+): Array<[string, string | undefined]> {
+  return starterOffers(registeredList, site).map(offer => [
+    offer.entry.starter.id,
+    offer.misfit === undefined ? undefined : starterMisfitReason(offer.misfit),
+  ]);
+}
+
 describe("the starter pages a site offers", () => {
   it("offers a starter whose blocks and variables the site has", () => {
     expect(
-      offeredStarterPages([registered("a"), registered("b")], {
+      offers([registered("a"), registered("b")], {
         blocks,
         variables: hasBrand,
         sharedStyles: NO_STYLES,
-      }).map(entry => entry.starter.id)
-    ).toEqual(["a", "b"]);
+      })
+    ).toEqual([
+      ["a", undefined],
+      ["b", undefined],
+    ]);
   });
 
-  it("leaves out a starter needing a variable the site no longer has", () => {
+  it("lists a starter needing a variable the site no longer has as unavailable, saying so", () => {
     expect(
-      offeredStarterPages([registered("a")], {
+      offers([registered("a")], {
         blocks,
         variables: new Set(["color.text"]),
         sharedStyles: NO_STYLES,
       })
-    ).toEqual([]);
+    ).toEqual([["a", "Uses a variable this site doesn't have."]]);
   });
 
-  it("leaves out a starter needing a block the site no longer has", () => {
+  it("lists a starter needing a block the site no longer has as unavailable, naming the block", () => {
     const fewer = createBlockRegistry();
     fewer.register(
       coreBlocks.filter(block => block.name !== "core/button"),
       { source: "@nextlyhq/plugin-page-builder" }
     );
     expect(
-      offeredStarterPages([registered("a")], {
+      offers([registered("a")], {
         blocks: fewer,
         variables: hasBrand,
         sharedStyles: NO_STYLES,
       })
-    ).toEqual([]);
+    ).toEqual([["a", "Uses the Button block, which this site doesn't have."]]);
   });
 
-  it("leaves out a starter wearing a shared style the site doesn't have, and offers it once the site has it", () => {
+  it("lists a starter wearing a shared style the site doesn't have as unavailable, and offers it once the site has it", () => {
     const styled = [wearing("c-hero-title")];
     expect(
-      offeredStarterPages(styled, {
+      offers(styled, {
         blocks,
         variables: hasBrand,
         sharedStyles: new Set(["c-other"]),
       })
-    ).toEqual([]);
+    ).toEqual([["styled", "Uses a shared style this site doesn't have."]]);
     expect(
-      offeredStarterPages(styled, {
+      offers(styled, {
         blocks,
         variables: hasBrand,
         sharedStyles: new Set(["c-hero-title"]),
-      }).map(entry => entry.starter.id)
-    ).toEqual(["styled"]);
+      })
+    ).toEqual([["styled", undefined]]);
   });
 
   it("offers starters only to a field that holds pages", () => {
@@ -196,17 +208,28 @@ describe("the source the routes answer from", () => {
     ]);
   });
 
-  it("copies only a starter it lists", async () => {
-    expect(await source(hasBrand).copy("a")).toMatchObject({ kind: "page" });
+  it("copies a starter the site can use, and refuses one it can't in the words the list shows", async () => {
+    expect(await source(hasBrand).copy("a")).toMatchObject({
+      document: { kind: "page" },
+    });
     expect(await source(hasBrand).copy("gone")).toBeUndefined();
-    expect(await source(new Set()).list()).toEqual([]);
-    expect(await source(new Set()).copy("a")).toBeUndefined();
     expect(await source(hasBrand).copy("a", ["component"])).toBeUndefined();
-    // A starter whose shared style is gone is neither listed nor copied.
+    // Without the variable it names, it is listed as unavailable, and a
+    // page made from it is refused with the same reason.
+    const without = source(new Set());
+    expect((await without.list()).map(item => item.unavailable)).toEqual([
+      { reason: "Uses a variable this site doesn't have." },
+    ]);
+    expect(await without.copy("a")).toEqual({
+      unavailable: `The starter page "${fixtureStarter("a").label}" isn't available on this site. Uses a variable this site doesn't have.`,
+    });
+    // A starter whose shared style is gone: listed, unavailable, not copied.
     const styled = source(hasBrand, new Set(["c-other"]), [
       wearing("c-hero-title"),
     ]);
-    expect(await styled.list()).toEqual([]);
-    expect(await styled.copy("styled")).toBeUndefined();
+    expect((await styled.list()).map(item => item.unavailable)).toEqual([
+      { reason: "Uses a shared style this site doesn't have." },
+    ]);
+    expect(await styled.copy("styled")).toHaveProperty("unavailable");
   });
 });
