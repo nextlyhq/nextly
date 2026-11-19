@@ -85,6 +85,7 @@ import {
 } from "../../domains/schema/migrate/core-reconcile";
 import {
   consentToCover,
+  countDeletions,
   describeDeletion,
   resolveDataLossConsent,
   type DataLossConsent,
@@ -1573,6 +1574,19 @@ export async function previewMigrate(args: {
     logger,
     pendingModules.length > 0
   );
+  // The translations tables deleted entities left, which a real run judges with its files'
+  // deletions and drops under the consent: listed as it lists them, with the consent it needs.
+  const leftovers = await leftoverTranslationsOf(
+    { adapter, db, dialect, migrationsDir: args.migrationsDir },
+    new Set(pendingFiles.map(file => fileUnit(file, dialect).label))
+  );
+  if (leftovers.length > 0) {
+    logger.info(`  • ${LEFTOVER_TRANSLATIONS_LABEL}`);
+    previewDeletions(
+      await leftoverDeletions(leftovers, { db, dialect }),
+      logger
+    );
+  }
   // The renames a real run would refuse before any statement, from the same check over the same
   // units: the modules, then the files.
   for (const { file, message } of await renamesOntoTakenTargets(
@@ -3684,23 +3698,18 @@ async function judgeFileDeletions(
   // and dropped by the metadata pass once covered: a table drop runs only under the consent.
   const leftovers =
     deps.judgeLeftoverTranslations === true
-      ? await leftoverTranslationsOf(deps)
+      ? await leftoverTranslationsOf(
+          deps,
+          new Set(fileUnits.map(unit => unit.label))
+        )
       : [];
   if (leftovers.length > 0) {
     const source = deletionSource(
-      "tables deleted entities left",
+      LEFTOVER_TRANSLATIONS_LABEL,
       leftovers.map(left => left.table).join("\n")
     );
-    for (const left of leftovers) {
-      sources.set(
-        {
-          kind: "table",
-          table: left.table,
-          translates: left.translates,
-          reason: `left by the deleted ${KIND_WORDS[left.kind]} "${left.slug}"`,
-        },
-        source
-      );
+    for (const deletion of await leftoverDeletions(leftovers, deps)) {
+      sources.set(deletion, source);
     }
   }
   for (const { unit, deletions } of await pendingRunDeletions(
@@ -3743,29 +3752,60 @@ const KIND_WORDS: Record<SettingsEntityKind, string> = {
 };
 
 /**
- * The translations tables the entities the applied migrations dropped left
- * standing (`leftoverTranslationsTables`), read from the applied records; none
- * where they cannot be read.
+ * The translations tables the entities the run's migrations dropped left
+ * standing (`leftoverTranslationsTables`), read from the history the run ends
+ * at: the applied records and `runFiles`, the app files this run applies. An
+ * entity a pending file of the run makes again is not dropped there, so its
+ * old table is not asked about, as the metadata pass, reading the same history
+ * once the files have run, would not drop it. None where it cannot be read.
  */
 async function leftoverTranslationsOf(
-  deps: MigrateCoreDeps
+  target: Pick<MigrateCoreDeps, "adapter" | "db" | "dialect" | "migrationsDir">,
+  runFiles: ReadonlySet<string>
 ): Promise<LeftoverTranslations[]> {
   // A database without the ledger yet (a first run) has applied no file, so
   // no deleted entity left anything; the ledger is not read where it is absent.
   const hasLedger = await (
-    deps.adapter as unknown as { tableExists: (n: string) => Promise<boolean> }
+    target.adapter as unknown as {
+      tableExists: (n: string) => Promise<boolean>;
+    }
   ).tableExists("nextly_schema_events");
   if (!hasLedger) return [];
-  const events = new SchemaEventsRepository(deps.db, deps.dialect);
+  const events = new SchemaEventsRepository(target.db, target.dialect);
   const source = await readRegistrySource({
-    migrationsDir: deps.migrationsDir,
-    isApplied: filename => events.isFileApplied(filename),
+    migrationsDir: target.migrationsDir,
+    isApplied: async filename =>
+      runFiles.has(filename) || (await events.isFileApplied(filename)),
   });
   if (source.kind !== "snapshot") return [];
   return leftoverTranslationsTables({
-    adapter: deps.adapter as unknown as DrizzleAdapter,
+    adapter: target.adapter as unknown as DrizzleAdapter,
     chain: source.chain ?? [source.entities],
   });
+}
+
+/** The heading a run lists the translations tables deleted entities left under. */
+const LEFTOVER_TRANSLATIONS_LABEL = "tables deleted entities left";
+
+/**
+ * The deletion each table in `leftovers` is listed and judged as: named for
+ * the entity it belonged to, covered as that entity's table's translations,
+ * and counted (`countDeletions`) so the listing says how many rows go.
+ */
+async function leftoverDeletions(
+  leftovers: readonly LeftoverTranslations[],
+  target: Pick<MigrateCoreDeps, "db" | "dialect">
+): Promise<Deletion[]> {
+  return countDeletions(
+    leftovers.map(left => ({
+      kind: "table" as const,
+      table: left.table,
+      translates: left.translates,
+      reason: `left by the deleted ${KIND_WORDS[left.kind]} "${left.slug}"`,
+    })),
+    target.db,
+    target.dialect
+  );
 }
 
 /**

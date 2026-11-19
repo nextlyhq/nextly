@@ -111,10 +111,12 @@ export async function removeDroppedEntityLeftovers(args: {
   for (const entity of gone) {
     await assertSchemaLockHeld();
     const word = KIND_WORDS[entity.kind];
+    // The translations tables dropped, kept outside the removal's try: a drop
+    // is not undone by a later failure, so it is reported either way.
+    const dropped: string[] = [];
     try {
       // A translations table is a table: dropped on its own, ahead of the rows'
       // transaction, which on MySQL a schema statement inside would commit.
-      const dropped: string[] = [];
       for (const table of entity.tables) {
         const translations = `${table}_locales`;
         if (args.dropTranslations?.has(translations) !== true) continue;
@@ -167,6 +169,13 @@ export async function removeDroppedEntityLeftovers(args: {
       );
     } catch (error) {
       left.push(`${word} "${entity.slug}"`);
+      if (dropped.length > 0) {
+        removedFrom.push(
+          `${word} "${entity.slug}" left: ${dropped
+            .map(table => `its translations table ${table}`)
+            .join(", ")}`
+        );
+      }
       logger.warn(
         `Could not remove what the deleted ${word} "${entity.slug}" left: ${causeOf(
           error
