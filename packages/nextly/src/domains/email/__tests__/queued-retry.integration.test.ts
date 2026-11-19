@@ -16,6 +16,8 @@ process.env.NEXTLY_SECRET =
 import { eq } from "drizzle-orm";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { buildClaims } from "../../../auth/jwt/claims";
+import { signAccessToken } from "../../../auth/jwt/sign";
 import { loadedDialect } from "../../../database/dialect-tables";
 import { container } from "../../../di/container";
 import {
@@ -31,6 +33,7 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { createDynamicHandlers } from "../../../routeHandler";
 import type { JobRegistry } from "../../jobs/job-registry";
 import { runJobsPass } from "../../jobs/jobs-runner";
 import { defineEmailProvider } from "../provider-definition";
@@ -141,6 +144,42 @@ async function queued(t: TestNextly, id: string): Promise<QueueRow> {
 function trigger(t: TestNextly, ahead = 0) {
   return runJobsPass(t.adapter, container.get<JobRegistry>("jobRegistry"), {
     now: () => new Date(Date.now() + ahead),
+  });
+}
+
+const ORIGIN = "http://localhost";
+
+/** A session for user `id` holding `roleIds`, as the admin sends it. */
+async function sessionOf(
+  id: string,
+  roleIds: string[]
+): Promise<Record<string, string>> {
+  const token = await signAccessToken(
+    buildClaims({
+      userId: id,
+      email: `${id}@retry.test`,
+      name: id,
+      image: null,
+      roleIds,
+      sessionEpoch: 0,
+    }),
+    process.env.NEXTLY_SECRET ?? ""
+  );
+  return { cookie: `nextly_session=${token}` };
+}
+
+/** One request through the REST catch-all. */
+function call(
+  method: "GET" | "POST",
+  path: string,
+  headers: Record<string, string>
+): Promise<Response> {
+  const req = new Request(`${ORIGIN}/api/${path}`, {
+    method,
+    headers: { origin: ORIGIN, ...headers },
+  });
+  return createDynamicHandlers()[method](req, {
+    params: Promise.resolve({ params: path.split("/").filter(Boolean) }),
   });
 }
 
@@ -365,6 +404,83 @@ describe.each(getConfiguredTestDialects())(
         ].sort((a, b) => a.entryId.localeCompare(b.entryId))
       );
       expect(JSON.stringify(added)).not.toContain(ADA);
+    });
+
+    it("offers retry and cancel on REST to a holder of manage-email-deliveries alone", async () => {
+      const t = await boot(dialect);
+      behaviour.refusals = 1;
+      const failed = await t.nextly.email.queue({ ...message, to: ADA });
+      behaviour.failures = Number.MAX_SAFE_INTEGER;
+      const waiting = await t.nextly.email.queue({ ...message, to: ADA });
+
+      await seedPermissions(t);
+      const managerRole = await role(t, "delivery-manager", [
+        "manage-email-deliveries",
+      ]);
+      const readerRole = await role(t, "delivery-reader", [
+        "read-email-deliveries",
+      ]);
+      const strangerRole = await role(t, "user-reader", ["read-users"]);
+      const manager = await sessionOf(
+        await account(t, "manager@example.com", [managerRole]),
+        [managerRole]
+      );
+      const reader = await sessionOf(
+        await account(t, "reader@example.com", [readerRole]),
+        [readerRole]
+      );
+      const stranger = await sessionOf(
+        await account(t, "stranger@example.com", [strangerRole]),
+        [strangerRole]
+      );
+
+      for (const headers of [reader, stranger, {}]) {
+        for (const path of [
+          `email-deliveries/queued/${failed.id}/retry`,
+          `email-deliveries/queued/${waiting.id}/cancel`,
+        ]) {
+          const refused = await call("POST", path, headers);
+          expect([401, 403], path).toContain(refused.status);
+        }
+      }
+      expect((await queued(t, failed.id)).state).toBe("failed");
+      expect((await queued(t, waiting.id)).state).toBe("waiting");
+
+      const retried = await call(
+        "POST",
+        `email-deliveries/queued/${failed.id}/retry`,
+        manager
+      );
+      expect(retried.status).toBe(200);
+      expect(await retried.json()).toMatchObject({
+        message: expect.any(String),
+        item: { id: failed.id, state: "waiting" },
+      });
+      const cancelled = await call(
+        "POST",
+        `email-deliveries/queued/${waiting.id}/cancel`,
+        manager
+      );
+      expect(cancelled.status).toBe(200);
+      expect((await queued(t, waiting.id)).state).toBe("cancelled");
+
+      // A refusal says why, as a conflict.
+      const again = await call(
+        "POST",
+        `email-deliveries/queued/${waiting.id}/retry`,
+        manager
+      );
+      expect(again.status).toBe(409);
+      // A GET names no action.
+      expect(
+        (
+          await call(
+            "GET",
+            `email-deliveries/queued/${failed.id}/retry`,
+            manager
+          )
+        ).status
+      ).not.toBe(200);
     });
   }
 );
