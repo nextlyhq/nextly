@@ -2914,7 +2914,7 @@ export class ReleasesService {
     } = {}
   ): Promise<string[]> {
     const now = new Date();
-    const failing: Array<BlockRequest & { revision: number }> = [];
+    const failing: FailingRelease[] = [];
     const affected = await this.deps.repository.scheduledMembersFor(target);
     // The drain's own plan of what is due now, read once and only when a due release is named.
     let due: DuePlan | undefined;
@@ -2940,17 +2940,15 @@ export class ReleasesService {
         if (hard.length === 0) continue;
       }
       // A component an earlier pass began waits for its approval rather than stopping, as the
-      // run leaves it (`begunReleases`): stopped, what it wrote would stay live for good.
-      if (
-        due?.begun.has(release.id) === true &&
-        hard.every(finding => finding.code === "NOT_APPROVED")
-      ) {
-        continue;
-      }
+      // run leaves it (`begunReleases`): stopped, what it wrote would stay live for good. Asked
+      // again inside the stop's transaction (`unlessBegun`), for a receipt written since.
+      const heldOnly = hard.every(finding => finding.code === "NOT_APPROVED");
+      if (due?.begun.has(release.id) === true && heldOnly) continue;
       failing.push({
         id: release.id,
         scheduledAt: release.scheduledAt,
         revision: release.revision,
+        heldOnly,
       });
     }
     const stopped: string[] = [];
@@ -3005,7 +3003,7 @@ export class ReleasesService {
    * moved since misses its fence, and its component is left whole.
    */
   private async stopDueComponents(
-    failing: readonly (BlockRequest & { revision: number })[],
+    failing: readonly FailingRelease[],
     { plan, releases }: DuePlan
   ): Promise<string[]> {
     const repository = this.deps.repository;
@@ -3022,7 +3020,14 @@ export class ReleasesService {
           : undefined;
       }
     )) {
-      stopped.push(...(await repository.blockReleases(entries)));
+      // Stopped only for missing approvals, a component a pass began since the plan was read
+      // stays scheduled; a release with any other hard problem stops it as before.
+      const unlessBegun = entries.every(
+        entry => checked.get(entry.id)?.heldOnly !== false
+      );
+      stopped.push(
+        ...(await repository.blockReleases(entries, { unlessBegun }))
+      );
     }
     return stopped;
   }
@@ -4603,3 +4608,6 @@ interface DuePlan {
   /** The releases of components an earlier pass began (`begunReleases`). */
   begun: ReadonlySet<string>;
 }
+
+/** A release an early stop found a hard problem in, and whether a missing approval was all. */
+type FailingRelease = BlockRequest & { revision: number; heldOnly: boolean };

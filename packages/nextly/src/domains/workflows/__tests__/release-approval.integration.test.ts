@@ -541,6 +541,44 @@ describe.each(getConfiguredTestDialects())(
       expect(await stoppedNotices(t, arranged)).toBe(0);
     });
 
+    it("leaves a due release scheduled when a pass writes one of its members after the stop judged it", async () => {
+      // The run writes its receipt between the early stop's reading and its stop; the stop asks
+      // again inside its own transaction, so the component a pass began stays scheduled.
+      const t = await boot(dialect);
+      const written = await doc(t, "pages");
+      const waiting = await doc(t, "pages");
+      await approve(t, "pages", written);
+      await approve(t, "pages", waiting);
+      const arranged = await arrange(
+        t,
+        [publishPage(written), publishPage(waiting)],
+        PAST
+      );
+      const repo = new ReleasesRepository(t.adapter);
+      const [release] = await repo.findReleases({ ids: [arranged.releaseId] });
+      const receipted = (await repo.listMembers(arranged.releaseId)).find(
+        member => member.entryId === written
+      );
+      if (!release || !receipted) throw new Error("no release or member");
+      const block = ReleasesRepository.prototype.blockReleases;
+      vi.spyOn(
+        ReleasesRepository.prototype,
+        "blockReleases"
+      ).mockImplementation(async function (this: ReleasesRepository, ...args) {
+        await t.adapter.update(
+          RELEASE_MEMBERS_TABLE,
+          { appliedRevision: release.revision },
+          { and: [{ column: "id", op: "=", value: receipted.id }] }
+        );
+        return block.apply(this, args);
+      });
+
+      await takeStep(t, "pages", waiting, null, "bounce", "Not yet.");
+
+      expect(await releaseState(t, arranged.releaseId)).toBe("scheduled");
+      expect(await stoppedNotices(t, arranged)).toBe(0);
+    });
+
     it("never stops due releases over a publish their plan loses to a later takedown", async () => {
       // The later release takes the page down and wins it, so the earlier publish is never made
       // and its approval holds nothing back.
