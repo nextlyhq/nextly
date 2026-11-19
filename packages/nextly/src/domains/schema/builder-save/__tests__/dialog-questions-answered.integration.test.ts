@@ -270,3 +270,92 @@ for (const dialect of getConfiguredTestDialects()) {
     }
   );
 }
+
+// A field inside a group with no name is a column of the row too: removed, it is asked about as
+// any removed field is, the dialog's preview lists it for the person to confirm, and their
+// confirmation, sent by the field's name as the admin sends it, lets the drop through.
+for (const dialect of getConfiguredTestDialects()) {
+  describe(`a dialog save that removes a field inside a group with no name (${dialect})`, () => {
+    let t: TestNextly;
+    let basePath: string;
+    const laidOut = (fields: Field[]) => ({
+      type: "group",
+      label: "Details",
+      fields,
+    });
+    const before = [text("heading"), laidOut([text("views"), text("note")])];
+    const after = [text("heading"), laidOut([text("note")])];
+
+    beforeEach(async () => {
+      basePath = await mkdtemp(join(tmpdir(), "nextly-dialog-questions-"));
+      vi.stubEnv("NODE_ENV", "development");
+      t = await createTestNextly({
+        dialect: dialect as TestDialect,
+        basePath,
+        db: DB,
+      });
+      await dispatchComponents(
+        "createComponent",
+        {},
+        { slug: "meta", label: "Meta", fields: before }
+      );
+      await exec(
+        t,
+        `INSERT INTO comp_meta (id, _parent_id, _parent_table, _parent_field, _order, heading, views, note) VALUES ('kept-1', 'parent-1', 'dc_parent', 'meta', 0, 'Hello', '7', 'n')`
+      );
+    });
+
+    afterEach(async () => {
+      await t?.destroy();
+      vi.unstubAllEnvs();
+      await rm(basePath, { recursive: true, force: true });
+    });
+
+    const save = async (extra: Record<string, unknown>) =>
+      dispatchComponents(
+        "applyComponentSchemaChanges",
+        { slug: "meta" },
+        {
+          fields: after,
+          confirmed: true,
+          schemaVersion: await versionOf(t, "dynamic_components", "meta"),
+          ...extra,
+        }
+      );
+    const columns = async () =>
+      (
+        await readTableDefinition(
+          statement => exec(t, statement),
+          (t.adapter as unknown as DrizzleAdapter).getCapabilities().dialect,
+          "comp_meta"
+        )
+      ).columns.map(column => column.name);
+
+    it("refuses removing it unconfirmed, lists it as removed, and drops it once confirmed by name", async () => {
+      const refused = await save({}).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+      expect(String(refused)).toMatch(/cancelled/);
+      expect(await columns()).toContain("views");
+
+      // The dialog's preview, as the Builder reads it from the response.
+      const response = await dispatchComponents(
+        "previewComponentSchemaChanges",
+        { slug: "meta" },
+        { fields: after }
+      );
+      const body = (await (response as Response).json()) as {
+        data?: { changes?: { removed?: { name: string }[] } };
+        changes?: { removed?: { name: string }[] };
+      };
+      const shown = body.data ?? body;
+      expect((shown.changes?.removed ?? []).map(field => field.name)).toContain(
+        "views"
+      );
+
+      await save({ resolutions: { views: { action: "confirm_drop" } } });
+      expect(await columns()).not.toContain("views");
+    }, 60_000);
+  });
+}

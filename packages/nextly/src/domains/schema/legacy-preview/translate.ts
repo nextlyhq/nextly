@@ -33,11 +33,12 @@ import {
 import type { PipelinePreviewResult } from "../pipeline/preview";
 import {
   fieldProducesColumn,
+  fieldsStoredOnRow,
   junctionTableNameFor,
   toSnakeCase,
   type ColumnOrigin,
 } from "../services/field-column-descriptor";
-import { computeFieldDiff } from "../services/field-diff";
+import { rowFieldDiff } from "../services/field-diff";
 import {
   relationshipTargetSlug,
   sameRelationTarget,
@@ -78,7 +79,7 @@ export interface TranslateContext {
  * Translate pipeline preview output to legacy `SchemaPreviewResult`.
  *
  * What this does:
- *   1. Run `computeFieldDiff` on user-provided fields to produce the
+ *   1. Run `rowFieldDiff` on user-provided fields to produce the
  *      legacy `changes.{added,removed,changed,unchanged}` shape.
  *   2. Count the non-null values each removed field holds, where they are
  *      stored (`countRows - countNulls`, the pipeline's helpers). A count
@@ -105,7 +106,7 @@ export async function translatePipelinePreviewToLegacy(
   // Where the fields' values are stored, before and after, by the shared rule: an entity keeps its
   // translatable values in the companion when translated, and every entity does under per-language
   // storage, where turning the entity's translation on or off moves none of them.
-  const diff = computeFieldDiff(currentFields, newFields, {
+  const diff = rowFieldDiff(currentFields, newFields, {
     localized: storesPerLanguage({ localized }),
     newLocalized: storesPerLanguage({
       localized: context.requestedLocalized ?? localized,
@@ -559,9 +560,12 @@ function uniquenessWarnings(
   preview: PipelinePreviewResult,
   context: TranslateContext
 ): string[] {
-  const kept = new Set(context.currentFields.map(field => field.name));
+  // The row's fields, a field inside a group with no name among them, by the column each is.
+  const kept = new Set(
+    fieldsStoredOnRow(context.currentFields).map(field => field.name)
+  );
   const byColumn = new Map(
-    context.newFields
+    fieldsStoredOnRow(context.newFields)
       .filter(field => kept.has(field.name))
       .map(field => [toSnakeCase(field.name).toLowerCase(), field])
   );

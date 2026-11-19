@@ -6,6 +6,8 @@ import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { isFieldLocalized } from "../../i18n/classify-fields";
 import { usesJunctionTable } from "../field-rules";
 
+import { fieldsStoredOnRow } from "./field-column-descriptor";
+
 // A single field change: what the field was and what it became
 export interface FieldChange {
   name: string;
@@ -178,4 +180,20 @@ function movesLinkStorage(
 // field read as a change, even one that only relabelled it.
 function isSet(value: boolean | undefined): boolean {
   return value === true;
+} /**
+ * The field diff a Schema Builder dialog shows and asks about: over the fields stored on the row,
+ * so a field inside a group with no name, a column of the row too (`fieldsStoredOnRow`), is added,
+ * changed or removed as that column rather than hidden in its group. What the dialog's preview
+ * lists for the person to confirm, and what a save that runs its file asks before it drops.
+ */
+export function rowFieldDiff(
+  oldFields: readonly FieldDefinition[],
+  newFields: readonly FieldDefinition[],
+  options: { localized?: boolean; newLocalized?: boolean } = {}
+): FieldDiffResult {
+  return computeFieldDiff(
+    fieldsStoredOnRow(oldFields),
+    fieldsStoredOnRow(newFields),
+    options
+  );
 }

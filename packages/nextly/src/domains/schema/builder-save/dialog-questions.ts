@@ -25,7 +25,7 @@ import { PromptCancelledError } from "../pipeline/prompt-dispatcher/errors";
 import type { Resolution } from "../pipeline/resolution/types";
 import type { DesiredSchema } from "../pipeline/types";
 import { toSnakeCase } from "../services/field-column-descriptor";
-import { computeFieldDiff } from "../services/field-diff";
+import { rowFieldDiff } from "../services/field-diff";
 
 /**
  * Refuse a dialog save whose request leaves a question the push asks unanswered, judged by the
@@ -61,10 +61,11 @@ export async function refuseUnansweredDialogQuestions(args: {
   // `drop_and_add` is the consent to lose its values.
   const covered = new Set(candidates.map(candidate => candidate.fromColumn));
   // The drops the request answers for are those of the fields the change removes, as the dialog
-  // lists them for the person to confirm (`computeFieldDiff`). A field it keeps by name whose column
-  // goes, a relationship stored in a link table now, is a change of storage the save carries.
+  // lists them for the person to confirm (`rowFieldDiff`), a field inside a group with no name
+  // included. A field it keeps by name whose column goes, a relationship stored in a link table
+  // now, is a change of storage the save carries.
   const removed = new Set(
-    computeFieldDiff([...args.oldFields], [...args.newFields], {
+    rowFieldDiff(args.oldFields, args.newFields, {
       localized: storesPerLanguage({ localized: args.wasLocalized }),
       newLocalized: storesPerLanguage({ localized: args.isLocalized }),
     }).removed.map(field => toSnakeCase(field.name))
