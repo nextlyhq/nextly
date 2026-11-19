@@ -141,12 +141,13 @@ function SkippedItem({ line }: { line: SkippedLine }): JSX.Element {
         <span className="text-foreground">{line.name}</span>
       ) : (
         // Underlined always, beside names that are not links; in a new tab,
-        // so Settings stays where it is.
+        // so Settings stays where it is. In the text colour: a brand's primary
+        // is a fill and can fall under AA as small text.
         <a
           href={line.href}
           target="_blank"
           rel="noopener noreferrer"
-          className="font-medium text-primary underline underline-offset-2"
+          className="font-medium text-foreground underline underline-offset-2"
         >
           {line.name}
         </a>
