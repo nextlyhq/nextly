@@ -5,6 +5,7 @@
 import { describe, expect, it } from "vitest";
 
 import { defineCollection } from "../../../collections/config/define-collection";
+import { setupTransformerInput } from "../../../plugins/plugin-consent";
 import { defineSingle } from "../../../singles/config/define-single";
 import { configurationProblems } from "../config-problems";
 
@@ -97,5 +98,78 @@ describe("a collection defineCollection finds a problem in", () => {
       declared.fields.map(field => (field as { name?: string }).name)
     ).toEqual(["title", "slug"]);
     expect(declared.labels).toMatchObject({ singular: "Notes" });
+  });
+});
+
+describe("an entity declared with no fields, through its define function", () => {
+  // The system fields its function adds are not the author's: judged without them, a collection
+  // breaks the rule that it declare a field, as it did when `defineCollection` threw.
+  it("is reported for a collection, its system fields still added", () => {
+    const declared = {
+      collections: [defineCollection({ slug: "notes", fields: [] })],
+    };
+
+    expect(configurationProblems(declared)).toContainEqual(
+      expect.objectContaining({
+        path: "collections[0].fields",
+        code: "FIELDS_EMPTY",
+      })
+    );
+    expect(
+      declared.collections[0].fields.map(
+        field => (field as { name?: string }).name
+      )
+    ).toEqual(["title", "slug"]);
+  });
+
+  // A Single may declare no fields of its own (its rules never refused one, and `defineSingle`
+  // never threw on it), so judging it without its system fields finds nothing.
+  it("is accepted for a Single, as it always was", () => {
+    const declared = {
+      singles: [defineSingle({ slug: "home", fields: [] })],
+    };
+
+    expect(configurationProblems(declared)).toEqual([]);
+    expect(
+      declared.singles[0].fields.map(field => (field as { name?: string }).name)
+    ).toEqual(["title", "slug"]);
+  });
+
+  it("is not reported once a plugin's setup gives it a field", () => {
+    const declared = {
+      collections: [defineCollection({ slug: "notes", fields: [] })],
+    };
+    const [notes] = declared.collections;
+    const effective = {
+      collections: [
+        { ...notes, fields: [...notes.fields, { name: "body", type: "text" }] },
+      ],
+    };
+
+    expect(configurationProblems(declared, effective)).toEqual([]);
+  });
+});
+
+describe("an app's entity a plugin's setup renamed", () => {
+  // Followed from the copy a setup is handed to the entity it returns, rather than by its slug,
+  // which the setup may change: the renamed entity is the one the commands use.
+  it("is judged as the setup left it, at the place the app declared it", () => {
+    const declared = {
+      collections: [
+        { slug: "Blog Posts", fields: [{ name: "body", type: "text" }] },
+      ],
+    };
+    const handed = setupTransformerInput(declared, []);
+    const effective = {
+      collections: handed.collections.map(entity => ({
+        ...entity,
+        slug: "blog-posts",
+      })),
+    };
+
+    expect(
+      configurationProblems(declared).map(problem => problem.path)
+    ).toEqual(["collections[0].slug"]);
+    expect(configurationProblems(declared, effective)).toEqual([]);
   });
 });

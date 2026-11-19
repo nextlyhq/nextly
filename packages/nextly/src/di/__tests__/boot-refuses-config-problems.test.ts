@@ -98,7 +98,7 @@ describe("a start given entities declared through define* with problems", () => 
 });
 
 describe("a start given an entity written as a plain object with a problem", () => {
-  it("warns of the problem, with its place, and goes on to connect", async () => {
+  it("warns of the problem, with its place, and starts as it did", async () => {
     const warned: string[] = [];
     vi.spyOn(console, "warn").mockImplementation((...parts: unknown[]) => {
       warned.push(parts.map(String).join(" "));
@@ -114,15 +114,14 @@ describe("a start given an entity written as a plain object with a problem", () 
 
     const refused = await refusalOf(config);
 
-    expect(refused).not.toMatchObject({
-      logContext: { reason: "config-invalid" },
-    });
+    // It starts as it did: nothing refuses it, and its services are registered.
+    expect(refused).toBeUndefined();
     expect(
       warned.some(line => line.includes("collections[0].fields[0].name")),
       warned.join("\n")
     ).toBe(true);
-    // Past the check, on to what the start does next.
     expect(created.adapters).toBe(1);
+    expect(isServicesRegistered()).toBe(true);
   });
 });
 

@@ -103,3 +103,34 @@ describe("a public address its own rule refuses, beside another problem", () => 
     expect(paths).toContain("collections[1].slug");
   });
 });
+
+describe("an app's entity a plugin's setup repairs by renaming it", () => {
+  // The commands use the entity the setup returned, so that is the one judged.
+  it("loads, judged as the setup left it", async () => {
+    exported.config = {
+      collections: [
+        { slug: "Blog Posts", fields: [{ name: "body", type: "text" }] },
+      ],
+      plugins: [
+        {
+          name: "@test/renames",
+          version: "1.0.0",
+          nextly: "*",
+          setup: (config: { collections?: Array<{ slug?: string }> }) => ({
+            ...config,
+            collections: (config.collections ?? []).map(entity => ({
+              ...entity,
+              slug: "blog-posts",
+            })),
+          }),
+        },
+      ],
+    };
+
+    const loaded = await loadConfig({ cwd: project() });
+
+    expect(loaded.config.collections?.map(entity => entity.slug)).toContain(
+      "blog-posts"
+    );
+  });
+});
