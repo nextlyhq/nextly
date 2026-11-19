@@ -4,12 +4,11 @@
  * are said.
  *
  * The parts listed are those waiting for this person's approval: each holds
- * the same approval step, and may take it. The step names `"all"` where every
- * part that step leaves from is listed, so the server names the parts it
- * leaves (`left`); where some part in that stage is not this person's to
- * approve, it names the listed parts alone, which the server takes as named.
- * Either way `seen` is each listed part's revision and version as the dialog
- * showed it, and the server refuses the whole step where any of them moved.
+ * the same approval step, and may take it. The step names exactly those
+ * parts, never `"all"`: the review state leaves out parts the person may not
+ * read, and `"all"` would reach them too. `seen` is each listed part's
+ * revision and version as the dialog showed it, and the server refuses the
+ * whole step where any of them moved.
  *
  * @module components/features/entries/review/approve-all
  */
@@ -33,8 +32,8 @@ export interface ApproveAll {
   listed: PartReview[];
   /** Every other part of the document, named in the dialog as left out. */
   out: PartReview[];
-  /** The parts the step names. */
-  parts: TakeStepPayload["parts"];
+  /** The parts the step names: the listed ones, each by its id. */
+  parts: (string | null)[];
 }
 
 /** Whether `part` holds the step `name` and this person may take it there. */
@@ -75,17 +74,11 @@ export function approveAllOf(
   const name = chosen.name;
   const listed = parts.filter(part => mayApprove(part, name));
   const out = parts.filter(part => !mayApprove(part, name));
-  const inItsStage = parts.filter(part =>
-    part.steps.some(step => step.name === name)
-  );
   return {
     step: chosen,
     listed,
     out,
-    parts:
-      listed.length === inItsStage.length
-        ? "all"
-        : listed.map(part => part.part),
+    parts: listed.map(part => part.part),
   };
 }
 

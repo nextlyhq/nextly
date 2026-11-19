@@ -249,9 +249,9 @@ describe("Approve all languages", () => {
     expect(stepSpy).toHaveBeenCalledWith({
       document: { collection: "posts", id: "e1" },
       step: "approve",
-      // Every part the approval leaves from is listed, so the server names
-      // the rest.
-      parts: "all",
+      // The listed parts by name, even where they are every part in review:
+      // "all" would reach parts the review state leaves out.
+      parts: ["en", null, "es"],
       seen: [
         { part: "en", revision: 5, version: "t-en-5" },
         { part: null, revision: 3, version: "t-shared" },
