@@ -8,10 +8,10 @@
  * Read from each database's own catalog (`readTableDefinition`) and compared whole, column for
  * column, so a property nobody thought to list is held too.
  *
- * On the Builder road the development database's main column is given a default by hand first, as
- * a database may have one, so the receiving column has something of its own to keep on the way into
- * the translations table (a default set by hand is in no migration file, so turning translation off
- * restores the column as its file says, without it); SQLite cannot change an existing column, so there the columns are Nextly's own.
+ * On the Builder road the dialog runs the migration file it writes, planned from the history, so
+ * the columns are Nextly's own there too: a default given to the main column by hand is in no
+ * migration file, and the dialog refuses it as drift, naming the ways to recover, before anything
+ * moves.
  * On the replay the files are Nextly's and so are the columns they make: what is held there is that
  * the translations table describes every field's column as the main table does.
  */
@@ -273,29 +273,6 @@ describe.each(getConfiguredTestDialects())(
       const first = await boot(dialect);
       instance = first;
       await createPosts(first);
-      // A column as a database may have it: with a default of its own, given by hand. The migration
-      // history records no such default, so turning translation on is refused as drift before
-      // anything moves, with the way on; put back by hand, the same save goes on.
-      if (dialect !== "sqlite") {
-        await run(
-          first,
-          `ALTER TABLE ${q(TABLE)} ALTER COLUMN ${q("views")} SET DEFAULT 7`
-        );
-        const refused = await setTranslated(first, true).then(
-          () => undefined,
-          (error: unknown) => error
-        );
-        const told =
-          refused instanceof Error ? refused.message : String(refused);
-        expect(told).toContain("schema drift detected");
-        expect(told).toContain("put the table back as the history records it");
-        await expectAllMovedIn(first, TABLE);
-        expect(await tableThere(first, COMPANION)).toBe(false);
-        await run(
-          first,
-          `ALTER TABLE ${q(TABLE)} ALTER COLUMN ${q("views")} DROP DEFAULT`
-        );
-      }
       await expectAllMovedIn(first, TABLE);
       const order = await movedColumnsLeft(first, TABLE);
       const before = await movedColumns(first, dialect, TABLE);
@@ -323,23 +300,16 @@ describe.each(getConfiguredTestDialects())(
 
       await setTranslated(first, false);
 
-      // The turn-off's own file restores each column as Nextly defines it, and the database stands
-      // as that file says: so each comes back as it was before translation, and the translations
-      // table is gone. A property no migration file holds is not kept on this road: a default set
-      // by hand on the main table, not through Nextly, does not survive.
+      // The turn-off restores each column as Nextly defines it: so each comes back as it was before
+      // translation, and the translations table is gone.
       expect(await tableThere(first, COMPANION)).toBe(false);
       expect(await valuesIn(first, TABLE, `${q("id")} = 'r1'`)).toEqual(VALUES);
-      const { views, ...rest } = before;
       // Each column back, though not where it stood: the turn-off's push adds the restored columns
       // after the others, in its own order, so their position is the one thing not held here.
       await expectAllMovedIn(first, TABLE);
       const back = await movedColumns(first, dialect, TABLE);
       expectEveryColumn(back);
-      expect(back).toEqual({
-        ...rest,
-        views: views && { ...views, default: back.views?.default ?? null },
-      });
-      expect(back.views?.default ?? null).toBeNull();
+      expect(back).toEqual(before);
     });
 
     /**
@@ -376,6 +346,40 @@ describe.each(getConfiguredTestDialects())(
       });
       return { second, before, order };
     }
+
+    // A default given to the main column by hand is in no migration file, so the dialog's file, planned
+    // from the history, finds the database other than it records: refused as drift, with the ways to
+    // recover, and nothing moves. SQLite cannot give an existing column a default.
+    it.skipIf(dialect === "sqlite")(
+      "refuses, through the Builder's schema dialog, a column given a default by hand as drift, moving nothing",
+      async () => {
+        const first = await boot(dialect);
+        instance = first;
+        await createPosts(first);
+        await run(
+          first,
+          dialect === "mysql"
+            ? `ALTER TABLE ${q(TABLE)} MODIFY COLUMN ${q("views")} INT NULL DEFAULT 7`
+            : `ALTER TABLE ${q(TABLE)} ALTER COLUMN ${q("views")} SET DEFAULT 7`
+        );
+        const before = await movedColumns(first, dialect, TABLE);
+        await insertEntry(first);
+
+        const refusal = await setTranslated(first, true).then(
+          () => undefined,
+          (error: unknown) => error
+        );
+
+        expect(refusal).toMatchObject({ code: "NEXTLY_MIGRATION_DRIFT" });
+        const said =
+          (refusal as { publicMessage?: string }).publicMessage ?? "";
+        // A Builder save's drift refusal: the one way on that works for a save, the table put back by hand.
+        expect(said).toContain("The save was refused: schema drift detected");
+        expect(said).toContain("put the table back as the history records it");
+        expect(await movedColumns(first, dialect, TABLE)).toEqual(before);
+        expect(await tableThere(first, COMPANION)).toBe(false);
+      }
+    );
 
     it("through nextly migrate, replaying the dialog's turn-on into a second database", async () => {
       const { second, before, order } = await replayUpToTurnOn();
