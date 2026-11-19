@@ -79,6 +79,7 @@
  */
 import type { ValidationIssue } from "../validation";
 
+import { tokenCustomProperty } from "./declarations";
 import { resolveAliases } from "./dtcg-aliases";
 import {
   type DtcgNode,
@@ -90,6 +91,14 @@ import {
 } from "./dtcg-format";
 import { read, readToken } from "./dtcg-read";
 import { unreadIn } from "./dtcg-report";
+import { type DtcgSiteData, readSiteData, siteDataOf } from "./dtcg-site-data";
+import {
+  keptTextStyle,
+  readTextStyles,
+  TEXT_STYLES_GROUP,
+  textStyleToDtcg,
+  typographyContext,
+} from "./dtcg-typography";
 import {
   fluidNoteFor,
   isKind,
@@ -97,15 +106,20 @@ import {
   type TypedValue,
   withFluidNote,
 } from "./dtcg-values";
+import { isTextStyle, type NamedClass } from "./named-class";
 import {
   MAX_TOKEN_NAME_LENGTH,
   MAX_TOKEN_NAME_SEGMENTS,
+  resolveTokenPrefix,
   type SiteToken,
   type SiteTokenSet,
+  tokenIdentity,
   tokenNamingProblem,
 } from "./site-tokens";
 
 export { NEXTLY_EXTENSION } from "./dtcg-format";
+export type { DtcgSiteData } from "./dtcg-site-data";
+export { TEXT_STYLES_GROUP } from "./dtcg-typography";
 export type { DtcgNode } from "./dtcg-format";
 export {
   GENERIC_FONT_FAMILIES,
@@ -132,13 +146,23 @@ export { resolveAliases } from "./dtcg-aliases";
  * tokens missing has no way to know, and the ones that go missing are the
  * interesting ones — the `clamp()` that took an afternoon to get right.
  */
-export function tokensToDtcg(set: SiteTokenSet): {
+export function tokensToDtcg(
+  set: SiteTokenSet,
+  options: TokensToDtcgOptions = {}
+): {
   document: DtcgNode;
   issues: ValidationIssue[];
+  /**
+   * The ids of the text styles the file keeps as Nextly data only: their
+   * parts have no form the format types, so design tools don't see them.
+   */
+  keptTextStyles: string[];
 } {
   const document: DtcgNode = {};
   const issues: ValidationIssue[] = [];
   const carried: DtcgNode = {};
+  const aliasOf = colourAliases(set.prefix, set.tokens);
+  const written: { token: SiteToken; typed: TypedValue }[] = [];
 
   for (const token of set.tokens) {
     const naming = exportNamingRefusal(token, "it was not exported");
@@ -150,7 +174,7 @@ export function tokensToDtcg(set: SiteTokenSet): {
       issues.push(issue(naming));
       continue;
     }
-    const typed = typedValue(token);
+    const typed = typedValue(token, aliasOf);
     if (typed === undefined) {
       // Keyed by the whole name: this is extension data, not a token tree, so
       // the format's ban on a period inside a name does not reach it.
@@ -161,17 +185,177 @@ export function tokensToDtcg(set: SiteTokenSet): {
       carried[token.name] = entryFor(token, undefined);
       continue;
     }
-    place(document, token.name.split("."), entryFor(token, typed), issues);
+    if (
+      place(document, token.name.split("."), entryFor(token, typed), issues)
+    ) {
+      written.push({ token, typed });
+    }
   }
 
-  if (Object.keys(carried).length > 0) {
-    document.$extensions = { [NEXTLY_EXTENSION]: { [CARRIED]: carried } };
+  carryUnplacedAliases(document, written, carried);
+  const styles = textStylesFor(options.textStyles ?? [], written);
+  if (styles.group !== undefined) document[TEXT_STYLES_GROUP] = styles.group;
+  const site = siteDataOf(set);
+  const sequence = sequenceOf(set.tokens, written, carried);
+  const own: DtcgNode = {
+    ...(Object.keys(carried).length > 0 ? { [CARRIED]: carried } : {}),
+    ...(sequence === undefined ? {} : { [SEQUENCE]: sequence }),
+    ...(site === undefined ? {} : { [SITE]: site }),
+    ...(styles.kept === undefined ? {} : { [TEXT_STYLES]: styles.kept }),
+  };
+  if (Object.keys(own).length > 0) {
+    document.$extensions = { [NEXTLY_EXTENSION]: own };
   }
-  return { document, issues };
+  return { document, issues, keptTextStyles: styles.only };
+}
+
+/**
+ * A shadow written with an alias to a colour the file couldn't place (its
+ * path is another token's group) would point at nothing: each such shadow
+ * is taken back out of the tree and kept as Nextly data, as every value the
+ * format can't hold is.
+ */
+function carryUnplacedAliases(
+  document: DtcgNode,
+  written: { token: SiteToken; typed: TypedValue }[],
+  carried: DtcgNode
+): void {
+  const placed = new Set(written.map(entry => entry.token.name));
+  for (const entry of [...written]) {
+    if (entry.token.kind !== "shadow") continue;
+    const aliases = [
+      ...JSON.stringify(entry.typed).matchAll(/"\{([^"{}]+)\}"/g),
+    ];
+    if (aliases.every(([, name]) => placed.has(name ?? ""))) continue;
+    unplace(document, entry.token.name.split("."));
+    written.splice(written.indexOf(entry), 1);
+    carried[entry.token.name] = entryFor(entry.token, undefined);
+  }
+}
+
+/** Take the token at `path` out of the tree, with any group it leaves empty. */
+function unplace(root: DtcgNode, path: readonly string[]): void {
+  const [head, ...rest] = path;
+  if (head === undefined || !Object.hasOwn(root, head)) return;
+  const child = root[head];
+  if (rest.length > 0 && isPlainObject(child)) {
+    unplace(child, rest);
+    if (Object.keys(child).length > 0) return;
+  }
+  delete root[head];
+}
+
+/**
+ * The variables' names in the site's order, when reading the file would
+ * meet them in another: the tree groups them by path, and the variables the
+ * format can't type sit apart. Absent when the two orders agree.
+ */
+function sequenceOf(
+  tokens: readonly SiteToken[],
+  written: readonly { token: SiteToken }[],
+  carried: DtcgNode
+): string[] | undefined {
+  const names = new Set([
+    ...written.map(entry => entry.token.name),
+    ...Object.keys(carried),
+  ]);
+  const inSet = [
+    ...new Set(tokens.map(token => token.name).filter(name => names.has(name))),
+  ];
+  // The order a reader meets them in: the tree's groups, depth first, then
+  // the carried variables.
+  const tree: DtcgNode = {};
+  for (const { token } of written) {
+    let node = tree;
+    for (const segment of token.name.split(".")) {
+      if (!Object.hasOwn(node, segment)) node[segment] = {};
+      node = node[segment] as DtcgNode;
+    }
+  }
+  const met: string[] = [];
+  const walk = (node: DtcgNode, at: readonly string[]): void => {
+    for (const [key, child] of Object.entries(node)) {
+      const here = [...at, key].join(".");
+      if (names.has(here)) met.push(here);
+      walk(child as DtcgNode, [...at, key]);
+    }
+  };
+  walk(tree, []);
+  met.push(...Object.keys(carried));
+  return met.every((name, at) => name === inSet[at]) ? undefined : inSet;
+}
+
+/**
+ * The site's text styles in the file: the typography values design tools
+ * read, under their group, and every text style kept exactly as Nextly
+ * data, with the ids of those kept only there.
+ */
+function textStylesFor(
+  textStyles: readonly NamedClass[],
+  written: readonly { token: SiteToken; typed: TypedValue }[]
+): { group?: DtcgNode; kept?: DtcgNode[]; only: string[] } {
+  const ofText = textStyles.filter(isTextStyle);
+  if (ofText.length === 0) return { only: [] };
+  const context = typographyContext(written);
+  const group: DtcgNode = {};
+  const only: string[] = [];
+  for (const style of ofText) {
+    const value = textStyleToDtcg(style, context);
+    if (value === undefined || Object.hasOwn(group, style.slug)) {
+      only.push(style.id);
+      continue;
+    }
+    group[style.slug] = value;
+  }
+  return {
+    ...(Object.keys(group).length === 0 ? {} : { group }),
+    kept: ofText.map(keptTextStyle),
+    only,
+  };
+}
+
+/** How {@link tokensToDtcg} writes a set. */
+export interface TokensToDtcgOptions {
+  /** The site's text styles, written as DTCG typography values. */
+  readonly textStyles?: readonly NamedClass[];
+}
+
+/**
+ * A `var()` of a colour variable's custom property, under the site's prefix,
+ * as an alias to that variable's path: how a shadow's colour variable is
+ * written. Only a colour the file writes as a DTCG colour is named, so the
+ * alias always resolves.
+ */
+function colourAliases(
+  prefix: string | undefined,
+  tokens: readonly SiteToken[]
+): (reference: string) => string | undefined {
+  const written = resolveTokenPrefix(prefix).prefix;
+  const byProperty = new Map<string, string>();
+  for (const token of tokens) {
+    if (token.kind !== "color") continue;
+    if (exportNamingRefusal(token, "") !== undefined) continue;
+    if (typedValue(token) === undefined) continue;
+    const property = tokenCustomProperty(tokenIdentity(token), written);
+    if (!byProperty.has(property)) byProperty.set(property, `{${token.name}}`);
+  }
+  return reference => {
+    const named = /^var\(\s*(--[A-Za-z0-9_-]+)\s*\)$/.exec(reference.trim());
+    return named === null ? undefined : byProperty.get(named[1] ?? "");
+  };
 }
 
 /** Where the document's own extension holds the variables the format cannot type. */
 const CARRIED = "variables";
+
+/** Where it holds the site's own design data: Site text, order, fluid range. */
+const SITE = "site";
+
+/** Where it holds every text style, exactly. */
+const TEXT_STYLES = "textStyles";
+
+/** Where it holds the variables' names in the site's order. */
+const SEQUENCE = "sequence";
 
 /**
  * Why a token's name or id keeps it out of an exported file, in words, or
@@ -216,6 +400,10 @@ function entryFor(token: SiteToken, typed: TypedValue | undefined): DtcgNode {
     // and everything about which version of this exporter ran.
     ...(token.id === undefined ? {} : { id: token.id }),
     ...(token.label === undefined ? {} : { label: token.label }),
+    ...(token.group === undefined ? {} : { group: token.group }),
+    ...(token.fluid === undefined
+      ? {}
+      : { fluid: { small: token.fluid.small, large: token.fluid.large } }),
     ...(fluidNote === undefined
       ? {}
       : { description: token.description ?? null }),
@@ -265,7 +453,7 @@ function place(
   path: string[],
   entry: DtcgNode,
   issues: ValidationIssue[]
-): void {
+): boolean {
   let node = root;
   for (let index = 0; index < path.length - 1; index++) {
     const segment = path[index] ?? "";
@@ -284,16 +472,17 @@ function place(
           `"${path.join(".")}" cannot be exported, because "${path.slice(0, index + 1).join(".")}" is already a token.`
         )
       );
-      return;
+      return false;
     }
     node = existing;
   }
   const leaf = path[path.length - 1] ?? "";
   if (Object.hasOwn(node, leaf)) {
     issues.push(issue(`"${path.join(".")}" is exported more than once.`));
-    return;
+    return false;
   }
   node[leaf] = entry;
+  return true;
 }
 
 /* ------------------------------------------------------------------ import */
@@ -308,6 +497,10 @@ function place(
 export function dtcgToTokens(input: unknown): {
   tokens: SiteToken[];
   issues: ValidationIssue[];
+  /** The site's own design data the file keeps, when it keeps any. */
+  site?: DtcgSiteData;
+  /** The text styles the file keeps, when it keeps any. */
+  textStyles?: NamedClass[];
 } {
   const tokens: SiteToken[] = [];
   const issues: ValidationIssue[] = [];
@@ -317,7 +510,10 @@ export function dtcgToTokens(input: unknown): {
       issues: [issue("The file is not a design-token document.")],
     };
   }
-  const { tree, carried } = takeCarried(input, issues);
+  const { tree, carried, site, textStyles, sequence } = takeCarried(
+    input,
+    issues
+  );
   const resolved = resolveAliases(tree);
   issues.push(...resolved.issues);
   read(resolved.document, [], undefined, tokens, issues);
@@ -355,7 +551,18 @@ export function dtcgToTokens(input: unknown): {
       tokens.push(token);
     }
   }
-  return { tokens, issues };
+  inSequence(tokens, sequence);
+  const siteData = site === undefined ? undefined : readSiteData(site, issues);
+  const styles =
+    textStyles === undefined ? undefined : readTextStyles(textStyles, issues);
+  return {
+    tokens,
+    issues,
+    ...(siteData === undefined ? {} : { site: siteData }),
+    ...(styles === undefined || styles.length === 0
+      ? {}
+      : { textStyles: styles }),
+  };
 }
 
 /**
@@ -373,29 +580,54 @@ function holdsStoredValue(entry: DtcgNode): boolean {
 }
 
 /**
- * The document without the variables this system carried in its own root
- * extension, and those variables by name.
+ * The document without this system's own data at its root, and that data:
+ * the variables the format cannot type, by name, the site's design data,
+ * and the text styles. With the text styles kept here, the typography
+ * values written beside them for design tools are taken out too: the kept
+ * copy is what is read.
  *
- * Taken out before the tree is walked, so the walk reports what is left of the
- * root's extensions as it always did, and never this system's own data.
+ * Taken out before the tree is walked, so the walk reports what is left of
+ * the root's extensions as it always did, and never this system's own data.
  */
 function takeCarried(
   input: DtcgNode,
   issues: ValidationIssue[]
-): { tree: DtcgNode; carried: DtcgNode } {
+): {
+  tree: DtcgNode;
+  carried: DtcgNode;
+  site?: unknown;
+  textStyles?: unknown;
+  sequence?: unknown;
+} {
   const extensions = statedExtensions(input);
   const own = extensions?.[NEXTLY_EXTENSION];
-  if (extensions === undefined || !isPlainObject(own) || !(CARRIED in own)) {
+  if (
+    extensions === undefined ||
+    !isPlainObject(own) ||
+    !(CARRIED in own || SITE in own || TEXT_STYLES in own || SEQUENCE in own)
+  ) {
     return { tree: input, carried: {} };
   }
-  const { [CARRIED]: variables, ...ownRest } = own;
+  const {
+    [CARRIED]: variables,
+    [SITE]: site,
+    [TEXT_STYLES]: textStyles,
+    [SEQUENCE]: sequence,
+    ...ownRest
+  } = own;
   const { [NEXTLY_EXTENSION]: _own, ...otherVendors } = extensions;
   const rest: DtcgNode =
     Object.keys(ownRest).length === 0
       ? otherVendors
       : { ...otherVendors, [NEXTLY_EXTENSION]: ownRest };
-  const { $extensions: _all, ...tree } = input;
-  if (!isPlainObject(variables)) {
+  const { $extensions: _all, ...walked } = input;
+  const tree: DtcgNode =
+    textStyles === undefined
+      ? walked
+      : Object.fromEntries(
+          Object.entries(walked).filter(([key]) => key !== TEXT_STYLES_GROUP)
+        );
+  if (variables !== undefined && !isPlainObject(variables)) {
     issues.push(
       issue(
         `The file's ${NEXTLY_EXTENSION} "${CARRIED}" is not a list of variables, so none of it was read.`
@@ -406,5 +638,25 @@ function takeCarried(
     tree:
       Object.keys(rest).length === 0 ? tree : { ...tree, $extensions: rest },
     carried: isPlainObject(variables) ? variables : {},
+    ...(site === undefined ? {} : { site }),
+    ...(textStyles === undefined ? {} : { textStyles }),
+    ...(sequence === undefined ? {} : { sequence }),
   };
+}
+
+/**
+ * The tokens put in the order the file's sequence names them, in place;
+ * one it doesn't name keeps its place after every one it does. A sequence
+ * that is not a list of names orders nothing.
+ */
+function inSequence(tokens: SiteToken[], sequence: unknown): void {
+  if (!Array.isArray(sequence)) return;
+  const at = new Map<string, number>();
+  sequence.forEach((name: unknown, index) => {
+    if (typeof name === "string" && !at.has(name)) at.set(name, index);
+  });
+  // After every listed one, however often a name is listed.
+  const rank = (token: SiteToken) => at.get(token.name) ?? sequence.length;
+  // A stable sort: tokens of one rank keep the order they were read in.
+  tokens.sort((left, right) => rank(left) - rank(right));
 }

@@ -18,6 +18,7 @@ import {
   DELETE_COMPONENT_REPLACEMENT_COMPONENT,
 } from "./builder-view";
 import { COMPONENTS_SLUG } from "./collections/components";
+import { LAYOUTS_SLUG } from "./collections/layouts";
 import { PATTERNS_SLUG } from "./collections/patterns";
 import { TEMPLATES_SLUG } from "./collections/templates";
 import { pageBuilder } from "./plugin";
@@ -41,14 +42,18 @@ const REPLACED = {
 };
 
 /**
- * The views the plugin replaces, the Templates collection's aside: its own
- * actions and panels are the templates' wiring, not the component store's.
+ * The views the plugin replaces, the Templates collection's and the header &
+ * footer sets' aside: their own actions, panels and views are their wiring,
+ * not the component store's.
  */
 function componentViews(
   plugin: ReturnType<typeof pageBuilder>
 ): Record<string, unknown> {
-  const { [TEMPLATES_SLUG]: _templates, ...others } =
-    plugin.contributes?.admin?.views ?? {};
+  const {
+    [TEMPLATES_SLUG]: _templates,
+    [LAYOUTS_SLUG]: _sets,
+    ...others
+  } = plugin.contributes?.admin?.views ?? {};
   return others;
 }
 

@@ -211,7 +211,9 @@ function DropLines({
     <>
       <p className="text-sm font-semibold text-foreground">{title}</p>
       {hint === undefined ? null : (
-        <span className="mt-1 text-sm font-medium text-primary underline underline-offset-2">
+        // In the text colour: the primary token is a fill a brand may set to
+        // any colour, and small text drawn in it can fall under AA.
+        <span className="mt-1 text-sm font-medium text-foreground underline underline-offset-2">
           {hint}
         </span>
       )}

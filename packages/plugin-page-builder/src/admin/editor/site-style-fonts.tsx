@@ -16,6 +16,7 @@ import {
   type SiteFamily,
 } from "@nextlyhq/builder/shell";
 import {
+  useCurrentUserId,
   usePluginClientConfig,
   useUploadMedia,
   WEB_FONT_FORMATS,
@@ -28,6 +29,8 @@ import { readSiteStyleRecord } from "../../site-style-record";
 import { useFontCatalogueClient, useSaveSiteStyle } from "../site-style-client";
 
 import { toastSaveConflicts } from "./conflict-toast";
+import { fontPreviewsStoreFor } from "./editor-preference-stores";
+import { useVariablesStudio } from "./site-style-tokens-studio";
 import { PLUGIN_SOURCE } from "./stored-document";
 
 /**
@@ -331,6 +334,9 @@ export function useFontCatalogue(): FontCatalogue | undefined {
   // exist only once a read has answered, so it is set before it is asked.
   const previewBase = useRef("");
   const off = config?.fontCatalogue === false;
+  // The author's choice to show previews, kept under their own key.
+  const userId = useCurrentUserId();
+  const previewConsent = useMemo(() => fontPreviewsStoreFor(userId), [userId]);
   return useMemo(
     () =>
       off
@@ -350,8 +356,9 @@ export function useFontCatalogue(): FontCatalogue | undefined {
                 style,
               }),
             add: client.add,
+            ...(previewConsent === undefined ? {} : { previewConsent }),
           },
-    [off, client]
+    [off, client, previewConsent]
   );
 }
 
@@ -369,12 +376,11 @@ export function SiteFontsScreen({
   codeFaces,
   tokens,
   absence,
-  onOpenTokens,
-  onClose,
-  labelledBy,
   storedFaces,
   storedPending,
   unreadableFonts,
+  // Where the screen sends the author and how it closes, passed through.
+  ...ways
 }: Pick<
   FontsScreenProps,
   | "faces"
@@ -382,6 +388,7 @@ export function SiteFontsScreen({
   | "tokens"
   | "absence"
   | "onOpenTokens"
+  | "onOpenRole"
   | "onClose"
   | "labelledBy"
 > & {
@@ -392,6 +399,7 @@ export function SiteFontsScreen({
   const mayChange = useCan("update-site-style");
   const writer = useFontFaceWriter(storedFaces, storedPending, unreadableFonts);
   const catalogue = useFontCatalogue();
+  const studio = useVariablesStudio();
   return (
     <FontsScreen
       absence={absence}
@@ -402,12 +410,37 @@ export function SiteFontsScreen({
       onAddFace={writer.add}
       onRemoveFamily={writer.remove}
       catalogue={catalogue}
-      tokens={tokens}
-      {...(onOpenTokens === undefined ? {} : { onOpenTokens })}
-      {...(onClose === undefined ? {} : { onClose })}
-      {...(labelledBy === undefined ? {} : { labelledBy })}
+      tokens={studio?.tokens ?? tokens}
+      {...studioScreenProps(studio)}
+      {...ways}
     />
   );
+}
+
+/**
+ * What the screen takes from the Variables studio it is mounted in, as the
+ * Design panel and the admin's Fonts page mount it: the variables' usage,
+ * so a font says how many places use it, and the studio's writer, so a
+ * role set here is one variable edit the studio saves (and, in the builder,
+ * undoes). Nothing outside a studio, and no writer for a read-only one.
+ */
+function studioScreenProps(
+  studio: ReturnType<typeof useVariablesStudio>
+): Pick<
+  FontsScreenProps,
+  "usage" | "onTokensChange" | "suppliedText" | "classes" | "issue"
+> {
+  if (studio === null) return {};
+  const siteText = studio.supplied?.siteText;
+  return {
+    ...(studio.usage === undefined ? {} : { usage: studio.usage }),
+    ...(studio.readOnly === true ? {} : { onTokensChange: studio.onChange }),
+    ...(siteText === undefined ? {} : { suppliedText: siteText }),
+    // The text styles rows follow, so a font one supplies is guarded, and a
+    // failed save, which this screen says as the Variables tab does.
+    ...(studio.classes === undefined ? {} : { classes: studio.classes }),
+    ...(studio.issue === undefined ? {} : { issue: studio.issue }),
+  };
 }
 
 /**

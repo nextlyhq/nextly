@@ -72,6 +72,18 @@ export interface ComponentVariantsHost {
    * Absent, the section holds it alone and the canvas draws the defaults.
    */
   readonly preview?: VariantPreviewBinding;
+  /**
+   * The variants are edited in the component's own view alone, and no
+   * section is drawn here: a header or footer edited in place from a page,
+   * whose canvas has no variant of it to preview.
+   */
+  readonly editedInOwnView?: boolean;
+  /**
+   * Opens the component's own view, where its variants are edited: offered
+   * beside the line saying so while `editedInOwnView`. Absent where the host
+   * cannot open it, and the line then stands alone.
+   */
+  readonly onOpenOwnView?: () => void;
 }
 
 /** The open variant, as the host holds it for the canvas to preview. */

@@ -38,7 +38,9 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import { MIGRATION_TARGET } from "../../domains/field-groups/migration/target";
 import {
+  forgetFieldGroupStorageNames,
   resolveFieldGroupRegistryName,
   resolveFieldGroupRegistryTable,
 } from "../../domains/field-groups/storage/resolve-storage-names";
@@ -166,8 +168,8 @@ const POSTGRES_SQL = {
     DROP TABLE IF EXISTS "dynamic_collections" CASCADE;
   `,
 
-  dropDynamicComponents: `
-    DROP TABLE IF EXISTS "${STORAGE_FORMAT.registryTable}" CASCADE;
+  dropDynamicComponents: (registryTable: string) => `
+    DROP TABLE IF EXISTS "${registryTable}" CASCADE;
   `,
 
   dropNextlyMigrations: `
@@ -249,8 +251,8 @@ const MYSQL_SQL = {
     DROP TABLE IF EXISTS \`dynamic_collections\`;
   `,
 
-  dropDynamicComponents: `
-    DROP TABLE IF EXISTS \`${STORAGE_FORMAT.registryTable}\`;
+  dropDynamicComponents: (registryTable: string) => `
+    DROP TABLE IF EXISTS \`${registryTable}\`;
   `,
 
   dropNextlyMigrations: `
@@ -335,8 +337,8 @@ const SQLITE_SQL = {
     DROP TABLE IF EXISTS "dynamic_collections";
   `,
 
-  dropDynamicComponents: `
-    DROP TABLE IF EXISTS "${STORAGE_FORMAT.registryTable}";
+  dropDynamicComponents: (registryTable: string) => `
+    DROP TABLE IF EXISTS "${registryTable}";
   `,
 
   dropNextlyMigrations: `
@@ -511,7 +513,7 @@ export class SystemTableService extends BaseService {
 
     const down = [
       `-- Drop ${STORAGE_FORMAT.registryTable} table`,
-      sql.dropDynamicComponents.trim(),
+      sql.dropDynamicComponents(STORAGE_FORMAT.registryTable).trim(),
       "",
       "-- Drop dynamic_collections table",
       sql.dropDynamicCollections.trim(),
@@ -554,14 +556,22 @@ export class SystemTableService extends BaseService {
         this.logger.info("Dropped system table 'nextly_migrations'");
       }
 
-      const dcompExists = await this.tableExists(STORAGE_FORMAT.registryTable);
-      if (dcompExists) {
-        await this.executeSQL(sql.dropDynamicComponents);
-        dropped.push(STORAGE_FORMAT.registryTable);
-        this.logger.info(
-          `Dropped system table '${STORAGE_FORMAT.registryTable}'`
-        );
+      // The field-group registry under each name it can have. On a site whose storage moved to the
+      // current names it is `dynamic_field_groups`, and dropping only the legacy name would leave
+      // it behind; a stopped or hand-repaired storage migration can leave both, and readers prefer
+      // the legacy one, so resolving one name would leave the other. Each is dropped only where it
+      // exists, so a migrated site's reset names no legacy table.
+      for (const fieldGroupRegistry of [
+        STORAGE_FORMAT.registryTable,
+        MIGRATION_TARGET.registryTable,
+      ]) {
+        if (!(await this.tableExists(fieldGroupRegistry))) continue;
+        await this.executeSQL(sql.dropDynamicComponents(fieldGroupRegistry));
+        dropped.push(fieldGroupRegistry);
+        this.logger.info(`Dropped system table '${fieldGroupRegistry}'`);
       }
+      // The name this process resolved names a table that is gone now.
+      forgetFieldGroupStorageNames(this.adapter);
 
       const dcExists = await this.tableExists("dynamic_collections");
       if (dcExists) {

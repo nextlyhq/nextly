@@ -16,6 +16,7 @@
  * @since 1.0.0
  */
 import type { SupportedDialect } from "../../../database/schema-registry";
+import { processGlobal } from "../../../shared/process-global";
 
 import type { ExtensionSchema } from "./build-extension-schema";
 
@@ -26,7 +27,11 @@ import type { ExtensionSchema } from "./build-extension-schema";
  * boots a container and still has to reach the same answer; two paths to one
  * fact is what the extension module exists to avoid.
  */
-const active = new Map<SupportedDialect, ExtensionSchema>();
+/** One per process: see {@link processGlobal}. */
+const active = processGlobal(
+  "activeExtensionSchema",
+  () => new Map<SupportedDialect, ExtensionSchema>()
+);
 
 export function setActiveExtensionSchema(
   dialect: SupportedDialect,

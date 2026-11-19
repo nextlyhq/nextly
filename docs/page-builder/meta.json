@@ -3,6 +3,8 @@
   "pages": [
     "index",
     "editor",
+    "design-panel",
+    "how-text-works",
     "placement",
     "locked-areas",
     "layouts",
@@ -11,6 +13,7 @@
     "moving-between-sites",
     "compose-through-the-api",
     "named-queries",
+    "starter-pages",
     "contributed-blocks",
     "forms"
   ]

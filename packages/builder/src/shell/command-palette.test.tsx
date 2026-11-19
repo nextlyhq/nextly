@@ -804,12 +804,12 @@ describe("the host can drive it", () => {
     pressPaletteKey();
 
     const separators = () =>
-      document.querySelectorAll("[cmdk-separator]").length;
+      document.querySelectorAll("[data-palette-divider]").length;
     expect(separators()).toBeGreaterThan(0);
 
-    // The mode decision and cmdk's own search state have to agree. cmdk's separator reads its RAW
-    // search and unmounts while that is nonempty, so spaces stripped every divider out of a list
-    // that was still grouped and still showing everything.
+    // The mode decision and the dividers have to agree. cmdk's own separator read its RAW search
+    // and unmounted while that was nonempty, so spaces stripped every divider out of a list that
+    // was still grouped and still showing everything.
     fireEvent.change(screen.getByRole("combobox"), {
       target: { value: "   " },
     });

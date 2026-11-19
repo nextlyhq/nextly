@@ -759,3 +759,98 @@ describe("the Design panel's writes", () => {
     expect(answered).toBe(true);
   });
 });
+
+describe("a value drawn as it is typed", () => {
+  /** Type into a field without leaving it, as an author part-way through. */
+  function type(field: HTMLElement, value: string): void {
+    act(() => {
+      fireEvent.change(field, { target: { value } });
+    });
+  }
+
+  it("draws each valid colour as it is typed, and writes once when the field is left", async () => {
+    const steps: EditorStep[] = [];
+    render(<Editor steps={steps} />);
+    const field = openBrand();
+    type(field, "#ff0000");
+    expect(canvas()).toBe("#ff0000");
+    // Half a colour keeps the last valid one drawn.
+    type(field, "#00ff0");
+    expect(canvas()).toBe("#ff0000");
+    type(field, "#00ff00");
+    expect(canvas()).toBe("#00ff00");
+    // However long the author takes, nothing typed is written yet.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+    expect(writes).toEqual([]);
+
+    act(() => {
+      fireEvent.blur(field);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(writes).toHaveLength(1);
+    expect(lastBrand()).toBe("#00ff00");
+    expect(steps).toHaveLength(1);
+    expect(canvas()).toBe("#00ff00");
+  });
+
+  it("draws what is stored again when the field is left with nothing to write", async () => {
+    render(<Editor steps={[]} />);
+    const field = openBrand();
+    type(field, "#ff0000");
+    expect(canvas()).toBe("#ff0000");
+    // Typed back to what the variable holds: nothing to write.
+    type(field, "#1d2b6b");
+    act(() => {
+      fireEvent.blur(field);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(writes).toEqual([]);
+    expect(canvas()).toBe("none");
+    expect(previewing()).toBe("0");
+  });
+
+  it("keeps an edit still waiting for its write drawn when a later preview ends unwritten", async () => {
+    render(<Editor steps={[]} />);
+    const field = openBrand();
+    enter(field, "#000031");
+    expect(canvas()).toBe("#000031");
+    type(field, "#ff0000");
+    expect(canvas()).toBe("#ff0000");
+    // Typed back to what the edit holds: nothing more to write.
+    type(field, "#000031");
+    act(() => {
+      fireEvent.blur(field);
+    });
+    expect(canvas()).toBe("#000031");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(writes).toHaveLength(1);
+    expect(lastBrand()).toBe("#000031");
+    expect(canvas()).toBe("#000031");
+  });
+
+  it("draws what is stored again when the editor closes mid-edit", async () => {
+    render(<Editor steps={[]} />);
+    const field = openBrand();
+    type(field, "#ff0000");
+    expect(canvas()).toBe("#ff0000");
+    act(() => {
+      fireEvent.keyDown(field, { key: "Escape" });
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    // Escape leaves the typing unwritten, as it always has; nothing it drew
+    // stays drawn.
+    expect(writes).toEqual([]);
+    expect(canvas()).toBe("none");
+    expect(previewing()).toBe("0");
+  });
+});

@@ -14,6 +14,7 @@ import type {
   TokensPanelProps,
   VariableReach,
   VariablesAccess,
+  VariablesTogether,
   VariablesUsage,
   VariableUsesPage,
 } from "@nextlyhq/builder/shell";
@@ -66,6 +67,22 @@ function usageFromResponse(
     mayCount: body.mayCount,
     variables,
   };
+}
+
+/**
+ * Each group's count as the tab reads it, in the order asked. Fails where the
+ * answer holds no count for every group, so the tab adds the variables'
+ * documents up rather than reading a count that is not there.
+ */
+function togetherFromResponse(
+  body: VariablesUsageResponse | undefined,
+  groups: number
+): readonly VariablesTogether[] {
+  const together = body?.together;
+  if (together === undefined || together.length !== groups) {
+    throw new Error("The usage read counted no groups.");
+  }
+  return together;
 }
 
 /**
@@ -132,6 +149,20 @@ export function useVariablesClient(
     []
   );
 
+  const usageTogether = useCallback(
+    async (groups: readonly (readonly string[])[], signal: AbortSignal) =>
+      togetherFromResponse(
+        await readPluginRoute<VariablesUsageResponse>({
+          plugin: PAGE_BUILDER_PLUGIN_NAME,
+          // Each group's variables, once each, then the groups by position.
+          path: variableUsagePath([...new Set(groups.flat())], groups),
+          signal,
+        }),
+        groups.length
+      ),
+    []
+  );
+
   const uses = useCallback(
     async (id: string, page: number, signal: AbortSignal) =>
       usesFromResponse(
@@ -148,13 +179,14 @@ export function useVariablesClient(
   return useMemo(
     () => ({
       usage,
+      usageTogether,
       uses,
       // The shared styles' count: one count fills every usage index.
       count: countSiteUsage,
       ...(openSharedStyle === undefined ? {} : { openSharedStyle }),
       ...(openLook === undefined ? {} : { openLook }),
     }),
-    [usage, uses, openSharedStyle, openLook]
+    [usage, usageTogether, uses, openSharedStyle, openLook]
   );
 }
 

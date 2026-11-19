@@ -18,11 +18,13 @@ import { contributedInspector } from "../contributed-blocks";
 
 import { FONTS_SCREEN_VIEW } from "./design-panel";
 import { DocumentSettingsPanel } from "./document-settings-panel";
-import { servicesFor } from "./editor-services";
+import { servicesFor, withSettingMaker } from "./editor-services";
 import { pageAddressOf, type PageFacts } from "./editor-settings";
 import type { CardVerbs, EditorView } from "./editor-view";
 import { PageReadMeter, type PageDataCount } from "./page-read-meter";
 import { SelectedRegionCard } from "./region-card";
+import { inspectedVariantsOf } from "./region-editing";
+import { SetSettingsPanel } from "./set-settings-panel";
 import type { SettingsPlace } from "./settings-place";
 import {
   offerableFaces,
@@ -70,6 +72,11 @@ export function editorInspector<TFieldValues extends FieldValues>(
   return (
     <InspectorPanel
       editor={editor}
+      // While a header or footer is edited in place, its blocks are said to
+      // be in it: "Navigation · in Site header".
+      {...(view.editing.target.kind === "region"
+        ? { editingIn: view.editing.target.label }
+        : {})}
       // The SAME ref the canvas publishes its root through, so the style
       // tab reads the element a node is actually drawn as rather than
       // inferring one from the document. Two refs would let the panel
@@ -88,21 +95,26 @@ export function editorInspector<TFieldValues extends FieldValues>(
       // handed out of it because the inspector is drawn beside the canvas
       // rather than under it.
       verbs={verbs}
-      contentServices={servicesFor(
-        view.passages,
-        view.locale,
-        view.readMedia,
-        view.searchMedia,
-        view.entryCollection,
-        view.userId,
-        {
-          entry: view.bindingEntry,
-          page: view.editedDocument,
-          canvas: view.canvasEntry,
-        },
-        // The language the canvas's binding pass is given, its context's, as
-        // the published page's is its route's.
-        canvasRender.context?.locale
+      contentServices={withSettingMaker(
+        servicesFor(
+          view.passages,
+          view.locale,
+          view.readMedia,
+          view.searchMedia,
+          view.entryCollection,
+          view.userId,
+          {
+            entry: view.bindingEntry,
+            page: view.editedDocument,
+            canvas: view.canvasEntry,
+          },
+          // The language the canvas's binding pass is given, its context's,
+          // as the published page's is its route's.
+          canvasRender.context?.locale
+        ),
+        // A placement's "Make this a setting of the component", held for
+        // the page's Save.
+        view.makeComponentSetting
       )}
       // A placement's exposed passage the canvas is editing in place: its
       // field in the placement panel is held meanwhile, as one editor serves
@@ -161,31 +173,72 @@ export function editorInspector<TFieldValues extends FieldValues>(
       // "Edit block styles" under the Block style tiles: Design's Styles tab,
       // at the block's type.
       onEditBlockStyles={view.openBlockStyles}
+      // A block's own custom CSS: lent only to a person who may change site
+      // code; without it the panel draws no Custom CSS section.
+      {...(view.blockCustomCss === undefined
+        ? {}
+        : { customCss: view.blockCustomCss })}
       // In a component's own view: the ids its live definition holds, which a
       // new field must never reuse, how far a removal reaches, and its name
       // for the card heading the view, which is the open document's title.
-      componentFields={namedFacts(componentFacts, view.pageTitle)}
+      // In a header or footer edited in place, its component's own.
+      componentFields={
+        view.regionEditing.area === undefined
+          ? namedFacts(componentFacts, view.pageTitle)
+          : view.regionEditing.componentFacts
+      }
       // And how many placements chose a variant, for its delete dialog, and
-      // the open variant, which the canvas previews.
-      componentVariants={previewingHost(componentVariants, view.preview)}
+      // the open variant, which the canvas previews. A header or footer
+      // edited in place keeps its variants to its own view, opened by the
+      // same "Edit component" the Components panel uses.
+      componentVariants={inspectedVariantsOf(
+        view.regionEditing,
+        previewingHost(componentVariants, view.preview),
+        view.componentView.onEditComponent
+      )}
       // A header or footer selected on the canvas: what it is, where it
       // comes from and how to change it, in place of the page's settings.
       {...regionCardOf(view)}
       // With nothing selected: the open document's own settings, editing
       // the entry's form as Settings does, saved with the page's draft.
-      documentSettings={own => (
-        <DocumentSettingsPanel
-          kind={view.initialDocument.kind}
-          own={own}
-          control={form.control as unknown as Control<FieldValues>}
-          onOpenSettings={view.pages.openSettings}
-          address={pageAddressOf(view, form.page)}
-          // The same place Settings' General draws the search result at.
-          place={form.place}
-          // The page's data at every level, so it can always be found.
-          pageData={<PageReadMeter count={form.pageData} place="settings" />}
-        />
-      )}
+      documentSettings={own =>
+        view.set !== undefined ? (
+          setSettingsOf(view, view.set, own, form.control)
+        ) : (
+          <DocumentSettingsPanel
+            kind={view.initialDocument.kind}
+            own={own}
+            control={form.control as unknown as Control<FieldValues>}
+            onOpenSettings={view.pages.openSettings}
+            address={pageAddressOf(view, form.page)}
+            // The same place Settings' General draws the search result at.
+            place={form.place}
+            // The page's data at every level, so it can always be found.
+            pageData={<PageReadMeter count={form.pageData} place="settings" />}
+          />
+        )
+      }
+    />
+  );
+}
+
+/**
+ * With nothing selected on a set's screen: the set's settings, or while its
+ * header or footer is edited in place, that component's own, as the
+ * builder draws them, never the set's around it.
+ */
+export function setSettingsOf<TFieldValues extends FieldValues>(
+  view: Pick<EditorView, "regionEditing">,
+  set: NonNullable<EditorView["set"]>,
+  own: React.ReactNode | null,
+  control: Control<TFieldValues>
+): React.ReactNode {
+  if (view.regionEditing.area !== undefined) return own;
+  return (
+    <SetSettingsPanel
+      set={set}
+      control={control as unknown as Control<FieldValues>}
+      onEditArea={view.regionEditing.requestEdit}
     />
   );
 }
@@ -196,14 +249,25 @@ export function editorInspector<TFieldValues extends FieldValues>(
  */
 function regionCardOf(view: EditorView): { regionCard?: React.ReactNode } {
   const facts = view.selectedRegion.card;
-  if (facts === undefined) return {};
+  // While it is edited, the inspector edits its blocks instead.
+  if (facts === undefined || view.regionEditing.area !== undefined) return {};
+  const { requestEdit } = view.regionEditing;
   return {
     regionCard: (
       <SelectedRegionCard
         key={`${facts.area}:${facts.componentId}`}
         facts={facts}
-        onEditComponent={view.componentView.onEditComponent}
+        onEdit={
+          requestEdit === undefined ? undefined : () => requestEdit(facts.area)
+        }
         onOpenSettings={view.pages.openSettings}
+        // On a set's own screen the header is chosen in the set's settings,
+        // which clearing the selection shows.
+        onShowSetSettings={
+          view.set === undefined
+            ? undefined
+            : view.selectedRegion.selection.clear
+        }
       />
     ),
   };

@@ -180,16 +180,13 @@ function SiteTextRow({
               type="button"
               className="nx-vars__row nx-site-text__row"
               data-site-text={row.role}
-              // Named with its section, so "Body" here is never taken
-              // for a type size of the same name in the list below.
-              aria-label={
-                row.follows === undefined
-                  ? `${EDITOR_WORDS.siteText}: ${row.label}, ${words}`
-                  : `${EDITOR_WORDS.siteText}: ${row.label} uses ${row.follows.name}`
-              }
               data-open={open ? "" : undefined}
             >
-              <span className="nx-vars__name" title={row.label}>
+              <span
+                className="nx-vars__name"
+                title={row.label}
+                aria-hidden="true"
+              >
                 {row.label}
               </span>
               <span
@@ -202,8 +199,17 @@ function SiteTextRow({
               >
                 {SAMPLE}
               </span>
-              <span className="nx-vars__chip" title={words}>
+              <span className="nx-vars__chip" title={words} aria-hidden="true">
                 {words}
+              </span>
+              {/* The row's name, in one element, named with its section so
+                  "Body" here is never taken for a type size of the same name
+                  in the list below. Text rather than an aria-label, which
+                  would have to hold every drawn word, the sample included. */}
+              <span className="nx-sr-only">
+                {row.follows === undefined
+                  ? `${EDITOR_WORDS.siteText}: ${row.label}, ${words}`
+                  : `${EDITOR_WORDS.siteText}: ${row.label} uses ${row.follows.name}`}
               </span>
             </button>
           </PopoverTrigger>

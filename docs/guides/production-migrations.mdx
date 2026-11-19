@@ -961,8 +961,8 @@ commands warn, naming its kind and slug: the code-first definition wins.
 
 Two things to know before relying on it:
 
-- **The Builder's own `.sql` file is ignored.** Saving a Collection writes a timestamped migration
-  but no `meta/*.snapshot.json`. Every command ignores such a file, naming it with "ignored:
+- **A file an earlier Schema Builder wrote is ignored.** Before Builder saves wrote their snapshot,
+  saving a Collection wrote a timestamped migration but no `meta/*.snapshot.json`. Every command ignores such a file, naming it with "ignored:
   written by an earlier Schema Builder", so run `nextly migrate:create` to write the change as a
   migration with its snapshot, and commit that pair. Only a file with the whole signature is
   ignored. A file with the Builder's name and no snapshot that lacks another part of it, for
@@ -977,39 +977,25 @@ Two things to know before relying on it:
   collection and save it once before generating the migration.
 
 It is input, not a deployment artifact. `nextly migrate` never reads `ui-schema.json`; it applies
-`.sql` files. An entity's registry row reaches another database only when a migration file carries
-its upsert, and `migrate:create` appends that upsert **only for entities whose table the migration
-actually changes**. So the manifest gets an entity into the generator's view; a DDL change to that
-entity is what gets its row into production.
+`.sql` files. An entity's registry row reaches another database in those files: every Builder save
+writes a migration carrying it, a save that changes settings alone included (see
+[What a Builder save writes](/docs/schema-builder#what-a-builder-save-writes)).
 
 The manifest is written by a development-only route, so it is a dev-time artifact you commit rather
 than something production generates.
 
-### What does not travel
+### What travels with a Builder save
 
-- A **metadata-only** edit — a label, a description, or the Versions, Revalidate or Webhooks switch,
-  with no column change for that entity — produces no upsert, because `migrate:create` writes a file
-  only for DDL and filters metadata upserts to the tables that file touches. With no DDL anywhere in
-  the run it writes nothing at all (`No changes detected`, exit code 0). The value stays in the
-  manifest until some later migration changes that entity's table and carries the row with it.
-  A **cleared** description is the exception, because it never travels: the manifest records an
-  empty description as absent, and the upsert leaves a column the manifest does not carry as it
-  was, so the other database keeps the old text through every later migration.
-- Status and Internationalization are **not** metadata: both change columns. Note that an
-  Internationalization toggle whose column moves are emitted as a companion migration can still
-  leave the `localized` registry value behind, because the upsert is filtered by the same
-  touched-table set the companion file does not populate. Check the registry row after toggling
-  localization on an existing entity.
-- **A deletion leaves the registry row behind.** Deleting a Collection, a Single or a Field Group
-  in the Builder writes the migration that drops its table, with a snapshot that no longer records
-  the entity, so the next `migrate:create` and `migrate:check` find nothing lost. Removing the
-  entry from `ui-schema.json` by hand is not a deletion: both commands refuse it, as above. The
-  table goes. Its registry row does not: `migrate:create`
-  builds registry upserts only for entities still in the manifest, and nothing on the
-  `nextly migrate` path removes a row. The other environment keeps a row describing a table that no
-  longer exists. There is no supported way to remove it through `nextly migrate` today, and
-  `nextly prune` does not apply — it only removes `plugin:` provenance and always retains Builder
-  entities.
+- A **metadata-only** edit — a description, or a switch such as Versions, with no column change —
+  writes a settings-only migration that carries the registry row. A **cleared** description travels
+  the same way, as the empty text it is.
+- Status and Internationalization are **not** metadata: both change columns, and their migrations
+  carry the registry row with them, its `localized` value included.
+- **A deletion removes the registry row.** Deleting a Collection, a Single or a Field Group in the
+  Builder writes the migration that drops its table and removes its row, with a snapshot that no
+  longer records the entity, so the next `migrate:create` and `migrate:check` find nothing lost.
+  Removing the entry from `ui-schema.json` by hand is not a deletion: both commands refuse it, as
+  above.
 
 ### What `migrate` repairs
 
@@ -1024,11 +1010,10 @@ reach a Builder entity is narrower than it sounds:
 | A missing **collection** or **single** row from a `migrate:create` deployment      | **No** — a `migrate:create` snapshot records tables, not entities, so registration finds nothing to insert. Only an entity-level snapshot, such as a scaffolded template's, restores a row |
 | A missing **field group** row                                                      | No — registration covers collections and singles only                                                                                                                                      |
 | An existing row with stale labels, descriptions or fields                          | No — the pass promotes status; it does not refresh content                                                                                                                                 |
-| A metadata-only edit that produced no file                                         | No — there is no artifact to read                                                                                                                                                          |
-| The row of a **deleted** entity                                                    | No — nothing on this path removes a row                                                                                                                                                    |
+| The row of a **deleted** entity                                                    | Removed by the delete's own migration, not by this pass                                                                                                                                    |
 
-So run `nextly migrate` to settle a pending status, but do not rely on it to recreate a registry row
-that a Builder deployment is missing.
+So run `nextly migrate` to settle a pending status. A Builder entity's row does not depend on this
+pass: each Builder save's migration writes it.
 
 ### Moving an entity into code
 

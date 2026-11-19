@@ -15,6 +15,8 @@ import {
   type PageCheck,
   type PageFinding,
 } from "./page-checks";
+import { labelNotInName } from "../label-in-name.fixture";
+
 import { PageChecksList } from "./page-checks-list";
 
 afterEach(cleanup);
@@ -119,7 +121,7 @@ describe("the list", () => {
     };
     draw([linked], { onFix });
     const link = screen.getByRole("link", {
-      name: "Over the page data limit in Site header. Edit the Main header & footer, in a new tab",
+      name: /^Over the page data limit in Site header\. Edit header & footer\. .*\(Edit the Main header & footer, in a new tab\)$/,
     });
     expect(link.getAttribute("href")).toBe("/admin/layouts/main");
     expect(link.getAttribute("target")).toBe("_blank");
@@ -129,9 +131,40 @@ describe("the list", () => {
 
   it("says, in each item, what is wrong, on which block, why it matters and what to do", () => {
     draw([finding("a")]);
-    const item = screen.getByRole("button", { name: "Problem a: Block a" });
+    const item = screen.getByRole("button", { name: /^Problem a: Block a\./ });
     expect(item.textContent).toContain("Why a matters.");
     expect(item.textContent).toContain("What to do about a.");
+  });
+
+  it("names each item with the words it draws, in order, the why kept", () => {
+    // A speech-input user says what they see (WCAG 2.5.3), and the item draws
+    // what is wrong, the block, why it matters and what to do.
+    draw([
+      finding("a"),
+      {
+        ...finding("h", "content"),
+        nodeId: undefined,
+        block: undefined,
+        fix: undefined,
+        what: "Over the page data limit in Site header",
+        opens: {
+          href: "/admin/layouts/main",
+          text: "Edit header & footer",
+          name: "Edit the Main header & footer, in a new tab",
+        },
+      },
+    ]);
+    const button = screen.getByRole("button", { name: /^Problem a: Block a/ });
+    expect(labelNotInName(button)).toBeNull();
+    expect(button.textContent).toContain("Why a matters.");
+    const link = screen.getByRole("link", {
+      name: /^Over the page data limit in Site header/,
+    });
+    expect(labelNotInName(link)).toBeNull();
+    // Where it goes is still said.
+    expect(link.getAttribute("aria-label")).toContain(
+      "Edit the Main header & footer, in a new tab"
+    );
   });
 
   it("says automatic checks don't replace an accessibility review", () => {
@@ -155,7 +188,9 @@ describe("the list", () => {
 
   it("asks for an item's fix when it is pressed", () => {
     const { onFix } = draw([finding("a"), finding("b")]);
-    fireEvent.click(screen.getByRole("button", { name: "Problem b: Block b" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: /^Problem b: Block b\./ })
+    );
     expect(onFix).toHaveBeenCalledWith(expect.objectContaining({ key: "b" }));
   });
 
@@ -187,9 +222,9 @@ describe("the list", () => {
         onFix={vi.fn()}
       />
     );
-    expect(screen.queryByRole("button", { name: "Problem a: Block a" })).toBe(
-      null
-    );
+    expect(
+      screen.queryByRole("button", { name: /^Problem a: Block a\./ })
+    ).toBe(null);
     expect(screen.getByText("1 item needs attention")).toBeDefined();
   });
 });

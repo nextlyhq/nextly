@@ -1377,7 +1377,9 @@ export class CollectionQueryService extends BaseService {
     collectionName: string,
     rows: Record<string, unknown>[],
     preloaded?: CompanionSchema | null,
-    statusFilter?: StatusFilter | null
+    statusFilter?: StatusFilter | null,
+    /** The documents a due release reveals to this read (`TranslationStatusArgs.revealed`). */
+    revealed?: ReadonlySet<unknown>
   ): Promise<void> {
     if (!this.localization || rows.length === 0) return;
     const companion =
@@ -1469,6 +1471,7 @@ export class CollectionQueryService extends BaseService {
       // On a status-scoped read, don't report a draft-only translation as present.
       statusValues:
         companion.hasStatus && statusFilter ? statusFilter.values : undefined,
+      revealed,
     });
   }
 
@@ -3559,6 +3562,8 @@ export class CollectionQueryService extends BaseService {
       skipByEntry: Map<string, ReadonlySet<string>> | undefined;
       refused: ReadonlyMap<string, ReadonlySet<string>>;
       caller: Parameters<CollectionQueryService["buildComponentReadAccess"]>[0];
+      /** A pending change shown in place of one language's stored values. */
+      pending?: { locale: string; values: Record<string, unknown> };
     }
   ): Promise<void> {
     if (!this.fieldGroupDataService || read.translations !== "all") return;
@@ -3583,6 +3588,7 @@ export class CollectionQueryService extends BaseService {
           [locale],
           readExpansionCaches()
         ),
+      pending: read.pending,
     });
   }
 
@@ -4410,7 +4416,8 @@ export class CollectionQueryService extends BaseService {
               params.collectionName,
               entries,
               companion,
-              statusFilter // the per-locale published filter
+              statusFilter, // the per-locale published filter
+              revealed
             )
         );
       }
@@ -5919,7 +5926,8 @@ export class CollectionQueryService extends BaseService {
               params.collectionName,
               [entry],
               companion,
-              statusFilter // the per-locale published filter
+              statusFilter, // the per-locale published filter
+              new Set<unknown>(decisions.reveal)
             )
         );
       }
@@ -5965,6 +5973,9 @@ export class CollectionQueryService extends BaseService {
       // Populate component field data from comp_{slug} tables
       // Pass depth for relationship expansion within component data
       // Pass select to skip component fields excluded from selection (performance optimization)
+      // The languages the entry's field groups are not read in beside it: those it is not
+      // published in. Put beside it once the read's document is settled, below.
+      let besideSkips: Map<string, ReadonlySet<string>> | undefined;
       if (this.fieldGroupDataService) {
         // On a public read, the languages the entry is not published in, which its field groups'
         // translations fall back past as its own translated fields do, and which a read of every
@@ -5995,26 +6006,8 @@ export class CollectionQueryService extends BaseService {
           // is judged by its own collection's field rules.
           access: this.buildComponentReadAccess(params, localeChain, caches),
         });
-        // A read of every language: the entry's field groups in every language it is published
-        // in beside it, as its own translated fields are.
-        await this.populateComponentsBesideRows([expandedEntry], {
-          translations: params.translations,
-          parentTable: collectionTableName(collection, params.collectionName),
-          fields: fields as FieldConfig[],
-          depth: params.depth,
-          select: params.select,
-          skipByEntry,
-          refused: refusedLanguages,
-          caller: params,
-        });
+        besideSkips = skipByEntry;
       }
-      // Each language beside the entry only where the read rule admits it in
-      // that language: after the field groups are put beside it, so a
-      // refused language is withheld from them too.
-      withholdLanguages(
-        expandedEntry,
-        refusedLanguages.get(String(expandedEntry.id))
-      );
 
       // On a trusted draft-view read, surface the working draft
       // (pending edits to a published document) in place of the live row, when
@@ -6071,6 +6064,11 @@ export class CollectionQueryService extends BaseService {
       // Under per-language storage: whether the shared part holds a pending
       // change, told on every language's editor read. Undefined elsewhere.
       let sharedChangesPending: boolean | undefined;
+      // The pending change shown in place of the read's language, by top-level field: what that
+      // language's field groups hold beside the read.
+      let pendingChange:
+        | { locale: string; values: Record<string, unknown> }
+        | undefined;
       if (draftEligible) {
         if (params.overrideAccess === true) {
           draftView = true;
@@ -6302,19 +6300,44 @@ export class CollectionQueryService extends BaseService {
           }
           // A draft kept by part holds only what it changes, so its values
           // are laid over the live entry rather than replacing it.
-          expandedEntry = parts
-            ? {
-                ...expandedEntry,
-                ...Object.fromEntries(
-                  Object.entries(draftEntry).filter(
-                    ([key]) => key in rawSnapshot
-                  )
-                ),
-              }
+          const shownDraft = parts
+            ? Object.fromEntries(
+                Object.entries(draftEntry).filter(([key]) => key in rawSnapshot)
+              )
             : draftEntry;
+          expandedEntry = parts
+            ? { ...expandedEntry, ...shownDraft }
+            : draftEntry;
+          if (typeof draftLocale === "string") {
+            pendingChange = { locale: draftLocale, values: shownDraft };
+          }
           draftOverlaid = true;
         }
       }
+
+      // A read of every language: the entry's field groups in every language it is published
+      // in beside it, as its own translated fields are. After the pending change is laid over
+      // it, so beside the document it returns, the change's language holds what the change does.
+      if (this.fieldGroupDataService) {
+        await this.populateComponentsBesideRows([expandedEntry], {
+          translations: params.translations,
+          parentTable: collectionTableName(collection, params.collectionName),
+          fields: fields as FieldConfig[],
+          depth: params.depth,
+          select: params.select,
+          skipByEntry: besideSkips,
+          refused: refusedLanguages,
+          caller: params,
+          pending: pendingChange,
+        });
+      }
+      // Each language beside the entry only where the read rule admits it in
+      // that language: after the field groups are put beside it, so a
+      // refused language is withheld from them too.
+      withholdLanguages(
+        expandedEntry,
+        refusedLanguages.get(String(expandedEntry.id))
+      );
 
       // An explicit `status: "draft"` read that opted into the working draft
       // dropped the draft predicate above so the published main row could be
