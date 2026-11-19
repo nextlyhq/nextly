@@ -29,6 +29,7 @@ import type { VersionScopeKind } from "../../schemas/versions/types";
 import { actionsByComponent, componentHold } from "./component-hold";
 import { goingLiveHold, type GoingLiveHold } from "./going-live-hold";
 import { planReleaseMaterialisation } from "./plan-release-materialisation";
+import { isDueAt } from "./release-due";
 import type { DueCheck } from "./release-read";
 import { NO_DECISIONS } from "./release-scope";
 import type { ReleaseDecisions } from "./release-scope";
@@ -55,8 +56,8 @@ export interface ReleaseVisibility {
 /** The lookup half, satisfied by `ReleasesRepository`. */
 export interface RevealSource {
   findDueDecisions(input: RevealQuery): Promise<ReleaseDecisions>;
-  /** The due releases and their members, as the run reads them to plan (see `withoutHeld`). */
-  findDueReleases: ReleasesRepository["findDueReleases"];
+  /** The releases holding the documents decided, and their members, to plan (`withoutHeld`). */
+  scheduledMembersFor: ReleasesRepository["scheduledMembersFor"];
   listMembersOf: ReleasesRepository["listMembersOf"];
 }
 
@@ -105,6 +106,11 @@ export function createReleaseVisibility(deps: {
  * Planned as the run plans (`planReleaseMaterialisation`) and asked as the run asks, so the two
  * cannot disagree. Read only when this scope has a decision to make, and only while something is
  * due, which the cheap check above already established.
+ *
+ * Bounded to the due releases holding a document this read decides, not the whole due backlog:
+ * a read pays for its own documents' releases. A component can reach further, through a release
+ * that shares a document with one of these but none with this scope; a hold there is not seen
+ * here, and the run, which plans every due release, still refuses that component.
  */
 async function withoutHeld(
   due: ReleaseDecisions,
@@ -113,7 +119,18 @@ async function withoutHeld(
   repository: RevealSource
 ): Promise<ReleaseDecisions> {
   if (due.reveal.length === 0 && due.hide.length === 0) return due;
-  const releases = await repository.findDueReleases(query.now);
+  const holding = await repository.scheduledMembersFor({
+    documents: [...due.reveal, ...due.hide].map(entryId => ({
+      scopeKind: query.scopeKind,
+      scopeSlug: query.scopeSlug,
+      entryId,
+    })),
+  });
+  const releases = holding.flatMap(({ release }) =>
+    release.scheduledAt !== null && isDueAt(release.scheduledAt, query.now)
+      ? [release]
+      : []
+  );
   if (releases.length === 0) return due;
   const plan = planReleaseMaterialisation({
     releases: releases.map(release => ({

@@ -68,6 +68,7 @@ import type { UserContext } from "../collections/services/collection-types";
 
 import {
   actionsByComponent,
+  begunReleases,
   componentHold,
   type ComponentHold,
 } from "./component-hold";
@@ -320,9 +321,10 @@ async function stopHopelessReleases(
   deps: ApplyDueReleasesDeps,
   plan: ReturnType<typeof planReleaseMaterialisation>,
   outcomes: readonly MaterialisationOutcome[],
-  plannedInstants: ReadonlyMap<string, Date>
+  plannedInstants: ReadonlyMap<string, Date>,
+  begun: ReadonlySet<string>
 ): Promise<number> {
-  const permanent = permanentlyBrokenReleases(outcomes, begunReleases(plan));
+  const permanent = permanentlyBrokenReleases(outcomes, begun);
   if (permanent.size === 0) return 0;
 
   // ONE CALL PER COMPONENT, and the component is the unit of atomicity. The
@@ -407,19 +409,6 @@ function permanentlyBrokenReleases(
       )
       .map(o => o.releaseId)
   );
-}
-
-/** The releases of each component an earlier pass already wrote part of. */
-function begunReleases(
-  plan: ReturnType<typeof planReleaseMaterialisation>
-): Set<string> {
-  const begun = new Set<string>();
-  for (const [index, actions] of actionsByComponent(plan).entries()) {
-    if (actions.some(action => action.applied)) {
-      for (const id of plan.overlappingReleases[index] ?? []) begun.add(id);
-    }
-  }
-  return begun;
 }
 
 export interface MaterialisationOutcome {
@@ -550,7 +539,9 @@ export async function applyDueReleases(
     // schedule the plan was built from.
     new Map(
       releases.flatMap(r => (r.scheduledAt ? [[r.id, r.scheduledAt]] : []))
-    )
+    ),
+    // From every member's receipt, the losing actions' included (`begunReleases`).
+    begunReleases(plan, members, releases)
   );
 
   const { published, undischarged } = await dischargeSettledComponents(

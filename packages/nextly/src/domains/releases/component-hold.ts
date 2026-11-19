@@ -21,6 +21,7 @@ import type {
   MaterialisationAction,
   planReleaseMaterialisation,
 } from "./plan-release-materialisation";
+import { memberAppliedFor, type DrainMemberRow } from "./releases-repository";
 
 /** Asks which of the documents going live are held back, by their ids. */
 export type AskHeld = (
@@ -91,4 +92,42 @@ export async function componentHold(
       detail: error instanceof Error ? error.message : String(error),
     };
   }
+}
+
+/**
+ * The releases of each component an earlier pass already wrote part of: a component holding any
+ * member with a receipt for its release's current revision.
+ *
+ * Read from every member, not from the plan's actions: the planner keeps one winning action per
+ * document, so a document an earlier pass published and a later release now takes down appears
+ * only as the takedown, and the receipt that says the component began would be lost with the
+ * losing publish. A begun component is never stopped for a hold, by the run or by an early stop,
+ * since stopping would leave what it wrote live for good; it waits, scheduled, for the approval.
+ */
+export function begunReleases(
+  plan: Pick<
+    ReturnType<typeof planReleaseMaterialisation>,
+    "overlappingReleases"
+  >,
+  members: readonly Pick<DrainMemberRow, "releaseId" | "appliedRevision">[],
+  releases: readonly { id: string; revision: number }[]
+): Set<string> {
+  const revisionOf = new Map(
+    releases.map(release => [release.id, release.revision])
+  );
+  const receipted = new Set(
+    members
+      .filter(member => {
+        const revision = revisionOf.get(member.releaseId);
+        return revision !== undefined && memberAppliedFor(member, revision);
+      })
+      .map(member => member.releaseId)
+  );
+  const begun = new Set<string>();
+  for (const group of plan.overlappingReleases) {
+    if (group.some(id => receipted.has(id))) {
+      for (const id of group) begun.add(id);
+    }
+  }
+  return begun;
 }

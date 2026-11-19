@@ -1595,6 +1595,45 @@ describe("applyDueReleases asks whether each document going live is held back", 
     expect(second).toMatchObject({ blocked: 0, published: 1 });
   });
 
+  it("counts a release as begun from a receipt the planner drops, a losing publish's included", async () => {
+    // r1 published e1 on a pass that was cut off; r2, due since, takes e1 down and wins it, so
+    // the plan holds r2's takedown and not r1's applied publish. r1's other document is held.
+    const unpublish = vi.fn(async () => {});
+    const d: ApplyDueReleasesDeps = {
+      ...deps({
+        releases: [
+          release(),
+          release({
+            id: "r2",
+            scheduledAt: new Date("2026-03-01T00:00:00.000Z"),
+          }),
+        ],
+        members: [
+          member({ id: "m-pub", releaseId: "r1", entryId: "e1" }),
+          member({ id: "m-held", releaseId: "r1", entryId: "e2" }),
+          member({
+            id: "m-down",
+            releaseId: "r2",
+            entryId: "e1",
+            action: "unpublish",
+          }),
+        ],
+        mutations: { unpublish },
+        marks: new Map([["m-pub", 0]]),
+      }),
+      notApproved: async documents =>
+        new Set(
+          documents.map(document => document.id).filter(id => id === "m-held")
+        ),
+    };
+
+    const result = await applyDueReleases(d);
+
+    expect(unpublish).not.toHaveBeenCalled();
+    expect(blockedIn(d)).toEqual([]);
+    expect(result).toMatchObject({ blocked: 0, published: 0 });
+  });
+
   it("asks about the member it is about to publish, by its id and document", async () => {
     const asked = vi.fn(
       async (_documents: readonly { id: string; entryId: string }[]) =>

@@ -9,6 +9,8 @@
  * The deploys that withdraw an approval or attach a workflow are in
  * `release-approval-boot.integration.test.ts`.
  */
+import { randomUUID } from "node:crypto";
+
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { grantTo } from "../../../__tests__/fixtures/permission-holders";
@@ -30,7 +32,11 @@ import type {
 } from "../../releases/readiness/check-sources";
 import { releaseCheckSources } from "../../releases/readiness/check-sources";
 import { createReleaseMutations } from "../../releases/release-mutations";
-import { ReleasesRepository } from "../../releases/releases-repository";
+import { RELEASE_MEMBERS_TABLE } from "../../releases/release-tables";
+import {
+  IDS_PER_LOOKUP,
+  ReleasesRepository,
+} from "../../releases/releases-repository";
 import { updateReviewState } from "../review-state-repository";
 import { writeWorkflowSettings } from "../workflow-settings-repository";
 
@@ -501,6 +507,109 @@ describe.each(getConfiguredTestDialects())(
       const visible = await visiblePages(t);
       expect(visible).not.toContain(withdrawn);
       expect(visible).not.toContain(kept);
+    });
+
+    it("leaves a due release a pass began scheduled when a step withdraws a later member's approval", async () => {
+      // Stopped, the page the cut-off pass wrote would stay live and the other never follow.
+      const t = await boot(dialect);
+      const written = await doc(t, "pages");
+      const waiting = await doc(t, "pages");
+      await approve(t, "pages", written);
+      await approve(t, "pages", waiting);
+      const arranged = await arrange(
+        t,
+        [publishPage(written), publishPage(waiting)],
+        PAST
+      );
+      const repo = new ReleasesRepository(t.adapter);
+      const [release] = await repo.findReleases({ ids: [arranged.releaseId] });
+      if (!release) throw new Error("the arranged release was not found");
+      const receipted = (await repo.listMembers(arranged.releaseId)).find(
+        member => member.entryId === written
+      );
+      if (!receipted) throw new Error("no member for the written page");
+      // The receipt the cut-off pass left on the member it wrote.
+      await t.adapter.update(
+        RELEASE_MEMBERS_TABLE,
+        { appliedRevision: release.revision },
+        { and: [{ column: "id", op: "=", value: receipted.id }] }
+      );
+
+      await takeStep(t, "pages", waiting, null, "bounce", "Not yet.");
+
+      expect(await releaseState(t, arranged.releaseId)).toBe("scheduled");
+      expect(await stoppedNotices(t, arranged)).toBe(0);
+    });
+
+    it("never stops due releases over a publish their plan loses to a later takedown", async () => {
+      // The later release takes the page down and wins it, so the earlier publish is never made
+      // and its approval holds nothing back.
+      const t = await boot(dialect);
+      const page = await doc(t, "pages");
+      await approve(t, "pages", page);
+      const publishing = await arrange(t, [publishPage(page)], PAST);
+      const takingDown = await arrange(
+        t,
+        [{ ...publishPage(page), action: "unpublish" }],
+        new Date(PAST.getTime() + 24 * 60 * 60 * 1000)
+      );
+
+      await takeStep(t, "pages", page, null, "bounce", "Not yet.");
+
+      expect(await releaseState(t, publishing.releaseId)).toBe("scheduled");
+      expect(await releaseState(t, takingDown.releaseId)).toBe("scheduled");
+      expect(await stoppedNotices(t, publishing)).toBe(0);
+    });
+
+    it("binds no more ids in one statement than every dialect accepts, however many documents it judges", async () => {
+      const t = await boot(dialect);
+      const page = await doc(t, "pages");
+      const { releaseId } = await arrange(t, [publishPage(page)], null);
+      const repo = new ReleasesRepository(t.adapter);
+      const [release] = await repo.findReleases({ ids: [releaseId] });
+      const [real] = await repo.listMembers(releaseId);
+      const source = releaseCheckSources().find(
+        candidate => candidate.key === "workflows.approval"
+      );
+      if (!source || !release || !real) {
+        throw new Error("no approval source, release or member to judge");
+      }
+      // More documents of one scope than SQLite binds in a statement, as a component of several
+      // releases can name.
+      const members = Array.from(
+        { length: 2 * IDS_PER_LOOKUP + 1 },
+        (_, i) => ({
+          ...real,
+          id: `${real.id}-${i}`,
+          entryId: i === 0 ? page : randomUUID(),
+        })
+      );
+      const reads = new Proxy({} as ReleaseCheckReads, {
+        get: (_target, name) => {
+          throw new Error(`the approval check asked ${String(name)}`);
+        },
+      });
+      const select = vi.spyOn(t.adapter, "select");
+
+      await source.check(members, { release, now: new Date(), reads });
+
+      const bound = select.mock.calls.map(([, options]) =>
+        Math.max(
+          0,
+          ...(
+            (
+              options as {
+                where?: { and?: { op?: string; value?: unknown }[] };
+              }
+            )?.where?.and ?? []
+          )
+            .filter(condition => condition.op === "IN")
+            .map(condition =>
+              Array.isArray(condition.value) ? condition.value.length : 0
+            )
+        )
+      );
+      expect(Math.max(...bound)).toBeLessThanOrEqual(IDS_PER_LOOKUP);
     });
 
     it("refuses Publish now for an unapproved member, even to a person who may publish without review", async () => {

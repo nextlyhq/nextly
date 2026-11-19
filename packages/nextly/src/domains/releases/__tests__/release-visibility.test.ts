@@ -61,7 +61,7 @@ function member(
 
 /** Nothing due to plan: what the first cases' reads never reach. */
 const NOTHING_DUE = {
-  findDueReleases: async () => [],
+  scheduledMembersFor: async () => [],
   listMembersOf: async () => [],
 };
 
@@ -71,7 +71,10 @@ const NOTHING_DUE = {
  */
 const TWO_RELEASES = {
   findDueDecisions: async () => ({ reveal: ["e1", "e2"], hide: ["e3"] }),
-  findDueReleases: async () => [release("r1"), release("r2")],
+  scheduledMembersFor: async () => [
+    { release: release("r1"), members: [] },
+    { release: release("r2"), members: [] },
+  ],
   listMembersOf: async () => [
     member("r1", "e1", "publish"),
     member("r2", "e2", "publish"),
@@ -173,7 +176,9 @@ describe("createReleaseVisibility with a hold on going live", () => {
       cache: { mayHaveDue: async () => true },
       repository: {
         findDueDecisions: async () => ({ reveal: [], hide: ["e3"] }),
-        findDueReleases: async () => [release("r2")],
+        scheduledMembersFor: async () => [
+          { release: release("r2"), members: [] },
+        ],
         listMembersOf: async () => [member("r2", "e3", "unpublish")],
       },
       hold: () => ({ held }),

@@ -40,6 +40,7 @@ import {
   type ReleaseCheckFinding,
   type ReleaseCheckSource,
 } from "../releases/readiness/check-sources";
+import { idBatches } from "../releases/releases-repository";
 import { VersionsRepository } from "../versions/versions-repository";
 
 import { entityOf, partStage, pendingPartsOf } from "./implicit-stage";
@@ -108,14 +109,18 @@ async function scopeContent(
   if (entity === null) return null;
   const localization = appLocalization();
   const ids = [...new Set(entryIds)];
-  const mainRows = await adapter.select<{ id: unknown; status?: unknown }>(
-    entity.tableName,
-    {
-      columns: ["id", "status"],
-      where: { and: [{ column: "id", op: "IN", value: ids }] },
-    }
-  );
-  const mainStatus = new Map(mainRows.map(row => [String(row.id), row.status]));
+  // Each read below binds the ids in runs (`perIdBatch`): a component of several releases can
+  // name more documents of one scope than SQLite binds in a statement.
+  const mainStatus = await perIdBatch(ids, async batch => {
+    const rows = await adapter.select<{ id: unknown; status?: unknown }>(
+      entity.tableName,
+      {
+        columns: ["id", "status"],
+        where: { and: [{ column: "id", op: "IN", value: batch }] },
+      }
+    );
+    return new Map(rows.map(row => [String(row.id), row.status]));
+  });
   // Languages move one by one only where the entity keeps a status per language, as a
   // document-wide publish asks the publish gate about them.
   const companion =
@@ -136,18 +141,18 @@ async function scopeContent(
       mainTableName: entity.tableName,
       localizedColumns: companion.localizedFields.map(field => field.column),
     });
-    ownStatuses = await readCompanionLocaleStatusAllOf(
+    const db =
       adapter.getDrizzle<
         Parameters<typeof readCompanionLocaleStatusAllOf>[0]
-      >(),
-      companion.table,
-      ids,
-      readiness
+      >();
+    ownStatuses = await perIdBatch(ids, batch =>
+      readCompanionLocaleStatusAllOf(db, companion.table, batch, readiness)
     );
   }
-  const pendingByEntry = await new VersionsRepository(
-    adapter
-  ).findPendingChangeLocales(scope.scopeKind, scope.scopeSlug, ids);
+  const versions = new VersionsRepository(adapter);
+  const pendingByEntry = await perIdBatch(ids, batch =>
+    versions.findPendingChangeLocales(scope.scopeKind, scope.scopeSlug, batch)
+  );
   return {
     table: scope.scopeKind === "single" ? await documentTableOn(scope) : null,
     languages: perLanguage
@@ -175,6 +180,21 @@ async function scopeContent(
       return { live, pending: pendingOn(part) };
     },
   };
+}
+
+/**
+ * `read` over `ids` in runs the fewest-binding dialect accepts (`idBatches`), the answers merged:
+ * one statement per run, so a large batch of documents never exceeds a statement's parameters.
+ */
+async function perIdBatch<V>(
+  ids: readonly string[],
+  read: (batch: string[]) => Promise<ReadonlyMap<string, V>>
+): Promise<Map<string, V>> {
+  const merged = new Map<string, V>();
+  for (const batch of idBatches(ids)) {
+    for (const [id, value] of await read(batch)) merged.set(id, value);
+  }
+  return merged;
 }
 
 /** Whom a part waits for, as a finding spells it: see the module. */
