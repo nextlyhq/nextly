@@ -12,6 +12,7 @@ import { describe, expect, it, vi } from "vitest";
 import { defineCollection } from "../../../collections/config/define-collection";
 import { toCodeFirstCollectionConfig } from "../../../domains/collections/services/collection-sync-service";
 import { serializeCollection } from "../../../domains/schema/services/code-generator";
+import { calculateSchemaHash } from "../../../domains/schema/services/schema-hash";
 import { resolveVersionsConfig } from "../../../domains/versions/resolve-config";
 import type {
   DynamicCollectionInsert,
@@ -138,7 +139,13 @@ describe("a demoted collection's record", () => {
     );
     expect(registered).toEqual([]);
     expect(updated).toHaveLength(1);
-    expect(updated[0]).toMatchObject({ source: "ui", locked: false });
+    expect(updated[0]).toMatchObject({
+      source: "ui",
+      locked: false,
+      // As a newly registered demote records it, and the hash the sync compares fields by.
+      configPath: "demoted-from-code",
+      schemaHash: calculateSchemaHash(updated[0].fields as never),
+    });
     // Asked of the registry as a hand-over, which is what lets a locked record be written.
     expect(updateOptions).toEqual([{ handOver: "builder" }]);
   });

@@ -17,6 +17,7 @@ import {
 import { assertNoMigrationInFlight } from "../../domains/field-groups/migration/sync-guard";
 import { canPrompt } from "../../domains/schema/migrate/can-prompt";
 import { serializeCollection } from "../../domains/schema/services/code-generator";
+import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
 import { resolveCollectionTableName } from "../../domains/schema/utils/resolve-table-name";
 import type { DynamicCollectionInsert } from "../../schemas/dynamic-collections/types";
 import type { CollectionRegistryService } from "../../services/collections/collection-registry-service";
@@ -167,6 +168,9 @@ type DemotedWrite =
     }
   | { kind: "register"; record: DynamicCollectionInsert };
 
+/** Where a demoted record says it came from, in place of the configuration file's path. */
+const DEMOTED_FROM_CODE = "demoted-from-code";
+
 /**
  * How a demote updates a record the registry already holds: as the hand-over of the
  * configuration's own collection to the Schema Builder, which the registry takes for a record the
@@ -188,8 +192,16 @@ function demotedWrite(
       kind: "update",
       slug: collection.slug,
       // Unlocked with it: a record the code-first sync made is locked, and the Schema Builder's
-      // is not (`HAND_OVER`).
-      data: { ...options, source: "ui", locked: false },
+      // is not (`HAND_OVER`). With the hash the registry compares fields by, so a collection
+      // whose fields are as they were is not marked as waiting for a schema change, and the path
+      // a newly registered demote records.
+      data: {
+        ...options,
+        source: "ui",
+        locked: false,
+        schemaHash: calculateSchemaHash(options.fields),
+        configPath: DEMOTED_FROM_CODE,
+      },
     };
   }
   return {
@@ -201,7 +213,7 @@ function demotedWrite(
       schemaHash: createHash("sha256")
         .update(JSON.stringify(options.fields))
         .digest("hex"),
-      configPath: "demoted-from-code",
+      configPath: DEMOTED_FROM_CODE,
     },
   };
 }
@@ -255,7 +267,11 @@ async function writeDemotedRecord(
   const write = demotedWrite(collection, current);
   if (write.kind === "update") {
     await registry.updateCollection(write.slug, write.data, HAND_OVER);
-    logger.info(`Updated existing UI record for '${write.slug}'.`);
+    logger.info(
+      current?.source === "ui"
+        ? `Updated existing UI record for '${write.slug}'.`
+        : `Moved the registry record of '${write.slug}' to UI source.`
+    );
     return;
   }
   await registry.registerCollection(write.record);

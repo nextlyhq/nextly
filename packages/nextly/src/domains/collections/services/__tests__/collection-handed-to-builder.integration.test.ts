@@ -19,6 +19,7 @@ import {
   type TestNextly,
 } from "../../../../plugins/test-nextly";
 import { CollectionRegistryService } from "../collection-registry-service";
+import { calculateSchemaHash } from "../../../schema/services/schema-hash";
 import { toCodeFirstCollectionConfig } from "../collection-sync-service";
 
 describe.each(getConfiguredTestDialects())(
@@ -87,6 +88,56 @@ describe.each(getConfiguredTestDialects())(
       );
     });
 
+    it("leaves an unchanged collection's schema version and migration state as they were", async () => {
+      const slug = "chb_unchanged";
+      const config = coded(slug);
+      await registry.syncCodeFirstCollections([config]);
+      const before = await registry.getCollectionBySlug(slug);
+      await registry.updateCollection(
+        slug,
+        {
+          fields: config.fields as never,
+          schemaHash: calculateSchemaHash(config.fields as never),
+          source: "ui",
+          locked: false,
+        },
+        { handOver: "builder" }
+      );
+      const after = await registry.getCollectionBySlug(slug);
+      expect({
+        schemaVersion: after?.schemaVersion,
+        migrationStatus: after?.migrationStatus,
+      }).toEqual({
+        schemaVersion: before?.schemaVersion,
+        migrationStatus: before?.migrationStatus,
+      });
+    });
+
+    it("unlocks a Builder row an earlier sync locked again", async () => {
+      // What a demote followed by a start left before the sync learned to leave such a row:
+      // the Builder's by its source, and locked.
+      const slug = "chb_relocked";
+      await registry.syncCodeFirstCollections([coded(slug)]);
+      await registry.updateCollection(
+        slug,
+        { source: "ui", locked: false },
+        { handOver: "builder" }
+      );
+      await registry.updateCollection(
+        slug,
+        { locked: true },
+        { source: "code" }
+      );
+      expect(await owner(slug)).toEqual({ source: "ui", locked: true });
+
+      await registry.updateCollection(
+        slug,
+        { source: "ui", locked: false },
+        { handOver: "builder" }
+      );
+      expect(await owner(slug)).toEqual({ source: "ui", locked: false });
+    });
+
     it("answers the hand-over's question without writing", async () => {
       const slug = "chb_asked";
       await registry.syncCodeFirstCollections([coded(slug)]);
@@ -138,6 +189,10 @@ describe.each(getConfiguredTestDialects())(
         text({ name: "title" }),
         text({ name: "summary" }),
       ]);
+      // The plan a dry run prints is the sync's own answer.
+      const planned = await registry.planCodeFirstCollections([changed]);
+      expect(planned.updated).not.toContain(slug);
+      expect(planned.unchanged).toContain(slug);
       const first = await registry.syncCodeFirstCollections([changed]);
       const second = await registry.syncCodeFirstCollections([changed]);
       expect(first.errors).toEqual([]);
@@ -153,6 +208,24 @@ describe.each(getConfiguredTestDialects())(
       const said = warnings.filter(message => message.includes(slug));
       expect(said).toHaveLength(1);
       expect(said[0]).toContain("nextly.config");
+    });
+
+    it("a plugin's entry under a Builder collection's address is handled as before, and not blamed on the configuration", async () => {
+      const slug = "chb_plugin_over_builder";
+      await registry.syncCodeFirstCollections([coded(slug)]);
+      await registry.updateCollection(
+        slug,
+        { source: "ui", locked: false },
+        { handOver: "builder" }
+      );
+      warnings.length = 0;
+      await registry.syncCodeFirstCollections([
+        {
+          ...coded(slug, [text({ name: "title" }), text({ name: "extra" })]),
+          source: "plugin:@test/chb",
+        },
+      ]);
+      expect(warnings.filter(message => message.includes(slug))).toEqual([]);
     });
   }
 );

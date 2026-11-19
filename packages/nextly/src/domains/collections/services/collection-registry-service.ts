@@ -61,23 +61,39 @@ export interface UpdateCollectionOptions {
   source?: CollectionSource;
   /**
    * Hands a collection the configuration defines to the Schema Builder: the one change a locked
-   * row of the app's own (`source: "code"`) takes from a caller that is not the sync, and the one
-   * update that writes the row's source, with its lock, in the same statement
-   * (`handsOverToBuilder`). A plugin's row is refused as any other change to it is.
+   * row takes from a caller that is not the sync, and the one update that writes the row's
+   * source, with its lock, in the same statement (`handsOverToBuilder`). It takes the app's own
+   * row (`source: "code"`), and one that is the Builder's already and was locked again by a sync
+   * of an earlier release. A plugin's row is refused as any other change to it is.
    */
   handOver?: "builder";
 }
 
 /**
- * Whether an update hands the configuration's own collection to the Schema Builder: asked for,
- * of a row the app's configuration made. A plugin registers its collection again at every start,
- * so its row has nobody to be handed over by.
+ * Whether an update hands a collection to the Schema Builder: asked for, of a row the app's
+ * configuration made or one that is the Builder's already. A plugin registers its collection
+ * again at every start, so its row has nobody to be handed over by.
  */
 function handsOverToBuilder(
   existing: Pick<DynamicCollectionRecord, "source">,
   options: UpdateCollectionOptions | undefined
 ): boolean {
-  return options?.handOver === "builder" && existing.source === "code";
+  return (
+    options?.handOver === "builder" &&
+    (existing.source === "code" || existing.source === "ui")
+  );
+}
+
+/**
+ * Whether a collection the app's configuration declares is one the Schema Builder owns: its row
+ * says so, and the entry is the app's own. The sync then writes nothing to the row, in a real run
+ * and in the plan of one alike. A plugin's entry under such an address is not this case.
+ */
+function builderOwnsDeclared(
+  config: Pick<CodeFirstCollectionConfig, "source">,
+  existing: Pick<DynamicCollectionRecord, "source"> | null | undefined
+): boolean {
+  return existing?.source === "ui" && (config.source ?? "code") === "code";
 }
 
 /** Input for registering a code-first collection during sync. */
@@ -628,7 +644,8 @@ export class CollectionRegistryService extends BaseRegistryService<
         // The configuration's and plugins' sync writes `define*` output, with its added
         // system fields; every other caller writes fields as it was sent.
         // A hand-over writes the fields the configuration defined too.
-        isPipelineSource(options?.source) || options?.handOver === "builder"
+        isPipelineSource(options?.source) ||
+          handsOverToBuilder(existing, options)
           ? { definedInCode: "collection" }
           : {}
       );
@@ -1180,6 +1197,11 @@ export class CollectionRegistryService extends BaseRegistryService<
       const existing = registryPresent
         ? await this.getCollectionBySlug(config.slug)
         : null;
+      // The Schema Builder's collection is left as it is, as the sync leaves it.
+      if (builderOwnsDeclared(config, existing)) {
+        planned.unchanged.push(config.slug);
+        continue;
+      }
       const { step } = this.codeFirstSyncStep(config, existing);
       if (step === "create") planned.created.push(config.slug);
       else if (step === "unchanged") planned.unchanged.push(config.slug);
@@ -1245,13 +1267,15 @@ export class CollectionRegistryService extends BaseRegistryService<
 
   /**
    * Says, once for each address in this process, that a collection the Schema Builder owns is
-   * still declared in the configuration, where its entry no longer decides anything.
+   * still declared in the configuration. The sync leaves its registry record to the Builder;
+   * what the configuration's entry still decides elsewhere (the table a development push
+   * builds) is why the entry has to go.
    */
   private warnStillDeclaredInCode(slug: string): void {
     if (this.warnedStillInCode.has(slug)) return;
     this.warnedStillInCode.add(slug);
     this.logger.warn(
-      `Collection "${slug}" belongs to the Schema Builder and is still declared in nextly.config: its entry there is not applied. Remove it from the configuration's collections.`,
+      `Collection "${slug}" belongs to the Schema Builder and is still declared in nextly.config. Its registry record is left to the Builder, and its table still follows the configuration's entry until that entry is removed: remove it from the configuration's collections.`,
       { slug }
     );
   }
@@ -1287,7 +1311,7 @@ export class CollectionRegistryService extends BaseRegistryService<
     for (const config of configs) {
       try {
         const held = await recordOf(config.slug);
-        if (held?.source === "ui") {
+        if (builderOwnsDeclared(config, held)) {
           // The Schema Builder's collection, still declared in code: its row is the Builder's to
           // change, so the sync writes nothing to it, and says which entry to remove.
           this.warnStillDeclaredInCode(config.slug);
