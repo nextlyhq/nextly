@@ -4,7 +4,8 @@
  * turns translation off. A Builder save runs
  * without `nextly migrate` having run first, so it makes the archive ready before its file runs:
  * on a database without one, the default language stays on the entity and the others are
- * archived, for a Single and a field group alike, on every dialect.
+ * archived, for a Single and a field group alike, on every dialect. Turning translation off on its
+ * own runs its file too: the migration runner runs the disable, rather than the dialog's push.
  */
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -21,6 +22,20 @@ import {
   type TestNextly,
 } from "../../../../plugins/test-nextly";
 import type { SingleEntryService } from "../../../singles/services/single-entry-service";
+
+/** The units the migration runner runs, by source, so a case can tell the file road from the push. */
+const ran = vi.hoisted(() => ({ sources: [] as string[] }));
+
+vi.mock("../../busy-table/run-unit", async original => {
+  const actual = await original<typeof import("../../busy-table/run-unit")>();
+  return {
+    ...actual,
+    runUnitInTries: (...args: Parameters<typeof actual.runUnitInTries>) => {
+      ran.sources.push(args[2].source);
+      return actual.runUnitInTries(...args);
+    },
+  };
+});
 
 const DB = { migrationsDir: "./migrations", uiSchemaFile: "./ui-schema.json" };
 const LOCALIZATION = { locales: ["en", "es"], defaultLocale: "en" };
@@ -138,6 +153,7 @@ for (const dialect of getConfiguredTestDialects()) {
 
       beforeEach(async () => {
         basePath = await mkdtemp(join(tmpdir(), "nextly-save-archive-"));
+        ran.sources.length = 0;
         // The Builder's save runs its change in development only.
         vi.stubEnv("NODE_ENV", "development");
         t = await createTestNextly({
@@ -184,6 +200,14 @@ for (const dialect of getConfiguredTestDialects()) {
               `WHERE ${q("field")} = 'title' AND ${q("locale")} = 'es'`
           );
           expect(String(archived?.value)).toContain("Hola");
+          // Run as files, by the migration runner: the turn-off's own file among them.
+          if (!localized) {
+            expect(
+              ran.sources.some(source =>
+                source.includes("disable_localization")
+              )
+            ).toBe(true);
+          }
         }
       );
     }
