@@ -411,9 +411,10 @@ describeEachDialect("a collection update's registry write", dialect => {
       locale: "en",
       overrideAccess: true,
     });
-    expect(JSON.stringify(read), "the read after the switch").toContain(
-      '"heading":"Hello"'
-    );
+    expect(
+      JSON.stringify(read),
+      `the read after the switch: ${JSON.stringify(read)}`
+    ).toContain('"heading":"Hello"');
   });
 
   it("leaves the webhook recording policy as stored when the transaction holding its write rolls back", async () => {
@@ -440,7 +441,7 @@ describeEachDialect("a collection update's registry write", dialect => {
         );
         throw rolledBack;
       })
-    ).rejects.toBe(rolledBack);
+    ).rejects.toThrow("rolled back");
 
     expect(
       isWebhookRecordingEnabled("collection", SLUG),

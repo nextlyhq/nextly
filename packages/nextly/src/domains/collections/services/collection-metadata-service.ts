@@ -1390,9 +1390,10 @@ export class CollectionMetadataService extends BaseService {
               // shape (drops or restores translatable columns) even with no field edit, so the
               // runtime schema must be re-registered on a flag-only toggle too, not only when
               // `body.fields` is present.
+              // Read from the row as it was before the save: the save writer may have written the
+              // new switch with its files already, and the row read back would then hold it.
               const wasLocalizedNow =
-                (existingCollection as { localized?: boolean }).localized ===
-                true;
+                (before as { localized?: boolean }).localized === true;
               const isLocalizedNow =
                 body.localized !== undefined
                   ? body.localized === true
