@@ -3730,6 +3730,12 @@ const KIND_WORDS: Record<SettingsEntityKind, string> = {
 async function leftoverTranslationsOf(
   deps: MigrateCoreDeps
 ): Promise<LeftoverTranslations[]> {
+  // A database without the ledger yet (a first run) has applied no file, so
+  // no deleted entity left anything; the ledger is not read where it is absent.
+  const hasLedger = await (
+    deps.adapter as unknown as { tableExists: (n: string) => Promise<boolean> }
+  ).tableExists("nextly_schema_events");
+  if (!hasLedger) return [];
   const events = new SchemaEventsRepository(deps.db, deps.dialect);
   const source = await readRegistrySource({
     migrationsDir: deps.migrationsDir,
