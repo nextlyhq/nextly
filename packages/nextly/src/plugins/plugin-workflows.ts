@@ -19,7 +19,11 @@ import { z } from "zod";
 import type { PaginationMeta } from "../api/response-shapes";
 import type { WorkflowAsker } from "../api/workflows";
 import { nextlyValidationFromZod } from "../api/zod-to-nextly-error";
-import { runWithCallerScope } from "../auth/caller-scope";
+import {
+  currentCallerScope,
+  currentRouteActor,
+  runWithCallerScope,
+} from "../auth/caller-scope";
 import { runAsPrincipal } from "../auth/principal-scope";
 import { checkedCaller } from "../direct-api/namespaces/helpers";
 import type {
@@ -29,6 +33,7 @@ import type {
 import type { TakeStepResult } from "../domains/workflows/steps";
 import type { WorkflowDefinition } from "../domains/workflows/workflow-settings-api";
 import { NextlyError } from "../errors/nextly-error";
+import { deepEqual } from "../shared/lib/deep-equal";
 
 import { resolveServiceOpts, type ServiceOpts } from "./service-opts";
 
@@ -180,6 +185,23 @@ function parse<T>(schema: z.ZodType<T>, value: unknown): T {
 }
 
 /**
+ * Refuses a scope a plugin hands the service on a request an API key authenticated, unless it is
+ * that key's own. A key always acts with its own scope: a move is recorded as the key's, so a
+ * scope a plugin supplied, wider or merely different, would act with grants the key does not
+ * hold under the key's name. Forbidden, with nothing of either scope in the answer. A request a
+ * person signed in to, or a call outside any request, is left to the checks after it.
+ */
+function refuseAnotherScopeForTheKey(opts: ServiceOpts | undefined): void {
+  const supplied = opts?.authenticatedScope;
+  if (supplied === undefined) return;
+  if (currentRouteActor()?.actor.type !== "apiKey") return;
+  if (deepEqual(supplied, currentCallerScope())) return;
+  throw NextlyError.forbidden({
+    logContext: { reason: "plugin-workflows-scope-not-the-keys-own" },
+  });
+}
+
+/**
  * Runs `work` for the caller `opts` names, as the asker the REST routes build for them: resolved
  * by the rule every plugin service uses, then asked the Direct API's question of who a checked
  * call is for, so a call naming nobody, the system or the public is refused. A key is the one the
@@ -192,6 +214,7 @@ async function asAsker<T>(
   opts: ServiceOpts | undefined,
   work: (asker: NonNullable<WorkflowAsker>) => Promise<T>
 ): Promise<T> {
+  refuseAnotherScopeForTheKey(opts);
   const resolved = await resolveServiceOpts(opts ?? {});
   const auth = checkedCaller(
     {},

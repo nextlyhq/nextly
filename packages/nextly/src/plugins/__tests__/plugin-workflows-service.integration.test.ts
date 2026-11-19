@@ -109,6 +109,15 @@ function refusalOf(error: unknown): Response {
   );
 }
 
+/** A scope granting more than any key below holds on pages: what a plugin could try to widen to. */
+const WIDER_SCOPE = apiKeyScope(
+  (["read", "update", "sign-off"] as const).map(action => ({
+    slug: `${action}-pages`,
+    action,
+    resource: "pages",
+  }))
+);
+
 /**
  * The agent's plugin: one route that checks access itself, calling the service as the request's
  * user, exactly as an agent's tool does.
@@ -124,14 +133,21 @@ const agentPlugin = definePlugin({
         path: "/run",
         checksAccess: true,
         handler: async (request, ctx) => {
-          const { op, input } = (await request.json()) as {
+          const { op, input, scope } = (await request.json()) as {
             op: Op;
             input: unknown;
+            scope?: "own" | "wider";
           };
           try {
             const result = await call(ctx.services.workflows, op, input, {
               as: "user",
               user: ctx.user ?? undefined,
+              // A plugin may hand the service a scope of its own: the request's, or one that
+              // grants more than the key it came with.
+              ...(scope === "own" && ctx.authenticatedScope
+                ? { authenticatedScope: ctx.authenticatedScope }
+                : {}),
+              ...(scope === "wider" ? { authenticatedScope: WIDER_SCOPE } : {}),
             });
             return Response.json({ result });
           } catch (error) {
@@ -195,7 +211,12 @@ interface Answer {
 }
 
 /** One call of the service, made through the plugin's route for `who`. */
-async function run(who: Who, op: Op, input: unknown): Promise<Answer> {
+async function run(
+  who: Who,
+  op: Op,
+  input: unknown,
+  scope?: "own" | "wider"
+): Promise<Answer> {
   const handlers = createDynamicHandlers();
   const params = ["plugins", ...PLUGIN.split("/"), "run"];
   const response = await handlers.POST(
@@ -206,7 +227,7 @@ async function run(who: Who, op: Op, input: unknown): Promise<Answer> {
         origin: "http://localhost",
         "content-type": "application/json",
       },
-      body: JSON.stringify({ op, input }),
+      body: JSON.stringify({ op, input, ...(scope ? { scope } : {}) }),
     }),
     { params: Promise.resolve({ params }) }
   );
@@ -574,6 +595,70 @@ describe.each(getConfiguredTestDialects())(
           publishable: false,
           approval: null,
         });
+      });
+
+      it("acts for a key with the key's own scope, and refuses one a plugin hands it instead", async () => {
+        await boot(dialect);
+        const id = await entry(app(), PAGES);
+        const reader = await keyOf("reader", [["read", PAGES]]);
+        const writer = await keyOf("writer", [
+          ["read", PAGES],
+          ["update", PAGES],
+        ]);
+        const submit = async () => ({
+          document: { collection: PAGES, id },
+          parts: [null],
+          seen: await seenPage(id),
+          comment: "Ready for legal",
+        });
+
+        // A wider scope would let the reader's key submit; a different one, even no wider, is
+        // still not the key's.
+        const widened = await run(
+          { key: reader.key },
+          "submit",
+          await submit(),
+          "wider"
+        );
+        const swapped = await run(
+          { key: writer.key },
+          "submit",
+          await submit(),
+          "wider"
+        );
+        expect(widened.error).toMatchObject({ status: 403, code: "FORBIDDEN" });
+        expect(swapped.error).toMatchObject({ status: 403, code: "FORBIDDEN" });
+        expect(await stateOf(app(), partOf(PAGES, id, null))).toBeNull();
+
+        // The key's own scope, handed back, is the key's: the control that the check is not
+        // a refusal of any scope at all.
+        const own = resultOf(
+          await run({ key: writer.key }, "submit", await submit(), "own")
+        );
+        expect(own).toMatchObject({ step: "send" });
+      });
+
+      it("refuses a scope a plugin hands it on a signed-in person's request, as before", async () => {
+        await boot(dialect);
+        const id = await entry(app(), PAGES);
+        const answer = await run(
+          { person: KIM },
+          "submit",
+          {
+            document: { collection: PAGES, id },
+            parts: [null],
+            seen: await seenPage(id),
+            comment: "Ready for legal",
+          },
+          "wider"
+        );
+        // No key authenticated it, so the scope names no key: refused for that, not as a
+        // widening.
+        expect(answer.error).toMatchObject({ code: "VALIDATION_ERROR" });
+        expect(JSON.stringify(answer.error?.data)).toContain(
+          "API_KEY_ID_REQUIRED"
+        );
+        expect(await stateOf(app(), partOf(PAGES, id, null))).toBeNull();
       });
 
       it("submits with the submit step named", async () => {
