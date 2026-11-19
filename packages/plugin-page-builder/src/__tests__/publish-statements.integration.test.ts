@@ -64,11 +64,17 @@ type Route = "direct" | "rest";
  * measured once the components a page places are read in one query per
  * form. The same for both fixtures, as nothing a publish reads grows with
  * the components the page places.
+ *
+ * One read more than before page code and custom CSS were judged: a publish
+ * is compared with the live row as well as the draft, to see it leaves the
+ * page's code and CSS as a stored form holds them, and nothing else a publish
+ * judges reads the live row. Each stored form is read once for every check
+ * of the field's write, so the checks share the draft the Layers lock reads.
  */
 const PINS: Readonly<Record<TestDialect, Readonly<Record<Route, number>>>> = {
-  sqlite: { direct: 66, rest: 67 },
-  postgresql: { direct: 69, rest: 71 },
-  mysql: { direct: 69, rest: 70 },
+  sqlite: { direct: 67, rest: 68 },
+  postgresql: { direct: 70, rest: 72 },
+  mysql: { direct: 70, rest: 71 },
 };
 
 /**

@@ -50,6 +50,22 @@ function messages(raw: unknown): string[] {
 }
 
 describe("readTransferFile", () => {
+  it("reads the variable prefix a file names, and a file that names none", () => {
+    const named = readTransferFile(file({ tokenPrefix: "--acme-" }));
+    expect("file" in named && named.file.tokenPrefix).toBe("--acme-");
+    const unnamed = readTransferFile(file());
+    expect("file" in unnamed && unnamed.file.tokenPrefix).toBeUndefined();
+  });
+
+  it("refuses a variable prefix no site could write its variables under", () => {
+    for (const tokenPrefix of ["acme", "--Acme-", "--nx-", "--a-) red; x: (", 7]) {
+      expect(
+        messages({ ...file(), tokenPrefix }),
+        String(tokenPrefix)
+      ).toHaveLength(1);
+    }
+  });
+
   it("leaves out a block's own look, so an import never changes the site's", () => {
     const primary = {
       id: "look:core/button:primary",

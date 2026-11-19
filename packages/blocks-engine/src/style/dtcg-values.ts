@@ -244,10 +244,15 @@ function numberToDtcg(css: string): number | undefined {
   return Number.isFinite(value) ? value : undefined;
 }
 
-/** A weight as a number, or one of the two keywords the format names. */
+/**
+ * A weight as a number from 1 to 1000, the range both CSS and the format
+ * allow, or one of the two keywords the format names.
+ */
 function weightToDtcg(css: string): number | string | undefined {
   const numeric = numberToDtcg(css);
-  if (numeric !== undefined) return numeric;
+  if (numeric !== undefined) {
+    return numeric >= 1 && numeric <= 1000 ? numeric : undefined;
+  }
   const keyword = css.toLowerCase();
   return keyword === "normal" || keyword === "bold" ? keyword : undefined;
 }

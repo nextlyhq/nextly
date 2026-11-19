@@ -530,6 +530,20 @@ describe("creating from the New page dialog", () => {
     expect(offered.create).not.toHaveBeenCalled();
   });
 
+  it("refuses a starter the site can't hold in the words the picker shows, and makes nothing", async () => {
+    const sentence =
+      'The starter page "Landing" isn\'t available on this site. Needs 5 levels of nesting; this site allows 4.';
+    const starter = vi.fn(async () => ({ unavailable: sentence }));
+    const reads = readsOver({ starter });
+    const error = await refused(() =>
+      createPage({ collection: "pages", title: "A", starter: "landing" }, reads)
+    );
+    expect(issuesOf(error)).toEqual([
+      expect.objectContaining({ path: "starter", message: sentence }),
+    ]);
+    expect(reads.create).not.toHaveBeenCalled();
+  });
+
   it("fills the page body only from a starter, the header and footer following the dialog's choice", async () => {
     // The starter's blocks, as the source copies them for a new page.
     const body = {

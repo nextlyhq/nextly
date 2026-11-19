@@ -533,6 +533,8 @@ async function connect(
         warn: m => context.logger.warn(m),
         info: m => context.logger.info(m),
       },
+      // The command's own bounds, for a busy SQLite database met while the lock is taken.
+      busyBounds: busyTable.bounds,
     });
     if (!outcome.ran) {
       throw new NextlyError({

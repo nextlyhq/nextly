@@ -18,16 +18,16 @@ import { fieldsNewToSingleTable, namedOnRow } from "./single-row-fills";
 
 /**
  * Whether the save carries values across its change, which the dialog's push does and the file,
- * written from the newest snapshot, does not yet: translation turned off for the entity's values,
- * whose columns the push restores from the live tables; a Required or Unique field leaving
- * translation,
+ * written from the newest snapshot, does not yet: translation turned off in a save that changes the
+ * entity's table in other ways too, which `migrate:create` refuses to write as files; a Required or
+ * Unique field leaving translation while the entity stays translated,
  * whose setting the push applies once the default language's values are in its shared column
  * (`fieldsWithLeavingSettingsDeferred`); a field whose column changes type or size, whose stored
  * values the push judges before it alters the column; a field new to a Single's table that its row
  * is filled in; and a change reaching a relation's storage (`reachesRelationStorage`), which the
  * push plans from the live table.
  *
- * Any other save, translation turned on and a field joining or leaving it included, is
+ * Any other save, translation turned on or off and a field joining or leaving it included, is
  * applied by its file, in tries over a busy table and on SQLite as a migration file runs, with the
  * companion brought in step after it.
  */
@@ -37,6 +37,8 @@ export async function pushCarriesValues(args: {
   /** Whether the values are stored per language before and after the save. */
   wasStored: boolean;
   isStored: boolean;
+  /** Whether the save turns Draft/Published on or off, which adds or drops a column of the table. */
+  statusChanges?: boolean;
   /** The companion rename the save makes, if any, under which a field leaving translation is named. */
   renamed: FieldRename | null | undefined;
   /** The entity's main table as the database holds it. */
@@ -58,11 +60,16 @@ export async function pushCarriesValues(args: {
     holdsRow: () => Promise<boolean>;
   };
 }): Promise<boolean> {
-  // Translation turned off: the file restores each translated column to the main table with the
-  // translations column's type, which on MySQL is not the type the main file's snapshot records,
-  // so the runner finds the main table at neither end of that file. The push restores the columns
-  // from the live tables.
-  if (args.wasStored && !args.isStored) return true;
+  // Translation turned off: its file puts each column back as the main table's snapshot records
+  // it, Required and Unique settings included, and the main file that follows is recorded as
+  // applied over that table. A save that changes the table in other ways too would leave the main
+  // file at neither end, so `migrate:create` refuses it, and the push applies it.
+  if (args.wasStored && !args.isStored) {
+    return (
+      args.statusChanges === true ||
+      !sameFieldsBesideTranslation(args.oldFields, args.newFields)
+    );
+  }
   // A Required or Unique field leaving translation: the push adds its shared column without the
   // setting, copies the default language's values in, then sets it. The file adds the column with
   // the setting before any value is there, refused for every table that has rows.
@@ -94,6 +101,31 @@ export async function pushCarriesValues(args: {
     after: args.newFields,
     liveTable: args.liveTable,
   });
+}
+
+/**
+ * Whether the save's fields are its old ones but for whether each is translated: every name, type
+ * and setting the same, in the same order, with `localized` left out at every depth. Anything
+ * else, a field added, removed, renamed or reordered, a setting changed, or the same field written
+ * with its keys in another order, reads as a change, which keeps the push.
+ */
+function sameFieldsBesideTranslation(
+  oldFields: readonly FieldDefinition[],
+  newFields: readonly FieldDefinition[]
+): boolean {
+  const withoutTranslation = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(withoutTranslation);
+    if (value === null || typeof value !== "object") return value;
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([key, v]) => key !== "localized" && v !== undefined)
+        .map(([key, v]) => [key, withoutTranslation(v)] as const)
+    );
+  };
+  return (
+    JSON.stringify(withoutTranslation(oldFields)) ===
+    JSON.stringify(withoutTranslation(newFields))
+  );
 }
 
 /** Whether a field kept by the save, under its name or its rename, gets a column of another type. */

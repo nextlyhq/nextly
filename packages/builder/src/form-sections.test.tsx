@@ -328,7 +328,7 @@ describe("a Form's After sending", () => {
     // address.
     expect(
       screen.getByRole("button", {
-        name: "Page: search pages or paste a URL",
+        name: "Page: search or paste a URL",
       })
     ).toBeDefined();
     expect(screen.queryByLabelText("Message")).toBeNull();

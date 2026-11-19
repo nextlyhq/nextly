@@ -11,7 +11,14 @@ import type { ActivityEvent } from "nextly/widget-result";
 /**
  * Activity type indicating the nature of the action
  */
-export type ActivityType = "create" | "update" | "delete" | "login" | "logout";
+export type ActivityType =
+  | "create"
+  | "update"
+  | "delete"
+  /** A search of the email delivery log by address. */
+  | "read"
+  | "login"
+  | "logout";
 
 /**
  * Activity category for badge display

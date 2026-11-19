@@ -26,7 +26,6 @@ import type { DryRunChange, DryRunPlan } from "../dry-run";
 
 import { confirmBackup } from "./backup-confirmation";
 import { dryRunRefusalOf } from "./migrate-create";
-
 import type {
   UpgradeAdapter,
   UpgradeStep,
@@ -54,6 +53,13 @@ export interface DataStepsDeps {
    * a refusal then says so, rather than that nothing was changed.
    */
   afterMigrations?: boolean;
+  /**
+   * A precondition of the command's own, asked under the lock before any
+   * step is counted or run: holding the lock is necessary for the steps and
+   * may not be sufficient, as where a change another run left half done is
+   * recorded apart from the lock. It refuses by throwing.
+   */
+  underLock?: () => Promise<void>;
   /** How long a held schema lock is waited for, in milliseconds. Absent, about a minute. */
   lockWaitMs?: number;
   /** The schema lock's lease, in seconds, as the configuration sets it. */
@@ -195,6 +201,7 @@ export async function runDataSteps(
     deps.adapter as unknown as DrizzleAdapter,
     context.dialect,
     async () => {
+      await deps.underLock?.();
       // Counted again under the lock, each once the steps before it have
       // run: a run this one waited behind may have done the work already,
       // and a step reads what the steps before it repaired.

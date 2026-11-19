@@ -6,9 +6,11 @@
  * from its own blocks in the site's own style, and the one picked copied
  * into the page as one undo step.
  *
- * The list is the server's (`/starter-pages`), so a starter the site no
- * longer has the blocks or variables for is not offered here either. The
- * copy is the builder's (`applyStarterPage`): the engine's fresh-id copy
+ * The list is the server's (`/starter-pages`), and a starter the site can't
+ * use is listed with the server's reason, which the start area shows under
+ * it, dimmed. Such a starter is never applied, and one whose copy the editor
+ * refuses is not dropped in silence: both are said in the editor's notices.
+ * The copy is the builder's (`applyStarterPage`): the engine's fresh-id copy
  * through `applyAll`, so a single Undo empties the page again.
  *
  * @module @nextlyhq/plugin-page-builder/admin/editor/starter-pages-client
@@ -27,6 +29,7 @@ import { PAGE_BUILDER_PLUGIN_NAME } from "../../library-contract";
 import type { NewPageStarter } from "../../pages-write-contract";
 import {
   STARTER_PAGES_ROUTE_PATH,
+  starterUnavailableSentence,
   type StarterPagesResponse,
 } from "../../starter-pages/starter-pages-contract";
 
@@ -70,6 +73,23 @@ function useOfferedStarterPages(wanted: boolean): readonly NewPageStarter[] {
   return starters ?? [];
 }
 
+/**
+ * What the row needs of the editor's view: the page and its apply, what its
+ * pictures are drawn with, and the notices a starter it can't apply is said
+ * in. Narrower than the whole view, so the row can be drawn on its own.
+ */
+type StarterRowView = Pick<
+  EditorView,
+  "canvasSiteStyle" | "previewMode" | "pictureSession"
+> & {
+  readonly editor: Pick<EditorView["editor"], "document" | "applyAll">;
+  readonly componentLibrary: Pick<
+    EditorView["componentLibrary"],
+    "definitions"
+  >;
+  readonly notices: Pick<EditorView["notices"], "raise">;
+};
+
 /** What the start area's row is drawn and applied from. */
 interface StarterRow {
   readonly starters: readonly StarterPage[];
@@ -80,8 +100,9 @@ interface StarterRow {
  * The start area's starter row for the page on screen: none on a document
  * that is not a page, or a page that has blocks.
  */
-function useStarterRow(view: EditorView): StarterRow {
+function useStarterRow(view: StarterRowView): StarterRow {
   const { editor } = view;
+  const { raise } = view.notices;
   const empty = editor.document.nodes.length === 0;
   const offered = useOfferedStarterPages(
     empty && editor.document.kind === "page"
@@ -98,6 +119,8 @@ function useStarterRow(view: EditorView): StarterRow {
         (starter): StarterPage => ({
           id: starter.id,
           title: starter.label,
+          // The server's reason, which the start area shows under the tile.
+          unavailable: starter.unavailable?.reason,
           picture: (
             // The picture takes its box's width, and a tile in the row has
             // none of its own, so the box gives it one.
@@ -118,11 +141,26 @@ function useStarterRow(view: EditorView): StarterRow {
   const onStarter = useCallback(
     (id: string) => {
       const starter = offered.find(candidate => candidate.id === id);
-      if (starter !== undefined) {
-        applyStarterPage(editor, starter.document.nodes);
+      if (starter === undefined) return;
+      // The start area doesn't report an unavailable tile; were one reported
+      // anyway, the site still can't hold it, so it is said, not applied.
+      if (starter.unavailable !== undefined) {
+        raise(
+          starterUnavailableSentence(starter.label, starter.unavailable.reason)
+        );
+        return;
+      }
+      // A page that gained a block meanwhile is left as it is, as the
+      // builder's apply leaves it; that is not the starter's failing.
+      if (editor.document.nodes.length > 0) return;
+      // A copy the editor refused (its page limits, or the planner) changes
+      // nothing; the author is told rather than left pressing a tile that
+      // does nothing.
+      if (!applyStarterPage(editor, starter.document.nodes)) {
+        raise(starterUnavailableSentence(starter.label));
       }
     },
-    [offered, editor]
+    [offered, editor, raise]
   );
   return { starters: empty ? starters : [], onStarter };
 }
@@ -135,7 +173,7 @@ function useStarterRow(view: EditorView): StarterRow {
 export function EditorPageInserters({
   view,
   ...props
-}: PageInsertersProps & { readonly view: EditorView }): React.JSX.Element {
+}: PageInsertersProps & { readonly view: StarterRowView }): React.JSX.Element {
   const row = useStarterRow(view);
   return (
     <PageInserters
