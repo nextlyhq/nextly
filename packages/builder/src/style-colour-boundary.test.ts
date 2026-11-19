@@ -295,7 +295,9 @@ describe("the admin theme's contrast implementation is out of reach", () => {
     ).toBe(true);
     // Climbs out and comes straight back: not an escape, and a prefix test
     // reports it as one.
-    expect(escapesPackage(shallow, "./styles/style-controls")).toBe(false);
+    expect(
+      escapesPackage(shallow, "../../builder/src/styles/style-controls")
+    ).toBe(false);
     expect(escapesPackage(shallow, "./styles/style-controls")).toBe(false);
     expect(escapesPackage(shallow, "@nextlyhq/ui")).toBe(false);
   });
