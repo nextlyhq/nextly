@@ -686,30 +686,32 @@ function askHeld(
 }
 
 /**
- * The outcome of an action its component's hold refuses, written nowhere. The held documents are
+ * The outcome of each action a component's hold refuses, written nowhere. The held documents are
  * reported as held; every other one says which held documents it waits for, so a release stopped
- * for one document is not read as stopped for each.
+ * for one document is not read as stopped for each. Made once per component, so that detail is
+ * written once for the component rather than again for each of its actions.
  */
-function heldOutcome(
-  action: MaterialisationAction,
+function heldOutcomeOf(
   hold: ComponentHold
-): MaterialisationOutcome {
-  const base = {
-    ref: action.ref,
-    memberId: action.memberId,
-    releaseId: action.releaseId,
-    effect: action.effect,
-  };
-  if (hold.failure === "APPROVAL_CHECK_FAILED") {
-    return { ...base, failure: hold.failure, detail: hold.detail };
-  }
-  if (hold.held.has(action.memberId)) {
-    return { ...base, failure: "NOT_APPROVED" };
-  }
-  return {
-    ...base,
-    failure: "NOT_APPROVED",
-    detail: `Waits for ${[...hold.held].join(", ")}, held back in a release it goes live with.`,
+): (action: MaterialisationAction) => MaterialisationOutcome {
+  const waitsFor =
+    hold.failure === "NOT_APPROVED"
+      ? `Waits for ${[...hold.held].join(", ")}, held back in a release it goes live with.`
+      : hold.detail;
+  return action => {
+    const base = {
+      ref: action.ref,
+      memberId: action.memberId,
+      releaseId: action.releaseId,
+      effect: action.effect,
+    };
+    if (hold.failure === "APPROVAL_CHECK_FAILED") {
+      return { ...base, failure: hold.failure, detail: waitsFor };
+    }
+    if (hold.held.has(action.memberId)) {
+      return { ...base, failure: "NOT_APPROVED" };
+    }
+    return { ...base, failure: "NOT_APPROVED", detail: waitsFor };
   };
 }
 
@@ -976,8 +978,12 @@ async function applyWithinBudget(
   );
   const startedComponents = new Set<number>();
   const byComponent = actionsByComponent(plan);
-  // Each started component's hold, asked before its first write (`componentHold`).
-  const holds = new Map<number, ComponentHold | null>();
+  // Each started component's hold, asked before its first write (`componentHold`), as the
+  // outcome of each action it refuses; null when nothing holds it.
+  const holds = new Map<
+    number,
+    ((action: MaterialisationAction) => MaterialisationOutcome) | null
+  >();
   const applied = new Set<string>();
   for (const action of ordered) {
     const component = componentOf.get(action.releaseId) ?? -1;
@@ -997,18 +1003,19 @@ async function applyWithinBudget(
     }
     if (!startedComponents.has(component)) {
       startedComponents.add(component);
-      holds.set(
-        component,
-        await componentHold(askHeld(deps), byComponent[component] ?? [])
+      const hold = await componentHold(
+        askHeld(deps),
+        byComponent[component] ?? []
       );
+      holds.set(component, hold === null ? null : heldOutcomeOf(hold));
     }
     applied.add(action.releaseId);
     // A held component writes nothing more: what an earlier pass applied still goes through
     // `applyOne`, which writes nothing again, so it is reported as it stands.
-    const hold = holds.get(component) ?? null;
+    const held = holds.get(component) ?? null;
     outcomes.push(
-      hold !== null && !action.applied
-        ? heldOutcome(action, hold)
+      held !== null && !action.applied
+        ? held(action)
         : await applyOne(deps, action)
     );
   }
