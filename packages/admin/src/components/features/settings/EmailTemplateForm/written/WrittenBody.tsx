@@ -52,6 +52,7 @@ import {
   Plus,
 } from "@admin/components/icons";
 import { toast } from "@admin/components/ui";
+import { copyableMediaUrl } from "@admin/lib/media-utils";
 import { cn } from "@admin/lib/utils";
 import type {
   WrittenBlock,
@@ -74,7 +75,7 @@ import {
 } from "./block-model";
 import { chipNamer, itemPaths } from "./chip-names";
 import { chipShowsBlank } from "./chip-values";
-import { ChipViewContext, type ChipView } from "./ChipLabel";
+import { ChipButton, ChipViewContext, type ChipView } from "./ChipLabel";
 import { RunEditor } from "./RunEditor";
 import { ChipNode, type Inline } from "./runs";
 
@@ -134,7 +135,14 @@ function listVariablesOf(variables: readonly TemplateFormVariable[]): string[] {
 function chipView(edit: Edit, list?: string): ChipView {
   return {
     name: chipNamer(edit.variables, list),
-    blank: chip => chipShowsBlank(chip, edit.sampleData, list),
+    // Unknown test data (invalid sample JSON) marks nothing.
+    blank: chip =>
+      edit.sampleData !== null && chipShowsBlank(chip, edit.sampleData, list),
+    // Inside a list, its item's fields first: what each repeat links to.
+    paths: [
+      ...(list === undefined ? [] : itemPaths(edit.variables, list)),
+      ...edit.variables.map(variable => variable.name).filter(Boolean),
+    ],
   };
 }
 
@@ -159,8 +167,8 @@ interface Edit {
   readOnly: boolean;
   /** The template's declared variables, which name chips and lists. */
   variables: readonly TemplateFormVariable[];
-  /** The workbench's test data, which says which chips show blank. */
-  sampleData: Record<string, unknown>;
+  /** The workbench's test data, or null while it is invalid and unknown. */
+  sampleData: Record<string, unknown> | null;
   /** Told which field's editor was typed in last, and its block's place. */
   focused: (editor: LexicalEditor, path: BlockPath) => void;
   /**
@@ -234,15 +242,6 @@ function ItemFields({
 
 type ImageBlock = Extract<WrittenBlock, { type: "image" }>;
 
-/**
- * A library file's address as an email can use it: a sent email is read far
- * from the admin, and only a complete address loads there, so one the
- * library gives relative to the site is made complete from the admin's own.
- */
-function libraryImageAddress(url: string): string {
-  return new URL(url, window.location.origin).href;
-}
-
 /** An image's address, typed or chosen from the media library, and its alt text. */
 function ImageFields({
   block,
@@ -265,7 +264,9 @@ function ImageFields({
       block.alt.length === 0 && picked.altText
         ? [{ type: "text" as const, text: picked.altText }]
         : block.alt;
-    set({ ...block, src: { url: libraryImageAddress(picked.url) }, alt });
+    // A sent email is read far from the admin: the address as the library
+    // copies it, complete, so it loads there.
+    set({ ...block, src: { url: copyableMediaUrl(picked.url) }, alt });
   };
   return (
     <div className="grid gap-2">
@@ -293,8 +294,30 @@ function ImageFields({
           )}
         </div>
       ) : (
+        // An address held by a variable: the same chip as in text, with its
+        // name, its mark and its fallback.
         <p className="text-sm text-muted-foreground">
-          The image at [{block.src.chip.variable}]
+          The image at{" "}
+          <span className="mx-0.5 rounded-md border border-border bg-muted px-1.5 py-0.5 text-xs text-foreground">
+            <ChipButton
+              variable={block.src.chip.variable}
+              fallback={block.src.chip.fallback}
+              editable={!edit.readOnly}
+              onFallback={fallback => {
+                if (!("chip" in block.src)) return;
+                const { variable } = block.src.chip;
+                set({
+                  ...block,
+                  src: {
+                    chip: {
+                      variable,
+                      ...(fallback !== undefined ? { fallback } : {}),
+                    },
+                  },
+                });
+              }}
+            />
+          </span>
         </p>
       )}
       <RunEditor
@@ -684,7 +707,7 @@ export interface WrittenBodyProps {
   /** The template's declared variables, which name chips and lists. */
   variables?: readonly TemplateFormVariable[];
   /** The workbench's test data, which says which chips show blank. */
-  sampleData?: Record<string, unknown>;
+  sampleData?: Record<string, unknown> | null;
   /** Set to a way to put a variable where the person was last typing. */
   insertRef?: MutableRefObject<InsertVariable | null>;
 }

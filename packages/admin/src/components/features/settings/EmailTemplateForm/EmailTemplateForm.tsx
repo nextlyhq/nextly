@@ -74,6 +74,7 @@ function ContentColumn({
   inbox,
   editor,
   writtenInsert,
+  sampleData,
 }: {
   form: FormOf;
   template?: EmailTemplateRecord;
@@ -90,6 +91,8 @@ function ContentColumn({
   >;
   /** Where the Variables rail puts a chip in a written email. */
   writtenInsert: React.MutableRefObject<InsertVariable | null>;
+  /** The test data, or null while the sample JSON is invalid. */
+  sampleData: Record<string, unknown> | null;
 }) {
   const [subject, preheader, fromOverride, format, blocks, variables] =
     form.watch([
@@ -140,7 +143,7 @@ function ContentColumn({
             value={blocks}
             readOnly={!owns || isPending}
             variables={variables}
-            sampleData={editor.completion.sample}
+            sampleData={sampleData}
             insertRef={writtenInsert}
             onChange={next =>
               form.setValue("blocks", next, { shouldDirty: true })
@@ -412,6 +415,7 @@ export function EmailTemplateForm({
               isPending={isPending}
               isLayoutRow={isLayoutRow}
               writtenInsert={writtenInsert}
+              sampleData={derived.sampleError ? null : derived.sampleData}
               inbox={
                 derived.hasPreview
                   ? {

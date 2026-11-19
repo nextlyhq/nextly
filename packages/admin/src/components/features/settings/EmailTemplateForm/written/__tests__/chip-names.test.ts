@@ -74,6 +74,43 @@ describe("a chip's friendly name", () => {
     expect(chipNamer(variables)("item")).toBe("Featured item");
   });
 
+  it("matches a declaration whose own name holds a dot before its fields", () => {
+    const dotted: TemplateFormVariable[] = [
+      {
+        name: "order.lines",
+        description: "",
+        required: true,
+        presentation: {
+          type: "list",
+          label: "Order lines",
+          fields: [
+            {
+              name: "product",
+              label: "Product",
+              type: "object",
+              fields: [{ name: "title", label: "Title" }],
+            },
+            {
+              name: "options",
+              type: "list",
+              fields: [{ name: "name" }],
+            },
+            { name: "qty", label: "Quantity" },
+          ],
+        },
+      },
+    ];
+    expect(chipNamer(dotted)("order.lines")).toBe("Order lines");
+    const inList = chipNamer(dotted, "order.lines");
+    expect(inList("item.product.title")).toBe("Item › Product › Title");
+    // Through a nested object to its fields; a nested list cannot repeat
+    // inside the item, so its fields are not offered.
+    expect(itemPaths(dotted, "order.lines")).toEqual([
+      "item.product.title",
+      "item.qty",
+    ]);
+  });
+
   it("offers a list's item fields as item paths", () => {
     expect(itemPaths(variables, "order.lines")).toEqual([
       "item.title",

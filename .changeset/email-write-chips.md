@@ -33,4 +33,6 @@ Chips in a written email read by their friendly names (`@experimental`): a varia
 
 A chip with no test value and no fallback is marked. Clicking a chip opens its fallback dialog, which sets the text shown when the variable is missing, null or empty; false and 0 still show.
 
+Text in a text block can be linked: select it and choose Link, then give a complete address or pick a variable that holds one, by its friendly name. Only the selected text changes, so a link it cuts through keeps its address on the rest. A link can be edited or removed the same way.
+
 An image block can be chosen from the media library. Its address is made complete, so a sent email loads it, and the library's alt text is used when the block has none.

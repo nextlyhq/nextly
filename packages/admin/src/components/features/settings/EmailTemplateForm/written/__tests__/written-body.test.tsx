@@ -494,6 +494,61 @@ describe("a written email's blocks", () => {
     });
   });
 
+  it("gives an image's variable address the same chip: its name, its mark and its fallback", async () => {
+    const user = userEvent.setup();
+    const seen = vi.fn<(doc: WrittenDocument) => void>();
+    render(
+      <WrittenBody
+        value={doc({
+          type: "image",
+          src: { chip: { variable: "logoUrl" } },
+          alt: [{ type: "text", text: "Logo" }],
+        })}
+        variables={[
+          {
+            name: "logoUrl",
+            description: "",
+            required: true,
+            presentation: { label: "Logo address" },
+          },
+        ]}
+        sampleData={{}}
+        onChange={seen}
+      />
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Logo address, shows nothing" })
+    );
+    const dialog = await screen.findByRole("dialog");
+    await user.type(
+      within(dialog).getByLabelText("Fallback"),
+      "https://cdn.example/logo.png"
+    );
+    await user.click(
+      within(dialog).getByRole("button", { name: "Save fallback" })
+    );
+    expect(seen.mock.calls[0]?.[0].blocks[0]).toMatchObject({
+      src: {
+        chip: { variable: "logoUrl", fallback: "https://cdn.example/logo.png" },
+      },
+    });
+  });
+
+  it("marks no chip while the test data is unknown", () => {
+    render(
+      <WrittenBody
+        value={doc({
+          type: "heading",
+          text: [{ type: "chip", variable: "name" }],
+        })}
+        sampleData={null}
+        onChange={vi.fn()}
+      />
+    );
+    // Not "shows nothing": with the sample JSON invalid, nothing is known.
+    expect(screen.getByRole("button", { name: "name" })).toBeDefined();
+  });
+
   it("opens no fallback dialog while the email is read-only", () => {
     render(
       <WrittenBody

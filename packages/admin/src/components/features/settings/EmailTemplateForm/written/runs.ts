@@ -16,8 +16,10 @@ import {
   $createTextNode,
   $getNodeByKey,
   $getRoot,
+  $getSelection,
   $isElementNode,
   $isLineBreakNode,
+  $isRangeSelection,
   $isTextNode,
   DecoratorNode,
   ElementNode,
@@ -39,7 +41,7 @@ import { ChipLabel } from "./ChipLabel";
 export type Inline = Extract<WrittenBlock, { type: "text" }>["text"][number];
 
 /** A link as stored: a fixed address, or a variable holding one. */
-type WrittenLink = NonNullable<Inline["link"]>;
+export type WrittenLink = NonNullable<Inline["link"]>;
 
 /** A chip as stored: the variable and its fallback. */
 type Chip = Extract<Inline, { type: "chip" }>;
@@ -234,6 +236,75 @@ function textNodes(text: string, marks: Marks): LexicalNode[] {
     nodes.push(node);
   });
   return nodes;
+}
+
+/** A piece of the text: a run's text, a chip, or a line break. */
+function isLeaf(node: LexicalNode): boolean {
+  return (
+    $isTextNode(node) || node instanceof ChipNode || $isLineBreakNode(node)
+  );
+}
+
+/** The link the selection starts in, if any. Call inside a read or an update. */
+export function $selectedLink(): WrittenLink | undefined {
+  const selection = $getSelection();
+  if (!$isRangeSelection(selection)) return undefined;
+  for (const node of selection.getNodes()) {
+    const holder = node instanceof WrittenLinkNode ? node : node.getParent();
+    if (holder instanceof WrittenLinkNode) return holder.__link;
+  }
+  return undefined;
+}
+
+/**
+ * Link the selected text to `link`, or unlink it with undefined. Only the
+ * selection changes: a link it cuts through keeps its address on the rest.
+ * Call inside an update.
+ */
+export function $setSelectionLink(link: WrittenLink | undefined): void {
+  const selection = $getSelection();
+  if (!$isRangeSelection(selection) || selection.isCollapsed()) return;
+  // Split at the selection's ends, so it covers whole pieces.
+  const picked = new Set(
+    selection
+      .extract()
+      .filter(isLeaf)
+      .map(node => node.getKey())
+  );
+  for (const paragraph of $getRoot().getChildren()) {
+    if (!$isElementNode(paragraph)) continue;
+    // Every piece of the paragraph, with the link it has now.
+    const pieces = paragraph
+      .getChildren()
+      .flatMap(child =>
+        child instanceof WrittenLinkNode
+          ? child.getChildren().map(leaf => ({ leaf, link: child.__link }))
+          : [{ leaf: child, link: undefined as WrittenLink | undefined }]
+      );
+    if (!pieces.some(({ leaf }) => picked.has(leaf.getKey()))) continue;
+    const holders = paragraph.getChildren().filter(isLinkNode);
+    // Laid out again in order: neighbours sharing a link share one holder.
+    let holder: WrittenLinkNode | undefined;
+    for (const piece of pieces) {
+      const next = picked.has(piece.leaf.getKey()) ? link : piece.link;
+      if (!next) {
+        paragraph.append(piece.leaf);
+        holder = undefined;
+        continue;
+      }
+      if (!holder || !sameLink(holder.__link, next)) {
+        holder = new WrittenLinkNode(next);
+        paragraph.append(holder);
+      }
+      holder.append(piece.leaf);
+    }
+    // The old holders, emptied as their pieces moved.
+    for (const old of holders) if (old.isAttached()) old.remove();
+  }
+}
+
+function isLinkNode(node: LexicalNode): node is WrittenLinkNode {
+  return node instanceof WrittenLinkNode;
 }
 
 /** Replace the editor's content with `runs`. Call inside an update. */

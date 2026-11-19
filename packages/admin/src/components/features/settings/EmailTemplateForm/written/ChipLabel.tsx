@@ -20,26 +20,41 @@ export interface ChipView {
   name: ChipNamer;
   /** Whether a chip shows nothing with the test data. */
   blank: (chip: { variable: string; fallback?: string }) => boolean;
+  /** The variable paths offered here, such as for a link's address. */
+  paths: readonly string[];
 }
 
 /** Without a provider, a chip shows its variable's path and is never marked. */
 export const ChipViewContext = createContext<ChipView>({
   name: variable => variable,
   blank: () => false,
+  paths: [],
 });
 
-export function ChipLabel({
-  variable,
-  fallback,
-  onFallback,
-}: {
+interface ChipProps {
   variable: string;
   fallback: string | undefined;
   /** Sets the chip's fallback, or removes it with undefined. */
   onFallback: (fallback: string | undefined) => void;
-}): JSX.Element {
-  const view = useContext(ChipViewContext);
+}
+
+/** A chip inside a text field, editable while its field is. */
+export function ChipLabel(props: ChipProps): JSX.Element {
   const editable = useLexicalEditable();
+  return <ChipButton {...props} editable={editable} />;
+}
+
+/**
+ * A chip anywhere: inside a text field, or standing for a whole value such
+ * as an image's address. It opens its fallback dialog while `editable`.
+ */
+export function ChipButton({
+  variable,
+  fallback,
+  onFallback,
+  editable,
+}: ChipProps & { editable: boolean }): JSX.Element {
+  const view = useContext(ChipViewContext);
   const [open, setOpen] = useState(false);
   const name = view.name(variable);
   const blank = view.blank({ variable, fallback });
