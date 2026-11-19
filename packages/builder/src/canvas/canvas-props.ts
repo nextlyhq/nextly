@@ -13,10 +13,10 @@ import type {
 import type { PageRendererProps } from "@nextlyhq/blocks-react";
 
 import type { AppliedConditions } from "../conditions/applied-conditions";
-import type { SelectionMode } from "../selection";
 
 import type { CanvasDragHandlers, CanvasDragState } from "./canvas-drag";
 import type { CanvasRegion, EmptyRegionBandProps } from "./canvas-regions";
+import type { SelectionMode } from "./selection";
 
 export interface CanvasProps {
   /** The document being edited. */

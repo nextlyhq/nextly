@@ -18,8 +18,8 @@ import {
 import { Input } from "@nextlyhq/ui";
 import * as React from "react";
 
+import { isElement } from "../../canvas/dom-kind";
 import { useCanvasTokenMode } from "../../canvas/prefers-dark";
-import { isElement } from "../../dom-kind";
 import { typedStyleText, useLiveDraft, type LiveDraft } from "../../live-draft";
 import { fieldStep, scrubModifiersOf } from "../../scrub-gesture";
 import type { StyleControl, StyleControlKind } from "../../style-controls";

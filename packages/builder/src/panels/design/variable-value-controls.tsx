@@ -35,7 +35,7 @@ import {
 } from "@nextlyhq/ui";
 import * as React from "react";
 
-import { isInput } from "../../dom-kind";
+import { isInput } from "../../canvas/dom-kind";
 import { InheritedValue } from "../../inspector/style-inspector/inherited-value";
 import {
   TypesLiveContext,

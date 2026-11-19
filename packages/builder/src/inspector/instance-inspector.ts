@@ -48,8 +48,8 @@ import {
   type ResolvedBlockNode,
 } from "@nextlyhq/blocks-engine";
 
+import { composedHolds, composedHoldWording } from "../canvas/component-holds";
 import type { RefusalWording } from "../canvas/drag-refusal";
-import { composedHolds, composedHoldWording } from "../component-holds";
 import { refusalAnnouncement } from "../move-refusal";
 import type { BuilderOp, NodePatch } from "../op-vocabulary";
 import type { SavedComponent } from "../panels/add/inserter";

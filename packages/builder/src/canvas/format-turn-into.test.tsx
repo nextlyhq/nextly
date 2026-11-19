@@ -25,7 +25,7 @@ import {
 import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 
 import type { EditorState } from "../editor-state";
-import { runTurnInto, turnIntoOffers } from "../turn-into-verb";
+import { runTurnInto, turnIntoOffers } from "./turn-into-verb";
 
 import { formatBar } from "./format-bar-state";
 import { useInlineEditing } from "./use-inline-editing";

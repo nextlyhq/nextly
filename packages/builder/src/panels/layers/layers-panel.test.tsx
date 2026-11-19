@@ -27,7 +27,7 @@ import {
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import * as React from "react";
 
-import { PreviewedEntryProvider } from "../../previewed-entry";
+import { PreviewedEntryProvider } from "../../canvas/previewed-entry";
 import {
   clearBlocks,
   hasBlock,

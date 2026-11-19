@@ -75,6 +75,7 @@ import {
   type TabAt,
   type TabDraft,
 } from "../canvas/canvas-tab-places";
+import { isHTMLElement } from "../canvas/dom-kind";
 import {
   canvasContentRect,
   clippedByAncestorRect,
@@ -82,7 +83,6 @@ import {
   overlaySpaceOf,
   type OverlaySpace,
 } from "../canvas/geometry-dom";
-import { isHTMLElement } from "../dom-kind";
 import type { Rect } from "../geometry";
 import {
   useMediaSummary,

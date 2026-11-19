@@ -34,7 +34,7 @@ import {
   stackTiers,
   type ColumnsLayout,
   type StackOn,
-} from "../../columns-layout";
+} from "../../canvas/columns-layout";
 import type { EditorState } from "../../editor-state";
 import { readStyleValue } from "../../style-values";
 import { HeldByLock } from "../held-by-lock";

@@ -26,8 +26,8 @@ import {
 import { ChevronDown } from "lucide-react";
 import * as React from "react";
 
+import { isElement } from "../../canvas/dom-kind";
 import { ChoiceList } from "../../choice-list";
-import { isElement } from "../../dom-kind";
 import { useLiveGesture } from "../../live-gesture";
 import { HiddenColours } from "../../panels/design/built-in-colours";
 import {
