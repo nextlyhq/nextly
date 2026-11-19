@@ -89,6 +89,7 @@ import { TranslationPanes } from "../TranslationMode/TranslationPanes";
 import { useTranslationSource } from "../TranslationMode/useTranslationSource";
 import { useEntryLocaleContext } from "../useEntryLocaleContext";
 
+import { HISTORY_REASON } from "./document-actions";
 import { pluginDocumentLock } from "./document-lock-affordances";
 import {
   topLevelFieldNames,
@@ -1334,6 +1335,14 @@ export function EntryForm({
     locale,
     isDirty: hasUnsavedWork,
     storedStamp: storedStampOf(entry),
+    // A past version on screen, or a save or recovery on its way, holds
+    // the review's steps outside the header as the header holds its own.
+    held:
+      viewingVersion !== null
+        ? HISTORY_REASON
+        : isSubmitting
+          ? "Saving…"
+          : undefined,
   });
 
   const documentActionsInput: DocumentActionBindingsInput = {
@@ -1863,6 +1872,7 @@ export function EntryForm({
                                           }}
                                           parts={review.onScreen}
                                           allParts={review.parts}
+                                          hold={review.hold}
                                           className={DOCUMENT_COLUMN_INSET}
                                         />
                                       )}

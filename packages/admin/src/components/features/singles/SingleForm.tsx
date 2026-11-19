@@ -31,6 +31,7 @@ import { z } from "zod";
 import { copiedValuesFor } from "@admin/components/features/entries/copied-values";
 import { CopyFromLanguageScope } from "@admin/components/features/entries/CopyFromLanguageScope";
 import { singleSourceFetcher } from "@admin/components/features/entries/entry-locale-source";
+import { HISTORY_REASON } from "@admin/components/features/entries/EntryForm/document-actions";
 import { pluginDocumentLock } from "@admin/components/features/entries/EntryForm/document-lock-affordances";
 import {
   topLevelFieldNames,
@@ -1797,6 +1798,10 @@ export function SingleForm({
     locale,
     isDirty: hasUnsavedWork,
     storedStamp: storedStampOf(document),
+    // A past version on screen, or a save or recovery on its way, holds
+    // the review's steps outside the header as the header holds its own.
+    held:
+      viewingVersion !== null ? HISTORY_REASON : busy ? "Saving…" : undefined,
   });
 
   const documentActionsInput: DocumentActionBindingsInput = {
@@ -2121,6 +2126,7 @@ export function SingleForm({
                                       }}
                                       parts={review.onScreen}
                                       allParts={review.parts}
+                                      hold={review.hold}
                                       className={DOCUMENT_COLUMN_INSET}
                                     />
                                     <EntryMetaStrip

@@ -59,6 +59,13 @@ export interface EditorReviewInput {
    * starts the next draft.
    */
   storedStamp?: string;
+  /**
+   * Why the host holds every step at this moment, where something does: a
+   * past version on screen, or a save or a recovery on its way. The header
+   * holds its steps for these through the action model; the review's other
+   * actions read it from `hold`.
+   */
+  held?: string | undefined;
 }
 
 export interface EditorReview {
@@ -78,6 +85,12 @@ export interface EditorReview {
   refusal: string | null;
   /** Forgets that refusal. */
   clearRefusal: () => void;
+  /**
+   * Why no step can be taken from outside the header at this moment (as the
+   * header's own steps are held): the host's hold, else unsaved edits or an
+   * unsaved document. Undefined where nothing holds them.
+   */
+  hold: string | undefined;
   /** The dialog a step needing a comment asks with. */
   dialog: ReactNode;
 }
@@ -87,6 +100,7 @@ export function useEditorReview({
   locale,
   isDirty,
   storedStamp,
+  held,
 }: EditorReviewInput): EditorReview {
   const query = useReviewState(document);
   const { defaultLocale } = useLocalization();
@@ -108,6 +122,7 @@ export function useEditorReview({
   // speaks for.
   const onScreen = partsOnScreen(query.data, locale ?? defaultLocale);
   const part = onScreen[0];
+  const hold = held ?? stepHold(isDirty, onScreen).stepReason;
   const parts =
     document !== undefined && query.data?.attached === true
       ? query.data.review.parts
@@ -121,6 +136,7 @@ export function useEditorReview({
       parts,
       refusal: null,
       clearRefusal: taker.clearRefusal,
+      hold,
       dialog: null,
     };
   }
@@ -157,6 +173,7 @@ export function useEditorReview({
     parts,
     refusal: taker.refusal,
     clearRefusal: taker.clearRefusal,
+    hold,
     dialog: taker.dialog,
   };
 }

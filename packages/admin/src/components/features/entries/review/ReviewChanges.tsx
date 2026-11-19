@@ -43,6 +43,12 @@ export interface ReviewChangesProps {
    * screen alone.
    */
   allParts?: readonly PartReview[];
+  /**
+   * Why no step can be taken at this moment (unsaved edits, a past version
+   * on screen, a save on its way), as the header's steps are held: "Approve
+   * all languages" is held with it.
+   */
+  hold?: string | undefined;
   /** The editor's column inset, as the title above uses. */
   className?: string;
 }
@@ -60,6 +66,7 @@ export function ReviewChanges({
   scope,
   parts,
   allParts,
+  hold,
   className,
 }: ReviewChangesProps): JSX.Element | null {
   const [open, setOpen] = useState(true);
@@ -89,6 +96,11 @@ export function ReviewChanges({
               type="button"
               variant="outline"
               size="sm"
+              disabled={hold !== undefined}
+              title={hold}
+              {...(hold === undefined
+                ? {}
+                : { "aria-describedby": "review-changes-hold" })}
               onClick={() => setApprovingAll(true)}
             >
               Approve all languages…
@@ -107,6 +119,11 @@ export function ReviewChanges({
           )}
         </div>
       </div>
+      {approval === undefined || hold === undefined ? null : (
+        <p id="review-changes-hold" className="text-xs text-muted-foreground">
+          {hold}
+        </p>
+      )}
       {judged.map(part => (
         <PartChanges
           key={part.part ?? ""}
@@ -123,6 +140,7 @@ export function ReviewChanges({
           scope={scope}
           approval={approval}
           parts={everyPart}
+          hold={hold}
         />
       )}
     </section>

@@ -65,6 +65,8 @@ export interface ApproveAllDialogProps {
   approval: ApproveAll;
   /** Every part of the document, for naming the parts a step leaves. */
   parts: readonly PartReview[];
+  /** Why the approval cannot be sent at this moment, where something holds it. */
+  hold?: string | undefined;
 }
 
 export function ApproveAllDialog({
@@ -73,6 +75,7 @@ export function ApproveAllDialog({
   scope,
   approval,
   parts,
+  hold,
 }: ApproveAllDialogProps): JSX.Element {
   const document = reviewDocumentOf(scope);
   const mutation = useTakeStep(document);
@@ -88,6 +91,8 @@ export function ApproveAllDialog({
   const label = `Approve ${names}`;
 
   const approve = async (): Promise<void> => {
+    // Held as the header's steps are: nothing is sent meanwhile.
+    if (hold !== undefined) return;
     setRefusal(null);
     try {
       const answer = await mutation.mutateAsync({
@@ -193,7 +198,8 @@ export function ApproveAllDialog({
           </Button>
           <Button
             type="button"
-            disabled={mutation.isPending}
+            disabled={mutation.isPending || hold !== undefined}
+            title={hold}
             onClick={() => void approve()}
           >
             {mutation.isPending ? (
