@@ -1037,7 +1037,7 @@ A document whose collection or Single has no workflow attached answers `200` wit
 
 **API keys see work assigned to their roles, not to their owner personally.** A key, full-access or scoped to a role, stands for its roles alone.
 
-Only parts the caller may read are listed and counted: a hidden part never takes a place on a page, and `total` never counts one. The list reads a bounded number of parts, oldest first: at most 1,000 of the caller's own work and 1,000 of the rest. When more are there, the list ends at the last part it read, `total` counts what it found, and `meta.totalCapped` is `true`. That total is a floor, so show it as "N+".
+Only parts the caller may read are listed and counted: a hidden part never takes a place on a page, and `total` never counts one. A request reads a bounded number of parts, oldest first: enough to fill its page and know whether there's a next one, and at most its page's depth plus 1,000 more. When more are there, `total` counts what it found and `meta.totalCapped` is `true`. That total is a floor, so show it as "N+". `hasNext` still says whether there's a next page, and a later page reads further, so every page stays reachable.
 
 #### Settings
 

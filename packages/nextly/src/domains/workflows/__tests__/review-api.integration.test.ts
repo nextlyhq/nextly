@@ -1629,16 +1629,17 @@ describe.each(getConfiguredTestDialects())(
       });
 
       it("marks the total a floor when there is more waiting than it reads", async () => {
-        // More parts wait than one list reads: the total counts those read, and says it is a floor.
-        // None of these documents exists, so none is readable, and the total read is 0 — yet more
-        // may wait past the cap, which `totalCapped` says rather than a bare 0.
+        // More parts wait than one request reads (its page's depth and 1,000 more): the total counts
+        // those read, and says it is a floor. None of these documents exists, so none is readable,
+        // and the total read is 0, yet more may wait past what was read, which `totalCapped` says
+        // rather than a bare 0.
         current = await bootSteps(dialect);
         await people();
         await person(app(), "sam", [
           ["read", PAGES],
           ["sign-off", PAGES],
         ]);
-        for (let n = 0; n <= 1000; n += 1) {
+        for (let n = 0; n < 1015; n += 1) {
           await seedState(app(), partOf(PAGES, randomUUID(), null), "legal", {
             definitionHash: HASH,
           });
@@ -1650,6 +1651,44 @@ describe.each(getConfiguredTestDialects())(
         );
         expect(page.items).toEqual([]);
         expect(page.meta).toMatchObject({ total: 0, totalCapped: true });
+      });
+
+      it("reaches every page of work past what one request reads", async () => {
+        // 995 parts no one may read come first, then 10 Sam may. A first read of 1,000 holds only 5
+        // of them: the list reads on, a window at a time, so both pages of 5 are reachable and the
+        // first says there is a next.
+        current = await bootSteps(dialect);
+        await people();
+        await person(app(), "sam", [
+          ["read", PAGES],
+          ["sign-off", PAGES],
+        ]);
+        for (let n = 0; n < 995; n += 1) {
+          await seedState(app(), partOf(PAGES, randomUUID(), null), "legal", {
+            definitionHash: HASH,
+          });
+        }
+        const later = new Date("2026-11-03T10:00:00.000Z");
+        const readable: string[] = [];
+        for (let n = 0; n < 10; n += 1) {
+          const id = await entry(app(), PAGES);
+          readable.push(id);
+          await seedState(app(), partOf(PAGES, id, null), "legal", {
+            definitionHash: HASH,
+            enteredAt: later,
+          });
+        }
+        const SAM: Who = { kind: "person", id: "sam" };
+
+        const first = await door.waiting(SAM, { page: 1, limit: 5 });
+        const second = await door.waiting(SAM, { page: 2, limit: 5 });
+        expect(first.items).toHaveLength(5);
+        expect(first.meta).toMatchObject({ hasNext: true });
+        expect(
+          [...first.items, ...second.items]
+            .map(item => (item.document as Doc).entryId)
+            .sort()
+        ).toEqual([...readable].sort());
       });
 
       it("lists for a key scoped to one role only that role's work", async () => {

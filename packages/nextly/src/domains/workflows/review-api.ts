@@ -37,6 +37,7 @@ import {
   type ReviewAssignee,
   type ReviewDocument,
   type ReviewState,
+  type WaitingShare,
   type WaitingStageTerms,
 } from "./review-state-repository";
 import {
@@ -363,9 +364,10 @@ function attachedStages(): ScopedStage[] {
 
 /**
  * How many review states a list reads of each share (the caller's own work, and the rest of the
- * stages), and so read checks and pages from. Where either read is full, more may wait: the list
- * ends at the earlier end of the two, and says its count is a floor (`totalCapped`), never a number
- * that took in a part the caller may not read.
+ * stages) in one window, and how far past the page a request may read: a request reads windows
+ * until it holds one more readable part than its page needs, or has read its page's depth and this
+ * many more. Past that its count is a floor (`totalCapped`), never a number that took in a part the
+ * caller may not read, and a later page reads further.
  */
 const WAITING_SCAN_LIMIT = 1000;
 
@@ -392,24 +394,63 @@ export async function waitingFor(
     mine.some(each => each.kind === who.kind && each.id === who.id);
   const deciderOf = decidersByEntity(adapter);
   const terms = await stageTerms(takeable, mine, isMine, deciderOf);
-  const { candidates, capped } = await waitingCandidates(adapter, terms);
+  const decided: WaitingContext = {
+    query,
+    isMine,
+    deciderOf,
+    accountable: await accountableFor(adapter, query.caller),
+    stageOfRow: new Map(
+      takeable.map(scoped => [
+        `${scoped.kind}:${scoped.slug}:${scoped.stage}`,
+        scoped,
+      ])
+    ),
+  };
+  // Windows read until the list holds one part more than the page needs (so it knows there is a
+  // next page), everything is read, or the request has read its page's depth and a window more.
+  const need = query.offset + query.limit + 1;
+  const budget = query.offset + query.limit + WAITING_SCAN_LIMIT;
+  const scan = waitingScan(adapter, terms);
+  const waiting: WaitingPart[] = [];
+  while (waiting.length < need && !scan.done() && scan.read < budget) {
+    const window = await scan.next(
+      Math.min(WAITING_SCAN_LIMIT, budget - scan.read)
+    );
+    waiting.push(...(await waitingIn(window, decided)));
+  }
+  return {
+    items: waiting.slice(query.offset, query.offset + query.limit),
+    total: waiting.length,
+    totalCapped: !scan.done(),
+  };
+}
 
-  const accountable = await accountableFor(adapter, query.caller);
-  const stageOfRow = new Map(
-    takeable.map(scoped => [
-      `${scoped.kind}:${scoped.slug}:${scoped.stage}`,
-      scoped,
-    ])
-  );
+/** What deciding whether a window's parts wait for the caller needs, asked once per list. */
+interface WaitingContext {
+  query: WaitingQuery;
+  isMine: (who: ReviewAssignee) => boolean;
+  deciderOf: (scoped: ScopedStage) => Decider;
+  accountable: string | null;
+  stageOfRow: ReadonlyMap<string, ScopedStage>;
+}
+
+/** The parts of one window that wait for the caller and that they may read, in order. */
+async function waitingIn(
+  window: readonly ReviewState[],
+  { query, isMine, deciderOf, accountable, stageOfRow }: WaitingContext
+): Promise<WaitingPart[]> {
+  // Who each part's assignee or default reviewer is, asked in batches per collection or Single
+  // before any part is decided, so a long queue of distinct assignees costs a few reads.
+  await primeDeciders(window, stageOfRow, deciderOf);
   const movable: ReviewState[] = [];
-  for (const row of candidates) {
+  for (const row of window) {
     const scoped = stageOfRow.get(
       `${row.scopeKind}:${row.scopeSlug}:${row.stage}`
     );
     if (!scoped) continue;
     // Whom this part waits for, by the rule its read names: the caller, one of their roles, or
     // every holder, which the caller is, by the stage's permission asked in `takeableStages`.
-    const waits = await deciderOf(scoped)(row);
+    const waits = await deciderOf(scoped).decide(row);
     if (waits === null || (waits.kind === "one" && !isMine(waits.who))) {
       continue;
     }
@@ -430,14 +471,9 @@ export async function waitingFor(
       part: row.part,
     }))
   );
-  const waiting = movable
+  return movable
     .filter((_, index) => readable[index] === true)
     .map(row => waitingItem(row, row.assignee));
-  return {
-    items: waiting.slice(query.offset, query.offset + query.limit),
-    total: waiting.length,
-    totalCapped: capped,
-  };
 }
 
 /**
@@ -518,39 +554,75 @@ async function stageTerms(
   return terms;
 }
 
+/** One share's place in a waiting scan: how many of its states, in order, earlier windows read. */
+interface ShareCursor {
+  share: WaitingShare;
+  read: number;
+  done: boolean;
+}
+
 /**
- * The review states a list decides, oldest first, from two bounded reads: the caller's own work,
- * and the rest, so the rest of a busy stage never crowds their own work out of the read. Each
- * read asks for one row past the limit, so a share of exactly the limit is known to be whole. One
- * with more is whole only up to its limit's last row; past the earlier such end the list would
- * miss what that read never reached, so it ends there, and says it was `capped`.
+ * The review states a list decides, oldest first, a window at a time, from two bounded reads per
+ * window: the caller's own work, and the rest, so the rest of a busy stage never crowds their own
+ * work out of a window. Each read asks for one row past the window, so a share that fits is known
+ * to be whole. One that does not is whole only up to the window's last row; past the earlier such
+ * end the window would miss what that read never reached, so it ends there, and the next window
+ * reads on from it. A share is done only once a window held all of it.
  */
-async function waitingCandidates(
+function waitingScan(
   adapter: DrizzleAdapter,
   terms: readonly WaitingStageTerms[]
-): Promise<{ candidates: ReviewState[]; capped: boolean }> {
-  const shares: ReviewState[][] = [];
-  const ends: ReviewState[] = [];
-  for (const share of ["own", "rest"] as const) {
-    const rows = await readWaitingReviewStates(
-      adapter,
-      terms,
-      share,
-      WAITING_SCAN_LIMIT + 1
-    );
-    if (rows.length > WAITING_SCAN_LIMIT) {
-      rows.length = WAITING_SCAN_LIMIT;
-      ends.push(rows[WAITING_SCAN_LIMIT - 1]);
-    }
-    shares.push(rows);
-  }
-  ends.sort(waitingOrder);
-  const end = ends[0];
-  const candidates = shares
-    .flat()
-    .sort(waitingOrder)
-    .filter(row => end === undefined || waitingOrder(row, end) <= 0);
-  return { candidates, capped: end !== undefined };
+): {
+  read: number;
+  done: () => boolean;
+  next: (size: number) => Promise<ReviewState[]>;
+} {
+  const cursors: ShareCursor[] = (["own", "rest"] as const).map(share => ({
+    share,
+    read: 0,
+    done: false,
+  }));
+  const scan = {
+    read: 0,
+    done: () => cursors.every(cursor => cursor.done),
+    async next(size: number): Promise<ReviewState[]> {
+      const fetched: { cursor: ShareCursor; state: ReviewState }[] = [];
+      const full = new Set<ShareCursor>();
+      let end: ReviewState | undefined;
+      for (const cursor of cursors) {
+        if (cursor.done) continue;
+        const states = await readWaitingReviewStates(
+          adapter,
+          terms,
+          cursor.share,
+          size + 1,
+          cursor.read
+        );
+        if (states.length > size) {
+          states.length = size;
+          full.add(cursor);
+          const last = states[size - 1];
+          if (end === undefined || waitingOrder(last, end) < 0) end = last;
+        }
+        for (const state of states) fetched.push({ cursor, state });
+      }
+      const window = fetched
+        .filter(each => end === undefined || waitingOrder(each.state, end) <= 0)
+        .sort((a, b) => waitingOrder(a.state, b.state));
+      const kept = new Set(window);
+      for (const each of window) each.cursor.read += 1;
+      for (const cursor of cursors) {
+        // Whole when its read fit the window and none of it was cut at the window's end.
+        const cut = fetched.some(
+          each => each.cursor === cursor && !kept.has(each)
+        );
+        if (!cursor.done && !full.has(cursor) && !cut) cursor.done = true;
+      }
+      scan.read += window.length;
+      return window.map(each => each.state);
+    },
+  };
+  return scan;
 }
 
 /**

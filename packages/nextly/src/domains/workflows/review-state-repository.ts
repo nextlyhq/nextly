@@ -280,7 +280,7 @@ function waitingWhere(
 
 /**
  * `share` of the review states in the stages `terms` names, oldest entry into their stage first, at
- * most `limit` of them: the candidates a waiting list decides part by part, read checks and pages
+ * most `limit` of them past the first `offset`: the candidates a waiting list decides part by part, read checks and pages
  * from. Bounded, as a stage may hold any number of parts.
  *
  * @experimental
@@ -289,7 +289,9 @@ export async function readWaitingReviewStates(
   db: ReviewStatesDb,
   terms: readonly WaitingStageTerms[],
   share: WaitingShare,
-  limit: number
+  limit: number,
+  // How many of the share's states, in this order, an earlier window already read.
+  offset = 0
 ): Promise<ReviewState[]> {
   const where = waitingWhere(terms, share);
   if (where === null) return [];
@@ -301,6 +303,7 @@ export async function readWaitingReviewStates(
       { column: "partKey", direction: "asc" },
     ],
     limit,
+    ...(offset > 0 ? { offset } : {}),
   });
   return rows.map(fromRow);
 }
