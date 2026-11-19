@@ -171,7 +171,11 @@ export async function opens(page, cdp, watcher, id, count) {
     await page.goto(`${BASE}/admin/collections/pages/${id}`, {
       timeout: 120_000,
     });
-    const link = page.getByRole("link", { name: "Open in builder" });
+    // The page builder card's way in: the document bar draws a link of the
+    // same name, so the name alone matches two.
+    const link = page
+      .locator('[data-slot="page-builder-card"]')
+      .getByRole("link", { name: "Open in builder", exact: true });
     await link.waitFor({ timeout: SHOW_LIMIT_MS });
     await watcher.quiet();
     await slowNetwork(cdp, LATENCY_MS);
