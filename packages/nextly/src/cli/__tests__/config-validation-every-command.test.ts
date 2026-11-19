@@ -110,6 +110,9 @@ async function run(
   args: readonly string[]
 ): Promise<{ status: number | undefined; stderr: string }> {
   const written: string[] = [];
+  // Each run reads the configuration afresh, as a new process does: the loader's cache is keyed
+  // by the file, which the stubbed bundle leaves unchanged between runs.
+  clearConfigCache();
   // A command may move into the project (`media` does); the run puts the process back after.
   const home = process.cwd();
   vi.spyOn(process.stderr, "write").mockImplementation(chunk => {
@@ -252,4 +255,58 @@ describe("an invalid configuration, saved while the development server runs", ()
       warned.join("\n---\n")
     ).toBe(true);
   }, 120_000);
+});
+
+describe("a Builder entity the definition file lost, which a plugin extends", () => {
+  // The plugin's extend names an entity the file no longer declares. Restoring the file is the
+  // fix, not creating the target: the loss is what each command reports, as `migrate:check` and
+  // `migrate:create` report it, rather than an extend target nothing declares.
+  it("is refused as lost, not as a missing extend target", async () => {
+    writeFileSync(join(dir, "nextly.config.ts"), "export default {};\n");
+    const definitions = join(dir, "ui-schema.json");
+    writeFileSync(
+      definitions,
+      JSON.stringify({
+        collections: [
+          { slug: "cases", fields: [{ name: "rating", type: "number" }] },
+        ],
+        singles: [],
+        components: [],
+      })
+    );
+    exported.config = { db: { migrationsDir: "./migrations" } };
+    const first = await run(["migrate:create", "--name", "cases"]);
+    expect(first.status, first.stderr).toBe(0);
+
+    // The entry removed from the file, and a plugin extending it added.
+    writeFileSync(
+      definitions,
+      JSON.stringify({ collections: [], singles: [], components: [] })
+    );
+    exported.config = {
+      db: { migrationsDir: "./migrations" },
+      plugins: [
+        {
+          name: "@acme/seo",
+          version: "1.0.0",
+          nextly: "*",
+          contributes: {
+            extend: [
+              { target: "cases", fields: [{ name: "seoTitle", type: "text" }] },
+            ],
+          },
+        },
+      ],
+    };
+
+    for (const args of [["generate:types"], ["migrate:check"]]) {
+      const ran = await run(args);
+      const name = args.join(" ");
+
+      expect(ran.status, `${name}\n${ran.stderr}`).toBe(1);
+      expect(ran.stderr, name).toContain("BUILDER_DEFINITION_MISSING");
+      expect(ran.stderr, name).toContain("collection 'cases'");
+      expect(ran.stderr, name).not.toContain("EXTEND_TARGET_UNKNOWN");
+    }
+  }, 300_000);
 });

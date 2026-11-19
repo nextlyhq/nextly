@@ -41,6 +41,7 @@ import {
   snapshotFieldTypes,
   withoutDisabledBehavior,
 } from "../../domains/schema/field-types/field-type-registry";
+import { loadLatestSnapshot } from "../../domains/schema/migrate-create/snapshot-io";
 import {
   currentWithheldScopeFields,
   publishWithheldScopeFields,
@@ -49,6 +50,7 @@ import {
   resolvePostgresSchema,
   setActivePostgresSchema,
 } from "../../domains/schema/services/postgres-schema";
+import { assertBuilderDefinitionsKept } from "../../domains/schema/ui-schema/builder-definitions";
 import { loadUiSchema } from "../../domains/schema/ui-schema/loader";
 import { manifestToBuilderEntities } from "../../domains/schema/ui-schema/merge";
 import { publishWebhookEventTypes } from "../../domains/webhooks/event-type-registry";
@@ -110,6 +112,43 @@ async function readBuilderEntities(
   } catch {
     return {};
   }
+}
+
+/**
+ * Refuse, as `migrate:check` and `migrate:create` do (`assertBuilderDefinitionsKept`), when the
+ * newest snapshot records a Builder entity that neither the configuration nor the definition file
+ * declares now. Asked where a plugin's extend or a relationship names a target nothing declares:
+ * that target may be the entity the file lost, and restoring the file is then the fix. Returns
+ * where nothing was lost, or where the snapshot cannot be read, which those commands report.
+ */
+async function refuseLostBuilderDefinitions(
+  projectRoot: string,
+  config: SanitizedNextlyConfig,
+  builderEntities: BuilderEntities
+): Promise<void> {
+  let latest: Awaited<ReturnType<typeof loadLatestSnapshot>>;
+  try {
+    latest = await loadLatestSnapshot(
+      resolve(projectRoot, config.db.migrationsDir, "meta")
+    );
+  } catch {
+    return;
+  }
+  assertBuilderDefinitionsKept({
+    recorded: latest?.data.entities,
+    merged: {
+      collections: [
+        ...(config.collections ?? []),
+        ...(builderEntities.collections ?? []),
+      ],
+      singles: [...(config.singles ?? []), ...(builderEntities.singles ?? [])],
+      components: [
+        ...(config.fieldGroups ?? []),
+        ...(builderEntities.components ?? []),
+      ],
+    },
+    definitionFile: config.db.uiSchemaFile,
+  });
 }
 
 /** Builder collection slugs (the only valid relationTo targets among Builder entities). */
@@ -808,20 +847,28 @@ async function loadConfigInternal(
       assertRegisteredKeepTheirKind(config, builderEntities);
       // Kept for the cycle judgement below: the Builder's field groups as stored, and with each
       // plugin's extension onto them, as the boot judges them.
-      const extended = resolveBuilderExtends(
-        folded.deferredExtends,
-        builderEntities
-      );
+      let extended: ReturnType<typeof resolveBuilderExtends>;
+      try {
+        extended = resolveBuilderExtends(
+          folded.deferredExtends,
+          builderEntities
+        );
+        finalizeRelationTargets(
+          collectUnresolvedRelationTargets(
+            config as unknown as NextlyServiceConfig
+          ),
+          builderCollectionSlugs(builderEntities)
+        );
+      } catch (error) {
+        // A target the definition file lost is that loss first: refused as the migrate commands
+        // refuse it, so the fix named is restoring the file, not creating the target.
+        await refuseLostBuilderDefinitions(cwd, config, builderEntities);
+        throw error;
+      }
       builderFieldGroups = {
         stored: builderEntities.components ?? [],
         registered: extended.components ?? [],
       };
-      finalizeRelationTargets(
-        collectUnresolvedRelationTargets(
-          config as unknown as NextlyServiceConfig
-        ),
-        builderCollectionSlugs(builderEntities)
-      );
       validateCrossPluginRelations(transformedPlugins);
 
       // Fail fast on invalid plugin-declared custom permissions (D36) — same
