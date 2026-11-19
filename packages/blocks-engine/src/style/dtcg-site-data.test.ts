@@ -129,6 +129,28 @@ describe("the site's own design data at the file's root", () => {
     expect(dtcgToTokens(written({ tokens: [brand] })).site).toBeUndefined();
   });
 
+  it("skips a colour order the site can't store, saying so, and keeps the rest", () => {
+    for (const order of [
+      ["c-brand", "c-brand"],
+      ["c-brand", ""],
+      Array.from({ length: 1001 }, (_, at) => `c-${String(at)}`),
+    ]) {
+      const file = written();
+      rootData(file).site = { order, builtInColoursShown: false };
+      const read = dtcgToTokens(file);
+      expect(read.site, String(order.length)).toEqual({
+        builtInColoursShown: false,
+      });
+      expect(read.issues.map(entry => entry.message)).toContain(
+        "The colour order in the file could not be read, so it was skipped."
+      );
+      expect(read.tokens.map(token => token.name)).toEqual([
+        "color.brand",
+        "space.roomy",
+      ]);
+    }
+  });
+
   it("skips each part it can't read, saying which, and keeps the rest", () => {
     const file = written();
     rootData(file).site = {

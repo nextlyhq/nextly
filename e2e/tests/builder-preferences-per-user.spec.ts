@@ -96,7 +96,7 @@ test("two authors of one browser each keep their own zoom, and the old record go
     // The second author starts from the defaults: fitting the canvas.
     await becomeAuthor(context, grace);
     await openOwnPage(page, "grace");
-    await expect(zoom(page)).toHaveAccessibleName(/^Canvas zoom: fitting/, {
+    await expect(zoom(page)).toHaveAccessibleName(/^Canvas zoom: Fit,/, {
       timeout: 30_000,
     });
     await zoom(page).click();

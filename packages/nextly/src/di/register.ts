@@ -173,6 +173,7 @@ import {
   publishWorkflows,
   type RegisteredWorkflow,
 } from "../domains/workflows/registry";
+import { recheckReleasesInWorkflowScopes } from "../domains/workflows/release-recheck-signal";
 import { NextlyError } from "../errors/nextly-error";
 import { getEventBus } from "../events/event-bus";
 import type { FieldGroupConfig } from "../field-groups/config/types";
@@ -343,6 +344,7 @@ import {
 } from "../shared/builder-refusal";
 import { assertNoLegacyFieldGroupKey } from "../shared/legacy-field-group-key";
 import { assertPluginFieldDeclarations } from "../shared/lib/assert-plugin-field-declarations";
+import { configurationProblems } from "../shared/lib/config-problems";
 import { replaceFieldFunctions } from "../shared/lib/field-level-registry";
 import type {
   AdminConfig,
@@ -393,6 +395,7 @@ import {
   registerWorkflowComparisonBaselines,
   registerWorkflowNoticeKinds,
   registerWorkflowPublishGate,
+  registerWorkflowReleaseChecks,
   resetWidgetRegistries,
   type RegistrationContext,
 } from "./registrations";
@@ -815,6 +818,9 @@ export function registerDomainServices(ctx: RegistrationContext): void {
   // release that stops or runs late) can register its kinds against it.
   registerNoticeServices(ctx);
   registerReleaseServices(ctx);
+  // Workflows' "Not approved" check beside core's, and the hold the release's run and a reader's
+  // projection of a due release ask, so no release goes live past a workflow.
+  registerWorkflowReleaseChecks(ctx);
   // The notices a workflow's steps and assignments give the people they name, registered with
   // the notices service as the releases' are, so no move can name a person it cannot tell.
   registerWorkflowNoticeKinds();
@@ -982,7 +988,7 @@ async function registerServicesOnce(
     unresolvedRelations,
     unresolvedPermissions,
     pluginBootContributions,
-  } = validateBootContributions(transformedConfig, transformedPlugins);
+  } = validateBootContributions(transformedConfig, transformedPlugins, config);
   // Before any plugin context exists to read them: the dependencies `ctx.db`
   // grants table access by are the ones this boot's plugins declare.
   publishPluginDependencies(transformedPlugins);
@@ -1621,6 +1627,13 @@ async function registerServicesOnce(
     },
     logger: resolvedLogger,
   });
+
+  // Every scheduled release holding a document of a collection or Single with a workflow attached
+  // is checked again now that review state follows this boot's workflows: approvals a change of
+  // definition withdrew, here or in `nextly migrate`, and a workflow attached for the first time,
+  // leave nothing else to signal from. Last, once the services are registered and the boot is
+  // published, as the checks resolve them; a stop it cannot make is logged, never failing the boot.
+  await recheckReleasesInWorkflowScopes();
 }
 
 // ============================================================
@@ -1771,7 +1784,9 @@ interface ValidatedBootContributions {
  */
 function validateBootContributions(
   transformedConfig: NextlyServiceConfig,
-  transformedPlugins: PluginDefinition[]
+  transformedPlugins: PluginDefinition[],
+  /** The configuration as the app declares it, before the plugins' setups. */
+  declaredConfig: NextlyServiceConfig
 ): ValidatedBootContributions {
   // Collect every relationTo (code + plugin) that doesn't resolve to a merged
   // collection (or core target); require dependsOn for cross-plugin
@@ -1805,12 +1820,6 @@ function validateBootContributions(
     transformedPlugins
   );
 
-  // Fail fast on a public address that breaks the template rule, or two
-  // Singles at one address. Asked of the merged configuration, since a
-  // plugin's types reach it without passing through `defineCollection` or
-  // `defineSingle`, and a plugin must not take a page the site declares.
-  assertConfiguredPublicAddresses(transformedConfig);
-
   // Fail fast on a collection, or a Single, that opens in a view it does not
   // have: every link to it would lead nowhere. Asked of the merged
   // configuration against every plugin's views, disabled ones included.
@@ -1838,6 +1847,38 @@ function validateBootContributions(
   };
 
   registerPluginFieldTypes(transformedPlugins);
+
+  // The app's own entities, judged by the rules that judge each one, as every command's load
+  // judges them (`configurationProblems`), in the form the plugins' setups left them. Here, now
+  // that the field types are registered and before any check below throws on one problem, so
+  // the start names them all. An entity declared through `define*` stops the start before the
+  // adapter connects. One written as a plain object was never judged at the start before: a
+  // site serving one is told of each problem, with where and what to do, and starts as it did;
+  // every command refuses it. A plugin's contributions keep the checks of their own type below.
+  const problems = configurationProblems(declaredConfig, transformedConfig);
+  if (problems.some(problem => problem.declaredByDefine)) {
+    throw NextlyError.validation({
+      errors: problems.map(({ path, code, message }) => ({
+        path,
+        code,
+        message,
+      })),
+      logContext: { reason: "config-invalid" },
+    });
+  }
+  for (const problem of problems) {
+    (transformedConfig.logger ?? consoleLogger).warn(
+      `[Nextly] Configuration problem at ${problem.path}: ${problem.message} Every nextly command refuses this configuration until it is fixed.`
+    );
+  }
+
+  // Fail fast on a public address that breaks the template rule, or two
+  // Singles at one address. Asked of the merged configuration, since a
+  // plugin's types reach it without passing through `defineCollection` or
+  // `defineSingle`, and a plugin must not take a page the site declares.
+  // After the app's entities are judged, so a `define*` entity's address is
+  // refused with its other problems rather than alone.
+  assertConfiguredPublicAddresses(transformedConfig);
 
   // Now that the registry is populated, each plugin field type gets to check the
   // declarations that use it. A plugin's own contributions are raw configs — its
@@ -1977,7 +2018,22 @@ async function prepareBootSchema(
   // holding the active-schema map — so it read an empty map while this call
   // had just filled one. Passing the value makes the boot path independent of
   // how the two modules happen to be resolved.
+  // Each field group's stored table, so a contribution to a group attaches to the table the group
+  // is in: `fg_<slug>` on a site whose field-group storage was migrated.
+  const { declaredFieldGroupStorage } = await import(
+    "../domains/field-groups/services/field-group-stored-tables"
+  );
+  const fieldGroups = await declaredFieldGroupStorage(
+    adapter,
+    transformedConfig.fieldGroups
+  );
   return compileAndPublishExtensionSchema({
+    ...(fieldGroups === undefined
+      ? {}
+      : {
+          fieldGroupTables: fieldGroups.tables,
+          fieldGroupTypeColumns: fieldGroups.typeColumns,
+        }),
     dialect: bootDialect,
     // The transformed list, like everything else from Layer 0b down: a
     // plugin a `setup` transformer added declares tables too, and the
@@ -4976,16 +5032,16 @@ async function syncCodeFirstComponents(
     ...componentSyncResult.updated,
   ];
 
-  // Shared resolver so the existence probe below, the DDL path further down and
-  // the migration CLI all produce identical component table names.
-  const { resolveComponentTableName } = await import(
-    "../domains/schema/utils/resolve-table-name"
-  );
+  // The table each group's registry row names after the sync, so the probe below and the create
+  // further down address the group's own storage. Derived again from the slug, the name would be
+  // the legacy one on a site whose storage moved to the current names, and the probe would queue a
+  // `comp_` table to be created beside the group's real one.
+  const tableNameOf = (slug: string): string | undefined =>
+    componentSyncResult.tableNames[slug];
 
   for (const slug of componentSyncResult.unchanged) {
-    // The physical name normalizes the slug, so probing the raw slug would
-    // never find the table and would queue a redundant sync on every boot.
-    const tableName = resolveComponentTableName(slug);
+    const tableName = tableNameOf(slug);
+    if (tableName === undefined) continue;
     try {
       const tableExists = await adapter.tableExists(tableName);
       if (!tableExists) {
@@ -5015,10 +5071,11 @@ async function syncCodeFirstComponents(
     const compConfig = transformedConfig.fieldGroups.find(c => c.slug === slug);
     if (!compConfig) continue;
 
-    const tableName = resolveComponentTableName(slug);
+    const tableName = tableNameOf(slug);
+    if (tableName === undefined) continue;
 
-    // i18n: a localized component omits its translatable columns from the main comp_
-    // table and gets a companion `comp_<slug>_locales` (created below).
+    // i18n: a localized component omits its translatable columns from the main
+    // table and gets a companion `<table>_locales` (created below).
     // Where its translatable columns live: its companion, for a translatable component or for every
     // component on a site that keeps every translatable field per language.
     const compLocalized = storesPerLanguage(compConfig);
@@ -6422,12 +6479,31 @@ async function refuseMixedStorageInConfig(
   const [
     { refuseMixedStorage },
     { resolveSingleTableName },
-    { resolveCollectionTableName, resolveComponentTableName },
+    { resolveCollectionTableName },
+    { readStoredFieldGroupTables, storedOrNewTableName },
   ] = await Promise.all([
     import("../domains/i18n/per-language-storage-layout"),
     import("../domains/singles/services/resolve-single-table-name"),
     import("../domains/schema/utils/resolve-table-name"),
+    import("../domains/field-groups/services/field-group-stored-tables"),
   ]);
+  // A declared field group's table as its registry row names it, or, for one the registry does
+  // not hold yet, its name under the naming this site's storage is on. So it is matched with its
+  // own registry row below rather than judged a second time as a Builder entity, and the
+  // undeclared-languages check reads its real translation table. Only read when the configuration
+  // declares a group. A registry that cannot be read is left to the registry scan below, which
+  // refuses naming the registry it could not read.
+  const storedFieldGroups =
+    (config.fieldGroups ?? []).length === 0
+      ? undefined
+      : await readStoredFieldGroupTables(adapter);
+  const fieldGroupTableOf = (slug: string): string =>
+    storedOrNewTableName(
+      storedFieldGroups?.usable === true
+        ? storedFieldGroups
+        : { tables: new Map(), naming: "legacy" },
+      slug
+    );
   type Entity = Parameters<typeof refuseMixedStorage>[1][number];
   const fieldsOf = (entity: { fields?: unknown }) =>
     (entity.fields ?? []) as Entity["fields"];
@@ -6460,7 +6536,7 @@ async function refuseMixedStorageInConfig(
       (g): Entity => ({
         kind: "component",
         slug: g.slug,
-        tableName: resolveComponentTableName(g.slug),
+        tableName: fieldGroupTableOf(g.slug),
         fields: fieldsOf(g),
         localized: (g as { localized?: unknown }).localized,
       })

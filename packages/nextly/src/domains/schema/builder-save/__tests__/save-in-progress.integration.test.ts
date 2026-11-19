@@ -8,9 +8,10 @@
  * `finally` of the save runs, as none would in a process that was killed there. Each write point
  * of the save in turn: the definition file, a migration file, a statement of the file run, the
  * ledger's record of it and the registry row. After each, the row and the marker are there and
- * describe the save. A save that ends, written or withdrawn whole, leaves neither; one that ends
- * with part of it kept and nothing recording what (a MySQL save stopped part-way) keeps both. A
- * record already standing, from a process that stopped, stays as it was through a later save.
+ * describe the save. A save that ends, written, withdrawn whole or stopped part-way and settled
+ * to what applied (MySQL), leaves neither; one that ends with part of it kept and nothing recording
+ * what (a MySQL stop whose settle failed) keeps both. A record already standing, from a process
+ * that stopped, stays as it was through a later save.
  *
  * The kill is released once the case has looked, so the instance's connections can close.
  */
@@ -827,15 +828,53 @@ describe.each(getConfiguredTestDialects())(
       }, 300_000);
 
       // MySQL commits each statement as it runs, so a save refused at its second addition keeps
-      // the first, and its files are kept recorded applied nowhere: nothing records what committed,
-      // so the record stays for the next start to settle.
+      // the first. The save settles to what applied, its outcome recorded, so its record clears.
       it.runIf(dialect === "mysql")(
-        "a save stopped part-way on MySQL, its files kept unrecorded, keeps the row and the marker",
+        "a save stopped part-way on MySQL and settled to what applied clears the row and the marker",
+        async () => {
+          const t = await boot();
+          await path.create([text("heading")]);
+          const refused = refuseAdding(t, "beta");
+
+          const answer = await path
+            .save(t, [text("heading"), text("alpha"), text("beta")])
+            .catch((error: unknown) => error);
+          expect(refused(), "no statement adding `beta` was met").toBe(1);
+          expect(
+            answer instanceof Response ? answer.ok : !(answer instanceof Error),
+            "the save was not refused"
+          ).toBe(false);
+          const live = await liveColumns(t, path.table);
+          expect(live, "alpha committed before beta failed").toContain("alpha");
+          expect(live, "beta never added").not.toContain("beta");
+
+          expect(await recordRow(t, path), "the record's row").toBeUndefined();
+          expect(entityMarkers(path), "the record's marker").toEqual([]);
+        },
+        300_000
+      );
+
+      // Where recording what applied fails too, nothing records what committed: the record stays
+      // for the next start to settle.
+      it.runIf(dialect === "mysql")(
+        "a save stopped part-way on MySQL whose settle fails keeps the row and the marker",
         async () => {
           const t = await boot();
           await path.create([text("heading")]);
           const definitionBefore = definitionText();
           const refused = refuseAdding(t, "beta");
+          // Once the save's own statement failed, the ledger refuses the settle's record.
+          const markApplied = SchemaEventsRepository.prototype.markApplied;
+          vi.spyOn(
+            SchemaEventsRepository.prototype,
+            "markApplied"
+          ).mockImplementation(async function (
+            this: SchemaEventsRepository,
+            ...args: Parameters<typeof markApplied>
+          ) {
+            if (refused() > 0) throw new Error("injected ledger failure");
+            return markApplied.apply(this, args);
+          });
 
           const answer = await path
             .save(t, [text("heading"), text("alpha"), text("beta")])

@@ -2,13 +2,11 @@
  * Which starter pages a site offers now, and the page body one gives a new
  * page.
  *
- * **Offered.** A starter whose blocks, variables or shared styles the site
- * no longer has
- * is left out of the list rather than offered half-drawn: a variable an
- * author removed in Design, or a block a plugin that was turned off
- * supplied. What a starter needs is read by the walk an export carries a
- * page's references by (`collectDocumentReferences`), so the two agree on
- * what a document names.
+ * **Offered, or unavailable with why.** Every starter this boot registered is
+ * listed. One the site can't hold now (a block, variable or shared style it
+ * no longer has, or more than its page limits allow) carries the reason
+ * (`starter-fit`) rather than being left out, so an author sees it is there
+ * and why it can't be used; a page made from it is refused in the same words.
  *
  * **Copied once.** A starter's blocks reach a page through the engine's
  * paste planner, the same fresh-id copy a paste makes and without the record
@@ -32,70 +30,51 @@ import {
 import type { StarterPageDefinition } from "@nextlyhq/plugin-sdk/blocks";
 
 import type { NewPageStarter } from "../pages-write-contract";
-import {
-  collectDocumentReferences,
-  emptyReferences,
-  registryMediaProps,
-} from "../transfer/transfer-references";
 
+import {
+  starterDocument,
+  starterFit,
+  starterMisfitReason,
+  type StarterMisfit,
+  type StarterSite,
+} from "./starter-fit";
 import type { RegisteredStarterPage } from "./starter-pages";
 
-/** What the site has now, which a starter's needs are judged against. */
-export interface StarterSite {
-  /** The site's block registry. */
-  readonly blocks: BlockRegistryReader;
-  /** The identities of every variable the site defines now. */
-  readonly variables: ReadonlySet<string>;
-  /** The ids of every shared style the site defines now. */
-  readonly sharedStyles: ReadonlySet<string>;
-}
-
-/** A starter's blocks as a page document, the shape a page stores them in. */
-function starterDocument(starter: StarterPageDefinition): BlockDocument {
-  return {
-    formatVersion: DOCUMENT_FORMAT_VERSION,
-    kind: "page",
-    nodes: [...starter.blocks],
-  };
+/** A starter as the site offers it now: with why it can't be used, if it can't. */
+export interface StarterOffer {
+  readonly entry: RegisteredStarterPage;
+  /** Absent when the site can use the starter now. */
+  readonly misfit?: StarterMisfit;
 }
 
 /**
- * Whether the site still has every block, variable and shared style
- * `starter` names: a page naming a shared style the site doesn't define is
- * refused at save, so a starter naming one could never be made.
+ * Every starter this boot registered, in order, each judged against what the
+ * site has and allows now.
  */
-function siteHasWhatStarterNeeds(
-  starter: StarterPageDefinition,
-  site: StarterSite
-): boolean {
-  const needs = emptyReferences();
-  collectDocumentReferences(starterDocument(starter), needs, {
-    mediaProps: type => registryMediaProps(site.blocks, type),
-  });
-  return (
-    [...needs.blockTypes].every(type => site.blocks.has(type)) &&
-    [...needs.tokens].every(token => site.variables.has(token)) &&
-    [...needs.classes].every(style => site.sharedStyles.has(style))
-  );
-}
-
-/** The starters a site offers now, in the order they were registered. */
-export function offeredStarterPages(
+export function starterOffers(
   registered: readonly RegisteredStarterPage[],
-  site: StarterSite
-): RegisteredStarterPage[] {
-  return registered.filter(entry =>
-    siteHasWhatStarterNeeds(entry.starter, site)
-  );
+  site: StarterSite,
+  limits?: DocumentLimits
+): StarterOffer[] {
+  return registered.map(entry => {
+    const misfit = starterFit(entry.starter, site, limits);
+    return misfit === undefined ? { entry } : { entry, misfit };
+  });
 }
 
 /** A starter as the New page dialog and the empty page list it. */
-export function starterItem(starter: StarterPageDefinition): NewPageStarter {
+export function starterItem(
+  starter: StarterPageDefinition,
+  misfit?: StarterMisfit
+): NewPageStarter {
   return {
     id: starter.id,
     label: starter.label,
     description: starter.description,
     document: starterDocument(starter),
+    ...(misfit === undefined
+      ? {}
+      : { unavailable: { reason: starterMisfitReason(misfit) } }),
   };
 }
 

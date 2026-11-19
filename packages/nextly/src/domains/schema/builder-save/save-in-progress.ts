@@ -150,13 +150,14 @@ function markerPath(projectRoot: string, record: SaveInProgress): string {
 
 /**
  * A record a scope made, and what its save said of how it ended: `withdrawn` where it failed and
- * removed everything it wrote, `left` where it kept part of itself with nothing recording what.
+ * removed everything it wrote, `settled` where it stopped part way and recorded what applied,
+ * `left` where it kept part of itself with nothing recording what.
  */
 interface MadeRecord {
   adapter: DrizzleAdapter;
   projectRoot: string;
   record: SaveInProgress;
-  ending: "open" | "withdrawn" | "left";
+  ending: "open" | "withdrawn" | "settled" | "left";
   /**
    * The stored schema version's count of registry writes when the record was made (`seq`),
    * undefined where none was stored: a save whose registry write committed moved it since.
@@ -173,6 +174,11 @@ export interface StartedSave {
   filesWritten(names: readonly string[]): Promise<void>;
   /** The save failed and withdrew everything it wrote: its record clears with the scope. */
   withdrawn(): void;
+  /**
+   * The save stopped part way and what applied was recorded (`settleStoppedSave`): its record
+   * clears with the scope, though the save is thrown as a failure.
+   */
+  settled(): void;
   /** Part of the save was kept and nothing records what: its record stays. */
   left(): void;
 }
@@ -181,17 +187,18 @@ export interface StartedSave {
 const NO_RECORD: StartedSave = {
   filesWritten: () => Promise.resolve(),
   withdrawn: () => undefined,
+  settled: () => undefined,
   left: () => undefined,
 };
 
 const scopes = new AsyncLocalStorage<MadeRecord[]>();
 
 /**
- * The records of `made` an ending clears: one whose save withdrew everything it wrote, and, where
- * the work ended without throwing, one whose save's registry write committed, which moves the
- * stored schema version (`registryWritten`). A resolved scope alone says nothing: a service can
- * answer a failed registry write as a result, after the definition, files and statements were
- * written. A record left part-way never clears.
+ * The records of `made` an ending clears: one whose save withdrew everything it wrote, or settled
+ * what applied of a part-way stop, and, where the work ended without throwing, one whose save's
+ * registry write committed, which moves the stored schema version (`registryWritten`). A resolved
+ * scope alone says nothing: a service can answer a failed registry write as a result, after the
+ * definition, files and statements were written. A record left part-way never clears.
  */
 async function clearedBy(
   made: readonly MadeRecord[],
@@ -200,8 +207,9 @@ async function clearedBy(
 ): Promise<MadeRecord[]> {
   const cleared: MadeRecord[] = [];
   for (const entry of made) {
-    if (entry.ending === "withdrawn") cleared.push(entry);
-    else if (
+    if (entry.ending === "withdrawn" || entry.ending === "settled") {
+      cleared.push(entry);
+    } else if (
       ended &&
       entry.ending === "open" &&
       (await registryWritten(entry, logger))
@@ -401,6 +409,9 @@ export async function recordSaveStarted(args: {
     filesWritten: names => noteFilesWritten(entry, meta, key, names),
     withdrawn: () => {
       if (entry.ending === "open") entry.ending = "withdrawn";
+    },
+    settled: () => {
+      if (entry.ending === "open") entry.ending = "settled";
     },
     left: () => {
       entry.ending = "left";

@@ -641,8 +641,21 @@ export {
  * handler and an agent all reach the same `apply`, so undo covers every one of
  * them rather than only the path that happened to implement it.
  */
-export { MAX_HISTORY, useEditorState } from "./editor-state";
-export type { EditorState, UseEditorStateArgs } from "./editor-state";
+export { MAX_HISTORY, useDocumentView, useEditorState } from "./editor-state";
+
+/**
+ * A handler that keeps its identity across renders and calls the newest one,
+ * for a surface memoised so a selection draws it nothing again.
+ */
+export {
+  useLatestCallback,
+  useLatestOptionalCallback,
+} from "./latest-callback";
+export type {
+  EditorDocumentView,
+  EditorState,
+  UseEditorStateArgs,
+} from "./editor-state";
 
 /**
  * Why `EditorState.lockRefusalFor` refuses an edit: a slot lock a block
@@ -819,6 +832,9 @@ export type {
   TokensPanelProps,
   VariablesHeader,
 } from "./tokens-panel";
+// What a host's variables write made at once answers it stored, so an import
+// can say a save the site took only in part as exactly that.
+export type { VariablesStored } from "./variables-transfer";
 // Which variable groups each Design tab lists, and the one variable search,
 // so a tab's count and the rows it lists come from the same rule.
 export {

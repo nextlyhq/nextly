@@ -52,7 +52,11 @@ import {
   createsEmptyTable,
   rebuildCopyStatements,
 } from "../ownership/drop-guard";
-import type { NextlySchemaSnapshot } from "../pipeline/diff/types";
+import { diffSnapshots } from "../pipeline/diff/diff";
+import type {
+  ForeignKeySpec,
+  NextlySchemaSnapshot,
+} from "../pipeline/diff/types";
 import {
   MYSQL_LIVE_RUN_LENGTH,
   mysqlLiveRunAt,
@@ -70,6 +74,7 @@ import {
   judgeStatements,
   labelOf,
   type JudgedStatement,
+  type LiveSchema,
   type LiveSchemaWithColumnFacts,
 } from "./statement-judgement";
 import { registryRowWrittenBy } from "./statement-targets";
@@ -156,11 +161,16 @@ type ProofArgs = Parameters<typeof proveStatements>[0];
 function liveStatusOf(
   statement: string,
   later: readonly string[],
-  { dialect, sides, live }: ProofArgs
+  args: ProofArgs
 ): StatementProof["status"] | undefined {
+  const { dialect, sides, live } = args;
+  // The whole proof's arguments go on to the counter check, which takes them
+  // as one value, rather than a copy that would leave one of them out.
   if (
     !inlineConstraintsUsable(statement, dialect, sides, live.schema) ||
-    !generatedKeysAssigned(statement, later, dialect, live.schema)
+    !generatedKeysAssigned(statement, later, dialect, live.schema) ||
+    !namedObjectsStand(statement, later, dialect, live.schema) ||
+    !carriedCounterCovers(statement, later, args)
   ) {
     return "not-done";
   }
@@ -596,24 +606,357 @@ function twinColumnsLeftToDefault(
     .map(([column]) => ({ table, column }));
 }
 
+/**
+ * The table a `CREATE TABLE [IF NOT EXISTS] t (...)` creates and each clause of its body, ready
+ * to read; undefined for any other statement. The one reading of that body.
+ */
+function createdBodyOf(
+  create: string,
+  dialect: SupportedDialect
+): { table: string; clauses: StatementCursor[] } | undefined {
+  const cursor = cursorOf(create, dialect, EXACT);
+  if (!cursor.accept("CREATE", "TABLE")) return undefined;
+  cursor.acceptCondition();
+  const table = cursor.name();
+  if (table === undefined || !cursor.accept("(")) return undefined;
+  const body = cursor.rest();
+  return {
+    table,
+    clauses: new StatementCursor(body.slice(0, body.lastIndexOf(")")))
+      .clauses()
+      .map(tokens => new StatementCursor(tokens)),
+  };
+}
+
 /** Each column a `CREATE TABLE` body defines, with the tokens after its name. */
 function columnDefinitions(
   create: string,
   dialect: SupportedDialect
 ): Array<[string, StatementToken[]]> {
-  const cursor = cursorOf(create, dialect, EXACT);
-  cursor.accept("CREATE", "TABLE");
+  return (createdBodyOf(create, dialect)?.clauses ?? []).flatMap(definition => {
+    if (nextIn(definition, TABLE_CONSTRAINT_WORDS)) return [];
+    const column = definition.name();
+    return column === undefined ? [] : [[column, definition.rest()]];
+  });
+}
+
+/**
+ * A constraint or index a statement makes or validates under a name, with the tokens after the
+ * name: what the live database can hold another way under that same name.
+ */
+interface NamedObject {
+  kind: "constraint" | "validated" | "index";
+  table: string;
+  name: string;
+  tail: StatementToken[];
+}
+
+/** `CONSTRAINT n ...`, read after `CONSTRAINT`, as a named constraint of `table`. */
+function namedConstraint(
+  clause: StatementCursor,
+  table: string
+): NamedObject[] {
+  const name = clause.name();
+  return name === undefined
+    ? []
+    : [{ kind: "constraint", table, name, tail: clause.rest() }];
+}
+
+/** The named object one `ALTER TABLE` clause makes or validates, where it does. */
+function namedObjectOfClause(
+  clause: StatementCursor,
+  table: string,
+  dialect: SupportedDialect
+): NamedObject[] {
+  if (clause.accept("VALIDATE", "CONSTRAINT")) {
+    const name = clause.name();
+    return name === undefined
+      ? []
+      : [{ kind: "validated", table, name, tail: [] }];
+  }
+  if (!clause.accept("ADD")) return [];
+  if (clause.accept("CONSTRAINT")) return namedConstraint(clause, table);
+  return dialect === "mysql" ? mysqlIndexElement(clause, table) : [];
+}
+
+/**
+ * The index MySQL's `[UNIQUE] [INDEX | KEY] n (...)` declares, in an `ALTER TABLE ... ADD` clause
+ * or a `CREATE TABLE` body: `UNIQUE n`, `INDEX n`, `KEY n`, `UNIQUE INDEX n` and `UNIQUE KEY n`.
+ */
+function mysqlIndexElement(
+  clause: StatementCursor,
+  table: string
+): NamedObject[] {
+  const unique = clause.accept("UNIQUE");
+  const index = clause.accept("INDEX") || clause.accept("KEY");
+  if (!unique && !index) return [];
+  const name = clause.name();
+  return name === undefined
+    ? []
+    : [{ kind: "index", table, name, tail: clause.rest() }];
+}
+
+/** The index a `CREATE [UNIQUE] INDEX [CONCURRENTLY] [IF NOT EXISTS] n ON [ONLY] t` creates. */
+function createdIndexOf(
+  statement: string,
+  dialect: SupportedDialect
+): NamedObject[] {
+  const cursor = cursorOf(statement, dialect, EXACT);
+  if (!cursor.accept("CREATE")) return [];
+  cursor.accept("UNIQUE");
+  if (!cursor.accept("INDEX")) return [];
+  if (dialect === "postgresql") cursor.accept("CONCURRENTLY");
   cursor.acceptCondition();
-  if (cursor.name() === undefined || !cursor.accept("(")) return [];
-  const body = cursor.rest();
-  return new StatementCursor(body.slice(0, body.lastIndexOf(")")))
-    .clauses()
-    .flatMap(tokens => {
-      const definition = new StatementCursor(tokens);
-      if (nextIn(definition, TABLE_CONSTRAINT_WORDS)) return [];
-      const column = definition.name();
-      return column === undefined ? [] : [[column, definition.rest()]];
+  const name = cursor.name();
+  if (name === undefined || !cursor.accept("ON")) return [];
+  if (dialect === "postgresql") cursor.accept("ONLY");
+  const table = cursor.name();
+  return table === undefined
+    ? []
+    : [{ kind: "index", table, name, tail: cursor.rest() }];
+}
+
+/** Every constraint and index a statement makes or validates under a name. */
+function namedObjectsOf(
+  statement: string,
+  dialect: SupportedDialect
+): NamedObject[] {
+  const created = createdBodyOf(statement, dialect);
+  if (created !== undefined) {
+    return created.clauses.flatMap(clause => {
+      if (clause.accept("CONSTRAINT")) {
+        return namedConstraint(clause, created.table);
+      }
+      return dialect === "mysql"
+        ? mysqlIndexElement(clause, created.table)
+        : [];
     });
+  }
+  const altered = alteredTableOf(statement, dialect);
+  if (altered !== undefined) {
+    return altered.clauses.flatMap(clause =>
+      namedObjectOfClause(clause, altered.table, dialect)
+    );
+  }
+  return createdIndexOf(statement, dialect);
+}
+
+/** Words after `DROP` in an `ALTER TABLE` clause that open a named constraint, index or key. */
+const DROPPED_BY_NAME: readonly (readonly string[])[] = [
+  ["CONSTRAINT"],
+  ["CHECK"],
+  ["FOREIGN", "KEY"],
+  ["INDEX"],
+  ["KEY"],
+];
+
+/**
+ * The constraints and indexes one statement drops, by name, with the table where the statement
+ * names one: `DROP INDEX n` on PostgreSQL and SQLite names none.
+ */
+function namedDropsOf(
+  statement: string,
+  dialect: SupportedDialect
+): Array<{ table?: string; name: string }> {
+  const cursor = cursorOf(statement, dialect, EXACT);
+  if (cursor.accept("DROP", "INDEX")) {
+    if (dialect === "postgresql") cursor.accept("CONCURRENTLY");
+    cursor.acceptCondition();
+    const names = cursor.names() ?? [];
+    const table = cursor.accept("ON") ? cursor.name() : undefined;
+    return names.map(name => ({ table, name }));
+  }
+  const altered = alteredTableOf(statement, dialect);
+  return (altered?.clauses ?? []).flatMap(clause => {
+    if (!clause.accept("DROP")) return [];
+    if (!DROPPED_BY_NAME.some(words => clause.accept(...words))) return [];
+    clause.acceptCondition();
+    const name = clause.name();
+    return name === undefined ? [] : [{ table: altered?.table, name }];
+  });
+}
+
+/** The indexes MySQL's `ALTER TABLE t RENAME INDEX | KEY a TO b` renames, as `[from, to]`. */
+function indexRenamesOf(
+  statement: string,
+  dialect: SupportedDialect
+): { table: string; pairs: Array<[string, string]> } | undefined {
+  const altered = dialect === "mysql" && alteredTableOf(statement, dialect);
+  if (altered === false || altered === undefined) return undefined;
+  const pairs = altered.clauses.flatMap((clause): Array<[string, string]> => {
+    if (!clause.accept("RENAME")) return [];
+    if (!clause.accept("INDEX") && !clause.accept("KEY")) return [];
+    const from = clause.name();
+    const to = clause.accept("TO") ? clause.name() : undefined;
+    return from === undefined || to === undefined ? [] : [[from, to]];
+  });
+  return { table: altered.table, pairs };
+}
+
+/** Where a named object stands after one later statement, or undefined where it drops it. */
+function objectAfter(
+  at: { table: string; name: string },
+  statement: string,
+  dialect: SupportedDialect
+): { table: string; name: string } | undefined {
+  const dropped = namedDropsOf(statement, dialect).some(
+    drop =>
+      drop.name === at.name &&
+      (drop.table === undefined || drop.table === at.table)
+  );
+  if (dropped) return undefined;
+  const renames = indexRenamesOf(statement, dialect);
+  const renamed =
+    renames?.table === at.table
+      ? renames.pairs.find(([from]) => from === at.name)?.[1]
+      : undefined;
+  // A table is followed as its columns are: no step names the column of no name.
+  const table = whereItEnds(
+    { table: at.table, column: "" },
+    [statement],
+    dialect,
+    "rows"
+  )?.table;
+  return table === undefined ? undefined : { table, name: renamed ?? at.name };
+}
+
+/**
+ * The table and name a named object stands under once the later statements of the file have run,
+ * each applied in order, or undefined where one of them drops the object or its table: nothing is
+ * asked of it then.
+ */
+function whereObjectEnds(
+  object: NamedObject,
+  later: readonly string[],
+  dialect: SupportedDialect
+): { table: string; name: string } | undefined {
+  let at: { table: string; name: string } | undefined = {
+    table: object.table,
+    name: object.name,
+  };
+  for (const statement of later) {
+    at = objectAfter(at, statement, dialect);
+    if (at === undefined) return undefined;
+  }
+  return at;
+}
+
+/** How a foreign key's definition has its check deferred: PostgreSQL's three states. */
+function declaredDeferrability(
+  tail: readonly StatementToken[]
+): "not" | "immediate" | "deferred" {
+  const declared = outsideParentheses(tail);
+  if (hasRun(declared, "NOT", "DEFERRABLE")) return "not";
+  // `INITIALLY DEFERRED` makes a key deferrable whether or not the word is written.
+  if (hasRun(declared, "INITIALLY", "DEFERRED")) return "deferred";
+  return declared.includes("DEFERRABLE") ? "immediate" : "not";
+}
+
+/**
+ * Whether one named constraint stands in the live database as its definition declares, in what
+ * the snapshot does not record of it: a MySQL check enforced or not, a PostgreSQL foreign key's
+ * deferrability. True for any other constraint.
+ */
+function constraintAsDeclared(
+  object: NamedObject,
+  end: { table: string; name: string },
+  dialect: SupportedDialect,
+  schema: LiveSchemaWithColumnFacts
+): boolean {
+  const declared = outsideParentheses(object.tail);
+  if (dialect === "mysql" && declared[0] === "CHECK") {
+    return (
+      schema.checkEnforced(end.table, end.name) ===
+      !hasRun(declared, "NOT", "ENFORCED")
+    );
+  }
+  if (dialect === "postgresql" && declared[0] === "FOREIGN") {
+    return (
+      schema.keyDeferrability(end.table, end.name) ===
+      declaredDeferrability(object.tail)
+    );
+  }
+  // A unique constraint is an index under its own name on PostgreSQL and MySQL; SQLite names
+  // the index it makes for one itself.
+  if (dialect !== "sqlite" && declared[0] === "UNIQUE") {
+    return schema.indexShape(end.table, end.name) === "plain";
+  }
+  return true;
+}
+
+/**
+ * Whether every constraint and index the statement makes or validates under a name stands in the
+ * live database as the statement leaves it. The snapshot comparison finds the name and the
+ * columns; a database brought there by hand can hold under that name a constraint never
+ * validated, a check not enforced, a deferrable key, or an index built by another method. Each is
+ * asked about under the table and name the rest of the file leaves it with, and not at all where
+ * a later statement drops it. A constraint written without a name is not asked about.
+ */
+function namedObjectsStand(
+  statement: string,
+  later: readonly string[],
+  dialect: SupportedDialect,
+  schema: LiveSchemaWithColumnFacts
+): boolean {
+  return namedObjectsOf(statement, dialect).every(object => {
+    const end = whereObjectEnds(object, later, dialect);
+    if (end === undefined) return true;
+    if (object.kind === "validated") {
+      return schema.usable({ kind: "constraint", ...end });
+    }
+    if (object.kind === "index") {
+      return schema.indexShape(end.table, end.name) === "plain";
+    }
+    return constraintAsDeclared(object, end, dialect, schema);
+  });
+}
+
+/**
+ * The statement a SQLite rebuild writes to carry `table`'s AUTOINCREMENT counter to its twin
+ * (`sqliteSwapStatements`), and the twin's name. The one spelling the proof reads it by.
+ */
+function sequenceCarryOf(table: string): { twin: string; text: string } {
+  const twin = `__new_${table}`;
+  return {
+    twin,
+    text:
+      `INSERT INTO sqlite_sequence (name, seq) SELECT ${literalOf(twin)}, seq ` +
+      `FROM sqlite_sequence WHERE name = ${literalOf(table)}`,
+  };
+}
+
+/** The twin whose counter `statement` carries, for a table the snapshot holds, or undefined. */
+function carriedTwinOf(
+  statement: string,
+  tables: Iterable<string>
+): string | undefined {
+  const written = statement.trim().replace(/;$/, "");
+  for (const table of tables) {
+    const carry = sequenceCarryOf(table);
+    if (carry.text === written) return carry.twin;
+  }
+  return undefined;
+}
+
+/**
+ * Whether the counter a SQLite rebuild carries covers its table's rows in the live database
+ * (`LiveColumnFacts.counterCovers`), asked of the table the twin is moved into place as. The
+ * carry itself leaves nothing to compare: the value it copied is gone with the table it copied
+ * from. True for any other statement.
+ */
+function carriedCounterCovers(
+  statement: string,
+  later: readonly string[],
+  { dialect, sides, live }: ProofArgs
+): boolean {
+  if (dialect !== "sqlite") return true;
+  const twin = carriedTwinOf(
+    statement,
+    objectsOf([sides.before, sides.target]).tables
+  );
+  if (twin === undefined) return true;
+  const end = whereItEnds({ table: twin, column: "" }, later, dialect, "rows");
+  return end === undefined || live.schema.counterCovers(end.table);
 }
 
 /** Words opening a table constraint in a `CREATE TABLE` body, not a column. */
@@ -954,16 +1297,11 @@ function isSequenceCarry(
   objects: SnapshotObjects
 ): boolean {
   if (dialect !== "sqlite") return false;
-  return [...objects.tables].some(table => {
-    const twin = `__new_${table}`;
-    const carry =
-      `INSERT INTO sqlite_sequence (name, seq) SELECT ${literalOf(twin)}, seq ` +
-      `FROM sqlite_sequence WHERE name = ${literalOf(table)}`;
-    return (
-      statement.trim().replace(/;$/, "") === carry &&
-      statements.some(other => createdTable(other, dialect) === twin)
-    );
-  });
+  const twin = carriedTwinOf(statement, objects.tables);
+  return (
+    twin !== undefined &&
+    statements.some(other => createdTable(other, dialect) === twin)
+  );
 }
 
 /** A registry row `migrate:create` writes, for an entity whose table the snapshot holds. */
@@ -1124,7 +1462,24 @@ function createIndexShown(cursor: StatementCursor, file: FileContext): boolean {
   if (cursor.isWord("ON")) return false;
   if (cursor.name() === undefined || !cursor.accept("ON")) return false;
   if (file.dialect === "postgresql") cursor.accept("ONLY");
-  return known(cursor.name(), file);
+  return known(cursor.name(), file) && !statesIndexOrder(cursor.rest());
+}
+
+/** Words of an index definition that say how its keys are ordered. */
+const INDEX_ORDER_WORDS = new Set(["ASC", "DESC", "NULLS"]);
+
+/**
+ * Whether an index definition states a direction, a NULL order or a method other than the
+ * default: none is recorded by a snapshot, so a statement that states one changes what no
+ * snapshot shows. `USING btree`, the default written out, states nothing.
+ */
+function statesIndexOrder(tokens: readonly StatementToken[]): boolean {
+  return tokens.some(
+    (token, at) =>
+      typeof token === "string" &&
+      (INDEX_ORDER_WORDS.has(token) ||
+        (token === "USING" && tokens[at + 1] !== "BTREE"))
+  );
 }
 
 /** `DROP INDEX [CONCURRENTLY] [IF EXISTS] n [ON t] [CASCADE|RESTRICT]`. */
@@ -1321,13 +1676,20 @@ function elementFollows(
     return namedConstraintAdded(clause);
   const next = clause.peek();
   if (typeof next !== "string") return clause.name() !== undefined;
+  if (adding && MYSQL_INDEX_ELEMENTS.has(next) && file.dialect === "mysql") {
+    return !statesIndexOrder(clause.rest());
+  }
   return elementWord(next, file.dialect) || plainColumnName(next);
 }
+
+/** Words after `ADD` that open an index or key in MySQL's `ALTER TABLE`. */
+const MYSQL_INDEX_ELEMENTS = new Set(["INDEX", "KEY", "UNIQUE"]);
 
 /** A named constraint added must be of a kind the snapshot records: not an `EXCLUDE`, say. */
 function namedConstraintAdded(clause: StatementCursor): boolean {
   if (clause.name() === undefined) return false;
-  return nextIn(clause, CONSTRAINT_KINDS);
+  // A unique or primary key is an index: one that states an order is not shown (`statesIndexOrder`).
+  return nextIn(clause, CONSTRAINT_KINDS) && !statesIndexOrder(clause.rest());
 }
 
 /** A word naming the element an `ADD` or `DROP` clause changes. */
@@ -1588,28 +1950,20 @@ interface DanglingReference {
 }
 
 /**
- * The dangling references through a foreign key the file adds: one its target snapshot declares
- * on a table and its earlier snapshot does not. Rows that dangle through a key the database already
+ * The dangling references through a foreign key the file adds (`addedForeignKeys`): one its
+ * target snapshot declares on a table and its earlier snapshot does not, a key replaced under its
+ * own name by one of another shape included. Rows that dangle through a key the database already
  * had are not the file's doing, and a run of it would not be refused for them either.
  */
 export function danglingOnAddedKeys(
   sides: { before: NextlySchemaSnapshot; target: NextlySchemaSnapshot },
   dangling: readonly DanglingReference[]
 ): DanglingReference[] {
-  const earlier = new Set(
-    sides.before.tables.flatMap(table =>
-      (table.foreignKeys ?? []).map(key => `${table.name}\u0000${key.name}`)
-    )
-  );
-  const added = sides.target.tables.flatMap(table =>
-    (table.foreignKeys ?? [])
-      .filter(key => !earlier.has(`${table.name}\u0000${key.name}`))
-      .map(key => ({
-        pair: `${table.name}\u0000${key.referencesTable}`.toLowerCase(),
-        columns: columnsKey(key.columns),
-        references: columnsKey(key.referencesColumns),
-      }))
-  );
+  const added = addedForeignKeys(sides).map(({ table, key }) => ({
+    pair: `${table}\u0000${key.referencesTable}`.toLowerCase(),
+    columns: columnsKey(key.columns),
+    references: columnsKey(key.referencesColumns),
+  }));
   // A count that names its key is the file's only where an added key has those columns and
   // references the same ones; what a count does not name (a key that could not be read, a key
   // written to its parent's primary key without naming it) is not compared, so the count is laid
@@ -1625,6 +1979,37 @@ export function danglingOnAddedKeys(
         (entry.referencesColumns === undefined ||
           entry.referencesColumns.length === 0 ||
           key.references === columnsKey(entry.referencesColumns))
+    );
+  });
+}
+
+/**
+ * The foreign keys the file adds, by the diff's own reading of its two snapshots
+ * (`diffSnapshots`): a key the earlier side does not have, and one it has under the same name in
+ * another shape (other columns, another target, another action), which the diff drops and adds.
+ * Every key of a table the file creates is one it adds.
+ */
+function addedForeignKeys(sides: {
+  before: NextlySchemaSnapshot;
+  target: NextlySchemaSnapshot;
+}): Array<{ table: string; key: ForeignKeySpec }> {
+  const before = new Map(sides.before.tables.map(table => [table.name, table]));
+  return sides.target.tables.flatMap(table => {
+    const earlier = before.get(table.name);
+    if (earlier === undefined) {
+      return (table.foreignKeys ?? []).map(key => ({ table: table.name, key }));
+    }
+    // The two sides of this one table, its keys alone: no other change is asked about.
+    const keysOnly = (keys: ForeignKeySpec[] | undefined) => ({
+      tables: [{ name: table.name, columns: [], foreignKeys: keys ?? [] }],
+    });
+    return diffSnapshots(
+      keysOnly(earlier.foreignKeys),
+      keysOnly(table.foreignKeys)
+    ).flatMap(op =>
+      op.type === "add_foreign_key"
+        ? [{ table: table.name, key: op.foreignKey }]
+        : []
     );
   });
 }

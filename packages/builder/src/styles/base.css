@@ -223,7 +223,10 @@
   /*
    * The admin's destructive pair, for a reading past a limit (the page reads
    * meter over its allowance): the deep red its Delete confirmation uses in
-   * the light theme (destructive-700), on that red's palest tint. Mixed here
+   * the light theme (destructive-700), on that red's palest tint. The text
+   * half is also every red word the editor draws (a refused value, a reason a
+   * choice cannot be made): the bare `--nx-destructive` is a fill's red and
+   * reads under AA's 4.5:1 as small text on the light panel. Mixed here
    * from the one token, as the admin's scale mixes them, since that scale is
    * declared `@theme inline` and emits no property this sheet could read. The
    * dark theme takes the solid red, below.

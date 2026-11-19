@@ -32,6 +32,7 @@ import { SingleMetadataService } from "../../../singles/services/single-metadata
 import { SingleRegistryService } from "../../../singles/services/single-registry-service";
 import { resolveBuilderVersions } from "../../../versions/builder-versions";
 import { SchemaEventsRepository } from "../../events/schema-events-repository";
+import { introspectLiveSnapshot } from "../../pipeline/diff/introspect-live";
 
 // A companion reconcile made to fail, by the one test that needs it to: every
 // other test runs the real one.
@@ -562,20 +563,24 @@ describe.each(getConfiguredTestDialects())(
       );
 
       companionFails.single = true;
-      const result = await bodyOf(
-        await dispatchSingles(
-          "updateSingleSchema",
-          { slug: "notice" },
-          {
-            fields: [
-              { name: "heading", type: "text" },
-              { name: "body", type: "text" },
-            ],
-          }
-        )
+      const thrown = await dispatchSingles(
+        "updateSingleSchema",
+        { slug: "notice" },
+        {
+          fields: [
+            { name: "heading", type: "text" },
+            { name: "body", type: "text" },
+          ],
+        }
+      ).then(
+        () => undefined,
+        (error: unknown) => error
       );
 
-      expect(JSON.stringify(result)).toContain("failed");
+      // Its file is recorded applied, so the save tried again is what finishes it.
+      expect(String((thrown as Error | undefined)?.message)).toBe(
+        'Single "notice" was saved, but its migration failed: its translations table did not follow the change. Save it again to retry.'
+      );
       const update = migrationFiles(t).find(f =>
         /_notice_update\.sql$/.test(f)
       );
@@ -619,12 +624,55 @@ describe.each(getConfiguredTestDialects())(
       const save = await changeColumnType(t);
 
       companionFails.single = true;
-      const result = await bodyOf(await save());
+      const thrown = await save().then(
+        () => undefined,
+        (error: unknown) => error
+      );
 
-      expect(JSON.stringify(result)).toContain("failed");
       const update = updateFile(t);
       expect(update).toBeDefined();
       expect(await appliedFiles(t)).not.toContain(update);
+      // The failure names the file it kept and the steps that finish the change.
+      expect(String((thrown as Error | undefined)?.message)).toContain(
+        `its translations table did not follow the change. Its migration file ${update} was kept and not recorded applied.`
+      );
+    });
+
+    // A value-carrying Single update applies its change by its own statements (a push), so the
+    // drift a hand-added column makes is refused before they run, naming the column.
+    it("refuses a value-carrying Single update over a column the history does not record, naming it, and changes nothing", async () => {
+      const t = await boot();
+      const save = await changeColumnType(t);
+      await t.adapter.executeQuery(
+        `ALTER TABLE single_notice ADD COLUMN extra text`
+      );
+      const liveColumns = async () =>
+        (
+          await introspectLiveSnapshot(
+            t.adapter.getDrizzle(),
+            t.adapter.getCapabilities().dialect,
+            ["single_notice"]
+          )
+        ).tables
+          .find(table => table.name === "single_notice")
+          ?.columns.map(c => ({ name: c.name, type: c.type }));
+      const files = migrationFiles(t);
+      const applied = await appliedFiles(t);
+      const live = await liveColumns();
+
+      // The dispatcher answers a refusal as a response, or throws it: read as one text either way.
+      const refused = await save().then(
+        async answer =>
+          `${(answer as Response).status} ${await (answer as Response).text()}`,
+        (error: unknown) =>
+          `${String((error as { code?: unknown }).code)} ${String((error as { publicMessage?: unknown }).publicMessage)}`
+      );
+
+      expect(refused).toContain("NEXTLY_MIGRATION_DRIFT");
+      expect(refused).toContain("single_notice.extra present in DB");
+      expect(migrationFiles(t)).toEqual(files);
+      expect(await appliedFiles(t)).toEqual(applied);
+      expect(await liveColumns()).toEqual(live);
     });
 
     it("records a value-carrying Single update's files applied only once its row is written", async () => {

@@ -25,7 +25,6 @@
  * @module site
  * @experimental
  */
-import { draftMode } from "next/headers";
 import type { JSX } from "react";
 
 import {
@@ -45,6 +44,19 @@ import { sanitiseSiteCode } from "../site-code/sanitise";
 import { SITE_CODE_SLUG, storedSiteCodeEntries } from "../site-code/storage";
 
 import { PageCodeBoundary } from "./page-code-boundary";
+
+/**
+ * Whether the page is drawn for a draft-mode request, which the preview pane
+ * makes: asked as Nextly's own content routes ask it, so it is false outside
+ * a request (a page drawn by a test or a script) rather than an error, and
+ * Next's own signals during a prerender are handed back to it. Not read from
+ * `next/headers` here: a module importing that can't be loaded by plain
+ * Node, and this one is reached from the plugin's root, which the CLI loads.
+ */
+async function inDraftMode(): Promise<boolean> {
+  const { isDraftModeRequest } = await import("@nextlyhq/plugin-sdk");
+  return isDraftModeRequest();
+}
 
 /** What `<SiteCode>` is given. */
 export interface SiteCodeProps {
@@ -254,7 +266,7 @@ export async function SiteCode(
   props: SiteCodeProps
 ): Promise<JSX.Element | null> {
   // The preview pane shows drafts in draft mode, framed by the admin.
-  if ((await draftMode()).isEnabled) return null;
+  if (await inDraftMode()) return null;
   const slug = props.slug ?? SITE_CODE_SLUG;
   const entries = storedSiteCodeEntries(
     await (props.read ?? readStoredSiteCode)(slug),
@@ -371,7 +383,7 @@ export async function PageCode(
   props: PageCodeProps
 ): Promise<JSX.Element | null> {
   // The preview pane shows drafts in draft mode, as for site code.
-  if ((await draftMode()).isEnabled) return null;
+  if (await inDraftMode()) return null;
   const code = pageCodeOf(props.document);
   const text = code?.[props.slot] ?? "";
   if (text === "") return null;

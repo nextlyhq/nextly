@@ -18,6 +18,8 @@ import {
   isTokenRef,
   tokenRef,
   fluidValue,
+  type FluidRangeWidths,
+  type FluidSizes,
   type NodeStyles,
   type SiteTokenSet,
   type StyleLeaf,
@@ -75,6 +77,20 @@ export interface TextStyleEditorProps {
   readonly write: (change: SharedStyleChange) => Promise<string | undefined>;
   /** Change the site's variables, for the fluid range "Fluid…" sets. */
   readonly onTokens?: ((tokens: SiteTokenSet) => void) | undefined;
+  /** The two sizes each device's size was made fluid from, where it was. */
+  readonly fluidSizes?: Readonly<Record<string, FluidSizes>> | undefined;
+  /**
+   * Store a size made fluid with the two sizes it was made from, as one
+   * change, so a change of the site's fluid range can make it again: the
+   * refusal in words, or nothing. Absent, only the size is written.
+   */
+  readonly onFluid?:
+    | ((
+        device: string,
+        sizes: FluidSizes,
+        value: string
+      ) => Promise<string | undefined>)
+    | undefined;
 }
 
 /**
@@ -141,6 +157,15 @@ export function TextStyleEditor(
             onValue={value => set(device.id, "fontSize", value)}
             onClear={() => set(device.id, "fontSize", null)}
             onTokens={props.onTokens}
+            made={props.fluidSizes?.[device.id]}
+            onFluid={
+              props.onFluid === undefined || readOnly
+                ? undefined
+                : (sizes, value) =>
+                    void props
+                      .onFluid?.(device.id, sizes, value)
+                      .then(answer => setRefusal(answer ?? null))
+            }
           />
         ))}
       </fieldset>
@@ -347,6 +372,19 @@ function FontPart({
   );
 }
 
+/**
+ * The stored sizes, only while they still make the size: one typed since is
+ * the author's, and "Fluid…" starts from it as it reads.
+ */
+function sizesStillMaking(
+  made: FluidSizes | undefined,
+  range: FluidRangeWidths | undefined,
+  size: string
+): FluidSizes | undefined {
+  if (made === undefined || range === undefined) return undefined;
+  return fluidValue(made, range) === size ? made : undefined;
+}
+
 /** One device's size: a type size, a typed size, or a fluid one. */
 function SizePart({
   device,
@@ -356,6 +394,8 @@ function SizePart({
   onValue,
   onClear,
   onTokens,
+  made,
+  onFluid,
 }: {
   device: TextStyleDevice;
   value: StyleValue | undefined;
@@ -365,9 +405,14 @@ function SizePart({
   /** Take the device's own size away, so it follows Desktop's again. */
   onClear: () => void;
   onTokens: ((tokens: SiteTokenSet) => void) | undefined;
+  /** The two sizes the size was made fluid from, where it was. */
+  made: FluidSizes | undefined;
+  /** Store a size made fluid with its two sizes; absent, the size alone. */
+  onFluid: ((sizes: FluidSizes, value: string) => void) | undefined;
 }): React.JSX.Element {
   const range = tokens === undefined ? undefined : fluidRangeOf(tokens);
   const size = plain(value);
+  const sizes = sizesStillMaking(made, range, size);
   // A device other than Desktop holding a size of its own can give it up:
   // an emptied field writes nothing, so this is the way back.
   const own = !readOnly && device.id !== TEXT_STYLE_BASE && value !== undefined;
@@ -393,10 +438,14 @@ function SizePart({
         {readOnly || range === undefined || tokens === undefined ? null : (
           <FluidButton
             hook={{
-              sizes: undefined,
+              sizes,
               value: size,
               range,
-              onFluid: sizes => onValue(fluidValue(sizes, range)),
+              onFluid: next => {
+                const fluid = fluidValue(next, range);
+                if (onFluid === undefined) onValue(fluid);
+                else onFluid(next, fluid);
+              },
               onRange: next => onTokens?.(setFluidRange(tokens, next)),
             }}
           />

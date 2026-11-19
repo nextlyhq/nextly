@@ -473,6 +473,36 @@ for (const dialect of getConfiguredTestDialects()) {
       expect(await foreignKeyColumns("dc_posts")).not.toContain("author");
     });
 
+    // A relationship's storage switch applies by the push, so the drift a hand-added column makes
+    // is refused before the push runs, naming the column, with the switch's values untouched.
+    it("refuses a switch over a column the history does not record, naming it, and changes nothing", async () => {
+      const t = await boot();
+      const { a } = await postsWithAuthors(t, false);
+      const post = (
+        await t.nextly.create({
+          collection: "posts",
+          data: { title: "P1", author: a },
+        })
+      ).item.id as string;
+      await database.adapter.executeQuery(
+        `ALTER TABLE dc_posts ADD COLUMN extra text`
+      );
+
+      const outcome = await switchAuthor(database.adapter, true);
+
+      expect(outcome).toEqual({
+        refused: expect.stringContaining(
+          "dc_posts.extra present in DB"
+        ) as unknown as string,
+      });
+      expect(await authorOf(t, post)).toBe(a);
+      expect(
+        (await storedPosts(database.adapter)).fields.find(
+          f => f.name === "author"
+        )
+      ).toMatchObject({ hasMany: false });
+    });
+
     it("switches a relationship from many to one when no row holds more than one", async () => {
       const t = await boot();
       const { a } = await postsWithAuthors(t, true);

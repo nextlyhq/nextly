@@ -428,7 +428,6 @@ function ComponentRow({
         type="button"
         className="nx-components-panel__place"
         data-component-row-place=""
-        aria-label={entry.label}
         aria-describedby={described === "" ? undefined : described}
         onClick={onPlace}
         onKeyDown={event => {
@@ -441,8 +440,15 @@ function ComponentRow({
         <BlockIconMark icon={entry.icon} size={16} />
         <span className="nx-components-panel__text">
           <span className="nx-components-panel__name">{entry.label}</span>
+          {/* Named by the name it draws, not a label over the row, which
+              would have to hold these words too; they describe it instead,
+              so they are hidden from its name. */}
           {aside === undefined ? null : (
-            <span id={`${id}-where`} className="nx-components-panel__aside">
+            <span
+              id={`${id}-where`}
+              className="nx-components-panel__aside"
+              aria-hidden="true"
+            >
               {aside}
             </span>
           )}
@@ -450,6 +456,7 @@ function ComponentRow({
             <span
               id={`${id}-what`}
               className="nx-components-panel__description"
+              aria-hidden="true"
             >
               {entry.description}
             </span>

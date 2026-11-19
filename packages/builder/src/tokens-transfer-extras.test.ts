@@ -11,8 +11,9 @@ import {
   type FontFaceDef,
   type NamedClass,
   type SiteTokenSet,
+  type TokenRemap,
 } from "@nextlyhq/blocks-engine";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { DESIGN_ACTION_WORDS } from "./editor-words";
 import {
@@ -22,6 +23,24 @@ import {
   planImport,
   type ImportPlan,
 } from "./tokens-transfer";
+
+/**
+ * Each remap an import points a value through, recorded and passed on: the
+ * engine builds its table once per remap object, so the objects an import
+ * hands it count the tables it builds.
+ */
+const remaps = vi.hoisted((): TokenRemap[] => []);
+
+vi.mock("@nextlyhq/blocks-engine", async importOriginal => {
+  const real = await importOriginal<typeof import("@nextlyhq/blocks-engine")>();
+  return {
+    ...real,
+    remapTokenReferences: <T>(value: T, remap: TokenRemap): T => {
+      remaps.push(remap);
+      return real.remapTokenReferences(value, remap);
+    },
+  };
+});
 
 const eyebrow: NamedClass = {
   id: "ts-eyebrow",
@@ -466,25 +485,86 @@ describe("an import carrying the site's own design data", () => {
     ).toEqual(["ts-b"]);
   });
 
-  it("plans a large file into a site with another prefix without slowing with its size", () => {
-    // Each variable's value is remapped through one table built per import,
-    // not one per variable.
-    const tokens = Array.from({ length: 3000 }, (_, at) => ({
-      name: `color.c${String(at)}`,
-      kind: "color" as const,
-      values: { light: "#123456" },
-    }));
-    const started = performance.now();
-    ready(
+  it("leaves out a text style naming a variable neither the file nor this site has, saying so, and stores the rest", () => {
+    const style = (id: string, label: string, size: string): NamedClass => ({
+      id,
+      slug: label.toLowerCase(),
+      label,
+      orderIndex: 0,
+      role: "text",
+      styles: { base: { base: { fontSize: { $token: size } } } },
+    });
+    const source: SiteTokenSet = {
+      tokens: [
+        {
+          name: "font-size.lead",
+          kind: "dimension",
+          values: { light: "2rem" },
+        },
+      ],
+    };
+    const lost = style("ts-lost", "Lost", "font-size.nowhere");
+    // A built-in variable every site has is one this site has.
+    const builtIn = style("ts-built-in", "Heading", "font-size.h2");
+    const lead = style("ts-lead", "Lead", "font-size.lead");
+    const plan = ready(
       planImport(
-        files({ tokens }, []),
-        { tokens: [], prefix: "--brand-" },
+        files(source, [lost, builtIn, lead]),
+        { tokens: [] },
         {
           textStyles: [],
         }
       )
     );
-    expect(performance.now() - started).toBeLessThan(1500);
+    expect(plan.extras.textStyles.added.map(entry => entry.id)).toEqual([
+      "ts-built-in",
+      "ts-lead",
+    ]);
+    expect(plan.skipped).toContain(
+      "“Lost” was not imported: a variable it uses, “font-size.nowhere”, isn't on this site or in the file."
+    );
+    const applied = applyImport(plan, { tokens: [] }, new Map());
+    if (!applied.ok) throw new Error(applied.error);
+    const edited = applied.classes?.([]);
+    expect(
+      edited !== undefined && "classes" in edited
+        ? edited.classes.map(entry => entry.id)
+        : []
+    ).toEqual(["ts-built-in", "ts-lead"]);
+  });
+
+  it("plans a large file into a site with another prefix through one remap, pointing every reference", () => {
+    // Each variable names the one before it, so every value has a var() to
+    // point at this site's prefix. Each is pointed through one table built
+    // per import, not one per variable: every value is handed to the engine
+    // with the same remap, which it builds its table for once.
+    const size = 1000;
+    const tokens = Array.from({ length: size }, (_, at) => ({
+      name: `shadow.s${String(at)}`,
+      kind: "shadow" as const,
+      values: {
+        light:
+          at === 0
+            ? "0 1px 2px #123456"
+            : `0 1px 2px var(--site-shadow-s${String(at - 1)})`,
+      },
+    }));
+    const file = files({ tokens }, []);
+    remaps.length = 0;
+    const plan = ready(
+      planImport(file, { tokens: [], prefix: "--brand-" }, { textStyles: [] })
+    );
+    const light = new Map(
+      plan.added.map(token => [token.name, token.values.light])
+    );
+    expect(light.size).toBe(size);
+    for (let at = 1; at < size; at++) {
+      expect(light.get(`shadow.s${String(at)}`)).toBe(
+        `0 1px 2px var(--brand-shadow-s${String(at - 1)})`
+      );
+    }
+    expect(remaps.length).toBeGreaterThanOrEqual(size);
+    expect(new Set(remaps).size).toBe(1);
   });
 
   it("remaps a text style's values, never its name", () => {
@@ -597,6 +677,24 @@ describe("an import carrying the site's own design data", () => {
       h3: { fontSize: "var(--site-t-own-h2, 1rem)" },
       h4: { fontSize: "calc(var(--site-t-own-h2) * 1.2)" },
     });
+  });
+
+  it("skips a colour order this site can't store, saying so, and imports the rest", () => {
+    const source: SiteTokenSet = {
+      tokens: [
+        { name: "color.accent", kind: "color", values: { light: "#ff0000" } },
+      ],
+      order: ["color.accent", "color.accent"],
+      builtInColoursShown: false,
+    };
+    const plan = ready(
+      planImport(files(source, []), { tokens: [] }, { textStyles: [] })
+    );
+    expect(plan.skipped).toContain(
+      "The colour order in the file could not be read, so it was skipped."
+    );
+    expect(plan.extras.site).toEqual({ builtInColoursShown: false });
+    expect(plan.added.map(token => token.name)).toEqual(["color.accent"]);
   });
 
   it("orders the file's colours under the ids they merge into here", () => {

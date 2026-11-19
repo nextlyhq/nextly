@@ -37,6 +37,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { LoadConfigResult } from "../cli/utils/config-loader";
 import type { SchemaRegistry } from "../database/schema-registry";
+import type { FieldGroupNaming } from "../domains/field-groups/services/field-group-storage-names";
 import type { ExtensionSchema } from "../domains/schema/extension/build-extension-schema";
 import type {
   PluginMigrationSet,
@@ -904,22 +905,29 @@ async function startFingerprints(
 
 /** Each configured entity's registry row, as its declaration describes it. */
 async function declaredRows(
-  config: FingerprintedConfig
+  config: FingerprintedConfig,
+  /**
+   * The naming the site's field-group storage is on: a declared group's row names its table
+   * under it, as the sync writes the row (`field-group-storage-names`).
+   */
+  fieldGroupNaming: FieldGroupNaming
 ): Promise<Record<string, RowShape>> {
   const [
     { calculateSchemaHash },
-    { resolveCollectionTableName, resolveComponentTableName },
+    { resolveCollectionTableName },
     { resolveSingleTableName },
+    { fieldGroupTableNameFor },
   ] = await Promise.all([
     import("../domains/schema/services/schema-hash"),
     import("../domains/schema/utils/resolve-table-name"),
     import("../domains/singles/services/resolve-single-table-name"),
+    import("../domains/field-groups/services/field-group-storage-names"),
   ]);
   const tableOf: Record<FingerprintedKind, (e: FingerprintedEntity) => string> =
     {
       collection: e => resolveCollectionTableName(e.slug, e.dbName),
       single: e => resolveSingleTableName({ slug: e.slug, dbName: e.dbName }),
-      fieldGroup: e => resolveComponentTableName(e.slug),
+      fieldGroup: e => fieldGroupTableNameFor(fieldGroupNaming, e.slug),
     };
   const rows: Record<string, RowShape> = {};
   for (const [kind, list] of kindsOf(config)) {
@@ -1042,7 +1050,13 @@ export async function readStartFingerprints(
       extensionFingerprint,
       configuredSchema: adapter.getConfiguredSchema?.() ?? null,
     });
-    const declared = await declaredRows(config);
+    const { resolveFieldGroupStorageNames } = await import(
+      "../domains/field-groups/services/field-group-storage-names"
+    );
+    const declared = await declaredRows(
+      config,
+      (await resolveFieldGroupStorageNames(adapter)).naming
+    );
     // One read of this start's own rows, by their key prefix, whatever the
     // number of entities and whatever else `nextly_meta` holds.
     const meta = await startRows(adapter);

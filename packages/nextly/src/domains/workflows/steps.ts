@@ -107,6 +107,7 @@ import {
   type DocumentTable,
 } from "./part-versions";
 import { workflowAttachedTo, type RegisteredWorkflow } from "./registry";
+import { recheckReleasesHolding } from "./release-recheck-signal";
 import {
   createReviewState,
   readReviewState,
@@ -1761,8 +1762,20 @@ export async function takeWorkflowStep(
   const context = await prepareStep(adapter, input, registered, step);
   ensureWorkflowContentEventKinds();
   const outcome = await adapter.transaction(tx => runStep(tx, context));
-  if ("taken" in outcome) return outcome.taken;
-  throw await hiddenFieldsForbidden(adapter, context, outcome.hidden);
+  if (!("taken" in outcome)) {
+    throw await hiddenFieldsForbidden(adapter, context, outcome.hidden);
+  }
+  // A part leaving a stage that allows publishing loses its approval, which changes no content,
+  // so no save tells the releases holding the document: they are checked again here, once the
+  // step has committed, and one going live with that part is stopped before its moment.
+  if (
+    outcome.taken.moved.some(moved =>
+      allowsPublish(registered.workflow, moved.from)
+    )
+  ) {
+    await recheckReleasesHolding({ documents: [input.document] });
+  }
+  return outcome.taken;
 }
 
 /** One assignment, with the workflow of its document. */

@@ -78,6 +78,10 @@ export function ContentFold({
           )}
         />
         <span className="min-w-0 truncate">{label}</span>
+        {/* A real space between the label and its count, which the flex row
+            does not draw: without it the two read as one word,
+            "Collections4", which the name "Collections, 4" never says. */}
+        {count === undefined || count === null ? null : " "}
         {count === undefined ? null : (
           // The count's slot is held while the list arrives, so nothing
           // moves when the number lands in it.

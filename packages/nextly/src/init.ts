@@ -209,6 +209,7 @@ function buildNextlyInstance(
     timeseries: directAPI.timeseries.bind(directAPI),
     bulkDelete: directAPI.bulkDelete.bind(directAPI),
     duplicate: directAPI.duplicate.bind(directAPI),
+    createFromSource: directAPI.createFromSource.bind(directAPI),
     findSingle: directAPI.findSingle.bind(directAPI),
     updateSingle: directAPI.updateSingle.bind(directAPI),
     findSingles: directAPI.findSingles.bind(directAPI),
@@ -265,6 +266,10 @@ function buildNextlyInstance(
     contentEvents: directAPI.contentEvents,
     // A person's own notices, forwarded for the same reason.
     notices: directAPI.notices,
+    // Review state under a workflow, and the email delivery log, forwarded
+    // for the same reason.
+    workflows: directAPI.workflows,
+    emailDeliveries: directAPI.emailDeliveries,
 
     // RBAC namespaces
     roles: directAPI.roles,

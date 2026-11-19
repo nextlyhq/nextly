@@ -6,6 +6,7 @@ import type { JSX } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useForm, type Resolver, type SubmitHandler } from "react-hook-form";
 
+import { toast } from "@admin/components/ui";
 import { Form } from "@admin/components/ui/form";
 import { ROUTES } from "@admin/constants/routes";
 import { useEmailProviders } from "@admin/hooks/queries/useEmailProviders";
@@ -45,6 +46,21 @@ import {
   type RevealRequest,
   type SheetPanel,
 } from "./WorkbenchLayout";
+import { WrittenBody, type InsertVariable } from "./written/WrittenBody";
+
+/**
+ * The declared variables a list block can repeat over: those declared as a
+ * list first, then the rest, since a variable the admin declares has no type
+ * yet and may still hold a list.
+ */
+function listVariablesOf(variables: TemplateFormValues["variables"]): string[] {
+  const isList = (variable: TemplateFormValues["variables"][number]) =>
+    variable.presentation?.type === "list";
+  return [
+    ...variables.filter(isList),
+    ...variables.filter(variable => !isList(variable)),
+  ].map(variable => variable.name);
+}
 
 // ============================================================
 // EmailTemplateForm — the template workbench
@@ -71,6 +87,7 @@ function ContentColumn({
   isLayoutRow,
   inbox,
   editor,
+  writtenInsert,
 }: {
   form: FormOf;
   template?: EmailTemplateRecord;
@@ -85,12 +102,19 @@ function ContentColumn({
     React.ComponentProps<typeof BodyEditor>,
     "control" | "isPending" | "readOnly" | "liquid"
   >;
+  /** Where the Variables rail puts a chip in a written email. */
+  writtenInsert: React.MutableRefObject<InsertVariable | null>;
 }) {
-  const [subject, preheader, fromOverride] = form.watch([
-    "subject",
-    "preheader",
-    "fromOverride",
-  ]);
+  const [subject, preheader, fromOverride, format, blocks, variables] =
+    form.watch([
+      "subject",
+      "preheader",
+      "fromOverride",
+      "format",
+      "blocks",
+      "variables",
+    ]);
+  const written = format === "written";
   return (
     // The column scrolls, so its cards keep their height (a shrunk card clips
     // its own fields); only the body grows into what is left.
@@ -124,14 +148,27 @@ function ContentColumn({
         />
       </div>
       <div className="flex min-h-105 flex-1 flex-col overflow-hidden rounded-lg border border-border">
-        <BodyEditor
-          control={form.control}
-          isPending={isPending}
-          readOnly={!owns}
-          liquid={!keptOnOldEngine}
-          suppliedNames={suppliedNamesFor(isLayoutRow)}
-          {...editor}
-        />
+        {written && blocks ? (
+          // A written email's body is its blocks, in place of the code editor.
+          <WrittenBody
+            value={blocks}
+            readOnly={!owns || isPending}
+            listVariables={listVariablesOf(variables)}
+            insertRef={writtenInsert}
+            onChange={next =>
+              form.setValue("blocks", next, { shouldDirty: true })
+            }
+          />
+        ) : (
+          <BodyEditor
+            control={form.control}
+            isPending={isPending}
+            readOnly={!owns}
+            liquid={!keptOnOldEngine}
+            suppliedNames={suppliedNamesFor(isLayoutRow)}
+            {...editor}
+          />
+        )}
       </div>
     </div>
   );
@@ -210,6 +247,8 @@ export function EmailTemplateForm({
     layoutId,
     fromOverride,
     replyTo,
+    watchedFormat,
+    watchedBlocks,
   ] = form.watch([
     "htmlContent",
     "plainTextContent",
@@ -222,6 +261,8 @@ export function EmailTemplateForm({
     "layoutId",
     "fromOverride",
     "replyTo",
+    "format",
+    "blocks",
   ]);
 
   useEffect(() => {
@@ -244,11 +285,29 @@ export function EmailTemplateForm({
   );
 
   // Insert a {{variable}} at the editor caret (falls back to append).
-  const insertVariable = useVariableInsertion({
+  const insertCodedVariable = useVariableInsertion({
     form,
     editorTab,
     bodyViewRef,
   });
+  // A written email's variables are chips in its blocks, put where the person
+  // was last typing; the code editor's insertion would go into HTML a written
+  // email doesn't have.
+  const writtenInsert = useRef<InsertVariable | null>(null);
+  const insertVariable = useCallback(
+    (name: string) => {
+      if (form.getValues("format") !== "written") {
+        insertCodedVariable(name);
+        return;
+      }
+      if (!writtenInsert.current?.(name)) {
+        toast.info(
+          "Click into a heading, text, button label or alt text, then insert the variable."
+        );
+      }
+    },
+    [form, insertCodedVariable]
+  );
 
   const derived = useDerivedTemplateState({
     variables,
@@ -262,6 +321,7 @@ export function EmailTemplateForm({
     kind: currentKind,
     fromOverride,
     templateId: template?.id,
+    written: watchedFormat === "written" ? watchedBlocks : null,
   });
 
   // What the template uses but doesn't declare, and what would show blank.
@@ -364,6 +424,7 @@ export function EmailTemplateForm({
               acts={acts}
               isPending={isPending}
               isLayoutRow={isLayoutRow}
+              writtenInsert={writtenInsert}
               inbox={
                 derived.hasPreview
                   ? {
