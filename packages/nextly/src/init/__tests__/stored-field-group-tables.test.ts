@@ -19,7 +19,7 @@ import { describe, expect, it, vi } from "vitest";
 import { MIGRATION_TARGET } from "../../domains/field-groups/migration/manifest";
 import { forgetFieldGroupStorageNames } from "../../domains/field-groups/storage/resolve-storage-names";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
-import { readStoredFieldGroupTables } from "../field-group-reload-plan";
+import { readStoredFieldGroupTables } from "../../domains/field-groups/services/field-group-stored-tables";
 
 /**
  * The identifiers a Drizzle statement addresses.
