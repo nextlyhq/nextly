@@ -76,39 +76,8 @@ export async function runBootTimeApplyIfDev(opts?: {
 
   const label = callerLabel(opts?.caller);
   try {
-    // Step 0: settle a Builder save an earlier process left part-way, before anything reads the
-    // migration files it wrote. One left pending keeps its record: its remaining files run in
-    // step 1, and the record clears only once they are recorded applied.
-    const settled = await settleLeftSavesAtStart(label);
-
-    // Step 1: Apply pending SQL migrations first (lock-guarded, safe across workers). Not while a
-    // save of this host stays unsettled: its files may be among the pending ones, and running them
-    // over a save nothing could judge would change the database its record describes.
-    let registeredByMigrate = 0;
-    // Whether a save's files stay unrun at the end of step 1: unsettled from the start, or still
-    // pending or left once the migrate step has had its run.
-    let held = settled.unsettled;
-    if (settled.unsettled) {
-      consoleLogger.warn(
-        `${label} Pending migrations were not applied at this start: a Builder save left part-way is not settled (named above), and its files may be among them. Clear its record by hand as the warning says, then start again.`
-      );
-      markStartIncomplete();
-    } else {
-      registeredByMigrate = await applyPendingMigrations(label);
-      // A save left pending, settled again now its remaining files have had their run: recorded
-      // applied, it is whole and its record clears; still pending (the files this start ran are not
-      // the ones it wrote), the record stays, refusing a Builder save until they run.
-      if (settled.pending.length > 0) {
-        const again = await settleLeftSavesAtStart(label, settled.pending);
-        held = again.unsettled || again.pending.length > 0;
-        if (again.pending.length > 0) {
-          consoleLogger.warn(
-            `${label} A Builder save stopped between its migration files, and the rest of them did not run at this start, so its record stays. Run \`nextly migrate\` from the project the save was made in.`
-          );
-          markStartIncomplete();
-        }
-      }
-    }
+    // Steps 0 and 1: settle what an earlier process left, then apply pending SQL migrations.
+    const { registeredByMigrate, held } = await settleThenMigrate(label);
 
     // Step 1.5: Register collections from migration metadata
     // NOTE: This runs OUTSIDE the migrate lock. Multiple Next.js dev workers may
@@ -247,6 +216,47 @@ export function checkRelationsBeforePlugins(
  * `nextly migrate` reads them. The directory need not exist: what its absence
  * means differs by caller, so each asks about it on its own.
  */
+/**
+ * Steps 0 and 1 of a development start. Step 0 settles a Builder save an earlier process left
+ * part-way, before anything reads the migration files it wrote: one left pending keeps its record,
+ * its remaining files run in step 1, and the record clears only once they are recorded applied.
+ * Step 1 applies pending SQL migrations (lock-guarded, safe across workers), but not while a save
+ * of this host stays unsettled: its files may be among the pending ones, and running them over a
+ * save nothing could judge would change the database its record describes.
+ *
+ * Answers what the migrate run registered, and whether a save's files stay unrun at the end of
+ * step 1 (`held`): unsettled from the start, or still pending or left once the migrate step has
+ * had its run. The start's later schema steps wait while it is held.
+ */
+async function settleThenMigrate(
+  label: string
+): Promise<{ registeredByMigrate: number; held: boolean }> {
+  const settled = await settleLeftSavesAtStart(label);
+  if (settled.unsettled) {
+    consoleLogger.warn(
+      `${label} Pending migrations were not applied at this start: a Builder save left part-way is not settled (named above), and its files may be among them. Clear its record by hand as the warning says, then start again.`
+    );
+    markStartIncomplete();
+    return { registeredByMigrate: 0, held: true };
+  }
+  const registeredByMigrate = await applyPendingMigrations(label);
+  if (settled.pending.length === 0) return { registeredByMigrate, held: false };
+  // A save left pending, settled again now its remaining files have had their run: recorded
+  // applied, it is whole and its record clears; still pending (the files this start ran are not
+  // the ones it wrote), the record stays, refusing a Builder save until they run.
+  const again = await settleLeftSavesAtStart(label, settled.pending);
+  if (again.pending.length > 0) {
+    consoleLogger.warn(
+      `${label} A Builder save stopped between its migration files, and the rest of them did not run at this start, so its record stays. Run \`nextly migrate\` from the project the save was made in.`
+    );
+    markStartIncomplete();
+  }
+  return {
+    registeredByMigrate,
+    held: again.unsettled || again.pending.length > 0,
+  };
+}
+
 /**
  * Settle every Builder save this host's earlier process left part-way (`settleLeftSaves`), under the
  * schema lock, so two development workers starting together do not both settle one. A failure is

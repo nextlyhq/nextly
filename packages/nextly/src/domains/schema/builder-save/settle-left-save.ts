@@ -144,45 +144,8 @@ export async function settleLeftSaves(
   if (!(await deps.adapter.tableExists("nextly_meta"))) return settled;
   const here = hostname();
   for (const row of await readSavesInProgress(deps.adapter)) {
-    // An unreadable record names no save to judge: it refuses as it is, with its hand step, and is
-    // answered as left, so a caller holds back what it holds back for a record that stays.
-    if (!("record" in row)) {
-      if (deps.only === undefined) settled.push(unreadableLeft(row.key));
-      continue;
-    }
-    // Another machine's save wrote its files there, not here: its own start settles it. It may
-    // describe a file part-applied on this database, so it too is answered as left.
-    if (row.record.host !== here) {
-      if (deps.only === undefined) {
-        settled.push({
-          id: row.record.id,
-          kind: row.record.kind,
-          slug: row.record.slug,
-          outcome: "left",
-          notes: [
-            `left by another host (${row.record.host}), which settles it`,
-          ],
-        });
-      }
-      continue;
-    }
-    if (deps.only !== undefined && !deps.only.has(row.record.id)) continue;
-    try {
-      settled.push(await settleLeftSave(deps, row.record));
-    } catch (error) {
-      const why = error instanceof Error ? error.message : String(error);
-      deps.logger.warn(
-        `A Builder save of the ${described(row.record)} was left part-way, and settling it failed (${why}). Its record stays, and the next development start tries again.`
-      );
-      // Answered as left, so a caller holds back what it holds back for a record that stays.
-      settled.push({
-        id: row.record.id,
-        kind: row.record.kind,
-        slug: row.record.slug,
-        outcome: "left",
-        notes: [`settling it failed: ${why}`],
-      });
-    }
+    const one = await settleRow(deps, row, here);
+    if (one !== undefined) settled.push(one);
   }
   const stale = await removeStaleMarkers({
     adapter: deps.adapter,
@@ -195,6 +158,46 @@ export async function settleLeftSaves(
     );
   }
   return settled;
+}
+
+/**
+ * One stored record, settled or answered: undefined for one this settle is not asked about
+ * (`only`). A record that is not judged here is answered as left, so a caller holds back what it
+ * holds back for a record that stays: one that cannot be read refuses as it is, with its hand step;
+ * another machine's wrote its files there, not here, and its own start settles it, but it may
+ * describe a file part-applied on this database.
+ */
+async function settleRow(
+  deps: SettleDeps,
+  row: Awaited<ReturnType<typeof readSavesInProgress>>[number],
+  here: string
+): Promise<SettledSave | undefined> {
+  if (!("record" in row)) {
+    return deps.only === undefined ? unreadableLeft(row.key) : undefined;
+  }
+  const record = row.record;
+  const left = (note: string): SettledSave => ({
+    id: record.id,
+    kind: record.kind,
+    slug: record.slug,
+    outcome: "left",
+    notes: [note],
+  });
+  if (record.host !== here) {
+    return deps.only === undefined
+      ? left(`left by another host (${record.host}), which settles it`)
+      : undefined;
+  }
+  if (deps.only !== undefined && !deps.only.has(record.id)) return undefined;
+  try {
+    return await settleLeftSave(deps, record);
+  } catch (error) {
+    const why = error instanceof Error ? error.message : String(error);
+    deps.logger.warn(
+      `A Builder save of the ${described(record)} was left part-way, and settling it failed (${why}). Its record stays, and the next development start tries again.`
+    );
+    return left(`settling it failed: ${why}`);
+  }
 }
 
 /** An unreadable record, answered as left: its key names the entity where it can be read. */
