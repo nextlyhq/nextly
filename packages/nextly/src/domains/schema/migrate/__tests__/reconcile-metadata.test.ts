@@ -110,6 +110,10 @@ async function run(opts: {
     ) => work({ getDrizzle: () => ({}) }),
     inRegistryStep: (_adapter: unknown, work: () => Promise<unknown>) => work(),
     newestAppliedAppMigration: () => null,
+    // Read as inside a registry write a caller holds: the archive's labelling and the removal of
+    // what dropped entities left step aside, as before the pass had them. Their own suites
+    // (`deployed-delete-of-a-translated-entity.integration.test.ts`) judge them.
+    registryWriteOpen: () => true,
   }));
   const made = mockRegistries(
     opts.collections ?? [],
