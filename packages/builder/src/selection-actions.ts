@@ -19,11 +19,11 @@ import * as React from "react";
 
 import { toolbarActions, type ToolbarAction } from "./canvas/toolbar-actions";
 import type { EditorState } from "./editor-state";
+import type { SelectionVerbs } from "./selection-offer";
 import {
   useNestingSource,
   useSelectionActionsContext,
-} from "./keyboard-actions";
-import type { SelectionVerbs } from "./selection-offer";
+} from "./shell/keyboard-actions";
 
 /**
  * What to offer for this editor's selection, recomputed only when it changes.

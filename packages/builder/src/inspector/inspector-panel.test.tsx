@@ -43,7 +43,7 @@ import type { ContentServices } from "./content/content-controls";
 import { editedStyleState, InspectorPanel } from "./inspector-panel";
 import { applyOp } from "../ops";
 import type { EditorState } from "../editor-state";
-import type { SharedBlockVerbs } from "../keyboard-actions";
+import type { SharedBlockVerbs } from "../shell/keyboard-actions";
 
 /** Verbs as a host shares them: the menu's locked answers are the same list. */
 function shared(verbs: Omit<SharedBlockVerbs, "withLocks">): SharedBlockVerbs {

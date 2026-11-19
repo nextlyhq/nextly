@@ -15,7 +15,7 @@ import type { StyleValue } from "@nextlyhq/blocks-engine";
 import { detectApplePlatform } from "@nextlyhq/ui";
 import * as React from "react";
 
-import { spokenKeyHint } from "../../key-hint";
+import { spokenKeyHint } from "../../shell/key-hint";
 import type { SideOrientation } from "../../side-orientation";
 import { sideBoxFor } from "../../style-sides";
 

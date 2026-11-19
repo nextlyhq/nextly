@@ -155,7 +155,7 @@ export {
 export {
   CANVAS_ROUTE_DOCS_HREF,
   SITE_CODE_POLICY_DOCS_HREF,
-} from "./docs-links";
+} from "./shell/docs-links";
 export { CanvasMarks } from "./canvas/canvas-marks";
 /**
  * @experimental The line where the Add panel's highlighted tile would land,
@@ -214,11 +214,11 @@ export {
   type RegionEditing,
   type RegionEditingWords,
   type RegionStateArgs,
-} from "./editing-target";
+} from "./shell/editing-target";
 export {
   RegionEditingBar,
   type RegionEditingBarProps,
-} from "./region-editing-bar";
+} from "./shell/region-editing-bar";
 
 /**
  * The inserter, behind the same client banner as the shell it fills: it holds
@@ -260,8 +260,8 @@ export type { ImageBindingFallbackProps } from "./bindings/image-binding-fallbac
 // What a host tells the inspector about the component it edits, beside it.
 export type { ComponentFieldsHost } from "./panels/components/component-fields";
 // The banner over a component's own view: its name, its reach, and Back.
-export { ComponentBanner } from "./component-banner";
-export type { ComponentBannerProps } from "./component-banner";
+export { ComponentBanner } from "./shell/component-banner";
+export type { ComponentBannerProps } from "./shell/component-banner";
 // And about its variants: how many placements chose one, for the delete dialog.
 export type {
   ComponentVariantsHost,
@@ -430,14 +430,14 @@ export {
   BlockKeyboardActions,
   useBlockActionsContext,
   useBlockKeyboardActions,
-} from "./keyboard-actions";
+} from "./shell/keyboard-actions";
 export type {
   BlockActions,
   BlockKeyboardActionsOptions,
   BlockKeyboardActionsResult,
   ComponentVerbsHost,
   SharedStyleVerbHost,
-} from "./keyboard-actions";
+} from "./shell/keyboard-actions";
 // Which way "Turn into component…" may go, as the host is told when it opens.
 export type { TurnIntoChoice } from "./canvas/toolbar-actions";
 
@@ -567,9 +567,9 @@ export type { AccordionAddQuestionProps } from "./canvas/accordion-add-question"
  * The badge on a block whose bound value a visitor will not see, drawn in the
  * canvas's overlay from the host's `visitorUnreadableBindings` answer.
  */
-export { VisitorUnreadableBadges } from "./visitor-unreadable-badges";
-export type { VisitorUnreadableBadgesProps } from "./visitor-unreadable-badges";
-export { VisitorUnreadableProvider } from "./visitor-unreadable-context";
+export { VisitorUnreadableBadges } from "./shell/visitor-unreadable-badges";
+export type { VisitorUnreadableBadgesProps } from "./shell/visitor-unreadable-badges";
+export { VisitorUnreadableProvider } from "./shell/visitor-unreadable-context";
 /**
  * @experimental Where the host keeps the signed-in author's Recent colours,
  * provided once around the shell so every colour picker in it, a block's and
@@ -634,7 +634,7 @@ export {
   applyStarterPage,
   planStarterPage,
   type StarterPageSources,
-} from "./starter-page";
+} from "./shell/starter-page";
 
 /**
  * The editor's document state, published beside the canvas because it is a hook
@@ -653,7 +653,7 @@ export { MAX_HISTORY, useDocumentView, useEditorState } from "./editor-state";
 export {
   useLatestCallback,
   useLatestOptionalCallback,
-} from "./latest-callback";
+} from "./shell/latest-callback";
 export type {
   EditorDocumentView,
   EditorState,
@@ -1028,8 +1028,8 @@ export type {
  * Which values each placement of a new component may change: the picker the
  * host's "Turn into component" form draws.
  */
-export { ExposurePicker, selectionAsComponent } from "./exposure-picker";
-export type { ExposurePickerProps } from "./exposure-picker";
+export { ExposurePicker, selectionAsComponent } from "./shell/exposure-picker";
+export type { ExposurePickerProps } from "./shell/exposure-picker";
 
 /**
  * Page checks: the count beside Publish that opens the list and walks it

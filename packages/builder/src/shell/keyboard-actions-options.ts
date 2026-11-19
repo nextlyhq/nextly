@@ -9,17 +9,18 @@
 import type { ComponentLookup, NestingSource } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
-import type { BlockActions, ToolbarFocusSlot } from "./block-actions-context";
-import type { BlockClipboardVerbs } from "./block-clipboard-verbs";
+import type { BlockClipboardVerbs } from "../block-clipboard-verbs";
 import type {
   ComponentVerbsOffer,
   ToolbarAction,
   ToolbarActionId,
   TurnIntoChoice,
-} from "./canvas/toolbar-actions";
-import type { EditorState } from "./editor-state";
-import type { OfferSignal, SelectionOffer } from "./selection-offer";
-import type { SharedStyleOffer } from "./shared-style-target";
+} from "../canvas/toolbar-actions";
+import type { EditorState } from "../editor-state";
+import type { OfferSignal, SelectionOffer } from "../selection-offer";
+import type { SharedStyleOffer } from "../shared-style-target";
+
+import type { BlockActions, ToolbarFocusSlot } from "./block-actions-context";
 
 /**
  * The verbs for the current selection, as a surface OUTSIDE the provider is

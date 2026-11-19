@@ -48,7 +48,7 @@ import * as React from "react";
 import { createPortal } from "react-dom";
 
 import { useCanvasTokenModeAt } from "../../canvas/prefers-dark";
-import { HOW_TEXT_WORKS_DOCS_HREF } from "../../docs-links";
+import { HOW_TEXT_WORKS_DOCS_HREF } from "../../shell/docs-links";
 
 import { ColourCleanUp, type CleanUpColours } from "./colour-cleanup";
 import {

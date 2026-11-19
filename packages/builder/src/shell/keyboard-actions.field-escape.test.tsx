@@ -16,9 +16,9 @@ import { ShortcutProvider } from "@nextlyhq/ui";
 import * as React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { EditorState } from "./editor-state";
+import type { EditorState } from "../editor-state";
 import { BlockKeyboardActions } from "./keyboard-actions";
-import { useStoredDraft } from "./stored-draft";
+import { useStoredDraft } from "../stored-draft";
 
 afterEach(cleanup);
 

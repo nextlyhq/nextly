@@ -29,9 +29,9 @@ import {
 import { createElement } from "react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { Canvas } from "./canvas/canvas";
-import type { CanvasRegion } from "./canvas/canvas-regions";
-import { RegionEditingScrim } from "./canvas/region-editing-scrim";
+import { Canvas } from "../canvas/canvas";
+import type { CanvasRegion } from "../canvas/canvas-regions";
+import { RegionEditingScrim } from "../canvas/region-editing-scrim";
 import {
   canvasEditingOf,
   regionEscape,
@@ -39,13 +39,13 @@ import {
   type EditingTargetState,
   type RegionEditing,
 } from "./editing-target";
-import { useEditorState, type EditorState } from "./editor-state";
-import { InspectorPanel } from "./inspector/inspector-panel";
+import { useEditorState, type EditorState } from "../editor-state";
+import { InspectorPanel } from "../inspector/inspector-panel";
 import { BlockKeyboardActions } from "./keyboard-actions";
-import { InsertPanel } from "./panels/add/insert-panel";
-import { LayersPanel } from "./panels/layers/layers-panel";
+import { InsertPanel } from "../panels/add/insert-panel";
+import { LayersPanel } from "../panels/layers/layers-panel";
 import { RegionEditingBar } from "./region-editing-bar";
-import { CANVAS_ROOT_CLASS } from "./shell-state";
+import { CANVAS_ROOT_CLASS } from "../shell-state";
 
 beforeAll(() => {
   // The tree virtualizes and the Add panel scrolls its rows into view: jsdom

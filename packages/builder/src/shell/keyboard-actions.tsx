@@ -35,26 +35,18 @@ import { useIsomorphicLayoutEffect, useShortcuts } from "@nextlyhq/ui";
 import * as React from "react";
 
 import {
-  type BlockActions,
-  BlockActionsContext,
-  NestingContext,
-  SelectionActionsContext,
-  ToolbarFocusContext,
-  type ToolbarFocusSlot,
-} from "./block-actions-context";
-import {
   BlockClipboardEvents,
   CLIPBOARD_KEY_HELP,
-} from "./block-clipboard-events";
-import { useBlockClipboardVerbs } from "./block-clipboard-verbs";
+} from "../block-clipboard-events";
+import { useBlockClipboardVerbs } from "../block-clipboard-verbs";
 import {
   CANVAS_ESCAPE_PRIORITY,
   escapeOutcome,
   modalIsOpen,
   pressOrigin,
   returnFocusToCanvas,
-} from "./canvas/canvas-escape";
-import { useCanvasFrame } from "./canvas/canvas-frame-context";
+} from "../canvas/canvas-escape";
+import { useCanvasFrame } from "../canvas/canvas-frame-context";
 import {
   patternSaveRefusal,
   SAVE_PATTERN_GRANT_REFUSAL,
@@ -62,11 +54,42 @@ import {
   turnIntoChoice,
   type MoveJudge,
   type MovePosition,
-} from "./canvas/toolbar-actions";
-import type { EditorState } from "./editor-state";
-import { escapeFieldEdit } from "./field-edit";
-import { lockViewOf } from "./inspector/inspector";
-import { placedComponentId } from "./inspector/instance-inspector";
+} from "../canvas/toolbar-actions";
+import type { EditorState } from "../editor-state";
+import { escapeFieldEdit } from "../field-edit";
+import { lockViewOf } from "../inspector/inspector";
+import { placedComponentId } from "../inspector/instance-inspector";
+import { keyboardMovePosition, type MoveDirection } from "../keyboard-move";
+import { lockedBlockWording, lockRefusalWording } from "../lock-refusal";
+import { lockBlockingMove } from "../locking";
+import {
+  nestingRefusalForMove,
+  refusalAnnouncement,
+  unmovedAnnouncement,
+} from "../move-refusal";
+import { pathTo } from "../panels/layers/layers";
+import { usePreviewedCollection } from "../previewed-entry";
+import { offerSignal, useSelectionOffer } from "../selection-offer";
+import {
+  isRefusal,
+  selectionDeletion,
+  selectionDuplication,
+  selectionMove,
+} from "../selection-ops";
+import { planUnwrap, planWrap } from "../selection-wrap";
+import { useStyleClipboardVerbs } from "../style-clipboard-verbs";
+import { runTurnInto, turnIntoOffers } from "../turn-into-verb";
+
+import {
+  type BlockActions,
+  BlockActionsContext,
+  NestingContext,
+  SelectionActionsContext,
+  ToolbarFocusContext,
+  type ToolbarFocusSlot,
+} from "./block-actions-context";
+import { blockActionRunners } from "./builder-commands";
+import { useNoticeSink } from "./builder-notices";
 import {
   type BlockKeyboardActionsOptions,
   type BlockKeyboardActionsResult,
@@ -82,28 +105,6 @@ import {
   MOVE_KEYS,
   UNDO_KEYS_SPOKEN,
 } from "./keyboard-announcements";
-import { keyboardMovePosition, type MoveDirection } from "./keyboard-move";
-import { lockedBlockWording, lockRefusalWording } from "./lock-refusal";
-import { lockBlockingMove } from "./locking";
-import {
-  nestingRefusalForMove,
-  refusalAnnouncement,
-  unmovedAnnouncement,
-} from "./move-refusal";
-import { pathTo } from "./panels/layers/layers";
-import { usePreviewedCollection } from "./previewed-entry";
-import { offerSignal, useSelectionOffer } from "./selection-offer";
-import {
-  isRefusal,
-  selectionDeletion,
-  selectionDuplication,
-  selectionMove,
-} from "./selection-ops";
-import { planUnwrap, planWrap } from "./selection-wrap";
-import { blockActionRunners } from "./shell/builder-commands";
-import { useNoticeSink } from "./shell/builder-notices";
-import { useStyleClipboardVerbs } from "./style-clipboard-verbs";
-import { runTurnInto, turnIntoOffers } from "./turn-into-verb";
 
 // The keys and what is announced, the contexts the toolbar and menus read,
 // and what the hook takes and returns live in modules of their own beside

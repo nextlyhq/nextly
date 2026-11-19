@@ -31,7 +31,7 @@ import {
   type ComponentLookup,
 } from "@nextlyhq/blocks-engine";
 
-import type { EditorState } from "./editor-state";
+import type { EditorState } from "../editor-state";
 import {
   BlockKeyboardActions,
   useBlockActionsContext,

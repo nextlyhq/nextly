@@ -25,7 +25,7 @@ import {
   type NestingSource,
 } from "@nextlyhq/blocks-engine";
 
-import type { EditorState } from "./editor-state";
+import type { EditorState } from "../editor-state";
 
 /** What the copy is judged by: the site's nesting rules, and its components. */
 export interface StarterPageSources {

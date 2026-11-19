@@ -13,7 +13,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { BlockDocument } from "@nextlyhq/blocks-engine";
 
-import type { EditorState } from "./editor-state";
+import type { EditorState } from "../editor-state";
 import { BlockKeyboardActions } from "./keyboard-actions";
 
 afterEach(cleanup);

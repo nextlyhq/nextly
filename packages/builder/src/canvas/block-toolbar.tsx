@@ -94,16 +94,16 @@ import {
   lockStatusOf,
   lockViewOf,
 } from "../inspector/inspector";
-import {
-  useBlockActionsContext,
-  useToolbarFocusSlot,
-} from "../keyboard-actions";
 import { lockRefusalWording } from "../lock-refusal";
 import { lockBlockingEdit } from "../locking";
 import { refusalAnnouncement } from "../move-refusal";
 import { layerLabel, pathTo } from "../panels/layers/layers";
 import { useSelectionActions } from "../selection-actions";
 import { blockActionRunners } from "../shell/builder-commands";
+import {
+  useBlockActionsContext,
+  useToolbarFocusSlot,
+} from "../shell/keyboard-actions";
 import { isTurnIntoAction } from "../turn-into-verb";
 
 import {

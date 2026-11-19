@@ -62,32 +62,32 @@ import {
   CANVAS_ROOT_CLASS,
   CHROME_ATTRIBUTE,
   nodeElement,
-} from "./canvas/canvas";
-import { useCanvasFrame } from "./canvas/canvas-frame-context";
+} from "../canvas/canvas";
+import { useCanvasFrame } from "../canvas/canvas-frame-context";
 import {
   watchCanvasFor,
   watchScreenBand,
-} from "./canvas/canvas-geometry-watch";
+} from "../canvas/canvas-geometry-watch";
 import {
   overlaps,
   tabBoardOf,
   useTabPost,
   type TabAt,
   type TabDraft,
-} from "./canvas/canvas-tab-places";
+} from "../canvas/canvas-tab-places";
 import {
   canvasContentRect,
   clippedByAncestorRect,
   onScreenOf,
   overlaySpaceOf,
   type OverlaySpace,
-} from "./canvas/geometry-dom";
-import { isHTMLElement } from "./dom-kind";
-import type { Rect } from "./geometry";
+} from "../canvas/geometry-dom";
+import { isHTMLElement } from "../dom-kind";
+import type { Rect } from "../geometry";
 import {
   useMediaSummary,
   type MediaSummary,
-} from "./inspector/content/content-controls";
+} from "../inspector/content/content-controls";
 
 /** The badge's words: what the author needs to know, at a glance. */
 const VISITOR_UNREADABLE_WORDS = "Visitors won't see this";
