@@ -89,7 +89,7 @@ const counted = vi.hoisted(() => ({
 const settingsSeen = vi.hoisted(() => ({
   open: false,
   pageTitle: undefined as string | undefined,
-  share: undefined as object | undefined,
+  share: undefined as { description?: string } | undefined,
 }));
 
 /** The selected block as a surface names it: its name and its words. */
@@ -198,7 +198,7 @@ vi.mock("./editor/settings-dialog", () => ({
   SettingsDialog: (props: {
     open: boolean;
     pageTitle: string | undefined;
-    share: object;
+    share: { description?: string };
   }) => {
     counted.settings += 1;
     settingsSeen.open = props.open;
@@ -377,6 +377,9 @@ beforeAll(() => {
         props: { text: { type: "text", label: "Text" } },
         example: { props: { text: "" } },
         render: () => <p>leaf</p>,
+        // Its words describe the page, so the share preview Settings builds
+        // while open reads them from the document.
+        seo: (props: { text?: string }) => ({ description: props.text }),
       },
     ] as never,
     { source: "selection-top-bar-test" }
@@ -491,19 +494,22 @@ describe("a selection draws none of the rail, Help or Page settings again", () =
     expectEverySurfaceOn("beta", "Beta: Beta's words");
     expect(shellDraws()).toEqual(before);
 
-    // An edit while it is open: Settings draws again with a share preview
-    // built afresh from the edited page.
-    const share = settingsSeen.share;
+    // The control: the open preview is built from the page, its description
+    // from the first block's words.
+    expect(settingsSeen.share?.description).toBe("Alpha's words");
+
+    // An edit of those words while it is open: Settings draws again with a
+    // preview built from the edited page, not from the one it was opened on.
     act(() => {
       seen.inspector?.apply({
         kind: "update",
-        id: "beta",
-        patch: { props: { text: "Beta, edited" } },
+        id: "alpha",
+        patch: { props: { text: "Alpha, edited" } },
       });
     });
     expect(counted.settings).toBeGreaterThan(before.settings);
     expect(settingsSeen.open).toBe(true);
-    expect(settingsSeen.share).not.toBe(share);
+    expect(settingsSeen.share?.description).toBe("Alpha, edited");
 
     // Closing Settings, then opening Help from the rail: Help draws again.
     act(() => {
