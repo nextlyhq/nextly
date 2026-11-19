@@ -96,9 +96,9 @@ export function reviewPlan(
  * review (the document's newest, in any language) carries the shared fields
  * in its own language.
  *
- * Its baseline is that language's newest version saved at or before the
- * shared part's approval (`approvedAt`), or, with none, at or before the
- * document's last publish: never one saved after, so the comparison may show
+ * Its baseline is that language's newest version numbered at or before the
+ * shared part's approved version, or, with none, at or before the document's
+ * last published version: never one saved after, so the comparison may show
  * more than the shared fields changed since, never less. Where that language
  * has no such version, the whole version is shown as new.
  */
@@ -138,9 +138,13 @@ export function sharedPlan(
     return { kind: "unchanged", to };
   }
   const within = newest.locale ?? null;
+  // Cut off by version number, one sequence per document in every language:
+  // two versions saved in the same second share a time, and a cut by time
+  // could take a draft saved after the publish as the baseline, leaving out
+  // the change it made.
   const cutoff =
-    approval?.at ??
-    saved.find(version => version.status === "published")?.createdAt;
+    approval?.versionNo ??
+    saved.find(version => version.status === "published")?.versionNo;
   const baseline =
     cutoff === undefined
       ? undefined
@@ -148,7 +152,7 @@ export function sharedPlan(
           version =>
             version.versionNo !== to &&
             (version.locale ?? null) === within &&
-            Date.parse(version.createdAt) <= Date.parse(cutoff)
+            version.versionNo <= cutoff
         );
   if (baseline !== undefined) {
     return {

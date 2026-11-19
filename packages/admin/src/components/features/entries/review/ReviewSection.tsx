@@ -41,6 +41,7 @@ import { leadingReviewStep } from "../EntryForm/document-actions";
 import { PanelSection } from "../EntryForm/panels/PanelSection";
 
 import { waitingForWords } from "./review-words";
+import { approves, hidesALanguage, SHARED_APPROVAL_HELD } from "./shared-hold";
 import { StepRefusalNote } from "./StepRefusalNote";
 import { useStepTaker, type StepTaker } from "./useStepTaker";
 
@@ -55,7 +56,7 @@ export function ReviewSection({
   locale,
 }: ReviewSectionProps): JSX.Element | null {
   const { data } = useReviewState(document);
-  const { defaultLocale, getLocale } = useLocalization();
+  const { defaultLocale, getLocale, locales } = useLocalization();
   const taker = useStepTaker(document);
   const language = locale ?? defaultLocale;
   if (data === undefined || !data.attached) return null;
@@ -69,6 +70,9 @@ export function ReviewSection({
   );
   if (parts.length === 0) return null;
   const titled = parts.length > 1;
+  // The shared fields' approval is held where this person can't read every
+  // language: see `shared-hold`.
+  const hidden = hidesALanguage(data.review.parts, locales.length);
   return (
     <PanelSection title="Review">
       <div className="space-y-4">
@@ -78,6 +82,9 @@ export function ReviewSection({
             document={document}
             part={part}
             taker={taker}
+            approvalHeld={
+              hidden && part.part === null ? SHARED_APPROVAL_HELD : undefined
+            }
             title={
               !titled
                 ? null
@@ -98,11 +105,14 @@ function PartBlock({
   document,
   part,
   taker,
+  approvalHeld,
   title,
 }: {
   document: ReleaseDocumentRef;
   part: PartReview;
   taker: StepTaker;
+  /** Why this part's approve steps are held, where they are. */
+  approvalHeld: string | undefined;
   title: string | null;
 }): JSX.Element {
   const { formatDate } = useAdminDateFormatter();
@@ -126,7 +136,7 @@ function PartBlock({
               Due {formatDate(part.dueAt, { dateStyle: "medium" }, part.dueAt)}
             </p>
           )}
-          <PartSteps part={part} taker={taker} />
+          <PartSteps part={part} taker={taker} approvalHeld={approvalHeld} />
           <AssignControls document={document} part={part} />
         </>
       )}
@@ -139,9 +149,11 @@ function PartBlock({
 function PartSteps({
   part,
   taker,
+  approvalHeld,
 }: {
   part: PartReview;
   taker: StepTaker;
+  approvalHeld: string | undefined;
 }): JSX.Element | null {
   const steps = part.steps
     .filter(step => step.mayTake)
@@ -159,12 +171,20 @@ function PartSteps({
           size="sm"
           variant={step.primary ? "default" : "outline"}
           className="h-7 px-2 text-xs"
-          disabled={taker.pending || part.version === null}
+          disabled={
+            taker.pending ||
+            part.version === null ||
+            (approvalHeld !== undefined && approves(step))
+          }
           onClick={() => take(step)}
         >
           {step.label}
         </Button>
       ))}
+      {approvalHeld === undefined ||
+      !steps.some(step => approves(step)) ? null : (
+        <p className="w-full text-xs text-muted-foreground">{approvalHeld}</p>
+      )}
     </div>
   );
 }

@@ -46,6 +46,7 @@ import {
   takeableOnEvery,
   waitingForWords,
 } from "./review-words";
+import { approves, hidesALanguage, SHARED_APPROVAL_HELD } from "./shared-hold";
 import { STEP_NOT_OFFERED, useStepTaker } from "./useStepTaker";
 
 export interface EditorReviewInput {
@@ -105,7 +106,7 @@ export function useEditorReview({
   held,
 }: EditorReviewInput): EditorReview {
   const query = useReviewState(document);
-  const { defaultLocale } = useLocalization();
+  const { defaultLocale, locales } = useLocalization();
   const taker = useStepTaker(document);
   const queryClient = useQueryClient();
 
@@ -132,11 +133,28 @@ export function useEditorReview({
   // speaks for.
   const onScreen = partsOnScreen(query.data, locale ?? defaultLocale);
   const part = onScreen[0];
-  const hold = held ?? stepHold(isDirty, onScreen).stepReason;
   const parts =
     document !== undefined && query.data?.attached === true
       ? query.data.review.parts
       : [];
+  // Where this person can't read every language, the shared fields' newest
+  // version may be one they can't see: their approval of the shared fields is
+  // held, here (the shared part on screen) and in approve-all (the shared part
+  // among those waiting for their approval).
+  const hidden = hidesALanguage(parts, locales.length);
+  const sharedApproves = (candidates: readonly PartReview[]): boolean =>
+    candidates.some(
+      candidate =>
+        candidate.part === null &&
+        candidate.steps.some(step => approves(step) && step.mayTake)
+    );
+  const sharedHold =
+    hidden && sharedApproves(onScreen) ? SHARED_APPROVAL_HELD : undefined;
+  const stepReason = stepHold(isDirty, onScreen).stepReason ?? sharedHold;
+  const hold =
+    held ??
+    stepReason ??
+    (hidden && sharedApproves(parts) ? SHARED_APPROVAL_HELD : undefined);
 
   if (document === undefined || part === undefined) {
     return {
@@ -173,7 +191,7 @@ export function useEditorReview({
       primary: step.primary,
     })),
     waitingFor: waitingForWords(part.waitingFor),
-    ...stepHold(isDirty, onScreen),
+    ...(stepReason === undefined ? {} : { stepReason }),
   };
 
   return {

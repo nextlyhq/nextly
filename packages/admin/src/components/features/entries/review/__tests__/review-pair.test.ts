@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 
 import type { VersionMeta } from "@admin/services/versionApi";
 
-import { reviewPlan } from "../review-pair";
+import { reviewPlan, sharedPlan } from "../review-pair";
 
 /** A version, newest-first lists name only what each case changes. */
 function version(
@@ -84,5 +84,24 @@ describe("reviewPlan", () => {
 
   it("has nothing to review before a version is saved", () => {
     expect(reviewPlan([], "en", null)).toEqual({ kind: "none" });
+  });
+});
+
+describe("sharedPlan", () => {
+  it("takes the published version as the baseline, not a draft saved in the same second after it", () => {
+    const sameSecond = "2026-11-19T09:00:00.000Z";
+    const versions = [
+      version(7, { createdAt: "2026-11-19T09:00:05.000Z" }),
+      version(6, { createdAt: sameSecond }),
+      version(5, { status: "published", createdAt: sameSecond }),
+    ];
+
+    expect(sharedPlan(versions, true, null)).toEqual({
+      kind: "pair",
+      from: 5,
+      to: 7,
+      since: "published",
+      within: "en",
+    });
   });
 });
