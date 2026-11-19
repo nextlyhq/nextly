@@ -1312,6 +1312,39 @@ describe.each(getConfiguredTestDialects())(
       change: "update" as const,
     };
 
+    // Turning translation off puts `body` back on the main table before the main file runs, and the
+    // main file's snapshot records that table: the runner checks the main table against its two
+    // ends. On MySQL the field is `text` there, and a column put back wider (LONGTEXT) was at
+    // neither end, which the runner refused as drift.
+    it("turns translation off through its files, the main table put back as the main file's snapshot records it", async () => {
+      const body = (extra: Record<string, unknown> = {}) => text("body", extra);
+      await writeCollectionSave(translatedDeps(), {
+        slug: "posts",
+        previous: null,
+        entity: translated([body({ localized: true })]),
+        change: "create",
+      });
+      await adapter.executeQuery(
+        "INSERT INTO dc_posts (id, title, slug, created_at, updated_at) VALUES ('p1', 'A post', 'p1', '2026-11-06 00:00:00', '2026-11-06 00:00:00')"
+      );
+      await adapter.executeQuery(
+        "INSERT INTO dc_posts_locales (_parent, _locale, body) VALUES ('p1', 'en', 'Hello'), ('p1', 'es', 'Hola')"
+      );
+
+      await writeCollectionSave(translatedDeps(), {
+        slug: "posts",
+        previous: translated([body({ localized: true })]),
+        entity: posts([body()]),
+        change: "update",
+      });
+
+      expect(
+        await adapter.executeQuery<{ body: string }>(
+          "SELECT body FROM dc_posts WHERE id = 'p1'"
+        )
+      ).toEqual([{ body: "Hello" }]);
+    });
+
     it("refuses to record a translation change whose push left the table short of its file, and records nothing", async () => {
       await writeCollectionSave(translatedDeps(), {
         slug: "posts",
