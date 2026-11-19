@@ -28,7 +28,19 @@ beforeEach(async () => {
 });
 
 /** The table rebuilt with `score` of `type`, as a Single's save rebuilds it. */
-const changeScoreTo = (type: string, judge?: (db: unknown) => Promise<void>) =>
+/** What the field before and after were, for a change of `score`'s type. */
+interface Fields {
+  /** The field before was a relationship, its column carrying the key Nextly made for it. */
+  fromRelationship?: boolean;
+  /** The field after is unique. */
+  unique?: boolean;
+}
+
+const changeScoreTo = (
+  type: string,
+  judge?: (db: unknown) => Promise<void>,
+  fields: Fields = {}
+) =>
   applyMigrationWhole({
     db: adapter.getDrizzle(),
     dialect: "sqlite",
@@ -42,7 +54,16 @@ const changeScoreTo = (type: string, judge?: (db: unknown) => Promise<void>) =>
       adapter: adapter as unknown as DrizzleAdapter,
       tableName: "single_home",
       required: new Map(),
-      types: new Map([["score", type]]),
+      types: new Map([
+        [
+          "score",
+          {
+            type,
+            fromRelationship: fields.fromRelationship === true,
+            unique: fields.unique === true,
+          },
+        ],
+      ]),
       ...(judge === undefined ? {} : { judge }),
     },
   });
@@ -55,6 +76,22 @@ const declared = () =>
       )
       .get() as { type: string }
   ).type.toLowerCase();
+
+/** The tables the single's table references. */
+const references = () =>
+  (
+    sqlite
+      .prepare("SELECT \"table\" FROM pragma_foreign_key_list('single_home')")
+      .all() as { table: string }[]
+  ).map(row => row.table);
+
+/** The single's table's inline UNIQUE constraints (SQLite's `u` indexes). */
+const inlineUniques = () =>
+  sqlite
+    .prepare(
+      "SELECT name FROM pragma_index_list('single_home') WHERE origin = 'u'"
+    )
+    .all();
 
 const stored = () =>
   sqlite
@@ -124,7 +161,7 @@ describe("a SQLite rebuild that changes a column's type", () => {
 
   // A relationship's column references its target; retyped to a plain number it holds plain
   // values, which the old reference would refuse, and the save's file declares it with none.
-  it("drops the old reference from a column it retypes", async () => {
+  it("drops the reference a former relationship's column carries", async () => {
     sqlite.exec(`
       CREATE TABLE posts (id TEXT PRIMARY KEY);
       CREATE TABLE single_home (
@@ -134,19 +171,61 @@ describe("a SQLite rebuild that changes a column's type", () => {
       INSERT INTO single_home VALUES ('h1', NULL);
     `);
 
-    await changeScoreTo("integer");
+    await changeScoreTo("integer", undefined, { fromRelationship: true });
 
     expect(declared()).toBe("integer");
-    expect(
-      sqlite
-        .prepare("SELECT * FROM pragma_foreign_key_list('single_home')")
-        .all(),
-      "the table's references"
-    ).toEqual([]);
+    expect(references(), "the table's references").toEqual([]);
     sqlite.pragma("foreign_keys = ON");
     sqlite.prepare("UPDATE single_home SET score = 5").run();
     expect(stored()).toEqual({ score: 5, class: "integer" });
   });
+
+  // A reference added by hand, on a column whose field was never a relationship, is not one
+  // Nextly made: it stays, and the rebuild keeps it as it keeps any constraint the table has.
+  it("keeps a reference on a column whose field was not a relationship", async () => {
+    sqlite.exec(`
+      CREATE TABLE posts (id TEXT PRIMARY KEY);
+      CREATE TABLE single_home (
+        id TEXT PRIMARY KEY,
+        score TEXT REFERENCES posts(id)
+      );
+      INSERT INTO single_home VALUES ('h1', NULL);
+    `);
+
+    await changeScoreTo("integer");
+
+    expect(declared()).toBe("integer");
+    expect(references(), "the table's references").toEqual(["posts"]);
+  });
+
+  // An older one-to-one's column was made UNIQUE inline. Retyped to a field that is not unique, it
+  // takes repeated values; one that is unique keeps it.
+  it.each([
+    ["leaves out", false, 0],
+    ["keeps", true, 1],
+  ] as const)(
+    "%s a former relationship's inline UNIQUE where the new field's uniqueness says so",
+    async (_how, unique, uniques) => {
+      sqlite.exec(`
+        CREATE TABLE posts (id TEXT PRIMARY KEY);
+        CREATE TABLE single_home (
+          id TEXT PRIMARY KEY,
+          score TEXT UNIQUE REFERENCES posts(id)
+        );
+        INSERT INTO single_home VALUES ('h1', NULL);
+      `);
+
+      await changeScoreTo("integer", undefined, {
+        fromRelationship: true,
+        unique,
+      });
+
+      expect(declared()).toBe("integer");
+      expect(inlineUniques(), "the inline UNIQUE constraints").toHaveLength(
+        uniques
+      );
+    }
+  );
 
   it("declares the new type without the old declaration's modifier", async () => {
     sqlite.exec(`
