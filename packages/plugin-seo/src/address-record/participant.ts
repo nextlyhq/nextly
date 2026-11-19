@@ -169,11 +169,57 @@ export async function heldNow(
   });
 }
 
+/** An address the record is asked about: a path in a language. */
+export interface AskedAddress {
+  locale: string;
+  path: string;
+}
+
+/** Who holds each address of a read made for many at once, by `locale|path`. */
+export type KnownHolders = ReadonlyMap<string, AddressHolder[]>;
+
+/**
+ * Who holds each of `addresses`, read for all of them at once, for
+ * {@link withKnownHolders} to answer from.
+ */
+export async function holdersAt(
+  ctx: PluginContext,
+  addresses: readonly AskedAddress[]
+): Promise<KnownHolders> {
+  const keysByAddress = new Map(
+    addresses.map(({ locale, path }) => [
+      `${locale}|${path}`,
+      keysHolding(locale, path),
+    ])
+  );
+  const allKeys = [...new Set([...keysByAddress.values()].flat())];
+  const holderByKey = await holdersByKey(ctx, allKeys);
+  const known = new Map<string, AddressHolder[]>();
+  for (const [address, keys] of keysByAddress) {
+    known.set(
+      address,
+      keys.flatMap(claim => holderByKey.get(claim) ?? [])
+    );
+  }
+  return known;
+}
+
+/**
+ * `work`, run with `addressHolders` answering from `known` for each address
+ * it holds, so pages worked through one by one cost one read of the record
+ * rather than one a page. Any other address is read as before.
+ */
+export function withKnownHolders<T>(
+  known: KnownHolders,
+  work: () => Promise<T>
+): Promise<T> {
+  return holdersKnown.run(known, work);
+}
+
 /**
  * Who holds each of `paths` in `locale`, read for all of them at once while
  * `work` runs: `addressHolders` asked about one of them in `locale` answers
- * from this read, so a list of pages worked through one by one costs one read
- * of the record rather than one a page. Any other address is read as before.
+ * from this read.
  */
 export async function withAddressHolders<T>(
   ctx: PluginContext,
@@ -181,23 +227,17 @@ export async function withAddressHolders<T>(
   paths: readonly string[],
   work: () => Promise<T>
 ): Promise<T> {
-  const keysByPath = new Map(
-    paths.map(path => [path, keysHolding(locale, path)])
+  return withKnownHolders(
+    await holdersAt(
+      ctx,
+      paths.map(path => ({ locale, path }))
+    ),
+    work
   );
-  const allKeys = [...new Set([...keysByPath.values()].flat())];
-  const holderByKey = await holdersByKey(ctx, allKeys);
-  const known = new Map<string, AddressHolder[]>();
-  for (const [path, keys] of keysByPath) {
-    known.set(
-      `${locale}|${path}`,
-      keys.flatMap(claim => holderByKey.get(claim) ?? [])
-    );
-  }
-  return holdersKnown.run(known, work);
 }
 
-/** The holders a `withAddressHolders` read found, while its work runs. */
-const holdersKnown = new AsyncLocalStorage<Map<string, AddressHolder[]>>();
+/** The holders a `withKnownHolders` read found, while its work runs. */
+const holdersKnown = new AsyncLocalStorage<KnownHolders>();
 
 /**
  * Who the record says holds the address `path` in `locale`, or in the site's

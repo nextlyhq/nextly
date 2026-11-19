@@ -23,6 +23,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { blockLookGroups } from "./block-look-rows";
 import { BlockLooksGroup } from "./block-looks-group";
 import type { BlockStyleActions } from "./block-style-actions";
+import { labelNotInName } from "./label-in-name.fixture";
 
 afterEach(cleanup);
 
@@ -98,6 +99,21 @@ function draw(
 }
 
 /** A row by the start of its name. */
+/**
+ * A row's accessible name, as a screen reader hears it: read through the role
+ * query, which computes the name the same way for every button it finds.
+ */
+function accessibleNameOf(element: HTMLElement): string | undefined {
+  let heard: string | undefined;
+  screen.queryAllByRole("button", {
+    name: (name, each) => {
+      if (each === element) heard = name;
+      return false;
+    },
+  });
+  return heard;
+}
+
 const rowOf = (section: HTMLElement, name: string) =>
   within(section).getByRole("button", { name: new RegExp(`^${name}\\b`) });
 
@@ -201,7 +217,7 @@ describe("the Block styles section", () => {
   it("marks the block's own style ★ until another style carries it", () => {
     const { section } = draw(LIBRARY);
     expect(within(section).getAllByText("★ Default")).toHaveLength(3);
-    expect(rowOf(section, "Primary").getAttribute("aria-label")).toBe(
+    expect(accessibleNameOf(rowOf(section, "Primary"))).toBe(
       "Primary, default"
     );
     cleanup();
@@ -211,11 +227,26 @@ describe("the Block styles section", () => {
       )
     ).section;
     const button = within(moved).getByRole("list", { name: "Button styles" });
-    expect(rowOf(button, "Ghost").getAttribute("aria-label")).toBe(
-      "Ghost, default"
-    );
-    expect(rowOf(button, "Primary").getAttribute("aria-label")).toBe("Primary");
+    expect(accessibleNameOf(rowOf(button, "Ghost"))).toBe("Ghost, default");
+    expect(accessibleNameOf(rowOf(button, "Primary"))).toBe("Primary");
     expect(within(button).getAllByText("★ Default")).toHaveLength(1);
+  });
+
+  it("names each row by its own text, with no label laid over the specimen it draws", () => {
+    const { section } = draw(LIBRARY);
+    const rows = [
+      ...section.querySelectorAll<HTMLElement>("[data-block-look]"),
+    ];
+    expect(rows.length).toBeGreaterThan(0);
+    for (const row of rows) {
+      // A label over the row would have to hold its drawn specimen and chips
+      // too, so the row is named by text inside it, heard as it was before.
+      expect(row.getAttribute("aria-label")).toBeNull();
+      expect(labelNotInName(row)).toBeNull();
+    }
+    expect(accessibleNameOf(rowOf(section, "Primary"))).toBe(
+      "Primary, default"
+    );
   });
 
   it("shows a hidden built-in style, saying Hidden", () => {
@@ -224,7 +255,7 @@ describe("the Block styles section", () => {
         entry === TEXT ? { ...TEXT, hidden: true as const } : entry
       )
     );
-    expect(rowOf(section, "Text").getAttribute("aria-label")).toBe(
+    expect(accessibleNameOf(rowOf(section, "Text"))).toBe(
       "Text, hidden, built-in"
     );
     expect(within(section).getByText("Hidden")).toBeTruthy();

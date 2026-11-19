@@ -1312,6 +1312,39 @@ describe.each(getConfiguredTestDialects())(
       change: "update" as const,
     };
 
+    // Turning translation off puts `body` back on the main table before the main file runs, and the
+    // main file's snapshot records that table: the runner checks the main table against its two
+    // ends. On MySQL the field is `text` there, and a column put back wider (LONGTEXT) was at
+    // neither end, which the runner refused as drift.
+    it("turns translation off through its files, the main table put back as the main file's snapshot records it", async () => {
+      const body = (extra: Record<string, unknown> = {}) => text("body", extra);
+      await writeCollectionSave(translatedDeps(), {
+        slug: "posts",
+        previous: null,
+        entity: translated([body({ localized: true })]),
+        change: "create",
+      });
+      await adapter.executeQuery(
+        "INSERT INTO dc_posts (id, title, slug, created_at, updated_at) VALUES ('p1', 'A post', 'p1', '2026-11-06 00:00:00', '2026-11-06 00:00:00')"
+      );
+      await adapter.executeQuery(
+        "INSERT INTO dc_posts_locales (_parent, _locale, body) VALUES ('p1', 'en', 'Hello'), ('p1', 'es', 'Hola')"
+      );
+
+      await writeCollectionSave(translatedDeps(), {
+        slug: "posts",
+        previous: translated([body({ localized: true })]),
+        entity: posts([body()]),
+        change: "update",
+      });
+
+      expect(
+        await adapter.executeQuery<{ body: string }>(
+          "SELECT body FROM dc_posts WHERE id = 'p1'"
+        )
+      ).toEqual([{ body: "Hello" }]);
+    });
+
     it("refuses to record a translation change whose push left the table short of its file, and records nothing", async () => {
       await writeCollectionSave(translatedDeps(), {
         slug: "posts",
@@ -1331,7 +1364,94 @@ describe.each(getConfiguredTestDialects())(
       expect(await appliedRows()).toEqual(applied);
     });
 
-    it("keeps every file and the new definition when an earlier file applied and a later one failed", async () => {
+    // A save that applies its change by a push (`appliedBy`) is judged against the history before
+    // the push runs, as the file road's own reconcile judges it: a column added by hand, which the
+    // history does not record, refuses the save naming it, with the push never run and nothing kept.
+    // A translated save's push changes its translations table too, so that table is judged before
+    // the push as the file road judges it: a column added there by hand refuses the save, naming it.
+    it("refuses a pushed translated save over a translations table the history does not record, naming it, and changes nothing", async () => {
+      const title = text("title", { localized: true });
+      await writeCollectionSave(translatedDeps(), {
+        slug: "posts",
+        previous: null,
+        entity: translated([title]),
+        change: "create",
+      });
+      await adapter.executeQuery(
+        `ALTER TABLE dc_posts_locales ADD COLUMN extra text`
+      );
+      const files = migrationFiles();
+      const snapshots = snapshotFiles();
+      const defined = definition();
+      const applied = await appliedRows();
+      const push = vi.fn(() => Promise.resolve());
+
+      const refused: unknown = await writeCollectionSave(
+        translatedDeps(),
+        {
+          slug: "posts",
+          previous: translated([title]),
+          entity: translated([title, text("subtitle")]),
+          change: "update",
+        },
+        { appliedBy: push }
+      ).catch((error: unknown) => error);
+
+      expect(refused).toMatchObject({ code: "NEXTLY_MIGRATION_DRIFT" });
+      expect(
+        String((refused as { publicMessage?: unknown }).publicMessage)
+      ).toContain("dc_posts_locales.extra present in DB");
+      expect(push).not.toHaveBeenCalled();
+      expect(migrationFiles()).toEqual(files);
+      expect(snapshotFiles()).toEqual(snapshots);
+      expect(definition()).toEqual(defined);
+      expect(await appliedRows()).toEqual(applied);
+    });
+
+    it("refuses a pushed save over a column the history does not record before the push, naming it, and changes nothing", async () => {
+      await writeCollectionSave(deps(), {
+        slug: "posts",
+        previous: null,
+        entity: posts([text("title")]),
+        change: "create",
+      });
+      await adapter.executeQuery(`ALTER TABLE dc_posts ADD COLUMN extra text`);
+      const files = migrationFiles();
+      const snapshots = snapshotFiles();
+      const defined = definition();
+      const applied = await appliedRows();
+      const live = await columns();
+      const push = vi.fn(() => Promise.resolve());
+
+      const refused: unknown = await writeCollectionSave(
+        deps(),
+        {
+          slug: "posts",
+          previous: posts([text("title")]),
+          entity: posts([text("title"), text("subtitle")]),
+          change: "update",
+        },
+        { appliedBy: push }
+      ).catch((error: unknown) => error);
+
+      expect(refused).toMatchObject({ code: "NEXTLY_MIGRATION_DRIFT" });
+      expect(
+        String((refused as { publicMessage?: unknown }).publicMessage)
+      ).toContain("dc_posts.extra present in DB");
+      expect(push).not.toHaveBeenCalled();
+      expect(migrationFiles()).toEqual(files);
+      expect(snapshotFiles()).toEqual(snapshots);
+      expect(definition()).toEqual(defined);
+      expect(await appliedRows()).toEqual(applied);
+      expect(await columns()).toEqual(live);
+    });
+
+    // The save's second file, its translations table's, is refused at its first statement. On
+    // SQLite and PostgreSQL the save's files run as one unit, in one transaction, so the first goes
+    // back with it: no file is applied or left, and the definition is as it was. MySQL commits each
+    // schema statement as it runs, so there the files run one by one: the first stays applied, the
+    // rest are kept, recorded nowhere, and the failure says the database holds part of the change.
+    it("leaves a save whose later file failed whole on SQLite and PostgreSQL, and part held on MySQL", async () => {
       await writeCollectionSave(translatedDeps(), {
         slug: "posts",
         previous: null,
@@ -1341,19 +1461,42 @@ describe.each(getConfiguredTestDialects())(
       await adapter.executeQuery(
         "INSERT INTO dc_posts (id, title, slug, created_at, updated_at) VALUES ('p1', 'Hello', 'p1', '2026-11-06 00:00:00', '2026-11-06 00:00:00')"
       );
-      // The save's second file refused, after its first applied.
       const before = migrationFiles();
+      const appliedBefore = (await appliedRows()).map(row => row.filename);
+      const definedBefore = definition();
       fault.seen = 0;
-      fault.pick = (_statements, nth) => (nth === 2 ? 0 : undefined);
+      fault.pick = statements => {
+        const first = statements.findIndex(statement =>
+          statement.includes("dc_posts_locales")
+        );
+        return first === -1 ? undefined : first;
+      };
 
-      await expect(
-        writeCollectionSave(translatedDeps(), enableTitle)
-      ).rejects.toBeDefined();
+      const failed = await writeCollectionSave(
+        translatedDeps(),
+        enableTitle
+      ).then(
+        () => undefined,
+        (error: unknown) => error
+      );
 
+      expect(failed).toBeDefined();
       const written = migrationFiles().filter(f => !before.includes(f));
+      const applied = (await appliedRows())
+        .map(row => row.filename)
+        .filter(f => !appliedBefore.includes(f));
+      if (dialect !== "mysql") {
+        expect(written).toEqual([]);
+        expect(applied).toEqual([]);
+        expect(definition()).toEqual(definedBefore);
+        return;
+      }
       expect(written.length).toBeGreaterThan(1);
-      const applied = (await appliedRows()).map(row => row.filename);
       expect(written.some(f => applied.includes(f))).toBe(true);
+      const kept = written.filter(f => !applied.includes(f));
+      const said = (failed as { publicMessage?: string }).publicMessage ?? "";
+      expect(said).toContain("The database now holds part of this change");
+      for (const name of kept) expect(said).toContain(name);
       expect(
         (
           JSON.parse(definition() ?? "{}") as {

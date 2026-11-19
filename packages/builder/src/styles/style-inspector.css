@@ -575,11 +575,17 @@
   color: var(--nx-destructive);
 }
 
+/*
+ * The Tabs root keeps its content's height and the panel scrolls it. The
+ * panel is a scrolling flex column, and a root free to shrink there takes the
+ * panel's height while its content runs on: the sticky tab row inside it is
+ * held only within that shorter box, and scrolled away with it.
+ */
 .nx-inspector__tabs {
   display: flex;
   flex-direction: column;
+  flex-shrink: 0;
   gap: 0.75rem;
-  min-height: 0;
 }
 
 /*
@@ -824,6 +830,16 @@
   border-radius: 0.25rem;
   font-size: var(--text-xs);
   color: var(--nx-muted-foreground);
+}
+
+/* At least 24px tall, WCAG 2.2's minimum target: the hit area is padded to
+   it, the text kept small. Inline-flex centres the words in the taller box.
+   The 24px floor holds under a smaller browser text size, which shrinks the
+   rem length; a larger one still grows the box. */
+.nx-css-properties__add {
+  display: inline-flex;
+  align-items: center;
+  min-block-size: max(1.5rem, 24px);
 }
 
 .nx-css-property__remove:hover,

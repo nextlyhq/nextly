@@ -11,6 +11,7 @@
  *
  * @module fluid-popover
  */
+import { isFluidSize } from "@nextlyhq/blocks-engine";
 import { Button, Input } from "@nextlyhq/ui";
 import * as React from "react";
 
@@ -46,12 +47,13 @@ function startingSizes(hook: FluidHook, range: FluidRangeWidths): FluidSizes {
     : { small: fixed, large: fixed };
 }
 
-/** A typed size in px, or `undefined` for what is not a positive number. */
+/**
+ * A typed size in px, or `undefined` for what is not one: the engine's one
+ * bound, which a reader of stored sizes holds them to as well.
+ */
 function sizeOf(text: string): number | undefined {
   const value = Number(text.trim());
-  return text.trim() !== "" && Number.isFinite(value) && value > 0
-    ? value
-    : undefined;
+  return text.trim() !== "" && isFluidSize(value) ? value : undefined;
 }
 
 /** "Fluid…", and its two sizes under it while it is open. */
