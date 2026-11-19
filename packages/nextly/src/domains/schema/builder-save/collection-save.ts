@@ -1671,43 +1671,13 @@ async function companionDriftItems(
   const dialect = deps.adapter.getCapabilities().dialect;
   const key = (name: string) => identifierKey(dialect, name);
   const companion = `${table}_locales`;
-  // The snapshot records a translations table as a list of its translated columns, empty where it
-  // holds none, and an untranslated table as none. A translated table recorded without the list
-  // has none too, or, in a snapshot from before empty lists were written, may have one the
-  // migration files made; `migrate:create` asks those files then, so its presence is not judged.
-  const recordedExists =
-    recordedTable.localized !== true
-      ? false
-      : recordedTable.localizedColumns !== undefined || undefined;
-  const liveExists = await companionTableExists(deps.adapter, companion);
-  const takenByEnable =
-    pushTarget?.translated === true && liveExists && recordedExists === false;
-  // A push building the whole table again (`buildsWholeTable`) creates the translations table
-  // beside it: one missing with its main table is the pair it rebuilds.
-  const rebuiltWithMain =
-    pushTarget?.buildsWholeTable === true &&
-    recordedExists === true &&
-    !liveExists;
-  if (
-    recordedExists !== undefined &&
-    recordedExists !== liveExists &&
-    !takenByEnable &&
-    !rebuiltWithMain
-  ) {
-    return [
-      {
-        kind: liveExists ? "+" : "-",
-        detail: `${companion} ${liveExists ? "present in" : "absent from"} DB`,
-      },
-    ];
-  }
-  if (!liveExists) return [];
-  // Taken as the enable's own only where it has a translations table's structure: a table made by
-  // hand, or left without its keys, would meet writes that match rows on them.
-  if (takenByEnable) {
-    const shape = await companionShapeItems(deps, companion);
-    if (shape.length > 0) return shape;
-  }
+  const presence = await companionPresenceItems(
+    deps,
+    companion,
+    recordedTable,
+    pushTarget
+  );
+  if (presence !== undefined) return presence;
   const taken = new Set([...(pushTarget?.columns ?? [])].map(key));
 
   const recorded = recordedTable.localizedColumns ?? [];
@@ -1719,18 +1689,10 @@ async function companionDriftItems(
     column => !structural.has(key(column))
   );
   const liveKeys = new Set(live.map(key));
-  // A translated column the main table holds too, where the history records it on the
-  // translations table alone: a file turning translation off would add it to the main table again.
-  const recordedOnMain = new Set(recordedTable.columns.map(c => key(c.name)));
   const onMain =
-    pushTarget !== undefined || recorded.length === 0
-      ? []
-      : (await liveColumnsOf(deps.adapter, table))
-          .map(c => c.name)
-          .filter(
-            column =>
-              recordedKeys.has(key(column)) && !recordedOnMain.has(key(column))
-          );
+    pushTarget === undefined
+      ? await translatedColumnsKeptOnMain(deps, table, recordedTable)
+      : [];
   return [
     ...live
       .filter(
@@ -1752,6 +1714,72 @@ async function companionDriftItems(
     })),
     ...(await companionIndexDriftItems(deps, companion, recordedTable)),
   ];
+}
+
+/**
+ * The translations table's presence against the history, for `companionDriftItems`: the drift to
+ * name where it stands against the record, none where it is absent and recorded absent (nothing
+ * more to judge), and undefined where its columns are to be judged.
+ *
+ * The snapshot records a translations table as a list of its translated columns, empty where it
+ * holds none, and an untranslated table as none. A translated table recorded without the list has
+ * none too, or, in a snapshot from before empty lists were written, may have one the migration
+ * files made; `migrate:create` asks those files then, so its presence is not judged. A push takes
+ * one already there where it turns translation on (judged by its structure, `companionShapeItems`,
+ * then its columns against none recorded), and a push building the whole table again builds a
+ * missing one with it.
+ */
+async function companionPresenceItems(
+  deps: CollectionSaveDeps,
+  companion: string,
+  recordedTable: TableSpec,
+  pushTarget: PushTarget | undefined
+): Promise<DriftItem[] | undefined> {
+  const recordedExists =
+    recordedTable.localized !== true
+      ? false
+      : recordedTable.localizedColumns !== undefined || undefined;
+  const liveExists = await companionTableExists(deps.adapter, companion);
+  if (recordedExists === undefined || recordedExists === liveExists) {
+    return liveExists ? undefined : [];
+  }
+  if (liveExists && pushTarget?.translated === true) {
+    // Taken as the enable's own only where it has a translations table's structure: a table made
+    // by hand, or left without its keys, would meet writes that match rows on them.
+    const shape = await companionShapeItems(deps, companion);
+    return shape.length > 0 ? shape : undefined;
+  }
+  if (!liveExists && pushTarget?.buildsWholeTable === true) return [];
+  return [
+    {
+      kind: liveExists ? "+" : "-",
+      detail: `${companion} ${liveExists ? "present in" : "absent from"} DB`,
+    },
+  ];
+}
+
+/**
+ * A translated column the main table holds too, where the history records it on the translations
+ * table alone: a file turning translation off would add it to the main table again. Asked only
+ * where the save runs its file (`companionDriftItems`).
+ */
+async function translatedColumnsKeptOnMain(
+  deps: CollectionSaveDeps,
+  table: string,
+  recordedTable: TableSpec
+): Promise<string[]> {
+  const recorded = recordedTable.localizedColumns ?? [];
+  if (recorded.length === 0) return [];
+  const dialect = deps.adapter.getCapabilities().dialect;
+  const key = (name: string) => identifierKey(dialect, name);
+  const recordedKeys = new Set(recorded.map(key));
+  const recordedOnMain = new Set(recordedTable.columns.map(c => key(c.name)));
+  return (await liveColumnsOf(deps.adapter, table))
+    .map(c => c.name)
+    .filter(
+      column =>
+        recordedKeys.has(key(column)) && !recordedOnMain.has(key(column))
+    );
 }
 
 /**
