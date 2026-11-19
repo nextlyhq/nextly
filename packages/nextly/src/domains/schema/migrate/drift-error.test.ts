@@ -57,4 +57,35 @@ describe("migrationDriftError", () => {
 
     expect(err.publicMessage).not.toContain("Schema Builder");
   });
+
+  // A refused Builder save has withdrawn its file, so the way on is the one a save can take, and
+  // no command that names the file or compares only the definitions is offered.
+  it("tells a Builder save's refusal its own way on, naming no file and no command", () => {
+    const err = migrationDriftError({
+      migration: "20261119_notes_update",
+      file: "src/db/migrations/20261119_notes_update.sql",
+      driftItems: [{ kind: "+", detail: "dc_notes.legacy_note present in DB" }],
+      builderSave: true,
+    });
+
+    expect(err.code).toBe("NEXTLY_MIGRATION_DRIFT");
+    expect(err.statusCode).toBe(409);
+    expect(err.publicMessage).toContain("schema drift detected");
+    expect(err.publicMessage).toContain("+ dc_notes.legacy_note present in DB");
+    expect(err.publicMessage).toContain(
+      "put the table back as the history records it"
+    );
+    expect(err.publicMessage).toContain("Then save again.");
+    for (const absent of [
+      "20261119_notes_update",
+      "migrate:resolve",
+      "migrate:create",
+      "db:sync",
+    ]) {
+      expect(err.publicMessage).not.toContain(absent);
+    }
+    expect(err.logContext).toMatchObject({
+      suggestedActions: ["restore-by-hand"],
+    });
+  });
 });
