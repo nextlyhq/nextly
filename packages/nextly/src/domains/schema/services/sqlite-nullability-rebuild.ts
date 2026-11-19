@@ -90,8 +90,28 @@ export async function rebuildSqliteNullability(
     });
   }
 
+  // A column given another type no longer holds what its old reference pointed at: on SQLite every
+  // relationship's column has one type, so a retyped column is never one, and its reference goes.
+  const retyped = (column: string) => {
+    const type = typeOf(column);
+    const now = live.columns.find(
+      c => c.name.toLowerCase() === column.toLowerCase()
+    );
+    return (
+      type !== undefined &&
+      now !== undefined &&
+      now.type.toLowerCase() !== type.toLowerCase()
+    );
+  };
   const rebuilt = {
     ...live,
+    ...(live.foreignKeys === undefined
+      ? {}
+      : {
+          foreignKeys: live.foreignKeys.filter(
+            key => !key.columns.some(retyped)
+          ),
+        }),
     columns: live.columns.map(column => {
       const wanted = target(column.name);
       const type = typeOf(column.name);
