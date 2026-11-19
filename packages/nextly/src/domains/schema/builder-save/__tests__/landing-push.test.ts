@@ -397,6 +397,17 @@ describe("nextSteps, the file checked against the database", () => {
     );
   });
 
+  it("records every file without the check where none has a snapshot", () => {
+    expect(nextSteps(["0003_locales.sql"], null)).toContain(
+      "run `nextly migrate:resolve --applied 0003_locales.sql --skip-verify`; then run `nextly migrate`"
+    );
+    expect(nextSteps(["0003_locales.sql", "0004_locales.sql"], null)).toContain(
+      "`nextly migrate:resolve --applied 0003_locales.sql --skip-verify`, then " +
+        "`nextly migrate:resolve --applied 0004_locales.sql --skip-verify`; " +
+        "none of them has a snapshot to check the database against."
+    );
+  });
+
   it("checks the named file and records each other one without the check, in run order", () => {
     expect(
       nextSteps(["0002_main.sql", "0003_locales.sql"], "0002_main.sql")
