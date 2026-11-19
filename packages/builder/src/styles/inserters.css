@@ -261,9 +261,32 @@
   cursor: not-allowed;
 }
 
+/*
+ * The picture's box: the dimmed picture and the panel saying why share one
+ * grid cell, so the panel lies over the picture and the box is as tall as
+ * the taller of the two; a long reason grows the box rather than being cut.
+ */
 .nx-page-start__tile-picture {
+  display: grid;
+}
+
+.nx-page-start__tile-picture > * {
+  grid-area: 1 / 1;
+}
+
+.nx-page-start__tile-thumb {
   display: block;
-  opacity: 0.5;
+  opacity: 0.35;
+}
+
+.nx-page-start__tile-why {
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 0.125rem;
+  padding: 0.375rem;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--nx-builder-panel) 85%, transparent);
 }
 
 .nx-page-start__tile-note,
