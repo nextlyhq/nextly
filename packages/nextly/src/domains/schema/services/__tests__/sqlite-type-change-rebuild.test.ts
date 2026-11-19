@@ -86,6 +86,35 @@ describe("a SQLite rebuild that changes a column's type", () => {
     expect(stored()).toEqual({ score: "abc", class: "text" });
   });
 
+  // An INTEGER column stores a fraction as REAL rather than refusing it, so a value a whole-number
+  // type cannot take is refused as one the type cannot take at all is.
+  it("refuses a fraction for a whole-number type, with nothing changed", async () => {
+    sqlite.exec(`
+      CREATE TABLE single_home (id TEXT PRIMARY KEY, score TEXT);
+      INSERT INTO single_home VALUES ('h1', '1.5');
+    `);
+
+    const refusal = await changeScoreTo("integer").then(
+      () => undefined,
+      (error: unknown) => error
+    );
+
+    expect(JSON.stringify(refusal)).toContain("TYPE_CHANGE_LOSES_VALUES");
+    expect(declared()).toBe("text");
+    expect(stored()).toEqual({ score: "1.5", class: "text" });
+  });
+
+  it("keeps a fraction for a type that holds one", async () => {
+    sqlite.exec(`
+      CREATE TABLE single_home (id TEXT PRIMARY KEY, score TEXT);
+      INSERT INTO single_home VALUES ('h1', '1.5');
+    `);
+
+    await changeScoreTo("real");
+
+    expect(stored()).toEqual({ score: 1.5, class: "real" });
+  });
+
   it("declares the new type without the old declaration's modifier", async () => {
     sqlite.exec(`
       CREATE TABLE single_home (id TEXT PRIMARY KEY, score NUMERIC(10,2));
