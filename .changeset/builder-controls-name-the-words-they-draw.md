@@ -34,5 +34,7 @@ The builder's controls now hold the words they draw in their accessible names, s
 - A Design group's fold button ("Brand 1") and a Layers header or footer row draw a real space between their two words, which an accessibility check had read as one word.
 - The Body and Headings font rows, the Site text rows and the block style rows are named by text inside the row, not by a label laid over the specimen they draw. A screen reader hears them as before.
 - A header or footer drawn on the canvas is named the same way. Its drawn content is a picture of the region, so it is hidden from a screen reader, which hears the region's name as before.
+- A row in the Components panel is named by the component's name it draws, with where it can go and its description said after, as before.
+- An empty link picker is named "Link: search or paste a URL", the words it shows.
 - The canvas zoom reads "Canvas zoom: Fit, 60%" while fitting, the words it shows, instead of "fitting".
 - The design token export in Design's ⋯ menu says its format, "DTCG 2025.10", as part of its name, since the format is drawn beside it.
