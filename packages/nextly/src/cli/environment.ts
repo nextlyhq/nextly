@@ -96,13 +96,13 @@ export function loadCliEnvironment(
   Object.assign(process.env, { NODE_ENV: mode });
   const preset = new Set(Object.keys(process.env));
   const { loadEnvConfig } = nextEnv();
-  // The loader announces each file it reads; the CLI prints its own mode line
+  // The loader announces each file it reads; the CLI prints its own line
   // instead, so only a file it could not read is reported.
   const { loadedEnvFiles } = loadEnvConfig(folder, mode === "development", {
     info: () => {},
     error: (...args: unknown[]) => console.error(...args),
   });
-  // A run starts here, and the mode line is printed once a run.
+  // A run starts here, and its line is printed once a run.
   modeLinePrinted = false;
   current = {
     mode,
@@ -209,7 +209,7 @@ export function modeLine(): string | undefined {
 }
 
 /**
- * Where the mode line goes, set by the program once it has read `--quiet`:
+ * Where the run's line goes, set by the program once it has read `--quiet`:
  * `undefined` prints nothing.
  */
 export function setModeLineWriter(
@@ -219,10 +219,10 @@ export function setModeLineWriter(
 }
 
 /**
- * Prints the mode line once a run, through the writer the program set. Called
+ * Prints the run's line once a run, through the writer the program set. Called
  * where a command first validates its database settings, so every command
- * that reaches a database names the mode it runs in and the file its URL came
- * from, and a command that does not stays as quiet as it was.
+ * that reaches a database names the database, the mode it runs in and where its URL
+ * came from, and a command that does not stays as quiet as it was.
  */
 export function announceMode(): void {
   if (modeLinePrinted || !writeModeLine) return;

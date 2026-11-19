@@ -196,7 +196,7 @@ ${pc.bold("Documentation:")}
     );
     // A cancel at any prompt a command reaches ends the run with exit 130.
     setCancelEndsRun(true);
-    // The mode line goes to stderr, so a command's `--json` output stays one
+    // The line naming the database goes to stderr, so a command's `--json` output stays one
     // document, and `--quiet` keeps it to errors only.
     setModeLineWriter(
       thisCommand.opts<{ quiet?: boolean }>().quiet

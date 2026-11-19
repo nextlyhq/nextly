@@ -102,7 +102,7 @@ export function detectDialectFromUrl(
  */
 export function validateDatabaseEnv(): DatabaseEnvValidation {
   // Every command that reaches a database checks its settings here first, so
-  // this is where the run names its mode and where its URL came from.
+  // this is where the run names its database, its mode and where its URL came from.
   announceMode();
   const errors: string[] = [];
   let problem: DatabaseEnvValidation["problem"];
@@ -230,7 +230,7 @@ async function connectCliAdapter(
   readOnly: boolean
 ): Promise<CLIDatabaseAdapter | MissingDatabase> {
   // A command may connect without the settings check first, as
-  // `plugins install` does; it names its mode here instead (once a run).
+  // `plugins install` does; it names its database here instead (once a run).
   announceMode();
   const { dialect, databaseUrl } = cliTarget(options);
   options.logger?.debug(`Creating ${dialect} adapter...`);
