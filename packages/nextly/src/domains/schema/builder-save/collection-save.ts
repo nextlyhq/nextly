@@ -633,9 +633,11 @@ async function settleStoppedSave(
       await onSettled(judged.report);
     });
   } catch (error) {
-    // Overtaken by another writer, the folder is that writer's now: nothing is removed from it or
-    // written back into it.
-    if (!isWriterOvertaken(error)) {
+    // Overtaken by another writer, nothing the other writer may already read is removed: a
+    // replacement put in place stays, with the definition. Where none of it was put in place,
+    // the stopped file and its snapshot, removed first and perhaps applied in part, are written
+    // back, so no history the ledger names is lost.
+    if (!isWriterOvertaken(error) || replacement.length === 0) {
       await putBack(deps, left, replacement, definitionPath);
     }
     throw error;
@@ -1042,19 +1044,27 @@ async function writeSave(
   } catch (error) {
     if (isWriterOvertaken(error)) {
       // Another writer took the folder: what the save put there stays, since a migration file in
-      // the folder may already be applied, and the definition stays as it was. The record stays
-      // with them, for the save to be compared and made again.
-      started.left();
+      // the folder may already be applied. The record stays with it, for the save to be compared
+      // and made again; a save overtaken before it put anything there has nothing to settle, and
+      // its record goes.
+      if (names.length === 0) started.withdrawn();
+      else started.left();
       throw overtakenSaveError(error, names);
     }
     return undoThenThrow(error, [{ files: names, undo: () => undo(error) }]);
   }
 }
 
+/** The `logContext` mark of a save overtaken once its definition was already in place. */
+const DEFINITION_LEFT_IN_PLACE = "definitionLeftInPlace";
+
 /**
  * Write the save's definition as the folder's writer: in full, then put in place only once the
- * hold on the migration folder is checked to be still the save's. A save stalled past its lease
- * after its files, with another writer gone ahead from its snapshot, changes no definition.
+ * hold on the migration folder is checked to be still the save's, and checked again once it is in
+ * place, as `publishHeld` checks after a migration's files. A save stalled past its lease after
+ * its files, with another writer gone ahead from its snapshot, changes no definition; one stalled
+ * between the check and the rename finds it out after, and is refused with the definition left
+ * as it wrote it.
  */
 async function writeDefinitionHeld(
   deps: CollectionSaveDeps,
@@ -1064,14 +1074,34 @@ async function writeDefinitionHeld(
   await writeAtomically(definitionPath, serializeUiSchema(next), () =>
     assertWriterHold(deps.migrationsDir)
   );
+  try {
+    await assertWriterHold(deps.migrationsDir);
+  } catch (error) {
+    if (!isWriterOvertaken(error)) throw error;
+    throw NextlyError.serviceUnavailable({
+      publicMessage:
+        "Another migration writer took this project's migration files as this change wrote " +
+        "its definition. The save's migration files and its definition were left in place, " +
+        "since a migration file may already be applied. Compare the newest migrations with " +
+        "the definition, delete the one `nextly migrate:status` does not show applied where " +
+        "two make the same change, then save again.",
+      logContext: {
+        reason: WRITER_HOLD_LOST_REASON,
+        [DEFINITION_LEFT_IN_PLACE]: true,
+      },
+      ...(error instanceof Error ? { cause: error } : {}),
+    });
+  }
 }
 
 /**
  * The refusal of a save another writer overtook: it names the files the save left in the folder,
- * where it wrote any, and says the definition was not changed.
+ * where it wrote any, and says the definition was not changed. One overtaken once its definition
+ * was in place says so itself, and is passed on.
  */
 function overtakenSaveError(error: unknown, left: readonly string[]): unknown {
   if (left.length === 0 || !NextlyError.is(error)) return error;
+  if (error.logContext?.[DEFINITION_LEFT_IN_PLACE] === true) return error;
   return NextlyError.serviceUnavailable({
     publicMessage:
       "Another migration writer took this project's migration files while this change was " +
