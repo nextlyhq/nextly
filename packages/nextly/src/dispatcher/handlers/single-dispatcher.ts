@@ -250,6 +250,52 @@ const SINGLE_SLUG_FIELD: SingleField = {
 };
 
 /**
+ * The version history, cache-revalidation and webhook settings a Single's schema save asks for,
+ * as the registry columns that hold them.
+ */
+function requestedSettings(b: {
+  versions?: boolean;
+  versionsMaxPerDoc?: number | false;
+  revalidate?: boolean;
+  webhooks?: boolean;
+}): Record<string, unknown> {
+  const settings: Record<string, unknown> = {};
+  // Version history toggle. The registry column holds the resolved config
+  // every runtime reader tests, so the boolean is normalized before it is
+  // stored; off writes null. `status` is deliberately not passed to the
+  // resolver: it aliases to a versioned config for back-compat, which would
+  // stop the toggle from turning versioning off on a Draft/Published single.
+  // Retention without the on/off switch is ambiguous — the resolver needs
+  // the enabled state — so a retention-only patch is rejected rather than
+  // silently ignored. Mirrors the schema-detail routes.
+  if (b.versionsMaxPerDoc !== undefined && b.versions === undefined) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "versionsMaxPerDoc",
+          code: "MISSING_DEPENDENCY",
+          message: "versionsMaxPerDoc requires versions to be set.",
+        },
+      ],
+    });
+  }
+  if (b.versions !== undefined) {
+    settings.versions = resolveBuilderVersions(b.versions, b.versionsMaxPerDoc);
+  }
+  // Cache-revalidation toggle, normalized to the resolved config the write
+  // path reads; on writes null (standard tags), off writes the disable config.
+  if (b.revalidate !== undefined) {
+    settings.revalidate = resolveBuilderRevalidate(b.revalidate);
+  }
+  // Webhook recording toggle, normalized to the resolved policy boot reads;
+  // on writes null (record), off writes the stored opt-out.
+  if (b.webhooks !== undefined) {
+    settings.webhooks = resolveBuilderWebhooks(b.webhooks);
+  }
+  return settings;
+}
+
+/**
  * What a Single's schema save answers: thrown where its leaving settings were refused or its
  * migration failed past its main change (its row written either way), else the toast's copy.
  */
@@ -1274,41 +1320,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // managed on the companion (moving existing rows between the two is the `nextly migrate`
       // path — the dev toggle provisions the companion without touching main-table data).
       if (b.localized !== undefined) updateData.localized = b.localized;
-      // Version history toggle. The registry column holds the resolved config
-      // every runtime reader tests, so the boolean is normalized before it is
-      // stored; off writes null. `status` is deliberately not passed to the
-      // resolver: it aliases to a versioned config for back-compat, which would
-      // stop the toggle from turning versioning off on a Draft/Published single.
-      // Retention without the on/off switch is ambiguous — the resolver needs
-      // the enabled state — so a retention-only patch is rejected rather than
-      // silently ignored. Mirrors the schema-detail routes.
-      if (b.versionsMaxPerDoc !== undefined && b.versions === undefined) {
-        throw NextlyError.validation({
-          errors: [
-            {
-              path: "versionsMaxPerDoc",
-              code: "MISSING_DEPENDENCY",
-              message: "versionsMaxPerDoc requires versions to be set.",
-            },
-          ],
-        });
-      }
-      if (b.versions !== undefined) {
-        updateData.versions = resolveBuilderVersions(
-          b.versions,
-          b.versionsMaxPerDoc
-        );
-      }
-      // Cache-revalidation toggle, normalized to the resolved config the write
-      // path reads; on writes null (standard tags), off writes the disable config.
-      if (b.revalidate !== undefined) {
-        updateData.revalidate = resolveBuilderRevalidate(b.revalidate);
-      }
-      // Webhook recording toggle, normalized to the resolved policy boot reads;
-      // on writes null (record), off writes the stored opt-out.
-      if (b.webhooks !== undefined) {
-        updateData.webhooks = resolveBuilderWebhooks(b.webhooks);
-      }
+      Object.assign(updateData, requestedSettings(b));
       const wasLocalized = existing.localized === true;
       const isLocalized =
         b.localized !== undefined ? b.localized === true : wasLocalized;
