@@ -25,8 +25,10 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { sql, type SQL } from "drizzle-orm";
 
+import { ddlType } from "../../i18n/migration/ddl-types";
 import { fieldToLocalizedColumnSpec } from "../../i18n/migration/field-to-column-spec";
 import { runStatement } from "../pipeline/_internal/run-statement";
+import { querySqlRows } from "../pipeline/classifier/count-helpers";
 import type { ColumnOrigin } from "../services/field-column-descriptor";
 import { columnDescriptorAt } from "../value-conversion/type-change/field-type";
 import type { JudgedFieldTypeChange } from "../value-conversion/type-change/field-type-changes";
@@ -48,6 +50,11 @@ interface ColumnConversion {
   readings: readonly { key: RowKey; readsAs: string }[];
   /** The rows whose value is cleared, by the person's consent: written as no value. */
   cleared: readonly RowKey[];
+  /**
+   * The column's table is rebuilt to the new type by nothing else on SQLite (a translations table,
+   * which the push leaves out): the column beside, of the new type, takes its place there.
+   */
+  takesPlaceOnSqlite: boolean;
 }
 
 /** A save's field type changes, converted value by value. */
@@ -85,7 +92,7 @@ export function typeConversionOf(args: {
     if (change.readings === undefined) return [];
     const type =
       change.table === args.translationsTable
-        ? fieldToLocalizedColumnSpec(change.to, dialect, args.builtBy)?.type
+        ? translationsColumnType(change.to, dialect, args.builtBy)
         : columnDescriptorAt(change.to, dialect, {
             builtBy: args.builtBy,
             ...(args.componentRow === true ? { componentRow: true } : {}),
@@ -98,6 +105,7 @@ export function typeConversionOf(args: {
         type,
         readings: change.readings,
         cleared: change.result.cleared,
+        takesPlaceOnSqlite: change.table === args.translationsTable,
       },
     ];
   });
@@ -113,6 +121,16 @@ export function typeConversionOf(args: {
       return mine.length === 0 ? undefined : runAll(mine);
     },
   };
+}
+
+/** A translated field's column type in its translations table, as that table's creator types it. */
+function translationsColumnType(
+  field: JudgedFieldTypeChange["to"],
+  dialect: SupportedDialect,
+  builtBy: ColumnOrigin
+): string | undefined {
+  const spec = fieldToLocalizedColumnSpec(field, dialect, builtBy);
+  return spec === null ? undefined : ddlType(spec, dialect);
 }
 
 /** One column converted on `dialect`, as the module's header describes for each. */
@@ -133,6 +151,22 @@ async function convertColumn(
     beside,
     dialect === "postgresql" ? type : undefined
   );
+  if (dialect === "sqlite" && conversion.takesPlaceOnSqlite) {
+    // No rebuild gives this column its new type: the column beside, of that type, takes its place,
+    // and the column's indexes (a translated unique field's per-language one) are made again on it.
+    const indexes = await sqliteIndexesOn(
+      db,
+      conversion.table,
+      conversion.column
+    );
+    for (const index of indexes) {
+      await run(sql`DROP INDEX ${sql.identifier(index.name)}`);
+    }
+    await run(sql`ALTER TABLE ${table} DROP COLUMN ${column}`);
+    await run(sql`ALTER TABLE ${table} RENAME COLUMN ${beside} TO ${column}`);
+    for (const index of indexes) await run(sql.raw(index.sql));
+    return;
+  }
   if (dialect === "sqlite") {
     // Every row takes what the column beside holds, an empty one no value; the rebuild that gives
     // the column its new type keeps it.
@@ -186,6 +220,33 @@ async function writeValues(
       )}`
     );
   }
+}
+
+/** The indexes of a SQLite table that cover `column`, each with the statement that made it. */
+async function sqliteIndexesOn(
+  db: unknown,
+  table: string,
+  column: string
+): Promise<{ name: string; sql: string }[]> {
+  const made = await querySqlRows<{ name: string; sql: string | null }>(
+    db,
+    "sqlite",
+    sql`SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = ${table}`
+  );
+  const covering: { name: string; sql: string }[] = [];
+  for (const index of made) {
+    // An index SQLite makes itself (a key's) has no statement, and is not one a column swap drops.
+    if (index.sql === null) continue;
+    const columns = await querySqlRows<{ name: string | null }>(
+      db,
+      "sqlite",
+      sql`SELECT name FROM pragma_index_info(${index.name})`
+    );
+    if (columns.some(c => c.name?.toLowerCase() === column.toLowerCase())) {
+      covering.push({ name: index.name, sql: index.sql });
+    }
+  }
+  return covering;
 }
 
 /** The condition naming one row: an entry by its id, a translation by its entry and language. */
