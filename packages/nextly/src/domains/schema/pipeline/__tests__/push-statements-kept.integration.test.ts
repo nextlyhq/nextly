@@ -9,8 +9,11 @@
  *
  * The apply adds two columns to a table it made, with nothing before the executor's statements that
  * runs one (no key lifted, no pre-cleanup). The executor fails the chosen statement and runs each
- * before it, as the database would.
+ * before it, as the database would. And pre-cleanup's statements are counted as they run: one a
+ * trigger refuses, its first, leaves none kept on MySQL and SQLite.
  */
+import Database from "better-sqlite3";
+import { drizzle as drizzleSqlite } from "drizzle-orm/better-sqlite3";
 import { drizzle as drizzleMysql } from "drizzle-orm/mysql2";
 import { drizzle as drizzlePg } from "drizzle-orm/node-postgres";
 import { createPool, type Pool as MysqlPool } from "mysql2";
@@ -23,7 +26,9 @@ import {
   clearLiveSnapshots,
 } from "../../../../init/schema-snapshot-cache";
 import { DrizzleStatementExecutor } from "../../services/drizzle-statement-executor";
+import { RealClassifier } from "../classifier/classifier";
 import { introspectLiveSnapshot } from "../diff/introspect-live";
+import { RealPreCleanupExecutor } from "../pre-cleanup/executor";
 import { PushSchemaPipeline } from "../pushschema-pipeline";
 import {
   noopClassifier,
@@ -34,6 +39,7 @@ import {
   noopPromptDispatcher,
   noopRenameDetector,
 } from "../pushschema-pipeline-stubs";
+import { RegexRenameDetector } from "../rename-detector";
 import type { DesiredSchema } from "../types";
 
 const PG = makeTestContext("postgresql");
@@ -96,6 +102,122 @@ function pipelineFailingAt(
     }),
     sent: () => sent,
   };
+}
+
+/** A collection on `tableName` whose text field `total` is required or not. */
+function orders(tableName: string, required: boolean): DesiredSchema {
+  return {
+    collections: {
+      orders: {
+        slug: "orders",
+        tableName,
+        fields: [{ name: "total", type: "text", required }] as never,
+      },
+    },
+    singles: {},
+    components: {},
+  };
+}
+
+/** A pipeline that classifies and pre-cleans for real, answering `total`'s NULLs with a default. */
+function fillingPipeline(
+  dialect: "mysql" | "sqlite",
+  db: unknown,
+  tableName: string
+): PushSchemaPipeline {
+  clearCachedSnapshot();
+  clearLiveSnapshots();
+  return new PushSchemaPipeline({
+    executor: new DrizzleStatementExecutor(dialect, db),
+    renameDetector: new RegexRenameDetector(),
+    classifier: new RealClassifier(),
+    promptDispatcher: {
+      dispatch: () =>
+        Promise.resolve({
+          confirmedRenames: [],
+          resolutions: [
+            {
+              kind: "provide_default",
+              eventId: `add_not_null_with_nulls:${tableName}.total`,
+              value: "0",
+            },
+          ],
+          proceed: true,
+        }),
+    },
+    preRenameExecutor: noopPreRenameExecutor,
+    preCleanupExecutor: new RealPreCleanupExecutor(),
+    migrationJournal: noopMigrationJournal,
+    notifier: noopNotifier,
+  });
+}
+
+/**
+ * One row in `tableName` with `total` NULL, every other column that needs a value given one: a row
+ * the change making `total` required must fill first.
+ */
+async function insertRowWithoutTotal(
+  dialect: "mysql" | "sqlite",
+  db: unknown,
+  tableName: string,
+  run: (statement: string) => Promise<unknown>
+): Promise<void> {
+  const quote = (name: string) =>
+    dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+  const live = await introspectLiveSnapshot(db, dialect, [tableName]);
+  const columns = (
+    live.tables.find(t => t.name === tableName)?.columns ?? []
+  ).filter(
+    column =>
+      column.name !== "total" &&
+      !column.nullable &&
+      column.default === undefined
+  );
+  const value = (type: string) =>
+    /int|numeric|decimal|double|real|float|bool/i.test(type)
+      ? "0"
+      : /date|time/i.test(type)
+        ? "'2026-01-01 00:00:00'"
+        : "'r1'";
+  await run(
+    `INSERT INTO ${quote(tableName)} (${columns.map(c => quote(c.name)).join(", ")}) VALUES (${columns.map(c => value(c.type)).join(", ")})`
+  );
+}
+
+/**
+ * `tableName` made with `total` optional and a row holding no total, a trigger refusing every
+ * update of it, then the change making `total` required applied: its pre-cleanup's first
+ * statement, the fill, is refused, so nothing of the change ran.
+ */
+async function fillRefusedByTrigger(
+  dialect: "mysql" | "sqlite",
+  db: unknown,
+  tableName: string,
+  run: (statement: string) => Promise<unknown>,
+  databaseName?: string
+) {
+  const target = {
+    db,
+    dialect,
+    source: "code" as const,
+    promptChannel: "terminal" as const,
+    ...(databaseName === undefined ? {} : { databaseName }),
+  };
+  const made = await fillingPipeline(dialect, db, tableName).apply({
+    ...target,
+    desired: orders(tableName, false),
+  });
+  expect(made.success).toBe(true);
+  await insertRowWithoutTotal(dialect, db, tableName, run);
+  await run(
+    dialect === "mysql"
+      ? `CREATE TRIGGER \`${tableName}_refuse\` BEFORE UPDATE ON \`${tableName}\` FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'refused by a trigger'`
+      : `CREATE TRIGGER "${tableName}_refuse" BEFORE UPDATE ON "${tableName}" BEGIN SELECT RAISE(ABORT, 'refused by a trigger'); END`
+  );
+  return fillingPipeline(dialect, db, tableName).apply({
+    ...target,
+    desired: orders(tableName, true),
+  });
 }
 
 describe.skipIf(!MYSQL_URL)("a failed apply's kept statements (mysql)", () => {
@@ -173,6 +295,31 @@ describe.skipIf(!MYSQL_URL)("a failed apply's kept statements (mysql)", () => {
     // The statement that stayed changed the table.
     expect(await columns()).not.toEqual(before);
   });
+
+  it("keeps none where pre-cleanup's first statement is refused, and says so", async () => {
+    const orderTable = `${MYSQL.prefix}_kept_orders`;
+    await pool.promise().query(`DROP TABLE IF EXISTS \`${orderTable}\``);
+    try {
+      const result = await fillRefusedByTrigger(
+        "mysql",
+        db,
+        orderTable,
+        statement => pool.promise().query(statement),
+        databaseName
+      );
+
+      expect(result.success, JSON.stringify(result.error)).toBe(false);
+      expect(result.statementsKept).toBe(0);
+      const [rows] = await pool
+        .promise()
+        .query(
+          `SELECT COUNT(*) AS n FROM \`${orderTable}\` WHERE \`total\` IS NULL`
+        );
+      expect(Number((rows as { n: unknown }[])[0]?.n)).toBe(1);
+    } finally {
+      await pool.promise().query(`DROP TABLE IF EXISTS \`${orderTable}\``);
+    }
+  });
 });
 
 describe.skipIf(!PG_URL)("a failed apply's kept statements (postgres)", () => {
@@ -218,5 +365,32 @@ describe.skipIf(!PG_URL)("a failed apply's kept statements (postgres)", () => {
     expect(failing.sent()).toBe(1);
     expect(result.success).toBe(false);
     expect(result.statementsKept).toBeUndefined();
+  });
+});
+
+describe("a failed apply's kept statements (sqlite)", () => {
+  it("keeps none where pre-cleanup's first statement is refused, and says so", async () => {
+    const sqlite = new Database(":memory:");
+    const db = drizzleSqlite({ client: sqlite });
+    try {
+      const tableName = "dc_kept_orders";
+      const result = await fillRefusedByTrigger(
+        "sqlite",
+        db,
+        tableName,
+        statement => Promise.resolve(sqlite.exec(statement))
+      );
+
+      expect(result.success, JSON.stringify(result.error)).toBe(false);
+      expect(result.statementsKept).toBe(0);
+      const row = sqlite
+        .prepare(
+          `SELECT COUNT(*) AS n FROM "${tableName}" WHERE "total" IS NULL`
+        )
+        .get() as { n: number };
+      expect(row.n).toBe(1);
+    } finally {
+      sqlite.close();
+    }
   });
 });
