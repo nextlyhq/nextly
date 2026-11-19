@@ -53,6 +53,10 @@ import {
   fieldsWithLeavingSettingsDeferred,
 } from "../../domains/i18n/migration/archive-preflight";
 import { resolveCompanionRename } from "../../domains/i18n/migration/companion-rename";
+import {
+  isProvenanceNotMoved,
+  provenanceStatementsOf,
+} from "../../domains/i18n/migration/held-leaving-drops";
 import { translationLayoutChange } from "../../domains/i18n/per-language-storage";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
 import { assertLanguageStatesAgreeWithEntry } from "../../domains/i18n/runtime/language-states-agree";
@@ -1962,7 +1966,20 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
                 ? { registry: writeRow, settled: refreshRuntime }
                 : {}),
             }
-          );
+          ).catch(async (error: unknown) => {
+            // The change landed, its file recorded and its fields with it: only the renamed
+            // field's provenance move failed. The row's version moves on as its fields did, so a
+            // client holding the old one is refused, and the statements that finish the move go to
+            // the server log; the answer says the change landed (`provenanceNotMoved`).
+            if (isProvenanceNotMoved(error)) {
+              (getLoggerFromDI() ?? consoleLogger).error(
+                `[applySingleSchemaChanges] The translation records of '${slug}' were not moved after its rename: ${error.logMessage ?? ""}. Run these to finish it:\n${provenanceStatementsOf(error).join("\n")}`
+              );
+              await writeRow();
+              refreshRuntime(fields as unknown[]);
+            }
+            throw error;
+          });
 
           // Post-apply: update dynamic_singles fields JSON + schema_hash, advance
           // schema_version so the optimistic-lock check above sees a new value on the

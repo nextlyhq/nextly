@@ -10,6 +10,8 @@
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import { NextlyError } from "../../../errors/nextly-error";
+
 import {
   applyMigrationWhole,
   applyStatementsInTries,
@@ -69,15 +71,28 @@ export async function applyCompanionTransition(args: {
   // its new name. Moved here, once its column has been, rather than among the plan's statements,
   // which a migration file may carry: the records are data, not schema.
   if (args.renamed && (args.kind === "collection" || args.kind === "single")) {
-    const { renameFieldProvenance } = await import(
-      "../provenance/record-provenance"
-    );
-    await renameFieldProvenance(adapter, {
+    const { renameFieldProvenance, renameFieldProvenanceStatements } =
+      await import("../provenance/record-provenance");
+    const rename = {
       scopeKind: args.kind,
       scopeSlug: args.slug,
       from: args.renamed.from,
       to: args.renamed.to,
-    });
+    };
+    try {
+      await renameFieldProvenance(adapter, rename);
+    } catch (error) {
+      // The change has landed by now (its columns moved, its file recorded), so the failure says
+      // so, and what finishes it: no later save knows of the rename to move the records again.
+      throw provenanceNotMoved(
+        error,
+        rename,
+        renameFieldProvenanceStatements(
+          adapter.getCapabilities().dialect,
+          rename
+        )
+      );
+    }
   }
   // The transition record describes a companion that no longer exists, so it stops being true the
   // moment the disable succeeds. Left behind, it would refuse the next enable's real source locale:
@@ -96,6 +111,56 @@ export async function applyCompanionTransition(args: {
       args.slug
     );
   }
+}
+
+/** What a provenance move that failed after its change landed is marked with (`provenanceNotMoved`). */
+const PROVENANCE_NOT_MOVED = "translation-records-not-moved";
+
+/**
+ * The failure of a renamed field's provenance move, once its change has landed: the admin is told
+ * the change landed, which records stayed under the old name and what that costs, and that a
+ * developer can finish it; the statements that do (`renameFieldProvenanceStatements`) and the
+ * cause go with it for the server log, never in the answer, which may reach someone with no
+ * database to run them on.
+ */
+function provenanceNotMoved(
+  error: unknown,
+  rename: {
+    scopeKind: "collection" | "single";
+    scopeSlug: string;
+    from: string;
+    to: string;
+  },
+  statements: string[]
+): NextlyError {
+  const kind = rename.scopeKind === "single" ? "Single" : "Collection";
+  return new NextlyError({
+    code: "NEXTLY_MIGRATION_APPLY_FAILED",
+    publicMessage: `${kind} "${rename.scopeSlug}" was saved: its change landed, but its translations step failed, so the translation records of "${rename.from}" were not moved to "${rename.to}". Until they are, no language of ${rename.to} can be found out of date. A developer can finish it with the statements in the server log.`,
+    logMessage: error instanceof Error ? error.message : String(error),
+    logContext: { reason: PROVENANCE_NOT_MOVED, ...rename, statements },
+    ...(error instanceof Error ? { cause: error } : {}),
+  });
+}
+
+/**
+ * Whether `error` is a renamed field's provenance move that failed after its change landed
+ * (`provenanceNotMoved`): its caller records the change, as it did land, and passes it on as it is.
+ */
+export function isProvenanceNotMoved(error: unknown): error is NextlyError {
+  return (
+    NextlyError.is(error) && error.logContext?.reason === PROVENANCE_NOT_MOVED
+  );
+}
+
+/**
+ * The statements a developer runs to finish the move (`provenanceNotMoved`), for the server log.
+ */
+export function provenanceStatementsOf(error: NextlyError): string[] {
+  const statements = error.logContext?.statements;
+  return Array.isArray(statements)
+    ? statements.filter((s): s is string => typeof s === "string")
+    : [];
 }
 
 /**
