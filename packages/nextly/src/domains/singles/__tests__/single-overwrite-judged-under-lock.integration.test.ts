@@ -297,6 +297,29 @@ describe.each(getConfiguredTestDialects())(
       expect(await storedCode(site)).toBe("first");
     });
 
+    it("judges an overwrite again when its own language changed in between", async () => {
+      const site = await boot(dialect, { localized: true });
+      // An English save of the translated headline alone, which moves the
+      // English version and not the Single's own.
+      between = async () => {
+        await site.nextly.updateSingle({
+          slug: SLUG,
+          data: { headline: "Hi", _overwrite: true },
+          locale: "en",
+          user: MANAGER,
+          overrideAccess: true,
+        });
+      };
+      await site.nextly.updateSingle({
+        slug: SLUG,
+        data: { code: "first", headline: "Hello", _overwrite: true },
+        locale: "en",
+        user: MANAGER,
+        overrideAccess: true,
+      });
+      expect(judged.filter(value => value === "first")).toHaveLength(2);
+    });
+
     it("writes an overwrite judged again by a validator that reads the pool, on one connection", async () => {
       const site = await boot(dialect);
       readsPool = true;
@@ -310,16 +333,25 @@ describe.each(getConfiguredTestDialects())(
 
     it("judges a password again as it was sent, not as the hash the write stores", async () => {
       const site = await boot(dialect);
+      // Judged again, since another save lands after the first judgement.
+      between = async () => {
+        await save(site, MANAGER, "managers");
+      };
       // 28 characters as sent; the hash the write stores in its place is 60,
       // which the length rule would refuse were it judged instead.
       await expect(
         site.nextly.updateSingle({
           slug: SLUG,
-          data: { secret: "a-password-of-28-characters!", _overwrite: true },
+          data: {
+            code: "first",
+            secret: "a-password-of-28-characters!",
+            _overwrite: true,
+          },
           user: MANAGER,
           overrideAccess: true,
         })
       ).resolves.toBeDefined();
+      expect(judged.filter(value => value === "first")).toHaveLength(2);
     });
 
     it("tells a caller judged by their permissions the refusal under the lock, on one connection", async () => {

@@ -3253,10 +3253,18 @@ export class SingleMutationService extends BaseService {
       // compared under the row lock: one that moved means another save landed
       // after these values were judged, and they are judged again rather
       // than written over a Single they were never judged against.
+      // Its own row, and the language it writes even where it carries no
+      // `_rev` to name one: a save of that language's translated values
+      // moves only that language's version, not the row's.
+      const overwriteLanguages =
+        judgedLanguages ??
+        (companion && companionPhysicallyExists && writeLocale !== undefined
+          ? { table: companion.companionTableName, locales: [writeLocale] }
+          : undefined);
       const judgedRow = {
         table: singleMeta.tableName,
         id: String(documentId),
-        ...(judgedLanguages ? { languages: judgedLanguages } : {}),
+        ...(overwriteLanguages ? { languages: overwriteLanguages } : {}),
       };
       let judgedVersion =
         versionCheck.kind === "overwrite"
@@ -4035,7 +4043,21 @@ export class SingleMutationService extends BaseService {
           if (
             versionCheck.kind === "overwrite" &&
             !insertedHere &&
-            movedSinceJudged(judgedVersion, mainBefore)
+            movedSinceJudged(
+              judgedVersion,
+              // The same languages it was judged on: the write's own, read
+              // here where `_rev` named none for the read above.
+              overwriteLanguages === judgedLanguages
+                ? mainBefore
+                : await readDocumentRevision(tx, {
+                    dialect: this.adapter.dialect,
+                    table: singleMeta.tableName,
+                    id: existingDoc.id,
+                    ...(overwriteLanguages
+                      ? { languages: overwriteLanguages }
+                      : {}),
+                  })
+            )
           ) {
             judgedVersionMoved = true;
             throw NextlyError.conflict({
