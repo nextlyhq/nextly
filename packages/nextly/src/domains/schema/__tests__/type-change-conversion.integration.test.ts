@@ -220,7 +220,16 @@ describe.each(getConfiguredTestDialects())(
         })
       ).toBeUndefined();
       expect(await read(t, "v", "en")).toEqual({ a: 12 });
-      expect(await read(t, "v", "es")).toEqual({ a: null });
+      // Read as stored: a language with no value reads the default language's, so the cleared
+      // Spanish value is asked of its own row.
+      const [spanish] = await (
+        t.adapter as unknown as {
+          executeQuery<R>(statement: string): Promise<R[]>;
+        }
+      ).executeQuery<{ v: unknown }>(
+        `SELECT ${q("v")} AS v FROM ${q(`${TABLE}_locales`)} WHERE ${q("_locale")} = 'es'`
+      );
+      expect(spanish?.v ?? null).toBeNull();
     });
 
     // A family this conversion does not write yet keeps today's answer exactly: a date read as text
