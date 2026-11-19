@@ -595,11 +595,19 @@ async function writeSave(
   }
 
   const names: string[] = [];
+  // Whether the save has replaced the definition, so a withdrawal puts it back only then: one that
+  // failed before its write leaves the file it never touched alone.
+  let definitionReplaced = false;
   const undo = async (error: unknown) => {
     // Only a save that withdrew everything it wrote has nothing left to settle.
     if (
-      (await undoUnapplied(deps, names, before, definitionPath, error)) ===
-        "withdrawn" &&
+      (await undoUnapplied(
+        deps,
+        names,
+        definitionReplaced ? { before } : undefined,
+        definitionPath,
+        error
+      )) === "withdrawn" &&
       (await sqlFiles(deps.migrationsDir)).every(file =>
         sqlBefore.includes(file)
       )
@@ -615,6 +623,7 @@ async function writeSave(
     // stopped or failed before it leaves the definition as it was, so nothing says the change
     // happened that no migration records.
     await writeAtomically(definitionPath, serializeUiSchema(plan.next));
+    definitionReplaced = true;
     return { files, names, table: plan.table, undo, started };
   } catch (error) {
     return undoThenThrow(error, [{ files: names, undo: () => undo(error) }]);
@@ -2685,9 +2694,9 @@ function onlyTable(
 
 /**
  * After a failed save: where nothing the save wrote applied, remove every
- * file it wrote, with its snapshot, and put the definition back as it was. A
- * file that failed part-way stays, with the definition it was written from,
- * for `nextly migrate:resolve` to settle. Where an earlier file of the save
+ * file it wrote, with its snapshot, and put the definition back as it was
+ * where the save replaced it. A file that failed part-way stays, with the
+ * definition it was written from, for `nextly migrate:resolve` to settle. Where an earlier file of the save
  * applied and a later one failed with nothing of it applied, the database is
  * part of the way to the new definition: every file and the new definition
  * stay, the failed file's attempt is settled, and `nextly migrate` runs the
@@ -2696,7 +2705,8 @@ function onlyTable(
 async function undoUnapplied(
   deps: CollectionSaveDeps,
   written: readonly string[],
-  definition: string | undefined,
+  /** The definition's text before the save replaced it; undefined where it never did. */
+  definition: { before: string | undefined } | undefined,
   definitionPath: string,
   error: unknown
 ): Promise<"withdrawn" | "kept"> {
@@ -2739,8 +2749,13 @@ async function undoUnapplied(
       { force: true }
     );
   }
-  if (definition === undefined) await rm(definitionPath, { force: true });
-  else await writeAtomically(definitionPath, definition);
+  if (definition !== undefined) {
+    if (definition.before === undefined) {
+      await rm(definitionPath, { force: true });
+    } else {
+      await writeAtomically(definitionPath, definition.before);
+    }
+  }
   return "withdrawn";
 }
 
