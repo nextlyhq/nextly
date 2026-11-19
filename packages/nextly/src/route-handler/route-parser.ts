@@ -2203,6 +2203,37 @@ const EMAIL_DELIVERY_READS: Record<string, string> = {
  *   address, sent in the body so it is never in a URL, a log line or a
  *   browser's history
  */
+/** The queued-email actions a POST names, by their last segment. */
+const QUEUED_EMAIL_ACTIONS: Record<string, string> = {
+  retry: "retryQueuedEmail",
+  cancel: "cancelQueuedEmail",
+};
+
+/**
+ * What a POST under `/api/email-deliveries` names, or null for none:
+ * - the search, a read sent as a POST so its address is in the body;
+ * - `queued/[id]/retry` and `queued/[id]/cancel`, which act on one queued
+ *   email, asking `manage-email-deliveries`.
+ */
+function emailDeliveryPostMethod(
+  id: string | undefined,
+  subresource: string | undefined,
+  subId: string | undefined
+): { operation: OperationType; method: string; queuedId?: string } | null {
+  if (id === "search" && subresource === undefined && subId === undefined) {
+    return { operation: "list", method: "searchByAddress" };
+  }
+  // Own keys only: a segment such as `constructor` names no action.
+  const action =
+    subId !== undefined && Object.hasOwn(QUEUED_EMAIL_ACTIONS, subId)
+      ? QUEUED_EMAIL_ACTIONS[subId]
+      : undefined;
+  if (id === "queued" && subresource && action) {
+    return { operation: "update", method: action, queuedId: subresource };
+  }
+  return null;
+}
+
 function parseEmailDeliveryRoutes(
   id: string | undefined,
   subresource: string | undefined,
@@ -2217,21 +2248,10 @@ function parseEmailDeliveryRoutes(
     routeParams,
   });
   if (httpMethod === "POST") {
-    // The search is a read sent as a POST: its address is in the body.
-    if (id === "search" && subresource === undefined && subId === undefined) {
-      return read("list", "searchByAddress");
-    }
-    // POST /api/email-deliveries/queued/[id]/retry and /cancel act on one
-    // queued email, asking `manage-email-deliveries`.
-    if (id === "queued" && subresource && subId === "retry") {
-      routeParams.queuedId = subresource;
-      return read("update", "retryQueuedEmail");
-    }
-    if (id === "queued" && subresource && subId === "cancel") {
-      routeParams.queuedId = subresource;
-      return read("update", "cancelQueuedEmail");
-    }
-    return null;
+    const posted = emailDeliveryPostMethod(id, subresource, subId);
+    if (!posted) return null;
+    if (posted.queuedId !== undefined) routeParams.queuedId = posted.queuedId;
+    return read(posted.operation, posted.method);
   }
   // Every other route here is a read, and none has a segment past its id.
   if (httpMethod !== "GET" || subId !== undefined) return null;
