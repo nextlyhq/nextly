@@ -12,12 +12,14 @@ import { judgeMigrationSiblingFields } from "../migrate-create/sibling-fields";
 import {
   assertNoNewSiblingClashes,
   configuredSiblingClashes,
+  judgeConfiguredSiblingFields,
   judgeSiblingFields,
   newSiblingClashes,
   refusedConfiguredSiblingFields,
   type SiblingClash,
   siblingClashes,
   siblingClashesError,
+  siblingClashHeldMessage,
   siblingClashWarning,
 } from "../sibling-fields";
 
@@ -189,21 +191,28 @@ describe("newSiblingClashes", () => {
     expect(newSiblingClashes(pair, null)).toHaveLength(1);
   });
 
-  it("keeps a pair the previous definition already holds", () => {
-    // The pair is there; it is just not new.
-    expect(siblingClashes([...pair, text("x")])).toHaveLength(1);
-    expect(newSiblingClashes([...pair, text("x")], pair)).toEqual([]);
+  // Two names that differ only in case inside a group are two keys of its value: they share no
+  // stored value, so a pair the previous definition held is kept.
+  it("keeps a pair sharing no stored value that the previous definition already holds", () => {
+    const apart = [group("seo", [text("Ab"), text("aB")])];
+    expect(siblingClashes(apart)[0].shared).toBeNull();
+    expect(newSiblingClashes([...apart, text("x")], apart)).toEqual([]);
   });
 
-  it("keeps a pair whose fields changed type", () => {
-    const next = [{ name: "fooBar", type: "number" }, text("foo_bar")];
-    expect(siblingClashes(next)).toHaveLength(1);
+  // Two fields reading and writing one column or key are refused however long they have.
+  it("refuses a pair sharing a column or a key, though the previous definition held it", () => {
+    const sharingAKey = [group("seo", [text("x"), text("x")])];
+    for (const held of [pair, [text("Title"), text("title")], sharingAKey]) {
+      expect(siblingClashes(held)[0].shared).not.toBeNull();
+      expect(newSiblingClashes(held, held)).toEqual(siblingClashes(held));
+    }
+    // A type change that keeps both fields in one column changes nothing.
     expect(
       newSiblingClashes(
         [{ name: "fooBar", type: "number" }, text("foo_bar")],
         pair
       )
-    ).toEqual([]);
+    ).toHaveLength(1);
   });
 
   it("finds the pair a field added, renamed or moved into a container creates", () => {
@@ -230,15 +239,15 @@ describe("newSiblingClashes", () => {
   });
 
   it("finds a third field joining an existing pair new, for each pair it makes", () => {
-    const next = [text("title"), text("Title"), text("TITLE")];
+    // Inside a group, three names that differ only in case share no stored value.
+    const next = [group("seo", [text("ab"), text("Ab"), text("AB")])];
     expect(
-      newSiblingClashes(next, [text("title"), text("Title")]).map(c => [
-        c.first,
-        c.second,
-      ])
+      newSiblingClashes(next, [group("seo", [text("ab"), text("Ab")])]).map(
+        c => [c.first, c.second]
+      )
     ).toEqual([
-      ["title", "TITLE"],
-      ["Title", "TITLE"],
+      ["ab", "AB"],
+      ["Ab", "AB"],
     ]);
   });
 });
@@ -247,16 +256,31 @@ describe("judgeSiblingFields", () => {
   const names = (list: SiblingClash[]) =>
     list.map(c => `${c.container}: ${c.first}/${c.second}`);
 
-  it("keeps a held pair only as often as it was held", () => {
+  it("keeps a held pair sharing no stored value only as often as it was held", () => {
+    // A column-less pair at the top level shares no stored value.
     const judged = judgeSiblingFields(
-      [group("seo", [text("title"), text("title"), text("title")])],
-      [group("seo", [text("title"), text("title")])]
+      [component("seo"), component("seo"), component("seo")],
+      [component("seo"), component("seo")]
     );
-    expect(names(judged.existing)).toEqual(["group 'seo': title/title"]);
+    expect(names(judged.existing)).toEqual(["the top level: seo/seo"]);
     expect(names(judged.refused)).toEqual([
-      "group 'seo': title/title",
-      "group 'seo': title/title",
+      "the top level: seo/seo",
+      "the top level: seo/seo",
     ]);
+  });
+
+  it("refuses every held pair sharing a stored value, at every level", () => {
+    const held = [
+      text("Title"),
+      text("title"),
+      group("seo", [text("x"), text("x")]),
+      repeater("links", [text("url"), text("url")]),
+    ];
+    expect(judgeSiblingFields(held, held)).toEqual({
+      refused: siblingClashes(held),
+      existing: [],
+      heldSharing: siblingClashes(held),
+    });
   });
 
   it("finds a held pair new once a type change makes both fields one column", () => {
@@ -270,6 +294,7 @@ describe("judgeSiblingFields", () => {
     expect(judgeSiblingFields(before, after)).toEqual({
       refused: [],
       existing: siblingClashes(before),
+      heldSharing: [],
     });
   });
 
@@ -290,6 +315,7 @@ describe("judgeSiblingFields", () => {
       ).toEqual({
         refused: [],
         existing: [],
+        heldSharing: [],
       });
       expect(
         judgeSiblingFields(spelled, null, { definedInCode: kind }).refused
@@ -345,10 +371,10 @@ describe("judgeSiblingFields", () => {
         judgeSiblingFields([text("title"), component("title")], null, {
           definedInCode: kind,
         })
-      ).toEqual({ refused: [], existing: [] });
+      ).toEqual({ refused: [], existing: [], heldSharing: [] });
     }
     // Written by the author, `define*` still refuses it.
-    expect(configuredSiblingClashes("collection", declared)).toHaveLength(1);
+    expect(configuredSiblingClashes(declared)).toHaveLength(1);
   });
 
   // Only a road that judges `define*` output adds no field of its own to what
@@ -432,26 +458,129 @@ describe("judgeSiblingFields", () => {
   });
 });
 
+// A start judges configuration against the registry row; an entity with no row whose table an
+// earlier start or migrate made is taken as it stands, so its pairs are held.
+describe("refusedConfiguredSiblingFields, for an entity with no row whose table exists", () => {
+  const noRows = { collections: [], singles: [], components: [] };
+  const tableThere = async () => true;
+
+  it("refuses a pair sharing a column, though the table holds it", async () => {
+    const refused = await refusedConfiguredSiblingFields(
+      {
+        collections: [
+          { slug: "posts", fields: [text("Title"), text("title")] },
+        ],
+      },
+      noRows,
+      tableThere
+    );
+    expect(
+      refused.map(({ entity, clash }) => [
+        entity.slug,
+        clash.first,
+        clash.second,
+      ])
+    ).toEqual([["posts", "Title", "title"]]);
+  });
+
+  it("takes a pair sharing no stored value as held", async () => {
+    expect(
+      await refusedConfiguredSiblingFields(
+        {
+          collections: [
+            { slug: "posts", fields: [group("seo", [text("Ab"), text("aB")])] },
+          ],
+        },
+        noRows,
+        tableThere
+      )
+    ).toEqual([]);
+  });
+});
+
+// A start reads the Builder's own entities from their registry rows, so a pair sharing a stored
+// value that a row holds would keep the Builder, where it is renamed, from opening. That start
+// reports it; every other road, and a pair the row does not hold, refuses.
+describe("judgeConfiguredSiblingFields, reporting a pair the row already holds", () => {
+  const held = [text("Title"), text("title")];
+  const rows = {
+    collections: [{ slug: "posts", tableName: "dc_posts", fields: held }],
+    singles: [],
+    components: [],
+  };
+  const tableThere = async () => true;
+  const pairs = (list: { clash: SiblingClash }[]) =>
+    list.map(({ clash }) => `${clash.first}/${clash.second}`);
+
+  it("reports a held pair sharing a column when asked, and refuses it by default", async () => {
+    const config = { collections: [{ slug: "posts", fields: held }] };
+    const reporting = await judgeConfiguredSiblingFields(
+      config,
+      rows,
+      tableThere,
+      { heldSharing: "report" }
+    );
+    expect({
+      refused: pairs(reporting.refused),
+      reported: pairs(reporting.reported),
+    }).toEqual({ refused: [], reported: ["Title/title"] });
+    const refusing = await judgeConfiguredSiblingFields(
+      config,
+      rows,
+      tableThere
+    );
+    expect({
+      refused: pairs(refusing.refused),
+      reported: pairs(refusing.reported),
+    }).toEqual({ refused: ["Title/title"], reported: [] });
+  });
+
+  it("refuses a pair the row does not hold, though held ones are reported", async () => {
+    const judged = await judgeConfiguredSiblingFields(
+      {
+        collections: [
+          {
+            slug: "posts",
+            fields: [...held, text("fooBar"), text("foo_bar")],
+          },
+        ],
+      },
+      rows,
+      tableThere,
+      { heldSharing: "report" }
+    );
+    expect({
+      refused: pairs(judged.refused),
+      reported: pairs(judged.reported),
+    }).toEqual({ refused: ["fooBar/foo_bar"], reported: ["Title/title"] });
+  });
+
+  it("says what a reported pair shares and how to end it", () => {
+    const [clash] = siblingClashes(held);
+    expect(
+      siblingClashHeldMessage({ kind: "collection", slug: "posts" }, clash)
+    ).toBe(
+      "Collection 'posts': fields 'Title' and 'title' at the top level share the column 'title'. Rename one field in the Builder (or your configuration) and save; until then no save of its definition is accepted."
+    );
+  });
+});
+
 describe("configuredSiblingClashes", () => {
-  // Configuration in code refused, before this rule, two names at one level
-  // that differ only in case, and two column fields of a collection's or a
-  // Single's top level that share a column. Only those are refused where
-  // nothing says whether the entity exists yet.
-  it("refuses at definition what configuration refused before", () => {
-    for (const kind of ["collection", "single", "fieldGroup"] as const) {
-      expect(
-        configuredSiblingClashes(kind, [
-          text("Title"),
-          text("title"),
-          group("g", [text("a"), text("A")]),
-        ])
-      ).toHaveLength(2);
-    }
-    for (const kind of ["collection", "single"] as const) {
-      expect(
-        configuredSiblingClashes(kind, [text("fooBar"), text("foo_bar")])
-      ).toHaveLength(1);
-    }
+  // At definition, where nothing says whether the entity exists yet, every pair sharing a stored
+  // value is refused, and every pair configuration refused before this rule: two names at one
+  // level that differ only in case.
+  it("refuses at definition every pair sharing a stored value, and what configuration refused before", () => {
+    expect(
+      configuredSiblingClashes([
+        text("Title"),
+        text("title"),
+        group("g", [text("a"), text("A")]),
+      ])
+    ).toHaveLength(2);
+    // Two fields with a column at the top level, a field group's included, share it.
+    expect(
+      configuredSiblingClashes([text("fooBar"), text("foo_bar")])
+    ).toHaveLength(1);
   });
 
   it("leaves to the roads that know the previous definition what configuration accepted", () => {
@@ -461,13 +590,10 @@ describe("configuredSiblingClashes", () => {
       group("g", [text("fooBar"), text("foo_bar")]),
       repeater("r", [text("fooBar"), text("foo_bar")]),
     ];
+    // Two names that become one column but share no stored value: keys of a group's or a
+    // repeater's value, and fields without a column.
     expect(siblingClashes(accepted)).toHaveLength(3);
-    for (const kind of ["collection", "single", "fieldGroup"] as const) {
-      expect(configuredSiblingClashes(kind, accepted)).toEqual([]);
-    }
-    expect(
-      configuredSiblingClashes("fieldGroup", [text("fooBar"), text("foo_bar")])
-    ).toEqual([]);
+    expect(configuredSiblingClashes(accepted)).toEqual([]);
   });
 });
 
@@ -496,7 +622,7 @@ describe("refusal and warning", () => {
         { kind: "single", slug: "home" },
         siblingClashes(fields)
       ).publicData;
-    expect(messages([text("a"), text("a")])).toEqual({
+    expect(messages([component("a"), component("a")])).toEqual({
       errors: [
         {
           path: "fields",
@@ -518,17 +644,35 @@ describe("refusal and warning", () => {
     });
   });
 
-  it("warns about an existing pair, naming the value it shares and saying to rename one", () => {
-    const [top] = siblingClashes([text("fooBar"), text("foo_bar")]);
-    const [nested] = siblingClashes([group("seo", [text("x"), text("x")])]);
+  it("names the column or key a pair shares, and says each needs its own", () => {
+    const entity = { kind: "collection", slug: "posts" } as const;
+    const message = (fields: unknown[]) =>
+      siblingClashesError(entity, siblingClashes(fields)).publicData;
+    expect(message([text("Title"), text("title")])).toEqual({
+      errors: [
+        {
+          path: "fields",
+          code: "FIELD_NAME_DUPLICATE",
+          message:
+            "Collection 'posts': fields 'Title' and 'title' at the top level share the column 'title'. Rename one of them so each has its own column.",
+        },
+      ],
+    });
+    expect(message([group("seo", [text("x"), text("x")])])).toEqual({
+      errors: [
+        {
+          path: "fields",
+          code: "FIELD_NAME_DUPLICATE",
+          message:
+            "Collection 'posts': fields 'x' and 'x' in group 'seo' share the key 'x'. Rename one of them so each has its own key.",
+        },
+      ],
+    });
+  });
+
+  it("warns about a held pair sharing no stored value, saying to rename one", () => {
     const [apart] = siblingClashes([group("seo", [text("Ab"), text("aB")])]);
     const entity = { kind: "fieldGroup", slug: "hero" } as const;
-    expect(siblingClashWarning(entity, top)).toBe(
-      "Field group 'hero': fields 'fooBar' and 'foo_bar' at the top level already share the column 'foo_bar'. They keep working; rename one of them so each keeps its own value."
-    );
-    expect(siblingClashWarning(entity, nested)).toBe(
-      "Field group 'hero': fields 'x' and 'x' in group 'seo' already share the key 'x'. They keep working; rename one of them so each keeps its own value."
-    );
     expect(siblingClashWarning(entity, apart)).toBe(
       "Field group 'hero': fields 'Ab' and 'aB' in group 'seo' differ only in letter case. They keep working; rename one of them."
     );

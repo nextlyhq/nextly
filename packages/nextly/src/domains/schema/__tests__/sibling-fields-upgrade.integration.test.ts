@@ -1,16 +1,19 @@
 /**
- * The upgrade: a database an earlier version left holding pairs of sibling fields the rule now
- * refuses as new keeps working after it starts with the rule.
+ * The upgrade: a database an earlier version left holding pairs of sibling fields.
  *
  * Seeded through the production DDL and registry helpers, as the earlier version left it:
  * - a Builder collection `articles` whose registry row holds two top-level fields named `summary`
- *   (one column, `summary`, in its table) and a group `seo` holding two fields named `headline`;
- * - a code-first collection `guides` whose group `seo` holds `fooBar` and `foo_bar`, a pair
- *   `defineCollection` accepted before the rule and still accepts.
+ *   (one column, `summary`, in its table) and a group `seo` holding two fields named `headline`
+ *   (one key of its value): two pairs that each share one stored value;
+ * - a code-first collection `guides` whose group `seo` holds `fooBar` and `foo_bar`: two keys of
+ *   its value, a pair that shares none.
  *
- * After the upgraded start, each entity is written and read, `articles` is saved in the Builder
- * after an unrelated edit (a new field, then a new label), and `migrate:check` passes with exactly
- * one warning per pair. Nothing is refused.
+ * Two fields sharing one stored value are refused however long they have: `migrate:check` refuses
+ * `articles`, naming each pair and the column or key it shares, while `guides` keeps working with
+ * a warning. The upgraded start goes on, so the Builder can open, and logs each of `articles`'
+ * pairs with what to rename; every save of `articles`' definition is refused until one field of
+ * each pair is renamed, and the same save with them renamed goes through. Then each entity is
+ * written and read, and `migrate:check` passes with only `guides`' warning.
  *
  * Each case owns its database: a throwaway database on PostgreSQL and MySQL, a temporary file on
  * SQLite.
@@ -31,7 +34,6 @@ import {
   dropDatabaseStatement,
 } from "../../../database/test-database-ddl";
 import { clearServices } from "../../../di/register";
-import { dispatchCollections } from "../../../dispatcher/handlers/collection-dispatcher";
 import { seedBuilderCollection } from "../../../plugins/__tests__/seed-builder-entity";
 import {
   createTestNextly,
@@ -39,6 +41,7 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { dispatchCollections } from "../../../dispatcher/handlers/collection-dispatcher";
 import type { ServiceContainer } from "../../../services";
 import { _resetEnvCache } from "../../../shared/lib/env";
 import { consoleLogger } from "../../../shared/types";
@@ -52,6 +55,8 @@ const SERVER_URL_ENV = {
 
 interface CaseDatabase {
   adapter: DrizzleAdapter;
+  /** Connect again: a refused start disconnects the adapter it was given. */
+  reopen(): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -60,17 +65,22 @@ async function openDatabase(dialect: TestDialect): Promise<CaseDatabase> {
     vi.stubEnv("DB_DIALECT", "sqlite");
     _resetEnvCache();
     const dir = await mkdtemp(join(tmpdir(), "nextly-sibling-upgrade-"));
-    const adapter = (await createAdapter({
-      type: "sqlite",
-      url: `file:${join(dir, "test.db")}`,
-    } as Parameters<typeof createAdapter>[0])) as unknown as DrizzleAdapter;
-    return {
-      adapter,
+    const connect = async () =>
+      (await createAdapter({
+        type: "sqlite",
+        url: `file:${join(dir, "test.db")}`,
+      } as Parameters<typeof createAdapter>[0])) as unknown as DrizzleAdapter;
+    const database: CaseDatabase = {
+      adapter: await connect(),
+      async reopen() {
+        database.adapter = await connect();
+      },
       async close() {
-        await adapter.disconnect().catch(() => {});
+        await database.adapter.disconnect().catch(() => {});
         await rm(dir, { recursive: true, force: true });
       },
     };
+    return database;
   }
   const serverUrl = process.env[SERVER_URL_ENV[dialect]];
   if (!serverUrl) throw new Error(`${SERVER_URL_ENV[dialect]} is not set`);
@@ -84,18 +94,24 @@ async function openDatabase(dialect: TestDialect): Promise<CaseDatabase> {
   url.pathname = `/${name}`;
   vi.stubEnv("DATABASE_URL", url.toString());
   _resetEnvCache();
-  const adapter = (await createAdapter({
-    type: dialect,
-    url: url.toString(),
-  })) as unknown as DrizzleAdapter;
-  return {
-    adapter,
+  const connect = async () =>
+    (await createAdapter({
+      type: dialect,
+      url: url.toString(),
+    })) as unknown as DrizzleAdapter;
+  const database: CaseDatabase = {
+    adapter: await connect(),
+    async reopen() {
+      await database.adapter.disconnect().catch(() => {});
+      database.adapter = await connect();
+    },
     async close() {
-      await adapter.disconnect().catch(() => {});
+      await database.adapter.disconnect().catch(() => {});
       await server.executeQuery(dropDatabaseStatement(dialect, name));
       await server.disconnect();
     },
   };
+  return database;
 }
 
 /** The Builder collection's fields as the earlier version left its registry row. */
@@ -124,12 +140,26 @@ const guides = defineCollection({
   ],
 });
 
-/** One warning per pair, as `migrate:check` words it. */
-const EXPECTED_WARNINGS = [
-  "Collection 'articles': fields 'summary' and 'summary' at the top level already share the column 'summary'. They keep working; rename one of them so each keeps its own value.",
-  "Collection 'articles': fields 'headline' and 'headline' in group 'seo' already share the key 'headline'. They keep working; rename one of them so each keeps its own value.",
-  "Collection 'guides': fields 'fooBar' and 'foo_bar' in group 'seo' would both become the column 'foo_bar'. They keep working; rename one of them.",
+/** `articles` with one field of each pair gone, as a rename leaves its row: its table is as it was. */
+const ARTICLES_RENAMED = [
+  { name: "summary", type: "text", source: "ui" },
+  {
+    name: "seo",
+    type: "group",
+    source: "ui",
+    fields: [{ name: "headline", type: "text" }],
+  },
 ];
+
+/** The refusal of `articles`' pairs, each naming the stored value it shares. */
+const ARTICLES_REFUSALS = [
+  "Collection 'articles': fields 'summary' and 'summary' at the top level share the column 'summary'. Rename one of them so each has its own column.",
+  "Collection 'articles': fields 'headline' and 'headline' in group 'seo' share the key 'headline'. Rename one of them so each has its own key.",
+];
+
+/** The warning for `guides`' pair, which shares no stored value and keeps working. */
+const GUIDES_WARNING =
+  "Collection 'guides': fields 'fooBar' and 'foo_bar' in group 'seo' would both become the column 'foo_bar'. They keep working; rename one of them.";
 
 function makeLogger() {
   return {
@@ -182,7 +212,82 @@ for (const dialect of getConfiguredTestDialects()) {
       _resetEnvCache();
     });
 
-    it("keeps every entity holding a pair read, written, saved and checked, refusing nothing", async () => {
+    /**
+     * `migrate:check` over a migrations folder whose latest snapshot predates the record of
+     * entities, as an upgraded project's does: both tables are in it, so each entity exists, and
+     * each is judged with the fields its registry row holds.
+     */
+    let checks = 0;
+    async function check() {
+      // A folder of its own for each check, so a second one starts from the same snapshot.
+      checks += 1;
+      const migrationsDir = join(projectRoot, `migrations-${String(checks)}`);
+      await mkdir(join(migrationsDir, "meta"), { recursive: true });
+      const tables = {
+        tables: ["dc_articles", "dc_guides"].map(name => ({
+          name,
+          columns: [{ name: "id", type: "text", nullable: false }],
+        })),
+      };
+      await writeFile(
+        join(migrationsDir, "20260101_120000_001_initial.sql"),
+        "-- placeholder",
+        "utf-8"
+      );
+      await writeSnapshot(
+        join(migrationsDir, "meta"),
+        "20260101_120000_001_initial",
+        tables,
+        "-- placeholder"
+      );
+      const registry = new DynamicCollectionRegistryService(
+        database.adapter,
+        consoleLogger
+      );
+      const fieldsOf = async (slug: string) =>
+        ((await registry.getCollection(slug)) as { fields: unknown[] }).fields;
+      const exit = vi
+        .spyOn(process, "exit")
+        .mockImplementation((() => undefined) as never);
+      const printed = vi
+        .spyOn(console, "error")
+        .mockImplementation(() => undefined);
+      const logger = makeLogger();
+      await runChecks({
+        migrationsDir,
+        desiredSnapshot: tables,
+        entities: {
+          collections: [
+            {
+              slug: "articles",
+              tableName: "dc_articles",
+              fields: (await fieldsOf("articles")) as never,
+            },
+            {
+              slug: "guides",
+              tableName: "dc_guides",
+              fields: (await fieldsOf("guides")) as never,
+            },
+          ],
+          singles: [],
+          components: [],
+        },
+        logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
+      });
+      const outcome = {
+        errors: logger.error.mock.calls.map(([line]) => String(line)),
+        warnings: logger.warn.mock.calls.map(([line]) => String(line)),
+        exited: exit.mock.calls.length > 0,
+        passed: logger.success.mock.calls.some(([line]) =>
+          String(line).includes("migrate:check OK")
+        ),
+      };
+      exit.mockRestore();
+      printed.mockRestore();
+      return outcome;
+    }
+
+    it("refuses an entity holding two fields that share a column or a key until one of each is renamed, starting so the Builder can rename them", async () => {
       // The database as an earlier version left it. The tables come from the production DDL, which
       // makes one column per name, and the registry rows hold the pairs, as the earlier version's
       // saves left them.
@@ -213,8 +318,66 @@ for (const dialect of getConfiguredTestDialects()) {
         fields: guides.fields as never,
       });
 
-      // The upgraded start: both rows hold their pairs, so nothing is new and nothing is refused.
-      const t = await boot({ collections: [guides] });
+      // `migrate:check` refuses `articles`' two pairs, naming each, and warns about `guides`.
+      expect(await check()).toEqual({
+        errors: ARTICLES_REFUSALS,
+        warnings: [GUIDES_WARNING],
+        exited: true,
+        passed: false,
+      });
+
+      // The upgraded start goes on, so the Builder can open, and says what to rename.
+      const startLogger = makeLogger();
+      const t = await boot({
+        collections: [guides],
+        logger: startLogger as never,
+      });
+      const logged = startLogger.error.mock.calls.map(([line]) => String(line));
+      for (const pair of [
+        "fields 'summary' and 'summary' at the top level share the column 'summary'",
+        "fields 'headline' and 'headline' in group 'seo' share the key 'headline'",
+      ]) {
+        expect(logged).toContainEqual(
+          expect.stringContaining(
+            `${pair}. Rename one field in the Builder (or your configuration) and save`
+          )
+        );
+      }
+
+      // Every save of its definition is refused until one of each pair is renamed, an unrelated
+      // edit included; the same edit with them renamed goes through.
+      const save = async (fields: unknown[]) => {
+        const { schemaVersion } = (await new DynamicCollectionRegistryService(
+          t.adapter as never,
+          consoleLogger
+        ).getCollection("articles")) as { schemaVersion?: number };
+        const nodeEnv = process.env.NODE_ENV;
+        vi.stubEnv("NODE_ENV", "development");
+        try {
+          return await dispatchCollections(
+            {} as ServiceContainer,
+            "applySchemaChanges",
+            { collectionName: "articles" },
+            { fields, confirmed: true, schemaVersion: schemaVersion ?? 1 }
+          );
+        } finally {
+          vi.stubEnv("NODE_ENV", nodeEnv);
+        }
+      };
+      const subtitle = { name: "subtitle", type: "text" };
+      await expect(save([...ARTICLES_FIELDS, subtitle])).rejects.toMatchObject({
+        code: "VALIDATION_ERROR",
+        publicData: {
+          errors: ARTICLES_REFUSALS.map(message => ({
+            path: "fields",
+            code: "FIELD_NAME_DUPLICATE",
+            message,
+          })),
+        },
+      });
+      await expect(
+        save([...ARTICLES_RENAMED, subtitle])
+      ).resolves.toBeDefined();
 
       // Each entity is written and read.
       const article = await t.nextly.create({
@@ -238,119 +401,13 @@ for (const dialect of getConfiguredTestDialects()) {
       })) as { seo?: { fooBar?: string; foo_bar?: string } } | null;
       expect(guideRead?.seo).toMatchObject({ fooBar: "a", foo_bar: "b" });
 
-      // Saved in the Builder after an unrelated edit: a new field, applied as the Builder's save
-      // applies it, in development, where a save runs its migration, then a new label.
-      const { schemaVersion } = (await new DynamicCollectionRegistryService(
-        t.adapter as never,
-        consoleLogger
-      ).getCollection("articles")) as { schemaVersion?: number };
-      const nodeEnv = process.env.NODE_ENV;
-      vi.stubEnv("NODE_ENV", "development");
-      try {
-        await dispatchCollections(
-          {} as ServiceContainer,
-          "applySchemaChanges",
-          { collectionName: "articles" },
-          {
-            fields: [...ARTICLES_FIELDS, { name: "subtitle", type: "text" }],
-            confirmed: true,
-            schemaVersion: schemaVersion ?? 1,
-          }
-        );
-      } finally {
-        vi.stubEnv("NODE_ENV", nodeEnv);
-      }
-      const edited = await t.nextly.create({
-        collection: "articles",
-        data: { title: "Edited", summary: "s", subtitle: "sub" },
+      // `migrate:check` passes, warning only about `guides`.
+      expect(await check()).toEqual({
+        errors: [],
+        warnings: [GUIDES_WARNING],
+        exited: false,
+        passed: true,
       });
-      expect(
-        edited.item as { summary?: string; subtitle?: string }
-      ).toMatchObject({ summary: "s", subtitle: "sub" });
-      await dispatchCollections(
-        {} as ServiceContainer,
-        "updateCollection",
-        { collectionName: "articles" },
-        { labels: { singular: "Story", plural: "Stories" } }
-      );
-      const relabelled = (await new DynamicCollectionRegistryService(
-        t.adapter as never,
-        consoleLogger
-      ).getCollection("articles")) as {
-        labels?: { singular?: string };
-        fields: unknown[];
-      };
-      expect(relabelled.labels?.singular).toBe("Story");
-      // The row still holds both pairs and the new field.
-      expect(
-        (relabelled.fields as { name: string }[]).map(f => f.name)
-      ).toEqual(["summary", "summary", "seo", "subtitle"]);
-
-      // `migrate:check` over a migrations folder whose latest snapshot predates the record of
-      // entities, as an upgraded project's does: both tables are in it, so each entity exists and
-      // each pair is warned about once.
-      const migrationsDir = join(projectRoot, "migrations");
-      await mkdir(join(migrationsDir, "meta"), { recursive: true });
-      const tables = {
-        tables: ["dc_articles", "dc_guides"].map(name => ({
-          name,
-          columns: [{ name: "id", type: "text", nullable: false }],
-        })),
-      };
-      await writeFile(
-        join(migrationsDir, "20260101_120000_001_initial.sql"),
-        "-- placeholder",
-        "utf-8"
-      );
-      await writeSnapshot(
-        join(migrationsDir, "meta"),
-        "20260101_120000_001_initial",
-        tables,
-        "-- placeholder"
-      );
-      const fieldsOf = async (slug: string) =>
-        (
-          (await new DynamicCollectionRegistryService(
-            t.adapter as never,
-            consoleLogger
-          ).getCollection(slug)) as { fields: unknown[] }
-        ).fields;
-      const exit = vi
-        .spyOn(process, "exit")
-        .mockImplementation((() => undefined) as never);
-      const printed = vi
-        .spyOn(console, "error")
-        .mockImplementation(() => undefined);
-      const logger = makeLogger();
-      await runChecks({
-        migrationsDir,
-        desiredSnapshot: tables,
-        entities: {
-          collections: [
-            {
-              slug: "articles",
-              tableName: "dc_articles",
-              fields: (await fieldsOf("articles")) as never,
-            },
-            {
-              slug: "guides",
-              tableName: "dc_guides",
-              fields: (await fieldsOf("guides")) as never,
-            },
-          ],
-          singles: [],
-          components: [],
-        },
-        logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
-      });
-      const warnings = logger.warn.mock.calls.map(([line]) => String(line));
-      expect([...warnings].sort()).toEqual([...EXPECTED_WARNINGS].sort());
-      expect(logger.error).not.toHaveBeenCalled();
-      expect(printed).not.toHaveBeenCalled();
-      expect(exit).not.toHaveBeenCalled();
-      expect(logger.success).toHaveBeenCalledWith(
-        expect.stringContaining("migrate:check OK")
-      );
     });
   });
 }

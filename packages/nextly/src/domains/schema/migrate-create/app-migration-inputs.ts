@@ -318,7 +318,7 @@ export async function appMigrationInputs(
   assertMigrationAddresses(merged, judgedAgainst, logger, input.judged);
   const judgedEntities = onlyJudged(merged, input.judged);
   // And each new pair of sibling fields, against the fields the latest snapshot records.
-  assertMigrationSiblingFields(judgedEntities, judgedAgainst, logger);
+  assertSiblingsUnlessHeld(input, judgedEntities, judgedAgainst, logger);
   // The rows as the previous snapshot recorded each Builder entity, for a
   // migration that writes a row for its settings alone to write back on the
   // way down. A snapshot with no settings record has none to offer.
@@ -358,6 +358,25 @@ const RECORDED_UNDER = {
   single: "singles",
   fieldGroup: "fieldGroups",
 } as const;
+
+/**
+ * The sibling-field check (`assertMigrationSiblingFields`), unless the judged entity is one the
+ * input holds (`held`): that entity is described as the database already stands, not written, and
+ * its pairs are judged where its definition is written.
+ */
+function assertSiblingsUnlessHeld(
+  input: { judged?: JudgedEntity; held?: readonly HeldEntity[] },
+  ...check: Parameters<typeof assertMigrationSiblingFields>
+): void {
+  const { judged, held = [] } = input;
+  if (
+    judged !== undefined &&
+    held.some(h => h.kind === judged.kind && h.entity.slug === judged.slug)
+  ) {
+    return;
+  }
+  assertMigrationSiblingFields(...check);
+}
 
 /** `merged` narrowed to the judged entity, or whole without one. */
 function onlyJudged<

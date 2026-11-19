@@ -160,7 +160,7 @@ describe("mutateManifest and sibling fields", () => {
               path: "fields",
               code: "FIELD_NAME_DUPLICATE",
               message:
-                "Collection 'events': fields 'note' and 'note' at the top level have the same name. Rename one of them.",
+                "Collection 'events': fields 'note' and 'note' at the top level share the column 'note'. Rename one of them so each has its own column.",
             },
           ],
         },
@@ -191,22 +191,79 @@ describe("mutateManifest and sibling fields", () => {
     );
   });
 
-  it("keeps a pair the stored entry already holds", () => {
-    const next = mutateManifest(withPair, {
+  // Two fields sharing one column are refused though the stored entry holds them: the write must
+  // rename one.
+  it("refuses a pair sharing a column that the stored entry already holds", () => {
+    expect(() =>
+      mutateManifest(withPair, {
+        type: "upsert",
+        kind: "collections",
+        entity: {
+          slug: "events",
+          fields: [
+            { name: "title", type: "text" },
+            { name: "title", type: "textarea" },
+            { name: "venue", type: "text" },
+          ],
+        },
+      })
+    ).toThrow(
+      expect.objectContaining({
+        publicData: {
+          errors: [
+            {
+              path: "fields",
+              code: "FIELD_NAME_DUPLICATE",
+              message:
+                "Collection 'events': fields 'title' and 'title' at the top level share the column 'title'. Rename one of them so each has its own column.",
+            },
+          ],
+        },
+      })
+    );
+  });
+
+  // A manifest that describes a definition already stored (the entity before a save) is read, not
+  // written: its pairs are judged where a definition is written.
+  it("describes a stored definition holding a pair when asked not to judge it", () => {
+    const next = mutateManifest(
+      withPair,
+      {
+        type: "upsert",
+        kind: "collections",
+        entity: withPair.collections[0],
+      },
+      { judgeSiblings: false }
+    );
+    expect(next.collections[0].fields.map(f => f.name)).toEqual([
+      "title",
+      "title",
+    ]);
+  });
+
+  // Two names that differ only in case inside a group share no stored value: held, they stay.
+  it("keeps a pair sharing no stored value that the stored entry already holds", () => {
+    const seo = {
+      name: "seo",
+      type: "group",
+      fields: [
+        { name: "Ab", type: "text" },
+        { name: "aB", type: "text" },
+      ],
+    };
+    const held = uiSchemaManifest.parse({
+      collections: [{ slug: "events", fields: [seo] }],
+    });
+    const next = mutateManifest(held, {
       type: "upsert",
       kind: "collections",
       entity: {
         slug: "events",
-        fields: [
-          { name: "title", type: "text" },
-          { name: "title", type: "textarea" },
-          { name: "venue", type: "text" },
-        ],
+        fields: [seo, { name: "venue", type: "text" }],
       },
     });
     expect(next.collections[0].fields.map(f => f.name)).toEqual([
-      "title",
-      "title",
+      "seo",
       "venue",
     ]);
   });

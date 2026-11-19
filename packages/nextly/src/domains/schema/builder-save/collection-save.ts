@@ -1349,7 +1349,7 @@ async function adoptionFor(
   const kind = kindOf(save);
   const inputs = await appMigrationInputs({
     ...(await inputsArgs(deps, save, [save.previous])),
-    manifest: withEntity(current, kind, save.slug, save.previous),
+    manifest: withEntity(current, kind, save.slug, save.previous, "stored"),
   });
   const declared = inputs[kind.manifest].find(c => c.slug === save.slug);
   const placed = (list: ManifestKind) =>
@@ -1867,7 +1867,8 @@ async function writeFiles(
         plan.current,
         kindOf(save),
         save.slug,
-        save.previous
+        save.previous,
+        "stored"
       ),
       save,
       name: `${migrationSlug(save.slug)}_adopt`,
@@ -1904,7 +1905,8 @@ async function writeFiles(
           plan.current,
           kindOf(save),
           save.slug,
-          save.previous
+          save.previous,
+          "stored"
         ),
         save,
         name: `${migrationSlug(save.slug)}_convert`,
@@ -2040,11 +2042,21 @@ function withEntity(
   manifest: UiSchemaManifest,
   kind: SaveKind,
   slug: string,
-  entity: UiSchemaEntity | null
+  entity: UiSchemaEntity | null,
+  /**
+   * `"stored"` where `entity` is the definition already stored (the entity before the save), which
+   * is described, not written, so its sibling fields are not judged; `"written"`, the default,
+   * where it is the definition the save writes.
+   */
+  as: "written" | "stored" = "written"
 ): UiSchemaManifest {
   return entity === null
     ? mutateManifest(manifest, { type: "delete", kind: kind.manifest, slug })
-    : mutateManifest(manifest, { type: "upsert", kind: kind.manifest, entity });
+    : mutateManifest(
+        manifest,
+        { type: "upsert", kind: kind.manifest, entity },
+        { judgeSiblings: as === "written" }
+      );
 }
 
 /** A file's text, or undefined where there is none. */
