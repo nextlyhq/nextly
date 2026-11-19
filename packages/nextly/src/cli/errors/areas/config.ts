@@ -67,6 +67,29 @@ function configFile(error: NextlyError): string {
   return typeof path === "string" ? basename(path) : "nextly.config.ts";
 }
 
+/**
+ * What to do about a problem whose rule's own sentence says what is wrong but not how to put it
+ * right, read from the failure itself: one code covers several. A field type nothing offers is
+ * told to use a built-in one or install its plugin, while a registered type's option its own rule
+ * refuses gets that rule's sentence alone, the plugin being installed. A rule whose sentence
+ * already says it ("Rename one of them") has none.
+ */
+function problemFix(
+  code: string | undefined,
+  message: string
+): string | undefined {
+  if (code === "SLUG_INVALID_FORMAT") {
+    return "use a lowercase address, such as 'blog-posts'.";
+  }
+  if (
+    code === "FIELD_TYPE_INVALID" &&
+    message.startsWith("Invalid field type ")
+  ) {
+    return "use a built-in field type, or install the plugin that offers this one.";
+  }
+  return undefined;
+}
+
 export const CONFIG_CODES = defineCodes({
   CONFIG_NOT_FOUND: {
     cause:
@@ -196,6 +219,40 @@ export const CONFIG_CODES = defineCodes({
     cause:
       "The configuration, or a definition it loads, declares something Nextly cannot use.",
     from: [
+      {
+        // The load's check of every entity (`configurationProblems`): each problem, first to last,
+        // at its path, with what to do where the rule's own sentence does not say, then a count.
+        code: "VALIDATION_ERROR",
+        reason: "config-invalid",
+        describe: error => {
+          const problems = (
+            (
+              error.publicData as
+                | {
+                    errors?: Array<{
+                      path?: string;
+                      code?: string;
+                      message?: string;
+                    }>;
+                  }
+                | undefined
+            )?.errors ?? []
+          ).filter(problem => typeof problem.message === "string");
+          const count = `${problems.length} problem${problems.length === 1 ? "" : "s"}`;
+          return {
+            what: `\`${configFile(error)}\` has ${count}, so it cannot be used.`,
+            why: [
+              ...problems.flatMap(problem => {
+                const fix = problemFix(problem.code, problem.message ?? "");
+                const line = `${problem.path ?? ""}: ${problem.message ?? ""}`;
+                return fix === undefined ? [line] : [line, `  Fix: ${fix}`];
+              }),
+              `${count}.`,
+            ].join("\n"),
+            next: "Fix each problem listed, then run the command again.",
+          };
+        },
+      },
       {
         // A validation failure no narrower code reads: the issues it lists, by their path.
         code: "VALIDATION_ERROR",
