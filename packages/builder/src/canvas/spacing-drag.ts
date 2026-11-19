@@ -39,10 +39,10 @@
 import type { StyleValue } from "@nextlyhq/blocks-engine";
 
 import type { Scale } from "../geometry";
-import type { SideOrientation } from "../side-orientation";
-import { measurementOf } from "../style-numeric";
-import type { LogicalSide } from "../style-sides";
-import type { StyleAddress } from "../style-values";
+import type { SideOrientation } from "../styles/side-orientation";
+import { measurementOf } from "../styles/style-numeric";
+import type { LogicalSide } from "../styles/style-sides";
+import type { StyleAddress } from "../styles/style-values";
 
 import type { SpacingBox, SpacingSide } from "./spacing-bands";
 

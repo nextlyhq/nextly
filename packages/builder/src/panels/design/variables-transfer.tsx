@@ -52,10 +52,13 @@ import {
 import { Ellipsis } from "lucide-react";
 import * as React from "react";
 
-import type { ClassListEdit, EditClasses } from "../../block-style-actions";
 import { ChromeTooltip } from "../../chrome-tooltip";
 import { DESIGN_ACTION_WORDS as WORDS } from "../../editor-words";
-import { sharedStyleName } from "../../shared-style-library";
+import type {
+  ClassListEdit,
+  EditClasses,
+} from "../../styles/block-style-actions";
+import { sharedStyleName } from "../../styles/shared-style-library";
 
 import { FontChoicesContext, type FontChoices } from "./font-family-field";
 import {

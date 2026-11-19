@@ -47,7 +47,7 @@ import {
   DARK_FOLLOWS_LIGHT,
 } from "./tokens-studio";
 import { colourOrder } from "./colour-groups";
-import { fluidValue } from "../../fluid-size";
+import { fluidValue } from "../../styles/fluid-size";
 
 const BREAKPOINTS = { base: { id: "base", label: "Base" } } as never;
 

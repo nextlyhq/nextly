@@ -32,7 +32,7 @@ import {
   PreviewedEntryProvider,
   type PreviewedCollection,
   type PreviewedEntry,
-} from "../../previewed-entry";
+} from "../../canvas/previewed-entry";
 import { chromeStylesheetSource } from "../../styles/chrome-stylesheet";
 
 beforeAll(() => {

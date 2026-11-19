@@ -21,13 +21,13 @@ import {
 } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
-import type { SharedStyleRow } from "../../shared-style-library";
+import type { SharedStyleRow } from "../../styles/shared-style-library";
 import {
   breakpointSource,
   propertiesWriting,
   type StyleProvenance,
-} from "../../style-provenance";
-import { readStyleValue, type StyleAddress } from "../../style-values";
+} from "../../styles/style-provenance";
+import { readStyleValue, type StyleAddress } from "../../styles/style-values";
 import { fieldLabel } from "../inspector";
 
 import { siteDefaultSource } from "./site-default-source";

@@ -28,7 +28,7 @@ import {
 import * as React from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
-import type { SharedStylesCount } from "../../shared-style-library";
+import type { SharedStylesCount } from "../../styles/shared-style-library";
 import { TokensPanel, type TokensPanelProps } from "./tokens-panel";
 import type {
   VariableReach,

@@ -28,7 +28,6 @@ import { INSTANCE_ATTRIBUTE } from "@nextlyhq/blocks-react";
 import { useCallback, useSyncExternalStore } from "react";
 
 import type { EditorState } from "../editor-state";
-import type { OpenPassages } from "../open-passages";
 
 import { composedTextAt } from "./exposed-inline";
 import {
@@ -41,6 +40,7 @@ import {
   type InlinePropKind,
 } from "./inline-prop-kind";
 import { firstInlineProp } from "./inline-target";
+import type { OpenPassages } from "./open-passages";
 import {
   useInlineRichText,
   type CaretPoint,

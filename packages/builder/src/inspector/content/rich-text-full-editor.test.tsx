@@ -22,7 +22,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ShortcutProvider } from "@nextlyhq/ui";
 
 import type { ContentControlProps, ContentServices } from "./content-services";
-import { createOpenPassages } from "../../open-passages";
+import { createOpenPassages } from "../../canvas/open-passages";
 import { RichTextControl } from "./rich-text-control";
 import { FULL_EDITOR_WORDS } from "./rich-text-full-editor";
 

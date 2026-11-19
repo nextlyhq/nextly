@@ -139,7 +139,7 @@ lock was lost). The results, with every long task and every reading, go to
 ## The counters
 
 What a counter can say, a unit test says instead of a timing, so it cannot
-flake on a slow machine: `packages/builder/src/speed-counters.test.tsx` (the
+flake on a slow machine: `packages/builder/src/canvas/speed-counters.test.tsx` (the
 header and footer drawn again per selection, hover and insert; the site's
 stylesheet compiled per selection and hover; the page drawn per selection and
 hover with the canvas's own inputs held steady; whole-document walks per

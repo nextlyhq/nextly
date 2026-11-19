@@ -24,13 +24,13 @@ import {
   type NamedClass,
 } from "@nextlyhq/blocks-engine";
 
-import { storedContexts } from "../../class-library";
+import { storedContexts } from "../../styles/class-library";
 import {
   listedWords,
   type SharedStyleKind,
   type SharedStylesCount,
   type SharedStyleUsesPage,
-} from "../../shared-style-library";
+} from "../../styles/shared-style-library";
 
 /**
  * How widely one variable is used across the site.

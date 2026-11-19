@@ -47,7 +47,7 @@ import {
 import { SettingsFilterProvider, StyleReportContext } from "../settings-filter";
 import { keywordLabel } from "./style-keyword-labels";
 import type { SharedStylesHost } from "./style-target";
-import type { StylePolicy } from "../../style-values";
+import type { StylePolicy } from "../../styles/style-values";
 
 /**
  * What a field's tooltip says, as an author hovering it reads it: what the

@@ -23,22 +23,22 @@ import {
 } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
-import { numberedForPlace } from "../../accordion-questions";
+import { numberedForPlace } from "../../canvas/accordion-questions";
 import {
   placementWording,
   refusalWording,
   type RefusalWording,
 } from "../../canvas/drag-refusal";
-import type { EditorState } from "../../editor-state";
 import {
   entryContentRefusal,
   offeredIn,
   withEntryContentField,
-} from "../../entry-content-rules";
+} from "../../canvas/entry-content-rules";
+import { usePreviewedCollection } from "../../canvas/previewed-entry";
+import type { EditorState } from "../../editor-state";
 import { lockRefusalWording, type LockRefusalFacts } from "../../lock-refusal";
 import { refusalAnnouncement } from "../../move-refusal";
 import type { BuilderOp } from "../../op-vocabulary";
-import { usePreviewedCollection } from "../../previewed-entry";
 import { withArticle } from "../../with-article";
 
 import { insertLockAt, type InsertLock } from "./insert-lock";

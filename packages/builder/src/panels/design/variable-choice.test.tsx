@@ -25,7 +25,7 @@ import {
 import * as React from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
-import type { SiteVariable } from "../../style-colour";
+import type { SiteVariable } from "../../styles/style-colour";
 import { unlinkedValue, VariableChip, VariableChoice } from "./variable-choice";
 
 afterEach(cleanup);
