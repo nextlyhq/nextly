@@ -201,7 +201,9 @@ function SwitcherMenu({
         {newPage === undefined ? null : (
           <>
             <DropdownMenuItem
-              className="font-medium text-primary"
+              // In the text colour, set apart by its weight: a brand's
+              // primary is a fill and can fall under AA as small text.
+              className="font-medium text-foreground"
               onSelect={() => {
                 newPageAfterClose.current = true;
               }}

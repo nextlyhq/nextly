@@ -151,18 +151,20 @@ export function useFieldEdit(
   );
 }
 
-/**
- * The edit of a field that writes as it is typed (`live-draft.ts`), whose own
- * writes move the stored value as it goes, so the edit cannot end when the
- * stored value moves, as a draft's does. Begun at the first keystroke in the
- * element focus is in, unless this field already holds the edit in progress;
- * ended by the field when its edit ends (blur, Enter, the value moved by
- * something else) and when it goes. Escape's put-back runs `cancel`.
- */
-export function useTypedFieldEdit(): {
+/** A field's own begin and end of its edit, for a field that says when. */
+interface HeldFieldEdit {
+  /** Begin the edit, unless this field holds it; `cancel` is Escape's put-back. */
   readonly begin: (cancel: () => void) => void;
+  /** End it without putting anything back. */
   readonly end: () => void;
-} {
+}
+
+/**
+ * An edit the field begins and ends itself, of the kind `draft` says. Begun
+ * in the element focus is in, unless this field already holds the edit in
+ * progress; ended by the field, by focus leaving it and when it goes.
+ */
+function useHeldFieldEdit(draft: boolean): HeldFieldEdit {
   const handle = React.useRef<FieldEditHandle | null>(null);
   const end = React.useCallback(() => {
     handle.current?.end();
@@ -180,13 +182,42 @@ export function useTypedFieldEdit(): {
             handle.current = null;
             cancel();
           },
-          draft: false,
+          draft,
         });
       },
       end,
     }),
-    [end]
+    [end, draft]
   );
+}
+
+/**
+ * The edit of a field that writes as it is typed (`live-draft.ts`), whose own
+ * writes move the stored value as it goes, so the edit cannot end when the
+ * stored value moves, as a draft's does. Begun at the first keystroke in the
+ * element focus is in, unless this field already holds the edit in progress;
+ * ended by the field when its edit ends (blur, Enter, the value moved by
+ * something else) and when it goes. Escape's put-back runs `cancel`.
+ */
+export function useTypedFieldEdit(): HeldFieldEdit {
+  return useHeldFieldEdit(false);
+}
+
+/**
+ * The edit of a field whose draft is not one text following one stored
+ * value, so {@link useFieldEdit} cannot tell when it begins and ends: the
+ * Advanced tab's anchor and attribute rows, held as one draft, or a field
+ * whose text lives in the input itself, as a Layers rename's does. The field
+ * begins it at each keystroke and says how Escape puts its value back; it
+ * ends when focus leaves the field, as the field writes its draft, and when
+ * the field goes.
+ *
+ * A draft of the document's where the fields drawn here edit the document
+ * ({@link FieldsOfDocument}), so the page counts it as unsaved work and a
+ * store of the page writes it first ({@link finishFieldEdit}).
+ */
+export function useDraftFieldEdit(): HeldFieldEdit {
+  return useHeldFieldEdit(React.useContext(FieldsOfDocument));
 }
 
 /** Whether `edit` was begun in `origin`, or in a field holding it. */
