@@ -240,10 +240,18 @@ describe("running a command", () => {
     mount(<CommandPalette commands={[]} placeholder="Search commands…" />);
     pressPaletteKey();
 
-    // `CommandDialog` renders neither, and the input's placeholder names the INPUT rather than
-    // the dialog — so without these a screen reader announces an unnamed dialog.
+    // The input's placeholder names the INPUT rather than the dialog — so without these a screen
+    // reader announces an unnamed dialog.
     const dialog = screen.getByRole("dialog", { name: "Command palette" });
-    expect(dialog.getAttribute("aria-describedby")).toBeTruthy();
+    const described = dialog.getAttribute("aria-describedby") ?? "";
+    expect(document.getElementById(described)?.textContent).toBe(
+      "Search for a command and press Enter to run it."
+    );
+    // Named and described once: `CommandDialog` draws its own title, so a second one passed in
+    // as a child would be another element answering to the same id.
+    const labelledBy = dialog.getAttribute("aria-labelledby") ?? "";
+    expect(document.querySelectorAll(`[id="${labelledBy}"]`)).toHaveLength(1);
+    expect(document.querySelectorAll(`[id="${described}"]`)).toHaveLength(1);
   });
 
   it("reports the empty state rather than an empty list", () => {
