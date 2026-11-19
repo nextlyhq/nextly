@@ -12,6 +12,7 @@ import type { DeliveryAttempt } from "@admin/services/emailActivityApi";
 import {
   attemptText,
   detailState,
+  emptyTimelineText,
   failureKindOf,
   versionText,
 } from "../activity-detail-model";
@@ -178,6 +179,69 @@ describe("detailState", () => {
   });
 });
 
+describe("unknown outcomes", () => {
+  const unknown = {
+    templateCaused: false,
+    attemptOnRecord: true,
+    failureKind: "unknown" as const,
+    failureReason: "The provider's answer was lost.",
+  };
+
+  it("tells a queued email still retrying not to be sent by hand as well", () => {
+    const state = detailState({
+      ...unknown,
+      source: "queued",
+      outcome: "retrying",
+    });
+    expect(state.todo).toMatch(/don’t send it by hand/i);
+    expect(state.todo).not.toMatch(/before sending it again/i);
+  });
+
+  it("sends one attempt of a queued email to the queued email", () => {
+    const state = detailState({
+      ...unknown,
+      source: "attempt",
+      outcome: "failed",
+    });
+    expect(state.todo).toMatch(/open the queued email/i);
+  });
+
+  it("keeps the warning when retention has removed every attempt", () => {
+    const state = detailState({
+      ...unknown,
+      attemptOnRecord: false,
+      source: "queued",
+      outcome: "retrying",
+    });
+    expect(state.title).toBe("Retrying: it may have arrived");
+    expect(state.todo).toMatch(/don’t send it by hand/i);
+  });
+
+  it("asks a direct send to be checked before it is sent again", () => {
+    const state = detailState({
+      ...unknown,
+      source: "delivery",
+      outcome: "failed",
+    });
+    expect(state.todo).toMatch(/provider’s own log before sending it again/i);
+  });
+});
+
+describe("emptyTimelineText", () => {
+  it("says no attempt yet only for a queued email still waiting for its first", () => {
+    expect(emptyTimelineText({ state: "waiting", attempts: 0 })).toBe(
+      "No attempt yet."
+    );
+    const none =
+      "No delivery is on record: none was made, or it’s no longer kept.";
+    // Sent, attempted, or with its count pruned: it may well have been tried.
+    expect(emptyTimelineText({ state: "sent", attempts: 1 })).toBe(none);
+    expect(emptyTimelineText({ state: "waiting", attempts: 2 })).toBe(none);
+    expect(emptyTimelineText({ state: "failed", attempts: null })).toBe(none);
+    expect(emptyTimelineText(null)).toBe(none);
+  });
+});
+
 describe("versionText", () => {
   it("names the owner's default, the site's override, and a draft test", () => {
     expect(
@@ -211,11 +275,17 @@ describe("versionText", () => {
   it("says plainly when there was no template, or the version wasn't recorded", () => {
     expect(versionText("none")).toEqual({ label: "No template", digest: null });
     expect(versionText("not-recorded")).toEqual({
-      label: "Not recorded (sent before versions were kept)",
+      label: "Not recorded (from before versions were kept)",
+      digest: null,
+    });
+    // "Not sent yet" only while it can still be sent; a failed or cancelled
+    // email never will be.
+    expect(versionText(null, true)).toEqual({
+      label: "Not sent yet",
       digest: null,
     });
     expect(versionText(null)).toEqual({
-      label: "Not sent yet",
+      label: "No version recorded",
       digest: null,
     });
   });
@@ -277,6 +347,16 @@ describe("failureKindOf", () => {
       "retryable"
     );
     expect(failureKindOf(lost)).toBe("retryable");
+    // A later retry that failed before any provider was asked records its
+    // own failure and no attempt: it never borrows the earlier unknown.
+    const later = {
+      retryable: true,
+      reason: "The attempt failed before a provider was asked.",
+    };
+    expect(failureKindOf(later, newest({}))).toBe("retryable");
+    expect(
+      failureKindOf({ ...lost, status: 503 }, newest({ failureStatus: null }))
+    ).toBe("retryable");
     // A refusal stays one, whatever an earlier attempt said.
     expect(failureKindOf({ retryable: false, reason: "x" }, newest({}))).toBe(
       "refused"

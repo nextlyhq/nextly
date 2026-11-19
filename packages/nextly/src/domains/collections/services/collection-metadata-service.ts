@@ -1809,6 +1809,9 @@ export class CollectionMetadataService extends BaseService {
       import("../../../hooks/hook-registry"),
       import("./collection-delete-failure"),
     ]);
+    const { deleteTransactionInTries } = await import(
+      "./delete-transaction-tries"
+    );
     // What each registry row's removal found, read after the commit.
     const unregistered = new Map<string, UnregisteredCollectionRow>();
     const slugs = ordered.map(({ slug }) => slug);
@@ -1816,60 +1819,86 @@ export class CollectionMetadataService extends BaseService {
     // teardown can drop a table): until then a failure on MySQL has
     // committed nothing, and is answered as on the other dialects.
     let ddlStarted = false;
+    // The plugins' handler calls the current try made: a try that made any, then ended waiting
+    // for a busy table, is not run again, since a handler may act outside the database.
+    let handlerCalls = 0;
     try {
-      await this.adapter.transaction(async tx => {
-        // The registry rows first, held for update to the end: a write that
-        // must not outlive a collection holds its row for share
-        // (`holdCollectionsIn`), so it either commits before the plugins'
-        // handlers below read what to remove, or waits and finds the
-        // collection gone.
-        const hold = await this.collectionService.holdCollectionsIn(
-          tx,
-          slugs,
-          "update"
-        );
-        // Released once the last statement below has run, failed or not: on
-        // MySQL the hold outlives the first table drop's commit only through
-        // it, and it belongs to this connection, which the transaction hands
-        // back next.
-        try {
-          // The rows held must be the rows loaded: a slug deleted and created
-          // again since names a new collection, which this delete must not
-          // touch. Refused here, before anything is removed.
-          assertHeldAsLoaded(ordered, hold.ids);
-          // The plugins' handlers next: what they remove is plain rows, so
-          // here, before any DDL, a handler that throws rolls the whole
-          // delete back on every dialect, MySQL included, whose table drops
-          // below commit what ran before them.
-          await runCollectionDeleteHandlers(getActiveHookRegistry(), slugs, tx);
-          // Marked at the first statement that can commit on MySQL, not
-          // before the teardown that may issue none: a failure before it
-          // rolls everything back, and keeps its own error.
-          const teardownAdapter = noticingDdl(
-            teardownAdapterIn(this.adapter, tx),
-            () => {
-              ddlStarted = true;
-            }
+      // In tries for a busy table on PostgreSQL and SQLite: a try whose wait for a held table
+      // ended rolled back whole, and the next runs all of it again, unless it ran a plugin's
+      // handler. MySQL runs it once, as before.
+      await deleteTransactionInTries(
+        this.adapter,
+        `delete ${slugs.length === 1 ? "collection" : "collections"} ${slugs.map(slug => JSON.stringify(slug)).join(", ")}`,
+        line => this.logger.warn(line),
+        async tx => {
+          handlerCalls = 0;
+          // The registry rows first, held for update to the end: a write that
+          // must not outlive a collection holds its row for share
+          // (`holdCollectionsIn`), so it either commits before the plugins'
+          // handlers below read what to remove, or waits and finds the
+          // collection gone.
+          const hold = await this.collectionService.holdCollectionsIn(
+            tx,
+            slugs,
+            "update"
           );
-          for (const { slug, collection } of ordered) {
-            await this.tearDownStoredWithIt(slug, collection, teardownAdapter);
-          }
-          for (const statement of drops) {
-            ddlStarted = true;
-            await tx.execute(statement);
-          }
-          for (const { slug } of ordered) {
-            unregistered.set(
-              slug,
-              await this.collectionService.unregisterCollectionIn(tx, slug)
+          // Released once the last statement below has run, failed or not: on
+          // MySQL the hold outlives the first table drop's commit only through
+          // it, and it belongs to this connection, which the transaction hands
+          // back next.
+          try {
+            // The rows held must be the rows loaded: a slug deleted and created
+            // again since names a new collection, which this delete must not
+            // touch. Refused here, before anything is removed.
+            assertHeldAsLoaded(ordered, hold.ids);
+            // The plugins' handlers next: what they remove is plain rows, so
+            // here, before any DDL, a handler that throws rolls the whole
+            // delete back on every dialect, MySQL included, whose table drops
+            // below commit what ran before them.
+            // Counted as each call begins, so one that then throws, its own wait for a busy
+            // table included, still counts.
+            await runCollectionDeleteHandlers(
+              getActiveHookRegistry(),
+              slugs,
+              tx,
+              () => {
+                handlerCalls += 1;
+              }
             );
+            // Marked at the first statement that can commit on MySQL, not
+            // before the teardown that may issue none: a failure before it
+            // rolls everything back, and keeps its own error.
+            const teardownAdapter = noticingDdl(
+              teardownAdapterIn(this.adapter, tx),
+              () => {
+                ddlStarted = true;
+              }
+            );
+            for (const { slug, collection } of ordered) {
+              await this.tearDownStoredWithIt(
+                slug,
+                collection,
+                teardownAdapter
+              );
+            }
+            for (const statement of drops) {
+              ddlStarted = true;
+              await tx.execute(statement);
+            }
+            for (const { slug } of ordered) {
+              unregistered.set(
+                slug,
+                await this.collectionService.unregisterCollectionIn(tx, slug)
+              );
+            }
+          } finally {
+            // A release that fails means the connection is gone, and its locks
+            // with it; the delete's own outcome is what the caller is told.
+            await hold.release().catch(() => undefined);
           }
-        } finally {
-          // A release that fails means the connection is gone, and its locks
-          // with it; the delete's own outcome is what the caller is told.
-          await hold.release().catch(() => undefined);
-        }
-      });
+        },
+        { ranUnknownCode: () => handlerCalls > 0 }
+      );
     } catch (error) {
       // On MySQL a registry row can have gone before the failure, so the
       // cached rows are not trusted either way.

@@ -60,11 +60,17 @@ const EXPRESSION = "(expression)";
 /** The indexes a table declares, by physical column name, in order. */
 function declaredIndexes(
   indexes: ReadonlyArray<{
-    config: { name: string; columns: ReadonlyArray<unknown>; unique?: boolean };
+    // Drizzle leaves an index's name unset until the table is built; every
+    // index these tables declare is named, so an unset one reads as empty.
+    config: {
+      name?: string;
+      columns: ReadonlyArray<unknown>;
+      unique?: boolean;
+    };
   }>
 ): DeclaredIndex[] {
   return indexes.map(({ config }) => ({
-    name: config.name,
+    name: config.name ?? "",
     unique: Boolean(config.unique),
     // An index may be declared over a SQL EXPRESSION rather than a column,
     // and such an entry carries no name. Kept as a marker rather than

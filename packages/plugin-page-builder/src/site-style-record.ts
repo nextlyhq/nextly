@@ -35,7 +35,8 @@ import {
   isLook,
   isTextStyle,
   isUsableNamedClass,
-  MAX_TOKEN_NAME_LENGTH,
+  // The colour order's one rule, which a design token file's is read by too.
+  isColourOrder,
   ownLooksRead,
   namedClassesRead,
   newStyleIssueBudget,
@@ -63,6 +64,7 @@ import {
   type TokenKind,
 } from "@nextlyhq/blocks-engine";
 
+import { isFluidRange } from "./site-fluid-range";
 import {
   BUILT_IN_NAME_FIELDS,
   resolveSiteStyle,
@@ -181,47 +183,6 @@ function isStoredTokenShape(entry: unknown): entry is StoredTokenShape {
     optionalRecord(entry.extensions) &&
     optionalRecord(entry.unreadExtension) &&
     (entry.fluid === undefined || isFluidSizes(entry.fluid))
-  );
-}
-
-/** The most colours an order may list: far beyond any palette. */
-const MAX_COLOUR_ORDER = 1000;
-
-/**
- * The site's colour order as stored: identities, each once, none longer
- * than a code name can be. A colour the order does not name is listed after
- * the ones it does, so an order naming a colour since removed is harmless.
- */
-function isColourOrder(value: unknown): value is readonly string[] {
-  return (
-    Array.isArray(value) &&
-    value.length <= MAX_COLOUR_ORDER &&
-    value.every(
-      identity =>
-        typeof identity === "string" &&
-        identity !== "" &&
-        identity.length <= MAX_TOKEN_NAME_LENGTH
-    ) &&
-    new Set(value).size === value.length
-  );
-}
-
-/**
- * The site's fluid range as stored: two positive, finite widths in px, the
- * smallest screen below the largest, or a fluid size would grow across no
- * width at all.
- */
-export function isFluidRange(
-  value: unknown
-): value is { min: number; max: number } {
-  return (
-    isPlainRecord(value) &&
-    typeof value.min === "number" &&
-    typeof value.max === "number" &&
-    Number.isFinite(value.min) &&
-    Number.isFinite(value.max) &&
-    value.min > 0 &&
-    value.min < value.max
   );
 }
 

@@ -842,34 +842,44 @@ export class SingleMetadataService {
     /** Whether the delete read the Single's registry row before it began. */
     options: { rowRead: boolean }
   ): Promise<void> {
-    const [{ teardownAdapterIn }, { forgetCompanionReadiness }] =
-      await Promise.all([
-        import("../../collections/services/teardown-adapter-in-transaction"),
-        import("../../i18n/runtime/companion-readiness"),
-      ]);
+    const [
+      { teardownAdapterIn },
+      { forgetCompanionReadiness },
+      { deleteTransactionInTries },
+    ] = await Promise.all([
+      import("../../collections/services/teardown-adapter-in-transaction"),
+      import("../../i18n/runtime/companion-readiness"),
+      import("../../collections/services/delete-transaction-tries"),
+    ]);
     let unregistered: UnregisteredSingleRow | undefined;
     try {
       // The row's removal counts the registry write on the same transaction (`unregisterSingleIn`).
-      await adapter.transaction(async tx => {
-        const through = teardownAdapterIn(adapter, tx);
-        if (tableName) {
-          await this.dropJunctionTables(tableName, fields, through);
-          await this.dropSingleStorage(slug, tableName, through);
+      // In tries for a busy table: a try whose wait for a held table ended rolled back whole.
+      await deleteTransactionInTries(
+        adapter,
+        `delete single "${slug}"`,
+        line => this.logger.warn(line),
+        async tx => {
+          const through = teardownAdapterIn(adapter, tx);
+          if (tableName) {
+            await this.dropJunctionTables(tableName, fields, through);
+            await this.dropSingleStorage(slug, tableName, through);
+          }
+          unregistered = await this.registry.unregisterSingleIn(tx, slug);
+          // A row the delete read, which its removal then did not remove (a row-level rule or a
+          // trigger keeping it), would describe storage this transaction dropped: refused here, so
+          // the drops roll back with it and the Single stays whole.
+          if (options.rowRead && unregistered.removed === 0) {
+            throw NextlyError.conflict({
+              reason: "state",
+              message:
+                "The Single's registry entry could not be removed, so nothing was deleted. Check what " +
+                "keeps the entry (a row-level rule or a trigger on the registry), then delete again.",
+              logContext: { reason: "single-registry-row-not-removed", slug },
+            });
+          }
         }
-        unregistered = await this.registry.unregisterSingleIn(tx, slug);
-        // A row the delete read, which its removal then did not remove (a row-level rule or a
-        // trigger keeping it), would describe storage this transaction dropped: refused here, so
-        // the drops roll back with it and the Single stays whole.
-        if (options.rowRead && unregistered.removed === 0) {
-          throw NextlyError.conflict({
-            reason: "state",
-            message:
-              "The Single's registry entry could not be removed, so nothing was deleted. Check what " +
-              "keeps the entry (a row-level rule or a trigger on the registry), then delete again.",
-            logContext: { reason: "single-registry-row-not-removed", slug },
-          });
-        }
-      });
+      );
     } catch (error) {
       // Mapped as the registry's own delete maps a driver's failure, so every road reports one
       // kind of error.

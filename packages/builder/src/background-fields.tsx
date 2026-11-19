@@ -15,11 +15,11 @@ import {
 } from "./background-placement";
 import { declarationsText } from "./code-hints";
 import { CssHint, OptionWrites, useFieldDescription } from "./css-hint";
+import { FieldPathWrites } from "./field-path-writes";
 import { FocalFrame } from "./focal-frame";
 import { FocalCss, FocalPointField, refusedBy } from "./focal-point-field";
 import { InheritedValue } from "./inherited-value";
 import { radioGroupStep } from "./roving-radios";
-import { FieldPathWrites } from "./field-path-writes";
 
 type CommitOutcome = "applied" | "refused" | "unchanged";
 
