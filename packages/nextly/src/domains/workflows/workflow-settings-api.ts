@@ -591,17 +591,17 @@ async function rolesHoldingEverywhere(
     });
     return rows.map(row => String(row.id)).sort();
   }
-  let holding: Set<string> | null = null;
-  for (const slug of slugs) {
-    const here = new Set(await rolesHolding(adapter, action, slug));
-    holding =
-      holding === null
-        ? here
-        : new Set([...holding].filter(id => here.has(id)));
+  // Start from the first attachment's holders, then keep only those every other attachment
+  // agrees on.
+  const [first, ...rest] = slugs;
+  let holding = await rolesHolding(adapter, action, first ?? "");
+  for (const slug of rest) {
     // No role left to keep, so no later attachment can add one.
-    if (holding.size === 0) break;
+    if (holding.length === 0) break;
+    const here = new Set(await rolesHolding(adapter, action, slug));
+    holding = holding.filter(id => here.has(id));
   }
-  return [...(holding ?? [])].sort();
+  return [...new Set(holding)].sort();
 }
 
 /**
