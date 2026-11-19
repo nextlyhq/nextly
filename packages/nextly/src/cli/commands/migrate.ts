@@ -2487,6 +2487,17 @@ function rowsOwedError(owed: readonly string[]): NextlyError {
   });
 }
 
+/** Warns of what the entities an applied migration dropped still hold, which the next run removes. */
+function reportRowsOwed(
+  owed: readonly string[],
+  logger: CommandContext["logger"]
+): void {
+  if (owed.length === 0) return;
+  logger.warn(
+    `${formatCount(owed.length, "dropped entity", "dropped entities")} still ${owed.length === 1 ? "holds" : "hold"} rows this run could not remove: ${owed.join("; ")}.`
+  );
+}
+
 function reportMetadataOutcome(
   metadata: MigrateCoreResult["metadata"],
   logger: CommandContext["logger"]
@@ -2519,12 +2530,7 @@ function reportMetadataOutcome(
   }
 
   // What the entities an applied migration dropped still hold, which the next run removes.
-  const owed = metadata.rowsOwed ?? [];
-  if (owed.length > 0) {
-    logger.warn(
-      `${formatCount(owed.length, "dropped entity", "dropped entities")} still ${owed.length === 1 ? "holds" : "hold"} rows this run could not remove: ${owed.join("; ")}.`
-    );
-  }
+  reportRowsOwed(metadata.rowsOwed ?? [], logger);
 
   // The rows of entities an applied migration dropped, removed with it.
   if (metadata.rowsRemoved.length > 0) {
@@ -2720,13 +2726,11 @@ async function addDocumentColumnsFor(deps: MigrateCoreDeps): Promise<void> {
 export async function migrateCore(
   deps: MigrateCoreDeps
 ): Promise<MigrateCoreResult> {
-  // A test's stop points (`stopAt`), installed for this run alone.
-  return withStopPoints(deps.stopAt, () => runMigrateCore(deps));
-}
-
-async function runMigrateCore(
-  deps: MigrateCoreDeps
-): Promise<MigrateCoreResult> {
+  // A test's stop points (`stopAt`), installed for this run alone: the run itself goes on below.
+  if (deps.stopAt !== undefined) {
+    const { stopAt, ...run } = deps;
+    return withStopPoints(stopAt, () => migrateCore(run));
+  }
   // Refused HERE rather than in `runMigrate`, because this function is also
   // reached from `runMigrationsOnBoot` and from boot-apply. A refusal in the
   // command alone would let a production boot apply migrations that silently
