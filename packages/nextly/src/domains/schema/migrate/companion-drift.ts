@@ -2,55 +2,62 @@
  * The drift check of the companion files `nextly migrate:create` writes for an entity's
  * translations table, made before `nextly migrate` applies any pending file.
  *
- * A companion file has no snapshot: the snapshot records the main tables, and these files carry
- * statements that move values and must run as written. Each one records in its header what it is
- * for, its columns included, so the table the applied companion files left is known
- * (`readCompanionHistory`). The real table is compared with that: whether it is there, and each
- * translated column by name and by whether it holds what the files made it to hold. A difference
- * is drift, reported with the companion file as a main file's drift is, and nothing is applied.
+ * A companion file has no snapshot of its own: it carries statements that move values and must
+ * run as written. What its table should look like is recorded all the same, in two places.
  *
- * Not every translations table can be checked. One no applied file made (a development sync or
- * `db:sync` made it), or one with a localization file this build cannot read in its history, has
+ * - The snapshot of the last applied main file says which tables are translated and names each
+ *   one's translated columns. It is written from the config, so it follows a renamed field and a
+ *   collection removed and added again.
+ * - The headers of the applied companion files say what type a column was made with, where the
+ *   file made it with the field's own type: a file that creates the table, or adds a column to
+ *   it. A file that moves a field into translation may make the column with the main column's
+ *   wider type, which its header does not record, so of such a column only the name is judged.
+ *
+ * The real table is compared with that record: whether it is there, each translated column by
+ * name, and a column's type where one is recorded. A difference is drift, reported with the
+ * companion file, and nothing is applied.
+ *
+ * Not every translations table can be checked. One the snapshot does not record (a development
+ * sync or `db:sync` made it, or its snapshot was written before column names were recorded) has
  * no known shape; its files are applied, and the reason is said in place of the check.
  *
- * A column a pending file of the same entity names is left to that file: a run stopped part-way
+ * A column a file not yet applied names is left to that file: a run stopped part-way, or a sync,
  * can leave it added or dropped already, and the file's own checks decide what to do with it.
  *
  * @module domains/schema/migrate/companion-drift
  */
-import { copyFile, mkdtemp, readFile, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { readFile } from "node:fs/promises";
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import { COMPANION_STRUCTURAL_COLUMNS } from "../../i18n/companion-columns";
 import { earlierCompanionColumnType } from "../../i18n/migration/companion-column-holds";
-import {
-  companionHistoryKey,
-  readCompanionHistory,
-  type CompanionHistory,
-} from "../../i18n/migration/companion-history";
+import { companionHistoryKey } from "../../i18n/migration/companion-history";
 import { ddlType } from "../../i18n/migration/ddl-types";
-import {
-  parseLocalizationIntent,
-  type LocalizationMigrationIntent,
-} from "../../i18n/migration/migration-intent";
+import type { LocalizationMigrationIntent } from "../../i18n/migration/migration-intent";
 import type { LocalizedColumnSpec } from "../../i18n/migration/types";
 import { LOCALIZATION_MIGRATION_MARKER } from "../../i18n/migration/write-migration-file";
-import { columnHolds } from "../pipeline/diff/declared-size";
+import { columnHolds, declaredSize } from "../pipeline/diff/declared-size";
 import { introspectLiveColumns } from "../pipeline/diff/introspect-live";
 import { normalizeType } from "../pipeline/diff/normalize-type";
-import type { ColumnSpec } from "../pipeline/diff/types";
+import type {
+  ColumnSpec,
+  NextlySchemaSnapshot,
+  TableSpec,
+} from "../pipeline/diff/types";
 
 import { migrationDriftError, type DriftItem } from "./drift-error";
 
-/** A migration file as the run lists it: its name without `.sql`, and where it is. */
+/** A migration file as the run lists it. */
 export interface CompanionFileRef {
+  /** Its name without `.sql`. */
   name: string;
   filePath: string;
+  /** What a companion file's header says it is for, as the run read it. */
+  localization?: LocalizationMigrationIntent;
 }
 
-/** What the check found of the pending companion files, by name. */
+/** What the check found of the companion files this run applies, by name. */
 export interface CompanionCheck {
   /** The files whose translations table was compared and matches. */
   checked: ReadonlySet<string>;
@@ -58,72 +65,94 @@ export interface CompanionCheck {
   unchecked: ReadonlyMap<string, string>;
 }
 
-const NOTHING: CompanionCheck = { checked: new Set(), unchecked: new Map() };
+type Kind = LocalizationMigrationIntent["kind"];
+type IntentFile = CompanionFileRef & {
+  localization: LocalizationMigrationIntent;
+};
 
-/** The kinds of file that make a translations table. */
-const MAKES_TABLE = new Set<LocalizationMigrationIntent["kind"]>([
+const hasIntent = (file: CompanionFileRef): file is IntentFile =>
+  file.localization !== undefined;
+
+const keyOf = ({ entity, spec }: LocalizationMigrationIntent): string =>
+  companionHistoryKey(entity, spec.collection, spec.mainTable);
+
+/** The kinds of file after which the translations table is there, or gone, whatever it was. */
+const MAKES_OR_DROPS_TABLE: ReadonlySet<Kind> = new Set<Kind>([
   "create-only",
   "enable",
+  "disable",
 ]);
 
-/** One pending companion file, read. */
-type PendingFile = CompanionFileRef &
-  (
-    | { reading: "intent"; intent: LocalizationMigrationIntent }
-    /** A localization file whose header this build cannot read. */
-    | { reading: "unread" }
-  );
-
-/** `file` as a pending companion file, or undefined when it is not one. */
-async function readPending(
-  file: CompanionFileRef
-): Promise<PendingFile | undefined> {
-  const content = await readFile(file.filePath, "utf-8");
-  let intent: LocalizationMigrationIntent | null;
-  try {
-    intent = parseLocalizationIntent(content, `${file.name}.sql`);
-  } catch {
-    return { ...file, reading: "unread" };
-  }
-  if (intent !== null) return { ...file, reading: "intent", intent };
-  return content.includes(LOCALIZATION_MIGRATION_MARKER)
-    ? { ...file, reading: "unread" }
-    : undefined;
-}
-
 /**
- * What the applied companion files left, by the one reader of their headers. It reads a folder,
- * so the applied localization files are set in one of their own, which is removed after.
+ * What each kind of file does to the record of exact column types: a create or an add makes its
+ * columns with the field's own type; a move into translation may carry the main column's, so its
+ * columns are no longer known exactly; a move out and a disable drop theirs.
  */
-async function historyOfApplied(
-  applied: readonly CompanionFileRef[]
-): Promise<CompanionHistory> {
-  const folder = await mkdtemp(join(tmpdir(), "nextly-applied-companions-"));
-  try {
-    for (const file of applied) {
-      const content = await readFile(file.filePath, "utf-8");
-      if (!content.includes(LOCALIZATION_MIGRATION_MARKER)) continue;
-      await copyFile(file.filePath, join(folder, `${file.name}.sql`));
-    }
-    return await readCompanionHistory(folder);
-  } finally {
-    await rm(folder, { recursive: true, force: true });
-  }
+const TYPES_AFTER: Record<
+  Kind,
+  (
+    types: Map<string, LocalizedColumnSpec>,
+    named: readonly LocalizedColumnSpec[]
+  ) => void
+> = {
+  "create-only": record,
+  adds: record,
+  enable: forget,
+  joins: forget,
+  shared: forget,
+  disable: types => types.clear(),
+  archive: () => {},
+  unique: () => {},
+};
+
+function record(
+  types: Map<string, LocalizedColumnSpec>,
+  named: readonly LocalizedColumnSpec[]
+): void {
+  for (const column of named) types.set(column.name, column);
 }
 
-/** The translations table's columns as the database has them, or undefined when it is not there. */
-async function liveColumns(
-  db: unknown,
-  dialect: SupportedDialect,
-  table: string
-): Promise<readonly ColumnSpec[] | undefined> {
-  const live = await introspectLiveColumns(db, dialect, [table]);
-  return live.tables.find(each => each.name === table)?.columns;
+function forget(
+  types: Map<string, LocalizedColumnSpec>,
+  named: readonly LocalizedColumnSpec[]
+): void {
+  for (const column of named) types.delete(column.name);
 }
+
+/** The exact column types the applied companion files record, by entity then column. */
+function exactTypes(
+  applied: readonly CompanionFileRef[]
+): Map<string, Map<string, LocalizedColumnSpec>> {
+  const byEntity = new Map<string, Map<string, LocalizedColumnSpec>>();
+  for (const file of applied.filter(hasIntent)) {
+    const key = keyOf(file.localization);
+    const types = byEntity.get(key) ?? new Map<string, LocalizedColumnSpec>();
+    TYPES_AFTER[file.localization.kind](types, file.localization.spec.columns);
+    byEntity.set(key, types);
+  }
+  return byEntity;
+}
+
+/** The snapshot of the last applied file that has one, or null when none has. */
+async function lastAppliedSnapshot(
+  applied: readonly CompanionFileRef[],
+  snapshotOf: SnapshotOf
+): Promise<NextlySchemaSnapshot | null> {
+  for (const file of [...applied].reverse()) {
+    const found = await snapshotOf(file.name);
+    if (found !== null) return found.snapshot;
+  }
+  return null;
+}
+
+/** A migration's snapshot by the migration's name, or null when it has none. */
+type SnapshotOf = (
+  name: string
+) => Promise<{ snapshot: NextlySchemaSnapshot } | null>;
 
 /**
- * Whether `live` holds what the files made the column to hold: the type they gave it or a wider
- * one, or the type an earlier release gave it. SQLite enforces no size, so there none decides.
+ * Whether `live` holds what a file made the column to hold: the type it gave it or a wider one,
+ * or the type an earlier release gave it. SQLite enforces no size, so there none decides.
  */
 function holds(
   live: ColumnSpec,
@@ -143,56 +172,72 @@ function holds(
   );
 }
 
-/** One entity's pending companion files, in the order they run. */
-interface PendingEntity {
-  key: string;
-  files: (PendingFile & { reading: "intent" })[];
+/** A live column's definition as a drift line says it: its type, its size, and NOT NULL. */
+function definitionOf(column: ColumnSpec): string {
+  const size = declaredSize(column);
+  const type =
+    size === undefined || column.type.includes("(")
+      ? column.type
+      : `${column.type}(${size})`;
+  return column.nullable ? type : `${type} NOT NULL`;
 }
 
-/**
- * How the real table differs from the one the applied files left, as drift items. The table's
- * own columns (`_parent`, `_locale` and the others it keeps for itself) begin with an underscore
- * and are no field's.
- */
+/** How the real table's columns differ from the recorded ones, as drift items. */
 function differences(args: {
   table: string;
-  expected: ReadonlyMap<string, LocalizedColumnSpec>;
+  names: readonly string[];
+  types: ReadonlyMap<string, LocalizedColumnSpec> | undefined;
   live: readonly ColumnSpec[];
-  /** The columns a pending file of the entity names. */
-  pendingColumns: ReadonlySet<string>;
+  /** The columns a file not yet applied names. */
+  leftToFiles: ReadonlySet<string>;
   dialect: SupportedDialect;
 }): DriftItem[] {
-  const { table, expected, live, pendingColumns, dialect } = args;
+  const { table, names, types, live, leftToFiles, dialect } = args;
   const byName = new Map(live.map(column => [column.name, column]));
   const items: DriftItem[] = [];
-  for (const [name, recorded] of expected) {
-    if (pendingColumns.has(name)) continue;
+  for (const name of names) {
+    if (leftToFiles.has(name)) continue;
     const column = byName.get(name);
+    const recorded = types?.get(name);
     if (column === undefined) {
-      items.push({
-        kind: "-",
-        detail: `column ${table}.${name} (${ddlType(recorded, dialect)})`,
-      });
-    } else if (!holds(column, recorded, dialect)) {
+      items.push({ kind: "-", detail: `column ${table}.${name}` });
+    } else if (recorded !== undefined && !holds(column, recorded, dialect)) {
       items.push({
         kind: "?",
-        detail: `column ${table}.${name} is ${column.type}, and the migration files made it ${ddlType(recorded, dialect)}`,
+        detail: `column ${table}.${name} is ${definitionOf(column)}, and its migration file made it ${ddlType(recorded, dialect)}`,
       });
     }
   }
   for (const column of live) {
     if (
-      !column.name.startsWith("_") &&
-      !expected.has(column.name) &&
-      !pendingColumns.has(column.name)
+      !COMPANION_STRUCTURAL_COLUMNS.has(column.name) &&
+      !names.includes(column.name) &&
+      !leftToFiles.has(column.name)
     ) {
       items.push({
         kind: "+",
-        detail: `column ${table}.${column.name} (${column.type})`,
+        detail: `column ${table}.${column.name} (${definitionOf(column)})`,
       });
     }
   }
   return items;
+}
+
+/** One entity's companion files not yet applied, in the order they run. */
+interface PendingEntity {
+  key: string;
+  files: IntentFile[];
+}
+
+function byEntity(pending: readonly IntentFile[]): PendingEntity[] {
+  const entities = new Map<string, PendingEntity>();
+  for (const file of pending) {
+    const key = keyOf(file.localization);
+    const found = entities.get(key) ?? { key, files: [] };
+    found.files.push(file);
+    entities.set(key, found);
+  }
+  return [...entities.values()];
 }
 
 /** What one entity's check comes to: it matches, it cannot be checked (why), or it has drifted. */
@@ -201,57 +246,49 @@ type Verdict =
   | { kind: "unchecked"; why: string }
   | { kind: "drift"; items: DriftItem[] };
 
-async function judge(
-  entity: PendingEntity,
-  history: CompanionHistory,
-  db: unknown,
-  dialect: SupportedDialect
-): Promise<Verdict> {
+function judge(args: {
+  entity: PendingEntity;
+  /** The main table as the last applied snapshot records it. */
+  recorded: TableSpec | undefined;
+  types: ReadonlyMap<string, LocalizedColumnSpec> | undefined;
+  live: readonly ColumnSpec[] | undefined;
+  dialect: SupportedDialect;
+}): Verdict {
+  const { entity, recorded, types, live, dialect } = args;
   const [first] = entity.files;
   if (first === undefined) return { kind: "matches" };
-  const { spec } = first.intent;
-  const table = spec.companionTable;
-  const live = await liveColumns(db, dialect, table);
-  const kinds = new Set(entity.files.map(file => file.intent.kind));
-  const expected = history.columns.get(entity.key);
+  const table = first.localization.spec.companionTable;
+  const translated = recorded?.localized === true;
+  // A file that makes or drops the table may have done so already, in a run stopped part-way.
+  const tableLeftToFiles = entity.files.some(file =>
+    MAKES_OR_DROPS_TABLE.has(file.localization.kind)
+  );
 
-  // No applied file is about this table.
-  if (expected === undefined) {
-    if (live === undefined) return { kind: "matches" };
-    return {
-      kind: "unchecked",
-      why: `the translations table ${table} is already there, and no applied migration file made it`,
-    };
-  }
-  if (
-    !history.describes(first.intent.entity, spec.collection, spec.mainTable)
-  ) {
-    return {
-      kind: "unchecked",
-      why: `the translations table ${table} was not made by a migration file this version can read`,
-    };
-  }
-
-  const shouldBeThere = history.present.has(entity.key);
   if (live === undefined) {
-    // A table a pending file drops may be gone already, from a run stopped part-way.
-    return shouldBeThere && !kinds.has("disable")
+    return translated && !tableLeftToFiles
       ? { kind: "drift", items: [{ kind: "-", detail: `table ${table}` }] }
       : { kind: "matches" };
   }
-  if (!shouldBeThere) {
-    // One a pending file makes may be there already, from a run stopped part-way.
-    return MAKES_TABLE.has(first.intent.kind)
-      ? { kind: "matches" }
-      : { kind: "drift", items: [{ kind: "+", detail: `table ${table}` }] };
+  if (!translated) {
+    return {
+      kind: "unchecked",
+      why: `the translations table ${table} is already there, and no applied migration file records it`,
+    };
+  }
+  if (recorded.localizedColumns === undefined) {
+    return {
+      kind: "unchecked",
+      why: `the applied migration files were written before they recorded the columns of the translations table ${table}`,
+    };
   }
   const items = differences({
     table,
-    expected,
+    names: recorded.localizedColumns,
+    types,
     live,
-    pendingColumns: new Set(
+    leftToFiles: new Set(
       entity.files.flatMap(file =>
-        file.intent.spec.columns.map(column => column.name)
+        file.localization.spec.columns.map(column => column.name)
       )
     ),
     dialect,
@@ -259,56 +296,72 @@ async function judge(
   return items.length === 0 ? { kind: "matches" } : { kind: "drift", items };
 }
 
-/** The pending companion files with a readable header, grouped by entity in the order they run. */
-function byEntity(pending: readonly PendingFile[]): PendingEntity[] {
-  const entities = new Map<string, PendingEntity>();
-  for (const file of pending) {
-    if (file.reading !== "intent") continue;
-    const { entity, spec } = file.intent;
-    const key = companionHistoryKey(entity, spec.collection, spec.mainTable);
-    const found = entities.get(key) ?? { key, files: [] };
-    found.files.push(file);
-    entities.set(key, found);
+/** The files among `files` that are localization files whose header this build cannot read. */
+async function unreadCompanionFiles(
+  files: readonly CompanionFileRef[]
+): Promise<CompanionFileRef[]> {
+  const unread: CompanionFileRef[] = [];
+  for (const file of files) {
+    if (hasIntent(file)) continue;
+    const content = await readFile(file.filePath, "utf-8");
+    if (content.includes(LOCALIZATION_MIGRATION_MARKER)) unread.push(file);
   }
-  return [...entities.values()];
+  return unread;
 }
 
 /**
- * Checks every pending companion file's translations table against the one the applied companion
- * files left. Throws the drift refusal for the first entity whose table differs, before any file
- * applies; otherwise says which files were checked and which could not be, with why.
+ * Checks the translations table of every companion file this run applies against the record the
+ * applied files left. Throws the drift refusal for the first entity whose table differs, before
+ * any file applies; otherwise says which files were checked and which could not be, with why.
  */
 export async function checkCompanionFiles(args: {
   db: unknown;
   dialect: SupportedDialect;
-  /** The files the ledger records as applied. */
+  /** The files the ledger records as applied, in run order. */
   applied: readonly CompanionFileRef[];
-  /** The files this run applies, in order. */
+  /** Every file not yet applied, in run order. */
   pending: readonly CompanionFileRef[];
+  /** The names of the files this run applies: all of `pending`, or fewer under a step. */
+  runs: ReadonlySet<string>;
+  snapshotOf: SnapshotOf;
 }): Promise<CompanionCheck> {
-  const pending = (await Promise.all(args.pending.map(readPending))).filter(
-    file => file !== undefined
-  );
-  if (pending.length === 0) return NOTHING;
-
-  const history = await historyOfApplied(args.applied);
   const checked = new Set<string>();
   const unchecked = new Map<string, string>();
-  for (const file of pending) {
-    if (file.reading === "unread") {
-      unchecked.set(
-        file.name,
-        "this version cannot read what the file records of its translations table"
-      );
-    }
+  const running = args.pending.filter(file => args.runs.has(file.name));
+  for (const file of await unreadCompanionFiles(running)) {
+    unchecked.set(
+      file.name,
+      "this version cannot read what the file records of its translations table"
+    );
   }
-  for (const entity of byEntity(pending)) {
-    const verdict = await judge(entity, history, args.db, args.dialect);
-    const [first] = entity.files;
-    if (verdict.kind === "drift" && first !== undefined) {
+  const entities = byEntity(args.pending.filter(hasIntent)).filter(entity =>
+    entity.files.some(file => args.runs.has(file.name))
+  );
+  if (entities.length === 0) return { checked, unchecked };
+
+  const snapshot = await lastAppliedSnapshot(args.applied, args.snapshotOf);
+  const types = exactTypes(args.applied);
+  const tables = entities.flatMap(entity =>
+    entity.files.slice(0, 1).map(file => file.localization.spec.companionTable)
+  );
+  const live = await introspectLiveColumns(args.db, args.dialect, tables);
+  for (const entity of entities) {
+    const [first] = entity.files.filter(file => args.runs.has(file.name));
+    if (first === undefined) continue;
+    const { spec } = first.localization;
+    const verdict = judge({
+      entity,
+      recorded: snapshot?.tables.find(table => table.name === spec.mainTable),
+      types: types.get(entity.key),
+      live: live.tables.find(table => table.name === spec.companionTable)
+        ?.columns,
+      dialect: args.dialect,
+    });
+    if (verdict.kind === "drift") {
       throw migrationDriftError({
         migration: first.name,
         file: first.filePath,
+        translationsTable: spec.companionTable,
         driftItems: verdict.items,
       });
     }

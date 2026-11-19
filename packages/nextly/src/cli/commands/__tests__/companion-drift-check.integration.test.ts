@@ -15,9 +15,11 @@
  */
 
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -29,7 +31,10 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import { defineCollection, defineConfig } from "../../../config";
 import { createAdapter } from "../../../database/factory";
+import { parseLocalizationIntent } from "../../../domains/i18n/migration/migration-intent";
 import { setNonInteractive } from "../../../domains/schema/migrate/can-prompt";
+import { checkCompanionFiles } from "../../../domains/schema/migrate/companion-drift";
+import { parseSnapshotFile } from "../../../domains/schema/migrate-create/snapshot-io";
 import { introspectLiveSnapshot } from "../../../domains/schema/pipeline/diff/introspect-live";
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
 import {
@@ -71,6 +76,46 @@ const configWith = (translated: readonly string[]) =>
           type: "text" as const,
           localized: true,
         })),
+      }),
+    ],
+  });
+
+/** No collection at all: the translated one removed. */
+const configWithout = () =>
+  defineConfig({
+    localization: { locales: ["en", "es"], defaultLocale: "en" },
+    db: { migrationsDir: "./migrations" },
+    collections: [],
+  });
+
+/**
+ * A whole-number field `views`, translated or not, beside each of `translated`. Turning its
+ * translation on moves it into the translations table with a file that may carry the main
+ * column's type.
+ */
+const configWithViews = (
+  viewsTranslated: boolean,
+  translated: readonly string[]
+) =>
+  defineConfig({
+    localization: { locales: ["en", "es"], defaultLocale: "en" },
+    db: { migrationsDir: "./migrations" },
+    collections: [
+      defineCollection({
+        slug: SLUG,
+        localized: true,
+        fields: [
+          {
+            name: "views",
+            type: "number" as const,
+            localized: viewsTranslated,
+          },
+          ...translated.map(name => ({
+            name,
+            type: "text" as const,
+            localized: true,
+          })),
+        ],
       }),
     ],
   });
@@ -163,20 +208,36 @@ describeEachDialect(
       }
     }
 
-    async function migrateCreate(config: unknown, name: string): Promise<void> {
+    async function migrateCreate(
+      config: unknown,
+      name: string,
+      options: { acceptRenames?: boolean; acceptDataLoss?: true } = {}
+    ): Promise<void> {
       loaded.config = config;
       clock += 1;
       vi.setSystemTime(new Date(Date.UTC(2026, 9, 29, 12, 0, 0, clock)));
       const { context, said } = command();
       // As `--non-interactive` does: no rename is asked about.
       setNonInteractive(true);
+      // A refusal goes to standard error in the CLI's error shape; it is kept for the failure.
+      const stderr = vi
+        .spyOn(console, "error")
+        .mockImplementation((...parts: unknown[]) => {
+          said.push(parts.map(String).join(" "));
+        });
       const code = await exiting(() =>
-        runMigrateCreate(name, { cwd: dir }, context)
-      ).finally(() => setNonInteractive(false));
+        runMigrateCreate(name, { cwd: dir, ...options }, context)
+      ).finally(() => {
+        setNonInteractive(false);
+        stderr.mockRestore();
+      });
       expect(code, said.join("\n")).toBeUndefined();
     }
 
-    async function migrate(config: unknown) {
+    async function migrate(
+      config: unknown,
+      options: { acceptDataLoss?: true } = {}
+    ) {
       loaded.config = config;
       const { context, said } = command();
       // A refusal ends in the CLI's error shape, which goes to standard error through
@@ -187,7 +248,9 @@ describeEachDialect(
           said.push(parts.map(String).join(" "));
         });
       try {
-        const code = await exiting(() => runMigrate({ cwd: dir }, context));
+        const code = await exiting(() =>
+          runMigrate({ cwd: dir, ...options }, context)
+        );
         return { code, said: said.join("\n") };
       } finally {
         stderr.mockRestore();
@@ -288,32 +351,172 @@ describeEachDialect(
       expect((await pendingFiles()).map(file => file.name)).toEqual(pending);
     }, 240_000);
 
-    it("a table no applied file made is applied, saying why it was not checked", async () => {
+    it("a table whose columns no applied file records is applied, saying why it was not checked", async () => {
       const pending = await secondFieldPending();
       const companionFile = pending.find(name => name.includes("localization"));
-      // The applied companion files leave the folder and the ledger, as in a project whose
-      // table a development sync made: no file in hand says how the table came to be.
-      const folder = join(dir, "migrations");
-      const applied = readdirSync(folder).filter(
-        name =>
-          name.includes("localization") &&
-          !pending.includes(name.replace(/\.sql$/, ""))
+      // The applied snapshots as a release before the record wrote them: the table translated,
+      // its translated columns not named.
+      const meta = join(dir, "migrations", "meta");
+      const applied = readdirSync(meta).filter(
+        name => !pending.includes(name.replace(/\.snapshot\.json$/, ""))
       );
-      expect(applied.length).toBeGreaterThan(0);
-      for (const name of applied) rmSync(join(folder, name));
-      await adapter().executeQuery(
-        `DELETE FROM ${q("nextly_schema_events")} WHERE ${q("filename")} LIKE '%localization%'`
-      );
+      let stripped = 0;
+      for (const name of applied) {
+        const file = JSON.parse(readFileSync(join(meta, name), "utf-8")) as {
+          snapshot: { tables: { localizedColumns?: string[] }[] };
+        };
+        for (const table of file.snapshot.tables) {
+          if (table.localizedColumns !== undefined) stripped += 1;
+          delete table.localizedColumns;
+        }
+        writeFileSync(join(meta, name), JSON.stringify(file, null, 2));
+      }
+      expect(stripped).toBeGreaterThan(0);
 
       const run = await migrate(configWith(["title", "summary"]));
 
       expect(run.code, run.said).toBeUndefined();
       expect(run.said).toContain(
-        `${String(companionFile)}.sql is applied without a drift check: the translations table ${COMPANION} is already there, and no applied migration file made it.`
+        `${String(companionFile)}.sql is applied without a drift check: the applied migration files were written before they recorded the columns of the translations table ${COMPANION}.`
       );
       expect(run.said).not.toMatch(MISSING_SNAPSHOT);
       expect(await companionColumns()).toContain("summary");
     }, 240_000);
+
+    it("a translated field renamed by an applied file is not drift", async () => {
+      const pending = await secondFieldPending();
+      // The database and the record as an applied rename of `title` to `headline` leaves them:
+      // the column renamed, the last applied snapshot naming it `headline`, and the companion
+      // files' headers, which record no rename, still naming `title`.
+      await adapter().executeQuery(
+        `ALTER TABLE ${q(COMPANION)} RENAME COLUMN ${q("title")} TO ${q("headline")}`
+      );
+      const folder = join(dir, "migrations");
+      const files = readdirSync(folder)
+        .filter(name => name.endsWith(".sql"))
+        .sort()
+        .map(name => {
+          const filePath = join(folder, name);
+          return {
+            name: name.replace(/\.sql$/, ""),
+            filePath,
+            localization:
+              parseLocalizationIntent(readFileSync(filePath, "utf-8"), name) ??
+              undefined,
+          };
+        });
+      const applied = files.filter(file => !pending.includes(file.name));
+      const snapshotOf = (name: string) => {
+        const path = join(folder, "meta", `${name}.snapshot.json`);
+        if (!existsSync(path)) return Promise.resolve(null);
+        const file = parseSnapshotFile(readFileSync(path, "utf-8"), path);
+        for (const table of file.snapshot.tables) {
+          if (table.localizedColumns !== undefined) {
+            table.localizedColumns = table.localizedColumns.map(column =>
+              column === "title" ? "headline" : column
+            );
+          }
+        }
+        return Promise.resolve(file);
+      };
+      // The fixture's control: an applied snapshot does record the translated column.
+      const recorded = await Promise.all(
+        applied.map(file => snapshotOf(file.name))
+      );
+      expect(
+        recorded.flatMap(file =>
+          (file?.snapshot.tables ?? []).flatMap(t => t.localizedColumns ?? [])
+        )
+      ).toContain("headline");
+
+      const check = await checkCompanionFiles({
+        db: adapter().getDrizzle(),
+        dialect: dialect as TestDialect,
+        applied,
+        pending: files.filter(file => pending.includes(file.name)),
+        runs: new Set(pending),
+        snapshotOf,
+      });
+
+      const companionFile = pending.find(name => name.includes("localization"));
+      expect([...check.checked]).toEqual([companionFile]);
+      expect([...check.unchecked.keys()]).toEqual([]);
+    }, 240_000);
+
+    it("a translated collection removed and added again is not drift", async () => {
+      await migrateCreate(configWith(["title"]), "posts");
+      expect((await migrate(configWith(["title"]))).code).toBeUndefined();
+      await migrateCreate(configWithout(), "remove", { acceptDataLoss: true });
+      const removed = await migrate(configWithout(), { acceptDataLoss: true });
+      expect(removed.code, removed.said).toBeUndefined();
+      // The control: the translations table went with its collection.
+      expect(await companionColumns()).toEqual([]);
+
+      await migrateCreate(configWith(["title"]), "again");
+      const run = await migrate(configWith(["title"]));
+
+      expect(run.code, run.said).toBeUndefined();
+      expect(run.said).not.toMatch(MISSING_SNAPSHOT);
+      expect(await companionColumns()).toContain("title");
+    }, 240_000);
+
+    /** `column` of the translations table given `type`, by hand. */
+    async function retype(column: string, type: string): Promise<void> {
+      await adapter().executeQuery(
+        dialect === "mysql"
+          ? `ALTER TABLE ${q(COMPANION)} MODIFY COLUMN ${q(column)} ${type}`
+          : `ALTER TABLE ${q(COMPANION)} ALTER COLUMN ${q(column)} TYPE ${type}`
+      );
+    }
+
+    // SQLite cannot change a column's type in place, and enforces none.
+    it.skipIf(dialect === "sqlite")(
+      "a column a file moved into translation, standing wider than its field, is not drift",
+      async () => {
+        await migrateCreate(configWithViews(false, ["title"]), "posts");
+        expect(
+          (await migrate(configWithViews(false, ["title"]))).code
+        ).toBeUndefined();
+        await migrateCreate(configWithViews(true, ["title"]), "views", {
+          acceptDataLoss: true,
+        });
+        const joined = await migrate(configWithViews(true, ["title"]), {
+          acceptDataLoss: true,
+        });
+        expect(joined.code, joined.said).toBeUndefined();
+        expect(await companionColumns()).toContain("views");
+        // As a file that carried a wider main column leaves it: the header records the
+        // field's own type, and the column stands wider.
+        await retype("views", "BIGINT");
+
+        await migrateCreate(
+          configWithViews(true, ["title", "summary"]),
+          "summary"
+        );
+        const run = await migrate(configWithViews(true, ["title", "summary"]));
+
+        expect(run.code, run.said).toBeUndefined();
+        expect(await companionColumns()).toContain("summary");
+      },
+      240_000
+    );
+
+    it.skipIf(dialect === "sqlite")(
+      "a column narrowed by hand from the type its file made it with is drift",
+      async () => {
+        const pending = await secondFieldPending();
+        await retype("title", "VARCHAR(10)");
+
+        const run = await migrate(configWith(["title", "summary"]));
+
+        expect(run.code, run.said).toBe(1);
+        expect(run.said).toMatch(
+          new RegExp(`\\? column ${COMPANION}\\.title is varchar\\(10\\)`, "i")
+        );
+        expect((await pendingFiles()).map(file => file.name)).toEqual(pending);
+      },
+      240_000
+    );
 
     it("applying a localized collection's generated files prints no missing-snapshot warning", async () => {
       await migrateCreate(configWith(["title"]), "posts");

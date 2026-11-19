@@ -4970,7 +4970,9 @@ export async function runFileMigrations(args: {
     db,
     dialect,
     applied: all.filter(m => plan.done.has(m)),
-    pending: all.filter(m => plan.runs.has(m)),
+    pending: all.filter(m => !plan.done.has(m)),
+    runs: new Set(all.filter(m => plan.runs.has(m)).map(m => m.name)),
+    snapshotOf: name => loadTargetSnapshot(metaDir, name),
   });
 
   // The last file this run applied, which a run that lost the schema lock names, so the operator

@@ -37,6 +37,15 @@ export interface MigrationDriftArgs {
    * offering nothing, because each one costs a try before it fails.
    */
   unadoptedDatabase?: boolean;
+  /**
+   * Set when the drift is a translations table's, found before its companion file applies.
+   *
+   * It gets its own cause and recoveries because the generic ones do not fit a companion file:
+   * it has no snapshot, so there is no baseline or target it was compared with and nothing a
+   * `capture_drift` migration would capture, and marking it applied would skip the values it
+   * moves between the main table and the translations table.
+   */
+  translationsTable?: string;
 }
 
 /**
@@ -150,19 +159,25 @@ export function migrationDriftError(args: MigrationDriftArgs): NextlyError {
         "  The database differs from the state this plugin module starts from,",
         "  from the state it produces, and from every later module's result.",
       ]
-    : args.unadoptedDatabase
+    : args.translationsTable !== undefined
       ? [
-          "  This database already has tables, and this migration expects to start",
-          "  from an empty one. That is what a project managed by `db:sync` looks",
-          "  like the first time it creates a migration: the schema is real, but",
-          "  nothing has recorded where the history begins.",
+          `  The translations table ${args.translationsTable} differs from what the applied`,
+          "  migration files left. It was changed outside a migration (manual SQL, a",
+          "  failed earlier run, another build's files). Nothing has been applied.",
         ]
-      : [
-          "  Your database differs from BOTH the pre-migration baseline and the",
-          "  expected post-migration state. This usually means schema changes were",
-          "  made outside Nextly's tracked paths (manual SQL, a failed prior run,",
-          "  divergent teammate state).",
-        ];
+      : args.unadoptedDatabase
+        ? [
+            "  This database already has tables, and this migration expects to start",
+            "  from an empty one. That is what a project managed by `db:sync` looks",
+            "  like the first time it creates a migration: the schema is real, but",
+            "  nothing has recorded where the history begins.",
+          ]
+        : [
+            "  Your database differs from BOTH the pre-migration baseline and the",
+            "  expected post-migration state. This usually means schema changes were",
+            "  made outside Nextly's tracked paths (manual SQL, a failed prior run,",
+            "  divergent teammate state).",
+          ];
 
   // One recovery, not a menu. All three generic ones fail on an unadopted
   // database, so listing them would cost three attempts before the real answer.
@@ -174,34 +189,43 @@ export function migrationDriftError(args: MigrationDriftArgs): NextlyError {
   // only the `.sql` leaves the snapshot behind to do the same thing.
   const recovery = args.pluginName
     ? pluginRecovery(args.pluginName)
-    : args.unadoptedDatabase
+    : args.translationsTable !== undefined
       ? [
-          "  Recovery — nothing in this history can be applied, so all of it has",
-          "  to go first. `migrate:baseline` refuses a project that has ANY",
-          "  migration or snapshot, and every file here was generated against a",
-          "  schema that already exists. Move the directory aside:",
-          `          mv ${shellQuote(directoryOf(args.file))} ${shellQuote(`${directoryOf(args.file)}.pre-baseline`)}`,
-          "",
-          "  Or, if this is the only migration, remove just it and its snapshot",
-          "  (the glob covers per-dialect variants, which are one migration):",
-          `          rm ${variantGlobFor(args.file, args.migration)} ${shellQuote(snapshotPathFor(args.file, args.migration))}`,
-          "",
-          "  Record what the database already has, once:",
-          "          pnpm nextly migrate:baseline",
-          "",
-          "  Then re-create the migration; it will contain only what changed:",
-          `          pnpm nextly migrate:create --name ${migrationNameWithoutTimestamp(args.migration)}`,
-        ]
-      : [
-          ...builderRecovery(args.driftItems),
           "  Recovery (pick one):",
-          "    [A] Sync the DB to your config, then re-run migrate:",
-          "          pnpm nextly db:sync && pnpm nextly migrate",
-          "    [B] Mark it applied without executing (if you applied it manually):",
-          `          pnpm nextly migrate:resolve --applied ${args.migration}`,
-          "    [C] Capture the drift in a new migration:",
-          "          pnpm nextly migrate:create --name capture_drift && pnpm nextly migrate",
-        ];
+          "    [A] Put the table back as the migration files left it (the lines above",
+          "        say what differs), then re-run migrate.",
+          "    [B] If the change is wanted, make it in your config and write a",
+          "        migration for it, then re-run migrate:",
+          "          pnpm nextly migrate:create --name <name> && pnpm nextly migrate",
+        ]
+      : args.unadoptedDatabase
+        ? [
+            "  Recovery — nothing in this history can be applied, so all of it has",
+            "  to go first. `migrate:baseline` refuses a project that has ANY",
+            "  migration or snapshot, and every file here was generated against a",
+            "  schema that already exists. Move the directory aside:",
+            `          mv ${shellQuote(directoryOf(args.file))} ${shellQuote(`${directoryOf(args.file)}.pre-baseline`)}`,
+            "",
+            "  Or, if this is the only migration, remove just it and its snapshot",
+            "  (the glob covers per-dialect variants, which are one migration):",
+            `          rm ${variantGlobFor(args.file, args.migration)} ${shellQuote(snapshotPathFor(args.file, args.migration))}`,
+            "",
+            "  Record what the database already has, once:",
+            "          pnpm nextly migrate:baseline",
+            "",
+            "  Then re-create the migration; it will contain only what changed:",
+            `          pnpm nextly migrate:create --name ${migrationNameWithoutTimestamp(args.migration)}`,
+          ]
+        : [
+            ...builderRecovery(args.driftItems),
+            "  Recovery (pick one):",
+            "    [A] Sync the DB to your config, then re-run migrate:",
+            "          pnpm nextly db:sync && pnpm nextly migrate",
+            "    [B] Mark it applied without executing (if you applied it manually):",
+            `          pnpm nextly migrate:resolve --applied ${args.migration}`,
+            "    [C] Capture the drift in a new migration:",
+            "          pnpm nextly migrate:create --name capture_drift && pnpm nextly migrate",
+          ];
 
   const publicMessage = [
     "Migration cannot be applied: schema drift detected",
@@ -228,9 +252,11 @@ export function migrationDriftError(args: MigrationDriftArgs): NextlyError {
       driftItems: args.driftItems,
       suggestedActions: args.pluginName
         ? ["plugin-sync", "plugin-recreate"]
-        : args.unadoptedDatabase
-          ? ["baseline"]
-          : ["A", "B", "C"],
+        : args.translationsTable !== undefined
+          ? ["restore-table", "migrate-the-change"]
+          : args.unadoptedDatabase
+            ? ["baseline"]
+            : ["A", "B", "C"],
       unadoptedDatabase: args.unadoptedDatabase === true,
     },
   });
