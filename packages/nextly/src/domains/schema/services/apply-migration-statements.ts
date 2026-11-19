@@ -37,13 +37,13 @@ import { sql } from "drizzle-orm";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import type { DatabaseInstance } from "../../../types/database-operations";
-
-import type { SqliteTypeChange } from "./sqlite-nullability-rebuild";
 import {
   isIdempotencyError,
   splitStatements,
 } from "../pipeline/sql-statement-utils";
 import { isRenameStatement } from "../rename-target";
+
+import type { SqliteTypeChange } from "./sqlite-nullability-rebuild";
 
 /**
  * The adapter surface this needs.
