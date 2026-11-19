@@ -468,7 +468,6 @@ describe("a configuration that imports a package that is not installed", () => {
       new NextlyError({
         code: "INVALID_INPUT",
         publicMessage: "Failed to load Nextly configuration.",
-        statusCode: 400,
         logMessage: "Config loader error",
         logContext: {
           configPath: join(project, "nextly.config.ts"),
@@ -480,9 +479,13 @@ describe("a configuration that imports a package that is not installed", () => {
     );
   }
 
-  /** An installed package with no `exports` map, holding `files`. */
-  function installPackage(name: string, files: readonly string[]) {
-    const root = join(project, "node_modules", ...name.split("/"));
+  /** An installed package with no `exports` map, holding `files`, under `within` (the project). */
+  function installPackage(
+    name: string,
+    files: readonly string[],
+    within = project
+  ) {
+    const root = join(within, "node_modules", ...name.split("/"));
     mkdirSync(root, { recursive: true });
     writeFileSync(
       join(root, "package.json"),
@@ -513,6 +516,22 @@ describe("a configuration that imports a package that is not installed", () => {
     const error = loadFailureOf("@acme/scoped/server");
     expect(error.why).toBe(
       "`@acme/scoped` is installed, but Node can't load `@acme/scoped/server` from it as written: the package doesn't export that path, so Node needs the file's extension, `@acme/scoped/server.js`."
+    );
+  });
+
+  it("names the package a nested dependency's path is in, not the outer folder", () => {
+    // A plugin's own dependency, installed inside the plugin as pnpm and nested installs place
+    // it: Node names the file under the LAST `node_modules`, and the package is the one there.
+    installPackage("acme-plugin", ["index.js"]);
+    const plugin = join(project, "node_modules", "acme-plugin");
+    writeFileSync(
+      join(plugin, "index.js"),
+      'export { value } from "acme-lib/headers";\n'
+    );
+    installPackage("acme-lib", ["headers.js"], plugin);
+    const error = loadFailureOf("acme-plugin");
+    expect(error.why).toBe(
+      "`acme-lib` is installed, but Node can't load `acme-lib/headers` from it as written: the package doesn't export that path, so Node needs the file's extension, `acme-lib/headers.js`."
     );
   });
 

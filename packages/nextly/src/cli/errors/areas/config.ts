@@ -64,9 +64,12 @@ interface InstalledPathMiss {
 function installedPathMiss(error: NextlyError): InstalledPathMiss | undefined {
   const missing = missingModule(error);
   if (missing === undefined) return undefined;
-  // The last `node_modules` segment holds the package; its scope, if any, is one more segment.
+  // The LAST `node_modules` segment holds the package (the greedy `^.*` reaches past an outer
+  // one, as in a plugin's own nested or pnpm-stored dependency); its scope is one more segment.
   const inPackage =
-    /[\\/]node_modules[\\/]((?:@[^\\/]+[\\/])?[^\\/]+)[\\/](.+)$/.exec(missing);
+    /^.*[\\/]node_modules[\\/]((?:@[^\\/]+[\\/])?[^\\/]+)[\\/](.+)$/.exec(
+      missing
+    );
   if (inPackage === null) return undefined;
   const pkg = inPackage[1].replace(/\\/g, "/");
   const specifier = `${pkg}/${inPackage[2].replace(/\\/g, "/")}`;
