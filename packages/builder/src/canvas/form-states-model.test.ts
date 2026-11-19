@@ -15,7 +15,7 @@ import {
 import { NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
 import { describe, expect, it } from "vitest";
 
-import { FORM_BLOCK } from "../form-picked";
+import { FORM_BLOCK } from "../inspector/content/form-picked";
 
 import { drawnForms } from "./form-states-model";
 

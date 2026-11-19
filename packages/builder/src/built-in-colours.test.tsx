@@ -29,7 +29,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { HiddenColours, useHiddenColoursRead } from "./built-in-colours";
 import type { EditorState } from "./editor-state";
-import { StyleInspectorPanel } from "./style-inspector-panel";
+import { StyleInspectorPanel } from "./inspector/style-inspector/style-inspector-panel";
 import { TokensPanel } from "./tokens-panel";
 import type { VariableReach, VariablesAccess } from "./variable-usage";
 

@@ -38,6 +38,10 @@ import * as React from "react";
 import type { EditClasses } from "./block-style-actions";
 import { BlockStyleNameField, RowMenuFrame } from "./block-style-row-menu";
 import { EDITOR_WORDS } from "./editor-words";
+import {
+  useQueuedStyles,
+  type SharedStylesHost,
+} from "./inspector/style-inspector/style-target";
 import { removeSharedStylesThrough } from "./shared-style-details";
 import {
   heldByThisPage,
@@ -50,7 +54,6 @@ import type {
   SharedStylesAccess,
 } from "./shared-styles-types";
 import { PopupRow } from "./site-text-panel";
-import { useQueuedStyles, type SharedStylesHost } from "./style-target";
 import { textStyleOptions, type TextStyleOption } from "./text-style-choice";
 import { TextStyleEditor } from "./text-style-editor";
 import { textStyleDevices } from "./text-style-parts";

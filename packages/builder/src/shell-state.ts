@@ -20,7 +20,7 @@ import {
   writeZoom,
   type CanvasZoom,
 } from "./canvas/canvas-zoom";
-import { readSectionFolds, type SectionFolds } from "./panel-folds";
+import { readSectionFolds, type SectionFolds } from "./inspector/panel-folds";
 
 /**
  * The panels the left rail switches between, in the order an author meets

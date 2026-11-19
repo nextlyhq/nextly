@@ -26,9 +26,9 @@ import { ChevronDown } from "lucide-react";
 import * as React from "react";
 
 import { ChoiceList } from "./choice-list";
-import { CssHint, CssNamesLine } from "./css-hint";
 import { FONT_ROLE_WORDS, noBoldWords } from "./editor-words";
 import type { CatalogueAddRequest } from "./font-catalogue-view";
+import { CssHint, CssNamesLine } from "./inspector/css-hint";
 import { Refusal, useRefusableWrite } from "./panel-actions";
 import {
   firstFamily,

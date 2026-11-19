@@ -65,8 +65,8 @@ import {
 } from "./canvas/toolbar-actions";
 import type { EditorState } from "./editor-state";
 import { escapeFieldEdit } from "./field-edit";
-import { lockViewOf } from "./inspector";
-import { placedComponentId } from "./instance-inspector";
+import { lockViewOf } from "./inspector/inspector";
+import { placedComponentId } from "./inspector/instance-inspector";
 import {
   type BlockKeyboardActionsOptions,
   type BlockKeyboardActionsResult,

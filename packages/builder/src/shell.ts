@@ -63,7 +63,7 @@ export type { OpenPreferenceStore } from "./shell-state";
  * A pure function over a document, so it crosses this entry carrying no state
  * and no React.
  */
-export { lockViewOf, selectionIsInspectable } from "./inspector";
+export { lockViewOf, selectionIsInspectable } from "./inspector/inspector";
 export { pageStyleTrace } from "./style-trace";
 
 /**
@@ -244,11 +244,11 @@ export {
  * and publishing it invites a host to build a second inspector that disagrees
  * with this one about the merge rule for a patch.
  */
-export { InspectorPanel } from "./inspector-panel";
+export { InspectorPanel } from "./inspector/inspector-panel";
 export type {
   BlockInspectorResolver,
   InspectorPanelProps,
-} from "./inspector-panel";
+} from "./inspector/inspector-panel";
 /**
  * A bound image's Fallback row: an image address, shown with its picture,
  * and a reserved place for choosing a library file. The inspector draws it
@@ -284,8 +284,8 @@ export type { CanvasPreviewTagsProps } from "./canvas/canvas-preview-tags";
  * is about. Mounting BOTH is the ordinary case and needs nothing here:
  * `InspectorPanel` already renders this one under its Style tab.
  */
-export { StyleInspectorPanel } from "./style-inspector-panel";
-export type { StyleInspectorPanelProps } from "./style-inspector-panel";
+export { StyleInspectorPanel } from "./inspector/style-inspector/style-inspector-panel";
+export type { StyleInspectorPanelProps } from "./inspector/style-inspector/style-inspector-panel";
 
 export { InsertPanel } from "./panels/add/insert-panel";
 export type {
@@ -544,7 +544,7 @@ export type { FormStatesProps } from "./canvas/form-states";
  *
  * @experimental
  */
-export { useFormsShownAgain } from "./form-source-control";
+export { useFormsShownAgain } from "./inspector/content/form-source-control";
 /**
  * The chooser a block just added asks for, drawn over it on the canvas while
  * the editor's first-add step holds: the Columns layouts with Skip. A canvas
@@ -733,7 +733,10 @@ export type { UseInlineEditingResult } from "./canvas/use-inline-editing";
  * expose: the hook selects the placement and hands the host its id, and the
  * host reads the placement with `inspectInstance` against its own library.
  */
-export { inspectInstance, partOfComponentSentence } from "./instance-inspector";
+export {
+  inspectInstance,
+  partOfComponentSentence,
+} from "./inspector/instance-inspector";
 /**
  * What finishing an inline edit did.
  *
@@ -909,7 +912,7 @@ export type { ClassSelectorProps } from "./class-selector";
  */
 export { SaveSharedStyleDialog } from "./shared-style-save-dialog";
 export type { SaveSharedStyleDialogProps } from "./shared-style-save-dialog";
-export type { SharedStylesHost } from "./style-target";
+export type { SharedStylesHost } from "./inspector/style-inspector/style-target";
 export type {
   SharedStyleChange,
   SharedStyleOffer,

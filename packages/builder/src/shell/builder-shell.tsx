@@ -12,9 +12,12 @@ import { CanvasFrameShortcuts } from "../canvas/canvas-frame-context";
 import { FIT_ZOOM, type CanvasZoom } from "../canvas/canvas-zoom";
 import { HoveredBlockProvider } from "../canvas/hovered-block";
 import { InsertionPreviewProvider } from "../canvas/insertion-preview";
-import { CssNamesContext, type CssNames } from "../css-names-context";
-import type { SectionFolds } from "../panel-folds";
-import { PanelFoldsContext, type PanelFolds } from "../panel-folds-context";
+import { CssNamesContext, type CssNames } from "../inspector/css-names-context";
+import type { SectionFolds } from "../inspector/panel-folds";
+import {
+  PanelFoldsContext,
+  type PanelFolds,
+} from "../inspector/panel-folds-context";
 import {
   browserStore,
   BUILDER_CHROME_CLASS,

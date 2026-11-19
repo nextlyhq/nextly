@@ -7,7 +7,7 @@
 import * as React from "react";
 
 import type { CanvasZoom } from "../canvas/canvas-zoom";
-import type { SectionFolds } from "../panel-folds";
+import type { SectionFolds } from "../inspector/panel-folds";
 import {
   DEFAULT_PREFERENCES,
   readPreferences,

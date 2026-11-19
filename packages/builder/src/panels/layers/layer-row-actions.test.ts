@@ -7,7 +7,7 @@
 import type { BreakpointSet } from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
-import { hideOnWrites } from "../../code-hints";
+import { hideOnWrites } from "../../inspector/code-hints";
 
 import {
   deviceStates,

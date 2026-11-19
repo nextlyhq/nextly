@@ -216,7 +216,10 @@ describe("the builder's chrome tooltips", () => {
     // other importer.
     expect(importers).toContain("chrome-tooltip.tsx");
     expect(files.map(file => relative(SRC_DIR, file))).toEqual(
-      expect.arrayContaining(["shell/editor-rail.tsx", "icon-choice-field.tsx"])
+      expect.arrayContaining([
+        "shell/editor-rail.tsx",
+        "inspector/style-inspector/icon-choice-field.tsx",
+      ])
     );
   });
 });

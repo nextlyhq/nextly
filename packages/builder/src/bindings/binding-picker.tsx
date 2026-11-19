@@ -28,8 +28,12 @@ import {
   type ListedChoice,
 } from "../choice-list";
 import { useClickedEntries } from "../clicked-entry";
-import type { ContentServices } from "../content-controls";
-import { fieldLabel, propLabel, type EditableProp } from "../inspector";
+import type { ContentServices } from "../inspector/content/content-controls";
+import {
+  fieldLabel,
+  propLabel,
+  type EditableProp,
+} from "../inspector/inspector";
 import { withArticle } from "../with-article";
 
 import { defaultFormatFor, previewWithFormat } from "./binding-format-field";

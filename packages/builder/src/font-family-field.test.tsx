@@ -26,7 +26,7 @@ import {
   FontFamilyField,
   type FontFamilyFieldProps,
 } from "./font-family-field";
-import { InheritedValue } from "./inherited-value";
+import { InheritedValue } from "./inspector/style-inspector/inherited-value";
 
 afterEach(cleanup);
 

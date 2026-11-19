@@ -14,7 +14,7 @@ import {
   conditionSentence,
   valueOpFor,
 } from "./condition-model";
-import type { QueryField } from "../list-query-model";
+import type { QueryField } from "../inspector/content/list-query-model";
 
 const rating: QueryField = {
   name: "rating",

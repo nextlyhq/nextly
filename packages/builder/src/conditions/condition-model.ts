@@ -20,8 +20,14 @@ import {
   type ListFilterOp,
 } from "@nextlyhq/blocks-engine";
 
-import type { LoopCollection, LoopListField } from "../content-controls";
-import { filterSentence, type QueryField } from "../list-query-model";
+import type {
+  LoopCollection,
+  LoopListField,
+} from "../inspector/content/content-controls";
+import {
+  filterSentence,
+  type QueryField,
+} from "../inspector/content/list-query-model";
 
 /**
  * A field a condition can check: one a list filters by, with its kind, or a

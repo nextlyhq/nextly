@@ -22,8 +22,8 @@ import {
 import * as React from "react";
 
 import type { ComponentFieldsHost } from "../component-fields";
-import { ComponentFieldsContext } from "../component-fields-panel";
-import type { EditableProp } from "../inspector";
+import { ComponentFieldsContext } from "../inspector/component-fields-panel";
+import type { EditableProp } from "../inspector/inspector";
 
 import type {
   BindingFieldChoice,

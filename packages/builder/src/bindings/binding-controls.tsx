@@ -49,8 +49,8 @@ import { ChevronDown, Database, ExternalLink, Unlink } from "lucide-react";
 import * as React from "react";
 
 import type { UnbindAnswer } from "../composition-actions";
-import type { ContentServices } from "../content-controls";
-import { propLabel, type EditableProp } from "../inspector";
+import type { ContentServices } from "../inspector/content/content-controls";
+import { propLabel, type EditableProp } from "../inspector/inspector";
 
 import {
   boundField,

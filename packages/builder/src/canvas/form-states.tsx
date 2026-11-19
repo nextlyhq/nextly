@@ -29,23 +29,26 @@ import { walkNodes } from "@nextlyhq/blocks-engine";
 import { Select, SelectContent, SelectTrigger } from "@nextlyhq/ui";
 import * as React from "react";
 
-import type { ContentServices, PickedFormState } from "../content-services";
 import { isHTMLElement } from "../dom-kind";
 import type { EditorState } from "../editor-state";
+import type { Rect } from "../geometry";
+import type {
+  ContentServices,
+  PickedFormState,
+} from "../inspector/content/content-services";
 import {
   FORM_BLOCK,
   FORM_WORDS,
   pickedFormOf,
   type PickedForm,
-} from "../form-picked";
+} from "../inspector/content/form-picked";
 import {
   FormChoiceItems,
   formOfChoice,
   useFormSources,
   useShownAgain,
-} from "../form-source-control";
-import type { Rect } from "../geometry";
-import { lockViewOf, propIsWritable, propPatch } from "../inspector";
+} from "../inspector/content/form-source-control";
+import { lockViewOf, propIsWritable, propPatch } from "../inspector/inspector";
 import { selectionModeFor } from "../selection";
 import { CANVAS_ROOT_CLASS } from "../shell-state";
 

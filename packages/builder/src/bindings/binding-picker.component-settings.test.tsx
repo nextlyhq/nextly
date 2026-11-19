@@ -30,9 +30,9 @@ import { boundField, boundNames } from "./binding-bound-names";
 import type { BindingFieldSource } from "./binding-services";
 import { settingBoundFrom, settingSource } from "./binding-setting-source";
 import type { ComponentFieldsHost } from "../component-fields";
-import type { ContentServices } from "../content-controls";
+import type { ContentServices } from "../inspector/content/content-controls";
 import type { EditorState } from "../editor-state";
-import { InspectorPanel } from "../inspector-panel";
+import { InspectorPanel } from "../inspector/inspector-panel";
 
 beforeAll(() => {
   // The active option is scrolled into view, which jsdom does not draw.

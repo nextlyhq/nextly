@@ -31,11 +31,11 @@ import * as React from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { BindingFieldSource, UnbindPlanAnswer } from "./binding-services";
-import type { ContentServices } from "../content-controls";
+import type { ContentServices } from "../inspector/content/content-controls";
 import type { EditorState } from "../editor-state";
-import { inspectSelection } from "../inspector";
-import { InspectorPanel } from "../inspector-panel";
-import { propGroupsOf } from "../prop-groups";
+import { inspectSelection } from "../inspector/inspector";
+import { InspectorPanel } from "../inspector/inspector-panel";
+import { propGroupsOf } from "../inspector/content/prop-groups";
 
 beforeAll(() => {
   // What the picker asks of an element, which jsdom does not draw: its

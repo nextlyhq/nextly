@@ -34,7 +34,7 @@ import { DROP_PARENT_ATTRIBUTE } from "./canvas-block-marks";
 import { CanvasMarks } from "./canvas-marks";
 import { conditionFieldsOfShapes } from "../conditions/condition-model";
 import { EXPOSED_ATTRIBUTE } from "./exposed-outline";
-import { markLookReach } from "../look-reach";
+import { markLookReach } from "../inspector/style-inspector/look-reach";
 import { HoveredBlockProvider, useHoveredBlockSetter } from "./hovered-block";
 import { PreviewedEntryProvider } from "../previewed-entry";
 import { VisitorUnreadableBadges } from "../visitor-unreadable-badges";

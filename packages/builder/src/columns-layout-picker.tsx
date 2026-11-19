@@ -17,9 +17,12 @@ import { Button } from "@nextlyhq/ui";
 import * as React from "react";
 
 import { COLUMNS_LAYOUTS, planLayout } from "./columns-layout";
-import { ColumnsLayoutGlyph, ROW_OWN } from "./columns-layout-field";
 import type { EditorState } from "./editor-state";
 import type { FirstAdd } from "./first-add";
+import {
+  ColumnsLayoutGlyph,
+  ROW_OWN,
+} from "./inspector/content/columns-layout-field";
 
 /** The chooser's words. */
 export const COLUMNS_PICKER_WORDS = {

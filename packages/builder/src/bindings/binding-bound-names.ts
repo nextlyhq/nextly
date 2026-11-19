@@ -12,8 +12,8 @@ import type {
   BlockDocument,
 } from "@nextlyhq/blocks-engine";
 
-import type { ContentServices } from "../content-controls";
-import { fieldLabel } from "../inspector";
+import type { ContentServices } from "../inspector/content/content-controls";
+import { fieldLabel } from "../inspector/inspector";
 
 import {
   choiceLabel,

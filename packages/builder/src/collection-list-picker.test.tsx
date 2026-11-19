@@ -36,7 +36,7 @@ import {
 } from "vitest";
 
 import { CollectionListPicker } from "./collection-list-picker";
-import type { LoopCollection } from "./content-services";
+import type { LoopCollection } from "./inspector/content/content-services";
 import type { FirstAdd } from "./first-add";
 
 beforeAll(() => {

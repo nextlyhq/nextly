@@ -34,7 +34,7 @@ import {
 import * as React from "react";
 
 import type { EditorState } from "./editor-state";
-import { lockViewOf } from "./inspector";
+import { lockViewOf } from "./inspector/inspector";
 import { Refusal } from "./panel-actions";
 import { sharedStyleSlug } from "./shared-style-library";
 import {

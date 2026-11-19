@@ -12,7 +12,7 @@
 import type { BindingRunInput } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
-import type { ContentServices } from "../content-controls";
+import type { ContentServices } from "../inspector/content/content-controls";
 
 import type { BindingFieldSource, ListSample } from "./binding-services";
 import type { ItemField } from "./item-binding-source";
