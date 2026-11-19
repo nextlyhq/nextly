@@ -459,4 +459,36 @@ describeEachDialect("a collection update's registry write", dialect => {
       "the policy after a commit"
     ).toBe(false);
   });
+
+  it("records the change it saved, marked failed, when this server cannot load it, with no save writer", async () => {
+    const t = await boot();
+    // The update's service without the Builder save writer, as one built outside the app's
+    // registration.
+    const handler = t.getService("collectionsHandler");
+    const metadata = Reflect.get(handler as object, "metadataService") as {
+      registerRuntimeSchema: (...args: unknown[]) => Promise<unknown>;
+    };
+    Reflect.set(metadata, "builderSave", undefined);
+    // The push and the file have run by the time the running shape is loaded; loading it fails.
+    const loaded = vi
+      .spyOn(metadata, "registerRuntimeSchema")
+      .mockRejectedValue(new Error("injected failure loading the shape"));
+
+    const { failed, said, status } = await update();
+
+    // Control: the load after the change was reached.
+    expect(loaded, "the running shape was loaded").toHaveBeenCalled();
+    expect(failed, `the update answered: ${said}`).toBe(true);
+    expect(said, "the answer").toBe(
+      "The schema change and its migration were saved, but the server could not load the collection's new shape, so its record is marked failed."
+    );
+    expect(status, "the answer's status").toBe(500);
+    // The table and the file have `extra`, so the row does too: a later save built from it keeps
+    // the field rather than dropping its column.
+    expect(await columnsOf(t), "the table").toContain("extra");
+    expect(await recorded(t), "the registry row").toMatchObject({
+      fields: ["heading", "extra"],
+      migrationStatus: "failed",
+    });
+  });
 });
