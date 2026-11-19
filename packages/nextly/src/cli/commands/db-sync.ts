@@ -66,7 +66,10 @@ import type { Command } from "commander";
 import { getDialectTables } from "../../database/index";
 import { SchemaRegistry } from "../../database/schema-registry";
 import { loadBuilderEntities } from "../../di/load-dynamic-tables";
-import { withMigrationExcluded } from "../../domains/field-groups/migration/sync-guard";
+import {
+  assertNoMigrationInFlight,
+  withMigrationExcluded,
+} from "../../domains/field-groups/migration/sync-guard";
 import { registerComponentSchemas } from "../../domains/field-groups/services/register-field-group-schemas";
 import { getFieldGroupRegistryAliases } from "../../domains/field-groups/storage/registry-schemas";
 import {
@@ -114,6 +117,7 @@ import {
   syncUserFields,
 } from "./dev-build";
 import { ensureCoreTables, productionSyncRefusal } from "./dev-server";
+import { planWithStoredData, storedDataOfRun } from "./stored-data-of-run";
 import { createDebouncedSync } from "./dev-watcher";
 import { syncSchemaInOrder } from "./sync-schema";
 
@@ -187,6 +191,12 @@ export interface DbSyncCommandOptions {
    * lock taken and nothing asked or written.
    */
   dryRun?: boolean;
+
+  /**
+   * `--backup-confirmed`: the operator's statement that the database is backed up. Read only
+   * where an earlier release stored data the run brings up to date once it has synced.
+   */
+  backupConfirmed?: boolean;
 
   /**
    * `--lock-timeout <seconds>`: how long one try of the sync's schema change waits for a table
@@ -330,7 +340,44 @@ export async function runDbSync(
     exitWithError(logger, error);
   }
 
+  // What the run does with data an earlier release stored: the steps `nextly
+  // migrate` takes once its migrations have applied, taken here once the
+  // sync is done, for a database that has no migrations to apply.
+  const storedData = storedDataOfRun({
+    adapter: adapter as unknown as DrizzleAdapter,
+    command: "nextly db:sync",
+    // The sync goes on registering tables in the registry it installed.
+    restoreResolver: () =>
+      (adapter as unknown as DrizzleAdapter).setTableResolver(schemaRegistry),
+    // The steps take the schema lock once the sync has let it go, and a
+    // field-group storage migration may have taken it between the two and
+    // stopped part-way. Its marker is read under the steps' lock, as the
+    // sync reads it under its own, so no step reads half-renamed tables.
+    underLock: () =>
+      assertNoMigrationInFlight({
+        adapter: adapter as unknown as DrizzleAdapter,
+        logger,
+        action: "db:sync's steps over data an earlier release stored",
+      }),
+    logger,
+    backupConfirmed: options.backupConfirmed === true,
+    lockTtlSeconds: configResult.config.db.migrateLockTtlSeconds,
+  });
+
+  const takesDataSteps = options.autoSync !== false;
+
   try {
+    // Step 3.4: Work of that kind whose backup nobody confirmed is refused
+    // here, before the core tables or the sync change anything. Counted with
+    // the field types this configuration registered, as every step below is.
+    // Not under `--no-auto-sync`, which leaves the tables as they are: the
+    // steps read them in the shape the configuration gives them.
+    if (takesDataSteps) {
+      await runWithFieldTypes(configResult.fieldTypes, () =>
+        storedData.confirmBeforeSchemaChanges()
+      );
+    }
+
     // Step 3.5: Ensure core tables exist.
     // For fresh databases, the system tables (users, roles, permissions,
     // dynamic_collections, etc.) must exist before any sync or query.
@@ -442,6 +489,18 @@ export async function runDbSync(
         })
     );
 
+    // Step 6: Data an earlier release stored, brought up to date under the
+    // schema lock, which the sync above has let go: once in a run, a watched
+    // one included. A backup refusal made only now, for work the check before
+    // the sync could not see, ends the run with the sync applied.
+    if (takesDataSteps) {
+      await runWithFieldTypes(configResult.fieldTypes, () =>
+        storedData.takeAfterSchemaChanges()
+      );
+    }
+    const storedDataRefused = storedData.refusal();
+    if (storedDataRefused !== null) throw storedDataRefused;
+
     // Step 7: Watch mode. Gated on any entity kind this command syncs, not just
     // collections and singles: `loadConfig({ watch: true })` has already opened
     // the file watcher, so a user-fields-only project stayed alive with no
@@ -530,9 +589,24 @@ async function reportSyncDryRun(
     installStaticSchemaRegistry(adapter);
     // Loaded only for a dry run, so a real sync loads none of the preview's modules.
     const { planDbSync } = await import("./db-sync-dry-run");
+    const plan = await planDbSync(configResult, adapter, options, context);
+    // The data steps a real run takes after its sync, counted read-only on
+    // the database as it stands and listed after the sync's own changes.
+    const stored = await runWithFieldTypes(configResult.fieldTypes, () =>
+      storedDataOfRun({
+        adapter: adapter as unknown as DrizzleAdapter,
+        command: "nextly db:sync",
+        logger,
+        backupConfirmed: options.backupConfirmed === true,
+        lockTtlSeconds: undefined,
+      }).plan()
+    );
     reportDryRun(
       logger,
-      await planDbSync(configResult, adapter, options, context)
+      // `--no-auto-sync` takes no data step.
+      planWithStoredData(plan, stored, {
+        takesSteps: options.autoSync !== false,
+      })
     );
   } finally {
     await adapter.disconnect();

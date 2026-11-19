@@ -64,6 +64,7 @@ import {
   type TokenKind,
 } from "@nextlyhq/blocks-engine";
 
+import { isFluidRange } from "./site-fluid-range";
 import {
   BUILT_IN_NAME_FIELDS,
   resolveSiteStyle,
@@ -182,25 +183,6 @@ function isStoredTokenShape(entry: unknown): entry is StoredTokenShape {
     optionalRecord(entry.extensions) &&
     optionalRecord(entry.unreadExtension) &&
     (entry.fluid === undefined || isFluidSizes(entry.fluid))
-  );
-}
-
-/**
- * The site's fluid range as stored: two positive, finite widths in px, the
- * smallest screen below the largest, or a fluid size would grow across no
- * width at all.
- */
-export function isFluidRange(
-  value: unknown
-): value is { min: number; max: number } {
-  return (
-    isPlainRecord(value) &&
-    typeof value.min === "number" &&
-    typeof value.max === "number" &&
-    Number.isFinite(value.min) &&
-    Number.isFinite(value.max) &&
-    value.min > 0 &&
-    value.min < value.max
   );
 }
 
