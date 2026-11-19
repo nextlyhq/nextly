@@ -69,6 +69,75 @@ function linkOf(draft: Draft): { link?: WrittenLink; problem?: string } {
     : { link: { chip: { variable: draft.variable, fallback } } };
 }
 
+/**
+ * The fields for where the link goes: an address, or a variable with its
+ * fallback address. `problemId` names the message about the address, when
+ * there is one.
+ */
+function TargetFields({
+  id,
+  draft,
+  edit,
+  choices,
+  problemId,
+}: {
+  id: string;
+  draft: Draft;
+  edit: (change: Partial<Draft>) => void;
+  choices: ReadonlyArray<{ path: string; name: string }>;
+  problemId: string | undefined;
+}): JSX.Element {
+  const invalid = problemId ? true : undefined;
+  if (draft.target === "address") {
+    return (
+      <div className="grid gap-1.5">
+        <Label htmlFor={`${id}-address`}>Address</Label>
+        <Input
+          id={`${id}-address`}
+          inputMode="url"
+          placeholder="https://"
+          value={draft.address}
+          aria-invalid={invalid}
+          aria-describedby={problemId}
+          onChange={event => edit({ address: event.target.value })}
+        />
+      </div>
+    );
+  }
+  return (
+    <>
+      <div className="grid gap-1.5">
+        <Label htmlFor={`${id}-variable`}>Variable</Label>
+        <select
+          id={`${id}-variable`}
+          className="h-9 rounded-md border border-input bg-background px-2 text-sm"
+          value={draft.variable}
+          onChange={event => edit({ variable: event.target.value })}
+        >
+          <option value="">Choose a variable</option>
+          {choices.map(choice => (
+            <option key={choice.path} value={choice.path}>
+              {choice.name}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div className="grid gap-1.5">
+        <Label htmlFor={`${id}-fallback`}>Fallback address (optional)</Label>
+        <Input
+          id={`${id}-fallback`}
+          inputMode="url"
+          placeholder="https://"
+          value={draft.fallback}
+          aria-invalid={invalid}
+          aria-describedby={problemId}
+          onChange={event => edit({ fallback: event.target.value })}
+        />
+      </div>
+    </>
+  );
+}
+
 export function LinkDialog({
   open,
   onOpenChange,
@@ -138,53 +207,13 @@ export function LinkDialog({
               A variable
             </label>
           </fieldset>
-          {draft.target === "address" ? (
-            <div className="grid gap-1.5">
-              <Label htmlFor={`${id}-address`}>Address</Label>
-              <Input
-                id={`${id}-address`}
-                inputMode="url"
-                placeholder="https://"
-                value={draft.address}
-                aria-invalid={problem ? true : undefined}
-                aria-describedby={problem ? problemId : undefined}
-                onChange={event => edit({ address: event.target.value })}
-              />
-            </div>
-          ) : (
-            <>
-              <div className="grid gap-1.5">
-                <Label htmlFor={`${id}-variable`}>Variable</Label>
-                <select
-                  id={`${id}-variable`}
-                  className="h-9 rounded-md border border-input bg-background px-2 text-sm"
-                  value={draft.variable}
-                  onChange={event => edit({ variable: event.target.value })}
-                >
-                  <option value="">Choose a variable</option>
-                  {choices.map(choice => (
-                    <option key={choice.path} value={choice.path}>
-                      {choice.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="grid gap-1.5">
-                <Label htmlFor={`${id}-fallback`}>
-                  Fallback address (optional)
-                </Label>
-                <Input
-                  id={`${id}-fallback`}
-                  inputMode="url"
-                  placeholder="https://"
-                  value={draft.fallback}
-                  aria-invalid={problem ? true : undefined}
-                  aria-describedby={problem ? problemId : undefined}
-                  onChange={event => edit({ fallback: event.target.value })}
-                />
-              </div>
-            </>
-          )}
+          <TargetFields
+            id={id}
+            draft={draft}
+            edit={edit}
+            choices={choices}
+            problemId={problem ? problemId : undefined}
+          />
           {problem ? (
             <p id={problemId} className="text-xs text-destructive">
               {problem}
