@@ -34,7 +34,7 @@ import { issuesByField } from "./workflow-settings-model";
 export type SaveOutcome = "saved" | "conflict" | "refused";
 
 /** The message shown when the settings moved since they were read. */
-export const CONFLICT_MESSAGE =
+const CONFLICT_MESSAGE =
   "Someone changed these settings; review and save again.";
 
 export interface WorkflowSettingsSave {

@@ -30,7 +30,7 @@ import type {
   WorkflowSummary,
 } from "@admin/types/workflows";
 
-export const workflowKeys = {
+const workflowKeys = {
   all: () => ["workflows"] as const,
   list: () => [...workflowKeys.all(), "list"] as const,
   settings: (slug: string) =>

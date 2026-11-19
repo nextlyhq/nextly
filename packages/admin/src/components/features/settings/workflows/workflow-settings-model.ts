@@ -204,7 +204,7 @@ export const assigneeKey = (assignee: WorkflowAssignee): string =>
  * `grants.<step>`, `defaultReviewers.<stage>` or `labels.<stage>`, whatever
  * part of it the server named after that.
  */
-export function issueField(issue: ValidationIssue): string | null {
+function issueField(issue: ValidationIssue): string | null {
   if (!issue.path) return null;
   const [section, name] = issue.path.split(".");
   if (!section || !name) return null;
