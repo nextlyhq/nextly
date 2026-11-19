@@ -1,3 +1,5 @@
+import type { SQL } from "drizzle-orm";
+import { MySqlDialect } from "drizzle-orm/mysql-core";
 import { describe, expect, it, vi } from "vitest";
 
 import type {
@@ -432,12 +434,19 @@ describe("executePreResolutionOps - each finished statement told as it finishes"
   // column made text, its values rewritten, the column made the list type). Each commits as it
   // runs, so each is told as it finishes, not the operation once.
   it("tells each statement of an operation that runs several, and none after the one that fails", async () => {
-    let sent = 0;
+    const started: string[] = [];
+    const finished: string[] = [];
+    // The conversion's second statement, the rewrite, is refused by its text, not by what the
+    // record was told, so the record under test cannot decide where the failure falls. The reads
+    // before it (the conversion's checks) and the column made text run.
+    const mysql = new MySqlDialect();
     const tx = {
-      execute: vi.fn(async () => {
-        sent += 1;
-        if (sent === 2) throw new Error("refused by a trigger");
-        return { rows: [] };
+      execute: vi.fn(async (query: SQL) => {
+        if (/^UPDATE /.test(mysql.sqlToQuery(query).sql.trim())) {
+          throw new Error("refused by a trigger");
+        }
+        // mysql2's [rows, fields] shape; no read returns rows here.
+        return [[], []];
       }),
     };
     const conversion: ChangeColumnTypeOp = {
@@ -448,8 +457,6 @@ describe("executePreResolutionOps - each finished statement told as it finishes"
       toType: "json",
       conversion: "referenceList",
     };
-    const started: string[] = [];
-    const finished: string[] = [];
     await expect(
       executePreResolutionOps(tx, [conversion], "mysql", [], {
         starting: statement => {
