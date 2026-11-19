@@ -38,7 +38,6 @@ import {
   openRemovalFor,
   type OpenRemovalReader,
 } from "../breakpoint-removal/lock-acceptance";
-import { formsChangedBy } from "../component-cycle-guard";
 import { pageCodeOf } from "../site-code/page-code";
 import { siteBreakpoints } from "../site-style";
 
@@ -63,7 +62,6 @@ import {
   withLockIssues,
 } from "./layers-lock-judgement";
 import { newConditionIssues, newListQueryIssues } from "./list-query-judgement";
-import { readStoredForms } from "./lock-baselines";
 import {
   changedFormsBaseline,
   pageCodeIssues,
@@ -215,13 +213,8 @@ function judgedByRules(
   ) {
     return issues;
   }
-  const status = (args.data as { status?: unknown } | undefined)?.status;
-  return readStoredForms(
-    args.write,
-    args.path,
-    formsChangedBy(typeof status === "string" ? status : undefined),
-    (args.field as { localized?: unknown }).localized === true
-  ).then(async stored => {
+  // The forms the write changes, read once for the whole judgement.
+  return changedFormsBaseline(args)().then(async stored => {
     const again = await judgedAgainstStored(
       judge,
       issues,
