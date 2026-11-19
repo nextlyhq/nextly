@@ -316,6 +316,107 @@ for (const dialect of getConfiguredTestDialects()) {
   );
 }
 
+// A field group's row keeps a many-to-many in a column of its own, as a list, where a collection
+// keeps it in a link table: turned into a field group, the relationship loses that column and the
+// links it holds, so its drop is asked as on any other row.
+for (const dialect of getConfiguredTestDialects()) {
+  describe(`a field group's many-to-many turned into a field group (${dialect})`, () => {
+    let t: TestNextly;
+    let basePath: string;
+    const related = {
+      name: "related",
+      type: "relationship",
+      options: { relationType: "manyToMany", target: "tags" },
+    };
+    const intoGroup = [
+      text("heading"),
+      { name: "related", type: "component", component: "card" },
+    ];
+
+    beforeEach(async () => {
+      basePath = await mkdtemp(join(tmpdir(), "nextly-dialog-questions-"));
+      vi.stubEnv("NODE_ENV", "development");
+      t = await createTestNextly({
+        dialect: dialect as TestDialect,
+        basePath,
+        db: DB,
+      });
+      await dispatchCollections(
+        {} as ServiceContainer,
+        "createCollection",
+        {},
+        { name: "tags", label: "tags", fields: [text("name")] }
+      );
+      await dispatchComponents(
+        "createComponent",
+        {},
+        { slug: "card", label: "Card", fields: [text("line")] }
+      );
+      await dispatchComponents(
+        "createComponent",
+        {},
+        { slug: "meta", label: "Meta", fields: [text("heading"), related] }
+      );
+      await exec(
+        t,
+        `INSERT INTO comp_meta (id, _parent_id, _parent_table, _parent_field, _order, heading, related) VALUES ('kept-1', 'parent-1', 'dc_parent', 'meta', 0, 'Hello', '["tag-1"]')`
+      );
+    });
+
+    afterEach(async () => {
+      await t?.destroy();
+      vi.unstubAllEnvs();
+      await rm(basePath, { recursive: true, force: true });
+    });
+
+    const columns = async () =>
+      (
+        await readTableDefinition(
+          statement => exec(t, statement),
+          (t.adapter as unknown as DrizzleAdapter).getCapabilities().dialect,
+          "comp_meta"
+        )
+      ).columns.map(column => column.name);
+    const save = async (answers: Answers) =>
+      dispatchComponents(
+        "applyComponentSchemaChanges",
+        { slug: "meta" },
+        {
+          fields: intoGroup,
+          confirmed: true,
+          schemaVersion: await versionOf(t, "dynamic_components", "meta"),
+          ...answers,
+        }
+      );
+
+    it("refuses it without confirming the drop, keeping the links, and drops the column once confirmed", async () => {
+      const refused = await save({}).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+
+      expect(String(refused)).toMatch(/cancelled/);
+      expect(await columns()).toContain("related");
+      const held = await exec<{ related: unknown }>(
+        t,
+        "SELECT related FROM comp_meta"
+      );
+      expect(held.map(row => String(row.related))).toEqual(['["tag-1"]']);
+
+      await save({
+        eventResolutions: [
+          {
+            kind: "confirm_drop",
+            eventId: "destructive_drop:comp_meta.related",
+          },
+        ],
+      });
+
+      expect(await columns()).not.toContain("related");
+    }, 60_000);
+  });
+}
+
 // A field inside a group with no name is a column of the row too: removed, it is asked about as
 // any removed field is, the dialog's preview lists it for the person to confirm, and their
 // confirmation, sent by the field's name as the admin sends it, lets the drop through.
