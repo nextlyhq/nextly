@@ -58,8 +58,6 @@ import {
   useRef,
 } from "react";
 
-import { isElement } from "../dom-kind";
-import { usePreviewedCollection } from "../previewed-entry";
 import { CANVAS_ROOT_CLASS } from "../shell-state";
 
 import { conditionMarksOf, entryContentMarksOf } from "./canvas-block-marks";
@@ -82,10 +80,12 @@ import {
 } from "./canvas-pointer";
 import type { CanvasProps } from "./canvas-props";
 import { siteSurface, useSiteSurfaceMarks } from "./canvas-site-surface";
+import { isElement } from "./dom-kind";
 import {
   useAppliedDrawing,
   useEntryContentDrawing,
 } from "./entry-content-canvas";
+import { usePreviewedCollection } from "./previewed-entry";
 import { useCanvasMarkers } from "./use-canvas-markers";
 
 /**

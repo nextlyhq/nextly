@@ -135,8 +135,14 @@ function parseMeRoutes(
   httpMethod: string,
   subresource: string | undefined,
   hasMoreSegments: boolean,
-  routeParams: Record<string, string>
+  routeParams: Record<string, string>,
+  rest: readonly string[]
 ): ParsedRoute | null {
+  // /api/me/identities[/456] → the caller's own external identities
+  if (subresource === "identities") {
+    return parseMeIdentityRoutes(httpMethod, rest, routeParams);
+  }
+
   // GET /api/me/permissions → get current user's resolved permissions
   if (subresource === "permissions" && httpMethod === "GET") {
     return {
@@ -184,6 +190,42 @@ function parseMeRoutes(
       service: "users",
       operation: "update",
       method: "updateCurrentUser",
+      routeParams,
+    };
+  }
+
+  return null;
+}
+
+/**
+ * The caller's own external identities: the same listing and unlink the
+ * users resource nests, for the signed-in account itself. The request
+ * handler names that account from the session, as it does for every
+ * `/api/me` route, so no user id is read from the path. Nothing may follow
+ * the identity's id.
+ */
+function parseMeIdentityRoutes(
+  httpMethod: string,
+  rest: readonly string[],
+  routeParams: Record<string, string>
+): ParsedRoute | null {
+  if (rest.length === 0 && httpMethod === "GET") {
+    // GET /api/me/identities → list the caller's own identities
+    return {
+      service: "identities",
+      operation: "list",
+      method: "listUserIdentities",
+      routeParams,
+    };
+  }
+
+  if (rest.length === 1 && httpMethod === "DELETE") {
+    // DELETE /api/me/identities/456 → unlink one of the caller's own
+    routeParams.identityId = rest[0];
+    return {
+      service: "identities",
+      operation: "delete",
+      method: "unlinkUserIdentity",
       routeParams,
     };
   }
@@ -293,6 +335,57 @@ function parseUserRoutes(
       service: "rbac",
       operation: "update",
       method: "unassignRoleFromUser",
+      routeParams,
+    };
+  }
+
+  return parseUserIdentityRoutes(
+    id,
+    subresource,
+    subId,
+    additionalParams,
+    httpMethod,
+    routeParams
+  );
+}
+
+/**
+ * A user's external identities, nested under the user as the role
+ * assignments are: the listing, and the unlink of one. Null for anything
+ * else, which is the users routes' own answer for a path they do not name.
+ */
+function parseUserIdentityRoutes(
+  id: string | undefined,
+  subresource: string | undefined,
+  subId: string | undefined,
+  additionalParams: string[],
+  httpMethod: string,
+  routeParams: Record<string, string>
+): ParsedRoute | null {
+  // A longer path is another route, not this one with its tail ignored.
+  if (!id || subresource !== "identities" || additionalParams.length > 0) {
+    return null;
+  }
+
+  if (!subId && httpMethod === "GET") {
+    // GET /api/users/123/identities → list the user's external identities
+    routeParams.userId = id;
+    return {
+      service: "identities",
+      operation: "list",
+      method: "listUserIdentities",
+      routeParams,
+    };
+  }
+
+  if (subId && httpMethod === "DELETE") {
+    // DELETE /api/users/123/identities/456 → unlink one external identity
+    routeParams.userId = id;
+    routeParams.identityId = subId;
+    return {
+      service: "identities",
+      operation: "delete",
+      method: "unlinkUserIdentity",
       routeParams,
     };
   }
@@ -3351,7 +3444,8 @@ export function parseRestRoute(
       httpMethod,
       id,
       params.length > 2,
-      routeParams
+      routeParams,
+      params.slice(2)
     );
     if (result) return result;
   }

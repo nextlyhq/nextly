@@ -37,10 +37,10 @@
  * @module canvas-geometry-watch
  */
 
-import { isElement, isFormField } from "../dom-kind";
 import { CANVAS_ROOT_CLASS } from "../shell-state";
 
 import { isEditableText, isTextEntry } from "./canvas-escape";
+import { isElement, isFormField } from "./dom-kind";
 import {
   overlaySpaceOf,
   screenScrollers,
