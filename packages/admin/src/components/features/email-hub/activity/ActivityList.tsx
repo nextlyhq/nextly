@@ -338,6 +338,14 @@ function ActivityCards({
   );
 }
 
+/** Why the list is empty: a search that found nothing, filters, or a quiet time. */
+function emptyText(searching: boolean, filtered: boolean): string {
+  if (searching) return "Nothing was sent to this address in this time.";
+  return filtered
+    ? "Nothing matches these filters."
+    : "No email has been sent in this time.";
+}
+
 /**
  * The Activity list: every delivery and queued email, newest first, as a
  * table at tablet width and up and as cards on a phone, with "Load more" at
@@ -376,11 +384,7 @@ export function ActivityList({
         </div>
       ) : views.length === 0 ? (
         <div className="rounded-lg border border-dashed border-border p-8 text-center text-sm text-muted-foreground">
-          {searching
-            ? "Nothing was sent to this address in this time."
-            : filtered
-              ? "Nothing matches these filters."
-              : "No email has been sent in this time."}
+          {emptyText(searching, filtered)}
         </div>
       ) : (
         <>
