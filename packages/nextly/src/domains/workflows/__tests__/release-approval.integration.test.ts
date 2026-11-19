@@ -122,14 +122,27 @@ async function notApprovedParts(
     .map(finding => (finding.detail as { parts?: unknown }).parts);
 }
 
-/** The drain's pass, run once, as the runner's sweep runs it. */
-function runDuePass(t: TestNextly) {
+/**
+ * The drain's pass, run once, as the runner's sweep runs it. `beforePublish`, when given, runs
+ * before each publish the pass writes, with the document it is about to write.
+ */
+function runDuePass(
+  t: TestNextly,
+  beforePublish?: (entryId: string) => Promise<void>
+) {
+  const mutations = createReleaseMutations({
+    contentApi: t.nextly,
+    lockServer: lockServerOf(t),
+  });
   return applyDueReleases({
     repository: new ReleasesRepository(t.adapter),
-    mutations: createReleaseMutations({
-      contentApi: t.nextly,
-      lockServer: lockServerOf(t),
-    }),
+    mutations: {
+      publish: async input => {
+        await beforePublish?.(input.ref.entryId);
+        return mutations.publish(input);
+      },
+      unpublish: input => mutations.unpublish(input),
+    },
     runAs: {
       findUser: id => Promise.resolve({ id, isActive: true }),
       listRoleSlugs: () => Promise.resolve([]),
@@ -664,6 +677,51 @@ describe.each(getConfiguredTestDialects())(
       expect(await releaseState(t, arranged.releaseId)).toBe("scheduled");
       expect(await stoppedNotices(t, arranged)).toBe(0);
       expect(flushed()).toContain(arranged.releaseId);
+    });
+
+    it("keeps a component scheduled when a publish it wrote this pass is followed by one the gate refuses for approval", async () => {
+      // Both pages approved when the pass asks; the second loses its approval after the first is
+      // written, and its own publish gate refuses it. Stopped, the first page would stay live for
+      // good; scheduled, a later pass with the approval back finishes the release.
+      const t = await boot(dialect);
+      const pages = [await doc(t, "pages"), await doc(t, "pages")];
+      for (const page of pages) await approve(t, "pages", page);
+      const arranged = await arrange(t, pages.map(publishPage), PAST);
+      const order = await plannedOrder(t);
+      const [first, second] = order;
+      if (first === undefined || second === undefined) {
+        throw new Error("the pass plans fewer than two documents");
+      }
+      const approved = await stateOf(t, partOf("pages", second, null));
+      if (!approved) throw new Error("no review state for the second page");
+
+      const pass = await runDuePass(t, async entryId => {
+        if (entryId === second) await withdrawSilently(t, "pages", second);
+      });
+
+      expect(
+        pass.outcomes.map(outcome => [outcome.ref.entryId, outcome.failure])
+      ).toEqual([
+        [first, null],
+        [second, "NOT_APPROVED"],
+      ]);
+      expect(await storedPageStatus(t, first)).toBe("published");
+      expect(await releaseState(t, arranged.releaseId)).toBe("scheduled");
+
+      // The approval back as it was, the next pass writes the rest and settles the release.
+      const withdrawn = await stateOf(t, partOf("pages", second, null));
+      if (!withdrawn) throw new Error("no review state to restore");
+      expect(
+        await updateReviewState(
+          stateDb(t),
+          partOf("pages", second, null),
+          withdrawn.revision,
+          { stage: approved.stage, approval: approved.approval }
+        )
+      ).toBeTruthy();
+      await runDuePass(t);
+      expect(await storedPageStatus(t, second)).toBe("published");
+      expect(await releaseState(t, arranged.releaseId)).toBe("published");
     });
 
     it("keeps a due release a pass began scheduled when its run meets a hold, and flushes what readers were shown", async () => {

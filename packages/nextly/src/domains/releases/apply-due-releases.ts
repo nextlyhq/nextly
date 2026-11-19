@@ -361,6 +361,29 @@ async function stopHopelessReleases(
 }
 
 /**
+ * The releases of each component begun: `before`, from the receipts read before this pass, and
+ * every release of a component one of whose actions this pass wrote. An approval withdrawn after
+ * the component's question meets a later write's own gate; the component has then begun all the
+ * same, and is kept scheduled for its approval rather than stopped with part of it live.
+ */
+function begunComponents(
+  plan: ReturnType<typeof planReleaseMaterialisation>,
+  outcomes: readonly MaterialisationOutcome[],
+  before: ReadonlySet<string>
+): Set<string> {
+  const wrote = new Set(
+    outcomes.filter(o => o.failure === null).map(o => o.releaseId)
+  );
+  const begun = new Set(before);
+  for (const group of plan.overlappingReleases) {
+    if (group.some(id => wrote.has(id))) {
+      for (const id of group) begun.add(id);
+    }
+  }
+  return begun;
+}
+
+/**
  * Flush the pages of each component an earlier pass began that a hold now keeps scheduled
  * (`permanentlyBrokenReleases` leaves it so rather than stopping it). A reader is shown nothing
  * more of it from now on, as of a component `blockReleases` stops and flushes, so a page cached
@@ -564,8 +587,13 @@ export async function applyDueReleases(
   // settle either, because the pair is only ever discharged together. Blocking
   // one and not the other would leave the second retrying forever, which is the
   // condition this exists to end.
-  // From every member's receipt, the losing actions' included (`begunReleases`).
-  const begun = begunReleases(plan, members, releases);
+  // From every member's receipt, the losing actions' included (`begunReleases`), and from this
+  // pass's own writes, which those receipts, read before it wrote, cannot show.
+  const begun = begunComponents(
+    plan,
+    outcomes,
+    begunReleases(plan, members, releases)
+  );
   const blocked = await stopHopelessReleases(
     deps,
     plan,
