@@ -340,7 +340,12 @@ function ActivityCards({
 
 /** Why the list is empty: a search that found nothing, filters, or a quiet time. */
 function emptyText(searching: boolean, filtered: boolean): string {
-  if (searching) return "Nothing was sent to this address in this time.";
+  if (searching) {
+    // Filtered, an empty search shows only that nothing sent there matches.
+    return filtered
+      ? "Nothing sent to this address matches these filters."
+      : "Nothing was sent to this address in this time.";
+  }
   return filtered
     ? "Nothing matches these filters."
     : "No email has been sent in this time.";

@@ -74,6 +74,15 @@ export function ActivityScreen(): JSX.Element {
   const [search, setSearch] = useState<AddressSearchRequest | null>(null);
   const searches = useRef(0);
   const activity = useEmailActivity(filter, { search: search ?? undefined });
+  // A filter changed on a search's results asks again, as a search of its
+  // own: each is recorded, so none is made but by the reader's own change.
+  const changeFilter = (next: ActivityFilter) => {
+    setFilter(next);
+    if (search) {
+      searches.current += 1;
+      setSearch({ ...search, id: searches.current, filter: next });
+    }
+  };
   const overdue = useQueuedEmailOverdue();
   const lists = useActivityLists();
   const now = useTickingNow();
@@ -87,13 +96,13 @@ export function ActivityScreen(): JSX.Element {
         searching={search !== null}
         onSearch={address => {
           searches.current += 1;
-          setSearch({ id: searches.current, address });
+          setSearch({ id: searches.current, address, filter });
         }}
         onClear={() => setSearch(null)}
       />
       <ActivityFilters
         filter={filter}
-        onChange={setFilter}
+        onChange={changeFilter}
         templates={templateChoices(
           lists.templates,
           activity.rows,
@@ -117,7 +126,7 @@ export function ActivityScreen(): JSX.Element {
         searching={search !== null}
         filtered={filtered}
         onClear={() =>
-          setFilter({ ...DEFAULT_ACTIVITY_FILTER, window: filter.window })
+          changeFilter({ ...DEFAULT_ACTIVITY_FILTER, window: filter.window })
         }
       />
       <ActivityBody

@@ -47,7 +47,9 @@ export function AddressSearch({
       <div className="flex flex-col gap-2 sm:flex-row">
         <Input
           id={inputId}
-          type="email"
+          // Text, not `email`: a browser's own check of an email field refuses
+          // forms the server searches, such as `Name <address>`, which it judges.
+          type="text"
           inputMode="email"
           // Kept out of the browser's saved form entries.
           autoComplete="off"

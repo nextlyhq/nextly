@@ -18,6 +18,16 @@ function field(): HTMLInputElement {
 }
 
 describe("the search by address", () => {
+  it("lets a display-name address through to the search", () => {
+    const onSearch = vi.fn();
+    render(
+      <AddressSearch searching={false} onSearch={onSearch} onClear={vi.fn()} />
+    );
+    fireEvent.change(field(), { target: { value: "Ada <ada@example.test>" } });
+    fireEvent.submit(field().closest("form") as HTMLFormElement);
+    expect(onSearch).toHaveBeenCalledWith("Ada <ada@example.test>");
+  });
+
   it("searches only when submitted, for the address as typed less its spaces", () => {
     const onSearch = vi.fn();
     render(
@@ -35,7 +45,10 @@ describe("the search by address", () => {
       <AddressSearch searching={false} onSearch={vi.fn()} onClear={vi.fn()} />
     );
     expect(field().getAttribute("autocomplete")).toBe("off");
-    expect(field().getAttribute("type")).toBe("email");
+    // Text with the email keyboard: a browser's own email check would refuse
+    // `Name <address>`, which the server searches.
+    expect(field().getAttribute("type")).toBe("text");
+    expect(field().getAttribute("inputmode")).toBe("email");
     expect(field().getAttribute("name")).toBeNull();
   });
 

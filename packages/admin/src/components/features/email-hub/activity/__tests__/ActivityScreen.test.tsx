@@ -198,12 +198,35 @@ describe("searching by address", () => {
     searchFor("ada@example.test");
     expect(vi.mocked(useEmailActivity)).toHaveBeenLastCalledWith(
       expect.anything(),
-      { search: { id: 1, address: "ada@example.test" } }
+      {
+        search: {
+          id: 1,
+          address: "ada@example.test",
+          filter: { outcome: "any", window: "7d" },
+        },
+      }
     );
     expect(
       screen.getByText("Older records can't be found this way.")
     ).toBeTruthy();
     expect(screen.getByText(/found for this address/)).toBeTruthy();
+  });
+
+  it("asks again as a new search when a filter changes on a search's results", () => {
+    activity({ rows: [ROW] });
+    render(<ActivityScreen />);
+    searchFor("ada@example.test");
+    fireEvent.click(screen.getByRole("button", { name: "30 days" }));
+    expect(vi.mocked(useEmailActivity)).toHaveBeenLastCalledWith(
+      expect.anything(),
+      {
+        search: {
+          id: 2,
+          address: "ada@example.test",
+          filter: { outcome: "any", window: "30d" },
+        },
+      }
+    );
   });
 
   it("searches the same address again as a new search, and clears back to the whole Activity", () => {
@@ -213,7 +236,9 @@ describe("searching by address", () => {
     searchFor("ada@example.test");
     expect(vi.mocked(useEmailActivity)).toHaveBeenLastCalledWith(
       expect.anything(),
-      { search: { id: 2, address: "ada@example.test" } }
+      expect.objectContaining({
+        search: expect.objectContaining({ id: 2, address: "ada@example.test" }),
+      })
     );
     fireEvent.click(screen.getByRole("button", { name: "Clear search" }));
     expect(vi.mocked(useEmailActivity)).toHaveBeenLastCalledWith(

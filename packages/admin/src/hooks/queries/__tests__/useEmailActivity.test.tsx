@@ -246,7 +246,8 @@ describe("useEmailActivity", () => {
 describe("useEmailActivity searching by address", () => {
   const NOTICE =
     "Only records sent under the current secret, or a previous secret still configured, can be found by address.";
-  const search = { id: 1, address: "ada@example.test" };
+  const ANY = { outcome: "any" as const, window: "7d" as const };
+  const search = { id: 1, address: "ada@example.test", filter: ANY };
 
   it("searches the address under the list's filters, and passes the server's notice on", async () => {
     searchActivityByAddress.mockResolvedValue({
@@ -255,7 +256,10 @@ describe("useEmailActivity searching by address", () => {
       notice: NOTICE,
     });
     const { result } = renderHook(
-      () => useEmailActivity({ outcome: "failed", window: "7d" }, { search }),
+      () =>
+        useEmailActivity(ANY, {
+          search: { ...search, filter: { outcome: "failed", window: "7d" } },
+        }),
       { wrapper }
     );
     await waitFor(() => expect(result.current.rows).toHaveLength(1));
@@ -315,6 +319,28 @@ describe("useEmailActivity searching by address", () => {
     expect(keys).not.toContain("ada");
   });
 
+  it("reads with the filters it was made with, so a filter edit alone never searches", async () => {
+    searchActivityByAddress.mockResolvedValue({
+      items: [entry("sent")],
+      meta: EMPTY_META,
+      notice: NOTICE,
+    });
+    const { rerender, result } = renderHook(
+      ({ outcome }: { outcome: "any" | "failed" }) =>
+        useEmailActivity({ outcome, window: "7d" }, { search }),
+      { wrapper, initialProps: { outcome: "any" as "any" | "failed" } }
+    );
+    await waitFor(() => expect(result.current.rows).toHaveLength(1));
+    rerender({ outcome: "failed" });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(searchActivityByAddress).toHaveBeenCalledTimes(1);
+    expect(searchActivityByAddress.mock.calls[0][0]).not.toHaveProperty(
+      "status"
+    );
+  });
+
   it("reads the same address again when it is searched again", async () => {
     searchActivityByAddress.mockResolvedValue({
       items: [entry("sent")],
@@ -331,7 +357,7 @@ describe("useEmailActivity searching by address", () => {
       ({ id }: { id: number }) =>
         useEmailActivity(
           { outcome: "any", window: "7d" },
-          { search: { id, address: "ada@example.test" } }
+          { search: { id, address: "ada@example.test", filter: ANY } }
         ),
       { wrapper: shared, initialProps: { id: 1 } }
     );

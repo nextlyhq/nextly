@@ -64,13 +64,11 @@ const emailActivityKeys = {
   all: () => ["emailActivity"] as const,
   list: (query: ReturnType<typeof activityQuery>, window: TimeWindow) =>
     [...emailActivityKeys.all(), "list", query, window] as const,
-  // A search is keyed by the screen's count of searches, never the address,
-  // so the address is in no cache key a devtool or a log could show.
-  search: (
-    query: ReturnType<typeof activityQuery>,
-    window: TimeWindow,
-    searchId: number
-  ) => [...emailActivityKeys.all(), "search", query, window, searchId] as const,
+  // A search is keyed by the screen's count of searches alone, never the
+  // address, so the address is in no cache key a devtool or a log could show,
+  // and nothing but a new search, never a filter edit, makes a new key.
+  search: (searchId: number) =>
+    [...emailActivityKeys.all(), "search", searchId] as const,
   overdue: () => [...emailActivityKeys.all(), "overdue"] as const,
   detail: (source: "delivery" | "queued", id: string) =>
     [...emailActivityKeys.all(), "detail", source, id] as const,
@@ -97,11 +95,15 @@ interface ActivityPage {
   notice: string | null;
 }
 
-/** A search by address the screen has made: its count, and the address. */
+/**
+ * A search by address the screen has made: its count, the address, and the
+ * filters it was made with, so it reads only what was asked when it was made.
+ */
 export interface AddressSearchRequest {
   /** Bumped by each search, so the same address searched again reads again. */
   id: number;
   address: string;
+  filter: ActivityFilter;
 }
 
 /**
@@ -182,15 +184,18 @@ export function useEmailActivity(
   filter: ActivityFilter,
   options: { enabled?: boolean; search?: AddressSearchRequest } = {}
 ): EmailActivityResult {
-  const filterKey = JSON.stringify(activityQuery(filter));
+  const search = options.search;
+  // A search reads with the filters it was made with: every read of one is
+  // recorded, so a filter edit alone never searches.
+  const asked = search?.filter ?? filter;
+  const filterKey = JSON.stringify(activityQuery(asked));
   // Read back from the key, so the memo depends on the filter's value and
   // not on a new object with the same value each render.
   const query = useMemo(
     () => JSON.parse(filterKey) as ReturnType<typeof activityQuery>,
     [filterKey]
   );
-  const window = filter.window;
-  const search = options.search;
+  const window = asked.window;
 
   const read = useInfiniteQuery<
     ActivityPage,
@@ -200,7 +205,7 @@ export function useEmailActivity(
     ActivityCursor | null
   >({
     queryKey: search
-      ? emailActivityKeys.search(query, window, search.id)
+      ? emailActivityKeys.search(search.id)
       : emailActivityKeys.list(query, window),
     initialPageParam: null,
     queryFn: ({ pageParam }) =>
