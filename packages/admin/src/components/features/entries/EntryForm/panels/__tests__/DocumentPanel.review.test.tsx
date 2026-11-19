@@ -1,10 +1,12 @@
 /**
  * The document panel's Review section, as the editor draws it: its steps wait
- * for what holds the header's (unsaved edits, a save on its way), and say why.
+ * for what holds the header's (unsaved edits, a save on its way), and say why;
+ * and it is a part of the panel of its own, kept where a plugin replaces Status.
  *
- * The plausible broken panel: one that offers the side panel's steps while the
- * page holds unsaved edits, so a step approves the stored content while other
- * content is on screen.
+ * The plausible broken panels: one that offers the side panel's steps while
+ * the page holds unsaved edits, so a step approves the stored content while
+ * other content is on screen; and one that draws Review inside the Status
+ * section, so a plugin replacing Status takes the workflow's steps with it.
  */
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -126,6 +128,31 @@ describe("the document panel's Review section", () => {
     expect(review).toHaveTextContent("Save your changes first.");
     await userEvent.click(approve);
     expect(api.takeStep).not.toHaveBeenCalled();
+  });
+
+  it("stays in the panel, with its steps, where a plugin replaces the Status section", async () => {
+    // A contribution that replaces Status arrives in Status' place, and Status is not in the
+    // order; the panel has nothing to draw it with here, so only the built-ins remain.
+    panel({
+      panelOrder: [
+        { kind: "builtIn", name: "publishing" },
+        { kind: "builtIn", name: "details" },
+      ],
+    });
+    const review = await screen.findByRole("region", { name: "Review" });
+    expect(
+      within(review).getByRole("button", { name: "Approve" })
+    ).toBeEnabled();
+    expect(screen.queryByRole("region", { name: "Status" })).toBeNull();
+  });
+
+  it("follows the Status section where Status is drawn", async () => {
+    panel();
+    await screen.findByRole("region", { name: "Review" });
+    const titles = screen
+      .getAllByRole("region", { hidden: true })
+      .map(region => region.getAttribute("data-panel-section") ?? "");
+    expect(titles.indexOf("Review")).toBe(titles.indexOf("Status") + 1);
   });
 
   it("offers its steps where nothing holds them", async () => {
