@@ -118,6 +118,19 @@ export interface HeldEffect {
   frame: TransactionFrame;
   /** `frame.writesAfterClosing` when it was registered. */
   writesBefore: number;
+  /**
+   * Its place among the `afterRollback` effects registered in this process,
+   * so effects held in two lists run in the order they were registered.
+   * Absent on `afterCommit` effects, which are held in one list.
+   */
+  registered?: number;
+}
+
+/** Effects in the order they were registered, from lists held apart. */
+export function inRegistrationOrder(effects: HeldEffect[]): HeldEffect[] {
+  return effects.sort(
+    (first, second) => (first.registered ?? 0) - (second.registered ?? 0)
+  );
 }
 
 /**

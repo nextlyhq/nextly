@@ -42,6 +42,7 @@ import {
   closeFrame,
   enqueueIn,
   joinable,
+  inRegistrationOrder,
   openFrame,
   outermost,
   settleNested,
@@ -430,6 +431,12 @@ interface CountCapableDb {
     from(table: unknown): { $dynamic(): AliasableSelect };
   };
 }
+
+/**
+ * How many `afterRollback` effects this process has held, numbering each as
+ * it is held so lists held apart can be run in registration order.
+ */
+let rollbackRegistrations = 0;
 
 export abstract class DrizzleAdapter {
   // ============================================================
@@ -854,13 +861,14 @@ export abstract class DrizzleAdapter {
         error,
         // A part a savepoint rolled back was undone by its own confirmed
         // ROLLBACK TO, so its rollback effects run whether or not this
-        // transaction's ROLLBACK is confirmed; each runs once.
-        effects: [
+        // transaction's ROLLBACK is confirmed; each runs once, and all of
+        // them in the order they were registered.
+        effects: inRegistrationOrder([
           ...frame.undoneRollbackHeld.splice(0),
           ...(confirmed
             ? rollbackEffects
             : this.dropUnconfirmed(rollbackEffects)),
-        ],
+        ]),
       };
     }
   }
@@ -1684,11 +1692,13 @@ export abstract class DrizzleAdapter {
     if (!frame) return;
     const root = outermost(frame);
     if (!root.finished) {
+      rollbackRegistrations += 1;
       root.rollbackHeld.push({
         effect: this.inRegisteringContext(effect),
         onDeferredFailure,
         frame,
         writesBefore: frame.writesAfterClosing,
+        registered: rollbackRegistrations,
       });
       return;
     }

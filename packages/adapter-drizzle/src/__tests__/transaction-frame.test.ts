@@ -474,6 +474,30 @@ describe("transaction frames", () => {
     ]);
   });
 
+  it("runs the outer's own rollback effects and an undone savepoint part's in the order they were registered", async () => {
+    const adapter = new FrameAdapter();
+    const tx = adapter.savepoints();
+    const ran: string[] = [];
+
+    await adapter
+      .transaction(async () => {
+        await adapter.afterRollback(() => ran.push("A, before the savepoint"));
+        await tx.savepoint("item_1");
+        await adapter.afterRollback(() => ran.push("B, in the undone item"));
+        await tx.rollbackToSavepoint("item_1");
+        await tx.releaseSavepoint("item_1");
+        await adapter.afterRollback(() => ran.push("C, after it"));
+        throw new Error("undo everything");
+      })
+      .catch(() => undefined);
+
+    expect(ran).toEqual([
+      "A, before the savepoint",
+      "B, in the undone item",
+      "C, after it",
+    ]);
+  });
+
   it("only sends the statements of a context savepoint used outside any transaction", async () => {
     const adapter = new FrameAdapter();
     const tx = adapter.savepoints();
