@@ -328,14 +328,19 @@ function schemaSaveAnswer(
  */
 function failedSingleMigration(
   slug: string,
-  failure: { reason: string; keptFiles: readonly string[]; next?: string }
+  failure: {
+    reason: string;
+    keptFiles: readonly string[];
+    checked?: string | null;
+    next?: string;
+  }
 ): NextlyError {
-  const { reason, keptFiles, next: instead } = failure;
+  const { reason, keptFiles, checked, next: instead } = failure;
   const one = keptFiles.length === 1;
   const next =
     keptFiles.length === 0
       ? (instead ?? "Save it again to retry.")
-      : `Its migration ${one ? "file" : "files"} ${keptFiles.join(", ")} ${one ? "was" : "were"} kept and not recorded applied. ${nextSteps(keptFiles)}`;
+      : `Its migration ${one ? "file" : "files"} ${keptFiles.join(", ")} ${one ? "was" : "were"} kept and not recorded applied. ${nextSteps(keptFiles, checked)}`;
   return new NextlyError({
     code: "NEXTLY_MIGRATION_APPLY_FAILED",
     publicMessage: `Single "${slug}" was saved, but its migration failed: ${reason}. ${next}`,

@@ -254,7 +254,13 @@ export interface UpdateSingleSchemaResult {
    * files the writer kept, recorded applied nowhere, in run order; empty where none was kept. `next`
    * says what to do where none was kept and saving again would not help.
    */
-  failure?: { reason: string; keptFiles: string[]; next?: string };
+  failure?: {
+    reason: string;
+    keptFiles: string[];
+    /** Of `keptFiles`, the one a resolve checks against the database (the writer's `checked`). */
+    checked?: string | null;
+    next?: string;
+  };
 }
 
 /** One Required or Unique setting of a field leaving translation, and the SQL that undoes it. */
@@ -308,10 +314,15 @@ function recordedRowOf(
  */
 function noteKeptFiles(
   result: UpdateSingleSchemaResult | undefined,
-  written: { files: readonly string[]; applied: boolean } | undefined
+  written:
+    | { files: readonly string[]; applied: boolean; checked?: string | null }
+    | undefined
 ): void {
   if (result?.failure && written?.applied === false) {
     result.failure.keptFiles = [...written.files];
+    if (written.checked !== undefined) {
+      result.failure.checked = written.checked;
+    }
   }
 }
 

@@ -315,6 +315,12 @@ export interface CollectionSaveResult {
   files: string[];
   /** Whether they were run and recorded applied here. */
   applied: boolean;
+  /**
+   * Where they were kept, recorded applied nowhere (`applied` false): the one a
+   * `migrate:resolve` checks against the database (`checkedFileOf`), or null where none has a
+   * snapshot.
+   */
+  checked?: string | null;
 }
 
 /**
@@ -388,7 +394,11 @@ export async function writeCollectionSave(
         if (applied === "partly-applied") {
           // Kept recorded applied nowhere: nothing says what committed, so the record stays.
           written.started.left();
-          return { files: [...written.names], applied: false };
+          return {
+            files: [...written.names],
+            applied: false,
+            checked: await checkedFileOf(deps, written.files.change),
+          };
         }
         await recordWhatWasPushed(deps, written.files, written.table);
       } else if (deps.applies) {
@@ -413,7 +423,14 @@ export async function writeCollectionSave(
         pushed = true;
         if (applied === "partly-applied") written.started.left();
       }
-      return { files: [...written.names], applied: deps.applies };
+      return {
+        files: [...written.names],
+        applied: deps.applies,
+        // Kept outside development, recorded nowhere: named, as a part-way failure names them.
+        ...(deps.applies
+          ? {}
+          : { checked: await checkedFileOf(deps, written.files.change) }),
+      };
     } catch (error) {
       if (!pushed) {
         await undoThenThrow(error, [
@@ -2161,7 +2178,8 @@ async function runWritten(
       // after it are kept, recorded nowhere, and the failure says so with what to run next, as a
       // push that failed part way says it.
       if (applied.length > 0) {
-        throw partlyAppliedChange(error, ordered.slice(applied.length));
+        const kept = ordered.slice(applied.length);
+        throw partlyAppliedChange(error, kept, await checkedFileOf(deps, kept));
       }
       throw error;
     }
@@ -2496,12 +2514,10 @@ async function recordWhatWasPushed(
     });
   }
   // The table after the push is what the change's newest file with a
-  // snapshot records: the adoption describes it before the push, and a
-  // translations-table file, which may come after, has no snapshot. Compared
-  // before anything is recorded, so a mismatch records no file.
-  const verified = [...units]
-    .reverse()
-    .find(u => u.filename !== files.adopt && u.target !== null);
+  // snapshot records (`checkedFileOf`). Compared before anything is
+  // recorded, so a mismatch records no file.
+  const checked = await checkedFileOf(deps, files.change);
+  const verified = units.find(u => u.filename === checked);
   if (verified?.target != null) {
     const live = await liveTable(deps, table);
     const expected = onlyTable(verified.target, table);
@@ -2523,6 +2539,22 @@ async function recordWhatWasPushed(
   for (const { filename, file } of units) {
     await recordAlreadyApplied({ filename, sha256: file.sha256 }, repo);
   }
+}
+
+/**
+ * Of a save's change files, in run order, the one a `migrate:resolve` checks against the database:
+ * the newest with a snapshot, which describes the table as the change leaves it. A translations
+ * table's file, which may come after it, has none, and the adoption describes the table before the
+ * change, so neither is it. Null where none has a snapshot.
+ */
+async function checkedFileOf(
+  deps: CollectionSaveDeps,
+  files: readonly string[]
+): Promise<string | null> {
+  for (const filename of [...files].reverse()) {
+    if ((await snapshotOf(deps, filename)) !== null) return filename;
+  }
+  return null;
 }
 
 /** A written file as the runner takes it. */

@@ -132,11 +132,15 @@ export class FirstQuestionWatch {
  * failure before that is thrown as it is, so the writer withdraws its files;
  * one after it answers `"partly-applied"`, so the writer keeps them, and is
  * held until the caller, once the writer has returned the files it kept,
- * throws it with `throwIfFailed`.
+ * throws it with `throwIfFailed`, naming the kept file a resolve checks
+ * (`checked`, the writer's).
  */
 export function partWayPush(push: (onLanded: () => void) => Promise<void>): {
   appliedBy: () => Promise<void | "partly-applied">;
-  throwIfFailed: (keptFiles: readonly string[]) => void;
+  throwIfFailed: (
+    keptFiles: readonly string[],
+    checked?: string | null
+  ) => void;
 } {
   // Held in an object, as the push sets it from inside the writer.
   const failed: { error?: unknown } = {};
@@ -154,8 +158,10 @@ export function partWayPush(push: (onLanded: () => void) => Promise<void>): {
         return "partly-applied";
       }
     },
-    throwIfFailed: keptFiles => {
-      if ("error" in failed) throw partlyAppliedChange(failed.error, keptFiles);
+    throwIfFailed: (keptFiles, checked) => {
+      if ("error" in failed) {
+        throw partlyAppliedChange(failed.error, keptFiles, checked);
+      }
     },
   };
 }
@@ -166,13 +172,15 @@ export function partWayPush(push: (onLanded: () => void) => Promise<void>): {
  * change, the files kept for it, and what to run next. Its code is the
  * failure's own, so a caller reading the code (a busy table's stop, say) reads
  * it unchanged; a failure that is not a `NextlyError` is told without its
- * text, which a driver can fill with identifiers and values.
+ * text, which a driver can fill with identifiers and values. `checked` is the
+ * kept file a resolve checks against the database (`nextSteps`).
  */
 export function partlyAppliedChange(
   error: unknown,
-  keptFiles: readonly string[]
+  keptFiles: readonly string[],
+  checked?: string | null
 ): NextlyError {
-  const kept = keptFilesText(keptFiles);
+  const kept = keptFilesText(keptFiles, checked);
   if (NextlyError.is(error)) return withKeptFiles(error, kept, keptFiles);
   return new NextlyError({
     code: "NEXTLY_MIGRATION_PARTIALLY_APPLIED",
@@ -184,11 +192,14 @@ export function partlyAppliedChange(
 }
 
 /** That the database holds part of the change, the files kept for it, and what to run next. */
-function keptFilesText(keptFiles: readonly string[]): string {
+function keptFilesText(
+  keptFiles: readonly string[],
+  checked?: string | null
+): string {
   if (keptFiles.length === 0)
     return "The database now holds part of this change.";
   const one = keptFiles.length === 1;
-  return `The database now holds part of this change, so ${one ? "its migration file" : "its migration files"} ${keptFiles.join(", ")} ${one ? "was" : "were"} kept and not recorded as applied. ${nextSteps(keptFiles)}`;
+  return `The database now holds part of this change, so ${one ? "its migration file" : "its migration files"} ${keptFiles.join(", ")} ${one ? "was" : "were"} kept and not recorded as applied. ${nextSteps(keptFiles, checked)}`;
 }
 
 /**
@@ -215,33 +226,38 @@ function withKeptFiles(
 /**
  * What to run once the database holds part of a change `keptFiles` describe, in run order. Each
  * file's snapshot is the database as that file leaves it, so with several only one describes the
- * finished change: `checked`, the last by default, or the newest with a snapshot where a
- * translations table's file, which has none, comes after it. It is compared with the database and
- * the others are recorded without the comparison. Recording them changes no registry row, and the
- * save stopped before writing its own, so `nextly migrate` follows: it brings the registry in step
- * with the newest applied snapshot on every run, with no file left to apply. Reversed, the files
- * run again from the start, by the same command.
+ * finished change: `named`, the newest kept file with a snapshot, where the writer says which (a
+ * translations table's file, which has none, may come after it); the last where it does not. It
+ * is compared with the database and the others are recorded without the comparison. `null` says
+ * none has a snapshot, so each is recorded without it. Recording them changes no registry row, and
+ * the save stopped before writing its own, so `nextly migrate` follows: it brings the registry in
+ * step with the newest applied snapshot on every run, with no file left to apply. Reversed, the
+ * files run again from the start, by the same command.
  */
 export function nextSteps(
   keptFiles: readonly string[],
-  checked: string | undefined = keptFiles[keptFiles.length - 1]
+  named?: string | null
 ): string {
   const last = keptFiles[keptFiles.length - 1];
+  const checked = named === undefined ? last : named;
   const follow = `run \`nextly migrate\`, which brings the registry in step with the recorded ${keptFiles.length === 1 ? "file" : "files"}. Or reverse what of it ran and run \`nextly migrate\`, which runs ${keptFiles.length === 1 ? "it" : "them"} from the start.`;
-  if (keptFiles.length === 1) {
-    return `Finish the change by hand, run \`nextly migrate:resolve --applied ${last}\`; then ${follow}`;
-  }
-  const commands = keptFiles.map(file =>
+  const resolve = (file: string) =>
     file === checked
       ? `\`nextly migrate:resolve --applied ${file}\``
-      : `\`nextly migrate:resolve --applied ${file} --skip-verify\``
-  );
+      : `\`nextly migrate:resolve --applied ${file} --skip-verify\``;
+  if (keptFiles.length === 1) {
+    return `Finish the change by hand, run ${resolve(last)}; then ${follow}`;
+  }
+  const commands = keptFiles.map(resolve);
   const record = `Finish the change by hand, record the files in order: ${commands
     .slice(0, -1)
     .join(", ")}, then ${commands[commands.length - 1]}`;
   // Where the checked file is the last, the steps read as they always have.
-  return checked === last
-    ? `${record}, which checks the database against the last; then ${follow}`
+  if (checked === last) {
+    return `${record}, which checks the database against the last; then ${follow}`;
+  }
+  return checked === null
+    ? `${record}; none of them has a snapshot to check the database against. Then ${follow}`
     : `${record}; the one without \`--skip-verify\` is checked against the database. Then ${follow}`;
 }
 

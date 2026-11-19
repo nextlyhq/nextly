@@ -1242,7 +1242,7 @@ const COLLECTIONS_METHODS: Record<
           });
           // Thrown before the registry row is written: the row keeps the fields the database
           // held before, as the kept files record the change still to finish.
-          push.throwIfFailed(written?.files ?? []);
+          push.throwIfFailed(written?.files ?? [], written?.checked);
           const storedFields =
             written === undefined
               ? (fields as unknown as FieldDefinition[])
