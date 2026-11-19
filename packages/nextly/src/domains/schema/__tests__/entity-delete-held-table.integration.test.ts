@@ -318,6 +318,93 @@ describe.each(getConfiguredTestDialects())(
       30_000
     );
 
+    /**
+     * A trigger of the site's own, and its removal: a row trigger on the collections' registry, or
+     * a DDL event trigger on drops. Each runs code the system does not know, which a second try
+     * would run again; both do nothing here.
+     */
+    async function siteTrigger(
+      t: TestNextly,
+      kind: "row" | "event"
+    ): Promise<() => Promise<void>> {
+      const run = (statement: string) => t.adapter.executeQuery(statement);
+      if (kind === "row") {
+        await run(
+          `CREATE OR REPLACE FUNCTION edh_audit() RETURNS trigger AS $$ BEGIN RETURN OLD; END $$ LANGUAGE plpgsql`
+        );
+        await run(
+          `CREATE TRIGGER edh_audit BEFORE DELETE ON "dynamic_collections" FOR EACH ROW EXECUTE FUNCTION edh_audit()`
+        );
+        return async () => {
+          await run(
+            `DROP TRIGGER IF EXISTS edh_audit ON "dynamic_collections"`
+          );
+          await run(`DROP FUNCTION IF EXISTS edh_audit()`);
+        };
+      }
+      await run(
+        `CREATE OR REPLACE FUNCTION edh_on_drop() RETURNS event_trigger AS $$ BEGIN END $$ LANGUAGE plpgsql`
+      );
+      await run(
+        `CREATE EVENT TRIGGER edh_on_drop ON sql_drop EXECUTE FUNCTION edh_on_drop()`
+      );
+      return async () => {
+        await run(`DROP EVENT TRIGGER IF EXISTS edh_on_drop`);
+        await run(`DROP FUNCTION IF EXISTS edh_on_drop()`);
+      };
+    }
+
+    for (const trigger of [
+      { kind: "row", says: "a row change on a table with a trigger" },
+      {
+        kind: "event",
+        says: "a schema statement, which fires the database's DDL event trigger",
+      },
+    ] as const) {
+      it.runIf(dialect === "postgresql")(
+        `a collection's, on a database with ${trigger.kind === "row" ? "a row" : "an event"} trigger of its own, stops without trying again`,
+        async () => {
+          const t = await boot();
+          const entity = await anEntity(t, "collection");
+          const companion = `${entity.table}_locales`;
+          const removeTrigger = await siteTrigger(t, trigger.kind);
+          try {
+            const release = await holdTable(t, companion);
+            try {
+              vi.stubEnv("NEXTLY_LOCK_TIMEOUT", "1");
+              vi.stubEnv("NEXTLY_LOCK_TIMEOUT_TOTAL", "3");
+
+              const stopped = await remove(entity).then(
+                () => "deleted",
+                (error: unknown) => error
+              );
+
+              // What the ended try ran may have fired the trigger, whose effects outside the
+              // database no rollback undoes: not tried again, nothing changed.
+              expect(stopped).toMatchObject({
+                code: "NEXTLY_TABLE_BUSY",
+                publicMessage: expect.stringContaining(
+                  "stopped without trying again: table busy."
+                ),
+              });
+              expect(
+                (stopped as { publicMessage: string }).publicMessage
+              ).toContain(trigger.says);
+              expect(await t.adapter.tableExists(entity.table)).toBe(true);
+              expect(await registryRowCount(t, entity)).toBe(1);
+              expect(deleteFiles(t, entity)).toEqual([]);
+            } finally {
+              await release();
+            }
+          } finally {
+            // Database-wide for an event trigger: removed whatever the outcome.
+            await removeTrigger();
+          }
+        },
+        30_000
+      );
+    }
+
     for (const kind of KINDS) {
       it.runIf(dialect === "postgresql")(
         `a ${kind}'s, against a held translations table, stops busy having changed nothing`,

@@ -9,9 +9,11 @@
  * timeout), as a field-group migration step's tries do, and a try whose wait ended is tried again
  * as the bounds (`NEXTLY_LOCK_TIMEOUT`, `NEXTLY_LOCK_TIMEOUT_TOTAL`) allow; then the delete stops
  * with `NEXTLY_TABLE_BUSY`. A try that ended rolled its transaction back whole, so the stop has
- * changed nothing, and the next try runs the whole transaction again; unless the try ran code the
- * system does not know (a plugin's handler), whose effects outside the database a rollback does
- * not undo: then the delete stops at once, without trying again.
+ * changed nothing, and the next try runs the whole transaction again; unless the try may have run
+ * code the system does not know, whose effects outside the database a rollback does not undo: a
+ * plugin's handler, a row trigger, or on PostgreSQL a DDL event trigger on its drops. Then the
+ * delete stops at once, without trying again, as the busy-table engine stops a change it judges
+ * the same way.
  *
  * MySQL commits each table drop as it runs, and what ran before it, so its deletes run in steps
  * ordered to stay retryable: the transaction runs there as before, unbounded.
@@ -25,7 +27,12 @@ import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import { NextlyError } from "../../../errors/nextly-error";
 import { busyTableBounds } from "../../schema/busy-table/bounds";
 import { endedWaiting } from "../../schema/busy-table/ended-waiting";
+import type { NoRetryReason } from "../../schema/busy-table/judge";
 import { tableBusyError, tryNotice } from "../../schema/busy-table/report";
+import {
+  ddlEventTriggerTags,
+  triggerTables,
+} from "../../schema/busy-table/run-unit";
 import { boundSqliteWait } from "../../schema/busy-table/session-try";
 import {
   withBusyTableTries,
@@ -64,6 +71,30 @@ function deleteStopped(stop: BusyTableStop): NextlyError {
       ? {}
       : { logContext: report.logContext }),
   });
+}
+
+/**
+ * Why a try that ended may not run again, or undefined where all of it may. A delete drops tables
+ * and changes rows across many tables (registry rows, the rows it sweeps, field-group values), so
+ * this is asked of the database as a whole rather than of each statement: a plugin's handler that
+ * ran (`ranUnknownCode`); on PostgreSQL a DDL event trigger that fires on `DROP TABLE`; any row
+ * trigger, or triggers this account cannot all see. Each read that fails answers no-retry, failing
+ * closed: what is lost is only the retry, and the delete changed nothing.
+ */
+async function noRetryOf(
+  adapter: DrizzleAdapter,
+  dialect: "postgresql" | "sqlite",
+  ranUnknownCode: boolean
+): Promise<NoRetryReason | undefined> {
+  if (ranUnknownCode) return "unknown-code";
+  const tags = await ddlEventTriggerTags(adapter, dialect);
+  if (tags === "all" || (tags !== "none" && tags.has("DROP TABLE"))) {
+    return "event-trigger";
+  }
+  const triggers = await triggerTables(adapter, dialect).catch(
+    () => "unseen" as const
+  );
+  return triggers === "unseen" || triggers.size > 0 ? "trigger" : undefined;
 }
 
 /**
@@ -124,19 +155,24 @@ export async function deleteTransactionInTries<T>(
         return { kind: "done", value };
       } catch (error) {
         if (!endedWaiting(error, dialect, false)) throw error;
-        // Rolled back whole: nothing of this try stays, and all of it may run again, unless it ran
-        // code the system does not know, which runs first in the delete (its first step).
+        // Rolled back whole: nothing of this try stays, and all of it may run again, unless it may
+        // have run code the system does not know, from its first step on.
+        const reason = await noRetryOf(
+          adapter,
+          dialect,
+          options.ranUnknownCode?.() === true
+        );
         return {
           kind: "ended",
           ended: { table: null, holder: HOLDER_NOT_LOOKED_UP },
-          ...(options.ranUnknownCode?.() === true
-            ? {
+          ...(reason === undefined
+            ? {}
+            : {
                 lasting: {
                   statementNumber: 1,
-                  judgement: { kind: "no-retry", reason: "unknown-code" },
+                  judgement: { kind: "no-retry", reason },
                 },
-              }
-            : {}),
+              }),
           undone: true,
           committed: [],
         };
