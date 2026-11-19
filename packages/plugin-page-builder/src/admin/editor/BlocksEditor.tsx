@@ -64,6 +64,7 @@ import {
   useLeavingWithHeldSettings,
 } from "./component-setting-hold";
 import { useConditionedPage } from "./conditioned-page";
+import { useCopySource } from "./copy-source";
 import { editorCanvasRegion } from "./editor-canvas-region";
 import {
   editorStrip,
@@ -746,6 +747,9 @@ function EditorBody<TFieldValues extends FieldValues>({
   } = view;
   // Page settings opened at a plugin check's tab, and heard closing.
   const settingsTabs = useSettingsTabRequestState(view.pages.openSettings);
+  // The stored entry this field's document is, which Save as section and
+  // Turn into component name, so the CSS it holds is no change to either.
+  const copySource = useCopySource(place.address);
   const { pageChecks, twoRegions, pageFacts } = usePageChecking({
     view,
     mount,
@@ -959,6 +963,9 @@ function EditorBody<TFieldValues extends FieldValues>({
           */}
               <SavePatternPrompt
                 document={savePattern.document}
+                // The stored entry the document is, so CSS it holds is no
+                // change to the saved section.
+                source={copySource}
                 selectedIds={editor.selection.ids}
                 onClose={savePattern.close}
                 returnFocusTo={savePattern.returnFocusTo}
@@ -971,6 +978,8 @@ function EditorBody<TFieldValues extends FieldValues>({
               />
               <ComponentFromSelectionPrompt
                 request={makeComponent.request}
+                // As for a saved section: the stored entry the document is.
+                source={copySource}
                 editor={editor}
                 library={componentLibrary}
                 onClose={makeComponent.close}

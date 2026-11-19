@@ -44,6 +44,7 @@ export type CompositionRouteContext = Pick<
       collections: Pick<
         PluginRouteContext["services"]["collections"],
         | "createEntry"
+        | "createEntryFromSource"
         | "updateEntry"
         | "withTransaction"
         | "createEntryInTransaction"
