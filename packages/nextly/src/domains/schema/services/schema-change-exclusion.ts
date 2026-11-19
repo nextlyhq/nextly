@@ -87,19 +87,36 @@ export async function withSchemaChangeExcluded<T>(
   // A save that writes a migration settles first what an earlier save left part-way, holding the
   // schema lock and the project's migration files as the save does: its files and its definition
   // are the ones this save starts from.
-  const settleFirst = async () => {
-    if (adapter === undefined || args.migrationsDir === undefined) return;
+  const settleBefore = async (): Promise<string[]> => {
+    if (adapter === undefined || args.migrationsDir === undefined) return [];
     const { settleBeforeBuilderSave } = await import(
       "../builder-save/settle-left-save"
     );
-    await settleBeforeBuilderSave(adapter, args.migrationsDir, args.logger);
+    return settleBeforeBuilderSave(adapter, args.migrationsDir, args.logger);
+  };
+  const settleAfter = async (standing: readonly string[]): Promise<void> => {
+    if (adapter === undefined || args.migrationsDir === undefined) return;
+    const { settleAfterBuilderSave } = await import(
+      "../builder-save/settle-left-save"
+    );
+    await settleAfterBuilderSave(
+      adapter,
+      args.migrationsDir,
+      args.logger,
+      standing
+    );
   };
   const held = () =>
     withBuilderWriterScope(
       args.label,
       async () => {
-        await settleFirst();
-        return withSaveRecords(work, args.logger);
+        const standing = await settleBefore();
+        const result = await withSaveRecords(work, args.logger);
+        // A save that finished one left part-way (the same save again) has brought the database
+        // to it: settled now, that record clears rather than standing until the next start. Only
+        // the records standing before the save: one the save itself left is the next start's.
+        await settleAfter(standing);
+        return result;
       },
       args.migrationsDir
     );

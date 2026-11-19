@@ -546,6 +546,9 @@ async function writeSave(
   const definitionPath = resolve(deps.projectRoot, deps.config.db.uiSchemaFile);
   const before = await readIfPresent(definitionPath);
   const after = serializeUiSchema(plan.next);
+  // The moment the save's files are named for, fixed before the record so the record can say it:
+  // a settle after a stop takes a file the record had not named yet only where it is of this one.
+  const filesAt = save.now ?? new Date();
   // Recorded before the first write, so a process stopped at any write after it leaves a record
   // of the save and of the definition it started from.
   const started = await recordSaveStarted({
@@ -560,6 +563,9 @@ async function writeSave(
     definitionAfter: after,
     startedFrom:
       (await newestSnapshotName(join(deps.migrationsDir, "meta"))) ?? null,
+    filesAt: filesAt.toISOString(),
+    // A save that leaves its files for `nextly migrate` is not judged from its tables.
+    applies: deps.applies,
     database: deps.database,
     notify: line => deps.logger.warn(line),
   });
@@ -591,11 +597,16 @@ async function writeSave(
     }
   };
   try {
-    const files = await writeFiles(deps, save, plan, async written => {
-      names.push(...written);
-      // Named in the record as soon as known, so a settle after a stop finds them by name.
-      await started.filesWritten(written);
-    });
+    const files = await writeFiles(
+      deps,
+      { ...save, now: filesAt },
+      plan,
+      async written => {
+        names.push(...written);
+        // Named in the record as soon as known, so a settle after a stop finds them by name.
+        await started.filesWritten(written);
+      }
+    );
     return { files, names, table: plan.table, undo, started };
   } catch (error) {
     return undoThenThrow(error, [{ files: names, undo: () => undo(error) }]);
@@ -1581,15 +1592,16 @@ function collectionOf(save: CollectionSave): UiSchemaEntity {
 
 /**
  * Where the translations table of `table`, and the main table's translated columns, differ from
- * what the newest snapshot records of them (`recordedTable`), for `refuseCompanionDrift`.
+ * what the newest snapshot records of them (`recordedTable`), for `refuseCompanionDrift`, and for
+ * a settle judging whether a left save's translations table stands where a snapshot says.
  *
  * The table's presence is a fact of its own: one holding only its structural columns has no
  * translated column to tell it from a missing one, and a file planned from a history that records
  * none creates it again. Names are compared as the dialect compares them (`identifierKey`), since
  * MySQL and SQLite take `TITLE` and `title` for one column, and the file's statements would too.
  */
-async function companionDriftItems(
-  deps: CollectionSaveDeps,
+export async function companionDriftItems(
+  deps: Pick<CollectionSaveDeps, "adapter">,
   table: string,
   recordedTable: TableSpec
 ): Promise<DriftItem[]> {
@@ -1671,7 +1683,7 @@ async function companionDriftItems(
  * the history's to record here.
  */
 async function companionIndexDriftItems(
-  deps: CollectionSaveDeps,
+  deps: Pick<CollectionSaveDeps, "adapter">,
   companion: string,
   recordedTable: TableSpec
 ): Promise<DriftItem[]> {

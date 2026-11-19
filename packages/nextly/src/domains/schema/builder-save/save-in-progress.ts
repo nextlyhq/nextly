@@ -107,6 +107,18 @@ const savedRecord = z.object({
    * last of these updates is found by the settle from the folder itself.
    */
   files: z.array(z.string()).optional(),
+  /**
+   * The moment the save's migration files are named for (`formatTimestamp`), recorded before any
+   * is written: a file the record has not named yet is the save's only where its name is of that
+   * moment. Absent from a record written before it was kept.
+   */
+  filesAt: z.string().optional(),
+  /**
+   * Whether the save applies its files itself (in development), false where it leaves them for
+   * `nextly migrate`: such a save's tables stand where they started by design, so no settle judges
+   * it from them. Absent from a record written before it was kept.
+   */
+  applies: z.boolean().optional(),
 });
 type SaveInProgress = z.infer<typeof savedRecord>;
 
@@ -300,6 +312,10 @@ export async function recordSaveStarted(args: {
   definitionAfter?: string;
   /** The newest snapshot on disk when the save started, which its files chain from. */
   startedFrom?: string | null;
+  /** The moment the save's migration files are named for, as an ISO timestamp. */
+  filesAt?: string;
+  /** Whether the save applies its own files (in development) rather than leaving them. */
+  applies?: boolean;
   /** The database the save writes to (`savedDatabase`); unknown where not given. */
   database: string | undefined;
   /** The save's log, which a try after the first is noticed in while the database is busy. */
@@ -330,6 +346,8 @@ export async function recordSaveStarted(args: {
     ...(args.startedFrom === undefined
       ? {}
       : { startedFrom: args.startedFrom }),
+    ...(args.filesAt === undefined ? {} : { filesAt: args.filesAt }),
+    ...(args.applies === undefined ? {} : { applies: args.applies }),
   };
   const meta = new MetaService(args.adapter, consoleLogger);
   const key = saveInProgressKey(args.kind, args.slug);
@@ -349,14 +367,13 @@ export async function recordSaveStarted(args: {
       logContext: { reason: "builder-save-record-unreadable", key },
     });
   }
+  // A later step of the save that made the record in this scope (a Single's save writes a field
+  // leaving translation as a step of its own, then the rest): the record is this save's, and goes on
+  // for it, saying what the save now writes.
+  const own = made.find(entry => entry.record.id === stood.data.id);
+  if (own !== undefined) return joinedStep(own, meta, key, args);
   if (stood.data.id !== record.id) {
-    // The record of a save whose process stopped: its marker stays in place, put back where it
-    // went missing (the row written, the process stopped before the marker), so the commands
-    // with no database see it while this save runs.
-    await placeMarker(markerPath(args.projectRoot, stood.data), stood.data, {
-      kept: true,
-    });
-    return NO_RECORD;
+    return beside(args, key, stood.data);
   }
   const entry: MadeRecord = {
     adapter: args.adapter,
@@ -397,6 +414,79 @@ export async function recordSaveStarted(args: {
  * leaves the row ahead of the marker, which the commands with no database read only for the save
  * it names.
  */
+/**
+ * A save of an entity whose record already stands, a save whose process stopped. Its marker stays
+ * in place, put back where it went missing (the row written, the process stopped before the
+ * marker), so the commands with no database see it while this save runs. The save goes on beside
+ * it, making no record of its own, or is refused (below).
+ */
+async function beside(
+  args: { projectRoot: string; definitionAfter?: string },
+  key: string,
+  stood: SaveInProgress
+): Promise<StartedSave> {
+  await placeMarker(markerPath(args.projectRoot, stood), stood, {
+    kept: true,
+  });
+  // One of this host's that its settle, which ran before this save, could not settle: a save of
+  // the entity over it would write past a state nothing has finished. Another host's is settled
+  // by that host's start, and this save goes on beside it.
+  // The same save again (its definition the one the left save was writing) goes on: it is the
+  // way that save is finished, and the settle after it (`withSchemaChangeExcluded`) judges the
+  // record then. Any other save of the entity is refused.
+  const finishing =
+    args.definitionAfter !== undefined &&
+    stood.definitionAfter === args.definitionAfter;
+  // A record of a save that applied nothing (outside development, its files left for
+  // `nextly migrate`) is not one a settle judges: a save goes on beside it, as beside another
+  // host's.
+  if (stood.host === hostname() && stood.applies !== false && !finishing) {
+    throw NextlyError.conflict({
+      reason: "state",
+      message: `${described(stood).replace(/^a /, "A ")} was left part-way and could not be settled, so this save was not started. ${clearByHand(args.projectRoot, stood)}`,
+      logContext: {
+        reason: "builder-save-left-unsettled",
+        key,
+        record: stood.id,
+      },
+    });
+  }
+  return NO_RECORD;
+}
+
+/**
+ * The record a save's later step goes on with: the save's own, made by its first step in this
+ * scope, brought to what the step writes (its definition, and the moment its files are named for,
+ * which a file not yet noted is of). The step's files join the record; how the save ended stays
+ * the first step's to say, except that a step that kept part of what it wrote leaves the record.
+ */
+async function joinedStep(
+  entry: MadeRecord,
+  meta: MetaService,
+  key: string,
+  step: { definitionAfter?: string; filesAt?: string }
+): Promise<StartedSave> {
+  const next: SaveInProgress = {
+    ...entry.record,
+    ...(step.definitionAfter === undefined
+      ? {}
+      : { definitionAfter: step.definitionAfter }),
+    ...(step.filesAt === undefined ? {} : { filesAt: step.filesAt }),
+  };
+  if (await meta.compareAndSet(key, entry.record, next)) {
+    const path = markerPath(entry.projectRoot, entry.record);
+    entry.record = next;
+    await replaceMarker(path, next);
+  }
+  return {
+    filesWritten: names => noteFilesWritten(entry, meta, key, names),
+    withdrawn: () => undefined,
+    left: () => {
+      entry.ending = "left";
+    },
+  };
+}
+
 async function noteFilesWritten(
   entry: MadeRecord,
   meta: MetaService,
@@ -788,6 +878,10 @@ export async function removeStaleMarkers(args: {
   const standing = new Set(
     rows.flatMap(row => ("record" in row ? [row.record.id] : []))
   );
+  // A row that cannot be read still stands for its entity's save: that entity's markers stay.
+  const unreadable = new Set(
+    rows.flatMap(row => ("record" in row ? [] : [row.key]))
+  );
   const removed: string[] = [];
   for (const marker of await readSaveMarkers(args.projectRoot)) {
     if ("unreadable" in marker) continue;
@@ -801,6 +895,7 @@ export async function removeStaleMarkers(args: {
       continue;
     }
     if (standing.has(record.id)) continue;
+    if (unreadable.has(saveInProgressKey(record.kind, record.slug))) continue;
     await removeMarker(marker.file, record);
     removed.push(relative(args.projectRoot, marker.file));
   }

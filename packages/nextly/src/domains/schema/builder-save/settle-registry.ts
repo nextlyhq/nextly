@@ -17,7 +17,7 @@ import { mediaUsageTablePresent } from "../../versions/entity-teardown";
 import { removeRegistryRow } from "../migrate/registry-row-removal";
 import { inRegistryStep, writeRegistryRows } from "../schema-version";
 
-import type { SettleDeps } from "./settle-left-save";
+import type { SavedEntity, SettleDeps } from "./settle-left-save";
 
 /** The registry writer a settle is handed, over `adapter`. */
 export function settleRegistryWriter(
@@ -32,12 +32,12 @@ export function settleRegistryWriter(
       await removeRow(adapter, kind, slug);
       return;
     }
-    const [row] = await adapter.select<{ schema_version: unknown }>(table, {
-      columns: ["schema_version"],
-      where: { and: [{ column: "slug", op: "=", value: slug }] },
-    });
+    const row = await registryRow(adapter, table, slug);
     // A row gone already (its entity deleted elsewhere since) has nothing to bring up.
     if (row === undefined) return;
+    // Already the saved shape (the save's own write committed, or an earlier settle's did before it
+    // stopped): written again, it would move the schema version on for nothing.
+    if (holds(row, saved)) return;
     const current = Number(row.schema_version);
     await writeAppliedFieldsRow(adapter, {
       table,
@@ -74,5 +74,50 @@ async function removeRow(
       return 1;
     },
     { wrote: removed => removed > 0 }
+  );
+}
+
+/** Whether the entity's registry row already holds the saved fields, read over `adapter`. */
+export function settleRegistryReader(
+  adapter: DrizzleAdapter
+): SettleDeps["registryHolds"] {
+  return async ({ kind, slug, saved }) => {
+    const table =
+      kind === "collection"
+        ? "dynamic_collections"
+        : kind === "single"
+          ? "dynamic_singles"
+          : await resolveRegistryTableName(adapter);
+    const row = await registryRow(adapter, table, slug);
+    if (saved === null) return row === undefined;
+    return row !== undefined && holds(row, saved);
+  };
+}
+
+interface RegistryRow {
+  schema_version: unknown;
+  fields: unknown;
+  localized: unknown;
+}
+
+async function registryRow(
+  adapter: DrizzleAdapter,
+  table: string,
+  slug: string
+): Promise<RegistryRow | undefined> {
+  const [row] = await adapter.select<RegistryRow>(table, {
+    columns: ["schema_version", "fields", "localized"],
+    where: { and: [{ column: "slug", op: "=", value: slug }] },
+  });
+  return row;
+}
+
+/** Whether `row` holds `saved`'s fields and translation flag, compared as stored. */
+function holds(row: RegistryRow, saved: SavedEntity): boolean {
+  const stored =
+    typeof row.fields === "string" ? row.fields : JSON.stringify(row.fields);
+  return (
+    stored === JSON.stringify(saved.fields) &&
+    Boolean(row.localized) === (saved.localized === true)
   );
 }

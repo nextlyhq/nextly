@@ -217,31 +217,45 @@ async function settleLeftSavesAtStart(label: string): Promise<void> {
     const { container } = await import("../di/container");
     const adapter = container.get<DrizzleAdapter | undefined>("adapter");
     if (!adapter) return;
-    const { migrationsDir } = await bootMigrateConfig();
-    const [{ settleLeftSaves }, { settleRegistryWriter }, { withMigrateLock }] =
-      await Promise.all([
-        import("../domains/schema/builder-save/settle-left-save"),
-        import("../domains/schema/builder-save/settle-registry"),
-        import("../domains/schema/pipeline/locks"),
-      ]);
-    // The database a save's record names, as the writer named it: the one the app's saves reach.
-    const database = container.has("builderSaveSetup")
-      ? container.get<{ database: string }>("builderSaveSetup").database
+    const [
+      { settleLeftSaves },
+      { settleRegistryReader, settleRegistryWriter },
+      { withMigrateLock },
+    ] = await Promise.all([
+      import("../domains/schema/builder-save/settle-left-save"),
+      import("../domains/schema/builder-save/settle-registry"),
+      import("../domains/schema/pipeline/locks"),
+    ]);
+    // Where the app's saves write, as the writer took it: the project root its records and markers
+    // are kept under, its migration folder and its database. Without a writer registered, the
+    // process's own folder and config, as the migrate step reads them.
+    const setup = container.has("builderSaveSetup")
+      ? container.get<{
+          projectRoot: string;
+          migrationsDir: string;
+          database: string;
+        }>("builderSaveSetup")
       : undefined;
+    const where = setup ?? {
+      projectRoot: process.cwd(),
+      migrationsDir: (await bootMigrateConfig()).migrationsDir,
+      database: undefined,
+    };
     await withMigrateLock(
       adapter,
       adapter.getCapabilities().dialect,
       () =>
         settleLeftSaves({
           adapter,
-          projectRoot: process.cwd(),
-          migrationsDir,
-          database,
+          projectRoot: where.projectRoot,
+          migrationsDir: where.migrationsDir,
+          database: where.database,
           logger: {
             info: message => consoleLogger.info(`${label} ${message}`),
             warn: message => consoleLogger.warn(`${label} ${message}`),
           },
           writeRegistry: settleRegistryWriter(adapter),
+          registryHolds: settleRegistryReader(adapter),
         }),
       {
         command: "the development start's settle of a left Builder save",

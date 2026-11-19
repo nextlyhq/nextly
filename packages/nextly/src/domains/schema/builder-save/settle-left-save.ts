@@ -56,6 +56,7 @@ import type { NextlySchemaSnapshot } from "../pipeline/diff/types";
 import { uiToMinimal } from "../ui-schema/merge";
 
 import {
+  companionDriftItems,
   saveKindOf,
   settleRemovedFileAttempts,
   writeAtomically,
@@ -72,6 +73,8 @@ export type SettledOutcome = "none" | "all" | "pending" | "left";
 
 /** One left save, and how it was settled. */
 export interface SettledSave {
+  /** The record's id, which tells this left save from a later one of the same entity. */
+  id: string;
   kind: AddressKind;
   slug: string;
   outcome: SettledOutcome;
@@ -101,6 +104,17 @@ export interface SettleDeps {
    * run the save's remaining files and is refused until a start has.
    */
   keepPending?: boolean;
+  /** Only the records with these ids, where given: those a settle before a save left standing. */
+  only?: ReadonlySet<string>;
+  /**
+   * Whether the entity's registry row already holds the saved fields and translation flag. For a
+   * collection, whose row this step does not write.
+   */
+  registryHolds(entity: {
+    kind: AddressKind;
+    slug: string;
+    saved: SavedEntity | null;
+  }): Promise<boolean>;
   writeRegistry(entity: {
     kind: "single" | "fieldGroup";
     slug: string;
@@ -132,6 +146,7 @@ export async function settleLeftSaves(
     if (!("record" in row)) continue;
     // Another machine's save wrote its files there, not here: its own start settles it.
     if (row.record.host !== here) continue;
+    if (deps.only !== undefined && !deps.only.has(row.record.id)) continue;
     try {
       settled.push(await settleLeftSave(deps, row.record));
     } catch (error) {
@@ -162,27 +177,60 @@ export async function settleBeforeBuilderSave(
   adapter: DrizzleAdapter,
   migrationsDir: string,
   logger: SettleDeps["logger"]
+): Promise<string[]> {
+  const settled = await settleHeld(adapter, migrationsDir, logger);
+  const pending = settled.filter(s => s.outcome === "pending");
+  if (pending.length > 0) throw pendingSaveRefusal(pending);
+  // The records this settle judged: those still standing (left, or a collection's kept for its
+  // registry row) are judged again after the save; one cleared is not read again.
+  return settled.map(s => s.id);
+}
+
+/**
+ * Settle again, once a Builder save has ended and still holding what it held, the records the
+ * settle before it left standing (`standing`): a save that finished one left part-way (the same
+ * save again) brought the database to it, and its record clears now. A record the save itself
+ * left is not judged here: the save has said how it ended, and the next start settles it. Nothing
+ * is refused here; the save has ended.
+ */
+export async function settleAfterBuilderSave(
+  adapter: DrizzleAdapter,
+  migrationsDir: string,
+  logger: SettleDeps["logger"],
+  standing: readonly string[]
 ): Promise<void> {
+  if (standing.length === 0) return;
+  await settleHeld(adapter, migrationsDir, logger, new Set(standing));
+}
+
+/** `settleLeftSaves` over the app's Builder setup, keeping a "pending" record. */
+async function settleHeld(
+  adapter: DrizzleAdapter,
+  migrationsDir: string,
+  logger: SettleDeps["logger"],
+  only?: ReadonlySet<string>
+): Promise<SettledSave[]> {
   // Loaded on demand, as the exclusion loads the writer hold: this runs only where a save writes.
-  const [{ container }, { settleRegistryWriter }] = await Promise.all([
-    import("../../../di/container"),
-    import("./settle-registry"),
-  ]);
-  if (!container.has("builderSaveSetup")) return;
+  const [{ container }, { settleRegistryReader, settleRegistryWriter }] =
+    await Promise.all([
+      import("../../../di/container"),
+      import("./settle-registry"),
+    ]);
+  if (!container.has("builderSaveSetup")) return [];
   const setup = container.get<{ projectRoot: string; database: string }>(
     "builderSaveSetup"
   );
-  const settled = await settleLeftSaves({
+  return settleLeftSaves({
     adapter,
     projectRoot: setup.projectRoot,
     migrationsDir,
     database: setup.database,
     logger,
     keepPending: true,
+    ...(only === undefined ? {} : { only }),
     writeRegistry: settleRegistryWriter(adapter),
+    registryHolds: settleRegistryReader(adapter),
   });
-  const pending = settled.filter(s => s.outcome === "pending");
-  if (pending.length > 0) throw pendingSaveRefusal(pending);
 }
 
 /** The refusal for a Builder save while a left save's remaining files are still to be run. */
@@ -206,81 +254,166 @@ async function settleLeftSave(
   deps: SettleDeps,
   record: LeftSave
 ): Promise<SettledSave> {
-  const dialect = deps.adapter.getCapabilities().dialect;
-  const repo = new SchemaEventsRepository(deps.adapter.getDrizzle(), dialect);
-  const files = await filesOfSave(deps, record);
-  const judged = await judge(deps, repo, record, files);
   const notes: string[] = [];
-  const result = (outcome: SettledOutcome): SettledSave => ({
+  const outcome = await settledOutcome(deps, record, notes);
+  return {
+    id: record.id,
     kind: record.kind,
     slug: record.slug,
     outcome,
     notes,
-  });
+  };
+}
 
+/** What `settleLeftSave` did, with what it could not do added to `notes`. */
+async function settledOutcome(
+  deps: SettleDeps,
+  record: LeftSave,
+  notes: string[]
+): Promise<SettledOutcome> {
+  if (record.applies === false) {
+    // Made outside development, the save left its files for `nextly migrate`: its tables stand
+    // where it started whether or not it finished, so they cannot say how far it got, and removing
+    // its files would take a deploy's migration away. Nothing of it is touched; the record stays.
+    deps.logger.warn(
+      `A Builder save of the ${described(record)} was made outside development, its migration files left for \`nextly migrate\`. It is not settled here; its record stays.`
+    );
+    return "left";
+  }
+  const dialect = deps.adapter.getCapabilities().dialect;
+  const repo = new SchemaEventsRepository(deps.adapter.getDrizzle(), dialect);
+  const { files, unclear } = await filesOfSave(deps, record);
+  if (unclear.length > 0) {
+    // A file named for the save's moment, with no ledger row, that the settle cannot tell as the
+    // save's (one whose header names the entity only in its settings line, say): judged without
+    // it, the save could be undone around it and the file left to run. The record stays.
+    deps.logger.warn(
+      `A Builder save of the ${described(record)} was left part-way, and ${unclear.join(", ")}, written as it ran, cannot be told as its own or not. It is not settled here; its record stays.`
+    );
+    notes.push(`${unclear.join(", ")} could not be told as the save's own`);
+    return "left";
+  }
+  const judged = await judge(deps, repo, record, files);
   if (judged === "left") {
     // A MySQL save stopped inside a file: what landed is settled from the live tables by the
     // step for a stopped save, which this one does not run yet. The record stays, refusing.
     deps.logger.warn(
       `A Builder save of the ${described(record)} stopped part-way through a migration file, with part of it applied. It is not settled here yet; its record stays.`
     );
-    return result("left");
+    return "left";
   }
-
-  if (judged === "none") {
-    for (const filename of files) {
-      // A failed attempt a file left in the ledger is cleared as the save's own withdrawal does.
-      await settleRemovedFileAttempts(deps.adapter, repo, filename);
-      await rm(join(deps.migrationsDir, filename), { force: true });
-      await rm(
-        snapshotPathOf(join(deps.migrationsDir, "meta"), baseName(filename)),
-        { force: true }
-      );
-    }
-    notes.push(...(await putDefinitionBack(deps, record)));
-    await clearSettledSave(deps.adapter, deps.projectRoot, record);
-    deps.logger.info(
-      `Settled a Builder save of the ${described(record)} that stopped before any of it applied: its files are removed and the definition put back.`
-    );
-    return result("none");
-  }
-
+  if (judged === "none") return settleNone(deps, repo, record, files, notes);
   // "all" or "pending": the saved definition stands, which its files are written from.
   notes.push(...(await keepSavedDefinition(deps, record)));
+  if (judged === "pending") return settlePending(deps, record);
+  return settleAll(deps, repo, record, files, notes);
+}
 
-  if (judged === "pending") {
-    if (deps.keepPending === true) return result("pending");
-    await clearSettledSave(deps.adapter, deps.projectRoot, record);
-    deps.logger.info(
-      `A Builder save of the ${described(record)} stopped between its migration files: the rest are pending, and run as any pending migration.`
+/** A save none of which applied: its files go and its definition is put back, by rule. */
+async function settleNone(
+  deps: SettleDeps,
+  repo: SchemaEventsRepository,
+  record: LeftSave,
+  files: readonly string[],
+  notes: string[]
+): Promise<SettledOutcome> {
+  // The definition first: one that cannot be told from the save's own write (a record from
+  // before it kept that write) keeps the record, and nothing else is touched, so the person can
+  // settle it by hand from the record.
+  const definition = await definitionAgainstRecord(deps, record);
+  if (definition === "unknown") {
+    deps.logger.warn(
+      `A Builder save of the ${described(record)} stopped before any of it applied, but ${record.definitionFile} has changed since it started and its record does not say whether the save made that change. Its record stays.`
     );
-    return result("pending");
+    notes.push(
+      `${record.definitionFile} could not be told apart from the save's own write`
+    );
+    return "left";
   }
+  for (const filename of files) {
+    // A failed attempt a file left in the ledger is cleared as the save's own withdrawal does.
+    await settleRemovedFileAttempts(deps.adapter, repo, filename);
+    await rm(join(deps.migrationsDir, filename), { force: true });
+    await rm(
+      snapshotPathOf(join(deps.migrationsDir, "meta"), baseName(filename)),
+      { force: true }
+    );
+  }
+  notes.push(...(await putDefinitionBack(deps, record, definition)));
+  await clearSettledSave(deps.adapter, deps.projectRoot, record);
+  deps.logger.info(
+    `Settled a Builder save of the ${described(record)} that stopped before any of it applied: its files are removed and the definition put back.`
+  );
+  return "none";
+}
 
+/**
+ * A save stopped between its files: the rest are pending. At a start they run as any pending
+ * migration and the record clears; at a Builder save it is kept, to refuse the save.
+ */
+async function settlePending(
+  deps: SettleDeps,
+  record: LeftSave
+): Promise<SettledOutcome> {
+  if (deps.keepPending === true) return "pending";
+  await clearSettledSave(deps.adapter, deps.projectRoot, record);
+  deps.logger.info(
+    `A Builder save of the ${described(record)} stopped between its migration files: the rest are pending, and run as any pending migration.`
+  );
+  return "pending";
+}
+
+/** A save that applied whole: its files recorded applied, its registry row brought up. */
+async function settleAll(
+  deps: SettleDeps,
+  repo: SchemaEventsRepository,
+  record: LeftSave,
+  files: readonly string[],
+  notes: string[]
+): Promise<SettledOutcome> {
   for (const filename of files) {
     if (!(await repo.isFileApplied(filename))) {
       await recordAlreadyApplied({ filename }, repo);
     }
   }
+  // A file applied after the save's last one: the schema has moved past this save (another
+  // host's save, say), so its registry row is not written again over what came after.
+  if (await movedPast(repo, files)) {
+    await clearSettledSave(deps.adapter, deps.projectRoot, record);
+    deps.logger.info(
+      `A Builder save of the ${described(record)} applied whole before it stopped, and later migrations have applied since: its record is cleared, and its registry row left as they left it.`
+    );
+    notes.push(
+      "later migrations applied since; the registry row is left as it is"
+    );
+    return "all";
+  }
+  const saved = savedEntity(record.definitionAfter, record.kind, record.slug);
   if (record.kind === "collection") {
     // A collection's registry row is written by its own service, which this step cannot reach
-    // yet: its files are recorded, and its record stays until the row can be written.
+    // yet. Where the row already holds the saved fields (a retry's push wrote it), there is nothing
+    // left to bring up and the record clears; otherwise its files are recorded and it stays.
+    if (
+      await deps.registryHolds({ kind: "collection", slug: record.slug, saved })
+    ) {
+      await clearSettledSave(deps.adapter, deps.projectRoot, record);
+      deps.logger.info(
+        `Settled a Builder save of the ${described(record)} that applied whole before it stopped: its files are recorded applied, and its registry row already holds the saved fields.`
+      );
+      return "all";
+    }
     deps.logger.warn(
       `A Builder save of the ${described(record)} applied whole before it stopped, and its files are now recorded applied, but its registry row cannot be brought up here yet. Its record stays.`
     );
     notes.push("the collection's registry row is not brought up yet");
-    return result("all");
+    return "all";
   }
-  await deps.writeRegistry({
-    kind: record.kind,
-    slug: record.slug,
-    saved: savedEntity(record.definitionAfter, record.kind, record.slug),
-  });
+  await deps.writeRegistry({ kind: record.kind, slug: record.slug, saved });
   await clearSettledSave(deps.adapter, deps.projectRoot, record);
   deps.logger.info(
     `Settled a Builder save of the ${described(record)} that applied whole before it stopped: its files are recorded applied and its registry row brought up.`
   );
-  return result("all");
+  return "all";
 }
 
 /**
@@ -329,10 +462,18 @@ function decide(facts: {
   if (facts.recorded === 0 && !facts.stoppedInside && facts.atBefore) {
     return "none";
   }
+  // No file of the save, and its tables not as it started: nothing says how they got there.
+  if (facts.recorded + facts.unrecorded === 0) return "left";
   if (facts.unrecorded === 0) return "all";
-  // An unrecorded file is taken as landed only where the live tables say so: one with a snapshot
-  // of its own. A companion file has none, so it is judged by whether it ran.
-  if (facts.started === 0 && facts.atTarget && facts.unrecordedHaveSnapshots) {
+  // Where no file is recorded and none started, the files were never run: tables standing at the
+  // target were brought there another way, a push that did the whole change, whose companion
+  // files have no snapshot to judge them by. Where some are recorded, an unrecorded file is taken
+  // as landed only by a snapshot of its own; the rest are pending.
+  if (
+    facts.started === 0 &&
+    facts.atTarget &&
+    (facts.recorded === 0 || facts.unrecordedHaveSnapshots)
+  ) {
     return "all";
   }
   // Some files ran and were recorded, and none of the rest started: on a database that runs a file
@@ -340,6 +481,22 @@ function decide(facts: {
   // target: a translation turned on leaves its main column for its translations file to move.
   if (facts.recorded > 0 && facts.started === 0) return "pending";
   return "left";
+}
+
+/** Whether the ledger records a file applied that is named after every one of `files`. */
+async function movedPast(
+  repo: SchemaEventsRepository,
+  files: readonly string[]
+): Promise<boolean> {
+  const last = [...files].sort().at(-1);
+  if (last === undefined) return false;
+  return (await repo.listFileApplies()).some(
+    row =>
+      row.status === "applied" &&
+      typeof row.filename === "string" &&
+      row.filename > last &&
+      !files.includes(row.filename)
+  );
 }
 
 /** Which of `files` the ledger records applied, and which have an attempt still unresolved. */
@@ -372,7 +529,16 @@ async function whereTablesStand(
 ): Promise<{ atBefore: boolean; atTarget: boolean }> {
   const before = await snapshotNamed(deps, record.startedFrom ?? null);
   const target = await newestSnapshotOf(deps, files);
-  const tables = changedTables(before, target ?? before);
+  // The tables the save changes, and the entity's own table always: a save stopped before its
+  // first snapshot was written has no target to tell its changes by, and one that changes only
+  // translated columns changes none of the main table's that the equivalence compares (they are
+  // recorded on it as `localizedColumns`), yet its translations table is still to be judged.
+  const tables = [
+    ...new Set([
+      ...changedTables(before, target ?? before),
+      ...entityTables(record),
+    ]),
+  ];
   const live =
     tables.length === 0
       ? { tables: [] }
@@ -381,10 +547,25 @@ async function whereTablesStand(
           deps.adapter.getCapabilities().dialect,
           tables
         );
+  // A translated table stands where a snapshot says only with its translations table: a save whose
+  // main statements committed and whose translations table did not follow is at neither end.
+  const companionsAt = async (snapshot: NextlySchemaSnapshot) => {
+    for (const table of only(snapshot, tables).tables) {
+      if (table.localized !== true) continue;
+      if ((await companionDriftItems(deps, table.name, table)).length > 0) {
+        return false;
+      }
+    }
+    return true;
+  };
   return {
-    atBefore: snapshotsEquivalent(only(before, tables), live),
+    atBefore:
+      snapshotsEquivalent(only(before, tables), live) &&
+      (await companionsAt(before)),
     atTarget:
-      target !== undefined && snapshotsEquivalent(only(target, tables), live),
+      target !== undefined &&
+      snapshotsEquivalent(only(target, tables), live) &&
+      (await companionsAt(target)),
   };
 }
 
@@ -397,15 +578,22 @@ async function whereTablesStand(
 async function filesOfSave(
   deps: SettleDeps,
   record: LeftSave
-): Promise<string[]> {
+): Promise<{ files: string[]; unclear: string[] }> {
   const named = new Set(record.files ?? []);
+  const unclear: string[] = [];
   const present = await sqlFilesIn(deps.migrationsDir);
   const isOfSave = laterFileOfSave(deps, record);
   for (const name of present) {
-    if (!named.has(name) && (await isOfSave(name))) named.add(name);
+    if (named.has(name)) continue;
+    const verdict = await isOfSave(name);
+    if (verdict === "save") named.add(name);
+    else if (verdict === "unclear") unclear.push(name);
   }
   // Only the files still there: one a settle already removed is not judged again.
-  return [...named].filter(n => present.includes(n)).sort();
+  return {
+    files: [...named].filter(n => present.includes(n)).sort(),
+    unclear,
+  };
 }
 
 /** The migration files in `dir`, in name order; none where it is absent. */
@@ -419,25 +607,28 @@ async function sqlFilesIn(dir: string): Promise<string[]> {
 }
 
 /**
- * Whether a file the record does not name is the save's all the same: written after the record
- * last learned a name, with no ledger row, named for a moment at or after the save started, and
- * naming the entity or changing its tables.
+ * Whether a file the record does not name is the save's all the same ("save"): written after the
+ * record last learned a name, with no ledger row, named for a moment at or after the save started,
+ * and naming the entity or changing its tables. One that has the first three and neither of the
+ * last ("unclear") cannot be told; any other file is not the save's ("other").
  */
 function laterFileOfSave(
   deps: SettleDeps,
   record: LeftSave
-): (name: string) => Promise<boolean> {
+): (name: string) => Promise<"save" | "unclear" | "other"> {
   const dialect = deps.adapter.getCapabilities().dialect;
   const repo = new SchemaEventsRepository(deps.adapter.getDrizzle(), dialect);
-  const since = sinceStamp(record.startedAt);
+  const window = nameWindow(record);
   const tables = entityTables(record);
   return async name => {
-    if (since === undefined || name.slice(0, since.length) < since) {
-      return false;
-    }
-    if (await repo.isFileApplied(name)) return false;
+    if (window === undefined) return "other";
+    const stamp = name.slice(0, window.from.length);
+    if (stamp < window.from || stamp > window.to) return "other";
+    if (await repo.isFileApplied(name)) return "other";
     const content = await readFile(join(deps.migrationsDir, name), "utf-8");
-    return namesEntity(content, record) || touches(content, tables, dialect);
+    return namesEntity(content, record) || touches(content, tables, dialect)
+      ? "save"
+      : "unclear";
   };
 }
 
@@ -525,21 +716,34 @@ function savedEntity(
 }
 
 /**
+ * Where the definition file stands against the record: as before the save (`before`), as the save
+ * wrote it (`saved`), changed since in another way (`edited`), or changed where the record does not
+ * keep the save's own text to tell (`unknown`).
+ */
+async function definitionAgainstRecord(
+  deps: SettleDeps,
+  record: LeftSave
+): Promise<"before" | "saved" | "edited" | "unknown"> {
+  const current = await readIfPresent(
+    join(deps.projectRoot, record.definitionFile)
+  );
+  if (current === (record.definitionBefore ?? undefined)) return "before";
+  if (record.definitionAfter === undefined) return "unknown";
+  return current === record.definitionAfter ? "saved" : "edited";
+}
+
+/**
  * Put the definition back as it was before the save, where it is still what the save wrote. One
- * that is already as it was is left. One edited since, or whose saved text the record does not
- * keep, is left as it is, and named.
+ * already as it was is left. One edited since is left as it is, and named.
  */
 async function putDefinitionBack(
   deps: SettleDeps,
-  record: LeftSave
+  record: LeftSave,
+  definition: "before" | "saved" | "edited"
 ): Promise<string[]> {
-  const path = join(deps.projectRoot, record.definitionFile);
-  const current = await readIfPresent(path);
-  if (current === (record.definitionBefore ?? undefined)) return [];
-  if (
-    record.definitionAfter !== undefined &&
-    current === record.definitionAfter
-  ) {
+  if (definition === "before") return [];
+  if (definition === "saved") {
+    const path = join(deps.projectRoot, record.definitionFile);
     if (record.definitionBefore === null) await rm(path, { force: true });
     else await writeAtomically(path, record.definitionBefore);
     return [];
@@ -649,14 +853,33 @@ function baseName(filename: string): string {
 }
 
 /**
- * The earliest name a file of the save can have: the moment it started, as migration files are
- * named (`formatTimestamp`), less a second, since a file that must run before the save's main one
- * (a translation turned off) is named a few milliseconds before it.
+ * The moments a file of the save can be named for (`formatTimestamp`), first and last. A record
+ * that keeps the moment the save's files are named for (`filesAt`) allows a second either side of
+ * it: a file that must run before the save's main one (a translation turned off) is named a few
+ * milliseconds before it, the files after it a few after. One that does not, written before that
+ * moment was kept, allows from a second before the save started to five minutes after: the time a
+ * save takes to reach its files. A file named outside these is another writer's, even where it
+ * names the entity.
  */
-function sinceStamp(startedAt: string): string | undefined {
-  const at = new Date(startedAt).getTime();
-  if (Number.isNaN(at)) return undefined;
-  return formatTimestamp(new Date(at - 1000));
+function nameWindow(
+  record: LeftSave
+): { from: string; to: string } | undefined {
+  const filesAt =
+    record.filesAt === undefined
+      ? undefined
+      : new Date(record.filesAt).getTime();
+  const startedAt = new Date(record.startedAt).getTime();
+  if (filesAt !== undefined && !Number.isNaN(filesAt)) {
+    return {
+      from: formatTimestamp(new Date(filesAt - 1000)),
+      to: formatTimestamp(new Date(filesAt + 1000)),
+    };
+  }
+  if (Number.isNaN(startedAt)) return undefined;
+  return {
+    from: formatTimestamp(new Date(startedAt - 1000)),
+    to: formatTimestamp(new Date(startedAt + 5 * 60 * 1000)),
+  };
 }
 
 function kindName(kind: AddressKind): string {
