@@ -108,6 +108,11 @@ describe("remapTokenReferences", () => {
     expect(
       remapTokenReferences(String.raw`selector { --acme-sp\61 ce-m: 2px }`, acme)
     ).toBe("selector { --site-space-m: 2px }");
+    // A declaration of a property no variable in the file is written under
+    // is the author's own, and stays as it is, as does its read.
+    const own =
+      "selector { --acme-other: red; --acme-color-brand-dark: blue; color: var(--acme-other); }";
+    expect(remapTokenReferences(own, acme)).toBe(own);
     // A declaration names no variable the file carries: the export lists
     // only what the CSS reads.
     expect(
