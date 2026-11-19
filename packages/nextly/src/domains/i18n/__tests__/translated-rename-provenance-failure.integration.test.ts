@@ -16,6 +16,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import { dispatchSingles } from "../../../dispatcher/handlers/single-dispatcher";
 import { getLoggerFromDI } from "../../../dispatcher/helpers/di";
+import { renameFieldProvenance } from "../provenance/record-provenance";
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
 import {
   createTestNextly,
@@ -144,6 +145,14 @@ describeEachDialect(
       };
     }
 
+    /** The Single's provenance records, by id and field path, sorted. */
+    async function provenanceRows(): Promise<string[]> {
+      const rows = await query<{ id: string; path: string }>(
+        `SELECT ${quote(dialect, "id")} AS id, ${quote(dialect, "field_path")} AS path FROM ${quote(dialect, PROVENANCE)} WHERE ${quote(dialect, "scope_slug")} = '${SLUG}'`
+      );
+      return rows.map(row => `${String(row.id)} ${String(row.path)}`).sort();
+    }
+
     /** The field paths the Single's provenance records, sorted. */
     async function provenancePaths(): Promise<string[]> {
       const rows = await query<{ path: string }>(
@@ -250,6 +259,18 @@ describeEachDialect(
       expect(await provenancePaths()).toContain("title2");
       expect(await provenancePaths()).not.toContain("heading");
       expect((await recorded()).fields).toEqual(["title2", "views"]);
+
+      // The move moves only what is still under the old name, so a second one changes nothing.
+      const moved = await provenanceRows();
+      await renameFieldProvenance(t.adapter, {
+        scopeKind: "single",
+        scopeSlug: SLUG,
+        from: "heading",
+        to: "title2",
+      });
+      expect(await provenanceRows(), "the records after a second move").toEqual(
+        moved
+      );
     });
 
     it("answers that the change landed and its translations step failed, moving the row's version on", async () => {
