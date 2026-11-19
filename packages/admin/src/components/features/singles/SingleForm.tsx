@@ -617,6 +617,7 @@ function SingleFormRail({
   documentStatus,
   singleSlug,
   locale,
+  reviewHold,
   onLocaleChange,
   panel,
   panelOrder,
@@ -634,6 +635,8 @@ function SingleFormRail({
   /** The Single's slug, which releases address it by with its id. */
   singleSlug: string;
   locale?: string;
+  /** Why the Review section's steps wait, as the header's do (`stepsHold`). */
+  reviewHold: string | undefined;
   onLocaleChange?: (locale: string, options?: { seedFrom?: string }) => void;
   panel: Pick<ReturnType<typeof useDocumentPanel>, "mode" | "shown" | "hide">;
   /** The panel's sections in the order the server placed them. */
@@ -671,6 +674,7 @@ function SingleFormRail({
         navigationDisabled={navigationDisabled}
         publishAllDisabled={publishAllDisabled}
         {...(locale === undefined ? {} : { locale })}
+        reviewHold={reviewHold}
         {...(onLocaleChange === undefined ? {} : { onLocaleChange })}
       />
     </DocumentSidePanel>
@@ -2206,6 +2210,9 @@ export function SingleForm({
                                   placedSectionProps={placedSectionProps}
                                   about={singlePanel}
                                   {...(locale === undefined ? {} : { locale })}
+                                  // The Review section's steps wait for
+                                  // what holds the header's.
+                                  reviewHold={review.stepsHold}
                                   {...(switchLocale === undefined
                                     ? {}
                                     : { onLocaleChange: switchLocale })}

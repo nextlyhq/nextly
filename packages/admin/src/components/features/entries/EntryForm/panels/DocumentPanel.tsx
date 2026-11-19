@@ -83,6 +83,12 @@ export interface DocumentPanelProps {
   releaseDocument?: ReleaseDocumentRef;
   /** The active editing locale, forwarded to the language panel. */
   locale?: string;
+  /**
+   * Why the Review section's steps wait at this moment, as the editor holds
+   * its header's (`useEditorReview`'s `stepsHold`): unsaved edits, a save on
+   * its way, a past version on screen. Absent, nothing holds them.
+   */
+  reviewHold?: string | undefined;
   /** Switch the editor to a language, forwarded to the language panel. */
   onLocaleChange?: (locale: string, options?: { seedFrom?: string }) => void;
   /** Withholds the panel's mutating actions (reading a past version). */
@@ -138,6 +144,7 @@ export function DocumentPanel({
   documentStatus,
   releaseDocument,
   locale,
+  reviewHold,
   onLocaleChange,
   actionsDisabled = false,
   navigationDisabled = actionsDisabled,
@@ -179,6 +186,7 @@ export function DocumentPanel({
               <ReviewSection
                 document={releaseDocument}
                 {...(locale === undefined ? {} : { locale })}
+                hold={reviewHold}
               />
             )}
           </>

@@ -94,6 +94,13 @@ export interface EditorReview {
    * unsaved document. Undefined where nothing holds them.
    */
   hold: string | undefined;
+  /**
+   * Why no step can be taken on any part at this moment, whichever surface
+   * offers it: the host's hold, else unsaved edits, which a step would not
+   * carry. The side panel's steps wait for it as the header's do. Undefined
+   * where nothing holds them.
+   */
+  stepsHold: string | undefined;
   /** The dialog a step needing a comment asks with. */
   dialog: ReactNode;
 }
@@ -150,9 +157,10 @@ export function useEditorReview({
     );
   const sharedHold =
     hidden && sharedApproves(onScreen) ? SHARED_APPROVAL_HELD : undefined;
+  const stepsHold = held ?? (isDirty ? SAVE_FIRST : undefined);
   const stepReason = stepHold(isDirty, onScreen).stepReason ?? sharedHold;
   const hold =
-    held ??
+    stepsHold ??
     stepReason ??
     (hidden && sharedApproves(parts) ? SHARED_APPROVAL_HELD : undefined);
 
@@ -165,6 +173,7 @@ export function useEditorReview({
       refusal: null,
       clearRefusal: taker.clearRefusal,
       hold,
+      stepsHold,
       dialog: null,
     };
   }
@@ -202,16 +211,20 @@ export function useEditorReview({
     refusal: taker.refusal,
     clearRefusal: taker.clearRefusal,
     hold,
+    stepsHold,
     dialog: taker.dialog,
   };
 }
+
+/** Why a step waits while the page holds edits a step would not carry. */
+const SAVE_FIRST = "Save your changes first.";
 
 /** Why no step can be taken at this moment, where something holds them. */
 function stepHold(
   isDirty: boolean,
   parts: readonly PartReview[]
 ): { stepReason?: string } {
-  if (isDirty) return { stepReason: "Save your changes first." };
+  if (isDirty) return { stepReason: SAVE_FIRST };
   if (parts.some(part => part.version === null)) {
     return { stepReason: "Save the document first." };
   }

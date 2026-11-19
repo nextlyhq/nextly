@@ -2029,6 +2029,9 @@ export function EntryForm({
                                         {...(locale === undefined
                                           ? {}
                                           : { locale })}
+                                        // The Review section's steps wait
+                                        // for what holds the header's.
+                                        reviewHold={review.stepsHold}
                                         {...(switchLocale === undefined
                                           ? {}
                                           : { onLocaleChange: switchLocale })}
