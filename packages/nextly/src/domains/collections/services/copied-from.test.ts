@@ -46,7 +46,8 @@ describe("the copy a create is told", () => {
       { collection: "pages", id: "p1" },
       read({ id: "p1", content: {}, _isWorkingDraft: true })
     );
-    expect(shown.forms).toEqual(["published", "draft"]);
+    // Only the form the read showed: its field rules were judged on it alone.
+    expect(shown.forms).toEqual(["draft"]);
   });
 
   it("names the fields the read returned, and the field the create named", () => {

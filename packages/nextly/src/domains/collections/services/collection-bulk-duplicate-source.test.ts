@@ -179,12 +179,12 @@ describe("createFromSource", () => {
     const [params, data] = createEntry.mock.calls[0] ?? [];
     expect(params).toMatchObject({ collectionName: "patterns", locale: "fr" });
     expect(data).toEqual({ title: "Hero", content: {} });
-    // The read showed the caller the draft, so it vouches too.
+    // The read showed the caller the draft, so only the draft vouches.
     expect(copiedFromOf(params?.copiedFrom)).toMatchObject({
       collection: "pages",
       id: "page-1",
       field: "content",
-      forms: ["published", "draft"],
+      forms: ["draft"],
     });
   });
 

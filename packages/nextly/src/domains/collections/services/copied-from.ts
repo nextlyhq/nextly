@@ -40,11 +40,13 @@ export interface CopySource {
 
 /**
  * The copy a create may carry, from the caller's read of `source` that has
- * just succeeded. `draftShown` says whether that read showed the caller the
- * source's pending draft (`_isWorkingDraft`), the one rule the read path uses
- * to decide who may see it, so a draft-only value never vouches for a caller
- * who could not read it. The fields are the paths that read returned, so a
- * value a field read rule withheld, at any depth, vouches for nothing either.
+ * just succeeded. It names only the form that read SHOWED: the pending draft
+ * where the read path showed the caller one (`_isWorkingDraft`), else the
+ * live row. Field rules were judged against that form's data alone, and a
+ * rule on the document's data can allow one form and deny the other, so the
+ * read proves nothing of the form it did not show, and that form vouches
+ * nothing. The fields are the paths that read returned, so a value a field
+ * read rule withheld, at any depth, vouches for nothing either.
  */
 export function readSourceCopy(
   source: CopySource,
@@ -63,7 +65,7 @@ export function readSourceCopy(
     id: source.id,
     forms: Object.freeze(
       data._isWorkingDraft === true
-        ? (["published", "draft"] as const)
+        ? (["draft"] as const)
         : (["published"] as const)
     ),
     fields: Object.freeze(readPaths(data)),

@@ -805,7 +805,8 @@ export class CollectionService extends BaseService {
    * @returns Created entry
    * @throws NextlyError if the source read or the creation fails
    */
-  // Reached through the plugin facade's method list (`ctx.services.collections`).
+  // Reached only through the plugin facade's method list, which the dead-code
+  // gate cannot trace.
   // fallow-ignore-next-line unused-class-member
   async createEntryFromSource(
     collectionName: string,
@@ -839,7 +840,8 @@ export class CollectionService extends BaseService {
    * Preceded by {@link warmLocalizedReadiness} for both collections.
    * Intended to become stable with it.
    */
-  // Reached through the plugin facade's method list (`ctx.services.collections`).
+  // Reached only through the plugin facade's method list, which the dead-code
+  // gate cannot trace.
   // fallow-ignore-next-line unused-class-member
   async createEntryFromSourceInTransaction(
     tx: TransactionContext,

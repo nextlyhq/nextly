@@ -389,6 +389,12 @@ export interface CopySourceAddress {
   readonly id: string;
   /** The blocks field; absent, the same field name the library entry uses. */
   readonly field?: string;
+  /**
+   * The translation the document is, where it is not the default language.
+   * Turn into component reads the entry in it; Save as section writes, and
+   * so reads, the default language, and doesn't take it.
+   */
+  readonly locale?: string;
 }
 
 /**

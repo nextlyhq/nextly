@@ -4,10 +4,11 @@
  * placed on a new entry, not written new, so copying it is no change.
  *
  * Core says a create copies an entry (`write.copiedFrom`) only after reading
- * that entry as the caller in the same call, and names the forms and fields
- * that read could see. So this reads the source's stored value only in those
- * forms, and only from a field that read returned: a draft the caller could
- * not see, or a field a read rule withheld from them, vouches for nothing.
+ * that entry as the caller in the same call, and names the one form that
+ * read showed and the fields it returned. So this reads the source's stored
+ * value only in that form, and only from a field that read returned: a form
+ * the read didn't show (its field rules were never judged on it), or a field
+ * a read rule withheld from the caller, vouches for nothing.
  *
  * @module fields/copied-source
  */

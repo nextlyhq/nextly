@@ -407,6 +407,80 @@ describe.each(getConfiguredTestDialects())(
       expect(JSON.parse(plainPreview.text).item.refusals).toEqual([]);
     });
 
+    it("vouches only from the form the caller's read showed, whose field rules it judged", async () => {
+      const GATED = "copy_gated";
+      const t = await boot({
+        collections: [
+          {
+            slug: GATED,
+            status: true,
+            versions: { drafts: true },
+            access: {
+              read: () => true,
+              create: () => true,
+              update: () => true,
+            },
+            fields: [
+              { name: "title", type: "text" },
+              { name: "gate", type: "text" },
+              {
+                name: "content",
+                type: BLOCKS_TYPE,
+                // Readable only on a document whose gate is open: the live
+                // row's is closed, its pending draft's open.
+                access: {
+                  read: ({ data }: { data?: { gate?: unknown } }) =>
+                    data?.gate === "open",
+                },
+              },
+            ],
+          } as never,
+        ],
+      });
+      const editor = await holding(
+        t,
+        "gatekeeper",
+        `read-${GATED}`,
+        `update-${GATED}`,
+        ...MAKE_LIBRARY
+      );
+      const live = page([block("a", { customCss: BLOCK_CSS }), block("b")]);
+      const drafted = page([block("a", { customCss: DRAFT_CSS }), block("b")]);
+      const made = (await t.nextly.create({
+        collection: GATED,
+        data: {
+          title: "Gated",
+          gate: "closed",
+          status: "published",
+          content: live,
+        },
+        overrideAccess: true,
+      } as never)) as unknown as { item: { id: string } };
+      const id = String(made.item.id);
+      await t.nextly.update({
+        collection: GATED,
+        id,
+        data: { gate: "open", content: drafted, _overwrite: true },
+        draft: true,
+        overrideAccess: true,
+      } as never);
+
+      const section = async (document: unknown, title: string) =>
+        post(await sessionOf(t, editor), route("save-as-pattern"), {
+          document,
+          selectedIds: ["a"],
+          fields: { title, granularity: "section" },
+          source: { collection: GATED, id, field: "content" },
+        });
+
+      // The live CSS sits in a field the caller's read never showed them.
+      const hidden = await section(live, "Live");
+      expect(hidden.text).toContain(CSS_REFUSED);
+      // CONTROL: the draft the read showed vouches for its own CSS.
+      const shown = await section(drafted, "Draft");
+      expect(shown.status, shown.text).toBe(201);
+    });
+
     it("judges a copy in the language the request names", async () => {
       const ARTICLES = "copy_articles";
       const t = await boot({

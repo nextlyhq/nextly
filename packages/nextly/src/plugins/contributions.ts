@@ -686,9 +686,10 @@ export interface PluginFieldWrite {
     /** The source entry's id. */
     readonly id: string;
     /**
-     * The stored forms of the source the caller's read could see:
-     * `published` always, and `draft` only where that read showed the
-     * caller the source's pending draft.
+     * The stored form of the source the caller's read showed: `draft` where
+     * that read showed the caller the source's pending draft, else
+     * `published`. Never both: field rules were judged against the shown
+     * form's data only, so the other form vouches for nothing.
      */
     readonly forms: readonly ("published" | "draft")[];
     /**

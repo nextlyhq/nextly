@@ -122,8 +122,12 @@ describe("CSS and page code a create copies", () => {
     const live = copying(COPY);
     expect(await cssOf(DRAFT, live)).toHaveLength(1);
     expect(live.asked).toEqual(["pages/content/published"]);
-    const shown = copying({ ...COPY, forms: ["published", "draft"] });
+    const shown = copying({ ...COPY, forms: ["draft"] });
     expect(await cssOf(DRAFT, shown)).toEqual([]);
+    expect(shown.asked).toEqual(["pages/content/draft"]);
+    // The live form, not shown, vouches nothing.
+    const notShown = copying({ ...COPY, forms: ["draft"] });
+    expect(await cssOf(LIVE, notShown)).toHaveLength(1);
   });
 
   it("reads nothing from a field the caller's read didn't return", async () => {
