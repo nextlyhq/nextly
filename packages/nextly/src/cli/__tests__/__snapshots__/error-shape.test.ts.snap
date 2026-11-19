@@ -826,6 +826,13 @@ exports[`each code, as a command ends with it > FIELD_GROUP_BACKUP_NOT_CONFIRMED
   Docs: https://nextlyhq.com/docs/cli/errors/field-group-backup-not-confirmed  (FIELD_GROUP_BACKUP_NOT_CONFIRMED)"
 `;
 
+exports[`each code, as a command ends with it > FIELD_GROUP_HISTORY_BEHIND_STORAGE 1`] = `
+"✗ This database's field groups were moved to the current names (dynamic_field_groups, fg_<slug>), and the project's migration history is still on the legacy ones (dynamic_components, comp_<slug>).
+  Why:  Every file after this point would be planned against tables the database no longer has.
+  Next: No file was applied. Run \`nextly migrate:create --field-group-names=current\`, then \`nextly migrate\` again.
+  Docs: https://nextlyhq.com/docs/cli/errors/field-group-history-behind-storage  (FIELD_GROUP_HISTORY_BEHIND_STORAGE)"
+`;
+
 exports[`each code, as a command ends with it > FIELD_GROUP_MIGRATION_IN_FLIGHT 1`] = `
 "✗ The command did not run: a field-group storage migration is in flight on this database.
   Why:  Mid-run, some field-group tables carry their old names and some their new ones (it is at step 3), a shape neither the old configuration nor the new one describes.
@@ -833,11 +840,39 @@ exports[`each code, as a command ends with it > FIELD_GROUP_MIGRATION_IN_FLIGHT 
   Docs: https://nextlyhq.com/docs/cli/errors/field-group-migration-in-flight  (FIELD_GROUP_MIGRATION_IN_FLIGHT)"
 `;
 
+exports[`each code, as a command ends with it > FIELD_GROUP_NAMES_DIFFER_FROM_HISTORY 1`] = `
+"✗ This database's field groups are on the current names (dynamic_field_groups, fg_<slug>), and the project's migration history is still on the legacy ones (dynamic_components, comp_<slug>).
+  Why:  Planned across the two, every field-group table would be dropped and created again, and its rows lost.
+  Next: Nothing was written. Run \`nextly migrate:create --field-group-names=current\` to move the history to the current names first.
+  Docs: https://nextlyhq.com/docs/cli/errors/field-group-names-differ-from-history  (FIELD_GROUP_NAMES_DIFFER_FROM_HISTORY)"
+`;
+
+exports[`each code, as a command ends with it > FIELD_GROUP_NAMES_OPTION_INVALID 1`] = `
+"✗ \`--field-group-names\` takes \`current\`, and was given \`fg\`.
+  Why:  It writes the one migration that moves the app's history to the current field-group names (dynamic_field_groups, fg_<slug>), and there is no other naming to move it to.
+  Next: Run \`nextly migrate:create --field-group-names=current\` on its own.
+  Docs: https://nextlyhq.com/docs/cli/errors/field-group-names-option-invalid  (FIELD_GROUP_NAMES_OPTION_INVALID)"
+`;
+
+exports[`each code, as a command ends with it > FIELD_GROUP_STORAGE_NOT_MIGRATED 1`] = `
+"✗ 20261119_120000_000_field_group_current_names.sql moves the migration history to the current field-group names (dynamic_field_groups, fg_<slug>), and this database's field groups are still on the legacy ones (dynamic_components, comp_<slug>).
+  Why:  Applying it would record a move the database has not made.
+  Next: It was not applied. Move the field groups with \`nextly migrate:field-groups --apply --backup-confirmed\`, then run \`nextly migrate\` again.
+  Docs: https://nextlyhq.com/docs/cli/errors/field-group-storage-not-migrated  (FIELD_GROUP_STORAGE_NOT_MIGRATED)"
+`;
+
 exports[`each code, as a command ends with it > FIELD_GROUP_STORAGE_REFUSED 1`] = `
 "✗ The field-group storage migration refused to proceed.
   Why:  Registry rows name storage that does not exist.
   Next: Run the command again with \`--verbose\` to see the tables and rows involved, and check them before running anything that changes the schema.
   Docs: https://nextlyhq.com/docs/cli/errors/field-group-storage-refused  (FIELD_GROUP_STORAGE_REFUSED)"
+`;
+
+exports[`each code, as a command ends with it > FIELD_GROUP_TRANSITION_REFUSED 1`] = `
+"✗ \`--field-group-names=current\` moves the history to the current field-group names, and the config has changes to "dc_posts" to migrate.
+  Why:  The move changes nothing else, so a change written into its snapshot would be missing from every database that applies it.
+  Next: Nothing was written. Write those first with \`nextly migrate:create --name <name>\`, then run it again.
+  Docs: https://nextlyhq.com/docs/cli/errors/field-group-transition-refused  (FIELD_GROUP_TRANSITION_REFUSED)"
 `;
 
 exports[`each code, as a command ends with it > FIELDS_LEAVING_TRANSLATION_NOT_MOVED 1`] = `

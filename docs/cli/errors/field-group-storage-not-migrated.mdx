@@ -1,0 +1,28 @@
+---
+title: FIELD_GROUP_STORAGE_NOT_MIGRATED
+description: "`nextly migrate` reached the migration that moves the history to the current field-group names on a database whose field groups are still on the legacy names."
+---
+
+## Cause
+
+`nextly migrate` reached the migration that moves the history to the current field-group names on a database whose field groups are still on the legacy names.
+
+The migration `nextly migrate:create --field-group-names=current` writes holds no statement: it records that the database's field groups are on the current names (`dynamic_field_groups`, `fg_<slug>`). `nextly migrate` never moves them itself, so on a database that is still on the legacy names (`dynamic_components`, `comp_<slug>`) it refuses that migration rather than record a move that didn't happen. The migrations before it stay applied.
+
+## Fix
+
+Back up the database, move its field groups, then run the migrations again:
+
+```bash
+npx nextly migrate:field-groups --apply --backup-confirmed
+npx nextly migrate
+```
+
+## Example
+
+```text
+✗ 20261119_120000_000_field_group_current_names.sql moves the migration history to the current field-group names (dynamic_field_groups, fg_<slug>), and this database's field groups are still on the legacy ones (dynamic_components, comp_<slug>).
+  Why:  Applying it would record a move the database has not made.
+  Next: It was not applied. Move the field groups with `nextly migrate:field-groups --apply --backup-confirmed`, then run `nextly migrate` again.
+  Docs: https://nextlyhq.com/docs/cli/errors/field-group-storage-not-migrated  (FIELD_GROUP_STORAGE_NOT_MIGRATED)
+```

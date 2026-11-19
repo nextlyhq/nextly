@@ -1,0 +1,33 @@
+---
+title: FIELD_GROUP_NAMES_DIFFER_FROM_HISTORY
+description: "A migration was planned with field groups under names the project's migration history is not on."
+---
+
+## Cause
+
+A migration was planned with field groups under names the project's migration history is not on.
+
+Each snapshot in the migrations folder records which names the project's field groups are kept under: the legacy ones (`dynamic_components`, `comp_<slug>`) or the current ones (`dynamic_field_groups`, `fg_<slug>`). A migration planned across the two would drop every field-group table and create it again under the other name, losing its rows, so it is refused. This happens when a Schema Builder save on a site whose field groups were moved meets a history that has not moved, or the other way round.
+
+## Fix
+
+If the database's field groups were moved and the history wasn't, move the history:
+
+```bash
+npx nextly migrate:create --field-group-names=current
+```
+
+If the history was moved and this database wasn't, move the database's field groups first:
+
+```bash
+npx nextly migrate:field-groups --apply --backup-confirmed
+```
+
+## Example
+
+```text
+✗ This database's field groups are on the current names (dynamic_field_groups, fg_<slug>), and the project's migration history is still on the legacy ones (dynamic_components, comp_<slug>).
+  Why:  Planned across the two, every field-group table would be dropped and created again, and its rows lost.
+  Next: Nothing was written. Run `nextly migrate:create --field-group-names=current` to move the history to the current names first.
+  Docs: https://nextlyhq.com/docs/cli/errors/field-group-names-differ-from-history  (FIELD_GROUP_NAMES_DIFFER_FROM_HISTORY)
+```

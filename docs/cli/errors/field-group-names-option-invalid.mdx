@@ -1,0 +1,27 @@
+---
+title: FIELD_GROUP_NAMES_OPTION_INVALID
+description: "`--field-group-names` was given to `nextly migrate:create` with a value other than `current`, or with `--blank`, `--plugin` or `--record-snapshot`."
+---
+
+## Cause
+
+`--field-group-names` was given to `nextly migrate:create` with a value other than `current`, or with `--blank`, `--plugin` or `--record-snapshot`.
+
+`--field-group-names=current` writes the one migration that moves the app's history to the current field-group names. It writes the app's migration and snapshot, which a blank migration, a plugin's module and a snapshot record don't have, and there is no other naming to move to.
+
+## Fix
+
+Run it on its own:
+
+```bash
+npx nextly migrate:create --field-group-names=current
+```
+
+## Example
+
+```text
+✗ `--field-group-names` takes `current`, and was given `fg`.
+  Why:  It writes the one migration that moves the app's history to the current field-group names (dynamic_field_groups, fg_<slug>), and there is no other naming to move it to.
+  Next: Run `nextly migrate:create --field-group-names=current` on its own.
+  Docs: https://nextlyhq.com/docs/cli/errors/field-group-names-option-invalid  (FIELD_GROUP_NAMES_OPTION_INVALID)
+```

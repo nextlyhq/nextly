@@ -1846,6 +1846,9 @@ async function generateFor(
     components: inputs.components,
     // The starting point the inputs were checked against, read once.
     previous: inputs.latest,
+    // The names the site's storage is on, which the save named its field groups under: a history
+    // on the other names is refused, naming the step between them, rather than planned across.
+    fieldGroupNaming: inputs.fieldGroupNaming,
     metadataUpserts: inputs.metadataUpserts,
     previousMetadataUpserts: inputs.previousMetadataUpserts,
     appStream: inputs.appStream,

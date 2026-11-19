@@ -1,0 +1,30 @@
+---
+title: FIELD_GROUP_HISTORY_BEHIND_STORAGE
+description: "The database's field groups were moved to the current names while the project's migration history is still on the legacy names."
+---
+
+## Cause
+
+The database's field groups were moved to the current names while the project's migration history is still on the legacy names.
+
+`nextly migrate:field-groups` moved this database's field groups to the current names (`dynamic_field_groups`, `fg_<slug>`, `_field_group_type`), and the project's migration history still keeps them under the legacy ones (`dynamic_components`, `comp_<slug>`). Every migration written after this point would be planned against tables the database no longer has, so `nextly migrate` stops before it applies anything.
+
+## Fix
+
+Move the history to the current names with one migration that changes nothing in the database, then apply it:
+
+```bash
+npx nextly migrate:create --field-group-names=current
+npx nextly migrate
+```
+
+Commit the migration it writes. Every database the project deploys to must have its field groups moved with `nextly migrate:field-groups --apply --backup-confirmed` before it applies that migration.
+
+## Example
+
+```text
+✗ This database's field groups were moved to the current names (dynamic_field_groups, fg_<slug>), and the project's migration history is still on the legacy ones (dynamic_components, comp_<slug>).
+  Why:  Every file after this point would be planned against tables the database no longer has.
+  Next: No file was applied. Run `nextly migrate:create --field-group-names=current`, then `nextly migrate` again.
+  Docs: https://nextlyhq.com/docs/cli/errors/field-group-history-behind-storage  (FIELD_GROUP_HISTORY_BEHIND_STORAGE)
+```

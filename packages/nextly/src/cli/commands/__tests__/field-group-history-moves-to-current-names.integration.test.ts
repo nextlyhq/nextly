@@ -304,7 +304,13 @@ describe.each(getConfiguredTestDialects())(
       const sections = parseSqlSections(
         await readFile(transition.sql, "utf-8")
       );
-      expect(sections.up.trim()).toBe("");
+      // No statement in UP: the storage moves through `migrate:field-groups` alone.
+      expect(
+        sections.upSql
+          .split("\n")
+          .map(line => line.trim())
+          .filter(line => line !== "" && !line.startsWith("--"))
+      ).toEqual([]);
       const snapshot = JSON.parse(
         await readFile(transition.snapshot, "utf-8")
       ) as {
