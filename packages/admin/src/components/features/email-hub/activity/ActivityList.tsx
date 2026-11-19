@@ -72,6 +72,11 @@ interface RowView {
   person: string | null;
   provider: string;
   recipient: string;
+  /**
+   * Provider and recipient on one line, for widths that hide their columns:
+   * whichever of the two is known, or null when neither is.
+   */
+  compact: string | null;
   happened: ReturnType<typeof whatHappened>;
 }
 
@@ -105,6 +110,15 @@ function recipientOf(row: ActivityRow): string {
   return row.recipientKinds.map(kind => RECIPIENT_KIND_LABELS[kind]).join(", ");
 }
 
+/**
+ * Provider and recipient as one line: a queued email not yet tried still
+ * knows who it goes to, so each part shows when it is known.
+ */
+function compactOf(provider: string, recipient: string): string | null {
+  const known = [provider, recipient].filter(part => part !== "—");
+  return known.length > 0 ? known.join(" · ") : null;
+}
+
 /** Which attempt a queued email is on, once it has made one. */
 function attemptOf(row: ActivityRow): string | null {
   return row.source === "queued" && row.attempts !== null && row.attempts > 0
@@ -124,6 +138,10 @@ function viewOf(row: ActivityRow, names: ActivityNames, now: Date): RowView {
     queued: row.source === "queued",
     person: personOf(row),
     provider: providerLabel(row.provider, names.provider),
+    compact: compactOf(
+      providerLabel(row.provider, names.provider),
+      recipientOf(row)
+    ),
     recipient: recipientOf(row),
     happened: whatHappened(row, now),
   };
@@ -253,14 +271,14 @@ function ActivityTable({
               </td>
               <td className="px-4 py-3">
                 <EmailCell view={view} onOpen={onOpen} />
-                {view.provider !== "—" && (
+                {view.compact && (
                   // Below the width that shows the Provider and Recipient
                   // columns, carried under the email instead.
                   <div
                     data-compact-details
                     className="mt-1 break-words text-xs text-muted-foreground xl:hidden"
                   >
-                    {view.provider} · {view.recipient}
+                    {view.compact}
                   </div>
                 )}
               </td>

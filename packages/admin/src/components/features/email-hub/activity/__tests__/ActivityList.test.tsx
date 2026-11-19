@@ -174,6 +174,30 @@ describe("the Activity list", () => {
     expect(row.querySelector("[data-compact-details]")).toBeNull();
   });
 
+  it("keeps a queued email's recipients in the compact line before any provider is known", () => {
+    renderList({
+      rows: [
+        activityRow({
+          kind: "queued",
+          id: "q8",
+          createdAt: "2026-11-16T10:00:00.000Z",
+          status: "waiting",
+          template: { slug: "order-shipped" },
+          provider: null,
+          recipientKinds: ["to", "bcc"],
+          failureReason: null,
+          attempts: 0,
+          nextAttemptAt: "2026-11-16T12:05:00.000Z",
+          erased: false,
+        }),
+      ],
+    });
+    const row = within(screen.getByRole("table")).getAllByRole("row")[1];
+    expect(row.querySelector("[data-compact-details]")?.textContent).toBe(
+      "To, Bcc"
+    );
+  });
+
   it("says why it is empty, filtered or not", () => {
     renderList({ rows: [] });
     expect(
