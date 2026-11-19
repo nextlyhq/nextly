@@ -29,6 +29,7 @@ import {
 import type { ServiceContainer } from "../../../../services";
 import { clearRegistryRowCache } from "../../../dynamic-collections/services/collection-row-cache";
 import { SchemaEventsRepository } from "../../../schema/events/schema-events-repository";
+import { writeRegistryRows } from "../../../schema/schema-version";
 
 const HISTORY = "./database/history";
 const DEFINITION = "./schema/builder.json";
@@ -71,14 +72,16 @@ describeEachDialect("a collection update's registry write", dialect => {
     return current;
   }
 
-  /** The update adding `extra`, as what it threw or what it answered. */
-  async function update(): Promise<{ failed: boolean; said: string }> {
+  /** An update (by default the one adding `extra`), as what it threw or what it answered. */
+  async function update(
+    body: Record<string, unknown> = { fields: AFTER }
+  ): Promise<{ failed: boolean; said: string }> {
     try {
       const answer = await dispatchCollections(
         {} as ServiceContainer,
         "updateCollection",
         { collectionName: SLUG },
-        { fields: AFTER }
+        body
       );
       const said =
         answer instanceof Response
@@ -299,7 +302,69 @@ describeEachDialect("a collection update's registry write", dialect => {
       "the table was looked for after the change"
     ).toBeGreaterThan(0);
     expect(failed, `the update answered: ${said}`).toBe(true);
-    expect(said, "the answer").toContain(`"${TABLE}" was not found`);
+    // The table's name stays in the log: the answer says which collection, never its storage.
+    expect(said, "the answer").toBe(
+      "The collection's table was not found after the schema change, so its record was left as it was."
+    );
     expect(await recorded(t), "the registry row").toEqual(before);
+  });
+
+  it("answers failed with nothing kept when a settings-only update's registry write fails", async () => {
+    const SETTINGS = { label: "Posts renamed" };
+    // Counted first, on an update without a failure: the last is the save's own write.
+    let writes: number;
+    {
+      const t = await boot();
+      const counted = await countingTrigger(t, 0);
+      const { failed, said } = await update(SETTINGS);
+      expect(failed, `the counting update failed: ${said}`).toBe(false);
+      writes = await counted();
+      await shutDown();
+    }
+    // Control: the trigger reaches the update's registry writes.
+    expect(
+      writes,
+      "no registry write of the update was counted"
+    ).toBeGreaterThan(0);
+
+    const t = await boot();
+    const before = await recorded(t);
+    const filesBefore = migrationFiles(t);
+    const appliedBefore = await appliedFiles(t);
+    await countingTrigger(t, writes);
+
+    const { failed, said } = await update(SETTINGS);
+
+    expect(failed, `the update answered: ${said}`).toBe(true);
+    // Nothing was pushed, so nothing is left part way: no kept file, no steps to finish it.
+    expect(said, "the answer").not.toContain("migrate:resolve");
+    expect(migrationFiles(t), "the migrations folder").toEqual(filesBefore);
+    expect(await appliedFiles(t), "the ledger").toEqual(appliedBefore);
+    expect(await recorded(t), "the registry row").toEqual(before);
+  });
+
+  it("moves the served schema version only once the transaction holding a registry write commits", async () => {
+    const t = await boot();
+    /** How many times this process has marked its served schema version as moved. */
+    const marks = () =>
+      Number(
+        (
+          Reflect.get(globalThis, "__nextly_servedSchema") as
+            | { marks?: number }
+            | undefined
+        )?.marks ?? 0
+      );
+    const before = marks();
+    let inside = Number.NaN;
+
+    // A registry write joined to a transaction still open, as the update's is to the one that
+    // records its files.
+    await t.adapter.transaction(async () => {
+      await writeRegistryRows(t.adapter, () => Promise.resolve(undefined));
+      inside = marks();
+    });
+
+    expect(inside, "marked while the transaction was open").toBe(before);
+    expect(marks(), "marked once it committed").toBeGreaterThan(before);
   });
 });
