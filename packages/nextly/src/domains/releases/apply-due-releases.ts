@@ -175,9 +175,10 @@ export interface ApplyDueReleasesDeps {
     /**
      * Flush these releases' documents without moving them: for a component
      * kept scheduled on a hold, which a reader is shown nothing more of. Never
-     * throws.
+     * throws. Optional: a caller's own repository need not provide it, and
+     * without it the documents' cached reads expire on their own.
      */
-    revalidateReleases(ids: readonly string[]): Promise<void>;
+    revalidateReleases?(ids: readonly string[]): Promise<void>;
   };
   mutations: ReleaseMutations;
   /** The identity reads, so a member's author can be resolved. */
@@ -377,7 +378,7 @@ async function flushHeldBegunComponents(
       .map(o => o.releaseId)
   );
   if (held.size === 0) return;
-  await deps.repository.revalidateReleases(
+  await deps.repository.revalidateReleases?.(
     plan.overlappingReleases
       .filter(group => group.some(id => held.has(id)))
       .flat()
