@@ -22,8 +22,11 @@ import type {
 import { useActivityDetail, useEmailActivity } from "../useEmailActivity";
 
 const listActivity = vi.fn();
+const searchActivityByAddress = vi.fn();
 vi.mock("@admin/services/emailActivityApi", () => ({
   listActivity: (...args: unknown[]) => listActivity(...args),
+  searchActivityByAddress: (...args: unknown[]) =>
+    searchActivityByAddress(...args),
   getQueuedEmailOverdue: vi.fn(),
   getDeliveryDetail: vi.fn(),
   getQueuedEmailDetail: (...args: unknown[]) => getQueuedEmailDetail(...args),
@@ -88,6 +91,7 @@ afterEach(() => {
   getQueuedEmailDetail.mockReset();
   vi.useRealTimers();
   listActivity.mockReset();
+  searchActivityByAddress.mockReset();
 });
 
 /** What the n-th read asked for. */
@@ -236,6 +240,171 @@ describe("useEmailActivity", () => {
       await vi.advanceTimersByTimeAsync(61_000);
     });
     expect(listActivity.mock.calls.length - before).toBe(0);
+  });
+});
+
+describe("useEmailActivity searching by address", () => {
+  const NOTICE =
+    "Only records sent under the current secret, or a previous secret still configured, can be found by address.";
+  const ANY = { outcome: "any" as const, window: "7d" as const };
+  const search = {
+    scope: "s1",
+    id: 1,
+    address: "ada@example.test",
+    filter: ANY,
+  };
+
+  it("searches the address under the list's filters, and passes the server's notice on", async () => {
+    searchActivityByAddress.mockResolvedValue({
+      items: [entry("sent")],
+      meta: { ...EMPTY_META, notice: NOTICE },
+    });
+    const { result } = renderHook(
+      () =>
+        useEmailActivity(ANY, {
+          search: { ...search, filter: { outcome: "failed", window: "7d" } },
+        }),
+      { wrapper }
+    );
+    await waitFor(() => expect(result.current.rows).toHaveLength(1));
+    expect(listActivity).not.toHaveBeenCalled();
+    expect(searchActivityByAddress.mock.calls[0][0]).toMatchObject({
+      address: "ada@example.test",
+      status: "failed",
+      limit: 50,
+    });
+    expect(result.current.notice).toBe(NOTICE);
+  });
+
+  it("never searches again by itself, since each search is recorded", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    // A queued email still waiting would make the list poll every 30 s.
+    searchActivityByAddress.mockResolvedValue({
+      items: [entry("waiting")],
+      meta: { ...EMPTY_META, notice: NOTICE },
+    });
+    const { result } = renderHook(
+      () => useEmailActivity({ outcome: "any", window: "7d" }, { search }),
+      { wrapper }
+    );
+    await waitFor(() => expect(result.current.rows).toHaveLength(1));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(121_000);
+    });
+    window.dispatchEvent(new Event("focus"));
+    expect(searchActivityByAddress).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the address out of every cache key, keying a search by its number", async () => {
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const shared = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    );
+    searchActivityByAddress.mockResolvedValue({
+      items: [entry("sent")],
+      meta: { ...EMPTY_META, notice: NOTICE },
+    });
+    const { result } = renderHook(
+      () => useEmailActivity({ outcome: "any", window: "7d" }, { search }),
+      { wrapper: shared }
+    );
+    await waitFor(() => expect(result.current.rows).toHaveLength(1));
+    const keys = JSON.stringify(
+      client
+        .getQueryCache()
+        .getAll()
+        .map(query => query.queryKey)
+    );
+    expect(keys).toContain('"search"');
+    expect(keys).not.toContain("ada");
+  });
+
+  it("reads with the filters it was made with, so a filter edit alone never searches", async () => {
+    searchActivityByAddress.mockResolvedValue({
+      items: [entry("sent")],
+      meta: { ...EMPTY_META, notice: NOTICE },
+    });
+    const { rerender, result } = renderHook(
+      ({ outcome }: { outcome: "any" | "failed" }) =>
+        useEmailActivity({ outcome, window: "7d" }, { search }),
+      { wrapper, initialProps: { outcome: "any" as "any" | "failed" } }
+    );
+    await waitFor(() => expect(result.current.rows).toHaveLength(1));
+    rerender({ outcome: "failed" });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(searchActivityByAddress).toHaveBeenCalledTimes(1);
+    expect(searchActivityByAddress.mock.calls[0][0]).not.toHaveProperty(
+      "status"
+    );
+  });
+
+  it("never takes over another mount's search under the same number", async () => {
+    searchActivityByAddress.mockResolvedValue({
+      items: [entry("sent")],
+      meta: { ...EMPTY_META, notice: NOTICE },
+    });
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const shared = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    );
+    const { rerender, result } = renderHook(
+      ({ scope, address }: { scope: string; address: string }) =>
+        useEmailActivity(ANY, {
+          search: { scope, id: 1, address, filter: ANY },
+        }),
+      {
+        wrapper: shared,
+        initialProps: { scope: "s1", address: "ada@example.test" },
+      }
+    );
+    await waitFor(() => expect(result.current.rows).toHaveLength(1));
+    // A screen mounted again numbers its searches from 1 too.
+    rerender({ scope: "s2", address: "bob@example.test" });
+    await waitFor(() =>
+      expect(searchActivityByAddress).toHaveBeenCalledTimes(2)
+    );
+    expect(searchActivityByAddress.mock.calls[1][0]).toMatchObject({
+      address: "bob@example.test",
+    });
+  });
+
+  it("reads the same address again when it is searched again", async () => {
+    searchActivityByAddress.mockResolvedValue({
+      items: [entry("sent")],
+      meta: { ...EMPTY_META, notice: NOTICE },
+    });
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const shared = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    );
+    const { rerender, result } = renderHook(
+      ({ id }: { id: number }) =>
+        useEmailActivity(
+          { outcome: "any", window: "7d" },
+          {
+            search: {
+              scope: "s1",
+              id,
+              address: "ada@example.test",
+              filter: ANY,
+            },
+          }
+        ),
+      { wrapper: shared, initialProps: { id: 1 } }
+    );
+    await waitFor(() => expect(result.current.rows).toHaveLength(1));
+    rerender({ id: 2 });
+    await waitFor(() =>
+      expect(searchActivityByAddress).toHaveBeenCalledTimes(2)
+    );
   });
 });
 

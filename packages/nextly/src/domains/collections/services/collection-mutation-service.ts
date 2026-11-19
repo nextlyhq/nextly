@@ -476,6 +476,7 @@ import {
 import {
   takesSavepoints,
   underSavepoint,
+  undoneAfter,
   VersionCaptureService,
 } from "../../versions/version-capture-service";
 import { versionConflictRetries } from "../../versions/version-conflict";
@@ -22209,12 +22210,17 @@ export class CollectionMutationService extends BaseService {
         // The publish gate's early answer to a create that publishes, before any hook runs, as
         // the create door asks it: a create the gate holds back runs no hook. Asked on the
         // caller's transaction, with no entry yet, so it reads nothing from outside it; only its
-        // refusal is kept, and the verdict after the insert is the one the create settles.
-        await this.judgeCreateOnTx(
-          tx,
-          { ...params, entryId: "" },
-          { status: body.status, locale: undefined, withoutReview },
-          collection
+        // refusal is kept, and the verdict after the insert is the one the create settles. It is
+        // asked under a savepoint undone once it answers: it runs before the item's own savepoint,
+        // so an effect a gate held for the commit while answering would otherwise outlive an item
+        // that savepoint then undoes. Only the verdict on the written entry holds effects.
+        await undoneAfter(tx, () =>
+          this.judgeCreateOnTx(
+            tx,
+            { ...params, entryId: "" },
+            { status: body.status, locale: undefined, withoutReview },
+            collection
+          )
         );
       }
 

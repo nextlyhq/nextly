@@ -17,6 +17,8 @@
  *   take the stage's primary step, else the roles that may; no one in a stage with no step out.
  * - Each part names its last move: the latest workflow event that involved it, not the document's
  *   latest and not its first.
+ * - Each part's stage, and each waiting item's, is named as Settings shows it: the label and
+ *   colour saved for it, else the code's label and no colour.
  * - Each step out of a part's stage says whether the caller may take it, judged as the step itself
  *   judges its caller (its permission, a person for an approval, no self-approval where refused),
  *   and whether it is the stage's primary step.
@@ -49,6 +51,7 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import { defineCollection, text } from "../../../config";
+import { getSchema } from "../../../api/singles-detail";
 import { createDynamicHandlers } from "../../../routeHandler";
 import { ServiceContainer } from "../../../services/index";
 import { listRoleSlugsForUserOrRefuse } from "../../../services/lib/permissions";
@@ -66,7 +69,9 @@ import {
   giveRole,
   person,
   role,
+  saveIn,
   seedState,
+  shownVersion,
   stateDb,
   stateOf,
   superAdminRole,
@@ -719,6 +724,53 @@ describe.each(getConfiguredTestDialects())(
         }
       );
 
+      it.runIf(door.name === "REST")(
+        "names a Single's workflow in its schema read, and never to a visitor",
+        async () => {
+          current = await bootSteps(dialect);
+          await person(app(), "dana", [["read", "banner"]]);
+
+          const read = await rest("GET", ["singles", "banner", "schema"], {
+            kind: "person",
+            id: "dana",
+          });
+
+          expect(read.workflow).toEqual({
+            slug: "editorial",
+            label: "Editorial",
+          });
+          // The exported schema helper a site can mount names it the same way.
+          const mounted = await getSchema(
+            new Request("http://localhost/api/singles/banner/schema", {
+              headers: {
+                ...(await headersFor({ kind: "person", id: "dana" })),
+                origin: "http://localhost",
+              },
+            }),
+            "banner"
+          );
+          expect(mounted.status).toBe(200);
+          expect(((await mounted.json()) as Doc).workflow).toEqual({
+            slug: "editorial",
+            label: "Editorial",
+          });
+
+          // A visitor is refused the read, so the workflow is never named to one.
+          const anonymous = await createDynamicHandlers().GET(
+            new Request("http://localhost/api/singles/banner/schema", {
+              headers: { origin: "http://localhost" },
+            }),
+            {
+              params: Promise.resolve({
+                params: ["singles", "banner", "schema"],
+              }),
+            }
+          );
+          expect(anonymous.status).toBe(401);
+          expect(await anonymous.text()).not.toContain("editorial");
+        }
+      );
+
       it("answers a document of a collection with no workflow as no workflow and no parts", async () => {
         current = await bootSteps(dialect, undefined, {
           collections: [plain],
@@ -1138,6 +1190,46 @@ describe.each(getConfiguredTestDialects())(
             .map(item => (item.document as Doc).entryId)
             .sort()
         ).toEqual([...ids].sort());
+      });
+
+      it("names each part's stage, here and in what waits, as Settings shows it: its label and colour, else the code's label and none", async () => {
+        current = await bootSteps(dialect);
+        await people();
+        await writeWorkflowSettings(
+          stateDb(app()),
+          "editorial",
+          { stages: { writing: { label: "Drafting", colour: "#16a34a" } } },
+          null,
+          null
+        );
+        const drafting = await entry(app(), PAGES);
+        await seedState(app(), partOf(PAGES, drafting, null), "writing", {
+          definitionHash: HASH,
+          assignee: { kind: "user", id: "alice" },
+        });
+        const legal = await entry(app(), PAGES);
+        await seedState(app(), partOf(PAGES, legal, null), "legal", {
+          definitionHash: HASH,
+        });
+
+        expect(await onlyPart(door, drafting)).toMatchObject({
+          stage: "writing",
+          stageLabel: "Drafting",
+          stageColour: "#16a34a",
+        });
+        expect(await onlyPart(door, legal)).toMatchObject({
+          stage: "legal",
+          stageLabel: "Legal check",
+          stageColour: null,
+        });
+        const waiting = await door.waiting(ALICE, { page: 1, limit: 10 });
+        expect(waiting.items).toEqual([
+          expect.objectContaining({
+            stage: "writing",
+            stageLabel: "Drafting",
+            stageColour: "#16a34a",
+          }),
+        ]);
       });
 
       it("names a part's assignee as who it waits for, before its stage's default reviewer", async () => {
@@ -1878,6 +1970,83 @@ describe.each(getConfiguredTestDialects())(
           expect.objectContaining({ single: "banner", code: "NOT_FOUND" }),
         ]);
         expect(JSON.stringify(answer.refused)).not.toContain(String(banner.id));
+      });
+
+      it("names each part's version under review: a language's newest, and the shared part's newest in any language", async () => {
+        current = await bootSteps(dialect);
+        await person(app(), "alice", [
+          ["read", POSTS],
+          ["update", POSTS],
+        ]);
+        const id = await entry(app(), POSTS);
+        // Spanish saved after English, so the shared part's newest version is the Spanish one.
+        await saveIn(app(), POSTS, id, "es", { title: "Hola" });
+
+        const parts = partsOf(
+          await door.reviewState(ALICE, { collection: POSTS, id })
+        );
+        const reviewed = (part: string | null) =>
+          parts.find(each => each.part === part)?.reviewedVersionNo;
+
+        // The same version core reviews and approves for each part.
+        expect(reviewed("en")).toBe(await shownVersion(app(), POSTS, id, "en"));
+        expect(reviewed("es")).toBe(await shownVersion(app(), POSTS, id, "es"));
+        expect(reviewed(null)).toBe(await shownVersion(app(), POSTS, id, null));
+        expect(reviewed(null)).toBe(reviewed("es"));
+        expect(Number(reviewed("en"))).toBeLessThan(Number(reviewed("es")));
+        // A language never saved has nothing under review.
+        expect(reviewed("ar")).toBeNull();
+
+        // English saved again, after Spanish: the shared part's version under review moves with it.
+        await saveIn(app(), POSTS, id, "en", { title: "Hello again" });
+        const later = partsOf(
+          await door.reviewState(ALICE, { collection: POSTS, id })
+        );
+        const reviewedLater = (part: string | null) =>
+          later.find(each => each.part === part)?.reviewedVersionNo;
+        expect(reviewedLater("en")).toBe(
+          await shownVersion(app(), POSTS, id, "en")
+        );
+        expect(reviewedLater(null)).toBe(
+          await shownVersion(app(), POSTS, id, null)
+        );
+        expect(reviewedLater(null)).toBe(reviewedLater("en"));
+        expect(reviewedLater("es")).toBe(reviewed("es"));
+        expect(Number(reviewedLater("es"))).toBeLessThan(
+          Number(reviewedLater("en"))
+        );
+      });
+
+      it("reads the version history once, however many parts the document has", async () => {
+        // Each part's version under review comes from one grouped read: a document kept in three
+        // languages and a shared part reads the history as often as one kept in none.
+        current = await bootSteps(dialect);
+        await person(app(), "alice", [
+          ["read", POSTS],
+          ["update", POSTS],
+          ["read", PAGES],
+          ["update", PAGES],
+        ]);
+        const post = await entry(app(), POSTS);
+        await saveIn(app(), POSTS, post, "es", { title: "Hola" });
+        await saveIn(app(), POSTS, post, "ar", { title: "Marhaba" });
+        const page = await entry(app(), PAGES);
+        const historyReads = async (collection: string, id: string) =>
+          (
+            await statementsOf(dialect, () =>
+              door.reviewState(ALICE, { collection, id })
+            )
+          ).filter(statement => statement.includes("nextly_versions"));
+
+        const onePart = await historyReads(PAGES, page);
+        const fourParts = await historyReads(POSTS, post);
+        // The reads did reach the history: a count of none would equal none.
+        expect(onePart.length).toBeGreaterThan(0);
+        // Both lists in the message, so a failure names the statement that differs.
+        expect(
+          fourParts.length,
+          `1 part:\n${onePart.join("\n")}\n\n4 parts:\n${fourParts.join("\n")}`
+        ).toBe(onePart.length);
       });
 
       it("names no last move for a part that never moved, though another part did", async () => {

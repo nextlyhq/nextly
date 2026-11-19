@@ -18,6 +18,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { loadConfig } from "../../cli/utils/config-loader";
+import { assertBuilderDefinitionsKept } from "../../domains/schema/ui-schema/builder-definitions";
 import { NextlyError } from "../../errors/index";
 import { describeConfigReloadFailure } from "../config-reload-failure";
 
@@ -148,5 +149,32 @@ describe("the dev log when a saved config cannot be read", () => {
 
     expect(message).toContain("the config refused to load");
     expect(message).not.toMatch(/syntax/i);
+  });
+});
+
+describe("the dev log when a saved config is refused by the definition file's loss", () => {
+  // Reported as the commands report it, with the entity and the fix, not as a bare message.
+  it("names the lost entity and what to do, as a command does", () => {
+    let refused: unknown;
+    try {
+      assertBuilderDefinitionsKept({
+        recorded: {
+          collections: { cases: { source: "builder" } },
+          singles: {},
+          fieldGroups: {},
+        } as unknown as Parameters<
+          typeof assertBuilderDefinitionsKept
+        >[0]["recorded"],
+        merged: { collections: [], singles: [], components: [] },
+        definitionFile: "./ui-schema.json",
+      });
+    } catch (error) {
+      refused = error;
+    }
+
+    const message = describeConfigReloadFailure(refused);
+
+    expect(message).toContain("BUILDER_DEFINITION_MISSING");
+    expect(message).toContain("collection 'cases'");
   });
 });

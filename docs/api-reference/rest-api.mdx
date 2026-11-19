@@ -931,6 +931,7 @@ These routes read and move review state for collections and Singles that have a 
       "part": "es",
       "stage": "legal",
       "stageLabel": "Legal check",
+      "stageColour": null,
       "publishable": false,
       "enteredAt": "2026-11-17T09:00:00.000Z",
       "enteredBy": "alice",
@@ -939,6 +940,7 @@ These routes read and move review state for collections and Singles that have a 
       "approval": null,
       "revision": 3,
       "version": "…",
+      "reviewedVersionNo": 12,
       "steps": [
         {
           "name": "clear",
@@ -987,8 +989,10 @@ What the fields mean:
 
 - **`part`:** a language code, or `null` for the shared part. A document that is not translated has only the shared part.
 - **`stage`:** `null` for a live part with nothing waiting to go live.
+- **`stageLabel`, `stageColour`:** the stage as Settings shows it: the label and colour saved there, else the code's label and `null`.
 - **`approval`:** `{ versionNo, by, at }` where the part holds an approval, else `null`.
 - **`revision` and `version`:** what a step sends back as what it saw.
+- **`reviewedVersionNo`:** the number of the part's version under review: its newest recorded version, in its language or, for the shared part, in any language. It is what approving the part approves; `null` for a part never saved.
 - **`steps`:** the steps out of the part's stage.
   - **`mayTake`:** whether the caller may take the step on this part. The server judges it with the same checks the step itself makes of who takes it: the step's permission (or the right to edit or publish, where it names none), a signed-in person for an approval or a request for changes (so an API key's is always `false`), and no self-approval where the step refuses it. A step can still be refused when taken, for what the caller saw being out of date, a missing comment, or fields the approver cannot read. Approvals are made by people: trusted server code may take every other step, and sees `mayTake: false` for an approval or a request for changes.
   - **`primary`:** `true` on the stage's primary step (its only step out, or the one marked `primary`), `false` on the others.
@@ -1032,7 +1036,7 @@ A document whose collection or Single has no workflow attached answers `200` wit
 
 #### What waits for you
 
-`GET /admin/api/workflows/waiting?page=1&limit=20` lists the parts that wait for the caller, as a [list envelope](#list), oldest entry into their stage first. Each item names its document, part and stage, and its `assignee`. A part waits for the caller in a stage whose primary step they may take (its permission, and who may take it: an approval is never a key's, nor that of the person who brought the part into a stage that refuses self-approval), when it is:
+`GET /admin/api/workflows/waiting?page=1&limit=20` lists the parts that wait for the caller, as a [list envelope](#list), oldest entry into their stage first. Each item names its document, part and stage (with `stageLabel` and `stageColour`, as the review state shows them), and its `assignee`. A part waits for the caller in a stage whose primary step they may take (its permission, and who may take it: an approval is never a key's, nor that of the person who brought the part into a stage that refuses self-approval), when it is:
 
 - assigned to them, or to a role they hold;
 - assigned to someone who can't take that step on this part, because they lost it or brought the part into a stage that refuses self-approval: such work waits for everyone who can;
@@ -1045,6 +1049,10 @@ Only parts the caller may read are listed and counted: a hidden part never takes
 #### Settings
 
 `GET /admin/api/workflows` lists the registered workflows: each one's stages, steps (with whether each is `grantable`), and the collections and Singles it is attached to.
+
+- **`configPath`:** the configuration file that registers it, relative to the project root, or `null` when none was found or it lies outside the root.
+- **Diagram:** each step's `permission` (its own, or the collection's `update`, or `publish` into a stage that allows publishing) and `commentRequired`; each stage's `primaryStep`, whether it is a `review` stage, and how it is shown (`shownLabel` and `colour`, saved in Settings, else the code's `label` and `null`); and the workflow's `onEdit` (`to`, `exemptFields`) and `afterPublish`.
+- **`stageCounts`:** how many documents are recorded in each stage, a document with several parts there counted once. A part in a stage the workflow no longer has counts in the first stage; a document that has never moved has no record and is not counted.
 
 `GET /admin/api/workflows/{slug}/settings` returns:
 
@@ -1062,9 +1070,15 @@ Only parts the caller may read are listed and counted: a hidden part never takes
       "partialRoles": [{ "id": "<roleId>", "name": "old-desk" }],
       "sharesPermissionWith": ["bounce"]
     }
-  }
+  },
+  "defaultReviewerHolds": { "legal": "holds" },
+  "reviewerRoles": { "legal": ["<roleId>", "<superAdminRoleId>"] }
 }
 ```
+
+`defaultReviewerHolds` says, for each stage with a default reviewer, whether that person or role still holds the stage's primary step on every attached collection and Single: `holds`, `lacks`, `deactivated` or `not-found`.
+
+`reviewerRoles` lists, for each review stage, the roles holding its primary step on every attached collection and Single: those granted it, those inheriting it, and the super-admin role, never the Public role, which stands for visitors. A default reviewer is a role from this list, or a person with one of them; the Public role is refused as one with `WORKFLOW_INELIGIBLE_REVIEWER`, whatever it holds.
 
 `PATCH /admin/api/workflows/{slug}/settings` changes them, and answers `{ message, item }` with the settings as they now read. The body names the `revision` it read, plus any of `defaultReviewers`, `labels`, `emails` and `grants`.
 

@@ -256,7 +256,9 @@ describe.each(getConfiguredTestDialects())(
     async function apply(
       t: TestNextly,
       confirmed: number | undefined,
-      remaining: unknown[] = REMAINING
+      remaining: unknown[] = REMAINING,
+      /** The dialog's confirmation by field name of a drop, as the admin sends it. */
+      resolutions?: Record<string, { action: "confirm_drop" }>
     ): Promise<unknown> {
       return dispatchCollections(
         {} as ServiceContainer,
@@ -269,6 +271,7 @@ describe.each(getConfiguredTestDialects())(
           ...(confirmed === undefined
             ? {}
             : { confirmedDeletions: [{ field: "note", count: confirmed }] }),
+          ...(resolutions === undefined ? {} : { resolutions }),
         }
       );
     }
@@ -398,7 +401,10 @@ describe.each(getConfiguredTestDialects())(
       for (const note of ["a", "b", "c"]) await insert(t, note);
       await insert(t, "written after the review");
 
-      await expect(apply(t, undefined)).resolves.toBeDefined();
+      // Its drop confirmed by name, as the admin's dialog confirms each removed field.
+      await expect(
+        apply(t, undefined, REMAINING, { note: { action: "confirm_drop" } })
+      ).resolves.toBeDefined();
       expect(await hasNoteColumn(t)).toBe(false);
     }, 60_000);
 
