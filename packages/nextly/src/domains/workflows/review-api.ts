@@ -267,8 +267,18 @@ export interface WaitingQuery {
     kind: "collection" | "single",
     slug: string
   ) => Promise<boolean>;
-  /** Whether the caller may read one document, asked of each item of the page. */
-  readable: (document: ReviewDocument, part: string | null) => Promise<boolean>;
+  /**
+   * Which of `items` the caller may read, each document in the language its part names, in order.
+   * Asked once for every candidate together: a list weighs many, and a read check apiece would be a
+   * round trip apiece.
+   */
+  readable: (items: readonly WaitingReadable[]) => Promise<readonly boolean[]>;
+}
+
+/** A document a waiting list asks the read check of, in the language its part names. */
+export interface WaitingReadable {
+  document: ReviewDocument;
+  part: string | null;
 }
 
 /** One stage of one attached collection or Single. */
@@ -353,7 +363,7 @@ export async function waitingFor(
       scoped,
     ])
   );
-  const waiting: WaitingPart[] = [];
+  const movable: ReviewState[] = [];
   for (const row of candidates) {
     const scoped = stageOfRow.get(
       `${row.scopeKind}:${row.scopeSlug}:${row.stage}`
@@ -366,17 +376,25 @@ export async function waitingFor(
       continue;
     }
     // Work the caller brought into a stage whose step refuses that is not theirs to move.
-    if (!takesStep(scoped.step, query.caller, accountable, row.enteredBy)) {
-      continue;
+    if (takesStep(scoped.step, query.caller, accountable, row.enteredBy)) {
+      movable.push(row);
     }
-    const document: ReviewDocument = {
-      scopeKind: row.scopeKind,
-      scopeSlug: row.scopeSlug,
-      entryId: row.entryId,
-    };
-    if (!(await query.readable(document, row.part))) continue;
-    waiting.push(waitingItem(row, row.assignee));
   }
+  // The read check, asked of every part the caller may move at once, before the page is cut: a
+  // part they may not read never takes a place on a page or counts.
+  const readable = await query.readable(
+    movable.map(row => ({
+      document: {
+        scopeKind: row.scopeKind,
+        scopeSlug: row.scopeSlug,
+        entryId: row.entryId,
+      },
+      part: row.part,
+    }))
+  );
+  const waiting = movable
+    .filter((_, index) => readable[index] === true)
+    .map(row => waitingItem(row, row.assignee));
   return {
     items: waiting.slice(query.offset, query.offset + query.limit),
     total: waiting.length,
@@ -464,24 +482,31 @@ async function stageTerms(
 
 /**
  * The review states a list decides, oldest first, from two bounded reads: the caller's own work,
- * and the rest, so the rest of a busy stage never crowds their own work out of the read. A full
- * read is whole only up to its last row; past the earlier such end the list would miss what that
- * read never reached, so it ends there, and says it was `capped`.
+ * and the rest, so the rest of a busy stage never crowds their own work out of the read. Each
+ * read asks for one row past the limit, so a share of exactly the limit is known to be whole. One
+ * with more is whole only up to its limit's last row; past the earlier such end the list would
+ * miss what that read never reached, so it ends there, and says it was `capped`.
  */
 async function waitingCandidates(
   adapter: DrizzleAdapter,
   terms: readonly WaitingStageTerms[]
 ): Promise<{ candidates: ReviewState[]; capped: boolean }> {
   const shares: ReviewState[][] = [];
+  const ends: ReviewState[] = [];
   for (const share of ["own", "rest"] as const) {
-    shares.push(
-      await readWaitingReviewStates(adapter, terms, share, WAITING_SCAN_LIMIT)
+    const rows = await readWaitingReviewStates(
+      adapter,
+      terms,
+      share,
+      WAITING_SCAN_LIMIT + 1
     );
+    if (rows.length > WAITING_SCAN_LIMIT) {
+      rows.length = WAITING_SCAN_LIMIT;
+      ends.push(rows[WAITING_SCAN_LIMIT - 1]);
+    }
+    shares.push(rows);
   }
-  const ends = shares
-    .filter(rows => rows.length === WAITING_SCAN_LIMIT)
-    .map(rows => rows[rows.length - 1])
-    .sort(waitingOrder);
+  ends.sort(waitingOrder);
   const end = ends[0];
   const candidates = shares
     .flat()

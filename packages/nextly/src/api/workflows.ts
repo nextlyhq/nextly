@@ -45,6 +45,7 @@ import {
   stepMany,
   waitingFor,
   type ManyRefusal,
+  type WaitingReadable,
 } from "../domains/workflows/review-api";
 import type { ReviewDocument } from "../domains/workflows/review-state-repository";
 import {
@@ -62,6 +63,11 @@ import {
 } from "../domains/workflows/workflow-settings-api";
 import { NextlyError } from "../errors";
 import { getCachedNextly } from "../init";
+import {
+  resolveDocumentVisibilityScope,
+  visibleDocuments,
+  type DocumentRef,
+} from "../services/lib/document-visibility";
 
 import { readCaller } from "./authenticated-read";
 import {
@@ -75,6 +81,7 @@ import {
 import { requireRouteAuthentication } from "./route-auth";
 import {
   assertVersionDocumentReadable,
+  historyLanguagesOf,
   readableHistoryLocales,
 } from "./versions-access";
 import { withErrorHandler } from "./with-error-handler";
@@ -414,6 +421,60 @@ async function readableBy(
   }
 }
 
+/**
+ * Which of `items` the asker may read, in order, each document in the language its part names:
+ * asked of the ordinary read path in batches (`visibleDocuments`: a read per collection and
+ * language, per Single and language), never a read per document. A part in no language is
+ * readable where the document is in any language its history is kept in, or, kept in none, as it
+ * is: what `assertReadable` asks of it.
+ */
+async function readableAmong(
+  asker: NonNullable<WorkflowAsker>,
+  items: readonly WaitingReadable[]
+): Promise<boolean[]> {
+  const kept = new Map<string, readonly (string | null)[]>();
+  const keptIn = async (document: ReviewDocument) => {
+    const key = `${document.scopeKind}:${document.scopeSlug}`;
+    let languages = kept.get(key);
+    if (languages === undefined) {
+      const history = await historyLanguagesOf(
+        document.scopeKind,
+        document.scopeSlug
+      );
+      languages = history.size > 0 ? [...history] : [null];
+      kept.set(key, languages);
+    }
+    return languages;
+  };
+  const refs: { index: number; ref: DocumentRef }[] = [];
+  for (const [index, { document, part }] of items.entries()) {
+    const languages = part === null ? await keptIn(document) : [part];
+    for (const locale of languages) {
+      refs.push({
+        index,
+        ref: {
+          kind: document.scopeKind,
+          slug: document.scopeSlug,
+          entryId: document.entryId,
+          locale,
+        },
+      });
+    }
+  }
+  const visible = await visibleDocuments(
+    refs,
+    each => each.ref,
+    {
+      user: asker.user,
+      ...(asker.scope === undefined ? {} : { authenticatedScope: asker.scope }),
+    },
+    await resolveDocumentVisibilityScope()
+  );
+  const readable = items.map(() => false);
+  for (const each of visible) readable[each.index] = true;
+  return readable;
+}
+
 const adapter = () => container.get<DrizzleAdapter>("adapter");
 
 /** Every assignment a request names, each document resolved and read-checked. */
@@ -591,8 +652,7 @@ export const workflowOperations = {
       readsEntity: (_kind, slug) => Promise.resolve(readable.has(slug)),
       // Each item in the language its part names: an item about a language the caller may not
       // read the document in is left out, as a read of that language would be refused.
-      readable: (document, part) =>
-        readableBy(asker, document, part === null ? [] : [part]),
+      readable: items => readableAmong(asker, items),
     });
     const totalPages = Math.max(1, Math.ceil(total / query.limit));
     return {

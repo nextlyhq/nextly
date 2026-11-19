@@ -1443,6 +1443,79 @@ describe.each(getConfiguredTestDialects())(
         for (const statement of reads) expect(statement).toMatch(/\blimit\b/i);
       });
 
+      it("asks whether its caller may read the documents in batches, never part by part", async () => {
+        // Each part's document is read checked: asked one by one, a long queue is a round trip per
+        // part. Asked per collection and language, 15 parts cost what 3 do.
+        current = await bootSteps(dialect);
+        await people();
+        await person(app(), "sam", [
+          ["read", PAGES],
+          ["sign-off", PAGES],
+        ]);
+        const seed = async (count: number) => {
+          for (let n = 0; n < count; n += 1) {
+            await seedState(
+              app(),
+              partOf(PAGES, await entry(app(), PAGES), null),
+              "legal",
+              { definitionHash: HASH }
+            );
+          }
+        };
+        const SAM: Who = { kind: "person", id: "sam" };
+        const statements = async () => {
+          // Once to warm what a first call caches, then counted.
+          await door.waiting(SAM, { page: 1, limit: 50 });
+          return (
+            await statementsOf(dialect, () =>
+              door.waiting(SAM, { page: 1, limit: 50 })
+            )
+          ).length;
+        };
+
+        await seed(3);
+        const few = await statements();
+        await seed(12);
+        const many = await statements();
+        expect(
+          (await door.waiting(SAM, { page: 1, limit: 50 })).meta
+        ).toMatchObject({ total: 15 });
+        expect(many).toBe(few);
+      });
+
+      it("reads exactly as many parts as it may whole, and cuts nothing it read in full", async () => {
+        // Exactly 1,000 parts are Sam's own: that read is whole, not cut short, so the work after it
+        // in the rest of the stage (an orphan, entered later) is still his, and the total is exact.
+        current = await bootSteps(dialect);
+        await people();
+        await person(app(), "sam", [
+          ["read", PAGES],
+          ["sign-off", PAGES],
+        ]);
+        for (let n = 0; n < 1000; n += 1) {
+          await seedState(app(), partOf(PAGES, randomUUID(), null), "legal", {
+            definitionHash: HASH,
+            assignee: { kind: "user", id: "sam" },
+          });
+        }
+        const orphan = await entry(app(), PAGES);
+        await seedState(app(), partOf(PAGES, orphan, null), "legal", {
+          definitionHash: HASH,
+          assignee: { kind: "user", id: "alice" },
+          enteredAt: new Date("2026-11-03T10:00:00.000Z"),
+        });
+
+        const page = await door.waiting(
+          { kind: "person", id: "sam" },
+          { page: 1, limit: 10 }
+        );
+        expect(page.items.map(item => (item.document as Doc).entryId)).toEqual([
+          orphan,
+        ]);
+        expect(page.meta).toMatchObject({ total: 1 });
+        expect(page.meta.totalCapped).toBeUndefined();
+      });
+
       it("marks the total a floor when there is more waiting than it reads", async () => {
         // More parts wait than one list reads: the total counts those read, and says it is a floor.
         // None of these documents exists, so none is readable, and the total read is 0 — yet more
