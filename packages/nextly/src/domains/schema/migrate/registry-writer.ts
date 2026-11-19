@@ -347,6 +347,17 @@ async function removeRows(
   );
 }
 
+/** The table a stored registry row names, where it names one. */
+function storedTableOf(row: unknown): string | undefined {
+  const tableName =
+    row !== null && typeof row === "object"
+      ? (row as { tableName?: unknown }).tableName
+      : undefined;
+  return typeof tableName === "string" && tableName !== ""
+    ? tableName
+    : undefined;
+}
+
 /**
  * Whether the table a stored registry row names is there, asked as a step of
  * its own; a row naming none, or a table that cannot be asked about, reads
@@ -357,11 +368,8 @@ async function tableStands(
   view: DrizzleAdapter,
   row: unknown
 ): Promise<boolean> {
-  const tableName =
-    row !== null && typeof row === "object"
-      ? (row as { tableName?: unknown }).tableName
-      : undefined;
-  if (typeof tableName !== "string" || tableName === "") return true;
+  const tableName = storedTableOf(row);
+  if (tableName === undefined) return true;
   try {
     return await inRegistryStep(adapter, () => view.tableExists(tableName));
   } catch {
@@ -620,17 +628,6 @@ function recordedSingle(
     localized: row.localized,
     ...(row.admin === undefined ? {} : { admin: row.admin }),
   };
-}
-
-/** The table a stored field-group row names, where it names one. */
-function storedTableOf(row: unknown): string | undefined {
-  const tableName =
-    row !== null && typeof row === "object"
-      ? (row as { tableName?: unknown }).tableName
-      : undefined;
-  return typeof tableName === "string" && tableName !== ""
-    ? tableName
-    : undefined;
 }
 
 /**

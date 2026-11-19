@@ -52,6 +52,24 @@ export function historyFieldGroupNaming(
 }
 
 /**
+ * The naming a `migrate:create` run writes its file under, given the newest snapshot it starts
+ * from: refused where the run's field groups were named under the other naming
+ * (`refuseNamingAgainstHistory`), and null for a transition with nothing to move
+ * (`transitionNeeded`).
+ */
+export function fieldGroupNamingOfRun(
+  latest: { data: Pick<SnapshotFile, "fieldGroupStorage"> } | null | undefined,
+  run: { fieldGroupNaming?: FieldGroupNaming; fieldGroupTransition?: boolean }
+): FieldGroupNaming | null {
+  const history = latest?.data ?? null;
+  refuseNamingAgainstHistory(history, run.fieldGroupNaming);
+  if (run.fieldGroupTransition === true && !transitionNeeded(history)) {
+    return null;
+  }
+  return historyFieldGroupNaming(history, run.fieldGroupNaming);
+}
+
+/**
  * Refuses a run whose field groups were named under a naming the history is not on, before
  * anything is planned. Diffed, every field-group table would read as dropped under one name and
  * created under the other. Names the step that moves the history instead.

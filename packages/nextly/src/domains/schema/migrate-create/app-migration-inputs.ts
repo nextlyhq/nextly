@@ -206,9 +206,7 @@ export async function appMigrationInputs(
   // The names the history keeps field groups under, unless the caller read the site's own: a
   // history moved to the current names generates every group there, and `generateMigration`
   // refuses a caller's naming that differs from the history's (`refuseNamingAgainstHistory`).
-  const fieldGroupNaming =
-    input.fieldGroupNaming ??
-    (latest === null ? "legacy" : snapshotFieldGroupNaming(latest.data));
+  const fieldGroupNaming = namingOfInputs(input.fieldGroupNaming, latest);
   // Each field group under the table it is stored in on this site (`withFieldGroupTables`).
   const fieldGroupNames = storageNamesFor(fieldGroupNaming);
   const merged = withFieldGroupTables(
@@ -543,4 +541,16 @@ function builderEntriesOf(record: EntitySettingsRecord | undefined): {
     singles: of(record?.singles),
     components: of(record?.fieldGroups),
   };
+}
+
+/**
+ * The names `appMigrationInputs` resolves field groups under: the caller's, else the latest
+ * snapshot's (the history's), else legacy where the folder has none.
+ */
+function namingOfInputs(
+  requested: FieldGroupNaming | undefined,
+  latest: LatestSnapshot | null
+): FieldGroupNaming {
+  if (requested !== undefined) return requested;
+  return latest === null ? "legacy" : snapshotFieldGroupNaming(latest.data);
 }

@@ -165,11 +165,9 @@ import {
 } from "./entity-settings";
 import {
   contributionsUnderCurrentNames,
-  historyFieldGroupNaming,
+  fieldGroupNamingOfRun,
   refuseChangesToTransition,
-  refuseNamingAgainstHistory,
   snapshotUnderCurrentNames,
-  transitionNeeded,
 } from "./field-group-names-transition";
 import { planFieldGroupRenames } from "./field-group-renames";
 import {
@@ -879,18 +877,10 @@ export async function generateMigration(
     scoped.previous === undefined
       ? await loadLatestSnapshot(metaDir)
       : scoped.previous;
-  // The history's field-group naming holds for every file but the transition, which moves it.
-  refuseNamingAgainstHistory(previous?.data ?? null, scoped.fieldGroupNaming);
-  if (
-    scoped.fieldGroupTransition === true &&
-    !transitionNeeded(previous?.data ?? null)
-  ) {
-    return null;
-  }
-  const fieldGroupNaming = historyFieldGroupNaming(
-    previous?.data ?? null,
-    scoped.fieldGroupNaming
-  );
+  // The history's field-group naming holds for every file but the transition, which moves it;
+  // null when the transition has nothing to move.
+  const fieldGroupNaming = fieldGroupNamingOfRun(previous, scoped);
+  if (fieldGroupNaming === null) return null;
 
   // Taken once, here, so the table diff and every companion planner below
   // see the same fields (`withKeptScopeFieldsOf`).
@@ -1087,13 +1077,6 @@ export async function generateMigration(
     now,
     fieldGroupNaming,
   };
-  if (args.fieldGroupTransition === true) {
-    refuseChangesToTransition({
-      tables: pendingTables,
-      beyondTables: changesBeyondTables,
-    });
-    return transitionSnapshot(args, record);
-  }
   const recorded = await recordedUnlessChanged(args, {
     pendingTables,
     hasSettingsChanges: changesBeyondTables,
@@ -1705,6 +1688,14 @@ async function recordedUnlessChanged(
     record: Omit<MigrationPair, "sqlContent">;
   }
 ): Promise<GenerateResult | undefined> {
+  // `--field-group-names=current`: the move to the current names, and nothing else.
+  if (args.fieldGroupTransition === true) {
+    refuseChangesToTransition({
+      tables: run.pendingTables,
+      beyondTables: run.hasSettingsChanges,
+    });
+    return transitionSnapshot(args, run.record);
+  }
   if (args.recordSnapshot !== true) return undefined;
   refuseChangesToRecord(run.pendingTables);
   if (run.hasSettingsChanges) return undefined;
@@ -1867,10 +1858,21 @@ async function recordSnapshot(
   args: GenerateArgs,
   record: Omit<MigrationPair, "sqlContent">
 ): Promise<GenerateResult> {
-  const run: MigrationPair = {
+  return writeUnchangedMigration(args, {
     ...record,
     sqlContent: formatSnapshotRecordFile(args.name, args.dialect, record.now),
-  };
+  });
+}
+
+/**
+ * Writes a migration that changes nothing in the database, and its snapshot: the record of
+ * translated fields, or the move to the current field-group names. It changes nothing, so it
+ * deletes nothing.
+ */
+async function writeUnchangedMigration(
+  args: GenerateArgs,
+  run: MigrationPair
+): Promise<GenerateResult> {
   const { sqlPath, snapshotPath } = await writeMigrationPair(args, run);
   return {
     sqlPath,
@@ -1881,7 +1883,6 @@ async function recordSnapshot(
     renamesAccepted: 0,
     settingsChanges: [],
     permissionChanges: [],
-    // A record changes nothing, so it deletes nothing.
     deletions: [],
   };
 }
@@ -1899,7 +1900,7 @@ async function transitionSnapshot(
   record: Omit<MigrationPair, "sqlContent">
 ): Promise<GenerateResult> {
   const groupTables = new Set(args.components.map(c => c.tableName));
-  const run: MigrationPair = {
+  return writeUnchangedMigration(args, {
     ...record,
     written: snapshotUnderCurrentNames(record.written, groupTables),
     contributions: contributionsUnderCurrentNames(
@@ -1912,20 +1913,7 @@ async function transitionSnapshot(
       args.dialect,
       record.now
     ),
-  };
-  const { sqlPath, snapshotPath } = await writeMigrationPair(args, run);
-  return {
-    sqlPath,
-    snapshotPath,
-    sqlContent: run.sqlContent,
-    companionFiles: [],
-    operationCount: 0,
-    renamesAccepted: 0,
-    settingsChanges: [],
-    permissionChanges: [],
-    // The transition changes nothing in the database, so it deletes nothing.
-    deletions: [],
-  };
+  });
 }
 
 /** A migration's `.sql` content and what its paired snapshot records. */
