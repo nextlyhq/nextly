@@ -30,6 +30,7 @@ import type { ServiceContainer } from "../../../../services";
 import { clearRegistryRowCache } from "../../../dynamic-collections/services/collection-row-cache";
 import { SchemaEventsRepository } from "../../../schema/events/schema-events-repository";
 import { writeRegistryRows } from "../../../schema/schema-version";
+import { isWebhookRecordingEnabled } from "../../../webhooks/recording-policy";
 
 const HISTORY = "./database/history";
 const DEFINITION = "./schema/builder.json";
@@ -55,12 +56,18 @@ async function shutDown(): Promise<void> {
 }
 
 describeEachDialect("a collection update's registry write", dialect => {
-  /** Boot in development with the Builder save writer set up, and create the collection. */
-  async function boot(): Promise<TestNextly> {
+  /**
+   * Boot in development with the Builder save writer set up, and create the collection; with
+   * `languages`, English and Spanish are configured.
+   */
+  async function boot(languages = false): Promise<TestNextly> {
     vi.stubEnv("NODE_ENV", "development");
     current = await createTestNextly({
       dialect: dialect as TestDialect,
       db: { migrationsDir: HISTORY, uiSchemaFile: DEFINITION },
+      ...(languages
+        ? { localization: { locales: ["en", "es"], defaultLocale: "en" } }
+        : {}),
     });
     await dispatchCollections(
       {} as ServiceContainer,
@@ -372,5 +379,80 @@ describeEachDialect("a collection update's registry write", dialect => {
 
     expect(inside, "marked while the transaction was open").toBe(before);
     expect(marks(), "marked once it committed").toBeGreaterThan(before);
+  });
+
+  it("brings this process's running shape to a translation switch saved alone", async () => {
+    const t = await boot(true);
+    const handler = t.getService("collectionsHandler") as unknown as {
+      getEntryService(): {
+        createEntry(
+          params: Record<string, unknown>,
+          data: Record<string, unknown>
+        ): Promise<{ success: boolean; data: unknown }>;
+      };
+      getEntry(params: Record<string, unknown>): Promise<unknown>;
+    };
+    const created = await handler
+      .getEntryService()
+      .createEntry(
+        { collectionName: SLUG, overrideAccess: true, locale: "en" },
+        { heading: "Hello" }
+      );
+    expect(created.success, JSON.stringify(created)).toBe(true);
+    const entryId = String((created.data as { id: unknown }).id);
+
+    const { failed, said } = await update({ localized: true });
+
+    expect(failed, `the update failed: ${said}`).toBe(false);
+    // The value moved to the translations table; a read here finds it there.
+    const read = await handler.getEntry({
+      collectionName: SLUG,
+      entryId,
+      locale: "en",
+      overrideAccess: true,
+    });
+    expect(JSON.stringify(read), "the read after the switch").toContain(
+      '"heading":"Hello"'
+    );
+  });
+
+  it("leaves the webhook recording policy as stored when the transaction holding its write rolls back", async () => {
+    const t = await boot();
+    const handler = t.getService("collectionsHandler");
+    const registry = Reflect.get(handler as object, "collectionService") as {
+      updateCollectionMetadata(
+        slug: string,
+        updates: Record<string, unknown>
+      ): Promise<unknown>;
+    };
+    // Control: recording is on before.
+    expect(isWebhookRecordingEnabled("collection", SLUG)).toBe(true);
+
+    // The row write joined to a transaction that then rolls back, as the update's joins the one
+    // recording its files.
+    const rolledBack = new Error("rolled back");
+    await expect(
+      t.adapter.transaction(async () => {
+        await writeRegistryRows(t.adapter, () =>
+          registry.updateCollectionMetadata(SLUG, {
+            webhooks: { record: false },
+          })
+        );
+        throw rolledBack;
+      })
+    ).rejects.toBe(rolledBack);
+
+    expect(
+      isWebhookRecordingEnabled("collection", SLUG),
+      "the policy after the rollback"
+    ).toBe(true);
+    // And a write that commits moves it.
+    await writeRegistryRows(t.adapter, () =>
+      registry.updateCollectionMetadata(SLUG, { webhooks: { record: false } })
+    );
+    expect(
+      isWebhookRecordingEnabled("collection", SLUG),
+      "the policy after a commit"
+    ).toBe(false);
   });
 });
