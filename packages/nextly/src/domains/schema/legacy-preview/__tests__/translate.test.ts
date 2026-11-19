@@ -5,6 +5,8 @@
 // pipeline preview output + synthetic field arrays; the live-DB row
 // counting is mocked.
 
+import type { SQL } from "drizzle-orm";
+import { SQLiteSyncDialect } from "drizzle-orm/sqlite-core";
 import { afterEach, describe, it, expect, vi } from "vitest";
 
 import type { ClassifierEvent } from "../../pipeline/resolution/types";
@@ -207,19 +209,10 @@ describe("translatePipelinePreviewToLegacy", () => {
       { name: "title", type: "text" } as FieldDefinition,
     ];
 
-    // Mock db: SQLite shape (.all returns rows synchronously).
-    // Translator calls countRows first (one call upfront), then
-    // countNulls once per removed field. Order: [countRows, countNulls(body)].
-    // Total = 100, nulls = 25 → non-null = 75.
-    let callIndex = 0;
-    const responses = [{ count: 100 }, { count: 25 }];
-    const dbMock = {
-      all: vi.fn().mockImplementation(() => {
-        const response = responses[callIndex] ?? { count: 0 };
-        callIndex += 1;
-        return [response];
-      }),
-    };
+    // 100 rows, 25 of them without a body: the body holds 75 values.
+    const { db: dbMock } = countingDb({
+      dc_posts: { rows: 100, nulls: { body: 25 } },
+    });
 
     const result = await translatePipelinePreviewToLegacy(emptyPreview, {
       tableName: "dc_posts",
@@ -307,8 +300,10 @@ describe("translatePipelinePreviewToLegacy", () => {
 //
 // A count the preview cannot read must never read as "nothing is deleted",
 // and a field's values are counted where they are stored. The SQLite double
-// below answers each count query from the table and column it names, and
-// records every query, so a test sees both what was counted and where.
+// below answers each count query from the table and column it names, read
+// from the query as SQLite would be sent it, and records every query's text,
+// so a test sees both what was counted and where. A column's values
+// (`COUNT("column")`) are its table's rows less its nulls.
 
 interface CountTable {
   /** Rows in the table, or an Error the row count throws. */
@@ -317,22 +312,29 @@ interface CountTable {
   nulls: Record<string, number | Error>;
 }
 
+const sqliteDialect = new SQLiteSyncDialect();
+
 function countingDb(tables: Record<string, CountTable>) {
   const queries: string[] = [];
   const db = {
-    all: vi.fn().mockImplementation((query: unknown) => {
-      const text = JSON.stringify(query);
+    all: vi.fn().mockImplementation((query: SQL) => {
+      const text = sqliteDialect.sqlToQuery(query).sql;
       queries.push(text);
-      const name = Object.keys(tables).find(t => text.includes(`\\"${t}\\"`));
+      const name = Object.keys(tables).find(t => text.includes(`"${t}"`));
       if (!name) throw new Error(`no such table in ${text}`);
       const table = tables[name];
-      const isNullCount = text.includes("IS NULL");
-      if (!isNullCount) {
-        if (table.rows instanceof Error) throw table.rows;
-        return [{ count: table.rows }];
+      if (table.rows instanceof Error) throw table.rows;
+      const counted = /COUNT\("([^"]+)"\)/i.exec(text)?.[1];
+      if (counted !== undefined) {
+        const nulls = table.nulls[counted];
+        if (nulls === undefined) throw new Error(`no such column: ${counted}`);
+        if (nulls instanceof Error) throw nulls;
+        return [{ count: table.rows - nulls }];
       }
+      const isNullCount = text.includes("IS NULL");
+      if (!isNullCount) return [{ count: table.rows }];
       const column = Object.keys(table.nulls).find(c =>
-        text.includes(`\\"${c}\\" IS NULL`)
+        text.includes(`"${c}" IS NULL`)
       );
       if (!column) throw new Error(`no such column in ${text}`);
       const nulls = table.nulls[column];

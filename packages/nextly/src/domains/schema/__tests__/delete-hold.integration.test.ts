@@ -19,7 +19,7 @@
  * - a review that lists only the top-level fields shows no count for a field removed from a group
  *   with no name, and a save that compares the row's fields then refuses every such removal.
  */
-import { readdirSync } from "node:fs";
+import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -31,6 +31,7 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import type { ServiceContainer } from "../../../services";
+import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
 
 // A gate before each migration file's first statement on the file road (`runWritten` asks the
 // required-column refusal before any statement of the file), outside the file's transaction.
@@ -100,16 +101,15 @@ const NOTED: unknown[] = [
   { name: "label", type: "text" },
   { name: "note", type: "text" },
 ];
-/** The fields with `note` laid out in a group with no name, whose fields are stored on the row. */
-const BOXED: unknown[] = [
-  { name: "label", type: "text" },
-  { type: "group", label: "Box", fields: [{ name: "note", type: "text" }] },
-];
-/** BOXED with `note` removed from the group, which stays. */
-const BOXED_EMPTIED: unknown[] = [
-  { name: "label", type: "text" },
-  { type: "group", label: "Box", fields: [] },
-];
+/**
+ * `fields` with `note` laid out in a group with no name, whose fields are stored on the row: a
+ * shape only the definition file holds at the top level, which the API takes no part of.
+ */
+function boxed(fields: readonly Record<string, unknown>[]): unknown[] {
+  return fields.map(field =>
+    field.name === "note" ? { type: "group", label: "Box", fields: [field] } : field
+  );
+}
 
 /** A gate's pause, its release, and whether the save reached it before it ended. */
 function gated(gate: typeof fileStart) {
@@ -129,7 +129,7 @@ describe.each(getConfiguredTestDialects())(
   dialect => {
     const q = (n: string) => (dialect === "mysql" ? `\`${n}\`` : `"${n}"`);
 
-    async function boot(fields: unknown[] = NOTED): Promise<TestNextly> {
+    async function boot(): Promise<TestNextly> {
       vi.stubEnv("NODE_ENV", "development");
       const t = await createTestNextly({
         dialect,
@@ -146,7 +146,7 @@ describe.each(getConfiguredTestDialects())(
         {
           name: SLUG,
           label: "Note",
-          fields,
+          fields: NOTED,
         }
       );
       return t;
@@ -290,14 +290,48 @@ describe.each(getConfiguredTestDialects())(
     // and counted by the review as one beside it, and deleted when its count is still the one
     // confirmed.
     it("deletes a field removed from a group with no name when its count is still the one confirmed", async () => {
-      const t = await boot(BOXED);
+      const t = await boot();
       for (const note of ["a", "b", "c"]) await insert(t, note);
-      expect(await reviewed(BOXED_EMPTIED)).toBe(3);
+      await layOutNoteInAGroup(t);
 
-      await expect(apply(t, 3, BOXED_EMPTIED)).resolves.toBeDefined();
+      // The Builder sends the row's named fields; the group, and the field in it, are gone.
+      expect(await reviewed(REMAINING)).toBe(3);
+      await expect(apply(t, 3, REMAINING)).resolves.toBeDefined();
 
       expect(await hasNoteColumn(t)).toBe(false);
     }, 60_000);
+
+    /**
+     * The collection's `note` laid out in a group with no name, where the definition file and the
+     * registry record the collection, as an edit of the file leaves them: its column stays where it
+     * is, on the row.
+     */
+    async function layOutNoteInAGroup(t: TestNextly): Promise<void> {
+      const file = join(t.basePath, "schema", "builder.json");
+      const definition = JSON.parse(readFileSync(file, "utf8")) as {
+        collections?: Array<{ slug: string; fields: Record<string, unknown>[] }>;
+      };
+      const entity = definition.collections?.find(
+        collection => collection.slug === SLUG
+      );
+      if (entity === undefined) throw new Error(`${SLUG} is not in ${file}`);
+      entity.fields = boxed(entity.fields) as Record<string, unknown>[];
+      writeFileSync(file, JSON.stringify(definition, null, 2));
+
+      const [row] = await sql<{ fields: unknown }>(
+        t,
+        `SELECT ${q("fields")} AS ${q("fields")} FROM ${q("dynamic_collections")} WHERE ${q("slug")} = '${SLUG}'`
+      );
+      const stored = (
+        typeof row?.fields === "string" ? JSON.parse(row.fields) : row?.fields
+      ) as Record<string, unknown>[];
+      const laidOut = JSON.stringify(boxed(stored)).replaceAll("'", "''");
+      await sql(
+        t,
+        `UPDATE ${q("dynamic_collections")} SET ${q("fields")} = '${laidOut}' WHERE ${q("slug")} = '${SLUG}'`
+      );
+      clearRegistryRowCache();
+    }
 
     it("deletes nothing and names the new count when an entry changed after the review", async () => {
       const t = await boot();
