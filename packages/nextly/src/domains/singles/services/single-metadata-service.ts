@@ -1645,42 +1645,49 @@ export class SingleMetadataService {
     input: UpdateSingleSchemaInput
   ): Promise<void> {
     if (input.fields === undefined) return;
-    const [{ DynamicCollectionSchemaService }, { toSnakeCase }] =
-      await Promise.all([
-        import(
-          "../../dynamic-collections/services/dynamic-collection-schema-service"
-        ),
-        import("../../../shared/lib/case-conversion"),
-      ]);
-    refuseUnansweredRename(
-      `The Single "${input.slug}"`,
-      new DynamicCollectionSchemaService(
-        undefined,
-        this.dialect
-      ).renameCandidatesOf(
-        (input.existing.fields ?? []) as unknown as FieldDefinition[],
-        input.fields
-      ),
-      toSnakeCase
+    const { schema, candidates } = await this.renameCandidatesOf(
+      input,
+      input.fields
+    );
+    refuseUnansweredRename(`The Single "${input.slug}"`, candidates, field =>
+      schema.columnNameOf(field)
     );
   }
 
-  /** Whether the request answered the change's column pair as a drop and an add. */
+  /**
+   * Whether the request answered a column pair of the change as a drop and an add: from the same
+   * candidates the refusal asks about.
+   */
   private async declinedColumnRename(
     input: UpdateSingleSchemaInput
   ): Promise<boolean> {
     if (input.fields === undefined) return false;
+    const { schema, candidates } = await this.renameCandidatesOf(
+      input,
+      input.fields
+    );
+    return candidates.some(
+      pair =>
+        schema.columnNameOf(pair.from) !== undefined && declinedRename(pair)
+    );
+  }
+
+  /** The pairs this change could be renaming (`renameCandidatesOf`), with the service that read them. */
+  private async renameCandidatesOf(
+    input: UpdateSingleSchemaInput,
+    fields: FieldDefinition[]
+  ) {
     const { DynamicCollectionSchemaService } = await import(
       "../../dynamic-collections/services/dynamic-collection-schema-service"
     );
-    const pair = new DynamicCollectionSchemaService(
-      undefined,
-      this.dialect
-    ).fieldRenameCandidate(
-      (input.existing.fields ?? []) as unknown as FieldDefinition[],
-      input.fields
-    );
-    return pair !== null && declinedRename(pair);
+    const schema = new DynamicCollectionSchemaService(undefined, this.dialect);
+    return {
+      schema,
+      candidates: schema.renameCandidatesOf(
+        (input.existing.fields ?? []) as unknown as FieldDefinition[],
+        fields
+      ),
+    };
   }
 
   /**

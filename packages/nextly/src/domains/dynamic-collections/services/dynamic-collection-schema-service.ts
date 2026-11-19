@@ -2834,6 +2834,11 @@ ${allColumnDefs.join(",\n")}
     return pair !== null && declinedRename(pair) ? null : pair;
   }
 
+  /** The column a field is stored in on its entity's row, or none for one that has no column. */
+  columnNameOf(field: FieldDefinition): string | undefined {
+    return fieldProducesColumn(field) ? toSnakeCase(field.name) : undefined;
+  }
+
   /**
    * Every pair a change could be renaming, whatever it answered about each: a column's, over all
    * the fields and over the shared and the translated fields apart (a localized entity plans each

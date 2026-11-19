@@ -86,9 +86,9 @@ export function withFieldRenameAnswers<T>(
 }
 
 /** A field pair, as the change's rename candidate names it. */
-interface FieldPair {
-  from: { name?: string };
-  to: { name?: string };
+interface FieldPair<F extends { name?: string } = { name?: string }> {
+  from: F;
+  to: F;
 }
 
 function answers(pair: FieldPair): FieldRenameAnswer | undefined {
@@ -106,21 +106,28 @@ export function declinedRename(pair: FieldPair): boolean {
  * Refuse, before anything is written, a change on a road that takes answers that makes a pair it
  * doesn't answer: each of `pairs`, the change's rename candidates (`renameCandidatesOf`).
  * `entity` names it: `The collection "posts"`, say. A pair answered `drop_and_add` whose two
- * names are one column (`columnOf`), as `fooBar` and `foo_bar` are, is refused too: the
+ * names are one column (`columnOf`, none for a field with no column), as `fooBar` and `foo_bar` are, is refused too: the
  * column cannot be dropped and added again in one change, only renamed. An answer for a pair the
  * change doesn't make is left aside. Off such a road nothing is refused.
  */
-export function refuseUnansweredRename(
+export function refuseUnansweredRename<F extends { name?: string }>(
   entity: string,
-  pairs: readonly FieldPair[],
-  columnOf: (name: string) => string
+  pairs: readonly FieldPair<F>[],
+  columnOf: (field: F) => string | undefined
 ): void {
   if (answersScope.getStore() === undefined) return;
   for (const pair of pairs) {
     const from = pair.from.name ?? "";
     const to = pair.to.name ?? "";
     const answer = answers(pair);
-    if (answer?.choice === "drop_and_add" && columnOf(from) === columnOf(to)) {
+    // Only fields stored in a column can collide in one: a field group's rows are told apart by
+    // the field's exact name, whatever column a name like it would have.
+    const fromColumn = columnOf(pair.from);
+    if (
+      answer?.choice === "drop_and_add" &&
+      fromColumn !== undefined &&
+      fromColumn === columnOf(pair.to)
+    ) {
       throw NextlyError.validation({
         errors: [
           {

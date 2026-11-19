@@ -27,10 +27,8 @@ async function refusedWith(
   to: string
 ): Promise<string | undefined> {
   const run = async () =>
-    refuseUnansweredRename(
-      'The collection "posts"',
-      [pair(from, to)],
-      toSnakeCase
+    refuseUnansweredRename('The collection "posts"', [pair(from, to)], field =>
+      toSnakeCase(field.name)
     );
   try {
     await (answers ? withFieldRenameAnswers(answers, run) : run());
@@ -40,6 +38,23 @@ async function refusedWith(
       .publicData?.errors?.[0]?.code;
   }
 }
+
+describe("a pair whose fields have no column", () => {
+  it("is never refused as one column, as a field group's rows go by the field's exact name", async () => {
+    const run = async () =>
+      refuseUnansweredRename(
+        'The collection "posts"',
+        [pair("fooBar", "foo_bar")],
+        () => undefined
+      );
+    await expect(
+      withFieldRenameAnswers(
+        [{ from: "fooBar", to: "foo_bar", choice: "drop_and_add" }],
+        run
+      )
+    ).resolves.toBeUndefined();
+  });
+});
 
 describe("parseFieldRenameAnswers", () => {
   it("reads one answer per pair, and none where none was sent", () => {

@@ -1573,19 +1573,22 @@ export class DynamicCollectionService extends BaseService {
       // A field leaving and another of the same type arriving is never taken for a rename by
       // guesswork: on a road that takes the request's answers, a pair with none is refused here,
       // before anything is written.
-      refuseUnansweredRename(
-        `The collection "${collectionName}"`,
-        this.schemaService.renameCandidatesOf(oldUserFields, userDefinedFields),
-        toSnakeCase
-      );
-      // A column pair the request answered as a drop and an add, which the translated-field
-      // preflight below is told of, so it takes the removal as the request's, not an unanswered one.
-      const declinedColumnPair = this.schemaService.fieldRenameCandidate(
+      const renameCandidates = this.schemaService.renameCandidatesOf(
         oldUserFields,
         userDefinedFields
       );
-      const declinedColumn =
-        declinedColumnPair !== null && declinedRename(declinedColumnPair);
+      refuseUnansweredRename(
+        `The collection "${collectionName}"`,
+        renameCandidates,
+        field => this.schemaService.columnNameOf(field)
+      );
+      // A column pair the request answered as a drop and an add, from the same candidates, which
+      // the translated-field preflight below is told of, so it takes the removal as the request's.
+      const declinedColumn = renameCandidates.some(
+        pair =>
+          this.schemaService.columnNameOf(pair.from) !== undefined &&
+          declinedRename(pair)
+      );
 
       // A many-to-many added to a renamed collection would get a junction its reads can't find.
       refuseNewJunctionsOnRenamedCollection({
