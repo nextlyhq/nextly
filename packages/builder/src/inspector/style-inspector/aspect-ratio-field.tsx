@@ -27,7 +27,7 @@ import {
 import * as React from "react";
 
 // Enter commits without submitting the entry form the builder sits in.
-import { CSS_NUMBER } from "../../style-numeric";
+import { CSS_NUMBER } from "../../styles/style-numeric";
 import { commitOnEnter } from "../commit-on-enter";
 import { useFieldDescription } from "../css-hint";
 

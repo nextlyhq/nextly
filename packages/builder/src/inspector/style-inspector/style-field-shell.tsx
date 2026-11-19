@@ -20,10 +20,16 @@ import * as React from "react";
 
 import { ChromeTooltip } from "../../chrome-tooltip";
 import type { EditorState } from "../../editor-state";
-import { contrastObscuredAbove, contrastObscuredIn } from "../../style-colour";
-import type { StyleControl } from "../../style-controls";
-import type { BreakpointBadge, BreakpointSource } from "../../style-provenance";
-import type { StyleAddress, StylePolicy } from "../../style-values";
+import {
+  contrastObscuredAbove,
+  contrastObscuredIn,
+} from "../../styles/style-colour";
+import type { StyleControl } from "../../styles/style-controls";
+import type {
+  BreakpointBadge,
+  BreakpointSource,
+} from "../../styles/style-provenance";
+import type { StyleAddress, StylePolicy } from "../../styles/style-values";
 import { controlWrites } from "../code-hints";
 import { CssHint, CssNamesLine, OptionWrites, FieldNamesId } from "../css-hint";
 

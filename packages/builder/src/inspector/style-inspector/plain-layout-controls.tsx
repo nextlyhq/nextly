@@ -54,13 +54,13 @@ import {
   type PlainFlow,
   type PlainArrange,
   type Spread,
-} from "../../plain-layout";
+} from "../../styles/plain-layout";
 import {
   sharedStyleChange,
   type SharedStyleChange,
-} from "../../shared-style-target";
-import type { SideOrientation } from "../../side-orientation";
-import { readStyleValue, type StyleAddress } from "../../style-values";
+} from "../../styles/shared-style-target";
+import type { SideOrientation } from "../../styles/side-orientation";
+import { readStyleValue, type StyleAddress } from "../../styles/style-values";
 import { layoutWritesText } from "../code-hints";
 import { CssHint } from "../css-hint";
 import { SegmentChoices } from "../segment-choices";

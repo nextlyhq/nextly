@@ -37,7 +37,10 @@ import {
 } from "../domains/auth/system-write-policy";
 import { resolveSingleDocumentId } from "../domains/singles/services/single-document-access";
 import type { UserContext } from "../domains/singles/types";
-import { documentTableOf } from "../domains/workflows/part-versions";
+import {
+  documentTableOf,
+  documentTableOn,
+} from "../domains/workflows/part-versions";
 import { registeredWorkflows } from "../domains/workflows/registry";
 import {
   assignMany,
@@ -45,11 +48,13 @@ import {
   stepMany,
   waitingFor,
   type ManyRefusal,
+  type WaitingReadable,
 } from "../domains/workflows/review-api";
 import type { ReviewDocument } from "../domains/workflows/review-state-repository";
 import {
   assignWorkflowParts,
   namedParts,
+  submitForReview,
   takeWorkflowStep,
   type Assignment,
   type WorkflowCaller,
@@ -59,9 +64,15 @@ import {
   readWorkflowSettingsView,
   refuseDefinitionKeys,
   updateWorkflowSettings,
+  workflowDefinitionOf,
 } from "../domains/workflows/workflow-settings-api";
 import { NextlyError } from "../errors";
 import { getCachedNextly } from "../init";
+import {
+  resolveDocumentVisibilityScope,
+  visibleDocuments,
+  type DocumentRef,
+} from "../services/lib/document-visibility";
 
 import { readCaller } from "./authenticated-read";
 import {
@@ -75,6 +86,7 @@ import {
 import { requireRouteAuthentication } from "./route-auth";
 import {
   assertVersionDocumentReadable,
+  historyLanguagesOf,
   readableHistoryLocales,
 } from "./versions-access";
 import { withErrorHandler } from "./with-error-handler";
@@ -122,6 +134,12 @@ const DocumentRef = z.union([
   z.object({ single: z.string().min(1) }).strict(),
 ]);
 
+/** A collection or a Single, by its slug alone. */
+const EntityRef = z.union([
+  z.object({ collection: z.string().min(1) }).strict(),
+  z.object({ single: z.string().min(1) }).strict(),
+]);
+
 const Part = z.string().min(1).max(64).nullable();
 
 const Seen = z
@@ -141,6 +159,11 @@ const StepBody = z
     comment: z.string().nullable().optional(),
   })
   .strict();
+
+/** A submit for review: a step's body whose step may be left out, to be found from the stage. */
+const SubmitBody = StepBody.extend({
+  step: z.string().min(1).optional(),
+}).strict();
 
 const Assignee = z
   .object({ kind: z.enum(["user", "role"]), id: z.string().min(1) })
@@ -229,6 +252,14 @@ const SettingsChangeBody = z
       .optional(),
   })
   .strict();
+
+/**
+ * The shapes a document, a collection or Single, a part and what was seen of it are named in, for
+ * another door that parses its own, stricter input from them, so every door names them alike.
+ *
+ * @experimental
+ */
+export const workflowInputShapes = { DocumentRef, EntityRef, Part, Seen };
 
 /** Parsed at the boundary: a body or query that does not fit is the client's mistake. */
 function parse<T>(schema: z.ZodType<T>, value: unknown): T {
@@ -355,6 +386,40 @@ async function documentOf(
 }
 
 /**
+ * Throws not found unless the collection or Single `slug` exists and the asker may read it at
+ * all, as a read route authorizes before it runs: the first half of every read check here, and
+ * the whole of a definition's. Existence is asked of every caller, trusted code included, since
+ * a read check that a caller passes for everything (a super-admin's) would otherwise answer for
+ * a name that is not there. Not found rather than forbidden, and the same not found either way,
+ * so a caller who may not read it is not told it exists. Trusted code is not asked to read.
+ */
+async function assertEntityReadable(
+  asker: WorkflowAsker,
+  scopeKind: "collection" | "single",
+  scopeSlug: string
+): Promise<void> {
+  // The registry's own lookup, which answers not found for a name it does not hold.
+  await documentTableOn({ scopeKind, scopeSlug });
+  if (asker === null) return;
+  const readsEntity = await canReadEntity(
+    scopeSlug,
+    readAccessCaller({
+      user: asker.user,
+      ...(asker.scope === undefined ? {} : { authenticatedScope: asker.scope }),
+    })
+  );
+  if (!readsEntity) {
+    throw NextlyError.notFound({
+      logContext: {
+        reason: "workflow-entity-not-readable",
+        scopeKind,
+        scopeSlug,
+      },
+    });
+  }
+}
+
+/**
  * Throws not found unless the asker may read `document` in every part named: first the collection
  * or Single at all, as a read route authorizes before it runs, then the document itself, in each
  * language named. Not found rather than forbidden either way, so a caller who may not read it is
@@ -368,22 +433,7 @@ async function assertReadable(
   parts: "all" | readonly (string | null)[] = []
 ): Promise<void> {
   if (asker === null) return;
-  const readsEntity = await canReadEntity(
-    document.scopeSlug,
-    readAccessCaller({
-      user: asker.user,
-      ...(asker.scope === undefined ? {} : { authenticatedScope: asker.scope }),
-    })
-  );
-  if (!readsEntity) {
-    throw NextlyError.notFound({
-      logContext: {
-        reason: "workflow-entity-not-readable",
-        scopeKind: document.scopeKind,
-        scopeSlug: document.scopeSlug,
-      },
-    });
-  }
+  await assertEntityReadable(asker, document.scopeKind, document.scopeSlug);
   // Each language named is asked about in its own right: one the caller may not read refuses the
   // whole move.
   await assertVersionDocumentReadable(
@@ -412,6 +462,60 @@ async function readableBy(
     if (NextlyError.isNotFound(error)) return false;
     throw error;
   }
+}
+
+/**
+ * Which of `items` the asker may read, in order, each document in the language its part names:
+ * asked of the ordinary read path in batches (`visibleDocuments`: a read per collection and
+ * language, per Single and language), never a read per document. A part in no language is
+ * readable where the document is in any language its history is kept in, or, kept in none, as it
+ * is: what `assertReadable` asks of it.
+ */
+async function readableAmong(
+  asker: NonNullable<WorkflowAsker>,
+  items: readonly WaitingReadable[]
+): Promise<boolean[]> {
+  const kept = new Map<string, readonly (string | null)[]>();
+  const keptIn = async (document: ReviewDocument) => {
+    const key = `${document.scopeKind}:${document.scopeSlug}`;
+    let languages = kept.get(key);
+    if (languages === undefined) {
+      const history = await historyLanguagesOf(
+        document.scopeKind,
+        document.scopeSlug
+      );
+      languages = history.size > 0 ? [...history] : [null];
+      kept.set(key, languages);
+    }
+    return languages;
+  };
+  const refs: { index: number; ref: DocumentRef }[] = [];
+  for (const [index, { document, part }] of items.entries()) {
+    const languages = part === null ? await keptIn(document) : [part];
+    for (const locale of languages) {
+      refs.push({
+        index,
+        ref: {
+          kind: document.scopeKind,
+          slug: document.scopeSlug,
+          entryId: document.entryId,
+          locale,
+        },
+      });
+    }
+  }
+  const visible = await visibleDocuments(
+    refs,
+    each => each.ref,
+    {
+      user: asker.user,
+      ...(asker.scope === undefined ? {} : { authenticatedScope: asker.scope }),
+    },
+    await resolveDocumentVisibilityScope()
+  );
+  const readable = items.map(() => false);
+  for (const each of visible) readable[each.index] = true;
+  return readable;
 }
 
 const adapter = () => container.get<DrizzleAdapter>("adapter");
@@ -472,6 +576,20 @@ export const workflowOperations = {
     };
   },
 
+  /**
+   * The definition of the workflow attached to a collection or Single: its stages and steps, none
+   * of its settings, and null where none is attached. Asked only of a caller who may read the
+   * collection or Single; one who may not, or names one that does not exist, is told it is not
+   * found, so the answer does not tell them which.
+   */
+  async definitionOf(asker: WorkflowAsker, input: unknown) {
+    const ref = parse(EntityRef, input);
+    const kind = "collection" in ref ? "collection" : "single";
+    const slug = "collection" in ref ? ref.collection : ref.single;
+    await assertEntityReadable(asker, kind, slug);
+    return { workflow: workflowDefinitionOf(kind, slug) };
+  },
+
   /** One step on one document, as the caller saw it. */
   async takeStep(asker: WorkflowAsker, input: unknown) {
     const body = parse(StepBody, input);
@@ -480,6 +598,25 @@ export const workflowOperations = {
     return takeWorkflowStep(adapter(), {
       document,
       step: body.step,
+      parts: body.parts,
+      seen: body.seen,
+      comment: body.comment ?? null,
+      caller: callerOf(asker),
+    });
+  },
+
+  /**
+   * A submit for review on one document: only a step of kind `submit`, named or found from the
+   * stage the parts stand in. The read check runs first, so a document the caller may not read is
+   * not found whatever step is named, never refused for the kind of step it names.
+   */
+  async submit(asker: WorkflowAsker, input: unknown) {
+    const body = parse(SubmitBody, input);
+    const document = await documentOf(body.document);
+    await assertReadable(asker, document, body.parts);
+    return submitForReview(adapter(), {
+      document,
+      ...(body.step === undefined ? {} : { step: body.step }),
       parts: body.parts,
       seen: body.seen,
       comment: body.comment ?? null,
@@ -584,15 +721,14 @@ export const workflowOperations = {
           : { authenticatedScope: asker.scope }),
       })
     );
-    const { items, total } = await waitingFor(adapter(), {
+    const { items, total, totalCapped } = await waitingFor(adapter(), {
       caller: asker.caller,
       limit: query.limit,
       offset: (query.page - 1) * query.limit,
       readsEntity: (_kind, slug) => Promise.resolve(readable.has(slug)),
       // Each item in the language its part names: an item about a language the caller may not
       // read the document in is left out, as a read of that language would be refused.
-      readable: (document, part) =>
-        readableBy(asker, document, part === null ? [] : [part]),
+      readable: items => readableAmong(asker, items),
     });
     const totalPages = Math.max(1, Math.ceil(total / query.limit));
     return {
@@ -602,8 +738,11 @@ export const workflowOperations = {
         page: query.page,
         limit: query.limit,
         totalPages,
-        hasNext: query.page < totalPages,
+        // A list that stopped before reading everything may have more, past its last page too.
+        hasNext: query.page < totalPages || totalCapped,
         hasPrev: query.page > 1,
+        // More may wait than the list read: its total is a floor ("1000+"), as a capped count's is.
+        ...(totalCapped ? { totalCapped: true as const } : {}),
       },
     };
   },

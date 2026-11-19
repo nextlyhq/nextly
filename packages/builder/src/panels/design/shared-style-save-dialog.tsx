@@ -35,7 +35,7 @@ import * as React from "react";
 
 import type { EditorState } from "../../editor-state";
 import { lockViewOf } from "../../inspector/inspector";
-import { sharedStyleSlug } from "../../shared-style-library";
+import { sharedStyleSlug } from "../../styles/shared-style-library";
 import {
   newSharedStyleName,
   planSaveAsSharedStyle,
@@ -43,7 +43,7 @@ import {
   sharedStyleMoveSummary,
   sharedStyleMoveWhat,
   type SharedStyleOffer,
-} from "../../shared-style-target";
+} from "../../styles/shared-style-target";
 
 import { Refusal } from "./panel-actions";
 

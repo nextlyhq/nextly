@@ -25,7 +25,7 @@ import * as React from "react";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { COLUMNS_LAYOUTS } from "./columns-layout";
-import { readStyleValue } from "../style-values";
+import { readStyleValue } from "../styles/style-values";
 import {
   COLUMNS_PICKER_WORDS,
   ColumnsLayoutPicker,

@@ -27,8 +27,11 @@ import {
   nextOrderIndex,
   unusedSlug,
   type BlockStylePlan,
-} from "../../block-style-plans";
-import { sharedStyleName, sharedStyleSlug } from "../../shared-style-library";
+} from "../../styles/block-style-plans";
+import {
+  sharedStyleName,
+  sharedStyleSlug,
+} from "../../styles/shared-style-library";
 
 /** A text style action's answer: the classes to store and the style it made, or why not. */
 export type TextStylePlanResult = BlockStylePlan;

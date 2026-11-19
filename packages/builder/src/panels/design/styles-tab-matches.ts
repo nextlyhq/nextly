@@ -19,7 +19,7 @@ import {
   sharedStyleSearchText,
   sharedStylesOnly,
   type SharedStyleRow,
-} from "../../shared-style-library";
+} from "../../styles/shared-style-library";
 
 import {
   blockLookGroups,

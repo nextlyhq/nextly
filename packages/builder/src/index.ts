@@ -519,7 +519,7 @@ export {
   type StyleControlOptions,
   type StyleControlSet,
   type StyleControlVariants,
-} from "./style-controls";
+} from "./styles/style-controls";
 
 /**
  * @experimental Addressing one control's value inside a node's style envelope.
@@ -539,7 +539,7 @@ export {
   type StylePolicy,
   type StyleWrite,
   type StyleWriteRequest,
-} from "./style-values";
+} from "./styles/style-values";
 
 /**
  * @experimental Whether a control's value was authored here, inherited, or
@@ -554,7 +554,7 @@ export {
   styleProvenance,
   type StyleProvenance,
   type StyleProvenanceQuery,
-} from "./style-provenance";
+} from "./styles/style-provenance";
 
 /**
  * @experimental Previewing a value mid-drag, and committing it once.
@@ -570,7 +570,7 @@ export {
   scrubStateFragments,
   type ScrubPreview,
   type ScrubTarget,
-} from "./style-scrub";
+} from "./styles/style-scrub";
 
 /**
  * @experimental Where a control's custom behaviour lives, referenced by name.
@@ -587,7 +587,7 @@ export {
   styleControlBehaviourKey,
   type StyleControlBehaviour,
   type StyleControlBehaviours,
-} from "./style-control-behaviour";
+} from "./styles/style-control-behaviour";
 
 /**
  * @experimental What the selected block offers on the Style tab.
@@ -626,7 +626,7 @@ export {
   batchStyleClearOps,
   type SharedValue,
   type BatchStyleWrite,
-} from "./batch-style";
+} from "./styles/batch-style";
 
 /**
  * Page checks: the check contract, the findings with the setting that fixes

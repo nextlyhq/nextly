@@ -30,9 +30,9 @@ import { Braces, Bold, Hash, Ruler, Timer, Type } from "lucide-react";
 import * as React from "react";
 
 import { DESKTOP_PREVIEW_WIDTH } from "../../canvas/canvas-width";
-import { fluidRange, pxAtWidth } from "../../fluid-size";
-import { colourHexOf } from "../../style-colour";
-import { lengthInPx, variableValueText } from "../../style-variables";
+import { fluidRange, pxAtWidth } from "../../styles/fluid-size";
+import { colourHexOf } from "../../styles/style-colour";
+import { lengthInPx, variableValueText } from "../../styles/style-variables";
 
 import { useColourRowDrag, useColourRowMove } from "./colour-group-ui";
 import { markOf } from "./design-group-toggle";

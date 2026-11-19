@@ -28,7 +28,7 @@ import {
   styleWriteOp,
   type StyleAddress,
   type StyleWrite,
-} from "../style-values";
+} from "../styles/style-values";
 
 import { offeredTiers } from "./canvas-width";
 

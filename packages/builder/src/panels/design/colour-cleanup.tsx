@@ -28,7 +28,7 @@ import {
 } from "@nextlyhq/ui";
 import * as React from "react";
 
-import { colourHexOf } from "../../style-colour";
+import { colourHexOf } from "../../styles/style-colour";
 
 import { colourOrder } from "./colour-groups";
 import { cleanUpCandidates } from "./colour-usage";
