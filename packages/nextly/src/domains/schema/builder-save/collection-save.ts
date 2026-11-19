@@ -2933,6 +2933,10 @@ function plannedMovesOf(
     ...(save.entity.hooks === undefined ? {} : { hooks: save.entity.hooks }),
     // The media library records each use by the field's path, which the moves carry along.
     mediaUses: { kind: "collection", slug: save.slug },
+    // A fill answer writes every entry's value before the copy, so it needs no stop.
+    filledColumns: (save.resolutions ?? [])
+      .filter(resolution => resolution.kind === "fill")
+      .map(resolution => toSnakeCase(resolution.column)),
   });
   refuseDeletesBeforeRefill(save, planned);
   return planned;

@@ -10,6 +10,7 @@ import type { StoragePlace } from "../check-move";
 import {
   emptiedContainers,
   mediaUsePathStatement,
+  missingValuesStop,
   moveDataStatements,
   movesAsTheSameDate,
   type MoveColumn,
@@ -286,6 +287,44 @@ describe("moveDataStatements on SQLite", () => {
     expect(
       db.prepare("SELECT featured FROM dc_posts ORDER BY id").all()
     ).toEqual([{ featured: 1 }, { featured: 0 }, { featured: 0 }]);
+  });
+
+  it("stops before it writes where an entry holds no value for a field required where it moves", () => {
+    const stop = missingValuesStop(
+      sqlite("text"),
+      key("meta", "summary") as Extract<StoragePlace, { kind: "json" }>,
+      "summary"
+    );
+    for (const missing of ["NULL", "'{}'", `'{"summary":null}'`]) {
+      const db = table("summary text");
+      db.exec(
+        `INSERT INTO dc_posts (id, meta) VALUES (1, '{"summary":"kept"}'), (2, ${missing});`
+      );
+      expect(() => run(db, stop), missing).toThrow(
+        "NOT NULL constraint failed: nextly_unfilled_summary.needs_a_value_summary"
+      );
+    }
+    const db = table("summary text");
+    db.exec(
+      `INSERT INTO dc_posts (id, meta) VALUES (1, '{"summary":"kept"}');`
+    );
+    run(db, stop);
+  });
+
+  it("bounds a stop's names within 63 characters, keeping the field's as far as it fits", () => {
+    const name = `featured${"x".repeat(52)}`;
+    const [create] = moveDataStatements(
+      { from: key("meta", name), to: column(name) },
+      sqlite("boolean", "integer")
+    ).stop;
+    const names = [...(create ?? "").matchAll(/"([^"]+)"/g)].map(
+      m => m[1] ?? ""
+    );
+    expect(names).toHaveLength(2);
+    for (const identifier of names) {
+      expect(identifier.length, identifier).toBeLessThanOrEqual(63);
+      expect(identifier).toMatch(/featuredx+_[0-9a-z]+$/);
+    }
   });
 
   it("copies dates SQLite keeps, whole seconds written with milliseconds among them", () => {

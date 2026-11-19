@@ -1125,11 +1125,17 @@ describe.each(getConfiguredTestDialects())(
       }));
 
       /** The move-out file written on a first database, the files before it run on a second. */
-      async function deployed(): Promise<TestNextly> {
+      async function deployed(
+        fields: { inside: Field[]; outside: Field[]; out: typeof out } = {
+          inside,
+          outside,
+          out,
+        }
+      ): Promise<TestNextly> {
         const first = await boot(dialect);
-        await createPosts(first, SLUG, { fields: inside });
+        await createPosts(first, SLUG, { fields: fields.inside });
         const created = await filesWritten();
-        await save(first, outside, out);
+        await save(first, fields.outside, fields.out);
         await first.destroy();
         instance = undefined;
         const second = await boot(dialect);
@@ -1176,6 +1182,44 @@ describe.each(getConfiguredTestDialects())(
           expect(await columnsOf(t)).toEqual(columns);
         }
       );
+
+      it("stops the file before it changes anything where an entry holds no value for a field made required as it moves", async () => {
+        const optional: Field = { name: "summary", type: "text" };
+        const t = await deployed({
+          inside: [group("meta", [NOTE, optional])],
+          outside: [{ ...optional, required: true }, group("meta", [NOTE])],
+          out: [{ from: ["meta", "summary"], to: ["summary"] }],
+        });
+        // The entry the first database never had: no value for the field now required.
+        await holding(t, { note: "n" });
+        const groups = await storedGroups(t);
+        const columns = await columnsOf(t);
+
+        await expect(migrateFolder(t)).rejects.toThrow(/needs_a_value_summary/);
+
+        expect(await storedGroups(t)).toEqual(groups);
+        expect(await columnsOf(t)).toEqual(columns);
+      });
+
+      it("names a field of 60 characters within every dialect's identifier bound", async () => {
+        // MySQL refuses a name past 64 characters; PostgreSQL cuts one past 63.
+        const name = `featured${"x".repeat(52)}`;
+        expect(name).toHaveLength(60);
+        const long: Field = { name, type: "checkbox" };
+        const t = await deployed({
+          inside: [group("meta", [NOTE, long])],
+          outside: [long, group("meta", [NOTE])],
+          out: [{ from: ["meta", name], to: [name] }],
+        });
+        await holding(t, { [name]: "yes" });
+        const columns = await columnsOf(t);
+
+        // The bounded name keeps as much of the field's as fits, then a hash of the whole.
+        await expect(migrateFolder(t)).rejects.toThrow(
+          /cannot_keep_featuredx+_[0-9a-z]+/
+        );
+        expect(await columnsOf(t)).toEqual(columns);
+      });
 
       it("applies the file where every value fits its column", async () => {
         const t = await deployed();

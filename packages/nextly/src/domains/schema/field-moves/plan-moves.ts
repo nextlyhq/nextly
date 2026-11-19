@@ -39,6 +39,7 @@ import { fieldsThatLeft } from "./move-candidates";
 import {
   emptiedContainers,
   mediaUsePathStatement,
+  missingValuesStop,
   moveDataStatements,
   type MoveColumn,
 } from "./move-statements";
@@ -122,7 +123,7 @@ function placed(
   if (move.to.kind === "column") {
     // Out of a group: copied after the column is added; back before the way down drops it.
     return {
-      up: { first: forth.stop, last: way.up },
+      up: { first: [...forth.stop, ...beside.first], last: way.up },
       down: { first: way.down, last: [] },
     };
   }
@@ -142,6 +143,8 @@ interface Beside {
   up: string[];
   down: string[];
   undo: string[];
+  /** Stops run first on the way up: a required field's entries without a value. */
+  first: string[];
 }
 
 function besideOf(
@@ -151,10 +154,20 @@ function besideOf(
   args: {
     after: readonly FieldDefinition[];
     mediaUses?: { kind: "collection" | "single"; slug: string };
+    filledColumns?: readonly string[];
   }
 ): Beside {
   const uses = args.mediaUses;
-  const { to } = move;
+  const { from, to } = move;
+  // A field required where it moves out to needs a value on every entry of the database the file
+  // runs on, unless the save fills the column first.
+  const first =
+    from.kind === "json" &&
+    to.kind === "column" &&
+    (move.field as { required?: unknown }).required === true &&
+    !(args.filledColumns ?? []).includes(to.column)
+      ? missingValuesStop(target, from, to.column)
+      : [];
   const undo =
     to.kind === "json"
       ? emptiedContainers(to, target, !groupIsRequired(args.after, to.column))
@@ -167,6 +180,7 @@ function besideOf(
       ? [mediaUsePathStatement(target.dialect, uses, request.to, request.from)]
       : [],
     undo,
+    first,
   };
 }
 
@@ -616,6 +630,8 @@ export function planEntityMoves(args: {
   hooks?: readonly StoredHookReference[];
   /** Whose record of media uses the moved fields' paths are kept in, where the entity has one. */
   mediaUses?: { kind: "collection" | "single"; slug: string };
+  /** The columns the save fills before its copies (a `fill` answer), which need no stop. */
+  filledColumns?: readonly string[];
 }): EntityMoves {
   const result: EntityMoves = {
     up: { first: [], last: [] },

@@ -20,6 +20,7 @@ import { NextlyError } from "../../../errors/nextly-error";
 import { MEDIA_USAGE_TABLE } from "../../../schemas/media-usage/table-name";
 import { quoteIdent } from "../pipeline/sql-templates/identifier-quoting";
 import type { ColumnKind } from "../services/field-column-descriptor";
+import { boundedIdentifier } from "../services/index-name";
 
 import type { StoragePlace } from "./check-move";
 
@@ -431,30 +432,76 @@ function unkeptValuesStop(
   from: Extract<StoragePlace, { kind: "json" }>,
   column: string
 ): string[] {
-  const q = (name: string) => quoteIdent(name, target.dialect);
-  const source = q(from.column);
+  const source = quoteIdent(from.column, target.dialect);
   const held = heldValueAt(from.column, from.keys, target.dialect);
   const holds = DIALECTS[target.dialect].holds(source, from.keys);
-  const sqliteDate = target.dialect === "sqlite" && target.kind === "timestamp";
+  if (target.dialect === "sqlite" && target.kind === "timestamp") {
+    // SQLite's date stop keeps the names it was released with.
+    return stopWhereNot(target.dialect, table, {
+      guard: `nextly_unreadable_date_${column}`,
+      reason: "an_entry_holds_a_date_sqlite_cannot_keep",
+      kept: `substr(strftime('%f', ${held.text}), 4) = '000' AND strftime('%s', ${held.text}) IS NOT NULL`,
+      where: holds,
+    });
+  }
+  const kept = KEPT_TESTS[target.dialect](target, held);
+  if (kept === undefined) return [];
+  return stopWhereNot(target.dialect, table, {
+    guard: `nextly_unkept_${column}`,
+    reason: `cannot_keep_${column}`,
+    kept,
+    where: holds,
+  });
+}
+
+/**
+ * Statements that stop a run, before the file changes anything, where an entry of the database it
+ * runs on holds no value for a field that is required where it moves: the save's own check
+ * (`refuseEmptyRequiredRefills`) reads the database the file is written from. The run stops on
+ * `needs_a_value_<field>` in `nextly_unfilled_<field>`. A save that fills the column first has
+ * no such entry left, and asks for none.
+ */
+export function missingValuesStop(
+  target: MoveColumn,
+  from: Extract<StoragePlace, { kind: "json" }>,
+  column: string
+): string[] {
+  const source = quoteIdent(from.column, target.dialect);
+  return stopWhereNot(
+    target.dialect,
+    quoteIdent(target.table, target.dialect),
+    {
+      guard: `nextly_unfilled_${column}`,
+      reason: `needs_a_value_${column}`,
+      kept: DIALECTS[target.dialect].holds(source, from.keys),
+      // Every row: a row that holds nothing at the key is the one this stop is for.
+      where: "1 = 1",
+    }
+  );
+}
+
+/**
+ * A run's stop where some row matching `where` fails `kept`: each such row's test goes into a
+ * temporary table's NOT NULL column as 1, or NULL where it fails, so the run stops on that
+ * constraint, the table and column naming why. Their names are bounded as every derived identifier
+ * is (`boundedIdentifier`): a long field keeps as much of its name as fits, then a hash of the
+ * whole, within the 63 characters every dialect takes.
+ */
+function stopWhereNot(
+  dialect: SupportedDialect,
+  table: string,
+  stop: { guard: string; reason: string; kept: string; where: string }
+): string[] {
+  const q = (name: string) => quoteIdent(boundedIdentifier(name), dialect);
   // Unqualified: SQLite and PostgreSQL look a name up among temporary tables first, and the
   // migration's deletion check reads a table the file creates as temporary as the file's own.
-  const guard = q(
-    sqliteDate ? `nextly_unreadable_date_${column}` : `nextly_unkept_${column}`
-  );
-  const reason = q(
-    sqliteDate
-      ? "an_entry_holds_a_date_sqlite_cannot_keep"
-      : `cannot_keep_${column}`
-  );
-  const kept = sqliteDate
-    ? `substr(strftime('%f', ${held.text}), 4) = '000' AND strftime('%s', ${held.text}) IS NOT NULL`
-    : KEPT_TESTS[target.dialect](target, held);
-  if (kept === undefined) return [];
-  const temporary = target.dialect === "mysql" ? "TEMPORARY" : "TEMP";
+  const guard = q(stop.guard);
+  const reason = q(stop.reason);
+  const temporary = dialect === "mysql" ? "TEMPORARY" : "TEMP";
   return [
     `CREATE ${temporary} TABLE ${guard} (${reason} INTEGER NOT NULL);`,
-    `INSERT INTO ${guard} (${reason}) SELECT CASE WHEN ${kept} THEN 1 END FROM ${table} WHERE ${holds};`,
-    target.dialect === "mysql"
+    `INSERT INTO ${guard} (${reason}) SELECT CASE WHEN ${stop.kept} THEN 1 END FROM ${table} WHERE ${stop.where};`,
+    dialect === "mysql"
       ? `DROP TEMPORARY TABLE ${guard};`
       : `DROP TABLE ${guard};`,
   ];
