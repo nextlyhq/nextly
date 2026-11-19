@@ -1583,7 +1583,8 @@ export async function runMigrateDown(
     env: process.env,
   });
 
-  const opened = await openMigrationCommand(options, logger);
+  // Rolls back by the migration files and their plugins, reading none of the app's entities.
+  const opened = await openMigrationCommand(options, logger, "defaults");
   // A dry run whose database is not there has said so, and ends here.
   if (opened === undefined) return;
   const { dbValidation, configResult, migrationsDir, adapter } = opened;

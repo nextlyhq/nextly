@@ -90,7 +90,46 @@ function problemFix(
   return undefined;
 }
 
+/** The searched folders as a reader names them: the project folder, then `src/`, `config/`. */
+function searchedFolder(folder: string): string {
+  return folder === "."
+    ? "the project folder"
+    : `\`${folder.replace(/^\.\//, "")}/\``;
+}
+
+/** `a`, `a and b`, `a, b and c`. */
+function listed(items: readonly string[], last: "and" | "or"): string {
+  if (items.length <= 1) return items.join("");
+  return `${items.slice(0, -1).join(", ")} ${last} ${items[items.length - 1]}`;
+}
+
 export const CONFIG_CODES = defineCodes({
+  CONFIG_MISSING: {
+    cause:
+      "No configuration file was found, and the command reads the collections, Singles and field groups it declares.",
+    from: [
+      {
+        code: "INVALID_INPUT",
+        reason: "config-missing",
+        describe: error => {
+          const root = error.logContext?.projectRoot;
+          const names = error.logContext?.names;
+          const folders = error.logContext?.folders;
+          const nameList = Array.isArray(names)
+            ? names.map(name => `\`${String(name)}\``)
+            : ["`nextly.config.ts`"];
+          const folderList = Array.isArray(folders)
+            ? folders.map(folder => searchedFolder(String(folder)))
+            : ["the project folder"];
+          return {
+            what: `No Nextly configuration file was found${typeof root === "string" ? ` in ${root}` : ""}.`,
+            why: `Looked for ${listed(nameList, "or")} in ${listed(folderList, "and")}.`,
+            next: "Pass `-c` the path of your configuration file, or start a new project with `npx create-nextly-app`.",
+          };
+        },
+      },
+    ],
+  },
   CONFIG_NOT_FOUND: {
     cause:
       "The configuration file named with `-c` or `--config` does not exist.",

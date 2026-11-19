@@ -176,7 +176,8 @@ export function configurationProblems(
     effective?.fieldGroups
   );
 
-  // Only a type nothing offers: a registered type's option problems are each validator's own.
+  // Only a type nothing offers: a registered type's option problems, and a missing type, are
+  // each validator's own.
   const fieldTypes = fieldDeclarationIssues(
     {
       collections: collections as CollectionConfig[],
@@ -184,7 +185,7 @@ export function configurationProblems(
       fieldGroups: fieldGroups as FieldGroupConfig[],
     },
     (kind, index) => `${kind}[${index}]`,
-    { options: false }
+    { options: false, missingType: false }
   );
 
   // Each kind with the validator that judges it, in the order problems are listed.

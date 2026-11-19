@@ -242,6 +242,16 @@ export interface LoadConfigOptions {
    * @default false
    */
   debug?: boolean;
+
+  /**
+   * What happens when no configuration file is found (and `configPath` names none):
+   * `"defaults"` gives the default configuration, which declares no collection, Single or field
+   * group; `"refuse"` throws, naming where it looked. A command that reads the app's entities
+   * refuses, since acting on the default would generate, migrate or prune as if the app declared
+   * nothing; the running site and the commands that read none of them keep the default.
+   * @default "defaults"
+   */
+  missing?: "defaults" | "refuse";
 }
 
 /**
@@ -555,6 +565,22 @@ async function loadConfigInternal(
   const configPath = options.configPath
     ? resolve(cwd, options.configPath)
     : findConfigFile(cwd);
+
+  if (!configPath && options.missing === "refuse") {
+    throw new NextlyError({
+      code: "INVALID_INPUT",
+      publicMessage: "Failed to load Nextly configuration.",
+      statusCode: 400,
+      logMessage: "Config loader error",
+      // Where the search looked, from the one list it reads, so the report names each place.
+      logContext: {
+        projectRoot: cwd,
+        names: [...CONFIG_FILE_NAMES],
+        folders: [...CONFIG_SEARCH_DIRS],
+        reason: "config-missing",
+      },
+    });
+  }
 
   if (!configPath) {
     debugLog(options, "No config file found, using default config");

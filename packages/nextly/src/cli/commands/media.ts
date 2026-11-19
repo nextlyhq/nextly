@@ -432,13 +432,15 @@ async function projectConfig(
   cwd: string,
   configPath: string | undefined,
   guard: ProjectGuard | null,
-  logger: Logger
+  logger: Logger,
+  /** `"refuse"` where the command reads the app's entities (`LoadConfigOptions.missing`). */
+  missing: "defaults" | "refuse" = "defaults"
 ): Promise<Awaited<ReturnType<typeof loadConfig>>> {
   if (guard) assertConfigInside(cwd, configPath, guard);
   enterProject(cwd, guard, logger);
   // The loader discovers the config from the project; a path is passed
   // only when one was given.
-  const loaded = await loadConfig({ configPath, cwd });
+  const loaded = await loadConfig({ configPath, cwd, missing });
   // The file the loader read, as discovery found it too: a project's own
   // config can be a link to another project's.
   if (guard) assertConfigInside(cwd, loaded.configPath, guard);
@@ -594,7 +596,9 @@ export async function mediaReindexUsageAction(
       // loaded config and sets up no media storage, so the two stay separate.
       // fallow-ignore-next-line code-duplication
       REINDEX_USAGE,
-      context.logger
+      context.logger,
+      // It rewrites the record from the configured collections, so a missing configuration refuses.
+      "refuse"
     );
     const db = databaseEnvOrThrow();
     if (cmdOptions.dryRun === true) {

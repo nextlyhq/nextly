@@ -26,6 +26,7 @@
     "config-invalid",
     "config-invalid-export",
     "config-load-failed",
+    "config-missing",
     "config-not-found",
     "config-syntax-error",
     "config-tooling-unavailable",

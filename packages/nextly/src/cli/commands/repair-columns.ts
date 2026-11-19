@@ -162,6 +162,8 @@ async function report(
   };
   const cwd = options.cwd ?? context.cwd;
   const { config, projectRoot, deferredExtends } = await loadConfig({
+    // Reads the app's entities: with no configuration file it refuses rather than act on none.
+    missing: "refuse",
     configPath: options.config,
     cwd,
     // The loader writes its diagnostics to standard output, which under `--json` holds the

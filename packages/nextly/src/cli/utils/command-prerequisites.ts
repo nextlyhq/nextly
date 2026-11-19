@@ -72,7 +72,9 @@ export async function loadConfigOrExit(
   logger: Logger
 ): Promise<LoadConfigResult> {
   try {
-    return await loadConfig(options);
+    // Every command loading through here reads the app's entities, so with no configuration file
+    // it refuses rather than act on none, unless the caller says otherwise.
+    return await loadConfig({ missing: "refuse", ...options });
   } catch (error) {
     exitWithError(logger, error);
   }
@@ -156,7 +158,12 @@ interface MigrationCommandOptions {
  */
 export async function openMigrationCommand(
   options: MigrationCommandOptions,
-  logger: Logger
+  logger: Logger,
+  /**
+   * What a project with no configuration file gets (`LoadConfigOptions.missing`): refused, for a
+   * command that reads the app's entities; the default configuration for one that reads none.
+   */
+  missing: "defaults" | "refuse" = "refuse"
 ): Promise<
   | {
       dbValidation: ValidDatabaseEnv;
@@ -172,6 +179,7 @@ export async function openMigrationCommand(
     configPath: options.config,
     cwd: options.cwd,
     debug: options.verbose,
+    missing,
   });
   const cwd = options.cwd ?? process.cwd();
   const adapter = await openCommandAdapter(

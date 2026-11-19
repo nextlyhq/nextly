@@ -173,3 +173,22 @@ describe("an app's entity a plugin's setup renamed", () => {
     expect(configurationProblems(declared, effective)).toEqual([]);
   });
 });
+
+describe("a field with no type", () => {
+  // The entity's own rules name it (`FIELD_TYPE_REQUIRED`); the field-type check, which asks only
+  // whether something offers a type that was given, leaves it to them, so it is counted once.
+  it.each([
+    ["no type", { name: "score" }],
+    ["an empty type", { name: "score", type: "" }],
+  ])("with %s is reported once", (_, field) => {
+    const problems = configurationProblems({
+      collections: [
+        { slug: "notes", fields: [{ name: "body", type: "text" }, field] },
+      ],
+    });
+
+    expect(problems.map(problem => `${problem.path} ${problem.code}`)).toEqual([
+      "collections[0].fields[1].type FIELD_TYPE_REQUIRED",
+    ]);
+  });
+});

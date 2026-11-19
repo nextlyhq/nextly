@@ -46,7 +46,8 @@ import {
 } from "./db-sync-registry";
 
 async function loadNextlyConfig(cwd: string) {
-  return loadConfig({ cwd });
+  // Reads the app's entities: with no configuration file it refuses rather than act on none.
+  return loadConfig({ cwd, missing: "refuse" });
 }
 
 /**

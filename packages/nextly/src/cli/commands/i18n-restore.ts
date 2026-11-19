@@ -92,6 +92,8 @@ export async function runI18nRestore(
   requireDatabaseEnv(logger);
 
   const configResult = await loadConfig({
+    // Reads the app's entities: with no configuration file it refuses rather than act on none.
+    missing: "refuse",
     configPath: options.config,
     cwd: options.cwd,
     debug: options.verbose,

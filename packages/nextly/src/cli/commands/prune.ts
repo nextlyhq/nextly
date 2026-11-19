@@ -709,6 +709,8 @@ export async function runPruneCommand(
   const dbValidation = requireDatabaseEnv(logger);
 
   const configResult = await loadConfig({
+    // Reads the app's entities: with no configuration file it refuses rather than act on none.
+    missing: "refuse",
     configPath: options.config,
     cwd: options.cwd,
   });

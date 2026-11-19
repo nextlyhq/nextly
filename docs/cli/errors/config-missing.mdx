@@ -1,0 +1,25 @@
+---
+title: CONFIG_MISSING
+description: "No configuration file was found, and the command reads the collections, Singles and field groups it declares."
+---
+
+## Cause
+
+No configuration file was found, and the command reads the collections, Singles and field groups it declares.
+
+Without `-c`, a command looks for `nextly.config.ts`, `nextly.config.mts`, `nextly.config.js` or `nextly.config.mjs`, in the project folder, then `src/`, then `config/`. A command that generates types, creates or applies migrations, syncs the database or prunes what the configuration no longer declares stops when none is there: acting on an empty configuration would treat every collection as gone. Commands that read none of them, such as `setup-token`, run without one.
+
+## Fix
+
+- Run the command from your project's folder, or pass `--cwd` with it.
+- Or pass `-c` the path of your configuration file, relative to the project folder.
+- Or, for a new project, start one with `npx create-nextly-app`.
+
+## Example
+
+```text
+✗ No Nextly configuration file was found in /home/you/app.
+  Why:  Looked for `nextly.config.ts`, `nextly.config.mts`, `nextly.config.js` or `nextly.config.mjs` in the project folder, `src/` and `config/`.
+  Next: Pass `-c` the path of your configuration file, or start a new project with `npx create-nextly-app`.
+  Docs: https://nextlyhq.com/docs/cli/errors/config-missing  (CONFIG_MISSING)
+```

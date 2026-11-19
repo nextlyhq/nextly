@@ -323,6 +323,7 @@ interface ConfigOptions {
  */
 async function reconcileSetup(
   globalOpts: ConfigOptions,
+  configResult: Awaited<ReturnType<typeof loadConfig>>,
   adapter: UpgradeAdapter,
   logger: ReturnType<typeof createContext>["logger"],
   recordChecksums: boolean
@@ -331,11 +332,6 @@ async function reconcileSetup(
   /** None where the configuration compiles to no extension schema. */
   contributions: EntityContributionSource | undefined;
 }> {
-  const configResult = await loadConfig({
-    configPath: globalOpts.config,
-    cwd: globalOpts.cwd,
-    debug: globalOpts.verbose,
-  });
   const migrationsDir = resolve(
     globalOpts.cwd ?? process.cwd(),
     configResult.config.db.migrationsDir
@@ -398,6 +394,21 @@ export async function upgradeAction(
 
   const dbValidation = requireDatabaseEnv(context.logger);
 
+  // The configuration is loaded, and judged, before the database is opened: a refused one leaves
+  // the database untouched, no lock cleared or taken. It reads the app's entities, so a project
+  // with no configuration file is refused rather than reconciled as if it declared none.
+  let configResult: Awaited<ReturnType<typeof loadConfig>>;
+  try {
+    configResult = await loadConfig({
+      missing: "refuse",
+      configPath: globalOpts.config,
+      cwd: globalOpts.cwd,
+      debug: globalOpts.verbose,
+    });
+  } catch (error) {
+    exitWithError(context.logger, error);
+  }
+
   if (cmdOptions.targetTableName !== undefined) {
     context.logger.warn(
       "upgrade's --target-table-name no longer does anything: the migration records of an earlier release are moved by `nextly migrate`, into nextly_schema_events."
@@ -405,7 +416,13 @@ export async function upgradeAction(
   }
 
   if (cmdOptions.dryRun === true) {
-    await reportUpgradeDryRun(cmdOptions, dbValidation, context, globalOpts);
+    await reportUpgradeDryRun(
+      cmdOptions,
+      dbValidation,
+      context,
+      globalOpts,
+      configResult
+    );
     return;
   }
 
@@ -432,7 +449,13 @@ export async function upgradeAction(
 
     await runReconcileCore({
       adapter,
-      ...(await reconcileSetup(globalOpts, adapter, context.logger, true)),
+      ...(await reconcileSetup(
+        globalOpts,
+        configResult,
+        adapter,
+        context.logger,
+        true
+      )),
       logger: {
         info: msg => context.logger.info(msg),
         warn: msg => context.logger.warn(msg),
@@ -464,7 +487,8 @@ async function reportUpgradeDryRun(
   cmdOptions: UpgradeCommandOptions,
   dbValidation: ReturnType<typeof requireDatabaseEnv>,
   context: ReturnType<typeof createContext>,
-  globalOpts: ConfigOptions
+  globalOpts: ConfigOptions,
+  configResult: Awaited<ReturnType<typeof loadConfig>>
 ): Promise<void> {
   let adapter:
     | ({ disconnect?: () => Promise<void> } & UpgradeAdapter)
@@ -487,7 +511,13 @@ async function reportUpgradeDryRun(
       adapter,
       interactive,
       consent: reconcileConsent(cmdOptions, context.logger),
-      ...(await reconcileSetup(globalOpts, adapter, context.logger, false)),
+      ...(await reconcileSetup(
+        globalOpts,
+        configResult,
+        adapter,
+        context.logger,
+        false
+      )),
     });
     reportDryRun(
       context.logger,

@@ -112,6 +112,8 @@ async function withStrandedRun<T>(
   work: (run: StrandedRun) => Promise<T>
 ): Promise<T> {
   const configResult = await loadConfig({
+    // Reads the app's entities: with no configuration file it refuses rather than act on none.
+    missing: "refuse",
     configPath: options.config,
     cwd: options.cwd,
   });

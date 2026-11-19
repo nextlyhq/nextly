@@ -10,6 +10,8 @@
  * cannot compile TypeScript at all.
  */
 
+import { toCliError } from "../cli/errors";
+import { formatCliError } from "../cli/errors/render";
 import { NextlyError } from "../errors/index";
 import {
   type BuildMessage,
@@ -31,6 +33,12 @@ function where(message: BuildMessage): string {
 
 /** The dev-log line for a config that could not be read. */
 export function describeConfigReloadFailure(error: unknown): string {
+  // A configuration the rules refuse is reported as every command reports it: each problem at its
+  // path, with the fix, then the count. Rendered by the CLI's own formatter, so the two cannot
+  // drift apart.
+  if (NextlyError.is(error) && error.logContext?.reason === "config-invalid") {
+    return `${LEAD}:\n${formatCliError(toCliError(error), { color: false })}\n${KEPT}`;
+  }
   if (
     NextlyError.is(error) &&
     error.code === "NEXTLY_CONFIG_TOOLING_UNAVAILABLE"
