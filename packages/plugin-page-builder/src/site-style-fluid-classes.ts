@@ -30,7 +30,6 @@
  * @module site-style-fluid-classes
  */
 import {
-  DEFAULT_FLUID_RANGE,
   classesAcrossFluidRange,
   fluidValue,
   isFluidSizes,
@@ -42,8 +41,8 @@ import {
 } from "@nextlyhq/blocks-engine";
 import { NextlyError } from "nextly/errors";
 
+import { siteFluidRange } from "./site-fluid-range";
 import type { SiteStyleData } from "./site-style";
-import { isFluidRange } from "./site-style-record";
 import { readStoredJson, sameStoredValue } from "./stored-json";
 
 /**
@@ -61,18 +60,16 @@ interface FluidRangeWrite {
 }
 
 /**
- * The range a stored or sent tokens section says the site uses: its own,
- * else the code's, else 360 to 1280, as the editor reads it. `undefined` for
- * a range the validator will refuse, which this hook leaves to it.
+ * The range a stored or sent tokens section says the site uses, read as the
+ * merge of the code and the stored tier reads it, so a code style and a
+ * stored one follow the same range. `undefined` for a range the validator
+ * will refuse, which this hook leaves to it.
  */
 function rangeOf(
   tokens: unknown,
   defaults: SiteStyleData | undefined
 ): FluidRangeWidths | undefined {
-  const own = isPlainRecord(tokens) ? tokens.fluidRange : undefined;
-  if (own !== undefined) return isFluidRange(own) ? own : undefined;
-  const code = defaults?.tokens?.fluidRange;
-  return code !== undefined && isFluidRange(code) ? code : DEFAULT_FLUID_RANGE;
+  return siteFluidRange(tokens, defaults?.tokens);
 }
 
 /** Why a range change is refused: the locked text styles that follow it. */

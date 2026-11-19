@@ -48,6 +48,7 @@ import {
   tokenIdentity,
   tokensToDtcg,
   isTextStyle,
+  classesAcrossFluidRange,
   DEFAULT_FLUID_RANGE,
   type DtcgSiteData,
   type ModesRead,
@@ -294,7 +295,12 @@ export function planImport(
     ...token,
     values: followingAdoption(token.values, adoption),
   }));
-  const extras = importExtras(read, context, refusedStyles, adoption);
+  const extras = importExtras(
+    withTextStylesAcrossRangeOf(read, into),
+    context,
+    refusedStyles,
+    adoption
+  );
   const { textStyles } = extras;
   const carriesMore =
     read.site !== undefined ||
@@ -348,6 +354,37 @@ function withFluidRangeOf(
   const current = into.fluidRange ?? DEFAULT_FLUID_RANGE;
   if (current.min === range.min && current.max === range.max) return into;
   return setFluidRange(into, range);
+}
+
+/**
+ * The file's text styles with each fluid size made again across this site's
+ * fluid range, where the file states no range and this site's is another.
+ *
+ * A file states the range of the site that wrote it, unless that site used
+ * the default one. The engine keeps a text style's fluid sizes only beside
+ * the size they make across that range (`dtcgToTokens`), and an import that
+ * states a range brings it here, so the sizes go on making the size. A file
+ * that states none leaves this site's range as it is: each such size is made
+ * again across it from its sizes, as this site's own text styles are, so the
+ * style follows the range here too. The server would make it again on
+ * arrival anyway, as it does for every save that sets new fluid sizes; made
+ * here, the preview shows what is stored.
+ */
+function withTextStylesAcrossRangeOf(
+  read: ModesRead,
+  into: SiteTokenSet
+): ModesRead {
+  if (read.textStyles === undefined || read.site?.fluidRange !== undefined) {
+    return read;
+  }
+  const across = classesAcrossFluidRange(
+    read.textStyles,
+    DEFAULT_FLUID_RANGE,
+    into.fluidRange ?? DEFAULT_FLUID_RANGE
+  );
+  return across === read.textStyles
+    ? read
+    : { ...read, textStyles: [...across] };
 }
 
 /**

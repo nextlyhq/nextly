@@ -264,3 +264,20 @@ export function workflowAttachedTo(
     (kind === "collection" ? entry.collections : entry.singles).includes(slug)
   );
 }
+
+/**
+ * The workflow a collection or Single is attached to, as its schema read names
+ * it: slug and label, or `null` where none is attached. The editor reads it to
+ * know, before a document exists, that it cannot be created as published.
+ *
+ * @experimental
+ */
+export function attachedWorkflowSummary(
+  kind: "collection" | "single",
+  slug: string
+): { slug: string; label: string } | null {
+  const attached = workflowAttachedTo(kind, slug);
+  return attached === undefined
+    ? null
+    : { slug: attached.workflow.slug, label: attached.workflow.label };
+}
