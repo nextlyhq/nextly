@@ -44,6 +44,7 @@ const post = {
 function part(over: Partial<PartReview> = {}): PartReview {
   return {
     part: null,
+    reviewedVersionNo: null,
     stage: "inReview",
     stageLabel: "In review",
     publishable: false,
