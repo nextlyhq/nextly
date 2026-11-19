@@ -1759,6 +1759,43 @@ describe.each(getConfiguredTestDialects())(
         expect(await visitorRead(PAGES, id)).toBeNull();
       });
 
+      it("records as published without review only the parts that were not approved", async () => {
+        await boot(dialect);
+        // English and the shared fields approved; Spanish never sent for review.
+        const id = await draftOf(POSTS, { title: "Hello", code: "C-1" });
+        await save(POSTS, id, { title: "Hola" }, "es");
+        await approve(POSTS, id, ["en", null]);
+
+        await app().nextly.publish({
+          collection: POSTS as never,
+          id,
+          locales: "all",
+          data: { _overwrite: true },
+          withoutReview: { reason: "Embargo lifted early" },
+        } as never);
+
+        expect((await visitorRead(POSTS, id, "es"))?.title).toBe("Hola");
+        const repo = new ContentEventsRepository(app().adapter, {
+          debug: () => undefined,
+          info: () => undefined,
+          warn: () => undefined,
+          error: () => undefined,
+        });
+        const { items } = await repo.listForSubject(
+          { kind: "collection", slug: POSTS, id },
+          { limit: 100 }
+        );
+        const bypassed = items.filter(
+          event => event.kind === "workflow-published-without-review"
+        );
+        expect(bypassed.map(event => event.note)).toEqual([
+          "Embargo lifted early",
+        ]);
+        // Spanish alone went past review; English and the shared fields went live under their
+        // approvals.
+        expect(bypassed[0].parts).toEqual(["es"]);
+      });
+
       it("publishes for trusted code that names a reason, and records it", async () => {
         await boot(dialect);
         const id = await draftOf(PAGES);
