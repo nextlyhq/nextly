@@ -43,6 +43,10 @@ vi.mock("@admin/components/features/versions/diff/VersionDiffView", () => ({
 vi.mock("@admin/hooks/useLocalization", () => ({
   useLocalization: () => ({
     defaultLocale: "en",
+    locales: [
+      { code: "en", label: "English" },
+      { code: "es", label: "Spanish" },
+    ],
     getLocale: (code: string | undefined) =>
       code === "en"
         ? { code, label: "English" }
