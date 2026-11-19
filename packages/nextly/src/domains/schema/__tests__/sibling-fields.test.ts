@@ -535,6 +535,32 @@ describe("judgeConfiguredSiblingFields, reporting a pair the row already holds",
     }).toEqual({ refused: ["Title/title"], reported: [] });
   });
 
+  // A row holding the pair while it shared nothing (a column-less `Title` beside `title`): a change
+  // that gives both one column makes a pair sharing it anew, refused, not reported.
+  it("refuses a held pair that a change makes share a column, rather than reporting it", async () => {
+    const before = [component("Title"), text("title")];
+    const after = [text("Title"), text("title")];
+    expect(siblingClashes(before)[0].shared).toBeNull();
+    expect(judgeSiblingFields(after, before)).toMatchObject({
+      refused: siblingClashes(after),
+      heldSharing: [],
+    });
+    const judged = await judgeConfiguredSiblingFields(
+      { collections: [{ slug: "posts", fields: after }] },
+      {
+        collections: [{ slug: "posts", tableName: "dc_posts", fields: before }],
+        singles: [],
+        components: [],
+      },
+      tableThere,
+      { heldSharing: "report" }
+    );
+    expect({
+      refused: pairs(judged.refused),
+      reported: pairs(judged.reported),
+    }).toEqual({ refused: ["Title/title"], reported: [] });
+  });
+
   it("refuses a pair the row does not hold, though held ones are reported", async () => {
     const judged = await judgeConfiguredSiblingFields(
       {

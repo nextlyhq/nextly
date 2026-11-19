@@ -198,6 +198,11 @@ export function siblingClashes(fields: unknown): SiblingClash[] {
   return out;
 }
 
+/** Whether two stored values are the same one: the same column, or the same key. */
+function sameShared(a: SiblingClash["shared"], b: SiblingClash["shared"]) {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
 /** A pair's identity: its container and its two names, in either order. */
 function pairKey(clash: SiblingClash): string {
   const names = [clash.first, clash.second].sort();
@@ -267,11 +272,18 @@ export function judgeSiblingFields(
   for (const clash of clashes) {
     // Held as often as the previous definition held it, whatever the pair stored there.
     const candidates = held.get(pairKey(clash)) ?? [];
-    // Two fields that share one column or key are never kept, however long they have; one the
-    // previous definition held is told apart (`heldSharing`) for the road that reports it.
+    // Two fields that share one column or key are never kept, however long they have. One the
+    // previous definition held sharing the same value is told apart (`heldSharing`) for the road
+    // that reports it; a pair that shared nothing, or another value, before shares this one anew.
     if (clash.shared !== null) {
       refused.push(clash);
-      if (candidates.shift() !== undefined) heldSharing.push(clash);
+      const same = candidates.findIndex(before =>
+        sameShared(before.shared, clash.shared)
+      );
+      if (same !== -1) {
+        candidates.splice(same, 1);
+        heldSharing.push(clash);
+      }
       continue;
     }
     if (candidates.length === 0) {
