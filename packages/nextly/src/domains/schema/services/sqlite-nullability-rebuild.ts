@@ -10,8 +10,6 @@
  *
  * @module domains/schema/services/sqlite-nullability-rebuild
  */
-import { sql } from "drizzle-orm";
-
 import { NextlyError } from "../../../errors/nextly-error";
 import type { MigrationTransaction } from "../migrate/migration-transaction";
 import {
@@ -28,8 +26,9 @@ import {
  * each column of `types` of the type it names. Nothing runs when every column already is.
  *
  * A type change copies each value across as it is, which SQLite stores by the new column's type
- * affinity (a text `"12"` becomes the number 12 in a numeric column): the values are judged before
- * the change is planned, and one the new type cannot take refuses the save before this runs.
+ * affinity (a text `"12"` becomes the number 12 in a numeric column). SQLite keeps a value it
+ * cannot convert rather than refusing it, so the values are judged first, by `judge`, on this
+ * transaction.
  *
  * The rebuild keeps every row, the primary key, types, defaults, foreign keys in and out, checks
  * and indexes, and each UNIQUE the live table declares inline (a one-to-one's column), which no
@@ -44,9 +43,16 @@ export async function rebuildSqliteNullability(
   columns: {
     required: ReadonlyMap<string, boolean>;
     types?: ReadonlyMap<string, string>;
+    /**
+     * The change's own judgement of the values a type change converts, run on this transaction
+     * before anything of the rebuild: a value written after the change was planned is judged too,
+     * and no write comes between it and the copy. It refuses by throwing, so nothing commits.
+     */
+    judge?: (db: unknown) => Promise<void>;
   }
 ): Promise<void> {
-  const { required, types = new Map<string, string>() } = columns;
+  const { required, types = new Map<string, string>(), judge } = columns;
+  if (types.size > 0) await judge?.(tx.db);
   const snapshot = await introspectLiveSnapshot(tx.db, "sqlite", [tableName]);
   const live = snapshot.tables.find(
     table => table.name.toLowerCase() === tableName.toLowerCase()
@@ -105,74 +111,5 @@ export async function rebuildSqliteNullability(
     keptUnique: losses?.unique ?? [],
   })) {
     await tx.execute(statement);
-  }
-  // Only the columns this rebuild retypes: one already of its type holds what it held before.
-  const retyped = new Map(
-    live.columns.flatMap(column => {
-      const type = typeOf(column.name);
-      return type !== undefined &&
-        column.type.toLowerCase() !== type.toLowerCase()
-        ? [[column.name, type] as const]
-        : [];
-    })
-  );
-  await refuseValuesTheTypesCannotTake(tx.db, tableName, retyped);
-}
-
-/**
- * The storage classes a column of this declared type holds once its values are converted, by
- * SQLite's affinity rules: an `INT` holds integers (a fraction it keeps as REAL, which it does not
- * hold); `REAL`, `DOUBLE`, `NUMERIC` and anything else not textual hold integers and reals.
- * Undefined for a textual or BLOB column, which keeps whatever it is given.
- */
-function convertedClasses(type: string): readonly string[] | undefined {
-  const declared = type.toUpperCase();
-  if (declared.includes("INT")) return ["integer"];
-  if (/CHAR|CLOB|TEXT|BLOB/.test(declared) || declared.trim() === "") {
-    return undefined;
-  }
-  return ["integer", "real"];
-}
-
-/**
- * Refuses, inside the rebuild's transaction so nothing of it commits, a column whose type changed
- * to a numeric one but holds a value its type does not hold once converted: SQLite keeps such a
- * value rather than refusing it (`"abc"` stays text, `"1.5"` becomes REAL, in an integer column). The values are judged before a
- * save plans the change; this holds where one was written in between.
- */
-async function refuseValuesTheTypesCannotTake(
-  db: unknown,
-  tableName: string,
-  types: ReadonlyMap<string, string>
-): Promise<void> {
-  const reader = db as { all(query: unknown): unknown };
-  for (const [column, type] of types) {
-    const classes = convertedClasses(type);
-    if (classes === undefined) continue;
-    const rows: unknown = await Promise.resolve(
-      reader.all(
-        sql`SELECT COUNT(*) AS "unconverted" FROM ${sql.identifier(tableName)}
-            WHERE ${sql.identifier(column)} IS NOT NULL
-              AND typeof(${sql.identifier(column)}) NOT IN (${sql.join(
-                classes.map(held => sql`${held}`),
-                sql`, `
-              )})`
-      )
-    );
-    const [row] = Array.isArray(rows)
-      ? (rows as { unconverted: number }[])
-      : [];
-    const unconverted = Number(row?.unconverted ?? 0);
-    if (unconverted === 0) continue;
-    throw NextlyError.validation({
-      errors: [
-        {
-          path: `schema.${tableName}.${column}`,
-          code: "TYPE_CHANGE_LOSES_VALUES",
-          message: `${column} holds ${String(unconverted)} ${unconverted === 1 ? "value" : "values"} that can't be stored as ${type}, so its type was not changed.`,
-        },
-      ],
-      logContext: { table: tableName, column, type, unconverted },
-    });
   }
 }

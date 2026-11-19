@@ -330,6 +330,11 @@ export interface SqliteNullability {
   required: ReadonlyMap<string, boolean>;
   /** Column → the type it becomes; absent or empty where no type changes. */
   types?: ReadonlyMap<string, string>;
+  /**
+   * The change's own judgement of the values a type change converts, run on the rebuild's
+   * transaction before its copy (`rebuildSqliteNullability`).
+   */
+  judge?: (db: unknown) => Promise<void>;
 }
 
 /**
