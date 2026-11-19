@@ -293,6 +293,7 @@ import {
   translationProvenancePresent,
 } from "../../i18n/provenance/record-provenance";
 import {
+  configuredLocale,
   isValidLocale,
   resolveLocaleChain,
   resolveRequestedLocale,
@@ -3641,6 +3642,23 @@ export class CollectionMutationService extends BaseService {
       resolveRequestedLocale(this.localization, locale) ===
         this.localization.defaultLocale;
     return { localizedFieldNames, enforceLocalizedRequired };
+  }
+
+  /**
+   * `params` with its write locale named by the configured code: an older spelling of a configured
+   * language (`pt_BR` for `pt-BR`), accepted for one release, is written under the code the rows
+   * are stored under (`configuredLocale`), never under the older one. A code that names no
+   * configured language is left as given, for the write to refuse.
+   */
+  private inConfiguredLocale<P extends { locale?: string | null }>(
+    params: P
+  ): P {
+    const locale = params.locale;
+    if (typeof locale !== "string" || !this.localization) return params;
+    const configured = configuredLocale(this.localization, locale);
+    return configured === undefined || configured === locale
+      ? params
+      : { ...params, locale: configured };
   }
 
   /**
@@ -8822,7 +8840,7 @@ export class CollectionMutationService extends BaseService {
     // A create moves the shared part (`WHOLE_DOCUMENT`), as its hooks are
     // told, whether the entry service or a batch sent it.
     return withWriteParts(WHOLE_DOCUMENT, () =>
-      this.createEntryInParts(params, body, depth)
+      this.createEntryInParts(this.inConfiguredLocale(params), body, depth)
     );
   }
 
@@ -16543,10 +16561,11 @@ export class CollectionMutationService extends BaseService {
    * told its languages.
    */
   async updateEntry(
-    rawParams: UpdateEntryParams,
+    requested: UpdateEntryParams,
     body: Record<string, unknown>,
     depth?: number
   ): Promise<CollectionServiceResult> {
+    const rawParams = this.inConfiguredLocale(requested);
     return this.inUpdateParts(
       {
         collectionName: rawParams.collectionName,
@@ -22032,9 +22051,10 @@ export class CollectionMutationService extends BaseService {
    */
   async createEntryInTransaction(
     tx: TransactionContext,
-    params: CreateEntryWriteParams,
+    requested: CreateEntryWriteParams,
     body: Record<string, unknown>
   ): Promise<CollectionServiceResult<unknown>> {
+    const params = this.inConfiguredLocale(requested);
     // The scope this write runs under becomes the ambient one for the whole
     // operation, not an argument handed to its first gate.
     //
@@ -22882,9 +22902,10 @@ export class CollectionMutationService extends BaseService {
    */
   async updateEntryInTransaction(
     tx: TransactionContext,
-    params: UpdateEntryWriteParams & { entryId: string },
+    requested: UpdateEntryWriteParams & { entryId: string },
     body: Record<string, unknown>
   ): Promise<CollectionServiceResult<unknown>> {
+    const params = this.inConfiguredLocale(requested);
     // The scope this write runs under becomes the ambient one for the whole
     // operation, not an argument handed to its first gate.
     //

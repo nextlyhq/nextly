@@ -248,6 +248,47 @@ describeEachDialect(
       expect(await read("pt_BR")).toMatchObject({ title: "olá" });
     });
 
+    // A client still sending the older spelling once the rows are converted writes under the
+    // standard code: a write under the older one would sit in a row no read in that language
+    // finds, and would be a second translation of the document beside the converted one.
+    it("writes a request naming the old code under the standard code once upgraded", async () => {
+      const id = await legacyArticle();
+      await migrateData(database!.adapter as never, UNDERSCORED);
+      const t = await bootSite(database!, "upgraded", UNDERSCORED);
+
+      const written = await entriesOf(t).updateEntry(
+        {
+          collectionName: ARTICLES,
+          entryId: id,
+          locale: "pt_BR",
+          overrideAccess: true,
+        },
+        // Saved as the language's pending change: a publish would put live whatever pending
+        // change the language already holds, which is not what this case is about.
+        { title: "olá 3", _overwrite: true }
+      );
+      expect(written.success, JSON.stringify(written)).toBe(true);
+
+      expect(await storedLanguages()).toEqual(["en", "pt-BR"]);
+      // Wherever the write was kept (a translation row, a version, a pending change), it is kept
+      // under the standard code, and nothing is kept under the older one.
+      const versions = await database!.adapter.select<{
+        locale: string | null;
+        snapshot: unknown;
+      }>(VERSIONS_TABLE, {
+        columns: ["locale", "snapshot"],
+        where: { and: [{ column: "entryId", op: "=", value: id }] },
+      });
+      expect(versions.map(row => row.locale)).not.toContain("pt_BR");
+      expect(
+        versions.some(
+          row =>
+            row.locale === "pt-BR" &&
+            JSON.stringify(row.snapshot).includes("olá 3")
+        )
+      ).toBe(true);
+    });
+
     it("lists each conversion in a dry run", async () => {
       await legacyArticle();
 
