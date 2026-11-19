@@ -214,9 +214,12 @@ describeEachDialect("a Single schema save whose statements fail", dialect => {
       `the save answered instead of failing: ${said}`
     ).toBeDefined();
     // Nothing landed, so nothing is kept and there is nothing to finish. The driver's text, which
-    // can hold identifiers and values, is not told.
+    // can hold identifiers and values, is not told. MySQL commits each schema statement as it
+    // runs, so its refusal says how far the change got: here, the first statement, so none.
     expect(String((thrown as Error).message)).toBe(
-      "The database refused this schema change, so nothing was changed."
+      dialect === "mysql"
+        ? "The database refused statement 1 of 2 of this schema change. The 0 before it were applied; saving again finishes the change from the table as it is now."
+        : "The database refused this schema change, so nothing was changed."
     );
     expect(await migrationFiles(), "the migrations folder").toEqual(
       folderBefore
