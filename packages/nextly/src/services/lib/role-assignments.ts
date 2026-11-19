@@ -15,7 +15,16 @@
  * an event any invalidation hears, so a cache that outlives one serves the
  * lapsed role for the rest of its life.
  */
-import { and, eq, gt, isNull, or, type Column, type SQL } from "drizzle-orm";
+import {
+  and,
+  eq,
+  gt,
+  inArray,
+  isNull,
+  or,
+  type Column,
+  type SQL,
+} from "drizzle-orm";
 
 import { NextlyError } from "../../errors/nextly-error";
 
@@ -41,6 +50,27 @@ export function roleAssignmentInForce(
   // possibly undefined because an empty `or` yields nothing. Refused rather
   // than passed on, since a `where` given undefined filters nothing, and a
   // read meant to drop lapsed roles would then return all of them.
+  if (condition === undefined) {
+    throw NextlyError.internal({
+      logContext: { reason: "role-assignment-condition-empty" },
+    });
+  }
+  return condition;
+}
+
+/**
+ * The assignments of any of `userIds` that are in force at `at`: the same
+ * condition, asked of several users in one read.
+ */
+export function usersRoleAssignmentsInForce(
+  userRoles: RoleAssignmentColumns,
+  userIds: readonly string[],
+  at: Date
+): SQL {
+  const condition = and(
+    inArray(userRoles.userId, [...userIds]),
+    roleAssignmentInForce(userRoles, at)
+  );
   if (condition === undefined) {
     throw NextlyError.internal({
       logContext: { reason: "role-assignment-condition-empty" },

@@ -27,6 +27,7 @@ import {
   partsWaitingFor,
   partWaitsDecider,
   type PartWaitingFor,
+  type PartWaitsDecider,
 } from "./part-waits-for";
 import { registeredWorkflows, workflowAttachedTo } from "./registry";
 import {
@@ -363,6 +364,9 @@ export async function waitingFor(
       scoped,
     ])
   );
+  // Who each candidate's assignee or default reviewer is, asked in batches per collection or
+  // Single before any part is decided, so a long queue of distinct assignees costs a few reads.
+  await primeDeciders(candidates, stageOfRow, deciderOf);
   const movable: ReviewState[] = [];
   for (const row of candidates) {
     const scoped = stageOfRow.get(
@@ -371,7 +375,7 @@ export async function waitingFor(
     if (!scoped) continue;
     // Whom this part waits for, by the rule its read names: the caller, one of their roles, or
     // every holder, which the caller is, by the stage's permission asked in `takeableStages`.
-    const waits = await deciderOf(scoped)(row);
+    const waits = await deciderOf(scoped).decide(row);
     if (waits === null || (waits.kind === "one" && !isMine(waits.who))) {
       continue;
     }
@@ -431,7 +435,7 @@ async function takeableStages(
   return takeable;
 }
 
-type Decider = ReturnType<typeof partWaitsDecider>;
+type Decider = PartWaitsDecider;
 
 /** One decider per collection or Single: the rule a part's read asks, its answers kept across parts. */
 function decidersByEntity(
@@ -449,6 +453,31 @@ function decidersByEntity(
   };
 }
 
+/** Primes each collection's or Single's decider with its candidates, one batch per action. */
+async function primeDeciders(
+  candidates: readonly ReviewState[],
+  stageOfRow: ReadonlyMap<string, ScopedStage>,
+  deciderOf: (scoped: ScopedStage) => Decider
+): Promise<void> {
+  const byEntity = new Map<
+    string,
+    { scoped: ScopedStage; rows: ReviewState[] }
+  >();
+  for (const row of candidates) {
+    const scoped = stageOfRow.get(
+      `${row.scopeKind}:${row.scopeSlug}:${row.stage}`
+    );
+    if (!scoped) continue;
+    const key = `${scoped.kind}:${scoped.slug}`;
+    const entity = byEntity.get(key) ?? { scoped, rows: [] };
+    entity.rows.push(row);
+    byEntity.set(key, entity);
+  }
+  for (const { scoped, rows } of byEntity.values()) {
+    await deciderOf(scoped).prime(rows);
+  }
+}
+
 /**
  * Each takeable stage's terms: the caller's own assignees, and whether an unassigned part waits for
  * them by the stage alone (its default reviewer is theirs, or it waits for every holder), asked as
@@ -462,7 +491,7 @@ async function stageTerms(
 ): Promise<WaitingStageTerms[]> {
   const terms: WaitingStageTerms[] = [];
   for (const scoped of takeable) {
-    const unassigned = await deciderOf(scoped)({
+    const unassigned = await deciderOf(scoped).decide({
       stage: scoped.stage,
       assignee: null,
       enteredBy: null,
