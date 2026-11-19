@@ -22,7 +22,7 @@ import {
 import * as React from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { CssNamesContext } from "./css-names-context";
+import { CssNamesContext } from "./inspector/css-names-context";
 import { labelNotInName } from "./label-in-name.fixture";
 import { SiteFontRoles, type SiteFontRolesProps } from "./site-font-roles";
 import { withFontRole } from "./site-font-roles-model";

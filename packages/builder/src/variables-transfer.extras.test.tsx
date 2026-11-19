@@ -245,7 +245,21 @@ describe("importing a file with text styles and the site's design data", () => {
     // style naming a variable it doesn't hold, so the variables go first;
     // it refuses to remove a text style a row still follows, so the rows go
     // last and Undo takes them back first, then the text styles, then the
-    // variables.
+    // variables. The file's text style names one of its variables and a
+    // Site text row follows that style, so each write is checked for what
+    // the next one depends on.
+    const lead: NamedClass = {
+      id: "ts-lead",
+      slug: "lead",
+      label: "Lead",
+      orderIndex: 0,
+      role: "text",
+      styles: { base: { base: { fontFamily: { $token: "font.heading" } } } },
+    };
+    const dependent: SiteTokenSet = {
+      ...SOURCE,
+      siteText: { ...SOURCE.siteText, h2: { textStyle: lead.id } },
+    };
     const onChange = vi.fn();
     let stored: (done: boolean) => void = () => undefined;
     const storeNow = vi.fn(
@@ -269,7 +283,10 @@ describe("importing a file with text styles and the site's design data", () => {
         storeNow={storeNow}
       />
     );
-    await chooseFile("variables.tokens.json", exported());
+    await chooseFile(
+      "variables.tokens.json",
+      exportDtcgWithTheme(dependent, [lead])[0]?.text ?? ""
+    );
     const preview = await screen.findByRole("dialog", {
       name: "Import variables",
     });
@@ -288,13 +305,25 @@ describe("importing a file with text styles and the site's design data", () => {
     });
     await waitFor(() => expect(onEditClasses).toHaveBeenCalledTimes(1));
     expect(onChange).not.toHaveBeenCalled();
+    // The second write: the class edit stores the text style, which names a
+    // variable the first write stored.
+    const compose = onEditClasses.mock.calls[0]?.[0];
+    if (compose === undefined) throw new Error("no class edit was made");
+    const made = compose([]);
+    const classes = "classes" in made ? made.classes : [];
+    const style = classes.find(entry => entry.id === lead.id);
+    expect(style?.styles).toEqual(lead.styles);
+    expect(variables.tokens.map(token => token.name)).toContain("font.heading");
     await act(async () => {
       finish(undefined);
     });
     await waitFor(() => expect(onChange).toHaveBeenCalledTimes(1));
-    expect((onChange.mock.calls[0]?.[0] as SiteTokenSet).siteText).toEqual(
-      SOURCE.siteText
-    );
+    // The third write: the rows, one following the text style the second
+    // write stored.
+    const last = onChange.mock.calls[0]?.[0] as SiteTokenSet | undefined;
+    const rows = last?.siteText;
+    expect(rows).toEqual(dependent.siteText);
+    expect(classes.map(entry => entry.id)).toContain(rows?.h2?.textStyle);
     expect(
       await screen.findByText("Imported 3 variables and 1 text style.")
     ).toBeDefined();

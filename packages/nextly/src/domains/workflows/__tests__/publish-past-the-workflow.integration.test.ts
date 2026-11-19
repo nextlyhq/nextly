@@ -23,6 +23,7 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
+import { markWriteIntegrityFailure } from "../../../shared/write-integrity";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { apiKeyScope } from "../../../auth/authenticated-scope";
@@ -1148,6 +1149,82 @@ describe.each(getConfiguredTestDialects())(
         expect((await storedPages()).map(page => page.title)).toEqual([
           "Stays a draft",
         ]);
+      });
+
+      it("runs nothing a batch item held for the commit once its failed settle undoes it, and runs the rest's", async () => {
+        await boot(dialect);
+        const adapter = app().adapter;
+        const ran: string[] = [];
+        const judged: string[] = [];
+        // A gate that lets every create through. Its verdict on each written entry holds an effect
+        // for the commit and one for a rollback, and the first entry's fails as it settles. The
+        // early answer a create asks before its row exists (no entry id) holds nothing.
+        container.register<PublishGate>("publishGate", () => ({
+          refusals: () => Promise.resolve([]),
+          judge: async (_tx, question) => {
+            if (question.entryId === "") {
+              return { refusals: [], settle: () => Promise.resolve() };
+            }
+            judged.push(question.entryId);
+            const item = String(judged.length);
+            await adapter.afterCommit(() => ran.push(`commit ${item}`));
+            await adapter.afterRollback(() => ran.push(`rollback ${item}`));
+            return {
+              refusals: [],
+              settle: () =>
+                item === "1"
+                  ? Promise.reject(new Error("settle failed"))
+                  : Promise.resolve(),
+            };
+          },
+        }));
+
+        const result = await pluginService().createMany(PAGES, [
+          { title: "Undone", status: "published" },
+          { title: "Kept", status: "published" },
+        ]);
+
+        expect(result.failed, JSON.stringify(result)).toBe(1);
+        expect((await storedPages()).map(page => page.title)).toEqual(["Kept"]);
+        // The batch committed: the kept item's commit effect runs and the undone item's never
+        // does; the undone item's compensation runs once, for its writes are undone.
+        expect([...ran].sort()).toEqual(["commit 2", "rollback 1"]);
+      });
+
+      it("runs an undone batch item's compensation once when the whole batch then rolls back", async () => {
+        await boot(dialect);
+        const adapter = app().adapter;
+        const ran: string[] = [];
+        const judged: string[] = [];
+        // The first written entry's settle fails, which undoes that item alone; the second's
+        // verdict fails as a write-integrity failure, which rolls the whole batch back.
+        container.register<PublishGate>("publishGate", () => ({
+          refusals: () => Promise.resolve([]),
+          judge: async (_tx, question) => {
+            if (question.entryId === "") {
+              return { refusals: [], settle: () => Promise.resolve() };
+            }
+            judged.push(question.entryId);
+            const item = String(judged.length);
+            await adapter.afterRollback(() => ran.push(`rollback ${item}`));
+            if (item === "2") {
+              throw markWriteIntegrityFailure(new Error("verdict failed"));
+            }
+            return {
+              refusals: [],
+              settle: () => Promise.reject(new Error("settle failed")),
+            };
+          },
+        }));
+
+        const result = await pluginService().createMany(PAGES, [
+          { title: "Undone", status: "published" },
+          { title: "Aborts", status: "published" },
+        ]);
+
+        expect(result.successful, JSON.stringify(result)).toBe(0);
+        expect(await storedPages()).toEqual([]);
+        expect([...ran].sort()).toEqual(["rollback 1", "rollback 2"]);
       });
 
       it("creates as published for trusted code that names a reason, which is the control", async () => {

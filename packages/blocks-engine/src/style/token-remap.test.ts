@@ -106,7 +106,10 @@ describe("remapTokenReferences", () => {
     );
     // Escaped as the browser reads it, like a read.
     expect(
-      remapTokenReferences(String.raw`selector { --acme-sp\61 ce-m: 2px }`, acme)
+      remapTokenReferences(
+        String.raw`selector { --acme-sp\61 ce-m: 2px }`,
+        acme
+      )
     ).toBe("selector { --site-space-m: 2px }");
     // A declaration of a property no variable in the file is written under
     // is the author's own, and stays as it is, as does its read.
@@ -115,9 +118,9 @@ describe("remapTokenReferences", () => {
     expect(remapTokenReferences(own, acme)).toBe(own);
     // A declaration names no variable the file carries: the export lists
     // only what the CSS reads.
-    expect(
-      cssTextProperties("selector { --site-color-brand: red }").size
-    ).toBe(0);
+    expect(cssTextProperties("selector { --site-color-brand: red }").size).toBe(
+      0
+    );
   });
 
   it("points each reference once, never along a chain of renames", () => {
@@ -136,6 +139,28 @@ describe("remapTokenReferences", () => {
         swap
       )
     ).toEqual({ x: "var(--site-b) var(--site-c)", y: { $token: "b" } });
+  });
+
+  it("builds its table once per remap, however many values it is asked of", () => {
+    // An import asks one remap of every value it writes. The table of the
+    // file's custom properties is built from `identities`, so each build
+    // reads them once.
+    let builds = 0;
+    const counted: TokenRemap = {
+      ids: acme.ids,
+      get identities() {
+        builds += 1;
+        return acme.identities;
+      },
+      from: acme.from,
+      to: acme.to,
+    };
+    for (let at = 0; at < 50; at++) {
+      expect(remapTokenReferences("var(--acme-space-m)", counted)).toBe(
+        "var(--site-space-m)"
+      );
+    }
+    expect(builds).toBe(1);
   });
 });
 
@@ -157,6 +182,8 @@ describe("cssTextProperties", () => {
   });
 
   it("names nothing in text with no var()", () => {
-    expect(cssTextProperties("selector { --site-color-brand: red }").size).toBe(0);
+    expect(cssTextProperties("selector { --site-color-brand: red }").size).toBe(
+      0
+    );
   });
 });

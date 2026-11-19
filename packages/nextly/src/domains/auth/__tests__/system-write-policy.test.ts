@@ -141,6 +141,14 @@ describe("the REST route gate asks what the system write policy says", () => {
     ["users", "updateUser", "PATCH", SYSTEM_WRITE_POLICY.users.update],
     ["users", "deleteUser", "DELETE", SYSTEM_WRITE_POLICY.users.delete],
     [
+      // The unlink is the same user-management write a role assignment is,
+      // so it asks the same update grant the routes above the roles do.
+      "identities",
+      "unlinkUserIdentity",
+      "DELETE",
+      SYSTEM_WRITE_POLICY.users.update,
+    ],
+    [
       "field-groups",
       "createComponent",
       "POST",
@@ -264,6 +272,13 @@ describe("the REST route gate asks what the system read policy says", () => {
   it.each([
     ["users", "listUsers", SYSTEM_READ_POLICY.users.read],
     ["users", "getUserById", SYSTEM_READ_POLICY.users.read],
+    [
+      // A per-user view, gated as one: the identities list asks the user
+      // read the user's other views take.
+      "identities",
+      "listUserIdentities",
+      SYSTEM_READ_POLICY.users.read,
+    ],
     ["rbac", "listRoles", SYSTEM_READ_POLICY.roles.read],
     ["rbac", "getRoleById", SYSTEM_READ_POLICY.roles.read],
     ["rbac", "listRolePermissions", SYSTEM_READ_POLICY.roles.readPermissions],

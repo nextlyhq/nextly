@@ -38,7 +38,11 @@ import * as React from "react";
 import { isElement } from "../dom-kind";
 import type { EditorState } from "../editor-state";
 import type { Rect } from "../geometry";
-import { designIsWritable, lockViewOf, propIsWritable } from "../inspector";
+import {
+  designIsWritable,
+  lockViewOf,
+  propIsWritable,
+} from "../inspector/inspector";
 import { selectionModeFor, type SelectionMode } from "../selection";
 import { CANVAS_ROOT_CLASS } from "../shell-state";
 

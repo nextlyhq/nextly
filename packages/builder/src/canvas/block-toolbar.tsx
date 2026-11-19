@@ -93,7 +93,7 @@ import {
   lockOp,
   lockStatusOf,
   lockViewOf,
-} from "../inspector";
+} from "../inspector/inspector";
 import {
   useBlockActionsContext,
   useToolbarFocusSlot,

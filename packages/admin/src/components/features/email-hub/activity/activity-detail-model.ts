@@ -279,15 +279,18 @@ export function versionText(
   };
 }
 
-/** One attempt on the timeline: its outcome, then provider, recipient and answer. */
-export function attemptText(attempt: DeliveryAttempt): {
+/**
+ * One attempt on the timeline: its outcome, then provider, recipient and
+ * answer. `provider` is the provider as the hub names it (`providerLabel`).
+ */
+export function attemptText(
+  attempt: DeliveryAttempt,
+  provider: string
+): {
   outcome: string;
   detail: string;
 } {
-  const parts = [
-    attempt.provider.type,
-    RECIPIENT_KIND_LABELS[attempt.recipientKind],
-  ];
+  const parts = [provider, RECIPIENT_KIND_LABELS[attempt.recipientKind]];
   if (attempt.outcome === "failed") {
     if (attempt.failureKind) {
       parts.push(

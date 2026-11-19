@@ -157,3 +157,25 @@ export interface DeleteUserArgs extends Omit<DeleteArgs, NotForUsers> {
   /** User collection slug (defaults to 'users') */
   collection?: string;
 }
+
+/**
+ * Arguments for listing a user's external identities: the sign-in identities
+ * linked to the account, as core's own table holds them. No provider token
+ * exists to be returned.
+ */
+export interface ListUserIdentitiesArgs extends DirectAPIConfig {
+  /** The account whose identities are listed (required). */
+  userId: string;
+}
+
+/**
+ * Arguments for unlinking one external identity from a user's account. The
+ * identity must be one that account holds; another account's identity is
+ * refused as a missing one is.
+ */
+export interface UnlinkIdentityArgs extends DirectAPIConfig {
+  /** The account the identity is unlinked from (required). */
+  userId: string;
+  /** The identity row's own id (required). */
+  identityId: string;
+}

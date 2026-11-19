@@ -1,7 +1,9 @@
 /**
  * A blocks field saves a page drawn from the site's core blocks, on a Single
- * and on a collection alike, judged against the site's own block registry.
+ * and on a collection alike, judged against the site's own block registry and
+ * under the limits the site configured.
  */
+import { DEFAULT_LIMITS, type DocumentLimits } from "@nextlyhq/blocks-engine";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -115,6 +117,75 @@ describe.each(getConfiguredTestDialects())(
         overrideAccess: true,
       });
       expect(typesIn((read as { body?: unknown }).body)).toEqual(["core/text"]);
+    });
+  }
+);
+
+/** Boxes nested `depth` deep, a heading in the innermost. */
+function nestedPage(depth: number) {
+  let nodes: Record<string, unknown>[] = [
+    { id: "h", type: "core/heading", version: 1, props: { text: "Hi" } },
+  ];
+  for (let level = depth - 1; level >= 1; level--) {
+    nodes = [
+      {
+        id: `box${level}`,
+        type: "core/box",
+        version: 1,
+        props: {},
+        slots: { children: nodes },
+      },
+    ];
+  }
+  return { formatVersion: 1, kind: "page", nodes };
+}
+
+/** The issue codes a refused write carries. */
+function codesOf(error: unknown): string[] {
+  const errors =
+    (error as { publicData?: { errors?: { code: string }[] } }).publicData
+      ?.errors ?? [];
+  return errors.map(issue => issue.code);
+}
+
+describe.each(getConfiguredTestDialects())(
+  "a page save under the limits the site configured (%s)",
+  (dialect: TestDialect) => {
+    let current: TestNextly | undefined;
+
+    afterEach(async () => {
+      await current?.destroy();
+      current = undefined;
+    });
+
+    async function save(limits: DocumentLimits, depth: number) {
+      current = await createTestNextly({
+        dialect,
+        plugins: [pageBuilder({ limits })],
+      });
+      return current.nextly.create({
+        collection: "pages",
+        data: { title: "Deep", slug: "deep", content: nestedPage(depth) },
+        overrideAccess: true,
+      });
+    }
+
+    it("refuses a page deeper than the tighter depth the site set", async () => {
+      const refused = await save({ ...DEFAULT_LIMITS, maxDepth: 4 }, 5).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+      expect(refused, "the save was accepted").toBeDefined();
+      expect(codesOf(refused)).toContain("depth-exceeded");
+    });
+
+    it("saves a page past the default depth that the site's looser depth allows", async () => {
+      const depth = DEFAULT_LIMITS.maxDepth + 2;
+      const made = await save(
+        { ...DEFAULT_LIMITS, maxDepth: depth + 2 },
+        depth
+      );
+      expect(made.item.id).toBeDefined();
     });
   }
 );
