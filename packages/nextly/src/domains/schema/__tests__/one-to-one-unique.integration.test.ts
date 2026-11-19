@@ -1066,16 +1066,23 @@ describeEachDialect(
     // The column comes back with the edit, and its unique index with it, made once.
     it("makes a many-to-many edited into a one-to-one unique", async () => {
       const t = await boot(dialect, "manyToOne");
-      await apply(t, [
-        { name: "title", type: "text" },
-        {
-          name: "person",
-          type: "relationship",
-          options: { target: PEOPLE, relationType: "manyToMany" },
-        },
-      ]);
+      // Its link moves into a link table, and back out below: each drops what the field held,
+      // which the dialog warns of and confirms by name.
+      await apply(
+        t,
+        [
+          { name: "title", type: "text" },
+          {
+            name: "person",
+            type: "relationship",
+            options: { target: PEOPLE, relationType: "manyToMany" },
+          },
+        ],
+        undefined,
+        undefined,
+        { person: { action: "confirm_drop" } }
+      );
 
-      // Its links leave the link table, which the dialog warns of and confirms by name.
       await apply(t, profileFields("oneToOne"), undefined, undefined, {
         person: { action: "confirm_drop" },
       });
