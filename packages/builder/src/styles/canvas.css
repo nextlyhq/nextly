@@ -386,7 +386,7 @@
 
 .nx-canvas-mark__tab[data-tab="unchecked"] {
   border-color: var(--nx-destructive);
-  color: var(--nx-destructive);
+  color: var(--nx-builder-destructive-text);
 }
 
 /* Shown for the previewed entry while conditions apply: a tick in the
@@ -878,7 +878,7 @@
 .nx-refusal-notice__mark {
   flex: none;
   margin-top: 0.0625rem;
-  color: var(--nx-destructive);
+  color: var(--nx-builder-destructive-text);
 }
 
 .nx-refusal-notice__text {
