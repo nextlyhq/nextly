@@ -481,15 +481,19 @@ export function missingValuesStop(
 }
 
 /**
- * SQLite's rule for a date it keeps as the same instant: read at all (`strftime`), in whole
- * seconds, on a day that exists (the date part reads back as itself: `2026-02-30` would read as
- * 2 March), at a time of day that exists (hour to 23, minute and second to 59), as
- * `movesAsTheSameDate` judges it before the save.
+ * SQLite's rule for a date it keeps as the same instant: an ISO date, or one with a time and the
+ * offset it was written at (a time with none is read at UTC here and in the server's zone by
+ * the application), read at all (`strftime`), in whole seconds, on a day that exists (the date
+ * part reads back as itself: `2026-02-30` would read as 2 March), at a time of day that exists
+ * (hour to 23, minute and second to 59), as `movesAsTheSameDate` judges it before the save.
+ * SQLite has no regular expressions, so the shape is its GLOB patterns.
  */
 function sqliteDateKept(value: string): string {
+  const date = "[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]";
+  const shape = `(${value} GLOB '${date}' OR (${value} GLOB '${date}T[0-9][0-9]:[0-9][0-9]*' AND (${value} GLOB '*Z' OR ${value} GLOB '*[+-][0-9][0-9]:[0-9][0-9]')))`;
   const day = `substr(${value}, 1, 10)`;
   const time = `(length(${value}) = 10 OR (substr(${value}, 12, 2) <= '23' AND substr(${value}, 15, 2) <= '59' AND (substr(${value}, 17, 1) <> ':' OR substr(${value}, 18, 2) <= '59')))`;
-  return `substr(strftime('%f', ${value}), 4) = '000' AND strftime('%s', ${value}) IS NOT NULL AND date(${day}) = ${day} AND ${time}`;
+  return `${shape} AND substr(strftime('%f', ${value}), 4) = '000' AND strftime('%s', ${value}) IS NOT NULL AND date(${day}) = ${day} AND ${time}`;
 }
 
 /**

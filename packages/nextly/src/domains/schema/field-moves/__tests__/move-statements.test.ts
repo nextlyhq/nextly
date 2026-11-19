@@ -338,6 +338,9 @@ describe("moveDataStatements on SQLite", () => {
       "2025-02-29T10:00:00Z",
       "2026-07-17T24:00:00Z",
       "2026-07-17T10:60:00Z",
+      // No offset: read at UTC by the copy and in the server's zone by the application.
+      "2026-07-17T10:00:00",
+      "2026-07-17 10:00:00Z",
     ]) {
       const db = table("published integer");
       db.exec(
@@ -348,10 +351,19 @@ describe("moveDataStatements on SQLite", () => {
       );
     }
     const db = table("published integer");
+    // Each form the save's check takes moves: as the API writes a date, a negative offset, no
+    // seconds, a date alone.
     db.exec(
-      `INSERT INTO dc_posts (id, meta) VALUES (1, '{"published":"2024-02-29T23:59:59Z"}'), (2, '{"published":"2026-07-17T10:00:05+05:00"}');`
+      `INSERT INTO dc_posts (id, meta) VALUES (1, '{"published":"2024-02-29T23:59:59Z"}'), (2, '{"published":"2026-07-17T10:00:05+05:00"}'), (3, '{"published":"2026-07-17T10:00:05.000Z"}'), (4, '{"published":"2026-07-17T10:00:05-05:00"}'), (5, '{"published":"2026-07-17T10:00Z"}'), (6, '{"published":"2026-07-17"}');`
     );
     run(db, [...out.stop, ...out.copy]);
+    expect(
+      db
+        .prepare(
+          "SELECT COUNT(*) AS moved FROM dc_posts WHERE published IS NOT NULL"
+        )
+        .get()
+    ).toEqual({ moved: 6 });
   });
 
   it("copies dates SQLite keeps, whole seconds written with milliseconds among them", () => {
