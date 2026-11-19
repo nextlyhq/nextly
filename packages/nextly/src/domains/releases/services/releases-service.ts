@@ -4186,6 +4186,38 @@ export class ReleasesService {
         logContext: { reason: "release-not-schedulable", releaseId: id },
       });
     }
+    await this.recheckScheduled(id);
+  }
+
+  /**
+   * Ask again, once a schedule has committed, what an event's own recheck asks. A step that
+   * withdrew an approval between this schedule's checks and its write found the release not yet
+   * scheduled and passed it by, so the early stop over the release's documents is run now and
+   * stops it at once rather than at its instant.
+   *
+   * Never fails the schedule, which has committed: a recheck that cannot run is logged, and the
+   * run asks again at the instant.
+   */
+  private async recheckScheduled(id: string): Promise<void> {
+    try {
+      const members = await this.deps.repository.listMembers(id);
+      if (members.length === 0) return;
+      await this.stopOnHardProblems({
+        documents: members.map(member => ({
+          scopeKind: member.scopeKind,
+          scopeSlug: member.scopeSlug,
+          entryId: member.entryId,
+        })),
+      });
+    } catch (error) {
+      this.deps.logger?.warn(
+        "A release could not be checked again once it was scheduled",
+        {
+          releaseId: id,
+          error: error instanceof Error ? error.message : String(error),
+        }
+      );
+    }
   }
 
   /**

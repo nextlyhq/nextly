@@ -875,6 +875,34 @@ describe.each(getConfiguredTestDialects())(
       ).toBeLessThanOrEqual(IDS_PER_LOOKUP);
     }, 120_000);
 
+    it("stops a release scheduled while a step withdrew its approval, once the schedule has committed", async () => {
+      const t = await boot(dialect);
+      const page = await doc(t, "pages");
+      await approve(t, "pages", page);
+      const arranged = await arrange(t, [publishPage(page)], null);
+      expect(await hardCodes(t, arranged.releaseId)).toEqual([]);
+      const schedule = ReleasesRepository.prototype.scheduleRelease;
+      vi.spyOn(
+        ReleasesRepository.prototype,
+        "scheduleRelease"
+      ).mockImplementation(async function (this: ReleasesRepository, ...args) {
+        // The step lands after the schedule's checks and before its write, so the step's own
+        // recheck finds the release still a draft and passes it by.
+        await takeStep(t, "pages", page, null, "bounce", "Not yet.");
+        expect(await releaseState(t, arranged.releaseId)).toBe("draft");
+        return schedule.apply(this, args);
+      });
+
+      await t.nextly.releases.schedule({
+        id: arranged.releaseId,
+        at: LATER,
+        timezone: "UTC",
+      });
+
+      expect(await releaseState(t, arranged.releaseId)).toBe("blocked");
+      expect(await stoppedNotices(t, arranged)).toBe(1);
+    });
+
     it("refuses Publish now for an unapproved member, even to a person who may publish without review", async () => {
       const t = await boot(dialect);
       const page = await doc(t, "pages");
