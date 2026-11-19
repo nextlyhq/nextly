@@ -1368,6 +1368,8 @@ export function EntryForm({
       : {}),
     onDiscardWorkingDraft: handleDiscardWorkingDraft,
     ...(review.binding === undefined ? {} : { review: review.binding }),
+    // Known before the entry exists, so a new one leads with Save draft.
+    workflowAttached: collection.workflow != null,
   };
 
   // A save refused because the entry changed since: who changed it and when,

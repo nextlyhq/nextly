@@ -640,6 +640,36 @@ describe.each(getConfiguredTestDialects())(
         ]);
       });
 
+      it.runIf(door.name === "REST")(
+        "names a collection's workflow in its schema read, before any document exists, and null where none is attached",
+        async () => {
+          current = await bootSteps(dialect, undefined, {
+            collections: [plain],
+          });
+          await people();
+          await person(app(), "carol", [
+            ["read", PLAIN],
+            ["update", PLAIN],
+          ]);
+
+          const held = await rest(
+            "GET",
+            ["collections", "schema", PAGES],
+            ALICE
+          );
+          const free = await rest("GET", ["collections", "schema", PLAIN], {
+            kind: "person",
+            id: "carol",
+          });
+
+          expect(held.workflow).toEqual({
+            slug: "editorial",
+            label: "Editorial",
+          });
+          expect(free.workflow).toBeNull();
+        }
+      );
+
       it("answers a document of a collection with no workflow as no workflow and no parts", async () => {
         current = await bootSteps(dialect, undefined, {
           collections: [plain],

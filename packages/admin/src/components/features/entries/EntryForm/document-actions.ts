@@ -145,6 +145,11 @@ export interface DocumentActionState {
    * of a document without one.
    */
   review?: ReviewActionState;
+  /**
+   * Whether a workflow holds this collection's publishing, known before the
+   * document exists. Absent means false.
+   */
+  workflowAttached?: boolean;
 }
 
 /** What a workflow step does, which decides where it is drawn. */
@@ -527,8 +532,9 @@ const BUILT_IN_ACTIONS: readonly ActionRule[] = [
  * public sees, and it belongs with the other destructive verbs.
  */
 export function documentActions(
-  state: DocumentActionState
+  given: DocumentActionState
 ): EditorDocumentAction[] {
+  const state = createHeldByWorkflow(given);
   const blocked = state.readingHistory ? HISTORY_REASON : undefined;
   const built = BUILT_IN_ACTIONS.filter(
     rule =>
@@ -557,6 +563,19 @@ export function documentActions(
   return primary === undefined
     ? [...built, ...reviewRows]
     : [primary, ...built, ...reviewRows];
+}
+
+/**
+ * A document being created where a workflow holds publishing cannot go live
+ * as it is created: nothing of it has been approved, and the server refuses a
+ * create that names `published`. It is offered as to a person who may not
+ * publish — Save draft leads, and Publish is not offered — so the one action
+ * drawn as the thing to press is one that can succeed.
+ */
+function createHeldByWorkflow(state: DocumentActionState): DocumentActionState {
+  return state.mode === "create" && state.workflowAttached === true
+    ? { ...state, canPublish: false }
+    : state;
 }
 
 /** The id a workflow step is offered under, apart from every built-in. */

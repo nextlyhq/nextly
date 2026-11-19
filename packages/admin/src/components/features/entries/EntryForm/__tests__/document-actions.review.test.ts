@@ -288,4 +288,31 @@ describe("the next step, per person and stage", () => {
     }
     expect(cases).toBe(36);
   });
+
+  describe("creating a document in a collection a workflow holds", () => {
+    it("leads with Save draft and offers no Publish: the gate refuses a create as published", () => {
+      const actions = documentActions(
+        state({ mode: "create", status: "draft", workflowAttached: true })
+      );
+
+      expect(actions[0]).toMatchObject({
+        id: "save",
+        label: "Save draft",
+        placement: "primary",
+      });
+      expect(actions.filter(action => action.id === "save")).toHaveLength(1);
+      expect(actions.some(action => action.id === "publish")).toBe(false);
+    });
+
+    it("leads with Publish where no workflow is attached, which is the control", () => {
+      const actions = documentActions(
+        state({ mode: "create", status: "draft" })
+      );
+
+      expect(actions[0]).toMatchObject({ id: "publish", placement: "primary" });
+      expect(
+        actionsAt(actions, "toolbar").map(action => action.label)
+      ).toContain("Save draft");
+    });
+  });
 });

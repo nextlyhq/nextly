@@ -256,6 +256,11 @@ export interface DocumentActionBindingsInput {
   pendingRecovery?: PendingRecovery | null;
   /** The workflow's next step, where a workflow is attached. */
   review?: DocumentReviewBinding;
+  /**
+   * Whether a workflow holds the collection's publishing, known before the
+   * document exists, so a new document leads with Save draft.
+   */
+  workflowAttached?: boolean;
 }
 
 /**
@@ -634,6 +639,7 @@ export function useDocumentActionBindings({
   onViewApi,
   pendingRecovery,
   review,
+  workflowAttached,
 }: DocumentActionBindingsInput): DocumentActionBindings {
   const { defaultLocale } = useLocalization();
   // True while the document area is showing a past version rather than the
@@ -724,6 +730,7 @@ export function useDocumentActionBindings({
     canDuplicate: onDuplicate !== undefined,
     writesRefused,
     ...(review === undefined ? {} : { review: review.state }),
+    workflowAttached: workflowAttached === true,
   });
   // A plugin's overrides, applied to what the model offers and to what each
   // verb runs, so the row, its control and `run` agree about them.
