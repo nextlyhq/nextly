@@ -23,6 +23,7 @@ import type { BlockDocument } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
 import { BlockIconMark } from "../block-icon";
+import { useSelectionActions } from "../canvas/selection-actions";
 import type { EditorState } from "../editor-state";
 import {
   InsertAnnouncement,
@@ -38,7 +39,6 @@ import {
   type ComponentTitleOf,
   type LayerNode,
 } from "../panels/layers/layers";
-import { useSelectionActions } from "../selection-actions";
 
 import { builderCommands } from "./builder-commands";
 import {

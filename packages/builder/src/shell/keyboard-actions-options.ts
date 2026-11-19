@@ -9,7 +9,8 @@
 import type { ComponentLookup, NestingSource } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
-import type { BlockClipboardVerbs } from "../block-clipboard-verbs";
+import type { BlockClipboardVerbs } from "../canvas/block-clipboard-verbs";
+import type { OfferSignal, SelectionOffer } from "../canvas/selection-offer";
 import type {
   ComponentVerbsOffer,
   ToolbarAction,
@@ -17,8 +18,7 @@ import type {
   TurnIntoChoice,
 } from "../canvas/toolbar-actions";
 import type { EditorState } from "../editor-state";
-import type { OfferSignal, SelectionOffer } from "../selection-offer";
-import type { SharedStyleOffer } from "../shared-style-target";
+import type { SharedStyleOffer } from "../styles/shared-style-target";
 
 import type { BlockActions, ToolbarFocusSlot } from "./block-actions-context";
 

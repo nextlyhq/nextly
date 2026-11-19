@@ -6,7 +6,7 @@
  *
  * @module editor-field-commit
  */
-import { isHTMLElement } from "../../dom-kind";
+import { isHTMLElement } from "../../canvas/dom-kind";
 
 export function commitFocusedField(document: Document | undefined): void {
   const active = document?.activeElement;

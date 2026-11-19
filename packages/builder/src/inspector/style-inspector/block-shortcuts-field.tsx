@@ -14,6 +14,8 @@ import {
 import { Switch } from "@nextlyhq/ui";
 import * as React from "react";
 
+import type { EditorState } from "../../editor-state";
+import type { BuilderOp } from "../../op-vocabulary";
 import {
   BUTTON_BLOCK,
   FULL_SCREEN,
@@ -34,9 +36,7 @@ import {
   type Reaching,
   type ShortcutAt,
   type SizeChoice,
-} from "../../block-shortcuts";
-import type { EditorState } from "../../editor-state";
-import type { BuilderOp } from "../../op-vocabulary";
+} from "../../styles/block-shortcuts";
 import {
   FULL_WIDTH_WRITES,
   heightShortcutWrites,

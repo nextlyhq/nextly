@@ -25,7 +25,7 @@ import {
   type LayoutWrite,
   type ParentArrangement,
   type ParentItems,
-} from "../../plain-layout";
+} from "../../styles/plain-layout";
 import { layoutWritesText } from "../code-hints";
 import { SegmentChoices } from "../segment-choices";
 import { SettingSlot } from "../settings-filter";

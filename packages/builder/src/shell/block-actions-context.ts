@@ -18,9 +18,9 @@ import {
 } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
-import type { MoveDirection } from "../keyboard-move";
-import type { SelectionOffer } from "../selection-offer";
-import type { TurnIntoOffer } from "../turn-into-verb";
+import type { MoveDirection } from "../canvas/keyboard-move";
+import type { SelectionOffer } from "../canvas/selection-offer";
+import type { TurnIntoOffer } from "../canvas/turn-into-verb";
 
 /**
  * The structural verbs, as callables.

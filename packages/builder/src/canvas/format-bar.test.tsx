@@ -23,7 +23,7 @@ import {
   BlockActionsContext,
   type BlockActions,
 } from "../shell/block-actions-context";
-import type { TurnIntoOffer } from "../turn-into-verb";
+import type { TurnIntoOffer } from "./turn-into-verb";
 
 import {
   createFormatBarStore,

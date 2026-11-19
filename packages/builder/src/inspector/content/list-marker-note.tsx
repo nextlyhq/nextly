@@ -17,9 +17,9 @@ import type {
 } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
-import { chainedStyleOp } from "../../columns-layout";
+import { chainedStyleOp } from "../../canvas/columns-layout";
 import type { BuilderOp } from "../../op-vocabulary";
-import { readStyleValue } from "../../style-values";
+import { readStyleValue } from "../../styles/style-values";
 
 /** The block a marker note belongs to. */
 const LIST_BLOCK = "core/list";

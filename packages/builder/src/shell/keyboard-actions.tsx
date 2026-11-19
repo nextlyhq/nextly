@@ -37,8 +37,8 @@ import * as React from "react";
 import {
   BlockClipboardEvents,
   CLIPBOARD_KEY_HELP,
-} from "../block-clipboard-events";
-import { useBlockClipboardVerbs } from "../block-clipboard-verbs";
+} from "../canvas/block-clipboard-events";
+import { useBlockClipboardVerbs } from "../canvas/block-clipboard-verbs";
 import {
   CANVAS_ESCAPE_PRIORITY,
   escapeOutcome,
@@ -48,6 +48,19 @@ import {
 } from "../canvas/canvas-escape";
 import { useCanvasFrame } from "../canvas/canvas-frame-context";
 import {
+  keyboardMovePosition,
+  type MoveDirection,
+} from "../canvas/keyboard-move";
+import { usePreviewedCollection } from "../canvas/previewed-entry";
+import { offerSignal, useSelectionOffer } from "../canvas/selection-offer";
+import {
+  isRefusal,
+  selectionDeletion,
+  selectionDuplication,
+  selectionMove,
+} from "../canvas/selection-ops";
+import { planUnwrap, planWrap } from "../canvas/selection-wrap";
+import {
   patternSaveRefusal,
   SAVE_PATTERN_GRANT_REFUSAL,
   toolbarActions,
@@ -55,11 +68,11 @@ import {
   type MoveJudge,
   type MovePosition,
 } from "../canvas/toolbar-actions";
+import { runTurnInto, turnIntoOffers } from "../canvas/turn-into-verb";
 import type { EditorState } from "../editor-state";
 import { escapeFieldEdit } from "../field-edit";
 import { lockViewOf } from "../inspector/inspector";
 import { placedComponentId } from "../inspector/instance-inspector";
-import { keyboardMovePosition, type MoveDirection } from "../keyboard-move";
 import { lockedBlockWording, lockRefusalWording } from "../lock-refusal";
 import { lockBlockingMove } from "../locking";
 import {
@@ -68,17 +81,7 @@ import {
   unmovedAnnouncement,
 } from "../move-refusal";
 import { pathTo } from "../panels/layers/layers";
-import { usePreviewedCollection } from "../previewed-entry";
-import { offerSignal, useSelectionOffer } from "../selection-offer";
-import {
-  isRefusal,
-  selectionDeletion,
-  selectionDuplication,
-  selectionMove,
-} from "../selection-ops";
-import { planUnwrap, planWrap } from "../selection-wrap";
-import { useStyleClipboardVerbs } from "../style-clipboard-verbs";
-import { runTurnInto, turnIntoOffers } from "../turn-into-verb";
+import { useStyleClipboardVerbs } from "../styles/style-clipboard-verbs";
 
 import {
   type BlockActions,

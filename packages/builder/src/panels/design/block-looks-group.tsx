@@ -20,18 +20,18 @@ import type {
 } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
+import { LookSpecimen } from "../../inspector/style-inspector/look-tiles-view";
 import {
   BLOCK_STYLE_WORDS,
   newStyleWords,
   type BlockStyleActions,
   type BlockStyleMade,
-} from "../../block-style-actions";
-import { LookSpecimen } from "../../inspector/style-inspector/look-tiles-view";
+} from "../../styles/block-style-actions";
 import {
   sharedStyleReachSentence,
   type BlocksOnThisPage,
   type SharedStyleReach,
-} from "../../shared-style-library";
+} from "../../styles/shared-style-library";
 import { blockLabel } from "../add/inserter";
 
 import {

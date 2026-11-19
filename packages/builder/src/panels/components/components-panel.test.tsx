@@ -32,7 +32,7 @@ import { labelNotInName } from "../../label-in-name.fixture";
 import { EditorRail } from "../../shell/editor-rail";
 import type { EditorState } from "../../editor-state";
 import { InsertPanel } from "../add/insert-panel";
-import { EMPTY_SELECTION } from "../../selection";
+import { EMPTY_SELECTION } from "../../canvas/selection";
 import type { LeftPanel } from "../../shell-state";
 
 beforeAll(() => {

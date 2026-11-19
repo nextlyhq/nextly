@@ -30,9 +30,17 @@ import * as React from "react";
 
 import { useCanvasTokenMode } from "../../canvas/prefers-dark";
 import { ChromeTooltip } from "../../chrome-tooltip";
-import { variableFor, variableLabel, variablesFor } from "../../style-colour";
-import type { StyleControl } from "../../style-controls";
-import { sideOf, type LogicalSide, type SideBox } from "../../style-sides";
+import {
+  variableFor,
+  variableLabel,
+  variablesFor,
+} from "../../styles/style-colour";
+import type { StyleControl } from "../../styles/style-controls";
+import {
+  sideOf,
+  type LogicalSide,
+  type SideBox,
+} from "../../styles/style-sides";
 
 import { variableRead } from "./site-default-source";
 import { SpacingSidePopover, type SideClose } from "./spacing-side-popover";

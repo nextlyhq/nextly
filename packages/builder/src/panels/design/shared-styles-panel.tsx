@@ -54,7 +54,7 @@ import {
   BLOCK_STYLE_WORDS,
   blockStyleActionsOf,
   type BlockStyleActions,
-} from "../../block-style-actions";
+} from "../../styles/block-style-actions";
 import {
   inSharedStyleFilter,
   sharedStyleUse,
@@ -64,7 +64,7 @@ import {
   type SharedStyleFilter,
   type SharedStyleReach,
   type SharedStyleRow,
-} from "../../shared-style-library";
+} from "../../styles/shared-style-library";
 
 import { lookKeyOf, type BlockLookGroup } from "./block-look-rows";
 import { BlockLooksGroup } from "./block-looks-group";

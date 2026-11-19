@@ -33,8 +33,8 @@ import {
   VariableChip,
   VariableChoice,
 } from "../../panels/design/variable-choice";
-import { variablesFor, type SiteVariable } from "../../style-colour";
-import { variableValueText } from "../../style-variables";
+import { variablesFor, type SiteVariable } from "../../styles/style-colour";
+import { variableValueText } from "../../styles/style-variables";
 import { commitOnEnter } from "../commit-on-enter";
 import { CssHint } from "../css-hint";
 import { arrowTo } from "../segment-choices";

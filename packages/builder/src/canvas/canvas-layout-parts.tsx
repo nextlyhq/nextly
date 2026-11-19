@@ -21,8 +21,6 @@ import {
 } from "@nextlyhq/blocks-react/environment";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { isHTMLElement } from "../dom-kind";
-
 import type { CanvasEditingRegion } from "./canvas-props";
 import {
   CanvasRegionFrame,
@@ -32,6 +30,7 @@ import {
   type CanvasRegion,
   type EmptyRegionBandProps,
 } from "./canvas-regions";
+import { isHTMLElement } from "./dom-kind";
 
 /** A region of the page's Layout, with how it treats the site sheet. */
 interface DrawnRegion {
