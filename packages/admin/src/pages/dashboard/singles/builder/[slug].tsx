@@ -396,7 +396,8 @@ export default function SingleBuilderEditPage({
     confirmation,
     // Judged against the fields as last saved, so a draft that changes a
     // saved field's storage level is refused before it can lose values.
-    getValidatedFields: () => getValidatedFields(pending.saved),
+    getValidatedFields: () =>
+      getValidatedFields(pending.saved, pending.savedBuiltIns),
     // Its renames of saved fields are the save's to answer, as renames.
     pendingChanges: pending.changes,
     preview: fields =>

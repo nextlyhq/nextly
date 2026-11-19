@@ -42,9 +42,12 @@ export interface UseBuilderFieldActionsReturn {
    * — in which case the reason has already been shown as a toast. Given the
    * fields as last saved, it also refuses a draft that takes a saved field to
    * another storage level, which the save would not yet keep the values of.
+   * Given the built-in rows as last saved (`savedBuiltIns`), it sends a title
+   * whose Unique was stored on and is now off; without them, only one now on.
    */
   getValidatedFields: (
-    saved?: readonly BuilderField[]
+    saved?: readonly BuilderField[],
+    savedBuiltIns?: readonly BuilderField[]
   ) => FieldDefinition[] | null;
 }
 
@@ -67,7 +70,10 @@ export function useBuilderFieldActions(
   );
 
   const getValidatedFields = useCallback(
-    (saved?: readonly BuilderField[]): FieldDefinition[] | null => {
+    (
+      saved?: readonly BuilderField[],
+      savedBuiltIns: readonly BuilderField[] = []
+    ): FieldDefinition[] | null => {
       const builtInNames = builtInFieldNamesOf(kind);
       const userFields = builder.fields.filter(
         f => !f.isSystem && !builtInNames.includes(f.name)
@@ -93,11 +99,12 @@ export function useBuilderFieldActions(
         );
         return null;
       }
-      // A built-in row the person set Unique on or off for goes first, as the Builder shows it;
+      // A built-in row whose Unique is on, or was stored on, goes first, as the Builder shows it;
       // the server checks a title made unique for repeats before anything changes.
-      return [...builtInFieldsToSave(kind, builder.fields), ...userFields].map(
-        convertToFieldDefinition
-      );
+      return [
+        ...builtInFieldsToSave(kind, builder.fields, savedBuiltIns),
+        ...userFields,
+      ].map(convertToFieldDefinition);
     },
     [builder, kind]
   );

@@ -99,7 +99,13 @@ export function builtInFieldsAsStored<
     const declared = choosesBuiltInUnique(kind, row)
       ? stored.find(field => field.name === row.name)
       : undefined;
-    if (declared === undefined) return row;
+    // A title the entity never stored is the shared one kept on the main table: sent, it says so,
+    // since a text field declared without `localized` is translated on a translated collection.
+    if (declared === undefined) {
+      return choosesBuiltInUnique(kind, row)
+        ? { ...row, advanced: { ...row.advanced, localized: false } }
+        : row;
+    }
     const built = fromStored(declared);
     // Unique is set below from what was stored: on, or left unset.
     const advanced = { ...built.advanced };
@@ -115,18 +121,28 @@ export function builtInFieldsAsStored<
 }
 
 /**
- * The built-in rows a save of `kind` sends: each whose Unique the person chooses and has set,
- * on or off (by a toggle, or as stored). Sent off as well as on: the server keeps a stored
- * built-in field it is not sent, so turning Unique off has to say so. One never set is left out,
- * as every built-in field was before.
+ * The built-in rows a save of `kind` sends: each whose Unique the person chooses and is on now, or
+ * was on in `savedBuiltIns` (the rows as loaded or last saved). Sent off as well as on: the server
+ * keeps a stored built-in field it is not sent, so turning a stored Unique off has to say so. One
+ * neither on nor stored on is left out, as every built-in field was before, so a toggle turned on
+ * and back off sends nothing.
  */
 export function builtInFieldsToSave(
   kind: SchemaTemplateKind,
-  fields: readonly BuilderField[]
+  fields: readonly BuilderField[],
+  savedBuiltIns: readonly BuilderField[]
 ): BuilderField[] {
+  const savedOn = (field: BuilderField) =>
+    savedBuiltIns.some(
+      row =>
+        row.isSystem === true &&
+        row.name === field.name &&
+        row.advanced?.unique === true
+    );
   return fields.filter(
     field =>
-      choosesBuiltInUnique(kind, field) && field.advanced?.unique !== undefined
+      choosesBuiltInUnique(kind, field) &&
+      (field.advanced?.unique === true || savedOn(field))
   );
 }
 

@@ -94,6 +94,11 @@ export interface BuilderPendingChanges {
    * name.
    */
   saved: readonly BuilderField[];
+  /**
+   * The built-in rows as loaded or last saved: what a save measures a title's Unique against, so
+   * it sends the title only where it is on or was stored on (`builtInFieldsToSave`).
+   */
+  savedBuiltIns: readonly BuilderField[];
   canUndo: boolean;
   canRedo: boolean;
   /** Undo one step, answering with what it undid, for announcing. */
@@ -363,13 +368,15 @@ export function useBuilderEntityState<TEntity>({
  */
 function describeSnapshotStep(
   before: BuilderSnapshot,
-  after: BuilderSnapshot
+  after: BuilderSnapshot,
+  /** Which built-in rows a save sends: a step that toggles one names it. */
+  savesBuiltIn: (field: BuilderField) => boolean
 ): string {
   if (before.fields === after.fields && before.settings && after.settings) {
     const changed = settingChanges(before.settings, after.settings);
     return `changed the settings: ${changed.map(c => c.label).join(", ")}`;
   }
-  return describeStep(before.fields, after.fields);
+  return describeStep(before.fields, after.fields, savesBuiltIn);
 }
 
 /**
@@ -388,19 +395,22 @@ function useFieldPendingChanges(
   changedSettings: readonly SettingChange[]
 ): BuilderPendingChanges {
   const { fields, resetFields, undo: undoFields, redo: redoFields } = builder;
+  // The one test of which built-in rows a save sends, for the change list and the history's words.
+  const savesBuiltIn = useCallback(
+    (field: BuilderField) => choosesBuiltInUnique(kind, field),
+    [kind]
+  );
   // The net changes from what was saved, by field identity.
   // The built-in rows' own changes first, where the Builder shows those rows.
   const changes = useMemo(
     () =>
       saved
         ? [
-            ...builtInChanges(savedBuiltIns, fields, field =>
-              choosesBuiltInUnique(kind, field)
-            ),
+            ...builtInChanges(savedBuiltIns, fields, savesBuiltIn),
             ...pendingChanges(saved, fields),
           ]
         : [],
-    [saved, savedBuiltIns, kind, fields]
+    [saved, savedBuiltIns, savesBuiltIn, fields]
   );
   const marks = useMemo(
     () =>
@@ -412,12 +422,16 @@ function useFieldPendingChanges(
   const undo = useCallback(() => {
     const step = undoFields();
     // What the step undone did, from the fields before it to those after.
-    return step ? `Undid: ${describeSnapshotStep(step.to, step.from)}` : null;
-  }, [undoFields]);
+    return step
+      ? `Undid: ${describeSnapshotStep(step.to, step.from, savesBuiltIn)}`
+      : null;
+  }, [undoFields, savesBuiltIn]);
   const redo = useCallback(() => {
     const step = redoFields();
-    return step ? `Redid: ${describeSnapshotStep(step.from, step.to)}` : null;
-  }, [redoFields]);
+    return step
+      ? `Redid: ${describeSnapshotStep(step.from, step.to, savesBuiltIn)}`
+      : null;
+  }, [redoFields, savesBuiltIn]);
   const discardAll = useCallback(() => {
     // The built-in rows as saved, a title's Unique included, then the saved fields; the saved
     // settings come back with them, in one fresh history.
@@ -431,6 +445,7 @@ function useFieldPendingChanges(
     marks,
     settingChanges: changedSettings,
     saved: saved ?? NO_FIELDS,
+    savedBuiltIns,
     canUndo: builder.canUndo,
     canRedo: builder.canRedo,
     undo,

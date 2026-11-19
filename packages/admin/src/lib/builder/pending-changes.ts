@@ -419,9 +419,14 @@ function describeChange(change: PendingChange): string {
  */
 export function describeStep(
   before: readonly BuilderField[],
-  after: readonly BuilderField[]
+  after: readonly BuilderField[],
+  /** Which built-in rows a save sends (`builtInChanges`): their changes are named as well. */
+  savesBuiltIn: (field: BuilderField) => boolean = () => false
 ): string {
-  const changes = pendingChanges(before, after);
+  const changes = [
+    ...builtInChanges(before, after, savesBuiltIn),
+    ...pendingChanges(before, after),
+  ];
   if (changes.length === 1 && changes[0]) return describeChange(changes[0]);
   return `${changes.length} changes`;
 }

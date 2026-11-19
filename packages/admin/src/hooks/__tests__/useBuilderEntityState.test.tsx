@@ -370,13 +370,24 @@ describe("a collection's title Unique", () => {
         ? { ...field, advanced: { ...field.advanced, unique } }
         : field
     );
+  // What a save sends, measured from the built-in rows as loaded, as the Builder pages pass them.
+  const sentFields = (
+    builder: ReturnType<typeof makeBuilder>,
+    kind: SchemaTemplateKind,
+    savedBuiltIns: readonly BuilderField[]
+  ) =>
+    renderHook(() =>
+      useBuilderFieldActions(builder.api, kind)
+    ).result.current.getValidatedFields(undefined, savedBuiltIns);
   const sent = (
     builder: ReturnType<typeof makeBuilder>,
-    kind: SchemaTemplateKind
+    kind: SchemaTemplateKind,
+    savedBuiltIns: readonly BuilderField[]
   ) =>
-    renderHook(() => useBuilderFieldActions(builder.api, kind))
-      .result.current.getValidatedFields()
-      ?.map(field => [field.name, field.unique]);
+    sentFields(builder, kind, savedBuiltIns)?.map(field => [
+      field.name,
+      field.unique,
+    ]);
 
   it("counts turning it on as one change of the title's settings, and saves the title with it", () => {
     const entity = {
@@ -396,7 +407,9 @@ describe("a collection's title Unique", () => {
     expect(result.current.pending.changes).toEqual([
       expect.objectContaining({ kind: "settings", name: "title" }),
     ]);
-    expect(sent(builder, "collection")).toEqual([
+    expect(
+      sent(builder, "collection", result.current.pending.savedBuiltIns)
+    ).toEqual([
       ["title", true],
       ["body", false],
     ]);
@@ -419,7 +432,9 @@ describe("a collection's title Unique", () => {
 
     expect(result.current.unsavedCount).toBe(1);
     // Off is sent: the server keeps a stored built-in field it is not sent.
-    expect(sent(builder, "collection")).toEqual([
+    expect(
+      sent(builder, "collection", result.current.pending.savedBuiltIns)
+    ).toEqual([
       ["title", false],
       ["body", false],
     ]);
@@ -472,15 +487,80 @@ describe("a collection's title Unique", () => {
     );
     rerender({ e: entity });
 
-    const saved = renderHook(() =>
-      useBuilderFieldActions(builder.api, "collection")
-    ).result.current.getValidatedFields();
+    const saved = sentFields(
+      builder,
+      "collection",
+      result.current.pending.savedBuiltIns
+    );
     expect(saved?.[0]).toMatchObject({
       name: "title",
       label: "Headline",
       required: true,
       unique: false,
     });
+  });
+
+  it("sends a title never stored as shared, not translated, when its Unique is turned on", () => {
+    // A text field declared without `localized` is translated on a translated collection, which
+    // would move the built-in title off the main table.
+    const entity = {
+      slug: "posts",
+      name: "Post",
+      fields: [definition("body")],
+    };
+    const { result, builder, rerender } = setup(entity);
+    act(() =>
+      builder.api.setFields(withUnique(builder.api.fields, "title", true))
+    );
+    rerender({ e: entity });
+
+    expect(
+      sentFields(builder, "collection", result.current.pending.savedBuiltIns)?.[0]
+    ).toMatchObject({ name: "title", unique: true, localized: false });
+  });
+
+  it("sends nothing of a title never stored once its Unique is turned on and back off", () => {
+    // Off again is no change, so no save carries the title: a later save of another field
+    // leaves the built-in title as the server defines it.
+    const entity = {
+      slug: "posts",
+      name: "Post",
+      fields: [definition("body")],
+    };
+    const { result, builder, rerender } = setup(entity);
+    act(() =>
+      builder.api.setFields(withUnique(builder.api.fields, "title", true))
+    );
+    act(() =>
+      builder.api.setFields(withUnique(builder.api.fields, "title", false))
+    );
+    rerender({ e: entity });
+
+    expect(result.current.unsavedCount).toBe(0);
+    expect(
+      sent(builder, "collection", result.current.pending.savedBuiltIns)
+    ).toEqual([["body", false]]);
+  });
+
+  it("names the title's Unique in what Undo and Redo of its toggle did", () => {
+    const entity = {
+      slug: "posts",
+      name: "Post",
+      fields: [definition("body")],
+    };
+    const { result, builder, rerender } = setup(entity);
+    const off = builder.api.fields;
+    const on = withUnique(off, "title", true);
+    const step = {
+      from: { fields: off, settings: null },
+      to: { fields: on, settings: null },
+    };
+    vi.mocked(builder.api.undo).mockReturnValue(step);
+    vi.mocked(builder.api.redo).mockReturnValue(step);
+    rerender({ e: entity });
+
+    expect(result.current.pending.undo()).toBe("Undid: changed Title");
+    expect(result.current.pending.redo()).toBe("Redid: changed Title");
   });
 
   it("counts no change for a Single's built-in Unique, which no save sends", () => {
@@ -508,7 +588,13 @@ describe("a collection's title Unique", () => {
         withUnique(collection.builder.api.fields, "slug", true)
       )
     );
-    expect(sent(collection.builder, "collection")).toEqual([["body", false]]);
+    expect(
+      sent(
+        collection.builder,
+        "collection",
+        collection.result.current.pending.savedBuiltIns
+      )
+    ).toEqual([["body", false]]);
 
     const single = setup(entity, { kind: "single" });
     act(() =>
@@ -516,6 +602,8 @@ describe("a collection's title Unique", () => {
         withUnique(single.builder.api.fields, "title", true)
       )
     );
-    expect(sent(single.builder, "single")).toEqual([["body", false]]);
+    expect(
+      sent(single.builder, "single", single.result.current.pending.savedBuiltIns)
+    ).toEqual([["body", false]]);
   });
 });
