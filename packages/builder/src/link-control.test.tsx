@@ -44,6 +44,7 @@ import type {
 } from "./content-controls";
 import type { EditorState } from "./editor-state";
 import { InspectorPanel } from "./inspector-panel";
+import { labelNotInName } from "./label-in-name.fixture";
 import { commitLinkChanges } from "./link-control";
 
 beforeAll(() => {
@@ -254,6 +255,12 @@ describe("the link group", () => {
   it("draws one link row, and the new-tab and rel rows only once a link is set", () => {
     mount("acme/heading", {}, { findLinkTargets: targetsService() });
     expect(trigger().textContent).toBe("Search or paste a URL");
+    // The words it draws are in its name, in order, so a speech-input user
+    // saying them reaches it.
+    expect(trigger().getAttribute("aria-label")).toBe(
+      "Link: search or paste a URL"
+    );
+    expect(labelNotInName(trigger())).toBeNull();
     expect(screen.queryByText("Open in a new tab")).toBeNull();
     expect(screen.queryByText("Link relationship")).toBeNull();
     expect(

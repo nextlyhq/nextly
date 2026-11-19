@@ -650,12 +650,17 @@ function bareNumberHint(control: StyleControl): string {
   return /^-?[\d.]+/.exec(placeholderFor(control))?.[0] ?? "";
 }
 
+/** A value that is one variable and nothing else: `var(--site-font-size-h2)`. */
+const VARIABLE_ALONE = /^var\(\s*--[\w-]+\s*\)$/;
+
 /**
  * Whether a choice in the unit menu can act: on a measurement, a keyword, or
  * any bare number the commit will give the unit (".5", "1e3" included, by the
  * same grammar). On an empty field only when what shows there is a
  * measurement or nothing: an inherited "auto" or "clamp(…)" beside "px"
- * would read as one value it is not.
+ * would read as one value it is not. An inherited variable alone, a Site text
+ * size, acts too: the field never shows it as text, and the next number takes
+ * the unit chosen, as on any empty field.
  */
 function unitActs(
   draft: string,
@@ -666,7 +671,9 @@ function unitActs(
   const text = trimCssWhitespace(draft);
   if (text === "") {
     return (
-      inherited === undefined || measurementOfText(inherited) !== undefined
+      inherited === undefined ||
+      measurementOfText(inherited) !== undefined ||
+      VARIABLE_ALONE.test(trimCssWhitespace(inherited))
     );
   }
   return measurement !== undefined || isKeyword || CSS_NUMBER.test(text);

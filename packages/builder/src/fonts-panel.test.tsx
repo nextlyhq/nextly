@@ -360,6 +360,16 @@ describe("the font variables", () => {
     expect(within(body).getByText("Aa").style.fontFamily).toContain("Inter");
   });
 
+  it("is named from text that starts with the words it shows", () => {
+    panel({ onOpenTokens: vi.fn() });
+    const body = row(/^Body/);
+    // No aria-label laid over the row: its name is its own text, which
+    // starts with the name and the family the row draws, so speaking what
+    // is on screen reaches it, and the decorative "Aa" is in no label.
+    expect(body.getAttribute("aria-label")).toBeNull();
+    expect(screen.getByRole("button", { name: /^Body, Inter\b/ })).toBe(body);
+  });
+
   it("says when a variable asks first for a family the site has no file for", () => {
     const onOpenTokens = vi.fn();
     panel({ onOpenTokens });
