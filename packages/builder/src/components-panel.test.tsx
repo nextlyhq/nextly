@@ -28,6 +28,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 
 import { ComponentsPanel } from "./components-panel";
+import { labelNotInName } from "./label-in-name.fixture";
 import { EditorRail } from "./shell/editor-rail";
 import type { EditorState } from "./editor-state";
 import { InsertPanel } from "./panels/add/insert-panel";
@@ -141,10 +142,25 @@ function placeButton(name: string): HTMLElement {
   return screen.getByRole("button", { name });
 }
 
+/**
+ * An element's accessible name, as a screen reader hears it: read through the
+ * role query, which computes the name the same way for every button it finds.
+ */
+function nameOf(element: Element): string | undefined {
+  let heard: string | undefined;
+  screen.queryAllByRole("button", {
+    name: (name, each) => {
+      if (each === element) heard = name;
+      return false;
+    },
+  });
+  return heard;
+}
+
 /** The names of the rows drawn, in order. */
-function rowNames(): (string | null)[] {
-  return [...document.querySelectorAll("[data-component-row-place]")].map(row =>
-    row.getAttribute("aria-label")
+function rowNames(): (string | undefined)[] {
+  return [...document.querySelectorAll("[data-component-row-place]")].map(
+    nameOf
   );
 }
 
@@ -177,6 +193,17 @@ describe("the Components panel's list", () => {
 
     expect(rowNames()).toEqual(["Promo card", "CTA band"]);
     expect(described(placeButton("Promo card"))).toBe("A card.");
+  });
+
+  it("names each row by the name it draws, with what else it draws said after", () => {
+    registerText();
+    renderPanel({ editor: editorSpy(documentOf()) });
+    const promo = placeButton("Promo card");
+    // A label over the row would have to hold its drawn description too, so
+    // the row is named by the name it draws, and the rest describes it.
+    expect(promo.getAttribute("aria-label")).toBeNull();
+    expect(labelNotInName(promo)).toBeNull();
+    expect(described(promo)).toBe("A card.");
   });
 
   it("narrows the list by the search, and says when nothing matches", () => {

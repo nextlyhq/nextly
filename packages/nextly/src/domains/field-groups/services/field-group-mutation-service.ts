@@ -806,7 +806,7 @@ export class FieldGroupMutationService extends BaseService {
   private async writeFieldGroupsPooled(
     params: Omit<SaveComponentDataParams, "access">
   ): Promise<void> {
-    const { parentId, parentTable, fields, data, locale, req } = params;
+    const { parentId, parentTable, fields, data, locale, req, write } = params;
     const { assembledFromStorage } = params;
     await this.eachFieldGroupWrite(fields, data, {
       clear: async f => {
@@ -822,6 +822,7 @@ export class FieldGroupMutationService extends BaseService {
             data: fieldData,
             locale,
             req,
+            write,
             assembledFromStorage,
           });
         } else if (f.component) {
@@ -834,6 +835,7 @@ export class FieldGroupMutationService extends BaseService {
               data: fieldData,
               locale,
               req,
+              write,
               assembledFromStorage,
             });
           } else {
@@ -845,6 +847,7 @@ export class FieldGroupMutationService extends BaseService {
               data: fieldData as ComponentInstanceData,
               locale,
               req,
+              write,
               assembledFromStorage,
             });
           }
@@ -1150,6 +1153,8 @@ export class FieldGroupMutationService extends BaseService {
     data: ComponentInstanceData;
     locale?: string;
     req?: Record<string, unknown>;
+    /** See {@link SaveComponentDataParams.write}. */
+    write?: EntryWriteContext;
     /** See {@link SaveComponentDataParams.assembledFromStorage}. */
     assembledFromStorage?: boolean;
   }): Promise<void> {
@@ -1188,7 +1193,9 @@ export class FieldGroupMutationService extends BaseService {
         componentMeta.slug,
         // The row this field's single instance is, whatever id is sent.
         existing[0]?.id,
-        undefined,
+        // The host write, seen through `instanceWriteOf`, as the write in a
+        // transaction hands it: a validator judging by it is not left blind.
+        params.write,
         assembledFromStorage
       );
 
@@ -1252,7 +1259,7 @@ export class FieldGroupMutationService extends BaseService {
       // The field groups placed directly in it, as rows whose parent is this one.
       await this.writeNestedPooled(
         { id: instanceId, tableName, fields: componentFields, data },
-        { locale, req, assembledFromStorage }
+        { locale, req, write: params.write, assembledFromStorage }
       );
     } catch (error) {
       // Rethrow already-mapped NextlyErrors (and ServiceError shims, which
@@ -1408,6 +1415,8 @@ export class FieldGroupMutationService extends BaseService {
     data: unknown;
     locale?: string;
     req?: Record<string, unknown>;
+    /** See {@link SaveComponentDataParams.write}. */
+    write?: EntryWriteContext;
     /** See {@link SaveComponentDataParams.assembledFromStorage}. */
     assembledFromStorage?: boolean;
   }): Promise<void> {
@@ -1462,7 +1471,9 @@ export class FieldGroupMutationService extends BaseService {
           componentMeta.slug,
           // The stored row an existing instance is, for its stored passwords.
           instanceId && existingMap.has(instanceId) ? instanceId : undefined,
-          undefined,
+          // The host write, seen through `instanceWriteOf`, as the write in a
+          // transaction hands it: a validator judging by it is not left blind.
+          params.write,
           assembledFromStorage
         );
 
@@ -1493,7 +1504,7 @@ export class FieldGroupMutationService extends BaseService {
         });
         await this.writeNestedPooled(
           { ...written, fields: componentFields, data: instance },
-          { locale, req, assembledFromStorage }
+          { locale, req, write: params.write, assembledFromStorage }
         );
       }
 
@@ -1685,6 +1696,8 @@ export class FieldGroupMutationService extends BaseService {
     data: unknown;
     locale?: string;
     req?: Record<string, unknown>;
+    /** See {@link SaveComponentDataParams.write}. */
+    write?: EntryWriteContext;
     /** See {@link SaveComponentDataParams.assembledFromStorage}. */
     assembledFromStorage?: boolean;
   }): Promise<void> {
@@ -1781,6 +1794,8 @@ export class FieldGroupMutationService extends BaseService {
         }
 
         const prepared = await this.prepareZoneBlock({
+          // The host write, as the write in a transaction hands it.
+          write: params.write,
           instance,
           componentType,
           metaCache,
@@ -1816,7 +1831,7 @@ export class FieldGroupMutationService extends BaseService {
         });
         await this.writeNestedPooled(
           { ...written, fields: componentFields, data: instance },
-          { locale, req, assembledFromStorage }
+          { locale, req, write: params.write, assembledFromStorage }
         );
       }
 
