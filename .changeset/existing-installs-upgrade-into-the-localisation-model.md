@@ -29,4 +29,4 @@
 "nextly": patch
 ---
 
-`nextly upgrade` brings an existing installation into the localisation model without losing anything: translatable values move per language, pending changes are keyed and split by part against what is live, language codes take their standard form, and Singles' translations are dated from their history. Its dry run lists what will move, what conflicts and what to check, and `--json` prints the plan. An older language code is read as its standard form for one release.
+`nextly migrate` brings an existing installation into the localisation model without losing anything: translatable values move per language, pending changes are keyed and split by part against what is live, language codes take their standard form, and Singles' translations are dated from their history. Its dry run lists what will move, what conflicts and what to check. Translatable fields are now always stored per language: `experimental.perLanguageStorage` has no effect and the start warns when it is set. An older language code is read as its standard form for one release.
