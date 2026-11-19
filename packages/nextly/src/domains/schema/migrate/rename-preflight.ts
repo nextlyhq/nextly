@@ -47,7 +47,10 @@
  * either: there is nothing left to rename.
  *
  * Statements are read through the shared readers (`renamesIn`,
- * `tablesChangedIn`), so a word in a string or a comment is never code.
+ * `tablesChangedIn`), so a word in a string or a comment is never code. On
+ * MySQL, a run `migrate:create` writes (a column's rename or nullability change
+ * built from the catalog when the file runs) is read as the one plain statement
+ * it amounts to (`plainMysqlEquivalents`).
  *
  * @module domains/schema/migrate/rename-preflight
  */
@@ -56,6 +59,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { NextlyError } from "../../../errors/nextly-error";
 import { queryLiveColumnTypes } from "../pipeline/live-column-types";
 import { readNameHoldersElsewhere } from "../pipeline/live-table-facts";
+import { plainMysqlEquivalents } from "../pipeline/sql-templates/mysql-live-restate";
 import { identifierKey } from "../rename-target";
 import { readIdentifierCaseRules } from "../utils/read-identifier-case";
 
@@ -263,7 +267,13 @@ function judgedRenames(
   const judged: { file: string; rename: StatementRename }[] = [];
   const changes: RunChanges = { tables: new Set(), relationNames: false };
   for (const { label, statements, adoptableAt = [] } of units) {
-    for (const statement of statements) {
+    // On MySQL, `migrate:create` writes a column's rename as a prepared run whose statement is
+    // built from the catalog when the file runs: read as the plain rename it amounts to
+    // (`plainMysqlEquivalents`), it is judged like any other, where its four statements read one
+    // at a time stopped the reading at its PREPARE.
+    const read =
+      dialect === "mysql" ? plainMysqlEquivalents(statements) : statements;
+    for (const statement of read) {
       const renames = judgedIn(statement, dialect, changes);
       if (renames === "stop") return judged;
       for (const rename of renames) {

@@ -47,6 +47,7 @@ function part(over: Partial<PartReview> = {}): PartReview {
     reviewedVersionNo: null,
     stage: "inReview",
     stageLabel: "In review",
+    stageColour: null,
     publishable: false,
     enteredAt: null,
     enteredBy: null,
@@ -113,6 +114,24 @@ describe("ReviewSection", () => {
     expect(section).toHaveTextContent("Not assigned, waiting for Editors");
     expect(section).toHaveTextContent("Alice moved it to In review");
     expect(section).toHaveTextContent("“Ready for a look”");
+  });
+
+  it("draws the stage as Settings names it: its label on its colour, a stage with none on the neutral swatch", async () => {
+    fetchSpy.mockResolvedValue(
+      answer(part({ stageLabel: "Waiting for review", stageColour: "#d97706" }))
+    );
+    render(<ReviewSection document={post} />);
+    const section = await screen.findByRole("region", { name: "Review" });
+    const shown = within(section).getByText("Waiting for review");
+    expect(shown.closest(".bg-warning-surface")).not.toBeNull();
+  });
+
+  it("draws a stage with no colour on the neutral swatch, never a guessed one", async () => {
+    fetchSpy.mockResolvedValue(answer(part()));
+    render(<ReviewSection document={post} />);
+    const section = await screen.findByRole("region", { name: "Review" });
+    const shown = within(section).getByText("In review", { selector: "span" });
+    expect(shown.closest(".bg-muted")).not.toBeNull();
   });
 
   it("names the assignee and the due date", async () => {

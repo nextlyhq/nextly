@@ -297,8 +297,10 @@ describeEachDialect("a Single schema save whose statements fail", dialect => {
           | null
           | undefined
       )?.score?.getSQLType?.();
-    // Control: the shape is registered before the save, so what follows reads one.
-    expect(scoreType(), "the registered shape before the save").toBe("text");
+    // Control: the shape is registered before the save, so what follows reads one. A text field
+    // is `varchar(255)` on MySQL and `text` elsewhere.
+    const textType = dialect === "mysql" ? "varchar(255)" : "text";
+    expect(scoreType(), "the registered shape before the save").toBe(textType);
     const strayAdded = vi.fn();
     const service = getSingleMetadataServiceFromDI() as unknown as Record<
       string,
@@ -343,7 +345,7 @@ describeEachDialect("a Single schema save whose statements fail", dialect => {
     // The requested shape is not left registered: forgotten, so the next use rebuilds it from
     // the table, or still the one the table has.
     expect(
-      [undefined, "text"],
+      [undefined, textType],
       "the registered shape after the refused save"
     ).toContain(scoreType());
   });

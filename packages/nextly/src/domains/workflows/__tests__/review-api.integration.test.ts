@@ -17,6 +17,8 @@
  *   take the stage's primary step, else the roles that may; no one in a stage with no step out.
  * - Each part names its last move: the latest workflow event that involved it, not the document's
  *   latest and not its first.
+ * - Each part's stage, and each waiting item's, is named as Settings shows it: the label and
+ *   colour saved for it, else the code's label and no colour.
  * - Each step out of a part's stage says whether the caller may take it, judged as the step itself
  *   judges its caller (its permission, a person for an approval, no self-approval where refused),
  *   and whether it is the stage's primary step.
@@ -1140,6 +1142,46 @@ describe.each(getConfiguredTestDialects())(
             .map(item => (item.document as Doc).entryId)
             .sort()
         ).toEqual([...ids].sort());
+      });
+
+      it("names each part's stage, here and in what waits, as Settings shows it: its label and colour, else the code's label and none", async () => {
+        current = await bootSteps(dialect);
+        await people();
+        await writeWorkflowSettings(
+          stateDb(app()),
+          "editorial",
+          { stages: { writing: { label: "Drafting", colour: "#16a34a" } } },
+          null,
+          null
+        );
+        const drafting = await entry(app(), PAGES);
+        await seedState(app(), partOf(PAGES, drafting, null), "writing", {
+          definitionHash: HASH,
+          assignee: { kind: "user", id: "alice" },
+        });
+        const legal = await entry(app(), PAGES);
+        await seedState(app(), partOf(PAGES, legal, null), "legal", {
+          definitionHash: HASH,
+        });
+
+        expect(await onlyPart(door, drafting)).toMatchObject({
+          stage: "writing",
+          stageLabel: "Drafting",
+          stageColour: "#16a34a",
+        });
+        expect(await onlyPart(door, legal)).toMatchObject({
+          stage: "legal",
+          stageLabel: "Legal check",
+          stageColour: null,
+        });
+        const waiting = await door.waiting(ALICE, { page: 1, limit: 10 });
+        expect(waiting.items).toEqual([
+          expect.objectContaining({
+            stage: "writing",
+            stageLabel: "Drafting",
+            stageColour: "#16a34a",
+          }),
+        ]);
       });
 
       it("names a part's assignee as who it waits for, before its stage's default reviewer", async () => {

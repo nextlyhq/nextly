@@ -198,4 +198,51 @@ describe("a refused step, said in place", () => {
       "Shorten the intro."
     );
   });
+
+  it("retries a commented step refused as stale with the part as it now stands", async () => {
+    // A colleague's save moved the part after the dialog opened: the first send is refused as
+    // stale, and the review state, read again, names the part's new revision and version.
+    stepSpy
+      .mockRejectedValueOnce(
+        refused(409, "The document changed since you read it.", {})
+      )
+      .mockResolvedValue({ message: "Step taken.", item: {} });
+    const section = await panel();
+    fetchSpy.mockResolvedValue({
+      attached: true,
+      review: {
+        workflow: { slug: "review", label: "Review" },
+        parts: [{ ...inReview, revision: 5, version: "v5" }],
+        mayPublishWithoutReview: false,
+      },
+    });
+
+    await userEvent.click(
+      within(section).getByRole("button", { name: "Request changes" })
+    );
+    const dialog = await screen.findByRole("dialog");
+    await userEvent.type(
+      within(dialog).getByLabelText("Comment"),
+      "Shorten the intro."
+    );
+    const send = within(dialog).getByRole("button", {
+      name: "Request changes",
+    });
+    await userEvent.click(send);
+    await waitFor(() => expect(stepSpy).toHaveBeenCalledTimes(1));
+    expect(stepSpy.mock.calls[0]?.[0]).toMatchObject({
+      seen: [{ part: null, revision: 4, version: "v4" }],
+    });
+    // The refusal reads the review state again.
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(2));
+
+    await waitFor(() => expect(send).toBeEnabled());
+    await userEvent.click(send);
+    await waitFor(() => expect(stepSpy).toHaveBeenCalledTimes(2));
+    expect(stepSpy.mock.calls[1]?.[0]).toMatchObject({
+      step: "send-back",
+      comment: "Shorten the intro.",
+      seen: [{ part: null, revision: 5, version: "v5" }],
+    });
+  });
 });

@@ -129,7 +129,7 @@ function Probe() {
   return (
     <div>
       <p data-testid="header">
-        {review.binding === undefined
+        {review.part === undefined || review.binding === undefined
           ? "reading"
           : (review.binding.state.stepReason ?? "free")}
       </p>
