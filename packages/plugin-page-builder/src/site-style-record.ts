@@ -35,7 +35,8 @@ import {
   isLook,
   isTextStyle,
   isUsableNamedClass,
-  MAX_TOKEN_NAME_LENGTH,
+  // The colour order's one rule, which a design token file's is read by too.
+  isColourOrder,
   ownLooksRead,
   namedClassesRead,
   newStyleIssueBudget,
@@ -181,28 +182,6 @@ function isStoredTokenShape(entry: unknown): entry is StoredTokenShape {
     optionalRecord(entry.extensions) &&
     optionalRecord(entry.unreadExtension) &&
     (entry.fluid === undefined || isFluidSizes(entry.fluid))
-  );
-}
-
-/** The most colours an order may list: far beyond any palette. */
-const MAX_COLOUR_ORDER = 1000;
-
-/**
- * The site's colour order as stored: identities, each once, none longer
- * than a code name can be. A colour the order does not name is listed after
- * the ones it does, so an order naming a colour since removed is harmless.
- */
-function isColourOrder(value: unknown): value is readonly string[] {
-  return (
-    Array.isArray(value) &&
-    value.length <= MAX_COLOUR_ORDER &&
-    value.every(
-      identity =>
-        typeof identity === "string" &&
-        identity !== "" &&
-        identity.length <= MAX_TOKEN_NAME_LENGTH
-    ) &&
-    new Set(value).size === value.length
   );
 }
 

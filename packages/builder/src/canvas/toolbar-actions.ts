@@ -85,15 +85,15 @@ import {
   selectionMove,
 } from "../selection-ops";
 import {
-  saveAsSharedStyleRefusal,
-  type SharedStyleOffer,
-} from "../shared-style-target";
-import {
   isUnwrappable,
   planUnwrap,
   planWrap,
   WRAP_WORDS,
 } from "../selection-wrap";
+import {
+  saveAsSharedStyleRefusal,
+  type SharedStyleOffer,
+} from "../shared-style-target";
 import { turnIntoOffers, type TurnIntoActionId } from "../turn-into-verb";
 
 import type { RefusalWording } from "./drag-refusal";

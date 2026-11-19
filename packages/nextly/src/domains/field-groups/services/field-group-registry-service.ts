@@ -34,13 +34,17 @@ import {
   calculateSchemaHash,
   schemaHashesMatch,
 } from "../../schema/services/schema-hash";
-import { resolveComponentTableName } from "../../schema/utils/resolve-table-name";
 import {
   extractFieldGroupReferences,
   isFieldGroupFieldType,
 } from "../storage/field-group-field-type";
 import { resolveRegistryTableName } from "../storage/resolve-storage-names";
 
+import {
+  fieldGroupTableNameFor,
+  isDerivedTableName,
+  resolveFieldGroupStorageNames,
+} from "./field-group-storage-names";
 import { teardownEntityComponentData } from "./teardown-entity-field-group-data";
 
 /**
@@ -245,6 +249,12 @@ export interface SyncComponentResult {
   updated: string[];
   unchanged: string[];
   errors: Array<{ slug: string; error: string }>;
+  /**
+   * The table each component's registry row names after the sync, by slug, for every component
+   * whose table pointer the sync settled (a component it reports as an error may be absent). What a caller that probes or creates the table addresses: deriving the name again
+   * would name the legacy table on a site whose storage moved to the current names.
+   */
+  tableNames: Record<string, string>;
 }
 
 export interface ListComponentsOptions extends BaseListOptions {
@@ -439,8 +449,8 @@ export class FieldGroupRegistryService extends BaseRegistryService<
     }
 
     const now = this.formatDateForDb();
-    // Store the caller-resolved physical name verbatim. Callers derive it via
-    // resolveComponentTableName; re-prefixing here would desync the registry
+    // Store the caller-resolved physical name verbatim. Callers derive it under
+    // the site's naming (`field-group-storage-names`); re-prefixing here would desync the registry
     // from the table the schema layer creates.
     const tableName = data.tableName;
     const record: Record<string, unknown> = {
@@ -1006,6 +1016,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
       updated: [],
       unchanged: [],
       errors: [],
+      tableNames: {},
     };
 
     for (const config of configs) {
@@ -1029,6 +1040,9 @@ export class FieldGroupRegistryService extends BaseRegistryService<
           continue;
         }
         const { desiredTableName, repairedTableName } = pointer;
+        // The name the row holds once this sync writes it: the stored one, the repaired one, or
+        // the one a new group is created under.
+        result.tableNames[config.slug] = desiredTableName;
         if (!existing) {
           await this.registerComponent({
             ...declaredComponentRegistration(
@@ -1207,9 +1221,11 @@ export class FieldGroupRegistryService extends BaseRegistryService<
    * Where a code-first component's stored table pointer stands against the
    * table its slug derives.
    *
-   * Canonical resolution: comp_ + normalized slug, matching what the runtime
-   * schema layer and migrate:create derive for the same component. Resolved
-   * before the existence check so a stored name that drifted from it is
+   * A stored name the slug derives under either naming is used as stored. A
+   * new component takes the name its slug derives under the naming this site's
+   * storage is on (`field-group-storage-names`): `comp_` + normalized slug on a
+   * site that has not migrated, `fg_` + normalized slug on one that has and on
+   * a new site. Resolved before the existence check so a stored name that drifted from it is
    * reconciled rather than left addressing a table the schema layer never
    * created.
    *
@@ -1235,8 +1251,22 @@ export class FieldGroupRegistryService extends BaseRegistryService<
     slug: string,
     existing: DynamicFieldGroupRecord | null
   ): Promise<CodeFirstTablePointer> {
-    const desiredTableName = resolveComponentTableName(slug);
-    if (existing === null || existing.tableName === desiredTableName) {
+    // A stored name the slug derives under either naming is the group's own storage: a group
+    // created before the storage migration and moved by it carries the current name, one created
+    // by an earlier release the legacy name. It is used as stored, never derived again — deriving
+    // the legacy name for a migrated group is what made every sync on a migrated site skip it.
+    if (existing !== null && isDerivedTableName(slug, existing.tableName)) {
+      return {
+        matches: true,
+        desiredTableName: existing.tableName,
+        repairedTableName: undefined,
+      };
+    }
+    // A new group, or a stored name the slug does not derive: the name a new group takes on this
+    // site, under the naming its storage is on.
+    const { naming } = await resolveFieldGroupStorageNames(this.adapter);
+    const desiredTableName = fieldGroupTableNameFor(naming, slug);
+    if (existing === null) {
       return { matches: true, desiredTableName, repairedTableName: undefined };
     }
     // One mismatch is repairable without moving anything: the stored name

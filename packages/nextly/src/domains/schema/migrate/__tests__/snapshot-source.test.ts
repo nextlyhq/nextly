@@ -29,7 +29,7 @@ afterEach(() => {
 function snapshotOf(base: string, slug: string): void {
   const snapshot: MigrationSnapshot = {
     version: 1,
-    collections: [{ slug, tableName: `dc_${slug}` }],
+    collections: [{ slug, tableName: `dc_${slug}`, fields: [] }],
   };
   mkdirSync(join(migrationsDir, "meta"), { recursive: true });
   writeFileSync(
