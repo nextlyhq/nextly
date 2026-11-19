@@ -227,41 +227,51 @@ describeEachDialect("a Single schema save whose statements fail", dialect => {
   // A migration that fails past its main change keeps the row it wrote, so a retry has one
   // describing the table, and is answered as a failure with its reason and what to do, never as
   // pending. The Single's last migration recorded as failed is such a failure: a change to some
-  // of its fields does not clear it.
-  it("answers a migration that failed past its change as failed, naming its reason and the kept file", async () => {
-    await t.adapter.update(
-      "dynamic_singles",
-      { migrationStatus: "failed" },
-      { and: [{ column: "slug", op: "=", value: SLUG }] }
-    );
-    clearRegistryRowCache();
-    const folderBefore = await migrationFiles();
+  // of its fields does not clear it. Outside development the writer keeps the save's files as it
+  // does in development, unrecorded, so they are named there too.
+  it.each(["development", "test"])(
+    "answers a migration that failed past its change as failed, naming its reason and the kept file (NODE_ENV %s)",
+    async env => {
+      vi.stubEnv("NODE_ENV", env);
+      await t.adapter.update(
+        "dynamic_singles",
+        { migrationStatus: "failed" },
+        { and: [{ column: "slug", op: "=", value: SLUG }] }
+      );
+      clearRegistryRowCache();
+      const folderBefore = await migrationFiles();
 
-    const { thrown, said } = await attempt([
-      { name: "count", type: "text" },
-      { name: "score", type: "text" },
-      { name: "tagline", type: "text", required: true, defaultValue: "Draft" },
-    ]);
+      const { thrown, said } = await attempt([
+        { name: "count", type: "text" },
+        { name: "score", type: "text" },
+        {
+          name: "tagline",
+          type: "text",
+          required: true,
+          defaultValue: "Draft",
+        },
+      ]);
 
-    expect(
-      thrown,
-      `the save answered instead of failing: ${said}`
-    ).toBeDefined();
-    const kept = (await migrationFiles()).filter(
-      name => !folderBefore.includes(name)
-    );
-    expect(kept, "the change's one file is kept").toHaveLength(1);
-    const [file] = kept;
-    expect(String((thrown as Error).message)).toBe(
-      `Single "${SLUG}" was saved, but its migration failed: an earlier change to it did not finish, and a change to some of its fields does not clear that. ` +
-        `Its migration file ${file} was kept and not recorded applied. ` +
-        `Finish the change by hand, run \`nextly migrate:resolve --applied ${file}\`; then run \`nextly migrate\`, which brings the registry in step with the recorded file. ` +
-        "Or reverse what of it ran and run `nextly migrate`, which runs it from the start."
-    );
-    expect((await recorded()).migrationStatus, "the row's status").toBe(
-      "failed"
-    );
-  });
+      expect(
+        thrown,
+        `the save answered instead of failing: ${said}`
+      ).toBeDefined();
+      const kept = (await migrationFiles()).filter(
+        name => !folderBefore.includes(name)
+      );
+      expect(kept, "the change's one file is kept").toHaveLength(1);
+      const [file] = kept;
+      expect(String((thrown as Error).message)).toBe(
+        `Single "${SLUG}" was saved, but its migration failed: an earlier change to it did not finish, and a change to some of its fields does not clear that. ` +
+          `Its migration file ${file} was kept and not recorded applied. ` +
+          `Finish the change by hand, run \`nextly migrate:resolve --applied ${file}\`; then run \`nextly migrate\`, which brings the registry in step with the recorded file. ` +
+          "Or reverse what of it ran and run `nextly migrate`, which runs it from the start."
+      );
+      expect((await recorded()).migrationStatus, "the row's status").toBe(
+        "failed"
+      );
+    }
+  );
 
   // On SQLite the service's statements leave a field's type as it was, so the change lands without
   // its file's shape and the writer will not record the file applied. PostgreSQL and MySQL change
@@ -271,6 +281,21 @@ describeEachDialect("a Single schema save whose statements fail", dialect => {
     async () => {
       const before = await recorded();
       const folderBefore = await migrationFiles();
+      // The running server's shape of the table, which reads and writes use until a restart.
+      const resolver = (
+        t.adapter as unknown as {
+          tableResolver?: { getTable(name: string): unknown };
+        }
+      ).tableResolver;
+      const scoreType = () =>
+        (
+          resolver?.getTable(TABLE) as
+            | Record<string, { getSQLType?: () => string } | undefined>
+            | null
+            | undefined
+        )?.score?.getSQLType?.();
+      // Control: the shape is registered before the save, so what follows reads one.
+      expect(scoreType(), "the registered shape before the save").toBe("text");
 
       const { thrown, said } = await attempt([
         { name: "count", type: "text" },
@@ -292,6 +317,12 @@ describeEachDialect("a Single schema save whose statements fail", dialect => {
           "Or reverse what of it ran and run `nextly migrate`, which runs it from the start."
       );
       expect(await recorded(), "the registry row").toEqual(before);
+      // The requested shape is not left registered: forgotten, so the next use rebuilds it from
+      // the table, or still the one the table has.
+      expect(
+        [undefined, "text"],
+        "the registered shape after the refused save"
+      ).toContain(scoreType());
     }
   );
 });
