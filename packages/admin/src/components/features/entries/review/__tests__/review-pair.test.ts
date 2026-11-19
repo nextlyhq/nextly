@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 
 import type { VersionMeta } from "@admin/services/versionApi";
 
-import { reviewPlan, sharedPlan } from "../review-pair";
+import { reviewPlan, sharedReviewPlan } from "../review-pair";
 
 /** A version, newest-first lists name only what each case changes. */
 function version(
@@ -52,17 +52,6 @@ describe("reviewPlan", () => {
     expect(reviewPlan(versions, "en", 6)).toEqual({ kind: "server", to: 7 });
   });
 
-  it("reviews the document's newest version in any language for the shared part", () => {
-    // Every language's version carries the shared fields: a localized save
-    // newer than any shared-only row is what the shared part shows.
-    const versions = [version(9), version(8, { locale: null }), version(7)];
-    expect(reviewPlan(versions, null, null)).toEqual({
-      kind: "server",
-      to: 9,
-    });
-    expect(reviewPlan(versions, null, 9)).toEqual({ kind: "unchanged", to: 9 });
-  });
-
   it("reviews an autosave's saved version, not the autosave", () => {
     const versions = [
       version(null, { isAutosave: true }),
@@ -87,21 +76,17 @@ describe("reviewPlan", () => {
   });
 });
 
-describe("sharedPlan", () => {
-  it("takes the published version as the baseline, not a draft saved in the same second after it", () => {
-    const sameSecond = "2026-11-19T09:00:00.000Z";
-    const versions = [
-      version(7, { createdAt: "2026-11-19T09:00:05.000Z" }),
-      version(6, { createdAt: sameSecond }),
-      version(5, { status: "published", createdAt: sameSecond }),
-    ];
+describe("sharedReviewPlan", () => {
+  it("asks the server for the comparison of the version the review state names", () => {
+    expect(sharedReviewPlan(11, 7)).toEqual({ kind: "server", to: 11 });
+    expect(sharedReviewPlan(11, null)).toEqual({ kind: "server", to: 11 });
+  });
 
-    expect(sharedPlan(versions, true, null)).toEqual({
-      kind: "pair",
-      from: 5,
-      to: 7,
-      since: "published",
-      within: "en",
-    });
+  it("says nothing changed where the version under review is the one approved", () => {
+    expect(sharedReviewPlan(7, 7)).toEqual({ kind: "unchanged", to: 7 });
+  });
+
+  it("has nothing to review before a version is saved", () => {
+    expect(sharedReviewPlan(null, null)).toEqual({ kind: "none" });
   });
 });

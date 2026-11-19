@@ -108,6 +108,29 @@ Some comparisons have nothing to start from, and are refused with `NO_BASELINE`:
 
 The response says which baseline it used.
 
+### Comparing the shared fields
+
+Fields that are not translated are shared by every language (see
+[Languages in history](#languages-in-history)), and a save in any language records them. Add
+`?part=shared` to compare those fields alone, across languages:
+
+- The two versions may be in two languages (`?from=4&to=7&part=shared`, where version 4 is
+  English and version 7 Spanish). Only the shared fields are compared; no translated field is
+  shown.
+- Baselines resolve over every language's versions. `published` is the newest version
+  published in any language, `previous` the version before it in any language, and with
+  Workflows, `since-approved` and `since-submitted` the shared fields' own approval and
+  submission (`?to=7&baseline=since-approved&part=shared`).
+- Read access is unchanged: you need to be able to read both versions, each in its own
+  language.
+- `part` cannot be combined with `locale`, and `shared` is its only value.
+
+From server code, `nextly.versions.compare({ collection, id, from, to, part: "shared" })` takes
+the same `part`, refuses the same values, and answers as REST does.
+
+The response carries `part: "shared"`, and its `locale` is the language of the `to` version.
+Without `part`, a comparison is of one language as before, and two languages are refused.
+
 ### The version you last looked at
 
 Nextly remembers, per person, document and language, the version each person last looked
