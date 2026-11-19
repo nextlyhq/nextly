@@ -400,6 +400,9 @@ describe.each(getConfiguredTestDialects())(
     // from the snapshot: into the registry the database holds, naming the table it is stored in.
     it("writes a Schema Builder group's registry row under the current names once the history moved", async () => {
       const url = await openDatabase(dialect);
+      // A Builder group's rows are written by the migrations, which SQLite asks consent for
+      // where it cannot read the triggers a table carries; CI gives it, as here.
+      vi.stubEnv("NEXTLY_ACCEPT_DATA_LOSS", "1");
       writeBuilderGroup(["heading"]);
       loaded.config = withBuilder(FIRST);
       expect((await create("init")).exit).toBeUndefined();

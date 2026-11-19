@@ -23,10 +23,7 @@ import {
   type FieldGroupNaming,
 } from "../../field-groups/services/field-group-storage-names";
 import { resolveSingleTableName } from "../../singles/services/resolve-single-table-name";
-import {
-  loadLatestSnapshot,
-  snapshotFieldGroupNaming,
-} from "../migrate-create/snapshot-io";
+import { historyFieldGroupNamingIn } from "../migrate-create/snapshot-io";
 import type { ColumnOrigin } from "../services/field-column-descriptor";
 import { loadUiSchema } from "../ui-schema/loader";
 import { applyDeferredExtendsToManifest } from "../ui-schema/merge";
@@ -209,10 +206,7 @@ export async function fieldGroupNamingOfHistory(args: {
 }): Promise<FieldGroupNaming> {
   const dir = args.config.db.migrationsDir;
   if (dir === undefined) return "legacy";
-  const latest = await loadLatestSnapshot(
-    resolve(args.projectRoot, dir, "meta")
-  );
-  return latest === null ? "legacy" : snapshotFieldGroupNaming(latest.data);
+  return historyFieldGroupNamingIn(resolve(args.projectRoot, dir, "meta"));
 }
 
 /**

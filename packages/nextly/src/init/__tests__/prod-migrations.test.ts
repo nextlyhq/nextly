@@ -17,6 +17,43 @@ const reloadDynamicTables = vi.fn(async () => undefined);
 vi.mock("../reload-dynamic-tables", () => ({
   reloadDynamicTables: (label: string) => reloadDynamicTables(label),
 }));
+
+/** The field groups' stored tables the start reads from its database, by slug. */
+const storedFieldGroups = vi.hoisted(() => ({
+  value: undefined as
+    | {
+        tables: Map<string, string>;
+        typeColumns: Map<string, string>;
+      }
+    | undefined,
+}));
+vi.mock(
+  "../../domains/field-groups/services/field-group-stored-tables",
+  async importOriginal => ({
+    ...(await importOriginal<
+      typeof import("../../domains/field-groups/services/field-group-stored-tables")
+    >()),
+    declaredFieldGroupStorage: async () => storedFieldGroups.value,
+  })
+);
+
+/** What the start compiled the extension schema from. */
+const compiledFrom = vi.hoisted(() => ({ inputs: [] as unknown[] }));
+vi.mock("../../domains/schema/extension/publish", async importOriginal => {
+  const actual =
+    await importOriginal<
+      typeof import("../../domains/schema/extension/publish")
+    >();
+  return {
+    ...actual,
+    compileExtensionSchema: (
+      input: Parameters<typeof actual.compileExtensionSchema>[0]
+    ) => {
+      compiledFrom.inputs.push(input);
+      return actual.compileExtensionSchema(input);
+    },
+  };
+});
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -464,6 +501,34 @@ describe("runProdMigrationsIfEnabled", () => {
     expect(a.logger.error).not.toHaveBeenCalled();
     // success was routed to the boot logger's info.
     expect(a.logger.info).toHaveBeenCalledWith("Applied x.sql");
+  });
+
+  // A contribution to a field group is compiled, and its ownership recorded, against the table the
+  // group is stored in: `fg_<slug>` once the site's field-group storage was migrated.
+  it("compiles the extension schema with each field group's stored table and type column", async () => {
+    storedFieldGroups.value = {
+      tables: new Map([["card", "fg_card"]]),
+      typeColumns: new Map([["fg_card", "_field_group_type"]]),
+    };
+    compiledFrom.inputs.length = 0;
+    try {
+      const a = args();
+      (a.config as Record<string, unknown>).fieldGroups = [
+        { slug: "card", fields: [] },
+      ];
+      await runProdMigrationsIfEnabled(a as never);
+
+      const input = compiledFrom.inputs[0] as {
+        fieldGroupTables?: ReadonlyMap<string, string>;
+        fieldGroupTypeColumns?: ReadonlyMap<string, string>;
+      };
+      expect(input.fieldGroupTables?.get("card")).toBe("fg_card");
+      expect(input.fieldGroupTypeColumns?.get("fg_card")).toBe(
+        "_field_group_type"
+      );
+    } finally {
+      storedFieldGroups.value = undefined;
+    }
   });
 
   it("tells migrateCore about a junction the Schema Builder declares", async () => {

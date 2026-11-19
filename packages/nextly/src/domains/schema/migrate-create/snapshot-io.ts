@@ -47,7 +47,7 @@ import { prepareWhole, type PreparedFile } from "./writer-hold";
  * instead of reading the file as legacy and planning to drop every `fg_` table and create its
  * `comp_` twin. A legacy snapshot stays version 1 and is written byte-identically.
  */
-export const CURRENT_NAMES_SNAPSHOT_VERSION = 2;
+const CURRENT_NAMES_SNAPSHOT_VERSION = 2;
 
 export interface SnapshotFile {
   /** 1 for a history on the legacy field-group names, 2 for one on the current names. */
@@ -111,6 +111,28 @@ export function snapshotFieldGroupNaming(
   file: Pick<SnapshotFile, "fieldGroupStorage">
 ): FieldGroupNaming {
   return file.fieldGroupStorage === "current" ? "current" : "legacy";
+}
+
+/**
+ * The field-group names the history in `metaDir` is on: its newest snapshot's, and legacy where
+ * the folder holds none, or its newest is a template's older-format file, which records no tables
+ * and predates the record. Any other file that is no snapshot is refused, as every reader refuses
+ * it.
+ */
+export async function historyFieldGroupNamingIn(
+  metaDir: string
+): Promise<FieldGroupNaming> {
+  const newest = await newestSnapshotName(metaDir);
+  if (newest === undefined) return "legacy";
+  const content = await readFile(resolve(metaDir, newest), "utf-8");
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    // Not JSON: `parseSnapshotFile` below says so.
+  }
+  if (isOlderFormatSnapshot(parsed)) return "legacy";
+  return snapshotFieldGroupNaming(parseSnapshotFile(content, newest));
 }
 
 /**

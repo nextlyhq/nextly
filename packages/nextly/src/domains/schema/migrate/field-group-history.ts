@@ -29,7 +29,7 @@ import {
   snapshotUnderCurrentNames,
 } from "../migrate-create/field-group-names-transition";
 import {
-  loadLatestSnapshot,
+  historyFieldGroupNamingIn,
   snapshotFieldGroupNaming,
   type SnapshotFile,
 } from "../migrate-create/snapshot-io";
@@ -69,7 +69,7 @@ export async function underDatabaseFieldGroupNames<
 }
 
 /** The names the database keeps its field groups under, read from its registry in the catalog. */
-export async function databaseFieldGroupNaming(
+async function databaseFieldGroupNaming(
   adapter: CatalogReadAdapter
 ): Promise<FieldGroupNaming> {
   return namingOfRegistry(await resolveRegistryNameFromCatalog(adapter));
@@ -138,8 +138,10 @@ export async function refuseMovedStorageBehindLegacyHistory(args: {
 }): Promise<void> {
   if (args.newestApplied === "current") return;
   if ((await databaseFieldGroupNaming(args.adapter)) === "legacy") return;
-  const latest = await loadLatestSnapshot(resolve(args.migrationsDir, "meta"));
-  if (latest !== null && snapshotFieldGroupNaming(latest.data) === "current") {
+  if (
+    (await historyFieldGroupNamingIn(resolve(args.migrationsDir, "meta"))) ===
+    "current"
+  ) {
     return;
   }
   throw fieldGroupHistoryBehindStorageError();
