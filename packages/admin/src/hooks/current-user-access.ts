@@ -13,6 +13,7 @@ import {
   useQueryClient,
   type Query,
   type QueryCache,
+  type QueryCacheNotifyEvent,
   type QueryClient,
 } from "@tanstack/react-query";
 import { useCallback, useSyncExternalStore } from "react";
@@ -66,6 +67,21 @@ function isCapabilitiesQuery(query: Query): boolean {
 }
 
 /**
+ * Whether a cache event can change a capabilities answer {@link isKnownSingle}
+ * reads: one added, removed, or updated (its data set, fetched or failed).
+ * An observer of the query mounting, unmounting or rendering changes no
+ * answer, and the page builder mounts and renders many on every click.
+ */
+function changesCapabilities(event: QueryCacheNotifyEvent): boolean {
+  return (
+    (event.type === "added" ||
+      event.type === "removed" ||
+      event.type === "updated") &&
+    isCapabilitiesQuery(event.query)
+  );
+}
+
+/**
  * {@link isKnownSingle}'s answers by slug, per query cache, kept until a
  * capabilities answer changes. The cache notifies every subscriber of every
  * query's events, and a page builder renders many readers on each click, so
@@ -82,7 +98,7 @@ function knownSinglesOf(queryClient: QueryClient): Map<string, boolean> {
   if (kept !== undefined) return kept;
   const answers = new Map<string, boolean>();
   cache.subscribe(event => {
-    if (isCapabilitiesQuery(event.query)) answers.clear();
+    if (changesCapabilities(event)) answers.clear();
   });
   KNOWN_SINGLES.set(cache, answers);
   return answers;
@@ -99,9 +115,10 @@ export function useIsKnownSingle(slug: string): boolean {
     (onChange: () => void) => {
       const answers = knownSinglesOf(queryClient);
       return queryClient.getQueryCache().subscribe(event => {
-        // Only a capabilities answer can change what this reads. Emptied here
-        // too, since this listener can run before the one that empties it.
-        if (!isCapabilitiesQuery(event.query)) return;
+        // Only a change to a capabilities answer can change what this reads.
+        // Emptied here too, since this listener can run before the one that
+        // empties it.
+        if (!changesCapabilities(event)) return;
         answers.clear();
         onChange();
       });

@@ -82,7 +82,7 @@ import {
 import { insertCountsStoreFor } from "./editor-preference-stores";
 import { EditorSearch } from "./editor-search";
 import { editorSettings, usePageFacts } from "./editor-settings";
-import { editorTopBar } from "./editor-top-bar";
+import { useEditorTopBar } from "./editor-top-bar";
 import type { CardVerbs, EditorView } from "./editor-view";
 import { EditorHiddenColours } from "./hidden-colours";
 import {
@@ -760,6 +760,26 @@ function EditorBody<TFieldValues extends FieldValues>({
     settingsClosed: settingsTabs.closed,
   });
 
+  // Its columns are handed the same values while only the selection moves,
+  // so a selection draws none of it again.
+  const topBar = useEditorTopBar(view, {
+    title: page.title,
+    // Recorded by its address, so the recent page opens the same row after
+    // the rows are reordered.
+    field: place.address,
+    location: place.location,
+    canvas: canvas.canvasElement,
+    // "Preview as visitor", in Preview's menu.
+    visitor: conditions.visitor,
+    pageChecks,
+    pageFacts,
+    openSettingsTab: settingsTabs.ask,
+    pageData,
+    // The form, in the ⋯ menu: the same leave as the exit to the form, so it
+    // is offered exactly where that is.
+    openAsForm: shellExit(componentView, openAsForm),
+  });
+
   return (
     // Fills the view's area, under the admin's lock and recovery notices for
     // this document, rather than covering the window over them. A component's
@@ -795,23 +815,7 @@ function EditorBody<TFieldValues extends FieldValues>({
             // the editor's OWN dirty signal: the form's is false for as long as the
             // editor is open, because the document is committed on the way out.
             // The title is the top bar's switcher, so the shell draws none.
-            {...editorTopBar(view, {
-              title: page.title,
-              // Recorded by its address, so the recent page opens the same row
-              // after the rows are reordered.
-              field: place.address,
-              location: place.location,
-              canvas: canvas.canvasElement,
-              // "Preview as visitor", in Preview's menu.
-              visitor: conditions.visitor,
-              pageChecks,
-              pageFacts,
-              openSettingsTab: settingsTabs.ask,
-              pageData,
-              // The form, in the ⋯ menu: the same leave as the exit to the
-              // form, so it is offered exactly where that is.
-              openAsForm: shellExit(componentView, openAsForm),
-            })}
+            {...topBar}
             // Pinned above the canvas: a template's entry it is drawn with, and
             // the visitor's view while it is on.
             // While a header is edited, its bar in the two-headers notice's

@@ -259,6 +259,115 @@ export interface EditorState {
   firstAdd?: FirstAdd;
 }
 
+/**
+ * The editor's state without its selection: what a surface that shows
+ * nothing about the selected block reads, such as the top bar.
+ *
+ * Derived from {@link EditorState} rather than declared beside it, so it
+ * gains every field the state gains. Having no `selection` or `selectedId`, a
+ * surface handed one cannot read the selection at all, so it can never show
+ * a selection that is out of date: the compiler refuses the read.
+ * @experimental
+ */
+export type EditorDocumentView = Omit<EditorState, "selection" | "selectedId">;
+
+/**
+ * Every field of the view, each present, held or `undefined`: the type the
+ * view is first built as, so a field added to the state and not built into
+ * the view fails to compile rather than being silently left out of it.
+ */
+type EveryViewField = {
+  // Over the keys as a plain union rather than `keyof`, so the mapping keeps
+  // no field's `?` and every field must be named.
+  [K in Extract<keyof EditorDocumentView, string>]:
+    | EditorDocumentView[K]
+    | undefined;
+};
+
+/**
+ * The view of `editor` without its selection, keeping its identity across a
+ * change of the selection alone, so a surface given it and memoised draws
+ * nothing again when only the selection moves. A change to any other field
+ * (an edit, an undo, a list shown empty) makes a new view.
+ *
+ * Keyed on each field rather than on `editor`, whose identity changes with
+ * every selection. Any editor state can be viewed, the page's or a header's
+ * edited in place, so the view is taken where it is needed rather than kept
+ * on the state.
+ * @experimental
+ */
+export function useDocumentView(
+  editor: EditorDocumentView
+): EditorDocumentView {
+  return useMemo(
+    () =>
+      withoutAbsent({
+        document: editor.document,
+        select: editor.select,
+        apply: editor.apply,
+        applyAll: editor.applyAll,
+        lockRefusalFor: editor.lockRefusalFor,
+        planRepair: editor.planRepair,
+        composed: editor.composed,
+        lockDefinitions: editor.lockDefinitions,
+        undo: editor.undo,
+        redo: editor.redo,
+        recordStep: editor.recordStep,
+        cancelTyping: editor.cancelTyping,
+        canUndo: editor.canUndo,
+        canRedo: editor.canRedo,
+        limits: editor.limits,
+        undoDepth: editor.undoDepth,
+        listsShowingEmpty: editor.listsShowingEmpty,
+        showListEmpty: editor.showListEmpty,
+        listsStillShowing: editor.listsStillShowing,
+        tagListStillShowing: editor.tagListStillShowing,
+        sortFieldAsked: editor.sortFieldAsked,
+        askSortField: editor.askSortField,
+        settingAsked: editor.settingAsked,
+        askSetting: editor.askSetting,
+        firstAdd: editor.firstAdd,
+      }),
+    // Each field rather than `editor`, whose identity a selection changes.
+    [
+      editor.document,
+      editor.select,
+      editor.apply,
+      editor.applyAll,
+      editor.lockRefusalFor,
+      editor.planRepair,
+      editor.composed,
+      editor.lockDefinitions,
+      editor.undo,
+      editor.redo,
+      editor.recordStep,
+      editor.cancelTyping,
+      editor.canUndo,
+      editor.canRedo,
+      editor.limits,
+      editor.undoDepth,
+      editor.listsShowingEmpty,
+      editor.showListEmpty,
+      editor.listsStillShowing,
+      editor.tagListStillShowing,
+      editor.sortFieldAsked,
+      editor.askSortField,
+      editor.settingAsked,
+      editor.askSetting,
+      editor.firstAdd,
+    ]
+  );
+}
+
+/** The view with an optional field the state does not hold left absent, as on it. */
+function withoutAbsent(fields: EveryViewField): EditorDocumentView {
+  const view: Partial<Record<keyof EditorDocumentView, unknown>> = {};
+  for (const [key, value] of Object.entries(fields)) {
+    if (value !== undefined) view[key as keyof EditorDocumentView] = value;
+  }
+  return view as EditorDocumentView;
+}
+
 export interface UseEditorStateArgs {
   /** The document to start from. */
   initialDocument: BlockDocument;

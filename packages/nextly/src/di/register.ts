@@ -343,6 +343,7 @@ import {
 } from "../shared/builder-refusal";
 import { assertNoLegacyFieldGroupKey } from "../shared/legacy-field-group-key";
 import { assertPluginFieldDeclarations } from "../shared/lib/assert-plugin-field-declarations";
+import { configurationProblems } from "../shared/lib/config-problems";
 import { replaceFieldFunctions } from "../shared/lib/field-level-registry";
 import type {
   AdminConfig,
@@ -982,7 +983,7 @@ async function registerServicesOnce(
     unresolvedRelations,
     unresolvedPermissions,
     pluginBootContributions,
-  } = validateBootContributions(transformedConfig, transformedPlugins);
+  } = validateBootContributions(transformedConfig, transformedPlugins, config);
   // Before any plugin context exists to read them: the dependencies `ctx.db`
   // grants table access by are the ones this boot's plugins declare.
   publishPluginDependencies(transformedPlugins);
@@ -1771,7 +1772,9 @@ interface ValidatedBootContributions {
  */
 function validateBootContributions(
   transformedConfig: NextlyServiceConfig,
-  transformedPlugins: PluginDefinition[]
+  transformedPlugins: PluginDefinition[],
+  /** The configuration as the app declares it, before the plugins' setups. */
+  declaredConfig: NextlyServiceConfig
 ): ValidatedBootContributions {
   // Collect every relationTo (code + plugin) that doesn't resolve to a merged
   // collection (or core target); require dependsOn for cross-plugin
@@ -1805,12 +1808,6 @@ function validateBootContributions(
     transformedPlugins
   );
 
-  // Fail fast on a public address that breaks the template rule, or two
-  // Singles at one address. Asked of the merged configuration, since a
-  // plugin's types reach it without passing through `defineCollection` or
-  // `defineSingle`, and a plugin must not take a page the site declares.
-  assertConfiguredPublicAddresses(transformedConfig);
-
   // Fail fast on a collection, or a Single, that opens in a view it does not
   // have: every link to it would lead nowhere. Asked of the merged
   // configuration against every plugin's views, disabled ones included.
@@ -1838,6 +1835,38 @@ function validateBootContributions(
   };
 
   registerPluginFieldTypes(transformedPlugins);
+
+  // The app's own entities, judged by the rules that judge each one, as every command's load
+  // judges them (`configurationProblems`), in the form the plugins' setups left them. Here, now
+  // that the field types are registered and before any check below throws on one problem, so
+  // the start names them all. An entity declared through `define*` stops the start before the
+  // adapter connects. One written as a plain object was never judged at the start before: a
+  // site serving one is told of each problem, with where and what to do, and starts as it did;
+  // every command refuses it. A plugin's contributions keep the checks of their own type below.
+  const problems = configurationProblems(declaredConfig, transformedConfig);
+  if (problems.some(problem => problem.declaredByDefine)) {
+    throw NextlyError.validation({
+      errors: problems.map(({ path, code, message }) => ({
+        path,
+        code,
+        message,
+      })),
+      logContext: { reason: "config-invalid" },
+    });
+  }
+  for (const problem of problems) {
+    (transformedConfig.logger ?? consoleLogger).warn(
+      `[Nextly] Configuration problem at ${problem.path}: ${problem.message} Every nextly command refuses this configuration until it is fixed.`
+    );
+  }
+
+  // Fail fast on a public address that breaks the template rule, or two
+  // Singles at one address. Asked of the merged configuration, since a
+  // plugin's types reach it without passing through `defineCollection` or
+  // `defineSingle`, and a plugin must not take a page the site declares.
+  // After the app's entities are judged, so a `define*` entity's address is
+  // refused with its other problems rather than alone.
+  assertConfiguredPublicAddresses(transformedConfig);
 
   // Now that the registry is populated, each plugin field type gets to check the
   // declarations that use it. A plugin's own contributions are raw configs — its
