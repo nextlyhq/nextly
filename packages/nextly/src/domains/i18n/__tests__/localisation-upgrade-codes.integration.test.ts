@@ -12,6 +12,7 @@ import { sql } from "drizzle-orm";
 import { afterEach, expect, it, vi } from "vitest";
 
 import { MIGRATE_DATA_STEPS } from "../../../cli/commands/upgrade-steps";
+import { runStatement } from "../../schema/pipeline/_internal/run-statement";
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
 import { createDynamicHandlers } from "../../../routeHandler";
 import type { TestNextly } from "../../../plugins/test-nextly";
@@ -323,6 +324,48 @@ describeEachDialect(
         )
       ).rejects.toThrow(/pt_BR[\s\S]*nextly migrate/);
     });
+
+    // A site that changed how it wrote a language more than once can hold one document under two
+    // older spellings of one code. Both become the same code, so the conversion stops before
+    // writing anything, naming both, rather than stop on the unique key after rewriting some
+    // tables. MySQL compares codes without regard to case, so it never holds the two apart.
+    it.skipIf(dialect === "mysql")(
+      "stops before writing anything where two older spellings of one code hold the same document",
+      async () => {
+        await legacyArticle();
+        const table = sql.identifier("dc_articles_locales");
+        const [row] = await database!.adapter.queryStatement<
+          Record<string, unknown>
+        >(
+          sql`SELECT * FROM ${table} WHERE ${sql.identifier("_locale")} = ${"pt_BR"}`
+        );
+        const copy = Object.entries(row!).map(([column, value]) => [
+          column,
+          column === "_locale"
+            ? "PT_br"
+            : column === "id"
+              ? `${String(value)}-older`
+              : value,
+        ]);
+        await runStatement(
+          database!.adapter.getDrizzle(),
+          database!.adapter.dialect,
+          sql`INSERT INTO ${table} (${sql.join(
+            copy.map(([column]) => sql.identifier(String(column))),
+            sql`, `
+          )}) VALUES (${sql.join(
+            copy.map(([, value]) => sql`${value}`),
+            sql`, `
+          )})`
+        );
+
+        await expect(
+          migrateData(database!.adapter as never, STANDARD)
+        ).rejects.toThrow(/pt_BR[\s\S]*PT_br|PT_br[\s\S]*pt_BR/);
+
+        expect(await storedLanguages()).toEqual(["PT_br", "en", "pt_BR"]);
+      }
+    );
 
     // A site that manages its languages in Settings keeps them in `nextly_languages`, each with the
     // codes it falls back to. The upgrade converts that registry with the content, so the site's

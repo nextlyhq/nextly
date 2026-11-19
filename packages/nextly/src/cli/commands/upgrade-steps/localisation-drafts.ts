@@ -168,6 +168,41 @@ function isSharedEdit(
   return !(column in live && sameSharedValue(live[column], value));
 }
 
+/** Where each language's value of a field came from, by `[slot, field]`. */
+type LanguageOrigins = Map<
+  string,
+  { value: unknown; from: string; at: number }
+>;
+
+/**
+ * Records `draft`'s value of the language field `key` for its language (`slot`), and returns the
+ * tie it makes, if any: a pending change kept under no language and one kept under the default
+ * language both become that language's draft, and where they hold different values for one field
+ * and were saved at the same moment, the order the rows were read in would pick the value kept.
+ */
+function languageValueTie(
+  origins: LanguageOrigins,
+  slot: string,
+  key: string,
+  value: unknown,
+  draft: VersionRow
+): SharedConflict | undefined {
+  const at = savedAt(draft);
+  const from = draft.locale ?? "no language";
+  const id = JSON.stringify([slot, key]);
+  const earlier = origins.get(id);
+  origins.set(id, { value, from, at });
+  if (
+    earlier === undefined ||
+    earlier.from === from ||
+    earlier.at !== at ||
+    sameSharedValue(earlier.value, value)
+  ) {
+    return undefined;
+  }
+  return { field: key, earlier: earlier.from, later: from };
+}
+
 /**
  * Split one document's drafts against its live row (`live`, by column): oldest save first, so a
  * later save's shared value replaces an earlier one, each such disagreement recorded.
@@ -184,6 +219,7 @@ function splitDrafts(
   const languages = new Map<string, Record<string, unknown>>();
   const conflicts: SharedConflict[] = [];
   const ties: SharedConflict[] = [];
+  const languageOrigins: LanguageOrigins = new Map();
   const ordered = [...document.drafts].sort((a, b) => savedAt(a) - savedAt(b));
   for (const draft of ordered) {
     const snapshot = snapshotRecord(draft.snapshot);
@@ -194,6 +230,8 @@ function splitDrafts(
     const slot = draft.locale ?? defaultLocale;
     for (const [key, value] of Object.entries(snapshot)) {
       if (document.keys.language.has(key)) {
+        const tie = languageValueTie(languageOrigins, slot, key, value, draft);
+        if (tie) ties.push(tie);
         languages.set(slot, { ...languages.get(slot), [key]: value });
         continue;
       }
@@ -287,10 +325,9 @@ async function plannedSplits(
     throw new NextlyError({
       code: "NEXTLY_UPGRADE_LOCALISATION_UNRESOLVED",
       publicMessage:
-        `Two languages' pending changes to one shared field were saved at the same moment for ` +
-        `${tied.join("; ")}, so which change came later cannot be told. Give the field the same ` +
-        "value in both pending changes, or discard one of them, then run `nextly migrate` again. " +
-        "Nothing was changed.",
+        `Pending changes to one field were saved at the same moment for ${tied.join("; ")}, so ` +
+        "which change came later cannot be told. Give the field the same value in those pending " +
+        "changes, or discard one of them, then run `nextly migrate` again. Nothing was changed.",
       logContext: { ties: tied },
     });
   }

@@ -180,7 +180,7 @@ async function meetsBoth(
   adapter: DrizzleAdapter,
   target: KeyedTarget,
   conversion: CodeConversion
-): Promise<boolean> {
+): Promise<string | undefined> {
   const a = sql`${sql.identifier("a")}`;
   const b = sql`${sql.identifier("b")}`;
   const column = (alias: SQL, name: string) =>
@@ -197,15 +197,30 @@ async function meetsBoth(
     target.keyed === undefined
       ? sql``
       : sql` AND ${column(a, target.keyed)} IS NOT NULL AND ${column(b, target.keyed)} IS NOT NULL`;
-  const rows = await adapter.queryStatement<{ found: unknown }>(
-    sql`SELECT 1 AS ${sql.identifier("found")} FROM ${sql.identifier(target.table)} ${a} JOIN ${sql.identifier(target.table)} ${b} ON ${joined} WHERE ${column(a, target.language)} = ${target.spelled(conversion.from)} AND ${column(b, target.language)} = ${target.spelled(conversion.to)}${keyed} LIMIT 1`
+  // The first thing held under both, by the columns that make it unique, so the refusal can name it.
+  const named =
+    target.same.length === 0
+      ? sql`1 AS ${sql.identifier("found")}`
+      : sql.join(
+          target.same.map(
+            name => sql`${column(a, name)} AS ${sql.identifier(name)}`
+          ),
+          sql`, `
+        );
+  const [row] = await adapter.queryStatement<Record<string, unknown>>(
+    sql`SELECT ${named} FROM ${sql.identifier(target.table)} ${a} JOIN ${sql.identifier(target.table)} ${b} ON ${joined} WHERE ${column(a, target.language)} = ${target.spelled(conversion.from)} AND ${column(b, target.language)} = ${target.spelled(conversion.to)}${keyed} LIMIT 1`
   );
-  return rows.length > 0;
+  if (row === undefined) return undefined;
+  const key = target.same
+    .map(name => `${name} ${String(row[name])}`)
+    .join(", ");
+  return key === "" ? target.table : `${target.table} (${key})`;
 }
 
 /**
- * The tables where some one thing is kept under both spellings of `conversion`: each translation
- * table with a document translated in both, and each other keyed table the rewrite would collide in.
+ * Where some one thing is kept under both spellings of `conversion`, each named by its table and
+ * the key of the first such thing: each translation table with a document translated in both, and
+ * each other keyed table the rewrite would collide in.
  */
 async function tablesMeetingBoth(
   context: UpgradeStepContext,
@@ -225,8 +240,8 @@ async function tablesMeetingBoth(
   const meeting: string[] = [];
   for (const target of targets) {
     if (!(await context.adapter.tableExists(target.table))) continue;
-    if (await meetsBoth(adapter, target, conversion))
-      meeting.push(target.table);
+    const where = await meetsBoth(adapter, target, conversion);
+    if (where !== undefined) meeting.push(where);
   }
   return meeting;
 }
@@ -234,16 +249,19 @@ async function tablesMeetingBoth(
 /** The refusal of rows kept under both spellings of one language, naming where. */
 function keptUnderBoth(
   conversion: CodeConversion,
-  tables: readonly string[]
+  where: readonly string[],
+  /** Another older spelling of the same code, where two of them meet rather than one and the code. */
+  alongside?: string
 ): NextlyError {
+  const other = alongside ?? conversion.to;
   return new NextlyError({
     code: "NEXTLY_LANGUAGE_CODES_COLLIDE",
     publicMessage:
-      `Rows under both "${conversion.from}" and "${conversion.to}", one language under two codes, ` +
-      `are kept for the same thing in ${tables.join(", ")}; moving "${conversion.from}" to ` +
-      `"${conversion.to}" would make them one. Keep the rows of one spelling, then run ` +
-      "`nextly migrate` again. Nothing was changed.",
-    logContext: { from: conversion.from, to: conversion.to, tables },
+      `Rows under both "${conversion.from}" and "${other}", one language under two codes, are ` +
+      `kept for the same thing in ${where.join("; ")}; moving them to "${conversion.to}" would ` +
+      "make them one. Keep the rows of one spelling, then run `nextly migrate` again. Nothing " +
+      "was changed.",
+    logContext: { from: conversion.from, other, to: conversion.to, where },
   });
 }
 
@@ -273,6 +291,18 @@ async function conversionsToRun(
   if (conversions.length === 0) return [];
   // Rewriting a version's languages writes the newer columns: only on a history laid out for them.
   await assertVersionHistoryReady(context);
+  // Two older spellings of one code (`pt_BR` and `PT_br`) both become that code, so each pair is
+  // checked against the other as well as against the code itself, before any row is written.
+  for (const [index, one] of conversions.entries()) {
+    for (const other of conversions.slice(index + 1)) {
+      if (other.to !== one.to) continue;
+      const meeting = await tablesMeetingBoth(context, tables, {
+        from: one.from,
+        to: other.from,
+      });
+      if (meeting.length > 0) throw keptUnderBoth(one, meeting, other.from);
+    }
+  }
   const pending: CodeConversion[] = [];
   for (const conversion of conversions) {
     // Every conversion is checked before any row is written, so one that would collide stops

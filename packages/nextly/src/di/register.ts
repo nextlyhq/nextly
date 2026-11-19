@@ -630,11 +630,9 @@ export interface NextlyServiceConfig {
   webhookAuditEnabled?: boolean;
 
   /**
-   * Whether every translatable field is kept per language from the start
-   * (`experimental.perLanguageStorage`). Carried from the sanitized config; absent, which is off,
-   * when built without app config.
-   *
-   * @experimental
+   * What the configuration wrote of the deprecated `experimental.perLanguageStorage`, which
+   * chooses no layout: read only so the start warns a site that still writes it. Absent where it
+   * writes nothing.
    */
   perLanguageStorage?: boolean;
 }

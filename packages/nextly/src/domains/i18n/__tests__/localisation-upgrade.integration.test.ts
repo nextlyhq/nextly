@@ -15,6 +15,8 @@
  * draft (a language's draft then carries shared values), one that takes the first save rather than
  * the later, and a dry run that writes.
  */
+import { randomUUID } from "node:crypto";
+
 import { afterEach, expect, it, vi } from "vitest";
 
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
@@ -143,6 +145,51 @@ describeEachDialect(
       expect(pending.en).toMatchObject({ title: "pending title 2" });
       expect(pending.en).not.toHaveProperty("code");
       expect(pending.shared).toEqual({ code: "pending-code-2" });
+    });
+
+    // A pending change kept under no language and one kept under the default language become the
+    // same language's draft. Where they hold different values for one field and were saved at the
+    // same moment, nothing says which is the later: neither is kept on a guess.
+    it("refuses a no-language and a default-language pending change saved at the same moment, keeping both", async () => {
+      const { seeded } = await legacySite();
+      const at = new Date("2026-08-01T10:00:00Z");
+      const where = {
+        and: [
+          { column: "entryId", op: "=" as const, value: seeded.notes.pending },
+          ...WORKING_DRAFT_SHAPE,
+        ],
+      };
+      await database!.adapter.update(
+        VERSIONS_TABLE,
+        { createdAt: at, updatedAt: at },
+        where
+      );
+      const [legacy] = await database!.adapter.select<VersionRow>(
+        VERSIONS_TABLE,
+        { where }
+      );
+      expect(legacy?.locale ?? null).toBeNull();
+      await database!.adapter.insert(
+        VERSIONS_TABLE,
+        {
+          ...legacy,
+          id: randomUUID(),
+          locale: "en",
+          draftKey: null,
+          snapshot: JSON.stringify({ title: "pending title in en" }),
+          createdAt: at,
+          updatedAt: at,
+        },
+        { returning: [] }
+      );
+      const before = await pendingChangesOf(seeded.notes.pending);
+      expect(Object.keys(before).sort()).toEqual(["en", "shared"]);
+
+      await expect(upgrade()).rejects.toThrow(
+        new RegExp(`${seeded.notes.pending}[\\s\\S]*title`)
+      );
+
+      expect(await pendingChangesOf(seeded.notes.pending)).toEqual(before);
     });
 
     // Where two languages changed one shared field and were saved at the same moment, nothing says
