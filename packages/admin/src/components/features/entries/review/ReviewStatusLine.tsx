@@ -14,6 +14,7 @@
 
 import type { JSX } from "react";
 
+import { StageDot } from "@admin/components/features/settings/workflows/StagePill";
 import { cn } from "@admin/lib/utils";
 import type { PartReview } from "@admin/types/workflows";
 
@@ -141,10 +142,14 @@ function StageWords({
   return (
     <>
       <p
-        className="text-xs text-muted-foreground"
+        className="flex items-center gap-1.5 text-xs text-muted-foreground"
         data-testid="review-status-line"
       >
-        {words.join(" · ")}
+        {/* The stage's colour as Settings saved it; a stage with none gets no mark. */}
+        {part.stageColour === null ? null : (
+          <StageDot colour={part.stageColour} />
+        )}
+        <span>{words.join(" · ")}</span>
       </p>
       {live && hasWorkingDraft && !part.publishable ? (
         <p role="note" className={NOTE}>
