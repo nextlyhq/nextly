@@ -984,6 +984,9 @@ export class MySqlAdapter extends DrizzleAdapter {
    * - No arrays
    * - No native ILIKE
    * - No RETURNING clause
+   * - No savepoint for a nested transaction: one opened inside another's work
+   *   joins it flat (`joinSteps`), so `supportsSavepoints` is false. The
+   *   transaction context's own savepoint methods are a separate matter.
    */
   getCapabilities(): DatabaseCapabilities {
     return {
@@ -995,7 +998,7 @@ export class MySqlAdapter extends DrizzleAdapter {
       supportsFts: true, // MySQL has FULLTEXT indexes
       supportsIlike: false, // No native ILIKE, use LOWER() LIKE
       supportsReturning: false, // No RETURNING clause in MySQL
-      supportsSavepoints: true, // On the transaction context; a nested transaction joins flat
+      supportsSavepoints: false, // A nested transaction joins flat; no savepoint isolates it
       supportsOnConflict: true, // ON DUPLICATE KEY UPDATE
       maxParamsPerQuery: 65535, // MySQL limit
       maxIdentifierLength: 64, // MySQL limit

@@ -1273,12 +1273,27 @@ describe("@nextly/adapter-mysql", () => {
       expect(capabilities.supportsFts).toBe(true);
       expect(capabilities.supportsIlike).toBe(false);
       expect(capabilities.supportsReturning).toBe(false);
-      expect(capabilities.supportsSavepoints).toBe(true);
+      expect(capabilities.supportsSavepoints).toBe(false);
       expect(capabilities.supportsOnConflict).toBe(true);
       expect(capabilities.maxParamsPerQuery).toBe(65535);
       expect(capabilities.maxIdentifierLength).toBe(64);
       // Not known before connect: the server's version decides it.
       expect(capabilities.sharedRowLock).toBeUndefined();
+    });
+
+    // `supportsSavepoints` means a nested transaction is isolated by a
+    // savepoint, which MySQL's flat join is not, whatever savepoints the
+    // transaction context itself takes.
+    it("reports no savepoints for nested transactions once connected, though its context takes them", async () => {
+      const adapter = createMySqlAdapter({
+        url: "mysql://localhost:3306/test",
+      });
+      await adapter.connect();
+
+      expect(adapter.getCapabilities().supportsSavepoints).toBe(false);
+      await adapter.transaction(async tx => {
+        expect(typeof tx.savepoint).toBe("function");
+      });
     });
 
     it.each([
