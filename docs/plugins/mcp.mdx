@@ -1,0 +1,131 @@
+---
+title: MCP
+description: A Model Context Protocol endpoint for AI agents, off by default, that reads review state and submits for review as the key it is given, and approves and publishes nothing.
+---
+
+> **Experimental: pin your versions.**
+>
+> `@nextlyhq/plugin-mcp` and the tools it serves are experimental. Their names, inputs and
+> answers may change between alpha releases. Pin your versions and read the release notes
+> before upgrading.
+
+The MCP plugin serves a [Model Context Protocol](https://modelcontextprotocol.io) endpoint, so
+an AI agent can learn what an install lets it read, read where documents stand in review, and
+submit its work for a person to review.
+
+It is off by default, and authenticated like every other Nextly route: an agent connects with
+an API key, and every tool answers for that key, judged on the grants stamped on the key and
+never on the roles of whoever minted it. An agent is bounded by the key you give it.
+
+## Installation
+
+```bash
+npm install @nextlyhq/plugin-mcp
+```
+
+```ts
+import { mcpPlugin } from "@nextlyhq/plugin-mcp";
+import { defineConfig } from "nextly/config";
+
+export default defineConfig({
+  plugins: [mcpPlugin({ enabled: true })],
+});
+```
+
+While `enabled` is `false`, the default, the plugin contributes no route at all. Turned on, the
+endpoint answers at `/admin/api/mcp` in a scaffolded project (pass `path` to move it), on the
+hostname of `NEXT_PUBLIC_APP_URL` unless you name `allowedHosts`. The package README covers the
+address checks and the protocol revisions it serves.
+
+## The tools
+
+Five tools. Four read, and exactly one writes: `submit_for_review`.
+
+Every answer carries a constant sentence as its text and the data as `structuredContent`. Text
+people wrote, such as a comment, a title or a stage's label, is never put into the sentence: it
+arrives only as data, so it cannot pose as an instruction to the agent.
+
+| Tool                      | Writes | Input                                       | Answer (`structuredContent`)                                |
+| ------------------------- | ------ | ------------------------------------------- | ----------------------------------------------------------- |
+| `get_initial_context`     | No     | none                                        | `{ entities, complete }`: what the key may read             |
+| `get_workflow`            | No     | `{ collection }` or `{ single }`            | `{ workflow }`: its stages and steps, or `null`             |
+| `get_review_state`        | No     | `{ document }`                              | `{ workflow, parts }`: each part's stage and steps          |
+| `list_waiting_for_review` | No     | `{ page?, limit? }`                         | `{ items, meta }`: what waits for the key, a page at a time |
+| `submit_for_review`       | Yes    | `{ document, parts, seen, comment, step? }` | `{ step, moved, left, reviewer, skippedReviewer }`          |
+
+A `document` is `{ "collection": "posts", "id": "…" }` for an entry and `{ "single": "homepage" }`
+for a Single. Every input is strict: a key a tool does not name is refused, not ignored.
+
+### `get_workflow`
+
+The review workflow attached to a collection or Single: its stages in order and the steps
+between them, each with its kind (`submit`, `approve`, `request-changes` or `move`), the stages it
+leaves from and the one it enters. Never the workflow's settings, who may take its steps, or the
+other collections and Singles it is attached to. Name exactly one of `collection` and `single`.
+
+### `get_review_state`
+
+Where a document stands, part by part: each language is a part, and so is the content every
+language shares (`part: null`). Each part carries its `stage`, whether it may be published, who it
+waits for, its last move, and each step out of its stage with `mayTake`, whether this key may take
+it. It also carries `revision` and `version`: what a submit must say it saw. The fields are those
+of the REST route's [review state](/docs/api-reference/rest-api#workflows-experimental).
+
+### `list_waiting_for_review`
+
+The parts assigned to the key's owner, in stages whose step the key may take, in documents it may
+read, as a list envelope: `{ items, meta }`. `page` starts at 1, and `limit` is 1 to 100 (20 unless
+named).
+
+### `submit_for_review`
+
+Submits parts of a document for review, with a comment the reviewer reads:
+
+```json
+{
+  "document": { "collection": "posts", "id": "…" },
+  "parts": ["es"],
+  "seen": [{ "part": "es", "revision": 0, "version": "…" }],
+  "comment": "Translated; ready for legal"
+}
+```
+
+- **`parts`:** each part named. There is no "every part": an agent says which it worked on.
+- **`seen`:** each part's `revision` and `version`, as `get_review_state` gave them. A part that
+  moved since is refused with `409 CONFLICT` (`data.reason: "stale"`): read it again before
+  deciding.
+- **`comment`:** required, and more than blanks.
+- **`step`:** a step of kind `submit`. Left out, the submit step out of the parts' stage is
+  taken.
+
+A submit approves nothing: a submitted part is not made publishable by it, and a person still
+reviews it. The history names the key that submitted, by its own id.
+
+## What an agent cannot do
+
+No tool approves, requests changes, publishes, publishes without review, assigns, or changes a
+workflow, and no tool takes an argument that would. An approval is a person's to give: an API key
+may never approve or request changes, whatever grants it holds, and `submit_for_review` refuses
+any step that is not a submit.
+
+| Code                       | Status | When                                                                                      |
+| -------------------------- | ------ | ----------------------------------------------------------------------------------------- |
+| `WORKFLOW_STEP_NOT_SUBMIT` | `400`  | `step` names a step that is not a submit, such as an approval or a move.                  |
+| `WORKFLOW_NO_SUBMIT_STEP`  | `409`  | No `step` is named, and no submit step leaves the stage a part stands in.                 |
+| `VALIDATION_ERROR`         | `400`  | With `WORKFLOW_STEP_REQUIRED` in `data.errors`: more than one submit step could be meant. |
+| `FORBIDDEN`                | `403`  | The key does not hold the step's permission, such as `update-posts`.                      |
+| `NOT_FOUND`                | `404`  | The key may not read the document, or not in a part it named.                             |
+
+A refusal answers with `isError: true` and the error as `structuredContent.error`: the same
+`{ code, message, requestId, data? }` the REST routes send. A failure that is not a deliberate
+refusal answers with one fixed sentence and `INTERNAL_ERROR`, never the failure's own message;
+the server's log has the detail under the `requestId`.
+
+## One language at a time
+
+A document's languages are reviewed separately, and a key is held to each one. Where a
+collection's read rule refuses a language (say `read: ({ locale }) => locale !== "es"`), a key is
+told nothing of that language's part: `get_review_state` leaves it out, `list_waiting_for_review`
+does not list it, and `submit_for_review` answers a part in it as `404 NOT_FOUND`, exactly as
+though the document had no such part. The other languages of the same document answer as
+usual.
