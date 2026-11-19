@@ -57,6 +57,11 @@ import {
   saveOfSchemaChange,
   type SchemaChangeAnswers,
 } from "../../domains/schema/builder-save/schema-change-save";
+import {
+  parseFieldRenameAnswers,
+  withFieldRenameAnswers,
+  withoutRenameAnswers,
+} from "../../domains/schema/field-rename-answers";
 import { introspectLiveSnapshot } from "../../domains/schema/pipeline/diff/introspect-live";
 import type { BrowserRenameResolution } from "../../domains/schema/pipeline/prompt-dispatcher/browser";
 import { reachesRelationStorage } from "../../domains/schema/pipeline/recorded-shapes";
@@ -726,9 +731,19 @@ const COLLECTIONS_METHODS: Record<
       if (updatedFields !== undefined) {
         assertValidPluginFieldOptions(updatedFields);
       }
-      const result = await svc.updateCollection(
-        { collectionName: p.collectionName },
-        await withFieldsAsStored(p.collectionName, body)
+      // The request's answers for a field leaving and another arriving: the change runs with
+      // them, so a pair it doesn't answer is refused, not taken for a rename.
+      const renames = parseFieldRenameAnswers(
+        (body as { renames?: unknown }).renames
+      );
+      const result = await withFieldRenameAnswers(renames, async () =>
+        svc.updateCollection(
+          { collectionName: p.collectionName },
+          await withFieldsAsStored(
+            p.collectionName,
+            withoutRenameAnswers(body as Record<string, unknown>)
+          )
+        )
       );
       const collection = unwrapServiceResult(result, {
         slug: p.collectionName,

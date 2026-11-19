@@ -52,6 +52,7 @@ import {
   storesPerLanguage,
 } from "../../i18n/per-language-storage";
 import { companionHasStatusColumn } from "../../i18n/runtime/companion-io";
+import { refuseUnansweredRename } from "../../schema/field-rename-answers";
 import { introspectLiveSnapshot } from "../../schema/pipeline/diff/introspect-live";
 import { normalizeType } from "../../schema/pipeline/diff/normalize-type";
 import type { ForeignKeySpec } from "../../schema/pipeline/diff/types";
@@ -1564,6 +1565,17 @@ export class DynamicCollectionService extends BaseService {
         (f: FieldDefinition) =>
           !RESERVED_FIELD_NAMES.includes(f.name) ||
           userDefinedFields.some(kept => kept.name === f.name)
+      );
+
+      // A field leaving and another of the same type arriving is never taken for a rename by
+      // guesswork: on a road that takes the request's answers, a pair with none is refused here,
+      // before anything is written.
+      refuseUnansweredRename(
+        `The collection "${collectionName}"`,
+        this.schemaService.fieldRenameCandidate(
+          oldUserFields,
+          userDefinedFields
+        )
       );
 
       // A many-to-many added to a renamed collection would get a junction its reads can't find.

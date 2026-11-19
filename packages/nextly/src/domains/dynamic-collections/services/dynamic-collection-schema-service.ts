@@ -38,6 +38,7 @@ import {
   removedAndAddedFields as renameCandidates,
 } from "../../field-groups/storage/field-group-rename";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
+import { declinedRename } from "../../schema/field-rename-answers";
 import {
   builderColumnIsUnique,
   isListMarkedUnique,
@@ -2824,6 +2825,22 @@ ${allColumnDefs.join(",\n")}
    * confirmation later if friction is real.
    */
   detectFieldRename(
+    oldFields: FieldDefinition[],
+    newFields: FieldDefinition[]
+  ): { from: FieldDefinition; to: FieldDefinition } | null {
+    const pair = this.fieldRenameCandidate(oldFields, newFields);
+    // A change sent with answers that called this pair a drop and an add renames nothing: every
+    // step of it asks here, so none of them takes the pair for a rename.
+    return pair !== null && declinedRename(pair) ? null : pair;
+  }
+
+  /**
+   * The one leaving and one arriving field of a compatible type a change could be renaming, or
+   * none, whatever the change answered about it: what a road that takes answers asks for an
+   * answer to (`refuseUnansweredRename`). `detectFieldRename` is this less a pair answered
+   * `drop_and_add`.
+   */
+  fieldRenameCandidate(
     oldFields: FieldDefinition[],
     newFields: FieldDefinition[]
   ): { from: FieldDefinition; to: FieldDefinition } | null {

@@ -96,6 +96,7 @@ import type {
 import { entitySaveDeps } from "../../schema/builder-save/entity-save-deps";
 import { entityRelations } from "../../schema/builder-save/single-relations";
 import { singleEntity } from "../../schema/builder-save/stored-entity";
+import { refuseUnansweredRename } from "../../schema/field-rename-answers";
 import { refuseRenamedFieldOntoTakenColumn } from "../../schema/rename-target";
 import { writeRegistryRowsWith } from "../../schema/schema-version";
 import {
@@ -1091,6 +1092,7 @@ export class SingleMetadataService {
     // A field renamed onto a column that is already there is refused here, before anything
     // changes: the archive write of a field leaving translation, just below, is the first write a
     // save makes.
+    await this.refuseUnansweredRename(input);
     await this.refuseRenameOntoTakenColumn(input);
 
     // The history checks a Builder save makes, before that first write, where a writer is set up.
@@ -1620,6 +1622,30 @@ export class SingleMetadataService {
         builtBy: "collection",
       },
       { single: input.slug }
+    );
+  }
+
+  /**
+   * Refuse a schema change, on a road that takes the request's answers, that removes a field and
+   * adds another of the same type with no answer for the pair (`refuseUnansweredRename`): it is
+   * never taken for a rename by guesswork. Asked before anything changes.
+   */
+  private async refuseUnansweredRename(
+    input: UpdateSingleSchemaInput
+  ): Promise<void> {
+    if (input.fields === undefined) return;
+    const { DynamicCollectionSchemaService } = await import(
+      "../../dynamic-collections/services/dynamic-collection-schema-service"
+    );
+    refuseUnansweredRename(
+      `The Single "${input.slug}"`,
+      new DynamicCollectionSchemaService(
+        undefined,
+        this.dialect
+      ).fieldRenameCandidate(
+        (input.existing.fields ?? []) as unknown as FieldDefinition[],
+        input.fields
+      )
     );
   }
 
