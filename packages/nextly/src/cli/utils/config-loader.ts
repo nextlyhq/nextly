@@ -606,10 +606,10 @@ async function loadConfigInternal(
     : findConfigFile(cwd);
 
   if (!configPath && options.missing === "refuse") {
+    // The status is the code's own (`error-codes.ts`).
     throw new NextlyError({
       code: "INVALID_INPUT",
       publicMessage: "Failed to load Nextly configuration.",
-      statusCode: 400,
       logMessage: "Config loader error",
       // Where the search looked, from the one list it reads, so the report names each place.
       logContext: {
@@ -1051,7 +1051,11 @@ function publishConfiguredPostgresSchema(config: {
 export async function loadConfig(
   options: LoadConfigOptions = {}
 ): Promise<LoadConfigResult> {
-  if (cachedConfig && !options.watch) {
+  // A cached default, given where no configuration file was found, is no answer to a caller that
+  // refuses to act without one: it is asked again, and refused.
+  const cachedDefaultRefused =
+    options.missing === "refuse" && cachedConfig?.configPath === undefined;
+  if (cachedConfig && !options.watch && !cachedDefaultRefused) {
     debugLog(options, "Returning cached config");
     return cachedConfig;
   }

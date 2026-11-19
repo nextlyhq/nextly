@@ -55,6 +55,7 @@ const READ_ENTITIES: ReadonlyArray<readonly string[]> = [
   ["migrate:baseline"],
   ["migrate:resolve", "--applied", "0001_init.sql"],
   ["migrate:fresh"],
+  ["migrate:down"],
   ["db:sync"],
   ["build"],
   ["prune"],

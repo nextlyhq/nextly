@@ -389,3 +389,19 @@ describe("the loader, with no configuration file", () => {
     expect(loaded.config.collections ?? []).toEqual([]);
   });
 });
+
+describe("the loader, asked to refuse after a default was cached", () => {
+  // The default an earlier caller was given is no answer to one that reads the app's entities.
+  it("still refuses a project with no configuration file", async () => {
+    await loadConfig({ cwd: dir });
+
+    const refused = await loadConfig({ cwd: dir, missing: "refuse" }).then(
+      () => undefined,
+      (error: unknown) => error
+    );
+
+    expect(refused).toMatchObject({
+      logContext: { reason: "config-missing" },
+    });
+  });
+});

@@ -237,3 +237,25 @@ describe("a define* collection with no fields, copied for the plugins' setups", 
     );
   });
 });
+
+describe("a define* collection with no fields, whose fields a plugin's setup copies", () => {
+  // A setup that rebuilds each field (`{ ...field }`) still hands back the system ones.
+  it("is still reported as declaring no field of its own", () => {
+    const declared = {
+      collections: [defineCollection({ slug: "notes", fields: [] })],
+    };
+    const [notes] = setupTransformerInput(declared, []).collections;
+    const effective = {
+      collections: [
+        { ...notes, fields: notes.fields.map(field => ({ ...field })) },
+      ],
+    };
+
+    expect(configurationProblems(declared, effective)).toContainEqual(
+      expect.objectContaining({
+        path: "collections[0].fields",
+        code: "FIELDS_EMPTY",
+      })
+    );
+  });
+});
