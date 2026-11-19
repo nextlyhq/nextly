@@ -803,6 +803,9 @@ export function CompactDocumentActionBar({
       }
       pending={pending}
       menuClassName={COMPACT_MENU_CLASS}
+      // A Publish the workflow holds opens "Choose what to publish…" here as
+      // it does in the header, by the same rule.
+      onOpenReady={readyToPublishOpener(actions, bindings)}
     />
   );
 }

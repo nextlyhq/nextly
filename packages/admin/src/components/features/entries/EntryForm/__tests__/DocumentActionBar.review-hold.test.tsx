@@ -11,7 +11,11 @@ import { describe, expect, it, vi } from "vitest";
 
 import { render, screen } from "@admin/__tests__/utils";
 
-import { DocumentActionBar, type ActionBinding } from "../DocumentActionBar";
+import {
+  CompactDocumentActionBar,
+  DocumentActionBar,
+  type ActionBinding,
+} from "../DocumentActionBar";
 import type { EditorDocumentAction } from "../document-actions";
 
 const REASON = "Needs approval: In review, waiting for Editors";
@@ -120,6 +124,25 @@ describe("a Publish the workflow holds", () => {
     );
     await userEvent.click(screen.getByRole("button", { name: "Publish" }));
     expect(choose).not.toHaveBeenCalled();
+    expect(publish).not.toHaveBeenCalled();
+  });
+});
+
+describe("a Publish the workflow holds, on a full-window surface's compact bar", () => {
+  it("is held the same way, and opens Choose what to publish… when pressed", async () => {
+    const publish = vi.fn();
+    const choose = vi.fn();
+    render(
+      <CompactDocumentActionBar
+        actions={[HELD_PUBLISH, CHOOSE]}
+        bindings={bindings(publish, choose)}
+      />
+    );
+    const held = screen.getByRole("button", { name: "Publish" });
+    expect(held).toHaveAttribute("aria-disabled", "true");
+    expect(held).toHaveAccessibleDescription(REASON);
+    await userEvent.click(held);
+    expect(choose).toHaveBeenCalledTimes(1);
     expect(publish).not.toHaveBeenCalled();
   });
 });
