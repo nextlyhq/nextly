@@ -697,14 +697,14 @@ describe.each(getConfiguredTestDialects())(
       }, 300_000);
 
       // A row of a stopped save whose process stopped before its marker: the next save puts the
-      // marker back before it goes on, so the commands with no database see the part-way save.
+      // marker back before it goes on, so the commands with no database see the part-way save. Left
+      // by another host, whose own start settles it: a record of this host is settled before the
+      // save instead (`settle-left-save`).
       it("a standing record without its marker gets it back before a later save goes on", async () => {
         const t = await boot();
         await path.create([text("heading")]);
-        // Left on this host, by an app handed its adapter as this one is: the marker refuses here.
         const left = {
           ...stoppedRecord(path, "a-stopped-host"),
-          host: hostname(),
           database: "unknown",
         };
         await new MetaService(t.adapter, consoleLogger).set(
@@ -719,7 +719,10 @@ describe.each(getConfiguredTestDialects())(
         );
         expect(await recordRow(t, path)).toEqual(left);
         expect(entityMarkers(path)).toEqual([left]);
-        expect(await refusal(markersRefuse())).toBe("CONFLICT");
+        // Another host's: one line of notice here, not a refusal.
+        const notices: string[] = [];
+        expect(await refusal(markersRefuse(notices))).toBe("none");
+        expect(notices.join(" ")).toContain("a-stopped-host");
       }, 300_000);
 
       // A row that is not a save's record still stands for one: both readers refuse, and a save of

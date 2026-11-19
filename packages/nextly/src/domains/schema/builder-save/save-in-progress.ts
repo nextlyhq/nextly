@@ -39,6 +39,7 @@ import {
   mkdir,
   readdir,
   readFile,
+  rename,
   rm,
   writeFile,
 } from "node:fs/promises";
@@ -90,8 +91,27 @@ const savedRecord = z.object({
   definitionFile: z.string(),
   /** The definition file's text before the save; null where there was none. */
   definitionBefore: z.string().nullable(),
+  /**
+   * The text the save writes to the definition file, so a settle tells the save's own write from
+   * an edit made since. Absent from a record written before it was kept.
+   */
+  definitionAfter: z.string().optional(),
+  /**
+   * The snapshot the save's files chain from, which a settle judges "none of it landed" against:
+   * the newest on disk when the save started, applied or not. Null where there was none; absent
+   * from a record written before it was kept.
+   */
+  startedFrom: z.string().nullable().optional(),
+  /**
+   * The migration files the save wrote, as it learned each one's name. A file written after the
+   * last of these updates is found by the settle from the folder itself.
+   */
+  files: z.array(z.string()).optional(),
 });
 type SaveInProgress = z.infer<typeof savedRecord>;
+
+/** A record of a save that has started, as a settle reads it. */
+export type LeftSave = SaveInProgress;
 
 const KEY_PREFIX = "builder-save-in-progress:";
 
@@ -132,8 +152,13 @@ interface MadeRecord {
   registryWritesBefore: number | undefined;
 }
 
-/** What a writer tells its record of how the save ended. */
+/** What a writer tells its record of how the save went. */
 export interface StartedSave {
+  /**
+   * The save wrote these migration files: they join the record's `files`, in the row and then the
+   * marker, so a settle after a stop knows them by name.
+   */
+  filesWritten(names: readonly string[]): Promise<void>;
   /** The save failed and withdrew everything it wrote: its record clears with the scope. */
   withdrawn(): void;
   /** Part of the save was kept and nothing records what: its record stays. */
@@ -142,6 +167,7 @@ export interface StartedSave {
 
 /** For a save that made no record of its own (one already stood for the entity). */
 const NO_RECORD: StartedSave = {
+  filesWritten: () => Promise.resolve(),
   withdrawn: () => undefined,
   left: () => undefined,
 };
@@ -270,6 +296,10 @@ export async function recordSaveStarted(args: {
   /** The definition file's absolute path. */
   definitionFile: string;
   definitionBefore: string | undefined;
+  /** The text the save is about to write to the definition file. */
+  definitionAfter?: string;
+  /** The newest snapshot on disk when the save started, which its files chain from. */
+  startedFrom?: string | null;
   /** The database the save writes to (`savedDatabase`); unknown where not given. */
   database: string | undefined;
   /** The save's log, which a try after the first is noticed in while the database is busy. */
@@ -294,6 +324,12 @@ export async function recordSaveStarted(args: {
     database: args.database ?? UNKNOWN_DATABASE,
     definitionFile: relative(args.projectRoot, args.definitionFile),
     definitionBefore: args.definitionBefore ?? null,
+    ...(args.definitionAfter === undefined
+      ? {}
+      : { definitionAfter: args.definitionAfter }),
+    ...(args.startedFrom === undefined
+      ? {}
+      : { startedFrom: args.startedFrom }),
   };
   const meta = new MetaService(args.adapter, consoleLogger);
   const key = saveInProgressKey(args.kind, args.slug);
@@ -345,6 +381,7 @@ export async function recordSaveStarted(args: {
     throw error;
   }
   return {
+    filesWritten: names => noteFilesWritten(entry, meta, key, names),
     withdrawn: () => {
       if (entry.ending === "open") entry.ending = "withdrawn";
     },
@@ -352,6 +389,49 @@ export async function recordSaveStarted(args: {
       entry.ending = "left";
     },
   };
+}
+
+/**
+ * Add `names` to the record's files: the row, only while it is still this record (a row another
+ * process moved is left to that process), then the marker, replaced whole. A stop between the two
+ * leaves the row ahead of the marker, which the commands with no database read only for the save
+ * it names.
+ */
+async function noteFilesWritten(
+  entry: MadeRecord,
+  meta: MetaService,
+  key: string,
+  names: readonly string[]
+): Promise<void> {
+  if (names.length === 0) return;
+  const next: SaveInProgress = {
+    ...entry.record,
+    files: [...(entry.record.files ?? []), ...names],
+  };
+  if (!(await meta.compareAndSet(key, entry.record, next))) return;
+  const path = markerPath(entry.projectRoot, entry.record);
+  entry.record = next;
+  await replaceMarker(path, next);
+}
+
+/**
+ * Put `record` at `path` in place of the marker there, whole: written aside, then renamed over it,
+ * so a reader sees the old marker or the new one, never half of either.
+ */
+async function replaceMarker(
+  path: string,
+  record: SaveInProgress
+): Promise<void> {
+  const temporary = `${path}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(temporary, `${JSON.stringify(record, null, 2)}\n`, {
+      encoding: "utf-8",
+      flag: "wx",
+    });
+    await rename(temporary, path);
+  } finally {
+    await rm(temporary, { force: true });
+  }
 }
 
 /**
@@ -615,7 +695,7 @@ interface RecordRows {
  * The records the database holds, in one select over their keys. Each value is the JSON text
  * `MetaService` stores, which MySQL's driver hands back as a string and the others as stored.
  */
-async function readSavesInProgress(
+export async function readSavesInProgress(
   adapter: DrizzleAdapter
 ): Promise<ReadRow[]> {
   const table = loadedDialect(adapter.getCapabilities().dialect).tables
@@ -643,7 +723,7 @@ async function readSavesInProgress(
 }
 
 /** A record's row as read: the record, or why it could not be read, by its key. */
-type ReadRow =
+export type ReadRow =
   | { key: string; record: SaveInProgress }
   | { key: string; unreadable: string };
 
@@ -672,4 +752,57 @@ export async function refuseWhileSaveInProgress(
       saves: rows.map(row => row.key),
     },
   });
+}
+
+/**
+ * Clear a record a settle has settled: its row, only while it is still this record (a save that
+ * started since made its own), then its marker, only where it is this record's.
+ */
+export async function clearSettledSave(
+  adapter: DrizzleAdapter,
+  projectRoot: string,
+  record: LeftSave
+): Promise<void> {
+  const meta = new MetaService(adapter, consoleLogger);
+  const key = saveInProgressKey(record.kind, record.slug);
+  const standing = savedRecord.safeParse(await meta.get<unknown>(key));
+  if (standing.success && standing.data.id === record.id) {
+    await meta.delete(key);
+  }
+  await removeMarker(markerPath(projectRoot, record), record);
+}
+
+/**
+ * Remove each marker of this host and `database` that no row stands behind: one left where a save's
+ * row was cleared and its marker was not, which the commands with no database would otherwise
+ * refuse over for good. A marker of another host or database, or one that cannot be read, stays.
+ */
+export async function removeStaleMarkers(args: {
+  adapter: DrizzleAdapter;
+  projectRoot: string;
+  /** This process's database (`savedDatabase`). */
+  database: string | undefined;
+}): Promise<string[]> {
+  const here = hostname();
+  const rows = await readSavesInProgress(args.adapter);
+  const standing = new Set(
+    rows.flatMap(row => ("record" in row ? [row.record.id] : []))
+  );
+  const removed: string[] = [];
+  for (const marker of await readSaveMarkers(args.projectRoot)) {
+    if ("unreadable" in marker) continue;
+    const { record } = marker;
+    if (record.host !== here) continue;
+    if (
+      args.database !== undefined &&
+      record.database !== args.database &&
+      record.database !== UNKNOWN_DATABASE
+    ) {
+      continue;
+    }
+    if (standing.has(record.id)) continue;
+    await removeMarker(marker.file, record);
+    removed.push(relative(args.projectRoot, marker.file));
+  }
+  return removed;
 }

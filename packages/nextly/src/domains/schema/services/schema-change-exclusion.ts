@@ -83,13 +83,26 @@ export async function withSchemaChangeExcluded<T>(
   // migration files, refused at once where another writer holds them. A
   // save's record that it is in progress is cleared once the whole change
   // has ended, its registry write included, as its outcome allows.
+  const { adapter } = args;
+  // A save that writes a migration settles first what an earlier save left part-way, holding the
+  // schema lock and the project's migration files as the save does: its files and its definition
+  // are the ones this save starts from.
+  const settleFirst = async () => {
+    if (adapter === undefined || args.migrationsDir === undefined) return;
+    const { settleBeforeBuilderSave } = await import(
+      "../builder-save/settle-left-save"
+    );
+    await settleBeforeBuilderSave(adapter, args.migrationsDir, args.logger);
+  };
   const held = () =>
     withBuilderWriterScope(
       args.label,
-      () => withSaveRecords(work, args.logger),
+      async () => {
+        await settleFirst();
+        return withSaveRecords(work, args.logger);
+      },
       args.migrationsDir
     );
-  const { adapter } = args;
   if (!adapter) return held();
 
   // Loaded on demand for the reason the services' own imports are: this module is reached from DI

@@ -97,7 +97,10 @@ import {
   type AddedStatements,
   type GenerateArgs,
 } from "../migrate-create/generate";
-import { loadLatestSnapshot } from "../migrate-create/snapshot-io";
+import {
+  loadLatestSnapshot,
+  newestSnapshotName,
+} from "../migrate-create/snapshot-io";
 import { isWriterOvertaken } from "../migrate-create/writer-hold";
 import { countRowsBreakingNotNull } from "../pipeline/classifier/count-helpers";
 import { diffSnapshots } from "../pipeline/diff/diff";
@@ -297,6 +300,15 @@ const SAVE_KINDS: Record<AddressKind, SaveKind> = {
     builtBy: builtByFor("fieldGroup", true),
   },
 };
+
+/** Where an entity of `kind` is kept: its definition's list and its table's prefix. */
+export function saveKindOf(kind: AddressKind): {
+  manifest: SaveKind["manifest"];
+  prefix: SaveKind["prefix"];
+} {
+  const { manifest, prefix } = SAVE_KINDS[kind];
+  return { manifest, prefix };
+}
 
 /** The kind of entity `save` writes. */
 function kindOf(save: CollectionSave): SaveKind {
@@ -533,6 +545,7 @@ async function writeSave(
 
   const definitionPath = resolve(deps.projectRoot, deps.config.db.uiSchemaFile);
   const before = await readIfPresent(definitionPath);
+  const after = serializeUiSchema(plan.next);
   // Recorded before the first write, so a process stopped at any write after it leaves a record
   // of the save and of the definition it started from.
   const started = await recordSaveStarted({
@@ -542,6 +555,11 @@ async function writeSave(
     slug: save.slug,
     definitionFile: definitionPath,
     definitionBefore: before,
+    // What the save writes and what its files chain from, so a settle after a stop can tell its
+    // write from a later edit, and the files' starting point from the newest one applied.
+    definitionAfter: after,
+    startedFrom:
+      (await newestSnapshotName(join(deps.migrationsDir, "meta"))) ?? null,
     database: deps.database,
     notify: line => deps.logger.warn(line),
   });
@@ -551,7 +569,7 @@ async function writeSave(
   let sqlBefore: string[];
   try {
     sqlBefore = await sqlFiles(deps.migrationsDir);
-    await writeAtomically(definitionPath, serializeUiSchema(plan.next));
+    await writeAtomically(definitionPath, after);
   } catch (error) {
     // A failed read or replace leaves the definition whole and nothing else of the save is
     // written yet: there is nothing to settle, so the record clears with the save's failure.
@@ -573,9 +591,11 @@ async function writeSave(
     }
   };
   try {
-    const files = await writeFiles(deps, save, plan, written =>
-      names.push(...written)
-    );
+    const files = await writeFiles(deps, save, plan, async written => {
+      names.push(...written);
+      // Named in the record as soon as known, so a settle after a stop finds them by name.
+      await started.filesWritten(written);
+    });
     return { files, names, table: plan.table, undo, started };
   } catch (error) {
     return undoThenThrow(error, [{ files: names, undo: () => undo(error) }]);
@@ -702,7 +722,7 @@ export async function previewCollectionSave(
       { ...deps, migrationsDir: scratch },
       save,
       plan,
-      () => {}
+      () => Promise.resolve()
     );
     const names = [
       ...(files.adopt === undefined ? [] : [files.adopt]),
@@ -1321,7 +1341,7 @@ async function writeFiles(
   deps: CollectionSaveDeps,
   save: CollectionSave,
   plan: SavePlan,
-  onWritten: (names: string[]) => void
+  onWritten: (names: string[]) => Promise<void>
 ): Promise<SaveFiles> {
   // An adopted collection's address and sibling fields predate those rules.
   const held =
@@ -1345,7 +1365,7 @@ async function writeFiles(
       now,
       tablesAsTheyStand: [plan.adoption.table],
     });
-    onWritten(adopted);
+    await onWritten(adopted);
     if (adopted.length > 1) {
       // A translated collection's companion table is written as files of its
       // own, with no snapshot to adopt it against.
@@ -1382,7 +1402,7 @@ async function writeFiles(
         now: new Date(now.getTime() + offset),
       }))
     );
-    onWritten(convert);
+    await onWritten(convert);
     offset += 1;
   }
   const change = await generateFor(deps, {
@@ -1406,7 +1426,7 @@ async function writeFiles(
       ? {}
       : { existingTableKeys: new Map([[plan.table, save.keys]]) }),
   });
-  onWritten(change);
+  await onWritten(change);
   return { adopt, change: [...convert, ...change] };
 }
 
@@ -1531,7 +1551,10 @@ async function readIfPresent(path: string): Promise<string | undefined> {
  * Replace `path` with `text` in one rename, so a reader never sees half a
  * file, and a write that fails leaves the old one whole.
  */
-async function writeAtomically(path: string, text: string): Promise<void> {
+export async function writeAtomically(
+  path: string,
+  text: string
+): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
   const temporary = `${path}.${randomUUID()}.tmp`;
   try {
@@ -2484,6 +2507,18 @@ async function settleAttempts(
   repo: SchemaEventsRepository,
   filename: string
 ): Promise<void> {
+  await settleRemovedFileAttempts(deps.adapter, repo, filename);
+}
+
+/**
+ * `settleAttempts` for a caller with the adapter alone: a settle that removes a stopped save's
+ * files clears their failed attempts as the save's own withdrawal does.
+ */
+export async function settleRemovedFileAttempts(
+  adapter: DrizzleAdapter,
+  repo: SchemaEventsRepository,
+  filename: string
+): Promise<void> {
   // Only an attempt still unresolved needs clearing: one that ended with nothing applied (a
   // busy table's tries that ran out, say) resolved itself, and there is nothing to clear.
   if (
@@ -2502,7 +2537,7 @@ async function settleAttempts(
   await resolveMigration({
     mode: "failed-cleanup",
     filename,
-    dialect: deps.adapter.getCapabilities().dialect,
+    dialect: adapter.getCapabilities().dialect,
     repo,
     // Read only by the other modes; the file is being removed.
     fileExists: () => Promise.resolve(false),

@@ -75,6 +75,10 @@ export async function runBootTimeApplyIfDev(opts?: {
 
   const label = callerLabel(opts?.caller);
   try {
+    // Step 0: settle a Builder save an earlier process left part-way, before anything reads the
+    // migration files it wrote: what is settled to pending runs in step 1.
+    await settleLeftSavesAtStart(label);
+
     // Step 1: Apply pending SQL migrations first (lock-guarded, safe across workers)
     const registeredByMigrate = await applyPendingMigrations(label);
 
@@ -202,6 +206,55 @@ export function checkRelationsBeforePlugins(
  * `nextly migrate` reads them. The directory need not exist: what its absence
  * means differs by caller, so each asks about it on its own.
  */
+/**
+ * Settle every Builder save this host's earlier process left part-way (`settleLeftSaves`), under the
+ * schema lock, so two development workers starting together do not both settle one. A failure is
+ * logged and the start goes on: the records stay, refusing what they refuse, and the next start
+ * tries again.
+ */
+async function settleLeftSavesAtStart(label: string): Promise<void> {
+  try {
+    const { container } = await import("../di/container");
+    const adapter = container.get<DrizzleAdapter | undefined>("adapter");
+    if (!adapter) return;
+    const { migrationsDir } = await bootMigrateConfig();
+    const [{ settleLeftSaves }, { settleRegistryWriter }, { withMigrateLock }] =
+      await Promise.all([
+        import("../domains/schema/builder-save/settle-left-save"),
+        import("../domains/schema/builder-save/settle-registry"),
+        import("../domains/schema/pipeline/locks"),
+      ]);
+    // The database a save's record names, as the writer named it: the one the app's saves reach.
+    const database = container.has("builderSaveSetup")
+      ? container.get<{ database: string }>("builderSaveSetup").database
+      : undefined;
+    await withMigrateLock(
+      adapter,
+      adapter.getCapabilities().dialect,
+      () =>
+        settleLeftSaves({
+          adapter,
+          projectRoot: process.cwd(),
+          migrationsDir,
+          database,
+          logger: {
+            info: message => consoleLogger.info(`${label} ${message}`),
+            warn: message => consoleLogger.warn(`${label} ${message}`),
+          },
+          writeRegistry: settleRegistryWriter(adapter),
+        }),
+      {
+        command: "the development start's settle of a left Builder save",
+        releaseOnInterrupt: false,
+      }
+    );
+  } catch (error) {
+    consoleLogger.warn(
+      `${label} A Builder save left part-way could not be settled (${error instanceof Error ? error.message : String(error)}). Its record stays, and the next development start tries again.`
+    );
+  }
+}
+
 async function bootMigrateConfig(): Promise<{
   configResult: LoadConfigResult;
   migrationsDir: string;
