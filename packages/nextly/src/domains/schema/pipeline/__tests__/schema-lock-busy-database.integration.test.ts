@@ -481,6 +481,65 @@ describe("taking the schema lock on a busy database (sqlite)", () => {
       await expect(run("refuse")).resolves.toEqual({ ran: true, value: "ran" });
     }, 60_000);
 
+    it("finishes a run whose work ends into a database busy for longer than one wait", async () => {
+      // Busy from inside the work: the steps at its end (the session's release, the check that
+      // no other run took the lock, the lock's release) are the ones that wait.
+      const letGo = {
+        timer: undefined as ReturnType<typeof setTimeout> | undefined,
+      };
+      try {
+        await expect(
+          withSchemaLock(
+            {
+              adapter,
+              command: "nextly migrate",
+              whenHeld: "wait",
+              busyBounds: { tryMs: 1_000, totalMs: 20_000 },
+              logger,
+            },
+            async () => {
+              await holdTheDatabase();
+              letGo.timer = setTimeout(() => free(), ownBusyTimeout + 1_500);
+              return "ran";
+            }
+          )
+        ).resolves.toEqual({ ran: true, value: "ran" });
+      } finally {
+        clearTimeout(letGo.timer);
+      }
+      await holding.catch(() => {});
+      await expect(run("refuse")).resolves.toEqual({ ran: true, value: "ran" });
+    }, 60_000);
+
+    it("releases the lock when only its release meets a busy database", async () => {
+      // Busy from just after the end check, the second transaction once the work has ended:
+      // the release alone waits. Given up, it would leave the lock held for its whole lease.
+      let restore: () => void = () => {};
+      const letGo = setTimeout(() => free(), ownBusyTimeout + 3_000);
+      try {
+        await expect(
+          withSchemaLock(
+            {
+              adapter,
+              command: "nextly migrate",
+              whenHeld: "wait",
+              busyBounds: { tryMs: 1_000, totalMs: 20_000 },
+              logger,
+            },
+            async () => {
+              restore = busyAfterTransaction(2);
+              return "ran";
+            }
+          )
+        ).resolves.toEqual({ ran: true, value: "ran" });
+      } finally {
+        clearTimeout(letGo);
+        restore();
+      }
+      await holding.catch(() => {});
+      await expect(run("refuse")).resolves.toEqual({ ran: true, value: "ran" });
+    }, 60_000);
+
     it("ends a run that finished, but could not confirm its lock, as a busy database and not a lost lock", async () => {
       const error: unknown = await withSchemaLock(
         {

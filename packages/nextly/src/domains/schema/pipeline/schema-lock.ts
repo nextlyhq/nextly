@@ -583,7 +583,7 @@ async function waitingForBusyDatabase<T>(
   // A run that refuses a held lock at once asks once, waiting as its connection is set to and no
   // longer: the bounds are a command's, and a request must not wait an operator's long try.
   if (options.whenHeld === "refuse") {
-    return oneTryForBusyDatabase(options, dialect, step);
+    return oneTryForBusyDatabase(options, dialect, waited, step);
   }
   return inBusyDatabaseTries(options, dialect, waited, step, {
     holder: true,
@@ -596,6 +596,11 @@ async function waitingForBusyDatabase<T>(
  */
 interface BusyWait {
   startedAt: number;
+  /**
+   * Set once the lock's row could not be read beside the writer (a journal mode that makes a
+   * reader wait): reading it again would only wait again, so the run asks no more.
+   */
+  holderUnreadable?: boolean;
 }
 
 /**
@@ -610,17 +615,21 @@ type BusyOutcome<T> =
 /**
  * The run that holds the schema lock, read while the database is busy: the row is read without
  * a transaction, which SQLite allows beside another connection's open write in its default
- * journal mode. Null where no live holder is named, the row could not be read, or the holder is
- * this context's own run: the database is then busy for a reason that is not a run to wait for.
+ * journal mode. Null where no live holder is named, the row could not be read (and is then
+ * not asked for again in this run, `BusyWait.holderUnreadable`), or the holder is this
+ * context's own run: the database is then busy for a reason that is not a run to wait for.
  */
 async function liveHolderOf(
   adapter: DrizzleAdapter,
-  dialect: SupportedDialect
+  dialect: SupportedDialect,
+  waited: BusyWait
 ): Promise<SchemaLockHolder | null> {
+  if (waited.holderUnreadable === true) return null;
   let holder: SchemaLockHolder | null;
   try {
     holder = await readSchemaRowHolder(adapter, dialect);
   } catch {
+    waited.holderUnreadable = true;
     return null;
   }
   // The lock this very context holds, through another adapter on the same database, is not a
@@ -643,17 +652,18 @@ async function liveHolderOf(
 async function oneTryForBusyDatabase<T>(
   options: SchemaLockOptions,
   dialect: SupportedDialect,
+  waited: BusyWait,
   step: () => Promise<T>
 ): Promise<BusyOutcome<T>> {
   const { adapter } = options;
-  const holder = await liveHolderOf(adapter, dialect);
+  const holder = await liveHolderOf(adapter, dialect, waited);
   if (holder !== null) return { kind: "held", holder };
   const startedAt = Date.now();
   try {
     return { kind: "ran", value: await step() };
   } catch (error) {
     if (!endedWaiting(error, dialect, false)) throw error;
-    const later = await liveHolderOf(adapter, dialect);
+    const later = await liveHolderOf(adapter, dialect, waited);
     if (later !== null) return { kind: "held", holder: later };
     throw await busyAfterOneTry(options, dialect, error, startedAt);
   }
@@ -752,7 +762,7 @@ async function inBusyDatabaseTries<T>(
             if (!endedWaiting(error, dialect, false)) throw error;
             busy = error;
             const holder = how.holder
-              ? await liveHolderOf(adapter, dialect)
+              ? await liveHolderOf(adapter, dialect, waited)
               : null;
             // Busy because a Nextly run is at work: a held lock, not a busy table.
             if (holder !== null) {
@@ -1458,6 +1468,8 @@ class SchemaLockHold {
   workEnded = false;
   /** Whether the work ended by failing: its own error is then the run's, and nothing delays it. */
   workFailed = false;
+  /** The holder the row's seeding already found on a busy SQLite database, for the first wait. */
+  heldAtStart: SchemaLockHolder | undefined;
   private endWait: BusyWait | undefined;
 
   /** The wait a step that meets a busy SQLite database counts against, now. */
@@ -1773,13 +1785,18 @@ class SchemaLockHold {
     for (const release of releases) {
       // A busy SQLite database is waited for: a release given up on leaves the claim standing
       // for its whole lease, and the next run refused for it.
-      await whileBusy(
-        this.options,
-        this.dialect,
-        this.busyBudget(),
-        // Nothing is renewed any more: the release is tried for as long as the wait allows.
-        () => undefined,
-        release
+      // Not once the work has failed: its error is the run's, and nothing waits before it.
+      await (
+        this.workFailed
+          ? release()
+          : whileBusy(
+              this.options,
+              this.dialect,
+              this.busyBudget(),
+              // Nothing is renewed any more: the release is tried for as long as the wait allows.
+              () => undefined,
+              release
+            )
       ).catch(() => {
         failed = true;
       });
@@ -1931,6 +1948,12 @@ async function acquire(
 > {
   for (;;) {
     if (hold.interrupted) throw interruptedBeforeStart(hold.options.command);
+    const known = hold.heldAtStart;
+    hold.heldAtStart = undefined;
+    if (known !== undefined) {
+      if ((await wait.after(known)) === "settled") return { kind: "settled" };
+      continue;
+    }
     const attempt = hold.acquireOnce();
     hold.pending = attempt;
     const outcome = await attempt;
@@ -2124,8 +2147,10 @@ export async function withSchemaLock<T>(
       hold.busyWait,
       () => ensureRow(hold.adapter, hold.dialect, hold.mayCreateTables)
     );
-    // A live holder was read from the row, so the row is there to contend for.
+    // A live holder was read from the row, so the row is there to contend for; and the holder
+    // is the wait's first answer, with no second attempt spent finding it again.
     hold.rowReady = ready.kind === "held" ? true : ready.value;
+    if (ready.kind === "held") hold.heldAtStart = ready.holder;
     const outcome = await runWhenHeld(hold, wait, work);
     if (!outcome.ran) return outcome;
     await assertHeldToTheEnd(hold);
