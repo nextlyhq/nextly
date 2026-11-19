@@ -214,4 +214,33 @@ describe("useBuilderChecklist", () => {
       false
     );
   });
+
+  it("works the steps out once per page, not once per render", () => {
+    // The editor renders this on every click, and the steps read the whole
+    // page; a click changes no block, so the steps it was given stand.
+    const empty = documentOf();
+    const store = fakeStore();
+    const { result, rerender } = renderHook(
+      ({ document }) => useBuilderChecklist({ document, store }),
+      { initialProps: { document: empty } }
+    );
+    const first = result.current.steps;
+    rerender({ document: empty });
+    expect(result.current.steps).toBe(first);
+
+    // An edit makes a new page, whose steps are worked out afresh.
+    const written = documentOf([
+      {
+        id: "a",
+        type: "acme/heading",
+        version: 1,
+        props: { text: "Hi" },
+      } as BlockNode,
+    ]);
+    rerender({ document: written });
+    expect(result.current.steps).not.toBe(first);
+    expect(result.current.steps.find(s => s.id === "write-text")?.done).toBe(
+      true
+    );
+  });
 });
