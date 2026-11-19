@@ -221,7 +221,13 @@ function resultOf(answer: Answer): Doc {
 
 /** Kim holds everything the keys below are scoped to, so each key is narrower than its owner. */
 const KIM = "kim";
-const KIM_GRANTS: Grant[] = [PAGES, "posts", LETTERS, "banner"].flatMap(
+const KIM_GRANTS: Grant[] = [
+  PAGES,
+  "posts",
+  LETTERS,
+  "banner",
+  "memos",
+].flatMap(
   slug =>
     [
       ["read", slug],
