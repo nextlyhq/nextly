@@ -10,6 +10,8 @@
  * real databases (`busy-table-parity.integration.test.ts` and the other `busy-table-*`
  * integration suites); this stands in for them with what one try that never waits does:
  *
+ * - the caller's `before` (`BusyTableRun.before`) runs once, ahead of the first statement, on the
+ *   adapter's own handle, as the runner runs it ahead of them on the unit's;
  * - each statement is sent once, in order, through the adapter's `executeQuery`, where the double
  *   records it;
  * - a failure the caller passes over (`BusyTableRun.passOver`) is passed over only where the
@@ -31,6 +33,7 @@ export const runUnitOnce: typeof runUnitInTries = async (
   const dialect = adapter.getCapabilities().dialect;
   // As `runMigrationStatements`: in a transaction, only MySQL can go on past a failed statement.
   const mayPassOver = !unit.transaction || dialect === "mysql";
+  await run.before?.(adapter.getDrizzle());
   for (const statement of statements) {
     try {
       await adapter.executeQuery(statement);

@@ -52,6 +52,10 @@ import type {
   BuilderSaveSetup,
   writeCollectionSave,
 } from "../../domains/schema/builder-save/collection-save";
+import {
+  type ConfirmedDeletion,
+  deletionHoldOf,
+} from "../../domains/schema/builder-save/deletion-counts";
 import { partWayPush } from "../../domains/schema/builder-save/landing-push";
 import {
   saveOfSchemaChange,
@@ -328,6 +332,67 @@ const TogetherParam = z
       )
       .max(500)
   );
+
+/**
+ * The counts of removed fields' values the person confirmed in the review, as an apply's body
+ * sends them: each field's name and a whole number of values. Absent where the body sends none,
+ * and the save then deletes as it always has (`CollectionSave.confirmedDeletions`).
+ */
+const ConfirmedDeletionsBody = z.object({
+  confirmedDeletions: z
+    .array(
+      z.object({
+        field: z.string().min(1),
+        count: z.number().int().min(0),
+      })
+    )
+    .max(500)
+    .optional(),
+});
+
+function readConfirmedDeletions(
+  body: unknown
+): z.infer<typeof ConfirmedDeletionsBody>["confirmedDeletions"] {
+  try {
+    return ConfirmedDeletionsBody.parse(body ?? {}).confirmedDeletions;
+  } catch (error) {
+    if (error instanceof z.ZodError) throw nextlyValidationFromZod(error);
+    throw error;
+  }
+}
+
+/** The save's answer of the counts confirmed, where the body sent them; nothing otherwise. */
+function confirmedDeletionsAnswer(
+  confirmedDeletions: z.infer<
+    typeof ConfirmedDeletionsBody
+  >["confirmedDeletions"]
+): { confirmedDeletions?: readonly ConfirmedDeletion[] } {
+  return confirmedDeletions === undefined ? {} : { confirmedDeletions };
+}
+
+/**
+ * The counts the person confirmed, compared just before the schema pipeline's push deletes the
+ * removed fields' values, where no save writer runs the save: with nothing held, as a push the
+ * writer runs compares them (`DeletionHold.compare`). Refuses where a count changed.
+ */
+async function comparedBeforePipelinePush(args: {
+  dialect: Parameters<typeof deletionHoldOf>[0]["dialect"];
+  tableName: string;
+  localized: boolean;
+  previous: readonly unknown[] | undefined;
+  next: FieldDefinition[];
+  confirmed: readonly ConfirmedDeletion[] | undefined;
+  db: unknown;
+}): Promise<void> {
+  await deletionHoldOf({
+    dialect: args.dialect,
+    tableName: args.tableName,
+    localized: args.localized,
+    previous: (args.previous ?? []) as unknown as FieldDefinition[],
+    next: args.next,
+    confirmed: args.confirmed,
+  })?.compare(args.db);
+}
 
 function parseTogetherParam(value: string | undefined): string[] {
   if (value === undefined) return [];
@@ -985,6 +1050,9 @@ const COLLECTIONS_METHODS: Record<
       // The lifecycle the Builder's pending settings ask for, read (and a malformed value refused)
       // before the lock is taken.
       const requestedLifecycle = readRequestedLifecycle(body);
+      // The counts the person confirmed deleting, read with the rest of the request, before the
+      // lock: a malformed one refuses the save before anything is read from the database.
+      const confirmedDeletions = readConfirmedDeletions(body);
       assertValidFieldsPayload(sentFields, {
         kind: "collection",
         stored: "under-lock",
@@ -1238,6 +1306,7 @@ const COLLECTIONS_METHODS: Record<
               ...(acknowledgedConversions === undefined
                 ? {}
                 : { acknowledgedConversions }),
+              ...confirmedDeletionsAnswer(confirmedDeletions),
             },
           });
           // Thrown before the registry row is written: the row keeps the fields the database
@@ -1247,6 +1316,19 @@ const COLLECTIONS_METHODS: Record<
             written === undefined
               ? (fields as unknown as FieldDefinition[])
               : written.fields;
+          // Without a save writer, the pipeline's push deletes the removed fields' values: the counts
+          // the person confirmed are compared just before it (`comparedBeforePipelinePush`).
+          if (written === undefined) {
+            await comparedBeforePipelinePush({
+              dialect,
+              tableName,
+              localized: wasLocalized,
+              previous: collection.fields,
+              next: fields as unknown as FieldDefinition[],
+              confirmed: confirmedDeletions,
+              db: adapter.getDrizzle(),
+            });
+          }
           const result =
             written !== undefined
               ? { summary: pushedSummary }

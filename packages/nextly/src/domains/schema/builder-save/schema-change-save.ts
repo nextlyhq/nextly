@@ -21,6 +21,7 @@ import {
 } from "../services/field-column-descriptor";
 
 import type { CollectionSave } from "./collection-save";
+import type { ConfirmedDeletion } from "./deletion-counts";
 
 /** A field's answer in the earlier per-field shape the admin still sends. */
 export interface PerFieldResolution {
@@ -34,6 +35,11 @@ export interface SchemaChangeAnswers {
   eventResolutions?: readonly Resolution[];
   resolutions?: Readonly<Record<string, PerFieldResolution>>;
   acknowledgedConversions?: readonly string[];
+  /**
+   * How many values of each removed field the review showed and the person confirmed deleting:
+   * the save deletes only where each still holds that many (`CollectionSave.confirmedDeletions`).
+   */
+  confirmedDeletions?: readonly ConfirmedDeletion[];
   /**
    * A Single's one row given the default each field new to its table states, by field
    * (`singleRowFills`): not an answer the person gave, and judged as a Single's fill alone
@@ -147,6 +153,9 @@ export function saveOfSchemaChange(args: {
       ...(args.answers.acknowledgedConversions === undefined
         ? {}
         : { acknowledgedConversions: args.answers.acknowledgedConversions }),
+      ...(args.answers.confirmedDeletions === undefined
+        ? {}
+        : { confirmedDeletions: args.answers.confirmedDeletions }),
       ...(args.junctions === undefined ? {} : { junctions: args.junctions }),
       ...(args.keys === undefined ? {} : { keys: args.keys }),
     },

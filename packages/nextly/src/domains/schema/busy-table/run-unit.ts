@@ -69,6 +69,12 @@ export interface BusyTableRun {
    * honoured.
    */
   readonly passOver?: (error: unknown, statement: string) => boolean;
+  /**
+   * Run on every try before the unit's first statement, inside its transaction where it has one
+   * (`StatementTryBound.before`): a caller's read or lock that must hold until the statements have
+   * run. Absent, the unit runs as it always has.
+   */
+  readonly before?: (db: unknown) => Promise<void>;
 }
 
 /** Where `triggerTables` looks on PostgreSQL. */
@@ -501,6 +507,7 @@ export async function runUnitInTries(
               };
             },
             ...(run.passOver === undefined ? {} : { passOver: run.passOver }),
+            ...(run.before === undefined ? {} : { before: run.before }),
           }
         );
         await stopWatches();

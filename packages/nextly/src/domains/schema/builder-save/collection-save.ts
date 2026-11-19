@@ -158,6 +158,12 @@ import {
   refuseFieldTypeChanges,
 } from "../value-conversion/type-change/field-type-changes";
 
+import {
+  type ConfirmedDeletion,
+  type DeletionHold,
+  deletionHoldOf,
+  isDeletionCountRefusal,
+} from "./deletion-counts";
 import { partlyAppliedChange } from "./landing-push";
 import {
   openSaveRecords,
@@ -220,6 +226,13 @@ export interface CollectionSave {
    * (`previewCollectionSave`): a save converts no column it was not shown to.
    */
   acknowledgedConversions?: readonly string[];
+  /**
+   * How many values of each removed field the person confirmed deleting, in the save's review.
+   * Where given, the save counts them again in the file that deletes them, with other writes held
+   * on PostgreSQL and SQLite, and deletes only where every count still matches
+   * (`deletionHoldOf`); absent, it deletes as it always has.
+   */
+  confirmedDeletions?: readonly ConfirmedDeletion[];
   /**
    * The registry row's migration status before the save, where the caller read the row: a field
    * type change while the definition still awaits its migration is refused, since the columns do
@@ -393,6 +406,11 @@ export async function writeCollectionSave(
         // a push over a table the history does not describe would change it and leave the files
         // unrecordable.
         await refuseDriftBeforePush(deps, written.files, written.table);
+        // The counts the person confirmed, compared just before the push: no transaction of the
+        // save's holds a push's statements, so nothing is held between the count and the delete.
+        await deletionHoldOfSave(deps, save, written.table)?.compare(
+          deps.adapter.getDrizzle()
+        );
         const applied = await options.appliedBy();
         pushed = true;
         if (applied === "partly-applied") {
@@ -416,7 +434,8 @@ export async function writeCollectionSave(
           written.files,
           written.table,
           bounds,
-          options.inLastTransaction
+          options.inLastTransaction,
+          deletionHoldOfSave(deps, save, written.table)
         );
       } else if (options.appliedAfter !== undefined) {
         const applied = await options.appliedAfter();
@@ -2150,7 +2169,9 @@ async function runWritten(
   files: SaveFiles,
   table: string,
   boundsRead: BusyTableBounds | undefined,
-  inLastTransaction?: () => Promise<void>
+  inLastTransaction?: () => Promise<void>,
+  /** The count of what the save deletes, checked in the file that deletes it (`deletionHoldOf`). */
+  hold?: DeletionHold
 ): Promise<void> {
   const db = deps.adapter.getDrizzle();
   const dialect = deps.adapter.getCapabilities().dialect;
@@ -2180,6 +2201,9 @@ async function runWritten(
         bounds,
         notify: line => deps.logger.warn(line),
         appliedBefore: () => [...applied],
+        // In the file that deletes the removed fields' values, before its first statement and
+        // inside its transaction, on every try.
+        ...beforeOf(unit.source === holdFile ? hold : undefined),
       }
     );
   const ordered =
@@ -2190,6 +2214,11 @@ async function runWritten(
     files.change.length === 0 || files.adopt === undefined
       ? undefined
       : await unitOf(deps, files.adopt);
+  // The first file whose statements change a table the removed values are stored in, or whose
+  // tables cannot be named, which then may: the count is taken there, so that file's transaction
+  // holds it until the values are gone.
+  const holdFile =
+    hold === undefined ? undefined : await deletingFileOf(deps, ordered, hold);
   let before = await scopedSnapshotBefore(deps, ordered[0], table);
   if (await ranAsOneUnit()) return;
   for (const filename of ordered) {
@@ -2210,10 +2239,13 @@ async function runWritten(
       // holds part of the save. The files already run stay recorded applied, this one and those
       // after it are kept, recorded nowhere, and the failure says so with what to run next, as a
       // push that failed part way says it.
+      // A count that changed is refused before the file's first statement, inside its run, and
+      // the file's runner reports it as the file failing: given back as the refusal it is.
+      const refusal = countRefusalOf(error) ?? error;
       if (applied.length > 0) {
-        throw partlyAppliedChange(error, ordered.slice(applied.length));
+        throw partlyAppliedChange(refusal, ordered.slice(applied.length));
       }
-      throw error;
+      throw refusal;
     }
     applied.push(filename);
   }
@@ -2286,13 +2318,15 @@ async function runWritten(
           bounds,
           notify: line => deps.logger.warn(line),
           appliedBefore: () => [],
+          // Every file runs in this one transaction, the deleting one among them.
+          ...beforeOf(hold),
         }
       );
     } catch (error) {
-      // A lost race, and a busy table's stop, are thrown as they are, as a file run alone throws
-      // them; any other failure names the file whose statement the database refused.
-      if (isConcurrentRun(error)) throw error;
-      if (NextlyError.isCode(error, "NEXTLY_TABLE_BUSY")) throw error;
+      // A lost race, a busy table's stop, and a count that changed are thrown as they are, as a
+      // file run alone throws them; any other failure names the file whose statement the database
+      // refused.
+      if (passesThroughAsIs(error)) throw error;
       throw applyFailedError(fileRefusedIn(parts, error), error);
     }
     return true;
@@ -2569,6 +2603,79 @@ async function recordWhatWasPushed(
   for (const { filename, file } of units) {
     await recordAlreadyApplied({ filename, sha256: file.sha256 }, repo);
   }
+}
+
+/** The run's `before` for `hold`'s count (`DeletionHold.check`), or none without a hold. */
+function beforeOf(hold: DeletionHold | undefined): {
+  before?: (db: unknown) => Promise<void>;
+} {
+  return hold === undefined ? {} : { before: hold.check };
+}
+
+/**
+ * Whether a failure of the save's one unit reaches the caller as it is, as a file run alone throws
+ * it: a lost race, a busy table's stop, and a count that changed (`isDeletionCountRefusal`). Any
+ * other names the file whose statement the database refused.
+ */
+function passesThroughAsIs(error: unknown): boolean {
+  return (
+    isConcurrentRun(error) ||
+    NextlyError.isCode(error, "NEXTLY_TABLE_BUSY") ||
+    isDeletionCountRefusal(error)
+  );
+}
+
+/**
+ * The refusal of a count that changed (`isDeletionCountRefusal`) in `error`, itself or as the cause
+ * a file's runner wrapped it in (`applyFailedError`); undefined for any other failure.
+ */
+function countRefusalOf(error: unknown): unknown {
+  if (isDeletionCountRefusal(error)) return error;
+  const cause = NextlyError.is(error) ? error.cause : undefined;
+  return isDeletionCountRefusal(cause) ? cause : undefined;
+}
+
+/**
+ * The count of what `save` deletes, checked in the file that deletes it: built from the fields
+ * before and after it and the counts the person confirmed (`deletionHoldOf`); undefined where the
+ * save carries none.
+ */
+function deletionHoldOfSave(
+  deps: CollectionSaveDeps,
+  save: CollectionSave,
+  table: string
+): DeletionHold | undefined {
+  return deletionHoldOf({
+    dialect: deps.adapter.getCapabilities().dialect,
+    tableName: table,
+    localized: save.previous?.localized === true,
+    previous: (save.previous?.fields ?? []) as unknown as FieldDefinition[],
+    next: (save.entity?.fields ?? []) as unknown as FieldDefinition[],
+    confirmed: save.confirmedDeletions,
+  });
+}
+
+/**
+ * The first of `ordered` whose statements change a table `hold` reads, or whose tables cannot be
+ * named and so may; the first file where none can be told apart, so the count is still taken.
+ */
+async function deletingFileOf(
+  deps: CollectionSaveDeps,
+  ordered: readonly string[],
+  hold: DeletionHold
+): Promise<string | undefined> {
+  const dialect = deps.adapter.getCapabilities().dialect;
+  const held = new Set(hold.tables.map(table => table.toLowerCase()));
+  for (const filename of ordered) {
+    const named = tablesChangedBy(await unitOf(deps, filename), dialect);
+    if (
+      named === undefined ||
+      named.some(table => held.has(table.toLowerCase()))
+    ) {
+      return filename;
+    }
+  }
+  return ordered[0];
 }
 
 /** A written file as the runner takes it. */
