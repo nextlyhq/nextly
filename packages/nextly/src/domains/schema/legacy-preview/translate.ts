@@ -30,6 +30,7 @@ import {
 import { usesJunctionTable } from "../field-rules";
 import type { PipelinePreviewResult } from "../pipeline/preview";
 import {
+  fieldsStoredOnRow,
   toSnakeCase,
   type ColumnOrigin,
 } from "../services/field-column-descriptor";
@@ -101,7 +102,13 @@ export async function translatePipelinePreviewToLegacy(
   // Where the fields' values are stored, before and after, by the shared rule: an entity keeps its
   // translatable values in the companion when translated, and every entity does under per-language
   // storage, where turning the entity's translation on or off moves none of them.
-  const diff = computeFieldDiff(currentFields, newFields, {
+  // Compared by the fields stored on the row (`fieldsStoredOnRow`), so a field inside a group with
+  // no name is listed, and counted, as the row's own field it is: removed, its column goes, and a
+  // save that compares the confirmed counts compares it the same way (`deletionHoldOf`).
+  const diff = computeFieldDiff(
+    fieldsStoredOnRow(currentFields),
+    fieldsStoredOnRow(newFields),
+    {
     localized: storesPerLanguage({ localized }),
     newLocalized: storesPerLanguage({
       localized: context.requestedLocalized ?? localized,

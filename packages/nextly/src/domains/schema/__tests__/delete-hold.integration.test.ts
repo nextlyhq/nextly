@@ -15,7 +15,9 @@
  * - one that counts without holding the table lets a write through between the count and the
  *   drop: on PostgreSQL a write sent once the count is taken waits until the save has committed;
  * - one that compares only in the migration file deletes 4 values against 3 confirmed on a
- *   translated collection, whose save the push applies in development.
+ *   translated collection, whose save the push applies in development;
+ * - a review that lists only the top-level fields shows no count for a field removed from a group
+ *   with no name, and a save that compares the row's fields then refuses every such removal.
  */
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
@@ -93,7 +95,21 @@ afterEach(async () => {
 
 const SLUG = "dh_notes";
 const TABLE = "dc_dh_notes";
-const REMAINING = [{ name: "label", type: "text" }];
+const REMAINING: unknown[] = [{ name: "label", type: "text" }];
+const NOTED: unknown[] = [
+  { name: "label", type: "text" },
+  { name: "note", type: "text" },
+];
+/** The fields with `note` laid out in a group with no name, whose fields are stored on the row. */
+const BOXED: unknown[] = [
+  { name: "label", type: "text" },
+  { type: "group", label: "Box", fields: [{ name: "note", type: "text" }] },
+];
+/** BOXED with `note` removed from the group, which stays. */
+const BOXED_EMPTIED: unknown[] = [
+  { name: "label", type: "text" },
+  { type: "group", label: "Box", fields: [] },
+];
 
 /** A gate's pause, its release, and whether the save reached it before it ended. */
 function gated(gate: typeof fileStart) {
@@ -113,7 +129,7 @@ describe.each(getConfiguredTestDialects())(
   dialect => {
     const q = (n: string) => (dialect === "mysql" ? `\`${n}\`` : `"${n}"`);
 
-    async function boot(): Promise<TestNextly> {
+    async function boot(fields: unknown[] = NOTED): Promise<TestNextly> {
       vi.stubEnv("NODE_ENV", "development");
       const t = await createTestNextly({
         dialect,
@@ -130,10 +146,7 @@ describe.each(getConfiguredTestDialects())(
         {
           name: SLUG,
           label: "Note",
-          fields: [
-            { name: "label", type: "text" },
-            { name: "note", type: "text" },
-          ],
+          fields,
         }
       );
       return t;
@@ -206,12 +219,14 @@ describe.each(getConfiguredTestDialects())(
     }
 
     /** The count the review shows for the removed field. */
-    async function reviewed(): Promise<number | undefined> {
+    async function reviewed(
+      remaining: unknown[] = REMAINING
+    ): Promise<number | undefined> {
       const body = (await dispatchCollections(
         {} as ServiceContainer,
         "previewSchemaChanges",
         { collectionName: SLUG },
-        { fields: REMAINING }
+        { fields: remaining }
       )) as Response | Record<string, unknown>;
       const json = (
         body instanceof Response ? await body.json() : body
@@ -225,14 +240,15 @@ describe.each(getConfiguredTestDialects())(
 
     async function apply(
       t: TestNextly,
-      confirmed: number | undefined
+      confirmed: number | undefined,
+      remaining: unknown[] = REMAINING
     ): Promise<unknown> {
       return dispatchCollections(
         {} as ServiceContainer,
         "applySchemaChanges",
         { collectionName: SLUG },
         {
-          fields: REMAINING,
+          fields: remaining,
           confirmed: true,
           schemaVersion: await schemaVersion(t),
           ...(confirmed === undefined
@@ -266,6 +282,19 @@ describe.each(getConfiguredTestDialects())(
       expect(await reviewed()).toBe(3);
 
       await expect(apply(t, 3)).resolves.toBeDefined();
+
+      expect(await hasNoteColumn(t)).toBe(false);
+    }, 60_000);
+
+    // A group with no name only lays its fields out: a field inside it is the row's own, listed
+    // and counted by the review as one beside it, and deleted when its count is still the one
+    // confirmed.
+    it("deletes a field removed from a group with no name when its count is still the one confirmed", async () => {
+      const t = await boot(BOXED);
+      for (const note of ["a", "b", "c"]) await insert(t, note);
+      expect(await reviewed(BOXED_EMPTIED)).toBe(3);
+
+      await expect(apply(t, 3, BOXED_EMPTIED)).resolves.toBeDefined();
 
       expect(await hasNoteColumn(t)).toBe(false);
     }, 60_000);
