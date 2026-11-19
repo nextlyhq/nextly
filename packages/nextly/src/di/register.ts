@@ -30,7 +30,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { isNextBuildPhase } from "@nextlyhq/adapter-drizzle/build-phase";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { dequal } from "dequal";
-import type { AnyRelations, Table } from "drizzle-orm";
+import type { AnyRelations } from "drizzle-orm";
 
 import { authUiProblems } from "../auth/handlers/auth-ui";
 import {
@@ -372,6 +372,7 @@ import {
   loadBuilderEntities,
   loadDynamicTables,
 } from "./load-dynamic-tables";
+import { registerConfigTablesQuietly } from "./register-config-tables";
 import { forgetRegisteredLocalization } from "./registered-localization";
 import {
   registerAuthServices,
@@ -2077,43 +2078,6 @@ async function publishStoredRecordingPolicies(
   setStoredRecordingRefresher(() =>
     publishStoredWebhookRecordingPolicies(adapter, configOwnedSlugs)
   );
-}
-
-/**
- * Belt-and-suspenders: also register every code-first collection and
- * single from the supplied config directly into the resolver. The
- * `loadDynamicTables` pass inside initializeSchemaRegistry reads from
- * the `dynamic_collections` / `dynamic_singles` DB tables and swallows
- * errors on failure, which means a silent read hiccup (SQLite driver
- * quirk, partially-written row, wrong JSON shape on the `fields`
- * column) leaves code-first tables invisible at runtime. Registering
- * straight from the loaded `NextlyConfig` sidesteps that failure mode
- * entirely for code-first tables - the DB is still the source of
- * truth for UI-created tables via `loadDynamicTables`.
- */
-export async function registerConfigTablesQuietly(
-  schemaRegistry: SchemaRegistry | undefined,
-  transformedConfig: NextlyServiceConfig,
-  adapter: DrizzleAdapter,
-  logger: Logger,
-  overrides?: { differed: boolean }
-): Promise<void> {
-  if (!schemaRegistry) return;
-  try {
-    await registerConfigTablesInResolver(
-      schemaRegistry,
-      transformedConfig,
-      adapter,
-      logger,
-      overrides
-    );
-  } catch (err) {
-    // Non-fatal: the DB-backed pass may still have registered these
-    // tables. Log at debug so real issues surface during dev.
-    logger.debug?.(
-      `[registerServices] Could not register config tables into resolver: ${err instanceof Error ? err.message : String(err)}`
-    );
-  }
 }
 
 /** One config entity's fields, as `replaceFieldFunctions` takes them. */
@@ -4207,177 +4171,6 @@ function publishWebhookRecordingPolicies(config: RecordingPolicyConfig): void {
       pluginSingles.has(slug) ? "plugin" : "code"
     );
   }
-}
-
-/**
- * Register every code-first collection and single from the config as a
- * runtime Drizzle schema in the resolver. Complements `loadDynamicTables`
- * which reads the same data from the `dynamic_*` DB registry; having both
- * paths makes the resolver correct even when the DB read silently fails
- * or when a just-synced row hasn't been flushed yet.
- *
- * No-op for tables that are already registered (e.g. from the DB pass).
- *
- * Exported for its test.
- */
-export async function registerConfigTablesInResolver(
-  registry: SchemaRegistry,
-  config: NextlyServiceConfig,
-  adapter: DrizzleAdapter,
-  logger: Partial<Logger>,
-  /**
-   * Told, where given, whether a table this registers replaced one the
-   * registry pass had registered with different columns: the definitions
-   * the start serves then differ from the stored registry, and the start's
-   * load may not be recorded as following it (`definitionsLoaded`).
-   */
-  overrides?: { differed: boolean }
-): Promise<void> {
-  const dialect = adapter.getCapabilities().dialect;
-  const { entityKind, getColumns } = await import("drizzle-orm");
-  /**
-   * A table's columns as it reads and writes them, sorted: each column's
-   * Drizzle class, which holds its decoder and encoder (`SQLiteBoolean` and
-   * `SQLiteInteger` are both `integer`), its SQL type, and every setting it
-   * was built with, the name, nullability and mode among them. A function
-   * setting (a mapper, a default) is rebuilt with each column, so it is
-   * described by its source. Read through `getColumns`, Drizzle v1's column
-   * accessor, typed as a `Table` so it returns the column map rather than a
-   * view's selected fields.
-   */
-  const columnsOf = (table: unknown): string =>
-    Object.values(getColumns(table as Table))
-      .map(column =>
-        JSON.stringify([
-          Reflect.get(column.constructor, entityKind) as unknown,
-          column.getSQLType(),
-          describeSetting(column, entityKind),
-        ])
-      )
-      .sort()
-      .join("\n");
-  // Every registration below goes through here, so a replacement of a
-  // registry-backed table with columns that differ in any of that is seen.
-  const observed: Pick<SchemaRegistry, "registerDynamicSchema"> = {
-    registerDynamicSchema: (tableName, table) => {
-      if (overrides !== undefined && registry.hasTable(tableName)) {
-        const existing = registry.getTable(tableName);
-        if (
-          typeof existing === "object" &&
-          existing !== null &&
-          columnsOf(existing) !== columnsOf(table)
-        ) {
-          overrides.differed = true;
-        }
-      }
-      registry.registerDynamicSchema(tableName, table);
-    },
-  };
-  // Loaded here, as the generators it calls were, so they stay out of this
-  // module's own load.
-  const { registerEntityRuntimeTables } = await import(
-    "./register-runtime-tables"
-  );
-
-  // Collections: table name convention is `dc_<slug-with-underscores>`.
-  for (const collection of config.collections ?? []) {
-    try {
-      const slug = (collection as { slug: string }).slug;
-      const dbName = (collection as { dbName?: string }).dbName;
-      const fields = (collection as { fields?: unknown[] }).fields ?? [];
-      if (!slug || !Array.isArray(fields) || fields.length === 0) continue;
-      const baseTableName = dbName ?? slug.replace(/-/g, "_");
-      const tableName = baseTableName.startsWith("dc_")
-        ? baseTableName
-        : `dc_${baseTableName}`;
-      // The status flag gives the runtime table its system status column,
-      // which Draft/Published CRUD reads and writes; the localized one leaves
-      // the translatable columns to the companion.
-      registerEntityRuntimeTables(
-        observed,
-        {
-          slug,
-          tableName,
-          fields: fields as FieldDefinition[],
-          status: (collection as { status?: boolean }).status === true,
-          localized: (collection as { localized?: boolean }).localized === true,
-        },
-        dialect
-      );
-    } catch (err) {
-      logger.debug?.(
-        `[registerServices] Failed to register collection "${(collection as { slug?: string }).slug ?? "?"}" in resolver: ${err instanceof Error ? err.message : String(err)}`
-      );
-    }
-  }
-
-  // Singles: table name convention is `single_<slug-with-underscores>`.
-  // so every code path agrees on the physical table name.
-  const { resolveSingleTableName } = await import(
-    "../domains/singles/services/resolve-single-table-name"
-  );
-  for (const single of config.singles ?? []) {
-    try {
-      const slug = (single as { slug: string }).slug;
-      const dbName = (single as { dbName?: string }).dbName;
-      const fields = (single as { fields?: unknown[] }).fields ?? [];
-      if (!slug || !Array.isArray(fields) || fields.length === 0) continue;
-      const tableName = resolveSingleTableName({ slug, dbName });
-      // The same registration as a collection's, so a localized single's
-      // main table leaves out the columns its migrations put on the companion.
-      registerEntityRuntimeTables(
-        observed,
-        {
-          slug,
-          tableName,
-          fields: fields as FieldDefinition[],
-          status: (single as { status?: boolean }).status === true,
-          localized: (single as { localized?: boolean }).localized === true,
-        },
-        dialect
-      );
-    } catch (err) {
-      logger.debug?.(
-        `[registerServices] Failed to register single "${(single as { slug?: string }).slug ?? "?"}" in resolver: ${err instanceof Error ? err.message : String(err)}`
-      );
-    }
-  }
-}
-
-/**
- * A column setting as comparable data: functions by their source, objects by
- * their Drizzle kind and their own settings in key order. The column's table,
- * and its `config` (the settings it was built from, which it holds again on
- * itself), are left out, and a value met again on the way is not followed.
- */
-function describeSetting(
-  value: unknown,
-  kind: symbol,
-  seen: Set<object> = new Set()
-): unknown {
-  if (typeof value === "function") return `fn:${String(value)}`;
-  if (typeof value === "bigint") return `bigint:${value}`;
-  if (typeof value !== "object" || value === null) return value;
-  if (seen.has(value)) return "[seen]";
-  seen.add(value);
-  if (Array.isArray(value)) {
-    return value.map(item => describeSetting(item, kind, seen));
-  }
-  if (value instanceof Date) return `date:${value.toISOString()}`;
-  const ownKind: unknown =
-    typeof value.constructor === "function"
-      ? Reflect.get(value.constructor, kind)
-      : undefined;
-  return [
-    typeof ownKind === "string" ? ownKind : null,
-    Object.keys(value)
-      .filter(key => key !== "table" && key !== "config")
-      .sort()
-      .map(key => [
-        key,
-        describeSetting((value as Record<string, unknown>)[key], kind, seen),
-      ]),
-  ];
 }
 
 function logStorageConfiguration(
