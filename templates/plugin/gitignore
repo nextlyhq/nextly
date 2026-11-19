@@ -11,3 +11,6 @@ dev/.next
 *.db-shm
 .env
 .env.local
+
+# nextly: runtime files the app writes for this machine (logs, a save in progress)
+/.nextly/

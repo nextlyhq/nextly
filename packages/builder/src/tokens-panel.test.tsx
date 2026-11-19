@@ -23,12 +23,29 @@ import {
 import * as React from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
+import { HOW_TEXT_WORKS_DOCS_HREF } from "./docs-links";
 import {
   TokensPanel,
   useVariablesHeader,
   type TokensPanelProps,
 } from "./tokens-panel";
-import type { VariableGroup } from "./tokens-studio";
+import { DESIGN_TAB_GROUPS, type VariableGroup } from "./tokens-studio";
+
+/**
+ * An element's accessible name, as a screen reader hears it: from its content
+ * where it has no label of its own. Read through the role query, which
+ * computes the name the same way for every button it finds.
+ */
+function nameOf(element: Element | null | undefined): string | undefined {
+  let heard: string | undefined;
+  screen.queryAllByRole("button", {
+    name: (name, each) => {
+      if (each === element) heard = name;
+      return false;
+    },
+  });
+  return heard;
+}
 
 type HostedProps = Omit<TokensPanelProps, "currentTokens" | "onChange"> &
   Partial<Pick<TokensPanelProps, "currentTokens" | "onChange">>;
@@ -256,10 +273,8 @@ describe("the rows", () => {
     expect(brand.textContent).toContain("Brand");
     expect(brand.textContent).not.toContain("color.brand");
     // Named as one phrase, the visible name first.
-    expect(brand.getAttribute("aria-label")).toBe(
-      "Brand, light #1d2b6b, dark #8fa7ff"
-    );
-    expect(row(/^Text/).getAttribute("aria-label")).toBe(
+    expect(nameOf(brand)).toBe("Brand, light #1d2b6b, dark #8fa7ff");
+    expect(nameOf(row(/^Text/))).toBe(
       "Text, light #3b3f46, dark same as light"
     );
     // A type size and its line height are one row, written "16 / 26".
@@ -289,7 +304,7 @@ describe("the rows", () => {
     const chip = section.querySelector(".nx-vars__chip");
     expect(chip?.textContent).toBe("Fluid · 16–32px");
     expect(chip?.getAttribute("title")).toBe(fluid);
-    expect(section.getAttribute("aria-label")).toBe(`Hero, ${fluid}`);
+    expect(nameOf(section)).toBe(`Hero, ${fluid}`);
     // A fixed length still reads as itself, with no hover to add.
     const fixed = row(/^Space 4/).querySelector(".nx-vars__chip");
     expect(fixed?.textContent).toBe("1rem");
@@ -346,10 +361,8 @@ describe("the rows", () => {
         }}
       />
     );
-    expect(row(/^Tile · space\.tile,/).getAttribute("aria-label")).toBe(
-      "Tile · space.tile, 24px"
-    );
-    expect(row(/^Tile · spacing\.tile,/).getAttribute("aria-label")).toBe(
+    expect(nameOf(row(/^Tile · space\.tile,/))).toBe("Tile · space.tile, 24px");
+    expect(nameOf(row(/^Tile · spacing\.tile,/))).toBe(
       "Tile · spacing.tile, 32px"
     );
   });
@@ -1475,10 +1488,8 @@ describe("a row's name in the dark preview", () => {
       ),
     };
     render(<Hosted tokens={site} prefersDark />);
-    expect(row(/^Space 4/).getAttribute("aria-label")).toBe("Space 4, 2rem");
-    expect(row(/^Body/).getAttribute("aria-label")).toBe(
-      "Body, size 16px, line height 30px"
-    );
+    expect(nameOf(row(/^Space 4/))).toBe("Space 4, 2rem");
+    expect(nameOf(row(/^Body/))).toBe("Body, size 16px, line height 30px");
   });
 });
 
@@ -1664,6 +1675,27 @@ describe("a Design tab's view of the variables", () => {
     render(<Folding groups={["colours"]} />);
     expect(regions()).toEqual(["Colours2"]);
     expect(screen.queryByRole("button", { name: /^Space 4/ })).toBeNull();
+  });
+
+  it("links How text works from the Type tab, opening the docs page in a new tab", () => {
+    render(<Folding groups={DESIGN_TAB_GROUPS.type} />);
+    const link = screen.getByRole("link", { name: "How text works" });
+    expect(link.getAttribute("href")).toBe(HOW_TEXT_WORKS_DOCS_HREF);
+    expect(link.getAttribute("target")).toBe("_blank");
+    expect(link.getAttribute("rel")).toBe("noreferrer");
+    // First in the tab's own part, before Site text.
+    const siteText = screen.getByRole("region", { name: "Site text" });
+    expect(
+      link.compareDocumentPosition(siteText) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+  });
+
+  it("links How text works from no other tab", () => {
+    for (const tab of ["colours", "spacing", "styles"] as const) {
+      const { unmount } = render(<Folding groups={DESIGN_TAB_GROUPS[tab]} />);
+      expect(screen.queryByRole("link", { name: "How text works" })).toBeNull();
+      unmount();
+    }
   });
 
   it("folds a group by its heading, which says how many it holds", () => {

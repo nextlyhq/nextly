@@ -21,6 +21,7 @@
  */
 import {
   findNode,
+  walkNodes,
   type BlockDocument,
   type BlockNode,
 } from "@nextlyhq/blocks-engine";
@@ -65,13 +66,15 @@ export function drawnForms(
   elements: readonly Element[],
   document: BlockDocument
 ): DrawnForm[] {
+  const forms = formsById(document);
+  if (forms.size === 0) return [];
   const found: DrawnForm[] = [];
   const seen = new Set<string>();
   for (const element of elements) {
     if (element.hasAttribute(INSTANCE_ATTRIBUTE)) continue;
     const nodeId = element.getAttribute(NODE_ID_ATTRIBUTE);
     if (nodeId === null || seen.has(nodeId)) continue;
-    const node = formNodeOf(document, nodeId);
+    const node = forms.get(nodeId);
     if (node === undefined) continue;
     seen.add(nodeId);
     const picked = pickedFormOf(node.props.form);
@@ -83,6 +86,24 @@ export function drawnForms(
     });
   }
   return found;
+}
+
+/**
+ * Each id {@link formNodeOf} answers a Form for, with that Form, from one walk
+ * of the document. The canvas measures on every edit and every change of
+ * layout, and asking `formNodeOf` per drawn block walked the whole page once
+ * for each of them. The first node an id names wins, as `findNode` finds it,
+ * so an id whose first node is not a Form names none here either.
+ */
+function formsById(document: BlockDocument): Map<string, BlockNode> {
+  const named = new Set<string>();
+  const forms = new Map<string, BlockNode>();
+  walkNodes(document.nodes, node => {
+    if (named.has(node.id)) return;
+    named.add(node.id);
+    if (node.type === FORM_BLOCK) forms.set(node.id, node);
+  });
+  return forms;
 }
 
 /** The key a picked form's state is kept under. */

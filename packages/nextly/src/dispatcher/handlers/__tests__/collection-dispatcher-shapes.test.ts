@@ -990,6 +990,9 @@ function makeFakeAdapter() {
     update: vi.fn().mockResolvedValue(undefined),
     // Asked before the apply, for the index names a change takes and for the companion.
     tableExists: vi.fn().mockResolvedValue(false),
+    // Asked after the registry write (`afterEnclosingCommit`): outside a transaction here, as
+    // the real adapter answers where no file's transaction encloses the write.
+    inTransaction: () => false,
   };
 }
 
@@ -1446,6 +1449,8 @@ describe("dispatchCollections, localized persistence failure", () => {
       // Asked by the translation-move precondition, as on the real adapter.
       getCapabilities: () => ({ dialect: "postgresql" as const }),
       tableExists: vi.fn().mockResolvedValue(true),
+      // Asked after the registry write (`afterEnclosingCommit`): outside a transaction here.
+      inTransaction: () => false,
       getDrizzle: vi.fn().mockReturnValue({
         all: vi.fn().mockResolvedValue([]),
         run: vi.fn().mockResolvedValue(undefined),

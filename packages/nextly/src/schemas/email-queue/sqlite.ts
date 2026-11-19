@@ -22,6 +22,11 @@ export const emailQueueSqlite = sqliteTable(
     principalId: text("principal_id"),
     failure: text("failure"),
     templateSlug: text("template_slug"),
+    messageKind: text("message_kind"),
+    recipientKinds: text("recipient_kinds"),
+    providerType: text("provider_type"),
+    providerId: text("provider_id"),
+    providerOrigin: text("provider_origin"),
     createdAt: integer("created_at").notNull(),
     updatedAt: integer("updated_at").notNull(),
     settledAt: integer("settled_at"),
@@ -31,5 +36,7 @@ export const emailQueueSqlite = sqliteTable(
     index("email_queue_principal_idx").on(t.principalKind, t.principalId),
     index("email_queue_created_idx").on(t.createdAt, t.id),
     index("email_queue_template_idx").on(t.templateSlug, t.createdAt),
+    index("email_queue_provider_type_idx").on(t.providerType, t.createdAt),
+    index("email_queue_provider_origin_idx").on(t.providerOrigin, t.createdAt),
   ]
 );

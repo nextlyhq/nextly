@@ -6,9 +6,12 @@
  * deletion of the run, and the run prints each one before deleting it. Given
  * a comma-separated list (`--accept-data-loss=posts,pages.summary`) it covers
  * only those tables and columns: a named table covers every deletion in it —
- * dropping it, dropping any of its columns, removing its rows — and a named
- * `table.column` covers dropping that column. Anything it does not cover is
- * refused, named, before anything changes.
+ * dropping it, dropping any of its columns, removing its rows — and the drop
+ * of its translations table (`<table>_locales`, where the command proved it
+ * one: `translates`), which goes with a translated entity's delete; a named
+ * `table.column` covers dropping that column. A column or rows of a
+ * translations table are covered by its own name.
+ * Anything it does not cover is refused, named, before anything changes.
  *
  * Without consent an interactive run lists every deletion, with its count
  * when the database can be read, and asks; a run with no terminal refuses at
@@ -99,6 +102,12 @@ export type Deletion =
       core?: boolean;
       count?: number;
       alongside?: string;
+      /**
+       * The table this one holds the translations of, where the command
+       * proved it that table's translations table (`<table>_locales`, keyed
+       * by `_parent` and `_locale`): naming that table covers this one.
+       */
+      translates?: string;
       reason?: string;
       owner?: string;
     }
@@ -377,11 +386,59 @@ export function consentCovers(
   if (given.targets === "all") return true;
   if (deletion.kind === "unnamed" || onlyBlanketCovers(deletion)) return false;
   if (given.targets.tables.has(deletion.table)) return true;
-  if (deletion.owner !== undefined && given.targets.tables.has(deletion.owner))
-    return true;
+  if (coveredWithAnother(given.targets.tables, deletion)) return true;
   return (
     deletion.kind === "column" &&
     given.targets.columns.has(`${deletion.table}.${deletion.column}`)
+  );
+}
+
+/**
+ * Whether naming another table covers `deletion` along with that table: the
+ * entity's main table covers every deletion it owns (`owner`), and a table
+ * covers the drop of its translations table (`translates`), as deleting a
+ * translated entity's table loses both. Only where the command proved the
+ * translations table one; a name alone proves nothing.
+ */
+function coveredWithAnother(
+  tables: ReadonlySet<string>,
+  deletion: Deletion
+): boolean {
+  if (deletion.kind === "unnamed") return false;
+  if (deletion.owner !== undefined && tables.has(deletion.owner)) return true;
+  return (
+    deletion.kind === "table" &&
+    deletion.translates !== undefined &&
+    tables.has(deletion.translates)
+  );
+}
+
+/**
+ * `deletions` in their order, but with each translations table's drop listed
+ * right after the drop of the table it translates (`translates`), when the
+ * same run (and the same file, where `sourceOf` names one) drops both: a file
+ * drops every translations table first, and the person asked reads each
+ * table's rows and its translations together.
+ */
+function translationsBesideTheirTables(
+  deletions: readonly Deletion[],
+  sourceOf: ((deletion: Deletion) => string | undefined) | undefined
+): Deletion[] {
+  const place = (deletion: Deletion, table: string) =>
+    `${sourceOf?.(deletion) ?? ""}\u0000${table}`;
+  const dropped = new Set(
+    deletions.flatMap(d => (d.kind === "table" ? [place(d, d.table)] : []))
+  );
+  // Where each translations table goes: after its table, where this list drops that too.
+  const ownerOf = (d: Deletion): string | undefined =>
+    d.kind === "table" && d.translates !== undefined
+      ? [place(d, d.translates)].find(owner => dropped.has(owner))
+      : undefined;
+  const placed = deletions.filter(d => ownerOf(d) === undefined);
+  return placed.flatMap(d =>
+    d.kind === "table"
+      ? [d, ...deletions.filter(m => ownerOf(m) === place(d, d.table))]
+      : [d]
   );
 }
 
@@ -649,8 +706,13 @@ export async function judgeDataLoss(args: {
   approved?: readonly Deletion[];
   sourceOf?: (deletion: Deletion) => string | undefined;
 }): Promise<DataLossVerdict> {
-  const { deletions, consent } = args;
-  if (deletions.length === 0) return { kind: "proceed" };
+  const { consent } = args;
+  if (args.deletions.length === 0) return { kind: "proceed" };
+  // Listed, and refused, with each translations table beside the table it translates.
+  const deletions = translationsBesideTheirTables(
+    args.deletions,
+    args.sourceOf
+  );
   const approved = new Set((args.approved ?? []).map(deletionKey));
   // Agreeing to drop an entity's main table agrees to what that table owns,
   // as a consent naming it covers it: the entity's other tables and its rows

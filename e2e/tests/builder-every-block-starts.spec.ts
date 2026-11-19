@@ -15,7 +15,7 @@
  *
  * @module tests/builder-every-block-starts.spec
  */
-import { expect, type Page } from "@playwright/test";
+import { expect, type Page, type Request } from "@playwright/test";
 
 import { selection } from "./canvas/editor-driver";
 import { gotoAdmin } from "./support/admin";
@@ -29,6 +29,48 @@ const STARTS_WITH: Readonly<Record<string, readonly string[]>> = {
   Heading: ["A section title"],
   Text: ["A paragraph of text."],
   List: ["First", "Second"],
+};
+
+/**
+ * Every core block a page's Add panel offers, by its tile's name. Entry
+ * content is left out: it is offered only while a collection's template is
+ * open.
+ */
+const CORE_TILES = [
+  "Section",
+  "Box",
+  "Columns",
+  "Column",
+  "Card",
+  "Accordion",
+  "Question",
+  "Spacer",
+  "Heading",
+  "Text",
+  "Rich text",
+  "Table of contents",
+  "List",
+  "Image",
+  "Button",
+  "Form",
+  "Gallery",
+  "Divider",
+  "Quote",
+  "Embed",
+  "Icon",
+  "Collection list",
+] as const;
+
+/**
+ * The blocks that start empty, each by the next step the canvas shows over
+ * it: a picker, or the empty state with its own words.
+ */
+const NEXT_STEP: Readonly<Record<string, string>> = {
+  Columns: "Choose a layout",
+  "Collection list": "Show entries from",
+  Image: "Add an image",
+  Gallery: "Add images",
+  Embed: "Paste a YouTube, Vimeo or other link",
 };
 
 /** The fields a new Form starts with, by their labels. */
@@ -83,20 +125,50 @@ test("every core block starts at a visible size, real or with its next step, and
 }) => {
   test.setTimeout(420_000);
   await page.setViewportSize({ width: 1440, height: 900 });
+  // Each request is held against the tile whose adding started it, from the
+  // moment it starts, so a failure that answers late is still that tile's,
+  // never the next one's, and a tile that adds nothing is checked too.
+  let adding = "";
+  const startedBy = new Map<Request, string>();
   const failed: string[] = [];
-  page.on("response", response => {
-    if (response.status() >= 400) {
-      failed.push(`${response.status()} ${response.url()}`);
-    }
+  page.on("request", request => {
+    startedBy.set(request, adding);
+  });
+  page.on("requestfinished", request => {
+    const tile = startedBy.get(request) ?? "";
+    // Held as pending until its status is read, so the last wait below
+    // cannot end before the failure is counted.
+    void request.response().then(response => {
+      startedBy.delete(request);
+      if (response !== null && response.status() >= 400 && tile !== "") {
+        failed.push(`${tile}: ${response.status()} ${request.url()}`);
+      }
+    });
   });
   page.on("requestfailed", request => {
+    const tile = startedBy.get(request) ?? "";
+    startedBy.delete(request);
     // A read the editor stopped itself, as a newer one replaces it, is not a
     // missing file.
     if (request.failure()?.errorText.includes("ERR_ABORTED") === true) return;
+    if (tile === "") return;
     failed.push(
-      `failed ${request.url()} ${request.failure()?.errorText ?? ""}`
+      `${tile}: failed ${request.url()} ${request.failure()?.errorText ?? ""}`
     );
   });
+  /** The requests a tile started that have not answered yet. */
+  const pendingFor = (tile: string) =>
+    [...startedBy.values()].filter(by => by === tile).length;
+  /**
+   * Waits, a bounded while, for the tile's requests to answer. One still open
+   * after it (a stream) is left: its failure, if it comes, is still counted
+   * against this tile.
+   */
+  const settleRequests = (tile: string) =>
+    expect
+      .poll(() => pendingFor(tile), { timeout: 5_000 })
+      .toBe(0)
+      .catch(() => undefined);
 
   const id = await createPage(page);
   await gotoAdmin(page, `/collections/pages/${id}/builder?field=content`);
@@ -104,7 +176,9 @@ test("every core block starts at a visible size, real or with its next step, and
     timeout: 60_000,
   });
   const tiles = await blockTiles(page);
-  expect(tiles.length, "the Add panel offers blocks").toBeGreaterThan(10);
+  expect(tiles, "the Add panel offers every core block").toEqual(
+    expect.arrayContaining([...CORE_TILES])
+  );
 
   const problems: string[] = [];
   for (const name of tiles) {
@@ -116,8 +190,8 @@ test("every core block starts at a visible size, real or with its next step, and
     ) {
       await page.keyboard.press("Escape");
     }
-    const before = failed.length;
     const tile = page.getByRole("option", { name, exact: true }).first();
+    adding = name;
     await tile.click();
     // A block that only goes inside another (a Column, an accordion's item)
     // adds nothing on its own; its tile says where it goes instead.
@@ -138,6 +212,7 @@ test("every core block starts at a visible size, real or with its next step, and
           `${name}: nothing was added, and the tile says nothing of where it goes`
         );
       }
+      await settleRequests(name);
       continue;
     }
     const block = canvasBlock(page, added).first();
@@ -175,11 +250,26 @@ test("every core block starts at a visible size, real or with its next step, and
         problems.push(`${name}: does not start with "${words}"`);
       }
     }
+    // A block that starts empty shows its next step, in its own words.
+    const next = NEXT_STEP[name];
+    if (
+      next !== undefined &&
+      // Drawn over the canvas, in the editor's own page, once the block is.
+      !(await expect(page.getByText(next).first())
+        .toBeVisible({ timeout: 5_000 })
+        .then(() => true)
+        .catch(() => false))
+    ) {
+      problems.push(`${name}: starts empty without "${next}"`);
+    }
     // A picker the block asks with on the canvas is its next step; leave it.
     await page.keyboard.press("Escape");
-    for (const failure of failed.slice(before)) {
-      problems.push(`${name}: ${failure}`);
-    }
+    await settleRequests(name);
   }
-  expect(problems).toEqual([]);
+  // Every request answered, so a late failure is counted, against its tile.
+  await expect
+    .poll(() => startedBy.size, { timeout: 15_000 })
+    .toBe(0)
+    .catch(() => undefined);
+  expect([...problems, ...failed]).toEqual([]);
 });

@@ -62,6 +62,8 @@ const RAW_TEST_ALLOWED = {
     "checks the canvas's zone inset arithmetic in Node; it opens no page",
   "e2e/tests/flaky-reporter.test.ts":
     "checks the flaky reporter's summary in Node; it opens no page",
+  "e2e/tests/live-drag-latency.test.ts":
+    "checks how the live-drag speed check times a move in Node; it opens no page",
   "e2e/tests/locks-held.test.ts":
     "reads the suite's source and Playwright's own list; it opens no page",
 };
