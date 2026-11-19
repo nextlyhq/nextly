@@ -36,3 +36,7 @@ called outside a request scope". The plugin also no longer imports
 `next/headers` itself, which plain Node can't load: a config that loads the
 plugin's source, as the plugin's own upgrade test does, works with
 `nextly migrate` again.
+
+`@nextlyhq/plugin-sdk` adds `isDraftModeRequest`, an `@experimental`
+re-export of core's draft-mode check, so a plugin's server component can ask
+whether it is drawn for the preview pane the way core's routes do.

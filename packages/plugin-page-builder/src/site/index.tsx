@@ -54,7 +54,7 @@ import { PageCodeBoundary } from "./page-code-boundary";
  * Node, and this one is reached from the plugin's root, which the CLI loads.
  */
 async function inDraftMode(): Promise<boolean> {
-  const { isDraftModeRequest } = await import("nextly/runtime");
+  const { isDraftModeRequest } = await import("@nextlyhq/plugin-sdk");
   return isDraftModeRequest();
 }
 
