@@ -103,14 +103,15 @@ export async function rebuildSqliteNullability(
       now.type.toLowerCase() !== type.toLowerCase()
     );
   };
+  const dropped = (live.foreignKeys ?? []).filter(key =>
+    key.columns.some(retyped)
+  );
   const rebuilt = {
     ...live,
     ...(live.foreignKeys === undefined
       ? {}
       : {
-          foreignKeys: live.foreignKeys.filter(
-            key => !key.columns.some(retyped)
-          ),
+          foreignKeys: live.foreignKeys.filter(key => !dropped.includes(key)),
         }),
     columns: live.columns.map(column => {
       const wanted = target(column.name);
@@ -127,7 +128,14 @@ export async function rebuildSqliteNullability(
       };
     }),
   };
-  for (const statement of sqliteTableRebuildStatements(rebuilt, [], {
+  // The dropped references named as dropped, so the rebuild's guard takes them as gone on purpose
+  // rather than as constraints it would lose.
+  const drops = dropped.map(foreignKey => ({
+    type: "drop_foreign_key" as const,
+    tableName: live.name,
+    foreignKey,
+  }));
+  for (const statement of sqliteTableRebuildStatements(rebuilt, drops, {
     keptUnique: losses?.unique ?? [],
   })) {
     await tx.execute(statement);
