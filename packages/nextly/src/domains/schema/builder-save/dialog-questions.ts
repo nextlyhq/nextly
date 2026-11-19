@@ -116,16 +116,27 @@ export async function refuseUnansweredDialogQuestions(args: {
         resolution.fromColumn === offered.candidate.fromColumn &&
         resolution.toColumn === offered.candidate.toColumn
     );
+  const confirmedByName = (field: FieldDefinition) =>
+    args.legacy?.byFieldName[field.name]?.action === "confirm_drop";
   const unconfirmedTranslated = [...removedFields, ...losingColumn].filter(
     field =>
       isFieldLocalized(field, wasStored) &&
       !answeredAsOffered(toSnakeCase(field.name)) &&
-      args.legacy?.byFieldName[field.name]?.action !== "confirm_drop"
+      !confirmedByName(field)
   );
-  if (unconfirmedTranslated.length > 0) {
+  // A many-to-many leaving its link table, removed or kept by name without one, takes the table
+  // and every link with it, which the preview, reading the entity's own columns, does not see: its
+  // drop is confirmed by the field's name, as the dialog confirms a removed field.
+  const unconfirmedLinks = manyToManyLeavingLinkTable(
+    args.oldFields,
+    args.newFields,
+    args.builtBy
+  ).filter(field => !confirmedByName(field));
+  const unconfirmed = [...unconfirmedTranslated, ...unconfirmedLinks];
+  if (unconfirmed.length > 0) {
     throw cancelled(
       args.tableName,
-      unconfirmedTranslated.map(field => field.name)
+      unconfirmed.map(field => field.name)
     );
   }
   const events = preview.events.filter(
@@ -179,6 +190,27 @@ function fieldsLosingTheirColumn(
       !usesJunctionTable(kept)
       ? [field]
       : [];
+  });
+}
+
+/**
+ * The many-to-many relationships, as they were, that leave their link table: removed, or kept by
+ * name but no longer kept in one. Only a collection's or a Single's row keeps one there; a field
+ * group's row keeps a many-to-many in a column of its own, which `fieldsLosingTheirColumn` asks of.
+ */
+function manyToManyLeavingLinkTable(
+  oldFields: readonly FieldDefinition[],
+  newFields: readonly FieldDefinition[],
+  builtBy: ColumnOrigin
+): FieldDefinition[] {
+  if (builtBy === "fieldGroup") return [];
+  const after = new Map(
+    fieldsStoredOnRow(newFields).map(field => [field.name, field] as const)
+  );
+  return fieldsStoredOnRow(oldFields).filter(field => {
+    if (!usesJunctionTable(field)) return false;
+    const kept = after.get(field.name);
+    return kept === undefined || !usesJunctionTable(kept);
   });
 }
 

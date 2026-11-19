@@ -441,11 +441,12 @@ for (const dialect of getConfiguredTestDialects()) {
   });
 }
 
-// A collection keeps a many-to-many in a link table, which the push's questions do not cover: they
-// are asked of the entity's columns. Turned into a field group, the relationship's links are kept
-// where they are, and the save asks nothing of them.
+// A collection keeps a many-to-many in a link table, which the push's preview does not read: it
+// asks about the entity's own columns. Removed, or kept by name but turned into a field group, the
+// relationship's link table goes with every link, so its drop is confirmed by the field's name, as
+// the admin's dialog confirms a removed field.
 for (const dialect of getConfiguredTestDialects()) {
-  describe(`a collection's many-to-many turned into a field group (${dialect})`, () => {
+  describe(`a collection's many-to-many leaving its link table (${dialect})`, () => {
     let t: TestNextly;
     let basePath: string;
     const related = {
@@ -453,6 +454,7 @@ for (const dialect of getConfiguredTestDialects()) {
       type: "relationship",
       options: { relationType: "manyToMany", target: "tags" },
     };
+    const link = junctionTableNameFor("dc_posts", related as never);
 
     beforeEach(async () => {
       basePath = await mkdtemp(join(tmpdir(), "nextly-dialog-questions-"));
@@ -479,6 +481,14 @@ for (const dialect of getConfiguredTestDialects()) {
         {},
         { name: "posts", label: "posts", fields: [text("heading"), related] }
       );
+      const tag = (await t.nextly.create({
+        collection: "tags",
+        data: { name: "first" },
+      } as never)) as unknown as { item: { id: unknown } };
+      await t.nextly.create({
+        collection: "posts",
+        data: { heading: "Hello", related: [String(tag.item.id)] },
+      } as never);
     });
 
     afterEach(async () => {
@@ -487,45 +497,56 @@ for (const dialect of getConfiguredTestDialects()) {
       await rm(basePath, { recursive: true, force: true });
     });
 
-    it("keeps the links of a relationship turned into a field group", async () => {
-      const tag = await t.nextly.create({
-        collection: "tags",
-        data: { name: "first" },
-      } as never);
-      await t.nextly.create({
-        collection: "posts",
-        data: {
-          heading: "Hello",
-          related: [String((tag as { item: { id: unknown } }).item.id)],
-        },
-      } as never);
-      const link = junctionTableNameFor("dc_posts", related as never);
-      const links = async () =>
-        exec<{ n: number | string }>(
-          t,
-          `SELECT COUNT(*) AS n FROM ${link}`
-        ).then(rows => Number(rows[0]?.n ?? 0));
-      expect(await links()).toBe(1);
-
-      await dispatchCollections(
+    // The links the link table holds, or none where the table is gone.
+    const links = async () =>
+      exec<{ n: number | string }>(t, `SELECT COUNT(*) AS n FROM ${link}`).then(
+        rows => Number(rows[0]?.n ?? 0),
+        () => 0
+      );
+    const save = async (fields: Field[], answers: Answers) =>
+      dispatchCollections(
         {} as ServiceContainer,
         "applySchemaChanges",
         { collectionName: "posts" },
         {
-          fields: [
-            text("heading"),
-            { name: "related", type: "component", component: "card" },
-          ],
+          fields,
           confirmed: true,
           schemaVersion: await versionOf(t, "dynamic_collections", "posts"),
+          ...answers,
         }
-      ).then(
-        () => undefined,
-        () => undefined
       );
 
-      expect(await links()).toBe(1);
-    }, 60_000);
+    it.each([
+      {
+        change: "turned into a field group",
+        fields: [
+          text("heading"),
+          { name: "related", type: "component", component: "card" },
+        ],
+      },
+      { change: "removed", fields: [text("heading")] },
+    ])(
+      "refuses the relationship $change unconfirmed, keeping its links, and goes through once confirmed by name",
+      async ({ fields }) => {
+        expect(await links()).toBe(1);
+
+        const refused = await save(fields, {}).then(
+          () => undefined,
+          (error: unknown) => error
+        );
+
+        expect(refused).toMatchObject({
+          code: "NEXTLY_MIGRATION_APPLY_FAILED",
+        });
+        expect(String(refused)).toMatch(/cancelled/);
+        expect(await links()).toBe(1);
+
+        await save(fields, {
+          resolutions: { related: { action: "confirm_drop" } },
+        });
+      },
+      60_000
+    );
   });
 }
 
@@ -713,10 +734,10 @@ for (const dialect of getConfiguredTestDialects()) {
       expect(await companionColumns()).toContain("teaser");
     }, 60_000);
 
-    // Kept by name but turned into a field group, the field has no column any more: its
-    // translations column goes with every language's value, which the main table's preview does
-    // not see, so it is confirmed by name as a removed translated field is.
-    it("refuses turning it into a field group unconfirmed, keeping every language, and drops it once confirmed by name", async () => {
+    // Kept by name but turned into a field group, the field would leave translation with its storage
+    // reshaped, which is refused before anything is written, confirmed or not: every language's
+    // value stays.
+    it("refuses turning it into a field group, confirmed or not, keeping every language", async () => {
       await dispatchComponents(
         "createComponent",
         {},
@@ -729,19 +750,17 @@ for (const dialect of getConfiguredTestDialects()) {
         ],
       };
 
-      const refused = await save(intoGroup).then(
-        () => undefined,
-        (error: unknown) => error
-      );
-      expect(refused).toMatchObject({ code: "NEXTLY_MIGRATION_APPLY_FAILED" });
-      expect(String(refused)).toMatch(/cancelled/);
-      expect(await companionColumns()).toContain("teaser");
-
-      await save({
-        ...intoGroup,
-        resolutions: { teaser: { action: "confirm_drop" } },
-      });
-      expect(await companionColumns()).not.toContain("teaser");
+      for (const answers of [
+        {},
+        { resolutions: { teaser: { action: "confirm_drop" } } },
+      ]) {
+        const refused = await save({ ...intoGroup, ...answers }).then(
+          () => undefined,
+          (error: unknown) => error
+        );
+        expect(refused).toMatchObject({ code: "VALIDATION_ERROR" });
+        expect(await companionColumns()).toContain("teaser");
+      }
     }, 60_000);
   });
 }
