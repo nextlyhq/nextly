@@ -599,6 +599,38 @@ interface SaveJudgement {
   storedProvenancePaths?: ReadonlySet<string>;
 }
 
+/** The issues a save was refused for, and the values they were found in. */
+interface SaveIssues {
+  readonly issues: ValidationIssue[];
+  readonly view: Record<string, unknown>;
+}
+
+/**
+ * `value` with every plain object and array in it copied, and every other
+ * value kept as it is: the values a save was judged on, kept apart from the
+ * write's own data, which hashing, extraction and serialisation change in
+ * place before the save is judged again under its row lock. Never throws,
+ * as a structured clone does on a value it can't copy.
+ */
+function detachedContainers<T>(value: T): T {
+  if (Array.isArray(value)) {
+    return value.map(item => detachedContainers(item)) as T;
+  }
+  if (
+    value !== null &&
+    typeof value === "object" &&
+    Object.getPrototypeOf(value) === Object.prototype
+  ) {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [
+        key,
+        detachedContainers(item),
+      ])
+    ) as T;
+  }
+  return value;
+}
+
 /**
  * SingleMutationService
  *
@@ -2395,25 +2427,30 @@ export class SingleMutationService extends BaseService {
   }
 
   /**
-   * {@link assertSaveValid} on the row as committed: the Single's main row
-   * locked first, then the same judgement with every stored read on `tx`.
+   * {@link saveIssues} on the row as committed: the Single's main row locked
+   * first, then the same judgement with every stored read on `tx`.
    *
    * The lock is taken before any read the judgement makes, so on MySQL's
    * repeatable read the reads that follow see the row as last committed
    * rather than a snapshot from before another writer's save. Every write to
    * a Single takes this lock, so none can land between the judgement and the
    * write it guards.
+   *
+   * The issues found are returned as found, not as the caller may be told
+   * them: telling them asks the read gate and field rules, whose reads are on
+   * the pool, where they would wait for the connection this transaction
+   * holds. The caller refuses with them once the transaction has ended.
    */
-  private async assertSaveValidUnderLock(
+  private async saveIssuesUnderLock(
     tx: TransactionContext,
     row: { readonly tableName: string; readonly id: string },
     judgement: SaveJudgement
-  ): Promise<void> {
+  ): Promise<SaveIssues> {
     await tx.selectOne(row.tableName, {
       where: this.whereEq("id", row.id),
       forUpdate: true,
     });
-    await this.assertSaveValid({ ...judgement, tx });
+    return this.saveIssues({ ...judgement, tx });
   }
 
   /**
@@ -2423,7 +2460,16 @@ export class SingleMutationService extends BaseService {
    * issue on a field the caller may not read is told without naming it or
    * its value.
    */
-  private async assertSaveValid(
+  private async assertSaveValid(args: SaveJudgement): Promise<void> {
+    const found = await this.saveIssues(args);
+    if (found.issues.length > 0) throw await this.saveRefusal(found, args);
+  }
+
+  /**
+   * The issues the Single's declared rules find in a save, unredacted, and
+   * the values they were found in; see {@link assertSaveValid}.
+   */
+  private async saveIssues(
     args: SaveJudgement & {
       /**
        * The transaction the judgement reads stored values on: absent before
@@ -2431,7 +2477,7 @@ export class SingleMutationService extends BaseService {
        */
       tx?: TransactionContext;
     }
-  ): Promise<void> {
+  ): Promise<SaveIssues> {
     const { slug, fieldConfigs } = args;
     const validationView = relationshipValidationView(args.data, fieldConfigs);
     const judgedIssues = await validateEntryData(
@@ -2483,11 +2529,24 @@ export class SingleMutationService extends BaseService {
         },
       }
     );
-    const validationIssues = await issuesTheReaderMaySee(judgedIssues, {
+    return { issues: judgedIssues, view: validationView };
+  }
+
+  /**
+   * The refusal of a save for `found`, told as the reader may be told it:
+   * an issue on a field they may not read is told without naming it or its
+   * value. Read on the pool, so asked outside any transaction.
+   */
+  private async saveRefusal(
+    found: SaveIssues,
+    args: SaveJudgement
+  ): Promise<NextlyError> {
+    const { slug } = args;
+    const validationIssues = await issuesTheReaderMaySee(found.issues, {
       kind: "single",
       slug,
-      document: validationView,
-      fields: fieldConfigs,
+      document: found.view,
+      fields: args.fieldConfigs,
       fieldGroups: this.fieldGroupDataService,
       entryId: args.entryId,
       // A Single the reader may not read is shown to them in no part.
@@ -2498,9 +2557,7 @@ export class SingleMutationService extends BaseService {
         }),
       reader: args.reader,
     });
-    if (validationIssues.length > 0) {
-      throw NextlyError.validation({ errors: validationIssues });
-    }
+    return NextlyError.validation({ errors: validationIssues });
   }
 
   /**
@@ -3220,10 +3277,13 @@ export class SingleMutationService extends BaseService {
       // gate the collection write paths run. Singles updates are PATCH
       // semantics: absent keys stay untouched, provided keys must hold.
       // Kept, so a save the version check does not cover is judged again by
-      // the same call under the row lock (see the transaction below).
+      // the same call under the row lock (see the transaction below). The
+      // values judged are a copy: the write changes its own data in place
+      // before then (a password hashed, components extracted), and the second
+      // judgement is of the values as sent, as the first was.
       const saveJudgement: SaveJudgement = {
         slug,
-        data: currentData,
+        data: detachedContainers(currentData),
         fieldConfigs,
         localizedFieldNames,
         enforceLocalizedRequired,
@@ -3716,6 +3776,11 @@ export class SingleMutationService extends BaseService {
         this.hookRegistry,
         hookCollection
       );
+      // The issues a save was refused for under its row lock, told as the
+      // caller may be told them once the transaction has ended: what they may
+      // be told is read on the pool, which inside the transaction would wait
+      // for the connection the transaction holds.
+      let refusedUnderLock: SaveIssues | undefined;
       try {
         // Retry the whole update+capture transaction on a version_no allocation
         // race; the re-run re-reads the max. The single UPDATE is deterministic.
@@ -3815,12 +3880,18 @@ export class SingleMutationService extends BaseService {
           // page code, say) would otherwise be replaced by a value judged
           // against what it replaced, its permission never asked. A save
           // carrying `_rev` is refused for that race by its version check.
+          // A refusal found here ends the transaction, and is told once it
+          // has ended (see the catch below).
           if (versionCheck.kind !== "judge") {
-            await this.assertSaveValidUnderLock(
+            const found = await this.saveIssuesUnderLock(
               tx,
               { tableName: singleMeta.tableName, id: existingDoc.id },
               saveJudgement
             );
+            if (found.issues.length > 0) {
+              refusedUnderLock = found;
+              throw NextlyError.validation({ errors: [] });
+            }
           }
 
           // TOCTOU-safe transition enforcement: reclassify the publish/unpublish
@@ -6456,6 +6527,9 @@ export class SingleMutationService extends BaseService {
           return rows;
         }, versionConflictRetries());
       } catch (error) {
+        if (refusedUnderLock !== undefined) {
+          throw await this.saveRefusal(refusedUnderLock, saveJudgement);
+        }
         // A field rule that could not run keeps its own answer, read through
         // the chain before the unwrap below: that answer's cause is the rule's
         // own error, which the unwrap would otherwise throw in its place.

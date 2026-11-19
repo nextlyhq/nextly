@@ -8,10 +8,18 @@
  * what it replaced: here, an editor's overwrite puts back the code a manager
  * just changed, and the rule that only a manager may change it never sees the
  * change.
+ *
+ * The second judgement is of the values as sent, not as the write has since
+ * changed them, and a refusal from it is told on the transaction's one
+ * connection, with nothing left to read on the pool.
  */
 import { afterEach, describe, expect, it } from "vitest";
 
-import { defineSingle, pluginField, text } from "../../../config";
+import {
+  grantTo,
+  userWhoMay,
+} from "../../../__tests__/fixtures/permission-holders";
+import { defineSingle, password, pluginField, text } from "../../../config";
 import type { PluginFieldValidateArgs } from "../../../plugins/contributions";
 import { definePlugin } from "../../../plugins/plugin-context";
 import {
@@ -20,6 +28,11 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+
+// One connection, so a read the judgement under the row lock makes on the
+// pool has none to take while the transaction holds it. Set before any
+// instance boots: the pool reads it then.
+process.env.DB_POOL_MAX = "1";
 
 const SLUG = "lockedcodesite";
 const MANAGER = { id: "manager-1", email: "manager@example.com" };
@@ -68,6 +81,19 @@ const guardedCodePlugin = definePlugin({
   },
 });
 
+/** The refusal of the code, naming it: a refusal with no issue is not it. */
+const REFUSED_CODE = {
+  code: "VALIDATION_ERROR",
+  publicData: {
+    errors: [
+      expect.objectContaining({
+        path: "code",
+        message: "Only a manager may change the code.",
+      }),
+    ],
+  },
+};
+
 let current: TestNextly | undefined;
 
 afterEach(async () => {
@@ -86,6 +112,8 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         fields: [
           text({ name: "headline" }),
           pluginField({ name: "code", type: "guarded-code" }),
+          // Stored as a hash longer than the length allowed of what is sent.
+          password({ name: "secret", maxLength: 32 }),
         ],
       }),
     ],
@@ -127,9 +155,9 @@ describe.each(getConfiguredTestDialects())(
       between = async () => {
         await save(site, MANAGER, "managers");
       };
-      await expect(save(site, EDITOR, "first")).rejects.toMatchObject({
-        code: "VALIDATION_ERROR",
-      });
+      await expect(save(site, EDITOR, "first")).rejects.toMatchObject(
+        REFUSED_CODE
+      );
       // The manager's change stands.
       expect(await storedCode(site)).toBe("managers");
     });
@@ -144,6 +172,43 @@ describe.each(getConfiguredTestDialects())(
       };
       await save(site, MANAGER, "first");
       expect(await storedCode(site)).toBe("first");
+    });
+
+    it("judges a password again as it was sent, not as the hash the write stores", async () => {
+      const site = await boot(dialect);
+      // 28 characters as sent; the hash the write stores in its place is 60,
+      // which the length rule would refuse were it judged instead.
+      await expect(
+        site.nextly.updateSingle({
+          slug: SLUG,
+          data: { secret: "a-password-of-28-characters!", _overwrite: true },
+          user: MANAGER,
+          overrideAccess: true,
+        })
+      ).resolves.toBeDefined();
+    });
+
+    it("tells a caller judged by their permissions the refusal under the lock, on one connection", async () => {
+      const site = await boot(dialect);
+      // The editor may read and update the Single, so the refusal is told
+      // as their permissions allow, which asks the read gate.
+      await userWhoMay(site, EDITOR.id, "read", [SLUG]);
+      await grantTo(site, EDITOR.id, "update", [SLUG]);
+      between = async () => {
+        await save(site, MANAGER, "managers");
+        // A role given meanwhile, so what the editor may do is read afresh
+        // rather than remembered from the save's own access check.
+        await grantTo(site, EDITOR.id, "delete", [SLUG]);
+      };
+      await expect(
+        site.nextly.updateSingle({
+          slug: SLUG,
+          data: { code: "first", _overwrite: true },
+          user: EDITOR,
+          overrideAccess: false,
+        })
+      ).rejects.toMatchObject(REFUSED_CODE);
+      expect(await storedCode(site)).toBe("managers");
     });
 
     it("keeps an editor's overwrite that changes nothing", async () => {
