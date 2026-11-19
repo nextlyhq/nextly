@@ -111,7 +111,51 @@ describe("the detail sheet", () => {
     expect(screen.getByText("The site’s own template")).toBeTruthy();
     expect(screen.getByText("Version 7aa2c510")).toBeTruthy();
     expect(screen.getByText("The form-builder plugin")).toBeTruthy();
+    expect(screen.getByText(/No delivery is on record/)).toBeTruthy();
+  });
+
+  it("offers no Fix template once a later attempt has sent it", () => {
+    // The template marker stays on the row after a retry succeeds.
+    showing(queuedDetail({ state: "sent", lastFailure: null }));
+    renderSheet();
+    expect(screen.getByRole("status").textContent).toContain("Sent");
+    expect(screen.queryByRole("link", { name: "Fix template" })).toBeNull();
+  });
+
+  it("offers Fix template while a template failure is still retrying", () => {
+    showing(queuedDetail({ state: "retrying" }));
+    renderSheet();
+    expect(screen.getByRole("link", { name: "Fix template" })).toBeTruthy();
+  });
+
+  it("never calls a retrying email with attempts behind it unsent, when its version was pruned", () => {
+    showing(
+      queuedDetail({
+        state: "retrying",
+        attempts: 2,
+        templateCaused: false,
+        templateVersion: null,
+        timeline: [],
+      })
+    );
+    renderSheet();
+    expect(screen.queryByText("Not sent yet")).toBeNull();
+    expect(screen.getByText("No version recorded")).toBeTruthy();
+  });
+
+  it("says a queued email that hasn't been tried has no attempt yet, and no version yet", () => {
+    showing(
+      queuedDetail({
+        state: "waiting",
+        attempts: 0,
+        lastFailure: null,
+        templateCaused: false,
+        templateVersion: null,
+      })
+    );
+    renderSheet();
     expect(screen.getByText("No attempt yet.")).toBeTruthy();
+    expect(screen.getByText("Not sent yet")).toBeTruthy();
   });
 
   it("names each attempt's provider answer, after the state", () => {
@@ -235,7 +279,13 @@ describe("the detail sheet", () => {
           retryable: true,
           reason: "The provider's answer was lost.",
         },
-        timeline: [{ ...ATTEMPT, failureKind: "unknown" }],
+        timeline: [
+          {
+            ...ATTEMPT,
+            failureKind: "unknown",
+            failureReason: "The provider's answer was lost.",
+          },
+        ],
       })
     );
     renderSheet();
