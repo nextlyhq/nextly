@@ -524,12 +524,26 @@ async function waitingIn(
 }
 
 /**
+ * How many stages' next step the caller may take, in collections and Singles they may read: the
+ * stages the waiting list looks in (`takeableStages`), counted with no document read. Nothing can
+ * ever wait for a caller with none.
+ *
+ * @experimental
+ */
+export async function takeableStageCount(
+  adapter: DrizzleAdapter,
+  query: Pick<WaitingQuery, "caller" | "readsEntity">
+): Promise<number> {
+  return (await takeableStages(adapter, query)).length;
+}
+
+/**
  * The stages whose next step the caller may take, in collections and Singles they may read: its
  * permission, and who may take it (a step only a person takes is never a key's).
  */
 async function takeableStages(
   adapter: DrizzleAdapter,
-  query: WaitingQuery
+  query: Pick<WaitingQuery, "caller" | "readsEntity">
 ): Promise<ScopedStage[]> {
   const actor = await workflowCallerActor(adapter, query.caller);
   const takeable: ScopedStage[] = [];

@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { bulkMoveSummary } from "../bulk-workflow-moves";
+import { bulkMoveSummary, bulkMoveSteps } from "../bulk-workflow-moves";
 
 describe("bulkMoveSummary", () => {
   it("counts what moved and names each refusal with its reason", () => {
@@ -34,5 +34,40 @@ describe("bulkMoveSummary", () => {
       head: "1 sent back.",
       refusals: [],
     });
+  });
+});
+
+describe("bulkMoveSteps", () => {
+  const step = (
+    name: string,
+    kind: "submit" | "approve" | "request-changes" | "move"
+  ) => ({
+    name,
+    label: name,
+    kind,
+  });
+
+  it("names the one step of each kind a list may take in bulk, never an approval", () => {
+    expect(
+      bulkMoveSteps([
+        step("submit", "submit"),
+        step("clear", "approve"),
+        step("send-back", "request-changes"),
+      ])
+    ).toEqual({ submit: "submit", sendBack: "send-back" });
+  });
+
+  it("leaves a kind to each document where the workflow has more than one step of it", () => {
+    expect(
+      bulkMoveSteps([
+        step("submit-legal", "submit"),
+        step("submit-copy", "submit"),
+        step("send-back", "request-changes"),
+      ])
+    ).toEqual({ sendBack: "send-back" });
+  });
+
+  it("offers no step move where the workflow has none of either kind", () => {
+    expect(bulkMoveSteps([step("clear", "approve")])).toEqual({});
   });
 });

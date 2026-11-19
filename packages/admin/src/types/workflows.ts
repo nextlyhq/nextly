@@ -138,6 +138,10 @@ export interface WaitingItem {
   stageColour: string | null;
   /** Who it is assigned to; null for unassigned work, which waits for every holder. */
   assignee: ReviewAssignee | null;
+  /** Whom it waits for, named as the document's own review read names it. */
+  waitingFor: ReviewWaitingFor | null;
+  /** The document's title as the caller reads it; null where they may not read its title. */
+  title: string | null;
   enteredAt: string;
   dueAt: string | null;
 }

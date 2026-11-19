@@ -70,13 +70,15 @@ describe.each(getConfiguredTestDialects())(
       ]);
       await person(t, "reader", [["read", "pages"]]);
 
+      // `stages` counts the stages whose next step the caller may take: Legal check's sign-off.
       expect(await scopeAs("sam")).toEqual({
         status: 200,
-        body: { reviews: true },
+        body: { reviews: true, stages: expect.any(Number) },
       });
+      expect((await scopeAs("sam")).body.stages).toBeGreaterThan(0);
       expect(await scopeAs("reader")).toEqual({
         status: 200,
-        body: { reviews: false },
+        body: { reviews: false, stages: 0 },
       });
     });
 

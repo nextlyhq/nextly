@@ -112,6 +112,20 @@ export const fetchWaitingForMe = ({
   );
 
 /**
+ * Whether anything can ever wait for the caller's review: how many stages' next step they may take,
+ * in content they may read. The sidebar shows "Waiting for my review" on it.
+ */
+export const fetchWaitingScope = (): Promise<{
+  reviews: boolean;
+  stages: number;
+}> =>
+  fetcher<{ reviews: boolean; stages: number }>(
+    "/workflows/waiting/scope",
+    {},
+    true
+  );
+
+/**
  * Takes one step on several documents: each moves if it may, and each refusal comes back with its
  * reason. The server refuses an approval here outright: each is given from that document's review.
  */

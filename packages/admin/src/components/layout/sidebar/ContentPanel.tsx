@@ -17,6 +17,7 @@ import {
 } from "@admin/components/features/dashboard/PluginMenuItems";
 import { Link } from "@admin/components/ui/link";
 import { ROUTES } from "@admin/constants/routes";
+import { useWaitingScope } from "@admin/hooks/queries/useWaitingForMe";
 import {
   useSidebarCollectionList,
   useSidebarSingleList,
@@ -57,9 +58,10 @@ export function ContentPanel({
   // whenever the reader may read any.
   const singles = useSidebarSingleList({ enabled: hasSingles });
   const folds = useContentFolds();
-  // The panel leads with "Waiting for my review" where a workflow holds any collection it lists:
-  // the list read names each one's workflow for a signed-in reader.
-  const hasWorkflows = collections.items.some(item => !!item.workflow);
+  // The panel leads with "Waiting for my review" where anything can ever wait for the reader's
+  // review: any stage, of any collection or Single, whose next step they may take.
+  const waitingScope = useWaitingScope();
+  const hasWorkflows = waitingScope.data?.reviews === true;
 
   // Counts come from the same search the lists draw with, so a heading's
   // count can never disagree with what it lists.

@@ -42,3 +42,31 @@ export function bulkMoveSummary(
     refusals: outcome.refused.map(each => `${each.title}: ${each.reason}.`),
   };
 }
+
+/** A workflow's step, as its summary names it. */
+export interface BulkMoveStepCandidate {
+  name: string;
+  label: string;
+  kind: "submit" | "approve" | "request-changes" | "move";
+}
+
+/**
+ * The step a list takes in bulk for Submit for review and for Send back…: the workflow's one step of
+ * that kind. Where it has several of a kind, which applies depends on each document's stage, so that
+ * move is left to each document. An approval is never one: each is given from that document's review.
+ */
+export function bulkMoveSteps(steps: readonly BulkMoveStepCandidate[]): {
+  submit?: string;
+  sendBack?: string;
+} {
+  const only = (kind: BulkMoveStepCandidate["kind"]) => {
+    const ofKind = steps.filter(step => step.kind === kind);
+    return ofKind.length === 1 ? ofKind[0].name : undefined;
+  };
+  const submit = only("submit");
+  const sendBack = only("request-changes");
+  return {
+    ...(submit === undefined ? {} : { submit }),
+    ...(sendBack === undefined ? {} : { sendBack }),
+  };
+}

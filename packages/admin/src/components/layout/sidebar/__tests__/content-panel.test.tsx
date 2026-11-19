@@ -91,6 +91,10 @@ vi.mock("@admin/hooks/useSidebarContentLists", async () => {
     }),
   };
 });
+const scope = vi.hoisted(() => ({ reviews: false }));
+vi.mock("@admin/hooks/queries/useWaitingForMe", () => ({
+  useWaitingScope: () => ({ data: { reviews: scope.reviews, stages: 0 } }),
+}));
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
   useBranding: () => lists.branding,
 }));
@@ -209,21 +213,14 @@ beforeEach(() => {
   lists.singlesComplete = true;
   lists.collectionsComplete = true;
   lists.branding = {};
+  scope.reviews = false;
 });
 
 afterEach(cleanup);
 
 describe("ContentPanel — Waiting for my review", () => {
-  it("leads with Waiting for my review where a workflow holds content, opening the waiting view", () => {
-    lists.collections = [
-      {
-        id: "c1",
-        name: "posts",
-        label: "Posts",
-        workflow: { slug: "editorial", label: "Editorial" },
-      },
-      { id: "c2", name: "authors", label: "Authors", workflow: null },
-    ];
+  it("leads with Waiting for my review where anything can wait for the reader, opening the waiting view", () => {
+    scope.reviews = true;
     renderPanel();
 
     expect(outline()[0]).toBe("Waiting for my review");
@@ -232,11 +229,8 @@ describe("ContentPanel — Waiting for my review", () => {
     ).toHaveAttribute("href", "/admin/content/waiting");
   });
 
-  it("draws no Waiting for my review where no workflow holds content", () => {
-    lists.collections = [
-      { id: "c1", name: "posts", label: "Posts", workflow: null },
-      { id: "c2", name: "authors", label: "Authors" },
-    ];
+  it("draws no Waiting for my review where nothing can wait for the reader", () => {
+    scope.reviews = false;
     renderPanel();
 
     expect(

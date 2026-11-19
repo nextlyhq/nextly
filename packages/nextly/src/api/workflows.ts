@@ -46,6 +46,7 @@ import {
   assignMany,
   reviewStateOf,
   stepMany,
+  takeableStageCount,
   waitingFor,
   type ManyRefusal,
   type WaitingReadable,
@@ -79,6 +80,7 @@ import {
   privateToSession,
   SKIP_DATE_FORMATTING_HEADER,
   respondBulk,
+  respondData,
   respondDoc,
   respondList,
   respondMutation,
@@ -464,6 +466,65 @@ async function readableBy(
   }
 }
 
+/** Who is asking, as the waiting list reads them: no more than its read checks need. */
+export type WaitingAsker = Pick<
+  NonNullable<WorkflowAsker>,
+  "user" | "scope" | "caller"
+>;
+
+/** The collections and Singles a workflow is attached to that `asker` may read anything of. */
+async function readableAttached(asker: WaitingAsker): Promise<Set<string>> {
+  // Collections and Singles share one namespace of slugs, so one ask covers both.
+  const attached = registeredWorkflows().flatMap(registered => [
+    ...registered.collections,
+    ...registered.singles,
+  ]);
+  return readableEntities(
+    attached,
+    readAccessCaller({
+      user: asker.user,
+      ...(asker.scope === undefined ? {} : { authenticatedScope: asker.scope }),
+    })
+  );
+}
+
+/**
+ * What waits for `asker`, a page at a time: the waiting list's own answer, which its route and the
+ * dashboard's Needs attention count both read, so the two never disagree.
+ *
+ * @experimental
+ */
+export async function waitingPage(
+  asker: WaitingAsker,
+  query: { page: number; limit: number }
+) {
+  const readable = await readableAttached(asker);
+  const { items, total, totalCapped } = await waitingFor(adapter(), {
+    caller: asker.caller,
+    limit: query.limit,
+    offset: (query.page - 1) * query.limit,
+    readsEntity: (_kind, slug) => Promise.resolve(readable.has(slug)),
+    // Each item in the language its part names: an item about a language the caller may not
+    // read the document in is left out, as a read of that language would be refused.
+    readable: items => readableAmong(asker, items),
+  });
+  const totalPages = Math.max(1, Math.ceil(total / query.limit));
+  return {
+    items,
+    meta: {
+      total,
+      page: query.page,
+      limit: query.limit,
+      totalPages,
+      // A list that stopped before reading everything may have more, past its last page too.
+      hasNext: query.page < totalPages || totalCapped,
+      hasPrev: query.page > 1,
+      // More may wait than the list read: its total is a floor ("1000+"), as a capped count's is.
+      ...(totalCapped ? { totalCapped: true as const } : {}),
+    },
+  };
+}
+
 /**
  * Which of `items` the asker may read, in order, each document in the language its part names:
  * asked of the ordinary read path in batches (`visibleDocuments`: a read per collection and
@@ -472,7 +533,7 @@ async function readableBy(
  * is: what `assertReadable` asks of it.
  */
 async function readableAmong(
-  asker: NonNullable<WorkflowAsker>,
+  asker: WaitingAsker,
   items: readonly WaitingReadable[]
 ): Promise<boolean[]> {
   const kept = new Map<string, readonly (string | null)[]>();
@@ -709,45 +770,20 @@ export const workflowOperations = {
 
   /** What waits for the caller, a page at a time. Trusted code has nothing waiting for it. */
   async waiting(asker: NonNullable<WorkflowAsker>, input: unknown) {
-    const query = parse(WaitingQuery, input);
-    // Collections and Singles share one namespace of slugs, so one ask covers both.
-    const attached = registeredWorkflows().flatMap(registered => [
-      ...registered.collections,
-      ...registered.singles,
-    ]);
-    const readable = await readableEntities(
-      attached,
-      readAccessCaller({
-        user: asker.user,
-        ...(asker.scope === undefined
-          ? {}
-          : { authenticatedScope: asker.scope }),
-      })
-    );
-    const { items, total, totalCapped } = await waitingFor(adapter(), {
+    return waitingPage(asker, parse(WaitingQuery, input));
+  },
+
+  /**
+   * Whether anything can ever wait for the caller's review: how many stages' next step they may
+   * take, in content they may read, judged as the waiting list judges it, with no document read.
+   */
+  async waitingScope(asker: NonNullable<WorkflowAsker>) {
+    const readable = await readableAttached(asker);
+    const stages = await takeableStageCount(adapter(), {
       caller: asker.caller,
-      limit: query.limit,
-      offset: (query.page - 1) * query.limit,
       readsEntity: (_kind, slug) => Promise.resolve(readable.has(slug)),
-      // Each item in the language its part names: an item about a language the caller may not
-      // read the document in is left out, as a read of that language would be refused.
-      readable: items => readableAmong(asker, items),
     });
-    const totalPages = Math.max(1, Math.ceil(total / query.limit));
-    return {
-      items,
-      meta: {
-        total,
-        page: query.page,
-        limit: query.limit,
-        totalPages,
-        // A list that stopped before reading everything may have more, past its last page too.
-        hasNext: query.page < totalPages || totalCapped,
-        hasPrev: query.page > 1,
-        // More may wait than the list read: its total is a floor ("1000+"), as a capped count's is.
-        ...(totalCapped ? { totalCapped: true as const } : {}),
-      },
-    };
+    return { reviews: stages > 0, stages };
   },
 };
 
@@ -859,6 +895,10 @@ const ROUTES: Record<
           : { id: document.id, code, message }
       )
     );
+  },
+
+  async getWaitingScope(_request, asker) {
+    return respondData(await workflowOperations.waitingScope(asker));
   },
 
   async listWaiting(request, asker) {
