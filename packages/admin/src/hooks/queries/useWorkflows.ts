@@ -18,6 +18,7 @@ import {
 } from "@tanstack/react-query";
 
 import { useAuthSession } from "@admin/hooks/queries/useAuthSession";
+import { reviewKeys } from "@admin/hooks/queries/useReviewState";
 import type { ListResponse } from "@admin/lib/api/response-types";
 import {
   getWorkflowSettings,
@@ -68,7 +69,10 @@ export function useWorkflowSettings(
 
 /**
  * Changes one workflow's settings. The answer is the settings as they then
- * read, so it replaces the cached settings at once, with no second read.
+ * read, so it replaces the cached settings at once, with no second read. A
+ * change of a stage's label or colour is shown wherever the stage is, so it
+ * also marks the workflows list and every document's review state stale: the
+ * list, the editor's review card and its status line read the stage again.
  */
 export function useUpdateWorkflowSettings(
   slug: string
@@ -76,8 +80,13 @@ export function useUpdateWorkflowSettings(
   const queryClient = useQueryClient();
   return useMutation<WorkflowSettingsView, Error, WorkflowSettingsChange>({
     mutationFn: change => updateWorkflowSettings(slug, change),
-    onSuccess: settings => {
+    onSuccess: async (settings, change) => {
       queryClient.setQueryData(workflowKeys.settings(slug), settings);
+      if (change.labels === undefined) return;
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: workflowKeys.list() }),
+        queryClient.invalidateQueries({ queryKey: reviewKeys.all() }),
+      ]);
     },
   });
 }
