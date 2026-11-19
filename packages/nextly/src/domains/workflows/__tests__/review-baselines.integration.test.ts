@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { superAdminUser } from "../../../__tests__/fixtures/permission-holders";
 import { getVersionDiffForDocument } from "../../../dispatcher/handlers/versions-methods";
 import { NextlyError } from "../../../errors";
+import { createDynamicHandlers } from "../../../routeHandler";
 import type { CollectionsHandler } from "../../../services/collections-handler";
 import {
   getConfiguredTestDialects,
@@ -21,7 +22,14 @@ import {
   workflowPins,
 } from "../workflow-pins";
 
-import { bootSteps, entry, saveIn, shownVersion } from "./helpers/step-harness";
+import {
+  bootSteps,
+  entry,
+  person,
+  role,
+  saveIn,
+  shownVersion,
+} from "./helpers/step-harness";
 
 let t: TestNextly | undefined;
 
@@ -142,6 +150,45 @@ function namesOf(diff: {
       .map(field => field.name),
     title: content.some(field => field.name === "title"),
   };
+}
+
+/** A role-based API key owned by `ownerId`, its role holding exactly `read-posts`. */
+async function postsReaderKey(ownerId: string): Promise<string> {
+  const apiKeys = app().getService("apiKeyService") as unknown as {
+    createApiKey: (
+      userId: string,
+      input: {
+        name: string;
+        tokenType: string;
+        roleId: string;
+        expiresIn: string;
+      }
+    ) => Promise<{ key: string }>;
+  };
+  const { key } = await apiKeys.createApiKey(ownerId, {
+    name: "posts reader key",
+    tokenType: "role-based",
+    roleId: await role(app(), "posts-key-reader", [["read", "posts"]]),
+    expiresIn: "unlimited",
+  });
+  return key;
+}
+
+/** REST's comparison of a post's versions, as `key`, with the query given. */
+async function restCompare(
+  key: string,
+  id: string,
+  query: Record<string, string>
+): Promise<{ status: number; body: unknown }> {
+  const segments = ["collections", "posts", "entries", id, "versions", "diff"];
+  const response = await createDynamicHandlers().GET(
+    new Request(
+      `http://localhost/api/${segments.join("/")}?${new URLSearchParams(query).toString()}`,
+      { headers: { authorization: `Bearer ${key}` } }
+    ),
+    { params: Promise.resolve({ params: segments }) }
+  );
+  return { status: response.status, body: await response.json() };
 }
 
 /** The refusal `promise` ends in: its code and message, as a reader is told them. */
@@ -305,6 +352,46 @@ describe.each(getConfiguredTestDialects())(
 
       expect(
         await refusalOf(compare(id, { from: since, to: spanish }, "posts"))
+      ).toMatchObject({ path: "to", code: "LOCALE_MISMATCH" });
+    });
+
+    it("answers a shared comparison through the Direct API as REST answers it", async () => {
+      t = await bootSteps(dialect);
+      const reader = await person(t, "posts-reader", [["read", "posts"]]);
+      const key = await postsReaderKey(reader.userId);
+      const { id, since, spanish } = await postWithSharedChange();
+
+      const rest = await restCompare(key, id, {
+        from: String(since),
+        to: String(spanish),
+        part: "shared",
+      });
+      expect(rest.status, JSON.stringify(rest.body)).toBe(200);
+      const direct = await t.nextly.versions.compare({
+        collection: "posts",
+        id,
+        from: since,
+        to: spanish,
+        part: "shared",
+        overrideAccess: false,
+        user: { id: reader.userId },
+      });
+      // One answer through either door: the shared field alone, across languages.
+      expect(direct).toEqual(rest.body);
+      expect(namesOf(direct)).toEqual({ changed: ["code"], title: false });
+
+      // Without `part`, the Direct API still refuses the pair in two languages.
+      expect(
+        await refusalOf(
+          t.nextly.versions.compare({
+            collection: "posts",
+            id,
+            from: since,
+            to: spanish,
+            overrideAccess: false,
+            user: { id: reader.userId },
+          })
+        )
       ).toMatchObject({ path: "to", code: "LOCALE_MISMATCH" });
     });
   }

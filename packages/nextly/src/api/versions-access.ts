@@ -1188,11 +1188,12 @@ const comparisonQuerySchema = z.object({
 });
 
 /**
- * A comparison's `part` parameter: absent, or `shared`. Anything else is
- * refused naming the parameter, rather than compared as one language.
+ * A comparison's `part`: absent, or `shared`. Anything else is refused naming
+ * the parameter, rather than compared as one language. The one parser REST's
+ * query and the Direct API's `versions.compare` both read `part` through.
  */
-function parseComparisonPart(
-  value: string | undefined
+export function parseComparisonPart(
+  value: unknown
 ): ComparisonPart | undefined {
   if (value === undefined) return undefined;
   const parsed = comparisonPartSchema.safeParse(value);
