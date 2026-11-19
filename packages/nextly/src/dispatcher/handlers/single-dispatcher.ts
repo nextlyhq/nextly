@@ -53,9 +53,11 @@ import {
   fieldsWithLeavingSettingsDeferred,
 } from "../../domains/i18n/migration/archive-preflight";
 import { resolveCompanionRename } from "../../domains/i18n/migration/companion-rename";
+import { isProvenanceNotMoved } from "../../domains/i18n/migration/held-leaving-drops";
 import { translationLayoutChange } from "../../domains/i18n/per-language-storage";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
 import { assertLanguageStatesAgreeWithEntry } from "../../domains/i18n/runtime/language-states-agree";
+import { refuseUnansweredDialogQuestions } from "../../domains/schema/builder-save/dialog-questions";
 import {
   FirstQuestionWatch,
   landingPush,
@@ -102,6 +104,7 @@ import {
   schemaDraftSplit,
 } from "../../domains/versions/draft-split-eligibility";
 import { resolveBuilderWebhooks } from "../../domains/webhooks/builder-webhooks";
+import { attachedWorkflowSummary } from "../../domains/workflows/registry";
 import { NextlyError } from "../../errors";
 import { transformRichTextFields } from "../../lib/field-transform";
 import { resolveBuilderRevalidate } from "../../revalidation/builder-revalidate";
@@ -1264,6 +1267,14 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             enrichedData as unknown as SingleWithFields
           ),
           ...draftSplitResponseFields(draftSplit),
+          // The workflow that holds this Single's publishing, so the editor
+          // knows whether a review state is coming before it reads one: one
+          // with none publishes without waiting. `null` where none is
+          // attached; read by signed-in callers only, as the route is.
+          workflow: attachedWorkflowSummary(
+            "single",
+            String((single as { slug?: string }).slug ?? "")
+          ),
         } as Record<string, unknown>,
       ]);
       // As the Builder's editor reads it: a relationship the earlier Builder stored gets the
@@ -1954,6 +1965,28 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
                   tableName,
                 }),
               afterFile: () => reconcileBuilderCompanion("single", companion),
+              // The push's questions, asked of the file before anything is written: a rename the
+              // request does not answer, or a drop it does not confirm, refuses the save as the
+              // push refuses it.
+              questions: () =>
+                refuseUnansweredDialogQuestions({
+                  desired,
+                  db,
+                  dialect,
+                  tableName,
+                  // The builder that made the table, which the offered rename is judged by.
+                  builtBy: "collection",
+                  oldFields: (single.fields ??
+                    []) as unknown as FieldDefinition[],
+                  newFields: fields as unknown as FieldDefinition[],
+                  wasLocalized,
+                  isLocalized,
+                  renameResolutions: renameResolutions ?? [],
+                  eventResolutions: eventResolutions ?? [],
+                  ...(legacyBundle === undefined
+                    ? {}
+                    : { legacy: legacyBundle }),
+                }),
               // On the file road the row is written in the file's own transaction, so a failed
               // write leaves the save as it was and is answered as the failure it is. Not where the
               // translations table is reconciled after the file: the row would then record the
@@ -1962,7 +1995,26 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
                 ? { registry: writeRow, settled: refreshRuntime }
                 : {}),
             }
-          );
+          ).catch(async (error: unknown) => {
+            // The change landed, its file recorded and its fields with it: only the renamed
+            // field's provenance move failed, and logged the statements that finish it. The row's
+            // version moves on as its fields did, so a client holding the old one is refused; the
+            // answer says the change landed (`provenanceNotMoved`). Where the row cannot be
+            // written either, that is logged too, and the answer stays the move's: it is what says
+            // what landed and where the statements are. The running shape follows the table
+            // first, whatever the row write does, as the table has the change either way.
+            if (isProvenanceNotMoved(error)) {
+              refreshRuntime(fields);
+              try {
+                await writeRow();
+              } catch (rowError) {
+                (getLoggerFromDI() ?? consoleLogger).error(
+                  `[applySingleSchemaChanges] The registry row of '${slug}' was not written after its rename, so its version did not move on: ${rowError instanceof Error ? rowError.message : String(rowError)}`
+                );
+              }
+            }
+            throw error;
+          });
 
           // Post-apply: update dynamic_singles fields JSON + schema_hash, advance
           // schema_version so the optimistic-lock check above sees a new value on the

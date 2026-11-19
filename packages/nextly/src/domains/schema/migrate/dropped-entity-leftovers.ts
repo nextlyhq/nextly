@@ -30,17 +30,24 @@ import type { Logger } from "../../../shared/types";
 import { teardownAdapterIn } from "../../collections/services/teardown-adapter-in-transaction";
 import { teardownEntityComponentData } from "../../field-groups/services/teardown-entity-field-group-data";
 import { resolveRegistryTableName } from "../../field-groups/storage/resolve-storage-names";
+import { COMPANION_KEY_COLUMNS } from "../../i18n/companion-columns";
 import { ensureI18nArchive } from "../../i18n/migration/ensure-archive";
 import {
   ARCHIVE_TABLE,
   removeEntityTranslationRows,
 } from "../../i18n/migration/entity-translation-rows";
+import { dropTranslationsTable } from "../../i18n/migration/teardown-entity-i18n";
 import { recordedEntityTable } from "../migrate-create/dropped-translations";
 import type {
   EntitySettingsRecord,
   SettingsEntityKind,
 } from "../migrate-create/entity-settings";
-import { assertSchemaLockHeld } from "../pipeline/schema-lock";
+import { introspectLiveColumns } from "../pipeline/diff/introspect-live";
+import { readForeignKeyTargets } from "../pipeline/live-table-facts";
+import {
+  assertSchemaLockHeld,
+  isSchemaLockLost,
+} from "../pipeline/schema-lock";
 
 import { droppedEntities, RECORDED_KINDS } from "./registry-history";
 import { isStoppedAtPoint, reachStopPoint } from "./stop-points";
@@ -84,6 +91,13 @@ export async function removeDroppedEntityLeftovers(args: {
    * boots no app). Called only when some entity's leftovers are to be removed.
    */
   prepareTables?: () => Promise<void>;
+  /**
+   * The translations tables dropped entities left standing that the run's
+   * data-loss consent covers (`leftoverTranslationsTables`, judged with the
+   * run's other deletions): each is dropped before its entity's rows go. None
+   * is dropped where none is given, as at a development start.
+   */
+  dropTranslations?: ReadonlySet<string>;
 }): Promise<{ removed: string[]; left: string[] }> {
   const { adapter, logger } = args;
   const removedFrom: string[] = [];
@@ -102,7 +116,19 @@ export async function removeDroppedEntityLeftovers(args: {
   for (const entity of gone) {
     await assertSchemaLockHeld();
     const word = KIND_WORDS[entity.kind];
+    // The translations tables dropped, kept outside the removal's try: a drop
+    // is not undone by a later failure, so it is reported either way.
+    const dropped: string[] = [];
     try {
+      // A translations table is a table: dropped on its own, ahead of the rows'
+      // transaction, which on MySQL a schema statement inside would commit.
+      await dropCoveredTranslations(
+        adapter,
+        entity,
+        args.dropTranslations,
+        dropped,
+        logger
+      );
       const removed = await adapter.transaction(async tx => {
         const scoped = teardownAdapterIn(adapter, tx);
         let values = 0;
@@ -138,14 +164,26 @@ export async function removeDroppedEntityLeftovers(args: {
       });
       // The entity's transaction has committed (`stop-points.ts`).
       await reachStopPoint(`${entity.kind} ${entity.slug}: removed leftovers`);
-      if (removed.values + removed.translations === 0) continue;
+      if (removed.values + removed.translations + dropped.length === 0) {
+        continue;
+      }
       removedFrom.push(
-        `${word} "${entity.slug}" left: ${plural(removed.values, "field group value")}, ${plural(removed.translations, "translation row")}`
+        removedLine(word, entity.slug, [
+          ...droppedParts(dropped),
+          plural(removed.values, "field group value"),
+          plural(removed.translations, "translation row"),
+        ])
       );
     } catch (error) {
+      // A run that lost the schema lock stops: it may change nothing further, and the caller
+      // must not go on as if only this entity's removal had failed.
+      if (isSchemaLockLost(error)) throw error;
       // A test's stop at a point ends the run there (`stop-points.ts`), never one entity's.
       if (isStoppedAtPoint(error)) throw error;
       left.push(`${word} "${entity.slug}"`);
+      if (dropped.length > 0) {
+        removedFrom.push(removedLine(word, entity.slug, droppedParts(dropped)));
+      }
       logger.warn(
         `Could not remove what the deleted ${word} "${entity.slug}" left: ${causeOf(
           error
@@ -154,6 +192,138 @@ export async function removeDroppedEntityLeftovers(args: {
     }
   }
   return { removed: removedFrom, left };
+}
+
+/**
+ * Drops each of `entity`'s translations tables `covered` names (the run's
+ * consent covers them), adding each one dropped to `dropped` as it goes, so a
+ * later failure still finds the ones that went.
+ */
+async function dropCoveredTranslations(
+  adapter: DrizzleAdapter,
+  entity: DroppedEntity,
+  covered: ReadonlySet<string> | undefined,
+  dropped: string[],
+  logger: Logger
+): Promise<void> {
+  for (const table of entity.tables) {
+    const translations = `${table}_locales`;
+    if (covered?.has(translations) !== true) continue;
+    // Proven again right before the drop, as the run was asked about it: a migration of this run
+    // may have dropped that table and made another under its name.
+    if (!(await keyedAsTranslations(adapter, translations))) {
+      logger.warn(
+        `Left table ${JSON.stringify(translations)} as it is: it is no longer the translations table the deleted ${KIND_WORDS[entity.kind]} "${entity.slug}" left, which the run was asked about.`
+      );
+      continue;
+    }
+    if (
+      await dropTranslationsTable(
+        adapter,
+        table,
+        "the removal of what a deleted entity left",
+        // Only the table was consented to: a view or another table's key on it refuses the drop.
+        { cascade: false }
+      )
+    ) {
+      dropped.push(translations);
+    }
+  }
+}
+
+/** The report's words for the translations tables dropped. */
+function droppedParts(dropped: readonly string[]): string[] {
+  return dropped.map(table => `its translations table ${table}`);
+}
+
+/** One report line: the entity, and what of what it left went. */
+function removedLine(
+  word: string,
+  slug: string,
+  parts: readonly string[]
+): string {
+  return `${word} "${slug}" left: ${parts.join(", ")}`;
+}
+
+/** A translations table a dropped entity left standing, with the entity and the table it translated. */
+export interface LeftoverTranslations {
+  kind: SettingsEntityKind;
+  slug: string;
+  table: string;
+  translates: string;
+}
+
+/**
+ * The translations tables (`<table>_locales`) entities nothing can still own
+ * left standing (`goneEntities`): an older PostgreSQL delete dropped the
+ * entity's table with `CASCADE`, which takes only the translations table's
+ * key to it, and left the translations table with every translation in it.
+ * Each is proven the entity's by its name, after a table the applied history
+ * recorded for the dropped entity, and by `_parent` and `_locale`, the key
+ * every translations table is made with (a field's column never starts with
+ * `_`). Dropping one deletes data, so the command judges these with its other
+ * deletions under the data-loss consent before anything runs.
+ */
+export async function leftoverTranslationsTables(args: {
+  adapter: DrizzleAdapter;
+  chain: readonly EntitySettingsRecord[];
+}): Promise<LeftoverTranslations[]> {
+  const out: LeftoverTranslations[] = [];
+  for (const entity of await goneEntities(args)) {
+    for (const main of entity.tables) {
+      const table = `${main}_locales`;
+      if (!(await tableStands(args.adapter, table))) continue;
+      if (!(await keyedAsTranslations(args.adapter, table))) continue;
+      out.push({
+        kind: entity.kind,
+        slug: entity.slug,
+        table,
+        translates: main,
+      });
+    }
+  }
+  return out;
+}
+
+/**
+ * Whether live `table` is a translations table an older delete left: keyed by `_parent` and
+ * `_locale` alone, with no key from `_parent` to any table. One that cannot be read is not.
+ */
+async function keyedAsTranslations(
+  adapter: DrizzleAdapter,
+  table: string
+): Promise<boolean> {
+  try {
+    const live = await introspectLiveColumns(
+      adapter.getDrizzle(),
+      adapter.dialect,
+      [table]
+    );
+    // Its primary key exactly the pair every translations table is made with (`PRIMARY KEY
+    // (_parent, _locale)`): columns of those names on a table that is keyed otherwise do not make
+    // it one, and dropping it is not undone.
+    const key = new Set(
+      (live.tables.find(t => t.name === table)?.columns ?? [])
+        .filter(column => column.primaryKey === true)
+        .map(column => column.name)
+    );
+    if (
+      key.size !== COMPANION_KEY_COLUMNS.length ||
+      !COMPANION_KEY_COLUMNS.every(column => key.has(column))
+    ) {
+      return false;
+    }
+    // And no key from `_parent` to any table: an older delete's drop of the main table took the
+    // one it had, so a table of this name whose `_parent` points somewhere was made since.
+    const keys = await readForeignKeyTargets(
+      adapter.getDrizzle(),
+      adapter.dialect,
+      table
+    );
+    return (keys.get(COMPANION_KEY_COLUMNS[0] ?? "_parent") ?? []).length === 0;
+  } catch {
+    return false;
+  }
 }
 
 /**
