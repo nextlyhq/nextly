@@ -337,6 +337,8 @@ describe("ReviewSection", () => {
         "Someone else moved it first."
       )
     );
+    // In the status text colour that reads at AA in both schemes.
+    expect(within(section).getByRole("alert")).toHaveClass("text-danger-text");
     expect(
       announced().some(text => text.includes("Someone else moved it first."))
     ).toBe(false);

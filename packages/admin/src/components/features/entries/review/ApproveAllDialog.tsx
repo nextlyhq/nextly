@@ -218,7 +218,8 @@ export function ApproveAllDialog({
         {refusal === null ? null : (
           <p
             role="alert"
-            className="flex items-start gap-2 text-sm text-destructive"
+            // The status text colour, which reads at AA in both schemes.
+            className="flex items-start gap-2 text-sm text-danger-text"
           >
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
             {refusal}

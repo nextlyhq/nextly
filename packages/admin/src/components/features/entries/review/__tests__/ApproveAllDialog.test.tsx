@@ -468,6 +468,9 @@ describe("Approve all languages", () => {
         "Approvals are closed today."
       )
     );
+    // In the status text colour that reads at AA in both schemes, not the
+    // destructive action's red, which is lighter than text may be.
+    expect(within(dialog).getByRole("alert")).toHaveClass("text-danger-text");
     expect(
       announced().some(text => text.includes("Approvals are closed today."))
     ).toBe(false);
