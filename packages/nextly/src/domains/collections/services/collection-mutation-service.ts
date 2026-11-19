@@ -3503,8 +3503,9 @@ export class CollectionMutationService extends BaseService {
             args.readLocale ?? args.writeLocale
           ),
           // Who the write is made as, from the reader its access is judged
-          // by, for a field type whose values only some callers may change.
-          caller: fieldWriteCaller(args.reader),
+          // by, for a field type whose values only some callers may change;
+          // asked on the write's transaction where it has one.
+          caller: fieldWriteCaller(args.reader, args.tx?.getDrizzle()),
           // The entry a create copies, where the caller's read of it minted
           // one; nothing else reaches a validator as a copy.
           ...(args.copiedFrom === undefined

@@ -554,7 +554,9 @@ export function dtcgToTokens(input: unknown): {
   inSequence(tokens, sequence);
   const siteData = site === undefined ? undefined : readSiteData(site, issues);
   const styles =
-    textStyles === undefined ? undefined : readTextStyles(textStyles, issues);
+    textStyles === undefined
+      ? undefined
+      : readTextStyles(textStyles, issues, siteData?.fluidRange);
   return {
     tokens,
     issues,

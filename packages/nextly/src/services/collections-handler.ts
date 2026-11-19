@@ -35,6 +35,7 @@ import {
 import type { FieldSources } from "../domains/versions/restored-from";
 import type { WebhookFastDrainScheduler } from "../domains/webhooks/after-drain";
 import type { ResolvedWebhookRetentionConfig } from "../domains/webhooks/retention-config";
+import { attachedWorkflowSummary } from "../domains/workflows/registry";
 import type {
   RichTextOutputFormat,
   RichTextStyles,
@@ -740,6 +741,14 @@ export class CollectionsHandler {
         localized: data.localized === true,
       });
       Object.assign(data, draftSplitResponseFields(draftSplit));
+      // The workflow that holds the collection's publishing, so the editor
+      // knows before a document exists that it cannot be created as
+      // published, and leads a new one with Save draft. `null` where none is
+      // attached.
+      data.workflow = attachedWorkflowSummary(
+        "collection",
+        typeof data.slug === "string" ? data.slug : ""
+      );
     }
 
     return result;
