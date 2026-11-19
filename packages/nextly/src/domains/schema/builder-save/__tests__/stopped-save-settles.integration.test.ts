@@ -75,6 +75,28 @@ vi.mock("../stopped-save", async importOriginal => {
   return { ...actual, judgeStoppedSave: vi.fn(actual.judgeStoppedSave) };
 });
 
+// The registry writes every save path makes, refused while `registryRefused.when` answers yes.
+const registryRefused = vi.hoisted(() => ({ when: () => false }));
+vi.mock("../../schema-version", async importOriginal => {
+  const actual = await importOriginal<typeof import("../../schema-version")>();
+  const refuse = () => {
+    if (registryRefused.when()) {
+      throw new Error("injected registry write failure");
+    }
+  };
+  return {
+    ...actual,
+    writeRegistryRows: ((...args) => {
+      refuse();
+      return actual.writeRegistryRows(...args);
+    }) as typeof actual.writeRegistryRows,
+    writeRegistryRowsWith: ((...args) => {
+      refuse();
+      return actual.writeRegistryRowsWith(...args);
+    }) as typeof actual.writeRegistryRowsWith,
+  };
+});
+
 const HISTORY = "./database/history";
 const DEFINITION = "./schema/builder.json";
 
@@ -87,6 +109,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  registryRefused.when = () => false;
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   await current?.destroy();
@@ -918,6 +941,66 @@ describe.each(getConfiguredTestDialects())(
         300_000
       );
     });
+
+    describe.each(PATHS.filter(path => path.push !== true))(
+      "$name, whose settle fails at its registry write",
+      path => {
+        it.runIf(dialect === "mysql")(
+          "records nothing of the settle, is put back as it stopped, and reports the stop first",
+          async () => {
+            const t = await boot();
+            await path.create(t, [text("heading")]);
+            const folderBefore = filesBelow(history());
+            const appliedBefore = await appliedFiles(t);
+            const failed = failStatement(t, adding(path.table, "beta"));
+            // Once the save's own statement failed, the registry write that records the settle fails.
+            registryRefused.when = () => failed() > 0;
+
+            const outcome = await outcomeOf(
+              path.save(t, [text("heading"), text("alpha"), text("beta")])
+            );
+
+            expect(failed(), "no statement adding `beta` was met").toBe(1);
+            registryRefused.when = () => false;
+            vi.restoreAllMocks();
+            vi.stubEnv("NODE_ENV", "development");
+            expect(outcome.failed).toBe(true);
+            if (!outcome.failed) return;
+            expect(messageOf(outcome.error)).toMatch(
+              /failed part-way, and the statements before the failure stayed applied: .*Recording what of it applied failed too/s
+            );
+            // Nothing of the settle recorded: the ledger as before, the registry at the old shape.
+            expect
+              .soft(await appliedFiles(t), "the ledger")
+              .toEqual(appliedBefore);
+            expect
+              .soft(await registryFields(t, path), "the registry row")
+              .toEqual(["heading"]);
+            // The stopped file, its snapshot and the definition as the save left them.
+            const written = filesBelow(history()).filter(
+              f => !folderBefore.includes(f)
+            );
+            const sql = written.filter(f => f.endsWith(".sql"));
+            expect(sql, "the save's files").toHaveLength(1);
+            expect(
+              written.filter(f => f.endsWith(".snapshot.json")),
+              "the save's snapshots"
+            ).toHaveLength(1);
+            expect(
+              readFileSync(join(history(), sql[0]!), "utf8").split(
+                "-- DOWN"
+              )[0]
+            ).toMatch(/["`]beta["`]/);
+            expect(definedFields(path), "the definition").toEqual([
+              "alpha",
+              "beta",
+              "heading",
+            ]);
+          },
+          300_000
+        );
+      }
+    );
 
     // A fill runs as a row change on MySQL, which commits as it runs: rows it filled before a
     // later statement failed are changed whatever the table's shape reads as, so the save is not
