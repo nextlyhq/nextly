@@ -26,6 +26,7 @@ import {
 } from "./content-controls";
 import { takesList, type DraftFilter } from "./list-query-model";
 import { RelationControl } from "./relation-control";
+import { useStoredDraft } from "./stored-draft";
 
 /** The titles of entries a filter names, read once each through the host. */
 export function useEntryTitles(
@@ -125,8 +126,9 @@ function TypedValue({
 }): React.JSX.Element {
   const stored =
     typeof value === "string" || typeof value === "number" ? String(value) : "";
-  const [draft, setDraft] = React.useState(stored);
-  React.useEffect(() => setDraft(stored), [stored]);
+  // The inspector's own draft: an edit in progress from the first
+  // keystroke, which Save pressed from here writes first and Escape puts back.
+  const [draft, setDraft] = useStoredDraft(stored);
   const send = () => {
     if (draft === stored) return;
     if (kind === "number") {
@@ -172,7 +174,9 @@ function ChipValues({
   disabled: boolean;
   onDone: (values: string[]) => void;
 }): React.JSX.Element {
-  const [draft, setDraft] = React.useState("");
+  // A value being typed is an edit in progress over the empty field, as any
+  // other field's draft is: Save pressed from here adds it first.
+  const [draft, setDraft] = useStoredDraft("");
   const add = () => {
     const text = draft.trim();
     if (text === "" || values.includes(text)) return;
