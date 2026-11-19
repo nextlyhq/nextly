@@ -312,3 +312,113 @@ describe.each(LOCK_DIALECTS.filter(dialect => dialect !== "sqlite"))(
     );
   }
 );
+
+describe.each(LOCK_DIALECTS)(
+  "what a snapshot does not record of a constraint or an index, read on %s",
+  dialect => {
+    const P = `lnf_${randomBytes(3).toString("hex")}`;
+    const owners = `${P}_owners`;
+    const posts = `${P}_posts`;
+    const counted = `${P}_counted`;
+    let world: LockWorld;
+    let adapter: DrizzleAdapter;
+
+    const deferred =
+      dialect === "postgresql" ? " DEFERRABLE INITIALLY DEFERRED" : "";
+    const unenforced = dialect === "mysql" ? " NOT ENFORCED" : "";
+    const creates = [
+      `CREATE TABLE ${owners} (id integer PRIMARY KEY)`,
+      `CREATE TABLE ${posts} (id integer PRIMARY KEY, owner_id integer, other_id integer, score integer, slug varchar(64), CONSTRAINT ${P}_fk FOREIGN KEY (owner_id) REFERENCES ${owners} (id), CONSTRAINT ${P}_fkd FOREIGN KEY (other_id) REFERENCES ${owners} (id)${deferred}, CONSTRAINT ${P}_ck CHECK (score >= 0), CONSTRAINT ${P}_cku CHECK (score < 100)${unenforced})`,
+      `CREATE INDEX ${P}_plain ON ${posts} (score, slug)`,
+      `CREATE INDEX ${P}_desc ON ${posts} (score DESC)`,
+      ...(dialect === "postgresql"
+        ? [`CREATE INDEX ${P}_hash ON ${posts} USING hash (slug)`]
+        : []),
+    ];
+
+    beforeAll(async () => {
+      world = await lockWorld(dialect, { fresh: true });
+      adapter = await world.connect();
+      for (const statement of creates) await adapter.executeQuery(statement);
+    }, 120_000);
+
+    afterAll(async () => {
+      await adapter.disconnect();
+      await world.dispose();
+    }, 60_000);
+
+    it("tells a plain index from one built in another order or by another method", async () => {
+      const live = await readLiveSchema(adapter.getDrizzle(), dialect, creates);
+      expect(live.indexShape(`${P}_plain`, posts)).toBe("plain");
+      expect(live.indexShape(`${P}_desc`, posts)).toBe("other");
+      expect(live.indexShape(`${P}_never`, posts)).toBeUndefined();
+      if (dialect === "postgresql") {
+        expect(live.indexShape(`${P}_hash`, posts)).toBe("other");
+      }
+    });
+
+    it.runIf(dialect === "postgresql")(
+      "tells how each foreign key defers its check",
+      async () => {
+        const live = await readLiveSchema(
+          adapter.getDrizzle(),
+          dialect,
+          creates
+        );
+        expect(live.keyDeferrability(posts, `${P}_fk`)).toBe("not");
+        expect(live.keyDeferrability(posts, `${P}_fkd`)).toBe("deferred");
+      }
+    );
+
+    it.runIf(dialect === "mysql")(
+      "tells an enforced check from one that is not",
+      async () => {
+        const live = await readLiveSchema(
+          adapter.getDrizzle(),
+          dialect,
+          creates
+        );
+        expect(live.checkEnforced(posts, `${P}_ck`)).toBe(true);
+        expect(live.checkEnforced(posts, `${P}_cku`)).toBe(false);
+        expect(live.checkEnforced(posts, `${P}_never`)).toBeUndefined();
+      }
+    );
+
+    it.runIf(dialect === "sqlite")(
+      "tells whether a table's AUTOINCREMENT counter covers its rows",
+      async () => {
+        const covers = async () =>
+          (
+            await readLiveSchema(adapter.getDrizzle(), dialect, [
+              `CREATE TABLE ${counted} (id integer)`,
+              `CREATE TABLE ${posts} (id integer)`,
+            ])
+          ).counterCovers(counted);
+        await adapter.executeQuery(
+          `CREATE TABLE ${counted} (id INTEGER PRIMARY KEY AUTOINCREMENT, label text)`
+        );
+        // No row and no counter yet: nothing a key could be given out again from.
+        expect(await covers()).toBe(true);
+        await adapter.executeQuery(
+          `INSERT INTO ${counted} (label) VALUES ('a'), ('b'), ('c')`
+        );
+        expect(await covers()).toBe(true);
+        // The counter set back below the highest key, as a table copied by hand leaves it.
+        await adapter.executeQuery(
+          `UPDATE sqlite_sequence SET seq = 1 WHERE name = '${counted}'`
+        );
+        expect(await covers()).toBe(false);
+        await adapter.executeQuery(
+          `DELETE FROM sqlite_sequence WHERE name = '${counted}'`
+        );
+        expect(await covers()).toBe(false);
+        // A table not declared AUTOINCREMENT has no counter to cover it.
+        expect(
+          (
+            await readLiveSchema(adapter.getDrizzle(), dialect, creates)
+          ).counterCovers(posts)
+        ).toBe(false);
+      }
+    );
+  }
+);
