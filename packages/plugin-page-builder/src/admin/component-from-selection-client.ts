@@ -19,6 +19,7 @@ import {
   type ComponentFromSelectionFields,
   type ComponentFromSelectionRequest,
   type ComponentFromSelectionResult,
+  type CopySourceAddress,
 } from "../library-contract";
 
 import { refusalMessage } from "./save-pattern-client";
@@ -36,6 +37,11 @@ export interface ComponentFromSelectionAsk {
   readonly selectedIds: readonly string[];
   readonly fields: ComponentFromSelectionFields;
   readonly exposure?: ComponentExposure;
+  /**
+   * The stored entry the document is, where it is one, named with the
+   * create so the custom CSS it already holds is no change to the component.
+   */
+  readonly source?: CopySourceAddress;
 }
 
 export interface ComponentFromSelectionWriter {
@@ -92,6 +98,7 @@ export function useComponentFromSelection(): ComponentFromSelectionWriter {
         selectedIds: ask.selectedIds,
         fields: ask.fields,
         ...(ask.exposure === undefined ? {} : { exposure: ask.exposure }),
+        ...(ask.source === undefined ? {} : { page: ask.source }),
       });
       return answered?.item;
     },

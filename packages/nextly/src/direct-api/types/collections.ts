@@ -686,6 +686,35 @@ export interface DuplicateArgs<TSlug extends CollectionSlug = CollectionSlug>
 }
 
 /**
+ * @experimental Arguments for `createFromSource()`: create a document that
+ * copies a stored one, read as the caller first.
+ */
+export interface CreateFromSourceArgs<
+  TSlug extends CollectionSlug = CollectionSlug,
+> extends DirectAPIConfig,
+    RunAsPrincipal {
+  /** Collection slug the new document is created in (required) */
+  collection: TSlug;
+
+  /** Document data (required) */
+  data: Record<string, unknown>;
+
+  /**
+   * The stored document the new one copies, read as the caller before
+   * anything is created. `field` names the source field the copied value
+   * came from, where it differs from the field it is written to.
+   */
+  source: { collection: string; id: string; field?: string };
+
+  /**
+   * Skip cache revalidation for this write (the outbox drain still runs).
+   *
+   * @default false
+   */
+  disableRevalidate?: boolean;
+}
+
+/**
  * Result of a count operation.
  *
  * the wire API's `respondCount` envelope both speak the same key.

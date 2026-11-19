@@ -543,6 +543,7 @@ import {
   collectionTableName,
   generateSlug,
 } from "./collection-utils";
+import type { SourceReadCopy } from "./copied-from";
 import {
   entryStillReferenced,
   referrersHolding,
@@ -1799,6 +1800,11 @@ interface EntryValidationArgs {
   goesLive?: boolean;
   /** The batch the document goes live with, which reads definitions once. */
   batch?: GoingLiveRelationsBatch;
+  /**
+   * The entry a create copies, minted from the caller's read of it in the
+   * same call; see `PluginFieldWrite.copiedFrom`.
+   */
+  copiedFrom?: SourceReadCopy;
 }
 
 interface CreateEntryWriteParams {
@@ -1837,6 +1843,13 @@ interface CreateEntryWriteParams {
    * it. Self-resolved on the pooled connection when a caller does not pass one.
    */
   transitionAuth?: TransitionAuthorization;
+  /**
+   * The entry this create copies, minted by `readSourceCopy` from the
+   * caller's read of it on the same transaction (`createEntryFromSource`
+   * with a transaction). A value that is not such a copy reaches no
+   * validator.
+   */
+  copiedFrom?: SourceReadCopy;
 }
 
 /** The only things that differ between the two create entry points. */
@@ -3500,6 +3513,11 @@ export class CollectionMutationService extends BaseService {
           // by, for a field type whose values only some callers may change;
           // asked on the write's transaction where it has one.
           caller: fieldWriteCaller(args.reader, args.tx?.getDrizzle()),
+          // The entry a create copies, where the caller's read of it minted
+          // one; nothing else reaches a validator as a copy.
+          ...(args.copiedFrom === undefined
+            ? {}
+            : { copiedFrom: args.copiedFrom }),
         },
       }
     );
@@ -8857,6 +8875,13 @@ export class CollectionMutationService extends BaseService {
       // publish transition gate (a create-as-published) judges the key's OWN
       // grants — the route only authorized `create` against the key's scope.
       authenticatedScope?: AuthenticatedScope;
+      /**
+       * The entry this create copies, minted by `readSourceCopy` from the
+       * caller's read of it in the same call (a duplicate, or
+       * `createEntryFromSource`). Its field validators are told it; a value
+       * that is not such a copy is handed on to none of them.
+       */
+      copiedFrom?: SourceReadCopy;
     },
     body: Record<string, unknown>,
     depth?: number
@@ -9149,6 +9174,10 @@ export class CollectionMutationService extends BaseService {
           ...(params.locale === undefined
             ? {}
             : { writeLocale: params.locale }),
+          // The entry this create copies, where the caller read it first.
+          ...(params.copiedFrom === undefined
+            ? {}
+            : { copiedFrom: params.copiedFrom }),
           // No transaction yet, so stored rows are read on the pool: no row
           // of this write exists for a read to miss.
         });
@@ -22356,6 +22385,10 @@ export class CollectionMutationService extends BaseService {
           // On the caller's transaction, so a row an earlier entry of the
           // same batch wrote is seen.
           tx,
+          // The entry this create copies, where the caller read it first.
+          ...(params.copiedFrom === undefined
+            ? {}
+            : { copiedFrom: params.copiedFrom }),
         });
       }
 

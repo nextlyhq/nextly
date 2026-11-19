@@ -246,6 +246,7 @@ describe("init - Nextly API", () => {
       "contentEvents",
       "count",
       "create",
+      "createFromSource",
       "delete",
       "duplicate",
       "email",
