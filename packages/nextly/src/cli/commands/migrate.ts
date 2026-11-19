@@ -3601,7 +3601,12 @@ export async function refuseUnresolvedAppAttempts(args: {
 async function judgeFileDeletions(
   deps: MigrateCoreDeps,
   agreed?: Agreement
-): Promise<{ agreement: Agreement; files: ReadonlyMap<string, string> }> {
+): Promise<{
+  agreement: Agreement;
+  files: ReadonlyMap<string, string>;
+  /** The translations tables deleted entities left that this judgement covered. */
+  leftovers: readonly string[];
+}> {
   const consent = runConsent(deps);
   const listed = await listMigrationFiles(
     deps.adapter,
