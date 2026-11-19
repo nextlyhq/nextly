@@ -859,7 +859,7 @@ function unclipped<Part extends { baseStyles: { base: { base: object } } }>(
     string,
     unknown
   >;
-  return { ...part, baseStyles: { base: { base } } } as Part;
+  return { ...part, baseStyles: { base: { base } } };
 }
 
 /** The Content section a click's choice and its link are drawn in. */

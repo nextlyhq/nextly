@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { BlockDocument } from "./document";
+import type { BlockDocument, BlockNode } from "./document";
 import type { MigrationSource } from "./migration";
 import {
   findMigrationGaps,
@@ -630,8 +630,12 @@ describe("a step's renames", () => {
     migrate: { 1: same },
     renames: { 1: { citeUrl: "href" } },
   };
-  const page = (node: Record<string, unknown>): BlockDocument =>
-    ({ formatVersion: 1, kind: "page", nodes: [node] }) as BlockDocument;
+  // Loose on purpose: some cases store a binding no schema allows.
+  const page = (node: Record<string, unknown>): BlockDocument => ({
+    formatVersion: 1,
+    kind: "page",
+    nodes: [node as unknown as BlockNode],
+  });
 
   it("move a prop's value to its new name before the step runs", () => {
     const seen: Record<string, unknown>[] = [];
@@ -746,7 +750,7 @@ describe("a step's renames", () => {
     ]);
     // The stored document is left as it was.
     expect(
-      (component as { exposed: { propPath: string }[] }).exposed[0]?.propPath
+      (component as { exposed?: { propPath: string }[] }).exposed?.[0]?.propPath
     ).toBe("citeUrl");
   });
 

@@ -18,10 +18,10 @@ import { layoutAreaRoutes } from "../layout-area-route";
 import { layoutChoicesRoute } from "../layout-choices-route";
 import { registerLayoutComponentGuard } from "../layout-component-guard";
 import { layoutCountsRoute } from "../layout-counts-route";
-import { setAreaChoicesRoute } from "../set-area-choices-route";
 import { registerLayoutReadinessNotice } from "../layout-readiness-hook";
 import { removeLayoutRoute } from "../layout-removal/remove-route";
 import { layoutWriteRoutes } from "../layout-writes-route";
+import { setAreaChoicesRoute } from "../set-area-choices-route";
 
 import type { InitContext } from "./install-context";
 import { componentStoreOf } from "./options";

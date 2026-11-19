@@ -23,8 +23,8 @@ import { pageAddressOf, type PageFacts } from "./editor-settings";
 import type { CardVerbs, EditorView } from "./editor-view";
 import { PageReadMeter, type PageDataCount } from "./page-read-meter";
 import { SelectedRegionCard } from "./region-card";
-import { SetSettingsPanel } from "./set-settings-panel";
 import { inspectedVariantsOf } from "./region-editing";
+import { SetSettingsPanel } from "./set-settings-panel";
 import type { SettingsPlace } from "./settings-place";
 import {
   offerableFaces,
