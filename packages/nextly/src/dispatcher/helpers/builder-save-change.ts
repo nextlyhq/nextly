@@ -129,6 +129,11 @@ export async function writeBuilderSchemaChange(
     pushWhen: () => Promise<boolean>;
     afterFile: () => Promise<void>;
     registry?: (fields: readonly FieldDefinition[]) => Promise<void>;
+    /**
+     * After `registry`, for a file that stopped part way and was settled to what applied: what
+     * the caller does after an apply (its runtime tables), given the fields the row recorded.
+     */
+    settled?: (fields: readonly FieldDefinition[]) => void;
   }
 ): Promise<{ registryWritten: boolean }> {
   if (deps === undefined) {
@@ -162,14 +167,15 @@ export async function writeBuilderSchemaChange(
             inLastTransaction: () => registry(change.fields),
             // A file that stops part way is settled to what of it applied: the row then records
             // the fields as far as the database holds them.
-            onSettled: report =>
-              registry(
-                appliedFieldsOf(
-                  change.stored.fields as unknown as FieldDefinition[],
-                  change.fields,
-                  report
-                )
-              ),
+            onSettled: async report => {
+              const applied = appliedFieldsOf(
+                change.stored.fields as unknown as FieldDefinition[],
+                change.fields,
+                report
+              );
+              await registry(applied);
+              fileRoad.settled?.(applied);
+            },
           }),
     });
     await fileRoad.afterFile();

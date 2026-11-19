@@ -1812,6 +1812,45 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
               localized: isLocalized,
               schemaVersion: newSchemaVersion,
             });
+          // Post-apply: refresh in-memory runtime schema. Thread `localized` so the main
+          // table omits translatable columns, then register the companion runtime table so
+          // per-language reads/writes resolve in this process without a restart.
+          const refreshRuntime = (stored: readonly unknown[]): void => {
+            try {
+              const { table: freshTable } = generateRuntimeSchema(
+                tableName,
+                stored as FieldDefinition[],
+                dialect,
+                { localized: layout.isStored, status: single.status === true }
+              );
+              getSchemaRegistryFromDI()?.registerDynamicSchema(
+                tableName,
+                freshTable
+              );
+              if (layout.isStored) {
+                const companion = buildCompanionRuntimeTable({
+                  slug,
+                  tableName,
+                  fields: fields as FieldDefinition[],
+                  dialect,
+                  localized: true,
+                  // As saved, not as the record read before the save.
+                  status: layout.isPublishedPerLanguage,
+                });
+                if (companion) {
+                  getSchemaRegistryFromDI()?.registerDynamicSchema(
+                    companion.companionTableName,
+                    companion.table
+                  );
+                }
+              }
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              consoleLogger.warn(
+                `[applySingleSchemaChanges] In-memory schema refresh failed for '${slug}': ${msg}.`
+              );
+            }
+          };
           const { registryWritten } = await writeBuilderSchemaChange(
             builderSave,
             () => pushAndReconcileCompanion(push, desired, "single", companion),
@@ -1864,7 +1903,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
               // translations table is reconciled after the file: the row would then record the
               // change before that step holds it, so it is written after it, as before.
               ...(registryInFileTransaction(layout)
-                ? { registry: writeRow }
+                ? { registry: writeRow, settled: refreshRuntime }
                 : {}),
             }
           );
@@ -1889,43 +1928,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             );
           }
 
-          // Post-apply: refresh in-memory runtime schema. Thread `localized` so the main
-          // table omits translatable columns, then register the companion runtime table so
-          // per-language reads/writes resolve in this process without a restart.
-          try {
-            const { table: freshTable } = generateRuntimeSchema(
-              tableName,
-              fields as FieldDefinition[],
-              dialect,
-              { localized: layout.isStored, status: single.status === true }
-            );
-            getSchemaRegistryFromDI()?.registerDynamicSchema(
-              tableName,
-              freshTable
-            );
-            if (layout.isStored) {
-              const companion = buildCompanionRuntimeTable({
-                slug,
-                tableName,
-                fields: fields as FieldDefinition[],
-                dialect,
-                localized: true,
-                // As saved, not as the record read before the save.
-                status: layout.isPublishedPerLanguage,
-              });
-              if (companion) {
-                getSchemaRegistryFromDI()?.registerDynamicSchema(
-                  companion.companionTableName,
-                  companion.table
-                );
-              }
-            }
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            consoleLogger.warn(
-              `[applySingleSchemaChanges] In-memory schema refresh failed for '${slug}': ${msg}.`
-            );
-          }
+          refreshRuntime(fields);
 
           return respondAction(`Schema applied for single '${slug}'`, {
             newSchemaVersion: versionPersisted

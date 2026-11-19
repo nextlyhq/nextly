@@ -215,14 +215,14 @@ describe("how a stop is told", () => {
     );
     expect(told.code).toBe("NEXTLY_MIGRATION_PARTIALLY_APPLIED");
     expect(told.publicMessage).toBe(
-      "The file failed part-way. Recording what of it applied failed too, so the save is left as it stopped and recorded as in progress: Another run recorded the file first."
+      "The file failed part-way. Recording what of it applied failed too, so the save stays recorded as in progress, to be settled again: Another run recorded the file first."
     );
     // A driver's text stays in the log.
     expect(
       withSettleFailure(stop, new Error("ER_LOCK_DEADLOCK: secret table"))
         .publicMessage
     ).toBe(
-      "The file failed part-way. Recording what of it applied failed too, so the save is left as it stopped and recorded as in progress."
+      "The file failed part-way. Recording what of it applied failed too, so the save stays recorded as in progress, to be settled again."
     );
   });
 });

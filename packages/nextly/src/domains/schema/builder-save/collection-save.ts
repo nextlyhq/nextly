@@ -535,16 +535,16 @@ async function afterPartWayPush(
  * Settle a save that stopped part way to what of it the database holds. Each change the save asked
  * for is judged from the entity's live table (`judgeStoppedSave`), and the shape that judgement
  * arrives at is proven against the whole table before anything is written. Then the save's file
- * and snapshot, and the ledger's attempt at it, are replaced by a file written for exactly the
- * changes that applied, recorded applied; the definition is brought to that shape; and
- * `onSettled`, the caller's registry write, records the row. Answers the report.
+ * and snapshot are replaced by a file written for exactly the changes that applied, and the
+ * definition is brought to that shape; the file is compared with the live table again and
+ * recorded applied. Only then is the ledger's attempt at the stopped file cleared and `onSettled`,
+ * the caller's registry write, records the row. Answers the report.
  *
- * Undefined, with nothing written, where the save is not one this can judge: a create or a
- * delete; a save of more than one file (an adoption, a conversion, a translations table's); one
- * carrying junction or key statements of its own; a translated entity; one changing what the
- * entity's own settings make of its table; or a table that stands as no judgement explains. A
- * failure reading what it judges from is answered the same way, as nothing has been written yet.
- * A failure of what it writes is thrown, the save left as far as it got.
+ * Undefined, with nothing written, where the save is not one this can judge (`judgeableStop`), or
+ * the table stands as no judgement explains. A failure reading what it judges from is answered
+ * the same way, as nothing has been written yet. A failure before the replacement is recorded
+ * puts the stopped file, its snapshot and the definition back as the save left them, so the stop
+ * stays as it was for `nextly migrate:resolve`; any failure is thrown.
  */
 async function settleStoppedSave(
   deps: CollectionSaveDeps,
@@ -564,27 +564,103 @@ async function settleStoppedSave(
     return undefined;
   }
   if (judged === undefined) return undefined;
+  const definitionPath = resolve(
+    deps.projectRoot,
+    deps.config.db.uiSchemaFile
+  );
+  // What the save left, read before anything of it is replaced, to be put back where the
+  // replacement cannot be recorded.
+  const left = {
+    definition: await readIfPresent(definitionPath),
+    files: await readSaveFiles(deps, written.files.change),
+  };
+  const replacement: string[] = [];
+  try {
+    for (const filename of written.files.change) {
+      await removeFileAndSnapshot(deps, filename);
+    }
+    const settled = settledSaveOf(save, judged.applied, judged.report);
+    const plan = await planSave(deps, settled);
+    await writeAtomically(definitionPath, serializeUiSchema(plan.next));
+    const files = await writeFiles(deps, settled, plan, names =>
+      replacement.push(...names)
+    );
+    // Compared with the live table before it is recorded, as a pushed save's files are.
+    await recordWhatWasPushed(deps, files, plan.table);
+  } catch (error) {
+    await putBack(deps, left, replacement, definitionPath);
+    throw error;
+  }
+  // The replacement records what of the stopped file the database holds: the ledger's attempt at
+  // the stopped file is cleared, and the registry row written.
   const repo = new SchemaEventsRepository(
     deps.adapter.getDrizzle(),
     deps.adapter.getCapabilities().dialect
   );
-  // The stopped file goes, with the attempt the ledger keeps of it: the file written next records
-  // what of it the database holds.
   for (const filename of written.files.change) {
     await settleAttempts(deps, repo, filename);
-    await removeFileAndSnapshot(deps, filename);
   }
-  const settled = settledSaveOf(save, judged.applied, judged.report);
-  const plan = await planSave(deps, settled);
-  await writeAtomically(
-    resolve(deps.projectRoot, deps.config.db.uiSchemaFile),
-    serializeUiSchema(plan.next)
-  );
-  const files = await writeFiles(deps, settled, plan, () => undefined);
-  // Compared with the live table before it is recorded, as a pushed save's files are.
-  await recordWhatWasPushed(deps, files, plan.table);
   await onSettled(judged.report);
   return judged.report;
+}
+
+/** A migration file the save wrote, and its snapshot where it has one, as text. */
+interface SaveFileText {
+  filename: string;
+  sql: string;
+  snapshot: string | undefined;
+}
+
+/** The files `filenames` names, each with its snapshot, as they stand. */
+async function readSaveFiles(
+  deps: CollectionSaveDeps,
+  filenames: readonly string[]
+): Promise<SaveFileText[]> {
+  const files: SaveFileText[] = [];
+  for (const filename of filenames) {
+    files.push({
+      filename,
+      sql: await readFile(join(deps.migrationsDir, filename), "utf-8"),
+      snapshot: await readIfPresent(snapshotPathOf(deps, filename)),
+    });
+  }
+  return files;
+}
+
+/**
+ * Put a stopped save back as it left itself, after a settle that could not record its
+ * replacement: the replacement's files removed, the stopped file and its snapshot written again,
+ * and the definition as the save wrote it. A failure here is logged; the settle's own is what is
+ * thrown.
+ */
+async function putBack(
+  deps: CollectionSaveDeps,
+  left: { definition: string | undefined; files: readonly SaveFileText[] },
+  replacement: readonly string[],
+  definitionPath: string
+): Promise<void> {
+  try {
+    for (const filename of replacement) {
+      await removeFileAndSnapshot(deps, filename);
+    }
+    for (const { filename, sql, snapshot } of left.files) {
+      await writeAtomically(join(deps.migrationsDir, filename), sql);
+      if (snapshot !== undefined) {
+        await writeAtomically(snapshotPathOf(deps, filename), snapshot);
+      }
+    }
+    if (left.definition === undefined) {
+      await rm(definitionPath, { force: true });
+    } else {
+      await writeAtomically(definitionPath, left.definition);
+    }
+  } catch (error) {
+    deps.logger.error(
+      `The stopped save's files could not all be put back: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+  }
 }
 
 /**
@@ -647,9 +723,13 @@ async function judgedStop(
 }
 
 /**
- * The entity before and after a stopped save, where the stop is one its main table alone can
- * judge: an update of one file, of an entity not translated (whose change reaches its translations
- * table too), carrying no junction or key statements of its own.
+ * The entity before and after a stopped save, where the stop is one its main table's shape alone
+ * can judge: an update of one file, of an entity not translated (whose change reaches its
+ * translations table too), carrying no junction or key statements of its own, and no fill or
+ * delete of rows (`resolutions`, `rowFills`), which MySQL commits as it runs, so rows it changed
+ * before a later statement failed stay changed whatever the table's shape reads as. A field with
+ * no name that holds fields (a group with no name) keeps its fields on the table's row, by their
+ * own names, which the judgement does not reach: a save changing one is not judged.
  */
 function judgeableStop(
   save: CollectionSave,
@@ -657,15 +737,18 @@ function judgeableStop(
 ): { previous: UiSchemaEntity; entity: UiSchemaEntity } | undefined {
   const { previous, entity } = save;
   if (previous === null || entity === null) return undefined;
-  const oneFile = files.adopt === undefined && files.change.length === 1;
-  const translated = previous.localized === true || entity.localized === true;
-  const junctions =
-    (save.junctions?.up.length ?? 0) + (save.junctions?.down.length ?? 0) > 0;
-  const keys =
+  const unnamed = (e: UiSchemaEntity) =>
+    JSON.stringify(e.fields.filter(f => f.name === undefined));
+  const outOfReach = [
+    files.adopt !== undefined || files.change.length !== 1,
+    previous.localized === true || entity.localized === true,
+    (save.junctions?.up.length ?? 0) + (save.junctions?.down.length ?? 0) > 0,
     save.keys !== undefined &&
-    JSON.stringify(save.keys.before) !== JSON.stringify(save.keys.after);
-  if (!oneFile || translated || junctions || keys) return undefined;
-  return { previous, entity };
+      JSON.stringify(save.keys.before) !== JSON.stringify(save.keys.after),
+    (save.resolutions?.length ?? 0) + (save.rowFills?.length ?? 0) > 0,
+    unnamed(previous) !== unnamed(entity),
+  ];
+  return outOfReach.some(Boolean) ? undefined : { previous, entity };
 }
 
 /**
@@ -698,19 +781,16 @@ async function desiredTable(
 }
 
 /**
- * The save as far as it applied: the entity with the applied changes alone, the renames, fills and
- * row values of those changes, and a moment of its own, so its file runs after the history's.
+ * The save as far as it applied: the entity with the applied changes alone, the renames of those
+ * changes, and a moment of its own, so its file runs after the history's. A judged save carries no
+ * fill and no row values (`judgeableStop`).
  */
 function settledSaveOf(
   save: CollectionSave,
   applied: UiSchemaEntity,
   report: readonly StoppedChange[]
 ): CollectionSave {
-  const landed = (column: string) =>
-    report.some(
-      c => c.applied && (c.field === column || toSnakeCase(c.field) === column)
-    );
-  const { resolutions, rowFills, renamedFields } = save;
+  const { renamedFields } = save;
   return {
     ...save,
     entity: applied,
@@ -722,12 +802,6 @@ function settledSaveOf(
             report.some(c => c.field === r.to && c.applied)
           ),
         }),
-    ...(resolutions === undefined
-      ? {}
-      : { resolutions: resolutions.filter(r => landed(r.column)) }),
-    ...(rowFills === undefined
-      ? {}
-      : { rowFills: rowFills.filter(r => landed(r.column)) }),
   };
 }
 
@@ -2787,13 +2861,15 @@ async function removeFileAndSnapshot(
   filename: string
 ): Promise<void> {
   await rm(join(deps.migrationsDir, filename), { force: true });
-  await rm(
-    join(
-      deps.migrationsDir,
-      "meta",
-      filename.replace(/\.sql$/, ".snapshot.json")
-    ),
-    { force: true }
+  await rm(snapshotPathOf(deps, filename), { force: true });
+}
+
+/** Where the snapshot of the migration file `filename` is kept. */
+function snapshotPathOf(deps: CollectionSaveDeps, filename: string): string {
+  return join(
+    deps.migrationsDir,
+    "meta",
+    filename.replace(/\.sql$/, ".snapshot.json")
   );
 }
 

@@ -231,8 +231,7 @@ export function stoppedSaveError(
 
 /**
  * `failure`, the stopped save's own, told with the failure of what tried to settle it after its
- * own words: the save is left as it stopped, its record that it is in progress kept, for the next
- * settle. The settle's failure is named only where it is a `NextlyError`, whose public message is
+ * own words: its record that it is in progress is kept, for the next settle. The settle's failure is named only where it is a `NextlyError`, whose public message is
  * written to be shown; a driver's text stays in the log.
  */
 export function withSettleFailure(
@@ -246,7 +245,7 @@ export function withSettleFailure(
   return new NextlyError({
     code: base?.code ?? "NEXTLY_MIGRATION_PARTIALLY_APPLIED",
     ...(base === undefined ? {} : { statusCode: base.statusCode }),
-    publicMessage: `${base?.publicMessage ?? "The save failed part way."} Recording what of it applied failed too, so the save is left as it stopped and recorded as in progress${why}`,
+    publicMessage: `${base?.publicMessage ?? "The save failed part way."} Recording what of it applied failed too, so the save stays recorded as in progress, to be settled again${why}`,
     ...(base?.publicData === undefined ? {} : { publicData: base.publicData }),
     logMessage:
       settleFailure instanceof Error

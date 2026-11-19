@@ -830,10 +830,11 @@ describe.each(getConfiguredTestDialects())(
       );
 
       (keepsPartWay(dialect, path) && path.push !== true ? it : it.skip)(
-        "whose settle fails at its ledger write, is left as it stopped, recorded in progress, and reports the stop first",
+        "whose settle fails at its ledger write, is put back as it stopped, recorded in progress, and reports the stop first",
         async () => {
           const t = await boot();
           await path.create(t, [text("heading")]);
+          const folderBefore = filesBelow(history());
           const failed = failStatement(t, adding(path.table, "beta"));
           // Once the save's own statement failed, the ledger refuses the settle's record of what
           // applied.
@@ -869,9 +870,28 @@ describe.each(getConfiguredTestDialects())(
           if (!outcome.failed) return;
           // The stop's own failure first, then the settle's, never the settle's alone.
           expect(messageOf(outcome.error)).toMatch(
-            /failed part-way, and the statements before the failure stayed applied: .*Recording what of it applied failed too, so the save is left as it stopped and recorded as in progress: Another run recorded the file first\.$/s
+            /failed part-way, and the statements before the failure stayed applied: .*Recording what of it applied failed too, so the save stays recorded as in progress, to be settled again: Another run recorded the file first\.$/s
           );
           expect(namedChanges(outcome.error), "a report").toBeUndefined();
+          // The stopped file, its snapshot and the definition as the save left them, and no
+          // replacement: the stop stays as it was for `nextly migrate:resolve`.
+          const written = filesBelow(history()).filter(
+            f => !folderBefore.includes(f)
+          );
+          const sql = written.filter(f => f.endsWith(".sql"));
+          expect(sql, "the save's files").toHaveLength(1);
+          expect(
+            written.filter(f => f.endsWith(".snapshot.json")),
+            "the save's snapshots"
+          ).toHaveLength(1);
+          expect(
+            readFileSync(join(history(), sql[0]!), "utf8").split("-- DOWN")[0]
+          ).toMatch(/["`]beta["`]/);
+          expect(definedFields(path), "the definition").toEqual([
+            "alpha",
+            "beta",
+            "heading",
+          ]);
           // Its record that it is in progress stays, for the next settle.
           const record = await new MetaService(
             t.adapter,
@@ -884,5 +904,72 @@ describe.each(getConfiguredTestDialects())(
         300_000
       );
     });
+
+    // A fill runs as a row change on MySQL, which commits as it runs: rows it filled before a
+    // later statement failed are changed whatever the table's shape reads as, so the save is not
+    // judged from its shape. It keeps its files, as before, and names no report.
+    it.runIf(dialect === "mysql")(
+      "a collection save carrying a fill that stopped after the fill committed keeps its files and is not judged",
+      async () => {
+        const path = PATHS[0]!;
+        const t = await boot();
+        await path.create(t, [text("heading"), text("note")]);
+        await path.store?.(t, { heading: "Hello" });
+        const folderBefore = filesBelow(history());
+        vi.mocked(judgeStoppedSave).mockClear();
+        // The statement making `note` required, which runs after its fill.
+        const failed = failStatement(
+          t,
+          new RegExp(`${path.table}.*note.*NOT NULL`, "s")
+        );
+
+        const outcome = await outcomeOf(
+          dispatchCollections(
+            {} as ServiceContainer,
+            "applySchemaChanges",
+            { collectionName: path.slug },
+            {
+              fields: [
+                text("heading"),
+                { name: "note", type: "text", required: true },
+                text("beta"),
+              ],
+              confirmed: true,
+              schemaVersion: await versionOf(t, path.registry, path.slug),
+              resolutions: {
+                note: { action: "provide_default", value: "Filled" },
+              },
+            }
+          )
+        );
+
+        expect(failed(), "no statement making `note` required was met").toBe(
+          1
+        );
+        expect(
+          vi.mocked(judgeStoppedSave),
+          "a save whose fill committed was judged from its shape"
+        ).not.toHaveBeenCalled();
+        vi.restoreAllMocks();
+        vi.stubEnv("NODE_ENV", "development");
+        // The staging: the fill committed before `beta`'s statement failed.
+        expect(
+          await path.read?.(t),
+          "the fill did not commit before `note` was made required"
+        ).toMatchObject({ note: "Filled" });
+        expect(outcome.failed).toBe(true);
+        if (!outcome.failed) return;
+        expect(namedChanges(outcome.error), "a report").toBeUndefined();
+        // Its file is kept as written, for `nextly migrate:resolve`.
+        const sql = filesBelow(history()).filter(
+          f => f.endsWith(".sql") && !folderBefore.includes(f)
+        );
+        expect(sql, "the save's files").toHaveLength(1);
+        expect(readFileSync(join(history(), sql[0]!), "utf8")).toMatch(
+          /Filled/
+        );
+      },
+      300_000
+    );
   }
 );

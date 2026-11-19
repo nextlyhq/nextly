@@ -1399,6 +1399,15 @@ export class SingleMetadataService {
           },
           { status: "applied", refused: [] }
         );
+        // The running server's table follows the fields the row records, as after an apply.
+        if (plan) {
+          await this.registerUpdatedRuntimeSchema(
+            input,
+            { ...plan, fields },
+            deps.adapter,
+            input.isLocalized
+          );
+        }
       },
     });
     const outcome = plan
