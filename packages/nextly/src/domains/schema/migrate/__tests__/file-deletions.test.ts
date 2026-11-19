@@ -438,6 +438,20 @@ describe("a table created only if absent", () => {
         facts
       )
     ).toContainEqual(rows("posts_locales"));
+    // The same once the walk has followed the run's table to another name.
+    expect(
+      read(
+        "postgresql",
+        [
+          create,
+          "ALTER TABLE posts_locales RENAME TO staging",
+          "ALTER TABLE public.staging RENAME TO old_staging",
+          "ALTER TABLE public.audit RENAME TO staging",
+          "DELETE FROM staging",
+        ],
+        facts
+      )
+    ).toContainEqual(rows("staging"));
     // A statement the walk follows, or one about another table, changes nothing.
     expect(
       read(

@@ -2093,6 +2093,9 @@ class FileWalk {
     }
     this.origins.set(to, this.origin(from));
     this.origins.set(from, null);
+    // A table a conditional create made is still that table under its new name: a statement
+    // the walk does not follow that alters it there ends the run's hold on it (`unfollowed`).
+    if (this.madeIfAbsent.delete(from)) this.madeIfAbsent.add(to);
   }
 
   private renameColumn(name: string, from: string, to: string): void {

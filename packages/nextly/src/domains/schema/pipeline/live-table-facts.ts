@@ -133,9 +133,12 @@ export async function readTakenRelationNames(
   );
   const query =
     dialect === "postgresql"
-      ? sql`SELECT lower(c.relname) AS name FROM pg_class c
+      ? // Folded under the "C" collation, letter by letter in ASCII alone, as the names asked
+        // are: the database's own locale may fold an ASCII letter to another (Turkish `I`), and
+        // a relation so named must not read as absent.
+        sql`SELECT lower(c.relname::text COLLATE "C") AS name FROM pg_class c
             JOIN pg_namespace n ON n.oid = c.relnamespace
-            WHERE lower(c.relname) IN (${namesIn})
+            WHERE lower(c.relname::text COLLATE "C") IN (${namesIn})
               AND n.nspname NOT IN ('pg_catalog', 'information_schema')
               AND n.nspname NOT LIKE 'pg_toast%'`
       : dialect === "mysql"

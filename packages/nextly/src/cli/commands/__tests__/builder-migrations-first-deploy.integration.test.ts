@@ -280,6 +280,8 @@ describe.each(getConfiguredTestDialects())(
       registered: string[] | undefined;
       columns: string[];
       translations: string[];
+      /** The headings the translations table holds, copied from the entries by the run. */
+      headings: unknown[];
     }> {
       const rows = await adapter
         .executeQuery<{
@@ -309,6 +311,15 @@ describe.each(getConfiguredTestDialects())(
               ).map(field => field.name),
         columns: columnsOf("dc_posts"),
         translations: columnsOf("dc_notes_locales"),
+        headings: (
+          await adapter
+            .executeQuery<{
+              heading: unknown;
+            }>(
+              `SELECT ${q("heading")} AS heading FROM ${q("dc_notes_locales")}`
+            )
+            .catch(() => [])
+        ).map(row => row.heading),
       };
     }
 
@@ -343,6 +354,8 @@ describe.each(getConfiguredTestDialects())(
       expect(after.translations).toEqual(
         expect.arrayContaining(["_parent", "_locale", "heading"])
       );
+      // A deploy onto an empty database has no entry to copy: the fill ran, and moved none.
+      expect(after.headings).toEqual([]);
     }, 180_000);
 
     it("is applied by a production start that runs its own migrations, with no consent", async () => {
@@ -385,6 +398,8 @@ describe.each(getConfiguredTestDialects())(
       expect(after.translations).toEqual(
         expect.arrayContaining(["_parent", "_locale", "heading"])
       );
+      // A deploy onto an empty database has no entry to copy: the fill ran, and moved none.
+      expect(after.headings).toEqual([]);
       // The deployed site serves the collection.
       const written = await current.nextly.create({
         collection: "posts",
