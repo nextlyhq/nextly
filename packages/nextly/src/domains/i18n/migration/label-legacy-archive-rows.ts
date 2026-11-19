@@ -279,6 +279,41 @@ async function planLegacyArchiveLabels(
 }
 
 /**
+ * Hands the unresolved rows of `slugs` back to the labelling: they become unknown again, for the
+ * next `labelLegacyArchiveRows` to judge. For rows settled while their owner's registry row held
+ * a creation date that was wrong (`repair-sqlite-registry-timestamps`): a row is marked
+ * unresolved once and never read again, so a corrected date alone would not reach it. Rows of any
+ * other address, and rows already given a kind, are left as they are. Nothing where the database
+ * has no archive.
+ */
+export async function reopenUnresolvedArchiveRows(
+  adapter: Pick<LabelArchiveAdapter, "dialect" | "tableExists" | "getDrizzle">,
+  slugs: readonly string[]
+): Promise<void> {
+  const { nextlyI18nArchive: archive } = nextlyI18nArchiveTables(
+    adapter.dialect
+  );
+  if (
+    slugs.length === 0 ||
+    !(await adapter.tableExists(getTableName(archive)))
+  ) {
+    return;
+  }
+  const db = adapter.getDrizzle<LabelDb>();
+  for (let i = 0; i < slugs.length; i += SLUGS_PER_READ) {
+    await db
+      .update(archive)
+      .set({ entityKind: UNKNOWN_ARCHIVE_KIND })
+      .where(
+        and(
+          eq(archive.entityKind, UNRESOLVED_ARCHIVE_KIND),
+          inArray(archive.collection, slugs.slice(i, i + SLUGS_PER_READ))
+        )
+      );
+  }
+}
+
+/**
  * Settles the unknown rows: those whose owner the registries identify get its kind, and the rest
  * become unresolved. Idempotent: it reads and writes only rows still unknown, so it can run before
  * every read that scopes the archive by kind.

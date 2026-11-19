@@ -10,6 +10,7 @@
 
 import { isNextBuildPhase } from "@nextlyhq/adapter-drizzle/build-phase";
 
+import { repairSqliteRegistryTimestamps } from "../database/repair-sqlite-registry-timestamps";
 import {
   repairSqliteTimestamps,
   TIMESTAMP_REPAIR_META_KEY,
@@ -111,6 +112,14 @@ export async function runPostInitTasks(): Promise<void> {
           logger.info(
             `Repaired ${repaired} timestamp(s) stored as text in ${columns.length} column(s)`,
             { columns }
+          );
+        }
+        // And the registries' timestamps an earlier release wrote in milliseconds, under the
+        // same mark, so a later start reads the mark once and sends nothing for either.
+        const registries = await repairSqliteRegistryTimestamps(adapter);
+        if (registries.repaired > 0) {
+          logger.info(
+            `Repaired the timestamps of ${registries.repaired} registry row(s) stored in milliseconds`
           );
         }
         await meta.set(TIMESTAMP_REPAIR_META_KEY, new Date().toISOString());

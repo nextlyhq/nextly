@@ -24,8 +24,13 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
-/** Set once the repair has run, so it does not scan on every boot. */
-export const TIMESTAMP_REPAIR_META_KEY = "sqlite.timestampRepair.v1";
+/**
+ * Set once a start's SQLite timestamp repairs have run, so a later start scans nothing: this one,
+ * and the registries' millisecond rows (`repair-sqlite-registry-timestamps`). `v2` since the
+ * second was added, so a database marked before it runs both once more; this one finds nothing
+ * left to rewrite there.
+ */
+export const TIMESTAMP_REPAIR_META_KEY = "sqlite.timestampRepair.v2";
 
 /**
  * Matches the ISO-8601 shape the old writer produced (`2026-07-14T09:48:19.234Z`).
