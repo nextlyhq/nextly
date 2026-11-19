@@ -408,7 +408,7 @@ export interface AddressSearch extends ActivityFilter {
  * What a search by address says beside what it found: records written under
  * a secret no longer configured hold a digest nothing computed now matches.
  */
-export const ADDRESS_SEARCH_NOTICE =
+const ADDRESS_SEARCH_NOTICE =
   "Only records sent under the current secret, or a previous secret still " +
   "configured, can be found by address. Older records can't be found this " +
   "way.";
@@ -645,18 +645,7 @@ export class EmailDeliveryActivity {
     const after = decodeCursor(options.before);
     const limit = options.limit ?? DEFAULT_LIMIT;
     const queue = loadedDialect(this.dialect).tables.emailQueue;
-    const conditions = [
-      stateCondition(queue, options.state),
-      options.template ? eq(queue.templateSlug, options.template) : undefined,
-      options.from ? gte(queue.createdAt, options.from.getTime()) : undefined,
-      options.to ? lte(queue.createdAt, options.to.getTime()) : undefined,
-      after
-        ? or(
-            lt(queue.createdAt, after.at),
-            and(eq(queue.createdAt, after.at), lt(queue.id, after.id))
-          )
-        : undefined,
-    ].filter(condition => condition !== undefined);
+    const conditions = queueWindow(queue, options.state, options, after);
 
     const rows = await this.queueRows(conditions, limit + 1);
     const jobs = await this.jobsOf(
@@ -958,28 +947,10 @@ export class EmailDeliveryActivity {
     const queue = loadedDialect(this.dialect).tables.emailQueue;
     const present = await this.providersPresent();
     const conditions = [
-      address !== undefined ? this.sentTo(queue, address) : undefined,
-      stateCondition(queue, options.status),
-      options.template ? eq(queue.templateSlug, options.template) : undefined,
-      options.providerType
-        ? eq(queue.providerType, options.providerType)
-        : undefined,
-      // By its exact bytes on MySQL, as the delivery reader compares it.
-      options.providerType && this.dialect === "mysql"
-        ? sql`CAST(${queue.providerType} AS BINARY) = CAST(${options.providerType} AS BINARY)`
-        : undefined,
-      options.providerOrigin
-        ? originCondition(queue, options.providerOrigin, this.dialect, present)
-        : undefined,
-      options.from ? gte(queue.createdAt, options.from.getTime()) : undefined,
-      options.to ? lte(queue.createdAt, options.to.getTime()) : undefined,
-      after
-        ? or(
-            lt(queue.createdAt, after.at),
-            and(eq(queue.createdAt, after.at), lt(queue.id, after.id))
-          )
-        : undefined,
-    ].filter((condition): condition is SQL => condition !== undefined);
+      ...queueWindow(queue, options.status, options, after),
+      ...this.providerConditions(queue, options, present),
+      ...(address !== undefined ? [this.sentTo(queue, address)] : []),
+    ];
     const rows = await this.queueRows(conditions, limit);
     const jobs = await this.jobsOf(
       rows.flatMap(row => (row.jobId ? [row.jobId] : []))
@@ -987,6 +958,30 @@ export class EmailDeliveryActivity {
     return rows.map(row =>
       queuedEntry(row, row.jobId ? jobs.get(row.jobId) : undefined)
     );
+  }
+
+  /** The merged Activity's provider filters, on the queue's columns. */
+  private providerConditions(
+    queue: QueueTable,
+    options: z.infer<typeof ACTIVITY_FILTER>,
+    present: boolean
+  ): SQL[] {
+    const conditions: SQL[] = [];
+    if (options.providerType) {
+      conditions.push(eq(queue.providerType, options.providerType));
+      // By its exact bytes on MySQL, as the delivery reader compares it.
+      if (this.dialect === "mysql") {
+        conditions.push(
+          sql`CAST(${queue.providerType} AS BINARY) = CAST(${options.providerType} AS BINARY)`
+        );
+      }
+    }
+    if (options.providerOrigin) {
+      conditions.push(
+        originCondition(queue, options.providerOrigin, this.dialect, present)
+      );
+    }
+    return conditions;
   }
 
   /**
@@ -1181,6 +1176,30 @@ function queuedEntry(row: QueueRow, job: JobRow | undefined): ActivityEntry {
 }
 
 type QueueTable = ReturnType<typeof loadedDialect>["tables"]["emailQueue"];
+
+/**
+ * What both queue lists narrow by alike: the state, the template, the time
+ * window and the cursor, each when given.
+ */
+function queueWindow(
+  queue: QueueTable,
+  state: QueuedEmailStanding | undefined,
+  options: { template?: string; from?: Date; to?: Date },
+  after: Cursor | undefined
+): SQL[] {
+  return [
+    stateCondition(queue, state),
+    options.template ? eq(queue.templateSlug, options.template) : undefined,
+    options.from ? gte(queue.createdAt, options.from.getTime()) : undefined,
+    options.to ? lte(queue.createdAt, options.to.getTime()) : undefined,
+    after
+      ? or(
+          lt(queue.createdAt, after.at),
+          and(eq(queue.createdAt, after.at), lt(queue.id, after.id))
+        )
+      : undefined,
+  ].filter((condition): condition is SQL => condition !== undefined);
+}
 
 /** The condition for a queued email's state as its reader names it. */
 function stateCondition(
