@@ -27,6 +27,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import { dispatchSingles } from "../../../dispatcher/handlers/single-dispatcher";
+import { getSingleMetadataServiceFromDI } from "../../../dispatcher/helpers/di";
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
 import {
   createTestNextly,
@@ -276,56 +277,74 @@ describeEachDialect("a Single schema save whose statements fail", dialect => {
     }
   );
 
-  // On SQLite the service's statements leave a field's type as it was, so the change lands without
-  // its file's shape and the writer will not record the file applied. PostgreSQL and MySQL change
-  // the type, so the case does not arise there.
-  it.skipIf(dialect !== "sqlite")(
-    "answers that it failed, naming the kept file and the steps that finish it, when the change landed but could not be recorded applied",
-    async () => {
-      const before = await recorded();
-      const folderBefore = await migrationFiles();
-      // The running server's shape of the table, which reads and writes use until a restart.
-      const resolver = (
-        t.adapter as unknown as {
-          tableResolver?: { getTable(name: string): unknown };
-        }
-      ).tableResolver;
-      const scoreType = () =>
-        (
-          resolver?.getTable(TABLE) as
-            | Record<string, { getSQLType?: () => string } | undefined>
-            | null
-            | undefined
-        )?.score?.getSQLType?.();
-      // Control: the shape is registered before the save, so what follows reads one.
-      expect(scoreType(), "the registered shape before the save").toBe("text");
-
-      const { thrown, said } = await attempt([
-        { name: "count", type: "text" },
-        { name: "score", type: "number" },
-      ]);
-
-      expect(
-        thrown,
-        `the save answered instead of failing: ${said}`
-      ).toBeDefined();
-      const kept = (await migrationFiles()).filter(
-        name => !folderBefore.includes(name)
+  // The change lands, then the table no longer stands as the save's file says, so the writer will
+  // not record the file applied. A column the save never asked for is added to the table as the
+  // push lands, through the service the dispatcher resolves: the writer's own comparison of the
+  // table with the file then refuses, as it would after any change the file does not describe.
+  it("answers that it failed, naming the kept file and the steps that finish it, when the change landed but could not be recorded applied", async () => {
+    const before = await recorded();
+    const folderBefore = await migrationFiles();
+    // The running server's shape of the table, which reads and writes use until a restart.
+    const resolver = (
+      t.adapter as unknown as {
+        tableResolver?: { getTable(name: string): unknown };
+      }
+    ).tableResolver;
+    const scoreType = () =>
+      (
+        resolver?.getTable(TABLE) as
+          | Record<string, { getSQLType?: () => string } | undefined>
+          | null
+          | undefined
+      )?.score?.getSQLType?.();
+    // Control: the shape is registered before the save, so what follows reads one.
+    expect(scoreType(), "the registered shape before the save").toBe("text");
+    const strayAdded = vi.fn();
+    const service = getSingleMetadataServiceFromDI() as unknown as Record<
+      string,
+      (...args: unknown[]) => Promise<unknown>
+    >;
+    const apply = service.applyUpdateDdl;
+    vi.spyOn(service, "applyUpdateDdl").mockImplementation(async function (
+      this: unknown,
+      ...args: unknown[]
+    ) {
+      const outcome = await apply.apply(this, args);
+      const table = dialect === "mysql" ? `\`${TABLE}\`` : `"${TABLE}"`;
+      await t.adapter.executeQuery(
+        `ALTER TABLE ${table} ADD COLUMN stray_note TEXT`
       );
-      expect(kept, "the change's one file is kept").toHaveLength(1);
-      const [file] = kept;
-      expect(String((thrown as Error).message)).toBe(
-        `The database does not stand as ${file} says after the save's change was applied, so the save's file ${file} was kept and not recorded applied. Compare the table with ${file}. ` +
-          `Finish the change by hand, run \`nextly migrate:resolve --applied ${file}\`; then run \`nextly migrate\`, which brings the registry in step with the recorded file. ` +
-          "Or reverse what of it ran and run `nextly migrate`, which runs it from the start."
-      );
-      expect(await recorded(), "the registry row").toEqual(before);
-      // The requested shape is not left registered: forgotten, so the next use rebuilds it from
-      // the table, or still the one the table has.
-      expect(
-        [undefined, "text"],
-        "the registered shape after the refused save"
-      ).toContain(scoreType());
-    }
-  );
+      strayAdded();
+      return outcome;
+    });
+
+    const { thrown, said } = await attempt([
+      { name: "count", type: "text" },
+      { name: "score", type: "number" },
+    ]);
+
+    // Control: the column was added once the change had landed.
+    expect(strayAdded, "the stray column").toHaveBeenCalledTimes(1);
+    expect(
+      thrown,
+      `the save answered instead of failing: ${said}`
+    ).toBeDefined();
+    const kept = (await migrationFiles()).filter(
+      name => !folderBefore.includes(name)
+    );
+    expect(kept, "the change's one file is kept").toHaveLength(1);
+    const [file] = kept;
+    expect(String((thrown as Error).message)).toBe(
+      `The database does not stand as ${file} says after the save's change was applied, so the save's file ${file} was kept and not recorded applied. Compare the table with ${file}. ` +
+        `Finish the change by hand, run \`nextly migrate:resolve --applied ${file}\`; then run \`nextly migrate\`, which brings the registry in step with the recorded file. ` +
+        "Or reverse what of it ran and run `nextly migrate`, which runs it from the start."
+    );
+    expect(await recorded(), "the registry row").toEqual(before);
+    // The requested shape is not left registered: forgotten, so the next use rebuilds it from
+    // the table, or still the one the table has.
+    expect(
+      [undefined, "text"],
+      "the registered shape after the refused save"
+    ).toContain(scoreType());
+  });
 });
