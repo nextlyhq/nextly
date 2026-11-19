@@ -46,6 +46,10 @@ import type { ServiceContainer } from "../../../../services";
 import { consoleLogger } from "../../../../shared/types";
 import { MetaService } from "../../../meta/services/meta-service";
 import { SchemaEventsRepository } from "../../events/schema-events-repository";
+import {
+  acquireWriterHold,
+  setWriterHoldBounds,
+} from "../../migrate-create/writer-hold";
 import { introspectLiveSnapshot } from "../../pipeline/diff/introspect-live";
 import {
   refuseWhileSaveInProgress,
@@ -70,6 +74,8 @@ const kill = vi.hoisted(() => ({
   failAfter: undefined as undefined | ((point: string) => boolean),
   /** Whether a folder about to be listed is one to refuse, as one the process may not read. */
   refuseReading: undefined as undefined | ((path: string) => boolean),
+  /** Run once a file has been written in full, before it is put in place, as a stalled process would. */
+  stall: undefined as undefined | ((path: string) => Promise<void>),
 }));
 
 /**
@@ -124,12 +130,19 @@ vi.mock("node:fs/promises", async importOriginal => {
       ...rest
     );
   }) as typeof real.readdir;
+  const writeFile = (async (
+    ...args: Parameters<typeof real.writeFile>
+  ): Promise<void> => {
+    await real.writeFile(...args);
+    await kill.stall?.(String(args[0]));
+  }) as typeof real.writeFile;
   return {
     ...real,
     rename,
     rm,
     readdir,
-    default: { ...real, rename, rm, readdir },
+    writeFile,
+    default: { ...real, rename, rm, readdir, writeFile },
   };
 });
 
@@ -182,6 +195,7 @@ afterEach(async () => {
   kill.failRegistry = false;
   kill.failAfter = undefined;
   kill.refuseReading = undefined;
+  kill.stall = undefined;
   await stopped;
   stopped = undefined;
   vi.restoreAllMocks();
@@ -674,6 +688,67 @@ describe.each(getConfiguredTestDialects())(
 
       // A definition that cannot be replaced stays whole, and nothing else of the save is written
       // yet: there is nothing to settle, so the record goes with the save's failure.
+      // A save stalled past its lease before it put any file in place, while another writer took
+      // the migration folder, is refused: nothing of it was written, so its record goes with it.
+      it("a save overtaken before it put any file in place withdraws its record, with nothing written", async () => {
+        const restoreBounds = setWriterHoldBounds({
+          waitMs: 30_000,
+          leaseSeconds: 1,
+          // Never inside the case: the stalled save is not renewing.
+          renewMs: 600_000,
+        });
+        try {
+          const t = await boot();
+          await path.create([text("heading")]);
+          const definitionBefore = definitionText();
+          const before = filesBelow(join(basePath, HISTORY));
+          let overtaken = false;
+          // The first file the save writes in full, before it puts any in place: stalled past the
+          // lease, with another writer taking the folder and letting it go meanwhile.
+          kill.stall = async written => {
+            if (
+              overtaken ||
+              !written.startsWith(join(basePath, HISTORY)) ||
+              !written.endsWith(".tmp")
+            ) {
+              return;
+            }
+            overtaken = true;
+            await new Promise(resolve => setTimeout(resolve, 1_200));
+            const other = await acquireWriterHold({
+              migrationsDir: join(basePath, HISTORY),
+              command: "migrate:create",
+              whenHeld: "wait",
+            });
+            await other.release();
+          };
+
+          const answer = await path
+            .save(t, [text("heading"), text("alpha")])
+            .catch((error: unknown) => error);
+          kill.stall = undefined;
+          expect(overtaken, "the save never stalled on its first file").toBe(
+            true
+          );
+          expect(
+            answer instanceof Response ? answer.ok : !(answer instanceof Error),
+            "the save was not refused"
+          ).toBe(false);
+          expect(definitionText(), "the definition").toBe(definitionBefore);
+          expect(
+            filesBelow(join(basePath, HISTORY)).filter(
+              f => !f.endsWith(".lock")
+            ),
+            "the migration folder"
+          ).toEqual(before.filter(f => !f.endsWith(".lock")));
+          // Nothing to settle: the record goes with the refusal.
+          expect(await recordRow(t, path), "the record's row").toBeUndefined();
+          expect(recordMarker(path), "the record's marker").toBeUndefined();
+        } finally {
+          restoreBounds();
+        }
+      }, 300_000);
+
       it("a save whose definition cannot be written leaves neither the row nor the marker", async () => {
         const t = await boot();
         await path.create([text("heading")]);
