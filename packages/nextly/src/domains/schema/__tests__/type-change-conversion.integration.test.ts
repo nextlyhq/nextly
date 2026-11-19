@@ -178,6 +178,51 @@ describe.each(getConfiguredTestDialects())(
       expect(await read(t, "v", "es")).toEqual({ a: 34 });
     });
 
+    // A translated field's change is judged over every language's value whichever road the save
+    // takes (its migration file, or the push), so a value lost in one language needs its clear
+    // confirmed with its count, and a count that changed is refused there too.
+    it("refuses a translated change that loses a value in one language until the clear is confirmed with its count", async () => {
+      const t = await boot([{ name: "v", type: "text", localized: true }], {
+        localized: true,
+      });
+      const id = await write(t, "a", { v: "12" }, "en");
+      await t.nextly.update({
+        collection: SLUG,
+        id,
+        data: { v: "abc", _overwrite: true },
+        locale: "es",
+      } as never);
+      const to = [{ name: "v", type: "number", localized: true }];
+
+      expect(await save(t, to, { localized: true })).toMatchObject({
+        code: "VALIDATION_ERROR",
+      });
+      expect(
+        await save(t, to, {
+          localized: true,
+          confirmedClears: [{ field: "v", count: 2 }],
+        })
+      ).toMatchObject({
+        publicData: {
+          errors: [
+            expect.objectContaining({
+              code: "TYPE_CHANGE_CLEAR_COUNT_CHANGED",
+            }),
+          ],
+        },
+      });
+      expect(await read(t, "v", "es")).toEqual({ a: "abc" });
+
+      expect(
+        await save(t, to, {
+          localized: true,
+          confirmedClears: [{ field: "v", count: 1 }],
+        })
+      ).toBeUndefined();
+      expect(await read(t, "v", "en")).toEqual({ a: 12 });
+      expect(await read(t, "v", "es")).toEqual({ a: null });
+    });
+
     // A family this conversion does not write yet keeps today's answer exactly: a date read as text
     // is a form no save writes, so the change is refused and nothing changes, never half converted.
     it("still refuses a date becoming a text, and changes nothing", async () => {
