@@ -11,10 +11,11 @@ import { render, screen, waitFor, within } from "@admin/__tests__/utils";
 import type { VersionMeta } from "@admin/services/versionApi";
 import type { PartReview, ReviewStep } from "@admin/types/workflows";
 
-const { stepSpy, toastSpy, versionsMock } = vi.hoisted(() => ({
+const { stepSpy, toastSpy, versionsMock, baselineSpy } = vi.hoisted(() => ({
   stepSpy: vi.fn(),
   toastSpy: { success: vi.fn(), error: vi.fn() },
   versionsMock: vi.fn(),
+  baselineSpy: vi.fn(),
 }));
 
 vi.mock("@admin/services/workflowApi", async importOriginal => ({
@@ -31,6 +32,14 @@ vi.mock("@admin/hooks/queries/useVersions", async importOriginal => ({
   >()),
   useVersions: (...args: unknown[]) => versionsMock(...args),
 }));
+vi.mock("@admin/services/versionApi", async importOriginal => {
+  const real =
+    await importOriginal<typeof import("@admin/services/versionApi")>();
+  return {
+    ...real,
+    versionApi: { ...real.versionApi, diffFromBaseline: baselineSpy },
+  };
+});
 vi.mock("@admin/components/features/versions/diff/VersionDiffView", () => ({
   VersionDiffView: ({ from, to }: { from: number; to: number }) => (
     <p>
@@ -56,14 +65,18 @@ import { ReviewChanges } from "../ReviewChanges";
 
 const SCOPE = { kind: "collection", slug: "posts", entryId: "e1" } as const;
 
-function version(versionNo: number, status = "draft"): VersionMeta {
+function version(
+  versionNo: number,
+  locale: string | null,
+  status = "draft"
+): VersionMeta {
   return {
     id: `v${versionNo}`,
     versionNo,
     status,
     isAutosave: false,
     label: null,
-    locale: null,
+    locale,
     sourceVersionNo: null,
     createdBy: null,
     author: null,
@@ -129,10 +142,29 @@ function stale(parts: (string | null)[]): Error {
 beforeEach(() => {
   vi.clearAllMocks();
   versions = {
-    en: [version(7), version(5, "published")],
-    es: [version(9), version(6, "published")],
-    shared: [version(4), version(2, "published")],
+    en: [version(7, "en"), version(5, "en", "published")],
+    es: [version(9, "es"), version(6, "es", "published")],
+    shared: [version(4, null), version(2, null, "published")],
   };
+  // The server's `published` baseline, read here from the part's rows.
+  baselineSpy.mockImplementation(
+    (
+      _scope: unknown,
+      _baseline: string,
+      opts: { to?: number; locale?: string }
+    ) => {
+      const rows = versions[opts.locale ?? "shared"] ?? [];
+      const from = rows.find(row => row.status === "published")?.versionNo;
+      return Promise.resolve({
+        from,
+        to: opts.to,
+        locale: opts.locale ?? null,
+        hasChanges: true,
+        baseline: { name: "published", versionNo: from },
+        fields: [],
+      });
+    }
+  );
   versionsMock.mockImplementation(({ locale }: { locale?: string }) => ({
     data: { pages: [{ items: versions[locale ?? "shared"], meta: {} }] },
     isError: false,
@@ -169,12 +201,17 @@ describe("Approve all languages", () => {
     ]);
 
     const list = within(dialog).getByRole("list", { name: "Parts to approve" });
-    const rows = within(list).getAllByRole("button");
-    expect(rows.map(row => row.textContent)).toEqual([
-      "EnglishChanges since the published version.",
-      "Shared fieldsChanges since the published version.",
-      "SpanishChanges since the published version.",
-    ]);
+    await waitFor(() =>
+      expect(
+        within(list)
+          .getAllByRole("button")
+          .map(row => row.textContent)
+      ).toEqual([
+        "EnglishChanges since the published version.",
+        "Shared fieldsChanges since the published version.",
+        "SpanishChanges since the published version.",
+      ])
+    );
     // Collapsed until opened, one part at a time.
     expect(within(dialog).queryByText(/^comparing/)).not.toBeInTheDocument();
     await userEvent.click(
@@ -275,7 +312,11 @@ describe("Approve all languages", () => {
 
     // The review state, read again, holds English's new version: the dialog
     // stays open over it, and approving again sends what it now shows.
-    versions.en = [version(8), version(7), version(5, "published")];
+    versions.en = [
+      version(8, "en"),
+      version(7, "en"),
+      version(5, "en", "published"),
+    ];
     rerender([
       inReview("en", { revision: 4, version: "t-en-8" }),
       inReview("es"),
@@ -283,15 +324,19 @@ describe("Approve all languages", () => {
     const reopened = screen.getByRole("dialog", {
       name: "Approve all languages",
     });
-    expect(reopened).toHaveTextContent(
-      "EnglishChanges since the published version."
+    await waitFor(() =>
+      expect(reopened).toHaveTextContent(
+        "EnglishChanges since the published version."
+      )
     );
     await userEvent.click(
       within(
         within(reopened).getByRole("list", { name: "Parts to approve" })
       ).getByRole("button", { name: /English/ })
     );
-    expect(within(reopened).getByText("comparing 5 with 8")).toBeVisible();
+    expect(
+      await within(reopened).findByText("comparing 5 with 8")
+    ).toBeVisible();
 
     stepSpy.mockResolvedValueOnce({ message: "Step taken.", item: {} });
     await userEvent.click(

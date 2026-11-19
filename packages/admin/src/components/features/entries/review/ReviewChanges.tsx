@@ -150,7 +150,13 @@ function PartChanges({
       )}
       <p className="text-xs text-muted-foreground">{partPairWords(read)}</p>
       {open && pair?.kind === "pair" ? (
-        <VersionDiffView scope={scope} from={pair.from} to={pair.to} />
+        <VersionDiffView
+          scope={scope}
+          from={pair.from}
+          to={pair.to}
+          // A pair the server resolved already holds its comparison.
+          {...(pair.seededBy === undefined ? {} : { seededBy: pair.seededBy })}
+        />
       ) : null}
     </div>
   );

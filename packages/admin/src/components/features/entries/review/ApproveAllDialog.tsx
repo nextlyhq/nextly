@@ -243,7 +243,15 @@ function PartRow({
       </button>
       {open && pair?.kind === "pair" ? (
         <div className="border-t border-border px-3 py-2">
-          <VersionDiffView scope={scope} from={pair.from} to={pair.to} />
+          <VersionDiffView
+            scope={scope}
+            from={pair.from}
+            to={pair.to}
+            // A pair the server resolved already holds its comparison.
+            {...(pair.seededBy === undefined
+              ? {}
+              : { seededBy: pair.seededBy })}
+          />
         </div>
       ) : null}
     </li>

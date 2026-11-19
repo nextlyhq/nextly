@@ -29,6 +29,7 @@ const hooks = vi.hoisted(() => ({
   takeWorkflowStep: vi.fn(),
   useDocumentLock: vi.fn(),
   versions: vi.fn(),
+  diffFromBaseline: vi.fn(),
 }));
 
 vi.mock("@admin/services/workflowApi", async importOriginal => ({
@@ -74,6 +75,17 @@ vi.mock("@admin/hooks/queries/useVersions", async importOriginal => ({
   >()),
   useVersions: (...args: unknown[]) => hooks.versions(...args),
 }));
+vi.mock("@admin/services/versionApi", async importOriginal => {
+  const real =
+    await importOriginal<typeof import("@admin/services/versionApi")>();
+  return {
+    ...real,
+    versionApi: {
+      ...real.versionApi,
+      diffFromBaseline: hooks.diffFromBaseline,
+    },
+  };
+});
 vi.mock("@admin/components/features/versions/diff/VersionDiffView", () => ({
   VersionDiffView: ({ from, to }: { from: number; to: number }) => (
     <p>
@@ -185,6 +197,15 @@ beforeEach(() => {
     message: "Step taken.",
     item: {},
   });
+  // What is published in the part, as the server resolves it.
+  hooks.diffFromBaseline.mockResolvedValue({
+    from: 1,
+    to: 3,
+    locale: null,
+    hasChanges: true,
+    baseline: { name: "published", versionNo: 1 },
+    fields: [],
+  });
   hooks.versions.mockReturnValue({
     data: {
       pages: [
@@ -235,9 +256,11 @@ describe("a person who may read and approve, but not edit", () => {
     const approve = await headerApprove();
     expect(approve).toBeEnabled();
     expect(await offered()).toContain("Request changes");
-    expect(
-      screen.getByRole("region", { name: "Changes to review" })
-    ).toHaveTextContent("comparing 1 with 3");
+    await waitFor(() =>
+      expect(
+        screen.getByRole("region", { name: "Changes to review" })
+      ).toHaveTextContent("comparing 1 with 3")
+    );
   });
 
   it("approves the version on screen", async () => {

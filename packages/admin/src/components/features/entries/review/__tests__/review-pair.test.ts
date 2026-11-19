@@ -1,12 +1,13 @@
 /**
- * The two versions a reviewer compares: the newest saved version, against the
- * last approval, else the last published version.
+ * How a reviewer's comparison is found: the part's own newest saved version,
+ * against its last approval, else against what the server resolves as
+ * published in the part.
  */
 import { describe, expect, it } from "vitest";
 
 import type { VersionMeta } from "@admin/services/versionApi";
 
-import { reviewPair } from "../review-pair";
+import { reviewPlan } from "../review-pair";
 
 /** A version, newest-first lists name only what each case changes. */
 function version(
@@ -29,32 +30,49 @@ function version(
   };
 }
 
-describe("reviewPair", () => {
+describe("reviewPlan", () => {
   it("compares the newest version with the last approval", () => {
     const versions = [
       version(7),
       version(6),
       version(5, { status: "published" }),
     ];
-    expect(reviewPair(versions, 6)).toEqual({
-      kind: "pair",
+    expect(reviewPlan(versions, "en", 6)).toEqual({
+      kind: "approved",
       from: 6,
       to: 7,
-      since: "approved",
     });
   });
 
-  it("compares with the last published version where nothing was approved", () => {
-    const versions = [
-      version(7),
-      version(6),
-      version(5, { status: "published" }),
-    ];
-    expect(reviewPair(versions, null)).toEqual({
-      kind: "pair",
-      from: 5,
+  it("never takes a newer shared-fields row as a language's version under review", () => {
+    // A language's list holds the shared fields' versions too.
+    const versions = [version(9, { locale: null }), version(7), version(6)];
+    expect(reviewPlan(versions, "en", 6)).toEqual({
+      kind: "approved",
+      from: 6,
       to: 7,
-      since: "published",
+    });
+    expect(reviewPlan(versions, "en", null)).toEqual({
+      kind: "published",
+      to: 7,
+    });
+  });
+
+  it("takes only the shared fields' own rows for the shared part", () => {
+    const versions = [version(9), version(8, { locale: null }), version(7)];
+    expect(reviewPlan(versions, null, 4)).toEqual({
+      kind: "approved",
+      from: 4,
+      to: 8,
+    });
+  });
+
+  it("asks the server for what is published where nothing was approved, whatever the page holds", () => {
+    // Nothing published on this page: the published version may be past it.
+    const versions = [version(7), version(6)];
+    expect(reviewPlan(versions, "en", null)).toEqual({
+      kind: "published",
+      to: 7,
     });
   });
 
@@ -64,21 +82,20 @@ describe("reviewPair", () => {
       version(4),
       version(3, { status: "published" }),
     ];
-    expect(reviewPair(versions, null)).toMatchObject({ from: 3, to: 4 });
-  });
-
-  it("says all is new where nothing was published or approved", () => {
-    expect(reviewPair([version(2), version(1)], null)).toEqual({
-      kind: "first",
-      to: 2,
+    expect(reviewPlan(versions, "en", null)).toEqual({
+      kind: "published",
+      to: 4,
     });
   });
 
   it("says nothing changed where the newest version is the one approved", () => {
-    expect(reviewPair([version(4)], 4)).toEqual({ kind: "unchanged", to: 4 });
+    expect(reviewPlan([version(4)], "en", 4)).toEqual({
+      kind: "unchanged",
+      to: 4,
+    });
   });
 
   it("has nothing to review before a version is saved", () => {
-    expect(reviewPair([], null)).toEqual({ kind: "none" });
+    expect(reviewPlan([], "en", null)).toEqual({ kind: "none" });
   });
 });
