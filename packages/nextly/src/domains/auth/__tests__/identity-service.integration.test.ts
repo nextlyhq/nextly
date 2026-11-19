@@ -1090,6 +1090,19 @@ describe.each(getConfiguredTestDialects())(
       expect(after.users).toBe(before.users + 1);
       expect(after.identities).toBe(before.identities + 1);
       expect(after.userRoles).toBe(before.userRoles + 1);
+      // The one stored identity belongs to the account both resolved to,
+      // never to the account that was there before.
+      const stored = (
+        (await identityRows(handle)) as Array<Record<string, unknown>>
+      ).find(
+        row =>
+          row.providerKey === "acme-auth:google" &&
+          row.issuer === "" &&
+          row.subject === "one-mailbox"
+      );
+      expect(stored?.userId).toBe(one.userId);
+      expect(stored?.userId).toBe(two.userId);
+      expect(stored?.userId).not.toBe("founder");
     });
 
     // The held-attach race needs a second database connection to hold the
@@ -1156,7 +1169,12 @@ describe.each(getConfiguredTestDialects())(
           held();
           await released;
         });
-        await isHeld;
+        // A holder that fails before it holds anything surfaces here, rather
+        // than leaving the wait for `isHeld` to hang.
+        await Promise.race([
+          isHeld,
+          holding.then(() => new Promise<never>(() => {})),
+        ]);
 
         const signingIn = serviceOn(
           handle,
@@ -1169,8 +1187,13 @@ describe.each(getConfiguredTestDialects())(
             address: "fresh@example.com",
           })
         );
-        const waited = await untilAnotherWaitsOnALock(handle, dialect);
-        release();
+        let waited: boolean;
+        try {
+          waited = await untilAnotherWaitsOnALock(handle, dialect);
+        } finally {
+          // Released whatever the probe does, so the hold never outlives it.
+          release();
+        }
         const resolved = await signingIn;
         await holding;
 

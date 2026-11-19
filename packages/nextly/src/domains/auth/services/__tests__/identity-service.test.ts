@@ -1276,10 +1276,11 @@ describe("the provisioning branch", () => {
       }),
       roles: new RoleQueryService(adapter, testLogger),
       users: {
-        // The first attempt meets the verdict; any restart succeeds.
+        // The first attempt meets the verdict, wrapped as the creation
+        // primitive wraps a database error; any restart succeeds.
         createExternalUser: async () => {
           attempts += 1;
-          if (attempts === 1) throw verdict();
+          if (attempts === 1) throw NextlyError.fromDatabaseError(verdict());
           return { id: "restarted" };
         },
       },
@@ -1304,8 +1305,97 @@ describe("the provisioning branch", () => {
           handOff({ subject: "joined" })
         )
       )
-    ).rejects.toMatchObject({ kind: "deadlock" });
+    ).rejects.toMatchObject({ code: "CONFLICT" });
     expect(attempts).toBe(1);
+  });
+
+  it("resolves a duplicate refusal to the winner, but not one joined to the caller's transaction", async () => {
+    await plantRole("editor");
+    await plantUser("winner");
+    const adapter = countedAdapter();
+    // The creation meets a winner that stored the identity after this
+    // sign-in's lookup, and is refused as the duplicate it then is.
+    const service = new IdentityService(adapter, testLogger, {
+      linkingPolicy: policyProvisioning({
+        mayProvision: true,
+        roles: ["editor"],
+      }),
+      roles: new RoleQueryService(adapter, testLogger),
+      users: {
+        createExternalUser: async input => {
+          await plantIdentity({
+            providerKey: "acme-auth:google",
+            issuer: GOOGLE_ISSUER,
+            subject: input.identity?.subject ?? "",
+            userId: "winner",
+          });
+          throw NextlyError.duplicate();
+        },
+      },
+      sessionOf: sessionReading(null),
+    });
+
+    // Owning its transaction, the loser re-reads and resolves the winner.
+    const owned = await service.resolveSignInIdentity(
+      pluginIdentityBinding(ACME),
+      handOff({ subject: "owned" })
+    );
+    expect(owned.userId).toBe("winner");
+
+    // Joined to the caller's transaction, the refusal is the caller's: it
+    // propagates rather than being re-read (a re-read here, on the one
+    // connection, would have found the winner and resolved it).
+    await expect(
+      adapter.transaction(() =>
+        service.resolveSignInIdentity(
+          pluginIdentityBinding(ACME),
+          handOff({ subject: "joined" })
+        )
+      )
+    ).rejects.toMatchObject({ code: "DUPLICATE" });
+  });
+
+  it("looks an identity up only once another request's open transaction has ended, never seeing its uncommitted row", async () => {
+    await plantUser("holder");
+    const reader = service({
+      linkingPolicy: policyEnabling("acme-auth:google"),
+    });
+
+    // Another request's transaction writes the identity row and stays open,
+    // then rolls back: on SQLite's one shared connection, a read issued
+    // meanwhile would run inside it.
+    let release!: () => void;
+    const released = new Promise<void>(resolve => (release = resolve));
+    let held!: () => void;
+    const isHeld = new Promise<void>(resolve => (held = resolve));
+    const holding = testDb.adapter.transaction(async () => {
+      await plantIdentity({
+        providerKey: "acme-auth:google",
+        issuer: GOOGLE_ISSUER,
+        subject: "uncommitted",
+        userId: "holder",
+      });
+      held();
+      await released;
+      throw new Error("rolled back");
+    });
+    await isHeld;
+
+    let settled = false;
+    const lookup = reader
+      .resolveSignInIdentity(
+        pluginIdentityBinding(ACME),
+        handOff({ subject: "uncommitted" })
+      )
+      .finally(() => (settled = true));
+    await new Promise(resolve => setTimeout(resolve, 50));
+    // The lookup waits for the open transaction rather than reading in it.
+    expect(settled).toBe(false);
+
+    release();
+    await expect(holding).rejects.toThrow("rolled back");
+    // And sees only what committed: the rolled-back row resolves nobody.
+    expect((await lookup).userId).toBeNull();
   });
 });
 

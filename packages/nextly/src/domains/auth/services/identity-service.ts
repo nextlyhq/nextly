@@ -63,6 +63,7 @@ import type { nextlyExternalIdentitiesPg } from "../../../schemas/external-ident
 import type { nextlyExternalIdentitiesSqlite } from "../../../schemas/external-identities/sqlite";
 import { BaseService } from "../../../services/base-service";
 import type { Logger } from "../../../services/shared";
+import { serializeOnSqlite } from "../../../shared/lib/run-adapter-transaction";
 import { isUniqueViolation } from "../../../shared/lib/unique-violation";
 
 /**
@@ -647,12 +648,16 @@ export class IdentityService extends BaseService {
     const row = await this.findIdentity(identity);
     if (row !== null) return { userId: row.userId };
     if (!key.provisioning.mayProvision) return { userId: null };
+    // Asked once, before the creation: whether it joins a transaction the
+    // caller opened, which decides both the restart and the re-read below.
+    const joinsCallersTransaction = this.adapter.inTransaction();
     try {
       return {
         userId: await this.provisionWithOneRestart(
           binding,
           identity,
-          key.provisioning
+          key.provisioning,
+          joinsCallersTransaction
         ),
       };
     } catch (error) {
@@ -667,6 +672,10 @@ export class IdentityService extends BaseService {
       // and a re-read that finds nothing means the address was genuinely
       // held: the refusal stands as it would have anyway.
       if (!NextlyError.isCode(error, "DUPLICATE")) throw error;
+      // Joined to the caller's transaction, a re-read cannot see the winner —
+      // MySQL's snapshot predates its commit, PostgreSQL has aborted the
+      // transaction — so the refusal is the caller's to answer.
+      if (joinsCallersTransaction) throw error;
       const winner = await this.findIdentity(identity);
       if (winner === null) throw error;
       return { userId: winner.userId };
@@ -699,9 +708,9 @@ export class IdentityService extends BaseService {
     provisioning: Extract<
       ProviderProvisioningPolicy,
       { readonly mayProvision: true }
-    >
+    >,
+    joinsCallersTransaction: boolean
   ): Promise<string> {
-    const joinsCallersTransaction = this.adapter.inTransaction();
     try {
       return await this.provisionFor(binding, identity, provisioning);
     } catch (error) {
@@ -1080,22 +1089,33 @@ export class IdentityService extends BaseService {
    * on MySQL and a case-variant subject would resolve an account the
    * provider never named. The whole row comes back, because the link's
    * answer to a repeated link is the stored row as it stands.
+   *
+   * Through `serializeOnSqlite`: on SQLite every request shares one
+   * connection, and a plain read issued while another request's creation
+   * transaction is open would run inside it and see that transaction's
+   * identity row before it commits — a row its rollback can still take
+   * away. Queued behind the open transaction, the read sees only what
+   * committed; inside a transaction this request opened, it nests in it.
    */
   private async findIdentity(
     identity: Pick<StampedIdentity, "keyDigest">
   ): Promise<StoredIdentityRow | null> {
-    const rows = await this.db
-      .select({
-        id: this.identitiesTable.id,
-        providerKey: this.identitiesTable.providerKey,
-        issuer: this.identitiesTable.issuer,
-        subject: this.identitiesTable.subject,
-        address: this.identitiesTable.address,
-        userId: this.identitiesTable.userId,
-      })
-      .from(this.identitiesTable)
-      .where(eq(this.identitiesTable.keyDigest, identity.keyDigest))
-      .limit(1);
+    const rows = await serializeOnSqlite(
+      this.adapter,
+      async () =>
+        await this.db
+          .select({
+            id: this.identitiesTable.id,
+            providerKey: this.identitiesTable.providerKey,
+            issuer: this.identitiesTable.issuer,
+            subject: this.identitiesTable.subject,
+            address: this.identitiesTable.address,
+            userId: this.identitiesTable.userId,
+          })
+          .from(this.identitiesTable)
+          .where(eq(this.identitiesTable.keyDigest, identity.keyDigest))
+          .limit(1)
+    );
     return rows[0] ?? null;
   }
 }
