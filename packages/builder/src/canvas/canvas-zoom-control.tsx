@@ -170,11 +170,12 @@ export function CanvasZoomControl({
           /*
            * The accessible name carries the MODE as well as the number, because
            * "89%" alone does not say whether it will move when a panel opens —
-           * and that is the whole difference between the two states.
+           * and that is the whole difference between the two states. In the
+           * words drawn, so someone who says "Fit 60%" reaches it.
            */
           aria-label={
             zoom.kind === "fit"
-              ? `Canvas zoom: fitting, ${shown}`
+              ? `Canvas zoom: Fit, ${shown}`
               : `Canvas zoom: ${shown}`
           }
         >

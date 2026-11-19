@@ -684,7 +684,9 @@ describe("the read-only view", () => {
     await screen.findByRole("menu");
     expect(screen.queryByRole("menuitem", { name: /Import/ })).toBeNull();
     expect(
-      screen.getByRole("menuitem", { name: "Export design tokens (.json)" })
+      screen.getByRole("menuitem", {
+        name: "Export design tokens (.json), DTCG 2025.10",
+      })
     ).toBeDefined();
   });
 });
@@ -792,7 +794,7 @@ describe("import and export", () => {
         .map(item => item.getAttribute("aria-label") ?? item.textContent)
     ).toEqual([
       "Import design tokens\u2026",
-      "Export design tokens (.json)",
+      "Export design tokens (.json), DTCG 2025.10",
       "Export for Figma",
       "Copy CSS variables",
     ]);
@@ -1673,7 +1675,7 @@ describe("a Design tab's view of the variables", () => {
 
   it("lists only its tab's groups", () => {
     render(<Folding groups={["colours"]} />);
-    expect(regions()).toEqual(["Colours2"]);
+    expect(regions()).toEqual(["Colours 2"]);
     expect(screen.queryByRole("button", { name: /^Space 4/ })).toBeNull();
   });
 

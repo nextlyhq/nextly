@@ -193,7 +193,6 @@ export function CanvasRegionFrame({
       {...{ [CHROME_ATTRIBUTE]: "", [REGION_ATTRIBUTE]: region.area }}
       {...(selected ? { [REGION_SELECTED_ATTRIBUTE]: "" } : {})}
       role="button"
-      aria-label={region.label}
       aria-pressed={selected}
       tabIndex={0}
       onClick={choose}
@@ -206,7 +205,10 @@ export function CanvasRegionFrame({
       // hover cue changes no state and so runs no effect.
       onPointerEnter={() => markScheme(frame.current)}
     >
-      <div className="nx-canvas-region__content" inert>
+      {/* Its drawn content is a picture of the region, not its name: hidden
+          from a screen reader, and named by the text after it. Not an
+          aria-label, which would have to hold every word the content draws. */}
+      <div className="nx-canvas-region__content" inert aria-hidden="true">
         <RegionContent
           document={region.document}
           definitions={region.definitions}
@@ -214,6 +216,7 @@ export function CanvasRegionFrame({
           sheet={sheet}
         />
       </div>
+      <span className="nx-canvas-region__name">{region.label}</span>
       <span
         ref={tag}
         className="nx-canvas-region__tag"

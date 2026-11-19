@@ -432,7 +432,7 @@ for (const device of ["light", "dark"] as const) {
     // Light first, whatever the device prefers.
     await expect(darkSwitch(page)).toHaveAttribute("aria-pressed", "false");
     await expect.poll(() => grounds(page)).toEqual(everyPart(light));
-    await expect(gapRow).toHaveAttribute("aria-label", /^Gap, 8px/);
+    await expect(gapRow).toHaveAccessibleName(/^Gap, 8px/);
 
     // At once: the same document, never reloaded.
     await page.evaluate(() => {
@@ -441,11 +441,11 @@ for (const device of ["light", "dark"] as const) {
     await darkSwitch(page).click();
     await expect(darkSwitch(page)).toHaveAttribute("aria-pressed", "true");
     await expect.poll(() => grounds(page)).toEqual(everyPart(dark));
-    await expect(gapRow).toHaveAttribute("aria-label", /^Gap, 12px/);
+    await expect(gapRow).toHaveAccessibleName(/^Gap, 12px/);
 
     await darkSwitch(page).click();
     await expect.poll(() => grounds(page)).toEqual(everyPart(light));
-    await expect(gapRow).toHaveAttribute("aria-label", /^Gap, 8px/);
+    await expect(gapRow).toHaveAccessibleName(/^Gap, 8px/);
     expect(
       await page.evaluate(
         () => (window as unknown as Record<string, unknown>).__notReloaded

@@ -374,6 +374,21 @@ function commitName(dialog: HTMLElement, value: string): void {
   fireEvent.keyDown(field, { key: "Enter" });
 }
 
+/**
+ * An element's accessible name, as a screen reader hears it: read through the
+ * role query, which computes the name the same way for every button it finds.
+ */
+function nameOf(element: Element | null | undefined): string | undefined {
+  let heard: string | undefined;
+  screen.queryAllByRole("button", {
+    name: (name, each) => {
+      if (each === element) heard = name;
+      return false;
+    },
+  });
+  return heard;
+}
+
 describe("the Shared styles tab reaching an author", () => {
   it("offers the Design panel, whose Shared styles tab this is, at all", () => {
     // The slot was reserved and dark: the shell named it and nothing rendered
@@ -535,14 +550,10 @@ describe("the Shared styles tab reaching an author", () => {
     openEditor();
     await settle();
     expect(
-      screen
-        .getByRole("button", { name: /^card, \.nx-c-card/ })
-        .getAttribute("aria-label")
+      nameOf(screen.getByRole("button", { name: /^card, \.nx-c-card/ }))
     ).toContain("At least 1 block on this page");
     expect(
-      screen
-        .getByRole("button", { name: /^hero, \.nx-c-hero/ })
-        .getAttribute("aria-label")
+      nameOf(screen.getByRole("button", { name: /^hero, \.nx-c-hero/ }))
     ).not.toContain("on this page");
   });
 
@@ -559,7 +570,7 @@ describe("the Shared styles tab reaching an author", () => {
     openEditor();
     await settle();
     const row = screen.getByRole("button", { name: /^card, \.nx-c-card/ });
-    expect(row.getAttribute("aria-label")).not.toContain("block on this page");
+    expect(nameOf(row)).not.toContain("block on this page");
   });
 
   /*
