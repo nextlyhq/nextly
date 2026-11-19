@@ -37,6 +37,8 @@ import { sql } from "drizzle-orm";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import type { DatabaseInstance } from "../../../types/database-operations";
+
+import type { SqliteTypeChange } from "./sqlite-nullability-rebuild";
 import {
   isIdempotencyError,
   splitStatements,
@@ -328,8 +330,8 @@ export interface SqliteNullability {
   tableName: string;
   /** Column → true for NOT NULL, false for nullable. */
   required: ReadonlyMap<string, boolean>;
-  /** Column → the type it becomes; absent or empty where no type changes. */
-  types?: ReadonlyMap<string, string>;
+  /** Column → the type it becomes, with what the fields were; absent or empty where none changes. */
+  types?: ReadonlyMap<string, SqliteTypeChange>;
   /**
    * The change's own judgement of the values a type change converts, run on the rebuild's
    * transaction before its copy (`rebuildSqliteNullability`).

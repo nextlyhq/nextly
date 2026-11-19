@@ -83,6 +83,7 @@ import {
   relationshipKeyTarget,
   sameRelationTarget,
 } from "../../schema/services/relationship-key-target";
+import type { SqliteTypeChange } from "../../schema/services/sqlite-nullability-rebuild";
 import {
   backfillDefaultForType,
   backfillValueForType,
@@ -1759,7 +1760,7 @@ ${allColumnDefs.join(",\n")}
        * can rebuild the table once these statements have run applies it there. The values are
        * judged before (a change that loses one is refused), so the rebuild's copy keeps them.
        */
-      onSqliteTypeChange?: (column: string, type: string) => void;
+      onSqliteTypeChange?: (column: string, change: SqliteTypeChange) => void;
       /**
        * The registry's table for each collection, which a relationship's key references: a
        * renamed target keeps the table it was created under. Undefined spells each target's table
@@ -2313,10 +2314,14 @@ ${allColumnDefs.join(",\n")}
           described !== null &&
           before.dialectType !== described.dialectType
         ) {
-          options?.onSqliteTypeChange?.(
-            toSnakeCase(field.name),
-            described.dialectType
-          );
+          // With what the fields were, so the rebuild drops only the reference Nextly made for a
+          // former relationship, and an older one-to-one's inline UNIQUE only where the field after
+          // is not unique.
+          options?.onSqliteTypeChange?.(toSnakeCase(field.name), {
+            type: described.dialectType,
+            fromRelationship: oldField.type === "relationship",
+            unique: field.unique === true,
+          });
         }
         if (this.nullabilityChanged(oldField, field)) {
           options?.onSqliteNullability?.(

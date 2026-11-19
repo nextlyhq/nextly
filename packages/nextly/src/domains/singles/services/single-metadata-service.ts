@@ -106,6 +106,7 @@ import {
 } from "../../schema/services/apply-migration-statements";
 import { withSchemaChangeExcluded } from "../../schema/services/schema-change-exclusion";
 import { calculateSchemaHash } from "../../schema/services/schema-hash";
+import type { SqliteTypeChange } from "../../schema/services/sqlite-nullability-rebuild";
 import { assertNoNewSiblingClashes } from "../../schema/sibling-fields";
 
 import { singleTableFamiliesCollide } from "./resolve-single-table-name";
@@ -346,7 +347,7 @@ interface UpdateDdlPlan {
    * On SQLite, the type changes `migrationSQL` can't express (column → the type it becomes),
    * applied by the same rebuild. The values were judged against the new type while planning.
    */
-  sqliteTypes?: ReadonlyMap<string, string>;
+  sqliteTypes?: ReadonlyMap<string, SqliteTypeChange>;
   /** The values judged again on the rebuild's own transaction, where it changes a type. */
   sqliteTypeJudge?: (db: unknown) => Promise<void>;
   /** The field list the table holds once this plan has run. */
@@ -1912,7 +1913,7 @@ export class SingleMetadataService {
 
     // What SQLite can't alter in place, which the apply rebuilds the table for.
     const sqliteNullability = new Map<string, boolean>();
-    const sqliteTypes = new Map<string, string>();
+    const sqliteTypes = new Map<string, SqliteTypeChange>();
     return {
       leavingSettings: deferred.leavingSettings,
       migrationSQL: schemaService.generateAlterTableMigration(
@@ -1943,7 +1944,8 @@ export class SingleMetadataService {
           ...groupMigration,
           onSqliteNullability: (column, required) =>
             sqliteNullability.set(column, required),
-          onSqliteTypeChange: (column, type) => sqliteTypes.set(column, type),
+          onSqliteTypeChange: (column, change) =>
+            sqliteTypes.set(column, change),
         }
       ),
       sqliteNullability,
