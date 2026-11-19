@@ -34,8 +34,8 @@ import {
   type StyleValue,
 } from "@nextlyhq/blocks-engine";
 
-import { declarationsText } from "./code-hints";
 import { drawsBold, roleStack, siteFamilies } from "./font-library";
+import { declarationsText } from "./inspector/code-hints";
 
 /** The two site-wide fonts. */
 export type FontRole = "body" | "heading";

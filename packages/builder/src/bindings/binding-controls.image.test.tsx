@@ -28,9 +28,9 @@ import * as React from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { BindingFieldSource, UnbindPlanAnswer } from "./binding-services";
-import type { ContentServices } from "../content-controls";
+import type { ContentServices } from "../inspector/content/content-controls";
 import type { EditorState } from "../editor-state";
-import { InspectorPanel } from "../inspector-panel";
+import { InspectorPanel } from "../inspector/inspector-panel";
 import { VisitorUnreadableProvider } from "../visitor-unreadable-context";
 
 beforeAll(() => {

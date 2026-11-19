@@ -24,9 +24,12 @@ import {
 } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
-import { useLoopCollections } from "../collection-loop-controls";
-import type { ContentServices, LoopCollection } from "../content-controls";
-import { fieldSourceOf } from "../list-query-controls";
+import { useLoopCollections } from "../inspector/content/collection-loop-controls";
+import type {
+  ContentServices,
+  LoopCollection,
+} from "../inspector/content/content-controls";
+import { fieldSourceOf } from "../inspector/content/list-query-controls";
 
 import { asStoredDefinitions, gatedAsStored } from "./condition-gate";
 

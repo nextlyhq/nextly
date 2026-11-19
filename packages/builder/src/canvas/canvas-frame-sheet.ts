@@ -39,7 +39,7 @@ import {
   QUESTION_ROOM_ATTRIBUTE,
   QUESTION_ROOM_PROPERTY,
 } from "../accordion-questions";
-import { GALLERY_BLOCK } from "../gallery-pictures";
+import { GALLERY_BLOCK } from "../inspector/content/gallery-pictures";
 import { CANVAS_ROOT_CLASS } from "../shell-state";
 
 import { APPEAR_REPLAY_RULES } from "./appear-replay";

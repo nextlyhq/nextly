@@ -100,9 +100,12 @@ function brokenRules(texts: readonly string[]): string[] {
  */
 const ALLOWED: Readonly<Record<string, readonly string[]>> = {
   // A Columns block's arrangement of its columns, its Layout in Content.
-  "columns-layout-field.tsx": ["Layout", "A layout of its own, set in Style."],
+  "inspector/content/columns-layout-field.tsx": [
+    "Layout",
+    "A layout of its own, set in Style.",
+  ],
   // The same Layout control, as the settings search finds it.
-  "settings-entries.ts": ["Layout"],
+  "inspector/settings-entries.ts": ["Layout"],
   "columns-layout.ts": ["Not a layout."],
   // The same arrangement, chosen on the canvas when a Columns row is added.
   "columns-layout-picker.tsx": ["Choose a layout"],
@@ -113,12 +116,12 @@ const ALLOWED: Readonly<Record<string, readonly string[]>> = {
   "core-block-placement.fixture.ts": ["Layout"],
   // A Gallery's Layout section, the one its block places "When clicked" in,
   // holding how its pictures sit: Columns and On mobile.
-  "gallery-fields.tsx": ["Layout"],
-  "inspector.ts": ["Layout"],
+  "inspector/content/gallery-fields.tsx": ["Layout"],
+  "inspector/inspector.ts": ["Layout"],
   // The Add panel's group of layout blocks (Section, Columns, Grid).
   "panels/add/inserter-palette.ts": ["Layout"],
   // The Style tab's Layout section.
-  "inspector-sections.ts": ["Layout"],
+  "inspector/inspector-sections.ts": ["Layout"],
   // A header or footer the site's own code draws around the canvas.
   "canvas/site-chrome-cues.tsx": [
     "Part of your site’s layout",

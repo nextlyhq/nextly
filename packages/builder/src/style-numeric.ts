@@ -48,7 +48,7 @@ import {
   type StyleValue,
 } from "@nextlyhq/blocks-engine";
 
-import { keywordLabel } from "./style-keyword-labels";
+import { keywordLabel } from "./inspector/style-inspector/style-keyword-labels";
 
 /**
  * The grammar CSS calls a `<number>`: an optional sign, digits with an optional

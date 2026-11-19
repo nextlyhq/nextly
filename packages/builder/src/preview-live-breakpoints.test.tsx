@@ -22,7 +22,7 @@ import { PREVIEW_VIEWPORT_CONTAINER } from "@nextlyhq/blocks-engine";
 import { cleanup, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { StyleInspectorPanel } from "./style-inspector-panel";
+import { StyleInspectorPanel } from "./inspector/style-inspector/style-inspector-panel";
 import type { BreakpointSet } from "./breakpoints";
 import type { EditorState } from "./editor-state";
 

@@ -23,7 +23,7 @@ import {
 } from "./field-edit";
 import { useLiveDraft } from "./live-draft";
 import { useStoredDraft } from "./stored-draft";
-import { useDraft } from "./style-text-field";
+import { useDraft } from "./inspector/style-inspector/style-text-field";
 
 afterEach(cleanup);
 

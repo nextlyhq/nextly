@@ -20,7 +20,7 @@ import {
   type BreakpointSet,
 } from "@nextlyhq/blocks-engine";
 
-import type { DeviceRange } from "../../code-hints";
+import type { DeviceRange } from "../../inspector/code-hints";
 import type { BuilderOp } from "../../op-vocabulary";
 import {
   deviceOptions,

@@ -51,7 +51,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 
 import { gatedAsStored } from "../../conditions/condition-gate";
-import { holdsCustomCss } from "../../custom-css";
+import { holdsCustomCss } from "../../inspector/custom-css";
 import { storedComponentId } from "../../placement-props";
 import { blockLabel, type SavedComponent } from "../add/inserter";
 

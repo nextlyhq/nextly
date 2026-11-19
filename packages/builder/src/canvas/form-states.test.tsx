@@ -34,7 +34,7 @@ import type {
   ContentServices,
   FormSource,
   PickedFormState,
-} from "../content-services";
+} from "../inspector/content/content-services";
 import type { EditorState } from "../editor-state";
 import { CANVAS_ROOT_CLASS } from "../shell-state";
 

@@ -27,13 +27,13 @@ import {
 } from "@nextlyhq/blocks-engine";
 import { INSTANCE_ATTRIBUTE, NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
 
-import type { PickedFormState } from "../content-services";
+import type { PickedFormState } from "../inspector/content/content-services";
 import {
   answersGoNowhere,
   FORM_BLOCK,
   pickedFormOf,
   type PickedForm,
-} from "../form-picked";
+} from "../inspector/content/form-picked";
 
 /** What the canvas says over one Form. */
 export type FormNoticeKind = "draft" | "closed" | "deleted" | "nowhere";

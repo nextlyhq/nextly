@@ -36,13 +36,13 @@ import * as React from "react";
 
 import { FluidButton } from "./fluid-popover";
 import { FontChoicesContext } from "./font-family-field";
+import { propertyVariableLeaf } from "./inspector/style-inspector/style-value-fields";
 import {
   sharedStyleChange,
   type SharedStyleChange,
 } from "./shared-style-target";
 import { roleFamilies } from "./site-font-roles-model";
 import { fontWeightOptions, lineHeightFromText } from "./style-folded";
-import { propertyVariableLeaf } from "./style-value-fields";
 import {
   fontChoiceOf,
   fontValueOf,

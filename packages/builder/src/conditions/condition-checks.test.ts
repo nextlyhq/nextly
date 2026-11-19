@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 
 import { uncheckedConditionIds } from "./condition-checks";
 import { gatedAsStored } from "./condition-gate";
-import type { LoopCollection } from "../content-controls";
+import type { LoopCollection } from "../inspector/content/content-controls";
 
 const POSTS: LoopCollection = {
   slug: "posts",

@@ -36,10 +36,10 @@ import {
 import { Button, Popover, PopoverContent, PopoverTrigger } from "@nextlyhq/ui";
 import * as React from "react";
 
-import { CssHint, CssNamesLine } from "./css-hint";
 import { commitFocusedField } from "./editor-field-commit";
 import { EDITOR_WORDS } from "./editor-words";
 import { FluidButton, type FluidHook } from "./fluid-popover";
+import { CssHint, CssNamesLine } from "./inspector/css-hint";
 import { sharedStyleName } from "./shared-style-library";
 import {
   pairWords,

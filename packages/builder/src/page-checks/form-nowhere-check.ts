@@ -8,7 +8,7 @@
  */
 import { walkNodes, type BlockNode } from "@nextlyhq/blocks-engine";
 
-import { answersGoNowhere, FORM_BLOCK } from "../form-picked";
+import { answersGoNowhere, FORM_BLOCK } from "../inspector/content/form-picked";
 
 import type { PageCheck, PageCheckResult } from "./page-checks";
 

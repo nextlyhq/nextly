@@ -35,13 +35,16 @@ import {
 import { AlertCircle, FileText, Plus, Repeat } from "lucide-react";
 import * as React from "react";
 
-import { LoopPicker, useLoopCollections } from "../collection-loop-controls";
+import type { EditorState } from "../editor-state";
+import {
+  LoopPicker,
+  useLoopCollections,
+} from "../inspector/content/collection-loop-controls";
 import type {
   ContentServices,
   LoopCollection,
   LoopListField,
-} from "../content-controls";
-import type { EditorState } from "../editor-state";
+} from "../inspector/content/content-controls";
 import {
   fieldList,
   fieldSourceOf,
@@ -51,14 +54,17 @@ import {
   PUBLIC_ONLY,
   useCustomSources,
   useEntryTitles,
-} from "../list-query-controls";
-import { customSourceLookup, type CustomSource } from "../named-query-model";
+} from "../inspector/content/list-query-controls";
+import {
+  customSourceLookup,
+  type CustomSource,
+} from "../inspector/content/named-query-model";
 import {
   SentenceRow,
   useSentenceRows,
   type SentenceRows,
   type ShownRow,
-} from "../sentence-row";
+} from "../inspector/content/sentence-row";
 
 import { storedGroups } from "./condition-checks";
 import { gatedAsStored } from "./condition-gate";

@@ -9,7 +9,7 @@
 import type { SiteTokenSet } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
-import { ShadowControl } from "./shadow-control";
+import { ShadowControl } from "./inspector/style-inspector/shadow-control";
 import { ModeIcon } from "./variable-popup-parts";
 import type { ValueFieldProps } from "./variable-value-controls";
 

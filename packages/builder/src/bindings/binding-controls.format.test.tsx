@@ -23,10 +23,10 @@ import type {
   BindingFieldChoice,
   BindingFieldSource,
 } from "./binding-services";
-import type { ContentServices } from "../content-controls";
+import type { ContentServices } from "../inspector/content/content-controls";
 import type { EditorState } from "../editor-state";
-import { InspectorPanel } from "../inspector-panel";
-import type { CustomSource } from "../named-query-model";
+import { InspectorPanel } from "../inspector/inspector-panel";
+import type { CustomSource } from "../inspector/content/named-query-model";
 
 beforeAll(() => {
   // What Radix's select asks of an element, which jsdom does not draw.

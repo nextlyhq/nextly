@@ -26,9 +26,12 @@ import {
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { BindingFieldSource } from "./binding-services";
-import type { ContentServices, LoopCollection } from "../content-controls";
+import type {
+  ContentServices,
+  LoopCollection,
+} from "../inspector/content/content-controls";
 import type { EditorState } from "../editor-state";
-import { InspectorPanel } from "../inspector-panel";
+import { InspectorPanel } from "../inspector/inspector-panel";
 
 beforeAll(() => {
   // What the picker asks of an element, which jsdom does not draw: its
