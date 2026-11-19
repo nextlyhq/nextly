@@ -9,11 +9,11 @@
  *
  * The apply adds two columns to a table it made, with nothing before the executor's statements that
  * runs one (no key lifted, no pre-cleanup). The executor fails the chosen statement and runs each
- * before it, as the database would. And pre-cleanup's statements are counted as they run: one a
- * trigger refuses, its first, leaves none kept on MySQL and SQLite.
+ * before it, as the database would. And pre-cleanup's statements are counted as they run: on MySQL,
+ * one a trigger refuses, its first, leaves none kept. (SQLite refuses, before anything runs, to
+ * rebuild a table with triggers its schema does not track, so a trigger cannot reach its
+ * pre-cleanup; its statements are recorded by the same code.)
  */
-import Database from "better-sqlite3";
-import { drizzle as drizzleSqlite } from "drizzle-orm/better-sqlite3";
 import { drizzle as drizzleMysql } from "drizzle-orm/mysql2";
 import { drizzle as drizzlePg } from "drizzle-orm/node-postgres";
 import { createPool, type Pool as MysqlPool } from "mysql2";
@@ -121,7 +121,7 @@ function orders(tableName: string, required: boolean): DesiredSchema {
 
 /** A pipeline that classifies and pre-cleans for real, answering `total`'s NULLs with a default. */
 function fillingPipeline(
-  dialect: "mysql" | "sqlite",
+  dialect: "mysql",
   db: unknown,
   tableName: string
 ): PushSchemaPipeline {
@@ -157,7 +157,7 @@ function fillingPipeline(
  * the change making `total` required must fill first.
  */
 async function insertRowWithoutTotal(
-  dialect: "mysql" | "sqlite",
+  dialect: "mysql",
   db: unknown,
   tableName: string,
   run: (statement: string) => Promise<unknown>
@@ -190,7 +190,7 @@ async function insertRowWithoutTotal(
  * statement, the fill, is refused, so nothing of the change ran.
  */
 async function fillRefusedByTrigger(
-  dialect: "mysql" | "sqlite",
+  dialect: "mysql",
   db: unknown,
   tableName: string,
   run: (statement: string) => Promise<unknown>,
@@ -309,6 +309,8 @@ describe.skipIf(!MYSQL_URL)("a failed apply's kept statements (mysql)", () => {
       );
 
       expect(result.success, JSON.stringify(result.error)).toBe(false);
+      // Positive control: the fill reached the database, which refused it.
+      expect(JSON.stringify(result.error)).toContain("refused by a trigger");
       expect(result.statementsKept).toBe(0);
       const [rows] = await pool
         .promise()
@@ -365,32 +367,5 @@ describe.skipIf(!PG_URL)("a failed apply's kept statements (postgres)", () => {
     expect(failing.sent()).toBe(1);
     expect(result.success).toBe(false);
     expect(result.statementsKept).toBeUndefined();
-  });
-});
-
-describe("a failed apply's kept statements (sqlite)", () => {
-  it("keeps none where pre-cleanup's first statement is refused, and says so", async () => {
-    const sqlite = new Database(":memory:");
-    const db = drizzleSqlite({ client: sqlite });
-    try {
-      const tableName = "dc_kept_orders";
-      const result = await fillRefusedByTrigger(
-        "sqlite",
-        db,
-        tableName,
-        statement => Promise.resolve(sqlite.exec(statement))
-      );
-
-      expect(result.success, JSON.stringify(result.error)).toBe(false);
-      expect(result.statementsKept).toBe(0);
-      const row = sqlite
-        .prepare(
-          `SELECT COUNT(*) AS n FROM "${tableName}" WHERE "total" IS NULL`
-        )
-        .get() as { n: number };
-      expect(row.n).toBe(1);
-    } finally {
-      sqlite.close();
-    }
   });
 });
