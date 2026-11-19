@@ -15,6 +15,7 @@ import type { ContentServices, ListEntriesCount } from "./content-controls";
 import { readBound } from "./list-query-model";
 import { FieldError, GroupTitle } from "./list-query-parts";
 import { issuesAt, LIST_QUERY_PROPS, type Issues } from "./list-query-reading";
+import { useStoredDraft } from "./stored-draft";
 
 /** The text a bound field opens with: the stored number, or the unset one. */
 function boundText(stored: unknown, unsetValue: number | undefined): string {
@@ -41,10 +42,11 @@ function useBoundDraft(
   send: () => void;
 } {
   const text = boundText(stored, unsetValue);
-  const [draft, setDraft] = React.useState(text);
+  // The inspector's own draft: an edit in progress from the first
+  // keystroke, which Save pressed from here writes first and Escape puts back.
+  const [draft, setDraft] = useStoredDraft(text);
   const [problem, setProblem] = React.useState<string | undefined>();
   React.useEffect(() => {
-    setDraft(text);
     setProblem(undefined);
   }, [text]);
   const send = () => {
