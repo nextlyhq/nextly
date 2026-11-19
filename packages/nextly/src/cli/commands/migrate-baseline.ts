@@ -1055,7 +1055,7 @@ async function adopt(deps: BaselineCoreDeps): Promise<BaselineCoreResult> {
             undefined,
             undefined,
             // A baseline is a project's first migration: written from none.
-            null
+            { parent: null, merges: [] }
           ),
           await prepareWhole(sqlPath, sqlContent),
         ];

@@ -60,6 +60,35 @@ vi.mock("../../utils/config-loader", async importOriginal => ({
   }),
 }));
 
+/**
+ * A step taken once `nextly migrate` has made its checks before the lock,
+ * the last of which is of the configuration against the migrations, and
+ * before it takes the lock: where the folder can change under a waiting run.
+ */
+const stops = vi.hoisted(() => ({
+  beforeLock: undefined as (() => void) | undefined,
+}));
+vi.mock(
+  "../../../domains/schema/migrate/refuse-unwritten-changes",
+  async importOriginal => {
+    const original =
+      await importOriginal<
+        typeof import("../../../domains/schema/migrate/refuse-unwritten-changes")
+      >();
+    return {
+      ...original,
+      refuseUnwrittenChanges: async (
+        ...args: Parameters<typeof original.refuseUnwrittenChanges>
+      ) => {
+        await original.refuseUnwrittenChanges(...args);
+        const step = stops.beforeLock;
+        stops.beforeLock = undefined;
+        step?.();
+      },
+    };
+  }
+);
+
 // This file's own tables.
 const POSTS = "fh_posts";
 const TAGS = "fh_tags";
@@ -107,6 +136,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  stops.beforeLock = undefined;
   await instance?.destroy();
   instance = undefined;
   if (previousDialect === undefined) delete process.env.DB_DIALECT;
@@ -357,6 +387,35 @@ describe.each(getConfiguredTestDialects())(
       expect(again.refused, again.said).toBe(false);
     }, 120_000);
 
+    it("after a merge where each branch added a collection: the merge is recorded and migrate applies all", async () => {
+      const [tags, prices] = await writtenBesideEachOther([TAGS, PRICES]);
+      const both = configOf([POSTS, TAGS, PRICES]);
+
+      const refused = await migrate(both);
+      expect(refused.refused).toBe(true);
+      expect(refused.said).toContain(
+        `Two migrations were written from ${base}: ${tags} and ${prices}.`
+      );
+      expect(await adapter.tableExists(table(TAGS))).toBe(false);
+      expect(await adapter.tableExists(table(PRICES))).toBe(false);
+
+      // The record creates the table the newest snapshot lacks, which the
+      // other branch's migration has made by the time the record is reached:
+      // it is recorded as applied, its table and indexes being there already.
+      await pause(5);
+      const recorded = await migrateCreate(both, "record_merge");
+      expect(recorded.refused, recorded.said).toBe(false);
+
+      const applied = await migrate(both);
+      expect(applied.refused, applied.said).toBe(false);
+      expect(await adapter.tableExists(table(TAGS))).toBe(true);
+      expect(await adapter.tableExists(table(PRICES))).toBe(true);
+      const checked = await migrateCheck(both);
+      expect(checked.refused, checked.said).toBe(false);
+      const again = await migrate(both);
+      expect(again.refused, again.said).toBe(false);
+    }, 120_000);
+
     it("with one of the two applied on this database, names the other as the one not applied and leaves the applied one", async () => {
       const [tags, prices] = await writtenBesideEachOther([TAGS, PRICES]);
       // As the database of the developer whose branch had the first: applied
@@ -413,23 +472,66 @@ describe.each(getConfiguredTestDialects())(
 
       const nothing = await migrateCreate(withTags, "record_merge");
       expect(nothing.refused, nothing.said).toBe(false);
+      // The configuration is what the newest of the two records, and the
+      // other is named as the one written without it.
       expect(nothing.said).toContain(
-        "they make the same change and there is no merge to record: delete all but one of them"
+        `The configuration is what ${files[1]} records, so there is no merge to write. ${files[0]} was written without it`
       );
+      expect(nothing.said).toContain("delete it and its snapshot");
       expect(sqlFiles()).toHaveLength(3);
 
-      rmSync(join(dir, "migrations", files[1]));
+      rmSync(join(dir, "migrations", files[0]));
       rmSync(
         join(
           dir,
           "migrations",
           "meta",
-          files[1].replace(/\.sql$/, ".snapshot.json")
+          files[0].replace(/\.sql$/, ".snapshot.json")
         )
       );
       const applied = await migrate(withTags);
       expect(applied.refused, applied.said).toBe(false);
       expect(await adapter.tableExists(table(TAGS))).toBe(true);
+    }, 120_000);
+
+    it("refuses a migration written beside another while the run waited for the lock, before its first write", async () => {
+      const [tags, prices] = await writtenBesideEachOther([TAGS, PRICES]);
+      // The folder holds one of the two when the run starts and makes its
+      // first checks; the other arrives before the run takes the lock.
+      move(prices, "aside");
+      stops.beforeLock = () => move(prices, "back");
+
+      const refused = await migrate(configOf([POSTS, TAGS]));
+
+      expect(refused.refused).toBe(true);
+      expect(refused.said).toContain(
+        `Two migrations were written from ${base}: ${tags} and ${prices}.`
+      );
+      // Read again under the lock, so neither was applied.
+      expect(await adapter.tableExists(table(TAGS))).toBe(false);
+      expect(await adapter.tableExists(table(PRICES))).toBe(false);
+    }, 120_000);
+
+    it("is not settled by a migration that only follows one of the branches", async () => {
+      const [tags, prices] = await writtenBesideEachOther([TAGS, PRICES]);
+      // Written on the second branch, with the first not in the folder.
+      move(tags, "aside");
+      await pause(5);
+      const followed = await migrateCreate(
+        configOf([POSTS, PRICES, NOTES]),
+        "add_notes"
+      );
+      expect(followed.refused, followed.said).toBe(false);
+      move(tags, "back");
+
+      const refused = await migrate(configOf([POSTS, TAGS, PRICES, NOTES]));
+
+      expect(refused.refused).toBe(true);
+      expect(refused.said).toContain(
+        `Two migrations were written from ${base}: ${tags} and ${prices}.`
+      );
+      expect(await adapter.tableExists(table(TAGS))).toBe(false);
+      expect(await adapter.tableExists(table(NOTES))).toBe(false);
     }, 120_000);
 
     it("migrate:check fails and a Builder save adds nothing, until the merge is recorded", async () => {

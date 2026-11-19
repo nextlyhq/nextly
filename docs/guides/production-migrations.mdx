@@ -453,7 +453,7 @@ Each migration is written from the one before it, and its snapshot records which
 
 `nextly migrate`, a production start, `nextly migrate:check` and a Schema Builder save refuse such a history with `MIGRATION_HISTORY_FORKED`, naming the files, and `nextly migrate` applies none of them. Before this, they were applied in file order and the configuration was then refused as ahead of its migrations.
 
-After merging a branch that brought a migration of its own, run `nextly migrate:create --name record_merge`: it writes a migration after both that records the merged state, and `nextly migrate` then applies everything. If it finds nothing to record, the two make the same change: delete one of them and its snapshot in `meta/`.
+After merging a branch that brought a migration of its own, run `nextly migrate:create --name record_merge`: it writes a migration after both that records the merged state, and `nextly migrate` then applies everything. If it finds nothing to record, the configuration is already what the newest of them records: it names the migrations written without it, which repeat the change or make one the configuration no longer has, and those are deleted with their snapshots in `meta/`. A migration that only continues one of the branches does not record the merge.
 
 Run `nextly migrate:check` in CI on every pull request, so a merge that still needs its record fails there.
 

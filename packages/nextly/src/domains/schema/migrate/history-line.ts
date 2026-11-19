@@ -2,21 +2,22 @@
  * A project's migrations are one line: each is written from the one before
  * it, and its snapshot says which (`parent`, `snapshot-io.ts`).
  *
- * A migration whose parent is not the one before it in the folder was
- * written without those in between: by two writers at once (one stopped past
- * its hold on the migration files while the other wrote), or on two branches
- * merged afterwards. It was diffed against a snapshot that knows nothing of
- * the others, so the newest snapshot lacks their changes until a migration
- * written with all of them in the folder records the merge: the next `nextly
- * migrate:create`. Until then the history is refused where the migrations
- * are used, with the files named. Where the migrations make the same change
- * there is nothing to record, and one of them is deleted.
+ * A migration accounts for its parent and everything its parent accounts
+ * for. Two migrations that do not account for each other were written
+ * without each other: by two writers at once (one stopped past its hold on
+ * the migration files while the other wrote), or on two branches merged
+ * afterwards. Each was diffed against a snapshot that knows nothing of the
+ * other, so the newest snapshot lacks one side's changes until a migration
+ * records the merge: one written with both in the folder, whose snapshot
+ * names the other branch's end beside its parent (`merges`). That is the
+ * next `nextly migrate:create`. Until then the history is refused where the
+ * migrations are used, with the files named.
  *
- * A snapshot written before parents were recorded, or copied by hand for a
- * hand-written migration, names none and is trusted in its file order:
- * nothing of an existing project is refused. A parent that is no longer in
- * the folder is not refused either, since an older migration may be removed
- * on purpose.
+ * A snapshot that names no parent of its own (written before parents were
+ * recorded, or copied by hand for a hand-written migration) is trusted in
+ * its file order: it accounts for every migration named before it, so
+ * nothing of an existing project is refused. So is one whose parent is no
+ * longer in the folder, since an older migration may be removed on purpose.
  *
  * @module domains/schema/migrate/history-line
  */
@@ -26,18 +27,19 @@ import { resolve } from "node:path";
 import { NextlyError } from "../../../errors/nextly-error";
 import { recordedSnapshotNames } from "../migrate-create/snapshot-io";
 
-/** Migrations written without each other, with no migration after them recording the merge. */
+/** Migrations written without each other, with no migration recording them together. */
 export interface UnrecordedMerge {
-  /** The parent they were written from, by base name; null for the project's start. */
-  parent: string | null;
   /**
-   * The base names of the migrations after `parent` that were written
-   * without each other, in file order: those written from it, and those
-   * that followed one of them.
+   * What the branches were written from, by base name: null for the
+   * project's start, and undefined where they do not share it.
    */
+  parent: string | null | undefined;
+  /** The first migration of each branch, by base name, in file order. */
   migrations: string[];
-  /** Whether each of them was written from `parent` itself. */
-  siblings: boolean;
+  /** Every migration of every branch, in file order. */
+  members: string[];
+  /** The branch of the newest migration: what the others were written without. */
+  newest: string[];
 }
 
 /** The `logContext.reason` of a refusal over a forked history. */
@@ -51,24 +53,35 @@ interface Placed {
    * migration, or undefined where it records none of its own.
    */
   parent: string | null | undefined;
+  /** The other branch ends its snapshot records a merge of. */
+  merges: readonly string[];
 }
 
 /**
- * The parent `content`, the text of `base`'s snapshot, records: undefined
+ * Where `content`, the text of `base`'s snapshot, places it: no parent
  * where it records none (written before parents were), where it was written
  * for another migration (copied by hand), or where it cannot be read as a
  * snapshot, which the checks of snapshots themselves name.
  */
-function parentIn(content: string, base: string): string | null | undefined {
+function placedBy(content: string, base: string): Placed {
+  const none: Placed = { base, parent: undefined, merges: [] };
   try {
-    const { parent, migration } = JSON.parse(content) as {
+    const { parent, migration, merges } = JSON.parse(content) as {
       parent?: unknown;
       migration?: unknown;
+      merges?: unknown;
     };
-    if (migration !== base) return undefined;
-    return parent === null || typeof parent === "string" ? parent : undefined;
+    if (migration !== base) return none;
+    if (parent !== null && typeof parent !== "string") return none;
+    return {
+      base,
+      parent,
+      merges: Array.isArray(merges)
+        ? merges.filter((each): each is string => typeof each === "string")
+        : [],
+    };
   } catch {
-    return undefined;
+    return none;
   }
 }
 
@@ -83,93 +96,130 @@ async function placedIn(migrationsDir: string): Promise<Placed[]> {
   const placed: Placed[] = [];
   for (const file of await recordedSnapshotNames(metaDir)) {
     const base = file.slice(0, -".snapshot.json".length);
-    const content = await readFile(resolve(metaDir, file), "utf-8");
-    placed.push({ base, parent: parentIn(content, base) });
+    placed.push(
+      placedBy(await readFile(resolve(metaDir, file), "utf-8"), base)
+    );
   }
   return placed;
 }
 
-/**
- * Whether `base` was written after `ancestor`, by the parents the snapshots
- * record: `ancestor` is its parent, or its parent's, and so on.
- */
-function descendsFrom(
-  base: string,
-  ancestor: string,
-  parents: ReadonlyMap<string, string | null | undefined>
-): boolean {
-  const seen = new Set<string>();
-  let at = parents.get(base);
-  while (typeof at === "string" && !seen.has(at)) {
-    if (at === ancestor) return true;
-    seen.add(at);
-    at = parents.get(at);
-  }
-  return false;
+/** The line as read: each migration, and what each accounts for. */
+interface Line {
+  placed: readonly Placed[];
+  /** Every migration `base` accounts for, itself left out. */
+  known(base: string): ReadonlySet<string>;
 }
 
 /**
- * The migrations `placed[index]` was written without: those in the folder
- * between its parent and itself. None where it was written from the one
- * before it, where it records no parent, or where its parent is not before
- * it in the folder (removed since, or named after it). One written from it
- * in turn is not among them, whatever its name sorts as: it came after.
+ * What each migration accounts for: its parent and the branch ends it
+ * merges, and all they account for in turn. One that names no parent of its
+ * own accounts for every migration named before it.
  */
-function unseenBy(
-  placed: readonly Placed[],
-  index: number,
-  parents: ReadonlyMap<string, string | null | undefined>
-): string[] {
-  const { base, parent } = placed[index];
-  if (parent === undefined) return [];
-  return placed
-    .slice(0, index)
-    .map(before => before.base)
+function lineOf(placed: readonly Placed[]): Line {
+  const byBase = new Map(placed.map(each => [each.base, each]));
+  /** Every migration named before `base`: what one trusted in file order accounts for. */
+  const before = (base: string) =>
+    placed.filter(other => other.base < base).map(other => other.base);
+  const steps = (each: Placed): readonly string[] => {
+    if (each.parent === undefined) return before(each.base);
+    if (each.parent === null) return each.merges;
+    // A parent that is no longer in the folder (removed on purpose) says
+    // nothing more: the migration is trusted in file order from there.
+    return byBase.has(each.parent)
+      ? [each.parent, ...each.merges]
+      : [...before(each.base), ...each.merges];
+  };
+  const memo = new Map<string, ReadonlySet<string>>();
+  const known = (base: string): ReadonlySet<string> => {
+    const done = memo.get(base);
+    if (done !== undefined) return done;
+    const all = new Set<string>();
+    const queue = [base];
+    for (let at = queue.pop(); at !== undefined; at = queue.pop()) {
+      const each = byBase.get(at);
+      if (each === undefined) continue;
+      for (const next of steps(each)) {
+        if (all.has(next) || next === base) continue;
+        all.add(next);
+        queue.push(next);
+      }
+    }
+    memo.set(base, all);
+    return all;
+  };
+  return { placed, known };
+}
+
+/**
+ * The ends of the line's branches: each migration that records a parent and
+ * that no other migration accounts for. One where the history is one line.
+ */
+function headsOf(line: Line): string[] {
+  return line.placed
     .filter(
-      before =>
-        (parent === null || before > parent) &&
-        before < base &&
-        !descendsFrom(before, base, parents)
-    );
+      each =>
+        each.parent !== undefined &&
+        !line.placed.some(
+          other => other !== each && line.known(other.base).has(each.base)
+        )
+    )
+    .map(each => each.base);
 }
 
 /**
- * Every merge the folder's history does not record: each parent after which
- * migrations were written without each other, with no migration after them
- * that was written from the one before it, which is what records a merge.
+ * The branch ending at `head`: `head` and each migration it accounts for
+ * that no other branch end does, in file order.
+ */
+function branchOf(line: Line, head: string, heads: readonly string[]) {
+  const shared = new Set(
+    heads.filter(other => other !== head).flatMap(o => [...line.known(o)])
+  );
+  return [...line.known(head), head]
+    .filter(
+      base =>
+        !shared.has(base) &&
+        line.placed.find(each => each.base === base)?.parent !== undefined
+    )
+    .sort();
+}
+
+/**
+ * The merge the folder's history does not record, or none: the branches
+ * written without each other, where more than one migration is accounted
+ * for by no other.
  */
 export async function unrecordedMerges(
   migrationsDir: string
 ): Promise<UnrecordedMerge[]> {
-  const placed = await placedIn(migrationsDir);
-  const parentOf = new Map(placed.map(each => [each.base, each.parent]));
-  const unseen = placed.map((_, index) => unseenBy(placed, index, parentOf));
-  // The newest migration written from the one before it: with every
-  // migration before it in the folder when it was written, it records them.
-  const recordedUpTo = placed.findLastIndex(
-    (each, index) =>
-      each.parent !== undefined &&
-      unseen[index].length === 0 &&
-      each.parent === (placed[index - 1]?.base ?? null)
-  );
-  /** By parent; the project's start is keyed by the empty name. */
-  const merges = new Map<string, Set<string>>();
-  placed.forEach((each, index) => {
-    if (index <= recordedUpTo || unseen[index].length === 0) return;
-    const key = each.parent ?? "";
-    const together = merges.get(key) ?? new Set<string>();
-    for (const base of [...unseen[index], each.base]) together.add(base);
-    merges.set(key, together);
-  });
-  return [...merges].map(([key, together]) => {
-    const parent = key === "" ? null : key;
-    const migrations = [...together].sort();
-    return {
-      parent,
-      migrations,
-      siblings: migrations.every(base => parentOf.get(base) === parent),
-    };
-  });
+  const line = lineOf(await placedIn(migrationsDir));
+  const heads = headsOf(line);
+  if (heads.length < 2) return [];
+  const branches = heads.map(head => branchOf(line, head, heads));
+  const parentOf = (base: string) =>
+    line.placed.find(each => each.base === base)?.parent;
+  const starts = branches.map(branch => branch[0]);
+  const parents = new Set(starts.map(parentOf));
+  return [
+    {
+      parent: parents.size === 1 ? [...parents][0] : undefined,
+      migrations: [...starts].sort(),
+      members: branches.flat().sort(),
+      newest: branches[heads.indexOf([...heads].sort().at(-1) ?? "")] ?? [],
+    },
+  ];
+}
+
+/**
+ * The branch ends a migration written now from `parent` records a merge of:
+ * each end of the folder's line that is not `parent`. None in a history
+ * that is one line, where the only end is the parent itself.
+ */
+export async function mergedBy(
+  migrationsDir: string,
+  parent: string | null
+): Promise<string[]> {
+  const line = lineOf(await placedIn(migrationsDir));
+  return headsOf(line).filter(head => head !== parent);
 }
 
 /** `names` as a sentence lists them: "a and b", "a, b and c". */
@@ -183,30 +233,27 @@ const COUNTS = ["", "", "Two", "Three", "Four", "Five"];
 
 const file = (base: string) => `${base}.sql`;
 
-/** What happened, for one unrecorded merge. */
+/** What happened, for an unrecorded merge. */
 function whatOf(merge: UnrecordedMerge): string {
   const names = merge.migrations.map(file);
+  if (merge.parent === undefined) {
+    return `${listed(names)} were written without each other.`;
+  }
   const from =
     merge.parent === null
       ? "each as this project's first"
       : `from ${file(merge.parent)}`;
-  if (merge.siblings) {
-    const count = COUNTS[names.length] ?? String(names.length);
-    return `${count} migrations were written ${from}: ${listed(names)}.`;
-  }
-  return (
-    `${listed(names)} were not all written one after another: one of them was ` +
-    `written ${from}, without the others.`
-  );
+  const count = COUNTS[names.length] ?? String(names.length);
+  return `${count} migrations were written ${from}: ${listed(names)}.`;
 }
 
-/** One unrecorded merge as its refusal says it, or undefined where it is not refused. */
+/** An unrecorded merge as its refusal says it, or undefined where it is not refused. */
 function mergeLines(
   merge: UnrecordedMerge,
   applied: ReadonlySet<string> | undefined
 ): { what: string; why: string; next: string } | undefined {
-  const done = merge.migrations.filter(base => applied?.has(base) === true);
-  const pending = merge.migrations.filter(base => !done.includes(base));
+  const done = merge.members.filter(base => applied?.has(base) === true);
+  const pending = merge.members.filter(base => !done.includes(base));
   // Each already applied here: the history is what it is, and nothing is
   // left to refuse.
   if (pending.length === 0) return undefined;
@@ -285,20 +332,23 @@ export async function refuseForkedHistory(
 
 /**
  * What `nextly migrate:create` says where it found nothing to write and the
- * history holds a merge nothing records: the migrations make the same
- * change, so there is no merge to record and one of them goes. Undefined
- * where the history is one line.
+ * history holds a merge nothing records: the configuration is what the
+ * newest migration's snapshot records, so there is no merge to write, and
+ * the migrations written without it either repeat its change or make one
+ * the configuration no longer has. Undefined where the history is one line.
  */
 export async function nothingToRecordNotice(
   migrationsDir: string
 ): Promise<string | undefined> {
-  const merges = await unrecordedMerges(migrationsDir);
-  if (merges.length === 0) return undefined;
-  return merges
-    .map(
-      merge =>
-        `${whatOf(merge)} The configuration has nothing they lack, so they make the same ` +
-        "change and there is no merge to record: delete all but one of them, with their snapshots."
-    )
-    .join("\n");
+  const [merge] = await unrecordedMerges(migrationsDir);
+  if (merge === undefined) return undefined;
+  const others = merge.members.filter(base => !merge.newest.includes(base));
+  const one = others.length === 1;
+  return (
+    `${whatOf(merge)} The configuration is what ${file(merge.newest.at(-1) ?? "")} records, ` +
+    `so there is no merge to write. ${listed(others.map(file))} ${one ? "was" : "were"} written ` +
+    `without it: if ${one ? "its change is" : "their changes are"} the same, or no longer wanted, ` +
+    `delete ${one ? "it and its snapshot" : "them and their snapshots"}; if ${one ? "it is" : "they are"} ` +
+    "wanted, make the change in the configuration and run `nextly migrate:create` again."
+  );
 }

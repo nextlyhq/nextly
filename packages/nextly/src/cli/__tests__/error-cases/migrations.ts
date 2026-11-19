@@ -204,7 +204,8 @@ export const MIGRATION_CASES = {
         {
           parent: "20261020_120000_add_posts",
           migrations: ["20261021_090000_add_tags", "20261021_090500_add_price"],
-          siblings: true,
+          members: ["20261021_090000_add_tags", "20261021_090500_add_price"],
+          newest: ["20261021_090500_add_price"],
         },
       ],
       new Set(["20261020_120000_add_posts", "20261021_090000_add_tags"])

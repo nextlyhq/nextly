@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   HISTORY_FORKED_REASON,
   forkedHistoryError,
+  mergedBy,
   nothingToRecordNotice,
   refuseForkedHistory,
   unrecordedMerges,
@@ -32,13 +33,15 @@ afterEach(() => {
 
 /**
  * A written migration: its file and its snapshot, recording `parent` where
- * one is given. `"none"` writes a snapshot from before parents were
- * recorded; `copiedFrom` one copied by hand from that migration's.
+ * one is given, and the branch ends it `merges`. `"none"` writes a snapshot
+ * from before parents were recorded; `copiedFrom` one copied by hand from
+ * that migration's.
  */
 function migration(
   base: string,
   parent: string | null | "none",
-  copiedFrom?: string
+  copiedFrom?: string,
+  merges: string[] = []
 ): void {
   writeFileSync(join(dir, `${base}.sql`), "");
   writeFileSync(
@@ -46,7 +49,13 @@ function migration(
     JSON.stringify({
       version: 1,
       snapshot: { tables: [] },
-      ...(parent === "none" ? {} : { parent, migration: copiedFrom ?? base }),
+      ...(parent === "none"
+        ? {}
+        : {
+            parent,
+            migration: copiedFrom ?? base,
+            ...(merges.length > 0 ? { merges } : {}),
+          }),
     })
   );
 }
@@ -58,6 +67,7 @@ describe("the merges a migration history does not record", () => {
     migration("0003_c", "0002_b");
 
     expect(await unrecordedMerges(dir)).toEqual([]);
+    expect(await mergedBy(dir, "0003_c")).toEqual([]);
     await refuseForkedHistory(dir);
   });
 
@@ -67,62 +77,67 @@ describe("the merges a migration history does not record", () => {
     migration("0002_b", "0001_a");
 
     expect(await unrecordedMerges(dir)).toEqual([
-      { parent: "0001_a", migrations: ["0002_b", "0003_c"], siblings: true },
+      {
+        parent: "0001_a",
+        migrations: ["0002_b", "0003_c"],
+        members: ["0002_b", "0003_c"],
+        newest: ["0003_c"],
+      },
     ]);
   });
 
   it("finds two written each as the project's first, and three from one parent", async () => {
     migration("0001_a", null);
     migration("0002_b", null);
-    expect(await unrecordedMerges(dir)).toEqual([
-      { parent: null, migrations: ["0001_a", "0002_b"], siblings: true },
-    ]);
+    expect((await unrecordedMerges(dir))[0]).toMatchObject({
+      parent: null,
+      migrations: ["0001_a", "0002_b"],
+    });
 
     migration("0002_b", "0001_a");
     migration("0003_c", "0001_a");
     migration("0004_d", "0001_a");
+    expect((await unrecordedMerges(dir))[0]).toMatchObject({
+      parent: "0001_a",
+      migrations: ["0002_b", "0003_c", "0004_d"],
+      newest: ["0004_d"],
+    });
+  });
+
+  it("is not settled by a migration that only follows one of the branches", async () => {
+    migration("0001_p", null);
+    migration("0002_a", "0001_p");
+    migration("0003_b", "0001_p");
+    // Written on `b`'s branch, without `a`: it follows `b` and records no merge.
+    migration("0004_c", "0003_b");
+
     expect(await unrecordedMerges(dir)).toEqual([
       {
-        parent: "0001_a",
-        migrations: ["0002_b", "0003_c", "0004_d"],
-        siblings: true,
+        parent: "0001_p",
+        migrations: ["0002_a", "0003_b"],
+        members: ["0002_a", "0003_b", "0004_c"],
+        newest: ["0003_b", "0004_c"],
       },
     ]);
   });
 
-  it("finds a migration written without two that followed one another on another branch", async () => {
-    migration("0001_a", null);
-    migration("0002_b", "0001_a");
-    migration("0003_c", "0002_b");
-    migration("0004_d", "0001_a");
-
-    expect(await unrecordedMerges(dir)).toEqual([
-      {
-        parent: "0001_a",
-        migrations: ["0002_b", "0003_c", "0004_d"],
-        siblings: false,
-      },
-    ]);
-  });
-
-  it("finds none once a migration written after them, from the one before it, records the merge", async () => {
-    migration("0001_a", null);
-    migration("0002_b", "0001_a");
-    migration("0003_c", "0001_a");
-    // As `migrate:create` writes it with both in the folder.
-    migration("0004_record_merge", "0003_c");
+  it("finds none once a migration written with both in the folder records the merge", async () => {
+    migration("0001_p", null);
+    migration("0002_a", "0001_p");
+    migration("0003_b", "0001_p");
+    // What `migrate:create` records, written from the newest with the other there.
+    expect(await mergedBy(dir, "0003_b")).toEqual(["0002_a"]);
+    migration("0004_record_merge", "0003_b", undefined, ["0002_a"]);
 
     expect(await unrecordedMerges(dir)).toEqual([]);
 
-    // And one written without that record is found on its own.
-    migration("0005_e", "0003_c");
-    expect(await unrecordedMerges(dir)).toEqual([
-      {
-        parent: "0003_c",
-        migrations: ["0004_record_merge", "0005_e"],
-        siblings: true,
-      },
-    ]);
+    // And one written after it from `b`, without the record or what it
+    // merged, is found against both.
+    migration("0005_e", "0003_b");
+    expect((await unrecordedMerges(dir))[0]).toMatchObject({
+      members: ["0002_a", "0004_record_merge", "0005_e"],
+      newest: ["0005_e"],
+    });
   });
 
   it("trusts snapshots written before parents were recorded, in their file order", async () => {
@@ -152,6 +167,9 @@ describe("the merges a migration history does not record", () => {
     migration("0002_b", "0003_c");
 
     expect(await unrecordedMerges(dir)).toEqual([]);
+    // The next migration is written from the newest by name, and records
+    // the one named before it.
+    expect(await mergedBy(dir, "0003_c")).toEqual(["0002_b"]);
   });
 
   it("refuses nothing over a parent that is no longer in the folder", async () => {
@@ -178,6 +196,7 @@ describe("the merges a migration history does not record", () => {
 
     rmSync(join(dir, "meta"), { recursive: true });
     expect(await unrecordedMerges(dir)).toEqual([]);
+    expect(await mergedBy(dir, null)).toEqual([]);
   });
 });
 
@@ -185,7 +204,8 @@ describe("the refusal of a merge nothing records", () => {
   const merge = {
     parent: "0001_a",
     migrations: ["0002_b", "0003_c"],
-    siblings: true,
+    members: ["0002_b", "0003_c"],
+    newest: ["0003_c"],
   };
 
   it("names both files and how to record the merge, where no database says which is applied", () => {
@@ -213,6 +233,17 @@ describe("the refusal of a merge nothing records", () => {
     );
   });
 
+  it("refuses while a later migration of a branch is not applied, though each first one is", () => {
+    const refusal = forkedHistoryError(
+      [{ ...merge, members: ["0002_b", "0003_c", "0004_d"] }],
+      new Set(["0002_b", "0003_c"])
+    );
+
+    expect(refusal?.publicMessage).toContain(
+      "0002_b.sql and 0003_c.sql are applied on this database, and 0004_d.sql was written without their changes"
+    );
+  });
+
   it("refuses nothing where every one of them is already applied, or where there is none", () => {
     expect(
       forkedHistoryError([merge], new Set(["0001_a", "0002_b", "0003_c"]))
@@ -220,31 +251,25 @@ describe("the refusal of a merge nothing records", () => {
     expect(forkedHistoryError([])).toBeUndefined();
   });
 
-  it("says which were written without the others where they are not all from one parent", () => {
+  it("says they were written without each other where they do not share a parent", () => {
     expect(
-      forkedHistoryError([
-        {
-          parent: "0001_a",
-          migrations: ["0002_b", "0003_c", "0004_d"],
-          siblings: false,
-        },
-      ])?.publicMessage
-    ).toMatch(
-      /^0002_b\.sql, 0003_c\.sql and 0004_d\.sql were not all written one after another: one of them was written from 0001_a\.sql, without the others\./
-    );
+      forkedHistoryError([{ ...merge, parent: undefined }])?.publicMessage
+    ).toMatch(/^0002_b\.sql and 0003_c\.sql were written without each other\./);
   });
 });
 
 describe("what migrate:create says where it finds nothing to record", () => {
-  it("says the migrations make the same change, and to delete all but one", async () => {
+  it("names the migrations written without the newest, and when to delete them", async () => {
     migration("0001_a", null);
     migration("0002_b", "0001_a");
     migration("0003_c", "0001_a");
 
     expect(await nothingToRecordNotice(dir)).toBe(
       "Two migrations were written from 0001_a.sql: 0002_b.sql and 0003_c.sql. " +
-        "The configuration has nothing they lack, so they make the same change and there " +
-        "is no merge to record: delete all but one of them, with their snapshots."
+        "The configuration is what 0003_c.sql records, so there is no merge to write. " +
+        "0002_b.sql was written without it: if its change is the same, or no longer wanted, " +
+        "delete it and its snapshot; if it is wanted, make the change in the configuration " +
+        "and run `nextly migrate:create` again."
     );
   });
 

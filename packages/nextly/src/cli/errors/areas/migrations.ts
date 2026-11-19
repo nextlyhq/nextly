@@ -537,7 +537,7 @@ export const MIGRATION_CODES = defineCodes({
   },
   MIGRATION_HISTORY_FORKED: {
     cause:
-      "Migrations were written without each other, from the same earlier migration, and no migration yet records them together, so none of them was applied.",
+      "Migrations were written without each other, and no migration yet records them together, so the command applied none of them that was not applied already.",
     from: [
       {
         code: "CONFLICT",

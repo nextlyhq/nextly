@@ -2989,6 +2989,10 @@ export async function migrateCore(
       // history checks of `assertAppHistoryHolds`, in its order.
       await assertFilesPresent(lockedHistory);
       await refuseAttempts(lockedHistory);
+      // And the history as one line, read again under the lock: a migration
+      // written beside another while this run waited for it is refused
+      // before the run's first write, from the ledger no other run changes.
+      await refuseForkedAppHistory(deps);
       // And again under the lock, before anything writes (the checksum check
       // below records a missing checksum): a file changed while this run
       // waited for the lock is judged as it now reads.
@@ -5096,9 +5100,16 @@ export async function runFileMigrations(args: {
         before,
         target,
         // Without the indexes the file adopted, which its snapshot before it does not record.
+        // On a table the file itself creates they stay: a table that is there already, with
+        // them, is the file's own end, as where a migration written to record a merge
+        // creates a table an earlier one of the merge made.
         live: withoutAdoptedIndexes(
           await introspectLiveSnapshot(db, dialect, managed),
-          adoption.adopted
+          adoption.adopted.filter(index =>
+            before.tables.some(
+              table => table.name.toLowerCase() === index.table
+            )
+          )
         ),
         contributions: mergeContributions(
           beforeContributions,

@@ -226,5 +226,5 @@
   "UPGRADE_WORK_MOVED": "`nextly upgrade` was run for the database work it used to do, which `nextly migrate` and `nextly i18n:convert-zoned-dates` now do, so it changed nothing.",
   "DATA_STEPS_BACKUP_NOT_CONFIRMED": "A command would change data an earlier Nextly release stored, and no backup was confirmed, with no terminal attached to ask.",
   "DATA_STEPS_BACKUP_DECLINED": "A command would change data an earlier Nextly release stored, and its backup question was answered no.",
-  "MIGRATION_HISTORY_FORKED": "Migrations were written without each other, from the same earlier migration, and no migration yet records them together, so none of them was applied."
+  "MIGRATION_HISTORY_FORKED": "Migrations were written without each other, and no migration yet records them together, so the command applied none of them that was not applied already."
 }

@@ -100,6 +100,14 @@ export interface SnapshotFile {
    * parent: only a snapshot under its own name is read as part of the line.
    */
   migration?: string;
+  /**
+   * The other migrations this one was written with in the folder, besides
+   * its parent and what its parent already accounts for: the ends of
+   * branches written without its parent. Naming them is what records a
+   * merge. Absent where there were none, which is every migration of a
+   * history that was one line when it was written.
+   */
+  merges?: string[];
 }
 
 /**
@@ -438,6 +446,15 @@ function optionalPartProblem(obj: Record<string, unknown>): string | undefined {
   ) {
     return `expected parent to be a migration's name or null when present, got ${JSON.stringify(obj.parent)}`;
   }
+  if (
+    obj.merges !== undefined &&
+    !(
+      Array.isArray(obj.merges) &&
+      obj.merges.every(each => typeof each === "string")
+    )
+  ) {
+    return `expected merges to list migrations' names when present, got ${JSON.stringify(obj.merges)}`;
+  }
   if (obj.migration !== undefined && typeof obj.migration !== "string") {
     return `expected migration to be a migration's name when present, got ${JSON.stringify(obj.migration)}`;
   }
@@ -489,11 +506,13 @@ export async function prepareSnapshot(
   /** Every declared permission, by owner; omitted only by a caller that knows none. */
   permissions?: PermissionRecord,
   /**
-   * The migration this one is written from, by base name; null for a
-   * project's first. Omitted only by a caller that does not know which
-   * snapshot it started from, whose file then records none.
+   * Where this migration stands in the project's line: the migration it is
+   * written from, by base name (null for a project's first), and the other
+   * branch ends in the folder that it records a merge of. Omitted only by a
+   * caller that does not know which snapshot it started from, whose file
+   * then records none.
    */
-  parent?: string | null
+  line?: { parent: string | null; merges: readonly string[] }
 ): Promise<PreparedFile> {
   await mkdir(metaDir, { recursive: true });
   const byName = (a: { name: string }, b: { name: string }) =>
@@ -512,7 +531,15 @@ export async function prepareSnapshot(
     ...(permissions !== undefined ? { permissions } : {}),
     // The tables below carry the translated-field record as written here.
     translatedFieldsRecorded: true,
-    ...(parent !== undefined ? { parent, migration: baseName } : {}),
+    ...(line === undefined
+      ? {}
+      : {
+          parent: line.parent,
+          migration: baseName,
+          ...(line.merges.length > 0
+            ? { merges: [...line.merges].sort() }
+            : {}),
+        }),
     // Sort tables by name for reproducibility across machines.
     snapshot: {
       tables: [...snapshot.tables]

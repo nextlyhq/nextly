@@ -29,11 +29,11 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-A project's migration history is checked as one line. Each new migration's snapshot records the migration it was written from (`parent`), and migrations written without each other, from the same earlier one, are refused with `MIGRATION_HISTORY_FORKED`, naming the files, by `nextly migrate`, a production start, `nextly migrate:check` and a Schema Builder save, until a migration records them together. `nextly migrate` applies none of them meanwhile.
+A project's migration history is checked as one line. Each new migration's snapshot records the migration it was written from (`parent`) and any other branch ends it was written with (`merges`), and migrations written without each other, from the same earlier one, are refused with `MIGRATION_HISTORY_FORKED`, naming the files, by `nextly migrate`, a production start, `nextly migrate:check` and a Schema Builder save, until a migration records them together. `nextly migrate` applies nothing further meanwhile. A pending migration that creates a table an earlier one of the same run has made is recorded as applied where the table stands as it would leave it, its indexes included, so a recorded merge of two added collections applies.
 
 This changes what happens after two branches that each added a migration are merged: before, both were applied in file order and the configuration was then refused as ahead. Now nothing is applied until `nextly migrate:create --name record_merge` has written the migration that records the merge; `nextly migrate` then applies all of them. Run `nextly migrate:check` in CI to catch it on the pull request.
 
-It is also what stops a duplicate from a `migrate:create` that was stopped for longer than its hold on the migration files while another ran: both files may be written, and neither is applied. `nextly migrate:create` then finds nothing to record and says to delete one.
+It is also what stops a duplicate from a `migrate:create` that was stopped for longer than its hold on the migration files while another ran: both files may be written, and neither is applied. `nextly migrate:create` then finds nothing to record and names the one to delete.
 
 Migrations written before this release record no parent and are never refused; neither is a snapshot copied by hand for a hand-written migration, nor a migration whose parent was removed from the folder.
 
