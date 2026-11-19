@@ -23,7 +23,7 @@ import {
   getWorkflowSettings,
   listWorkflows,
   updateWorkflowSettings,
-} from "@admin/services/workflowsApi";
+} from "@admin/services/workflowApi";
 import type {
   WorkflowSettingsChange,
   WorkflowSettingsView,

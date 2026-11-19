@@ -39,7 +39,7 @@ const api = vi.hoisted(() => ({
 }));
 const held = vi.hoisted(() => ({ permissions: new Set<string>() }));
 
-vi.mock("@admin/services/workflowsApi", () => api);
+vi.mock("@admin/services/workflowApi", () => api);
 vi.mock("@admin/hooks/queries/useAuthSession", () => ({
   useAuthSession: () => ({ data: { isAuthenticated: true } }),
 }));

@@ -11,7 +11,8 @@
  * - an email switch, for its own trigger alone.
  *
  * The page also says where the workflow is registered, relative to the
- * playground's root, and the list how many documents each stage holds.
+ * playground's root, and the list how many documents each stage holds,
+ * whatever that count is.
  *
  * What the component tests cannot see: the routes, the session and the real
  * server's answers, revision included, across four saves in a row.
@@ -48,8 +49,9 @@ async function openReview(page: Page): Promise<void> {
   const card = page
     .getByRole("list", { name: "Workflows" })
     .getByRole("link", { name: /^Review Defined in code/ });
-  // No Reviewed note has moved yet, so every stage holds none.
-  await expect(card).toContainText("Drafting0 documents");
+  // Each stage with its count of documents; other specs move Reviewed notes
+  // through this workflow too, so the count itself is not assumed.
+  await expect(card).toContainText(/Drafting\d+ documents/);
   await card.click();
   await expect(
     page.getByText("nextly.config.ts", { exact: true })
