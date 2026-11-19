@@ -616,6 +616,42 @@ describe("what naming an entity's main table covers", () => {
     }
   });
 
+  it("reaches no other entity's translations table by its owner, by what it translates, or by both", () => {
+    const consent = flag("dc_posts");
+    // `dc_pages` is another collection: its translations table, by each route and by both.
+    const pagesLocales = { owner: "dc_pages", translates: "dc_pages" };
+    expect(
+      consentCovers(consent, table("dc_pages_locales", pagesLocales))
+    ).toBe(false);
+    expect(
+      consentCovers(consent, table("dc_pages_locales", { owner: "dc_pages" }))
+    ).toBe(false);
+    expect(
+      consentCovers(
+        consent,
+        table("dc_pages_locales", { translates: "dc_pages" })
+      )
+    ).toBe(false);
+    // Coverage takes one step, never a chain: a table translating the entity's
+    // own translations table is not the entity's.
+    expect(
+      consentCovers(
+        consent,
+        table("dc_posts_locales_locales", { translates: "dc_posts_locales" })
+      )
+    ).toBe(false);
+    // Its own translations table, by either route, is covered.
+    expect(
+      consentCovers(consent, table("dc_posts_locales", { owner: "dc_posts" }))
+    ).toBe(true);
+    expect(
+      consentCovers(
+        consent,
+        table("dc_posts_locales", { translates: "dc_posts" })
+      )
+    ).toBe(true);
+  });
+
   it("covers no table the registry does not say the entity owns", () => {
     // Named like a translation table, but no registry row says it is one.
     expect(consentCovers(flag("dc_posts"), table("dc_posts_locales"))).toBe(
