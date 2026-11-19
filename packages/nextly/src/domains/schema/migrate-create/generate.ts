@@ -29,6 +29,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
+import { chooseTypeColumns } from "../../field-groups/storage/resolve-storage-names";
 import { isFieldLocalized } from "../../i18n/classify-fields";
 import type { JoinRetries } from "../../i18n/migration/archive-preflight";
 import { carriedDefinition } from "../../i18n/migration/carried-definition";
@@ -129,6 +130,7 @@ import {
   columnsDeclaredBy,
   type ColumnOrigin,
 } from "../services/field-column-descriptor";
+import { identifierCaseRules } from "../utils/resolve-catalog-name";
 import {
   resolveCollectionTableName,
   resolveComponentTableName,
@@ -3576,6 +3578,19 @@ export function buildDesiredSnapshotFromConfig(
 ): NextlySchemaSnapshot {
   const tables: TableSpec[] = [];
   const kept = columnsByTable(existing ?? { tables: [] }, dialect);
+  // Each field group's discriminator, read off the table as the last migration recorded it: the
+  // storage migration renames a group's column whatever its table is called, so the name alone
+  // cannot say which one an existing table has (`chooseTypeColumns`).
+  const recordedTypeColumns = chooseTypeColumns(
+    (existing?.tables ?? []).map(table => ({
+      table: table.name,
+      columns: table.columns.map(column => column.name),
+    })),
+    components.map(component => component.tableName),
+    dialect === "mysql"
+      ? identifierCaseRules({ dialect, lowerCaseTableNames: 1 })
+      : identifierCaseRules({ dialect })
+  );
   for (const entity of collections) {
     const c = withKeptScopeFields("collection", entity, kept);
     // Why: forward the entity's Draft/Published flag so the snapshot
@@ -3629,6 +3644,9 @@ export function buildDesiredSnapshotFromConfig(
         buildDesiredTableFromComponentFields(c.tableName, c.fields, dialect, {
           builtBy: columnOriginOf(c, "fieldGroup"),
           localized: storesPerLanguage(c),
+          // The discriminator the table carries as the last migration left it, and for a table
+          // no migration has made yet, the one it is created with under its name.
+          typeColumn: recordedTypeColumns.get(c.tableName),
         }),
         c,
         "fieldGroup",
