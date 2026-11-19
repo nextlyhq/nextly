@@ -96,7 +96,10 @@ import type {
 import { entitySaveDeps } from "../../schema/builder-save/entity-save-deps";
 import { entityRelations } from "../../schema/builder-save/single-relations";
 import { singleEntity } from "../../schema/builder-save/stored-entity";
-import { refuseUnansweredRename } from "../../schema/field-rename-answers";
+import {
+  declinedRename,
+  refuseUnansweredRename,
+} from "../../schema/field-rename-answers";
 import { refuseRenamedFieldOntoTakenColumn } from "../../schema/rename-target";
 import { writeRegistryRowsWith } from "../../schema/schema-version";
 import {
@@ -1634,19 +1637,42 @@ export class SingleMetadataService {
     input: UpdateSingleSchemaInput
   ): Promise<void> {
     if (input.fields === undefined) return;
-    const { DynamicCollectionSchemaService } = await import(
-      "../../dynamic-collections/services/dynamic-collection-schema-service"
-    );
+    const [{ DynamicCollectionSchemaService }, { toSnakeCase }] =
+      await Promise.all([
+        import(
+          "../../dynamic-collections/services/dynamic-collection-schema-service"
+        ),
+        import("../../../shared/lib/case-conversion"),
+      ]);
     refuseUnansweredRename(
       `The Single "${input.slug}"`,
       new DynamicCollectionSchemaService(
         undefined,
         this.dialect
-      ).fieldRenameCandidate(
+      ).renameCandidatesOf(
         (input.existing.fields ?? []) as unknown as FieldDefinition[],
         input.fields
-      )
+      ),
+      toSnakeCase
     );
+  }
+
+  /** Whether the request answered the change's column pair as a drop and an add. */
+  private async declinedColumnRename(
+    input: UpdateSingleSchemaInput
+  ): Promise<boolean> {
+    if (input.fields === undefined) return false;
+    const { DynamicCollectionSchemaService } = await import(
+      "../../dynamic-collections/services/dynamic-collection-schema-service"
+    );
+    const pair = new DynamicCollectionSchemaService(
+      undefined,
+      this.dialect
+    ).fieldRenameCandidate(
+      (input.existing.fields ?? []) as unknown as FieldDefinition[],
+      input.fields
+    );
+    return pair !== null && declinedRename(pair);
   }
 
   /**
@@ -1710,6 +1736,8 @@ export class SingleMetadataService {
       newFields: input.fields,
       wasLocalized: input.wasLocalized,
       isLocalized: input.isLocalized,
+      // A column pair the request answered as a drop and an add: the removal is the request's.
+      ...((await this.declinedColumnRename(input)) ? { renamed: null } : {}),
     });
   }
 

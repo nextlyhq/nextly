@@ -52,7 +52,10 @@ import {
   storesPerLanguage,
 } from "../../i18n/per-language-storage";
 import { companionHasStatusColumn } from "../../i18n/runtime/companion-io";
-import { refuseUnansweredRename } from "../../schema/field-rename-answers";
+import {
+  declinedRename,
+  refuseUnansweredRename,
+} from "../../schema/field-rename-answers";
 import { introspectLiveSnapshot } from "../../schema/pipeline/diff/introspect-live";
 import { normalizeType } from "../../schema/pipeline/diff/normalize-type";
 import type { ForeignKeySpec } from "../../schema/pipeline/diff/types";
@@ -1572,11 +1575,17 @@ export class DynamicCollectionService extends BaseService {
       // before anything is written.
       refuseUnansweredRename(
         `The collection "${collectionName}"`,
-        this.schemaService.fieldRenameCandidate(
-          oldUserFields,
-          userDefinedFields
-        )
+        this.schemaService.renameCandidatesOf(oldUserFields, userDefinedFields),
+        toSnakeCase
       );
+      // A column pair the request answered as a drop and an add, which the translated-field
+      // preflight below is told of, so it takes the removal as the request's, not an unanswered one.
+      const declinedColumnPair = this.schemaService.fieldRenameCandidate(
+        oldUserFields,
+        userDefinedFields
+      );
+      const declinedColumn =
+        declinedColumnPair !== null && declinedRename(declinedColumnPair);
 
       // A many-to-many added to a renamed collection would get a junction its reads can't find.
       refuseNewJunctionsOnRenamedCollection({
@@ -1632,6 +1641,7 @@ export class DynamicCollectionService extends BaseService {
         newFields: userDefinedFields,
         wasLocalized: collectionWasLocalized,
         isLocalized: collectionIsLocalized,
+        ...(declinedColumn ? { renamed: null } : {}),
       });
       // What the existing entries must satisfy for the change to apply, asked before any statement
       // runs: a refusal part-way would leave MySQL, which commits each schema statement, holding

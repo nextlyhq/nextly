@@ -2835,6 +2835,44 @@ ${allColumnDefs.join(",\n")}
   }
 
   /**
+   * Every pair a change could be renaming, whatever it answered about each: a column's, over all
+   * the fields and over the shared and the translated fields apart (a localized entity plans each
+   * on its own table, where one may pair though the whole list does not), a many-to-many's and a
+   * field group's. What a road that takes answers asks an answer for (`refuseUnansweredRename`).
+   */
+  renameCandidatesOf(
+    oldFields: FieldDefinition[],
+    newFields: FieldDefinition[]
+  ): { from: FieldDefinition; to: FieldDefinition }[] {
+    const translated = (fields: FieldDefinition[], yes: boolean) =>
+      fields.filter(field => (field.localized === true) === yes);
+    const found = [
+      this.fieldRenameCandidate(oldFields, newFields),
+      this.fieldRenameCandidate(
+        translated(oldFields, false),
+        translated(newFields, false)
+      ),
+      this.fieldRenameCandidate(
+        translated(oldFields, true),
+        translated(newFields, true)
+      ),
+      this.junctionRenameCandidate(oldFields, newFields),
+      this.fieldGroupRenameCandidate(oldFields, newFields),
+    ].filter(
+      (pair): pair is { from: FieldDefinition; to: FieldDefinition } =>
+        pair !== null
+    );
+    // Once each: the populations agree on a pair they both see.
+    return found.filter(
+      (pair, i) =>
+        found.findIndex(
+          other =>
+            other.from.name === pair.from.name && other.to.name === pair.to.name
+        ) === i
+    );
+  }
+
+  /**
    * The one leaving and one arriving field of a compatible type a change could be renaming, or
    * none, whatever the change answered about it: what a road that takes answers asks for an
    * answer to (`refuseUnansweredRename`). `detectFieldRename` is this less a pair answered
@@ -2918,6 +2956,16 @@ ${allColumnDefs.join(",\n")}
     oldFields: FieldDefinition[],
     newFields: FieldDefinition[]
   ): { from: FieldDefinition; to: FieldDefinition } | null {
+    const pair = this.junctionRenameCandidate(oldFields, newFields);
+    // A pair a change answered as a drop and an add moves no links (`declinedRename`).
+    return pair !== null && declinedRename(pair) ? null : pair;
+  }
+
+  /** The many-to-many pair a change could be renaming, whatever it answered about it. */
+  junctionRenameCandidate(
+    oldFields: FieldDefinition[],
+    newFields: FieldDefinition[]
+  ): { from: FieldDefinition; to: FieldDefinition } | null {
     const { oldOnly, newOnly } = renameCandidates(
       oldFields,
       newFields,
@@ -2963,6 +3011,16 @@ ${allColumnDefs.join(",\n")}
    * one field group at a time.
    */
   detectFieldGroupAssociationRename(
+    oldFields: FieldDefinition[],
+    newFields: FieldDefinition[]
+  ): { from: FieldDefinition; to: FieldDefinition } | null {
+    const pair = this.fieldGroupRenameCandidate(oldFields, newFields);
+    // A pair a change answered as a drop and an add moves no rows (`declinedRename`).
+    return pair !== null && declinedRename(pair) ? null : pair;
+  }
+
+  /** The field-group pair a change could be renaming, whatever it answered about it. */
+  fieldGroupRenameCandidate(
     oldFields: FieldDefinition[],
     newFields: FieldDefinition[]
   ): { from: FieldDefinition; to: FieldDefinition } | null {

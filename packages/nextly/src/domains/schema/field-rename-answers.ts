@@ -35,7 +35,14 @@ const ANSWERS = z
       })
       .strict()
   )
-  .max(200);
+  .max(200)
+  // One answer per pair: two for the same pair would leave which applies to their order.
+  .refine(
+    answers =>
+      new Set(answers.map(a => JSON.stringify([a.from, a.to]))).size ===
+      answers.length,
+    { message: "renames answers a field pair more than once." }
+  );
 
 /** The answers a request sent, read at the boundary; none where it sent none. */
 export function parseFieldRenameAnswers(value: unknown): FieldRenameAnswer[] {
@@ -48,7 +55,7 @@ export function parseFieldRenameAnswers(value: unknown): FieldRenameAnswer[] {
           path: "renames",
           code: "INVALID",
           message:
-            'renames must be a list of { from, to, choice: "rename" | "drop_and_add" }, by field name.',
+            'renames must be a list of { from, to, choice: "rename" | "drop_and_add" }, by field name, answering each pair once.',
         },
       ],
     });
@@ -96,27 +103,45 @@ export function declinedRename(pair: FieldPair): boolean {
 }
 
 /**
- * Refuse, before anything is written, a change on a road that takes answers whose rename
- * candidate (`pair`, or none) has no answer. `entity` names it: `The collection "posts"`, say.
- * An answer for a pair the change doesn't make has nothing to answer and is left aside, as the
- * change is planned without it. Off such a road nothing is refused.
+ * Refuse, before anything is written, a change on a road that takes answers that makes a pair it
+ * doesn't answer: each of `pairs`, the change's rename candidates (`renameCandidatesOf`).
+ * `entity` names it: `The collection "posts"`, say. A pair answered `drop_and_add` whose two
+ * names are one column (`columnOf`), as `fooBar` and `foo_bar` are, is refused too: the
+ * column cannot be dropped and added again in one change, only renamed. An answer for a pair the
+ * change doesn't make is left aside. Off such a road nothing is refused.
  */
 export function refuseUnansweredRename(
   entity: string,
-  pair: FieldPair | null
+  pairs: readonly FieldPair[],
+  columnOf: (name: string) => string
 ): void {
   if (answersScope.getStore() === undefined) return;
-  if (pair === null || answers(pair) !== undefined) return;
-  const from = pair.from.name ?? "";
-  const to = pair.to.name ?? "";
-  throw NextlyError.validation({
-    errors: [
-      {
-        path: "renames",
-        code: "FIELD_RENAME_UNANSWERED",
-        message: `${entity} removes the field "${from}" and adds "${to}" of the same type, and the request doesn't say whether that is a rename. Send renames: [{ "from": "${from}", "to": "${to}", "choice": "rename" }] to rename it and keep its values, or "choice": "drop_and_add" to drop "${from}" and its values and add "${to}" empty.`,
-      },
-    ],
-    logContext: { reason: "field-rename-unanswered", from, to },
-  });
+  for (const pair of pairs) {
+    const from = pair.from.name ?? "";
+    const to = pair.to.name ?? "";
+    const answer = answers(pair);
+    if (answer?.choice === "drop_and_add" && columnOf(from) === columnOf(to)) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "renames",
+            code: "FIELD_RENAME_SAME_COLUMN",
+            message: `${entity}: "${from}" and "${to}" are stored in the same column, which can't be dropped and added again in one change. Answer "rename" for them, or remove "${from}" and add "${to}" in two changes.`,
+          },
+        ],
+        logContext: { reason: "field-rename-same-column", from, to },
+      });
+    }
+    if (answer !== undefined) continue;
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "renames",
+          code: "FIELD_RENAME_UNANSWERED",
+          message: `${entity} removes the field "${from}" and adds "${to}" of the same type, and the request doesn't say whether that is a rename. Send renames: [{ "from": "${from}", "to": "${to}", "choice": "rename" }] to rename it and keep its values, or "choice": "drop_and_add" to drop "${from}" and its values and add "${to}" empty.`,
+        },
+      ],
+      logContext: { reason: "field-rename-unanswered", from, to },
+    });
+  }
 }

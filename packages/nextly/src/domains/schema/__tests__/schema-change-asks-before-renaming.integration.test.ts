@@ -295,3 +295,98 @@ describeEachDialect(
     }
   }
 );
+
+describeEachDialect(
+  "a localized collection's change asks about the pair each of its tables would rename",
+  dialect => {
+    let current: TestNextly;
+    let basePath: string;
+
+    beforeEach(async () => {
+      vi.stubEnv("NODE_ENV", "development");
+      basePath = mkdtempSync(join(tmpdir(), "nextly-asks-localized-"));
+      current = await createTestNextly({
+        dialect,
+        collections: [],
+        basePath,
+        db: { migrationsDir: HISTORY, uiSchemaFile: DEFINITION },
+        localization: { locales: ["en", "es"], defaultLocale: "en" },
+      });
+    });
+
+    afterEach(async () => {
+      await current.destroy();
+      vi.unstubAllEnvs();
+      rmSync(basePath, { recursive: true, force: true });
+    });
+
+    async function posts(fields: Record<string, unknown>[]): Promise<void> {
+      await dispatchCollections(
+        {} as ServiceContainer,
+        "createCollection",
+        {},
+        { name: "posts", label: "Posts", localized: true, fields }
+      );
+    }
+
+    function change(
+      fields: Record<string, unknown>[],
+      renames?: Renames
+    ): Promise<unknown> {
+      return dispatchCollections(
+        {} as ServiceContainer,
+        "updateCollection",
+        { collectionName: "posts" },
+        { fields, ...(renames ? { renames } : {}) }
+      );
+    }
+
+    async function codeOf(run: Promise<unknown>): Promise<string | undefined> {
+      try {
+        const result = (await run) as { success?: boolean } | null;
+        return result?.success === false ? "refused" : undefined;
+      } catch (error) {
+        return (error as { publicData?: { errors?: { code?: string }[] } })
+          .publicData?.errors?.[0]?.code;
+      }
+    }
+
+    it("refuses a shared field replaced beside a translated one added, which the shared table alone pairs", async () => {
+      await posts([
+        { name: "heading", type: "text" },
+        { name: "body", type: "text", localized: true },
+      ]);
+
+      // Over the whole list two fields arrive, so it pairs nothing; the shared table's own
+      // change is `heading` leaving and `headline` arriving.
+      expect(
+        await codeOf(
+          change([
+            { name: "headline", type: "text" },
+            { name: "body", type: "text", localized: true },
+            { name: "summary", type: "text", localized: true },
+          ])
+        )
+      ).toBe("FIELD_RENAME_UNANSWERED");
+    });
+
+    it("drops and adds a translated field when the request says so, not refusing its removal as unanswered", async () => {
+      await posts([
+        { name: "heading", type: "text", localized: true },
+        { name: "views", type: "number" },
+      ]);
+
+      expect(
+        await codeOf(
+          change(
+            [
+              { name: "headline", type: "text", localized: true },
+              { name: "views", type: "number" },
+            ],
+            [{ from: "heading", to: "headline", choice: "drop_and_add" }]
+          )
+        )
+      ).toBeUndefined();
+    });
+  }
+);

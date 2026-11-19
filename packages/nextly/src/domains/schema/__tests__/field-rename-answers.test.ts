@@ -1,0 +1,102 @@
+/**
+ * A schema change's answers about a field leaving and another arriving: read at the boundary once
+ * per pair, refused for a pair left unanswered on a road that takes them, and never asked for off
+ * such a road. A pair whose two names are one column can't be dropped and added in one change.
+ *
+ * @module domains/schema/__tests__/field-rename-answers.test
+ */
+import { describe, expect, it } from "vitest";
+
+import { toSnakeCase } from "../../../shared/lib/case-conversion";
+import {
+  parseFieldRenameAnswers,
+  refuseUnansweredRename,
+  withFieldRenameAnswers,
+  type FieldRenameAnswer,
+} from "../field-rename-answers";
+
+const pair = (from: string, to: string) => ({
+  from: { name: from },
+  to: { name: to },
+});
+
+/** The code a refusal carries, or undefined where nothing was refused. */
+async function refusedWith(
+  answers: FieldRenameAnswer[] | undefined,
+  from: string,
+  to: string
+): Promise<string | undefined> {
+  const run = async () =>
+    refuseUnansweredRename(
+      'The collection "posts"',
+      [pair(from, to)],
+      toSnakeCase
+    );
+  try {
+    await (answers ? withFieldRenameAnswers(answers, run) : run());
+    return undefined;
+  } catch (error) {
+    return (error as { publicData?: { errors?: { code?: string }[] } })
+      .publicData?.errors?.[0]?.code;
+  }
+}
+
+describe("parseFieldRenameAnswers", () => {
+  it("reads one answer per pair, and none where none was sent", () => {
+    expect(parseFieldRenameAnswers(undefined)).toEqual([]);
+    expect(
+      parseFieldRenameAnswers([{ from: "a", to: "b", choice: "rename" }])
+    ).toEqual([{ from: "a", to: "b", choice: "rename" }]);
+  });
+
+  it("refuses two answers for one pair, which would leave which applies to their order", () => {
+    expect(() =>
+      parseFieldRenameAnswers([
+        { from: "a", to: "b", choice: "rename" },
+        { from: "a", to: "b", choice: "drop_and_add" },
+      ])
+    ).toThrow(/Validation/i);
+  });
+
+  it("refuses a choice it doesn't know", () => {
+    expect(() =>
+      parseFieldRenameAnswers([{ from: "a", to: "b", choice: "guess" }])
+    ).toThrow(/Validation/i);
+  });
+});
+
+describe("refuseUnansweredRename", () => {
+  it("refuses a pair with no answer on a road that takes answers, and passes an answered one", async () => {
+    expect(await refusedWith([], "heading", "headline")).toBe(
+      "FIELD_RENAME_UNANSWERED"
+    );
+    expect(
+      await refusedWith(
+        [{ from: "heading", to: "headline", choice: "rename" }],
+        "heading",
+        "headline"
+      )
+    ).toBeUndefined();
+  });
+
+  it("asks nothing off such a road, as the Builder's own saves are", async () => {
+    expect(await refusedWith(undefined, "heading", "headline")).toBeUndefined();
+  });
+
+  it("refuses dropping and adding two names of one column, and lets them be renamed", async () => {
+    expect(
+      await refusedWith(
+        [{ from: "fooBar", to: "foo_bar", choice: "drop_and_add" }],
+        "fooBar",
+        "foo_bar"
+      )
+    ).toBe("FIELD_RENAME_SAME_COLUMN");
+    expect(
+      await refusedWith(
+        [{ from: "fooBar", to: "foo_bar", choice: "rename" }],
+        "fooBar",
+        "foo_bar"
+      )
+    ).toBeUndefined();
+  });
+});
