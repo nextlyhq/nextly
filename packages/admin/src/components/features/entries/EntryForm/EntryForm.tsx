@@ -1343,6 +1343,9 @@ export function EntryForm({
         : isSubmitting
           ? "Saving…"
           : undefined,
+    // The schema read says whether a workflow holds this collection, so a
+    // collection without one offers Publish while the review state is read.
+    workflowExpected: collection.workflow != null,
   });
 
   const documentActionsInput: DocumentActionBindingsInput = {
@@ -2029,6 +2032,9 @@ export function EntryForm({
                                         {...(locale === undefined
                                           ? {}
                                           : { locale })}
+                                        // The Review section's steps wait
+                                        // for what holds the header's.
+                                        reviewHold={review.stepsHold}
                                         {...(switchLocale === undefined
                                           ? {}
                                           : { onLocaleChange: switchLocale })}

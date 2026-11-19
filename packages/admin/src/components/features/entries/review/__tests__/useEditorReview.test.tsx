@@ -68,6 +68,7 @@ function part(over: Partial<PartReview> = {}): PartReview {
     ],
     waitingFor: null,
     lastMove: null,
+    reviewedVersionNo: null,
     ...over,
   };
 }
@@ -120,17 +121,20 @@ function Editor({
   isDirty = false,
   canEdit = true,
   locale,
+  workflowExpected,
 }: {
   withReview?: boolean;
   isDirty?: boolean;
   canEdit?: boolean;
   locale?: string;
+  workflowExpected?: boolean;
 }): ReactElement {
   const methods = useForm({ defaultValues: { title: "Hello" } });
   const review = useEditorReview({
     document: post,
     locale,
     isDirty,
+    ...(workflowExpected === undefined ? {} : { workflowExpected }),
   });
   return (
     <FormProvider {...methods}>
@@ -178,6 +182,35 @@ describe("the editor's next step under a workflow", () => {
     );
   });
 
+  it("holds Publish while the review state is being read, rather than offering it as free", async () => {
+    fetchSpy.mockReturnValue(new Promise(() => undefined));
+    render(<Editor />);
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
+    const publish = screen.getByRole("button", { name: /^publish$/i });
+    expect(publish).toBeDisabled();
+    expect(publish).toHaveAttribute("title", "Checking the review…");
+  });
+
+  it("offers Publish while the review state is read where the page knows no workflow is attached", async () => {
+    fetchSpy.mockReturnValue(new Promise(() => undefined));
+    render(<Editor workflowExpected={false} />);
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
+    expect(screen.getByRole("button", { name: /^publish$/i })).toBeEnabled();
+  });
+
+  it("keeps Publish held, saying so, where the review state cannot be read", async () => {
+    fetchSpy.mockRejectedValue(new Error("Service unavailable"));
+    render(<Editor />);
+    const publish = await screen.findByRole("button", { name: /^publish$/i });
+    await waitFor(() =>
+      expect(publish).toHaveAttribute(
+        "title",
+        "The review state couldn't be read. Reload the page to try again."
+      )
+    );
+    expect(publish).toBeDisabled();
+  });
+
   it("leads a writer in drafting with Submit for review, sent with what they saw", async () => {
     held.slugs = new Set(["update-posts"]);
     fetchSpy.mockResolvedValue(attached(part()));
@@ -204,6 +237,31 @@ describe("the editor's next step under a workflow", () => {
     });
     expect(submit).toBeDisabled();
     expect(submit).toHaveAttribute("title", "Save your changes first.");
+  });
+
+  it("holds every step while one is on its way, so a second click sends nothing", async () => {
+    held.slugs = new Set(["approve-posts"]);
+    let answer: (value: unknown) => void = () => undefined;
+    stepSpy.mockReturnValue(
+      new Promise(resolve => {
+        answer = resolve;
+      })
+    );
+    fetchSpy.mockResolvedValue(attached(part(inReview(true))));
+    render(<Editor canEdit={false} />);
+    const approve = await screen.findByRole("button", { name: "Approve" });
+    await userEvent.click(approve);
+    await waitFor(() => expect(approve).toBeDisabled());
+    expect(approve).toHaveAttribute("title", "Taking the step…");
+    expect(
+      screen.getByRole("button", { name: "Request changes" })
+    ).toBeDisabled();
+    await userEvent.click(approve);
+    expect(stepSpy).toHaveBeenCalledTimes(1);
+
+    // Answered, the steps are offered again.
+    answer({ message: "Step taken.", item: {} });
+    await waitFor(() => expect(approve).toBeEnabled());
   });
 
   it("leads a reviewer with Approve, and asks a comment before requesting changes", async () => {

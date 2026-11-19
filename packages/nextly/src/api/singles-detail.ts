@@ -27,6 +27,7 @@ import {
   parseTranslationsParam,
 } from "../dispatcher/helpers/validation";
 import type { SingleResult } from "../domains/singles/types";
+import { attachedWorkflowSummary } from "../domains/workflows/registry";
 import { errorFromServiceEnvelope } from "../errors/from-service-envelope";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
@@ -343,6 +344,12 @@ export function getSchema(request: Request, slug: string): Promise<Response> {
       throw NextlyError.notFound({ logContext: { slug } });
     }
 
-    return respondDoc(single);
+    // The workflow that holds this Single's publishing, as the other Single
+    // schema reads name it (`null` where none is attached), so a client can
+    // tell whether a review state is coming whichever reader it mounts.
+    return respondDoc({
+      ...single,
+      workflow: attachedWorkflowSummary("single", slug),
+    });
   })(request);
 }
