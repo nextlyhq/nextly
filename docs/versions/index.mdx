@@ -125,6 +125,9 @@ Fields that are not translated are shared by every language (see
   language.
 - `part` cannot be combined with `locale`, and `shared` is its only value.
 
+From server code, `nextly.versions.compare({ collection, id, from, to, part: "shared" })` takes
+the same `part`, refuses the same values, and answers as REST does.
+
 The response carries `part: "shared"`, and its `locale` is the language of the `to` version.
 Without `part`, a comparison is of one language as before, and two languages are refused.
 
