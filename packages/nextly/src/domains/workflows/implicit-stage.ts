@@ -64,8 +64,13 @@ export function partStage(
   return known ? state.stage : workflow.firstStage;
 }
 
-/** The registry record a document's liveness is read from, or null when it is gone. */
-async function entityOf(document: ReviewDocument) {
+/**
+ * The registry record a document's liveness is read from, or null when its collection or Single is
+ * gone. Asked of the scope alone, so a check over many documents of one scope asks it once.
+ */
+export async function entityOf(
+  document: Pick<ReviewDocument, "scopeKind" | "scopeSlug">
+) {
   return document.scopeKind === "single"
     ? container
         .get<SingleRegistryService>("singleRegistryService")
@@ -122,7 +127,22 @@ export async function pendingPartsOn(
     document.scopeSlug,
     [document.entryId]
   );
-  const pending = byEntry.get(document.entryId) ?? new Set<string | null>();
-  const sharedPending = [...pending].some(slot => draftSlotParts(slot).shared);
-  return part => (part === null ? sharedPending : pending.has(part));
+  return pendingPartsOf(
+    byEntry.get(document.entryId) ?? new Set<string | null>()
+  );
+}
+
+/**
+ * Which parts hold changes not yet published, from the slots of a document's working drafts:
+ * a language whose own draft is pending, and the shared part where a draft's slot holds it
+ * (`draftSlotParts`). The one reading of a pending set, so the publish gate and a release's
+ * check of the same drafts never disagree about the shared part.
+ *
+ * @experimental
+ */
+export function pendingPartsOf(
+  slots: ReadonlySet<string | null>
+): (part: string | null) => boolean {
+  const sharedPending = [...slots].some(slot => draftSlotParts(slot).shared);
+  return part => (part === null ? sharedPending : slots.has(part));
 }
