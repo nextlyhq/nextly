@@ -26,7 +26,6 @@ import type { DryRunChange, DryRunPlan } from "../dry-run";
 
 import { confirmBackup } from "./backup-confirmation";
 import { dryRunRefusalOf } from "./migrate-create";
-
 import type {
   UpgradeAdapter,
   UpgradeStep,

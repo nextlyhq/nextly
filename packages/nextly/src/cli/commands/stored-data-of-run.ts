@@ -170,7 +170,7 @@ export function storedDataOfRun(args: {
   /** What the steps are run with, before or after the run's schema changes. */
   const deps = (afterMigrations: boolean): DataStepsDeps => ({
     afterMigrations,
-    adapter: adapter as unknown as DataStepsDeps["adapter"],
+    adapter,
     command: args.command,
     steps: MIGRATE_DATA_STEPS,
     backupConfirmed: confirmed,

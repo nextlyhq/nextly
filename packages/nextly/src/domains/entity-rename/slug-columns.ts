@@ -672,6 +672,12 @@ export const SLUG_COLUMNS: readonly SlugColumn[] = [
     reason: "The email template a delivery was sent from.",
   },
   {
+    table: "email_queue",
+    slugColumn: "template_slug",
+    onRename: "keep",
+    reason: "The email template a queued email will be sent from.",
+  },
+  {
     table: "nextly_jobs",
     slugColumn: "slug",
     onRename: "keep",
