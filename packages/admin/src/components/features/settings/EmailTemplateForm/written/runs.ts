@@ -273,34 +273,56 @@ export function $setSelectionLink(link: WrittenLink | undefined): void {
   );
   for (const paragraph of $getRoot().getChildren()) {
     if (!$isElementNode(paragraph)) continue;
-    // Every piece of the paragraph, with the link it has now.
-    const pieces = paragraph
-      .getChildren()
-      .flatMap(child =>
-        child instanceof WrittenLinkNode
-          ? child.getChildren().map(leaf => ({ leaf, link: child.__link }))
-          : [{ leaf: child, link: undefined as WrittenLink | undefined }]
-      );
+    const pieces = piecesOf(paragraph);
     if (!pieces.some(({ leaf }) => picked.has(leaf.getKey()))) continue;
-    const holders = paragraph.getChildren().filter(isLinkNode);
-    // Laid out again in order: neighbours sharing a link share one holder.
-    let holder: WrittenLinkNode | undefined;
-    for (const piece of pieces) {
-      const next = picked.has(piece.leaf.getKey()) ? link : piece.link;
-      if (!next) {
-        paragraph.append(piece.leaf);
-        holder = undefined;
-        continue;
-      }
-      if (!holder || !sameLink(holder.__link, next)) {
-        holder = new WrittenLinkNode(next);
-        paragraph.append(holder);
-      }
-      holder.append(piece.leaf);
-    }
-    // The old holders, emptied as their pieces moved.
-    for (const old of holders) if (old.isAttached()) old.remove();
+    $layOut(
+      paragraph,
+      pieces.map(piece => ({
+        leaf: piece.leaf,
+        link: picked.has(piece.leaf.getKey()) ? link : piece.link,
+      }))
+    );
   }
+}
+
+/** A piece of a paragraph and the link it has, or is to have. */
+interface Piece {
+  leaf: LexicalNode;
+  link: WrittenLink | undefined;
+}
+
+/** Every piece of `paragraph`, in order, with the link it has now. */
+function piecesOf(paragraph: ElementNode): Piece[] {
+  return paragraph
+    .getChildren()
+    .flatMap<Piece>(child =>
+      isLinkNode(child)
+        ? child.getChildren().map(leaf => ({ leaf, link: child.__link }))
+        : [{ leaf: child, link: undefined }]
+    );
+}
+
+/**
+ * Lay `pieces` out in `paragraph` again, in order, each under its link:
+ * neighbours sharing a link share one holder. The old holders, emptied as
+ * their pieces move, are removed.
+ */
+function $layOut(paragraph: ElementNode, pieces: readonly Piece[]): void {
+  const old = paragraph.getChildren().filter(isLinkNode);
+  let holder: WrittenLinkNode | undefined;
+  for (const { leaf, link } of pieces) {
+    if (!link) {
+      paragraph.append(leaf);
+      holder = undefined;
+      continue;
+    }
+    if (!holder || !sameLink(holder.__link, link)) {
+      holder = new WrittenLinkNode(link);
+      paragraph.append(holder);
+    }
+    holder.append(leaf);
+  }
+  for (const emptied of old) if (emptied.isAttached()) emptied.remove();
 }
 
 function isLinkNode(node: LexicalNode): node is WrittenLinkNode {
