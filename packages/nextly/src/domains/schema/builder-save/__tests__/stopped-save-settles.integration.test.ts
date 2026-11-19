@@ -145,6 +145,42 @@ const text = (name: string): BuilderField => ({ name, type: "text" });
 // addition: one field leaving and one of the same type arriving is taken as a rename of it.
 const number = (name: string): BuilderField => ({ name, type: "number" });
 
+/** The dialog's answers to a save's questions, in the request body as the admin sends them. */
+interface DialogAnswers {
+  resolutions?: Record<string, { action: "confirm_drop" }>;
+  renameResolutions?: Array<{
+    tableName: string;
+    fromColumn: string;
+    toColumn: string;
+    choice: "drop_and_add";
+  }>;
+}
+
+/** The dialog's confirmation by field name of each drop in `names`. */
+function dropsConfirmed(names: readonly string[]): DialogAnswers {
+  return {
+    resolutions: Object.fromEntries(
+      names.map(name => [name, { action: "confirm_drop" as const }])
+    ),
+  };
+}
+
+/**
+ * The dialog's answer that `fromColumn`, leaving, is not renamed to `toColumn`, arriving: dropped
+ * and the other added, its values given up, as the person answers the rename it offers.
+ */
+function notRenamed(
+  tableName: string,
+  fromColumn: string,
+  toColumn: string
+): DialogAnswers {
+  return {
+    renameResolutions: [
+      { tableName, fromColumn, toColumn, choice: "drop_and_add" },
+    ],
+  };
+}
+
 /** One of the Builder's save paths, and the road it applies its change by. */
 interface SavePath {
   name: string;
@@ -156,7 +192,15 @@ interface SavePath {
   /** The development push applies the change, rather than the save's file. */
   push?: boolean;
   create(t: TestNextly, fields: BuilderField[]): Promise<void>;
-  save(t: TestNextly, fields: BuilderField[]): Promise<unknown>;
+  /**
+   * Save `fields`, with the dialog's `answers` where the save asks questions: a save that runs its
+   * file refuses a drop of a column holding values, or a rename it offers, left unanswered.
+   */
+  save(
+    t: TestNextly,
+    fields: BuilderField[],
+    answers?: DialogAnswers
+  ): Promise<unknown>;
   /** Store an entry holding `values`, where the entity has entries of its own. */
   store?(t: TestNextly, values: Record<string, string | number>): Promise<void>;
   /** Read the entry back through the Direct API. */
@@ -205,7 +249,7 @@ const PATHS: readonly SavePath[] = [
         { name: "sts_posts", label: "sts_posts", fields }
       );
     },
-    save: async (t, fields) =>
+    save: async (t, fields, answers) =>
       dispatchCollections(
         {} as ServiceContainer,
         "applySchemaChanges",
@@ -214,6 +258,7 @@ const PATHS: readonly SavePath[] = [
           fields,
           confirmed: true,
           schemaVersion: await versionOf(t, "dynamic_collections", "sts_posts"),
+          ...answers,
         }
       ),
     store: async (t, values) => {
@@ -237,7 +282,7 @@ const PATHS: readonly SavePath[] = [
         { slug: "sts_hero", label: "sts_hero", fields }
       );
     },
-    save: async (t, fields) =>
+    save: async (t, fields, answers) =>
       dispatchSingles(
         "applySingleSchemaChanges",
         { slug: "sts_hero" },
@@ -245,6 +290,7 @@ const PATHS: readonly SavePath[] = [
           fields,
           confirmed: true,
           schemaVersion: await versionOf(t, "dynamic_singles", "sts_hero"),
+          ...answers,
         }
       ),
     store: async (t, values) => {
@@ -273,7 +319,7 @@ const PATHS: readonly SavePath[] = [
         { slug: "sts_card", label: "sts_card", fields }
       );
     },
-    save: async (t, fields) =>
+    save: async (t, fields, answers) =>
       dispatchComponents(
         "applyComponentSchemaChanges",
         { slug: "sts_card" },
@@ -281,6 +327,7 @@ const PATHS: readonly SavePath[] = [
           fields,
           confirmed: true,
           schemaVersion: await versionOf(t, "dynamic_components", "sts_card"),
+          ...answers,
         }
       ),
   },
@@ -742,8 +789,13 @@ describe.each(getConfiguredTestDialects())(
           const folderBefore = filesBelow(history());
           const failed = failStatement(t, adding(path.table, "beta"));
 
+          // Offered as a rename, answered as the drop and the addition it is.
           const outcome = await outcomeOf(
-            path.save(t, [text("heading"), text("beta")])
+            path.save(
+              t,
+              [text("heading"), text("beta")],
+              notRenamed(path.table, "old_note", "beta")
+            )
           );
 
           expect(failed(), "no statement adding `beta` was met").toBe(1);
@@ -820,8 +872,13 @@ describe.each(getConfiguredTestDialects())(
               await other.release();
             };
 
+            // Offered as a rename, answered as the drop and the addition it is.
             const outcome = await outcomeOf(
-              path.save(t, [text("heading"), text("beta")])
+              path.save(
+                t,
+                [text("heading"), text("beta")],
+                notRenamed(path.table, "old_note", "beta")
+              )
             );
             settleStall.at = undefined;
 
@@ -865,7 +922,9 @@ describe.each(getConfiguredTestDialects())(
             2
           );
 
-          const outcome = await outcomeOf(path.save(t, [text("heading")]));
+          const outcome = await outcomeOf(
+            path.save(t, [text("heading")], dropsConfirmed(["old_a", "old_b"]))
+          );
 
           expect(failed(), "no second drop was met").toBe(1);
           vi.restoreAllMocks();
