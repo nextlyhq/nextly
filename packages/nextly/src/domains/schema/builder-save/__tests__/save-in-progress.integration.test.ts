@@ -49,6 +49,7 @@ import { SchemaEventsRepository } from "../../events/schema-events-repository";
 import {
   acquireWriterHold,
   setWriterHoldBounds,
+  WRITER_LOCK_FILE,
 } from "../../migrate-create/writer-hold";
 import { introspectLiveSnapshot } from "../../pipeline/diff/introspect-live";
 import {
@@ -1173,11 +1174,16 @@ describe.each(getConfiguredTestDialects())(
             await path.create([text("heading")]);
             const refused = refuseAdding(t, "beta");
             const definition = join(basePath, DEFINITION);
-            // Every file in the folder put in place while the other writer holds it.
+            // Every migration file and snapshot put in place while the other writer holds it. The
+            // hold's own file is left out: the save giving up its hold moves it aside to judge it,
+            // and puts it back as the other writer's.
             const movedUnderOther: string[] = [];
             kill.stall = async point => {
               if (other !== undefined) {
-                if (point.startsWith(`renamed:${history}`)) {
+                if (
+                  point.startsWith(`renamed:${history}`) &&
+                  !point.includes(WRITER_LOCK_FILE)
+                ) {
                   movedUnderOther.push(
                     point.slice(`renamed:${history}/`.length)
                   );
