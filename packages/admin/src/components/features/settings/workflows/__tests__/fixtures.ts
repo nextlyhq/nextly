@@ -4,7 +4,8 @@
  * check can be parked On hold, and Clear and Bounce share the permission
  * `sign-off`. Send, Park, Resume and Fast-track name none of their own. As the
  * server lists it: each stage's primary step and whether it is a review stage,
- * each step's permission and comment rule, and the documents in each stage.
+ * each step's permission and comment rule, the documents in each stage, and
+ * each stage as Settings shows it (Legal check saved as "Lawyers", in amber).
  */
 import type { Role } from "@admin/types/entities";
 import type { UserApiResponse } from "@admin/types/user";
@@ -20,6 +21,8 @@ export const EDITORIAL: WorkflowSummary = {
     {
       name: "writing",
       label: "Writing",
+      shownLabel: "Writing",
+      colour: null,
       allowsPublish: false,
       primaryStep: "send",
       review: false,
@@ -27,6 +30,8 @@ export const EDITORIAL: WorkflowSummary = {
     {
       name: "legal",
       label: "Legal check",
+      shownLabel: "Lawyers",
+      colour: "#d97706",
       allowsPublish: false,
       primaryStep: "clear",
       review: true,
@@ -34,6 +39,8 @@ export const EDITORIAL: WorkflowSummary = {
     {
       name: "hold",
       label: "On hold",
+      shownLabel: "On hold",
+      colour: null,
       allowsPublish: false,
       primaryStep: "resume",
       review: true,
@@ -41,6 +48,8 @@ export const EDITORIAL: WorkflowSummary = {
     {
       name: "cleared",
       label: "Cleared",
+      shownLabel: "Cleared",
+      colour: null,
       allowsPublish: true,
       primaryStep: "bounce",
       review: false,

@@ -53,6 +53,7 @@ import {
 import { BUILT_IN_ACTIONS, WORKFLOW_PERMISSION_GROUP } from "./permissions";
 import { registeredWorkflows, type RegisteredWorkflow } from "./registry";
 import type { ReviewAssignee, ReviewStatesDb } from "./review-state-repository";
+import { readStagePresentation } from "./stage-presentation";
 import { primaryAction, stepAction } from "./steps";
 import type { Workflow, WorkflowStepKind } from "./types";
 import {
@@ -135,6 +136,10 @@ export interface WorkflowSummary {
     primaryStep: string | null;
     /** Whether it is a review stage: one with a step of kind approve out of it. */
     review: boolean;
+    /** Its label as every surface shows it: the one saved in Settings, else `label`. */
+    shownLabel: string;
+    /** Its colour as saved in Settings, a hex value; null where none is. */
+    colour: string | null;
   }[];
   steps: {
     name: string;
@@ -343,6 +348,7 @@ export async function listWorkflowSummaries(
   for (const registered of registeredWorkflows()) {
     const { workflow, collections, singles } = registered;
     const grantable = grantableActions(workflow);
+    const shown = await readStagePresentation(adapter, workflow);
     summaries.push({
       slug: workflow.slug,
       label: workflow.label,
@@ -353,6 +359,8 @@ export async function listWorkflowSummaries(
         allowsPublish: stage.allowsPublish,
         primaryStep: primaryStep(workflow, stage.name)?.name ?? null,
         review: isReviewStage(workflow, stage.name),
+        shownLabel: shown(stage.name).label,
+        colour: shown(stage.name).colour,
       })),
       steps: workflow.steps.map(step => ({
         name: step.name,

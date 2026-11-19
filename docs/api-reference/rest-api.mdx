@@ -928,6 +928,7 @@ These routes read and move review state for collections and Singles that have a 
       "part": "es",
       "stage": "legal",
       "stageLabel": "Legal check",
+      "stageColour": null,
       "publishable": false,
       "enteredAt": "2026-11-17T09:00:00.000Z",
       "enteredBy": "alice",
@@ -984,6 +985,7 @@ What the fields mean:
 
 - **`part`:** a language code, or `null` for the shared part. A document that is not translated has only the shared part.
 - **`stage`:** `null` for a live part with nothing waiting to go live.
+- **`stageLabel`, `stageColour`:** the stage as Settings shows it: the label and colour saved there, else the code's label and `null`.
 - **`approval`:** `{ versionNo, by, at }` where the part holds an approval, else `null`.
 - **`revision` and `version`:** what a step sends back as what it saw.
 - **`steps`:** the steps out of the part's stage.
@@ -1029,14 +1031,14 @@ A document whose collection or Single has no workflow attached answers `200` wit
 
 #### What waits for you
 
-`GET /admin/api/workflows/waiting?page=1&limit=20` lists the parts assigned to the caller, or to a role they hold, in stages whose primary step they may take, as a [list envelope](#list). Each item names its document and part. A document the caller may not read is left out of its page.
+`GET /admin/api/workflows/waiting?page=1&limit=20` lists the parts assigned to the caller, or to a role they hold, in stages whose primary step they may take, as a [list envelope](#list). Each item names its document and part, and its stage with `stageLabel` and `stageColour` as the review state does. A document the caller may not read is left out of its page.
 
 #### Settings
 
 `GET /admin/api/workflows` lists the registered workflows: each one's stages, steps (with whether each is `grantable`), and the collections and Singles it is attached to.
 
 - **`configPath`:** the configuration file that registers it, relative to the project root, or `null` when none was found or it lies outside the root.
-- **Diagram:** each step's `permission` (its own, or the collection's `update`, or `publish` into a stage that allows publishing) and `commentRequired`; each stage's `primaryStep` and whether it is a `review` stage; and the workflow's `onEdit` (`to`, `exemptFields`) and `afterPublish`.
+- **Diagram:** each step's `permission` (its own, or the collection's `update`, or `publish` into a stage that allows publishing) and `commentRequired`; each stage's `primaryStep`, whether it is a `review` stage, and how it is shown (`shownLabel` and `colour`, saved in Settings, else the code's `label` and `null`); and the workflow's `onEdit` (`to`, `exemptFields`) and `afterPublish`.
 - **`stageCounts`:** how many documents are recorded in each stage, a document with several parts there counted once. A part in a stage the workflow no longer has counts in the first stage; a document that has never moved has no record and is not counted.
 
 `GET /admin/api/workflows/{slug}/settings` returns:

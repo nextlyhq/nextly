@@ -62,6 +62,7 @@ function part(over: Partial<PartReview>): PartReview {
     part: "es",
     stage: "drafting",
     stageLabel: "Drafting",
+    stageColour: null,
     publishable: false,
     enteredAt: null,
     enteredBy: null,

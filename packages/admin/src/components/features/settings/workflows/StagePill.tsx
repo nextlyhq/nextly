@@ -16,8 +16,37 @@ import { NEUTRAL_SWATCH, stageColourOf } from "./stage-colours";
 export interface StagePillProps {
   label: string;
   /** The stored colour, or none. */
-  colour: string | undefined;
+  colour: string | null | undefined;
   className?: string;
+}
+
+/**
+ * A stage's colour as a dot: the swatch's solid, a stored value outside the
+ * palette as itself, or a hollow ring for a stage with none. The one drawing of
+ * a stage's colour, used in its pill and beside its name in a line of text.
+ */
+export function StageDot({
+  colour,
+}: {
+  colour: string | null | undefined;
+}): React.JSX.Element {
+  const drawn = stageColourOf(colour ?? undefined);
+  if (drawn.kind === "custom") {
+    return (
+      <span
+        aria-hidden="true"
+        className="inline-block size-2 shrink-0 rounded-full"
+        style={{ backgroundColor: drawn.value }}
+      />
+    );
+  }
+  const swatch = drawn.kind === "swatch" ? drawn.swatch : NEUTRAL_SWATCH;
+  return (
+    <span
+      aria-hidden="true"
+      className={cn("inline-block size-2 shrink-0 rounded-full", swatch.dot)}
+    />
+  );
 }
 
 export function StagePill({
@@ -25,7 +54,7 @@ export function StagePill({
   colour,
   className,
 }: StagePillProps): React.JSX.Element {
-  const drawn = stageColourOf(colour);
+  const drawn = stageColourOf(colour ?? undefined);
   const swatch = drawn.kind === "swatch" ? drawn.swatch : NEUTRAL_SWATCH;
   return (
     <span
@@ -36,19 +65,8 @@ export function StagePill({
         className
       )}
     >
-      {drawn.kind === "custom" ? (
-        <span
-          aria-hidden="true"
-          className="size-2 shrink-0 rounded-full"
-          style={{ backgroundColor: drawn.value }}
-        />
-      ) : (
-        <span
-          aria-hidden="true"
-          className={cn("size-2 shrink-0 rounded-full", swatch.dot)}
-        />
-      )}
-      {label}
+      <StageDot colour={colour} />
+      <span>{label}</span>
     </span>
   );
 }

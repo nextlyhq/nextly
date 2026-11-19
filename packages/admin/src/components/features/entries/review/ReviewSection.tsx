@@ -20,6 +20,7 @@
 import { Button } from "@nextlyhq/ui";
 import type { JSX } from "react";
 
+import { StagePill } from "@admin/components/features/settings/workflows/StagePill";
 import { toast } from "@admin/components/ui";
 import {
   useAssignPart,
@@ -109,11 +110,19 @@ function PartBlock({
       {title === null ? null : (
         <p className="text-xs font-medium text-muted-foreground">{title}</p>
       )}
-      <p className="font-medium text-foreground">
-        {part.stage === null
-          ? "Live, nothing waiting for review"
-          : (part.stageLabel ?? part.stage)}
-      </p>
+      {part.stage === null ? (
+        <p className="font-medium text-foreground">
+          Live, nothing waiting for review
+        </p>
+      ) : (
+        <p>
+          {/* The stage as Settings shows it: its saved label on its colour. */}
+          <StagePill
+            label={part.stageLabel ?? part.stage}
+            colour={part.stageColour}
+          />
+        </p>
+      )}
       {part.stage === null ? null : (
         <>
           <p className="text-xs text-muted-foreground">

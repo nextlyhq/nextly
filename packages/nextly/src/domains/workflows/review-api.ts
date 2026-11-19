@@ -34,6 +34,10 @@ import {
   type ReviewState,
 } from "./review-state-repository";
 import {
+  readStagePresentation,
+  type StagePresentation,
+} from "./stage-presentation";
+import {
   allowsPublish,
   assignWorkflowParts,
   primaryAction,
@@ -91,7 +95,10 @@ export interface PartReview {
   part: string | null;
   /** The stage it stands in; null for a live part with nothing waiting to go live. */
   stage: string | null;
+  /** Its stage's label as Settings shows it: the label saved there, else the code's. */
   stageLabel: string | null;
+  /** Its stage's colour as saved in Settings, a hex value; null where none is. */
+  stageColour: string | null;
   /** Whether its stage allows publishing. */
   publishable: boolean;
   enteredAt: Date | null;
@@ -134,11 +141,6 @@ export interface DocumentReview {
    */
   mayPublishWithoutReview: boolean;
 }
-
-const stageOf = (workflow: Workflow, name: string | null) =>
-  name === null
-    ? undefined
-    : workflow.stages.find(stage => stage.name === name);
 
 /** A step leaving a stage, before whether the caller may take it is judged. */
 type StepOut = Omit<AvailableStep, "mayTake">;
@@ -196,6 +198,8 @@ export async function reviewStateOf(
     ? [...(configuredLocales() ?? []), null]
     : [null];
   const live = await livePartsOf(adapter, document, parts);
+  // Read on the pool before the transaction, as every other read of settings is.
+  const shown = await readStagePresentation(adapter, workflow);
   const dialect = adapter.getCapabilities().dialect;
   const read = await adapter.transaction(async tx => {
     const states = await readDocumentReviewStates(tx, document);
@@ -216,7 +220,8 @@ export async function reviewStateOf(
       read.push({
         part,
         stage,
-        stageLabel: stageOf(workflow, stage)?.label ?? null,
+        stageLabel: stage === null ? null : shown(stage).label,
+        stageColour: stage === null ? null : shown(stage).colour,
         publishable: stage !== null && allowsPublish(workflow, stage),
         enteredAt: state?.enteredAt ?? null,
         enteredBy: state?.enteredBy ?? null,
@@ -280,7 +285,10 @@ export interface WaitingPart {
   document: ReviewDocument;
   part: string | null;
   stage: string;
+  /** Its stage's label as Settings shows it: the label saved there, else the code's. */
   stageLabel: string;
+  /** Its stage's colour as saved in Settings, a hex value; null where none is. */
+  stageColour: string | null;
   assignee: ReviewAssignee;
   enteredAt: Date;
   dueAt: Date | null;
@@ -380,6 +388,8 @@ export async function waitingFor(
   // and still counted: the count names no document.
   const total = await countAssignedReviewStates(adapter, holders, within);
   const items: WaitingPart[] = [];
+  // How each workflow's stages are shown, its settings read once for the page.
+  const shownBy = new Map<string, (stage: string) => StagePresentation>();
   for (const row of rows) {
     const document: ReviewDocument = {
       scopeKind: row.scopeKind,
@@ -387,13 +397,28 @@ export async function waitingFor(
       entryId: row.entryId,
     };
     if (!row.assignee || !(await query.readable(document, row.part))) continue;
-    items.push(waitingItem(row, row.assignee));
+    const workflow = workflowAttachedTo(row.scopeKind, row.scopeSlug)?.workflow;
+    let shown: StagePresentation = { label: row.stage, colour: null };
+    if (workflow) {
+      if (!shownBy.has(workflow.slug)) {
+        shownBy.set(
+          workflow.slug,
+          await readStagePresentation(adapter, workflow)
+        );
+      }
+      shown = shownBy.get(workflow.slug)?.(row.stage) ?? shown;
+    }
+    items.push(waitingItem(row, row.assignee, shown));
   }
   return { items, total };
 }
 
-function waitingItem(row: ReviewState, assignee: ReviewAssignee): WaitingPart {
-  const workflow = workflowAttachedTo(row.scopeKind, row.scopeSlug)?.workflow;
+/** One waiting part, its stage shown as `shown` says. */
+function waitingItem(
+  row: ReviewState,
+  assignee: ReviewAssignee,
+  shown: StagePresentation
+): WaitingPart {
   return {
     document: {
       scopeKind: row.scopeKind,
@@ -402,7 +427,8 @@ function waitingItem(row: ReviewState, assignee: ReviewAssignee): WaitingPart {
     },
     part: row.part,
     stage: row.stage,
-    stageLabel: (workflow && stageOf(workflow, row.stage)?.label) ?? row.stage,
+    stageLabel: shown.label,
+    stageColour: shown.colour,
     assignee,
     enteredAt: row.enteredAt,
     dueAt: row.dueAt,

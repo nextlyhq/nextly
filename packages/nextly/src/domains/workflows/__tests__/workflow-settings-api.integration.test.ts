@@ -31,6 +31,8 @@
  *   and the super-admin role, never one holding it on some attachments only.
  * - The Public role, which stands for visitors, is never a default reviewer: not offered, and
  *   refused, even where it holds the step.
+ * - The list shows each stage as Settings names it: the label and colour saved, else the code's
+ *   label and no colour.
  *
  * The plausible broken surfaces: an eligibility check on the first attached collection only, a
  * write that stores a definition key or ignores it, a write that skips the revision, grants set on
@@ -746,6 +748,35 @@ describe.each(getConfiguredTestDialects())(
         expect((await door.read(SAM, "editorial")).defaultReviewers).toEqual(
           {}
         );
+      });
+
+      it("lists each stage as Settings shows it: its label and colour, else the code's label and none", async () => {
+        current = await bootSteps(dialect);
+        await admin();
+        await door.update(SAM, "editorial", {
+          revision: 0,
+          labels: { legal: { label: "Lawyers", colour: "#aa3300" } },
+        });
+
+        const listed = await door.list(SAM);
+        const desk = listed.find(each => each.slug === "editorial");
+
+        expect(desk?.stages).toEqual([
+          expect.objectContaining({
+            name: "writing",
+            label: "Writing",
+            shownLabel: "Writing",
+            colour: null,
+          }),
+          expect.objectContaining({
+            name: "legal",
+            label: "Legal check",
+            shownLabel: "Lawyers",
+            colour: "#aa3300",
+          }),
+          expect.objectContaining({ name: "hold", shownLabel: "On hold" }),
+          expect.objectContaining({ name: "cleared", shownLabel: "Cleared" }),
+        ]);
       });
 
       it("refuses a default reviewer who cannot take the stage's primary step on every attached collection and Single", async () => {

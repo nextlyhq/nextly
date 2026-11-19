@@ -60,7 +60,10 @@ export interface PartReview {
   part: string | null;
   /** Null for a live part with nothing waiting to go live. */
   stage: string | null;
+  /** Its stage's label as Settings shows it: the label saved there, else the code's. */
   stageLabel: string | null;
+  /** Its stage's colour as saved in Settings, a hex value; null where none is. */
+  stageColour: string | null;
   /** Whether its stage allows publishing. */
   publishable: boolean;
   enteredAt: string | null;
@@ -127,6 +130,10 @@ export interface WorkflowStageSummary {
   primaryStep: string | null;
   /** Whether it is a review stage: one with a step of kind approve out of it. */
   review: boolean;
+  /** Its label as every surface shows it: the one saved in Settings, else `label`. */
+  shownLabel: string;
+  /** Its colour as saved in Settings, a hex value; null where none is. */
+  colour: string | null;
 }
 
 /** A step of a registered workflow. */

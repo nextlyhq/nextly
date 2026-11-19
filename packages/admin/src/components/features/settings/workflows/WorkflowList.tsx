@@ -2,8 +2,9 @@
 
 /**
  * The registered workflows, one card each: its label, that it is defined in
- * code, the collections and Singles using it, and its stages with how many
- * documents are recorded in each. A card opens the workflow's own page.
+ * code, the collections and Singles using it, and its stages, each as Settings
+ * shows it everywhere (its saved label and colour, else the code's label), with
+ * how many documents are recorded in each. A card opens the workflow's own page.
  */
 
 import { Badge } from "@nextlyhq/ui";
@@ -58,7 +59,7 @@ export function WorkflowList({
                     key={stage.name}
                     className="inline-flex items-center gap-1.5 text-sm"
                   >
-                    <StagePill label={stage.label} colour={undefined} />
+                    <StagePill label={stage.shownLabel} colour={stage.colour} />
                     <span className="font-medium">
                       {workflow.stageCounts[stage.name] ?? 0}
                       <span className="sr-only"> documents</span>
