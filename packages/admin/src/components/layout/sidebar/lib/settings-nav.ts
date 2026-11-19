@@ -9,6 +9,9 @@
  * added, showing destinations under no heading to whoever holds only the new
  * permission.
  */
+import { Workflow } from "lucide-react";
+
+import { WORKFLOW_SETTINGS_READ } from "@admin/components/features/settings/workflows/workflow-permissions";
 import {
   Activity,
   Key,
@@ -103,6 +106,15 @@ export const SETTINGS_NAV: readonly SettingsNavGroup[] = [
         // hub's landing route admits: it moves a reader who may not see
         // Messages on to a tab they may see.
         gate: { kind: "anyOf", permissions: EMAIL_HUB_PERMISSIONS },
+      },
+      {
+        id: "workflows",
+        label: "Workflows",
+        icon: Workflow,
+        href: ROUTES.SETTINGS_WORKFLOWS,
+        // Read by whoever may read settings or change them, as the server's
+        // workflow settings routes are, so the link and the page agree.
+        gate: { kind: "anyOf", permissions: WORKFLOW_SETTINGS_READ },
       },
     ],
   },

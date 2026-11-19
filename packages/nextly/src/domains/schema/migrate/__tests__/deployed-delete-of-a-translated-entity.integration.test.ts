@@ -21,6 +21,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -83,6 +84,8 @@ const leftovers = vi.hoisted(() => ({
   labelling: false,
   /** A collection whose registry row the next registry write leaves unwritten, as a row that failed. */
   unwritten: undefined as string | undefined,
+  /** Loses the schema lock once, in the translation rows' removal, as a run whose lease lapsed. */
+  lockLost: false,
 }));
 // `unwritten` writes every registry row the newest applied snapshot records but that collection's,
 // once: the rest of the write, the removal of dropped entities' rows included, is as it was.
@@ -159,6 +162,13 @@ vi.mock(
         if (leftovers.stop) {
           leftovers.stop = false;
           return Promise.reject(new Error("stopped in the translation rows"));
+        }
+        if (leftovers.lockLost) {
+          leftovers.lockLost = false;
+          return import("../../pipeline/schema-lock").then(
+            ({ lostLockError }) =>
+              Promise.reject(lostLockError("nextly migrate"))
+          );
         }
         return actual.removeEntityTranslationRows(...args);
       },
@@ -302,6 +312,7 @@ afterEach(async () => {
   leftovers.stop = false;
   leftovers.labelling = false;
   leftovers.unwritten = undefined;
+  leftovers.lockLost = false;
   setNonInteractive(false);
   await shutdownServices().catch(() => {});
   for (const close of closers.splice(0)) await close();
@@ -400,6 +411,17 @@ function migrate(consent: AcceptDataLossOption = true, config = PROJECT) {
   return command(context =>
     runMigrate(
       { cwd: dir, acceptDataLoss: consent } as Parameters<typeof runMigrate>[0],
+      context
+    )
+  );
+}
+
+/** `nextly migrate --dry-run`, which writes nothing. */
+function dryRun() {
+  loaded.config = PROJECT;
+  return command(context =>
+    runMigrate(
+      { cwd: dir, dryRun: true } as Parameters<typeof runMigrate>[0],
       context
     )
   );
@@ -763,7 +785,7 @@ describe.each(getConfiguredTestDialects())(
       await arm(deployed.adapter);
       const deleted = await migrate();
       const after = await sharedLeftOf(deployed.adapter);
-      return { deployed, before, deleted, after };
+      return { own, deployed, before, deleted, after };
     }
 
     /** The run's line naming what it removed of NOTES. */
@@ -1006,6 +1028,295 @@ describe.each(getConfiguredTestDialects())(
       expect(Number(left?.n)).toBe(0);
     }, 180_000);
 
+    /**
+     * The delete file as a release before deletes dropped the translations
+     * table wrote it: the main table's drop alone, which on PostgreSQL leaves
+     * the translations table standing, its key to the main table dropped by
+     * the CASCADE.
+     */
+    /** Each delete file `asAnOlderDeleteFile` rewrote, with the text the Builder's own database applied. */
+    const olderDeleteOriginals = new Map<string, string>();
+
+    function asAnOlderDeleteFile(): void {
+      const migrations = join(dir, "migrations");
+      const drop = `DROP TABLE IF EXISTS "${notes.table}_locales" CASCADE`;
+      olderDeleteOriginals.clear();
+      for (const name of readdirSync(migrations)) {
+        if (!name.endsWith(".sql")) continue;
+        const path = join(migrations, name);
+        const text = readFileSync(path, "utf8");
+        if (!text.includes(drop)) continue;
+        olderDeleteOriginals.set(path, text);
+        // Each statement ends in `;`, with a blank line between them (`formatMigrationFile`).
+        writeFileSync(
+          path,
+          text.split(`${drop};\n\n`).join("").split(`${drop};`).join("")
+        );
+      }
+    }
+
+    /** Whether the deployed database still has NOTES's translations table. */
+    const translationsStand = (adapter: DrizzleAdapter) =>
+      adapter.tableExists(`${notes.table}_locales`);
+
+    it.skipIf(dialect !== "postgresql")(
+      "drops the translations table an older delete left, under the consent, naming it",
+      async () => {
+        const { deployed, deleted } =
+          await deleteNotesOnTheDeployedDatabase(asAnOlderDeleteFile);
+        expect(deleted.code, deleted.said).toBeUndefined();
+        // Positive control: the older delete left it.
+        expect(await translationsStand(deployed.adapter)).toBe(true);
+
+        const later = await migrate();
+
+        expect(later.code, later.said).toBeUndefined();
+        // Listed with the rows it holds: the collection's two languages.
+        expect(later.said).toContain(`- table ${notes.table}_locales (2 rows)`);
+        expect(await translationsStand(deployed.adapter)).toBe(false);
+        expect(later.said).toContain(
+          `Removed what the deleted collection "${NOTES}" left: its translations table ${notes.table}_locales`
+        );
+      },
+      180_000
+    );
+
+    it.skipIf(dialect !== "postgresql")(
+      "names the translations table an older delete left in a dry run, with the consent a real run needs, and drops nothing",
+      async () => {
+        const { deployed } =
+          await deleteNotesOnTheDeployedDatabase(asAnOlderDeleteFile);
+
+        const preview = await dryRun();
+
+        expect(preview.code, preview.said).toBeUndefined();
+        expect(preview.said).toContain("tables deleted entities left");
+        expect(preview.said).toContain(
+          `deletes data: table ${notes.table}_locales (2 rows): left by the deleted collection "${NOTES}". A real run needs`
+        );
+        expect(await translationsStand(deployed.adapter)).toBe(true);
+      },
+      180_000
+    );
+
+    // A pending file of the run that makes the collection again leaves it undeleted in the history
+    // the run ends at: the metadata pass would not drop its old translations table, so the run
+    // does not ask about it.
+    it.skipIf(dialect !== "postgresql")(
+      "does not ask about the translations table of a collection a pending file makes again",
+      async () => {
+        const { own, deployed } =
+          await deleteNotesOnTheDeployedDatabase(asAnOlderDeleteFile);
+        // Made again in the Builder, untranslated, and the file it writes left pending. The
+        // Builder's own database applied the delete file as written, so it sees that text while it
+        // saves; the deployed database, which applied the older one, sees that one again after.
+        const older = new Map(
+          [...olderDeleteOriginals.keys()].map(path => [
+            path,
+            readFileSync(path, "utf8"),
+          ])
+        );
+        for (const [path, written] of olderDeleteOriginals)
+          writeFileSync(path, written);
+        reach(dialect, own.url);
+        await start(own.adapter);
+        await builder(async () => {
+          await dispatchCollections(
+            {} as ServiceContainer,
+            "createCollection",
+            {},
+            { name: NOTES, label: NOTES, fields: [text({ name: "title" })] }
+          );
+        });
+        for (const [path, written] of older) writeFileSync(path, written);
+        reach(dialect, deployed.url);
+        await start(deployed.adapter);
+
+        const later = await migrate("dpl_another");
+
+        expect(later.code, later.said).toBeUndefined();
+        expect(later.said).not.toContain(`table ${notes.table}_locales`);
+        // Positive control: the run made the collection again.
+        expect(await deployed.adapter.tableExists(notes.table)).toBe(true);
+        expect(await translationsStand(deployed.adapter)).toBe(true);
+      },
+      180_000
+    );
+
+    // A drop is not undone by a later failure: a run that dropped the table and then could not
+    // remove the collection's rows names both.
+    it.skipIf(dialect !== "postgresql")(
+      "names the translations table it dropped when the removal of the rows after it fails",
+      async () => {
+        const { deployed } =
+          await deleteNotesOnTheDeployedDatabase(asAnOlderDeleteFile);
+        leftovers.stop = true;
+
+        const later = await migrate();
+
+        expect(leftovers.stop, "the stop was reached").toBe(false);
+        expect(later.code, later.said).toBeUndefined();
+        expect(await translationsStand(deployed.adapter)).toBe(false);
+        expect(later.said).toContain(
+          `Removed what the deleted collection "${NOTES}" left: its translations table ${notes.table}_locales.`
+        );
+        expect(later.said).toContain(
+          `Could not remove what the deleted collection "${NOTES}" left`
+        );
+      },
+      180_000
+    );
+
+    // Only the table was consented to: a view made on it since is not dropped with it. The drop is
+    // refused, naming the view, and the table and the view stay for the operator.
+    it.skipIf(dialect !== "postgresql")(
+      "leaves the translations table an older delete left, and the view on it, where a view depends on it",
+      async () => {
+        const { deployed } =
+          await deleteNotesOnTheDeployedDatabase(asAnOlderDeleteFile);
+        const view = "dpl_notes_translations_view";
+        await deployed.adapter.executeQuery(
+          `CREATE VIEW "${view}" AS SELECT * FROM "${notes.table}_locales"`
+        );
+
+        const later = await migrate();
+
+        expect(later.code, later.said).toBeUndefined();
+        expect(await translationsStand(deployed.adapter)).toBe(true);
+        expect(await deployed.adapter.tableExists(view)).toBe(true);
+        expect(later.said).toContain("other objects depend on it");
+        expect(later.said).toContain(view);
+        expect(later.said).toContain(
+          `Could not remove what the deleted collection "${NOTES}" left`
+        );
+      },
+      180_000
+    );
+
+    // A pending migration of the run that drops the table the run was asked about and makes
+    // another of its name, keyed into a table that stands, leaves a table the consent was not for:
+    // it is left as it is, with what it holds.
+    it.skipIf(dialect !== "postgresql")(
+      "leaves a table of the translations table's name that a pending migration made in its place",
+      async () => {
+        const { deployed } =
+          await deleteNotesOnTheDeployedDatabase(asAnOlderDeleteFile);
+        const translations = `${notes.table}_locales`;
+        const [idType] = await deployed.adapter.executeQuery<{ t: string }>(
+          `SELECT format_type(atttypid, atttypmod) AS t FROM pg_attribute WHERE attrelid = '"dc_${KEPT}"'::regclass AND attname = 'id'`
+        );
+        const [kept] = await deployed.adapter.executeQuery<{ id: string }>(
+          `SELECT "id" AS id FROM "dc_${KEPT}" LIMIT 1`
+        );
+        const name = "29991231_000000_000_dpl_remake_translations";
+        writeFileSync(
+          join(dir, "migrations", `${name}.sql`),
+          [
+            `-- Migration: ${name}`,
+            "",
+            "-- UP",
+            `DROP TABLE "${translations}";`,
+            "",
+            `CREATE TABLE "${translations}" ("_parent" ${idType?.t ?? "text"} NOT NULL REFERENCES "dc_${KEPT}" ("id"), "_locale" varchar(10) NOT NULL, "title" text, PRIMARY KEY ("_parent", "_locale"));`,
+            "",
+            `INSERT INTO "${translations}" ("_parent", "_locale", "title") VALUES ('${kept?.id ?? ""}', 'es', 'Nuevo');`,
+            "",
+            "-- DOWN",
+            "",
+          ].join("\n")
+        );
+
+        const later = await migrate();
+
+        expect(later.code, later.said).toBeUndefined();
+        expect(later.said).toContain(
+          `Left table "${translations}" as it is: it is no longer the translations table`
+        );
+        const [rows] = await deployed.adapter.executeQuery<{ n: unknown }>(
+          `SELECT COUNT(*) AS n FROM "${translations}"`
+        );
+        expect(Number(rows?.n)).toBe(1);
+      },
+      180_000
+    );
+
+    it.skipIf(dialect !== "postgresql")(
+      "takes it under a consent naming the deleted collection's table",
+      async () => {
+        const { deployed } =
+          await deleteNotesOnTheDeployedDatabase(asAnOlderDeleteFile);
+        expect(await translationsStand(deployed.adapter)).toBe(true);
+
+        const later = await migrate(notes.table);
+
+        expect(later.code, later.said).toBeUndefined();
+        expect(await translationsStand(deployed.adapter)).toBe(false);
+      },
+      180_000
+    );
+
+    it.skipIf(dialect !== "postgresql")(
+      "leaves a table named as its translations table but not made as one",
+      async () => {
+        const { deployed } =
+          await deleteNotesOnTheDeployedDatabase(asAnOlderDeleteFile);
+        // In its place, a table of the same name without a translations table's key.
+        await deployed.adapter.executeQuery(
+          `DROP TABLE "${notes.table}_locales"`
+        );
+        await deployed.adapter.executeQuery(
+          `CREATE TABLE "${notes.table}_locales" ("id" integer PRIMARY KEY, "note" text)`
+        );
+
+        const later = await migrate();
+
+        expect(later.code, later.said).toBeUndefined();
+        expect(later.said).not.toContain(`- table ${notes.table}_locales`);
+        expect(await translationsStand(deployed.adapter)).toBe(true);
+      },
+      180_000
+    );
+
+    // Columns named as a translations table's key are not its key: a table of the same name keyed
+    // otherwise is not one, and is neither listed nor dropped.
+    it.skipIf(dialect !== "postgresql")(
+      "leaves a table named as its translations table, with its key's columns, but keyed otherwise",
+      async () => {
+        const { deployed } =
+          await deleteNotesOnTheDeployedDatabase(asAnOlderDeleteFile);
+        await deployed.adapter.executeQuery(
+          `DROP TABLE "${notes.table}_locales"`
+        );
+        await deployed.adapter.executeQuery(
+          `CREATE TABLE "${notes.table}_locales" ("id" integer PRIMARY KEY, "_parent" text, "_locale" text, "note" text)`
+        );
+
+        const later = await migrate();
+
+        expect(later.code, later.said).toBeUndefined();
+        expect(later.said).not.toContain(`- table ${notes.table}_locales`);
+        expect(await translationsStand(deployed.adapter)).toBe(true);
+      },
+      180_000
+    );
+
+    it.skipIf(dialect !== "postgresql")(
+      "refuses the run, keeping it, where no consent covers it",
+      async () => {
+        const { deployed } =
+          await deleteNotesOnTheDeployedDatabase(asAnOlderDeleteFile);
+        expect(await translationsStand(deployed.adapter)).toBe(true);
+
+        const later = await migrate("dpl_another");
+
+        expect(later.code, later.said).not.toBeUndefined();
+        expect(later.said).toContain("The consent given does not cover");
+        expect(later.said).toContain(`${notes.table}_locales`);
+        expect(await translationsStand(deployed.adapter)).toBe(true);
+      },
+      180_000
+    );
+
     // The labelling does not run on SQLite (above), so its failure is judged on PostgreSQL and
     // MySQL.
     it.skipIf(dialect === "sqlite")(
@@ -1095,6 +1406,25 @@ describe.each(getConfiguredTestDialects())(
       );
       expect(later.said).not.toContain("Database is up to date");
       expect(later.said).toContain("No migration files to apply.");
+    }, 180_000);
+
+    // A run that loses the schema lock while removing what a deleted collection left stops there:
+    // it may change nothing further, so it is never passed over as one entity's failure.
+    it("stops the run when it loses the schema lock while removing what a deleted collection left", async () => {
+      await deleteNotesOnTheDeployedDatabase(() => {
+        leftovers.earlier = true;
+      });
+      leftovers.earlier = false;
+      leftovers.lockLost = true;
+
+      const later = await migrate();
+
+      expect(leftovers.lockLost, "the lock loss was reached").toBe(false);
+      expect(later.code, later.said).not.toBeUndefined();
+      expect(later.said).toContain("lost the schema lock");
+      expect(later.said).not.toContain(
+        `Could not remove what the deleted collection "${NOTES}" left`
+      );
     }, 180_000);
 
     it("removes none of its rows in a run stopped part-way through them, and all of them in the next", async () => {
