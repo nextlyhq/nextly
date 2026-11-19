@@ -1,6 +1,6 @@
 /**
- * On SQLite, `db:sync` and the development push judge a column's type change by what the new field
- * reads from each value, beside the column rule, which there finds every value kept.
+ * On SQLite, `db:sync` judges a column's type change by what the new field reads from each value,
+ * beside the column rule, which there finds every value kept.
  *
  * Each case is a code-first collection: its table is made by a code-first apply of the real
  * pipeline, then a second apply changes its field, with the fields the registry recorded before
@@ -42,13 +42,15 @@ const fieldsOf = (value: Record<string, unknown>) => [
 /** The collection as code declares it: never the Schema Builder's. */
 const desiredOf = (
   fields: Record<string, unknown>,
-  recorded?: Record<string, unknown>
+  recorded?: Record<string, unknown>,
+  indexes?: { fields: string[]; unique?: boolean }[]
 ): DesiredSchema => ({
   collections: {
     [TABLE]: {
       slug: TABLE,
       tableName: TABLE,
       fields: fieldsOf(fields) as never,
+      ...(indexes !== undefined ? { indexes } : {}),
       ...(recorded !== undefined
         ? { recordedFields: fieldsOf(recorded) as never }
         : {}),
@@ -118,7 +120,8 @@ describe("db:sync's judgement of a column type change on SQLite", () => {
   /** What the classifier is handed for the `value` column's type change, by a code-first apply. */
   async function judged(
     to: Record<string, unknown>,
-    recorded?: Record<string, unknown>
+    recorded?: Record<string, unknown>,
+    indexes?: { fields: string[]; unique?: boolean }[]
   ): Promise<JudgedTypeChange> {
     let handed: JudgedTypeChange | null | undefined;
     const result = await applyCodeFirst(
@@ -135,7 +138,7 @@ describe("db:sync's judgement of a column type change on SQLite", () => {
           throw new Captured("captured");
         },
       },
-      desiredOf(to, recorded)
+      desiredOf(to, recorded, indexes)
     );
     expect(result.error?.message).toBe("captured");
     if (handed === undefined || handed === null) {
@@ -156,6 +159,43 @@ describe("db:sync's judgement of a column type change on SQLite", () => {
       id: string;
       value: unknown;
     }[];
+
+  /**
+   * The rebuild, as the apply makes it: the table made anew for `to` by a code-first apply, every
+   * value copied into it.
+   */
+  async function rebuildAs(to: Record<string, unknown>) {
+    sqlite.exec(`ALTER TABLE "${TABLE}" RENAME TO "${TABLE}_old"`);
+    clearCachedSnapshot();
+    const rebuilt = await applyCodeFirst(noopClassifier, desiredOf(to));
+    expect(rebuilt.error).toBeUndefined();
+    sqlite.exec(
+      `INSERT INTO "${TABLE}" (id, title, slug, value) SELECT id, title, slug, value FROM "${TABLE}_old"`
+    );
+    sqlite.exec(`DROP TABLE "${TABLE}_old"`);
+  }
+
+  /** The lossy event the classifier makes of `change`, which a consent then answers. */
+  const lossyEventOf = (change: JudgedTypeChange): TypeChangeEvent => ({
+    id: `type_change:${TABLE}.value`,
+    kind: "type_change",
+    tableName: TABLE,
+    columnName: "value",
+    fromType: "text",
+    toType: "integer",
+    isWidening: false,
+    perDialectWarning: { pg: "", mysql: "", sqlite: "" },
+    dialect: "sqlite",
+    lossy: {
+      judgement: change.judgement,
+      keyedBy: change.keyedBy,
+      cleared: change.cleared,
+      conversion: change.conversion,
+      ...(change.fieldReadings !== undefined
+        ? { fieldReadings: change.fieldReadings }
+        : {}),
+    },
+  });
 
   it("blocks a fraction held where the field becomes a whole number, naming its row", async () => {
     await create(
@@ -204,6 +244,19 @@ describe("db:sync's judgement of a column type change on SQLite", () => {
     ]);
   });
 
+  it("blocks the same repeat where the column is unique by the collection's index, not by its field", async () => {
+    // One answer says which columns the schema makes unique, and an index of one column is one.
+    await create({ type: "text" }, { r1: "maybe", r2: "maybe", r3: "later" });
+    const change = await judged({ type: "checkbox" }, { type: "text" }, [
+      { fields: ["value"], unique: true },
+    ]);
+    expect(change.judgement.class).toBe("blocked");
+    expect(rowsOf(change)).toEqual([
+      ["not-a-boolean", "lossy", ["r1", "r2", "r3"]],
+      ["repeated", "blocked", ["r1", "r2"]],
+    ]);
+  });
+
   it("asks only for consent where a unique field's values to be cleared all differ", async () => {
     await create({ type: "text" }, { r1: "maybe", r2: "later" });
     const change = await judged(
@@ -222,44 +275,13 @@ describe("db:sync's judgement of a column type change on SQLite", () => {
     expect(rowsOf(change)).toEqual([["not-a-boolean", "lossy", ["r2"]]]);
     expect(change.cleared).toEqual([{ id: "r2" }]);
 
-    // The rebuild, as the apply makes it: the table made anew for the checkbox by a code-first
-    // apply, every value copied into it.
-    sqlite.exec(`ALTER TABLE "${TABLE}" RENAME TO "${TABLE}_old"`);
-    clearCachedSnapshot();
-    const rebuilt = await applyCodeFirst(
-      noopClassifier,
-      desiredOf({ type: "checkbox" })
-    );
-    expect(rebuilt.error).toBeUndefined();
-    sqlite.exec(
-      `INSERT INTO "${TABLE}" (id, title, slug, value) SELECT id, title, slug, value FROM "${TABLE}_old"`
-    );
-    sqlite.exec(`DROP TABLE "${TABLE}_old"`);
+    await rebuildAs({ type: "checkbox" });
     // A value written since the consent was given, which it never named.
     sqlite
       .prepare(`UPDATE "${TABLE}" SET value = 'perhaps' WHERE id = 'r3'`)
       .run();
 
-    const event: TypeChangeEvent = {
-      id: `type_change:${TABLE}.value`,
-      kind: "type_change",
-      tableName: TABLE,
-      columnName: "value",
-      fromType: "text",
-      toType: "integer",
-      isWidening: false,
-      perDialectWarning: { pg: "", mysql: "", sqlite: "" },
-      dialect: "sqlite",
-      lossy: {
-        judgement: change.judgement,
-        keyedBy: change.keyedBy,
-        cleared: change.cleared,
-        conversion: change.conversion,
-        ...(change.fieldReadings !== undefined
-          ? { fieldReadings: change.fieldReadings }
-          : {}),
-      },
-    };
+    const event = lossyEventOf(change);
     // The apply cannot undo the rebuild, so it clears what was consented to and then fails,
     // saying what landed and naming the row written since.
     await expect(
@@ -286,6 +308,41 @@ describe("db:sync's judgement of a column type change on SQLite", () => {
       { id: "r1", value: null },
       { id: "r2", value: null },
       { id: "r3", value: "perhaps" },
+    ]);
+  });
+
+  it("fails naming a consented row whose value, written since, is one the new field would need rewritten", async () => {
+    // The consent named r2 for a value to clear. It now holds the text "true", which a checkbox
+    // reads only once rewritten: nothing clears it, nothing rewrites it, so the run cannot succeed.
+    await create({ type: "text" }, { r1: null, r2: "maybe" });
+    const change = await judged({ type: "checkbox" }, { type: "text" });
+    expect(change.cleared).toEqual([{ id: "r2" }]);
+    await rebuildAs({ type: "checkbox" });
+    sqlite
+      .prepare(`UPDATE "${TABLE}" SET value = 'true' WHERE id = 'r2'`)
+      .run();
+
+    const event = lossyEventOf(change);
+    await expect(
+      clearConsentedValues({
+        tx: db,
+        dialect: "sqlite",
+        events: [event],
+        clearing: [event.id],
+      })
+    ).rejects.toMatchObject({
+      publicData: {
+        errors: [
+          {
+            code: "CONVERSION_LEFT_A_LATER_VALUE",
+            message: expect.stringMatching(/cannot read: r2\./) as unknown,
+          },
+        ],
+      },
+    });
+    expect(stored()).toEqual([
+      { id: "r1", value: null },
+      { id: "r2", value: "true" },
     ]);
   });
 });

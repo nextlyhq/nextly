@@ -346,7 +346,7 @@ export async function clearConsentedValues(args: {
     const still: RowKey[] = again.cleared.filter(key =>
       consented.has(rowKeyText(key))
     );
-    const late = lateRows(again, consented);
+    const late = lateRows(again, consented, still);
     for (const statement of clearingStatements({
       table: event.tableName,
       column: event.columnName,
@@ -362,20 +362,30 @@ export async function clearConsentedValues(args: {
 }
 
 /**
- * The rows the second judgement names that the consent did not: each one a value written since
- * the column was judged, which the new type clears or cannot take.
+ * The rows the second judgement names that this run leaves holding their value: each one a value
+ * written since the column was judged, which the new type clears or cannot take. A row the
+ * consent did not name is one. So is a row it did name whose value now blocks the change (a text
+ * a checkbox would read only once rewritten): the consent was to clear what the row held then,
+ * the judgement no longer clears it, and nothing rewrites it.
  */
 function lateRows(
   again: Awaited<ReturnType<typeof judgeOfferedTypeChange>>,
-  consented: ReadonlySet<string>
+  consented: ReadonlySet<string>,
+  cleared: readonly RowKey[]
 ): RowKey[] {
+  const clearedNow = new Set(cleared.map(rowKeyText));
   const named = new Map<string, RowKey>();
-  const note = (key: RowKey) => {
-    if (!consented.has(rowKeyText(key))) named.set(rowKeyText(key), key);
+  const note = (key: RowKey, blocks: boolean) => {
+    const text = rowKeyText(key);
+    if (clearedNow.has(text)) return;
+    if (blocks || !consented.has(text)) named.set(text, key);
   };
-  again.cleared.forEach(note);
+  again.cleared.forEach(key => note(key, false));
   for (const reason of again.judgement.reasons) {
-    if (reason.class !== "safe") (reason.rows?.first ?? []).forEach(note);
+    if (reason.class === "safe") continue;
+    for (const key of reason.rows?.first ?? []) {
+      note(key, reason.class === "blocked");
+    }
   }
   return [...named.values()];
 }

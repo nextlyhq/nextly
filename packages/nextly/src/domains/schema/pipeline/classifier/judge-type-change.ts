@@ -52,6 +52,7 @@ import type {
 } from "../diff/types";
 import { builtByFor } from "../registered-collections";
 import type { DesiredSchema } from "../types";
+import { uniqueColumnLookup } from "../unique-columns";
 
 /**
  * An entity's fields before and after the apply, and how its table is made: what the per-value
@@ -68,6 +69,11 @@ export interface FieldReadings {
   builtBy: ColumnOrigin;
   /** Whether the fields are kept on a field group's row. */
   componentRow?: true;
+  /**
+   * Whether the schema being applied makes the column unique (`uniqueColumnLookup`): by its field,
+   * or by a single-column unique index its entity declares.
+   */
+  unique?: true;
 }
 
 /** One offered type change, judged from the rows its column holds. */
@@ -145,7 +151,8 @@ function fieldReadingsOf(
   schema: DesiredSchema,
   table: string,
   field: FieldDefinition | undefined,
-  dialect: SupportedDialect
+  dialect: SupportedDialect,
+  unique: boolean
 ): FieldReadings | undefined {
   if (dialect !== "sqlite" || field === undefined) return undefined;
   const owner = ownerOf(schema, table);
@@ -157,6 +164,7 @@ function fieldReadingsOf(
     field: field.name,
     builtBy: builtByFor(owner.kind, owner.e.builderOwned),
     ...(owner.kind === "fieldGroup" ? { componentRow: true as const } : {}),
+    ...(unique ? { unique: true as const } : {}),
   };
 }
 
@@ -306,7 +314,7 @@ export async function judgeOfferedTypeChange(
 }
 
 /**
- * `verdict`, blocked where the new field is unique and two values it would clear are the same.
+ * `verdict`, blocked where the new column is unique and two values it would clear are the same.
  *
  * SQLite clears a consented value only once its table's rebuild has succeeded, and the rebuild
  * copies every value into the new column first. Two equal values copied into a unique column end
@@ -320,8 +328,7 @@ async function withRepeatsToClear(
   verdict: ColumnVerdict,
   readings: FieldReadings
 ): Promise<ColumnVerdict> {
-  const field = readings.next.find(next => next.name === readings.field);
-  if (field?.unique !== true || verdict.cleared.length < 2) return verdict;
+  if (readings.unique !== true || verdict.cleared.length < 2) return verdict;
   const toClear = new Set(verdict.cleared.map(rowKeyText));
   const holders = new Map<string, RowKey[]>();
   for await (const value of readStoredValues(db, dialect, {
@@ -363,6 +370,9 @@ export function typeChangeJudge(args: {
   expected: NextlySchemaSnapshot;
   schema: DesiredSchema;
 }): TypeChangeJudge {
+  // The pipeline's one answer to which columns the applied schema makes unique, a declared index
+  // of one column among them: a field's own flag is only one of its two sources.
+  const isUnique = uniqueColumnLookup(args.expected, args.schema);
   return async op => {
     const liveTable: TableSpec | undefined = byName(
       args.live.tables,
@@ -386,7 +396,8 @@ export function typeChangeJudge(args: {
       args.schema,
       op.tableName,
       field,
-      args.dialect
+      args.dialect,
+      isUnique(op.tableName, op.columnName)
     );
     const { judgement, cleared } = await judgeOfferedTypeChange(
       args.db,
