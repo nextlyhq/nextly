@@ -29,4 +29,4 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-The data-loss listing in `nextly migrate`, `nextly migrate --dry-run` and a production start now says how much each deletion removes. Each table shows its rows and each column its non-empty values, for example `table dc_notes (1 row)`. A deletion in a table an earlier file of the same run already changes is listed without a count.
+The data-loss listing in `nextly migrate`, `nextly migrate --dry-run` and a production start now says how much each deletion removes. Each table shows its rows and each column its non-empty values, for example `table dc_notes (1 row)`. A deletion in a table an earlier migration of the same run already changes says why it has no count: `table dc_notes (rows not counted: an earlier migration in this run changes it)`.
