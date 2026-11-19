@@ -14,6 +14,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
+import type { RequestActor } from "../../../auth/request-actor";
 import { toDbError } from "../../../database/errors";
 import { getStaticRelations } from "../../../database/static-relations";
 import { NextlyError } from "../../../errors";
@@ -66,7 +67,12 @@ import {
 } from "../failure";
 import { describeProviderFailure } from "../provider-definition";
 import { cancelQueuedEmailAsPerson } from "../queued-cancel";
+import {
+  recordQueuedEmailActivity,
+  type QueuedEmailOperation,
+} from "../queued-email-activity";
 import { warnAboutLateQueuedEmail } from "../queued-email-warning";
+import { retryQueuedEmailAsPerson } from "../queued-retry";
 import {
   type QueuedEmail,
   type QueuedEmailState,
@@ -2128,9 +2134,51 @@ export class EmailService extends BaseService {
    */
   async cancelQueued(
     id: string,
-    by: { userId: string | null }
+    by: { userId: string | null; actor?: RequestActor | null }
   ): Promise<{ id: string; state: string }> {
-    return cancelQueuedEmailAsPerson(this.adapter, id, by.userId);
+    const result = await cancelQueuedEmailAsPerson(this.adapter, id, by.userId);
+    await this.recordQueuedActivity("cancel", id, by.actor);
+    return result;
+  }
+
+  /**
+   * @experimental Retry the queued email `id` now, as a person: one waiting
+   * or retrying is attempted now, and one failed with its message still held
+   * waits again with a new job due now (`queued-retry`). Whoever calls this
+   * has been judged already: the Direct API and the REST route ask
+   * `manage-email-deliveries` first.
+   *
+   * @throws {NextlyError} `NOT_FOUND` for no such email; `CONFLICT` for one
+   *   being sent now, already sent or cancelled, or whose message was cleared.
+   */
+  async retryQueued(
+    id: string,
+    by: { actor?: RequestActor | null }
+  ): Promise<{ id: string; state: string }> {
+    const result = await retryQueuedEmailAsPerson(this.adapter, id);
+    await this.recordQueuedActivity("retry", id, by.actor);
+    return result;
+  }
+
+  /**
+   * The activity entry for a person's retry or cancel, after the action has
+   * committed: a failure to record it is logged, never turned into a failure
+   * of an action that already happened.
+   */
+  private async recordQueuedActivity(
+    operation: QueuedEmailOperation,
+    queuedId: string,
+    actor: RequestActor | null | undefined
+  ): Promise<void> {
+    try {
+      await recordQueuedEmailActivity({ operation, queuedId, actor });
+    } catch (error) {
+      this.logger.error("Failed to record a queued email's activity", {
+        operation,
+        queuedId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   /**
