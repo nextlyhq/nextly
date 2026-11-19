@@ -76,7 +76,7 @@ vi.mock("../stopped-save", async importOriginal => {
 });
 
 // The registry writes every save path makes, refused while `registryRefused.when` answers yes.
-const registryRefused = vi.hoisted(() => ({ when: () => false }));
+const registryRefused = vi.hoisted(() => ({ when: (): boolean => false }));
 vi.mock("../../schema-version", async importOriginal => {
   const actual = await importOriginal<typeof import("../../schema-version")>();
   const refuse = () => {
@@ -987,9 +987,7 @@ describe.each(getConfiguredTestDialects())(
               "the save's snapshots"
             ).toHaveLength(1);
             expect(
-              readFileSync(join(history(), sql[0]!), "utf8").split(
-                "-- DOWN"
-              )[0]
+              readFileSync(join(history(), sql[0]!), "utf8").split("-- DOWN")[0]
             ).toMatch(/["`]beta["`]/);
             expect(definedFields(path), "the definition").toEqual([
               "alpha",
@@ -1038,9 +1036,7 @@ describe.each(getConfiguredTestDialects())(
           )
         );
 
-        expect(failed(), "no statement making `note` required was met").toBe(
-          1
-        );
+        expect(failed(), "no statement making `note` required was met").toBe(1);
         expect(
           vi.mocked(judgeStoppedSave),
           "a save whose fill committed was judged from its shape"

@@ -548,15 +548,15 @@ async function afterPartWayPush(
  * for is judged from the entity's live table (`judgeStoppedSave`), and the shape that judgement
  * arrives at is proven against the whole table before anything is written. Then the save's file
  * and snapshot are replaced by a file written for exactly the changes that applied, and the
- * definition is brought to that shape; the file is compared with the live table again and
- * recorded applied. Only then is the ledger's attempt at the stopped file cleared and `onSettled`,
- * the caller's registry write, records the row. Answers the report.
+ * definition is brought to that shape. The file is compared with the live table again and recorded
+ * applied, the ledger's attempt at the stopped file cleared, and the row written by `onSettled`,
+ * the caller's registry write, all in one transaction. Answers the report.
  *
  * Undefined, with nothing written, where the save is not one this can judge (`judgeableStop`), or
  * the table stands as no judgement explains. A failure reading what it judges from is answered
- * the same way, as nothing has been written yet. A failure before the replacement is recorded
+ * the same way, as nothing has been written yet. Any later failure, the transaction's included,
  * puts the stopped file, its snapshot and the definition back as the save left them, so the stop
- * stays as it was for `nextly migrate:resolve`; any failure is thrown.
+ * stays as it was for `nextly migrate:resolve`, and is thrown.
  */
 async function settleStoppedSave(
   deps: CollectionSaveDeps,
@@ -595,21 +595,25 @@ async function settleStoppedSave(
       replacement.push(...names)
     );
     // Compared with the live table before it is recorded, as a pushed save's files are.
-    await recordWhatWasPushed(deps, files, plan.table);
+    const units = await verifiedUnits(deps, files, plan.table);
+    // The replacement recorded applied, the ledger's attempt at the stopped file cleared and the
+    // registry row written, in one transaction: the registry write joins it through the adapter,
+    // so a failure of any of them records none, and the stop is put back as it was.
+    await deps.adapter.transaction(async tx => {
+      const repo = new SchemaEventsRepository(
+        tx.getDrizzle(),
+        deps.adapter.getCapabilities().dialect
+      );
+      await recordUnits(units, repo);
+      for (const filename of written.files.change) {
+        await settleAttempts(deps, repo, filename);
+      }
+      await onSettled(judged.report);
+    });
   } catch (error) {
     await putBack(deps, left, replacement, definitionPath);
     throw error;
   }
-  // The replacement records what of the stopped file the database holds: the ledger's attempt at
-  // the stopped file is cleared, and the registry row written.
-  const repo = new SchemaEventsRepository(
-    deps.adapter.getDrizzle(),
-    deps.adapter.getCapabilities().dialect
-  );
-  for (const filename of written.files.change) {
-    await settleAttempts(deps, repo, filename);
-  }
-  await onSettled(judged.report);
   return judged.report;
 }
 
@@ -2893,15 +2897,37 @@ async function recordWhatWasPushed(
   files: SaveFiles,
   table: string
 ): Promise<void> {
-  const repo = new SchemaEventsRepository(
-    deps.adapter.getDrizzle(),
-    deps.adapter.getCapabilities().dialect
+  await recordUnits(
+    await verifiedUnits(deps, files, table),
+    new SchemaEventsRepository(
+      deps.adapter.getDrizzle(),
+      deps.adapter.getCapabilities().dialect
+    )
   );
+}
+
+/** A written file, read for recording, with the snapshot beside it. */
+type WrittenUnit = {
+  filename: string;
+  file: Awaited<ReturnType<typeof unitOf>>;
+  target: NextlySchemaSnapshot | null;
+};
+
+/**
+ * The written files, in run order, once the collection's table is found to stand as the newest of
+ * them with a snapshot says (`recordWhatWasPushed`): where it does not, the save is refused naming
+ * the file. Reads the live table, so it is asked before any transaction that records them opens.
+ */
+async function verifiedUnits(
+  deps: CollectionSaveDeps,
+  files: SaveFiles,
+  table: string
+): Promise<WrittenUnit[]> {
   const ordered = [
     ...(files.adopt === undefined ? [] : [files.adopt]),
     ...files.change,
   ];
-  const units = [];
+  const units: WrittenUnit[] = [];
   for (const filename of ordered) {
     units.push({
       filename,
@@ -2930,6 +2956,14 @@ async function recordWhatWasPushed(
       });
     }
   }
+  return units;
+}
+
+/** Record each of `units` applied, in order, on `repo`: a transaction's, where they commit with it. */
+async function recordUnits(
+  units: readonly WrittenUnit[],
+  repo: SchemaEventsRepository
+): Promise<void> {
   for (const { filename, file } of units) {
     await recordAlreadyApplied({ filename, sha256: file.sha256 }, repo);
   }
