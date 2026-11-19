@@ -440,28 +440,38 @@ describe("transaction frames", () => {
     ]);
   });
 
-  it("keeps a rolled-back context savepoint's rollback effects with the outermost transaction, as a part's", async () => {
+  it("runs a rolled-back context savepoint's rollback effects once the outermost transaction ends, committed or not", async () => {
     const adapter = new FrameAdapter();
     const tx = adapter.savepoints();
     const ran: string[] = [];
 
     await adapter.transaction(async () => {
       await tx.savepoint("item_1");
-      await adapter.afterRollback(() => ran.push("dropped by the commit"));
+      await adapter.afterRollback(() => ran.push("undone under a commit"));
       await tx.rollbackToSavepoint("item_1");
       await tx.releaseSavepoint("item_1");
+      await tx.savepoint("item_2");
+      await adapter.afterRollback(() =>
+        ran.push("kept, so dropped by the commit")
+      );
+      await tx.releaseSavepoint("item_2");
     });
     await adapter
       .transaction(async () => {
         await tx.savepoint("item_1");
-        await adapter.afterRollback(() => ran.push("from the undone item"));
+        await adapter.afterRollback(() => ran.push("undone under a rollback"));
         await tx.rollbackToSavepoint("item_1");
         await tx.releaseSavepoint("item_1");
+        await adapter.afterRollback(() => ran.push("the outer's own"));
         throw new Error("undo everything");
       })
       .catch(() => undefined);
 
-    expect(ran).toEqual(["from the undone item"]);
+    expect(ran).toEqual([
+      "undone under a commit",
+      "undone under a rollback",
+      "the outer's own",
+    ]);
   });
 
   it("only sends the statements of a context savepoint used outside any transaction", async () => {

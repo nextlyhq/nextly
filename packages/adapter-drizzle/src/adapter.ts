@@ -833,9 +833,12 @@ export abstract class DrizzleAdapter {
       return {
         committed: true,
         result,
-        effects: frame.held.filter(
-          held => !undone(held.frame, held.writesBefore)
-        ),
+        // A part a savepoint rolled back is undone though the transaction
+        // committed, so its rollback effects run with the commit's.
+        effects: [
+          ...frame.undoneRollbackHeld.splice(0),
+          ...frame.held.filter(held => !undone(held.frame, held.writesBefore)),
+        ],
       };
     } catch (error) {
       await settleNested(frame);
@@ -849,9 +852,15 @@ export abstract class DrizzleAdapter {
       return {
         committed: false,
         error,
-        effects: confirmed
-          ? rollbackEffects
-          : this.dropUnconfirmed(rollbackEffects),
+        // A part a savepoint rolled back was undone by its own confirmed
+        // ROLLBACK TO, so its rollback effects run whether or not this
+        // transaction's ROLLBACK is confirmed; each runs once.
+        effects: [
+          ...frame.undoneRollbackHeld.splice(0),
+          ...(confirmed
+            ? rollbackEffects
+            : this.dropUnconfirmed(rollbackEffects)),
+        ],
       };
     }
   }
@@ -981,7 +990,7 @@ export abstract class DrizzleAdapter {
    */
   private readonly contextSavepoints = new WeakMap<
     TransactionFrame,
-    { name: string; heldBefore: number }[]
+    { name: string; heldBefore: number; rollbackHeldBefore: number }[]
   >();
 
   /**
@@ -993,8 +1002,10 @@ export abstract class DrizzleAdapter {
    * the `afterCommit` effects registered since its savepoint was set, as it
    * undoes the writes they announce, and counts as a part rolled back
    * (`TransactionInFlow.undone`); a RELEASE keeps them for the enclosing
-   * transaction. `afterRollback` effects stay with the outermost
-   * transaction, as a rolled-back part's do. The calling flow's open
+   * transaction. The `afterRollback` effects registered since the savepoint
+   * move out of the transaction's own: what they compensate for is undone, so
+   * they run once the outermost transaction ends, committed or rolled back,
+   * and once only. The calling flow's open
    * transaction is the one scoped; outside one the statements are only sent.
    *
    * @param send - Runs one statement on the transaction's connection
@@ -1018,7 +1029,11 @@ export abstract class DrizzleAdapter {
         const root = this.openTransactionInFlow();
         if (root === undefined) return;
         const marks = this.contextSavepoints.get(root) ?? [];
-        marks.push({ name, heldBefore: root.held.length });
+        marks.push({
+          name,
+          heldBefore: root.held.length,
+          rollbackHeldBefore: root.rollbackHeld.length,
+        });
         this.contextSavepoints.set(root, marks);
       },
       rollbackToSavepoint: async name => {
@@ -1031,6 +1046,9 @@ export abstract class DrizzleAdapter {
         // the rollback undid.
         marks.length = at + 1;
         root.held.splice(marks[at].heldBefore);
+        root.undoneRollbackHeld.push(
+          ...root.rollbackHeld.splice(marks[at].rollbackHeldBefore)
+        );
         root.rollbacks += 1;
       },
       releaseSavepoint: async name => {

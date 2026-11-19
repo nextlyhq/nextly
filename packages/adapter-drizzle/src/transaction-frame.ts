@@ -73,6 +73,13 @@ export interface TransactionFrame {
    */
   rollbackHeld: HeldEffect[];
   /**
+   * Effects held with `afterRollback` from a part a context savepoint rolled
+   * back, in registration order: that part's writes are undone whatever the
+   * outermost transaction does, so these run once it ends, committed or rolled
+   * back. Only the outermost transaction's list is used.
+   */
+  undoneRollbackHeld: HeldEffect[];
+  /**
    * Set once a part joined to this outermost transaction failed in a way the
    * transaction cannot commit past (`TransactionSteps.dooms`): its COMMIT is
    * then refused, it rolls back and rejects with this error, and every later
@@ -243,6 +250,7 @@ export function openFrame(place: FramePlace): TransactionFrame {
     writesAfterClosing: 0,
     held: [],
     rollbackHeld: [],
+    undoneRollbackHeld: [],
     doomed: undefined,
     queue: Promise.resolve(),
     open: parent ? parent.open : [],

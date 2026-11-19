@@ -425,8 +425,10 @@ export interface TransactionContext {
    * @remarks
    * Discards all changes made after the savepoint was created, and drops the
    * adapter's `afterCommit` effects registered since then, as a rolled-back
-   * nested transaction's are dropped. `afterRollback` effects stay held for
-   * the outermost transaction.
+   * nested transaction's are dropped. The `afterRollback` effects registered
+   * since then run once the outermost transaction ends, committed or rolled
+   * back: the changes they compensate for are undone either way. Each runs
+   * once.
    *
    * @param name - Savepoint name
    */
