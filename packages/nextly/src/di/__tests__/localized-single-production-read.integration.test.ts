@@ -16,7 +16,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { defineSingle, text } from "../../config";
 import type { SchemaRegistry } from "../../database/schema-registry";
-import { registerConfigTablesInResolver } from "../register";
+import { registerConfigTablesInResolver } from "../register-config-tables";
 import {
   createTestNextly,
   getConfiguredTestDialects,
