@@ -275,6 +275,59 @@ describe("createReleaseVisibility with a hold on going live", () => {
     });
   });
 
+  it("keeps the edge to a release it already knows, so a component past the bound is never cut short", async () => {
+    // h is held by more releases than the bound, rh0 among them, which also holds x. rp holds p
+    // and x. The read decides h, p and s; reaching x again finds rh0, already known, and joins
+    // p's component to h's, which is past the bound. s, alone, keeps its decision.
+    const crowd = Array.from(
+      { length: COMPONENT_WALK_RELEASES + 1 },
+      (_, i) => `rh${i}`
+    );
+    const holds = new Map<string, string[]>([
+      ...crowd.map((id): [string, string[]] => [
+        id,
+        id === "rh0" ? ["h", "x"] : ["h"],
+      ]),
+      ["rp", ["p", "x"]],
+      ["rs", ["s"]],
+    ]);
+    const visibility = createReleaseVisibility({
+      cache: { mayHaveDue: async () => true },
+      repository: {
+        findDueDecisions: async () => ({ reveal: ["h", "p", "s"], hide: [] }),
+        // Each release with the members naming the documents asked, as the repository answers.
+        scheduledMembersFor: async (target: ReleaseRecheckTarget) => {
+          const asked = new Set(
+            documentsOf(target).map(document => document.entryId)
+          );
+          return [...holds].flatMap(([id, entryIds]) => {
+            const naming = entryIds.filter(entryId => asked.has(entryId));
+            return naming.length === 0
+              ? []
+              : [
+                  {
+                    release: release(id),
+                    members: naming.map(entryId =>
+                      member(id, entryId, "publish")
+                    ),
+                  },
+                ];
+          });
+        },
+        listMembersOf: async (ids: string[]) =>
+          ids.flatMap(id =>
+            (holds.get(id) ?? []).map(entryId => member(id, entryId, "publish"))
+          ),
+      },
+      hold: () => ({ held: async () => new Set<string>() }),
+    });
+
+    expect(await visibility.decisions(QUERY)).toEqual({
+      reveal: ["s"],
+      hide: [],
+    });
+  });
+
   it("never asks while nothing would be revealed, so a takedown is never held", async () => {
     const held = vi.fn(async () => new Set(["e3"]));
     const visibility = createReleaseVisibility({

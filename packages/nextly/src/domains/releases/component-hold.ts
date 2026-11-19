@@ -273,15 +273,18 @@ export async function dueComponentsHolding(
       for (const document of frontier) components.giveUp(walkKeyOf(document));
       break;
     }
-    const found = await dueReleasesHolding(reads, frontier, now, releases);
-    for (const { release, naming } of found) {
-      releases.set(release.id, release);
-      // Joined to the documents it was found by, so a component past the bound is known before
-      // any of its members are read.
+    const holding = await dueReleasesHolding(reads, frontier, now);
+    // Joined to the documents it was found by, every release, a known one too: a release given
+    // up on is never read in full, so its edge to a document reached again is how what it joins
+    // learns it is past the bound. And joined before members are read, so a component past the
+    // bound is known first.
+    for (const { release, naming } of holding) {
       for (const document of naming) {
         components.join(releaseKeyOf(release.id), walkKeyOf(document));
       }
     }
+    const found = holding.filter(({ release }) => !releases.has(release.id));
+    for (const { release } of found) releases.set(release.id, release);
     components.giveUpOversized(releases.keys());
     const added = await reads.listMembersOf(
       found
@@ -308,22 +311,19 @@ export async function dueComponentsHolding(
 }
 
 /**
- * The due releases holding these documents not already in `known`, each with the members naming
- * them: one round of a walk's reads of releases.
+ * The due releases holding these documents, each with the members naming them: one round of a
+ * walk's reads of releases.
  */
 async function dueReleasesHolding(
   reads: ComponentReads,
   documents: readonly ReleaseRecheckDocument[],
-  now: Date,
-  known: ReadonlyMap<string, DueRelease>
+  now: Date
 ): Promise<
   { release: DueRelease; naming: readonly ReleaseRecheckDocument[] }[]
 > {
   return (await reads.scheduledMembersFor({ documents })).flatMap(
     ({ release, members }) =>
-      release.scheduledAt !== null &&
-      isDueAt(release.scheduledAt, now) &&
-      !known.has(release.id)
+      release.scheduledAt !== null && isDueAt(release.scheduledAt, now)
         ? [
             {
               release: {
