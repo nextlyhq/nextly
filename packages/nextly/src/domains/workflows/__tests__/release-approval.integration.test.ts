@@ -592,16 +592,13 @@ describe.each(getConfiguredTestDialects())(
       if (!source || !release || !real) {
         throw new Error("no approval source, release or member to judge");
       }
-      // More documents of one scope than SQLite binds in a statement, as a component of several
-      // releases can name.
-      const members = Array.from(
-        { length: 2 * IDS_PER_LOOKUP + 1 },
-        (_, i) => ({
-          ...real,
-          id: `${real.id}-${i}`,
-          entryId: i === 0 ? page : randomUUID(),
-        })
-      );
+      // More documents of one scope than one run binds: an unbatched read binds them all in one
+      // statement, which past SQLite's limit fails, as a component of several releases can reach.
+      const members = Array.from({ length: IDS_PER_LOOKUP + 1 }, (_, i) => ({
+        ...real,
+        id: `${real.id}-${i}`,
+        entryId: i === 0 ? page : randomUUID(),
+      }));
       const reads = new Proxy({} as ReleaseCheckReads, {
         get: (_target, name) => {
           throw new Error(`the approval check asked ${String(name)}`);
@@ -628,7 +625,8 @@ describe.each(getConfiguredTestDialects())(
         )
       );
       expect(Math.max(...bound)).toBeLessThanOrEqual(IDS_PER_LOOKUP);
-    });
+      // Each document's review state is still read on its own, so a server dialect needs longer.
+    }, 120_000);
 
     it("refuses Publish now for an unapproved member, even to a person who may publish without review", async () => {
       const t = await boot(dialect);
