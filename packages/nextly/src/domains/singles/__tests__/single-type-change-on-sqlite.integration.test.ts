@@ -21,6 +21,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import { dispatchSingles } from "../../../dispatcher/handlers/single-dispatcher";
+import { getSingleMetadataServiceFromDI } from "../../../dispatcher/helpers/di";
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
 import {
   createTestNextly,
@@ -30,7 +31,6 @@ import {
 import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
 import { SchemaEventsRepository } from "../../schema/events/schema-events-repository";
 import { getColumnDescriptor } from "../../schema/services/field-column-descriptor";
-import { SingleMetadataService } from "../services/single-metadata-service";
 
 const DB = { migrationsDir: "./migrations", uiSchemaFile: "./ui-schema.json" };
 const SLUG = "stc_home";
@@ -231,7 +231,8 @@ describeEachDialect("a Single's field type change", dialect => {
       const before = await recorded();
       const folderBefore = await migrationFiles();
       const judged = vi.fn();
-      const judge = SingleMetadataService.prototype as unknown as Record<
+      // The service the dispatcher resolves, so the save's own call is the one wrapped.
+      const judge = getSingleMetadataServiceFromDI() as unknown as Record<
         string,
         (...args: unknown[]) => Promise<void>
       >;
