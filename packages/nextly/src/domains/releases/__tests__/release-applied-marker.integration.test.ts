@@ -349,6 +349,7 @@ function bound(repo: ReleasesRepository): ApplyDueReleasesDeps["repository"] {
     markReleasesPublished: (entries, at) =>
       repo.markReleasesPublished(entries, at),
     blockReleases: entries => repo.blockReleases(entries),
+    revalidateReleases: ids => repo.revalidateReleases(ids),
   };
 }
 

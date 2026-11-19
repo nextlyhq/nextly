@@ -120,6 +120,8 @@ function deps(over: {
       // that blocked the wrong ones — or every one — look identical to a pass
       // that blocked exactly the hopeless.
       blockReleases: blocked,
+      // Flushing is the repository's, best-effort; nothing here reads a page.
+      revalidateReleases: async () => {},
       listMembersOf: async ids =>
         members
           .filter(m => ids.includes(m.releaseId))

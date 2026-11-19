@@ -133,6 +133,20 @@ function runDuePass(t: TestNextly) {
   });
 }
 
+/** The repository's flush of a release's documents, private to it, watched from here. */
+interface FlushesMembers {
+  revalidateMembersOf(releaseId: string): Promise<void>;
+}
+
+/** The releases whose documents the repository flushes from here on, as a reader's cache sees. */
+function watchFlushes(): () => string[] {
+  const flush = vi.spyOn(
+    ReleasesRepository.prototype as unknown as FlushesMembers,
+    "revalidateMembersOf"
+  );
+  return () => flush.mock.calls.map(([releaseId]) => releaseId);
+}
+
 /** Takes a part's approval away by writing its review row, as nothing that signals would. */
 async function withdrawSilently(
   t: TestNextly,
@@ -578,10 +592,14 @@ describe.each(getConfiguredTestDialects())(
         { and: [{ column: "id", op: "=", value: receipted.id }] }
       );
 
+      const flushed = watchFlushes();
+
       await takeStep(t, "pages", waiting, null, "bounce", "Not yet.");
 
       expect(await releaseState(t, arranged.releaseId)).toBe("scheduled");
       expect(await stoppedNotices(t, arranged)).toBe(0);
+      // Kept scheduled, yet a reader is now shown nothing more of it: its pages are flushed.
+      expect(flushed()).toContain(arranged.releaseId);
     });
 
     it("leaves a due release scheduled when a pass writes one of its members after the stop judged it", async () => {
@@ -615,11 +633,49 @@ describe.each(getConfiguredTestDialects())(
         );
         return block.apply(this, args);
       });
+      const flushed = watchFlushes();
 
       await takeStep(t, "pages", waiting, null, "bounce", "Not yet.");
 
       expect(await releaseState(t, arranged.releaseId)).toBe("scheduled");
       expect(await stoppedNotices(t, arranged)).toBe(0);
+      expect(flushed()).toContain(arranged.releaseId);
+    });
+
+    it("keeps a due release a pass began scheduled when its run meets a hold, and flushes what readers were shown", async () => {
+      const t = await boot(dialect);
+      const written = await doc(t, "pages");
+      const waiting = await doc(t, "pages");
+      await approve(t, "pages", written);
+      await approve(t, "pages", waiting);
+      const arranged = await arrange(
+        t,
+        [publishPage(written), publishPage(waiting)],
+        PAST
+      );
+      const repo = new ReleasesRepository(t.adapter);
+      const [release] = await repo.findReleases({ ids: [arranged.releaseId] });
+      const receipted = (await repo.listMembers(arranged.releaseId)).find(
+        member => member.entryId === written
+      );
+      if (!release || !receipted) throw new Error("no release or member");
+      // The receipt a cut-off pass left on the member it wrote.
+      await t.adapter.update(
+        RELEASE_MEMBERS_TABLE,
+        { appliedRevision: release.revision },
+        { and: [{ column: "id", op: "=", value: receipted.id }] }
+      );
+      await withdrawSilently(t, "pages", waiting);
+      const flushed = watchFlushes();
+
+      const pass = await runDuePass(t);
+
+      // The written member's action stands as applied; the other is held.
+      expect(pass.outcomes.map(outcome => outcome.failure)).toContain(
+        "NOT_APPROVED"
+      );
+      expect(await releaseState(t, arranged.releaseId)).toBe("scheduled");
+      expect(flushed()).toContain(arranged.releaseId);
     });
 
     it("never stops due releases over a publish their plan loses to a later takedown", async () => {

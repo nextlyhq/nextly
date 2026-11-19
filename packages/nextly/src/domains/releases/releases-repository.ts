@@ -1199,6 +1199,17 @@ export class ReleasesRepository {
   }
 
   /**
+   * Flush the documents of these releases without moving them: for a
+   * component kept scheduled while a hold keeps it from going further. A
+   * reader is shown nothing more of such a component from then on, so a page
+   * cached with what it projected must not outlive the change. Best-effort
+   * and never throws, as every flush here is.
+   */
+  async revalidateReleases(ids: readonly string[]): Promise<void> {
+    for (const id of new Set(ids)) await this.revalidateMembersOf(id);
+  }
+
+  /**
    * Create a release, with its `release-created` event in the same
    * transaction. `by` is who created it: the system unless a caller says.
    */
@@ -1452,6 +1463,10 @@ export class ReleasesRepository {
     // Before the transaction, never inside it: the probe goes through the
     // pool, which a transaction holding its only connection would starve.
     await this.notices.ready();
+    // Whether the stop was refused because a pass began the component, so it
+    // stays scheduled; its pages are flushed after all (below), since a
+    // reader is shown nothing more of a held component from now on.
+    let keptBegun = false;
     const moved = await this.moveComponentWhole(
       entries,
       entry => ({
@@ -1488,7 +1503,12 @@ export class ReleasesRepository {
           toState: "blocked",
         });
       },
-      options.unlessBegun === true ? componentBegun : undefined
+      options.unlessBegun === true
+        ? async (tx, ids) => {
+            keptBegun = await componentBegun(tx, ids);
+            return keptBegun;
+          }
+        : undefined
     );
 
     // AFTER THE COMMIT, never inside it. Revalidation makes a change visible to
@@ -1496,6 +1516,8 @@ export class ReleasesRepository {
     // the transaction would announce a transition that can still roll back —
     // the reader would then see a release stopped that is still scheduled.
     for (const entry of moved) await this.revalidateMembersOf(entry.id);
+    if (keptBegun)
+      await this.revalidateReleases(entries.map(entry => entry.id));
     return moved.map(entry => entry.id);
   }
 

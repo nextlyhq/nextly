@@ -2920,6 +2920,8 @@ export class ReleasesService {
     // The drain's own plan of the due components reached so far, read only when a due release
     // has a problem, and grown only by a due release outside it.
     let due: DuePlan | undefined;
+    // Due releases of a begun component kept scheduled for their approval.
+    const kept = new Set<string>();
     let judged = 0;
     for (const { release, members } of affected) {
       if (release.scheduledAt === null) continue;
@@ -2946,7 +2948,10 @@ export class ReleasesService {
       // run leaves it (`begunReleases`): stopped, what it wrote would stay live for good. Asked
       // again inside the stop's transaction (`unlessBegun`), for a receipt written since.
       const heldOnly = hard.every(finding => finding.code === "NOT_APPROVED");
-      if (due?.begun.has(release.id) === true && heldOnly) continue;
+      if (due?.begun.has(release.id) === true && heldOnly) {
+        kept.add(release.id);
+        continue;
+      }
       failing.push({
         id: release.id,
         scheduledAt: release.scheduledAt,
@@ -2966,6 +2971,15 @@ export class ReleasesService {
       // release stands in only should that ever not hold.
       due ??= await this.duePlan(now);
       stopped.push(...(await this.stopDueComponents(dueFailing, due)));
+    }
+    // A begun component kept scheduled shows a reader nothing more from now on, so its pages
+    // are flushed as a stop's are, every release of it.
+    if (kept.size > 0 && due !== undefined) {
+      await this.deps.repository.revalidateReleases(
+        due.plan.overlappingReleases
+          .filter(group => group.some(id => kept.has(id)))
+          .flat()
+      );
     }
     return stopped;
   }

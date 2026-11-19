@@ -171,6 +171,12 @@ export interface ApplyDueReleasesDeps {
     blockReleases(
       entries: readonly { id: string; scheduledAt: Date }[]
     ): Promise<readonly string[]>;
+    /**
+     * Flush these releases' documents without moving them: for a component
+     * kept scheduled on a hold, which a reader is shown nothing more of. Never
+     * throws.
+     */
+    revalidateReleases(ids: readonly string[]): Promise<void>;
   };
   mutations: ReleaseMutations;
   /** The identity reads, so a member's author can be resolved. */
@@ -353,6 +359,31 @@ async function stopHopelessReleases(
 }
 
 /**
+ * Flush the pages of each component an earlier pass began that a hold now keeps scheduled
+ * (`permanentlyBrokenReleases` leaves it so rather than stopping it). A reader is shown nothing
+ * more of it from now on, as of a component `blockReleases` stops and flushes, so a page cached
+ * with what it projected must not outlive the hold. The flush never throws.
+ */
+async function flushHeldBegunComponents(
+  deps: ApplyDueReleasesDeps,
+  plan: ReturnType<typeof planReleaseMaterialisation>,
+  outcomes: readonly MaterialisationOutcome[],
+  begun: ReadonlySet<string>
+): Promise<void> {
+  const held = new Set(
+    outcomes
+      .filter(o => o.failure === "NOT_APPROVED" && begun.has(o.releaseId))
+      .map(o => o.releaseId)
+  );
+  if (held.size === 0) return;
+  await deps.repository.revalidateReleases(
+    plan.overlappingReleases
+      .filter(group => group.some(id => held.has(id)))
+      .flat()
+  );
+}
+
+/**
  * One component's stop or settle, with a failure kept to that component.
  *
  * Each component moves in a transaction of its own, with its owners' notices
@@ -531,6 +562,8 @@ export async function applyDueReleases(
   // settle either, because the pair is only ever discharged together. Blocking
   // one and not the other would leave the second retrying forever, which is the
   // condition this exists to end.
+  // From every member's receipt, the losing actions' included (`begunReleases`).
+  const begun = begunReleases(plan, members, releases);
   const blocked = await stopHopelessReleases(
     deps,
     plan,
@@ -540,9 +573,9 @@ export async function applyDueReleases(
     new Map(
       releases.flatMap(r => (r.scheduledAt ? [[r.id, r.scheduledAt]] : []))
     ),
-    // From every member's receipt, the losing actions' included (`begunReleases`).
-    begunReleases(plan, members, releases)
+    begun
   );
+  await flushHeldBegunComponents(deps, plan, outcomes, begun);
 
   const { published, undischarged } = await dischargeSettledComponents(
     deps,
