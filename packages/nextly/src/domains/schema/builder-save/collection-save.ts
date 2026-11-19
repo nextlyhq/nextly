@@ -157,6 +157,7 @@ import {
 } from "./save-in-progress";
 import {
   appliedFieldsOf,
+  appliedRenames,
   askedChanges,
   fieldsWith,
   judgeStoppedSave,
@@ -833,9 +834,7 @@ function settledSaveOf(
     ...(renamedFields === undefined
       ? {}
       : {
-          renamedFields: renamedFields.filter(r =>
-            report.some(c => c.field === r.to && c.applied)
-          ),
+          renamedFields: appliedRenames(renamedFields, report),
         }),
   };
 }

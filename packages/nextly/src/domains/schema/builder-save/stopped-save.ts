@@ -15,6 +15,7 @@
  */
 import { NextlyError } from "../../../errors/nextly-error";
 import type { StoppedSavePublicData } from "../../../errors/public-data";
+import { toSnakeCase } from "../field-rules";
 import { snapshotsEquivalent } from "../migrate/drift-reconcile";
 import type { TableSpec } from "../pipeline/diff/types";
 
@@ -45,7 +46,7 @@ interface NamedField {
  * whatever else changed with it; one only `next` has is an addition, one only `previous` has a drop;
  * one both have that differs is a type change where its type differs and a settings change
  * otherwise. A field with no name (a layout field) holds no column, and is no change of its own.
- * Ordered by field.
+ * A rename may name its fields as written or by their columns (`sameField`). Ordered by field.
  */
 export function askedChanges<F extends NamedField>(
   previous: readonly F[],
@@ -54,8 +55,14 @@ export function askedChanges<F extends NamedField>(
 ): AskedChange[] {
   const before = byName(previous);
   const after = byName(next);
-  // Only a rename whose two names the lists hold is one: the definition is what is judged.
-  const renames = renamed.filter(r => before.has(r.from) && after.has(r.to));
+  // Only a rename whose two fields the lists hold is one: the definition is what is judged.
+  const named = (names: Iterable<string>, name: string) =>
+    [...names].find(field => sameField(field, name));
+  const renames = renamed.flatMap(r => {
+    const from = named(before.keys(), r.from);
+    const to = named(after.keys(), r.to);
+    return from === undefined || to === undefined ? [] : [{ from, to }];
+  });
   const renamedTo = new Set(renames.map(r => r.to));
   const renamedFrom = new Set(renames.map(r => r.from));
   const changes: AskedChange[] = renames.map(r => ({
@@ -105,10 +112,69 @@ export function fieldsWith<F extends NamedField>(
       applied
     )
   );
-  const dropsKept = changes
-    .filter(change => change.change === "drop" && !applied(change))
-    .flatMap(change => before.get(change.field) ?? []);
-  return [...saved, ...dropsKept];
+  const kept = new Set(
+    changes
+      .filter(change => change.change === "drop" && !applied(change))
+      .map(change => change.field)
+  );
+  // Where a renamed field before a kept drop stands in the list: under its new name.
+  const placedAs = new Map(
+    changes.flatMap(change =>
+      change.change === "rename" && change.from !== undefined && applied(change)
+        ? [[change.from, change.field] as const]
+        : []
+    )
+  );
+  return withDropsKept(saved, previous, kept, placedAs);
+}
+
+/**
+ * `saved` with each field of `previous` that `kept` names put back where `previous` had it: after
+ * the nearest field before it that `saved` holds (a renamed one under its new name, `placedAs`),
+ * or first where none does.
+ */
+function withDropsKept<F extends NamedField>(
+  saved: readonly F[],
+  previous: readonly F[],
+  kept: ReadonlySet<string>,
+  placedAs: ReadonlyMap<string, string>
+): F[] {
+  const fields = [...saved];
+  const indexOf = (name: string) =>
+    fields.findIndex(f => f.name === (placedAs.get(name) ?? name));
+  previous.forEach((field, index) => {
+    if (field.name === undefined || !kept.has(field.name)) return;
+    const after = previous
+      .slice(0, index)
+      .reverse()
+      .find(p => p.name !== undefined && indexOf(p.name) >= 0);
+    const at = after?.name === undefined ? 0 : indexOf(after.name) + 1;
+    fields.splice(at, 0, field);
+  });
+  return fields;
+}
+
+/**
+ * The renames of `renamed` the report names applied, as the save spelled them, so its file is
+ * written with them: a rename's names match a field as written or by its column (`sameField`).
+ */
+export function appliedRenames<R extends { from: string; to: string }>(
+  renamed: readonly R[],
+  report: readonly StoppedChange[]
+): R[] {
+  return renamed.filter(r =>
+    report.some(
+      c => c.change === "rename" && c.applied && sameField(c.field, r.to)
+    )
+  );
+}
+
+/**
+ * Whether two names name one field: alike as written, or alike as the column each makes
+ * (`toSnakeCase`), as a rename sent with its columns' names names its fields.
+ */
+function sameField(a: string, b: string): boolean {
+  return a === b || toSnakeCase(a) === toSnakeCase(b);
 }
 
 /**

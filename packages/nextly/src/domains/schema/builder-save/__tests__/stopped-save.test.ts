@@ -9,6 +9,7 @@ import { NextlyError } from "../../../../errors/nextly-error";
 import type { ColumnSpec, TableSpec } from "../../pipeline/diff/types";
 import {
   appliedFieldsOf,
+  appliedRenames,
   askedChanges,
   fieldsWith,
   judgeStoppedSave,
@@ -58,6 +59,16 @@ describe("askedChanges", () => {
     ]);
   });
 
+  it("takes a rename named by its columns as the rename of the fields those columns hold", () => {
+    expect(
+      askedChanges(
+        [text("metaTitle")],
+        [text("metaHeading")],
+        [{ from: "meta_title", to: "meta_heading" }]
+      )
+    ).toEqual([{ field: "metaHeading", change: "rename", from: "metaTitle" }]);
+  });
+
   it("takes a rename whose names the lists do not hold as the addition and drop they are", () => {
     expect(
       askedChanges([text("a")], [text("b")], [{ from: "x", to: "b" }])
@@ -90,7 +101,7 @@ describe("fieldsWith", () => {
       fieldsWith(previous, next, asked, c => c.field !== "gone").map(
         f => f.name
       )
-    ).toEqual(["heading", "new", "added", "gone"]);
+    ).toEqual(["heading", "new", "gone", "added"]);
     expect(
       appliedFieldsOf(previous, next, [
         { field: "added", change: "add", applied: false },
@@ -98,6 +109,66 @@ describe("fieldsWith", () => {
         { field: "new", change: "rename", from: "old", applied: true },
       ]).map(f => f.name)
     ).toEqual(["heading", "new"]);
+  });
+});
+
+describe("fieldsWith, for drops that did not apply", () => {
+  it("keeps each where the field list had it, not after the rest", () => {
+    const previous = [
+      text("a"),
+      text("gone_one"),
+      text("b"),
+      text("gone_two"),
+      text("c"),
+    ];
+    const next = [text("a"), text("b"), text("c")];
+    expect(
+      fieldsWith(
+        previous,
+        next,
+        [
+          { field: "gone_one", change: "drop" },
+          { field: "gone_two", change: "drop" },
+        ],
+        () => false
+      ).map(f => f.name)
+    ).toEqual(["a", "gone_one", "b", "gone_two", "c"]);
+  });
+
+  it("keeps one that led the list first", () => {
+    expect(
+      fieldsWith(
+        [text("gone"), text("a")],
+        [text("a"), text("added")],
+        [
+          { field: "added", change: "add" },
+          { field: "gone", change: "drop" },
+        ],
+        c => c.change === "add"
+      ).map(f => f.name)
+    ).toEqual(["gone", "a", "added"]);
+  });
+});
+
+describe("appliedRenames", () => {
+  it("keeps the renames the report names applied, however the save spelled their names", () => {
+    expect(
+      appliedRenames(
+        [
+          { from: "meta_title", to: "meta_heading" },
+          { from: "old", to: "new" },
+        ],
+        [
+          {
+            field: "metaHeading",
+            change: "rename",
+            from: "metaTitle",
+            applied: true,
+          },
+          { field: "new", change: "rename", from: "old", applied: false },
+        ]
+      )
+    ).toEqual([{ from: "meta_title", to: "meta_heading" }]);
   });
 });
 
