@@ -150,9 +150,28 @@ beforeEach(() => {
   baselineSpy.mockImplementation(
     (
       _scope: unknown,
-      _baseline: string,
+      baseline: string,
       opts: { to?: number; locale?: string }
     ) => {
+      // Never approved: the server answers since what is published.
+      if (baseline === "since-approved") {
+        return Promise.reject(
+          Object.assign(new Error("Validation failed."), {
+            status: 400,
+            code: "VALIDATION_ERROR",
+            data: {
+              errors: [
+                {
+                  path: "baseline",
+                  code: "NO_BASELINE",
+                  message:
+                    "This part has not been approved since it was last published.",
+                },
+              ],
+            },
+          })
+        );
+      }
       const rows = versions[opts.locale ?? "shared"] ?? [];
       const from = rows.find(row => row.status === "published")?.versionNo;
       return Promise.resolve({

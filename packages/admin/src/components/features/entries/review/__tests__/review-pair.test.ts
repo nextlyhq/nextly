@@ -31,15 +31,17 @@ function version(
 }
 
 describe("reviewPlan", () => {
-  it("compares the newest version with the last approval", () => {
+  it("asks the server for the comparison of the part's newest version", () => {
     const versions = [
       version(7),
       version(6),
       version(5, { status: "published" }),
     ];
-    expect(reviewPlan(versions, "en", 6)).toEqual({
-      kind: "approved",
-      from: 6,
+    expect(reviewPlan(versions, "en", 6)).toEqual({ kind: "server", to: 7 });
+    // With no approval in the review state too: the server keeps the last one
+    // an edit withdrew, and answers with what is published where none was.
+    expect(reviewPlan(versions, "en", null)).toEqual({
+      kind: "server",
       to: 7,
     });
   });
@@ -47,17 +49,7 @@ describe("reviewPlan", () => {
   it("never takes a newer shared-fields row as a language's version under review", () => {
     // A language's list holds the shared fields' versions too.
     const versions = [version(9, { locale: null }), version(7), version(6)];
-    expect(reviewPlan(versions, "en", 6)).toEqual({
-      kind: "approved",
-      from: 6,
-      to: 7,
-    });
-    expect(reviewPlan(versions, "en", null)).toEqual({
-      kind: "server",
-      baseline: "published",
-      to: 7,
-      since: "published",
-    });
+    expect(reviewPlan(versions, "en", 6)).toEqual({ kind: "server", to: 7 });
   });
 
   it("reviews the document's newest version in any language for the shared part", () => {
@@ -66,29 +58,9 @@ describe("reviewPlan", () => {
     const versions = [version(9), version(8, { locale: null }), version(7)];
     expect(reviewPlan(versions, null, null)).toEqual({
       kind: "server",
-      baseline: "published",
       to: 9,
-      since: "published",
-    });
-    // Its approval may name another language's version: the server pairs it.
-    expect(reviewPlan(versions, null, 4)).toEqual({
-      kind: "server",
-      baseline: "since-approved",
-      to: 9,
-      since: "approved",
     });
     expect(reviewPlan(versions, null, 9)).toEqual({ kind: "unchanged", to: 9 });
-  });
-
-  it("asks the server for what is published where nothing was approved, whatever the page holds", () => {
-    // Nothing published on this page: the published version may be past it.
-    const versions = [version(7), version(6)];
-    expect(reviewPlan(versions, "en", null)).toEqual({
-      kind: "server",
-      baseline: "published",
-      to: 7,
-      since: "published",
-    });
   });
 
   it("reviews an autosave's saved version, not the autosave", () => {
@@ -99,9 +71,7 @@ describe("reviewPlan", () => {
     ];
     expect(reviewPlan(versions, "en", null)).toEqual({
       kind: "server",
-      baseline: "published",
       to: 4,
-      since: "published",
     });
   });
 

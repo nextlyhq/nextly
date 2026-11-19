@@ -100,10 +100,13 @@ function inReview(over: Partial<PartReview> = {}): PartReview {
 
 /** What the server holds as published in each part, by language ("" for the shared part). */
 let published: Record<string, number> = {};
+/** The version each part was last approved at, as the server keeps it, by language. */
+let approvedPins: Record<string, number> = {};
 
 beforeEach(() => {
   vi.clearAllMocks();
   published = { en: 5, es: 6, "": 2 };
+  approvedPins = {};
   // The server's `published` baseline, in the part the request names.
   baselineSpy.mockImplementation(
     (
@@ -113,11 +116,15 @@ beforeEach(() => {
     ) => {
       // A named version carries its own language, as the server takes it:
       // version 8 is a Spanish save.
+      const part =
+        opts.locale === undefined && opts.to === 8 ? "es" : (opts.locale ?? "");
       const from =
-        opts.locale === undefined && opts.to === 8
-          ? published.es
-          : published[opts.locale ?? ""];
-      if (baseline !== "published" || from === undefined) {
+        baseline === "since-approved"
+          ? approvedPins[part]
+          : baseline === "published"
+            ? published[part]
+            : undefined;
+      if (from === undefined) {
         return Promise.reject(
           Object.assign(new Error("Validation failed."), {
             status: 400,
@@ -140,7 +147,7 @@ beforeEach(() => {
         to: opts.to,
         locale: opts.locale ?? null,
         hasChanges: true,
-        baseline: { name: "published", versionNo: from },
+        baseline: { name: baseline, versionNo: from },
         fields: [],
       });
     }
@@ -197,7 +204,8 @@ describe("ReviewChanges", () => {
     expect(screen.queryByText(/^comparing/)).toBeNull();
   });
 
-  it("compares with the last approval where the part has one", () => {
+  it("compares with the last approval where the part has one", async () => {
+    approvedPins = { en: 8 };
     listing([version(9), version(8), version(5, "published")]);
 
     render(
@@ -207,14 +215,19 @@ describe("ReviewChanges", () => {
       />
     );
 
+    expect(await screen.findByText("comparing 8 with 9")).toBeInTheDocument();
     expect(
       screen.getByText("Changes since the approved version.")
     ).toBeInTheDocument();
-    expect(screen.getByText("comparing 8 with 9")).toBeInTheDocument();
-    expect(baselineSpy).not.toHaveBeenCalled();
+    expect(baselineSpy).not.toHaveBeenCalledWith(
+      SCOPE,
+      "published",
+      expect.anything()
+    );
   });
 
   it("never compares a language with a newer shared-fields version", async () => {
+    approvedPins = { en: 6 };
     // A language's list holds the shared fields' versions too.
     listing([version(9, "draft", null), version(7), version(6)]);
 
@@ -225,8 +238,23 @@ describe("ReviewChanges", () => {
       />
     );
 
-    expect(screen.getByText("comparing 6 with 7")).toBeInTheDocument();
+    expect(await screen.findByText("comparing 6 with 7")).toBeInTheDocument();
     expect(screen.queryByText("comparing 6 with 9")).toBeNull();
+  });
+
+  it("compares with the approval an edit withdrew, which the server keeps", async () => {
+    // The review state says no approval after an edit; the server still
+    // answers since the version last approved.
+    approvedPins = { en: 6 };
+    listing([version(7), version(6), version(5, "published")]);
+
+    render(<ReviewChanges scope={SCOPE} parts={[inReview()]} />);
+
+    expect(await screen.findByText("comparing 6 with 7")).toBeInTheDocument();
+    expect(
+      screen.getByText("Changes since the approved version.")
+    ).toBeInTheDocument();
+    expect(screen.queryByText("comparing 5 with 7")).toBeNull();
   });
 
   it("hides the comparison and shows it again", async () => {
