@@ -56,6 +56,7 @@ import {
   type ConfirmedDeletion,
   deletionHoldOf,
 } from "../../domains/schema/builder-save/deletion-counts";
+import { refuseUnansweredDialogQuestions } from "../../domains/schema/builder-save/dialog-questions";
 import { partWayPush } from "../../domains/schema/builder-save/landing-push";
 import {
   renamedFieldsOf,
@@ -63,10 +64,16 @@ import {
   type SchemaChangeAnswers,
 } from "../../domains/schema/builder-save/schema-change-save";
 import { introspectLiveSnapshot } from "../../domains/schema/pipeline/diff/introspect-live";
-import type { BrowserRenameResolution } from "../../domains/schema/pipeline/prompt-dispatcher/browser";
+import type {
+  BrowserRenameResolution,
+  LegacyResolutionsBundle,
+} from "../../domains/schema/pipeline/prompt-dispatcher/browser";
 import { reachesRelationStorage } from "../../domains/schema/pipeline/recorded-shapes";
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
-import type { DesiredCollection } from "../../domains/schema/pipeline/types";
+import type {
+  DesiredCollection,
+  DesiredSchema,
+} from "../../domains/schema/pipeline/types";
 import { refuseRenamedFieldOntoTakenColumn } from "../../domains/schema/rename-target";
 import { writeRegistryRows } from "../../domains/schema/schema-version";
 import {
@@ -86,7 +93,10 @@ import {
   type CollectionWithAdmin,
 } from "../../plugins/admin-views";
 import { bumpSchemaVersion } from "../../route-handler/schema-version";
-import type { FieldDefinition } from "../../schemas/dynamic-collections";
+import type {
+  DynamicCollectionRecord,
+  FieldDefinition,
+} from "../../schemas/dynamic-collections";
 import type { ServiceContainer } from "../../services";
 import type { CollectionsHandler } from "../../services/collections-handler";
 import { readableSlugAllowlist } from "../../services/lib/readable-slug-allowlist";
@@ -360,6 +370,32 @@ function readConfirmedDeletions(
     if (error instanceof z.ZodError) throw nextlyValidationFromZod(error);
     throw error;
   }
+}
+
+/**
+ * The dialog's confirmations by field name, as its questions read them
+ * (`refuseUnansweredDialogQuestions`): each field's own resolution, and each removed field whose
+ * count of values the person confirmed deleting (`confirmedDeletions`), a count being its drop
+ * confirmed. Nothing where the body sends neither.
+ */
+function dialogConfirmations(
+  tableName: string,
+  resolutions: Record<string, FieldResolution> | undefined,
+  confirmedDeletions: ReturnType<typeof readConfirmedDeletions>
+): { legacy?: LegacyResolutionsBundle } {
+  const confirmDrop: LegacyResolutionsBundle["byFieldName"][string] = {
+    action: "confirm_drop",
+  };
+  const counted = (confirmedDeletions ?? []).map(
+    deletion => [deletion.field, confirmDrop] as const
+  );
+  if (resolutions === undefined && counted.length === 0) return {};
+  return {
+    legacy: {
+      tableName,
+      byFieldName: { ...Object.fromEntries(counted), ...resolutions },
+    },
+  };
 }
 
 /** The save's answer of the counts confirmed, where the body sent them; nothing otherwise. */
@@ -913,39 +949,12 @@ const COLLECTIONS_METHODS: Record<
       const dialect = adapter.dialect;
       const db = adapter.getDrizzle();
 
-      // Build a full DesiredSchema so drizzle-kit sees all managed tables.
-      // Without this, singles/components in the live DB are absent from the
-      // desired snapshot and drizzle-kit offers them as rename candidates.
-      const desired = await buildFullDesiredSchema();
-      desired.collections[p.collectionName] = {
+      const desired = await dialogDesiredSchema({
         slug: p.collectionName,
-        tableName,
-        // As the apply's first push creates them (`fieldsAsFirstPushed`).
-        fields: fieldsAsFirstPushed({
-          oldFields: currentFields,
-          newFields: fields as FieldDefinition[],
-          entity: collection,
-          requestedLocalized: previewLocalized,
-        }) as DesiredCollection["fields"],
-        // Carry the Draft/Published flag so previewDesiredSchema injects
-        // the `status` column into the desired snapshot.
-        status: collection.status === true,
-        // i18n: carry the localized flag so the push diff OMITS translatable
-        // columns from the main table's desired snapshot (they live in the
-        // companion `_locales` table). buildFullDesiredSchema already sets this
-        // from the registry, but the splice above overwrites that entry, so we
-        // must re-supply it or the preview would show translatable columns being
-        // added to the main table. The REQUEST's flag wins when the Builder
-        // sent one: the apply prefers it too, and a preview that diffed against
-        // the persisted flag instead would collect resolutions for DDL the
-        // apply is not going to run.
-        localized:
-          previewLocalized ??
-          (collection as { localized?: boolean }).localized === true,
-        // Authored in the Schema Builder: this is the Builder's own save path.
-        builderOwned: true,
-        recordedFields: recordedFieldsOf(collection),
-      };
+        collection,
+        fields: fields as FieldDefinition[],
+        requestedLocalized: previewLocalized,
+      });
 
       const preview = await builderSchemaPreviewBody({
         desired,
@@ -1355,6 +1364,35 @@ const COLLECTIONS_METHODS: Record<
               bumpSchemaVersion();
             },
             appliedBy: push.appliedBy,
+            // Where the file carries the change, the push's questions are asked of it first: a
+            // rename the request does not answer, or a drop it does not confirm, refuses the save
+            // before anything is written, as the push refuses it.
+            questions: async () =>
+              refuseUnansweredDialogQuestions({
+                desired: await dialogDesiredSchema({
+                  slug: p.collectionName,
+                  collection,
+                  fields: fields as unknown as FieldDefinition[],
+                  requestedLocalized: readRequestLocalized(body),
+                }),
+                db: adapter.getDrizzle(),
+                dialect,
+                tableName,
+                // The builder that made the table, which the offered rename is judged by.
+                builtBy: "collection",
+                oldFields: (collection.fields ??
+                  []) as unknown as FieldDefinition[],
+                newFields: fields as unknown as FieldDefinition[],
+                wasLocalized,
+                isLocalized,
+                renameResolutions: renameResolutions ?? [],
+                eventResolutions: eventResolutions ?? [],
+                ...dialogConfirmations(
+                  tableName,
+                  resolutions,
+                  confirmedDeletions
+                ),
+              }),
             // Whether the push applies the change in development, the writer recording its
             // migration once the push has run: a translated collection, or one turning
             // translation on or off, whose push carries its values across the change; and a change
@@ -2174,6 +2212,50 @@ async function writerSaveOf(change: WriterChange): Promise<
 }
 
 /**
+ * The full desired schema a collection's dialog change is planned against: this collection as the
+ * change leaves it, its fields as the apply's first push creates them (`fieldsAsFirstPushed`), and
+ * every other managed table as it is, so drizzle-kit sees them all rather than offering a Single's
+ * or a field group's table as a rename candidate. What the dialog's preview shows, and what a save
+ * that runs its own migration file asks the push's questions of (`refuseUnansweredDialogQuestions`).
+ */
+async function dialogDesiredSchema(args: {
+  slug: string;
+  collection: DynamicCollectionRecord;
+  fields: FieldDefinition[];
+  /** The request's localized flag, when the Builder sent one. */
+  requestedLocalized: boolean | undefined;
+}): Promise<DesiredSchema> {
+  const { slug, collection, fields } = args;
+  const currentFields = (collection.fields ??
+    []) as unknown as FieldDefinition[];
+  const desired = await buildFullDesiredSchema();
+  desired.collections[slug] = {
+    slug,
+    tableName: collection.tableName,
+    // As the apply's first push creates them (`fieldsAsFirstPushed`).
+    fields: fieldsAsFirstPushed({
+      oldFields: currentFields,
+      newFields: fields,
+      entity: collection,
+      requestedLocalized: args.requestedLocalized,
+    }) as DesiredCollection["fields"],
+    // Carry the Draft/Published flag so the desired snapshot has the `status` column.
+    status: collection.status === true,
+    // i18n: the push diff OMITS translatable columns from the main table's desired snapshot (they
+    // live in the companion `_locales` table). The request's flag wins when the Builder sent one,
+    // as the apply prefers it: planning against the persisted flag instead would ask about DDL the
+    // apply is not going to run.
+    localized:
+      args.requestedLocalized ??
+      (collection as { localized?: boolean }).localized === true,
+    // Authored in the Schema Builder: this is the Builder's own save path.
+    builderOwned: true,
+    recordedFields: recordedFieldsOf(collection),
+  };
+  return desired;
+}
+
+/**
  * A field change through the Builder save writer, when the app registered
  * one: written and, in development, run, or applied by `appliedBy` and then
  * recorded. Undefined without a writer, where the push pipeline applies the
@@ -2201,6 +2283,12 @@ async function saveThroughWriter(
      * caller does after an apply, given the fields the row recorded.
      */
     settled?: (fields: FieldDefinition[]) => void;
+    /**
+     * The questions the push asks before it changes anything, asked where the save's file rather
+     * than the push carries the change, before anything is written: a dialog's request that leaves
+     * one unanswered is refused as the push refuses it (`refuseUnansweredDialogQuestions`).
+     */
+    questions?: () => Promise<void>;
   }
 ): Promise<
   | {
@@ -2219,6 +2307,7 @@ async function saveThroughWriter(
     change.appliedBy !== undefined &&
     prepared.deps.applies &&
     (change.pushWhen === undefined || (await change.pushWhen()));
+  if (!viaPush) await change.questions?.();
   // Loaded here, where a save runs: the writer brings the migration generator
   // and runner, which a request that writes no field change never needs.
   const [{ writeCollectionSave }, { appliedFieldsOf }] = await Promise.all([

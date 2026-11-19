@@ -33,7 +33,7 @@ export const announceReview = announcerAt(REVIEW_ANNOUNCER_ID);
  * nothing. A refusal already told (`reported`) is drawn where the step was taken, as an alert
  * assistive technology reads at once, so saying it here too would say it twice.
  */
-export function stepOutcomeWords(
+function stepOutcomeWords(
   step: Pick<ReviewStep, "label">,
   outcome: DocumentActionOutcome
 ): string | null {

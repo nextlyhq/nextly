@@ -204,6 +204,52 @@ describe("Ready to publish?", () => {
     );
   });
 
+  it("asks the comment a fix's step requires before taking it, and sends it with the step", async () => {
+    const user = userEvent.setup();
+    open(
+      review([
+        part({
+          steps: [
+            {
+              name: "submit",
+              label: "Submit for review",
+              kind: "submit",
+              to: "inReview",
+              mayTake: true,
+              primary: true,
+              commentRequired: true,
+            },
+          ],
+        }),
+        APPROVED_SHARED,
+      ])
+    );
+    await screen.findByText("Goes live for the first time.");
+    const ready = screen.getByRole("region", { name: "Ready to publish?" });
+    await user.click(
+      within(ready).getByRole("button", { name: "Submit for review" })
+    );
+
+    // Nothing is sent until the comment the step requires is written.
+    const asked = await screen.findByRole("dialog", {
+      name: /submit for review/i,
+    });
+    expect(api.takeStep).not.toHaveBeenCalled();
+    await user.type(within(asked).getByRole("textbox"), "Ready for the desk.");
+    await user.click(
+      within(asked).getByRole("button", { name: "Submit for review" })
+    );
+    await waitFor(() =>
+      expect(api.takeStep).toHaveBeenCalledWith({
+        document: { collection: "posts", id: "post-1" },
+        step: "submit",
+        parts: ["es"],
+        seen: [{ part: "es", revision: 3, version: "v3" }],
+        comment: "Ready for the desk.",
+      })
+    );
+  });
+
   it("says who can unblock a part the person cannot move", async () => {
     open(review([IN_REVIEW_ES, APPROVED_SHARED]));
     await screen.findByText("Goes live for the first time.");

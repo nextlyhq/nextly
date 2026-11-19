@@ -300,9 +300,8 @@ export function PublishPartsDialog({
             Checking what this does to each part…
           </p>
         ) : null}
-        {/* Refusals in the status text colour, which reads at AA on the
-            dialog in both schemes; the destructive action's red is lighter
-            than text may be. */}
+        {/* Refusals are read on the dialog's surface, so they take the danger text token, which
+            reaches 4.5:1 there in light and dark; the destructive red is a fill's colour. */}
         {[...general, ...(otherRefusal ? [otherRefusal] : [])].map(message => (
           <p
             key={message}
@@ -425,7 +424,7 @@ function PartRow({
         <div id={describedBy} className="text-sm text-muted-foreground">
           {hint ? <p>{hint}</p> : null}
           {sentence ? <p>{sentence}</p> : null}
-          {/* In the status text colour, as the dialog's other refusals. */}
+          {/* The danger text token: readable at 4.5:1 on the dialog in light and dark. */}
           {refusals.map(message => (
             <p key={message} className="text-danger-text">
               {message}

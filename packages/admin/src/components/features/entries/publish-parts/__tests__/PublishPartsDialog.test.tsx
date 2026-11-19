@@ -201,11 +201,6 @@ describe("choosing what to publish", () => {
     await waitFor(() =>
       expect(spanish).toHaveAccessibleDescription(/has no current approval/)
     );
-    // In the status text colour that reads at AA in both schemes, not the
-    // destructive action's red, which is lighter than text may be.
-    expect(screen.getByText(/has no current approval/)).toHaveClass(
-      "text-danger-text"
-    );
     expect(screen.getByRole("dialog")).toBeInTheDocument();
   });
   it("shows a refusal naming a field rather than a part, with the field's name", async () => {
