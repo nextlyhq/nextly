@@ -1,6 +1,6 @@
 /**
- * Makes columns of a SQLite table NOT NULL or nullable, which SQLite can only do by rebuilding the
- * table: a new table of the live definition with the columns changed, every row copied, the old
+ * Makes columns of a SQLite table NOT NULL or nullable, or changes their types, which SQLite can
+ * only do by rebuilding the table: a new table of the live definition with the columns changed, every row copied, the old
  * one dropped and the new one renamed into place, its indexes recreated.
  *
  * Run inside `executeTransaction`, which turns foreign keys off before BEGIN: a translations
@@ -22,8 +22,12 @@ import {
 } from "../pipeline/sql-templates/sqlite-rebuild";
 
 /**
- * Rebuilds `tableName` with each column of `required` NOT NULL (true) or nullable (false). Nothing
- * runs when every column already is.
+ * Rebuilds `tableName` with each column of `required` NOT NULL (true) or nullable (false), and
+ * each column of `types` of the type it names. Nothing runs when every column already is.
+ *
+ * A type change copies each value across as it is, which SQLite stores by the new column's type
+ * affinity (a text `"12"` becomes the number 12 in a numeric column): the values are judged before
+ * the change is planned, and one the new type cannot take refuses the save before this runs.
  *
  * The rebuild keeps every row, the primary key, types, defaults, foreign keys in and out, checks
  * and indexes, and each UNIQUE the live table declares inline (a one-to-one's column), which no
@@ -35,8 +39,12 @@ import {
 export async function rebuildSqliteNullability(
   tx: MigrationTransaction,
   tableName: string,
-  required: ReadonlyMap<string, boolean>
+  columns: {
+    required: ReadonlyMap<string, boolean>;
+    types?: ReadonlyMap<string, string>;
+  }
 ): Promise<void> {
+  const { required, types = new Map<string, string>() } = columns;
   const snapshot = await introspectLiveSnapshot(tx.db, "sqlite", [tableName]);
   const live = snapshot.tables.find(
     table => table.name.toLowerCase() === tableName.toLowerCase()
@@ -47,9 +55,14 @@ export async function rebuildSqliteNullability(
     });
   }
   const target = (column: string) => required.get(column.toLowerCase());
+  const typeOf = (column: string) => types.get(column.toLowerCase());
   const changes = live.columns.filter(column => {
     const wanted = target(column.name);
-    return wanted !== undefined && column.nullable === wanted;
+    const type = typeOf(column.name);
+    return (
+      (wanted !== undefined && column.nullable === wanted) ||
+      (type !== undefined && column.type.toLowerCase() !== type.toLowerCase())
+    );
   });
   if (changes.length === 0) return;
 
@@ -73,7 +86,12 @@ export async function rebuildSqliteNullability(
     ...live,
     columns: live.columns.map(column => {
       const wanted = target(column.name);
-      return wanted === undefined ? column : { ...column, nullable: !wanted };
+      const type = typeOf(column.name);
+      return {
+        ...column,
+        ...(wanted === undefined ? {} : { nullable: !wanted }),
+        ...(type === undefined ? {} : { type }),
+      };
     }),
   };
   for (const statement of sqliteTableRebuildStatements(rebuilt, [], {

@@ -294,6 +294,11 @@ interface UpdateDdlPlan {
    * applied by rebuilding the table once its statements have run, in the same transaction.
    */
   sqliteNullability?: ReadonlyMap<string, boolean>;
+  /**
+   * On SQLite, the type changes `migrationSQL` can't express (column → the type it becomes),
+   * applied by the same rebuild. The values were judged against the new type while planning.
+   */
+  sqliteTypes?: ReadonlyMap<string, string>;
   /** The field list the table holds once this plan has run. */
   fields: FieldDefinition[];
   /** The field list the table holds now. The companion reconcile diffs against it. */
@@ -1787,6 +1792,7 @@ export class SingleMetadataService {
 
     // What SQLite can't alter in place, which the apply rebuilds the table for.
     const sqliteNullability = new Map<string, boolean>();
+    const sqliteTypes = new Map<string, string>();
     return {
       leavingSettings: deferred.leavingSettings,
       migrationSQL: schemaService.generateAlterTableMigration(
@@ -1817,9 +1823,11 @@ export class SingleMetadataService {
           ...groupMigration,
           onSqliteNullability: (column, required) =>
             sqliteNullability.set(column, required),
+          onSqliteTypeChange: (column, type) => sqliteTypes.set(column, type),
         }
       ),
       sqliteNullability,
+      sqliteTypes,
       fields,
       previousFields,
       describesWholeTable: false,
@@ -2552,7 +2560,13 @@ export class SingleMetadataService {
     plan: UpdateDdlPlan,
     undoRename: readonly string[]
   ): Promise<void> {
-    if (!plan.migrationSQL && !plan.sqliteNullability?.size) return;
+    if (
+      !plan.migrationSQL &&
+      !plan.sqliteNullability?.size &&
+      !plan.sqliteTypes?.size
+    ) {
+      return;
+    }
     try {
       await applyMigrationWhole({
         db: adapter.getDrizzle(),
@@ -2561,10 +2575,13 @@ export class SingleMetadataService {
         entity: "single",
         tolerateApplied: true,
         busyTable: this.busyTableWait(adapter),
-        sqliteNullability: plan.sqliteNullability && {
+        sqliteNullability: {
           adapter,
           tableName,
-          required: plan.sqliteNullability,
+          required: plan.sqliteNullability ?? new Map(),
+          ...(plan.sqliteTypes === undefined
+            ? {}
+            : { types: plan.sqliteTypes }),
         },
       });
     } catch (refusal) {

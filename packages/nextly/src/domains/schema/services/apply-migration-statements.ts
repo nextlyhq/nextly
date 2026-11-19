@@ -133,8 +133,9 @@ export async function applyMigrationWhole(args: {
   entity: string;
   tolerateApplied?: boolean;
   /**
-   * On SQLite, the columns of `tableName` to make NOT NULL (true) or nullable (false) once the
-   * statements have run, which SQLite does by rebuilding the table (`rebuildSqliteNullability`).
+   * On SQLite, the columns of `tableName` to make NOT NULL (true) or nullable (false), and those
+   * whose type changes, once the statements have run, which SQLite does by rebuilding the table
+   * (`rebuildSqliteNullability`).
    * The statements and the rebuild then run as one unit through `executeTransaction`.
    */
   sqliteNullability?: SqliteNullability;
@@ -149,8 +150,11 @@ export async function applyMigrationWhole(args: {
   // The one splitting rule: a separator is a line of its own, so its text inside a quoted value
   // stays part of the statement.
   const statements = splitStatements([args.migrationSQL]);
+  // A rebuild runs where it changes a column: its nullability or its type.
   const rebuild =
-    args.dialect === "sqlite" && args.sqliteNullability?.required.size
+    args.dialect === "sqlite" &&
+    ((args.sqliteNullability?.required.size ?? 0) > 0 ||
+      (args.sqliteNullability?.types?.size ?? 0) > 0)
       ? args.sqliteNullability
       : undefined;
   if (statements.length === 0 && rebuild === undefined) return;
@@ -274,7 +278,7 @@ async function runWholeInTries(
                 session: () => Promise.resolve(undefined),
               },
               rebuild.tableName,
-              rebuild.required
+              rebuild
             );
           };
     await runInTries(
@@ -308,12 +312,17 @@ async function runWholeInTries(
   }
 }
 
-/** What a SQLite migration's rebuild changes: whether each column of the table may be empty. */
+/**
+ * What a SQLite migration's rebuild changes: whether each column of the table may be empty, and
+ * the type of each column whose type the migration changes.
+ */
 export interface SqliteNullability {
   adapter: DrizzleAdapter;
   tableName: string;
   /** Column → true for NOT NULL, false for nullable. */
   required: ReadonlyMap<string, boolean>;
+  /** Column → the type it becomes; absent or empty where no type changes. */
+  types?: ReadonlyMap<string, string>;
 }
 
 /**
@@ -339,7 +348,7 @@ async function runRebuilding(
       await tx.execute(statement);
       progress.ran += 1;
     }
-    await rebuildSqliteNullability(tx, rebuild.tableName, rebuild.required);
+    await rebuildSqliteNullability(tx, rebuild.tableName, rebuild);
   });
 }
 
