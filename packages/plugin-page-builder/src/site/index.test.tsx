@@ -18,8 +18,16 @@ import {
 import { SITE_CODE_SLUG } from "../site-code/storage";
 
 let draft = false;
+/** Whether the page is drawn outside a request, where Next has no draft mode. */
+let noRequest = false;
 vi.mock("next/headers", () => ({
-  draftMode: async () => ({ isEnabled: draft }),
+  draftMode: async () => {
+    // As Next answers a call made where no request is in hand.
+    if (noRequest) {
+      throw new Error("`draftMode` was called outside a request scope.");
+    }
+    return { isEnabled: draft };
+  },
 }));
 
 /** What the stand-ins for Nextly's cache record, and what they answer. */
@@ -73,6 +81,7 @@ async function html(props: Parameters<typeof SiteCode>[0]): Promise<string> {
 
 beforeEach(() => {
   draft = false;
+  noRequest = false;
   runtime.registered = false;
   runtime.cachedFinds = [];
   storedDocument = null;
@@ -198,6 +207,16 @@ describe("<SiteCode>", () => {
     const read = vi.fn(stored([{ tag: "style", attrs: {}, text: "a{}" }]));
     expect(await SiteCode({ slot: "head", read })).toBeNull();
     expect(read).not.toHaveBeenCalled();
+  });
+
+  it("renders on a page drawn outside a request, as a published page", async () => {
+    noRequest = true;
+    expect(
+      await html({
+        slot: "head",
+        read: stored([{ tag: "style", attrs: {}, text: "a{}" }]),
+      })
+    ).toContain("a{}");
   });
 
   it("leaves out a stored entry the rules refuse, and says so", async () => {
@@ -339,6 +358,12 @@ describe("<PageCode>", () => {
     draft = true;
     expect(await pageHtml("head")).toBe("");
     expect(await pageHtml("body")).toBe("");
+  });
+
+  it("writes each place's code on a page drawn outside a request", async () => {
+    noRequest = true;
+    expect(await pageHtml("head")).toContain("window.pageHead = 1");
+    expect(await pageHtml("body")).toContain("window.pageBody = 1");
   });
 
   it("is handed the site's per-request nonce by the published route, in both places", async () => {

@@ -16,12 +16,12 @@
  *
  * @module page-checks/contrast-check
  */
-import {
-  type BlockNode,
-  type ContrastResult,
-  type NodeStyles,
-  type SiteTokenSet,
-  type StyleValue,
+import type {
+  BlockNode,
+  ContrastResult,
+  NodeStyles,
+  SiteTokenSet,
+  StyleValue,
 } from "@nextlyhq/blocks-engine";
 
 import {
@@ -47,10 +47,10 @@ const TEXT_BLOCKS: ReadonlySet<string> = new Set([
 const LARGE_TEXT = "core/heading";
 
 /** The site's text and background, where nothing on the page sets them. */
-const SITE_TEXT: StyleValue = { $token: "color.text" } as StyleValue;
+const SITE_TEXT: StyleValue = { $token: "color.text" };
 const SITE_BACKGROUND: StyleValue = {
   $token: "color.background",
-} as StyleValue;
+};
 
 /** What a block's text is drawn with, read down from the page. */
 interface Painted {

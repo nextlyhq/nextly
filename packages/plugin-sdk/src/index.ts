@@ -871,6 +871,21 @@ export type {
 export { getCachedNextly } from "nextly";
 
 /**
+ * @experimental Whether the request in hand is in Next's draft mode, as
+ *   Nextly's own content routes ask it: false outside a request (a page drawn
+ *   by a test or a script, or the CLI), and Next's own signals during a
+ *   prerender handed back to it rather than read as no.
+ *
+ *   For a plugin's server component that draws differently in the preview
+ *   pane. `next/headers` is imported inside the call, so a module using this
+ *   can be loaded by plain Node, which can't load `next/headers` itself.
+ *   Re-exported, so a plugin asks the same question core asks, through the
+ *   surface its compatibility is governed on; `@experimental` per the ladder
+ *   above.
+ */
+export { isDraftModeRequest } from "nextly/runtime";
+
+/**
  * @experimental Whether a failure means Nextly is unavailable (its start
  *   failed, the database is busy or could not be reached, a service is
  *   unavailable), and the render policy that follows: in production, a page

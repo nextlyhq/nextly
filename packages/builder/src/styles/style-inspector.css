@@ -833,11 +833,13 @@
 }
 
 /* At least 24px tall, WCAG 2.2's minimum target: the hit area is padded to
-   it, the text kept small. Inline-flex centres the words in the taller box. */
+   it, the text kept small. Inline-flex centres the words in the taller box.
+   The 24px floor holds under a smaller browser text size, which shrinks the
+   rem length; a larger one still grows the box. */
 .nx-css-properties__add {
   display: inline-flex;
   align-items: center;
-  min-block-size: 1.5rem;
+  min-block-size: max(1.5rem, 24px);
 }
 
 .nx-css-property__remove:hover,
