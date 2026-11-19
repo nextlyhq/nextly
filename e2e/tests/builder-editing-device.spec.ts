@@ -46,7 +46,7 @@ function devices(page: Page) {
   return page.getByRole("radiogroup", { name: "Device" });
 }
 
-/** The zoom menu's trigger, whose name says whether it is fitting. */
+/** The zoom menu's trigger, whose name says whether it is fitting ("Fit"). */
 function zoomTrigger(page: Page) {
   return page.getByRole("button", { name: /^Canvas zoom:/ });
 }
@@ -202,7 +202,7 @@ test.describe("the zoom", () => {
     await trigger.click();
     await page.getByRole("menuitemradio", { name: "Fit" }).click();
     await expect(trigger).toHaveText(/^Fit · \d+%$/);
-    await expect(trigger).toHaveAccessibleName(/^Canvas zoom: fitting, \d+%$/);
+    await expect(trigger).toHaveAccessibleName(/^Canvas zoom: Fit, \d+%$/);
   });
 
   test("goes to actual size on mod+0 and back to fitting on Shift+1", async ({

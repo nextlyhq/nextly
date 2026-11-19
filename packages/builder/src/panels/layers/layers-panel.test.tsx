@@ -37,6 +37,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 
 import { keyHint } from "../../key-hint";
+import { labelNotInName } from "../../label-in-name.fixture";
 import { MOVE_KEYS } from "../../keyboard-actions";
 import { LAYERS_DEPTH_PX } from "./layers-drop";
 import { LayersPanel } from "./layers-panel";
@@ -784,6 +785,15 @@ describe("the regions of the page's Layout in Layers", () => {
     const footer = screen.getByRole("button", { name: /^Site footer/ });
     expect(header.getAttribute("aria-pressed")).toBe("true");
     expect(footer.getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("is named by the words its row draws, in order", () => {
+    renderWithRegions();
+    // The name and its origin drawn flush would read as "headerMain", a
+    // word the row's name lacks, and a speech-input user could not say it.
+    for (const name of [/^Site header/, /^Site footer/]) {
+      expect(labelNotInName(screen.getByRole("button", { name }))).toBeNull();
+    }
   });
 });
 

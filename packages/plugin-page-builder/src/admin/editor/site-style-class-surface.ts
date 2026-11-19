@@ -6,7 +6,11 @@
  *
  * @module @nextlyhq/plugin-page-builder/admin/editor/site-style-class-surface
  */
-import type { NamedClass } from "@nextlyhq/blocks-engine";
+import {
+  withFluidSizesBack,
+  withoutStaleFluidSizes,
+  type NamedClass,
+} from "@nextlyhq/blocks-engine";
 import {
   sharedStyleNameTaken,
   type ClassListEdit,
@@ -423,10 +427,30 @@ function classRemovedFrom(
 }
 
 /**
+ * A style with an edit's styles, without the fluid sizes of each size the
+ * edit changed; on Undo, with those `undoneFrom` had back for each size put
+ * back as it was then.
+ */
+function editedClass(
+  entry: NamedClass,
+  styles: NamedClass["styles"],
+  undoneFrom: NamedClass | undefined
+): NamedClass {
+  const edited = withoutStaleFluidSizes({ ...entry, styles }, entry);
+  return undoneFrom === undefined
+    ? edited
+    : withFluidSizesBack(edited, undoneFrom);
+}
+
+/**
  * One style's change applied to the stored classes as a replay finds them:
  * the stored tier with that style changed, nothing to write, or nothing it
  * can do once the style is neither stored nor in the site's code (a removed
  * style is not recreated).
+ *
+ * As a forward write does, it drops the fluid sizes of each size it changes.
+ * An Undo hands the style as it was before the edit, and each size put back
+ * as it was then gets the fluid sizes it had then back with it.
  */
 function classChangeOn(
   held: unknown,
@@ -435,7 +459,9 @@ function classChangeOn(
   /** The site's code as it is now, when the step is replayed. */
   configured: readonly NamedClass[] | undefined,
   classId: string,
-  change: SharedStyleChange
+  change: SharedStyleChange,
+  /** On Undo, the style before the edit undone. */
+  undoneFrom?: NamedClass
 ): SiteStyleReplayed {
   const entries = (Array.isArray(held) ? held : []).filter(
     (entry): entry is NamedClass => typeof entry === "object" && entry !== null
@@ -475,10 +501,11 @@ function classChangeOn(
   if (out.kind === "unchanged" && (stored === undefined || stored === entry)) {
     return { kind: "unchanged" };
   }
-  const changed = {
-    ...entry,
-    styles: out.kind === "write" ? out.styles : entry.styles,
-  };
+  const changed = editedClass(
+    entry,
+    out.kind === "write" ? out.styles : entry.styles,
+    undoneFrom
+  );
   const next =
     at === -1
       ? [...entries, changed]
@@ -620,8 +647,16 @@ function useWriteClassStyles(
         if (changed.kind !== "write") slot.cancel();
         if (changed.kind === "refused") return { result: changed.reason };
         if (changed.kind === "unchanged") return { result: undefined };
+        /*
+         * A size changed here is the author's own: the fluid sizes it was
+         * made from are dropped in the same write, so nothing takes them for
+         * the ones it was made from (a copy, a range change) and makes the
+         * size again from them.
+         */
         const next = existing.map(each =>
-          each.id === classId ? { ...each, styles: changed.styles } : each
+          each.id === classId
+            ? withoutStaleFluidSizes({ ...each, styles: changed.styles }, each)
+            : each
         );
         /*
          * Undone and redone as a change to this one style, composed against
@@ -657,10 +692,17 @@ function useWriteClassStyles(
          */
         let baseline = configured;
         const replay =
-          (step: SharedStyleChange) =>
+          (step: SharedStyleChange, undoneFrom?: NamedClass) =>
           (held: unknown): SiteStyleReplayed => {
             const now = configuredNow.current;
-            const out = classChangeOn(held, baseline, now, classId, step);
+            const out = classChangeOn(
+              held,
+              baseline,
+              now,
+              classId,
+              step,
+              undoneFrom
+            );
             if (out.kind !== "gone") baseline = now;
             return out;
           };
@@ -671,7 +713,7 @@ function useWriteClassStyles(
               const step = undoOf(replaced);
               return step === REMOVED_BY_THEM
                 ? classRemovedFrom(held, configuredNow.current, classId)
-                : replay(step)(held);
+                : replay(step, entry)(held);
             },
             redo: replay(change),
           },

@@ -774,7 +774,10 @@ function SectionHeading({
           // At least 24px tall, a target a finger can hit beside the heading.
           className="h-auto min-h-6 p-0 text-xs text-foreground underline"
           disabled={saving}
-          aria-label={`Reset ${label} to defaults`}
+          // The words it draws, together, then the section it resets: a name
+          // that splits "Reset to defaults" around the section fails Label in
+          // Name for a person who says what they see.
+          aria-label={`Reset to defaults, ${label}`}
           onClick={onReset}
         >
           Reset to defaults

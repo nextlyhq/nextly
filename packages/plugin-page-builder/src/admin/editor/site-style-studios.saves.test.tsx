@@ -643,3 +643,118 @@ describe("a block style action's whole-list write", () => {
     );
   });
 });
+
+/**
+ * A change that sets one device's size at rest (or, with `undefined`, clears
+ * it, as Reset does), and whose inverse sets back the size it replaced.
+ */
+function setSize(device: string, size: unknown): SharedStyleChange {
+  type Styles = { base?: Record<string, Record<string, unknown>> };
+  return Object.assign(
+    (styles: Styles) => {
+      const atRest = styles.base ?? {};
+      const { fontSize: _was, ...rest } = atRest[device] ?? {};
+      const values = size === undefined ? rest : { ...rest, fontSize: size };
+      return {
+        kind: "write" as const,
+        styles: { ...styles, base: { ...atRest, [device]: values } },
+      };
+    },
+    {
+      invert: (before: Styles) =>
+        setSize(device, before.base?.[device]?.fontSize),
+    }
+  ) as unknown as SharedStyleChange;
+}
+
+describe("a text style's size edited by hand", () => {
+  const SIZES = { small: 16, large: 32 };
+  const MADE = "clamp(1rem, 0.6087rem + 1.7391vw, 2rem)";
+  const TYPED = "clamp(1rem, 2vw, 3rem)";
+  /** A text style whose Desktop and Mobile sizes were made with "Fluid…". */
+  const lead = {
+    id: "t-lead",
+    slug: "lead",
+    orderIndex: 0,
+    role: "text",
+    styles: { base: { base: { fontSize: MADE }, mobile: { fontSize: MADE } } },
+    fluidSizes: { base: SIZES, mobile: SIZES },
+  };
+  const surface = () =>
+    renderHook(() =>
+      useClassSurface(
+        { classes: [lead] as unknown as NamedClass[] },
+        false,
+        null,
+        undefined
+      )
+    ).result;
+  const savedLead = (): Record<string, unknown> | undefined =>
+    (saves.calls.at(-1)?.value as Record<string, unknown>[] | undefined)?.find(
+      entry => entry.id === "t-lead"
+    );
+
+  it("drops that device's fluid sizes in the same write, keeping the typed size", async () => {
+    const result = surface();
+    await act(async () => {
+      await result.current.writeStyles("t-lead", setSize("base", TYPED));
+    });
+    expect(saves.calls).toHaveLength(1);
+    expect(savedLead()).toMatchObject({
+      styles: { base: { base: { fontSize: TYPED } } },
+      fluidSizes: { mobile: SIZES },
+    });
+    expect(savedLead()?.fluidSizes).not.toHaveProperty("base");
+  });
+
+  it("drops them on a Reset too, and the field once none is left", async () => {
+    const result = surface();
+    const one = { ...lead, fluidSizes: { base: SIZES } };
+    await act(async () => {
+      await result.current.writeStyles("t-lead", setSize("base", undefined));
+    });
+    expect(savedLead()?.fluidSizes).toEqual({ mobile: SIZES });
+    const single = renderHook(() =>
+      useClassSurface(
+        { classes: [one] as unknown as NamedClass[] },
+        false,
+        null,
+        undefined
+      )
+    ).result;
+    await act(async () => {
+      await single.current.writeStyles("t-lead", setSize("base", "20px"));
+    });
+    expect(savedLead()).not.toHaveProperty("fluidSizes");
+  });
+
+  it("keeps them where the edit leaves the size as it was", async () => {
+    const result = surface();
+    await act(async () => {
+      await result.current.writeStyles("t-lead", setColor("blue"));
+    });
+    expect(savedLead()?.fluidSizes).toEqual({ base: SIZES, mobile: SIZES });
+  });
+
+  it("puts the sizes back with the size on Undo, and drops them again on Redo", async () => {
+    const result = surface();
+    await act(async () => {
+      await result.current.writeStyles("t-lead", setSize("base", TYPED));
+    });
+    const held = [savedLead()];
+    const undone = saves.inverse?.undo(held) as {
+      kind: string;
+      value: Record<string, unknown>[];
+    };
+    expect(undone.kind).toBe("write");
+    expect(undone.value[0]).toMatchObject({
+      styles: { base: { base: { fontSize: MADE } } },
+      fluidSizes: { base: SIZES, mobile: SIZES },
+    });
+    const redone = saves.inverse?.redo(undone.value) as {
+      kind: string;
+      value: Record<string, unknown>[];
+    };
+    expect(redone.value[0]?.fluidSizes).toEqual({ mobile: SIZES });
+  });
+});
