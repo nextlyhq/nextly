@@ -7,12 +7,13 @@
  * 1. the history checks `nextly migrate` runs first: an applied file edited or
  *    missing, or an attempt left unfinished, refuses the save before anything
  *    is written;
- * 2. the collection's whole definition, into the definition file
- *    (`db.uiSchemaFile`), replaced in one rename;
- * 3. the migration and snapshot `migrate:create` would write for the
+ * 2. the migration and snapshot `migrate:create` would write for the
  *    collection alone, into `db.migrationsDir`. A collection whose table the
  *    database has and no snapshot records is adopted first: a file describing
  *    the table as it stands, so a fresh database replays it;
+ * 3. once they are in place, the collection's whole definition, into the
+ *    definition file (`db.uiSchemaFile`), replaced in one rename: a save
+ *    stopped before it leaves the definition as it was;
  * 4. in development, each new file run through the runner `nextly migrate`
  *    records with, so it is recorded applied with its checksum and `nextly
  *    migrate` has nothing left to do. Outside development nothing runs, and
@@ -582,14 +583,13 @@ async function writeSave(
   });
   // The migration files there before the save: one the save left that is not among them, and not
   // named as written (a file its generation could not take back), keeps the record. Read before
-  // the definition is replaced, so a read that fails has changed nothing.
+  // anything of the save is written, so a read that fails has changed nothing.
   let sqlBefore: string[];
   try {
     sqlBefore = await sqlFiles(deps.migrationsDir);
-    await writeAtomically(definitionPath, serializeUiSchema(plan.next));
   } catch (error) {
-    // A failed read or replace leaves the definition whole and nothing else of the save is
-    // written yet: there is nothing to settle, so the record clears with the save's failure.
+    // Nothing of the save is written yet: there is nothing to settle, so the record clears with
+    // the save's failure.
     started.withdrawn();
     throw error;
   }
@@ -611,6 +611,10 @@ async function writeSave(
     const files = await writeFiles(deps, save, plan, written =>
       names.push(...written)
     );
+    // The definition last, once the migration files and their snapshots are in place: a save
+    // stopped or failed before it leaves the definition as it was, so nothing says the change
+    // happened that no migration records.
+    await writeAtomically(definitionPath, serializeUiSchema(plan.next));
     return { files, names, table: plan.table, undo, started };
   } catch (error) {
     return undoThenThrow(error, [{ files: names, undo: () => undo(error) }]);
