@@ -122,6 +122,7 @@ import { DocumentLanguagePanel } from "@admin/components/features/entries/Langua
 import { PreviewPanes } from "@admin/components/features/entries/PreviewMode/PreviewPanes";
 import { isRemovedFromCode } from "@admin/components/features/entries/removed-from-code-notice";
 import { storedStampOf } from "@admin/components/features/entries/review/review-words";
+import { ReviewChanges } from "@admin/components/features/entries/review/ReviewChanges";
 import { ReviewStatusLine } from "@admin/components/features/entries/review/ReviewStatusLine";
 import { useEditorReview } from "@admin/components/features/entries/review/useEditorReview";
 import { TranslationPanes } from "@admin/components/features/entries/TranslationMode/TranslationPanes";
@@ -2104,6 +2105,15 @@ export function SingleForm({
                                       }
                                       part={review.part}
                                       parts={review.parts}
+                                      className={DOCUMENT_COLUMN_INSET}
+                                    />
+                                    <ReviewChanges
+                                      scope={{
+                                        kind: "single",
+                                        slug: schema.slug,
+                                        documentId: String(document.id),
+                                      }}
+                                      part={review.part}
                                       className={DOCUMENT_COLUMN_INSET}
                                     />
                                     <EntryMetaStrip

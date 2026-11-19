@@ -81,6 +81,7 @@ import { previewRevisionOf } from "../PreviewMode/previewRevision";
 import { isRemovedFromCode } from "../removed-from-code-notice";
 import { RemovedFromCodeNotice } from "../RemovedFromCodeNotice";
 import { storedStampOf } from "../review/review-words";
+import { ReviewChanges } from "../review/ReviewChanges";
 import { ReviewStatusLine } from "../review/ReviewStatusLine";
 import { useEditorReview } from "../review/useEditorReview";
 import { TranslationPanes } from "../TranslationMode/TranslationPanes";
@@ -1847,6 +1848,17 @@ export function EntryForm({
                                         parts={review.parts}
                                         className={DOCUMENT_COLUMN_INSET}
                                       />
+                                      {savedEntryId === "" ? null : (
+                                        <ReviewChanges
+                                          scope={{
+                                            kind: "collection",
+                                            slug: collection.name,
+                                            entryId: savedEntryId,
+                                          }}
+                                          part={review.part}
+                                          className={DOCUMENT_COLUMN_INSET}
+                                        />
+                                      )}
                                       <EntryMetaStrip
                                         panelCarriesId={panelDocked}
                                         documentId={entry?.id}
