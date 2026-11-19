@@ -1327,7 +1327,7 @@ Rename one of the two fields so each has its own column or key, then save, or ru
 - **In your configuration:** a start refuses the pair too, so fix the file and start again.
 - **In the Builder:** the start goes on and logs the pair, so you can open the Builder and rename one of the two. Until you do, every save of that entity's definition is refused, a change to another field included. Its entries are read and written as before.
 
-Two names that differ only in letter case inside a group are two separate keys and keep working; `nextly migrate:check` warns about them.
+A pair that shares no stored value, such as two names that differ only in letter case inside a group (two separate keys), keeps working where an entity already holds it, and `nextly migrate:check` warns about it. A change that adds such a pair is refused.
 
 ### Upgrading Nextly
 
