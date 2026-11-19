@@ -31,7 +31,9 @@ import {
 import { withErrorHandler } from "../../api/with-error-handler";
 import { nextlyValidationFromZod } from "../../api/zod-to-nextly-error";
 import { isErrorResponse, requireAnyPermission } from "../../auth/middleware";
+import type { AuthContext } from "../../auth/middleware";
 import { toNextlyAuthError } from "../../auth/middleware/to-nextly-error";
+import { actorFromAuthContext } from "../../auth/request-actor";
 import { container } from "../../di/container";
 import { SYSTEM_READ_POLICY } from "../../domains/auth/system-write-policy";
 import { brandSettingsUpdateSchema } from "../../domains/email/brand-settings";
@@ -842,11 +844,69 @@ const EMAIL_DELIVERY_READS: Record<
     respondData({ ...(await activity.overdue()) }),
 };
 
+/** The method the route parser names the search by address with. */
+const SEARCH_BY_ADDRESS = "searchByAddress";
+/** The fields a search's body is read for; anything else is ignored. */
+const SEARCH_KEYS = ["address", ...ACTIVITY_FILTER_KEYS] as const;
+
+/**
+ * A search by address: the address and the merged Activity's filters from
+ * the JSON body, never the URL, recorded as the caller's search. A URL that
+ * names an address is refused rather than read, so no client comes to rely
+ * on one.
+ */
+async function searchResponse(
+  activity: EmailDeliveryActivity,
+  request: Request,
+  auth: AuthContext
+): Promise<Response> {
+  if (new URL(request.url).searchParams.has("address")) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "address",
+          code: "INVALID",
+          message: "Send the address in the request body, never the URL.",
+        },
+      ],
+    });
+  }
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    body = undefined;
+  }
+  if (typeof body !== "object" || body === null || Array.isArray(body)) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "body",
+          code: "INVALID",
+          message: "Send a JSON object with the address to search for.",
+        },
+      ],
+    });
+  }
+  const given = body as Record<string, unknown>;
+  const picked: Record<string, unknown> = {};
+  for (const key of SEARCH_KEYS) {
+    if (given[key] !== undefined) picked[key] = given[key];
+  }
+  const { items, meta, notice } = await activity.searchByAddress(
+    picked,
+    actorFromAuthContext(auth)
+  );
+  // The list envelope, with the notice of which records a search can't reach.
+  return respondData({ items, meta, notice });
+}
+
 /**
  * The Email hub's Activity reads: the delivery list, the queued-email list,
- * each template's last send, and whether queued email is overdue. Each asks
- * `read-email-deliveries` before anything is read, refused as every other
- * route refuses, and none returns an address, subject or body.
+ * each template's last send, whether queued email is overdue, and the search
+ * by address. Each asks `read-email-deliveries` before anything is read,
+ * refused as every other route refuses, and none returns an address, subject
+ * or body.
  */
 export function handleEmailDeliveryRequest(
   req: Request,
@@ -855,7 +915,7 @@ export function handleEmailDeliveryRequest(
 ): Promise<Response> {
   return withErrorHandler(async (request: Request): Promise<Response> => {
     const read = EMAIL_DELIVERY_READS[method];
-    if (!read) {
+    if (!read && method !== SEARCH_BY_ADDRESS) {
       throw NextlyError.notFound({
         logContext: { service: "email", method },
       });
@@ -871,13 +931,11 @@ export function handleEmailDeliveryRequest(
         logContext: { reason: "database-adapter-unavailable" },
       });
     }
-    return read(
-      new EmailDeliveryActivity(
-        adapter,
-        container.get<EmailDeliveryService>("emailDeliveryService")
-      ),
-      new URL(request.url).searchParams,
-      params
+    const activity = new EmailDeliveryActivity(
+      adapter,
+      container.get<EmailDeliveryService>("emailDeliveryService")
     );
+    if (!read) return searchResponse(activity, request, auth);
+    return read(activity, new URL(request.url).searchParams, params);
   })(req);
 }

@@ -1387,6 +1387,8 @@ export const nextly = {
     // infer required parameters that merely accept undefined.
     activity: async (args?: FindEmailActivityArgs) =>
       (await requireNextlyOnceStarted()).emailDeliveries.activity(args),
+    search: async args =>
+      (await requireNextlyOnceStarted()).emailDeliveries.search(args),
     find: async (args?: FindEmailDeliveriesArgs) =>
       (await requireNextlyOnceStarted()).emailDeliveries.find(args),
     findQueued: async (args?: FindQueuedEmailsArgs) =>

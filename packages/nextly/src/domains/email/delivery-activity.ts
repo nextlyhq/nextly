@@ -16,6 +16,12 @@
  * Lists answer `{ items, meta }`, walked by cursor: `meta.nextBefore` is the
  * `before` that reads the next page.
  *
+ * A search by address (`searchByAddress`) is the merged Activity narrowed to
+ * one exact address, matched by its keyed digests under the current and the
+ * previous secrets (`recipientDigests`), never by the address itself. Each
+ * search is recorded in the activity log without the address
+ * (`address-search-activity`), and the address is neither stored nor logged.
+ *
  * Who may read is decided before any of this runs: `read-email-deliveries`,
  * asked by the REST routes and by a checked Direct API call alike
  * (`SYSTEM_READ_POLICY.emailDeliveries`).
@@ -42,16 +48,20 @@ import {
 import { z } from "zod";
 
 import type { PaginationMeta } from "../../api/response-shapes";
+import type { RequestActor } from "../../auth/request-actor";
 import { loadedDialect } from "../../database/dialect-tables";
 import { toDbError } from "../../database/errors";
 import { NextlyError } from "../../errors";
 
+import { recordAddressSearch } from "./address-search-activity";
 import { deliveriesTableFor } from "./deliveries-table";
-import type {
-  DeliveryFailureKind,
-  DeliveryTemplateVersion,
-  EmailDeliveryRecipientKind,
-  EmailDeliveryStatus,
+import {
+  mailboxOf,
+  recipientDigests,
+  type DeliveryFailureKind,
+  type DeliveryTemplateVersion,
+  type EmailDeliveryRecipientKind,
+  type EmailDeliveryStatus,
 } from "./delivery-record";
 import type { EmailFailure } from "./failure";
 import {
@@ -294,6 +304,25 @@ const ACTIVITY_FILTER = z.object({
   ...common,
 });
 
+/** The longest address a mailbox can have (RFC 5321's path limit). */
+const MAX_ADDRESS = 320;
+/** One mailbox: something before one `@`, something after, no spaces. */
+const MAILBOX_SHAPE = /^[^\s@<>]+@[^\s@<>]+$/;
+
+// The address's own value is never put in a message: a refusal names the
+// field, not what was entered.
+const ADDRESS_SEARCH = ACTIVITY_FILTER.extend({
+  address: z
+    .string()
+    .trim()
+    .min(3)
+    .max(MAX_ADDRESS)
+    .refine(
+      value => MAILBOX_SHAPE.test(mailboxOf(value)),
+      "Enter one whole email address."
+    ),
+});
+
 const SLUGS = z.array(z.string().min(1).max(255)).max(MAX_SLUGS);
 
 /** @experimental How the delivery list is narrowed. */
@@ -363,6 +392,33 @@ export interface ActivityFilter {
   before?: string;
   /** At most 100; 50 when not given. */
   limit?: number | string;
+}
+
+/**
+ * @experimental A search of the merged Activity by one exact address, with
+ * its filters. Matched by the address's keyed digests, so only a whole
+ * address finds anything, however it is cased or written
+ * (`Name <address>` included).
+ */
+export interface AddressSearch extends ActivityFilter {
+  address: string;
+}
+
+/**
+ * What a search by address says beside what it found: records written under
+ * a secret no longer configured hold a digest nothing computed now matches.
+ */
+export const ADDRESS_SEARCH_NOTICE =
+  "Only records sent under the current secret, or a previous secret still " +
+  "configured, can be found by address. Older records can't be found this " +
+  "way.";
+
+/**
+ * @experimental One page of a search by address, with the notice saying
+ * which records a search cannot reach (`ADDRESS_SEARCH_NOTICE`).
+ */
+export interface AddressSearchPage extends ActivityPage<ActivityEntry> {
+  notice: string;
 }
 
 /** @experimental How the queued-email list is narrowed. */
@@ -808,7 +864,50 @@ export class EmailDeliveryActivity {
   async listActivity(
     filter: ActivityFilter = {}
   ): Promise<ActivityPage<ActivityEntry>> {
-    const options = parsed(ACTIVITY_FILTER, filter);
+    return this.activityPage(parsed(ACTIVITY_FILTER, filter));
+  }
+
+  /**
+   * The merged Activity narrowed to one exact address: the deliveries of
+   * sends not queued that went to it, and the queued emails it is a
+   * recipient of, or that a delivery to it belongs to, under the merged
+   * Activity's cursor and filters. Found by the address's digests under
+   * the current and previous secrets; older records are not found, which
+   * the answer's `notice` says.
+   *
+   * The search is recorded in the activity log as `actor`'s, with how many
+   * it found and never the address. When that record cannot be written the
+   * search is not answered.
+   *
+   * @throws {NextlyError} `VALIDATION_ERROR` for an address or filter it
+   * cannot read; `INTERNAL_ERROR` when the search could not be recorded.
+   */
+  async searchByAddress(
+    // Or a body as a route received it, which the search's schema reads.
+    search: AddressSearch | Readonly<Record<string, unknown>>,
+    actor?: RequestActor | null
+  ): Promise<AddressSearchPage> {
+    const { address, ...filter } = parsed(ADDRESS_SEARCH, search);
+    const page = await this.activityPage(filter, address);
+    try {
+      await recordAddressSearch({ actor, found: page.items.length });
+    } catch (error) {
+      throw NextlyError.internal({
+        cause: error instanceof Error ? error : undefined,
+        logContext: { reason: "address-search-not-recorded" },
+      });
+    }
+    return { ...page, notice: ADDRESS_SEARCH_NOTICE };
+  }
+
+  /**
+   * One page of the merged Activity under `options`, narrowed to
+   * `address`'s records when one is given.
+   */
+  private async activityPage(
+    options: z.infer<typeof ACTIVITY_FILTER>,
+    address?: string
+  ): Promise<ActivityPage<ActivityEntry>> {
     const after = decodeCursor(options.before);
     const limit = options.limit ?? DEFAULT_LIMIT;
     const outcome =
@@ -817,13 +916,15 @@ export class EmailDeliveryActivity {
         : undefined;
     // The queue is read first: a settled email pruned between the two reads
     // then has its deliveries listed on their own, never neither.
-    const queued = await this.queuedEntries(options, after, limit + 1);
+    const queued = await this.queuedEntries(options, after, limit + 1, address);
     // A state only a queued email can be in matches no delivery.
     const deliveries =
       options.status !== undefined && outcome === undefined
         ? []
         : await this.deliveries.list({
             standalone: true,
+            // Hashed by the delivery reader, as every lookup by address is.
+            recipient: address,
             status: outcome,
             templateSlug: options.template,
             providerType: options.providerType,
@@ -851,11 +952,13 @@ export class EmailDeliveryActivity {
   private async queuedEntries(
     options: z.infer<typeof ACTIVITY_FILTER>,
     after: Cursor | undefined,
-    limit: number
+    limit: number,
+    address: string | undefined
   ): Promise<ActivityEntry[]> {
     const queue = loadedDialect(this.dialect).tables.emailQueue;
     const present = await this.providersPresent();
     const conditions = [
+      address !== undefined ? this.sentTo(queue, address) : undefined,
       stateCondition(queue, options.status),
       options.template ? eq(queue.templateSlug, options.template) : undefined,
       options.providerType
@@ -884,6 +987,20 @@ export class EmailDeliveryActivity {
     return rows.map(row =>
       queuedEntry(row, row.jobId ? jobs.get(row.jobId) : undefined)
     );
+  }
+
+  /**
+   * The queued emails `address` is a recipient of, or that a delivery to it
+   * belongs to: a recipient a send filter added has a delivery and no
+   * recipient row. Matched by every digest the address could have been
+   * stored under; an erased or pruned email's recipients are gone, so it is
+   * not found.
+   */
+  private sentTo(queue: QueueTable, address: string): SQL {
+    const digests = recipientDigests(address);
+    const recipients = loadedDialect(this.dialect).tables.emailQueueRecipients;
+    const deliveries = deliveriesTableFor(this.dialect);
+    return sql`(${queue.id} in (select ${recipients.queuedId} from ${recipients} where ${inArray(recipients.recipientHash, digests)}) or ${queue.id} in (select ${deliveries.queuedId} from ${deliveries} where ${inArray(deliveries.recipientHash, digests)}))`;
   }
 
   /**

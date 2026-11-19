@@ -2104,6 +2104,9 @@ const EMAIL_DELIVERY_READS: Record<string, string> = {
  * - GET /api/email-deliveries/overdue → whether queued email is overdue
  * - GET /api/email-deliveries/[id] → one delivery's detail and timeline
  * - GET /api/email-deliveries/queued/[id] → one queued email's detail
+ * - POST /api/email-deliveries/search → the merged Activity for one exact
+ *   address, sent in the body so it is never in a URL, a log line or a
+ *   browser's history
  */
 function parseEmailDeliveryRoutes(
   id: string | undefined,
@@ -2112,14 +2115,20 @@ function parseEmailDeliveryRoutes(
   httpMethod: string,
   routeParams: Record<string, string>
 ): ParsedRoute | null {
-  // Every route here is a read, and none has a segment past its id.
-  if (httpMethod !== "GET" || subId !== undefined) return null;
   const read = (operation: OperationType, method: string): ParsedRoute => ({
     service: "email",
     operation,
     method,
     routeParams,
   });
+  // The search is a read sent as a POST: its address is in the body.
+  if (httpMethod === "POST") {
+    return id === "search" && subresource === undefined && subId === undefined
+      ? read("list", "searchByAddress")
+      : null;
+  }
+  // Every other route here is a read, and none has a segment past its id.
+  if (httpMethod !== "GET" || subId !== undefined) return null;
   if (id === undefined) return read("list", "listDeliveries");
   // GET /api/email-deliveries/queued/[id] → one queued email's detail
   if (id === "queued" && subresource) {

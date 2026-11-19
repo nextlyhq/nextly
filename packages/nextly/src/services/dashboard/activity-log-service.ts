@@ -59,8 +59,12 @@ import {
   type ReadCaller,
 } from "./readable-resources";
 
-/** The three mutation actions tracked in the activity log. */
-export type ActivityLogAction = "create" | "update" | "delete";
+/**
+ * What an activity-log entry records was done: the three mutations, and
+ * `read` for a read worth recording, such as a search of the delivery log by
+ * address (`address-search-activity`).
+ */
+export type ActivityLogAction = "create" | "update" | "delete" | "read";
 
 /** A single activity log record as returned by queries. */
 export interface ActivityLogEntry {

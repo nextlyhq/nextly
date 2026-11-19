@@ -53,6 +53,7 @@ import type {
 import type {
   ActivityEntry,
   ActivityPage,
+  AddressSearchPage,
   CancelQueuedEmailArgs,
   CreateEmailProviderArgs,
   CreateEmailTemplateArgs,
@@ -68,6 +69,7 @@ import type {
   FindEmailActivityArgs,
   FindEmailDeliveriesArgs,
   FindEmailDeliveryByIDArgs,
+  SearchEmailActivityArgs,
   FindEmailProviderByIDArgs,
   FindEmailProvidersArgs,
   FindEmailTemplateByIDArgs,
@@ -278,6 +280,13 @@ export interface EmailDeliveriesNamespace {
    * first under one cursor, by status, template, provider and time.
    */
   activity(args?: FindEmailActivityArgs): Promise<ActivityPage<ActivityEntry>>;
+  /**
+   * The merged Activity for one exact address, found by its digests under
+   * the current and previous secrets, with a notice that older records
+   * cannot be found. Recorded in the activity log as the caller's search,
+   * without the address.
+   */
+  search(args: SearchEmailActivityArgs): Promise<AddressSearchPage>;
   /** Queued emails, newest first, by state, template and time. */
   findQueued(
     args?: FindQueuedEmailsArgs
@@ -316,6 +325,13 @@ export function createEmailDeliveriesNamespace(
     async activity(args = {}) {
       await checked(args);
       return ctx.emailDeliveryActivity.listActivity(args);
+    },
+    async search(args) {
+      await checked(args);
+      return ctx.emailDeliveryActivity.searchByAddress(
+        args,
+        directApiActor(ctx.defaultConfig, args)
+      );
     },
     async findQueued(args = {}) {
       await checked(args);

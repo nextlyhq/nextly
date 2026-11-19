@@ -9,6 +9,7 @@
 
 import type {
   ActivityFilter,
+  AddressSearch,
   DeliveryActivityFilter,
   QueuedEmailActivityFilter,
 } from "../../domains/email/delivery-activity";
@@ -665,6 +666,16 @@ export interface FindEmailActivityArgs
     ActivityFilter {}
 
 /**
+ * @experimental Arguments for `nextly.emailDeliveries.search()`: one exact
+ * address and the merged Activity's filters. A call that checks access needs
+ * `read-email-deliveries`; the search is recorded in the activity log as the
+ * caller's, without the address.
+ */
+export interface SearchEmailActivityArgs
+  extends DirectAPIConfig,
+    AddressSearch {}
+
+/**
  * @experimental Arguments for `nextly.emailDeliveries.findByID()` and
  * `findQueuedByID()`. A call that checks access needs
  * `read-email-deliveries`.
@@ -676,6 +687,7 @@ export interface FindEmailDeliveryByIDArgs extends DirectAPIConfig {
 export type {
   ActivityEntry,
   ActivityPage,
+  AddressSearchPage,
   DeliveryActivity,
   DeliveryDetail,
   QueuedEmailActivity,
