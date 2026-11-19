@@ -396,9 +396,7 @@ async function flushHeldBegunComponents(
   begun: ReadonlySet<string>
 ): Promise<void> {
   const held = new Set(
-    outcomes
-      .filter(o => o.failure === "NOT_APPROVED" && begun.has(o.releaseId))
-      .map(o => o.releaseId)
+    outcomes.filter(o => heldBegun(o, begun)).map(o => o.releaseId)
   );
   if (held.size === 0) return;
   await deps.repository.revalidateReleases?.(
@@ -461,9 +459,26 @@ function permanentlyBrokenReleases(
         o =>
           o.failure !== null &&
           !RETRY_COULD_HELP[o.failure] &&
-          !(o.failure === "NOT_APPROVED" && begun.has(o.releaseId))
+          !heldBegun(o, begun)
       )
       .map(o => o.releaseId)
+  );
+}
+
+/**
+ * The failures a component's hold records (`componentHold`): its documents held back, or the
+ * question about them failing. Named once, so stopping and flushing judge a hold alike.
+ */
+const COMPONENT_HOLD_FAILURES: ReadonlySet<MaterialisationFailure | null> =
+  new Set<ComponentHold["failure"]>(["NOT_APPROVED", "APPROVAL_CHECK_FAILED"]);
+
+/** Whether this outcome is a hold on a component an earlier pass, or this one, began. */
+function heldBegun(
+  outcome: MaterialisationOutcome,
+  begun: ReadonlySet<string>
+): boolean {
+  return (
+    COMPONENT_HOLD_FAILURES.has(outcome.failure) && begun.has(outcome.releaseId)
   );
 }
 

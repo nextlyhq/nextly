@@ -1532,6 +1532,35 @@ describe("applyDueReleases asks whether each document going live is held back", 
       .mocked(d.repository.blockReleases)
       .mock.calls.flatMap(call => call[0].map(entry => entry.id));
 
+  it("flushes a begun component whose approval question fails, as it flushes one held back", async () => {
+    // An earlier pass wrote one member; the question about the rest fails. Kept scheduled, the
+    // component shows a reader nothing more, so its pages are flushed as for any hold.
+    const done = member({ id: "m-done", entryId: "e1" });
+    const waiting = member({ id: "m-wait", entryId: "e2" });
+    const base = deps({
+      members: [done, waiting],
+      marks: new Map([["m-done", 0]]),
+    });
+    const revalidateReleases = vi.fn(async (_ids: readonly string[]) => {});
+    const d: ApplyDueReleasesDeps = {
+      ...base,
+      repository: { ...base.repository, revalidateReleases },
+      notApproved: async () => {
+        throw new Error("connection reset");
+      },
+    };
+
+    const result = await applyDueReleases(d);
+
+    expect(result.outcomes.map(outcome => outcome.failure)).toContain(
+      "APPROVAL_CHECK_FAILED"
+    );
+    expect(blockedIn(d)).toEqual([]);
+    expect(revalidateReleases.mock.calls.flatMap(([ids]) => ids)).toEqual([
+      "r1",
+    ]);
+  });
+
   it("refuses a held publish without writing it, and stops its release rather than retrying it", async () => {
     const publish = vi.fn(async () => {});
     const held = member({ entryId: "e1" });
