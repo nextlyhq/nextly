@@ -83,14 +83,21 @@ export async function applyCompanionTransition(args: {
     } catch (error) {
       // The change has landed by now (its columns moved, its file recorded), so the failure says
       // so, and what finishes it: no later save knows of the rename to move the records again.
-      throw provenanceNotMoved(
-        error,
-        rename,
-        renameFieldProvenanceStatements(
-          adapter.getCapabilities().dialect,
-          rename
-        )
+      // The statements go to the server log here, whichever entity's save this is, as the answer
+      // tells a developer to find them there.
+      const statements = renameFieldProvenanceStatements(
+        adapter.getCapabilities().dialect,
+        rename
       );
+      const failure = provenanceNotMoved(error, rename, statements);
+      const [{ getLoggerFromDI }, { consoleLogger }] = await Promise.all([
+        import("../../../dispatcher/helpers/di"),
+        import("../../../shared/types"),
+      ]);
+      (getLoggerFromDI() ?? consoleLogger).error(
+        `[translations step] The translation records of ${rename.scopeKind} '${rename.scopeSlug}' were not moved after its rename: ${failure.logMessage ?? ""}. Run these to finish it:\n${statements.join("\n")}`
+      );
+      throw failure;
     }
   }
   // The transition record describes a companion that no longer exists, so it stops being true the
@@ -156,16 +163,6 @@ export function isProvenanceNotMoved(error: unknown): error is NextlyError {
   return (
     NextlyError.is(error) && error.logContext?.reason === PROVENANCE_NOT_MOVED
   );
-}
-
-/**
- * The statements a developer runs to finish the move (`provenanceNotMoved`), for the server log.
- */
-export function provenanceStatementsOf(error: NextlyError): string[] {
-  const statements = error.logContext?.statements;
-  return Array.isArray(statements)
-    ? statements.filter((s): s is string => typeof s === "string")
-    : [];
 }
 
 /**

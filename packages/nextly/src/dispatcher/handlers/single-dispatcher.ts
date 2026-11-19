@@ -53,10 +53,7 @@ import {
   fieldsWithLeavingSettingsDeferred,
 } from "../../domains/i18n/migration/archive-preflight";
 import { resolveCompanionRename } from "../../domains/i18n/migration/companion-rename";
-import {
-  isProvenanceNotMoved,
-  provenanceStatementsOf,
-} from "../../domains/i18n/migration/held-leaving-drops";
+import { isProvenanceNotMoved } from "../../domains/i18n/migration/held-leaving-drops";
 import { translationLayoutChange } from "../../domains/i18n/per-language-storage";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
 import { assertLanguageStatesAgreeWithEntry } from "../../domains/i18n/runtime/language-states-agree";
@@ -1968,21 +1965,17 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             }
           ).catch(async (error: unknown) => {
             // The change landed, its file recorded and its fields with it: only the renamed
-            // field's provenance move failed. The row's version moves on as its fields did, so a
-            // client holding the old one is refused, and the statements that finish the move go to
-            // the server log; the answer says the change landed (`provenanceNotMoved`). Where
-            // the row cannot be written either, that is logged too, and the answer stays the
-            // move's: it is what holds the statements and says what landed.
+            // field's provenance move failed, and logged the statements that finish it. The row's
+            // version moves on as its fields did, so a client holding the old one is refused; the
+            // answer says the change landed (`provenanceNotMoved`). Where the row cannot be
+            // written either, that is logged too, and the answer stays the move's: it is what says
+            // what landed and where the statements are.
             if (isProvenanceNotMoved(error)) {
-              const logger = getLoggerFromDI() ?? consoleLogger;
-              logger.error(
-                `[applySingleSchemaChanges] The translation records of '${slug}' were not moved after its rename: ${error.logMessage ?? ""}. Run these to finish it:\n${provenanceStatementsOf(error).join("\n")}`
-              );
               try {
                 await writeRow();
                 refreshRuntime(fields);
               } catch (rowError) {
-                logger.error(
+                (getLoggerFromDI() ?? consoleLogger).error(
                   `[applySingleSchemaChanges] The registry row of '${slug}' was not written after its rename, so its version did not move on: ${rowError instanceof Error ? rowError.message : String(rowError)}`
                 );
               }
