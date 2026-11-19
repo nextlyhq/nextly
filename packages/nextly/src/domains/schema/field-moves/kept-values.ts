@@ -60,7 +60,7 @@ const DATES_KEPT: Record<SupportedDialect, string> = {
 };
 
 /** The whole numbers an integer column holds on PostgreSQL (int4) and MySQL (int). */
-export const INT_RANGE = { least: -2147483648, most: 2147483647 } as const;
+const INT_RANGE = { least: -2147483648, most: 2147483647 } as const;
 
 /** The bytes MySQL's `text` holds, the column a long text field takes there. */
 const MYSQL_TEXT_BYTES = 65535;
@@ -188,18 +188,29 @@ function readsAsTheSameDate(
  * there, 2 is refused).
  */
 function readsAsTheSameBoolean(held: HeldValue): boolean {
-  const type = String(held.type).toLowerCase();
-  const text = String(held.text);
-  // SQLite names a JSON boolean's type `true` or `false`, and reads its text as 1 or 0.
-  if (type === "boolean" || type === "true" || type === "false") return true;
-  if (type === "number" || type === "integer") {
-    return text === "0" || text === "1";
-  }
-  if (type === "string" || type === "text") {
-    return text === "true" || text === "false";
-  }
-  return false;
+  const kept = BOOLEAN_TEXTS.get(String(held.type).toLowerCase());
+  return kept === undefined ? false : kept.has(String(held.text));
 }
+
+/**
+ * The texts read as one boolean, by the JSON type's name each dialect gives: a JSON boolean is
+ * read as itself, written `true`/`false` on PostgreSQL and MySQL and as 1/0 on SQLite, which names
+ * its type `true` or `false`.
+ */
+const BOOLEAN_TEXTS: ReadonlyMap<string, ReadonlySet<string>> = (() => {
+  const json = new Set(["true", "false", "1", "0"]);
+  const digits = new Set(["1", "0"]);
+  const words = new Set(["true", "false"]);
+  return new Map([
+    ["boolean", json],
+    ["true", json],
+    ["false", json],
+    ["number", digits],
+    ["integer", digits],
+    ["string", words],
+    ["text", words],
+  ]);
+})();
 
 /** Whether a value's text is a whole number an integer column holds, as the copy casts it. */
 function isWholeNumberInRange(text: string): boolean {
