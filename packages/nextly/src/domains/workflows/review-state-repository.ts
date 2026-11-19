@@ -169,15 +169,46 @@ export async function readReviewState(
   return row ? fromRow(row) : null;
 }
 
-/** Every part of a document that has a review state. */
+/**
+ * Every part of a document that has a review state: the batched read below, asked of this one
+ * document, so the two cannot come to answer a document differently.
+ */
 export async function readDocumentReviewStates(
   db: ReviewStatesDb,
   document: ReviewDocument
 ): Promise<ReviewState[]> {
+  return (
+    (await readScopeReviewStates(db, document, [document.entryId])).get(
+      document.entryId
+    ) ?? []
+  );
+}
+
+/**
+ * Every part with a review state of each of these documents of one collection or Single, by entry
+ * id; a document with none is absent. One read for all the ids given, so a caller holding more
+ * than one statement may bind reads them in runs; none when there are no ids.
+ */
+export async function readScopeReviewStates(
+  db: ReviewStatesDb,
+  scope: Pick<ReviewDocument, "scopeKind" | "scopeSlug">,
+  entryIds: readonly string[]
+): Promise<Map<string, ReviewState[]>> {
+  const states = new Map<string, ReviewState[]>();
+  if (entryIds.length === 0) return states;
   const rows = await db.select<ReviewStateRow>(REVIEW_STATES_TABLE, {
-    where: documentWhere(document),
+    where: {
+      and: [
+        { column: "scopeKind", op: "=", value: scope.scopeKind },
+        { column: "scopeSlug", op: "=", value: scope.scopeSlug },
+        { column: "entryId", op: "IN", value: [...new Set(entryIds)] },
+      ],
+    },
   });
-  return rows.map(fromRow);
+  for (const state of rows.map(fromRow)) {
+    states.set(state.entryId, [...(states.get(state.entryId) ?? []), state]);
+  }
+  return states;
 }
 
 /** A stage of one collection or Single, as a filter on review states names it. */

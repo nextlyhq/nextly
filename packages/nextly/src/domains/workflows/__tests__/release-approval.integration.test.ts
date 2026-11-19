@@ -755,7 +755,6 @@ describe.each(getConfiguredTestDialects())(
         )
       );
       expect(Math.max(...bound)).toBeLessThanOrEqual(IDS_PER_LOOKUP);
-      // Each document's review state is still read on its own, so a server dialect needs longer.
     }, 120_000);
 
     it("refuses Publish now for an unapproved member, even to a person who may publish without review", async () => {
@@ -789,7 +788,7 @@ describe.each(getConfiguredTestDialects())(
       expect(await storedPageStatus(t, page)).toBe("draft");
     });
 
-    it("reads each member's review state once, and a scope's liveness and drafts once per batch", async () => {
+    it("reads a scope's review states, liveness and drafts once per batch, naming every member", async () => {
       const t = await boot(dialect);
       const pages: string[] = [];
       for (let i = 0; i < 20; i += 1) pages.push(await doc(t, "pages"));
@@ -822,10 +821,10 @@ describe.each(getConfiguredTestDialects())(
       const count = (table: string | undefined) =>
         tables.filter(name => name === table).length;
       expect(findings).toHaveLength(20);
-      expect(count(REVIEW_STATES_TABLE)).toBe(20);
+      expect(count(REVIEW_STATES_TABLE)).toBe(1);
       expect(count(VERSIONS_TABLE)).toBe(1);
       expect(count(pagesTable)).toBe(1);
-      // Each member's review state read once, and the batch reads naming every member.
+      // Every batch read names every member, each once.
       const readsOf = (table: string | undefined) =>
         select.mock.calls
           .filter(([name]) => name === table)

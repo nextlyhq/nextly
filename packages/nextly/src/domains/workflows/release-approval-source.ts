@@ -9,8 +9,8 @@
  * nothing to publish (live, with no pending draft) is not asked about, as `partStage` puts it in
  * no stage. A member coming down, and a document no workflow is attached to, is never held.
  *
- * What it reads, for a batch: each member's review states (one indexed read per member); each
- * scope's stored statuses and pending drafts once for the whole batch; for a Single's part that is
+ * What it reads, for a batch: each scope's review states, stored statuses and pending drafts once
+ * for the whole batch, in runs of ids no statement binds too many of; for a Single's part that is
  * otherwise approved, the content it shows, since a Single's save leaves an approval in place; and
  * for a member held, whom its parts wait for. Liveness is the stored status, not a due release's
  * projection of it: the run judges a document as it is stored before it writes it, and the
@@ -50,7 +50,7 @@ import { partsWaitingFor, type PartWaitingFor } from "./part-waits-for";
 import { workflowAttachedTo, type RegisteredWorkflow } from "./registry";
 import { keepReleaseRecheck } from "./release-recheck-signal";
 import {
-  readDocumentReviewStates,
+  readScopeReviewStates,
   type ReviewDocument,
   type ReviewState,
 } from "./review-state-repository";
@@ -88,6 +88,8 @@ interface ScopeContent {
   languages: readonly string[];
   /** What the part holds, or null for a language with nothing stored or pending. */
   of(entryId: string, part: string | null): PartContent | null;
+  /** The document's review states, one per part that has one. */
+  statesOf(entryId: string): readonly ReviewState[];
   /**
    * Where a Single's content is read from, for comparing a part's content with its approval; null
    * for a collection, whose save withdraws an approval its content moved off.
@@ -96,9 +98,9 @@ interface ScopeContent {
 }
 
 /**
- * One scope's stored statuses and pending drafts for `entryIds`, or null when its collection or
- * Single is gone. Three reads at most, whatever the number of documents: the main rows, the
- * languages' own statuses, and the pending drafts.
+ * One scope's stored statuses, pending drafts and review states for `entryIds`, or null when its
+ * collection or Single is gone. Four reads at most per run of ids, whatever the number of
+ * documents: the main rows, the languages' own statuses, the pending drafts and the review states.
  */
 async function scopeContent(
   adapter: DrizzleAdapter,
@@ -153,11 +155,16 @@ async function scopeContent(
   const pendingByEntry = await perIdBatch(ids, batch =>
     versions.findPendingChangeLocales(scope.scopeKind, scope.scopeSlug, batch)
   );
+  // Read for the whole batch rather than per document, as the reads above are.
+  const statesByEntry = await perIdBatch(ids, batch =>
+    readScopeReviewStates(adapter, scope, batch)
+  );
   return {
     table: scope.scopeKind === "single" ? await documentTableOn(scope) : null,
     languages: perLanguage
       ? (localization?.locales.map(locale => locale.code) ?? [])
       : [],
+    statesOf: entryId => statesByEntry.get(entryId) ?? [],
     of(entryId, part) {
       const pending = pendingByEntry.get(entryId) ?? new Set<string | null>();
       const pendingOn = pendingPartsOf(pending);
@@ -211,7 +218,7 @@ async function heldPartsOf(
   document: ReviewDocument,
   content: ScopeContent
 ): Promise<HeldPart[]> {
-  const states = await readDocumentReviewStates(adapter, document);
+  const states = content.statesOf(document.entryId);
   const held: HeldPart[] = [];
   for (const part of [...content.languages, null]) {
     const holds = content.of(document.entryId, part);
