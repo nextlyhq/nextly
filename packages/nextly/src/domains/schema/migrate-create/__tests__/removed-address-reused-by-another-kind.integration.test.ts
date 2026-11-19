@@ -1,10 +1,13 @@
 /**
- * A collection removed from the configuration and its exact address reused by a Single, taken
- * through `migrate:create`, `nextly migrate` and a start, on PostgreSQL, MySQL and SQLite.
+ * A collection removed from the configuration and its exact address reused by another kind, a
+ * Single or a field group, taken through `migrate:create`, `nextly migrate` and a start, on
+ * PostgreSQL, MySQL and SQLite.
  *
- * `one` creates the collection; `two` is generated with the collection gone and a Single under the
- * same address. Each is applied and its registry rows written as `nextly migrate` writes them
- * (`reconcileMigrationMetadata`), and then the app starts on the new configuration.
+ * `one` creates the collection; `two` is generated with the collection gone and the other kind
+ * under the same address. Each is applied and its registry rows written as `nextly migrate`
+ * writes them (`reconcileMigrationMetadata`), which removes the row of the entity a migration
+ * dropped; the app then starts on the new configuration, its one-kind-per-address rule finding
+ * the address held once.
  */
 import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -17,7 +20,12 @@ import { createScratchDatabase } from "../../../../__tests__/helpers/fresh-datab
 import { migrateCore } from "../../../../cli/commands/migrate";
 import { createLogger } from "../../../../cli/utils/logger";
 import { installRegistryResolver } from "../../../../cli/utils/registry-resolver";
-import { defineCollection, defineSingle, text } from "../../../../config";
+import {
+  defineCollection,
+  defineFieldGroup,
+  defineSingle,
+  text,
+} from "../../../../config";
 import { createAdapter } from "../../../../database/factory";
 import { shutdownServices } from "../../../../di/register";
 import {
@@ -25,6 +33,7 @@ import {
   getConfiguredTestDialects,
   type TestDialect,
 } from "../../../../plugins/test-nextly";
+import { resolveRegistryTableName } from "../../../field-groups/storage/resolve-storage-names";
 import { ensureSchemaEventsTable } from "../../events/schema-events-ddl";
 import { resolveDataLossConsent } from "../../migrate/data-loss-consent";
 import { reconcileMigrationMetadata } from "../../migrate/reconcile-metadata";
@@ -34,8 +43,9 @@ import {
 } from "../app-migration-inputs";
 import { generateMigration } from "../generate";
 
-const SLUG = "rak_settings_page";
-const COLLECTION_TABLE = `dc_${SLUG}`;
+/** The kind that takes over the removed collection's address. */
+const KINDS = ["single", "fieldGroup"] as const;
+type ReusingKind = (typeof KINDS)[number];
 const silent = {
   info: () => {},
   warn: () => {},
@@ -43,9 +53,15 @@ const silent = {
   error: () => {},
 };
 
-describe.each(getConfiguredTestDialects())(
-  "a removed collection's address reused by a Single (%s)",
-  (dialect: TestDialect) => {
+describe.each(
+  getConfiguredTestDialects().flatMap(dialect =>
+    KINDS.map(kind => [dialect, kind] as const)
+  )
+)(
+  "a removed collection's address reused on %s by a %s",
+  (dialect: TestDialect, kind: ReusingKind) => {
+    const SLUG = `rak_${kind === "single" ? "page" : "group"}`;
+    const COLLECTION_TABLE = `dc_${SLUG}`;
     let url: string;
     let drop: () => Promise<void>;
     let adapter: DrizzleAdapter;
@@ -88,10 +104,14 @@ describe.each(getConfiguredTestDialects())(
     async function create(
       name: string,
       at: string,
-      entities: Pick<AppMigrationConfig, "collections" | "singles">
+      entities: Partial<
+        Pick<AppMigrationConfig, "collections" | "singles" | "fieldGroups">
+      >
     ): Promise<void> {
       const inputs = await appMigrationInputs({
         config: {
+          collections: [],
+          singles: [],
           fieldGroups: [],
           plugins: [],
           db: { uiSchemaFile: "ui-schema.json", migrationsDir: dir },
@@ -149,16 +169,18 @@ describe.each(getConfiguredTestDialects())(
 
     it("is generated, applied and started on", async () => {
       const fields = [text({ name: "title" })];
+      // The configuration once the other kind holds the address.
+      const reusing =
+        kind === "single"
+          ? { singles: [defineSingle({ slug: SLUG, fields })] }
+          : { fieldGroups: [defineFieldGroup({ slug: SLUG, fields })] };
       await create("one", "2026-11-19T10:00:00.000Z", {
         collections: [defineCollection({ slug: SLUG, fields })],
-        singles: [],
       });
       await migrate();
+      expect(await hasRow("dynamic_collections")).toBe(true);
 
-      await create("two", "2026-11-19T11:00:00.000Z", {
-        collections: [],
-        singles: [defineSingle({ slug: SLUG, fields })],
-      });
+      await create("two", "2026-11-19T11:00:00.000Z", reusing);
       expect(
         readdirSync(dir).filter(file => file.endsWith(".sql"))
       ).toHaveLength(2);
@@ -166,16 +188,18 @@ describe.each(getConfiguredTestDialects())(
       // What the registries hold once both are applied: where a start reads its kinds from.
       expect({
         collection: await hasRow("dynamic_collections"),
-        single: await hasRow("dynamic_singles"),
-      }).toEqual({ collection: false, single: true });
+        reusing: await hasRow(
+          kind === "single"
+            ? "dynamic_singles"
+            : await resolveRegistryTableName(adapter)
+        ),
+      }).toEqual({ collection: false, reusing: true });
 
-      // The start on the new configuration: the Single alone under the address.
+      // The start on the new configuration: the address held once, by the other kind.
       await adapter.disconnect();
       const started = await createTestNextly({
         adapter: (await adapterFor()) as never,
-        singles: [
-          defineSingle({ slug: SLUG, fields: [text({ name: "title" })] }),
-        ],
+        ...reusing,
       });
       expect(started).toBeDefined();
       await shutdownServices();
