@@ -438,5 +438,25 @@ for (const dialect of getConfiguredTestDialects()) {
       await save({ resolutions: { teaser: { action: "confirm_drop" } } });
       expect(await companionColumns()).not.toContain("teaser");
     }, 60_000);
+
+    // A rename answer is consent only for the pair the dialog offered: one naming the removed field
+    // beside a target it never offered answers nothing, and the save is refused, keeping the column.
+    it("refuses a rename answer for a pair the dialog never offered, keeping every language", async () => {
+      const refused = await save({
+        renameResolutions: [
+          {
+            tableName: "single_notice_locales",
+            fromColumn: "teaser",
+            toColumn: "nowhere",
+            choice: "drop_and_add",
+          },
+        ],
+      }).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+      expect(refused).toMatchObject({ code: "NEXTLY_MIGRATION_APPLY_FAILED" });
+      expect(await companionColumns()).toContain("teaser");
+    }, 60_000);
   });
 }

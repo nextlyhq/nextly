@@ -16,6 +16,7 @@ import { NextlyError } from "../../../errors/nextly-error";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { isFieldLocalized } from "../../i18n/classify-fields";
 import { appLocalization } from "../../i18n/configured-locales";
+import { offeredCompanionRename } from "../../i18n/migration/companion-rename";
 import { storesPerLanguage } from "../../i18n/per-language-storage";
 import { previewDesiredSchema } from "../pipeline/preview";
 import {
@@ -26,15 +27,18 @@ import {
 import { PromptCancelledError } from "../pipeline/prompt-dispatcher/errors";
 import type { Resolution } from "../pipeline/resolution/types";
 import type { DesiredSchema } from "../pipeline/types";
-import { toSnakeCase } from "../services/field-column-descriptor";
+import {
+  toSnakeCase,
+  type ColumnOrigin,
+} from "../services/field-column-descriptor";
 import { rowFieldDiff } from "../services/field-diff";
 
 /**
  * Refuse a dialog save whose request leaves a question the push asks unanswered, judged by the
  * push's own dispatcher over what the push would ask of the entity's table: the rename candidates
  * and the drops of columns holding values the preview of `desired` finds there, and the drop of
- * each removed field kept per language, whose values the translations table holds. Refused as the
- * push refuses it (`cancelled`).
+ * each removed field kept per language, whose values the translations table holds, confirmed by
+ * name or answered as the rename the dialog offered. Refused as the push refuses it (`cancelled`).
  */
 export async function refuseUnansweredDialogQuestions(args: {
   desired: DesiredSchema;
@@ -42,6 +46,8 @@ export async function refuseUnansweredDialogQuestions(args: {
   dialect: SupportedDialect;
   /** The entity's table, the only one its migration file changes. */
   tableName: string;
+  /** Which builder made the entity's table, which decides its columns (`ColumnOrigin`). */
+  builtBy: ColumnOrigin;
   /** The fields before and after the change, and whether the entity is translated before and after. */
   oldFields: readonly FieldDefinition[];
   newFields: readonly FieldDefinition[];
@@ -75,30 +81,35 @@ export async function refuseUnansweredDialogQuestions(args: {
   const removed = new Set(removedFields.map(field => toSnakeCase(field.name)));
   // A removed field kept per language has its values in the translations table, which the
   // preview does not read: its drop is confirmed by the field's name, as the dialog sends it, or
-  // by its translations column's drop event; or it is answered as a rename's pair, `rename`
-  // keeping its values and `drop_and_add` the consent to lose them, as the push takes a pair's
-  // answer. Unanswered, the file would drop every language's values with nobody asked.
-  const companion = `${args.tableName}_locales`;
-  const answeredAsPair = (column: string) =>
+  // answered as the rename the dialog offered for it on the translations table
+  // (`offeredCompanionRename`, the one offer the preview shows and the apply takes back), `rename`
+  // keeping its values and `drop_and_add` the consent to lose them. A resolution naming any other
+  // pair answers nothing. Unanswered, the file would drop every language's values with nobody
+  // asked.
+  const offered = await offeredCompanionRename({
+    tableName: args.tableName,
+    oldFields: args.oldFields,
+    newFields: args.newFields,
+    wasLocalized: args.wasLocalized,
+    isLocalized: args.isLocalized,
+    dialect: args.dialect,
+    builtBy: args.builtBy,
+  });
+  const answeredAsOffered = (column: string) =>
+    offered !== undefined &&
+    offered.candidate.fromColumn === column &&
     args.renameResolutions.some(
       resolution =>
-        resolution.fromColumn === column &&
-        (resolution.tableName === companion ||
-          resolution.tableName === args.tableName)
+        resolution.tableName === offered.candidate.tableName &&
+        resolution.fromColumn === offered.candidate.fromColumn &&
+        resolution.toColumn === offered.candidate.toColumn
     );
-  const unconfirmedTranslated = removedFields.filter(field => {
-    const column = toSnakeCase(field.name);
-    return (
+  const unconfirmedTranslated = removedFields.filter(
+    field =>
       isFieldLocalized(field, wasStored) &&
-      !answeredAsPair(column) &&
-      args.legacy?.byFieldName[field.name]?.action !== "confirm_drop" &&
-      !args.eventResolutions.some(
-        resolution =>
-          resolution.kind === "confirm_drop" &&
-          resolution.eventId === `destructive_drop:${companion}.${column}`
-      )
-    );
-  });
+      !answeredAsOffered(toSnakeCase(field.name)) &&
+      args.legacy?.byFieldName[field.name]?.action !== "confirm_drop"
+  );
   if (unconfirmedTranslated.length > 0) {
     throw cancelled(
       args.tableName,

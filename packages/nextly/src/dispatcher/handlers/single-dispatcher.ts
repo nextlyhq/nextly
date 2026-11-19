@@ -1866,6 +1866,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
                   db,
                   dialect,
                   tableName,
+                  // The builder that made the table, which the offered rename is judged by.
+                  builtBy: "collection",
                   oldFields: (single.fields ??
                     []) as unknown as FieldDefinition[],
                   newFields: fields as unknown as FieldDefinition[],

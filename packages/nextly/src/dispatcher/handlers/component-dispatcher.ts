@@ -1047,6 +1047,8 @@ export const COMPONENTS_METHODS: Record<
                   db,
                   dialect,
                   tableName,
+                  // The builder that made the table, which the offered rename is judged by.
+                  builtBy: "fieldGroup",
                   oldFields: (component.fields ??
                     []) as unknown as FieldDefinition[],
                   newFields: fields as unknown as FieldDefinition[],

@@ -1201,6 +1201,8 @@ const COLLECTIONS_METHODS: Record<
                 db: adapter.getDrizzle(),
                 dialect,
                 tableName,
+                // The builder that made the table, which the offered rename is judged by.
+                builtBy: "collection",
                 oldFields: (collection.fields ??
                   []) as unknown as FieldDefinition[],
                 newFields: fields as unknown as FieldDefinition[],
