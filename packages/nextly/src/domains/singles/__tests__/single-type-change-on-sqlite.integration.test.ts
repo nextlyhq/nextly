@@ -30,6 +30,7 @@ import {
 import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
 import { SchemaEventsRepository } from "../../schema/events/schema-events-repository";
 import { getColumnDescriptor } from "../../schema/services/field-column-descriptor";
+import { SingleMetadataService } from "../services/single-metadata-service";
 
 const DB = { migrationsDir: "./migrations", uiSchemaFile: "./ui-schema.json" };
 const SLUG = "stc_home";
@@ -218,4 +219,57 @@ describeEachDialect("a Single's field type change", dialect => {
       typeBefore
     );
   });
+
+  // A value written after the save judged the values and before its table is rebuilt: the change
+  // is judged again on the rebuild's own transaction, which no other write can enter on SQLite, so
+  // a value the new field cannot take refuses it there. `"2"` would be stored as the integer 2,
+  // which a checkbox, holding 0 or 1, cannot take.
+  it.skipIf(dialect !== "sqlite")(
+    "refuses a value written after the values were judged, with nothing changed",
+    async () => {
+      await fillRow("1");
+      const before = await recorded();
+      const folderBefore = await migrationFiles();
+      const judged = vi.fn();
+      const judge = SingleMetadataService.prototype as unknown as Record<
+        string,
+        (...args: unknown[]) => Promise<void>
+      >;
+      const original = judge.refuseWhatTheValueCannotTake;
+      vi.spyOn(judge, "refuseWhatTheValueCannotTake").mockImplementation(
+        async function (this: unknown, ...args: unknown[]) {
+          await original.apply(this, args);
+          judged();
+          await query(`UPDATE "${TABLE}" SET score = '2'`);
+        }
+      );
+
+      let thrown: unknown;
+      try {
+        await dispatchSingles(
+          "updateSingleSchema",
+          { slug: SLUG },
+          {
+            fields: [
+              { name: "count", type: "text" },
+              { name: "score", type: "checkbox" },
+            ],
+          }
+        );
+      } catch (error) {
+        thrown = error;
+      }
+
+      // Control: the value was written after the save's own judgement passed.
+      expect(judged, "the judgement before planning").toHaveBeenCalledTimes(1);
+      expect(thrown, "the save answered").toBeDefined();
+      expect(JSON.stringify(thrown)).toContain("TYPE_CHANGE_LOSES_VALUES");
+      expect(await recorded(), "the registry row").toEqual(before);
+      expect(await migrationFiles(), "the migrations folder").toEqual(
+        folderBefore
+      );
+      expect(await storedScore(), "the stored value").toBe("2");
+      expect(await sqliteColumnType("score"), "the column's type").toBe("text");
+    }
+  );
 });
