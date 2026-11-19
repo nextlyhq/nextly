@@ -12,7 +12,13 @@
  * Each run owns its database, reached by the commands through `DATABASE_URL` as an app's would: a
  * file on SQLite, a scratch database on the servers.
  */
-import { mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -79,6 +85,34 @@ const FIRST = declarations(["heading"]);
 const WITH_SUBTITLE = declarations(["heading", "subtitle"]);
 const configOf = (d: typeof FIRST) =>
   defineConfig({ ...d, db: { migrationsDir: "./migrations" } });
+
+/** Where the project's Schema Builder definitions are kept. */
+const BUILDER_FILE = "./schema/builder.json";
+const withBuilder = (d: typeof FIRST) =>
+  defineConfig({
+    ...d,
+    db: { migrationsDir: "./migrations", uiSchemaFile: BUILDER_FILE },
+  });
+
+/** The Schema Builder's definitions: one field group, `fh_banner`, with `fields`. */
+function writeBuilderGroup(fields: string[]): void {
+  mkdirSync(join(dir, "schema"), { recursive: true });
+  writeFileSync(
+    join(dir, BUILDER_FILE),
+    JSON.stringify({
+      version: 1,
+      collections: [],
+      singles: [],
+      components: [
+        {
+          slug: "fh_banner",
+          labels: { singular: "Banner", plural: "Banners" },
+          fields: fields.map(name => ({ name, type: "text" })),
+        },
+      ],
+    })
+  );
+}
 
 let dir: string;
 let closers: Array<() => Promise<void>> = [];
@@ -360,6 +394,38 @@ describe.each(getConfiguredTestDialects())(
         await app.nextly.find({ collection: "fh_posts" as never })
       ).items as Array<{ card?: { heading?: string; subtitle?: unknown } }>;
       expect(post.card?.heading).toBe("H");
+    });
+
+    // The registry row of a field group the Schema Builder made is written by `nextly migrate`
+    // from the snapshot: into the registry the database holds, naming the table it is stored in.
+    it("writes a Schema Builder group's registry row under the current names once the history moved", async () => {
+      const url = await openDatabase(dialect);
+      writeBuilderGroup(["heading"]);
+      loaded.config = withBuilder(FIRST);
+      expect((await create("init")).exit).toBeUndefined();
+      const first = await migrate();
+      expect(first.exit, first.said).toBeUndefined();
+      await migrateStorage(dialect, url);
+      expect(
+        (await create(undefined, { fieldGroupNames: "current" })).exit
+      ).toBeUndefined();
+      const moved = await migrate();
+      expect(moved.exit, moved.said).toBeUndefined();
+
+      writeBuilderGroup(["heading", "subtitle"]);
+      const edit = await create("banner_subtitle");
+      expect(edit.exit, edit.said).toBeUndefined();
+      const applied = await migrate();
+      expect(applied.exit, applied.said).toBeUndefined();
+
+      const adapter = await connect(dialect, url);
+      const q = (name: string) =>
+        dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+      const rows = (await adapter.executeQuery(
+        `SELECT ${q("table_name")} AS table_name, ${q("fields")} AS fields FROM ${q("dynamic_field_groups")} WHERE ${q("slug")} = 'fh_banner'`
+      )) as Array<{ table_name: string; fields: unknown }>;
+      expect(rows.map(row => row.table_name)).toEqual(["fg_fh_banner"]);
+      expect(JSON.stringify(rows[0]?.fields)).toContain("subtitle");
     });
 
     it("refuses the transition on a database whose field groups have not moved, and records nothing", async () => {
