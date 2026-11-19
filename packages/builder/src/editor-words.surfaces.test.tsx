@@ -33,13 +33,15 @@ vi.mock("./editor-words", async importOriginal => {
 });
 
 const { panelLabel } = await import("./shell/editor-rail");
-const { inspectorTabLabels } = await import("./inspector-panel");
+const { inspectorTabLabels } = await import("./inspector/inspector-panel");
 const { InsertPanel } = await import("./panels/add/insert-panel");
 const { LayersPanel } = await import("./panels/layers/layers-panel");
 const { useEditorState } = await import("./editor-state");
 const { HelpDialog } = await import("./shell/help-dialog");
-const { FontsPanel } = await import("./fonts-panel");
-const { SharedStylesPanel } = await import("./shared-styles-panel");
+const { FontsPanel } = await import("./panels/design/fonts-panel");
+const { SharedStylesPanel } = await import(
+  "./panels/design/shared-styles-panel"
+);
 
 afterEach(cleanup);
 

@@ -19,7 +19,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { BreakpointSet } from "../breakpoints";
+import type { BreakpointSet } from "../styles/breakpoints";
 import { BreakpointSwitcher } from "./breakpoint-switcher";
 
 afterEach(cleanup);

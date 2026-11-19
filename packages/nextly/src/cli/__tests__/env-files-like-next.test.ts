@@ -12,7 +12,7 @@
  * read nothing.
  */
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -50,6 +50,19 @@ function project(files: Record<string, string>): string {
     writeFileSync(join(folder, name), `DATABASE_URL=${url}\n`);
   }
   return folder;
+}
+
+/**
+ * The line a run prints before it uses a database: the SQLite file `file` of
+ * `folder`, resolved, with the mode and where the URL came from.
+ */
+function databaseLine(
+  folder: string,
+  file: string,
+  mode: string,
+  source: string
+): string {
+  return `Database: SQLite ${join(realpathSync(folder), file)} (${mode}; DATABASE_URL ${source})`;
 }
 
 /**
@@ -156,7 +169,12 @@ describe("the environment files the CLI reads, as Next.js reads them", () => {
     expect(cli.databaseUrl).toBe(nextReads(folder, "development"));
     expect(cli.databaseUrl).toBe("file:./from-env-local.db");
     expect(cli.printed).toEqual([
-      "Mode: development (DATABASE_URL from .env.local)",
+      databaseLine(
+        folder,
+        "from-env-local.db",
+        "development",
+        "from .env.local"
+      ),
     ]);
   });
 
@@ -177,7 +195,12 @@ describe("the environment files the CLI reads, as Next.js reads them", () => {
     );
     expect(cli.databaseUrl).toBe("file:./from-process.db");
     expect(cli.printed).toEqual([
-      "Mode: development (DATABASE_URL from the process environment)",
+      databaseLine(
+        folder,
+        "from-process.db",
+        "development",
+        "from the process environment"
+      ),
     ]);
   });
 
@@ -196,7 +219,7 @@ describe("the environment files the CLI reads, as Next.js reads them", () => {
       expect(cli.databaseUrl).toBe(`file:./${mode}.db`);
       expect(cli.nodeEnv).toBe(mode);
       expect(cli.printed).toEqual([
-        `Mode: ${mode} (DATABASE_URL from .env.${mode})`,
+        databaseLine(folder, `${mode}.db`, mode, `from .env.${mode}`),
       ]);
     }
   );
@@ -214,7 +237,12 @@ describe("the environment files the CLI reads, as Next.js reads them", () => {
     // sees the chosen mode, not the one the shell set.
     expect(cli.nodeEnv).toBe("production");
     expect(cli.printed).toEqual([
-      "Mode: production (DATABASE_URL from .env.production)",
+      databaseLine(
+        folder,
+        "production.db",
+        "production",
+        "from .env.production"
+      ),
     ]);
   });
 
@@ -224,27 +252,36 @@ describe("the environment files the CLI reads, as Next.js reads them", () => {
     const folder = project(perMode);
     expect(
       cliReads(folder, ["--mode=test", "probe"], childEnv("production")).printed
-    ).toEqual(["Mode: test (DATABASE_URL from .env.test)"]);
+    ).toEqual([databaseLine(folder, "test.db", "test", "from .env.test")]);
     expect(
       cliReads(
         folder,
         ["probe", "--mode", "production", "--mode=test"],
         childEnv(undefined)
       ).printed
-    ).toEqual(["Mode: test (DATABASE_URL from .env.test)"]);
+    ).toEqual([databaseLine(folder, "test.db", "test", "from .env.test")]);
     expect(
       cliReads(
         folder,
         ["probe", "--", "--mode", "production"],
         childEnv(undefined)
       ).printed
-    ).toEqual(["Mode: development (DATABASE_URL from .env.development)"]);
+    ).toEqual([
+      databaseLine(
+        folder,
+        "development.db",
+        "development",
+        "from .env.development"
+      ),
+    ]);
   });
 
   it("names a database URL no file and no variable sets", () => {
     const cli = cliReads(project({}), ["probe"], childEnv(undefined));
     expect(cli.databaseUrl).toBeUndefined();
-    expect(cli.printed).toEqual(["Mode: development (DATABASE_URL not set)"]);
+    expect(cli.printed).toEqual([
+      "Database: none (development; DATABASE_URL not set)",
+    ]);
   });
 
   // `nextly plugins install`, a step of the build script, connects without
@@ -266,8 +303,89 @@ describe("the environment files the CLI reads, as Next.js reads them", () => {
       { cwd: project({}), env: childEnv(undefined), encoding: "utf8" }
     );
     expect(JSON.parse(out)).toEqual([
-      "Mode: production (DATABASE_URL not set)",
+      "Database: none (production; DATABASE_URL not set)",
     ]);
+  });
+});
+
+describe("a second project folder's environment files", () => {
+  /** What a run started in `ranIn` holds once it has also read `other`'s files. */
+  function readsBoth(ranIn: string, other: string, env: NodeJS.ProcessEnv) {
+    const script = `
+      const { loadCliEnvironment, readFurtherEnvironment, setModeLineWriter, announceMode } = await import(${JSON.stringify(ENVIRONMENT)});
+      if (!process.env.SKIP_FIRST_LOAD) loadCliEnvironment(undefined);
+      delete process.env.DELETED_SINCE;
+      readFurtherEnvironment(${JSON.stringify(other)});
+      // As a command told to work in that folder then does.
+      process.chdir(${JSON.stringify(other)});
+      const printed = [];
+      setModeLineWriter(line => printed.push(line));
+      announceMode();
+      process.stdout.write(JSON.stringify({
+        databaseUrl: process.env.DATABASE_URL,
+        extra: process.env.EXTRA_SETTING,
+        deleted: process.env.DELETED_SINCE,
+        printed,
+      }));
+    `;
+    const out = execFileSync(
+      process.execPath,
+      ["--import", TSX, "--input-type=module", "--eval", script],
+      { cwd: ranIn, env, encoding: "utf8" }
+    );
+    return JSON.parse(out) as {
+      databaseUrl?: string;
+      extra?: string;
+      deleted?: string;
+      printed: string[];
+    };
+  }
+
+  it("are read as the mode's files are, `.env.local` over `.env`, where nothing has set the value", () => {
+    const other = project({
+      ".env": "file:./other-env.db",
+      ".env.local": "file:./other-env-local.db",
+    });
+    const read = readsBoth(project({}), other, childEnv(undefined));
+    expect(read.databaseUrl).toBe("file:./other-env-local.db");
+    // Named with the file it came from, by its path from where the CLI ran.
+    expect(read.printed).toHaveLength(1);
+    // The file is the one the command opens: resolved in the folder it
+    // works in, not the one the CLI ran in.
+    expect(read.printed[0]).toMatch(
+      new RegExp(
+        `^Database: SQLite ${join(realpathSync(other), "other-env-local.db").replaceAll(".", "\\.")} \\(development; DATABASE_URL from \\S*\\.env\\.local\\)$`
+      )
+    );
+  });
+
+  it("never replace a value the first folder's files or the process environment set", () => {
+    const other = project({ ".env.local": "file:./other.db" });
+    writeFileSync(join(other, ".env"), "EXTRA_SETTING=from-other\n");
+    const ranIn = project({ ".env": "file:./ran-in.db" });
+
+    const fromFile = readsBoth(ranIn, other, childEnv(undefined));
+    expect(fromFile.databaseUrl).toBe("file:./ran-in.db");
+    // What the first folder did not set, the second does.
+    expect(fromFile.extra).toBe("from-other");
+
+    const fromProcess = readsBoth(
+      project({}),
+      other,
+      childEnv(undefined, "file:./from-process.db")
+    );
+    expect(fromProcess.databaseUrl).toBe("file:./from-process.db");
+  });
+
+  it("are read where the CLI's own environment step never ran, and bring back nothing the process removed", () => {
+    const other = project({ ".env": "file:./other.db" });
+    const read = readsBoth(project({}), other, {
+      ...childEnv(undefined),
+      SKIP_FIRST_LOAD: "1",
+      DELETED_SINCE: "set at the start",
+    });
+    expect(read.databaseUrl).toBe("file:./other.db");
+    expect(read.deleted).toBeUndefined();
   });
 });
 
@@ -324,22 +442,24 @@ describe("the --mode option and the mode line, through the program", () => {
   it("accepts --mode after the command, as every global option is", async () => {
     const { program, stderr } = await run(["probe", "--mode", "production"]);
     expect(program.opts().mode).toBe("production");
-    expect(stderr.join("")).toBe(
-      "Mode: production (DATABASE_URL from the process environment)\n"
+    // The file is resolved against the folder the environment was read from.
+    expect(stderr.join("")).toMatch(
+      /^Database: SQLite \S+probe\.db \(production; DATABASE_URL from the process environment\)\n$/
     );
   });
 
   it("prints the mode line on stderr, leaving stdout to the command", async () => {
     const { stdout, stderr } = await run(["probe"]);
-    expect(stderr.join("")).toBe(
-      "Mode: test (DATABASE_URL from the process environment)\n"
+    // The file is resolved against the folder the environment was read from.
+    expect(stderr.join("")).toMatch(
+      /^Database: SQLite \S+probe\.db \(test; DATABASE_URL from the process environment\)\n$/
     );
-    expect(stdout.join("")).not.toContain("Mode:");
+    expect(stdout.join("")).not.toContain("Database:");
   });
 
   it("prints no mode line under --quiet", async () => {
     const { stdout, stderr } = await run(["--quiet", "probe"]);
-    expect(`${stdout.join("")}${stderr.join("")}`).not.toContain("Mode:");
+    expect(`${stdout.join("")}${stderr.join("")}`).not.toContain("Database:");
   });
 
   it("refuses a mode outside the three, naming them", async () => {

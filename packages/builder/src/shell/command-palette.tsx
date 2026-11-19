@@ -36,7 +36,7 @@ import {
 import * as React from "react";
 import { flushSync } from "react-dom";
 
-import { deepActiveElement } from "../dom-kind";
+import { deepActiveElement } from "../canvas/dom-kind";
 
 import { useModalKeyboardHold } from "./modal-keyboard-hold";
 import { useShellIsActive } from "./shell-active";

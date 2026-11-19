@@ -32,22 +32,22 @@ import {
 import { Plus } from "lucide-react";
 import * as React from "react";
 
-import {
-  numberedForPlace,
-  QUESTION_BLOCK,
-  QUESTION_ROOM_ATTRIBUTE,
-  QUESTION_ROOM_PROPERTY,
-} from "../accordion-questions";
-import { isHTMLElement } from "../dom-kind";
 import type { EditorState } from "../editor-state";
 import type { Rect } from "../geometry";
 import type { BuilderOp } from "../op-vocabulary";
 import { CANVAS_ROOT_CLASS } from "../shell-state";
 
+import {
+  numberedForPlace,
+  QUESTION_BLOCK,
+  QUESTION_ROOM_ATTRIBUTE,
+  QUESTION_ROOM_PROPERTY,
+} from "./accordion-questions";
 import { nodeElement } from "./canvas-addressing";
 import { CHROME_ATTRIBUTE } from "./canvas-chrome";
 import { useCanvasFrame } from "./canvas-frame-context";
 import { watchCanvasFor } from "./canvas-geometry-watch";
+import { isHTMLElement } from "./dom-kind";
 import {
   canvasContentRect,
   layoutFragments,

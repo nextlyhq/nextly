@@ -20,7 +20,11 @@
  */
 import { walkNodes, type BlockNode } from "@nextlyhq/blocks-engine";
 
-import { altModeOf, imageGroupOf, type ImageGroup } from "../image-group";
+import {
+  altModeOf,
+  imageGroupOf,
+  type ImageGroup,
+} from "../inspector/content/image-group";
 
 import type { PageCheck, PageCheckResult, ResolvedPage } from "./page-checks";
 import { bound, holds } from "./stored-values";
