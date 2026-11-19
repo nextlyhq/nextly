@@ -6,7 +6,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
-import { applyOp, type BuilderOp } from "./ops";
+import { applyOp, type BuilderOp } from "../ops";
 
 import {
   readStyleValue,

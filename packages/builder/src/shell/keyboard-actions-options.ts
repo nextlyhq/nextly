@@ -18,7 +18,7 @@ import type {
   TurnIntoChoice,
 } from "../canvas/toolbar-actions";
 import type { EditorState } from "../editor-state";
-import type { SharedStyleOffer } from "../shared-style-target";
+import type { SharedStyleOffer } from "../styles/shared-style-target";
 
 import type { BlockActions, ToolbarFocusSlot } from "./block-actions-context";
 

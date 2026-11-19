@@ -226,13 +226,13 @@ describe("the Baseline gate", () => {
   it("reads the web-features release the package pins, exactly", () => {
     const here = dirname(fileURLToPath(import.meta.url));
     const manifest = JSON.parse(
-      readFileSync(join(here, "..", "package.json"), "utf8")
+      readFileSync(join(here, "..", "..", "package.json"), "utf8")
     ) as {
       devDependencies: Record<string, string>;
     };
     const installed = JSON.parse(
       readFileSync(
-        join(here, "..", "node_modules", "web-features", "package.json"),
+        join(here, "..", "..", "node_modules", "web-features", "package.json"),
         "utf8"
       )
     ) as { version: string };

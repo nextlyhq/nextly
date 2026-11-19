@@ -19,7 +19,7 @@ import { act, renderHook } from "@testing-library/react";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { planLayout } from "./columns-layout";
-import { readStyleValue } from "../style-values";
+import { readStyleValue } from "../styles/style-values";
 import { useEditorState } from "../editor-state";
 import { firstAddChooserOf } from "./first-add";
 import { applyOps, type BuilderOp } from "../op-vocabulary";

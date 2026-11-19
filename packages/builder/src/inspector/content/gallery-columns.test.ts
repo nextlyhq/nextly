@@ -20,7 +20,7 @@ import {
 } from "./gallery-columns";
 import { stackTiers } from "../../canvas/columns-layout";
 import { applyOps, type BuilderOp } from "../../op-vocabulary";
-import { readStyleValue } from "../../style-values";
+import { readStyleValue } from "../../styles/style-values";
 
 const SITE: BreakpointSet = {
   viewport: [

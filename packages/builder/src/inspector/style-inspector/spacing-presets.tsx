@@ -19,9 +19,9 @@ import {
   variableLabel,
   variablesFor,
   type SiteVariable,
-} from "../../style-colour";
-import type { StyleControl } from "../../style-controls";
-import { lengthInPx, variableValueText } from "../../style-variables";
+} from "../../styles/style-colour";
+import type { StyleControl } from "../../styles/style-controls";
+import { lengthInPx, variableValueText } from "../../styles/style-variables";
 
 import { storedText } from "./style-text-field";
 

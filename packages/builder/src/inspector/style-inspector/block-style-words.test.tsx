@@ -16,8 +16,8 @@ import {
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
-import type { EditorState } from "./editor-state";
-import { StyleInspectorPanel } from "./inspector/style-inspector/style-inspector-panel";
+import type { EditorState } from "../../editor-state";
+import { StyleInspectorPanel } from "./style-inspector-panel";
 
 beforeAll(() => {
   const element = window.Element.prototype as unknown as Record<

@@ -54,9 +54,9 @@ import {
   contrastPartnerOf,
   contrastRatioText,
   type SiteVariable,
-} from "../../style-colour";
-import type { StyleControl } from "../../style-controls";
-import { readStyleValue, type StyleAddress } from "../../style-values";
+} from "../../styles/style-colour";
+import type { StyleControl } from "../../styles/style-controls";
+import { readStyleValue, type StyleAddress } from "../../styles/style-values";
 import { useFieldDescription } from "../css-hint";
 
 import { InheritedValue } from "./inherited-value";

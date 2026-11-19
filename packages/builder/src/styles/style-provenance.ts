@@ -41,8 +41,9 @@ import {
   type StyleTraceEntry,
 } from "@nextlyhq/blocks-engine";
 
+import { offeredTiers } from "../canvas/canvas-width";
+
 import { BASE_DEVICE_LABEL, isUsableWidth } from "./breakpoints";
-import { offeredTiers } from "./canvas/canvas-width";
 
 /** What a control's dot reports. */
 export type StyleProvenance =

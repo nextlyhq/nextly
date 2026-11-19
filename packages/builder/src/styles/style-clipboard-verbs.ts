@@ -17,11 +17,15 @@ import type { AnyBlockDefinition, NamedClass } from "@nextlyhq/blocks-engine";
 import { findNode } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
+import { subjectOf } from "../canvas/selection-ops";
+import type { EditorState } from "../editor-state";
+import { designReadOnlyReason, lockViewOf } from "../inspector/inspector";
+import {
+  lockSentence,
+  UNDO_KEYS_SPOKEN,
+} from "../shell/keyboard-announcements";
+
 import { batchStylePasteOps, type StyleSource } from "./batch-style";
-import { subjectOf } from "./canvas/selection-ops";
-import type { EditorState } from "./editor-state";
-import { designReadOnlyReason, lockViewOf } from "./inspector/inspector";
-import { lockSentence, UNDO_KEYS_SPOKEN } from "./shell/keyboard-announcements";
 import {
   copiedStyleOf,
   NOTHING_COPIED_YET,

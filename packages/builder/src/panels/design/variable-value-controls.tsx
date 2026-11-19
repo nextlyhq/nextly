@@ -42,8 +42,11 @@ import {
   type CommitOutcome,
 } from "../../inspector/style-inspector/style-field-surroundings";
 import { NumericField } from "../../inspector/style-inspector/style-numeric-field";
-import { styleControlsFor, type StyleControl } from "../../style-controls";
-import { CSS_NUMBER, lineHeightAsPixels } from "../../style-numeric";
+import {
+  styleControlsFor,
+  type StyleControl,
+} from "../../styles/style-controls";
+import { CSS_NUMBER, lineHeightAsPixels } from "../../styles/style-numeric";
 
 import { FontChoicesContext, FontFamilyField } from "./font-family-field";
 import { NAMED_WEIGHTS, weightName, weightsDrawn } from "./font-library";

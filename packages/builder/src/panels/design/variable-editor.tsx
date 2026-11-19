@@ -29,7 +29,7 @@ import { Button, ColorPicker, Input } from "@nextlyhq/ui";
 import { Undo2 } from "lucide-react";
 import * as React from "react";
 
-import { colourHexOf } from "../../style-colour";
+import { colourHexOf } from "../../styles/style-colour";
 
 import { FluidButton, type FluidHook } from "./fluid-popover";
 import { useRecentColours } from "./recent-colours";

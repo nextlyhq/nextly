@@ -29,26 +29,26 @@ import type {
 import { findNode, getBlock } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
-import { ClassSelector } from "../../class-selector";
 import type { EditorState } from "../../editor-state";
 import type { BuilderOp } from "../../op-vocabulary";
 import type {
   PageClassBlocks,
   SharedStylesAccess,
 } from "../../panels/design/shared-styles-panel";
+import { useSurvivingReport } from "../../shell/builder-notices";
+import { ClassSelector } from "../../styles/class-selector";
 import {
   sharedStyleReachSentence,
   type SharedStyleReach,
   type SharedStyleRow,
-} from "../../shared-style-library";
+} from "../../styles/shared-style-library";
 import {
   nodeSharedStyles,
   planDetachSharedStyle,
   planRemoveSharedStyle,
   NO_DESIGN_RIGHT,
   type SharedStyleChange,
-} from "../../shared-style-target";
-import { useSurvivingReport } from "../../shell/builder-notices";
+} from "../../styles/shared-style-target";
 import type { CardVerbs } from "../block-card";
 import { designReadOnlyReason, lockViewOf } from "../inspector";
 

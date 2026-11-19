@@ -22,9 +22,12 @@ import { isElement } from "../../canvas/dom-kind";
 import { useCanvasTokenMode } from "../../canvas/prefers-dark";
 import { typedStyleText, useLiveDraft, type LiveDraft } from "../../live-draft";
 import { fieldStep, scrubModifiersOf } from "../../scrub-gesture";
-import type { StyleControl, StyleControlKind } from "../../style-controls";
-import { CSS_NUMBER } from "../../style-numeric";
-import { tokenForTypedName } from "../../style-variables";
+import type {
+  StyleControl,
+  StyleControlKind,
+} from "../../styles/style-controls";
+import { CSS_NUMBER } from "../../styles/style-numeric";
+import { tokenForTypedName } from "../../styles/style-variables";
 import { commitOnEnter } from "../commit-on-enter";
 import { useFieldDescription } from "../css-hint";
 

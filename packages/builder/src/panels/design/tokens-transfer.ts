@@ -58,8 +58,8 @@ import {
   type SiteTokenSet,
 } from "@nextlyhq/blocks-engine";
 
-import type { ClassListEdit } from "../../block-style-actions";
 import { DESIGN_ACTION_WORDS } from "../../editor-words";
+import type { ClassListEdit } from "../../styles/block-style-actions";
 
 import { labelClashes, setFluidRange } from "./tokens-studio";
 import {

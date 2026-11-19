@@ -14,26 +14,26 @@ import {
 } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
+import { isElement } from "../../canvas/dom-kind";
+import type { EditorState } from "../../editor-state";
+import { useSurvivingReport } from "../../shell/builder-notices";
 import {
   batchStyleClearOps,
   batchStyleWriteOps,
   batchStyleWritesOps,
-} from "../../batch-style";
-import { isElement } from "../../canvas/dom-kind";
-import type { EditorState } from "../../editor-state";
+} from "../../styles/batch-style";
 import {
   moveToSharedStyleClear,
   planMoveToSharedStyle,
   sharedStyleChanges,
   type SharedStyleSet,
-} from "../../shared-style-target";
-import { useSurvivingReport } from "../../shell/builder-notices";
+} from "../../styles/shared-style-target";
 import {
   readStyleValue,
   type StyleAddress,
   type StylePolicy,
   type StyleWriteRequest,
-} from "../../style-values";
+} from "../../styles/style-values";
 import {
   designIsWritable,
   designReadOnlyReason,

@@ -28,7 +28,7 @@ import {
   contrastObscuringIn,
   contrastOf,
   contrastRatioText,
-} from "../style-colour";
+} from "../styles/style-colour";
 
 import type { PageCheck, PageCheckResult, ResolvedPage } from "./page-checks";
 import { eachRichTextNode } from "./rich-text-parts";

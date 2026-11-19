@@ -21,13 +21,14 @@ import {
   type StyleCompileContext,
 } from "@nextlyhq/blocks-engine";
 
+import { EDITOR_WORDS } from "../editor-words";
+import type { TokenMode } from "../panels/design/font-library";
+
 import {
   classDeclarations,
   everyClassDeclaration,
   usableSiteClasses,
 } from "./class-library";
-import { EDITOR_WORDS } from "./editor-words";
-import type { TokenMode } from "./panels/design/font-library";
 import { colourHexOf, contrastOf } from "./style-colour";
 
 /** The kinds of document a shared style is counted on. */

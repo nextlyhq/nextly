@@ -89,11 +89,12 @@ import {
 } from "@nextlyhq/blocks-engine";
 import { toHex } from "@nextlyhq/ui/color";
 
-import { colourOrder } from "./panels/design/colour-groups";
+import { colourOrder } from "../panels/design/colour-groups";
 import {
   lengthFamilyOf,
   type LengthFamily,
-} from "./panels/design/tokens-studio";
+} from "../panels/design/tokens-studio";
+
 import { CSS_NUMBER } from "./style-numeric";
 
 /**

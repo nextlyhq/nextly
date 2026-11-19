@@ -20,8 +20,9 @@ import {
   type StyleValue,
 } from "@nextlyhq/blocks-engine";
 
-import { chainedStyleOp } from "./canvas/columns-layout";
-import type { BuilderOp } from "./op-vocabulary";
+import { chainedStyleOp } from "../canvas/columns-layout";
+import type { BuilderOp } from "../op-vocabulary";
+
 import type { StyleProvenance } from "./style-provenance";
 import { readStyleValue } from "./style-values";
 
