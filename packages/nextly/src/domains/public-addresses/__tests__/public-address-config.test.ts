@@ -16,6 +16,13 @@ import { number, text } from "../../../collections/fields/helpers";
 import { defineSingle } from "../../../singles/config/define-single";
 import { publicAddressClashes } from "../distinct-public-addresses";
 import { ownAddressOf } from "../public-address-template";
+import { configurationProblems } from "../../../shared/lib/config-problems";
+
+/** Every problem the configuration's load reports for these entities, as one text. */
+const problemText = (entities: Parameters<typeof configurationProblems>[0]) =>
+  configurationProblems(entities)
+    .map(problem => `[${problem.code}] ${problem.path}: ${problem.message}`)
+    .join("\n");
 
 const posts = (publicAddress?: string) =>
   defineCollection({
@@ -43,23 +50,31 @@ describe("a public address declared in code", () => {
   });
 
   it("refuses a collection address that names no field, at definition", () => {
-    expect(() => posts("/blog/{handle}")).toThrow(/publicAddress/);
-    expect(() => posts("/blog/{handle}")).toThrow(/"handle" is not a field/);
+    expect(problemText({ collections: [posts("/blog/{handle}")] })).toMatch(
+      /publicAddress/
+    );
+    expect(problemText({ collections: [posts("/blog/{handle}")] })).toMatch(
+      /"handle" is not a field/
+    );
   });
 
   it("refuses a collection address every entry would share", () => {
-    expect(() => posts("/blog")).toThrow(/at least one placeholder/);
+    expect(problemText({ collections: [posts("/blog")] })).toMatch(
+      /at least one placeholder/
+    );
   });
 
   it("refuses a Single address with a placeholder, at definition", () => {
-    expect(() => page("home", "/{headline}")).toThrow(/no placeholder/);
+    expect(problemText({ singles: [page("home", "/{headline}")] })).toMatch(
+      /no placeholder/
+    );
   });
 
   it("refuses an address the runtime keeps for itself", () => {
-    expect(() => posts("/admin/{slug}")).toThrow(
+    expect(problemText({ collections: [posts("/admin/{slug}")] })).toMatch(
       /kept for the admin, the API or the runtime/
     );
-    expect(() => page("map", "/sitemap.xml")).toThrow(
+    expect(problemText({ singles: [page("map", "/sitemap.xml")] })).toMatch(
       /kept for the admin, the API or the runtime/
     );
   });
@@ -141,18 +156,22 @@ describe("an entry's own address, named by a field", () => {
   });
 
   it("refuses a text field that holds a list of values", () => {
-    expect(() =>
-      defineCollection({
-        slug: "features",
-        fields: [
-          text({ name: "title" }),
-          text({ name: "slug" }),
-          text({ name: "addresses", hasMany: true }),
+    expect(
+      problemText({
+        collections: [
+          defineCollection({
+            slug: "features",
+            fields: [
+              text({ name: "title" }),
+              text({ name: "slug" }),
+              text({ name: "addresses", hasMany: true }),
+            ],
+            publicAddress: "/features/{slug}",
+            publicAddressField: "addresses",
+          }),
         ],
-        publicAddress: "/features/{slug}",
-        publicAddressField: "addresses",
       })
-    ).toThrow(/publicAddressField/);
+    ).toMatch(/publicAddressField/);
   });
 
   it("spells an address as a browser sends it, never encoding an escape twice", () => {
@@ -170,15 +189,15 @@ describe("an entry's own address, named by a field", () => {
   });
 
   it("refuses a field the collection doesn't have, one that holds no text, and one with no template", () => {
-    expect(() => features({ publicAddressField: "where" })).toThrow(
-      /publicAddressField/
-    );
-    expect(() => features({ publicAddressField: "rank" })).toThrow(
-      /publicAddressField/
-    );
-    expect(() => features({ publicAddress: undefined })).toThrow(
-      /publicAddressField/
-    );
+    expect(
+      problemText({ collections: [features({ publicAddressField: "where" })] })
+    ).toMatch(/publicAddressField/);
+    expect(
+      problemText({ collections: [features({ publicAddressField: "rank" })] })
+    ).toMatch(/publicAddressField/);
+    expect(
+      problemText({ collections: [features({ publicAddress: undefined })] })
+    ).toMatch(/publicAddressField/);
   });
 
   it("accepts an address on this site, and an empty value, which leaves the template", async () => {

@@ -15,7 +15,11 @@
  * there, so text the section it came from holds is no change either. A
  * component placed on a page holds no CSS of its own on the page at all, and
  * detaching one the stored page placed brings the CSS its definition holds,
- * which is no change either.
+ * which is no change either. A create that copies a stored entry the caller
+ * could read (a duplicated page, a selection saved as a section or a
+ * component) brings the CSS that entry holds, in the forms the caller could
+ * see, and that is no change either: the document's CSS against the source
+ * document's, and a block's against the source's blocks'.
  *
  * @module fields/custom-css-judgement
  */
@@ -25,6 +29,7 @@ import {
   isPlainRecord,
   walkNodes,
   type BlockNode,
+  type DocumentLimits,
 } from "@nextlyhq/blocks-engine";
 import type { PluginFieldIssue, PluginFieldWrite } from "@nextlyhq/plugin-sdk";
 
@@ -32,6 +37,7 @@ import { checkCustomCss, customCssProblemText } from "../site-code/css-check";
 import { blocksValueRecord } from "../site-code/page-code";
 
 import type { JudgedField, StoredForms } from "./added-undefined-ids";
+import { copiedSourceValues } from "./copied-source";
 import { isTopLevel, siteSettingsCallerRefusal } from "./page-code-judgement";
 
 /** The issue code a refused change to custom CSS carries. */
@@ -58,6 +64,12 @@ export interface CssLibrary {
  * more and never less.
  */
 const MAX_LIBRARY_READ = 20;
+
+/**
+ * The bound a value's blocks are read within: the site's node cap, the one
+ * its pages are drawn under.
+ */
+export type CssReadLimits = Pick<DocumentLimits, "maxNodes">;
 
 /** The custom CSS one blocks value holds. */
 export interface HeldCustomCss {
@@ -93,8 +105,16 @@ function sectionOf(node: BlockNode): string | undefined {
     : undefined;
 }
 
-/** The custom CSS a blocks value holds, read within the document caps. */
-export function customCssHeldBy(value: unknown): HeldCustomCss {
+/**
+ * The custom CSS a blocks value holds, read within the document caps: the
+ * site's, where it set its own. Read within the engine's defaults instead, a
+ * site that set a higher node cap draws blocks past them whose CSS nobody
+ * read, so it would be stored unjudged.
+ */
+export function customCssHeldBy(
+  value: unknown,
+  limits: CssReadLimits = DEFAULT_LIMITS
+): HeldCustomCss {
   const record = blocksValueRecord(value);
   const settings = record?.settings;
   const document = cssText(
@@ -119,7 +139,7 @@ export function customCssHeldBy(value: unknown): HeldCustomCss {
         if (text === null) return;
         blocks.push(section === undefined ? { text } : { text, section });
       },
-      { maxNodes: DEFAULT_LIMITS.maxNodes }
+      { maxNodes: limits.maxNodes }
     );
   }
   return { document, blocks, placed };
@@ -141,7 +161,8 @@ interface CssChange {
 async function libraryTexts(
   write: PluginFieldWrite | undefined,
   store: StoreAddress | undefined,
-  documents: readonly string[]
+  documents: readonly string[],
+  limits: CssReadLimits
 ): Promise<ReadonlySet<string>> {
   const texts = new Set<string>();
   if (write === undefined || store === undefined || documents.length === 0) {
@@ -162,12 +183,31 @@ async function libraryTexts(
     }
     for (const stored of read.values()) {
       if (stored.kind !== "value") continue;
-      for (const block of customCssHeldBy(stored.value).blocks) {
+      for (const block of customCssHeldBy(stored.value, limits).blocks) {
         texts.add(block.text);
       }
     }
   }
   return texts;
+}
+
+/**
+ * Whether the write changes the document's CSS: no stored form it changes
+ * holds the same (a new page holds nothing yet, so no CSS is no change),
+ * and the entry it copies holds no such document CSS either. A copy vouches
+ * for text only, never for removing it.
+ */
+function documentCssChanged(
+  document: string | null,
+  held: readonly HeldCustomCss[],
+  copied: readonly HeldCustomCss[]
+): boolean {
+  if (document !== null && copied.some(form => form.document === document)) {
+    return false;
+  }
+  return held.length === 0
+    ? document !== null
+    : !held.some(form => form.document === document);
 }
 
 /**
@@ -184,7 +224,8 @@ async function cssChangedBy(
   written: HeldCustomCss,
   args: JudgedField,
   stored: () => Promise<StoredForms>,
-  library: CssLibrary
+  library: CssLibrary,
+  limits: CssReadLimits
 ): Promise<CssChange> {
   const holdsAny = written.document !== null || written.blocks.length > 0;
   if (!holdsAny && !isTopLevel(args)) return { blocks: [] };
@@ -197,27 +238,37 @@ async function cssChangedBy(
         }
       : { blocks: [] };
   }
-  const held = forms.forms.map(form => customCssHeldBy(form));
-  // A new page holds nothing yet: no CSS is no change.
-  const documentChanged =
-    held.length === 0
-      ? written.document !== null
-      : !held.some(form => form.document === written.document);
-  const blocks = await newBlockCss(written, held, args.write, library);
+  const held = forms.forms.map(form => customCssHeldBy(form, limits));
+  // The entry a create copies, in the form the caller's read showed, walked
+  // under the same site limits as the write: its document's CSS vouches for
+  // the document's, its blocks' for the blocks'. A source block past those
+  // limits is never walked, so it vouches for nothing.
+  const copied = (await copiedSourceValues(args)).map(form =>
+    customCssHeldBy(form, limits)
+  );
+  const documentChanged = documentCssChanged(written.document, held, copied);
+  const blocks = await newBlockCss(
+    written,
+    [...held, ...copied],
+    args.write,
+    library,
+    limits
+  );
   return documentChanged ? { document: written.document, blocks } : { blocks };
 }
 
 /**
- * The blocks' CSS texts no stored form holds, nor the saved section a block
- * was placed from, nor a component the stored page placed (which detaching
- * it copies into the page). Each library is read only while some CSS is
- * still unknown.
+ * The blocks' CSS texts no stored form holds (the entry's own, or the one a
+ * create copies), nor the saved section a block was placed from, nor a
+ * component a stored form placed (which detaching it copies into the page).
+ * Each library is read only while some CSS is still unknown.
  */
 async function newBlockCss(
   written: HeldCustomCss,
   held: readonly HeldCustomCss[],
   write: PluginFieldWrite | undefined,
-  library: CssLibrary
+  library: CssLibrary,
+  limits: CssReadLimits
 ): Promise<string[]> {
   const known = new Set(
     held.flatMap(form => form.blocks.map(block => block.text))
@@ -228,7 +279,8 @@ async function newBlockCss(
     library.patterns,
     unknown.flatMap(block =>
       block.section === undefined ? [] : [block.section]
-    )
+    ),
+    limits
   );
   const left = [
     ...new Set(
@@ -239,7 +291,8 @@ async function newBlockCss(
   const fromComponents = await libraryTexts(
     write,
     library.components,
-    held.flatMap(form => form.placed)
+    held.flatMap(form => form.placed),
+    limits
   );
   return left.filter(text => !fromComponents.has(text));
 }
@@ -262,13 +315,19 @@ export async function customCssIssues(
    * Where saved sections and components are kept; absent, no placed section
    * and no detached component vouches.
    */
-  library: CssLibrary = {}
+  library: CssLibrary = {},
+  /**
+   * The site's node cap, which the written value, its stored forms and the
+   * library documents vouching for its CSS are all read within.
+   */
+  limits: CssReadLimits = DEFAULT_LIMITS
 ): Promise<PluginFieldIssue[]> {
   const change = await cssChangedBy(
-    customCssHeldBy(value),
+    customCssHeldBy(value, limits),
     args,
     stored,
-    library
+    library,
+    limits
   );
   if (change.document === undefined && change.blocks.length === 0) return [];
   // The caller first, before anything about the CSS is read out.

@@ -11,6 +11,7 @@
  *
  * @module site-code/page-code-audit
  */
+import type { DocumentLimits } from "@nextlyhq/blocks-engine";
 import type { HookContext } from "@nextlyhq/plugin-sdk";
 
 import {
@@ -86,6 +87,11 @@ export interface PageCodeAuditArgs {
   readonly mayHoldBlocks: (collection: string) => boolean;
   readonly options: PageBuilderSiteCodeOptions | undefined;
   readonly siteOrigin: () => string;
+  /**
+   * The limits the site's pages are drawn under, so a change to the CSS of
+   * every block a page draws is recorded; the engine's defaults where unset.
+   */
+  readonly limits?: DocumentLimits;
 }
 
 /** One field whose page code, or custom CSS, a write changed. */
@@ -294,7 +300,12 @@ async function auditWrite(
       what: "a page's code",
       write: (where: Where) => writeRow(args, change, where),
     })),
-    ...changesOf(before, data, customCssHeldBy, sameCustomCss).map(change => ({
+    ...changesOf(
+      before,
+      data,
+      document => customCssHeldBy(document, args.limits),
+      sameCustomCss
+    ).map(change => ({
       change,
       what: "a document's custom CSS",
       write: (where: Where) => writeCssRow(args, change, where),

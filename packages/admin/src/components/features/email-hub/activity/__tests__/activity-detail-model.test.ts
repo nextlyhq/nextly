@@ -297,7 +297,7 @@ describe("attemptText", () => {
     createdAt: "2026-11-16T11:00:00.000Z",
     outcome: "failed",
     recipientKind: "to",
-    provider: { id: null, type: "resend" },
+    provider: { id: null, type: "resend", origin: "code" },
     failureKind: "retryable",
     failureStatus: 503,
     failureReason: "Resend answered 503",
@@ -307,9 +307,11 @@ describe("attemptText", () => {
   });
 
   it("names each attempt's outcome, provider, recipient kind and answer", () => {
-    expect(attemptText(attempt({}))).toEqual({
+    // The provider as the hub names it is passed in, never re-derived here.
+    expect(attemptText(attempt({}), "resend (in code)")).toEqual({
       outcome: "Failed",
-      detail: "resend · To · retryable, status 503 · Resend answered 503",
+      detail:
+        "resend (in code) · To · retryable, status 503 · Resend answered 503",
     });
     expect(
       attemptText(
@@ -318,9 +320,10 @@ describe("attemptText", () => {
           failureKind: null,
           failureStatus: null,
           failureReason: null,
-        })
+        }),
+        "Transactional"
       )
-    ).toEqual({ outcome: "Sent", detail: "resend · To" });
+    ).toEqual({ outcome: "Sent", detail: "Transactional · To" });
   });
 });
 
@@ -330,7 +333,7 @@ describe("failureKindOf", () => {
     createdAt: "2026-11-16T11:00:00.000Z",
     outcome: "failed",
     recipientKind: "to",
-    provider: { id: null, type: "resend" },
+    provider: { id: null, type: "resend", origin: "code" },
     failureKind: "unknown",
     failureStatus: null,
     failureReason: "The provider's answer was lost.",

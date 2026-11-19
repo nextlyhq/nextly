@@ -46,7 +46,7 @@ import {
   type SpacingScrubContext,
   type SpacingSubject,
 } from "./spacing-handles";
-import { readStyleValue } from "../style-values";
+import { readStyleValue } from "../styles/style-values";
 
 beforeAll(() => {
   // Absent from jsdom entirely, as `canvas-drag.test.tsx` records. Without them

@@ -682,19 +682,22 @@ describe("forgetI18nTransition", () => {
       token,
     });
 
-    await forgetI18nTransition(store, "single", "homepage");
+    // It answers that there was a record, so a caller reporting what it removed can count it.
+    await expect(
+      forgetI18nTransition(store, "single", "homepage")
+    ).resolves.toBe(true);
 
     await expect(
       readI18nTransitionState(store, "single", "homepage")
     ).resolves.toEqual({ status: "untracked" });
   });
 
-  it("is not an error when there was no record", async () => {
+  it("is not an error when there was no record, and answers that there was none", async () => {
     // Absent is the state it produces, so producing it twice is not a failure.
     const store = fakeStore();
 
     await expect(
       forgetI18nTransition(store, "fieldGroup", "never_localized")
-    ).resolves.toBeUndefined();
+    ).resolves.toBe(false);
   });
 });

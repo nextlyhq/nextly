@@ -201,8 +201,8 @@ import {
   type ReactElement,
 } from "react";
 
-import { isGallery } from "../gallery-pictures";
 import type { Rect } from "../geometry";
+import { isGallery } from "../inspector/content/gallery-pictures";
 import type { SlotSource } from "../panels/add/inserter";
 import { authoredName } from "../panels/layers/layers";
 

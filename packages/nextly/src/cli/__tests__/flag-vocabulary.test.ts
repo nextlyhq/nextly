@@ -51,10 +51,16 @@ const RETIRED: Record<string, string[]> = {
   // The earlier spelling of the backup confirmation `--backup-confirmed`.
   migrate: ["--confirm-backed-up"],
   "migrate:fresh": ["-f, --force", "--yes"],
-  // The first two confirmed the backup for work `nextly migrate` now does,
-  // and the third named another table for the migration records it now
-  // moves; each is still accepted, and no longer does anything.
-  upgrade: ["--confirm-backed-up", "-f, --force", "--target-table-name <name>"],
+  // Each belonged to the database work `nextly migrate` now does: still
+  // accepted, so a run with one ends naming that command, and no longer read.
+  upgrade: [
+    "--confirm-backed-up",
+    "-f, --force",
+    "--target-table-name <name>",
+    "--reconcile-core",
+    "--accept-data-loss [targets]",
+    "--force-unlock",
+  ],
   prune: ["--force"],
   "generate:widget": ["--force"],
 };

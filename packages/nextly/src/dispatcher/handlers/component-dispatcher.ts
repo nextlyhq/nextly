@@ -969,14 +969,29 @@ export const COMPONENTS_METHODS: Record<
           // applied, whether it is translated, and the advanced schema version, written with the
           // stored version in one transaction and the cached rows cleared after it.
           const registryTable = await resolveFieldGroupRegistryName(adapter);
-          const writeRow = () =>
+          // Handed the fields that applied where the save's file stopped part way and was settled.
+          const writeRow = (
+            stored: readonly unknown[] = fields
+          ): Promise<void> =>
             writeAppliedFieldsRow(adapter, {
               table: registryTable,
               slug,
-              fields: fields as FieldConfig[],
+              fields: stored as FieldConfig[],
               localized: isLocalized,
               schemaVersion: newSchemaVersion,
             });
+          // The runtime table this process reads and writes the field group through, built from the
+          // fields its row records: the save's, or those a stopped save settled to.
+          const refreshRuntime = (stored: readonly unknown[]): void => {
+            registerComponentRuntimeSchema(
+              adapter,
+              dialect,
+              tableName,
+              stored as FieldConfig[],
+              componentTypeColumn,
+              isStored
+            );
+          };
           const { registryWritten } = await writeBuilderSchemaChange(
             builderSave,
             () =>
@@ -1039,7 +1054,7 @@ export const COMPONENTS_METHODS: Record<
               // translations table is reconciled after the file: the row would then record the
               // change before that step holds it, so it is written after it, as before.
               ...(registryInFileTransaction({ wasStored, isStored })
-                ? { registry: writeRow }
+                ? { registry: writeRow, settled: refreshRuntime }
                 : {}),
             }
           );
@@ -1112,14 +1127,7 @@ export const COMPONENTS_METHODS: Record<
           // so the registered table includes component system columns
           // (_parent_id, _parent_table, _parent_field, _order, _component_type)
           // instead of collection columns (title, slug).
-          registerComponentRuntimeSchema(
-            adapter,
-            dialect,
-            tableName,
-            fields as FieldConfig[],
-            componentTypeColumn,
-            isStored
-          );
+          refreshRuntime(fields);
 
           // Reached only when the registry write landed, or when it raised and the row was found
           // to carry this edit anyway. Either way the version reported is the one now stored, so

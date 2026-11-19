@@ -36,7 +36,7 @@ import {
   PreviewedEntryProvider,
   type PreviewedCollection,
   type PreviewedEntry,
-} from "../previewed-entry";
+} from "./previewed-entry";
 
 const BODY_WORDS = "A content model is the set of collections you build on.";
 

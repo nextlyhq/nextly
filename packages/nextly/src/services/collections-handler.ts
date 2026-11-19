@@ -1537,6 +1537,50 @@ export class CollectionsHandler {
   }
 
   /**
+   * @experimental Create an entry that copies a stored one, reading the
+   * source as the caller first; see `CollectionService.createEntryFromSource`.
+   * Server-only: the REST dispatcher has no route to it.
+   */
+  async createEntryFromSource(params: {
+    collectionName: string;
+    /** The entry the new one copies, and the field its value came from. */
+    source: { collection: string; id: string; field?: string };
+    /** What to create. */
+    data: Record<string, unknown>;
+    userId?: string;
+    userName?: string;
+    userEmail?: string;
+    /** Authenticated role set, forwarded to role-based access rules. */
+    userRoles?: string[];
+    /** User context for access control */
+    user?: UserContext;
+    /** When true, bypass all access control checks */
+    overrideAccess?: boolean;
+    /** See {@link duplicateEntry}'s `trusted`. */
+    trusted?: TrustBound;
+    /** Write locale: the copy is written, and its source read, in it. */
+    locale?: string;
+    /** Arbitrary data passed to hooks via context */
+    context?: Record<string, unknown>;
+    /** The HTTP request behind this operation, when one produced it. */
+    request?: Request;
+    /** Acting identity from the transport, forwarded to the recorded event. */
+    actor?: RequestActor;
+    /** The caller's authenticated scope, judging the read and the create. */
+    authenticatedScope?: AuthenticatedScope;
+    /** Skip cache revalidation for this write (the outbox drain still runs). */
+    disableRevalidate?: boolean;
+  }) {
+    return this.entryService.createEntryFromSource({
+      ...this.resolveUserParam(params),
+      // Named explicitly, as on the duplicate, so the API-key scope survives
+      // the field-by-field rebuild rather than only via resolveUserParam's rest.
+      authenticatedScope: params.authenticatedScope,
+      disableRevalidate: params.disableRevalidate,
+    });
+  }
+
+  /**
    * Get the underlying CollectionMetadataService for direct access.
    * Useful for advanced use cases requiring fine-grained control.
    */

@@ -6,11 +6,18 @@
  * `nextly_external_identities` table) and every decision that turns one into
  * a session. This service is the intake door for that hand-off and the one
  * operation that attaches an identity on purpose: it resolves a handed-over
- * identity to the account it is linked to, and completes an explicit link a
- * signed-in person started. It never mints a session — resolving hands the
+ * identity to the account it is linked to — creating one where the key's own
+ * policy lets it provision, on the primitive that owns every creation
+ * refusal — and completes an explicit link a signed-in person started. It never mints a session — resolving hands the
  * caller a user id and nothing more, and a completed link attaches a row and
  * nothing more — so the only way any of this becomes a session is the
  * plugin login the resolution feeds (`ctx.auth.completeLogin`).
+ *
+ * The same table's read side lives here too: the listing that shows an
+ * account the identities it holds, and the unlink that removes one of its
+ * rows. Both are scoped to the owning account — one account's door never
+ * answers for another's identities — and the unlink touches nothing but the
+ * link row it names.
  *
  * The provider key a plugin names is stamped with the plugin's own name
  * before it reaches the table or a lookup, the same way its strategy names
@@ -33,19 +40,24 @@
 import { randomUUID } from "node:crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { eq } from "drizzle-orm";
+import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
+import { asc, eq } from "drizzle-orm";
 
 import { readAccessTokenCookie } from "../../../auth/cookies/access-token-cookie";
 import { verifyAccessToken } from "../../../auth/jwt/verify";
 import { sessionTokenIsCurrent } from "../../../auth/session/session-standing";
 import { loadedDialect } from "../../../database/dialect-tables";
 import { toDbError } from "../../../database/errors";
+import { appPasswordDigester } from "../../../di/password-digester";
 import { NextlyError } from "../../../errors/nextly-error";
 import { env } from "../../../lib/env";
 import { bootNameOf } from "../../../plugins/plugin-consent";
 import type { PluginDefinition } from "../../../plugins/plugin-context";
 import { pluginAdminSlug } from "../../../plugins/plugin-slug";
-import { externalIdentityKeyDigest } from "../../../schemas/external-identities";
+import {
+  EXTERNAL_IDENTITIES_TABLE,
+  externalIdentityKeyDigest,
+} from "../../../schemas/external-identities";
 import type { nextlyExternalIdentitiesMysql } from "../../../schemas/external-identities/mysql";
 import type { nextlyExternalIdentitiesPg } from "../../../schemas/external-identities/postgres";
 import type { nextlyExternalIdentitiesSqlite } from "../../../schemas/external-identities/sqlite";
@@ -83,13 +95,64 @@ export interface EnabledProviderKey {
  * Structural, matching the linking-policy module's public shape, so the real
  * policy — resolved from the app's own auth configuration — is handed to
  * this service as it is. A sign-in for a key the configuration doesn't
- * enable is refused by `requireEnabled` before any lookup, which is the only
- * question this service asks: whether an unlinked identity may be linked
- * implicitly, or provision an account, is decided elsewhere, by the slices
- * that own those branches.
+ * enable is refused by `requireEnabled` before any lookup, which is the one
+ * call this service makes: the answer it returns carries the branch policy
+ * too, so the provisioning branch reads its permission and its roles from
+ * what the gate already answered, never from anything the plugin handed
+ * over. Whether an unlinked identity may be linked implicitly is another
+ * slice's branch, and nothing here reads that answer.
+ *
+ * The unlink asks the second question, `policyFor`, the policy's
+ * non-throwing read: whether an identity the account keeps is at a provider
+ * still enabled, and so still a way in.
  */
 export interface LinkingPolicyPort {
   requireEnabled(providerKey: string): EnabledProviderKey;
+  policyFor(providerKey: string): { readonly enabled: boolean };
+}
+
+/**
+ * Resolves the role names the app's configuration gives to the roles they
+ * name.
+ *
+ * Structural over the role query service's batch slug lookup, so the real
+ * service satisfies this port as it is. The SLUG is the stable identifier a
+ * configuration names roles by — a display name is mutable, and a rename
+ * would silently re-target what a provisioned account is created with —
+ * which is also why this port has no by-name lookup to reach for. The whole
+ * set is resolved in one read rather than a read per name.
+ */
+export interface ProvisioningRoleResolver {
+  /**
+   * The roles carrying any of the slugs, each with the slug it carries, in
+   * no particular order; a slug no role carries is simply absent.
+   */
+  findRoleIdsBySlugs(
+    slugs: readonly string[]
+  ): Promise<Array<{ id: string; slug: string }>>;
+}
+
+/**
+ * The user-creation primitive the provisioning branch runs.
+ *
+ * Structural over the users mutation service's `createExternalUser`, which
+ * owns every refusal the creation itself can meet — the empty install, an
+ * address another account already holds, a role id that is not a role,
+ * super-admin direct or inherited — in one transaction with the roles it
+ * assigns. Provisioning adds only what stands before the primitive: the
+ * configuration's role names resolved to roles, and the identity row
+ * attached after. There is no second creation path to drift from the first.
+ */
+export interface ExternalUserCreator {
+  createExternalUser(input: {
+    email: string;
+    name: string;
+    image?: string | null;
+    roleIds: string[];
+    emailVerifiedAt: Date;
+    // The id as the users service types it (`MinimalUser.id`); the one
+    // reader, `provisionFor`, normalizes it to the string the table stores.
+  }): Promise<{ id: string | number }>;
 }
 
 /** What a listed login plugin hands over about one external identity. */
@@ -202,6 +265,12 @@ interface StampedIdentity {
   readonly issuer: string;
   readonly subject: string;
   readonly address: string | null;
+  /**
+   * Whether the provider proved that address — the flag the provisioning
+   * branch stamps the new account's verification against, and which the
+   * link never reads.
+   */
+  readonly addressProved: boolean;
   /** The identity's key as one comparable value, from `externalIdentityKeyDigest`. */
   readonly keyDigest: string;
 }
@@ -388,6 +457,7 @@ function stampedIdentityOf(
   };
   return {
     ...stamped,
+    addressProved: handOff.addressProved,
     // The identity's key as one value the table holds uniqueness by. The
     // lookup below compares THIS, never the three text columns: a hex digest
     // is bytewise-identical or a different value under every collation,
@@ -401,7 +471,12 @@ function stampedIdentityOf(
   };
 }
 
-/** What a handed-over identity resolved to. `userId` null: no linked account in this slice. */
+/**
+ * What a handed-over identity resolved to. `userId` null: the identity is
+ * linked to no account and the key's policy allowed core to make none — the
+ * plugin has no account to finish a sign-in with, and no way to make one
+ * itself.
+ */
 export interface SignInResolution {
   readonly userId: string | null;
 }
@@ -416,6 +491,21 @@ export interface AttachedExternalIdentity {
     readonly address: string | null;
     readonly userId: string;
   };
+}
+
+/**
+ * One stored identity as a listing answers it: the row's own facts, plus when
+ * the link was made. The table holds no provider token to leave out — nothing
+ * in a listing is anything but the link's own record.
+ */
+export interface ListedExternalIdentity {
+  readonly id: string;
+  readonly providerKey: string;
+  readonly issuer: string;
+  readonly subject: string;
+  readonly address: string | null;
+  readonly userId: string;
+  readonly createdAt: Date;
 }
 
 /** An explicit link as the plugin hands it over: the identity, and the context it started in. */
@@ -435,6 +525,18 @@ export interface ExplicitLinkInput {
 export interface IdentityServiceDeps {
   /** The linking policy, resolved from the app's own auth configuration. */
   readonly linkingPolicy: LinkingPolicyPort;
+  /**
+   * Resolves the provisioning roles the configuration names to the roles
+   * they are. The provisioning branch refuses a name that resolves to
+   * nothing before the creation primitive is reached.
+   */
+  readonly roles: ProvisioningRoleResolver;
+  /**
+   * Creates the account a provisioning key mints — active, verified, without
+   * a password, with exactly the roles given, in one transaction — and owns
+   * every refusal that creation can meet.
+   */
+  readonly users: ExternalUserCreator;
   /**
    * How the completing request's session is read. Defaults to core's own
    * session read; a port so the link's session rules can be tested without
@@ -466,14 +568,21 @@ export class IdentityService extends BaseService {
 
   /**
    * Take a finished sign-in for an external identity and resolve it to the
-   * account it is linked to.
+   * account it is linked to — creating that account, on the first sign-in,
+   * where the key's own policy lets it provision.
    *
-   * This is the whole of the sign-in side: it writes nothing — not the
-   * address, not a link, not a row for an identity nobody holds — so an
-   * unlinked identity resolves no user here whatever session the request
-   * carrying it holds, and whoever is signed in at the time is left alone.
-   * Linking an unlinked identity, implicitly or by provisioning, is another
-   * slice's branch; this door only answers "whose account is this, if any".
+   * A linked identity resolves to its account and nothing is written,
+   * whatever session the request carrying it holds and whoever is signed in
+   * at the time left alone: trust for implicit linking and permission to
+   * provision govern only their own branches, so an identity already linked
+   * signs in through a key that has neither. An unlinked identity resolves
+   * no user unless the key may provision — the answer the enabled gate
+   * already returned, never anything the plugin handed over — and when it
+   * may, provisioning creates the account active, verified and without a
+   * password on the one primitive that owns every creation refusal, and
+   * attaches the identity to it. Implicit linking is another slice's branch
+   * and is not built here: a trusted key that may not provision links
+   * nothing.
    *
    * Order, preconditions first: the payload is parsed and every malformed
    * part refused; then the stamped key passes the linking policy's enabled
@@ -492,12 +601,171 @@ export class IdentityService extends BaseService {
   ): Promise<SignInResolution> {
     const identity = stampedIdentityOf(binding, handOff);
     // The one policy question this service asks, before any lookup: the
-    // key's own gate. Branch answers (implicit-link trust, provisioning)
-    // are not read here — a linked identity signs in through a key that has
-    // neither.
-    this.deps.linkingPolicy.requireEnabled(identity.providerKey);
+    // key's own gate. Its answer carries the branch policy too, read only
+    // on the branch it governs — a linked identity signs in through a key
+    // that has neither answer.
+    const key = this.deps.linkingPolicy.requireEnabled(identity.providerKey);
     const row = await this.findIdentity(identity);
-    return { userId: row?.userId ?? null };
+    if (row !== null) return { userId: row.userId };
+    if (!key.provisioning.mayProvision) return { userId: null };
+    return {
+      userId: await this.provisionFor(binding, identity, key.provisioning),
+    };
+  }
+
+  /**
+   * Provision an account for an unlinked identity a provisioning key just
+   * signed in, and return the account's id.
+   *
+   * The address is what the account is created around, and the new account
+   * is created with its address stamped verified — so a hand-off without
+   * one, or one the provider never proved, has nothing core may vouch for
+   * and refuses before anything is written. The roles are the
+   * configuration's own names for this key, resolved by slug to the roles
+   * they are; a name no role carries refuses the provisioning naming the
+   * role, and the empty set refuses the same way, both before the creation
+   * primitive is reached. What the primitive refuses — the empty install,
+   * an address another account already holds, super-admin however it is
+   * reached — it refuses itself, writing nothing.
+   *
+   * The account made, the identity is attached to it under the digest the
+   * table holds uniqueness by — the row the person's next sign-in will
+   * resolve.
+   */
+  private async provisionFor(
+    binding: PluginIdentityBinding,
+    identity: StampedIdentity,
+    provisioning: Extract<
+      ProviderProvisioningPolicy,
+      { readonly mayProvision: true }
+    >
+  ): Promise<string> {
+    if (identity.address === null) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "address",
+            code: "REQUIRED",
+            message:
+              "Provisioning needs the address the provider asserted; a hand-off without one has nothing to create the account around.",
+          },
+        ],
+        logContext: {
+          reason: "provisioning-address-missing",
+          plugin: binding.pluginName,
+          providerKey: identity.providerKey,
+        },
+      });
+    }
+    if (!identity.addressProved) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "addressProved",
+            code: "INVALID",
+            message:
+              "Provisioning creates the account with its address already verified, which a proof the provider never made would counterfeit.",
+          },
+        ],
+        logContext: {
+          reason: "provisioning-address-unproved",
+          plugin: binding.pluginName,
+          providerKey: identity.providerKey,
+        },
+      });
+    }
+
+    const configured = provisioning.roles;
+    if (configured.length === 0) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "provision.roles",
+            code: "REQUIRED",
+            message:
+              "A provisioning key must name the roles it provisions; an account created by arriving through a provider carries an explicit privilege decision or none is made.",
+          },
+        ],
+        logContext: {
+          reason: "provisioning-roles-empty",
+          plugin: binding.pluginName,
+          providerKey: identity.providerKey,
+        },
+      });
+    }
+    // By slug, the stable identifier a configuration names roles by, the
+    // whole distinct set resolved in ONE read, then walked in the
+    // configuration's own order: the first name that resolves to nothing
+    // refuses the whole provisioning here, naming that role, before the
+    // creation primitive is reached — its own in-transaction existence
+    // check stays the backstop for a role deleted between the mapping and
+    // the insert. The answer is matched to the names bytewise, so a
+    // case-variant name refuses on every dialect alike rather than
+    // resolving on MySQL's case-insensitive collation alone.
+    const distinct = [...new Set(configured)];
+    const idBySlug = new Map(
+      (await this.deps.roles.findRoleIdsBySlugs(distinct)).map(role => [
+        role.slug,
+        role.id,
+      ])
+    );
+    const roleIds: string[] = [];
+    for (const slug of distinct) {
+      const id = idBySlug.get(slug);
+      if (id === undefined) {
+        throw NextlyError.validation({
+          errors: [
+            {
+              path: "provision.roles",
+              code: "INVALID",
+              message: `The provisioning role "${slug}" does not exist.`,
+            },
+          ],
+          logContext: {
+            reason: "provisioning-role-unknown",
+            role: slug,
+            plugin: binding.pluginName,
+            providerKey: identity.providerKey,
+          },
+        });
+      }
+      roleIds.push(id);
+    }
+
+    // The provider asserted no name for the person — the hand-off carries
+    // none — so the account's name is the address it is created around: the
+    // one string the provider vouched for, and nothing invented here.
+    const created = await this.deps.users.createExternalUser({
+      email: identity.address,
+      name: identity.address,
+      roleIds,
+      // The provider proved the address, and the account is created at the
+      // sign-in that carries that proof.
+      emailVerifiedAt: new Date(),
+    });
+    // Users ids are text in every dialect; the primitive's type merely admits a number.
+    const userId = String(created.id);
+
+    // The identity row, attached to the account it made, under the digest
+    // the table holds uniqueness by. Two first sign-ins racing each other
+    // both pass the read that precedes this; the digest's unique index is
+    // what actually refuses the second, as it refuses the link's race.
+    const row = {
+      id: randomUUID(),
+      providerKey: identity.providerKey,
+      issuer: identity.issuer,
+      subject: identity.subject,
+      keyDigest: identity.keyDigest,
+      address: identity.address,
+      userId,
+      createdAt: new Date(),
+    };
+    try {
+      await this.db.insert(this.identitiesTable).values(row);
+    } catch (error) {
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
+    }
+    return userId;
   }
 
   /**
@@ -598,6 +866,123 @@ export class IdentityService extends BaseService {
     }
 
     return attachmentOf(row);
+  }
+
+  /**
+   * List one account's external identities: every row the account owns, in
+   * the order the links were made, and nothing else.
+   *
+   * Read through the owner index the table carries for exactly this
+   * question, so a listing is one query however many identities other
+   * accounts hold. No policy is asked — which keys are enabled governs
+   * sign-ins, not what a person or an administrator is shown about the links
+   * that already exist.
+   */
+  async listExternalIdentities(
+    userId: string
+  ): Promise<ListedExternalIdentity[]> {
+    const rows = await this.db
+      .select({
+        id: this.identitiesTable.id,
+        providerKey: this.identitiesTable.providerKey,
+        issuer: this.identitiesTable.issuer,
+        subject: this.identitiesTable.subject,
+        address: this.identitiesTable.address,
+        userId: this.identitiesTable.userId,
+        createdAt: this.identitiesTable.createdAt,
+      })
+      .from(this.identitiesTable)
+      .where(eq(this.identitiesTable.userId, userId))
+      // The link order, with the id as the tiebreak: two links made in one
+      // stored moment keep a stable order however the database returns them.
+      .orderBy(
+        asc(this.identitiesTable.createdAt),
+        asc(this.identitiesTable.id)
+      );
+    return rows;
+  }
+
+  /**
+   * Unlink one external identity: remove the link row, and nothing else.
+   *
+   * The removal is scoped to the owning account — an identity another
+   * account holds is not unlinkable through this door, and answers exactly
+   * as an identity nobody holds does, so a caller learns nothing about
+   * whose row an id names. No session, token or account is touched: whoever
+   * was signed in through the identity stays signed in by the session they
+   * hold, and signs in differently only next time.
+   *
+   * An account is never left with no way in (the single sign-on spec's
+   * L8): with no password, the unlink is refused unless the account keeps
+   * another identity at a provider the linking policy still enables. An
+   * identity at a disabled provider is no way in, so it does not count.
+   *
+   * The check and the removal are one transaction under the lock on the
+   * account's row, so two unlinks for one account take turns: the second
+   * reads what the first left, and two at once can never remove the last
+   * way in together. SQLite's transactions are already serialized, which
+   * the same lock call answers there.
+   */
+  async unlinkExternalIdentity(
+    userId: string,
+    identityId: string
+  ): Promise<void> {
+    await this.adapter.transaction(async tx => {
+      await tx.lockRow("users", userId);
+      const held = await tx.select<{ id: unknown; providerKey: unknown }>(
+        EXTERNAL_IDENTITIES_TABLE,
+        {
+          columns: ["id", "providerKey"],
+          where: { and: [{ column: "userId", op: "=", value: userId }] },
+        }
+      );
+      if (!held.some(row => String(row.id) === identityId)) {
+        // The one refusal for a row that is absent and a row another
+        // account owns alike: the account's own rows are all that was read,
+        // so the answer cannot tell the two apart.
+        throw NextlyError.notFound({
+          message: "No such identity for this user.",
+          logContext: { reason: "identity-not-held", userId, identityId },
+        });
+      }
+      const anotherWayIn = held.some(
+        row =>
+          String(row.id) !== identityId &&
+          this.deps.linkingPolicy.policyFor(String(row.providerKey)).enabled
+      );
+      if (!anotherWayIn && !(await this.holdsPassword(tx, userId))) {
+        throw NextlyError.conflict({
+          reason: "state",
+          message:
+            "This is the account's last way to sign in. Set a password or link another account first.",
+          logContext: { reason: "identity-last-way-in", userId, identityId },
+        });
+      }
+      await tx.delete(EXTERNAL_IDENTITIES_TABLE, {
+        and: [
+          { column: "id", op: "=", value: identityId },
+          { column: "userId", op: "=", value: userId },
+        ],
+      });
+    });
+  }
+
+  /**
+   * Whether the account has a password to sign in with, read in the unlink's
+   * transaction: a stored value the app's password digester takes for a
+   * hash, the same answer the users service gives an account's
+   * `hasPassword`. A value it does not take signs nobody in, so it is no
+   * way in.
+   */
+  private async holdsPassword(
+    tx: TransactionContext,
+    userId: string
+  ): Promise<boolean> {
+    const [user] = await tx.select<{ passwordHash: unknown }>("users", {
+      columns: ["passwordHash"],
+      where: { and: [{ column: "id", op: "=", value: userId }] },
+    });
+    return appPasswordDigester().isHash(user?.passwordHash);
   }
 
   /**

@@ -603,7 +603,7 @@ export class CollectionMetadataService extends BaseService {
         },
         { appliedBy: pushed.appliedBy }
       );
-      pushed.throwIfFailed(written.files);
+      pushed.throwIfFailed(written.files, written.checked);
       return undefined;
     } catch (error: unknown) {
       return errorToMetadataResult(

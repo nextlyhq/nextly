@@ -88,11 +88,30 @@ export type EmailTemplateOwner =
   | { kind: "plugin"; name: string; installed: boolean }
   | { kind: "site" };
 
+/**
+ * A written template's blocks, as the server stores and checks them: derived
+ * from the draft preview's contract, which carries them, so the admin never
+ * restates the shape the server validates.
+ */
+export type WrittenDocument = NonNullable<
+  DraftPreviewRequest["template"]["blocks"]
+>;
+
+/** One block of a written template. */
+export type WrittenBlock = WrittenDocument["blocks"][number];
+
+/** Whether a template is written in blocks or coded in HTML. */
+export type TemplateFormat = "code" | "written";
+
 export interface EmailTemplateRecord {
   id: string;
   name: string;
   slug: string;
   kind: EmailTemplateKind;
+  /** Written in blocks, or coded; absent or null on a template stored before blocks were, which is coded. */
+  format?: TemplateFormat | null;
+  /** A written template's blocks; null for a coded one. Its HTML is written from them. */
+  blocks?: WrittenDocument | null;
   subject: string;
   htmlContent: string;
   plainTextContent: string | null;
@@ -262,6 +281,9 @@ export interface CreateEmailTemplatePayload {
   description?: string | null;
   cc?: string[] | null;
   bcc?: string[] | null;
+  /** "written" with its blocks for a template written in blocks; left out for a coded one. */
+  format?: TemplateFormat;
+  blocks?: WrittenDocument | null;
 }
 
 export interface UpdateEmailTemplatePayload {
@@ -281,6 +303,9 @@ export interface UpdateEmailTemplatePayload {
   description?: string | null;
   cc?: string[] | null;
   bcc?: string[] | null;
+  /** A written template's blocks; "code" converts it to code, one way. */
+  format?: TemplateFormat;
+  blocks?: WrittenDocument | null;
 }
 
 export interface EmailTemplatePreviewResult {
@@ -486,6 +511,9 @@ export interface SendTestTarget {
  * absent field is the stored one.
  */
 export interface TemplateTestDraft {
+  /** A written email's format and blocks, so a test sends the blocks on screen. */
+  format?: TemplateFormat;
+  blocks?: WrittenDocument | null;
   subject?: string;
   preheader?: string | null;
   htmlContent?: string;

@@ -162,7 +162,7 @@
   margin: 0;
   font-size: var(--text-xs);
   line-height: 1.4;
-  color: var(--nx-destructive);
+  color: var(--nx-builder-destructive-text);
 }
 
 /*
@@ -383,7 +383,7 @@
 }
 
 .nx-expose__reason[role="alert"] {
-  color: var(--nx-destructive);
+  color: var(--nx-builder-destructive-text);
 }
 
 /* A block's Shown row: the words in the field's place, the icon beside. */

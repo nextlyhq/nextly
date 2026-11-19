@@ -11,6 +11,10 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import {
+  NEXTLY_RUN_TIMEOUT,
+  runNextly,
+} from "../../__tests__/helpers/run-nextly";
 import { toCliError } from "../../errors";
 import { formatCliError } from "../../errors/render";
 import { clearConfigCache, loadConfig } from "../config-loader";
@@ -274,4 +278,57 @@ describe("a configuration that does not parse", () => {
     expect(report).toContain("nextly.config.ts:4:12");
     expect(occurrences(report, ":4:13"), report).toBe(0);
   });
+});
+
+describe("a configuration with several problems", () => {
+  // Three problems in two collections: a slug with a space, and a collection whose fields name
+  // one column twice and use a field type nothing offers. Each is reported, the first first.
+  const THREE_PROBLEMS = [
+    "export default {",
+    "  collections: [",
+    "    { slug: 'Blog Posts', fields: [{ name: 'title', type: 'text' }] },",
+    "    {",
+    "      slug: 'notes',",
+    "      fields: [",
+    "        { name: 'body', type: 'text' },",
+    "        { name: 'body', type: 'text' },",
+    "        { name: 'score', type: 'acme-rating' },",
+    "      ],",
+    "    },",
+    "  ],",
+    "};",
+    "",
+  ].join("\n");
+
+  // Run as a command runs it: a configuration that compiles is imported, which the test runner's
+  // own module loader cannot do in-process.
+  it(
+    "reports every problem with its path, the problem and the fix, then a count",
+    async () => {
+      writeFileSync(join(dir, "nextly.config.ts"), THREE_PROBLEMS);
+      const ran = await runNextly(["generate:types"], dir, {
+        DB_DIALECT: "sqlite",
+        DATABASE_URL: `file:${join(dir, "unused.db")}`,
+        NO_COLOR: "1",
+      });
+      const report = ran.stderr;
+
+      expect(ran.status, report).toBe(1);
+
+      expect(report, report).toContain("CONFIG_INVALID");
+      // Each problem, at its path in the configuration.
+      expect(report, report).toContain("collections[0].slug");
+      expect(report, report).toContain("collections[1].fields");
+      expect(report, report).toContain("collections[1].score.type");
+      expect(report, report).toContain("acme-rating");
+      // In the order the configuration declares them.
+      expect(report.indexOf("collections[0].slug")).toBeLessThan(
+        report.indexOf("collections[1].fields")
+      );
+      // And how many there are.
+      expect(report, report).toMatch(/3 problems/);
+      expect(report.replaceAll(dir, "<project>")).toMatchSnapshot();
+    },
+    NEXTLY_RUN_TIMEOUT
+  );
 });

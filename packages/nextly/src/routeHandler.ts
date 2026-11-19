@@ -121,6 +121,7 @@ import {
 } from "./auth/caller-scope";
 import { COLLECTION_DEFINITION_PERMISSIONS } from "./auth/collection-definition-policy";
 import { readAccessTokenCookie } from "./auth/cookies/access-token-cookie";
+import { isUnsafeMethod, validateOrigin } from "./auth/csrf/validate";
 import { hasAuthRateLimit } from "./auth/handlers/router";
 import { LIST_READ_GATES, requireListRead } from "./auth/list-read-gates";
 import type { SanitizedNextlyConfig } from "./collections/config/define-config";
@@ -174,6 +175,7 @@ import {
   SKIP_TIMEZONE_FORMAT_HEADER,
   withTimezoneFormatting,
 } from "./lib/date-formatting";
+import { env } from "./lib/env";
 import { writeGateFor } from "./lib/immutable-system-fields";
 import { createCorsMiddleware } from "./middleware/cors";
 import { defaultRestCallerReaders } from "./middleware/rest-callers";
@@ -1368,6 +1370,20 @@ async function resolveAuthorization(
     return requireListRead(req, LIST_READ_GATES.users);
   }
 
+  // --- A user's external identities: the user-management gates ---
+  // Listed with the user read every other per-user view takes; unlinked
+  // with the user update the role-assignment routes take, for the same
+  // reason they do — an identity is managed from the user's own edit
+  // surface, a user-management workflow, not a deletion of the user.
+  if (service === "identities") {
+    if (method === "listUserIdentities") {
+      return requirePermission(req, "read", "users");
+    }
+    if (method === "unlinkUserIdentity") {
+      return requirePermission(req, "update", "users");
+    }
+  }
+
   // --- Default: {action}-{service} (e.g., read-users, create-users) ---
   const action = getActionFromMethod(httpMethod);
   return requirePermission(req, action, service);
@@ -1826,6 +1842,13 @@ async function serveServiceRequest(
       if (routeParams) {
         routeParams.userId = authResult.userId;
       }
+      const keyRefusal = await refuseKeyWithoutIdentityGrant(
+        req,
+        service,
+        method,
+        authResult
+      );
+      if (keyRefusal) return keyRefusal;
       authorizedUser = authResult;
     }
     // Check if endpoint requires auth only (no specific permission)
@@ -1868,6 +1891,14 @@ async function serveServiceRequest(
       authorizedUser = authResult ?? undefined;
     }
   }
+
+  const crossSite = refuseCrossSiteIdentityWrite(
+    req,
+    service,
+    httpMethod,
+    authorizedUser
+  );
+  if (crossSite) return crossSite;
 
   // ==================== PARSE REQUEST BODY ====================
   let body: unknown = undefined;
@@ -2426,6 +2457,63 @@ function gateRuleCouldNotRun(req: Request, error: unknown): Response {
   );
 }
 
+/**
+ * The grant an API key needs for its own account's identities at
+ * `/api/me/identities`: the user read to list, the user update to unlink —
+ * the gates `/api/users/:id/identities` asks. Only a session's own person
+ * manages their identities with no permission; a key is a credential its
+ * holder scoped, and acting on its maker's account does not lift that
+ * scope, as it does not for any other route a key reaches.
+ *
+ * The caller the `/api/me` gate already authenticated is judged as it is,
+ * so the key is authenticated, and its rate limit spent, once.
+ */
+async function refuseKeyWithoutIdentityGrant(
+  req: Request,
+  service: string,
+  method: string,
+  caller: AuthContext
+): Promise<Response | null> {
+  if (service !== "identities" || caller.authMethod !== "api-key") {
+    return null;
+  }
+  const action = method === "listUserIdentities" ? "read" : "update";
+  const granted = await authorizeCaller(caller, action, "users");
+  return isErrorResponse(granted) ? refuseRequest(req, method, granted) : null;
+}
+
+/**
+ * The cross-site check an identity's unlink takes: a write the session
+ * cookie authenticated is refused unless it came from the app's own origin,
+ * or one the app allows — the origin half of the check the plugin route
+ * dispatcher gives an authenticated route's cookie writes. A `SameSite=Lax`
+ * cookie already stays off a cross-site write from another site; this holds
+ * where the cookie does travel, from a sibling subdomain or a browser that
+ * ignores the attribute. An API key carries no ambient cookie and sends no
+ * browser origin, so it is exempt, as everywhere else.
+ */
+function refuseCrossSiteIdentityWrite(
+  req: Request,
+  service: string,
+  httpMethod: string,
+  caller: AuthContext | undefined
+): Response | null {
+  if (
+    service !== "identities" ||
+    !isUnsafeMethod(httpMethod) ||
+    caller?.authMethod !== "session" ||
+    validateOrigin(req, env.NEXTLY_ALLOWED_ORIGINS_PARSED ?? [])
+  ) {
+    return null;
+  }
+  return buildErrorResponse(
+    NextlyError.csrfFailed({
+      logContext: { reason: "identity-write-cross-site", httpMethod },
+    }),
+    { requestId: readOrGenerateRequestId(req) }
+  );
+}
+
 function refuseRequest(
   req: Request,
   method: string,
@@ -2478,6 +2566,10 @@ const SESSION_PRIVATE_METHODS = new Set([
   // may publish, naming only the fields they may read.
   "previewPublishAllSingleLocales",
   "previewPublishAllLocales",
+  // An account's linked identities are told to that account's person, or to
+  // someone allowed to manage it, so neither the list nor its refusal is
+  // shared between callers.
+  "listUserIdentities",
 ]);
 
 // Re-exported from its neutral home so the dispatchers that import it from
