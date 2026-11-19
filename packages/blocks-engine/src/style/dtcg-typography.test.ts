@@ -141,10 +141,8 @@ describe("a text style in the design-token file", () => {
     };
     const { file } = exported([scaledSize]);
     const written = group(file)?.big as { $value: DtcgNode } | undefined;
-    expect(written?.$value.fontSize).toMatchObject({
-      unit: expect.any(String),
-      value: expect.any(Number),
-    });
+    // `font-size.h2` is 1.75rem, so twice it is 3.5rem.
+    expect(written?.$value.fontSize).toEqual({ value: 3.5, unit: "rem" });
   });
 
   it("keeps a part scaled from a variable of another type as Nextly data only, read back exactly", () => {
