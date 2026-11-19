@@ -147,6 +147,13 @@ function StateLine({
       <Badge variant="outline" className="shrink-0">
         {STATE_LABELS[stateOf(record)]}
       </Badge>
+      {record.format === "written" ? (
+        // Written in blocks: the body below is its blocks, not code.
+        <Badge variant="outline" className="shrink-0 gap-1">
+          <Pencil className="size-3" aria-hidden />
+          Write
+        </Badge>
+      ) : null}
       {isActive ? null : (
         <Badge variant="outline" className="shrink-0">
           Off

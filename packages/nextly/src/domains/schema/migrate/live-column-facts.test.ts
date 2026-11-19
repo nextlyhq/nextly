@@ -104,4 +104,45 @@ describe("readLiveColumnFacts on a MySQL-dialect server", () => {
     });
     expect(none.settingsReadable("dc_posts")).toBe(false);
   });
+
+  it("names a column flag it does not know, and none of the flags MySQL writes itself", async () => {
+    const withExtra = async (extra: string) => {
+      const db = {
+        execute(query: unknown): Promise<unknown> {
+          const text = rendered(query);
+          if (text.includes("COLUMN_NAME = ")) {
+            return Promise.resolve([[{ found: 1 }], []]);
+          }
+          return Promise.resolve([
+            [{ ...noted, comment: "", extra, engine: "InnoDB", srid: null }],
+            [],
+          ]);
+        },
+      };
+      const facts = await readLiveColumnFacts(db, "mysql", ["dc_posts"], {
+        tables: [],
+      });
+      return facts.untrackedSettings("dc_posts", "title");
+    };
+    // A flag of another engine (HeatWave's), which a plain restatement would take off.
+    expect(await withExtra("NOT SECONDARY")).toEqual(["NOT SECONDARY"]);
+    expect(await withExtra("auto_increment NOT SECONDARY")).toEqual([
+      "AUTO_INCREMENT",
+      "NOT SECONDARY",
+    ]);
+    // Every flag an ordinary MySQL server reports is known: none is named as unknown.
+    for (const [extra, settings] of [
+      ["", []],
+      ["DEFAULT_GENERATED", []],
+      ["auto_increment", ["AUTO_INCREMENT"]],
+      ["on update CURRENT_TIMESTAMP", ["ON UPDATE"]],
+      ["DEFAULT_GENERATED on update CURRENT_TIMESTAMP(3)", ["ON UPDATE"]],
+      ["INVISIBLE", ["INVISIBLE"]],
+      ["DEFAULT_GENERATED INVISIBLE", ["INVISIBLE"]],
+      ["VIRTUAL GENERATED", []],
+      ["STORED GENERATED", []],
+    ] as const) {
+      expect(await withExtra(extra), extra).toEqual(settings);
+    }
+  });
 });

@@ -514,3 +514,131 @@ describe("what the route refuses, and how it says so", () => {
     expect(written(createEntry)).not.toHaveProperty("title");
   });
 });
+
+describe("a save of a stored entry's document", () => {
+  /** A context recording a plain create and a create from a source. */
+  function copyContext() {
+    const createEntry = vi.fn(() => Promise.resolve({ item: { id: "p1" } }));
+    const createEntryFromSource = vi.fn(() =>
+      Promise.resolve({ item: { id: "p2" } })
+    );
+    const ctx = {
+      self: { collections: {} },
+      user: { id: "u1" },
+      services: { collections: { createEntry, createEntryFromSource } },
+    } as unknown as SavePatternRouteContext;
+    return { ctx, createEntry, createEntryFromSource };
+  }
+
+  it("is made through core's copy of that entry, as the user, naming only its address", async () => {
+    const { ctx, createEntry, createEntryFromSource } = copyContext();
+
+    await savePattern(
+      request({
+        document: pageDocument,
+        selectedIds: ["a"],
+        fields,
+        source: {
+          collection: "pages",
+          id: "page-1",
+          field: "content",
+          forms: ["published", "draft"],
+        },
+      }),
+      ctx,
+      blocks
+    );
+
+    expect(createEntry).not.toHaveBeenCalled();
+    const [slug, , source, as] = createEntryFromSource.mock.calls[0] as
+      | unknown[]
+      | [];
+    expect(slug).toBe(PATTERNS_SLUG);
+    // Nothing the caller sent beside the address reaches core.
+    expect(source).toEqual({
+      collection: "pages",
+      id: "page-1",
+      field: "content",
+    });
+    expect(as).toEqual({ as: "user", user: { id: "u1" } });
+  });
+
+  it("makes a dry run through the same copy, on its transaction, warming the source first", async () => {
+    const journal: string[] = [];
+    const createEntryInTransaction = vi.fn(() => Promise.resolve({}));
+    const createEntryFromSourceInTransaction = vi.fn(() => {
+      journal.push("copy-in-tx");
+      return Promise.resolve({ id: "p9" });
+    });
+    const ctx = {
+      self: { collections: {} },
+      user: { id: "u1" },
+      services: {
+        collections: {
+          createEntry: vi.fn(),
+          createEntryFromSource: vi.fn(),
+          createEntryInTransaction,
+          createEntryFromSourceInTransaction,
+          warmLocalizedReadiness: (slug: string) => {
+            journal.push(`warm ${slug}`);
+            return Promise.resolve();
+          },
+          withTransaction: async (work: (tx: unknown) => Promise<never>) => {
+            journal.push("begin");
+            return work({});
+          },
+        },
+      },
+    } as unknown as SavePatternRouteContext;
+
+    await savePattern(
+      request({
+        document: pageDocument,
+        selectedIds: ["a"],
+        fields,
+        dryRun: true,
+        source: { collection: "pages", id: "page-1", field: "content" },
+      }),
+      ctx,
+      blocks
+    );
+
+    expect(createEntryInTransaction).not.toHaveBeenCalled();
+    expect(journal).toEqual(["warm pages", "begin", "copy-in-tx"]);
+    const [, slug, , source, as] = createEntryFromSourceInTransaction.mock
+      .calls[0] as unknown as unknown[];
+    expect(slug).toBe(PATTERNS_SLUG);
+    expect(source).toEqual({
+      collection: "pages",
+      id: "page-1",
+      field: "content",
+    });
+    expect(as).toMatchObject({ as: "user", user: { id: "u1" } });
+  });
+
+  it("refuses a source that is not an address, and writes nothing", async () => {
+    for (const source of [
+      "pages/page-1",
+      { collection: "pages" },
+      { collection: "pages", id: "" },
+      { collection: "pages", id: "page-1", field: 3 },
+    ]) {
+      const { ctx, createEntry, createEntryFromSource } = copyContext();
+      const error = await thrownBy(
+        savePattern(
+          request({
+            document: pageDocument,
+            selectedIds: ["a"],
+            fields,
+            source,
+          }),
+          ctx,
+          blocks
+        )
+      );
+      expect(error.code).toBe("VALIDATION_ERROR");
+      expect(createEntry).not.toHaveBeenCalled();
+      expect(createEntryFromSource).not.toHaveBeenCalled();
+    }
+  });
+});

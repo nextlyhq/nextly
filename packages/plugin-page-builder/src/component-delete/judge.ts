@@ -105,9 +105,9 @@ export async function judge(
   const drafted = report.left
     .filter(left => left.reason === "pending-draft")
     .map(left => left.host);
-  const stopping = stoppingDocuments(report);
-  for (const key of await writesRefused(deps, report)) {
-    if (!stopping.has(key)) stopping.set(key, "not-permitted");
+  const stopping: Map<string, LeftDocumentReason> = stoppingDocuments(report);
+  for (const [key, reason] of await writesRefused(deps, report)) {
+    if (!stopping.has(key)) stopping.set(key, reason);
   }
   const layoutKeys = [...stopping]
     .filter(([, reason]) => reason === "layout")
@@ -157,15 +157,41 @@ function stoppingDocuments(report: RewriteReport): Map<string, LeftReason> {
 async function writesRefused(
   deps: JudgeDeps,
   report: RewriteReport
-): Promise<string[]> {
-  if (report.writes === undefined) return keysOf(report.rewritten);
-  const refused = new Set<string>();
+): Promise<Map<string, LeftDocumentReason>> {
+  if (report.writes === undefined) {
+    return new Map(
+      keysOf(report.rewritten).map(key => [key, "not-permitted"] as const)
+    );
+  }
+  const refused = new Map<string, LeftDocumentReason>();
   for (const write of report.writes) {
     const key = documentKeyOf(write.host);
     if (refused.has(key)) continue;
-    if (!(await mayMake(deps.mayWrite, write))) refused.add(key);
+    if (!(await mayMake(deps.mayWrite, write))) {
+      refused.set(key, await refusalOf(deps, write));
+    }
   }
-  return [...refused];
+  return refused;
+}
+
+/**
+ * Why the person may not make a write the check refused: for one that keeps
+ * the live row in its state (it names a status), the right to publish it
+ * where the same write saved without a status would be allowed, as a
+ * person who may change a document but not publish it is told; otherwise
+ * the right to change it.
+ */
+async function refusalOf(
+  deps: JudgeDeps,
+  write: PlannedHostWrite
+): Promise<LeftDocumentReason> {
+  if (write.status === undefined) return "not-permitted";
+  return (await mayMake(deps.mayWrite, {
+    host: write.host,
+    value: write.value,
+  }))
+    ? "not-permitted-to-publish"
+    : "not-permitted";
 }
 
 /**
@@ -254,6 +280,7 @@ const LEFT_REASONS: ReadonlySet<string> = new Set<LeftDocumentReason>([
   "refused",
   "pending-draft",
   "not-permitted",
+  "not-permitted-to-publish",
   "unreadable",
   "unaddressable",
   "changed",

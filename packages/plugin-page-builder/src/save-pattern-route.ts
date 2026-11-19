@@ -84,6 +84,7 @@ import { PATTERNS_SLUG, patternsCollection } from "./collections/patterns";
 import { JUDGEMENT_CONTEXT, judgeInTransaction } from "./judged-writes";
 import {
   SAVE_PATTERN_ROUTE_PATH,
+  type CopySourceAddress,
   type SavePatternFields,
   type SavePatternDryRun,
   type SavePatternRequest,
@@ -164,9 +165,18 @@ export interface SavePatternRouteContext {
         item: unknown;
         warnings?: SavePatternResponse["warnings"];
       }>;
+      /**
+       * The save of a document that is a stored entry: the entry is read as
+       * the caller first, and CSS it already holds counts as no change.
+       */
+      createEntryFromSource: PluginRouteContext["services"]["collections"]["createEntryFromSource"];
       /** For a dry run: the save is made in a transaction and rolled back. */
       withTransaction: PluginRouteContext["services"]["collections"]["withTransaction"];
       createEntryInTransaction: PluginRouteContext["services"]["collections"]["createEntryInTransaction"];
+      /** A dry run of a save of a stored entry's document, on the transaction. */
+      createEntryFromSourceInTransaction: PluginRouteContext["services"]["collections"]["createEntryFromSourceInTransaction"];
+      /** Before a dry run's transaction, so a translated read can resolve. */
+      warmLocalizedReadiness: PluginRouteContext["services"]["collections"]["warmLocalizedReadiness"];
     };
   };
 }
@@ -211,16 +221,36 @@ export async function savePattern(
   const asUser = { as: "user" as const, user: ctx.user ?? undefined };
   // A dry run answers the pattern it would store and stores nothing. The save
   // is made as the caller and rolled back, so the row's own rules (a unique
-  // slug, the caller's right to create and publish a pattern) answer it.
+  // slug, the caller's right to create and publish a pattern) answer it. A
+  // save of a stored entry's document is made through the same copy as the
+  // real save, on the transaction: the source read as the caller, and only
+  // what it holds vouching for the CSS, so the dry run answers as the save.
   if (request.dryRun === true) {
     const collections = ctx.services.collections;
+    const source = request.source;
+    const judging = { ...asUser, context: { [JUDGEMENT_CONTEXT]: true } };
+    // Before the transaction, as core asks: a translated read inside it can
+    // only be read, never resolved.
+    if (source !== undefined) {
+      await collections.warmLocalizedReadiness(source.collection);
+    }
     const judged = await judgeInTransaction(
       run => collections.withTransaction(run),
       (tx: PluginCollectionTransaction) =>
-        collections.createEntryInTransaction(tx, plan.create.collection, data, {
-          ...asUser,
-          context: { [JUDGEMENT_CONTEXT]: true },
-        })
+        source === undefined
+          ? collections.createEntryInTransaction(
+              tx,
+              plan.create.collection,
+              data,
+              judging
+            )
+          : collections.createEntryFromSourceInTransaction(
+              tx,
+              plan.create.collection,
+              data,
+              source,
+              judging
+            )
     );
     const result: SavePatternDryRun = {
       dryRun: true,
@@ -235,11 +265,20 @@ export async function savePattern(
     );
   }
 
-  const written = await ctx.services.collections.createEntry(
-    plan.create.collection,
-    data,
-    asUser
-  );
+  // Where the document is a stored entry, saved THROUGH core's copy: core
+  // reads the entry as the caller (refusing one they can't read) before it
+  // creates anything, and only text that read's entry holds vouches for the
+  // section's CSS. The blocks themselves still come from the editor.
+  const collections = ctx.services.collections;
+  const written =
+    request.source === undefined
+      ? await collections.createEntry(plan.create.collection, data, asUser)
+      : await collections.createEntryFromSource(
+          plan.create.collection,
+          data,
+          request.source,
+          asUser
+        );
 
   // The canonical envelope, BUILT rather than assembled. `respondMutation`
   // reads the request's own side-effect warning scope — the same scope the
@@ -377,12 +416,36 @@ async function readRequest(req: Request): Promise<SavePatternRequest> {
   if (body.dryRun !== undefined && typeof body.dryRun !== "boolean") {
     throw malformed("dryRun");
   }
+  const source = sourceAt(body.source);
   return {
     document: documentAt(body.document),
     selectedIds: selectionAt(body.selectedIds),
     fields: settableFields(objectAt(body.fields, "fields")),
     ...(body.dryRun === true ? { dryRun: true } : {}),
+    ...(source === undefined ? {} : { source }),
   };
+}
+
+/**
+ * The stored entry the document is, where the request names one, or the
+ * refusal that it is not an address. Only its collection, id and field are
+ * kept: nothing else the caller sent travels with it.
+ */
+function sourceAt(value: unknown): CopySourceAddress | undefined {
+  if (value === undefined) return undefined;
+  const source = objectAt(value, "source");
+  const named = (key: string): string | undefined => {
+    const part = source[key];
+    return typeof part === "string" && part !== "" ? part : undefined;
+  };
+  const collection = named("collection");
+  const id = named("id");
+  const field = named("field");
+  if (collection === undefined || id === undefined) throw malformed("source");
+  if (source.field !== undefined && field === undefined) {
+    throw malformed("source");
+  }
+  return { collection, id, ...(field === undefined ? {} : { field }) };
 }
 
 /**

@@ -54,6 +54,7 @@ import {
 } from "../../domains/email/template-references";
 import { templateVariablesSchema } from "../../domains/email/template-variables";
 import { testSendRecipientOf } from "../../domains/email/test-send-recipient";
+import { writtenDocumentSchema } from "../../domains/email/written/document";
 import type { UserService } from "../../domains/users/services/user-service";
 import { NextlyError } from "../../errors/nextly-error";
 import type { EmailProviderService } from "../../services/email/email-provider-service";
@@ -81,6 +82,10 @@ interface EmailTemplateServices {
  * optional: an absent field is the stored one.
  */
 const testDraftSchema = z.object({
+  // A written email's blocks on screen, checked by the rules a save applies,
+  // so a test sends the blocks being edited rather than the saved ones.
+  format: z.enum(["code", "written"]).optional(),
+  blocks: writtenDocumentSchema.nullable().optional(),
   subject: z.string().optional(),
   preheader: z.string().nullable().optional(),
   htmlContent: z.string().optional(),
