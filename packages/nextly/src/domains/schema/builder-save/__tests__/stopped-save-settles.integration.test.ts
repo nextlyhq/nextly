@@ -16,7 +16,15 @@
  * same failure leaves nothing applied and no file: those legs guard that settling never records a
  * step that rolled back. SQLite's push keeps the statements before the one that fails and so
  * settles as MySQL's does, until it runs in one transaction as the spec asks:
- * `SQLITE_PUSH_KEEPS_PART_WAY` says which, and moves its cases between the two.
+ * `SQLITE_PUSH_KEEPS_PART_WAY` says which, and moves its cases between the two. A save that rolled
+ * back whole never reaches the judgement of what applied at all.
+ *
+ * A collection's update through the push does not hand the writer its registry write yet (the
+ * collection metadata service writes the row after the writer returns), so its stop keeps its files
+ * for `nextly migrate:resolve` as before: its cases are expected to fail until it does.
+ *
+ * Where what the settle writes fails, the save is left as it stopped, its record that it is in
+ * progress kept, and the failure that stopped it is still the one reported, the settle's after it.
  *
  * Not covered here: a translated field's rename stopped between its two tables; on the push a stop
  * after a drop, since the push drops a column holding data only on the dialog's answer for it;
@@ -52,10 +60,20 @@ import {
 import type { ServiceContainer } from "../../../../services";
 import { clearRegistryRowCache } from "../../../dynamic-collections/services/collection-row-cache";
 import { SchemaEventsRepository } from "../../events/schema-events-repository";
+import { MetaService } from "../../../meta/services/meta-service";
+import { consoleLogger } from "../../../../shared/types";
 import { NO_CONSENT } from "../../migrate/data-loss-consent";
 import { parseSnapshotFile } from "../../migrate-create/snapshot-io";
 import { introspectLiveSnapshot } from "../../pipeline/diff/introspect-live";
 import { DrizzleStatementExecutor } from "../../services/drizzle-statement-executor";
+import { judgeStoppedSave } from "../stopped-save";
+
+// The judgement of what a stopped save applied, watched as it runs: a save that rolled back whole
+// must never reach it.
+vi.mock("../stopped-save", async importOriginal => {
+  const actual = await importOriginal<typeof import("../stopped-save")>();
+  return { ...actual, judgeStoppedSave: vi.fn(actual.judgeStoppedSave) };
+});
 
 const HISTORY = "./database/history";
 const DEFINITION = "./schema/builder.json";
@@ -87,6 +105,8 @@ const number = (name: string): BuilderField => ({ name, type: "number" });
 /** One of the Builder's save paths, and the road it applies its change by. */
 interface SavePath {
   name: string;
+  /** The kind of entity saved, as its record that a save is in progress names it. */
+  kind: "collection" | "single" | "fieldGroup";
   slug: string;
   table: string;
   registry: string;
@@ -130,6 +150,7 @@ function keepsPartWay(dialect: TestDialect, path: SavePath): boolean {
 const PATHS: readonly SavePath[] = [
   {
     name: "a collection's Builder apply",
+    kind: "collection",
     slug: "sts_posts",
     table: "dc_sts_posts",
     registry: "dynamic_collections",
@@ -162,6 +183,7 @@ const PATHS: readonly SavePath[] = [
   },
   {
     name: "a Single's Builder apply",
+    kind: "single",
     slug: "sts_hero",
     table: "single_sts_hero",
     registry: "dynamic_singles",
@@ -197,6 +219,7 @@ const PATHS: readonly SavePath[] = [
   },
   {
     name: "a field group's Builder apply",
+    kind: "fieldGroup",
     slug: "sts_card",
     table: "comp_sts_card",
     registry: "dynamic_components",
@@ -220,6 +243,7 @@ const PATHS: readonly SavePath[] = [
   },
   {
     name: "the Single schema save",
+    kind: "single",
     slug: "sts_banner",
     table: "single_sts_banner",
     registry: "dynamic_singles",
@@ -248,6 +272,7 @@ const PATHS: readonly SavePath[] = [
   {
     // The admin's update of a collection, which the development push applies.
     name: "a collection's update (the push)",
+    kind: "collection",
     slug: "sts_notes",
     table: "dc_sts_notes",
     registry: "dynamic_collections",
@@ -397,6 +422,14 @@ function namedChanges(error: unknown): NamedChange[] | undefined {
     .sort((a, b) => a.field.localeCompare(b.field));
 }
 
+/** The message a failure is told with: a thrown `NextlyError`'s, or a response's error envelope's. */
+function messageOf(error: unknown): string {
+  if (NextlyError.is(error)) return error.publicMessage;
+  return String(
+    (error as { error?: { message?: unknown } }).error?.message ?? error
+  );
+}
+
 /** Every file below `dir`, relative to it. */
 function filesBelow(dir: string): string[] {
   const found: string[] = [];
@@ -536,7 +569,14 @@ describe.each(getConfiguredTestDialects())(
     }
 
     describe.each(PATHS)("$name", path => {
-      it.runIf(keepsPartWay(dialect, path))(
+      beforeEach(() => {
+        vi.mocked(judgeStoppedSave).mockClear();
+      });
+      // The collection update's push writes its registry row after the writer returns, so the
+      // writer has no registry write to settle it with: it keeps its files, as before.
+      const settles = path.push === true ? it.fails : it;
+
+      (keepsPartWay(dialect, path) ? settles : it.skip)(
         "stopped at its second addition, keeps the first: one file for it, recorded applied, the definition and the registry at that shape",
         async () => {
           const t = await boot();
@@ -551,6 +591,10 @@ describe.each(getConfiguredTestDialects())(
           );
 
           expect(failed(), "no statement adding `beta` was met").toBe(1);
+          expect(
+            vi.mocked(judgeStoppedSave),
+            "the stop was never judged"
+          ).toHaveBeenCalled();
           vi.restoreAllMocks();
           vi.stubEnv("NODE_ENV", "development");
           // The staging: `alpha`'s statement committed before `beta`'s failed.
@@ -768,13 +812,74 @@ describe.each(getConfiguredTestDialects())(
           );
 
           expect(failed(), "no statement adding `beta` was met").toBe(1);
+          expect(
+            vi.mocked(judgeStoppedSave),
+            "a save that rolled back whole was judged for what applied"
+          ).not.toHaveBeenCalled();
           vi.restoreAllMocks();
           expect(outcome.failed).toBe(true);
+          if (!outcome.failed) return;
+          expect(namedChanges(outcome.error), "the report").toBeUndefined();
           expect(await liveColumns(t, path.table)).toEqual(columnsBefore);
           expect(filesBelow(history())).toEqual(folderBefore);
           expect(await appliedFiles(t)).toEqual(appliedBefore);
           expect(definedFields(path)).toEqual(["heading"]);
           expect(await registryFields(t, path)).toEqual(["heading"]);
+        },
+        300_000
+      );
+
+      (keepsPartWay(dialect, path) && path.push !== true ? it : it.skip)(
+        "whose settle fails at its ledger write, is left as it stopped, recorded in progress, and reports the stop first",
+        async () => {
+          const t = await boot();
+          await path.create(t, [text("heading")]);
+          const failed = failStatement(t, adding(path.table, "beta"));
+          // Once the save's own statement failed, the ledger refuses the settle's record of what
+          // applied.
+          const markApplied = SchemaEventsRepository.prototype.markApplied;
+          vi.spyOn(
+            SchemaEventsRepository.prototype,
+            "markApplied"
+          ).mockImplementation(async function (
+            this: SchemaEventsRepository,
+            ...args: Parameters<typeof markApplied>
+          ) {
+            if (failed() > 0) {
+              throw new NextlyError({
+                code: "NEXTLY_MIGRATION_CONCURRENT_RUN",
+                publicMessage: "Another run recorded the file first.",
+              });
+            }
+            return markApplied.apply(this, args);
+          });
+
+          const outcome = await outcomeOf(
+            path.save(t, [text("heading"), text("alpha"), text("beta")])
+          );
+
+          expect(failed(), "no statement adding `beta` was met").toBe(1);
+          expect(
+            vi.mocked(judgeStoppedSave),
+            "the stop was never judged"
+          ).toHaveBeenCalled();
+          vi.restoreAllMocks();
+          vi.stubEnv("NODE_ENV", "development");
+          expect(outcome.failed).toBe(true);
+          if (!outcome.failed) return;
+          // The stop's own failure first, then the settle's, never the settle's alone.
+          expect(messageOf(outcome.error)).toMatch(
+            /failed part-way, and the statements before the failure stayed applied: .*Recording what of it applied failed too, so the save is left as it stopped and recorded as in progress: Another run recorded the file first\.$/s
+          );
+          expect(namedChanges(outcome.error), "a report").toBeUndefined();
+          // Its record that it is in progress stays, for the next settle.
+          const record = await new MetaService(
+            t.adapter,
+            consoleLogger
+          ).getEntry(`builder-save-in-progress:${path.kind}:${path.slug}`);
+          expect(record.present, "the record that it is in progress").toBe(
+            true
+          );
         },
         300_000
       );

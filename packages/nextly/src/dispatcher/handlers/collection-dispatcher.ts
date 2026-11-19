@@ -2106,9 +2106,10 @@ async function saveThroughWriter(
     (change.pushWhen === undefined || (await change.pushWhen()));
   // Loaded here, where a save runs: the writer brings the migration generator
   // and runner, which a request that writes no field change never needs.
-  const { writeCollectionSave } = await import(
-    "../../domains/schema/builder-save/collection-save"
-  );
+  const [{ writeCollectionSave }, { appliedFieldsOf }] = await Promise.all([
+    import("../../domains/schema/builder-save/collection-save"),
+    import("../../domains/schema/builder-save/stopped-save"),
+  ]);
   const registry = change.registry;
   const inFile = prepared.deps.applies && !viaPush && registry !== undefined;
   const result = await writeCollectionSave(
@@ -2117,7 +2118,19 @@ async function saveThroughWriter(
     viaPush && change.appliedBy !== undefined
       ? { appliedBy: change.appliedBy }
       : inFile
-        ? { inLastTransaction: () => registry(prepared.fields) }
+        ? {
+            inLastTransaction: () => registry(prepared.fields),
+            // A file that stops part way is settled to what of it applied: the row then records
+            // the fields as far as the database holds them.
+            onSettled: report =>
+              registry(
+                appliedFieldsOf(
+                  change.collection.fields ?? [],
+                  prepared.fields,
+                  report
+                )
+              ),
+          }
         : {}
   );
   return {

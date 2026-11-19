@@ -972,11 +972,14 @@ export const COMPONENTS_METHODS: Record<
           // applied, whether it is translated, and the advanced schema version, written with the
           // stored version in one transaction and the cached rows cleared after it.
           const registryTable = await resolveFieldGroupRegistryName(adapter);
-          const writeRow = () =>
+          // Handed the fields that applied where the save's file stopped part way and was settled.
+          const writeRow = (
+            stored: readonly unknown[] = fields
+          ): Promise<void> =>
             writeAppliedFieldsRow(adapter, {
               table: registryTable,
               slug,
-              fields: fields as FieldConfig[],
+              fields: stored as FieldConfig[],
               localized: isLocalized,
               schemaVersion: newSchemaVersion,
             });

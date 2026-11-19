@@ -18,6 +18,8 @@ import { NextlyError } from "../../../errors/nextly-error";
 import { busyTableLeftNothing } from "../busy-table/report";
 import type { PromptDispatcher } from "../pipeline/pushschema-pipeline-interfaces";
 
+import { withSettleFailure } from "./stopped-save";
+
 type Dialect = "postgresql" | "mysql" | "sqlite";
 
 /** What a push answers: whether it succeeded, and the failure it stopped on. */
@@ -132,11 +134,16 @@ export class FirstQuestionWatch {
  * failure before that is thrown as it is, so the writer withdraws its files;
  * one after it answers `"partly-applied"`, so the writer keeps them, and is
  * held until the caller, once the writer has returned the files it kept,
- * throws it with `throwIfFailed`.
+ * throws it with `throwIfFailed`. Where the writer tried to settle the stop to
+ * what applied and that failed (`settleFailure`), that failure is told after
+ * the push's own, which it never replaces.
  */
 export function partWayPush(push: (onLanded: () => void) => Promise<void>): {
   appliedBy: () => Promise<void | "partly-applied">;
-  throwIfFailed: (keptFiles: readonly string[]) => void;
+  throwIfFailed: (
+    keptFiles: readonly string[],
+    settleFailure?: unknown
+  ) => void;
 } {
   // Held in an object, as the push sets it from inside the writer.
   const failed: { error?: unknown } = {};
@@ -154,8 +161,12 @@ export function partWayPush(push: (onLanded: () => void) => Promise<void>): {
         return "partly-applied";
       }
     },
-    throwIfFailed: keptFiles => {
-      if ("error" in failed) throw partlyAppliedChange(failed.error, keptFiles);
+    throwIfFailed: (keptFiles, settleFailure) => {
+      if (!("error" in failed)) return;
+      const change = partlyAppliedChange(failed.error, keptFiles);
+      throw settleFailure === undefined
+        ? change
+        : withSettleFailure(change, settleFailure);
     },
   };
 }

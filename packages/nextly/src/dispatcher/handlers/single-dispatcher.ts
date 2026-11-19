@@ -1801,11 +1801,14 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           // The registry's row of the save: the fields it applied, whether it is translated, and
           // the advanced schema version, written with the stored version in one transaction and the
           // cached rows cleared after it (`writeAppliedFieldsRow`).
-          const writeRow = () =>
+          // Handed the fields that applied where the save's file stopped part way and was settled.
+          const writeRow = (
+            stored: readonly unknown[] = fields
+          ): Promise<void> =>
             writeAppliedFieldsRow(adapter, {
               table: "dynamic_singles",
               slug,
-              fields: fields as FieldConfig[],
+              fields: stored as FieldConfig[],
               localized: isLocalized,
               schemaVersion: newSchemaVersion,
             });
