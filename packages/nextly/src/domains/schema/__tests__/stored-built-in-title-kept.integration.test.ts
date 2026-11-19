@@ -218,10 +218,11 @@ for (const dialect of getConfiguredTestDialects()) {
       );
     }
 
-    // Skipped: a code-first collection's registry row is locked by its sync, and the demote's
-    // update of it is refused as defined in code, so no project reaches this state through
-    // `nextly db:sync --demote` today. The fixture builds it as a project would, and these run once
-    // the demote can unlock the row it moves to the Schema Builder.
+    // Skipped: the demote now hands the code-first row to the Schema Builder, but the fixture's
+    // migration history (a baseline of the code-first tables) does not record the translations
+    // table the code-first sync made, so the dialog's file road refuses the save as drift before
+    // anything is written (`refuseCompanionDrift`: "+ dc_<slug>_locales present in DB"). These run
+    // once the fixture's history records that table as a project's would.
     it.skip("is kept by a save that adds another field, which is not taken for its rename", async () => {
       await demotedFromCode("tka");
 
@@ -233,10 +234,11 @@ for (const dialect of getConfiguredTestDialects()) {
       expect((await titlesIn("dc_tka_locales")).es).toBe("Titular");
     });
 
-    // Skipped: a code-first collection's registry row is locked by its sync, and the demote's
-    // update of it is refused as defined in code, so no project reaches this state through
-    // `nextly db:sync --demote` today. The fixture builds it as a project would, and these run once
-    // the demote can unlock the row it moves to the Schema Builder.
+    // Skipped: the demote now hands the code-first row to the Schema Builder, but the fixture's
+    // migration history (a baseline of the code-first tables) does not record the translations
+    // table the code-first sync made, so the dialog's file road refuses the save as drift before
+    // anything is written (`refuseCompanionDrift`: "+ dc_<slug>_locales present in DB"). These run
+    // once the fixture's history records that table as a project's would.
     it.skip("is kept by a save that adds nothing, its translations column not dropped", async () => {
       await demotedFromCode("tkb");
 

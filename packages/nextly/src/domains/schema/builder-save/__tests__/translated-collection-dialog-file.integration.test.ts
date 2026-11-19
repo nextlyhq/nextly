@@ -28,6 +28,7 @@ import {
 } from "../../../../plugins/test-nextly";
 import type { ServiceContainer } from "../../../../services";
 import type { CollectionService } from "../../../collections/services/collection-service";
+import { readTableDefinition } from "../../__tests__/helpers/table-definition";
 import { SchemaEventsRepository } from "../../events/schema-events-repository";
 import { PushSchemaPipeline } from "../../pipeline/pushschema-pipeline";
 
@@ -36,6 +37,8 @@ import { PushSchemaPipeline } from "../../pipeline/pushschema-pipeline";
 const seams = vi.hoisted(() => ({
   reconcileFails: false,
   fileFailure: undefined as RegExp | undefined,
+  /** How many statements `fileFailure` matched and replaced, so a case can see it was reached. */
+  fileFailureHits: 0,
 }));
 vi.mock("../../services/collection-schema-apply", async original => {
   const actual =
@@ -67,11 +70,11 @@ vi.mock("../../busy-table/run-unit", async original => {
         adapter,
         matches === undefined
           ? statements
-          : statements.map(statement =>
-              matches.test(statement)
-                ? "SELECT injected_failure FROM injected_failure"
-                : statement
-            ),
+          : statements.map(statement => {
+              if (!matches.test(statement)) return statement;
+              seams.fileFailureHits += 1;
+              return "SELECT injected_failure FROM injected_failure";
+            }),
         ...rest
       );
     },
@@ -123,6 +126,14 @@ for (const dialect of getConfiguredTestDialects()) {
           executeQuery<T>(sql: string): Promise<T[]>;
         }
       ).executeQuery<R>(statement);
+    const companionColumns = async () =>
+      (
+        await readTableDefinition(
+          statement => exec(statement),
+          adapterOf().getCapabilities().dialect,
+          "dc_posts_locales"
+        )
+      ).columns.map(column => column.name);
     const files = () => {
       const dir = join(basePath, "migrations");
       return existsSync(dir)
@@ -188,7 +199,7 @@ for (const dialect of getConfiguredTestDialects()) {
     // which advances its schema version, comes after the translations table's step, so a failure
     // of that step leaves the version where it was.
     it("leaves the registry row's version as it was when the translations table's step after the file fails", async () => {
-      const before = await row();
+      const before = { row: await row(), files: files() };
       seams.reconcileFails = true;
 
       const failed = await addTeaser().then(
@@ -196,8 +207,13 @@ for (const dialect of getConfiguredTestDialects()) {
         (error: unknown) => error
       );
 
-      expect(failed).toBeDefined();
-      expect((await row()).version).toBe(before.version);
+      // The save reached the step after its file: the seam's own failure, with the files the save
+      // wrote recorded applied, not a refusal before any file ran.
+      expect(String(failed)).toMatch(/the translations table's step failed/);
+      const written = files().filter(name => !before.files.includes(name));
+      expect(written.length).toBeGreaterThan(0);
+      expect(await applied()).toEqual(expect.arrayContaining(written));
+      expect((await row()).version).toBe(before.row.version);
     });
 
     // `teaser` added translated, and an entry holding a value in each language.
@@ -315,16 +331,28 @@ for (const dialect of getConfiguredTestDialects()) {
         };
         seams.fileFailure =
           /dc_posts_locales[`"]?\s.*ADD (COLUMN )?[`"]teaser[`"]/;
+        seams.fileFailureHits = 0;
 
         const failed = await addTeaser().then(
           () => undefined,
           (error: unknown) => error
         );
 
-        expect(failed).toBeDefined();
+        // The runner reached the translations file's ADD statement and the database refused it.
+        expect(seams.fileFailureHits).toBe(1);
+        expect(JSON.stringify(failed) + String(failed)).toMatch(
+          /injected_failure/
+        );
         expect(files()).toEqual(before.files);
         expect(await applied()).toEqual(before.applied);
         expect(await row()).toEqual(before.row);
+        // Taken back in the database too: the translations table has no `teaser`.
+        expect(await companionColumns()).not.toContain("teaser");
+
+        // The same check sees `teaser` once the save commits.
+        seams.fileFailure = undefined;
+        await addTeaser();
+        expect(await companionColumns()).toContain("teaser");
       }
     );
   });
