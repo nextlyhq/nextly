@@ -314,6 +314,70 @@ describe.each(getConfiguredTestDialects())(
       }
     });
 
+    it("keeps the provider that sent an email whose attempt stopped after its send was recorded", async () => {
+      const t = await boot(dialect);
+      // The sealed message, read while the attempt holds it.
+      const arrived = latch();
+      const held = latch();
+      behaviour.gate = held.promise;
+      behaviour.reached = arrived.open;
+      const queuing = t.nextly.email.queue({ ...message, to: ADA });
+      await arrived.promise;
+      const [sending] = await t.adapter.select<QueueRow & { jobId: string }>(
+        "email_queue",
+        { where: { and: [{ column: "state", op: "=", value: "sending" }] } }
+      );
+      behaviour.gate = undefined;
+      held.open();
+      await queuing;
+      expect(calls).toHaveLength(1);
+
+      // As if the process stopped once the send and its claim were
+      // recorded, before the email noted its provider and settled: sending,
+      // its message held, its provider not yet noted, its job to run again.
+      const { emailQueue: queue, nextlyJobs: jobs } =
+        loadedDialect(dialect).tables;
+      const db = t.adapter.getDrizzle() as never as {
+        update(table: unknown): {
+          set(values: unknown): { where(c: unknown): Promise<unknown> };
+        };
+      };
+      await db
+        .update(queue)
+        .set({
+          state: "sending",
+          message: sending.message,
+          providerType: null,
+          providerId: null,
+          providerOrigin: null,
+          settledAt: null,
+        })
+        .where(eq(queue.id as never, sending.id));
+      await db
+        .update(jobs)
+        .set({
+          state: "pending",
+          nextAttemptAt: null,
+          lockedBy: null,
+          lockedUntil: null,
+        })
+        .where(eq(jobs.id as never, sending.jobId));
+
+      await trigger(t);
+      // Answered from the claim: nothing sent again, and the provider that
+      // sent it is the one noted.
+      expect(calls).toHaveLength(1);
+      const [after] = await t.adapter.select<Record<string, unknown>>(
+        "email_queue",
+        { where: { and: [{ column: "id", op: "=", value: sending.id }] } }
+      );
+      expect(after).toMatchObject({
+        state: "sent",
+        providerType: "capturing-retry",
+        providerOrigin: "stored",
+      });
+    });
+
     it("refuses a retry of an email sent, cancelled or cleared, and of none", async () => {
       const t = await boot(dialect);
       const sent = await t.nextly.email.queue({ ...message, to: ADA });

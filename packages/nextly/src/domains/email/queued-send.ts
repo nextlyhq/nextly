@@ -30,7 +30,7 @@ import { randomUUID } from "node:crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
-import { and, eq, gt, inArray, isNotNull } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, isNotNull } from "drizzle-orm";
 
 import { loadedDialect } from "../../database/dialect-tables";
 import { getDialectTables } from "../../database/index";
@@ -59,6 +59,7 @@ import {
 import { enqueueInTransaction } from "../jobs/jobs-repository";
 import { openSetting, sealSetting } from "../plugins/settings-crypto";
 
+import { deliveriesTableFor } from "./deliveries-table";
 import { recipientDigest, storableError } from "./delivery-record";
 import { type EmailFailure, httpFailure } from "./failure";
 import { pruneQueuedEmails } from "./prune";
@@ -572,6 +573,51 @@ async function noteAttempt(
     .where(eq(queue.id, queuedId));
 }
 
+/** The Drizzle surface reading an email's latest delivery needs. */
+interface LatestDeliveryDb {
+  select(fields: Record<string, unknown>): {
+    from(table: unknown): {
+      where(condition: unknown): {
+        orderBy(...columns: unknown[]): {
+          limit(count: number): PromiseLike<unknown[]>;
+        };
+      };
+    };
+  };
+}
+
+/**
+ * The provider queued email `queuedId`'s latest delivery went through, as its
+ * delivery record keeps it; undefined when it has none, or none recorded one.
+ */
+async function sentProviderOf(
+  adapter: DrizzleAdapter,
+  queuedId: string
+): Promise<SentProvider | undefined> {
+  const deliveries = deliveriesTableFor(adapter.getCapabilities().dialect);
+  const [latest] = (await adapter
+    .getDrizzle<LatestDeliveryDb>()
+    .select({
+      type: deliveries.providerType,
+      id: deliveries.providerId,
+      origin: deliveries.providerOrigin,
+    })
+    .from(deliveries)
+    .where(eq(deliveries.queuedId, queuedId))
+    .orderBy(desc(deliveries.createdAt), desc(deliveries.id))
+    .limit(1)) as Array<{
+    type: string | null;
+    id: string | null;
+    origin: string | null;
+  }>;
+  if (!latest?.type || !latest.origin) return undefined;
+  return {
+    type: latest.type,
+    id: latest.id,
+    origin: latest.origin as SentProvider["origin"],
+  };
+}
+
 /** Recipient kinds as the queue keeps them: `to` first, each once. */
 function kindsText(kinds: readonly string[]): string {
   const present = new Set(kinds);
@@ -1078,6 +1124,16 @@ export async function attemptQueuedEmail(
       provider = heard;
     }
   );
+  // A repeat answered from its key's claim sends nothing and hears of no
+  // provider. The provider that sent it is on the deliveries recorded with
+  // that claim, in its transaction, so it is read from them: an attempt that
+  // stopped after the claim settled and before this note still leaves the
+  // email with the provider that sent it.
+  if (!failure && !provider) {
+    provider = await sentProviderOf(deps.adapter, row.id).catch(
+      () => undefined
+    );
+  }
   await noteAttempt(deps.adapter, row.id, {
     provider,
     failed: failure !== undefined,
