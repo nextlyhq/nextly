@@ -36,7 +36,6 @@ import {
 import { resolveRegistryTableName } from "../../../field-groups/storage/resolve-storage-names";
 import { ensureSchemaEventsTable } from "../../events/schema-events-ddl";
 import { resolveDataLossConsent } from "../../migrate/data-loss-consent";
-import { reconcileMigrationMetadata } from "../../migrate/reconcile-metadata";
 import {
   appMigrationInputs,
   type AppMigrationConfig,
@@ -46,12 +45,7 @@ import { generateMigration } from "../generate";
 /** The kind that takes over the removed collection's address. */
 const KINDS = ["single", "fieldGroup"] as const;
 type ReusingKind = (typeof KINDS)[number];
-const silent = {
-  info: () => {},
-  warn: () => {},
-  debug: () => {},
-  error: () => {},
-};
+const silent = { warn: () => {}, error: () => {} };
 
 describe.each(
   getConfiguredTestDialects().flatMap(dialect =>
@@ -65,7 +59,7 @@ describe.each(
     let url: string;
     let drop: () => Promise<void>;
     let adapter: DrizzleAdapter;
-    let dir: string;
+    let dir = "";
 
     const adapterFor = (): Promise<DrizzleAdapter> =>
       createAdapter({ type: dialect, url } as Parameters<
@@ -83,18 +77,25 @@ describe.each(
         drop = scratch.drop;
       }
       // The core tables and the registries, as a started app has them.
-      await createTestNextly({ adapter: (await adapterFor()) as never });
-      await shutdownServices();
+      const core = await createTestNextly({
+        adapter: (await adapterFor()) as never,
+      });
+      await core.destroy();
       adapter = await adapterFor();
       installRegistryResolver(adapter);
       dir = mkdtempSync(join(tmpdir(), "nextly-rak-migrations-"));
     }, 180_000);
 
     afterAll(async () => {
-      await adapter?.disconnect().catch(() => {});
-      await shutdownServices();
-      rmSync(dir, { recursive: true, force: true });
-      await drop?.();
+      // Each step on its own, so one that fails, or a setup that stopped early, leaves the
+      // others to run.
+      try {
+        await adapter?.disconnect().catch(() => {});
+        await shutdownServices();
+        if (dir !== "") rmSync(dir, { recursive: true, force: true });
+      } finally {
+        await drop?.();
+      }
     });
 
     /**
@@ -138,7 +139,10 @@ describe.each(
       });
     }
 
-    /** What `nextly migrate` does with the folder: apply, then write the registry rows. */
+    /**
+     * What `nextly migrate` does with the folder: apply each file, then its own registry phase,
+     * which removes the row of an entity a migration dropped.
+     */
     async function migrate(): Promise<void> {
       await migrateCore({
         extensionSchema: undefined,
@@ -152,16 +156,14 @@ describe.each(
         interactive: false,
         ensureLedger: () => ensureSchemaEventsTable(adapter),
       } as never);
-      await reconcileMigrationMetadata({
-        adapter,
-        dialect,
-        migrationsDir: dir,
-        logger: silent,
-      });
     }
 
-    async function hasRow(table: string): Promise<boolean> {
-      const row = await adapter.selectOne(table, {
+    /** Whether a registry holds a row for the address, read on `on`. */
+    async function hasRow(
+      table: string,
+      on: DrizzleAdapter = adapter
+    ): Promise<boolean> {
+      const row = await on.selectOne(table, {
         where: { and: [{ column: "slug", op: "=", value: SLUG }] },
       });
       return row !== null;
@@ -185,15 +187,9 @@ describe.each(
         readdirSync(dir).filter(file => file.endsWith(".sql"))
       ).toHaveLength(2);
       await migrate();
-      // What the registries hold once both are applied: where a start reads its kinds from.
-      expect({
-        collection: await hasRow("dynamic_collections"),
-        reusing: await hasRow(
-          kind === "single"
-            ? "dynamic_singles"
-            : await resolveRegistryTableName(adapter)
-        ),
-      }).toEqual({ collection: false, reusing: true });
+      // The removed collection's registry row went with the migration that dropped it: the
+      // row a start's one-kind-per-address rule would otherwise find.
+      expect(await hasRow("dynamic_collections")).toBe(false);
 
       // The start on the new configuration: the address held once, by the other kind.
       await adapter.disconnect();
@@ -201,9 +197,23 @@ describe.each(
         adapter: (await adapterFor()) as never,
         ...reusing,
       });
-      expect(started).toBeDefined();
-      await shutdownServices();
-      adapter = await adapterFor();
+      try {
+        // Read on the started app's own connection, which has its registries registered.
+        const live = started.adapter as unknown as DrizzleAdapter;
+        expect({
+          collection: await hasRow("dynamic_collections", live),
+          reusing: await hasRow(
+            kind === "single"
+              ? "dynamic_singles"
+              : await resolveRegistryTableName(live),
+            live
+          ),
+        }).toEqual({ collection: false, reusing: true });
+      } finally {
+        await started.destroy();
+        adapter = await adapterFor();
+        installRegistryResolver(adapter);
+      }
     }, 180_000);
   }
 );
