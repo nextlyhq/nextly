@@ -217,7 +217,7 @@ async function countRowsUnder(
 }
 
 /** The candidate tables, as the catalog spells them, that have a `_parent_table` column. */
-type InstanceTables = () => Promise<ReadonlySet<string>>;
+export type InstanceTables = () => Promise<ReadonlySet<string>>;
 
 /**
  * Which of `tables` have a `_parent_table` column, read from the catalog in one query through
@@ -229,7 +229,7 @@ type InstanceTables = () => Promise<ReadonlySet<string>>;
  * tables keeps them two here, and one that keeps `_PARENT_TABLE` a column of its own does not
  * take it for the parent column, which the count names exactly.
  */
-function instanceTablesOf(
+export function instanceTablesOf(
   adapter: TeardownComponentDataAdapter,
   tables: readonly string[]
 ): InstanceTables {

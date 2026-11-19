@@ -4082,6 +4082,10 @@ export function coveredEntitiesOf(
     ...of("single", args.singles, recorded?.singles, (slug, dbName) =>
       resolveSingleTableName({ slug, dbName })
     ),
+    // A field group's table is named by its slug alone.
+    ...of("fieldGroup", args.components, recorded?.fieldGroups, slug =>
+      resolveComponentTableName(slug)
+    ),
   ];
 }
 

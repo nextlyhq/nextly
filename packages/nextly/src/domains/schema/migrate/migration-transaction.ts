@@ -41,6 +41,7 @@ import {
   withSqliteForeignKeysOff,
   type SqliteForeignKeySession,
 } from "./sqlite-foreign-keys";
+import { reachStopPoint } from "./stop-points";
 import { uniqueIndexCheckpoint } from "./unique-column-guard";
 
 /**
@@ -845,6 +846,7 @@ async function runUnitStatements(
           const index = from + offset;
           // A run that lost the lock starts no further statement (`assertSchemaLockHeld`).
           await assertSchemaLockHeld();
+          await reachStopPoint(`${unit.source}: before statement ${index + 1}`);
           await bound?.beforeStatement?.();
           // Told before the statement's checkpoint, which belongs to it: a wait the checkpoint
           // ends on is the statement's, so a try that resumes starts at it, never before it.
@@ -866,6 +868,7 @@ async function runUnitStatements(
             index,
             total: statements.length,
           });
+          await reachStopPoint(`${unit.source}: after statement ${index + 1}`);
         }
         bound?.onStatement?.(statements.length);
         // A unit may rewrite registry rows (a schema save's upsert of its own
@@ -906,6 +909,7 @@ async function runUnitStatements(
       const index = from + offset;
       // Asked before the statement, outside the failure below: refused here, nothing of it ran.
       await assertSchemaLockHeld();
+      await reachStopPoint(`${unit.source}: before statement ${index + 1}`);
       await bound?.beforeStatement?.();
       // Told before the statement's checkpoint, which belongs to it: the statements before it
       // committed as they ran, so a try that ends in the checkpoint resumes at this statement and
@@ -925,6 +929,7 @@ async function runUnitStatements(
         if (passesOver(bound, error, statement, dialect)) continue;
         throw partialFailure(unit, index, statements.length, error);
       }
+      await reachStopPoint(`${unit.source}: after statement ${index + 1}`);
     }
     bound?.onStatement?.(statements.length);
     await bound?.settle?.();

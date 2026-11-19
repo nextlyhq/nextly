@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   consentCovers,
+  describeDeletion,
   resolveDataLossConsent,
   type Deletion,
 } from "../data-loss-consent";
@@ -661,5 +662,63 @@ describe("the server's rule for comparing table names", () => {
         "dc_posts",
       ])
     );
+  });
+});
+
+describe("a field group the run drops", () => {
+  const seo = coveredEntity({
+    kind: "fieldGroup",
+    slug: "seo",
+    tableName: "comp_seo",
+    source: "code",
+    fields: [manyToMany("links", "pages")],
+  });
+
+  it("owns its table and its translations table, and no junction table", () => {
+    // A field group keeps a many-to-many list on its own row.
+    expect(seo.tables).toEqual(["comp_seo", "comp_seo_locales"]);
+  });
+
+  it("takes the values nested in it and its archived translations, and nothing a document keeps", () => {
+    const listed = entityRowsOf(seo);
+    expect(listed.map(d => d.kind === "rows" && d.table)).toEqual([
+      FIELD_GROUP_TABLES,
+      "nextly_i18n_archive",
+    ]);
+    for (const d of listed) {
+      expect(d).toMatchObject({
+        kind: "rows",
+        owner: "comp_seo",
+        of: { kind: "fieldGroup", slug: "seo" },
+      });
+    }
+    expect(describeDeletion(listed[1] as Deletion)).toContain(
+      'rows of field group "seo" in nextly_i18n_archive'
+    );
+  });
+
+  it("is retired by a run whose last snapshot no longer records it among the field groups", async () => {
+    const meta = mkdtempSync(join(tmpdir(), "nextly-retired-fg-"));
+    try {
+      // A collection keeps the slug the field group had: each kind is asked about its own.
+      writeFileSync(
+        join(meta, "0001_a.snapshot.json"),
+        JSON.stringify({
+          version: 1,
+          migrationHash: "a".repeat(64),
+          snapshot: { tables: [] },
+          entities: {
+            collections: { seo: { source: "code", settings: { slug: "seo" } } },
+            singles: {},
+            fieldGroups: {},
+          },
+        })
+      );
+      const retires = await retiredByRun(meta, ["0001_a"]);
+      expect(retires?.({ kind: "fieldGroup", slug: "seo" })).toBe(true);
+      expect(retires?.({ kind: "collection", slug: "seo" })).toBe(false);
+    } finally {
+      rmSync(meta, { recursive: true, force: true });
+    }
   });
 });

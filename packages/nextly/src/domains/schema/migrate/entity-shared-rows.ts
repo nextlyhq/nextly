@@ -135,6 +135,12 @@ function refOf(entity: CoveredEntity): EntityRef {
  */
 export function entityRowsOf(entity: CoveredEntity): Deletion[] {
   const of = refOf(entity);
+  // A field group has no versions, pins, documents or provenance of its own: only the values
+  // nested in it and its archived translations go with it.
+  const shared =
+    entity.kind === "fieldGroup"
+      ? SHARED_TABLES.filter(table => table.table === "nextly_i18n_archive")
+      : SHARED_TABLES;
   return [
     {
       kind: "rows",
@@ -143,13 +149,13 @@ export function entityRowsOf(entity: CoveredEntity): Deletion[] {
       of,
       reason: FIELD_GROUP_REASON,
     },
-    ...SHARED_TABLES.map(
-      (shared): Deletion => ({
+    ...shared.map(
+      (table): Deletion => ({
         kind: "rows",
-        table: shared.table,
+        table: table.table,
         owner: entity.table,
         of,
-        reason: shared.reason,
+        reason: table.reason,
       })
     ),
   ];
@@ -209,11 +215,14 @@ export async function retiredByRun(
     if (snapshot === null) continue;
     if (!carriesRegistryMetadata(snapshot)) return undefined;
     const { entities } = snapshot;
-    return entity =>
-      !(
-        entity.slug in
-        (entity.kind === "single" ? entities.singles : entities.collections)
-      );
+    // Each kind is recorded under its own key: a collection, a Single and a field group may
+    // share a slug.
+    const recordedOf = {
+      collection: entities.collections,
+      single: entities.singles,
+      fieldGroup: entities.fieldGroups,
+    } as const;
+    return entity => !(entity.slug in recordedOf[entity.kind]);
   }
   return undefined;
 }

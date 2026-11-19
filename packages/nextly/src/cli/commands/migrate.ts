@@ -192,6 +192,7 @@ import {
   refuseRequiredColumnsOverNulls,
 } from "../../domains/schema/migrate/required-column-guard";
 import { resolveDeclaredSchema } from "../../domains/schema/migrate/resolved-schema";
+import { retireDroppedEntities } from "../../domains/schema/migrate/retire-dropped-entities";
 import {
   constructsAdded,
   refuseUnitTheServerCannotHold,
@@ -209,6 +210,11 @@ import {
 import { parseSqlSections } from "../../domains/schema/migrate/sql-sections";
 import { danglingReferences } from "../../domains/schema/migrate/sqlite-foreign-keys";
 import { readLiveSchema } from "../../domains/schema/migrate/statement-judgement";
+import {
+  reachStopPoint,
+  withStopPoints,
+  type StopPointHook,
+} from "../../domains/schema/migrate/stop-points";
 import {
   adoptUniqueIndexesAlreadyThere,
   type AdoptedUniqueIndex,
@@ -930,6 +936,11 @@ export async function runMigrate(
        * registry work it had just measured was still owed.
        */
       reportMetadataOutcome(metadata, logger);
+      // What an applied migration's dropped entities still hold fails the run, named, once
+      // everything else is reported: the next run removes it.
+      if (metadata.rowsOwed !== undefined && metadata.rowsOwed.length > 0) {
+        throw rowsOwedError(metadata.rowsOwed);
+      }
 
       // Both streams count: a run that executed only plugin modules did
       // migrate, and saying "nothing to migrate" after it is untrue.
@@ -1272,6 +1283,12 @@ export interface MigrateCoreDeps {
   /** Seam for tests; defaults to the real metadata reconciliation. */
   reconcileMetadataFn?: typeof reconcileMigrationMetadata;
   /**
+   * For tests: called at each named point the run reaches (`stop-points.ts`): before and after
+   * each statement of a file, once a file is recorded applied, and after each kind of a dropped
+   * entity's rows is removed. One that throws fails the run there.
+   */
+  stopAt?: StopPointHook;
+  /**
    * What the run does with the registry rows the migrations record:
    * `write` (the default, for `nextly migrate` and the production boot
    * step) brings each to the newest applied snapshot; `insert-missing`
@@ -1402,6 +1419,12 @@ export interface MigrateCoreResult {
     fieldGroupsRegistered: number;
     rowsNotWritten: string[];
     rowsRemoved: string[];
+    /**
+     * Entities an applied migration dropped that still hold rows this run could not remove, as
+     * `<kind> <slug>` and the kinds of row left (`retireDroppedEntities`). The next run removes
+     * them; the command fails while any are named. Absent when none are.
+     */
+    rowsOwed?: string[];
     marked: number;
     stillPending: number;
     awaitingMigration: number;
@@ -2446,6 +2469,21 @@ function assertPluginTablesAreMigratable(
  * and interleaving them with the migrate flow made both harder to follow than
  * either is alone.
  */
+/**
+ * The failure of a run that applied its migrations but could not remove everything the entities
+ * they dropped owned: what each still holds, and that the next run removes it.
+ */
+function rowsOwedError(owed: readonly string[]): NextlyError {
+  return new NextlyError({
+    code: "INTERNAL_ERROR",
+    publicMessage:
+      `The migrations applied, but what the entities they dropped owned was not all removed: ` +
+      `${owed.join("; ")}. Run \`nextly migrate\` again once the cause is fixed: it removes what ` +
+      `remains, and runs no migration again.`,
+    logContext: { reason: "dropped-entity-rows-owed", owed: [...owed] },
+  });
+}
+
 function reportMetadataOutcome(
   metadata: MigrateCoreResult["metadata"],
   logger: CommandContext["logger"]
@@ -2474,6 +2512,14 @@ function reportMetadataOutcome(
   if (metadata.rowsNotWritten.length > 0) {
     logger.warn(
       `${formatCount(metadata.rowsNotWritten.length, "registry row")} not brought to the newest applied snapshot: ${metadata.rowsNotWritten.join(", ")}. Re-run \`nextly migrate\` once the cause is fixed.`
+    );
+  }
+
+  // What the entities an applied migration dropped still hold, which the next run removes.
+  const owed = metadata.rowsOwed ?? [];
+  if (owed.length > 0) {
+    logger.warn(
+      `${formatCount(owed.length, "dropped entity", "dropped entities")} still ${owed.length === 1 ? "holds" : "hold"} rows this run could not remove: ${owed.join("; ")}.`
     );
   }
 
@@ -2671,6 +2717,13 @@ async function addDocumentColumnsFor(deps: MigrateCoreDeps): Promise<void> {
 export async function migrateCore(
   deps: MigrateCoreDeps
 ): Promise<MigrateCoreResult> {
+  // A test's stop points (`stopAt`), installed for this run alone.
+  return withStopPoints(deps.stopAt, () => runMigrateCore(deps));
+}
+
+async function runMigrateCore(
+  deps: MigrateCoreDeps
+): Promise<MigrateCoreResult> {
   // Refused HERE rather than in `runMigrate`, because this function is also
   // reached from `runMigrationsOnBoot` and from boot-apply. A refusal in the
   // command alone would let a production boot apply migrations that silently
@@ -2747,7 +2800,7 @@ export async function migrateCore(
   let applied = 0;
   let pluginModulesApplied = 0;
   let coreChanged = false;
-  let metadata = {
+  let metadata: MigrateCoreResult["metadata"] = {
     collectionsRegistered: 0,
     singlesRegistered: 0,
     fieldGroupsRegistered: 0,
@@ -2792,10 +2845,32 @@ export async function migrateCore(
       debug: (m: string) => deps.logger.debug(m),
     },
   });
+  /**
+   * `recorded`, with the entities its pass found an applied migration dropped retired, once that
+   * pass has committed (`retireDroppedEntities`): what each owned outside its tables, then its
+   * registry row. What a retirement could not remove is named in `rowsOwed`.
+   */
+  const retiredAfter = async (
+    recorded: Awaited<ReturnType<typeof reconcileMetadata>>
+  ): Promise<typeof metadata> => {
+    // The list is the run's to act on, not part of what it reports.
+    const { entitiesRetiring: retiring = [], ...reported } = recorded;
+    if (retiring.length === 0) return reported;
+    const retired = await retireDroppedEntities(
+      deps.adapter as unknown as DrizzleAdapter,
+      retiring,
+      deps.logger
+    );
+    return {
+      ...reported,
+      rowsRemoved: [...reported.rowsRemoved, ...retired.removed],
+      ...(retired.owed.length > 0 ? { rowsOwed: retired.owed } : {}),
+    };
+  };
   const recordMetadata = async (): Promise<void> => {
     deps.logger.info("Phase 3: recording migration metadata...");
     try {
-      metadata = await reconcileMetadata(metadataArgs());
+      metadata = await retiredAfter(await reconcileMetadata(metadataArgs()));
     } catch (error) {
       // A run that lost the schema lock stops here: it is not a bookkeeping
       // failure to warn about and carry on from into Phase 4's writes.
@@ -2931,7 +3006,7 @@ export async function migrateCore(
       // the version names the point the record is at.
       { wrote: () => false, migration: ({ point }) => point }
     );
-    metadata = committed.recorded;
+    metadata = await retiredAfter(committed.recorded);
     if (configurationRows !== undefined) {
       deps.logger.success(
         configurationRowsMessage(
@@ -5026,6 +5101,8 @@ export async function runFileMigrations(args: {
         } catch (err) {
           throw NextlyError.is(err) ? err : applyFailedError(filename, err);
         }
+        // The file and its ledger row have committed (`stop-points.ts`).
+        await reachStopPoint(`${filename}: recorded applied`);
         applied++;
         lastApplied = filename;
         appliedFiles.push(filename);
@@ -5144,6 +5221,8 @@ export async function runFileMigrations(args: {
               : [],
         }),
       });
+      // The file and its ledger row have committed (`stop-points.ts`).
+      await reachStopPoint(`${filename}: recorded applied`);
       applied++;
       lastApplied = filename;
       appliedFiles.push(filename);

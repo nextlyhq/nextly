@@ -121,18 +121,52 @@ export interface TeardownEntityI18nResult {
  * Call this BEFORE dropping the entity's main table. Errors propagate: callers drop the
  * main table and delete the registry row only after this resolves, so a failure here
  * surfaces with the entity still fully intact rather than half-deleted.
+ *
+ * The drop and each kind of row are steps of their own below, so a delete that has already
+ * dropped the table (a migration file, `nextly migrate`) removes the rows through the same steps.
  */
 export async function teardownEntityI18n(
   args: TeardownEntityI18nArgs
 ): Promise<TeardownEntityI18nResult> {
-  const { adapter, slug, tableName } = args;
-  // Known exactly when the slug is: the identity type offers both or neither.
-  const kind = args.slug === null ? undefined : args.kind;
-  const companionTable = `${tableName}_locales`;
+  const companionDropped = await dropEntityTranslationsTable(
+    args.adapter,
+    args.tableName
+  );
+  // A null slug means the caller could not identify the entity, and every row below is keyed
+  // by it, so there is no safe row set to delete.
+  if (args.slug === null) {
+    return { companionDropped, archiveRowsPurged: 0, provenanceRowsPurged: 0 };
+  }
+  const owner: TranslationRowsOwner = { kind: args.kind, slug: args.slug };
+  const archiveRowsPurged = await removeEntityTranslationArchive(
+    args.adapter,
+    owner
+  );
+  await forgetEntityTranslationTransition(args.adapter, owner);
+  const provenanceRowsPurged = await removeEntityTranslationProvenance(
+    args.adapter,
+    owner
+  );
+  return { companionDropped, archiveRowsPurged, provenanceRowsPurged };
+}
 
+/** The entity whose translation rows are removed, by the kind and slug every one of them is keyed by. */
+export interface TranslationRowsOwner {
+  kind: I18nTransitionKind;
+  slug: string;
+}
+
+/**
+ * Drops `<tableName>_locales`, the entity's translations table, where it stands. True when it
+ * was there and is dropped.
+ */
+export async function dropEntityTranslationsTable(
+  adapter: TeardownI18nAdapter,
+  tableName: string
+): Promise<boolean> {
+  const companionTable = `${tableName}_locales`;
   // Guarded so a non-localized entity (no companion was ever created) is a no-op rather
   // than relying on IF EXISTS semantics that differ across dialects.
-  let companionDropped = false;
   if (await adapter.tableExists(companionTable)) {
     const quoted = q(companionTable, adapter.dialect);
     // Postgres needs CASCADE to also remove the FK constraint the companion owns; MySQL and
@@ -149,7 +183,6 @@ export async function teardownEntityI18n(
       "the localization teardown",
       () => `the drop of table ${JSON.stringify(companionTable)}`
     );
-    companionDropped = true;
     // Readiness remembers only that a companion exists, and this is one of the two things that
     // makes that false. Forgetting it here rather than at the call sites keeps the memory tied to
     // the statement that invalidates it.
@@ -157,94 +190,107 @@ export async function teardownEntityI18n(
       "../runtime/companion-readiness"
     );
     forgetCompanionReadiness(adapter, companionTable);
+    return true;
   }
+  return false;
+}
 
+/**
+ * Removes the entity's rows in `nextly_i18n_archive`, by kind and slug. How many went; none
+ * where the archive does not exist.
+ */
+export async function removeEntityTranslationArchive(
+  adapter: TeardownI18nAdapter,
+  owner: TranslationRowsOwner
+): Promise<number> {
+  const { kind, slug } = owner;
   // The archive table is created lazily on the first localization disable, so its absence is
-  // the normal state for many databases and must not fail the delete. A null slug means the
-  // caller could not identify the entity, and the archive is keyed by slug, so there is no
-  // safe row set to delete.
-  let archiveRowsPurged = 0;
-  if (
-    slug !== null &&
-    kind !== undefined &&
-    (await adapter.tableExists(ARCHIVE_TABLE))
-  ) {
-    // An archive from before rows recorded their kind has no column to scope by until it is
-    // brought up to date, and its rows are this entity's only where the registries say so. This
-    // runs before the registry row is deleted, so the entity still answers for its slug. A row
-    // whose owner stays unknown is kept: deleting it could take another entity's translations.
-    await ensureI18nArchive(adapter, adapter.dialect);
-    await labelLegacyArchiveRows(adapter);
-    const db = adapter.getDrizzle<ArchiveDeleteCapableDb>();
-    const { nextlyI18nArchive } = nextlyI18nArchiveTables(adapter.dialect);
-    // Scoped to this entity only, by kind as well as slug — the archive is shared, an unscoped
-    // delete would wipe every other entity's recoverable translations, and a field group may
-    // carry a collection's or a Single's slug.
-    const result = await db
-      .delete(nextlyI18nArchive)
-      .where(
-        and(
-          eq(nextlyI18nArchive.collection, slug),
-          eq(nextlyI18nArchive.entityKind, kind)
-        )
-      );
-    // Each driver reports the count in a different place, and mysql2 nests it inside a
-    // result tuple, so the shared dialect-aware reader owns that knowledge.
-    archiveRowsPurged = affectedRowCount(result, adapter.dialect);
-  }
+  // the normal state for many databases and must not fail the delete.
+  if (!(await adapter.tableExists(ARCHIVE_TABLE))) return 0;
+  // An archive from before rows recorded their kind has no column to scope by until it is
+  // brought up to date, and its rows are this entity's only where the registries say so. This
+  // runs before the registry row is deleted, so the entity still answers for its slug. A row
+  // whose owner stays unknown is kept: deleting it could take another entity's translations.
+  await ensureI18nArchive(adapter, adapter.dialect);
+  await labelLegacyArchiveRows(adapter);
+  const db = adapter.getDrizzle<ArchiveDeleteCapableDb>();
+  const { nextlyI18nArchive } = nextlyI18nArchiveTables(adapter.dialect);
+  // Scoped to this entity only, by kind as well as slug — the archive is shared, an unscoped
+  // delete would wipe every other entity's recoverable translations, and a field group may
+  // carry a collection's or a Single's slug.
+  const result = await db
+    .delete(nextlyI18nArchive)
+    .where(
+      and(
+        eq(nextlyI18nArchive.collection, slug),
+        eq(nextlyI18nArchive.entityKind, kind)
+      )
+    );
+  // Each driver reports the count in a different place, and mysql2 nests it inside a
+  // result tuple, so the shared dialect-aware reader owns that knowledge.
+  return affectedRowCount(result, adapter.dialect);
+}
 
+/** Forgets the entity's translation transition record in `nextly_meta`, by kind and slug. */
+export async function forgetEntityTranslationTransition(
+  adapter: TeardownI18nAdapter,
+  owner: TranslationRowsOwner
+): Promise<void> {
   // The transition record outlives everything else here unless it is removed: it lives in
   // `nextly_meta`, not in any of the tables dropped above, and it is keyed by kind and slug —
   // both of which a later entity can reuse. Left behind, it would hand that entity a
   // predecessor's source locale and refuse its real one, after its companion had already been
   // created and seeded.
   //
-  // Skipped for the catalog sweep, which has no identity to key on. Consistent with the archive
-  // above: neither is touched when acting on it would mean guessing whose it is.
+  // The catalog sweep, which has no identity to key on, never gets here (`teardownEntityI18n`):
+  // as with the archive, neither is touched when acting on it would mean guessing whose it is.
   //
   // Guarded on the table's existence for the same reason the archive is: `nextly_meta` is created
   // by the core setup, and a database that never got that far still has to be able to delete an
   // entity. Failing the teardown because a bookkeeping row could not be removed would block the
   // drop it exists to perform.
-  if (
-    args.slug !== null &&
-    args.kind !== undefined &&
-    (await adapter.tableExists(META_TABLE))
-  ) {
+  if (await adapter.tableExists(META_TABLE)) {
     const { resolveTransitionStore } = await import("./transition-recorder");
     const { forgetI18nTransition } = await import("./transition-state");
     await forgetI18nTransition(
       await resolveTransitionStore(adapter),
-      args.kind,
-      args.slug
+      owner.kind,
+      owner.slug
     );
   }
+}
 
+/**
+ * Removes the entity's records of where its translated values came from, by kind and slug: kept
+ * for collections and Singles only. How many went; none where the table does not exist.
+ */
+export async function removeEntityTranslationProvenance(
+  adapter: TeardownI18nAdapter,
+  owner: TranslationRowsOwner
+): Promise<number> {
+  const { kind, slug } = owner;
   // Where each translated value came from is kept per entity, by kind and slug, in a table no
   // drop above reaches. Left behind, a later collection or Single of the same kind and slug would
   // read a predecessor's origins. Scoped by kind as well as slug, as the archive is: a collection
   // and a Single may share one. Guarded on the table's existence for the same reason too: it
   // reaches an installation through `nextly migrate`, and its absence must not block the delete.
-  let provenanceRowsPurged = 0;
   if (
-    slug !== null &&
-    (kind === "collection" || kind === "single") &&
-    (await adapter.tableExists(TRANSLATION_PROVENANCE_TABLE))
+    (kind !== "collection" && kind !== "single") ||
+    !(await adapter.tableExists(TRANSLATION_PROVENANCE_TABLE))
   ) {
-    const db = adapter.getDrizzle<ArchiveDeleteCapableDb>();
-    const { nextlyTranslationProvenance } = translationProvenanceTables(
-      adapter.dialect
-    );
-    const result = await db
-      .delete(nextlyTranslationProvenance)
-      .where(
-        and(
-          eq(nextlyTranslationProvenance.scopeKind, kind),
-          eq(nextlyTranslationProvenance.scopeSlug, slug)
-        )
-      );
-    provenanceRowsPurged = affectedRowCount(result, adapter.dialect);
+    return 0;
   }
-
-  return { companionDropped, archiveRowsPurged, provenanceRowsPurged };
+  const db = adapter.getDrizzle<ArchiveDeleteCapableDb>();
+  const { nextlyTranslationProvenance } = translationProvenanceTables(
+    adapter.dialect
+  );
+  const result = await db
+    .delete(nextlyTranslationProvenance)
+    .where(
+      and(
+        eq(nextlyTranslationProvenance.scopeKind, kind),
+        eq(nextlyTranslationProvenance.scopeSlug, slug)
+      )
+    );
+  return affectedRowCount(result, adapter.dialect);
 }

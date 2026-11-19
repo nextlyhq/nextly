@@ -890,20 +890,25 @@ export class SingleMetadataService {
     // The adapter itself, or one bound to a delete's transaction.
     adapter: TeardownAdapter
   ): Promise<void> {
-    // Embedded field-group instances point back at this table by a plain string with no foreign
-    // key, so the drop below cascades nothing and would strand them. Sweep first.
-    const { teardownEntityComponentData } = await import(
-      "../../field-groups/services/teardown-entity-field-group-data"
-    );
-    await teardownEntityComponentData({ adapter, parentTable: tableName });
+    // What the Single owns outside its tables, removed as every delete removes it, a deployed one
+    // through `nextly migrate` included (`removeRowsBeforeTheDrop`): its embedded field-group
+    // instances, which point back at this table by a plain string with no foreign key, so the drop
+    // below cascades nothing and would strand them, and its translation rows.
+    const [{ removeRowsBeforeTheDrop }, { dropEntityTranslationsTable }] =
+      await Promise.all([
+        import("../../schema/services/remove-entity-owned-data"),
+        import("../../i18n/migration/teardown-entity-i18n"),
+      ]);
+    await removeRowsBeforeTheDrop(adapter, {
+      kind: "single",
+      slug,
+      table: tableName,
+    });
 
-    // Remove the companion `_locales` table and this single's archive rows before the main table.
-    // The companion holds a foreign key to `<main>.id`, so it must go first or the main drop
-    // orphans it on PostgreSQL and is rejected by the constraint on MySQL.
-    const { teardownEntityI18n } = await import(
-      "../../i18n/migration/teardown-entity-i18n"
-    );
-    await teardownEntityI18n({ adapter, slug, tableName, kind: "single" });
+    // Remove the companion `_locales` table before the main table. The companion holds a foreign
+    // key to `<main>.id`, so it must go first or the main drop orphans it on PostgreSQL and is
+    // rejected by the constraint on MySQL.
+    await dropEntityTranslationsTable(adapter, tableName);
 
     // PostgreSQL needs CASCADE to drop dependent objects: the companion's foreign key makes the
     // main table a target, and a non-cascading drop raises rather than proceeding. The other two

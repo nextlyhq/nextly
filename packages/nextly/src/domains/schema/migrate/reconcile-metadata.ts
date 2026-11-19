@@ -63,6 +63,7 @@ import {
   readSchemaVersion,
   writeRegistryRows,
 } from "../schema-version";
+import type { OwningEntity } from "../services/remove-entity-owned-data";
 
 import { outstandingEntityChanges } from "./applied-entity-changes";
 import { registerFromMigrations } from "./metadata-register";
@@ -156,6 +157,11 @@ export interface ReconcileMetadataResult {
   rowsNotWritten: string[];
   /** Rows of entities an applied migration dropped, removed this run, as `<kind> <slug>`. */
   rowsRemoved: string[];
+  /**
+   * Entities an applied migration dropped whose tables are gone, for the run to retire once this
+   * pass commits (`retireDroppedEntities`). Their registry rows are left in this pass.
+   */
+  entitiesRetiring?: OwningEntity[];
   /** Rows moved from `pending`/`generated` to `applied`. */
   marked: number;
   /**
@@ -613,6 +619,7 @@ async function registerRows(
         fieldGroupsRegistered: written.written.fieldGroup,
         rowsNotWritten: written.failed,
         rowsRemoved: written.removed,
+        entitiesRetiring: written.retiring ?? [],
       },
       complete: written.failed.length === 0,
     };
@@ -706,6 +713,7 @@ type RegisteredRows = Pick<
   | "fieldGroupsRegistered"
   | "rowsNotWritten"
   | "rowsRemoved"
+  | "entitiesRetiring"
 >;
 
 /**

@@ -136,9 +136,9 @@ export type Deletion =
       fingerprint?: string;
     };
 
-/** A collection or a Single, as the listing names whose rows go from a shared table. */
+/** A collection, a Single or a field group, as the listing names whose rows go from a shared table. */
 export interface EntityRef {
-  kind: "collection" | "single";
+  kind: "collection" | "single" | "fieldGroup";
   slug: string;
 }
 
@@ -498,8 +498,15 @@ function describeWhat(deletion: Deletion): string {
 }
 
 /** A collection or Single as a listing names it: `collection "posts"`, `Single "home"`. */
+/** How the listing names each kind of entity. */
+const ENTITY_KIND_LABEL: Record<EntityRef["kind"], string> = {
+  collection: "collection",
+  single: "Single",
+  fieldGroup: "field group",
+};
+
 function entityLabel(entity: EntityRef): string {
-  return `${entity.kind === "single" ? "Single" : "collection"} "${entity.slug}"`;
+  return `${ENTITY_KIND_LABEL[entity.kind]} "${entity.slug}"`;
 }
 
 /** `what`, saying which entity's main table it belongs to, where it belongs to one. */

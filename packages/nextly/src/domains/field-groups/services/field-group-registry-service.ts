@@ -28,8 +28,12 @@ import {
 } from "../../collections/services/collection-registry-service";
 import type { TeardownAdapter } from "../../collections/services/teardown-adapter-in-transaction";
 import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
-import { teardownEntityI18n } from "../../i18n/migration/teardown-entity-i18n";
+import { dropEntityTranslationsTable } from "../../i18n/migration/teardown-entity-i18n";
 import type { BuilderSaveSetup } from "../../schema/builder-save/collection-save";
+import {
+  removeFieldGroupRegistryRow,
+  removeRowsBeforeTheDrop,
+} from "../../schema/services/remove-entity-owned-data";
 import {
   calculateSchemaHash,
   schemaHashesMatch,
@@ -45,7 +49,6 @@ import {
   isDerivedTableName,
   resolveFieldGroupStorageNames,
 } from "./field-group-storage-names";
-import { teardownEntityComponentData } from "./teardown-entity-field-group-data";
 
 /**
  * A reference to a Component from a Collection, Single, or another Component.
@@ -906,7 +909,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
       // PG RETURNING-less DELETE always returns 0 rows, so no post-delete count check.
       // With the stored schema version's count (`writeRegistry`).
       await this.writeRegistry(() =>
-        this.adapter.delete(table, this.whereEq("slug", slug))
+        removeFieldGroupRegistryRow(this.adapter, table, slug)
       );
     } else {
       const [
@@ -929,7 +932,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
             slug,
             tableName
           );
-          const removed = await tx.delete(table, this.whereEq("slug", slug));
+          const removed = await removeFieldGroupRegistryRow(tx, table, slug);
           // The row this delete read, not removed (a row-level rule or a trigger keeping it), would
           // describe storage this transaction dropped: refused here, so the drops roll back with it
           // and the field group stays whole. The transaction's own delete counts its rows on every
@@ -981,14 +984,15 @@ export class FieldGroupRegistryService extends BaseRegistryService<
     // table via `_parent_table`, so dropping it below would strand them. Deletion is
     // blocked while anything references this component, but nothing blocks the reverse
     // direction, so the nested rows are this delete's responsibility.
-    await teardownEntityComponentData({ adapter, parentTable: tableName });
-
-    await teardownEntityI18n({
+    // Removed as every delete removes them, a deployed one through `nextly migrate` included
+    // (`removeRowsBeforeTheDrop`): the nested values, then the translation rows.
+    await removeRowsBeforeTheDrop(adapter, {
       kind: "fieldGroup",
-      adapter,
       slug,
-      tableName,
+      table: tableName,
     });
+
+    await dropEntityTranslationsTable(adapter, tableName);
 
     // Drop the data table after its dependents, since both hold references into it.
     // IF EXISTS so the delete is safe where the table was never created; CASCADE on

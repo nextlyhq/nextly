@@ -12,13 +12,13 @@
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
-import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
 import { resolveRegistryTableName } from "../../field-groups/storage/resolve-storage-names";
 import {
   deleteEntityRegistryRow,
   type DashboardTables,
 } from "../../versions/entity-teardown";
 import type { SettingsEntityKind } from "../migrate-create/entity-settings";
+import { removeFieldGroupRegistryRow } from "../services/remove-entity-owned-data";
 
 /** Where a removal runs: the transaction the registry write holds, and the adapter reading on it. */
 export interface RemovalScope {
@@ -34,12 +34,11 @@ export async function removeRegistryRow(
   slug: string
 ): Promise<void> {
   if (kind === "fieldGroup") {
-    await scope.view.delete(await resolveRegistryTableName(scope.view), {
-      and: [{ column: "slug", op: "=", value: slug }],
-    });
-    // Cleared as the row goes, as `deleteEntityRegistryRow` clears for the
-    // other kinds, so a read later in the transaction does not find it.
-    clearRegistryRowCache();
+    await removeFieldGroupRegistryRow(
+      scope.view,
+      await resolveRegistryTableName(scope.view),
+      slug
+    );
     return;
   }
   await deleteEntityRegistryRow(

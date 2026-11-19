@@ -76,7 +76,12 @@ export function coveredEntity(row: {
     kind: row.kind,
     slug: row.slug,
     table: row.tableName,
-    tables: collectionOwnTables(row.tableName, fieldsOf(row.fields)),
+    // A field group keeps its many-to-many lists on its own row, in no junction table: it owns
+    // its table and its translations table alone.
+    tables:
+      row.kind === "fieldGroup"
+        ? [row.tableName, `${row.tableName}_locales`]
+        : collectionOwnTables(row.tableName, fieldsOf(row.fields)),
   };
 }
 
@@ -238,6 +243,10 @@ interface RegistryRow {
 const REGISTRIES = [
   { kind: "collection", table: "dynamic_collections" },
   { kind: "single", table: "dynamic_singles" },
+  // A database holds the field-group registry under one of two names, as its storage migration
+  // left it.
+  { kind: "fieldGroup", table: "dynamic_components" },
+  { kind: "fieldGroup", table: "dynamic_field_groups" },
 ] as const;
 
 /**
