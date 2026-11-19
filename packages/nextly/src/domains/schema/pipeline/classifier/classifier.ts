@@ -409,6 +409,9 @@ export class RealClassifier implements Classifier {
             keyedBy: judged.keyedBy,
             cleared: judged.cleared,
             conversion: judged.conversion,
+            ...(judged.fieldReadings !== undefined
+              ? { fieldReadings: judged.fieldReadings }
+              : {}),
           },
         },
       };

@@ -17,6 +17,7 @@ import type {
   ConversionJudgement,
   RowKey,
 } from "../../value-conversion/types";
+import type { FieldReadings } from "../classifier/judge-type-change";
 import type { ClassificationLevel } from "../pushschema-pipeline-interfaces";
 
 export type ResolutionKind =
@@ -90,6 +91,8 @@ export interface TypeChangeEvent extends BaseEvent {
     cleared: RowKey[];
     /** The conversion judged, which the apply judges again before it clears anything. */
     conversion: ColumnConversion;
+    /** The fields the per-value judge was also asked with, which that second judgement asks too. */
+    fieldReadings?: FieldReadings;
   };
 }
 

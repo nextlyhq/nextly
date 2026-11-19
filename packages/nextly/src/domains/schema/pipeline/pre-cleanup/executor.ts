@@ -25,11 +25,10 @@ import { sql } from "drizzle-orm";
 import { NextlyError } from "../../../../errors";
 import { clearingStatements, rowKeyText } from "../../repair-columns/clearing";
 import { toSnakeCase } from "../../services/field-column-descriptor";
-import { reasonClass } from "../../value-conversion/judge-column";
-import { judgeStoredColumn } from "../../value-conversion/read-values";
 import type { RowKey } from "../../value-conversion/types";
 import { runStatement } from "../_internal/run-statement";
 import { countRowsBreakingNotNull } from "../classifier/count-helpers";
+import { judgeOfferedTypeChange } from "../classifier/judge-type-change";
 import type {
   AddColumnOp,
   NextlySchemaSnapshot,
@@ -329,22 +328,20 @@ export async function clearConsentedValues(args: {
 }): Promise<void> {
   for (const event of clearedTypeChanges(args)) {
     const consented = new Set(event.lossy.cleared.map(rowKeyText));
-    const still: RowKey[] = [];
-    await judgeStoredColumn(
+    // The one judgement the classifier asked, asked again: the same rules name the same rows.
+    const again = await judgeOfferedTypeChange(
       args.tx,
-      event.lossy.conversion,
+      args.dialect,
       {
         table: event.tableName,
         column: event.columnName,
         keyedBy: event.lossy.keyedBy,
       },
-      {
-        noteRow: (kind, key) => {
-          if (reasonClass(kind) === "lossy" && consented.has(rowKeyText(key))) {
-            still.push(key);
-          }
-        },
-      }
+      event.lossy.conversion,
+      event.lossy.fieldReadings
+    );
+    const still: RowKey[] = again.cleared.filter(key =>
+      consented.has(rowKeyText(key))
     );
     for (const statement of clearingStatements({
       table: event.tableName,
