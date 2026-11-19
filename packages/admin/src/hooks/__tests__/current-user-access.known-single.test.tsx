@@ -9,7 +9,11 @@
  * the whole cache each time cost a scan per reader per event.
  */
 
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  QueryClient,
+  QueryClientProvider,
+  useQuery,
+} from "@tanstack/react-query";
 import { act, renderHook } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
@@ -72,6 +76,38 @@ describe("useIsKnownSingle", () => {
     act(() => {
       for (let i = 0; i < 10; i += 1) client.setQueryData(["other", i], -i);
     });
+
+    expect(view.result.current).toBe(true);
+    expect(findAll).not.toHaveBeenCalled();
+  });
+
+  it("scans the cache for no reader of the capabilities query mounting or rendering", () => {
+    // Each part of the editor that reads the capabilities answer is an observer of its query,
+    // and the cache tells every subscriber when one mounts, unmounts or renders. None of that
+    // changes the answer, so none of it may cost a scan.
+    const client = clientWith({ "site-settings": "single" });
+    const findAll = vi.spyOn(client.getQueryCache(), "findAll");
+    const view = renderHook(() => useIsKnownSingle("site-settings"), {
+      wrapper: wrapperFor(client),
+    });
+    expect(view.result.current).toBe(true);
+    expect(findAll).toHaveBeenCalled();
+    findAll.mockClear();
+
+    const readers = Array.from({ length: 5 }, () =>
+      renderHook(
+        () =>
+          useQuery({
+            queryKey: currentUserCapabilitiesKey(undefined),
+            queryFn: () => answer({ "site-settings": "single" }),
+            staleTime: Infinity,
+          }),
+        { wrapper: wrapperFor(client) }
+      )
+    );
+    for (const reader of readers) reader.rerender();
+    for (const reader of readers) reader.unmount();
+    view.rerender();
 
     expect(view.result.current).toBe(true);
     expect(findAll).not.toHaveBeenCalled();
