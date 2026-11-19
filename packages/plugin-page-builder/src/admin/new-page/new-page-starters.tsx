@@ -140,7 +140,7 @@ function StarterChoices({
                 {...(unavailable === undefined
                   ? {}
                   : { "data-unavailable": "" })}
-                className={`grid gap-1 rounded-lg border p-1.5 text-xs transition-colors has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring ${
+                className={`grid content-start gap-1 rounded-lg border p-1.5 text-xs transition-colors has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring ${
                   unavailable !== undefined
                     ? "cursor-not-allowed border-dashed border-border"
                     : on

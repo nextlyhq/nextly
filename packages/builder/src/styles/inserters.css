@@ -211,9 +211,15 @@
   gap: 0.5rem;
 }
 
+/*
+ * A grid of equal rows, so a tile with a reason under it doesn't leave its
+ * row taller than the rest: every tile is as tall as the tallest, and each
+ * column as wide as a tile's 8rem picture with its padding and border.
+ */
 .nx-page-start__tiles {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, 9.25rem);
+  grid-auto-rows: 1fr;
   justify-content: center;
   gap: 0.5rem;
   margin: 0;
@@ -221,8 +227,14 @@
   list-style: none;
 }
 
+.nx-page-start__tiles > li {
+  display: flex;
+}
+
 .nx-page-start__tile {
   flex-direction: column;
+  justify-content: flex-start;
+  width: 100%;
   padding: 0.5rem;
 }
 
@@ -251,6 +263,7 @@
   font-size: 0.71875rem;
   line-height: 1.3;
   text-align: center;
+  text-wrap: balance;
   white-space: normal;
 }
 
