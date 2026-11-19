@@ -904,22 +904,15 @@ const COLLECTIONS_METHODS: Record<
       // show before they confirm: each conversion, fill and delete. The
       // answers are optional here, so the review can ask again once chosen.
       const answers = body as SchemaChangeAnswers;
-      // The fields the save moves are refused here as the apply refuses them, before the person
-      // confirms, where the save would not keep their values through its migration file.
-      const moves = readRequestedMoves(body);
-      const wasLocalized =
-        (collection as { localized?: boolean }).localized === true;
-      await refuseMovesOffTheFile({
-        moves,
-        writes: container.has("builderSaveSetup"),
-        pushReason: pushReasonOf({
-          adapter,
-          tableName,
-          wasLocalized,
-          isLocalized: previewLocalized ?? wasLocalized,
-          before: currentFields,
-          after: fields as FieldDefinition[],
-        }),
+      const moves = await reviewedMoves({
+        body,
+        adapter,
+        tableName,
+        wasLocalized:
+          (collection as { localized?: boolean }).localized === true,
+        requestedLocalized: previewLocalized,
+        before: currentFields,
+        after: fields as FieldDefinition[],
       });
       const review = await reviewLinesOf({
         slug: p.collectionName,
@@ -2132,6 +2125,36 @@ function pushReasonOf(args: {
     return reaches ? "carries-values" : null;
   };
   return () => (answer ??= ask());
+}
+
+/**
+ * The fields a reviewed save moves, read from its request and refused as the apply refuses them,
+ * before the person confirms, where the save would not keep their values through its migration
+ * file. The request's translation state wins where the Builder sent one, as in the apply.
+ */
+async function reviewedMoves(args: {
+  body: unknown;
+  adapter: NonNullable<ReturnType<typeof getAdapterFromDI>>;
+  tableName: string;
+  wasLocalized: boolean;
+  requestedLocalized: boolean | undefined;
+  before: readonly FieldDefinition[];
+  after: readonly FieldDefinition[];
+}): Promise<readonly FieldMoveRequest[]> {
+  const moves = readRequestedMoves(args.body);
+  await refuseMovesOffTheFile({
+    moves,
+    writes: container.has("builderSaveSetup"),
+    pushReason: pushReasonOf({
+      adapter: args.adapter,
+      tableName: args.tableName,
+      wasLocalized: args.wasLocalized,
+      isLocalized: args.requestedLocalized ?? args.wasLocalized,
+      before: args.before,
+      after: args.after,
+    }),
+  });
+  return moves;
 }
 
 /**
