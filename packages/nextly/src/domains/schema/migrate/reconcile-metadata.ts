@@ -181,6 +181,12 @@ export interface ReconcileMetadataResult {
    * went (`removeDroppedEntityLeftovers`).
    */
   leftoversRemoved: string[];
+  /**
+   * The dropped entities whose leftovers this run could not remove, each named
+   * as `<kind> "<slug>"` (`removeDroppedEntityLeftovers`'s `left`): owed to the
+   * next run, so the run does not report the database up to date.
+   */
+  leftoversLeft?: string[];
   /** Rows moved from `pending`/`generated` to `applied`. */
   marked: number;
   /**
@@ -461,9 +467,11 @@ export async function reconcileMigrationMetadata(
         complete ? appliedMigration : undefined,
     }
   );
+  const leftovers = await leftoversOfDroppedEntities(deps);
   return {
     ...swept.result,
-    leftoversRemoved: await leftoversOfDroppedEntities(deps),
+    leftoversRemoved: leftovers.removed,
+    leftoversLeft: leftovers.left,
   };
 }
 
@@ -535,8 +543,9 @@ async function holdersInPlace(deps: ReconcileMetadataDeps): Promise<boolean> {
  */
 async function leftoversOfDroppedEntities(
   deps: ReconcileMetadataDeps
-): Promise<string[]> {
-  if (registryWriteOpen()) return [];
+): Promise<{ removed: string[]; left: string[] }> {
+  const none = { removed: [], left: [] };
+  if (registryWriteOpen()) return none;
   const { adapter, dialect, migrationsDir, logger } = deps;
   try {
     const events = new SchemaEventsRepository(adapter.getDrizzle(), dialect);
@@ -544,7 +553,7 @@ async function leftoversOfDroppedEntities(
       migrationsDir,
       isApplied: filename => events.isFileApplied(filename),
     });
-    if (source.kind !== "snapshot") return [];
+    if (source.kind !== "snapshot") return none;
     return await removeDroppedEntityLeftovers({
       adapter,
       chain: source.chain ?? [source.entities],
@@ -555,14 +564,14 @@ async function leftoversOfDroppedEntities(
     });
   } catch (error) {
     // A run that lost the schema lock stops; anything else costs only this
-    // removal, which the next run tries again.
+    // removal, which the next run tries again, and is owed to it.
     if (isSchemaLockLost(error)) throw error;
     logger.warn(
       `Could not remove what deleted entities left: ${
         error instanceof Error ? error.message : String(error)
       }. The next \`nextly migrate\` tries again.`
     );
-    return [];
+    return { removed: [], left: ["deleted entities"] };
   }
 }
 

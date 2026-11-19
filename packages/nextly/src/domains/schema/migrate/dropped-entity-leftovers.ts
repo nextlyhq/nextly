@@ -69,9 +69,9 @@ const RECORD_KEYS = Object.fromEntries(RECORDED_KINDS) as Record<
  * that nothing can still own (above). Runs under the caller's schema lock,
  * once the registry write that removes this run's dropped rows has committed,
  * and on no transaction of the caller's. Answers one line for each entity it
- * removed rows of, naming the entity and what went. A removal that fails is
- * warned of and leaves that entity's rows for the next run; the others still
- * go.
+ * removed rows of, naming the entity and what went (`removed`), and names each
+ * entity whose removal failed (`left`): that removal is warned of and leaves
+ * the entity's rows for the next run; the others still go.
  */
 export async function removeDroppedEntityLeftovers(args: {
   adapter: DrizzleAdapter;
@@ -83,11 +83,12 @@ export async function removeDroppedEntityLeftovers(args: {
    * boots no app). Called only when some entity's leftovers are to be removed.
    */
   prepareTables?: () => Promise<void>;
-}): Promise<string[]> {
+}): Promise<{ removed: string[]; left: string[] }> {
   const { adapter, logger } = args;
   const removedFrom: string[] = [];
+  const left: string[] = [];
   const gone = await goneEntities(args);
-  if (gone.length === 0) return removedFrom;
+  if (gone.length === 0) return { removed: removedFrom, left };
   await args.prepareTables?.();
   // The archive's rows are removed by entity kind, which an archive from
   // before rows recorded it lacks. Bringing it up to date is DDL, which on
@@ -112,10 +113,13 @@ export async function removeDroppedEntityLeftovers(args: {
             })
           ).instancesDeleted;
         }
+        // Not labelled here: the entity's registry row is gone, and the pass labelled what it could
+        // before the registry write, where every holder was in place (`labelArchiveWhileRegistered`).
         const translations = await removeEntityTranslationRows({
           adapter: scoped,
           kind: entity.kind,
           slug: entity.slug,
+          labelLegacy: false,
         });
         return {
           values,
@@ -130,6 +134,7 @@ export async function removeDroppedEntityLeftovers(args: {
         `${word} "${entity.slug}" left: ${plural(removed.values, "field group value")}, ${plural(removed.translations, "translation row")}`
       );
     } catch (error) {
+      left.push(`${word} "${entity.slug}"`);
       logger.warn(
         `Could not remove what the deleted ${word} "${entity.slug}" left: ${causeOf(
           error
@@ -137,7 +142,7 @@ export async function removeDroppedEntityLeftovers(args: {
       );
     }
   }
-  return removedFrom;
+  return { removed: removedFrom, left };
 }
 
 /**

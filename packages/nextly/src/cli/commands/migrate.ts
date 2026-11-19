@@ -952,7 +952,8 @@ export async function runMigrate(
         ran === 0
           ? metadata.stillPending > 0 ||
             metadata.unreadable.length > 0 ||
-            metadata.rowsNotWritten.length > 0
+            metadata.rowsNotWritten.length > 0 ||
+            (metadata.leftoversLeft?.length ?? 0) > 0
             ? "No migration files to apply."
             : "Nothing to migrate. Database is up to date."
           : `${formatCount(ran, "migration")} applied.`
@@ -1422,6 +1423,8 @@ export interface MigrateCoreResult {
     rowsNotWritten: string[];
     rowsRemoved: string[];
     leftoversRemoved: string[];
+    /** The dropped entities whose leftovers this run could not remove, owed to the next run. */
+    leftoversLeft?: string[];
     marked: number;
     stillPending: number;
     awaitingMigration: number;
