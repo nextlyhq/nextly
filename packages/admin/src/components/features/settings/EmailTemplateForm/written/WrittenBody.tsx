@@ -69,7 +69,7 @@ import {
   type BlockKind,
   type BlockPath,
 } from "./block-model";
-import { chipNamer } from "./chip-names";
+import { chipNamer, itemPaths } from "./chip-names";
 import { chipShowsBlank } from "./chip-values";
 import { ChipViewContext, type ChipView } from "./ChipLabel";
 import { RunEditor } from "./RunEditor";
@@ -158,8 +158,75 @@ interface Edit {
   variables: readonly TemplateFormVariable[];
   /** The workbench's test data, which says which chips show blank. */
   sampleData: Record<string, unknown>;
-  /** Told which field's editor was typed in last. */
-  focused: (editor: LexicalEditor) => void;
+  /** Told which field's editor was typed in last, and its block's place. */
+  focused: (editor: LexicalEditor, path: BlockPath) => void;
+  /**
+   * Puts a chip for one of a list's item fields where the person was last
+   * typing; false unless that was inside the list at `list`, the only place
+   * its `item` means anything.
+   */
+  insertItemField: (list: number, variable: string) => boolean;
+}
+
+/** Puts a chip for `variable` at the caret of `editor`, or at its end. */
+function insertChip(editor: LexicalEditor, variable: string): void {
+  editor.update(
+    () => {
+      const chip = new ChipNode(variable);
+      const selection = $getSelection();
+      if ($isRangeSelection(selection)) {
+        selection.insertNodes([chip]);
+        return;
+      }
+      // No caret kept: at the end of what the field holds.
+      const paragraph = $getRoot().getLastChild();
+      if ($isElementNode(paragraph)) paragraph.append(chip);
+      else $getRoot().append($createParagraphNode().append(chip));
+    },
+    { discrete: true }
+  );
+}
+
+/** A list's item fields, as chips to put into the blocks it repeats. */
+function ItemFields({
+  list,
+  variable,
+  edit,
+}: {
+  list: number;
+  variable: string;
+  edit: Edit;
+}): JSX.Element | null {
+  const paths = itemPaths(edit.variables, variable);
+  if (paths.length === 0 || edit.readOnly) return null;
+  const name = chipNamer(edit.variables, variable);
+  return (
+    <div
+      role="group"
+      aria-label="Item fields"
+      className="flex flex-wrap items-center gap-1.5 text-sm text-muted-foreground"
+    >
+      Insert an item field:
+      {paths.map(path => (
+        <Button
+          key={path}
+          type="button"
+          size="sm"
+          variant="outline"
+          className="h-7 px-2 text-xs"
+          onClick={() => {
+            if (!edit.insertItemField(list, path)) {
+              toast.info(
+                "Click into a block inside this list, then insert the item field."
+              );
+            }
+          }}
+        >
+          {name(path)}
+        </Button>
+      ))}
+    </div>
+  );
 }
 
 /** The fields of one block, by its kind. */
@@ -182,7 +249,7 @@ function BlockFields({
           placeholder="Write a heading"
           value={block.text}
           readOnly={edit.readOnly}
-          onFocusEditor={edit.focused}
+          onFocusEditor={editor => edit.focused(editor, path)}
           onChange={text => set({ ...block, text: plain(text) })}
         />
       );
@@ -194,7 +261,7 @@ function BlockFields({
           placeholder="Write something."
           value={block.text}
           readOnly={edit.readOnly}
-          onFocusEditor={edit.focused}
+          onFocusEditor={editor => edit.focused(editor, path)}
           onChange={text => set({ ...block, text })}
         />
       );
@@ -205,7 +272,7 @@ function BlockFields({
             label="Button label"
             value={block.label}
             readOnly={edit.readOnly}
-            onFocusEditor={edit.focused}
+            onFocusEditor={editor => edit.focused(editor, path)}
             onChange={label => set({ ...block, label: plain(label) })}
           />
           {"url" in block.link ? (
@@ -248,7 +315,7 @@ function BlockFields({
             placeholder="Describe the image"
             value={block.alt}
             readOnly={edit.readOnly}
-            onFocusEditor={edit.focused}
+            onFocusEditor={editor => edit.focused(editor, path)}
             onChange={alt => set({ ...block, alt: plain(alt) })}
           />
           {block.alt.length === 0 ? (
@@ -302,6 +369,9 @@ function BlockFields({
               ))}
             </select>
           </label>
+          {block.variable ? (
+            <ItemFields list={path[0]} variable={block.variable} edit={edit} />
+          ) : null}
           <div className="rounded-md border border-dashed border-border bg-muted/40 p-2">
             {/* Inside, `item` is this list's current item. */}
             <ChipViewContext.Provider
@@ -563,27 +633,12 @@ export function WrittenBody({
   sampleData = {},
   insertRef,
 }: WrittenBodyProps): JSX.Element {
-  // The field typed in last, where the Variables rail puts a chip.
-  const lastEditor = useRef<LexicalEditor | null>(null);
+  // The field typed in last, where a chip goes, and the list it sits in.
+  const last = useRef<{ editor: LexicalEditor; list?: number } | null>(null);
   if (insertRef) {
     insertRef.current = variable => {
-      const editor = lastEditor.current;
-      if (!editor || readOnly) return false;
-      editor.update(
-        () => {
-          const chip = new ChipNode(variable);
-          const selection = $getSelection();
-          if ($isRangeSelection(selection)) {
-            selection.insertNodes([chip]);
-            return;
-          }
-          // No caret kept: at the end of what the field holds.
-          const paragraph = $getRoot().getLastChild();
-          if ($isElementNode(paragraph)) paragraph.append(chip);
-          else $getRoot().append($createParagraphNode().append(chip));
-        },
-        { discrete: true }
-      );
+      if (!last.current || readOnly) return false;
+      insertChip(last.current.editor, variable);
       return true;
     };
   }
@@ -599,8 +654,13 @@ export function WrittenBody({
     readOnly,
     variables,
     sampleData,
-    focused: editor => {
-      lastEditor.current = editor;
+    focused: (editor, path) => {
+      last.current = { editor, list: path.length === 2 ? path[0] : undefined };
+    },
+    insertItemField: (list, variable) => {
+      if (readOnly || last.current?.list !== list) return false;
+      insertChip(last.current.editor, variable);
+      return true;
     },
   };
   return (

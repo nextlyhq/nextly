@@ -15,13 +15,16 @@ import type {
 
 import { WrittenBody, type InsertVariable } from "../WrittenBody";
 
-const toast = vi.hoisted(() => vi.fn());
+const toast = vi.hoisted(() => Object.assign(vi.fn(), { info: vi.fn() }));
 vi.mock("@admin/components/ui", async importOriginal => ({
   ...(await importOriginal<typeof import("@admin/components/ui")>()),
   toast,
 }));
 
-afterEach(() => toast.mockReset());
+afterEach(() => {
+  toast.mockReset();
+  toast.info.mockReset();
+});
 
 const heading = (text: string): WrittenBlock => ({
   type: "heading",
@@ -368,6 +371,58 @@ describe("a written email's blocks", () => {
     expect(
       screen.getByRole("button", { name: "Customer › Last name" })
     ).toBeDefined();
+  });
+
+  it("offers a list's item fields, only into the blocks that list repeats", async () => {
+    const user = userEvent.setup();
+    const seen = vi.fn<(doc: WrittenDocument) => void>();
+    render(
+      <WrittenBody
+        value={doc(heading("Your order"), {
+          type: "list",
+          variable: "lines",
+          blocks: [{ type: "text", text: [{ type: "text", text: "One " }] }],
+        })}
+        variables={[
+          {
+            name: "lines",
+            description: "",
+            required: true,
+            presentation: {
+              type: "list",
+              fields: [{ name: "title", label: "Product" }],
+            },
+          },
+        ]}
+        onChange={seen}
+      />
+    );
+    const field = within(
+      screen.getByRole("group", { name: "Item fields" })
+    ).getByRole("button", { name: "Item › Product" });
+
+    // Outside the list, `item` means nothing: it says where to click.
+    fireEvent.focus(screen.getByRole("textbox", { name: "Heading" }));
+    await user.click(field);
+    expect(toast.info).toHaveBeenCalledTimes(1);
+    expect(seen).not.toHaveBeenCalled();
+
+    fireEvent.focus(screen.getByRole("textbox", { name: "Text" }));
+    await user.click(field);
+    const last = seen.mock.calls[seen.mock.calls.length - 1]?.[0];
+    expect(last?.blocks[1]).toEqual({
+      type: "list",
+      variable: "lines",
+      blocks: [
+        {
+          type: "text",
+          text: [
+            { type: "text", text: "One " },
+            { type: "chip", variable: "item.title" },
+          ],
+        },
+      ],
+    });
   });
 
   it("opens no fallback dialog while the email is read-only", () => {
