@@ -77,6 +77,19 @@ export const StyleTargetContext: React.Context<StyleTarget> =
   React.createContext<StyleTarget>(BLOCK_TARGET);
 
 /**
+ * Whether the style fields drawn here write as they are typed, so the canvas
+ * follows each keystroke. A block's own fields do, and the panels that draw
+ * them say so: off by default, so a field reused elsewhere still writes only
+ * when it is left. A site variable's size or a shadow variable's colour turns
+ * it on with a write of its own for the keystrokes (the field's `onType`),
+ * which draws the value on the canvas and stores nothing: a variable is
+ * stored once, when its edit ends, as a change to every page that uses it
+ * should be.
+ */
+export const TypesLiveContext: React.Context<boolean> =
+  React.createContext<boolean>(false);
+
+/**
  * The prefix the cascade's token references were written under, for a reader
  * matching a value reaching from elsewhere to one token exactly; the default
  * prefix while no cascade answers.

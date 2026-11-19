@@ -69,10 +69,15 @@ import {
   type DesignRevealRequest,
   type DesignView,
 } from "./design-panel";
+import { readSiteHeaderFooter } from "./double-header-notice";
 import {
   checklistStoreFor,
   designFoldsStoreFor,
 } from "./editor-preference-stores";
+import {
+  useEmptyRegionBands,
+  type EmptyRegionBands,
+} from "./empty-region-bands";
 import { useLookEditing, type LookEditingState } from "./look-editing";
 import {
   offeredSelfOf,
@@ -86,6 +91,7 @@ import {
   type SectionPictureInputs,
 } from "./section-pictures";
 import { usePageRegions, type SelectedRegion } from "./selected-region";
+import type { SetMode } from "./set-regions";
 import type { FontRolesTab as FontRolesTabPart } from "./site-font-roles-tab";
 import type { SiteFontsScreen as SiteFontsScreenPart } from "./site-style-fonts";
 import {
@@ -153,6 +159,50 @@ const AVAILABLE_PANELS = [
   "components",
   "design",
 ] as const;
+
+/**
+ * The panels a header & footer set's own screen offers while neither its
+ * header nor its footer is edited in place: the set has no page to add to,
+ * so Add and Components wait until one of them is.
+ */
+const SET_PANELS = ["layers", "pages", "design"] as const;
+
+/**
+ * Whether the getting-started card is shown: not on a set's own screen,
+ * which has no page to build; and not until the author is known, whose own
+ * dismissal is the one to read. `checklist === false` is the only value that
+ * turns it off: an absent config and a malformed one both leave it on.
+ */
+function checklistOffered(
+  set: SetMode | undefined,
+  clientConfig: EditorMount["clientConfig"],
+  store: unknown
+): boolean {
+  return (
+    set === undefined &&
+    clientConfig?.checklist !== false &&
+    store !== undefined
+  );
+}
+
+/**
+ * Whether a page is open, one of the Pages panel's list: not a component or
+ * a pattern, and not a set's own screen, whose page is a placeholder.
+ */
+function editsAPage(
+  mount: Pick<EditorMount, "initialDocument">,
+  set: SetMode | undefined
+): boolean {
+  return mount.initialDocument.kind === "page" && set === undefined;
+}
+
+/** The left panels offered, by what is being edited. */
+function availablePanelsFor(
+  set: SetMode | undefined,
+  editingRegion: boolean
+): readonly (typeof AVAILABLE_PANELS)[number][] {
+  return set === undefined || editingRegion ? AVAILABLE_PANELS : SET_PANELS;
+}
 
 /**
  * The insert panel, with this site's saved patterns.
@@ -596,6 +646,8 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
     control: Control<TFieldValues>;
     canvasRoot: HTMLElement | null;
     siteTokens: SiteTokenSet | undefined;
+    /** The header & footer set whose own screen this is, if it is one. */
+    set?: SetMode | undefined;
   }
 ): EditorPanels {
   const { editor, clientConfig } = mount;
@@ -610,7 +662,8 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
     page.control,
     page.canvasRoot,
     { page: mount.page, active: editor },
-    useLookEditing(editor)
+    useLookEditing(editor),
+    page.set
   );
 
   /*
@@ -636,17 +689,17 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
     // Not until the author is known: their own dismissal is the one to read,
     // and a card drawn before it arrives would flash for an author who
     // dismissed it.
-    enabled: clientConfig?.checklist !== false && checklistStore !== undefined,
+    enabled: checklistOffered(page.set, clientConfig, checklistStore),
     ...(checklistStore === undefined ? {} : { store: checklistStore }),
   });
 
   const library = useOfferedLibrary(mount, layoutRegions.cards);
-  const requests = useEditorRequests(editor);
+  const requests = useEditorRequests(editor, page.set !== undefined);
   // Whether the editor's search is open: ⌘K opens it, and so does the top
   // bar's button, so the state sits above both.
   const [searchOpen, setSearchOpen] = useState(false);
   // The Pages panel, and the request its rows send to open Settings.
-  const pages = usePagesPanel(mount.initialDocument.kind === "page");
+  const pages = usePagesPanel(editsAPage(mount, page.set), page.set?.id);
   // Which look the inspector edits on its own: chosen in the Design panel,
   // left by selecting a block or a header or footer, by the bar's Back, or
   // by Esc. Choosing one leaves a selected header or footer.
@@ -662,9 +715,20 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
     designFolds,
     // Settings is a dialog, not a panel: the entry's fields are drawn in Page
     // settings' General and Fields tabs.
-    availablePanels: AVAILABLE_PANELS,
+    availablePanels: availablePanelsFor(
+      page.set,
+      mount.editing.target.kind === "region"
+    ),
     pageLayout,
     canvasRegions: layoutRegions.canvas,
+    // Where the site default shows no header or footer, the canvas's band
+    // saying so, with its ways to fill it.
+    emptyRegionBands: useEmptyRegionBands({
+      empty: layoutRegions.empty,
+      siteHeaderFooter: readSiteHeaderFooter(clientConfig),
+      followsDefault: layoutRegions.followsDefault,
+      reread: layoutRegions.reread,
+    }),
     siteTokens: page.siteTokens,
     layersRegions: layoutRegions.selectedRegion.layers,
     selectedRegion: layoutRegions.selectedRegion,
@@ -680,12 +744,14 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
  * opened by "/" and by the canvas's add controls, with its way on to Add.
  */
 function useEditorRequests(
-  editor: EditorMount["editor"]
+  editor: EditorMount["editor"],
+  /** Whether this is a set's own screen, whose empty page is a placeholder. */
+  pageless: boolean
 ): PanelRequests & Pick<EditorPanels, "insertPicker" | "browseAll"> {
   const requests = usePanelRequests(editor.selectedId);
   const picker = usePickerPanel(editor, requests.openInsertPanel);
   useAddOnEmptyOpen(
-    editor.document.nodes.length === 0,
+    !pageless && editor.document.nodes.length === 0,
     requests.openAddUnlessHidden
   );
   return { ...requests, ...picker };
@@ -831,6 +897,8 @@ export type EditorPanels = OfferedLibrary &
     pageLayout: ReactNode | null;
     /** The regions of the page's Layout, drawn locked around the page. */
     canvasRegions: readonly CanvasRegion[];
+    /** The bands where the site default shows no header or footer. */
+    emptyRegionBands: EmptyRegionBands;
     /** The site's variables as the panels offer them, once they are read. */
     siteTokens: SiteTokenSet | undefined;
     /** The same regions, as rows in Layers that select them. */
@@ -841,7 +909,7 @@ export type EditorPanels = OfferedLibrary &
     regionCards: readonly RegionCardFacts[];
     /** Read the regions again, after the header is published or saved. */
     rereadRegions: () => void;
-    availablePanels: typeof AVAILABLE_PANELS;
+    availablePanels: readonly (typeof AVAILABLE_PANELS)[number][];
     search: { open: boolean; setOpen: (open: boolean) => void };
     pages: PagesPanelMount;
     /** The look edited on its own from the Design panel, with no block. */
@@ -1136,6 +1204,14 @@ export function editorPanelRenderer({
                   {...(classes.library === undefined
                     ? {}
                     : { classes: classes.library })}
+                  // An import's text styles are stored by the class writer,
+                  // matched with the site's breakpoints once they are read.
+                  importing={{
+                    onEditClasses: classes.edit,
+                    ...(siteStylePending || siteStyleError !== null
+                      ? {}
+                      : { breakpoints: canvasRender.styleContext.breakpoints }),
+                  }}
                   // A shared style using a variable opens in its own tab; a
                   // block look, which that tab does not list, in the inspector.
                   opens={{
@@ -1173,7 +1249,10 @@ export function editorPanelRenderer({
                     siteStyleError
                   )}
                   absence={siteStyleError !== null ? "failed" : "pending"}
-                  onClose={close}
+                  onClose={() => close()}
+                  // A font's "Body font" or "Headings font": back to Type,
+                  // onto that role's picker.
+                  onOpenRole={role => close(`[data-font-role="${role}"]`)}
                   // A font variable is changed in the Type tab's variables:
                   // the screen closes onto it, its group opened and in view.
                   onOpenTokens={() => {

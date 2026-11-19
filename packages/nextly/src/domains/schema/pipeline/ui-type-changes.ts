@@ -18,9 +18,12 @@
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import {
   fieldsStoredOnRow,
-  getColumnDescriptor,
   type SupportedDialect,
 } from "../services/field-column-descriptor";
+import {
+  type ColumnAt,
+  columnDescriptorAt,
+} from "../value-conversion/type-change/field-type";
 import {
   entityLabel,
   type EntityTypeChangeInput,
@@ -105,6 +108,8 @@ function entityInput(
     translationsTable: `${entity.tableName}_locales`,
     ...perLanguageBefore(entity, entity.tableName, previous),
     builtBy: builtByFor(kind, entity.builderOwned),
+    // A field group keeps its fields on its component rows, where a many-to-many has a column.
+    ...(kind === "fieldGroup" ? { componentRow: true } : {}),
   };
 }
 
@@ -122,7 +127,7 @@ export async function refuseUiTypeChanges(
 ): Promise<void> {
   for (const saved of savedEntities(desired, "builder")) {
     const input = entityInput(saved);
-    const renamed = await landedRenames(saved, input.builtBy, db, dialect);
+    const renamed = await landedRenames(saved, input, db, dialect);
     await refuseFieldTypeChanges(db, dialect, {
       ...input,
       previous: saved.previous,
@@ -189,7 +194,8 @@ function keepsColumn(
  */
 async function landedRenames(
   saved: SavedEntity,
-  builtBy: EntityTypeChangeInput["builtBy"],
+  // Where the entity keeps its fields, which decides each one's column (`columnDescriptorAt`).
+  at: ColumnAt,
   db: unknown,
   dialect: SupportedDialect
 ): Promise<Map<string, string>> {
@@ -208,7 +214,7 @@ async function landedRenames(
   );
   const has = (field: FieldDefinition) =>
     columns.has(
-      getColumnDescriptor(field, dialect, builtBy)?.name.toLowerCase() ?? ""
+      columnDescriptorAt(field, dialect, at)?.name.toLowerCase() ?? ""
     );
   const gone = dropped.filter(f => !has(f));
   const landed = added.filter(has);
@@ -247,7 +253,7 @@ export async function refuseRenamedUiTypeChanges(
   for (const saved of savedEntities(desired, "builder")) {
     const input = entityInput(saved);
     const columnOf = (field: FieldDefinition) =>
-      getColumnDescriptor(field, dialect, input.builtBy)?.name.toLowerCase();
+      columnDescriptorAt(field, dialect, input)?.name.toLowerCase();
     // The entity's own table, or its companion for a translated field's rename.
     const tables = new Set(
       [saved.entity.tableName, `${saved.entity.tableName}_locales`].map(t =>

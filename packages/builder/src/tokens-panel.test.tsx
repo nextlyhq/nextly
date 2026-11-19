@@ -23,12 +23,13 @@ import {
 import * as React from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
+import { HOW_TEXT_WORKS_DOCS_HREF } from "./docs-links";
 import {
   TokensPanel,
   useVariablesHeader,
   type TokensPanelProps,
 } from "./tokens-panel";
-import type { VariableGroup } from "./tokens-studio";
+import { DESIGN_TAB_GROUPS, type VariableGroup } from "./tokens-studio";
 
 type HostedProps = Omit<TokensPanelProps, "currentTokens" | "onChange"> &
   Partial<Pick<TokensPanelProps, "currentTokens" | "onChange">>;
@@ -532,6 +533,25 @@ describe("the editor beside the panel", () => {
       expect(spellChecked(field)).toBe(false);
       expect(field.getAttribute("autocomplete")).toBe("off");
     }
+  });
+
+  it("holds a variable's size while it is typed, and writes it when the field is left", async () => {
+    // A variable changes every page that uses it, so its fields settle on
+    // leaving rather than writing each keystroke as a block's do.
+    const onChange = vi.fn();
+    render(<Hosted tokens={SITE} onChange={onChange} />);
+    const size = await openEditor(/^Space 4/);
+    const field = within(size).getByLabelText("Light") as HTMLInputElement;
+    act(() => field.focus());
+    fireEvent.change(field, { target: { value: "2" } });
+    fireEvent.change(field, { target: { value: "24" } });
+    expect(onChange).not.toHaveBeenCalled();
+    fireEvent.blur(field);
+    expect(onChange).toHaveBeenCalledTimes(1);
+    const written = onChange.mock.calls[0]?.[0] as SiteTokenSet;
+    expect(
+      written.tokens.filter(token => token.values.light === "24rem")
+    ).toHaveLength(1);
   });
 
   it("keeps Tab inside while it is open, both ways round", async () => {
@@ -1645,6 +1665,27 @@ describe("a Design tab's view of the variables", () => {
     render(<Folding groups={["colours"]} />);
     expect(regions()).toEqual(["Colours2"]);
     expect(screen.queryByRole("button", { name: /^Space 4/ })).toBeNull();
+  });
+
+  it("links How text works from the Type tab, opening the docs page in a new tab", () => {
+    render(<Folding groups={DESIGN_TAB_GROUPS.type} />);
+    const link = screen.getByRole("link", { name: "How text works" });
+    expect(link.getAttribute("href")).toBe(HOW_TEXT_WORKS_DOCS_HREF);
+    expect(link.getAttribute("target")).toBe("_blank");
+    expect(link.getAttribute("rel")).toBe("noreferrer");
+    // First in the tab's own part, before Site text.
+    const siteText = screen.getByRole("region", { name: "Site text" });
+    expect(
+      link.compareDocumentPosition(siteText) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+  });
+
+  it("links How text works from no other tab", () => {
+    for (const tab of ["colours", "spacing", "styles"] as const) {
+      const { unmount } = render(<Folding groups={DESIGN_TAB_GROUPS[tab]} />);
+      expect(screen.queryByRole("link", { name: "How text works" })).toBeNull();
+      unmount();
+    }
   });
 
   it("folds a group by its heading, which says how many it holds", () => {

@@ -1253,14 +1253,53 @@ export function junctionTableNameFor(
   ) => string = junctionTableNameBetween
 ): string {
   const options = junctionOptionsOf(field);
+  return junctionTableTo(
+    sourceTableName,
+    typeof options.target === "string" ? options.target : "",
+    field,
+    nameBetween
+  );
+}
+
+/**
+ * The junction table `sourceTable`'s many-to-many field keeps its links to
+ * `targetSlug` in: the author's own name when the field sets one, else the one
+ * derived from both tables. {@link junctionTableNameFor} with the target
+ * named by the caller, for a reader that resolves it from either spelling a
+ * field may carry.
+ */
+export function junctionTableTo(
+  sourceTable: string,
+  targetSlug: string,
+  field: JunctionField,
+  nameBetween: (
+    sourceTable: string,
+    targetTable: string,
+    fieldName: string
+  ) => string = junctionTableNameBetween
+): string {
+  const options = junctionOptionsOf(field);
   if (typeof options.junctionTable === "string" && options.junctionTable) {
     return options.junctionTable;
   }
-  return nameBetween(
-    sourceTableName,
-    `dc_${typeof options.target === "string" ? options.target : ""}`,
-    field.name ?? ""
-  );
+  return nameBetween(sourceTable, `dc_${targetSlug}`, field.name ?? "");
+}
+
+/**
+ * The two link columns of a junction from `sourceTable` to `targetSlug`: the
+ * source's table without its `dc_` prefix, and the target slug as written,
+ * each with `_id`. A Single's table (`single_<slug>`) carries no prefix, so its
+ * column is the whole table name. The junction's SQL is made with these
+ * columns and every read and write of its rows asks for them here.
+ */
+export function junctionLinkColumnsOf(
+  sourceTable: string,
+  targetSlug: string
+): { sourceColumn: string; targetColumn: string } {
+  return {
+    sourceColumn: `${sourceTable.replace("dc_", "")}_id`,
+    targetColumn: `${targetSlug}_id`,
+  };
 }
 
 /**

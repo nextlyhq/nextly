@@ -1,0 +1,830 @@
+/**
+ * A block inside a component that follows one of the component's own
+ * settings: `{ $bind: "<setting id>", source: "setting" }`. Composed, it
+ * shows what the placement gives the setting (its value, else its binding,
+ * else the setting's default, the value on the setting's own block); shown
+ * alone, the component shows the default; anywhere else it is unbound.
+ */
+import { describe, expect, it } from "vitest";
+
+import {
+  type Binding,
+  COMPONENT_INSTANCE_TYPE,
+  DOCUMENT_FORMAT_VERSION,
+  type BlockDocument,
+  type BlockNode,
+  type ComponentDocument,
+  type ExposedProperty,
+} from "./document";
+import { planDetach } from "./composition-planners";
+import { planRemoveExposure } from "./exposure-planners";
+import { withSettingDefaults } from "./setting-defaults";
+import { COLLECTION_LIST_TYPE, LIST_ENTRY_SLOT } from "./list-query";
+import { applyOps } from "./ops";
+import { bindDocument, createBindingRun } from "./resolve-bindings";
+import {
+  resolveComponentInstances,
+  type ResolvedBlockNode,
+} from "./resolve-instances";
+import { followerFills, settingBindingIssues } from "./setting-bindings";
+import { validateDocument } from "./validation";
+import { componentEnvelopeIssues } from "./validation-components";
+import { FIXTURE_BREAKPOINTS } from "./validation.fixtures";
+
+const heading = (
+  id: string,
+  text: string,
+  bindings?: Record<string, Binding>
+): BlockNode => ({
+  id,
+  type: "core/heading",
+  version: 1,
+  // The level carries the stored id, so a composed copy is found by it.
+  props: { text, level: id },
+  ...(bindings === undefined ? {} : { bindings }),
+});
+
+const follows = (id: string): Binding => ({ $bind: id, source: "setting" });
+
+const placement = (
+  id: string,
+  componentId: string,
+  props: Record<string, unknown> = {},
+  bindings?: Record<string, unknown>
+): BlockNode => ({
+  id,
+  type: COMPONENT_INSTANCE_TYPE,
+  version: 1,
+  props: { componentId, ...props },
+  ...(bindings === undefined
+    ? {}
+    : { bindings: bindings as Record<string, Binding> }),
+});
+
+const exposure = (
+  id: string,
+  nodeId: string,
+  propPath: string,
+  type: ExposedProperty["type"] = "text"
+): ExposedProperty => ({ id, label: id, nodeId, propPath, type });
+
+const component = (
+  nodes: BlockNode[],
+  exposed: ExposedProperty[]
+): ComponentDocument => ({
+  formatVersion: DOCUMENT_FORMAT_VERSION,
+  kind: "component",
+  nodes,
+  exposed,
+});
+
+const page = (nodes: BlockNode[]): BlockDocument => ({
+  formatVersion: DOCUMENT_FORMAT_VERSION,
+  kind: "page",
+  nodes,
+});
+
+function flatten(nodes: readonly ResolvedBlockNode[]): ResolvedBlockNode[] {
+  return nodes.flatMap(entry => [
+    entry,
+    ...Object.values(entry.slots ?? {}).flatMap(children => flatten(children)),
+  ]);
+}
+
+/** Every node of the composed page. */
+function composed(
+  document: BlockDocument,
+  definitions: ReadonlyMap<string, BlockDocument>
+): ResolvedBlockNode[] {
+  return flatten(
+    resolveComponentInstances(document, definitions).document
+      .nodes as ResolvedBlockNode[]
+  );
+}
+
+/** The composed copy of the component's block stored as `id`. */
+function copyOf(
+  nodes: readonly ResolvedBlockNode[],
+  id: string
+): ResolvedBlockNode | undefined {
+  return nodes.find(
+    entry => entry.instanceOf !== undefined && entry.props.level === id
+  );
+}
+
+// A card whose Title setting is on its heading, and whose image's alt text
+// follows that setting.
+const CARD = component(
+  [
+    heading("card-title", "Plain title"),
+    heading("card-echo", "Stored echo", { text: follows("title") }),
+  ],
+  [exposure("title", "card-title", "text")]
+);
+const DEFS = new Map<string, BlockDocument>([["card", CARD]]);
+
+describe("a block following its component's setting, composed", () => {
+  it("shows the placement's value for the setting", () => {
+    const nodes = composed(
+      page([placement("p", "card", { overrides: { title: "Typed" } })]),
+      DEFS
+    );
+    const echo = copyOf(nodes, "card-echo");
+    expect(echo?.props.text).toBe("Typed");
+    expect(echo?.bindings?.text).toBeUndefined();
+  });
+
+  it("shows the setting's default when the placement sets nothing", () => {
+    const echo = copyOf(
+      composed(page([placement("p", "card")]), DEFS),
+      "card-echo"
+    );
+    expect(echo?.props.text).toBe("Plain title");
+    expect(echo?.bindings).toBeUndefined();
+  });
+
+  it("reads the placement's binding of the setting, as the setting's block does", () => {
+    const byTitle = { $bind: "title", source: "item", list: "posts" };
+    const nodes = composed(
+      page([
+        {
+          id: "posts",
+          type: COLLECTION_LIST_TYPE,
+          version: 1,
+          props: { query: { collection: "posts" } },
+          slots: {
+            [LIST_ENTRY_SLOT]: [
+              placement("p", "card", {}, { "overrides.title": byTitle }),
+            ],
+          },
+        },
+      ]),
+      DEFS
+    );
+    expect(copyOf(nodes, "card-echo")?.bindings?.text).toEqual(byTitle);
+    expect(copyOf(nodes, "card-title")?.bindings?.text).toEqual(byTitle);
+  });
+
+  it("carries the setting's own block's binding when the placement sets nothing", () => {
+    const fromSite: Binding = { $bind: "name", source: "site" };
+    const defs = new Map<string, BlockDocument>([
+      [
+        "card",
+        component(
+          [
+            heading("card-title", "Plain title", { text: fromSite }),
+            heading("card-echo", "Stored echo", { text: follows("title") }),
+          ],
+          [exposure("title", "card-title", "text")]
+        ),
+      ],
+    ]);
+    const echo = copyOf(
+      composed(page([placement("p", "card")]), defs),
+      "card-echo"
+    );
+    expect(echo?.bindings?.text).toEqual(fromSite);
+  });
+
+  it("follows a setting whose id is not a field path", () => {
+    // Setting ids are minted from labels, hyphens and all.
+    const card = component(
+      [
+        heading("card-title", "Plain title"),
+        heading("card-echo", "Stored echo", { text: follows("hero-title") }),
+      ],
+      [exposure("hero-title", "card-title", "text")]
+    );
+    const echo = copyOf(
+      composed(
+        page([
+          placement("p", "card", { overrides: { "hero-title": "Typed" } }),
+        ]),
+        new Map<string, BlockDocument>([["card", card]])
+      ),
+      "card-echo"
+    );
+    expect(echo?.props.text).toBe("Typed");
+  });
+
+  it("follows the setting of the component it sits in, inside a component", () => {
+    // The badge's own Label setting is on its text; the card places the badge
+    // and feeds its Label from the card's Title.
+    const badge = component(
+      [
+        heading("badge-label", "Badge label"),
+        heading("badge-echo", "Badge echo", { text: follows("label") }),
+      ],
+      [exposure("label", "badge-label", "text")]
+    );
+    const card = component(
+      [
+        heading("card-title", "Plain title"),
+        placement(
+          "card-badge",
+          "badge",
+          {},
+          {
+            "overrides.label": follows("title"),
+          }
+        ),
+      ],
+      [exposure("title", "card-title", "text")]
+    );
+    const nodes = composed(
+      page([placement("p", "card", { overrides: { title: "Typed" } })]),
+      new Map<string, BlockDocument>([
+        ["card", card],
+        ["badge", badge],
+      ])
+    );
+    expect(copyOf(nodes, "badge-label")?.props.text).toBe("Typed");
+    expect(copyOf(nodes, "badge-echo")?.props.text).toBe("Typed");
+  });
+
+  it("keeps what it showed when the placement is detached", () => {
+    const host = page([
+      placement("p", "card", { overrides: { title: "Typed" } }),
+    ]);
+    const plan = planDetach(host, "p", DEFS, { parentsOf: () => undefined });
+    if (plan.pageOps === undefined) throw new Error(String(plan.problem));
+    const detached = flatten(
+      applyOps(host, plan.pageOps).document.nodes as ResolvedBlockNode[]
+    );
+    const echo = detached.find(entry => entry.props.level === "card-echo");
+    expect(echo?.props.text).toBe("Typed");
+    expect(echo?.bindings).toBeUndefined();
+  });
+});
+
+describe("a block following a setting, its edges", () => {
+  it("keeps the list of the setting's item binding when its follower sits in another list", () => {
+    // The Title setting's heading reads each post; its follower sits in a
+    // Comments list inside, and must still read the post, not the comment.
+    const list = (id: string, children: BlockNode[]): BlockNode => ({
+      id,
+      type: COLLECTION_LIST_TYPE,
+      version: 1,
+      props: { query: { collection: id } },
+      slots: { [LIST_ENTRY_SLOT]: children },
+    });
+    const card = component(
+      [
+        list("posts", [
+          heading("card-title", "Plain title", {
+            text: { $bind: "title", source: "item" },
+          }),
+          list("comments", [
+            heading("card-echo", "Stored echo", { text: follows("title") }),
+          ]),
+        ]),
+      ],
+      [exposure("title", "card-title", "text")]
+    );
+    const echo = copyOf(
+      composed(
+        page([placement("p", "card")]),
+        new Map<string, BlockDocument>([["card", card]])
+      ),
+      "card-echo"
+    );
+    // The composed copies of the two lists, found by the collection each
+    // reads, so the follower's list is judged against the ids they compose to.
+    const lists = composed(
+      page([placement("p", "card")]),
+      new Map<string, BlockDocument>([["card", card]])
+    ).filter(
+      entry =>
+        entry.type === COLLECTION_LIST_TYPE && entry.instanceOf !== undefined
+    );
+    const listReading = (collection: string): string | undefined =>
+      lists.find(
+        entry =>
+          (entry.props.query as { collection?: unknown } | undefined)
+            ?.collection === collection
+      )?.id;
+    const posts = listReading("posts");
+    const comments = listReading("comments");
+    expect(posts).toBeDefined();
+    expect(comments).toBeDefined();
+    expect(echo?.bindings?.text).toMatchObject({
+      $bind: "title",
+      source: "item",
+    });
+    // Named as the composed Posts list is: not the stored id, which names
+    // nothing once composed, and not the Comments list it sits in.
+    expect((echo?.bindings?.text as { list?: string } | undefined)?.list).toBe(
+      posts
+    );
+    expect(posts).not.toBe("posts");
+    expect(posts).not.toBe(comments);
+  });
+
+  it("shows the setting's default in a component placed inside the one shown alone", () => {
+    const badge = component(
+      [heading("badge-label", "Badge label")],
+      [exposure("label", "badge-label", "text")]
+    );
+    const card = component(
+      [
+        heading("card-title", "Plain title"),
+        placement(
+          "card-badge",
+          "badge",
+          {},
+          {
+            "overrides.label": follows("title"),
+          }
+        ),
+      ],
+      [exposure("title", "card-title", "text")]
+    );
+    const nodes = flatten(
+      resolveComponentInstances(card, new Map([["badge", badge]])).document
+        .nodes as ResolvedBlockNode[]
+    );
+    expect(copyOf(nodes, "badge-label")?.props.text).toBe("Plain title");
+  });
+
+  it("fills a placed component's setting whose id holds a dot, by its whole id", () => {
+    // The badge's Label is "hero.title": the card feeds it from its Title,
+    // and the value goes to the badge's `overrides["hero.title"]`, never to
+    // an `overrides.hero` record the badge doesn't read.
+    const badge = component(
+      [heading("badge-label", "Badge label")],
+      [exposure("hero.title", "badge-label", "text")]
+    );
+    const card = component(
+      [
+        heading("card-title", "Plain title"),
+        placement(
+          "card-badge",
+          "badge",
+          {},
+          { "overrides.hero.title": follows("title") }
+        ),
+      ],
+      [exposure("title", "card-title", "text")]
+    );
+    const definitions = new Map<string, BlockDocument>([
+      ["card", card],
+      ["badge", badge],
+    ]);
+    // Placed, with a value for Title.
+    const placed = composed(
+      page([placement("p", "card", { overrides: { title: "Typed" } })]),
+      definitions
+    );
+    expect(copyOf(placed, "badge-label")?.props.text).toBe("Typed");
+    // Shown alone, with Title's default.
+    const alone = withSettingDefaults(card).nodes[1];
+    expect(alone?.props.overrides).toEqual({ "hero.title": "Plain title" });
+    const drawn = flatten(
+      resolveComponentInstances(card, definitions).document
+        .nodes as ResolvedBlockNode[]
+    );
+    expect(copyOf(drawn, "badge-label")?.props.text).toBe("Plain title");
+  });
+
+  it("settles only the bindings following the setting taken away", () => {
+    const card = component(
+      [
+        heading("a", "Default title"),
+        {
+          ...heading("b", "Stored", {
+            text: follows("title"),
+            href: follows("link"),
+          }),
+        },
+      ],
+      [exposure("title", "a", "text"), exposure("link", "a", "level", "link")]
+    );
+    const settled = withSettingDefaults(card, "title");
+    expect(settled.nodes[1]?.props.text).toBe("Default title");
+    expect(settled.nodes[1]?.bindings).toEqual({ href: follows("link") });
+    const removed = planRemoveExposure(card, "title");
+    if ("problem" in removed) throw new Error(removed.problem);
+    expect(removed.document.nodes[1]?.bindings).toEqual({
+      href: follows("link"),
+    });
+  });
+
+  it("composes a component too deep to fill, rather than throwing", () => {
+    // A follower near the root, and a slot chain far past the node cap.
+    let chain: BlockNode = heading("deep-0", "x");
+    for (let i = 1; i < 20_000; i += 1) {
+      chain = {
+        id: `deep-${String(i)}`,
+        type: "core/box",
+        version: 1,
+        props: {},
+        slots: { children: [chain] },
+      };
+    }
+    const card = component(
+      [
+        heading("card-title", "Plain title"),
+        heading("card-echo", "Stored echo", { text: follows("title") }),
+        chain,
+      ],
+      [exposure("title", "card-title", "text")]
+    );
+    expect(() =>
+      resolveComponentInstances(card, new Map<string, BlockDocument>())
+    ).not.toThrow();
+    expect(() => withSettingDefaults(card)).not.toThrow();
+  });
+
+  it("charges entries that are no nodes against the node budget", () => {
+    // Three entries that are no nodes use a budget of three up, in both
+    // walks: the followers', and the index the setting's block is found in.
+    const stray = [null, null, null] as unknown as BlockNode[];
+    const tight = { maxDepth: 12, maxNodes: 3 };
+    const room = { maxDepth: 12, maxNodes: 4 };
+    // Past them, a follower of a setting the component lacks isn't read.
+    const lacking = component(
+      [...stray, heading("card-echo", "x", { text: follows("gone") })],
+      [exposure("title", "card-title", "text")]
+    );
+    expect(settingBindingIssues(lacking, tight)).toEqual([]);
+    expect(settingBindingIssues(lacking, room)).toHaveLength(1);
+    // A follower read first, and its setting's block past them, isn't found.
+    const late = component(
+      [
+        heading("card-echo", "x", { text: follows("title") }),
+        null as unknown as BlockNode,
+        null as unknown as BlockNode,
+        heading("card-title", "Plain title"),
+      ],
+      [exposure("title", "card-title", "text")]
+    );
+    expect(followerFills(late, () => ({}), tight)).toEqual([]);
+    expect(followerFills(late, () => ({}), room)).toHaveLength(1);
+  });
+
+  it("fills a follower past the default node budget when the limits allow it", () => {
+    const filler = Array.from({ length: 5001 }, (_, i) =>
+      heading(`f${String(i)}`, "x")
+    );
+    const card = component(
+      [
+        heading("card-title", "Plain title"),
+        ...filler,
+        heading("card-echo", "Stored echo", { text: follows("title") }),
+      ],
+      [exposure("title", "card-title", "text")]
+    );
+    const limits = { maxDepth: 12, maxNodes: 20_000, maxBytes: 50_000_000 };
+    const echo = flatten(
+      resolveComponentInstances(
+        page([placement("p", "card")]),
+        new Map<string, BlockDocument>([["card", card]]),
+        { limits }
+      ).document.nodes as ResolvedBlockNode[]
+    ).find(
+      entry =>
+        entry.instanceOf !== undefined && entry.props.level === "card-echo"
+    );
+    expect(echo?.props.text).toBe("Plain title");
+  });
+  it("reads the outer list's item for a setting's block in a nested list's empty state", () => {
+    // The Title setting's heading sits in a Comments list's empty state, which
+    // is drawn with no comment, so it reads each post; its follower beside the
+    // Comments list reads the post too, and is never pointed at a comment.
+    const card = component(
+      [
+        {
+          id: "posts",
+          type: COLLECTION_LIST_TYPE,
+          version: 1,
+          props: { query: { collection: "posts" } },
+          slots: {
+            [LIST_ENTRY_SLOT]: [
+              {
+                id: "comments",
+                type: COLLECTION_LIST_TYPE,
+                version: 1,
+                props: { query: { collection: "comments" } },
+                slots: {
+                  [LIST_ENTRY_SLOT]: [],
+                  empty: [
+                    heading("card-title", "Plain title", {
+                      text: { $bind: "title", source: "item" },
+                    }),
+                  ],
+                },
+              },
+              heading("card-echo", "Stored echo", { text: follows("title") }),
+            ],
+          },
+        },
+      ],
+      [exposure("title", "card-title", "text")]
+    );
+    const nodes = composed(
+      page([placement("p", "card")]),
+      new Map<string, BlockDocument>([["card", card]])
+    );
+    const posts = nodes.find(
+      entry =>
+        entry.type === COLLECTION_LIST_TYPE &&
+        (entry.props.query as { collection?: unknown } | undefined)
+          ?.collection === "posts"
+    )?.id;
+    expect(posts).toBeDefined();
+    const echo = copyOf(nodes, "card-echo");
+    expect(echo?.bindings?.text).toMatchObject({
+      $bind: "title",
+      source: "item",
+      list: posts,
+    });
+  });
+
+  it("clears a placed component's setting it feeds when the placement clears its own", () => {
+    // A cleared Title leaves the card's heading empty, and the badge it feeds
+    // empty too, rather than back on the badge's own default.
+    const badge = component(
+      [heading("badge-label", "Badge label")],
+      [exposure("label", "badge-label", "text")]
+    );
+    const card = component(
+      [
+        heading("card-title", "Plain title"),
+        placement(
+          "card-badge",
+          "badge",
+          {},
+          {
+            "overrides.label": follows("title"),
+          }
+        ),
+      ],
+      [exposure("title", "card-title", "text")]
+    );
+    const nodes = composed(
+      page([
+        placement("p", "card", { overrides: { title: { $unset: true } } }),
+      ]),
+      new Map<string, BlockDocument>([
+        ["card", card],
+        ["badge", badge],
+      ])
+    );
+    expect(copyOf(nodes, "card-title")?.props.text).toBeUndefined();
+    expect(copyOf(nodes, "badge-label")).toBeDefined();
+    expect(copyOf(nodes, "badge-label")?.props.text).toBeUndefined();
+  });
+
+  it("charges finding a setting's followers to the caller's work allowance", () => {
+    // Each node counts the reads of its id. With one unit of work left the
+    // placement is refused at once; preparing its followers must not first
+    // read the whole definition for free.
+    const reads = { count: 0 };
+    const counted = (node: BlockNode): BlockNode => {
+      const { id, ...rest } = node;
+      return Object.defineProperty({ ...rest }, "id", {
+        enumerable: true,
+        get: () => {
+          reads.count += 1;
+          return id;
+        },
+      }) as BlockNode;
+    };
+    const filler = Array.from({ length: 4000 }, (_, i) =>
+      counted(heading(`f${String(i)}`, "x"))
+    );
+    const readsFor = (exposed: ExposedProperty[]): number => {
+      reads.count = 0;
+      const card = component(
+        [counted(heading("card-title", "Plain title")), ...filler],
+        exposed
+      );
+      const result = resolveComponentInstances(
+        page([placement("p", "card")]),
+        new Map<string, BlockDocument>([["card", card]]),
+        { work: { left: 1 } }
+      );
+      expect(result.unresolved.some(entry => entry.reason === "budget")).toBe(
+        true
+      );
+      return reads.count;
+    };
+    const without = readsFor([]);
+    const withSetting = readsFor([exposure("title", "card-title", "text")]);
+    expect(withSetting).toBeLessThan(without + 20);
+  });
+});
+
+describe("a block following a setting, outside composition", () => {
+  const run = createBindingRun({
+    sources: { site: { name: "Acme" } },
+    props: {
+      get: type =>
+        type === "core/heading"
+          ? { props: { text: { type: "text" } } }
+          : undefined,
+    },
+  });
+  const textOf = (document: BlockDocument, id: string): unknown =>
+    flatten(
+      bindDocument(document, run).document.nodes as ResolvedBlockNode[]
+    ).find(entry => entry.id === id)?.props.text;
+
+  it("shows the setting's default in the component shown alone", () => {
+    expect(textOf(CARD, "card-echo")).toBe("Plain title");
+  });
+
+  it("shows the default's own binding in the component shown alone", () => {
+    const card = component(
+      [
+        heading("card-title", "Plain title", {
+          text: { $bind: "name", source: "site" },
+        }),
+        heading("card-echo", "Stored echo", { text: follows("title") }),
+      ],
+      [exposure("title", "card-title", "text")]
+    );
+    expect(textOf(card, "card-echo")).toBe("Acme");
+  });
+
+  it("is unbound on a page, showing the block's own value", () => {
+    const stray = page([heading("h", "Own text", { text: follows("title") })]);
+    const bound = bindDocument(stray, run);
+    expect(textOf(stray, "h")).toBe("Own text");
+    expect(bound.issues.map(issue => issue.code)).toEqual([
+      "binding-source-unavailable",
+    ]);
+  });
+});
+
+describe("where a setting binding may be saved", () => {
+  const codes = (doc: BlockDocument) =>
+    [...componentEnvelopeIssues(doc), ...settingBindingIssues(doc)].map(
+      issue => [issue.path, issue.code, issue.severity]
+    );
+
+  it("takes one following a setting of its own component", () => {
+    expect(codes(CARD)).toEqual([]);
+  });
+
+  it("refuses one following a setting the component doesn't have", () => {
+    const card = component(
+      [heading("a", "A"), heading("b", "B", { text: follows("gone") })],
+      [exposure("title", "a", "text")]
+    );
+    expect(codes(card)).toEqual([
+      ["/nodes/1/bindings/text", "invalid-binding", "error"],
+    ]);
+  });
+
+  it("refuses one following a visibility setting", () => {
+    const card = component(
+      [heading("a", "A"), heading("b", "B", { text: follows("shown") })],
+      [exposure("shown", "a", "text", "visibility")]
+    );
+    expect(codes(card)).toEqual([
+      ["/nodes/1/bindings/text", "invalid-binding", "error"],
+    ]);
+  });
+
+  it("refuses the setting's own block following it", () => {
+    const card = component(
+      [heading("a", "A", { text: follows("title") })],
+      [exposure("title", "a", "text")]
+    );
+    expect(codes(card)).toEqual([
+      ["/nodes/0/bindings/text", "invalid-binding", "error"],
+    ]);
+  });
+
+  it("is judged by the document's own validation", () => {
+    const judged = (doc: BlockDocument) =>
+      validateDocument(doc, {
+        breakpoints: FIXTURE_BREAKPOINTS,
+        mode: "strict",
+      })
+        .issues.filter(issue => issue.path.includes("/bindings"))
+        .map(issue => [issue.path, issue.code, issue.severity]);
+    const card = component(
+      [
+        heading("a", "A"),
+        heading("b", "B", { text: follows("hero-title") }),
+        heading("c", "C", { text: follows("gone") }),
+      ],
+      [exposure("hero-title", "a", "text")]
+    );
+    // A minted id is no field path, and is taken as one of the component's.
+    expect(judged(card)).toEqual([
+      ["/nodes/2/bindings/text", "invalid-binding", "error"],
+    ]);
+  });
+
+  it("takes a follower of a setting whose id holds a dot, as the component takes the id", () => {
+    // The id is matched whole, as the component's own check and the fill
+    // read it, never as a field path.
+    const card = component(
+      [heading("a", "A"), heading("b", "B", { text: follows("hero.title") })],
+      [exposure("hero.title", "a", "text")]
+    );
+    const issues = validateDocument(card, {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "strict",
+    }).issues.filter(issue => issue.severity === "error");
+    expect(issues).toEqual([]);
+    // Composed, the follower shows what the placement typed for it.
+    const echo = copyOf(
+      composed(
+        page([
+          placement("p", "card", { overrides: { "hero.title": "Typed" } }),
+        ]),
+        new Map<string, BlockDocument>([["card", card]])
+      ),
+      "b"
+    );
+    expect(echo?.props.text).toBe("Typed");
+  });
+
+  it("refuses a follower whose prop the setting's type doesn't fit", () => {
+    const judged = (doc: BlockDocument) =>
+      validateDocument(doc, {
+        breakpoints: FIXTURE_BREAKPOINTS,
+        mode: "strict",
+        definitions: {
+          get: type =>
+            type === "core/heading"
+              ? {
+                  version: 1,
+                  props: {
+                    text: { type: "text", role: "content" },
+                    level: { type: "text" },
+                  },
+                }
+              : undefined,
+        },
+      })
+        .issues.filter(issue => issue.path.includes("/bindings"))
+        .map(issue => [issue.path, issue.code, issue.severity]);
+    const card = component(
+      [
+        heading("a", "A"),
+        heading("b", "B", { text: follows("body") }),
+        heading("c", "C", { text: follows("title") }),
+      ],
+      [
+        exposure("body", "a", "level", "richText"),
+        exposure("title", "a", "text", "text"),
+      ]
+    );
+    expect(judged(card)).toEqual([
+      ["/nodes/1/bindings/text", "invalid-binding", "error"],
+    ]);
+  });
+
+  it("refuses a select follower whose prop lacks a choice the setting holds", () => {
+    const judged = (doc: BlockDocument) =>
+      validateDocument(doc, {
+        breakpoints: FIXTURE_BREAKPOINTS,
+        mode: "strict",
+        definitions: {
+          get: type =>
+            type === "core/heading"
+              ? {
+                  version: 1,
+                  props: {
+                    text: { type: "text", role: "content" },
+                    level: { type: "select", options: ["h1", "h2", "h3"] },
+                    target: { type: "select", options: ["_self", "_blank"] },
+                  },
+                }
+              : undefined,
+        },
+      })
+        .issues.filter(issue => issue.path.includes("/bindings"))
+        .map(issue => [issue.path, issue.code, issue.severity]);
+    const card = component(
+      [
+        heading("a", "A"),
+        // Both are selects, but `h1` is no target: following, the link would
+        // be given a value it can't render in place of `_blank`.
+        heading("b", "B", { target: follows("level") }),
+        heading("c", "C", { level: follows("level") }),
+      ],
+      [
+        {
+          ...exposure("level", "a", "level", "select"),
+          options: ["h1", "h2"].map(value => ({ value, label: value })),
+        },
+      ]
+    );
+    expect(judged(card)).toEqual([
+      ["/nodes/1/bindings/target", "invalid-binding", "error"],
+    ]);
+  });
+
+  it("only warns on a page, where it shows the block's own value", () => {
+    const stray = page([heading("h", "Own", { text: follows("title") })]);
+    expect(codes(stray)).toEqual([
+      ["/nodes/0/bindings/text", "invalid-binding", "warning"],
+    ]);
+  });
+});

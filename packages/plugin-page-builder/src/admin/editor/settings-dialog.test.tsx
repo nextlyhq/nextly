@@ -279,6 +279,7 @@ const PAGE_PLACE: SettingsPlace = {
   },
   flushHeld: () => null,
   pageCode: { value: undefined, set: () => true },
+  pageCss: { value: undefined, set: () => true },
 };
 
 /** A tab another plugin adds to the place. */
@@ -436,8 +437,9 @@ describe("Page settings", () => {
     show({ place });
     expect(tabNames()).toEqual(["General", "Fields", "Reviews", "Code"]);
     await userEvent.click(screen.getByRole("tab", { name: "Code" }));
+    // Found once it is drawn: the Code tab is fetched when first opened.
     expect(
-      screen.getByText(
+      await screen.findByText(
         "Code added to this page only. Site-wide code lives in Site settings."
       )
     ).toBeTruthy();
@@ -449,7 +451,7 @@ describe("Page settings", () => {
     expect(tabNames()).toEqual(["General", "Fields", "Reviews"]);
     expect(
       screen.getByText(
-        "This page adds its own code. Only people who can change site settings can see or edit it."
+        "This page adds its own code or CSS. Only people who can change site settings can see or edit it."
       )
     ).toBeTruthy();
     expect(screen.queryByText("<meta name=a content=b>")).toBeNull();
@@ -458,6 +460,39 @@ describe("Page settings", () => {
     // A page with no code of its own says nothing of it.
     show();
     expect(screen.queryByText(/This page adds its own code/)).toBeNull();
+  });
+
+  it("shows page CSS in the Code tab's CSS box to a role that may manage the site, and to an editor only General's line, never the CSS", async () => {
+    const CSS = "h1 { color: rebeccapurple; }";
+    const place = {
+      ...PAGE_PLACE,
+      pageCss: { value: CSS, set: () => true },
+    };
+    show({ place });
+    await userEvent.click(screen.getByRole("tab", { name: "Code" }));
+    expect(
+      (screen.getByRole("textbox", { name: "CSS" }) as HTMLTextAreaElement)
+        .value
+    ).toBe(CSS);
+    expect(
+      screen.getByText(
+        "CSS for this page only. Site-wide CSS lives in Site settings."
+      )
+    ).toBeTruthy();
+    cleanup();
+
+    // An editor: a page with CSS and no code is said to add its own, and
+    // the CSS is shown nowhere.
+    siteRead = { ...MANAGER, mayManageSite: false, layouts: [] };
+    show({ place });
+    expect(tabNames()).not.toContain("Code");
+    expect(
+      screen.getByText(
+        "This page adds its own code or CSS. Only people who can change site settings can see or edit it."
+      )
+    ).toBeTruthy();
+    expect(document.body.textContent).not.toContain("rebeccapurple");
+    expect(screen.queryByRole("textbox", { name: "CSS" })).toBeNull();
   });
 
   it("offers no Code tab where the builder's field isn't a page's own top-level field, which the server refuses code on", () => {

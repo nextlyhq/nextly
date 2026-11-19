@@ -84,6 +84,8 @@
     "migrate-ledger-unreadable",
     "migration-sql-uncheckable",
     "migration-tampered",
+    "migrations-writer-busy",
+    "migrations-writer-overtaken",
     "missing-migration",
     "missing-snapshot",
     "nextly-core-destructive-refused",

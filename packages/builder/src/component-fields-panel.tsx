@@ -93,6 +93,11 @@ export interface ComponentFieldsBinding {
   readonly requestRemoval: (removal: FieldRemoval) => void;
   /** The component's name, for the card heading its view; absent if unknown. */
   readonly name?: string | undefined;
+  /**
+   * How many pages use the component, as its view counts them, for the
+   * data picker's line over the component's settings; absent while uncounted.
+   */
+  readonly pages?: ComponentFieldsHost["pages"];
 }
 
 /**
@@ -176,6 +181,7 @@ function useComponentFields(
           },
           requestRemoval: setRemoval,
           name: host?.name,
+          pages: host?.pages,
         };
   const dialog =
     component === undefined || removal === null ? null : (

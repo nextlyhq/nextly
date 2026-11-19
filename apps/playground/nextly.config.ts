@@ -44,6 +44,7 @@ import { BuilderFirstPages } from "./src/collections/builder-first-pages";
 import { EntryArticles } from "./src/collections/entry-articles";
 import { ContributionStories } from "./src/collections/contribution-stories";
 import { ListStories } from "./src/collections/list-stories";
+import { e2eRateLimit } from "./src/e2e-rate-limit";
 import { E2E_NAMED_QUERIES } from "./src/named-queries";
 import { E2E_STARTER_PAGES } from "./src/starter-pages";
 import { Categories } from "./src/collections/categories";
@@ -183,6 +184,12 @@ const speedExtraCollections = Array.from(
  */
 export const pageBuilderPlugin = pageBuilder({
   siteStyle: SITE_STYLE_DEFAULTS,
+  // A site that draws its header and footer in code, for the browser tests
+  // of that mode alone (`NEXTLY_E2E_SITE_HEADER_FOOTER=code`); the Page
+  // Builder's own sets otherwise, as a default install has.
+  ...(process.env.NEXTLY_E2E_SITE_HEADER_FOOTER === "code"
+    ? { siteHeaderFooter: "code" as const }
+    : {}),
   // The browser tests' custom sources, registered by the same switch as
   // the collections and the Single they read.
   ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1"
@@ -476,6 +483,9 @@ export default defineConfig({
   typescript: {
     outputFile: "./src/types/nextly-types.ts",
   },
+  // The product's REST limits, unless the browser suite's server asks for
+  // its higher ones (`NEXTLY_E2E_RATE_LIMIT=1`; see `src/e2e-rate-limit.ts`).
+  ...e2eRateLimit(process.env.NEXTLY_E2E_RATE_LIMIT),
   db: {
     schemasDir: "./src/db/schemas/collections",
     migrationsDir: "./src/db/migrations",

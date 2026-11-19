@@ -99,6 +99,8 @@ export function editorTopBar(
     editor,
     inline,
   } = view;
+  if (view.set !== undefined)
+    return setTopBar(view, page.title, page.openAsForm);
   return {
     topBar: (
       <>
@@ -222,6 +224,66 @@ export function editorTopBar(
           form and the pin, which a page that opens here would otherwise
           leave out of reach. */}
         <EditorMoreMenu onOpenAsForm={page.openAsForm} />
+      </>
+    ),
+  };
+}
+
+/**
+ * The top bar on a header & footer set's own screen: the set's name and
+ * state with its history at the start, the devices in the centre, and Save
+ * and Publish at the end, which store the set (or, while its header or
+ * footer is edited in place, that). Nothing of a page's: no page switcher,
+ * checks, data meter or preview, since the set has no page of its own.
+ */
+function setTopBar(
+  view: EditorView,
+  title: string | undefined,
+  openAsForm: (() => void) | undefined
+): {
+  topBar: React.JSX.Element;
+  topBarCenter: React.JSX.Element;
+  topBarEnd: React.JSX.Element;
+} {
+  const shown = title === undefined || title === "" ? "Untitled set" : title;
+  return {
+    topBar: (
+      <>
+        <span
+          title={shown}
+          className="min-w-0 max-w-[20rem] shrink truncate text-sm font-medium"
+          data-testid="builder-set-title"
+        >
+          {shown}
+        </span>
+        <span className="shrink-0 text-xs text-muted-foreground">
+          Header & footer set
+        </span>
+        <DocumentStatusPill />
+        <HistoryButtons editor={view.editor} inline={view.inline} />
+      </>
+    ),
+    topBarCenter: (
+      <>
+        <BreakpointSwitcher
+          breakpoints={view.canvasRender.styleContext.breakpoints}
+          selected={view.editedBreakpoint}
+          onSelect={view.chooseDevice}
+          status={siteStyleStatus(view.siteStylePending, view.siteStyleError)}
+          previewWidth={view.previewWidth}
+          onPreviewWidth={view.setPreviewWidth}
+        />
+        <CanvasModeSwitch preview={view.previewMode} />
+      </>
+    ),
+    topBarEnd: (
+      <>
+        {view.regionEditing.topBar === undefined ? (
+          <DocumentSaveAndPublish />
+        ) : (
+          <RegionSaveAndPublish bar={view.regionEditing.topBar} />
+        )}
+        <EditorMoreMenu onOpenAsForm={openAsForm} />
       </>
     ),
   };

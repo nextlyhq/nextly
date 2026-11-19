@@ -66,6 +66,7 @@ export const emailDeliveriesSqlite = sqliteTable(
     templateDigest: text("template_digest"),
     failureKind: text("failure_kind"),
     failureStatus: integer("failure_status"),
+    providerOrigin: text("provider_origin"),
 
     /**
      * `timestamp_ms`, not `timestamp`.
@@ -96,6 +97,10 @@ export const emailDeliveriesSqlite = sqliteTable(
     // Erasure clears a send's key digest from all its records.
     index("email_deliveries_key_idx").on(t.keyDigest),
     index("email_deliveries_queued_idx").on(t.queuedId),
+    index("email_deliveries_provider_origin_idx").on(
+      t.providerOrigin,
+      t.createdAt
+    ),
     index("email_deliveries_template_idx").on(
       t.templateSlug,
       t.status,

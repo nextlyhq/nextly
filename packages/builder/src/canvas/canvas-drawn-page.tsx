@@ -29,6 +29,7 @@ import {
 import { withConditionHiddenBlock } from "../conditions/condition-hidden-block";
 
 import { useLayoutParts, type LayoutParts } from "./canvas-layout-parts";
+import { PagePlaceholder } from "./page-placeholder";
 import type { CanvasRegion } from "./canvas-regions";
 
 // Moved beside `revealedForCanvas`, so a reader with no React (the page
@@ -138,6 +139,7 @@ export function useDrawnPage({
   environment,
   applied,
   addressed,
+  placeholder,
 }: {
   regions: readonly CanvasRegion[] | undefined;
   rendered: Omit<PageRendererProps, "document" | "siteStyles"> | undefined;
@@ -152,6 +154,11 @@ export function useDrawnPage({
    * id.
    */
   addressed: boolean;
+  /**
+   * Words for a grey box drawn after the page, where any page goes, for a
+   * document view with no page of its own; absent, none is drawn.
+   */
+  placeholder?: string | undefined;
 }): { drawn: LayoutParts | undefined; page: React.JSX.Element } {
   const drawn = useLayoutParts(regions, rendered, sheet);
   // Every conditioned block drawn, whoever the page would show it to, so the
@@ -194,9 +201,12 @@ export function useDrawnPage({
           // otherwise run them again on every edit in the region.
           {...(addressed ? {} : { keepAsyncOutputs: true })}
         />
+        {placeholder === undefined ? null : (
+          <PagePlaceholder words={placeholder} />
+        )}
       </BlockEnvironmentProvider>
     ),
-    [drawnRender, drawable, sheet, environment, drawn, addressed]
+    [drawnRender, drawable, sheet, environment, drawn, addressed, placeholder]
   );
   return { drawn, page };
 }

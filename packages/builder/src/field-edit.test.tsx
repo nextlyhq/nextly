@@ -15,7 +15,13 @@ import {
 import * as React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { escapeFieldEdit } from "./field-edit";
+import {
+  escapeFieldEdit,
+  FieldsOfDocument,
+  finishFieldEdit,
+  useFieldDraftHeld,
+} from "./field-edit";
+import { useLiveDraft } from "./live-draft";
 import { useStoredDraft } from "./stored-draft";
 import { useDraft } from "./style-text-field";
 
@@ -155,5 +161,203 @@ describe("Escape in a Style field being edited", () => {
     });
     expect(outcome).toBe("put-back");
     expect(field.value).toBe("16px");
+  });
+});
+
+/**
+ * A field of the document, as the block settings panel draws its fields:
+ * its write moves the stored value, as an editor answering the write does.
+ */
+function DocumentField(props: {
+  readonly onCommit: (value: string) => void;
+}): React.JSX.Element {
+  const [stored, setStored] = React.useState("Before");
+  return (
+    <FieldsOfDocument.Provider value={true}>
+      <Field
+        label="Text"
+        stored={stored}
+        onCommit={value => {
+          props.onCommit(value);
+          setStored(value);
+        }}
+      />
+    </FieldsOfDocument.Provider>
+  );
+}
+
+/** Whether a field of the document holds a draft, as the editor reads it. */
+function Held(): React.JSX.Element {
+  return <output aria-label="Held">{String(useFieldDraftHeld())}</output>;
+}
+
+const held = (): string | null => screen.getByLabelText("Held").textContent;
+
+describe("a draft in a field of the document, before the page is stored", () => {
+  it("is written as leaving the field writes it, and the field keeps focus", () => {
+    const onCommit = vi.fn();
+    render(<DocumentField onCommit={onCommit} />);
+    const field = screen.getByLabelText<HTMLInputElement>("Text");
+    typeInto(field, "Typed");
+
+    act(() => finishFieldEdit());
+
+    expect(onCommit).toHaveBeenCalledTimes(1);
+    expect(onCommit).toHaveBeenCalledWith("Typed");
+    expect(document.activeElement).toBe(field);
+    expect(field.value).toBe("Typed");
+  });
+
+  it("is unsaved work from its first keystroke until it is written", () => {
+    render(
+      <>
+        <DocumentField onCommit={() => undefined} />
+        <Held />
+      </>
+    );
+    expect(held()).toBe("false");
+    const field = screen.getByLabelText<HTMLInputElement>("Text");
+    typeInto(field, "B");
+    expect(held()).toBe("true");
+
+    act(() => finishFieldEdit());
+    expect(held()).toBe("false");
+  });
+
+  it("is no unsaved work once Escape puts it back", () => {
+    render(
+      <>
+        <DocumentField onCommit={() => undefined} />
+        <Held />
+      </>
+    );
+    const field = screen.getByLabelText<HTMLInputElement>("Text");
+    typeInto(field, "Half typed");
+    act(() => {
+      escapeFieldEdit(field);
+    });
+    expect(held()).toBe("false");
+  });
+
+  it("is written once: a field already left has nothing more to write", () => {
+    const onCommit = vi.fn();
+    render(<DocumentField onCommit={onCommit} />);
+    const field = screen.getByLabelText<HTMLInputElement>("Text");
+    typeInto(field, "Typed");
+    act(() => field.blur());
+
+    act(() => finishFieldEdit());
+    expect(onCommit).toHaveBeenCalledTimes(1);
+  });
+
+  it("is neither written nor counted in a field outside the document's", () => {
+    // A site variable's field, say, which writes to the site when it is
+    // left: the page holds none of it.
+    const onCommit = vi.fn();
+    render(
+      <>
+        <Field label="Text" stored="Before" onCommit={onCommit} />
+        <Held />
+      </>
+    );
+    typeInto(screen.getByLabelText<HTMLInputElement>("Text"), "Typed");
+    expect(held()).toBe("false");
+
+    act(() => finishFieldEdit());
+    expect(onCommit).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * A field of the document whose commit trims what was typed, as a length's
+ * does: `2px ` is written as nothing, since `2px` is stored already.
+ */
+function TrimmingField(props: {
+  readonly onCommit: (value: string) => void;
+}): React.JSX.Element {
+  const stored = "2px";
+  const [draft, setDraft] = useStoredDraft(stored);
+  return (
+    <input
+      aria-label="Thickness"
+      value={draft}
+      onChange={event => setDraft(event.target.value)}
+      onBlur={() => {
+        const next = draft.trim();
+        if (next !== stored) props.onCommit(next);
+      }}
+    />
+  );
+}
+
+describe("a draft that settles to what is stored", () => {
+  it("is no unsaved work once a store has finished it, though nothing was written", () => {
+    const onCommit = vi.fn();
+    render(
+      <FieldsOfDocument.Provider value={true}>
+        <TrimmingField onCommit={onCommit} />
+        <Held />
+      </FieldsOfDocument.Provider>
+    );
+    typeInto(screen.getByLabelText<HTMLInputElement>("Thickness"), "2px ");
+    expect(held()).toBe("true");
+
+    act(() => finishFieldEdit());
+    expect(onCommit).not.toHaveBeenCalled();
+    expect(held()).toBe("false");
+  });
+
+  it("is no unsaved work once the field is left, though nothing was written", () => {
+    render(
+      <FieldsOfDocument.Provider value={true}>
+        <TrimmingField onCommit={() => undefined} />
+        <Held />
+      </FieldsOfDocument.Provider>
+    );
+    const field = screen.getByLabelText<HTMLInputElement>("Thickness");
+    typeInto(field, "2px ");
+    expect(held()).toBe("true");
+    act(() => field.blur());
+    expect(held()).toBe("false");
+  });
+});
+
+/** A field of the document that writes each keystroke as it goes in. */
+function LiveField(props: {
+  readonly onWrite: (value: string) => void;
+}): React.JSX.Element {
+  const [stored, setStored] = React.useState("Before");
+  const live = useLiveDraft(stored);
+  return (
+    <input
+      aria-label="Live"
+      value={live.draft}
+      onChange={event =>
+        live.type(event.target.value, text => {
+          props.onWrite(text);
+          setStored(text);
+          return true;
+        })
+      }
+      onBlur={() => live.end()}
+    />
+  );
+}
+
+describe("a field of the document that writes as it is typed", () => {
+  it("is no draft: its keystrokes are in the document already", () => {
+    const onWrite = vi.fn();
+    render(
+      <FieldsOfDocument.Provider value={true}>
+        <LiveField onWrite={onWrite} />
+        <Held />
+      </FieldsOfDocument.Provider>
+    );
+    typeInto(screen.getByLabelText<HTMLInputElement>("Live"), "Typed");
+    expect(onWrite).toHaveBeenCalledTimes(1);
+    expect(held()).toBe("false");
+
+    act(() => finishFieldEdit());
+    expect(onWrite).toHaveBeenCalledTimes(1);
   });
 });
