@@ -1183,6 +1183,79 @@ describe("the provisioning branch", () => {
     expect(account).toMatchObject({ id: result.userId });
     expect(await rolesOf(String(result.userId))).toEqual([editor]);
   });
+
+  it("resolves the loser of two racing first sign-ins to the winner's account, keeping one account and one identity", async () => {
+    await plantUser("first"); // the install is not empty
+    const editor = await plantRole("editor");
+
+    // Both writers are held at the creation primitive's door until both
+    // have arrived, which is after both passed the identity lookup that
+    // precedes it: the read-then-write window two first sign-ins for one
+    // identity actually race in, made deterministic rather than left to
+    // timing. They assert DIFFERENT addresses, so the race is decided by
+    // the identity's uniqueness — the backstop R-22's concurrency test
+    // names — and not by the address's.
+    const adapter = countedAdapter();
+    const primitive = new UserMutationService(adapter, testLogger);
+    let arrived = 0;
+    let open!: () => void;
+    const gate = new Promise<void>(resolve => (open = resolve));
+    const service = new IdentityService(adapter, testLogger, {
+      linkingPolicy: policyProvisioning({
+        mayProvision: true,
+        roles: ["editor"],
+      }),
+      roles: new RoleQueryService(adapter, testLogger),
+      users: {
+        createExternalUser: async input => {
+          arrived += 1;
+          if (arrived === 2) open();
+          await gate;
+          return primitive.createExternalUser(input);
+        },
+      },
+      sessionOf: sessionReading(null),
+    });
+
+    const [one, two] = await Promise.all([
+      service.resolveSignInIdentity(
+        pluginIdentityBinding(ACME),
+        handOff({
+          issuer: undefined,
+          subject: "raced",
+          address: "racer-one@example.com",
+        })
+      ),
+      service.resolveSignInIdentity(
+        pluginIdentityBinding(ACME),
+        handOff({
+          issuer: undefined,
+          subject: "raced",
+          address: "racer-two@example.com",
+        })
+      ),
+    ]);
+
+    // One account won; the loser resolved to it rather than seeing the
+    // unique index's refusal as an error. Neither promise rejected, so no
+    // database violation surfaced as a crash.
+    expect(one.userId).toBeTypeOf("string");
+    expect(two.userId).toBe(one.userId);
+    // Exactly the rows one sign-in writes: no second account, no orphaned
+    // account the identity will never resolve to, no dangling role grant.
+    expect(await usersCount()).toBe(2);
+    expect(await identitiesOf(String(one.userId))).toBe(1);
+    expect(await rolesOf(String(one.userId))).toEqual([editor]);
+    const stored = await identityRowOf("acme-auth:google", "raced");
+    expect(stored).toMatchObject({
+      userId: one.userId,
+      issuer: "",
+      subject: "raced",
+    });
+    expect(["racer-one@example.com", "racer-two@example.com"]).toContain(
+      (stored as { address?: unknown } | undefined)?.address
+    );
+  });
 });
 
 describe("the explicit link operation", () => {

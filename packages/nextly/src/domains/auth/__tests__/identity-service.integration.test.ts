@@ -8,6 +8,13 @@
  * a real account through the real creation primitive with exactly the
  * configured roles — its refusals leaving every table untouched.
  *
+ * The provisioning races: two first sign-ins for one issuerless identity
+ * held at the creation primitive's door until both have passed the read
+ * that precedes it, then released together — the read-then-write window the
+ * unique index exists to decide — and, on the dialects with a second
+ * connection to hold one on, a sign-in colliding with an attach still
+ * uncommitted.
+ *
  * The linking policy is the port, answered here by fakes that enable every
  * key: the policy's own matrix is another change's, and what these legs
  * prove is the service's behaviour on each database. Everything else is
@@ -48,6 +55,7 @@ import {
   IdentityService,
   pluginIdentityBinding,
   type ExternalIdentityHandOff,
+  type ExternalUserCreator,
   type LinkingPolicyPort,
 } from "../services/identity-service";
 
@@ -346,6 +354,84 @@ async function signedInAs(
     headers: { cookie: `${COOKIE_NAMES.accessToken}=${token}` },
   });
   return { request, sessionJti: verified.payload.jti };
+}
+
+/**
+ * A gate both racing sign-ins pass through at the creation primitive's
+ * door: each arrival waits, and the second opens the way for both. Every
+ * writer held there has already passed the identity lookup that precedes
+ * the primitive, so opening the gate releases two writers that both read
+ * "no such identity" and are both about to write — the read-then-write
+ * window two first sign-ins race in, deterministic rather than left to
+ * timing, with the write phase itself exactly what production runs.
+ */
+function startSignInGate(): { enter: () => Promise<void> } {
+  let arrived = 0;
+  let open!: () => void;
+  const gate = new Promise<void>(resolve => (open = resolve));
+  return {
+    async enter(): Promise<void> {
+      arrived += 1;
+      if (arrived === 2) open();
+      await gate;
+    },
+  };
+}
+
+/** The service on the booted instance, its creation primitive held at the gate. */
+function racingServiceOn(
+  handle: TestNextly,
+  linkingPolicy: LinkingPolicyPort,
+  gate: { enter: () => Promise<void> }
+): IdentityService {
+  const services = new ServiceContainer(handle.adapter);
+  const real = services.users;
+  const users: ExternalUserCreator = {
+    createExternalUser: async input => {
+      await gate.enter();
+      return real.createExternalUser(input);
+    },
+  };
+  return new IdentityService(handle.adapter, handle.getService("logger"), {
+    linkingPolicy,
+    roles: services.roles,
+    users,
+  });
+}
+
+/**
+ * Resolves once another statement on this test's database waits for a lock,
+ * or after `timeoutMs` when none does — the same probe the super-admin
+ * grant suite uses, copied for the same purpose: to show the two writers of
+ * a race genuinely met in the database rather than one after the other.
+ * SQLite serializes write transactions on the one shared connection, so
+ * there a writer queues rather than waits, and the probe is never asked.
+ */
+async function untilAnotherWaitsOnALock(
+  handle: TestNextly,
+  dialect: TestDialect,
+  timeoutMs = 5000
+): Promise<boolean> {
+  if (dialect === "sqlite") {
+    await new Promise(resolve => setTimeout(resolve, 100));
+    return false;
+  }
+  const probe =
+    dialect === "postgresql"
+      ? `SELECT count(*)::int AS n FROM pg_stat_activity
+         WHERE datname = current_database() AND wait_event_type = 'Lock'`
+      : `SELECT COUNT(*) AS n FROM information_schema.PROCESSLIST
+         WHERE DB = DATABASE() AND ID <> CONNECTION_ID()
+           AND COMMAND = 'Query' AND TIME >= 1`;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const rows = await handle.adapter.executeQuery<{ n: number | string }>(
+      probe
+    );
+    if (Number(rows[0]?.n ?? 0) > 0) return true;
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+  return false;
 }
 
 describe.each(getConfiguredTestDialects())(
@@ -881,5 +967,220 @@ describe.each(getConfiguredTestDialects())(
       expect(refused?.reason).toMatchObject({ code: "CONFLICT" });
       expect(await identityRows(handle)).toHaveLength(1);
     });
+
+    it("two first sign-ins race for one issuerless identity: one identity, one account, the loser resolves to the winner's", async () => {
+      const handle = await boot(dialect);
+      await handle.adapter.insert("users", {
+        id: "founder",
+        email: "founder@example.com",
+        isActive: true,
+      });
+      await seedRole(handle, "editor");
+      const before = await provisioningFootprint(handle);
+
+      const service = racingServiceOn(
+        handle,
+        provisioningPolicy(["editor"]),
+        startSignInGate()
+      );
+      const binding = pluginIdentityBinding(ACME);
+      // Issuerless — R-22's own case — and asserting different addresses, so
+      // the race is decided by the identity's uniqueness and not the
+      // address's: exactly the backstop the key digest's unique index exists
+      // to be.
+      const [one, two] = await Promise.all([
+        service.resolveSignInIdentity(
+          binding,
+          handOff({
+            issuer: undefined,
+            subject: "raced",
+            address: "racer-one@example.com",
+          })
+        ),
+        service.resolveSignInIdentity(
+          binding,
+          handOff({
+            issuer: undefined,
+            subject: "raced",
+            address: "racer-two@example.com",
+          })
+        ),
+      ]);
+
+      // The loser resolved to the winner's account; neither promise
+      // rejected, so no constraint violation surfaced as a crash.
+      expect(one.userId).toBeTypeOf("string");
+      expect(two.userId).toBe(one.userId);
+      // Exactly the rows one sign-in writes: one account more, one identity,
+      // one role grant — the loser's account and grant rolled back with its
+      // refused identity insert, leaving no account the identity will never
+      // resolve to.
+      const after = await provisioningFootprint(handle);
+      expect(after.users).toBe(before.users + 1);
+      expect(after.identities).toBe(before.identities + 1);
+      expect(after.userRoles).toBe(before.userRoles + 1);
+      const rows = (await identityRows(handle)) as Array<
+        Record<string, unknown>
+      >;
+      expect(rows).toHaveLength(before.identities + 1);
+      expect(rows[0]).toMatchObject({
+        providerKey: "acme-auth:google",
+        issuer: "",
+        subject: "raced",
+        userId: one.userId,
+      });
+      expect(["racer-one@example.com", "racer-two@example.com"]).toContain(
+        rows[0]?.address
+      );
+    });
+
+    it("two first sign-ins racing under one address resolve to one account — the address's uniqueness refusing the second", async () => {
+      const handle = await boot(dialect);
+      await handle.adapter.insert("users", {
+        id: "founder",
+        email: "founder@example.com",
+        isActive: true,
+      });
+      await seedRole(handle, "editor");
+      const before = await provisioningFootprint(handle);
+
+      const service = racingServiceOn(
+        handle,
+        provisioningPolicy(["editor"]),
+        startSignInGate()
+      );
+      const binding = pluginIdentityBinding(ACME);
+      // The same address from both hands: whichever backstop refuses the
+      // loser — the creation's duplicate-address check, the users email
+      // index inside the transaction, or the identity's own index — the
+      // outcome is one account, and the loser resolves to it.
+      const [one, two] = await Promise.all([
+        service.resolveSignInIdentity(
+          binding,
+          handOff({
+            issuer: undefined,
+            subject: "one-mailbox",
+            address: "one-mailbox@example.com",
+          })
+        ),
+        service.resolveSignInIdentity(
+          binding,
+          handOff({
+            issuer: undefined,
+            subject: "one-mailbox",
+            address: "one-mailbox@example.com",
+          })
+        ),
+      ]);
+
+      expect(one.userId).toBeTypeOf("string");
+      expect(two.userId).toBe(one.userId);
+      const after = await provisioningFootprint(handle);
+      expect(after.users).toBe(before.users + 1);
+      expect(after.identities).toBe(before.identities + 1);
+      expect(after.userRoles).toBe(before.userRoles + 1);
+    });
+
+    // The held-attach race needs a second database connection to hold the
+    // winner's row uncommitted while the sign-in runs, and SQLite runs
+    // everything on the one shared connection: there the gate test above is
+    // the dialect's own form of the race (writers queue behind the open
+    // transaction rather than waiting on a lock).
+    it.skipIf(dialect === "sqlite")(
+      "a first sign-in whose identity loses to an attach still uncommitted resolves to the winner, its own account rolled back",
+      async () => {
+        const handle = await boot(dialect);
+        await handle.adapter.insert("users", {
+          id: "founder",
+          email: "founder@example.com",
+          isActive: true,
+        });
+        await seedRole(handle, "editor");
+        // The winner's account, committed; only its identity row is held.
+        await handle.adapter.insert("users", {
+          id: "winner",
+          email: "winner@example.com",
+          isActive: true,
+        });
+        const before = await provisioningFootprint(handle);
+
+        // The winner's attach, written and held UNCOMMITTED on a connection
+        // of its own — exactly where a racing first sign-in stands between
+        // its own identity insert and its commit. The sign-in under test
+        // must BLOCK on the held row's uniqueness entry, which is the proof
+        // its identity insert runs inside its own transaction; once the
+        // hold commits, the whole sign-in creation refuses, rolls back, and
+        // resolves to the winner.
+        const { nextlyExternalIdentities } = getDialectTables();
+        const db = handle.adapter.getDrizzle() as {
+          transaction: (
+            fn: (tx: {
+              insert: (table: unknown) => {
+                values: (v: unknown) => Promise<unknown>;
+              };
+            }) => Promise<void>
+          ) => Promise<void>;
+        };
+        let release!: () => void;
+        const released = new Promise<void>(resolve => (release = resolve));
+        let held!: () => void;
+        const isHeld = new Promise<void>(resolve => (held = resolve));
+        const holding = db.transaction(async tx => {
+          await tx.insert(nextlyExternalIdentities).values({
+            id: randomUUID(),
+            providerKey: "acme-auth:google",
+            issuer: "",
+            subject: "contested",
+            // The same digest the sign-in below derives from the same
+            // facts, so the two rows collide on the index that holds it.
+            keyDigest: externalIdentityKeyDigest(
+              "acme-auth:google",
+              "",
+              "contested"
+            ),
+            address: "winner@example.com",
+            userId: "winner",
+            createdAt: new Date(),
+          });
+          held();
+          await released;
+        });
+        await isHeld;
+
+        const signingIn = serviceOn(
+          handle,
+          provisioningPolicy(["editor"])
+        ).resolveSignInIdentity(
+          pluginIdentityBinding(ACME),
+          handOff({
+            issuer: undefined,
+            subject: "contested",
+            address: "fresh@example.com",
+          })
+        );
+        const waited = await untilAnotherWaitsOnALock(handle, dialect);
+        release();
+        const resolved = await signingIn;
+        await holding;
+
+        // The two writers genuinely met: the sign-in's insert waited on the
+        // held row's lock.
+        expect(waited).toBe(true);
+        // The loser resolved to the winner's account.
+        expect(resolved.userId).toBe("winner");
+        // And wrote nothing of its own: the fresh address has no account,
+        // and the footprint grew by the winner's identity row alone.
+        const after = await provisioningFootprint(handle);
+        expect(after.users).toBe(before.users);
+        expect(after.identities).toBe(before.identities + 1);
+        expect(after.userRoles).toBe(before.userRoles);
+        const users = (await handle.adapter.select("users")) as Array<
+          Record<string, unknown>
+        >;
+        expect(users.find(row => row.email === "fresh@example.com")).toBe(
+          undefined
+        );
+      }
+    );
   }
 );
