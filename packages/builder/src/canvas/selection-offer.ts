@@ -29,7 +29,7 @@ import type {
 import * as React from "react";
 
 import type { EditorState } from "../editor-state";
-import type { SharedStyleOffer } from "../shared-style-target";
+import type { SharedStyleOffer } from "../styles/shared-style-target";
 
 import {
   depthMoveActions,

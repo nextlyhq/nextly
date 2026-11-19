@@ -64,7 +64,7 @@ export type { OpenPreferenceStore } from "./shell-state";
  * and no React.
  */
 export { lockViewOf, selectionIsInspectable } from "./inspector/inspector";
-export { pageStyleTrace } from "./style-trace";
+export { pageStyleTrace } from "./styles/style-trace";
 
 /**
  * Whether the surrounding shell is interactive.
@@ -365,7 +365,7 @@ export {
   authoredBreakpoints,
   BASE_DEVICE_LABEL,
   sameBreakpoints,
-} from "./breakpoints";
+} from "./styles/breakpoints";
 export { BreakpointManager } from "./shell/breakpoint-manager";
 export type { BreakpointManagerProps } from "./shell/breakpoint-manager";
 
@@ -906,8 +906,8 @@ export type { EditorWord } from "./editor-words";
  * document and decides when an edit is persisted; these export the surfaces,
  * not the save.
  */
-export { ClassSelector } from "./class-selector";
-export type { ClassSelectorProps } from "./class-selector";
+export { ClassSelector } from "./styles/class-selector";
+export type { ClassSelectorProps } from "./styles/class-selector";
 /*
  * Saving a block's look as a shared style: the dialog the host raises from
  * the block verb, and what the Style tab borrows from the host to edit a
@@ -919,8 +919,8 @@ export type { SharedStylesHost } from "./inspector/style-inspector/style-target"
 export type {
   SharedStyleChange,
   SharedStyleOffer,
-} from "./shared-style-target";
-export { sharedStyleNameTaken } from "./shared-style-target";
+} from "./styles/shared-style-target";
+export { sharedStyleNameTaken } from "./styles/shared-style-target";
 /*
  * The notice QUEUE is published; the region is not.
  *
@@ -944,7 +944,7 @@ export { TextStylesSection } from "./panels/design/text-styles-section";
 export type { TextStylesSectionProps } from "./panels/design/text-styles-section";
 // The whole-list class write the Styles tab's Block styles make, copy,
 // rename and hide block styles and move ★ through.
-export type { ClassListEdit, EditClasses } from "./block-style-actions";
+export type { ClassListEdit, EditClasses } from "./styles/block-style-actions";
 export type {
   ClassRenameOutcome,
   PageClassBlocks,
@@ -960,7 +960,7 @@ export type {
   SharedStylesUsage,
   SharedStyleUse,
   SharedStyleUsesPage,
-} from "./shared-style-library";
+} from "./styles/shared-style-library";
 export {
   classRows,
   filterClassRows,
@@ -972,7 +972,7 @@ export {
   usageSummary,
   withClassApplied,
   withClassRemoved,
-} from "./class-library";
+} from "./styles/class-library";
 export type {
   ApplyRefusal,
   ClassApplyOutcome,
@@ -983,7 +983,7 @@ export type {
   ClassUsageCounts,
   DeletionWarning,
   NameRefusal,
-} from "./class-library";
+} from "./styles/class-library";
 
 /**
  * The Design panel's Fonts tab, and the rules it draws from.

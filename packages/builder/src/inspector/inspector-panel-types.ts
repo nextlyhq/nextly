@@ -23,7 +23,7 @@ import type { EditorState } from "../editor-state";
 import type { SavedComponent } from "../panels/add/inserter";
 import type { ComponentFieldsHost } from "../panels/components/component-fields";
 import type { ComponentVariantsHost } from "../panels/components/component-variants";
-import type { StylePolicy } from "../style-values";
+import type { StylePolicy } from "../styles/style-values";
 
 import type { CardVerbs } from "./block-card";
 import type { ContentServices } from "./content/content-controls";

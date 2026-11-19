@@ -17,7 +17,7 @@ import {
 import * as React from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { fluidValue } from "../../fluid-size";
+import { fluidValue } from "../../styles/fluid-size";
 import { TokensPanel, type TokensPanelProps } from "./tokens-panel";
 
 type HostedProps = Omit<TokensPanelProps, "currentTokens" | "onChange"> &

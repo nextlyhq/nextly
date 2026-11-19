@@ -80,6 +80,7 @@
   "MIGRATION_CHECKSUM_MISMATCH": "A plugin's migration changed after it was generated or after it was applied.",
   "MIGRATION_CREATE_CANCELLED": "A prompt of `nextly migrate:create` was cancelled, so it wrote no migration.",
   "MIGRATION_DRIFT": "The database matches neither the state a migration starts from nor the state it produces.",
+  "MIGRATION_HISTORY_FORKED": "Migrations were written without each other, and no migration yet records them together, so the command applied none of them that was not applied already.",
   "MIGRATION_IRREVERSIBLE": "A migration to roll back has no `-- DOWN` section.",
   "MIGRATION_MISSING": "A migration recorded as applied has no file in the migrations folder.",
   "MIGRATION_NAME_REQUIRED": "`nextly migrate:create` was given no name for a migration that is not blank.",

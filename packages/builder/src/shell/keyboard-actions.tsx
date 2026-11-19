@@ -81,7 +81,7 @@ import {
   unmovedAnnouncement,
 } from "../move-refusal";
 import { pathTo } from "../panels/layers/layers";
-import { useStyleClipboardVerbs } from "../style-clipboard-verbs";
+import { useStyleClipboardVerbs } from "../styles/style-clipboard-verbs";
 
 import {
   type BlockActions,

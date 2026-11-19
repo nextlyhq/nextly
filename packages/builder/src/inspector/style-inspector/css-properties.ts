@@ -20,7 +20,7 @@
  *
  * @module css-properties
  */
-import { SECTION_BLOCK } from "../../block-shortcuts";
+import { SECTION_BLOCK } from "../../styles/block-shortcuts";
 import {
   OWN_ROW_FIELDS,
   type InspectorSectionKey,

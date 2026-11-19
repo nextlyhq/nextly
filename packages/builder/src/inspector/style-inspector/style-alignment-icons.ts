@@ -26,8 +26,8 @@ import {
   type StyleState,
 } from "@nextlyhq/blocks-engine";
 
-import type { SideOrientation } from "../../side-orientation";
-import { readStyleValue } from "../../style-values";
+import type { SideOrientation } from "../../styles/side-orientation";
+import { readStyleValue } from "../../styles/style-values";
 
 import { keywordLabel } from "./style-keyword-labels";
 

@@ -12,7 +12,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import * as React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { styleControlsFor } from "../../style-controls";
+import { styleControlsFor } from "../../styles/style-controls";
 import {
   BLOCK_TARGET,
   StyleTargetContext,

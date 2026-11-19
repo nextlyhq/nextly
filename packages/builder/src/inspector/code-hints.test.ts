@@ -8,7 +8,7 @@ import {
   planHeight,
   FULL_SCREEN,
   SIZES,
-} from "../block-shortcuts";
+} from "../styles/block-shortcuts";
 import {
   BUILT_IN_WRITES,
   declarationsText,

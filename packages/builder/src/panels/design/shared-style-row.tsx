@@ -27,8 +27,8 @@ import {
   type SharedStyleReach,
   type SharedStyleRow,
   type SharedStyleTile,
-} from "../../shared-style-library";
-import { activeTokenMode } from "../../style-colour";
+} from "../../styles/shared-style-library";
+import { activeTokenMode } from "../../styles/style-colour";
 
 import type { TokenMode } from "./font-library";
 import { SharedStyleDetails } from "./shared-style-details";
