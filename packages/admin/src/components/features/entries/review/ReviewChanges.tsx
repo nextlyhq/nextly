@@ -34,7 +34,7 @@ export interface ReviewChangesProps {
 }
 
 /** Whether the part waits for this person to judge it. */
-export function waitsForReviewBy(part: PartReview | undefined): boolean {
+function waitsForReviewBy(part: PartReview | undefined): boolean {
   return (
     part !== undefined &&
     part.steps.some(
