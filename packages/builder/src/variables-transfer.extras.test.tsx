@@ -30,7 +30,10 @@ import type { EditClasses } from "./block-style-actions";
 import type { CatalogueFamilyView, FontCatalogue } from "./font-catalogue-view";
 import { FontChoicesContext } from "./font-family-field";
 import { exportDtcgWithTheme } from "./tokens-transfer";
-import { useVariablesTransfer } from "./variables-transfer";
+import {
+  useVariablesTransfer,
+  type VariablesStored,
+} from "./variables-transfer";
 
 const MORE = "More design actions";
 
@@ -92,8 +95,8 @@ function Host({
   onChange?: (tokens: SiteTokenSet) => void;
   onEditClasses?: EditClasses;
   catalogue?: FontCatalogue;
-  /** The host's write at once, answering whether it was stored. */
-  storeNow?: (tokens: SiteTokenSet) => Promise<boolean>;
+  /** The host's write at once, answering what of it was stored. */
+  storeNow?: (tokens: SiteTokenSet) => Promise<boolean | VariablesStored>;
   /** The variables as an edit made meanwhile leaves them, read as current. */
   meanwhile?: (tokens: SiteTokenSet) => SiteTokenSet;
 }): React.JSX.Element {
@@ -419,6 +422,42 @@ describe("importing a file with text styles and the site's design data", () => {
         "The variables weren't saved, so nothing was imported."
       )
     ).toBeDefined();
+    expect(onEditClasses).not.toHaveBeenCalled();
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("says the variables were saved in part, and why, when the host stored only some", async () => {
+    const onEditClasses = vi.fn<EditClasses>(async () => undefined);
+    const onChange = vi.fn();
+    render(
+      <WithFonts
+        tokens={{ tokens: [] }}
+        onChange={onChange}
+        onEditClasses={onEditClasses}
+        storeNow={async () => ({
+          stored: "part",
+          why: "Card shadow: the value isn't a shadow.",
+        })}
+      />
+    );
+    await chooseFile("variables.tokens.json", exported());
+    const preview = await screen.findByRole("dialog", {
+      name: "Import variables",
+    });
+    fireEvent.click(within(preview).getByRole("button", { name: "Import" }));
+    expect(
+      await screen.findByText(
+        "Only some of the variables were saved, so the text styles and Site text weren't imported."
+      )
+    ).toBeDefined();
+    expect(
+      screen.getByText("Card shadow: the value isn't a shadow.")
+    ).toBeDefined();
+    // Neither "nothing was imported" nor a count of every variable: some
+    // were stored, and not all.
+    expect(screen.queryByText(/nothing was imported/)).toBeNull();
+    expect(screen.queryByText(/^Imported /)).toBeNull();
+    // The text styles name variables the site may not hold, so they wait.
     expect(onEditClasses).not.toHaveBeenCalled();
     expect(onChange).not.toHaveBeenCalled();
   });

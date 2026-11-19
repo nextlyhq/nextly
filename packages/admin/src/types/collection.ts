@@ -266,6 +266,11 @@ export interface Collection extends RemovedFromCodeMark {
    */
   draftsEnabled?: boolean;
   /**
+   * The workflow that holds the collection's publishing, from the schema read;
+   * `null` (or absent) where none is attached. Read-only.
+   */
+  workflow?: { slug: string; label: string } | null;
+  /**
    * Why drafts are off, when the configuration asked for them. With
    * `localized-component`, a draft saved before the rule may still be held,
    * and the editor reads it (`readsHeldDraft`).
