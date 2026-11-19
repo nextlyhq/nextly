@@ -310,22 +310,36 @@ function failStatement(
   t: TestNextly,
   pattern: RegExp,
   /** Which matching statement to fail: the first by default, or a later one. */
-  nth = 1
+  nth = 1,
+  /**
+   * Commit what the connection holds before failing, as MySQL does before it runs any schema
+   * statement, so row changes before a failing one stay.
+   */
+  commitFirst = false
 ): () => number {
   let failed = 0;
   let met = 0;
-  const refuse = (statement: string) => {
-    if (failed > 0 || !pattern.test(statement)) return;
+  /** Whether `statement` is the one to fail, counting it as failed. */
+  const failsHere = (statement: string): boolean => {
+    if (failed > 0 || !pattern.test(statement)) return false;
     met += 1;
-    if (met < nth) return;
+    if (met < nth) return false;
     failed += 1;
+    return true;
+  };
+  const refuse = async (
+    statement: string,
+    run: (sql: string) => Promise<unknown>
+  ): Promise<void> => {
+    if (!failsHere(statement)) return;
+    if (commitFirst) await run("COMMIT");
     throw new Error(`injected failure: ${statement}`);
   };
   const adapter = t.adapter;
   const executeQuery = adapter.executeQuery.bind(adapter);
   vi.spyOn(adapter, "executeQuery").mockImplementation(
     async (statement, params) => {
-      refuse(statement);
+      await refuse(statement, sql => executeQuery(sql));
       return executeQuery(statement, params);
     }
   );
@@ -341,7 +355,7 @@ function failStatement(
                   statement: string,
                   params?: Parameters<TransactionContext["execute"]>[1]
                 ) => {
-                  refuse(statement);
+                  await refuse(statement, sql => target.execute(sql));
                   return target.execute(statement, params);
                 };
               }
@@ -365,7 +379,7 @@ function failStatement(
     statements: string[]
   ) {
     for (const statement of statements) {
-      refuse(statement);
+      await refuse(statement, sql => run.call(this, tx, [sql]));
       await run.call(this, tx, [statement]);
     }
   });
@@ -917,11 +931,9 @@ describe.each(getConfiguredTestDialects())(
         await path.store?.(t, { heading: "Hello" });
         const folderBefore = filesBelow(history());
         vi.mocked(judgeStoppedSave).mockClear();
-        // The statement making `note` required, which runs after its fill.
-        const failed = failStatement(
-          t,
-          new RegExp(`${path.table}.*note.*NOT NULL`, "s")
-        );
+        // The statement making `note` required, which runs after its fill: MySQL commits the
+        // fill before it runs any schema statement, and the statement then fails.
+        const failed = failStatement(t, /EXECUTE nextly_ddl/, 1, true);
 
         const outcome = await outcomeOf(
           dispatchCollections(
