@@ -27,6 +27,7 @@ import {
   configuredBesideRows,
   configuredTable,
 } from "../../shared/address-rule";
+import { isFieldGroupFieldType } from "../field-groups/storage/field-group-field-type";
 
 import { siblingNameClash, type SiblingClashKind } from "./field-rules";
 import {
@@ -50,10 +51,13 @@ export interface SiblingClash {
   kind: SiblingClashKind;
   /**
    * The stored value both fields read and write, where they share one: at the
-   * top level the column both become (both must have a column), inside a group
-   * or a repeater the key of its value, which only one exact name shares.
+   * top level the column both become (both must have a column), or, for two
+   * field-group references, the instance rows both are stored as, which are
+   * keyed by the field's name (`_parent_field`, compared without regard to
+   * case as MySQL compares it); inside a group or a repeater the key of its
+   * value, which only one exact name shares.
    */
-  shared: { column: string } | { key: string } | null;
+  shared: { column: string } | { key: string } | { parentField: string } | null;
 }
 
 /** The entity kinds whose fields the rule judges. */
@@ -116,10 +120,20 @@ function sharedValue(
 ): SiblingClash["shared"] {
   if (!topLevel) return a.name === b.name ? { key: a.name } : null;
   const column = toSnakeCase(a.name);
-  return column === toSnakeCase(b.name) &&
+  if (
+    column === toSnakeCase(b.name) &&
     fieldProducesColumn(a) &&
     fieldProducesColumn(b)
-    ? { column }
+  ) {
+    return { column };
+  }
+  // Two field-group references store their instances in one table, each row keyed by the field's
+  // name, which MySQL compares without regard to case: two names equal ignoring case share rows.
+  const parentField = a.name.toLowerCase();
+  return isFieldGroupFieldType(a.type) &&
+    isFieldGroupFieldType(b.type) &&
+    parentField === b.name.toLowerCase()
+    ? { parentField }
     : null;
 }
 
@@ -344,11 +358,19 @@ const REFUSAL_REASONS: Record<
     `would both become the column '${toSnakeCase(clash.first)}'`,
 };
 
-/** The stored value a pair shares, as a sentence names it. */
-function sharedPhrase(shared: NonNullable<SiblingClash["shared"]>): string {
-  return "column" in shared
-    ? `the column '${shared.column}'`
-    : `the key '${shared.key}'`;
+/** The stored value a pair shares, as a sentence names it, and what each field needs its own of. */
+function sharedPhrase(shared: NonNullable<SiblingClash["shared"]>): {
+  value: string;
+  own: string;
+} {
+  if ("column" in shared) {
+    return { value: `the column '${shared.column}'`, own: "column" };
+  }
+  if ("key" in shared) return { value: `the key '${shared.key}'`, own: "key" };
+  return {
+    value: `the field group rows stored under '${shared.parentField}'`,
+    own: "field group rows",
+  };
 }
 
 /**
@@ -360,7 +382,8 @@ export function siblingClashMessage(
   clash: SiblingClash
 ): string {
   if (clash.shared !== null) {
-    return `${pairPhrase(entity, clash)} share ${sharedPhrase(clash.shared)}. Rename one of them so each has its own ${"column" in clash.shared ? "column" : "key"}.`;
+    const { value, own } = sharedPhrase(clash.shared);
+    return `${pairPhrase(entity, clash)} share ${value}. Rename one of them so each has its own ${own}.`;
   }
   return `${pairPhrase(entity, clash)} ${REFUSAL_REASONS[clash.kind](clash)}. Rename one of them.`;
 }
@@ -568,6 +591,6 @@ export function siblingClashHeldMessage(
   clash: SiblingClash
 ): string {
   const shared =
-    clash.shared === null ? "" : ` share ${sharedPhrase(clash.shared)}`;
+    clash.shared === null ? "" : ` share ${sharedPhrase(clash.shared).value}`;
   return `${pairPhrase(entity, clash)}${shared}. Rename one field in the Builder (or your configuration) and save; until then no save of its definition is accepted.`;
 }

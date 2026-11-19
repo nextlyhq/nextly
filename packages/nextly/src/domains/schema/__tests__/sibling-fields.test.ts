@@ -257,16 +257,45 @@ describe("judgeSiblingFields", () => {
     list.map(c => `${c.container}: ${c.first}/${c.second}`);
 
   it("keeps a held pair sharing no stored value only as often as it was held", () => {
-    // A column-less pair at the top level shares no stored value.
-    const judged = judgeSiblingFields(
-      [component("seo"), component("seo"), component("seo")],
-      [component("seo"), component("seo")]
-    );
-    expect(names(judged.existing)).toEqual(["the top level: seo/seo"]);
+    // Two virtual fields at the top level store nothing, so they share no stored value.
+    const note = { name: "note", type: "text", virtual: true };
+    const judged = judgeSiblingFields([note, note, note], [note, note]);
+    expect(names(judged.existing)).toEqual(["the top level: note/note"]);
     expect(names(judged.refused)).toEqual([
-      "the top level: seo/seo",
-      "the top level: seo/seo",
+      "the top level: note/note",
+      "the top level: note/note",
     ]);
+  });
+
+  // Two field-group references keep their instances in one table, each row keyed by the field's
+  // name, compared without regard to case: two of one name share those rows.
+  it("refuses two field-group references of one name, held or not, as sharing their rows", () => {
+    for (const held of [
+      [component("seo"), component("seo")],
+      [component("Seo"), component("seo")],
+    ]) {
+      const [clash] = siblingClashes(held);
+      expect(clash.shared).toEqual({ parentField: "seo" });
+      expect(judgeSiblingFields(held, held)).toMatchObject({
+        refused: siblingClashes(held),
+        heldSharing: siblingClashes(held),
+      });
+    }
+    expect(
+      siblingClashesError(
+        { kind: "collection", slug: "posts" },
+        siblingClashes([component("seo"), component("seo")])
+      ).publicData
+    ).toEqual({
+      errors: [
+        {
+          path: "fields",
+          code: "FIELD_NAME_DUPLICATE",
+          message:
+            "Collection 'posts': fields 'seo' and 'seo' at the top level share the field group rows stored under 'seo'. Rename one of them so each has its own field group rows.",
+        },
+      ],
+    });
   });
 
   it("refuses every held pair sharing a stored value, at every level", () => {
@@ -648,7 +677,13 @@ describe("refusal and warning", () => {
         { kind: "single", slug: "home" },
         siblingClashes(fields)
       ).publicData;
-    expect(messages([component("a"), component("a")])).toEqual({
+    const stored = { type: "text", virtual: true };
+    expect(
+      messages([
+        { name: "a", ...stored },
+        { name: "a", ...stored },
+      ])
+    ).toEqual({
       errors: [
         {
           path: "fields",
