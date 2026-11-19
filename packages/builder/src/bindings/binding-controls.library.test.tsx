@@ -18,10 +18,10 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { BindingFieldSource } from "./binding-services";
-import type { EditorState } from "./editor-state";
-import { inspectSelection, propLabel } from "./inspector";
-import { InspectorPanel } from "./inspector-panel";
-import { propGroupsOf } from "./prop-groups";
+import type { EditorState } from "../editor-state";
+import { inspectSelection, propLabel } from "../inspector";
+import { InspectorPanel } from "../inspector-panel";
+import { propGroupsOf } from "../prop-groups";
 
 beforeAll(() => {
   // What Radix asks of an element, which jsdom does not draw.

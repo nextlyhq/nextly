@@ -36,7 +36,7 @@ import {
 import { Button, Checkbox, Label, Textarea } from "@nextlyhq/ui";
 import * as React from "react";
 
-import { useBoundFieldOf } from "./binding-controls";
+import { useBoundFieldOf } from "./bindings/binding-controls";
 import {
   contentControlFor,
   MediaField,

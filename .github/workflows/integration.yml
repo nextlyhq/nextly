@@ -647,6 +647,20 @@ jobs:
       # Every package of the lane takes the same shard, so each one splits its
       # own files between the jobs; a package with fewer files than shards
       # passes the shards that get none (merge-queue-workflows.test.mjs).
+      # `nextly upgrade` moves a project's packages with the project's own
+      # package manager, and its integration tests install real projects with
+      # each of npm, pnpm, Yarn and bun (upgrade-packages.integration.test.ts).
+      # npm and pnpm are here already. Corepack provides the Yarn release a
+      # test project pins, and bun is installed at one exact version. The
+      # tests fail, rather than skip, where a manager is missing, so a leg
+      # without this step is a red one. On this leg only: the tests name no
+      # dialect, so the database legs skip them.
+      - name: Package managers the upgrade tests install with
+        run: |
+          corepack enable yarn
+          npm install --global bun@1.2.21
+          bun --version
+
       - name: Run integration tests (sqlite)
         run: |
           pnpm turbo build --filter=nextly --filter=@nextlyhq/adapter-postgres --filter=@nextlyhq/adapter-mysql --filter=@nextlyhq/adapter-sqlite --filter=@nextlyhq/plugin-page-builder --filter=@nextlyhq/plugin-commerce --filter=@nextlyhq/plugin-accounts --filter=@nextlyhq/plugin-seo --filter=@nextlyhq/plugin-form-builder

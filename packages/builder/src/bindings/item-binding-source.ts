@@ -23,15 +23,16 @@ import {
   type BlockNode,
 } from "@nextlyhq/blocks-engine";
 
+import { useLoopCollections } from "../collection-loop-controls";
+import type { ContentServices, LoopCollection } from "../content-controls";
+import { useCustomSources } from "../list-query-controls";
+import { customSourceLookup, type CustomSource } from "../named-query-model";
+
 import type {
   BindingFieldChoice,
   ListSample,
   ListSampleValue,
 } from "./binding-services";
-import { useLoopCollections } from "./collection-loop-controls";
-import type { ContentServices, LoopCollection } from "./content-controls";
-import { useCustomSources } from "./list-query-controls";
-import { customSourceLookup, type CustomSource } from "./named-query-model";
 
 /** One field an item binding can read, with what the admin calls it. */
 export type ItemField = BindingFieldShape & { readonly label?: string };
