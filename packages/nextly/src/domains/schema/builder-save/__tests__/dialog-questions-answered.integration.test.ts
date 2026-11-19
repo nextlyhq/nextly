@@ -604,19 +604,17 @@ for (const dialect of getConfiguredTestDialects()) {
       await save(fields, { resolutions: { pick: { action: "confirm_drop" } } });
     }, 60_000);
 
-    // The admin's road: Allow multiple turned off makes the many-to-many a single link. The
-    // dialog's preview classes the change destructive and warns of the links it drops; the
-    // dialog confirms by name each change it classed destructive, and the save goes through,
-    // dropping the links as the preview said.
-    it("saves Allow multiple turned off once the dialog confirms what its preview warned of", async () => {
+    // The admin's road: the relationship's collection picker points the many-to-many at another
+    // collection (`relationshipOptionsToSave` writes the picked one as its target). The dialog's
+    // preview classes the change destructive and warns of the links it drops; the dialog confirms
+    // by name each change it classed destructive, and the save goes through, dropping the links as
+    // the preview said.
+    it("saves a many-to-many pointed at another collection once the dialog confirms what its preview warned of", async () => {
       const fields = [
         text("heading"),
-        // As the admin saves it (`relationshipOptionsToSave`): one entry, kept in its column.
         {
-          name: "related",
-          type: "relationship",
-          hasMany: false,
-          options: { target: "tags", relationType: "manyToOne" },
+          ...related,
+          options: { relationType: "manyToMany", target: "categories" },
         },
         pick,
       ];
