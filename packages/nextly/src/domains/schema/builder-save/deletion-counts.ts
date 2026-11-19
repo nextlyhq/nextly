@@ -150,6 +150,15 @@ export interface DeletionHold {
    * write between the two is not held off.
    */
   readonly compare: (db: unknown) => Promise<void>;
+  /**
+   * `check` for the removed fields whose values are stored in `changed`, the tables one migration
+   * file's statements change, holding those tables alone: undefined where none of them holds a
+   * removed field's values. Each file that deletes values counts them in its own transaction, so
+   * a file that runs before it, and commits, takes no part of the count.
+   */
+  readonly checkIn: (
+    changed: readonly string[]
+  ) => ((db: unknown) => Promise<void>) | undefined;
 }
 
 /** The handle a statement is run through, as Drizzle gives it on PostgreSQL. */
@@ -192,12 +201,30 @@ export function deletionHoldOf(args: {
   // Kept: a column the save leaves, which a field after it still stores in. A field that keeps its
   // name but no longer has a column (a relationship made many-to-many, a field made virtual) keeps
   // nothing: its column goes.
-  const kept = new Set([
-    ...fieldsStoredOnRow(args.next)
+  const before = new Set(
+    fieldsStoredOnRow(args.previous)
       .filter(inAColumn)
-      .map(field => columnOf(field.name)),
-    ...(args.renamed ?? []).map(rename => columnOf(rename.from)),
-  ]);
+      .map(field => columnOf(field.name))
+  );
+  const after = new Set(
+    fieldsStoredOnRow(args.next)
+      .filter(inAColumn)
+      .map(field => columnOf(field.name))
+  );
+  // A rename keeps its column's values only where the save makes it one: a column that goes, and a
+  // column that comes in its place, as the pipeline pairs a drop with an add. Any other rename
+  // answer renames nothing, and its column, if it goes, is compared like any other.
+  const renamedAway = (args.renamed ?? [])
+    .map(rename => ({ from: columnOf(rename.from), to: columnOf(rename.to) }))
+    .filter(
+      rename =>
+        before.has(rename.from) &&
+        !after.has(rename.from) &&
+        after.has(rename.to) &&
+        !before.has(rename.to)
+    )
+    .map(rename => rename.from);
+  const kept = new Set([...after, ...renamedAway]);
   const removed = fieldsStoredOnRow(args.previous).filter(
     field => inAColumn(field) && !kept.has(columnOf(field.name))
   );
@@ -210,15 +237,16 @@ export function deletionHoldOf(args: {
   const confirmedOf = new Map(
     confirmed.map(entry => [entry.field, entry.count])
   );
-  const compare = async (db: unknown): Promise<void> => {
+  // The removed fields among `fields`, counted and compared.
+  const compareOf = (fields: FieldDefinition[]) => async (db: unknown) => {
     const counts = await computeNonNullCounts(
       db,
       dialect,
       tableName,
       localized,
-      removed
+      fields
     );
-    const changed = removed.flatMap(field => {
+    const changed = fields.flatMap(field => {
       const counted = counts[field.name] ?? UNCOUNTED;
       const confirmedCount = confirmedOf.get(field.name) ?? 0;
       return counted.unknown || counted.rowCount !== confirmedCount
@@ -245,14 +273,14 @@ export function deletionHoldOf(args: {
       },
     });
   };
-  return {
-    tables,
-    compare,
-    async check(db) {
+  // `fields` counted and compared with `held` held first, where the database can.
+  const checkOf =
+    (fields: FieldDefinition[], held: readonly string[]) =>
+    async (db: unknown): Promise<void> => {
       if (dialect === "postgresql") {
         // Other sessions' writes to the tables wait from here until the save's transaction ends;
         // their reads go on. A held table ends the try under the try's own lock timeout.
-        for (const table of tables) {
+        for (const table of held) {
           await (db as Executes).execute(
             sql.raw(
               `LOCK TABLE ${quoteIdent(table, dialect)} IN SHARE ROW EXCLUSIVE MODE`
@@ -260,7 +288,22 @@ export function deletionHoldOf(args: {
           );
         }
       }
-      await compare(db);
+      await compareOf(fields)(db);
+    };
+  return {
+    tables,
+    compare: compareOf(removed),
+    check: checkOf(removed, tables),
+    checkIn(changed) {
+      const inThem = new Set(changed.map(table => table.toLowerCase()));
+      const fields = removed.filter(field =>
+        inThem.has(valuesTableOf(tableName, localized, field).toLowerCase())
+      );
+      if (fields.length === 0) return undefined;
+      return checkOf(
+        fields,
+        tables.filter(table => inThem.has(table.toLowerCase()))
+      );
     },
   };
 }

@@ -84,6 +84,8 @@ export function saveOfSchemaChange(args: {
   row: {
     labels?: { singular: string; plural: string };
     fields?: FieldDefinition[];
+    /** Whether the registry stores the collection as translated. */
+    localized?: boolean;
   };
   fields: readonly FieldDefinition[];
   localized: boolean;
@@ -106,6 +108,9 @@ export function saveOfSchemaChange(args: {
       slug: args.slug,
       labels: args.row.labels ?? { singular: args.slug, plural: args.slug },
       fields: args.row.fields ?? [],
+      // Translated as the registry stores it, which decides where the entity's values are before
+      // the save (`deletionHoldOf` counts them there).
+      ...(args.row.localized === true ? { localized: true } : {}),
     } satisfies UiSchemaEntity);
   // Answers name columns of the row, a field inside a group with no name included: it is a
   // column there (`fieldsStoredOnRow`), and its change is asked about like one beside the group.

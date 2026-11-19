@@ -39,6 +39,7 @@ const fileStart = vi.hoisted(() => ({
   armed: false,
   paused: undefined as undefined | (() => void),
   release: undefined as undefined | Promise<void>,
+  letGo: undefined as undefined | (() => void),
 }));
 vi.mock("../migrate/required-column-guard", async importOriginal => {
   const real =
@@ -62,6 +63,7 @@ const afterCount = vi.hoisted(() => ({
   armed: false,
   paused: undefined as undefined | (() => void),
   release: undefined as undefined | Promise<void>,
+  letGo: undefined as undefined | (() => void),
 }));
 vi.mock("../builder-save/deletion-counts", async importOriginal => {
   const real =
@@ -71,14 +73,21 @@ vi.mock("../builder-save/deletion-counts", async importOriginal => {
     deletionHoldOf: (...args: Parameters<typeof real.deletionHoldOf>) => {
       const hold = real.deletionHoldOf(...args);
       if (hold === undefined) return hold;
-      return {
-        ...hold,
-        async check(db: unknown) {
-          await hold.check(db);
+      // Each count the save takes, whole or for one file's tables, pauses at the gate after it.
+      const gatedAfter =
+        (check: (db: unknown) => Promise<void>) => async (db: unknown) => {
+          await check(db);
           if (afterCount.armed) {
             afterCount.paused?.();
             await afterCount.release;
           }
+        };
+      return {
+        ...hold,
+        check: gatedAfter(hold.check),
+        checkIn(changed: readonly string[]) {
+          const check = hold.checkIn(changed);
+          return check === undefined ? undefined : gatedAfter(check);
         },
       };
     },
@@ -89,6 +98,9 @@ let instance: TestNextly | undefined;
 afterEach(async () => {
   fileStart.armed = false;
   afterCount.armed = false;
+  // A save a failed case left at a gate goes on, so its transaction ends before the app does.
+  fileStart.letGo?.();
+  afterCount.letGo?.();
   vi.unstubAllEnvs();
   await instance?.destroy();
   instance = undefined;
@@ -123,6 +135,7 @@ function gated(gate: typeof fileStart) {
     gate.paused = resolve;
   });
   gate.armed = true;
+  gate.letGo = release;
   return { paused, release };
 }
 

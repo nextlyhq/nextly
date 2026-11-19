@@ -438,6 +438,11 @@ export async function writeCollectionSave(
           deletionHoldOfSave(deps, save, written.table)
         );
       } else if (options.appliedAfter !== undefined) {
+        // The counts the person confirmed, compared just before the change is made here, as before
+        // a push: nothing holds the table between the count and the change's own statements.
+        await deletionHoldOfSave(deps, save, written.table)?.compare(
+          deps.adapter.getDrizzle()
+        );
         const applied = await options.appliedAfter();
         pushed = true;
         if (applied === "partly-applied") written.started.left();
@@ -2201,9 +2206,9 @@ async function runWritten(
         bounds,
         notify: line => deps.logger.warn(line),
         appliedBefore: () => [...applied],
-        // In the file that deletes the removed fields' values, before its first statement and
-        // inside its transaction, on every try.
-        ...beforeOf(unit.source === holdFile ? hold : undefined),
+        // In each file that deletes removed fields' values, for the values in the tables it is
+        // the last to change: before its first statement and inside its transaction, on every try.
+        ...beforeOf(holdIn.get(unit.source)),
       }
     );
   const ordered =
@@ -2214,11 +2219,13 @@ async function runWritten(
     files.change.length === 0 || files.adopt === undefined
       ? undefined
       : await unitOf(deps, files.adopt);
-  // The first file whose statements change a table the removed values are stored in, or whose
-  // tables cannot be named, which then may: the count is taken there, so that file's transaction
-  // holds it until the values are gone.
-  const holdFile =
-    hold === undefined ? undefined : await deletingFileOf(deps, ordered, hold);
+  // Each held table's count, in the last file that changes the table: the one whose statements
+  // delete its values, after any file that converts it. That file's transaction holds the count
+  // until the values are gone.
+  const holdIn =
+    hold === undefined
+      ? new Map<string, (db: unknown) => Promise<void>>()
+      : await deletingFilesOf(deps, ordered, hold);
   let before = await scopedSnapshotBefore(deps, ordered[0], table);
   if (await ranAsOneUnit()) return;
   for (const filename of ordered) {
@@ -2319,7 +2326,7 @@ async function runWritten(
           notify: line => deps.logger.warn(line),
           appliedBefore: () => [],
           // Every file runs in this one transaction, the deleting one among them.
-          ...beforeOf(hold),
+          ...beforeOf(hold?.check),
         }
       );
     } catch (error) {
@@ -2605,11 +2612,11 @@ async function recordWhatWasPushed(
   }
 }
 
-/** The run's `before` for `hold`'s count (`DeletionHold.check`), or none without a hold. */
-function beforeOf(hold: DeletionHold | undefined): {
+/** The run's `before` for a hold's count (`DeletionHold.check`), or none without one. */
+function beforeOf(check: ((db: unknown) => Promise<void>) | undefined): {
   before?: (db: unknown) => Promise<void>;
 } {
-  return hold === undefined ? {} : { before: hold.check };
+  return check === undefined ? {} : { before: check };
 }
 
 /**
@@ -2657,26 +2664,42 @@ function deletionHoldOfSave(
 }
 
 /**
- * The first of `ordered` whose statements change a table `hold` reads, or whose tables cannot be
- * named and so may; the first file where none can be told apart, so the count is still taken.
+ * Where a file-by-file run of `ordered` counts what `hold` deletes, by file: each held table in the
+ * last file whose statements change it, which deletes its values after any file that converts
+ * it. A file whose tables cannot be named may change any, and takes a table no file names; a table
+ * neither names is counted in the first file, so its count is still taken.
  */
-async function deletingFileOf(
+async function deletingFilesOf(
   deps: CollectionSaveDeps,
   ordered: readonly string[],
   hold: DeletionHold
-): Promise<string | undefined> {
+): Promise<Map<string, (db: unknown) => Promise<void>>> {
   const dialect = deps.adapter.getCapabilities().dialect;
-  const held = new Set(hold.tables.map(table => table.toLowerCase()));
+  const named = new Map<string, string>();
+  let unnamed: string | undefined;
   for (const filename of ordered) {
-    const named = tablesChangedBy(await unitOf(deps, filename), dialect);
-    if (
-      named === undefined ||
-      named.some(table => held.has(table.toLowerCase()))
-    ) {
-      return filename;
+    const changed = tablesChangedBy(await unitOf(deps, filename), dialect);
+    if (changed === undefined) {
+      unnamed ??= filename;
+      continue;
+    }
+    const lower = new Set(changed.map(table => table.toLowerCase()));
+    for (const table of hold.tables) {
+      if (lower.has(table.toLowerCase())) named.set(table, filename);
     }
   }
-  return ordered[0];
+  const tablesByFile = new Map<string, string[]>();
+  for (const table of hold.tables) {
+    const filename = named.get(table) ?? unnamed ?? ordered[0];
+    if (filename === undefined) continue;
+    tablesByFile.set(filename, [...(tablesByFile.get(filename) ?? []), table]);
+  }
+  const checks = new Map<string, (db: unknown) => Promise<void>>();
+  for (const [filename, tables] of tablesByFile) {
+    const check = hold.checkIn(tables);
+    if (check !== undefined) checks.set(filename, check);
+  }
+  return checks;
 }
 
 /** A written file as the runner takes it. */

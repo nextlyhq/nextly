@@ -9,7 +9,8 @@
  * - one read off the top-level fields alone misses a field inside a group with no name, whose
  *   column is the row's own and goes with it;
  * - one that ignores the save's renames compares a renamed field, whose values the save keeps, and
- *   refuses the save when it holds any;
+ *   refuses the save when it holds any; one that takes every rename answer as a rename skips a
+ *   field whose answer names no field after the save, and whose column goes;
  * - one that keeps every field whose name stays misses a field changed to a shape with no column
  *   (a relationship made many-to-many, a field made virtual), whose column goes;
  * - one that places a translatable field by the entity's own setting alone reads the main table
@@ -117,6 +118,25 @@ describe("the fields a save that removes fields compares", () => {
     expect(hold).toBeUndefined();
   });
 
+  it("compares a removed field that a rename answer names, where the save renames nothing", async () => {
+    // A rename answer whose new field is not in the save pairs no drop with an add: the pipeline
+    // renames nothing, and the column goes with its values.
+    const hold = deletionHoldOf({
+      dialect: "sqlite",
+      tableName: "dc_notes",
+      localized: false,
+      previous: [text("label"), text("note")],
+      next: [text("label")],
+      renamed: [{ from: "note", to: "memo" }],
+      confirmed: [],
+    });
+
+    expect(hold).toBeDefined();
+    expect(await refusedFields(hold!.compare(countingSqlite(4)))).toEqual([
+      "fields.note",
+    ]);
+  });
+
   it("counts a translatable field in the translations table under per-language storage", () => {
     setPerLanguageStorage(true);
     const hold = deletionHoldOf({
@@ -131,6 +151,34 @@ describe("the fields a save that removes fields compares", () => {
     });
 
     expect(hold?.tables).toEqual(["dc_notes_locales"]);
+  });
+
+  // A save of several files counts each table's removed values in the file that deletes them, so a
+  // file counts only the fields stored in the tables its own statements change.
+  it("counts, for one file, only the removed fields stored in the tables it changes", async () => {
+    const hold = deletionHoldOf({
+      dialect: "sqlite",
+      tableName: "dc_notes",
+      // Translated: a text field's values are in the translations table, a number's on the row.
+      localized: true,
+      previous: [
+        text("label"),
+        text("note"),
+        { name: "rank", type: "number" } as FieldDefinition,
+      ],
+      next: [text("label")],
+      confirmed: [],
+    });
+
+    const onTheRow = hold!.checkIn(["dc_notes"]);
+    const translated = hold!.checkIn(["dc_notes_locales"]);
+    expect(await refusedFields(onTheRow!(countingSqlite(1)))).toEqual([
+      "fields.rank",
+    ]);
+    expect(await refusedFields(translated!(countingSqlite(1)))).toEqual([
+      "fields.note",
+    ]);
+    expect(hold!.checkIn(["dc_other"])).toBeUndefined();
   });
 
   it("counts a field of a table named with a hyphen, and deletes when the count matches", async () => {

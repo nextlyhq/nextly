@@ -2077,20 +2077,32 @@ export const shouldLogF14HintReceiptForTest = shouldLogF14HintReceipt;
  * A registry row as the writer reads it: its table and its fields, which the
  * registry stores as the field definitions they were saved as.
  */
-function writerRowOf(collection: { tableName: string; fields?: unknown }): {
+function writerRowOf(collection: {
+  tableName: string;
+  fields?: unknown;
+  localized?: unknown;
+}): {
   tableName: string;
   fields: FieldDefinition[];
+  localized: boolean;
 } {
   return {
     tableName: collection.tableName,
     fields: (collection.fields ?? []) as FieldDefinition[],
+    // Whether the collection is translated as the registry stores it: where its values are, for a
+    // collection the definition file lacks (`saveOfSchemaChange`).
+    localized: collection.localized === true,
   };
 }
 
 /** What a field change gives the Builder save writer. */
 interface WriterChange {
   slug: string;
-  collection: { tableName: string; fields?: FieldDefinition[] };
+  collection: {
+    tableName: string;
+    fields?: FieldDefinition[];
+    localized?: boolean;
+  };
   fields: FieldDefinition[];
   localized: boolean;
   answers: SchemaChangeAnswers;
