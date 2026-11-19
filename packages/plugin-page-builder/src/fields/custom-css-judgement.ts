@@ -29,6 +29,7 @@ import {
   isPlainRecord,
   walkNodes,
   type BlockNode,
+  type DocumentLimits,
 } from "@nextlyhq/blocks-engine";
 import type { PluginFieldIssue, PluginFieldWrite } from "@nextlyhq/plugin-sdk";
 
@@ -64,6 +65,12 @@ export interface CssLibrary {
  */
 const MAX_LIBRARY_READ = 20;
 
+/**
+ * The bound a value's blocks are read within: the site's node cap, the one
+ * its pages are drawn under.
+ */
+export type CssReadLimits = Pick<DocumentLimits, "maxNodes">;
+
 /** The custom CSS one blocks value holds. */
 export interface HeldCustomCss {
   /** The document's own CSS; null where it holds none. */
@@ -98,8 +105,16 @@ function sectionOf(node: BlockNode): string | undefined {
     : undefined;
 }
 
-/** The custom CSS a blocks value holds, read within the document caps. */
-export function customCssHeldBy(value: unknown): HeldCustomCss {
+/**
+ * The custom CSS a blocks value holds, read within the document caps: the
+ * site's, where it set its own. Read within the engine's defaults instead, a
+ * site that set a higher node cap draws blocks past them whose CSS nobody
+ * read, so it would be stored unjudged.
+ */
+export function customCssHeldBy(
+  value: unknown,
+  limits: CssReadLimits = DEFAULT_LIMITS
+): HeldCustomCss {
   const record = blocksValueRecord(value);
   const settings = record?.settings;
   const document = cssText(
@@ -124,7 +139,7 @@ export function customCssHeldBy(value: unknown): HeldCustomCss {
         if (text === null) return;
         blocks.push(section === undefined ? { text } : { text, section });
       },
-      { maxNodes: DEFAULT_LIMITS.maxNodes }
+      { maxNodes: limits.maxNodes }
     );
   }
   return { document, blocks, placed };
@@ -146,7 +161,8 @@ interface CssChange {
 async function libraryTexts(
   write: PluginFieldWrite | undefined,
   store: StoreAddress | undefined,
-  documents: readonly string[]
+  documents: readonly string[],
+  limits: CssReadLimits
 ): Promise<ReadonlySet<string>> {
   const texts = new Set<string>();
   if (write === undefined || store === undefined || documents.length === 0) {
@@ -167,7 +183,7 @@ async function libraryTexts(
     }
     for (const stored of read.values()) {
       if (stored.kind !== "value") continue;
-      for (const block of customCssHeldBy(stored.value).blocks) {
+      for (const block of customCssHeldBy(stored.value, limits).blocks) {
         texts.add(block.text);
       }
     }
@@ -208,7 +224,8 @@ async function cssChangedBy(
   written: HeldCustomCss,
   args: JudgedField,
   stored: () => Promise<StoredForms>,
-  library: CssLibrary
+  library: CssLibrary,
+  limits: CssReadLimits
 ): Promise<CssChange> {
   const holdsAny = written.document !== null || written.blocks.length > 0;
   if (!holdsAny && !isTopLevel(args)) return { blocks: [] };
@@ -221,16 +238,21 @@ async function cssChangedBy(
         }
       : { blocks: [] };
   }
-  const held = forms.forms.map(form => customCssHeldBy(form));
-  // The entry a create copies, in the forms the caller could read: its
-  // document's CSS vouches for the document's, its blocks' for the blocks'.
-  const copied = (await copiedSourceValues(args)).map(customCssHeldBy);
+  const held = forms.forms.map(form => customCssHeldBy(form, limits));
+  // The entry a create copies, in the form the caller's read showed, walked
+  // under the same site limits as the write: its document's CSS vouches for
+  // the document's, its blocks' for the blocks'. A source block past those
+  // limits is never walked, so it vouches for nothing.
+  const copied = (await copiedSourceValues(args)).map(form =>
+    customCssHeldBy(form, limits)
+  );
   const documentChanged = documentCssChanged(written.document, held, copied);
   const blocks = await newBlockCss(
     written,
     [...held, ...copied],
     args.write,
-    library
+    library,
+    limits
   );
   return documentChanged ? { document: written.document, blocks } : { blocks };
 }
@@ -245,7 +267,8 @@ async function newBlockCss(
   written: HeldCustomCss,
   held: readonly HeldCustomCss[],
   write: PluginFieldWrite | undefined,
-  library: CssLibrary
+  library: CssLibrary,
+  limits: CssReadLimits
 ): Promise<string[]> {
   const known = new Set(
     held.flatMap(form => form.blocks.map(block => block.text))
@@ -256,7 +279,8 @@ async function newBlockCss(
     library.patterns,
     unknown.flatMap(block =>
       block.section === undefined ? [] : [block.section]
-    )
+    ),
+    limits
   );
   const left = [
     ...new Set(
@@ -267,7 +291,8 @@ async function newBlockCss(
   const fromComponents = await libraryTexts(
     write,
     library.components,
-    held.flatMap(form => form.placed)
+    held.flatMap(form => form.placed),
+    limits
   );
   return left.filter(text => !fromComponents.has(text));
 }
@@ -290,13 +315,19 @@ export async function customCssIssues(
    * Where saved sections and components are kept; absent, no placed section
    * and no detached component vouches.
    */
-  library: CssLibrary = {}
+  library: CssLibrary = {},
+  /**
+   * The site's node cap, which the written value, its stored forms and the
+   * library documents vouching for its CSS are all read within.
+   */
+  limits: CssReadLimits = DEFAULT_LIMITS
 ): Promise<PluginFieldIssue[]> {
   const change = await cssChangedBy(
-    customCssHeldBy(value),
+    customCssHeldBy(value, limits),
     args,
     stored,
-    library
+    library,
+    limits
   );
   if (change.document === undefined && change.blocks.length === 0) return [];
   // The caller first, before anything about the CSS is read out.

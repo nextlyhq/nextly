@@ -40,9 +40,11 @@
  */
 
 import {
+  allBlocks,
   COLLECTION_LIST_TYPE,
   hiddenOnDevice,
   isComponentInstance,
+  type AnyBlockDefinition,
   type BlockDocument,
   type BlockNode,
   type BreakpointSet,
@@ -283,18 +285,12 @@ export function layerLabel(
 
 /**
  * Every block's name in a document, by address, as Layers reads them, kept
- * per document and title lookup: the canvas asks for a placement's name each
- * time it draws its frame, and a selection can hold many placements, so the
- * page is read once rather than once per name. An edit makes a new document,
- * which is read afresh.
+ * per tree {@link layersOf} hands out: the canvas asks for a placement's name
+ * each time it draws its frame, and a selection can hold many placements, so
+ * the tree is read once rather than once per name. A tree built afresh (an
+ * edit, another title lookup, a block registered) is read afresh.
  */
-const BLOCK_NAMES = new WeakMap<
-  BlockDocument,
-  {
-    readonly titles: ComponentTitleOf | undefined;
-    readonly names: Map<string, string>;
-  }
->();
+const BLOCK_NAMES = new WeakMap<readonly LayerNode[], Map<string, string>>();
 
 /**
  * The name of the block at an address anywhere in the document, as its Layers
@@ -307,20 +303,21 @@ export function blockNameOf(
   id: string,
   componentTitle?: ComponentTitleOf
 ): string | undefined {
-  let kept = BLOCK_NAMES.get(document);
-  if (kept === undefined || kept.titles !== componentTitle) {
-    const names = new Map<string, string>();
+  const tree = layersOf(document, componentTitle);
+  let names = BLOCK_NAMES.get(tree);
+  if (names === undefined) {
+    const found = new Map<string, string>();
     const walk = (rows: readonly LayerNode[]): void => {
       for (const row of rows) {
-        names.set(row.id, row.label);
+        found.set(row.id, row.label);
         walk(row.children);
       }
     };
-    walk(layersOf(document, componentTitle));
-    kept = { titles: componentTitle, names };
-    BLOCK_NAMES.set(document, kept);
+    walk(tree);
+    names = found;
+    BLOCK_NAMES.set(tree, names);
   }
-  return kept.names.get(id);
+  return names.get(id);
 }
 
 /** Which region of `node` each of its children sits in, by the child. */
@@ -381,14 +378,76 @@ export function regionsTo(
 }
 
 /**
+ * A document's tree with no device, as last built for a title lookup and the
+ * registry's definitions, which name its rows. Kept for the untitled tree and
+ * for the last titled one, so a lookup made again on every render keeps one.
+ */
+interface KeptTree {
+  readonly titles: ComponentTitleOf | undefined;
+  readonly blocks: readonly AnyBlockDefinition[];
+  readonly tree: LayerNode[];
+}
+
+const KEPT_TREES = new WeakMap<
+  BlockDocument,
+  { untitled?: KeptTree; titled?: KeptTree }
+>();
+
+/** Whether two lists hold the same definitions, in the same order. */
+function sameDefinitions(
+  one: readonly AnyBlockDefinition[],
+  other: readonly AnyBlockDefinition[]
+): boolean {
+  return (
+    one.length === other.length &&
+    one.every((definition, index) => definition === other[index])
+  );
+}
+
+/**
  * The document as a tree of rows.
  *
  * `componentTitle` names component placements; see {@link layerLabel}.
+ *
+ * Without a device, the tree is built once per document, title lookup and set
+ * of registered definitions and handed out again after that: the breadcrumb
+ * and the selected block's toolbar and keyboard verbs each ask for the path to
+ * the selection on every click, and each path was a whole tree. An edit makes
+ * a new document, and a block registered or replaced changes the definitions,
+ * so either is built afresh. What is handed out is shared, so no caller may
+ * change it.
  */
 export function layersOf(
   document: BlockDocument,
   componentTitle?: ComponentTitleOf,
   device?: LayersDevice
+): LayerNode[] {
+  if (device !== undefined)
+    return buildLayers(document, componentTitle, device);
+  const blocks = allBlocks();
+  const kept = KEPT_TREES.get(document) ?? {};
+  const slot = componentTitle === undefined ? "untitled" : "titled";
+  const found = kept[slot];
+  if (
+    found !== undefined &&
+    found.titles === componentTitle &&
+    sameDefinitions(found.blocks, blocks)
+  ) {
+    return found.tree;
+  }
+  const tree = buildLayers(document, componentTitle, undefined);
+  KEPT_TREES.set(document, {
+    ...kept,
+    [slot]: { titles: componentTitle, blocks, tree },
+  });
+  return tree;
+}
+
+/** The tree {@link layersOf} answers with, built from the document. */
+function buildLayers(
+  document: BlockDocument,
+  componentTitle: ComponentTitleOf | undefined,
+  device: LayersDevice | undefined
 ): LayerNode[] {
   // `heldBy` is the nearest locked block above and `hiddenBy` the nearest
   // block hidden on the device, carried down the walk so the tree is read once

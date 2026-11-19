@@ -10,6 +10,7 @@
  * block); and letting a changed text through because the source holds some
  * other CSS.
  */
+import { DEFAULT_LIMITS } from "@nextlyhq/blocks-engine";
 import type {
   PluginFieldWrite,
   PluginFieldWriteCaller,
@@ -187,5 +188,89 @@ describe("CSS and page code a create copies", () => {
     await cssOf(LIVE, args);
     await pageCodeIssues(LIVE, args, "Content", undefined, NOTHING_STORED);
     expect(args.asked).toEqual(["pages/content/published"]);
+  });
+
+  describe("under the site's node limits", () => {
+    /** A page of `count` plain blocks, the last holding `css`. */
+    function longPage(count: number, css: string): Record<string, unknown> {
+      return {
+        formatVersion: 1,
+        kind: "page",
+        nodes: Array.from({ length: count }, (_, at) => ({
+          id: `n${at}`,
+          type: "core/text",
+          version: 1,
+          props: { text: "x" },
+          ...(at === count - 1 ? { customCss: css } : {}),
+        })),
+      };
+    }
+
+    /** A create copying a source that stores `stored` as its live form. */
+    function copyingStored(stored: unknown): JudgedField {
+      const write: PluginFieldWrite = {
+        kind: "collection",
+        slug: "pages",
+        inTransaction: false,
+        readStored: () => Promise.reject(new Error("not read here")),
+        readStoredOf: target =>
+          Promise.resolve(
+            new Map(
+              target.ids.map(id => [
+                id,
+                { kind: "value" as const, value: stored },
+              ])
+            )
+          ),
+        caller: caller("user"),
+        copiedFrom: COPY,
+      };
+      return { path: "content", write };
+    }
+
+    // The copy holds one block, whose CSS the source holds only past the
+    // engine's default node cap.
+    const copy = pageWith(BLOCK_CSS);
+    const pastDefault = longPage(DEFAULT_LIMITS.maxNodes + 2, BLOCK_CSS);
+
+    it("walks the source as far as the site's looser limit, so its CSS vouches", async () => {
+      const looser = {
+        ...DEFAULT_LIMITS,
+        maxNodes: DEFAULT_LIMITS.maxNodes + 10,
+      };
+      const issues = await customCssIssues(
+        copy,
+        copyingStored(pastDefault),
+        "Content",
+        NOTHING_STORED,
+        {},
+        looser
+      );
+      expect(issues).toEqual([]);
+    });
+
+    it("judges CSS past the site's limit as new: a block never walked vouches nothing", async () => {
+      // CONTROL: under the default limit, the same source vouches nothing.
+      expect(
+        await customCssIssues(
+          copy,
+          copyingStored(pastDefault),
+          "Content",
+          NOTHING_STORED
+        )
+      ).toHaveLength(1);
+      // And a tighter site limit stops the walk before the source's block.
+      const tighter = { ...DEFAULT_LIMITS, maxNodes: 10 };
+      expect(
+        await customCssIssues(
+          copy,
+          copyingStored(longPage(20, BLOCK_CSS)),
+          "Content",
+          NOTHING_STORED,
+          {},
+          tighter
+        )
+      ).toHaveLength(1);
+    });
   });
 });
