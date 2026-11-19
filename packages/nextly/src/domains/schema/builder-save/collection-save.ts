@@ -669,6 +669,10 @@ async function settleStoppedSave(
   // nothing is new against this, so nothing of the settle's can be standing beside it.
   let sqlAside: string[] = [];
   let snapshotsAside: string[] = [];
+  // Only while the save still holds the migration folder: one stalled past its lease while it
+  // judged the stop, with another writer since, moves nothing in it, and is refused with the stop
+  // left as the save left it.
+  await assertWriterHold(deps.migrationsDir);
   try {
     // Set aside, never deleted, while the settle's outcome is uncertain: under a name no migration
     // listing reads, so a stop or an overtaking writer anywhere after leaves it on disk.

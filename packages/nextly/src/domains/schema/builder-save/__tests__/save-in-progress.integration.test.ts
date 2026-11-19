@@ -76,7 +76,8 @@ const kill = vi.hoisted(() => ({
   refuseReading: undefined as undefined | ((path: string) => boolean),
   /**
    * Run once a file has been written in full under its temporary name (its path), or put in place
-   * (`renamed:` and its path), as a stalled process would.
+   * (`renamed:` and its path), or before one is read (`read:` and its path), as a stalled process
+   * would.
    */
   stall: undefined as undefined | ((path: string) => Promise<void>),
 }));
@@ -140,13 +141,18 @@ vi.mock("node:fs/promises", async importOriginal => {
     await real.writeFile(...args);
     await kill.stall?.(String(args[0]));
   }) as typeof real.writeFile;
+  const readFile = (async (...args: Parameters<typeof real.readFile>) => {
+    await kill.stall?.(`read:${String(args[0])}`);
+    return real.readFile(...args);
+  }) as typeof real.readFile;
   return {
     ...real,
     rename,
     rm,
     readdir,
     writeFile,
-    default: { ...real, rename, rm, readdir, writeFile },
+    readFile,
+    default: { ...real, rename, rm, readdir, writeFile, readFile },
   };
 });
 
@@ -1143,6 +1149,82 @@ describe.each(getConfiguredTestDialects())(
             ).toBe(true);
             expect(await recordRow(t, path), "the record's row").toBeDefined();
           } finally {
+            restoreBounds();
+          }
+        },
+        300_000
+      );
+
+      // A settle stalled past its lease while it judges the stop, with another writer holding the
+      // folder by the time it would set the stopped file aside: it no longer owns the folder, so it
+      // renames nothing in it, and the stop stays as the save left it with its record.
+      it.runIf(dialect === "mysql")(
+        "a settle overtaken before it sets the stopped file aside moves nothing in the folder",
+        async () => {
+          const restoreBounds = setWriterHoldBounds({
+            waitMs: 30_000,
+            leaseSeconds: 1,
+            renewMs: 600_000,
+          });
+          const history = join(basePath, HISTORY);
+          let other: Awaited<ReturnType<typeof acquireWriterHold>> | undefined;
+          try {
+            const t = await boot();
+            await path.create([text("heading")]);
+            const refused = refuseAdding(t, "beta");
+            const definition = join(basePath, DEFINITION);
+            // Every file in the folder put in place while the other writer holds it.
+            const movedUnderOther: string[] = [];
+            kill.stall = async point => {
+              if (other !== undefined) {
+                if (point.startsWith(`renamed:${history}`)) {
+                  movedUnderOther.push(
+                    point.slice(`renamed:${history}/`.length)
+                  );
+                }
+                return;
+              }
+              // The settle reading the definition, once the save has stopped at its statement:
+              // stalled past the lease, and the folder taken and held by another writer.
+              if (refused() === 0 || point !== `read:${definition}`) return;
+              await new Promise(resolve => setTimeout(resolve, 1_200));
+              other = await acquireWriterHold({
+                migrationsDir: history,
+                command: "migrate:create",
+                whenHeld: "wait",
+              });
+            };
+            const sqlBefore = filesBelow(history).filter(f =>
+              f.endsWith(".sql")
+            );
+
+            const answer = await path
+              .save(t, [text("heading"), text("alpha"), text("beta")])
+              .catch((error: unknown) => error);
+            kill.stall = undefined;
+            expect(refused(), "no statement adding `beta` was met").toBe(1);
+            expect(other, "the settle was never overtaken").toBeDefined();
+            expect(
+              answer instanceof Response
+                ? answer.ok
+                : !(answer instanceof Error),
+              "the save was not refused"
+            ).toBe(false);
+            expect(
+              movedUnderOther,
+              "files moved under the other writer"
+            ).toEqual([]);
+            // The save's own file, under its own name.
+            expect(
+              filesBelow(history).filter(
+                f => !sqlBefore.includes(f) && f.includes(".sql")
+              ),
+              "the save's migration files"
+            ).toEqual([expect.stringMatching(/\.sql$/)]);
+            expect(await recordRow(t, path), "the record's row").toBeDefined();
+          } finally {
+            kill.stall = undefined;
+            await other?.release();
             restoreBounds();
           }
         },
