@@ -8,6 +8,11 @@
  * made larger. jsdom lays nothing out, so the size is read from the rules the
  * chrome's stylesheet is built from.
  *
+ * The minimum is in CSS pixels, whatever the root font size: a reader who sets
+ * a smaller default text size in the browser shrinks every rem length, so a
+ * rem floor alone would draw the button under 24px. The height is resolved at
+ * several root sizes, not only the usual 16px.
+ *
  * @module add-css-property-target.test
  */
 import { readFileSync } from "node:fs";
@@ -27,8 +32,11 @@ const FLAT = chromeStylesheetSource(url =>
 /** WCAG 2.2's minimum target, in CSS pixels. */
 const MINIMUM_TARGET = 24;
 
-/** The root font size the rem lengths resolve against. */
-const ROOT_FONT_SIZE = 16;
+/**
+ * Root font sizes a reader's browser can set: smaller and larger than the
+ * usual 16px.
+ */
+const ROOT_FONT_SIZES = [10, 12, 16, 20];
 
 /**
  * Every declaration of `property` in a rule whose selector list names
@@ -50,23 +58,36 @@ function declared(selector: string, property: string): string[] {
   return values;
 }
 
-/** A length in px, from px or rem. */
-function pixels(length: string): number {
+/** A length in px at a root font size: px, rem, or a `max()` of them. */
+function pixels(length: string, rootFontSize: number): number {
+  const larger = /^max\((.+)\)$/.exec(length);
+  if (larger) {
+    return Math.max(
+      ...(larger[1] ?? "")
+        .split(",")
+        .map(part => pixels(part.trim(), rootFontSize))
+    );
+  }
   const match = /^(\d+(?:\.\d+)?)(px|rem)$/.exec(length);
-  if (!match) throw new Error(`not a px or rem length: ${length}`);
+  if (!match) throw new Error(`not a px, rem or max() length: ${length}`);
   const amount = Number(match[1]);
-  return match[2] === "rem" ? amount * ROOT_FONT_SIZE : amount;
+  return match[2] === "rem" ? amount * rootFontSize : amount;
 }
 
 describe("+ Add CSS property", () => {
-  it("is at least 24px tall, its hit area padded rather than its text enlarged", () => {
+  it("is at least 24px tall at any root font size, its hit area padded rather than its text enlarged", () => {
     const heights = declared(".nx-css-properties__add", "min-block-size");
     expect(
       heights,
       "no min-block-size on .nx-css-properties__add"
     ).not.toHaveLength(0);
     for (const height of heights) {
-      expect(pixels(height)).toBeGreaterThanOrEqual(MINIMUM_TARGET);
+      for (const root of ROOT_FONT_SIZES) {
+        expect(
+          pixels(height, root),
+          `min-block-size: ${height} with a ${root}px root`
+        ).toBeGreaterThanOrEqual(MINIMUM_TARGET);
+      }
     }
     // The text keeps the size the panel's other quiet buttons draw.
     expect(declared(".nx-css-properties__add", "font-size")).toEqual([
