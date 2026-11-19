@@ -108,6 +108,7 @@ function inReview(
     part,
     stage: "inReview",
     stageLabel: "In review",
+    stageColour: null,
     publishable: false,
     enteredAt: null,
     enteredBy: null,
@@ -119,6 +120,7 @@ function inReview(
     steps: [approveStep()],
     waitingFor: null,
     lastMove: null,
+    reviewedVersionNo: null,
     ...over,
   };
 }

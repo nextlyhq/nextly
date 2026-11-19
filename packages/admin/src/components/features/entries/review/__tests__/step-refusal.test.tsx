@@ -61,6 +61,7 @@ const inReview: PartReview = {
   part: null,
   stage: "inReview",
   stageLabel: "In review",
+  stageColour: null,
   publishable: false,
   enteredAt: null,
   enteredBy: null,
@@ -72,6 +73,7 @@ const inReview: PartReview = {
   steps: [approve, sendBack],
   waitingFor: null,
   lastMove: null,
+  reviewedVersionNo: null,
 };
 
 /** A refusal as `fetcher` throws it: the parsed `{ error }` envelope. */

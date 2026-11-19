@@ -98,6 +98,7 @@ function inReview(over: Partial<PartReview> = {}): PartReview {
     ],
     waitingFor: null,
     lastMove: null,
+    reviewedVersionNo: null,
     ...over,
   } as PartReview;
 }

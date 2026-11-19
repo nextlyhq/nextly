@@ -85,6 +85,7 @@ function part(over: Partial<PartReview>): PartReview {
     ],
     waitingFor: null,
     lastMove: null,
+    reviewedVersionNo: null,
     ...over,
   };
 }

@@ -18,12 +18,17 @@ import { NextlyError } from "../../errors";
 import { resolveUserRoles } from "../../services/lib/permissions";
 import type { PublishCaller } from "../collections/services/publish-gate";
 import { configuredLocales } from "../i18n/configured-locales";
+import { newestVersionNoPerLocale } from "../versions/versions-repository";
 
 import { primaryStep } from "./define-workflow";
 import { roleIdsOfSlugs } from "./holders";
 import { livePartsOf, partStage, pendingPartsOn } from "./implicit-stage";
 import { lastMovesOn, type LastMove } from "./last-moves";
-import { documentTableOn, partVersionOn } from "./part-versions";
+import {
+  documentTableOn,
+  partVersionOn,
+  versionUnderReview,
+} from "./part-versions";
 import {
   partsWaitingFor,
   partWaitsDecider,
@@ -120,6 +125,12 @@ export interface PartReview {
   revision: number;
   /** The document's version as a reader of this part holds it: what a step says it saw. */
   version: string | null;
+  /**
+   * The number of the part's version under review: its newest recorded version, in its language
+   * or, for the shared part, in any. What approving the part approves, so an editor can tell
+   * whether the version it shows is that one. Null for a part never saved.
+   */
+  reviewedVersionNo: number | null;
   /** The steps that leave from its stage, each with whether the caller may take it. */
   steps: AvailableStep[];
   /**
@@ -214,6 +225,12 @@ export async function reviewStateOf(
     const states = await readDocumentReviewStates(tx, document);
     const pending = await pendingPartsOn(tx, document);
     const moves = await lastMovesOn(tx, dialect, document);
+    // Every part's version under review from one read of the history, whatever the part count.
+    const newestByLocale = await newestVersionNoPerLocale(
+      tx,
+      dialect,
+      document
+    );
     const read: (Omit<PartReview, "waitingFor" | "steps"> & {
       steps: StepOut[];
     })[] = [];
@@ -248,6 +265,7 @@ export async function reviewStateOf(
         version:
           (await partVersionOn(tx, dialect, table, document.entryId, part)) ??
           null,
+        reviewedVersionNo: versionUnderReview(newestByLocale, part) ?? null,
         steps: stepsFrom(workflow, stage),
         lastMove: moves.get(part) ?? null,
       });
