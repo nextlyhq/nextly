@@ -73,7 +73,10 @@ import {
 } from "../schema-version";
 
 import { outstandingEntityChanges } from "./applied-entity-changes";
-import { removeDroppedEntityLeftovers } from "./dropped-entity-leftovers";
+import {
+  everyEntityRegistered,
+  removeDroppedEntityLeftovers,
+} from "./dropped-entity-leftovers";
 import { registerFromMigrations } from "./metadata-register";
 import {
   isAwaitingMigration,
@@ -483,10 +486,42 @@ async function labelArchiveWhileRegistered(
 ): Promise<void> {
   if (registryWriteOpen()) return;
   const { adapter, dialect } = deps;
+  // Labelling settles each row for good, from when its entity's registry row was created. SQLite's
+  // registries hold some of those times in milliseconds where the labelling reads seconds, so every
+  // holder would read as made in the future and every row would be settled as unresolved, which
+  // no later run can undo. So on SQLite the rows wait, as they did before this pass labelled them,
+  // until the registries' timestamps are stored in one unit and read so (the registry timestamp
+  // repair lifts this).
+  if (dialect === "sqlite") return;
   if (!(await adapter.tableExists(ARCHIVE_TABLE))) return;
+  // A holder the registry write below adds back (an entity the applied record lists that has no
+  // registry row) is not there to label its rows yet: labelled now, they would be settled as
+  // unresolved for good. So the rows wait for the next run, after that write.
+  if (!(await holdersInPlace(deps))) return;
   await assertSchemaLockHeld();
   await ensureI18nArchive(adapter, dialect);
   await labelLegacyArchiveRows(adapter);
+}
+
+/**
+ * Whether the registries already hold every entity the registry write below writes from: the
+ * configuration's on a first run, the newest applied snapshot's otherwise. False where that record
+ * cannot be read, so the labelling waits rather than run before a holder it may add.
+ */
+async function holdersInPlace(deps: ReconcileMetadataDeps): Promise<boolean> {
+  const { adapter, dialect, migrationsDir } = deps;
+  if (deps.configurationRows !== undefined) {
+    return everyEntityRegistered(adapter, deps.configurationRows);
+  }
+  const events = new SchemaEventsRepository(adapter.getDrizzle(), dialect);
+  const source = await readRegistrySource({
+    migrationsDir,
+    isApplied: filename => events.isFileApplied(filename),
+  });
+  return (
+    source.kind === "snapshot" &&
+    (await everyEntityRegistered(adapter, source.entities))
+  );
 }
 
 /**

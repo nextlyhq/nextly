@@ -265,6 +265,16 @@ async function registryHolds(
   column: "slug" | "tableName",
   value: string
 ): Promise<boolean> {
+  return (await readRegistryHolds(adapter, kind, column, value)) ?? true;
+}
+
+/** Whether `kind`'s registry has a row whose `column` is `value`; undefined when it cannot be read. */
+async function readRegistryHolds(
+  adapter: DrizzleAdapter,
+  kind: SettingsEntityKind,
+  column: "slug" | "tableName",
+  value: string
+): Promise<boolean | undefined> {
   try {
     const table =
       kind === "fieldGroup"
@@ -277,8 +287,28 @@ async function registryHolds(
     });
     return rows.length > 0;
   } catch {
-    return true;
+    return undefined;
   }
+}
+
+/**
+ * Whether the registries hold a row for every entity `record` lists, by its slug: where one is
+ * missing, a registry write from `record` adds it. False where a registry cannot be read, so a
+ * caller waiting for every holder to be in place waits.
+ */
+export async function everyEntityRegistered(
+  adapter: DrizzleAdapter,
+  record: EntitySettingsRecord
+): Promise<boolean> {
+  for (const [kind, key] of RECORDED_KINDS) {
+    for (const slug of Object.keys(record[key])) {
+      if (isReservedResourceSlug(slug)) continue;
+      if ((await readRegistryHolds(adapter, kind, "slug", slug)) !== true) {
+        return false;
+      }
+    }
+  }
+  return true;
 }
 
 function plural(count: number, one: string): string {
