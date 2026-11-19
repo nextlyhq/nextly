@@ -899,9 +899,11 @@ export class PushSchemaPipeline {
       const promptDispatcher = askingOnce(this.deps.promptDispatcher);
       // The statements a try sent and saw finish, each with whether it is a schema statement,
       // recorded where the apply hands its statements to the executor and as the pre-resolution
-      // phase reports them. On SQLite each has committed as it ran; on MySQL a schema statement
-      // commits what ran before it, and itself, while a row change after the last one rolls back
-      // with the try's transaction (`committedOf`). MySQL's and SQLite's are handed over one at a
+      // phase reports them. On SQLite a try that changes the table runs in one transaction, which
+      // a try that ended waiting rolled back whole (`sqliteTryWhole`), and one with nothing to
+      // change ran each statement committing as it ran; on MySQL a schema statement commits what
+      // ran before it, and itself, while a row change after the last one rolls back with the try's
+      // transaction (`committedOf`). MySQL's and SQLite's are handed over one at a
       // time while the tries are on, SQLite's split as its executor splits them, since a batch that
       // waits part-way would not say how many before it did; on PostgreSQL a batch is handed over
       // whole, as always, its try's transaction rolling back whole.
@@ -910,6 +912,9 @@ export class PushSchemaPipeline {
       // on MySQL one that waits has already committed everything before it.
       let nextIsSchema = false;
       let finishedEarlier = 0;
+      // Whether this SQLite try opened its one transaction: one that then ended waiting left
+      // nothing applied, as PostgreSQL's try does.
+      let sqliteTryWhole = false;
       const oneByOne = busyTable !== undefined && dialect !== "postgresql";
       // What each MySQL or SQLite try planned, and what the tries that ended waiting planned in
       // all: a later try plans from the live database, where what an earlier one committed is no
@@ -956,6 +961,7 @@ export class PushSchemaPipeline {
       ): Promise<PlannedApply> => {
         finishedThisTry = [];
         nextIsSchema = false;
+        sqliteTryWhole = false;
         // Resolved once per plan, before anything reads it. A desired schema is consumed by TWO
         // builders — the snapshot the diff compares and the Drizzle tables drizzle-kit turns into
         // DDL — and resolving inside either leaves the other on the raw fields, so a table would
@@ -1580,8 +1586,9 @@ export class PushSchemaPipeline {
           liftedKeysOwed = constraints.liftRestores;
           try {
             const leading = [...constraints.before, ...moves.statements];
-            // Counted as each statement finishes: on MySQL and SQLite each commits as it runs, so a
-            // try that ends waiting part-way names the ones that stay applied.
+            // Counted as each statement finishes: on MySQL each commits as it runs, so a try that
+            // ends waiting part-way names the ones that stay applied (on SQLite, where the try ran
+            // in one transaction, none stays).
             let told = 0;
             // The leading statements run first, then each rename or drop, a schema statement.
             const schemaAt = (index: number): boolean =>
@@ -2117,11 +2124,12 @@ export class PushSchemaPipeline {
               (count, pairs) =>
                 `This schema change would leave ${String(count)} row(s) referencing rows that do not exist (${pairs}). It was rolled back, and nothing was applied.`
             );
+          sqliteTryWhole = resolvedOps.length > 0;
           statementsExecuted = await withSqliteForeignKeysOff(
             session,
             async () => {
               try {
-                return resolvedOps.length > 0
+                return sqliteTryWhole
                   ? await withinSqliteTransaction(session, applyChecked)
                   : await applyChecked();
               } catch (err) {
@@ -2189,9 +2197,10 @@ export class PushSchemaPipeline {
         await refuseUiTypeChanges(args.desired, db, dialect);
       }
 
-      // MySQL and SQLite keep what a try committed, so each try plans the apply again from the
-      // live database, which shows it; Phase B's answers are read from the first try's
-      // (`askingOnce`). On SQLite a try's every wait is bounded by the connection's busy timeout,
+      // MySQL keeps what a try committed, so each try plans the apply again from the live
+      // database, which shows it; SQLite's tries plan again too, where a try that changed the table
+      // rolled back whole and one with nothing to change kept what it ran. Phase B's answers are
+      // read from the first try's (`askingOnce`). On SQLite a try's every wait is bounded by the connection's busy timeout,
       // set for the try and put back after it.
       const { statementsExecuted, resolvedOps, renamesApplied, moved } =
         busyTable === undefined || dialect === "postgresql"
@@ -2216,6 +2225,15 @@ export class PushSchemaPipeline {
                       }
                     },
                     () => {
+                      // A SQLite try that ran in one transaction rolled back whole: nothing of it
+                      // stays, and the next try plans it all again, as PostgreSQL's does.
+                      if (sqliteTryWhole) {
+                        return {
+                          table: waitedTable,
+                          undone: true,
+                          committed: [],
+                        };
+                      }
                       // Numbered across the apply's tries, so a statement a later try finished is
                       // not named by the number of one an earlier try did.
                       const kept = committedOf(
@@ -2997,8 +3015,9 @@ export function isSchemaStatement(statement: string): boolean {
 }
 
 /**
- * How many of the statements a try finished stay applied once it ended waiting. On SQLite every
- * one, as each committed as it ran. On MySQL a schema statement commits what ran before it, and
+ * How many of the statements a try finished stay applied once it ended waiting, where the try did
+ * not run in one transaction that rolled back whole. On SQLite every one, as each committed as it
+ * ran outside a transaction. On MySQL a schema statement commits what ran before it, and
  * itself once it has run: where the statement that waited is a schema statement, everything
  * before it; otherwise everything up to the last schema statement that ran, the row changes after
  * it rolled back with the try's transaction. Exported for its tests.

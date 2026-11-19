@@ -9,9 +9,10 @@
  * bounds are shortened (one second a try) so the cases run in seconds; the schedule they follow is
  * the default's, which the unit tests pin.
  *
- * PostgreSQL runs each try as one transaction of the plan it made once; MySQL and SQLite, which
- * keep what a try committed, plan each try again from the live database. Either way a question
- * the apply asks is asked once, and the journal records the apply once.
+ * PostgreSQL runs each try as one transaction of the plan it made once; MySQL, which keeps what a
+ * try committed, plans each try again from the live database, and so does SQLite, whose try that
+ * changes the table runs in one transaction and rolls back whole. Either way a question the apply
+ * asks is asked once, and the journal records the apply once.
  */
 import { randomBytes } from "node:crypto";
 
@@ -427,9 +428,11 @@ describe.each(DIALECTS)(
       }
     );
 
-    // MySQL and SQLite keep what a try committed, and a later try plans only what is left: the
-    // apply still reports every statement and every change its tries made, not the last try's.
-    it.runIf(dialect !== "postgresql")(
+    // MySQL keeps what a try committed, and a later try plans only what is left: the apply still
+    // reports every statement and every change its tries made, not the last try's. A SQLite try
+    // holds the write lock from its start, so no holder gets in part-way; one that ends waiting at
+    // its commit rolls back whole (pushschema-pipeline-sqlite-whole).
+    it.runIf(dialect === "mysql")(
       "reports what an earlier try committed with what the last try applied",
       async () => {
         const db = adapter.getDrizzle();

@@ -57,12 +57,17 @@ export async function withSqliteForeignKeysOff<T>(
  * Runs `work` in one transaction on the session's connection: committed where it returns, rolled
  * back where it or the commit throws, so nothing of it stays. Foreign-key enforcement is switched
  * outside it (`withSqliteForeignKeysOff`), as SQLite ignores the pragma inside a transaction.
+ *
+ * Begun IMMEDIATE, as the SQLite adapter begins its own: the database's write lock is taken at the
+ * start, waiting the connection's busy timeout for another writer, so no statement inside waits.
+ * A deferred transaction that read before it wrote would be answered busy at once where another
+ * writer got in between, without waiting at all.
  */
 export async function withinSqliteTransaction<T>(
   session: Pick<SqliteForeignKeySession, "run">,
   work: () => Promise<T>
 ): Promise<T> {
-  await session.run("BEGIN");
+  await session.run("BEGIN IMMEDIATE");
   try {
     const result = await work();
     await session.run("COMMIT");

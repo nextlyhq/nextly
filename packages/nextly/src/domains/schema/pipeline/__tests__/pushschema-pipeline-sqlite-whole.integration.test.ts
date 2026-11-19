@@ -7,6 +7,10 @@
 // Against a real in-memory SQLite database and the real executor, with every statement the
 // connection runs recorded.
 
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -28,6 +32,45 @@ import {
 
 const P = "sqlwhole"; // per-file table prefix
 const TABLE = `dc_${P}_posts`;
+
+/** The system tables, and the collection's table as the production generator writes it, with one row. */
+async function seedPosts(
+  sqlite: Database.Database,
+  db: ReturnType<typeof drizzle>
+): Promise<void> {
+  await freshPushSchema("sqlite", db, getDialectTables("sqlite"));
+  const schemaService = new DynamicCollectionSchemaService(undefined, "sqlite");
+  for (const statement of schemaService
+    .generateMigrationSQL(TABLE, [{ name: "heading", type: "text" }], {
+      localized: false,
+    })
+    .split("--> statement-breakpoint")) {
+    const clean = statement
+      .split("\n")
+      .filter(line => !line.trim().startsWith("--"))
+      .join("\n")
+      .trim();
+    if (clean) sqlite.exec(clean);
+  }
+  sqlite
+    .prepare(
+      `INSERT INTO "${TABLE}" ("id", "title", "slug", "heading") VALUES ('1', 'One', 'one', 'Hello')`
+    )
+    .run();
+}
+
+/** The collection with `fields`, as the desired schema an apply is handed. */
+const desiredWith = (fields: Array<{ name: string; type: string }>) => ({
+  collections: {
+    [`${P}_posts`]: {
+      slug: `${P}_posts`,
+      tableName: TABLE,
+      fields: fields as never,
+    },
+  },
+  singles: {},
+  components: {},
+});
 
 describe("PushSchemaPipeline — a SQLite push is all or nothing", () => {
   let sqlite: Database.Database;
@@ -57,29 +100,7 @@ describe("PushSchemaPipeline — a SQLite push is all or nothing", () => {
       return statement;
     }) as typeof sqlite.prepare;
     db = drizzle({ client: sqlite });
-    await freshPushSchema("sqlite", db, getDialectTables("sqlite"));
-    // The collection's table as the production generator writes it, with one row.
-    const schemaService = new DynamicCollectionSchemaService(
-      undefined,
-      "sqlite"
-    );
-    for (const statement of schemaService
-      .generateMigrationSQL(TABLE, [{ name: "heading", type: "text" }], {
-        localized: false,
-      })
-      .split("--> statement-breakpoint")) {
-      const clean = statement
-        .split("\n")
-        .filter(line => !line.trim().startsWith("--"))
-        .join("\n")
-        .trim();
-      if (clean) sqlite.exec(clean);
-    }
-    sqlite
-      .prepare(
-        `INSERT INTO "${TABLE}" ("id", "title", "slug", "heading") VALUES ('1', 'One', 'one', 'Hello')`
-      )
-      .run();
+    await seedPosts(sqlite, db);
     sent = [];
     recording = true;
   });
@@ -122,17 +143,7 @@ describe("PushSchemaPipeline — a SQLite push is all or nothing", () => {
     fails?: RegExp
   ) =>
     pipeline(fails).apply({
-      desired: {
-        collections: {
-          [`${P}_posts`]: {
-            slug: `${P}_posts`,
-            tableName: TABLE,
-            fields: fields as never,
-          },
-        },
-        singles: {},
-        components: {},
-      },
+      desired: desiredWith(fields),
       db,
       dialect: "sqlite",
       source: "code",
@@ -188,7 +199,7 @@ describe("PushSchemaPipeline — a SQLite push is all or nothing", () => {
     expect(result.success).toBe(true);
     expect(columns()).toContain("alpha");
     expect(transactionStatements().map(s => s.trim().toUpperCase())).toEqual([
-      "BEGIN",
+      "BEGIN IMMEDIATE",
       "COMMIT",
     ]);
     const switchedOff = sent.findIndex(statement =>
@@ -210,4 +221,97 @@ describe("PushSchemaPipeline — a SQLite push is all or nothing", () => {
     expect(columns()).toEqual(before);
     expect(transactionStatements()).toEqual([]);
   });
+});
+
+// A try whose COMMIT waits for a reader: in rollback-journal mode the commit needs every reader of
+// the database gone, and the busy timeout bounds its wait as a try's. The try rolls back whole, so
+// the try after it applies the whole change again, and the apply counts only what that try ran.
+describe("PushSchemaPipeline — a SQLite try that ended waiting at its commit", () => {
+  let dir: string;
+  let sqlite: Database.Database;
+  let reader: Database.Database;
+  let db: ReturnType<typeof drizzle>;
+
+  beforeEach(async () => {
+    dir = mkdtempSync(join(tmpdir(), "nextly-sqlite-whole-"));
+    const file = join(dir, "site.db");
+    // Rollback-journal mode, better-sqlite3's own, in which a commit waits for readers.
+    sqlite = new Database(file);
+    reader = new Database(file);
+    db = drizzle({ client: sqlite });
+    await seedPosts(sqlite, db);
+  });
+
+  afterEach(() => {
+    if (reader?.inTransaction) reader.exec("ROLLBACK");
+    reader?.close();
+    sqlite?.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("counts nothing of it applied, and the next try applies the whole change", async () => {
+    let held = false;
+    let freeing: Promise<void> = Promise.resolve();
+    const notices: string[] = [];
+    // Once the first try's first column is added, a reader opens a read transaction, which the
+    // try's commit then waits for past its bound; the reader ends during the pause after it.
+    class HoldingAtCommit extends DrizzleStatementExecutor {
+      override async executeStatements(
+        tx: unknown,
+        statements: string[]
+      ): Promise<void> {
+        await super.executeStatements(tx, statements);
+        if (!held && statements.some(statement => /\bADD\b/i.test(statement))) {
+          held = true;
+          reader.exec("BEGIN");
+          reader.prepare(`SELECT count(*) FROM "${TABLE}"`).get();
+          freeing = new Promise(resolve => setTimeout(resolve, 1_500)).then(
+            () => {
+              reader.exec("COMMIT");
+            }
+          );
+        }
+      }
+    }
+    const applied = await new PushSchemaPipeline({
+      executor: new HoldingAtCommit("sqlite", db),
+      renameDetector: noopRenameDetector,
+      classifier: noopClassifier,
+      promptDispatcher: noopPromptDispatcher,
+      preRenameExecutor: noopPreRenameExecutor,
+      preCleanupExecutor: noopPreCleanupExecutor,
+      migrationJournal: noopMigrationJournal,
+      notifier: noopNotifier,
+    }).apply({
+      desired: desiredWith([
+        { name: "heading", type: "text" },
+        { name: "alpha", type: "text" },
+        { name: "beta", type: "text" },
+      ]),
+      db,
+      dialect: "sqlite",
+      source: "code",
+      promptChannel: "terminal",
+      busyTable: {
+        bounds: { tryMs: 1_000, totalMs: 20_000 },
+        notify: line => notices.push(line),
+        change: "schema sync",
+      },
+    });
+    await freeing;
+
+    expect(held, "the reader never held the commit").toBe(true);
+    expect(applied.success, JSON.stringify(applied.error)).toBe(true);
+    expect(notices, "the tries").toHaveLength(1);
+    expect(
+      (
+        sqlite.prepare(`PRAGMA table_info("${TABLE}")`).all() as Array<{
+          name: string;
+        }>
+      ).map(column => column.name)
+    ).toEqual(expect.arrayContaining(["alpha", "beta"]));
+    // The last try's two additions, not the first try's too: those rolled back with it.
+    expect(applied.statementsExecuted).toBe(2);
+    expect(applied.summary).toMatchObject({ added: 2 });
+  }, 60_000);
 });
