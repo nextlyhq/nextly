@@ -69,7 +69,10 @@ import {
 } from "../../i18n/companion-columns";
 import { appLanguageOrder } from "../../i18n/configured-locales";
 import { joinRetries } from "../../i18n/migration/archive-preflight";
-import { companionUniqueIndexName } from "../../i18n/migration/companion-unique-indexes";
+import {
+  companionUniqueIndexName,
+  translatedColumnNames,
+} from "../../i18n/migration/companion-unique-indexes";
 import { ensureI18nArchive } from "../../i18n/migration/ensure-archive";
 import { mainTableFields } from "../../i18n/per-language-storage";
 import {
@@ -1664,16 +1667,22 @@ function collectionOf(save: CollectionSave): UiSchemaEntity {
  * none creates it again. Names are compared as the dialect compares them (`identifierKey`), since
  * MySQL and SQLite take `TITLE` and `title` for one column, and the file's statements would too.
  *
- * A translated column the main table keeps is counted only where the save runs its file
- * (`runsFile`), which is planned from the history and would add the column again. Unattended
- * provisioning (boot, `db:sync`, the development reload) keeps such columns by design, and a push
- * plans the database as it stands, restoring a kept column's value rather than adding it.
+ * A push plans the database as it stands (`pushTarget`, absent where the save runs its file, which
+ * is planned from the history), so three things are not counted for one:
+ * - A translated column the main table keeps. Unattended provisioning (boot, `db:sync`, the
+ *   development reload) keeps such columns by design, and the push restores a kept column's value
+ *   rather than adding the column again, as a file would.
+ * - A translations column the save's target translates. A field joining translation takes a
+ *   column already there, judging its definition (`judgeCompanionColumns`), as one an earlier
+ *   apply moved or an unattended reconcile added.
+ * - The translations table itself, where the save turns translation on: an enable an earlier
+ *   apply left half-applied is finished. Its columns are still judged, against none recorded.
  */
 async function companionDriftItems(
   deps: CollectionSaveDeps,
   table: string,
   recordedTable: TableSpec,
-  runsFile: boolean
+  pushTarget: PushTarget | undefined
 ): Promise<DriftItem[]> {
   const dialect = deps.adapter.getCapabilities().dialect;
   const key = (name: string) => identifierKey(dialect, name);
@@ -1687,7 +1696,13 @@ async function companionDriftItems(
       ? false
       : recordedTable.localizedColumns !== undefined || undefined;
   const liveExists = await companionTableExists(deps.adapter, companion);
-  if (recordedExists !== undefined && recordedExists !== liveExists) {
+  const takenByEnable =
+    pushTarget?.translated === true && liveExists && recordedExists === false;
+  if (
+    recordedExists !== undefined &&
+    recordedExists !== liveExists &&
+    !takenByEnable
+  ) {
     return [
       {
         kind: liveExists ? "+" : "-",
@@ -1696,6 +1711,7 @@ async function companionDriftItems(
     ];
   }
   if (!liveExists) return [];
+  const taken = new Set([...(pushTarget?.columns ?? [])].map(key));
 
   const recorded = recordedTable.localizedColumns ?? [];
   const recordedKeys = new Set(recorded.map(key));
@@ -1710,7 +1726,7 @@ async function companionDriftItems(
   // translations table alone: a file turning translation off would add it to the main table again.
   const recordedOnMain = new Set(recordedTable.columns.map(c => key(c.name)));
   const onMain =
-    !runsFile || recorded.length === 0
+    pushTarget !== undefined || recorded.length === 0
       ? []
       : (await liveColumnsOf(deps.adapter, table))
           .map(c => c.name)
@@ -1720,7 +1736,9 @@ async function companionDriftItems(
           );
   return [
     ...live
-      .filter(column => !recordedKeys.has(key(column)))
+      .filter(
+        column => !recordedKeys.has(key(column)) && !taken.has(key(column))
+      )
       .map(column => ({
         kind: "+" as const,
         detail: `${companion}.${column} present in DB`,
@@ -1824,9 +1842,16 @@ async function companionIndexDriftItems(
  * per-language unique index that is (`companionDriftItems`).
  *
  * Judged only for a save that is translated before or after, and only where
- * the newest snapshot records the table and says which of its tables were
+ * the snapshot records the table and says which of its tables were
  * translated: a table no snapshot records is adopted from the database, and a
  * snapshot from before that record says nothing of its translations table.
+ *
+ * Judged, as `nextly migrate` judges a file, against both ends: the newest
+ * snapshot this database's ledger reaches (`newestReachedSnapshot`) and the
+ * newest in the folder. They differ where an earlier save stopped part way and
+ * kept its files, recorded applied nowhere: the table then stands between the
+ * two, and only one that matches neither is drift. The differences named are
+ * the applied history's.
  */
 async function refuseCompanionDrift(
   deps: CollectionSaveDeps,
@@ -1837,29 +1862,73 @@ async function refuseCompanionDrift(
   if (save.previous?.localized !== true && save.entity?.localized !== true) {
     return;
   }
-  const latest = await newestReachedSnapshot(deps);
-  const recordedTable = latest?.data.snapshot.tables.find(
-    t => t.name === table
-  );
-  if (latest === null || recordedTable === undefined) return;
-  const recordsTranslations =
-    latest.data.translatedFieldsRecorded === true ||
-    latest.data.snapshot.tables.some(t => t.localized === true);
-  if (!recordsTranslations) return;
-
-  const driftItems = await companionDriftItems(
-    deps,
-    table,
-    recordedTable,
-    road.runsFile
-  );
-  if (driftItems.length === 0) return;
-  const migration = latest.filename.replace(/\.snapshot\.json$/, "");
+  const pushTarget = road.runsFile ? undefined : pushTargetOf(deps, save);
+  const reached = await newestReachedSnapshot(deps);
+  const newest = await loadLatestSnapshot(join(deps.migrationsDir, "meta"));
+  const ends =
+    reached?.filename === newest?.filename ? [reached] : [reached, newest];
+  let named: { snapshot: LatestSnapshot; items: DriftItem[] } | undefined;
+  for (const end of ends) {
+    const items = await companionDriftAgainst(deps, end, table, pushTarget);
+    if (end === null || items.length === 0) return;
+    named ??= { snapshot: end, items };
+  }
+  if (named === undefined) return;
+  const migration = named.snapshot.filename.replace(/\.snapshot\.json$/, "");
   throw migrationDriftError({
     migration,
     file: join(deps.migrationsDir, `${migration}.sql`),
-    driftItems,
+    driftItems: named.items,
   });
+}
+
+/** What a push takes as it finds it (`companionDriftItems`): the save's translated target. */
+interface PushTarget {
+  /** Whether the save leaves the entity translated. */
+  translated: boolean;
+  /** The translations columns of the fields the save leaves translated. */
+  columns: ReadonlySet<string>;
+}
+
+/** The push's target of `save`, its translated columns named by the kind's column rule. */
+function pushTargetOf(
+  deps: CollectionSaveDeps,
+  save: CollectionSave
+): PushTarget {
+  const entity = save.entity;
+  const translated = entity?.localized === true;
+  return {
+    translated,
+    columns: new Set(
+      entity === null
+        ? []
+        : translatedColumnNames({
+            fields: entity.fields,
+            entityLocalized: translated,
+            dialect: deps.adapter.getCapabilities().dialect,
+            builtBy: kindOf(save).builtBy,
+          })
+    ),
+  };
+}
+
+/**
+ * The translations table's differences from `end`, or none where `end` cannot judge it: no
+ * snapshot, one that does not record the table, or one from before translations were recorded.
+ */
+async function companionDriftAgainst(
+  deps: CollectionSaveDeps,
+  end: LatestSnapshot | null,
+  table: string,
+  pushTarget: PushTarget | undefined
+): Promise<DriftItem[]> {
+  const recordedTable = end?.data.snapshot.tables.find(t => t.name === table);
+  if (end === null || recordedTable === undefined) return [];
+  const recordsTranslations =
+    end.data.translatedFieldsRecorded === true ||
+    end.data.snapshot.tables.some(t => t.localized === true);
+  if (!recordsTranslations) return [];
+  return companionDriftItems(deps, table, recordedTable, pushTarget);
 }
 
 /**
@@ -2598,7 +2667,13 @@ async function liveTable(
  * stand in the database while no file could be recorded for it. A save that adopts its table
  * writes a file describing the table as it stands, so it has nothing to judge.
  *
- * Two differences are not judged, since neither can leave the push's change unrecorded:
+ * As the reconcile judges a file, the table is drift only where it matches neither end: what the
+ * history before the files records, nor what the save's own newest snapshot says it becomes. A
+ * table already standing as the save will leave it (a rename an earlier apply made, or a join or
+ * an enable that moved the main table's column before it stopped) is one `nextly migrate` records
+ * without running a statement, and the push leaves it as it is.
+ *
+ * Neither can leave the push's change unrecorded, so two differences are not judged:
  * - A table the database lacks. The push builds it whole (a Single's save over its missing table
  *   plans the whole table again), and the table it leaves is compared with the save's file before
  *   anything is recorded (`recordWhatWasPushed`).
@@ -2613,19 +2688,35 @@ async function refuseDriftBeforePush(
   if (files.adopt !== undefined || first === undefined) return;
   if (!(await deps.adapter.tableExists(table))) return;
   const before = await scopedSnapshotBefore(deps, first, table);
-  const live = withoutKeptTranslatedColumns(
-    deps,
-    await liveTable(deps, table),
-    before,
-    table
-  );
+  const standing = await liveTable(deps, table);
+  const live = withoutKeptTranslatedColumns(deps, standing, before, table);
   if (snapshotsEquivalent(live, before)) return;
+  // Compared as it stands: a column the save moves into translation is still judged, so one given
+  // a default by hand is drift at either end.
+  const after = await savedTargetOf(deps, files, table);
+  if (after !== null && snapshotsEquivalent(standing, after)) return;
   const migration = first.replace(/\.sql$/, "");
   throw migrationDriftError({
     migration,
     file: join(deps.migrationsDir, first),
     driftItems: diffSnapshots(before, live).map(toDriftItem),
   });
+}
+
+/**
+ * `table` as the save's newest change file with a snapshot says the save leaves it, or null where
+ * none has one: the end `recordWhatWasPushed` compares the pushed table with.
+ */
+async function savedTargetOf(
+  deps: CollectionSaveDeps,
+  files: SaveFiles,
+  table: string
+): Promise<NextlySchemaSnapshot | null> {
+  for (const filename of [...files.change].reverse()) {
+    const snapshot = await snapshotOf(deps, filename);
+    if (snapshot !== null) return onlyTable(snapshot, table);
+  }
+  return null;
 }
 
 /**

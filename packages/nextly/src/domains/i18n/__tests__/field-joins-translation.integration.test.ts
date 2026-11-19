@@ -465,13 +465,12 @@ describeEachDialect("a shared field that becomes translated", dialect => {
     expect(row?.heading).toBe("Hello");
   });
 
-  it("keeps the value on main when moving it fails, so the drop never runs, and judges the next try by what the failure left", async () => {
+  it("keeps the value on main when moving it fails, so the drop never runs, and moves it on the next try", async () => {
     // The apply moves the value before it drops the main column, so a move that fails stops the
     // apply with the column, and its value, still in place: the drop is never let through on a
     // move that did not happen. PostgreSQL takes the whole apply back; SQLite and MySQL keep the
-    // companion's new, empty column, which the history does not record, so the next save is
-    // judged as drift before its push runs and refused with the way on: that column, dropped by
-    // hand, lets the same save finish.
+    // companion's new, empty column, which is the one the save's field joins translation in, so
+    // the next save's push takes it as it is and finishes.
     const id = await seedCollection();
     const dialog = PATHS.find(p => p.path.includes("schema dialog"));
     if (!dialog) throw new Error("the collection dialog path is missing");
@@ -504,16 +503,7 @@ describeEachDialect("a shared field that becomes translated", dialect => {
       (error: unknown) => error
     );
 
-    if (leftColumn) {
-      expectBuilderDriftWayOn(retried);
-      expect(await mainHeading("dc_posts", id)).toBe("Hello");
-      await query(
-        `ALTER TABLE ${quote(dialect, "dc_posts_locales")} DROP COLUMN ${quote(dialect, "heading")}`
-      );
-      await dialog.change(TRANSLATED);
-    } else {
-      expect(retried).toBeUndefined();
-    }
+    expect(retried).toBeUndefined();
     expect((await companionHeadings("dc_posts", id)).en).toBe("Hello");
     expect(await readCollection(id)).toBe("Hello");
   });
@@ -1019,9 +1009,12 @@ describeEachDialect("a shared field that becomes translated", dialect => {
       expect(await mainHeading(table, id)).toBe("Hello");
       expect(await columnsOf(`${table}_locales`)).not.toContain("heading");
 
-      // The way on, followed: the default taken off by hand, and the same save made again.
+      // The way on, followed: the column put back as the history records it by hand (on MySQL the
+      // default needed a VARCHAR, so the TEXT column comes back too), and the same save made again.
       await query(
-        `ALTER TABLE ${quote(dialect, table)} ALTER COLUMN ${quote(dialect, "heading")} DROP DEFAULT`
+        dialect === "mysql"
+          ? `ALTER TABLE ${quote(dialect, table)} MODIFY COLUMN ${quote(dialect, "heading")} TEXT NULL`
+          : `ALTER TABLE ${quote(dialect, table)} ALTER COLUMN ${quote(dialect, "heading")} DROP DEFAULT`
       );
       await change(TRANSLATED);
       expect((await companionHeadings(table, id)).en).toBe("Hello");
