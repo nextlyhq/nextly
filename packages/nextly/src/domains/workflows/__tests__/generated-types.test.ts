@@ -11,7 +11,11 @@ import { TypeGenerator } from "../../schema/services/type-generator";
 import type { DynamicCollectionRecord } from "../../../schemas/dynamic-collections/types";
 import type { DynamicSingleRecord } from "../../../schemas/dynamic-singles/types";
 import { reviewWorkflow } from "../preset";
-import { buildWorkflowRegistry, publishWorkflows } from "../registry";
+import {
+  buildWorkflowRegistry,
+  publishedWorkflows,
+  publishWorkflows,
+} from "../registry";
 
 const collection = (slug: string) =>
   ({
@@ -54,8 +58,15 @@ function generate(collections: string[], singles: string[]): string {
   ).code;
 }
 
+/**
+ * The registry this file found, put back after each case as the same object:
+ * the process-wide guard checks that each shared singleton is restored, not
+ * only emptied.
+ */
+const original = publishedWorkflows();
+
 afterEach(() => {
-  publishWorkflows(new Map());
+  publishWorkflows(original);
 });
 
 describe("generated types for an attached workflow", () => {

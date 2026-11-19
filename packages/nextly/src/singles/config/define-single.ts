@@ -41,14 +41,12 @@
 
 import {
   asDeclaredFields,
+  systemFieldsBeside,
   toTitleCase,
 } from "../../collections/config/declared-config";
-import type {
-  AuthorableFieldConfig,
-  FieldConfig,
-} from "../../collections/fields/types";
+import type { AuthorableFieldConfig } from "../../collections/fields/types";
 import type { SingleAccessControl } from "../../domains/auth/services/access-control-types";
-import { columnsDeclaredBy } from "../../domains/schema/services/field-column-descriptor";
+import { markDeclaredByDefine } from "../../shared/lib/config-problems";
 
 import type {
   SingleConfig,
@@ -57,7 +55,7 @@ import type {
   SingleHooks,
   SinglePreviewConfig,
 } from "./types";
-import { assertValidSingleConfig } from "./validate-single";
+import { validateSingleConfig } from "./validate-single";
 
 // ============================================================
 // Utility Functions
@@ -194,79 +192,62 @@ export function defineSingle(config: SingleConfigInput): SingleConfig {
   // - Nested field validation (array, group, blocks)
   // - Access function type validation (read/update only)
   // Validated as declared; narrowed to the shared union only after.
-  assertValidSingleConfig({
+  // Judged, not thrown: a configuration's load and the start judge every entity in it by the
+  // same rules (`configurationProblems`) and report every problem, where a throw here would stop
+  // at the first one, during the import. The entity is normalized all the same, since a plugin's
+  // setup may repair the problem and must leave what a valid declaration gives; only where the
+  // problem makes normalizing itself throw is the entry returned as declared. Either way it is
+  // marked (`markDeclaredByDefine`), which tells the start to refuse it rather than warn.
+  const accepted = validateSingleConfig({
     ...config,
     fields: asDeclaredFields(config.fields),
-  });
+  }).valid;
+  try {
+    // ============================================================
+    // Auto-inject system fields (title, slug)
+    // ============================================================
+    // Every Single has title and slug as system-level columns in its DB table
+    // (createDefaultDocument always writes them). If the user already defined
+    // fields with these names, their definitions take priority.
 
-  // ============================================================
-  // Auto-inject system fields (title, slug)
-  // ============================================================
-  // Every Single has title and slug as system-level columns in its DB table
-  // (createDefaultDocument always writes them). If the user already defined
-  // fields with these names, their definitions take priority.
+    const systemFields = systemFieldsBeside(config.fields);
 
-  // Keyed by the COLUMN each field becomes, not by its declared name. A field named `Title` owns
-  // the `title` column, so injecting the system one beside it declares that column twice and the
-  // table cannot be created — the injection has to ask the same question the generators do.
-  const userFieldColumns = columnsDeclaredBy(config.fields);
+    const fieldsWithSystem = [
+      ...systemFields,
+      ...asDeclaredFields(config.fields),
+    ];
 
-  const systemFields: FieldConfig[] = [];
+    // ============================================================
+    // Apply Defaults
+    // ============================================================
 
-  if (!userFieldColumns.has("title")) {
-    systemFields.push({
-      type: "text",
-      name: "title",
-      label: "Title",
-      required: true,
-      // i18n: the auto-injected system title is SHARED by default, matching
-      // collections (define-collection.ts). Localizing title/slug is a deliberate
-      // opt-in via a user-defined localized field, not a side effect of text fields
-      // localizing by default — otherwise a localized single would relocate its
-      // identity columns into the companion `_locales` table.
-      localized: false,
-    });
+    // Generate label from slug if not provided
+    const label: SingleLabel = {
+      singular: config.label?.singular ?? toTitleCase(config.slug),
+    };
+
+    // Build normalized config with defaults
+    const normalized: SingleConfig = {
+      ...config,
+      fields: fieldsWithSystem,
+      label,
+      admin: {
+        ...config.admin,
+        // `internal: true` implies hidden-from-nav (D30); explicit admin.hidden wins.
+        hidden: config.internal === true ? true : config.admin?.hidden,
+      },
+    };
+
+    // Marked as declared through this function, so a start refuses it should the configuration's
+    // load find a problem this call could not, such as a field type nothing registers.
+    return markDeclaredByDefine(
+      normalized,
+      systemFields.map(field => field.name)
+    );
+  } catch (error) {
+    if (accepted) throw error;
+    return markDeclaredByDefine({ ...config }) as unknown as SingleConfig;
   }
-
-  if (!userFieldColumns.has("slug")) {
-    systemFields.push({
-      type: "text",
-      name: "slug",
-      label: "Slug",
-      required: true,
-      unique: true,
-      // i18n: auto-injected system slug is SHARED by default (see title above).
-      localized: false,
-    });
-  }
-
-  const fieldsWithSystem = [
-    ...systemFields,
-    ...asDeclaredFields(config.fields),
-  ];
-
-  // ============================================================
-  // Apply Defaults
-  // ============================================================
-
-  // Generate label from slug if not provided
-  const label: SingleLabel = {
-    singular: config.label?.singular ?? toTitleCase(config.slug),
-  };
-
-  // Build normalized config with defaults
-  const normalized: SingleConfig = {
-    ...config,
-    fields: fieldsWithSystem,
-    label,
-    admin: {
-      ...config.admin,
-      // `internal: true` implies hidden-from-nav (D30); explicit admin.hidden wins.
-      hidden: config.internal === true ? true : config.admin?.hidden,
-    },
-  };
-
-  return normalized;
 }
 
 // ============================================================

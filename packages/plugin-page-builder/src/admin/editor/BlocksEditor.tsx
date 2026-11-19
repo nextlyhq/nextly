@@ -64,6 +64,7 @@ import {
   useLeavingWithHeldSettings,
 } from "./component-setting-hold";
 import { useConditionedPage } from "./conditioned-page";
+import { useCopySource } from "./copy-source";
 import { editorCanvasRegion } from "./editor-canvas-region";
 import {
   editorStrip,
@@ -81,7 +82,7 @@ import {
 import { insertCountsStoreFor } from "./editor-preference-stores";
 import { EditorSearch } from "./editor-search";
 import { editorSettings, usePageFacts } from "./editor-settings";
-import { editorTopBar } from "./editor-top-bar";
+import { useEditorTopBar } from "./editor-top-bar";
 import type { CardVerbs, EditorView } from "./editor-view";
 import { EditorHiddenColours } from "./hidden-colours";
 import {
@@ -746,6 +747,9 @@ function EditorBody<TFieldValues extends FieldValues>({
   } = view;
   // Page settings opened at a plugin check's tab, and heard closing.
   const settingsTabs = useSettingsTabRequestState(view.pages.openSettings);
+  // The stored entry this field's document is, which Save as section and
+  // Turn into component name, so the CSS it holds is no change to either.
+  const copySource = useCopySource(place.address);
   const { pageChecks, twoRegions, pageFacts } = usePageChecking({
     view,
     mount,
@@ -754,6 +758,26 @@ function EditorBody<TFieldValues extends FieldValues>({
     applied: conditions.applied,
     pageData,
     settingsClosed: settingsTabs.closed,
+  });
+
+  // Its columns are handed the same values while only the selection moves,
+  // so a selection draws none of it again.
+  const topBar = useEditorTopBar(view, {
+    title: page.title,
+    // Recorded by its address, so the recent page opens the same row after
+    // the rows are reordered.
+    field: place.address,
+    location: place.location,
+    canvas: canvas.canvasElement,
+    // "Preview as visitor", in Preview's menu.
+    visitor: conditions.visitor,
+    pageChecks,
+    pageFacts,
+    openSettingsTab: settingsTabs.ask,
+    pageData,
+    // The form, in the ⋯ menu: the same leave as the exit to the form, so it
+    // is offered exactly where that is.
+    openAsForm: shellExit(componentView, openAsForm),
   });
 
   return (
@@ -791,23 +815,7 @@ function EditorBody<TFieldValues extends FieldValues>({
             // the editor's OWN dirty signal: the form's is false for as long as the
             // editor is open, because the document is committed on the way out.
             // The title is the top bar's switcher, so the shell draws none.
-            {...editorTopBar(view, {
-              title: page.title,
-              // Recorded by its address, so the recent page opens the same row
-              // after the rows are reordered.
-              field: place.address,
-              location: place.location,
-              canvas: canvas.canvasElement,
-              // "Preview as visitor", in Preview's menu.
-              visitor: conditions.visitor,
-              pageChecks,
-              pageFacts,
-              openSettingsTab: settingsTabs.ask,
-              pageData,
-              // The form, in the ⋯ menu: the same leave as the exit to the
-              // form, so it is offered exactly where that is.
-              openAsForm: shellExit(componentView, openAsForm),
-            })}
+            {...topBar}
             // Pinned above the canvas: a template's entry it is drawn with, and
             // the visitor's view while it is on.
             // While a header is edited, its bar in the two-headers notice's
@@ -959,6 +967,9 @@ function EditorBody<TFieldValues extends FieldValues>({
           */}
               <SavePatternPrompt
                 document={savePattern.document}
+                // The stored entry the document is, so CSS it holds is no
+                // change to the saved section.
+                source={copySource}
                 selectedIds={editor.selection.ids}
                 onClose={savePattern.close}
                 returnFocusTo={savePattern.returnFocusTo}
@@ -971,6 +982,8 @@ function EditorBody<TFieldValues extends FieldValues>({
               />
               <ComponentFromSelectionPrompt
                 request={makeComponent.request}
+                // As for a saved section: the stored entry the document is.
+                source={copySource}
                 editor={editor}
                 library={componentLibrary}
                 onClose={makeComponent.close}

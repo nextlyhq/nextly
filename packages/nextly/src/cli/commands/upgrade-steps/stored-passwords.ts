@@ -47,7 +47,13 @@ export function storedPasswordsOn(
     registry = installRegistryResolver(adapter);
     registries.set(adapter, registry);
   }
-  return { adapter, registry, logger: consoleLogger };
+  // The service log's debug lines are left out: registering the tables a
+  // count reads is no part of what the command reports.
+  return {
+    adapter,
+    registry,
+    logger: { ...consoleLogger, debug: () => undefined },
+  };
 }
 
 /** How many passwords stored as given the counts add up to. */

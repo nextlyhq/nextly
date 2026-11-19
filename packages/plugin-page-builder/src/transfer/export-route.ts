@@ -20,7 +20,9 @@
 import {
   BASE_BREAKPOINT,
   collectStyleProperties,
+  cssTextProperties,
   DEFAULT_LIMITS,
+  DEFAULT_TOKEN_PREFIX,
   documentTokenUsage,
   isComponentDocument,
   onlySiteProperties,
@@ -29,6 +31,7 @@ import {
   styleSitePropertiesIn,
   tokenCustomProperty,
   tokenIdentity,
+  selectNodes,
   usableNamedClasses,
   type BlockDocument,
   type BlockRegistryReader,
@@ -152,18 +155,13 @@ async function exportItem(
     ...root.patterns.map(item => item.content),
     ...[...components.values()].map(item => item.content),
   ];
-  // The custom properties the documents' CSS text reads through `var()`: a
-  // shadow keeps its colour that way. Read by the usage index's own walk.
   const properties = new Set<string>();
   for (const document of documents) {
     collectDocumentReferences(document, references, {
       mediaProps: type => registryMediaProps(setup.blocks, type),
       imageExposures: componentId => images.get(componentId) ?? new Set(),
     });
-    for (const property of documentTokenUsage(document, DEFAULT_LIMITS)
-      .properties) {
-      properties.add(property);
-    }
+    for (const property of cssPropertiesOf(document)) properties.add(property);
   }
 
   const style = await siteStyleFor(ctx, reads, references, properties);
@@ -179,11 +177,43 @@ async function exportItem(
     layouts: root.layouts,
     classes: style.classes,
     tokens: style.tokens,
+    ...style.prefix,
     breakpoints: style.breakpoints,
     media,
     blockTypes: [...references.blockTypes].sort(),
   };
   return respondDoc(file);
+}
+
+/**
+ * The custom properties a document's CSS text reads through `var()`: a
+ * shadow keeps its colour that way. Read in its styles by the usage index's
+ * own walk, and in the page's and each block's custom CSS by the import's
+ * own match, so the file carries what an import points.
+ */
+function cssPropertiesOf(document: BlockDocument): Set<string> {
+  const found = new Set(
+    documentTokenUsage(document, DEFAULT_LIMITS).properties
+  );
+  for (const css of customCssOf(document)) {
+    for (const property of cssTextProperties(css)) found.add(property);
+  }
+  return found;
+}
+
+/**
+ * A document's custom CSS: the page's own, and that of every block the
+ * compiler selects, as the usage index's walk selects them.
+ */
+function customCssOf(document: BlockDocument): string[] {
+  const found: string[] = [];
+  if (typeof document.settings?.customCss === "string") {
+    found.push(document.settings.customCss);
+  }
+  for (const { node } of selectNodes(document, DEFAULT_LIMITS).nodes) {
+    if (typeof node.customCss === "string") found.push(node.customCss);
+  }
+  return found;
 }
 
 /** The item a file is made from, and the components it names directly. */
@@ -391,6 +421,8 @@ async function siteStyleFor(
 ): Promise<{
   classes: NamedClass[];
   tokens: SiteToken[];
+  /** The prefix the documents' `var()`s name the variables by, if named. */
+  prefix: { tokenPrefix?: string };
   breakpoints: TransferBreakpoint[];
 }> {
   references.breakpoints.delete(BASE_BREAKPOINT);
@@ -400,7 +432,7 @@ async function siteStyleFor(
     references.breakpoints.size === 0 &&
     properties.size === 0
   ) {
-    return { classes: [], tokens: [], breakpoints: [] };
+    return { classes: [], tokens: [], prefix: {}, breakpoints: [] };
   }
   await requireRead(ctx, ctx.self.singles[SITE_STYLE_SLUG] ?? SITE_STYLE_SLUG);
   const style = await reads.siteStyle();
@@ -419,8 +451,24 @@ async function siteStyleFor(
   return {
     classes,
     tokens: [...tokens],
+    prefix: prefixNamed(style, tokens),
     breakpoints: breakpointsUsed(style.breakpoints, references.breakpoints),
   };
+}
+
+/**
+ * The site's prefix as the file names it: only where the file carries a
+ * variable and the prefix isn't the default, which a file naming none is
+ * read as, so a file from a site on the default reads in an older Nextly.
+ */
+function prefixNamed(
+  style: SiteStyleData,
+  tokens: readonly SiteToken[]
+): { tokenPrefix?: string } {
+  const prefix = resolveTokenPrefix(style.tokens?.prefix).prefix;
+  return tokens.length === 0 || prefix === DEFAULT_TOKEN_PREFIX
+    ? {}
+    : { tokenPrefix: prefix };
 }
 
 /**

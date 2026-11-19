@@ -14,6 +14,13 @@ import type { IconFieldConfig } from "../fields/types/icon";
 
 import { defineCollection, type CollectionConfig } from "./define-collection";
 import { validateCollectionConfig } from "./validate-config";
+import { configurationProblems } from "../../shared/lib/config-problems";
+
+/** Every problem the configuration's load reports for these entities, as one text. */
+const problemText = (entities: Parameters<typeof configurationProblems>[0]) =>
+  configurationProblems(entities)
+    .map(problem => `[${problem.code}] ${problem.path}: ${problem.message}`)
+    .join("\n");
 
 function collectionCodes(field: IconFieldConfig): string[] {
   const config: CollectionConfig = {
@@ -50,13 +57,17 @@ describe("validateCollectionConfig: icon default", () => {
     }
   });
 
-  it("stops defineCollection, the entry every code-first collection goes through", () => {
-    expect(() =>
-      defineCollection({
-        slug: "features",
-        fields: [icon({ name: "badge", defaultValue: "Star" })],
+  it("is reported for a collection declared through defineCollection, the entry every code-first collection goes through", () => {
+    expect(
+      problemText({
+        collections: [
+          defineCollection({
+            slug: "features",
+            fields: [icon({ name: "badge", defaultValue: "Star" })],
+          }),
+        ],
       })
-    ).toThrow(/ICON_DEFAULT_INVALID/);
+    ).toMatch(/ICON_DEFAULT_INVALID/);
   });
 
   it("is applied by the single and field-group validators too", () => {

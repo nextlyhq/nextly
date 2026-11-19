@@ -36,6 +36,7 @@
  */
 import {
   resolveSiteTokens,
+  resolveTokenPrefix,
   tokenIdentity,
   usableNamedClasses,
   COMPONENT_INSTANCE_TYPE,
@@ -281,6 +282,7 @@ async function readSite(
     },
     classes: readsStyle ? usableNamedClasses(style.classes ?? []) : [],
     tokens: readsStyle ? resolveSiteTokens(style.tokens).tokens : [],
+    tokenPrefix: resolveTokenPrefix(style.tokens?.prefix).prefix,
     // The whole set, its unbounded base row included: a file breakpoint
     // always has a width, so it never matches the base, and the base counts
     // toward an axis's room as the stored set's own check counts it.
@@ -633,7 +635,7 @@ async function writeDocuments(
     const maps = (): ReferenceMaps => ({
       components: componentIds,
       classes: plan.classes.map,
-      tokens: plan.tokens.map,
+      tokens: plan.tokens.remap,
       breakpoints: plan.breakpoints,
       media,
     });
@@ -924,7 +926,7 @@ async function plannedStyle(
   const maps: ReferenceMaps = {
     components: new Map(),
     classes: plan.classes.map,
-    tokens: plan.tokens.map,
+    tokens: plan.tokens.remap,
     breakpoints: plan.breakpoints,
     media: new Map(),
   };

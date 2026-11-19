@@ -1263,7 +1263,7 @@ const COLLECTIONS_METHODS: Record<
           });
           // Thrown before the registry row is written: the row keeps the fields the database
           // held before, as the kept files record the change still to finish.
-          push.throwIfFailed(written?.files ?? []);
+          push.throwIfFailed(written?.files ?? [], written?.checked);
           const storedFields =
             written === undefined
               ? (fields as unknown as FieldDefinition[])
@@ -2186,6 +2186,8 @@ async function saveThroughWriter(
       fields: FieldDefinition[];
       applied: boolean;
       files: readonly string[];
+      /** Of kept files, the one a resolve checks against the database (the writer's). */
+      checked?: string | null;
       registryWritten: boolean;
     }
   | undefined
@@ -2216,6 +2218,7 @@ async function saveThroughWriter(
     fields: prepared.fields,
     applied: result.applied,
     files: result.files,
+    ...(result.checked === undefined ? {} : { checked: result.checked }),
     registryWritten: inFile,
   };
 }

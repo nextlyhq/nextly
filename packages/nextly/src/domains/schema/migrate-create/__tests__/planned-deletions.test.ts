@@ -7,6 +7,11 @@ import {
   buildDesiredSnapshotFromConfigForTest,
   type MinimalConfigEntity,
 } from "../generate";
+import {
+  coveredEntity,
+  type CoveredEntity,
+} from "../../migrate/entity-coverage";
+import { entityRowsOf } from "../../migrate/entity-shared-rows";
 import { judgedDeletions, type DeletionPlan } from "../planned-deletions";
 
 const POSTS: MinimalConfigEntity = {
@@ -174,5 +179,72 @@ describe("judgedDeletions", () => {
       ['DROP TABLE "dc_scratch"'],
     ]);
     expect(all).toEqual([]);
+  });
+});
+
+describe("judgedDeletions with the entities the plan knows", () => {
+  // `posts` keeps its tag links in `dc_posts_tags`, a junction it names itself.
+  const posts = coveredEntity({
+    kind: "collection",
+    slug: "posts",
+    tableName: "dc_posts",
+    fields: [
+      {
+        name: "tags",
+        type: "relationship",
+        options: {
+          relationType: "manyToMany",
+          target: "tags",
+          junctionTable: "dc_posts_tags",
+        },
+      },
+    ],
+  }) as CoveredEntity;
+
+  it("gives a removed entity's other tables its main table, and lists its rows in shared tables", () => {
+    const { main, all } = judge(
+      [['DROP TABLE "dc_posts_tags"', 'DROP TABLE "dc_posts"']],
+      {
+        entities: [posts],
+        removedEntities: [
+          { kind: "collection", slug: "posts", table: "dc_posts" },
+        ],
+      }
+    );
+    const owned = [
+      { kind: "table", table: "dc_posts_tags", owner: "dc_posts" },
+      {
+        kind: "table",
+        table: "dc_posts",
+        reason: "collection posts is no longer in the config",
+      },
+    ];
+    // The file's header names what the file deletes; the consent covers the run's rows too.
+    expect(main).toEqual(owned);
+    expect(all).toEqual([...owned, ...entityRowsOf(posts)]);
+  });
+
+  it("gives a junction dropped while its entity stays the entity's main table, and lists no shared rows", () => {
+    const { all } = judge([['DROP TABLE "dc_posts_tags"']], {
+      entities: [posts],
+    });
+    expect(all).toEqual([
+      { kind: "table", table: "dc_posts_tags", owner: "dc_posts" },
+    ]);
+  });
+});
+
+describe("judgedDeletions for a main table the plan does not retire", () => {
+  // `posts` stays declared, under a new table: the drop of its old one is no retirement.
+  const renamed = coveredEntity({
+    kind: "collection",
+    slug: "posts",
+    tableName: "dc_posts",
+    fields: [],
+  }) as CoveredEntity;
+
+  it("lists no rows in shared tables for it", () => {
+    const { all } = judge([['DROP TABLE "dc_posts"']], { entities: [renamed] });
+    expect(all).toEqual([{ kind: "table", table: "dc_posts" }]);
   });
 });

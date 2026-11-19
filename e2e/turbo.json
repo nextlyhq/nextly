@@ -16,6 +16,24 @@
         "$TURBO_ROOT$/templates/blog/src/lib/extract-toc.ts",
         "$TURBO_ROOT$/templates/blog/src/lib/format-date.ts"
       ]
+    },
+    // The page builder's speed runs, against a production build: where it is
+    // served and who it signs in as. Never cached, since each run measures.
+    "test:builder-speed": {
+      "cache": false,
+      "env": [
+        "BUILDER_SPEED_EMAIL",
+        "BUILDER_SPEED_PASSWORD",
+        "BUILDER_SPEED_PORT"
+      ]
+    },
+    "test:builder-long-session": {
+      "cache": false,
+      "env": [
+        "BUILDER_SPEED_EMAIL",
+        "BUILDER_SPEED_PASSWORD",
+        "BUILDER_SPEED_PORT"
+      ]
     }
   }
 }

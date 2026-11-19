@@ -18,7 +18,9 @@
  */
 import type { ValidationIssue } from "@nextlyhq/plugin-sdk/admin";
 import { renderHook, act, waitFor } from "@testing-library/react";
+import { fluidValue } from "@nextlyhq/blocks-engine";
 import type * as React from "react";
+import { createElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 /** What the stubbed read answers with for the test in hand. */
@@ -122,6 +124,7 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
 const {
   SITE_STYLE_PAUSE_MS,
   SiteStyleHistoryContext,
+  SiteStylePreviewContext,
   extendHeldSiteStyle,
   releaseHeldSiteStyle,
   useFontCatalogueClient,
@@ -199,6 +202,47 @@ describe("reading the site style", () => {
 
     expect(result.current.error).toBeNull();
     expect(result.current.siteStyle.breakpoints?.viewport).toHaveLength(2);
+  });
+
+  it("draws a code text style made fluid across a range held but not yet stored", () => {
+    // The range the author is changing is held over the read while its save
+    // waits; the canvas draws the code's fluid text style across it already.
+    const sizes = { small: 16, large: 32 };
+    const held = { min: 400, max: 800 };
+    const defaults = {
+      classes: [
+        {
+          id: "t-code-lead",
+          slug: "code-lead",
+          orderIndex: 0,
+          role: "text",
+          styles: {
+            base: {
+              base: { fontSize: fluidValue(sizes, { min: 360, max: 1280 }) },
+            },
+          },
+          fluidSizes: { base: sizes },
+        },
+      ],
+    } as never;
+    readAnswer = { data: {}, isPending: false, error: null };
+    const preview = new Map([
+      ["tokens" as const, { tokens: [], fluidRange: held }],
+    ]);
+    const { result } = renderHook(() => useSiteStyle(defaults), {
+      wrapper: ({ children }: { children: React.ReactNode }) =>
+        createElement(
+          SiteStylePreviewContext.Provider,
+          { value: preview },
+          children
+        ),
+    });
+    const lead = result.current.siteStyle.classes?.[0]?.styles as {
+      base: { base: { fontSize: unknown } };
+    };
+    expect(lead.base.base.fontSize).toBe(fluidValue(sizes, held));
+    // Nothing of it is stored: the stored tier holds no classes.
+    expect(result.current.stored.classes).toBeUndefined();
   });
 
   it("reports PENDING separately, because defaults alone are also a real answer", () => {
