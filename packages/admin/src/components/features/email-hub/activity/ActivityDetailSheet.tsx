@@ -259,9 +259,13 @@ function Details({
   now: Date;
 }): JSX.Element {
   const slug = data.detail.templateSlug;
+  // "Not sent yet" only for an email still to be sent that has had no
+  // attempt: one attempted before has had its version pruned, not never sent.
   const version = versionText(
     data.detail.templateVersion,
-    data.source === "queued" && isUnsettled(data.detail.state)
+    data.source === "queued" &&
+      isUnsettled(data.detail.state) &&
+      data.detail.attempts === 0
   );
   return (
     <dl className="grid grid-cols-1 gap-3 sm:grid-cols-2">

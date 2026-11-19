@@ -347,6 +347,16 @@ describe("failureKindOf", () => {
       "retryable"
     );
     expect(failureKindOf(lost)).toBe("retryable");
+    // A later retry that failed before any provider was asked records its
+    // own failure and no attempt: it never borrows the earlier unknown.
+    const later = {
+      retryable: true,
+      reason: "The attempt failed before a provider was asked.",
+    };
+    expect(failureKindOf(later, newest({}))).toBe("retryable");
+    expect(
+      failureKindOf({ ...lost, status: 503 }, newest({ failureStatus: null }))
+    ).toBe("retryable");
     // A refusal stays one, whatever an earlier attempt said.
     expect(failureKindOf({ retryable: false, reason: "x" }, newest({}))).toBe(
       "refused"

@@ -128,6 +128,21 @@ describe("the detail sheet", () => {
     expect(screen.getByRole("link", { name: "Fix template" })).toBeTruthy();
   });
 
+  it("never calls a retrying email with attempts behind it unsent, when its version was pruned", () => {
+    showing(
+      queuedDetail({
+        state: "retrying",
+        attempts: 2,
+        templateCaused: false,
+        templateVersion: null,
+        timeline: [],
+      })
+    );
+    renderSheet();
+    expect(screen.queryByText("Not sent yet")).toBeNull();
+    expect(screen.getByText("No version recorded")).toBeTruthy();
+  });
+
   it("says a queued email that hasn't been tried has no attempt yet, and no version yet", () => {
     showing(
       queuedDetail({
@@ -264,7 +279,13 @@ describe("the detail sheet", () => {
           retryable: true,
           reason: "The provider's answer was lost.",
         },
-        timeline: [{ ...ATTEMPT, failureKind: "unknown" }],
+        timeline: [
+          {
+            ...ATTEMPT,
+            failureKind: "unknown",
+            failureReason: "The provider's answer was lost.",
+          },
+        ],
       })
     );
     renderSheet();

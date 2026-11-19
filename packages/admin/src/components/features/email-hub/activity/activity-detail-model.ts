@@ -101,9 +101,11 @@ export type DetailSource = "delivery" | "attempt" | "queued";
  *
  * The queue's row keeps only whether its failure is retryable, never that its
  * outcome is unknown, so a lost or missing answer is read from its newest
- * attempt: when that attempt failed with an unknown outcome and the row's
- * failure is retryable too, the two are the same answer. Otherwise the row
- * decides: worth trying again, or refused for good.
+ * attempt: when that attempt failed with an unknown outcome and recorded the
+ * same failure as the row (core's same sentence and status), the two are one
+ * answer. A later retry that failed before reaching a provider records a
+ * failure of its own and no attempt, so it never borrows an earlier attempt's
+ * unknown. Otherwise the row decides: worth trying again, or refused for good.
  */
 export function failureKindOf(
   failure: EmailFailure | null,
@@ -114,7 +116,9 @@ export function failureKindOf(
     failure.unknown ||
     (failure.retryable &&
       newest?.outcome === "failed" &&
-      newest.failureKind === "unknown")
+      newest.failureKind === "unknown" &&
+      newest.failureReason === failure.reason &&
+      (newest.failureStatus ?? null) === (failure.status ?? null))
   ) {
     return "unknown";
   }
