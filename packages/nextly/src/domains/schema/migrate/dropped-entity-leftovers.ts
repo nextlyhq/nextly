@@ -117,19 +117,12 @@ export async function removeDroppedEntityLeftovers(args: {
     try {
       // A translations table is a table: dropped on its own, ahead of the rows'
       // transaction, which on MySQL a schema statement inside would commit.
-      for (const table of entity.tables) {
-        const translations = `${table}_locales`;
-        if (args.dropTranslations?.has(translations) !== true) continue;
-        if (
-          await dropTranslationsTable(
-            adapter,
-            table,
-            "the removal of what a deleted entity left"
-          )
-        ) {
-          dropped.push(translations);
-        }
-      }
+      await dropCoveredTranslations(
+        adapter,
+        entity,
+        args.dropTranslations,
+        dropped
+      );
       const removed = await adapter.transaction(async tx => {
         const scoped = teardownAdapterIn(adapter, tx);
         let values = 0;
@@ -161,20 +154,16 @@ export async function removeDroppedEntityLeftovers(args: {
         continue;
       }
       removedFrom.push(
-        `${word} "${entity.slug}" left: ${[
-          ...dropped.map(table => `its translations table ${table}`),
+        removedLine(word, entity.slug, [
+          ...droppedParts(dropped),
           plural(removed.values, "field group value"),
           plural(removed.translations, "translation row"),
-        ].join(", ")}`
+        ])
       );
     } catch (error) {
       left.push(`${word} "${entity.slug}"`);
       if (dropped.length > 0) {
-        removedFrom.push(
-          `${word} "${entity.slug}" left: ${dropped
-            .map(table => `its translations table ${table}`)
-            .join(", ")}`
-        );
+        removedFrom.push(removedLine(word, entity.slug, droppedParts(dropped)));
       }
       logger.warn(
         `Could not remove what the deleted ${word} "${entity.slug}" left: ${causeOf(
@@ -184,6 +173,46 @@ export async function removeDroppedEntityLeftovers(args: {
     }
   }
   return { removed: removedFrom, left };
+}
+
+/**
+ * Drops each of `entity`'s translations tables `covered` names (the run's
+ * consent covers them), adding each one dropped to `dropped` as it goes, so a
+ * later failure still finds the ones that went.
+ */
+async function dropCoveredTranslations(
+  adapter: DrizzleAdapter,
+  entity: DroppedEntity,
+  covered: ReadonlySet<string> | undefined,
+  dropped: string[]
+): Promise<void> {
+  for (const table of entity.tables) {
+    const translations = `${table}_locales`;
+    if (covered?.has(translations) !== true) continue;
+    if (
+      await dropTranslationsTable(
+        adapter,
+        table,
+        "the removal of what a deleted entity left"
+      )
+    ) {
+      dropped.push(translations);
+    }
+  }
+}
+
+/** The report's words for the translations tables dropped. */
+function droppedParts(dropped: readonly string[]): string[] {
+  return dropped.map(table => `its translations table ${table}`);
+}
+
+/** One report line: the entity, and what of what it left went. */
+function removedLine(
+  word: string,
+  slug: string,
+  parts: readonly string[]
+): string {
+  return `${word} "${slug}" left: ${parts.join(", ")}`;
 }
 
 /** A translations table a dropped entity left standing, with the entity and the table it translated. */
