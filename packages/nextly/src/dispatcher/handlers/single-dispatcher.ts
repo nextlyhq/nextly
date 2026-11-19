@@ -56,6 +56,7 @@ import { resolveCompanionRename } from "../../domains/i18n/migration/companion-r
 import { translationLayoutChange } from "../../domains/i18n/per-language-storage";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
 import { assertLanguageStatesAgreeWithEntry } from "../../domains/i18n/runtime/language-states-agree";
+import { refuseUnansweredDialogQuestions } from "../../domains/schema/builder-save/dialog-questions";
 import {
   FirstQuestionWatch,
   landingPush,
@@ -1856,6 +1857,26 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
                   tableName,
                 }),
               afterFile: () => reconcileBuilderCompanion("single", companion),
+              // The push's questions, asked of the file before anything is written: a rename the
+              // request does not answer, or a drop it does not confirm, refuses the save as the
+              // push refuses it.
+              questions: () =>
+                refuseUnansweredDialogQuestions({
+                  desired,
+                  db,
+                  dialect,
+                  tableName,
+                  oldFields: (single.fields ??
+                    []) as unknown as FieldDefinition[],
+                  newFields: fields as unknown as FieldDefinition[],
+                  wasLocalized,
+                  isLocalized,
+                  renameResolutions: renameResolutions ?? [],
+                  eventResolutions: eventResolutions ?? [],
+                  ...(legacyBundle === undefined
+                    ? {}
+                    : { legacy: legacyBundle }),
+                }),
               // On the file road the row is written in the file's own transaction, so a failed
               // write leaves the save as it was and is answered as the failure it is. Not where the
               // translations table is reconciled after the file: the row would then record the

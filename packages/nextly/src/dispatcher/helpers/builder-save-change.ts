@@ -125,6 +125,12 @@ export async function writeBuilderSchemaChange(
   fileRoad?: {
     pushWhen: () => Promise<boolean>;
     afterFile: () => Promise<void>;
+    /**
+     * The questions the push asks before it changes anything, asked of the save's file where it
+     * runs instead, before anything is written: a rename the request does not answer, or a drop it
+     * does not confirm, refuses the save as the push refuses it (`refuseUnansweredDialogQuestions`).
+     */
+    questions?: () => Promise<void>;
     registry?: () => Promise<void>;
   }
 ): Promise<{ registryWritten: boolean }> {
@@ -136,6 +142,7 @@ export async function writeBuilderSchemaChange(
   // against the live table; only where the answer is used, a save the writer runs.
   const runsFile =
     deps.applies && fileRoad !== undefined && !(await fileRoad.pushWhen());
+  if (runsFile) await fileRoad.questions?.();
   const { save } = saveOfSchemaChange({
     ...change,
     row: {

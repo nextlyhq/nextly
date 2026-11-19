@@ -754,11 +754,10 @@ describeEachDialect("a translated field that is renamed", dialect => {
   ];
 
   // Before translation is on, `heading` is a main-table column, so its drop is asked about like any
-  // other. A schema dialog's push asks for it by field: refused with no answer, and applied once the
-  // admin confirms it. A dialog whose save runs its file applies it on the dialog's confirm, which
-  // listed the drop, as it does for an entity that is not translated.
+  // other, by field: refused with no answer, and applied once the admin confirms it (below). A
+  // dialog whose save runs its file asks it as the push does, before anything is written.
   it.each(ENABLING_DIALOGS)(
-    "refuses an unconfirmed drop, or applies it on the dialog's confirm, in the save that turns translation on, when $path applies",
+    "refuses an unconfirmed drop in the save that turns translation on, when $path applies",
     async ({ table, seed, apply }) => {
       const id = await seed();
 
@@ -767,11 +766,6 @@ describeEachDialect("a translated field that is renamed", dialect => {
         (error: unknown) => error
       );
 
-      if (runsItsFile(table)) {
-        expect(refusal).toBeUndefined();
-        expect(await columnsOf(table)).not.toContain("heading");
-        return;
-      }
       expect(reported(refusal)).toMatch(/cancelled/);
       expect(await mainValue(table, "heading", id)).toBe("Hello");
     }
