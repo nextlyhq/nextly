@@ -98,6 +98,7 @@ import {
   snapshotsEquivalent,
   toDriftItem,
 } from "../migrate/drift-reconcile";
+import { groupMigrationFiles } from "../migrate/migration-groups";
 import { refuseRequiredColumnsOverNulls } from "../migrate/required-column-guard";
 import { resolveMigration } from "../migrate/resolve";
 import { marksNoTransaction, splitSqlStatements } from "../migrate/split-sql";
@@ -165,6 +166,7 @@ import {
   refuseFieldTypeChanges,
 } from "../value-conversion/type-change/field-type-changes";
 
+import { asBuilderSaveDrift } from "./builder-save-drift";
 import { nextSteps, partlyAppliedChange } from "./landing-push";
 import {
   openSaveRecords,
@@ -384,6 +386,12 @@ export async function writeCollectionSave(
      * join, and the work then runs on its own after the file.
      */
     inLastTransaction?: () => Promise<void>;
+    /**
+     * With `appliedBy`, the push builds the whole table again from the definition (a Single's
+     * save over its missing table): a table the database lacks is then the push's to build, not
+     * drift. Anywhere else a missing table is drift, as `nextly migrate` judges it.
+     */
+    buildsWholeTable?: boolean;
   } = {}
 ): Promise<CollectionSaveResult> {
   // A drift refusal leaves the save's files withdrawn, so it is told with the Builder's way on.
@@ -419,7 +427,9 @@ async function writeCollectionSaveOnce(
         // Judged before the push, as the file road's reconcile judges a file before its statements:
         // a push over a table the history does not describe would change it and leave the files
         // unrecordable.
-        await refuseDriftBeforePush(deps, written.files, written.table);
+        await refuseDriftBeforePush(deps, written.files, written.table, {
+          buildsWholeTable: options.buildsWholeTable === true,
+        });
         const applied = await options.appliedBy();
         pushed = true;
         if (applied === "partly-applied") {
@@ -460,46 +470,6 @@ async function writeCollectionSaveOnce(
       throw error;
     }
   }, deps.logger);
-}
-
-/**
- * `error` told with the Builder's way on (`migrationDriftError`'s `builderSave`) where it is a
- * drift refusal naming its differences: the file road's reconcile, the push's check before it
- * (`refuseDriftBeforePush`) and the translations table's (`refuseCompanionDrift`). Each refuses
- * before anything runs, and the save withdraws its files, so `nextly migrate`'s recoveries, which
- * name the file or compare the definitions with the history, have nothing to act on. Any other
- * error is answered as it is: a database never adopted has its own recovery, and a refusal after
- * the push (`recordWhatWasPushed`) keeps the files and names the one to record.
- */
-function asBuilderSaveDrift(error: unknown): unknown {
-  if (!NextlyError.is(error) || error.code !== "NEXTLY_MIGRATION_DRIFT") {
-    return error;
-  }
-  const context = error.logContext ?? {};
-  const driftItems: unknown = context.driftItems;
-  if (
-    !Array.isArray(driftItems) ||
-    !driftItems.every(isDriftItem) ||
-    context.unadoptedDatabase === true ||
-    typeof context.migration !== "string"
-  ) {
-    return error;
-  }
-  return migrationDriftError({
-    migration: context.migration,
-    file: `${context.migration}.sql`,
-    driftItems,
-    builderSave: true,
-  });
-}
-
-/** Whether `value` is a drift line as `migrationDriftError` records it. */
-function isDriftItem(value: unknown): value is DriftItem {
-  if (typeof value !== "object" || value === null) return false;
-  const { kind, detail } = value as { kind?: unknown; detail?: unknown };
-  return (
-    (kind === "+" || kind === "-" || kind === "?") && typeof detail === "string"
-  );
 }
 
 /**
@@ -1946,27 +1916,32 @@ async function companionDriftAgainst(
  * file's target: judged against the kept file, the table the save left would read as drift, and
  * no later save could get past it. Where the ledger records no file applied, the newest snapshot
  * stands.
+ *
+ * Read by migration, as the runner groups the folder (`groupMigrationFiles`): a migration written
+ * only as a dialect's variant (`<name>.mysql.sql`) is recorded under its base name, and its
+ * snapshot is the base name's.
  */
 async function newestReachedSnapshot(
   deps: CollectionSaveDeps
 ): Promise<LatestSnapshot | null> {
   const metaDir = join(deps.migrationsDir, "meta");
-  const files = await sqlFiles(deps.migrationsDir);
+  const migrations = [
+    ...groupMigrationFiles(await sqlFiles(deps.migrationsDir)).keys(),
+  ].sort((a, b) => a.localeCompare(b));
   const repo = new SchemaEventsRepository(
     deps.adapter.getDrizzle(),
     deps.adapter.getCapabilities().dialect
   );
-  let reached: string | undefined;
-  for (const filename of [...files].reverse()) {
-    if (await repo.isFileApplied(filename)) {
-      reached = filename;
+  let reached: number | undefined;
+  for (let at = migrations.length - 1; at >= 0; at -= 1) {
+    if (await repo.isFileApplied(`${migrations[at]}.sql`)) {
+      reached = at;
       break;
     }
   }
   if (reached === undefined) return loadLatestSnapshot(metaDir);
-  const upTo = reached;
-  for (const filename of files.filter(f => f <= upTo).reverse()) {
-    const name = filename.replace(/\.sql$/, ".snapshot.json");
+  for (const migration of migrations.slice(0, reached + 1).reverse()) {
+    const name = `${migration}.snapshot.json`;
     const content = await readIfPresent(join(metaDir, name));
     if (content !== undefined) {
       return { filename: name, data: parseSnapshotFile(content, name) };
@@ -2691,19 +2666,24 @@ async function liveTable(
  * without running a statement, and the push leaves it as it is.
  *
  * Neither can leave the push's change unrecorded, so two differences are not judged:
- * - A table the database lacks. The push builds it whole (a Single's save over its missing table
- *   plans the whole table again), and the table it leaves is compared with the save's file before
- *   anything is recorded (`recordWhatWasPushed`).
+ * - A table the database lacks, where the push builds it whole (`buildsWholeTable`: a Single's
+ *   save over its missing table plans the whole table again). The table it leaves is compared
+ *   with the save's file before anything is recorded (`recordWhatWasPushed`). Elsewhere a missing
+ *   table is drift: a collection table dropped outside the saves would otherwise come back empty
+ *   and be recorded as if nothing had happened.
  * - A translated column the main table keeps (`withoutKeptTranslatedColumns`).
  */
 async function refuseDriftBeforePush(
   deps: CollectionSaveDeps,
   files: SaveFiles,
-  table: string
+  table: string,
+  push: { buildsWholeTable: boolean }
 ): Promise<void> {
   const first = files.change[0];
   if (files.adopt !== undefined || first === undefined) return;
-  if (!(await deps.adapter.tableExists(table))) return;
+  if (push.buildsWholeTable && !(await deps.adapter.tableExists(table))) {
+    return;
+  }
   const before = await scopedSnapshotBefore(deps, first, table);
   const standing = await liveTable(deps, table);
   const live = withoutKeptTranslatedColumns(deps, standing, before, table);

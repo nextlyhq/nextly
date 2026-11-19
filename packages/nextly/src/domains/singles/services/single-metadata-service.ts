@@ -1256,7 +1256,11 @@ export class SingleMetadataService {
     };
     let written: Awaited<ReturnType<typeof writeEntitySave>>;
     try {
-      written = await writeEntitySave(deps, save, applyAndRecord);
+      // A plan that builds the whole table again (its table missing) builds what the database
+      // lacks, so the check before the push does not take the missing table for drift.
+      written = await writeEntitySave(deps, save, applyAndRecord, {
+        buildsWholeTable: plan?.describesWholeTable === true,
+      });
     } catch (error) {
       if (ran.result === undefined) throw error;
       this.logger.error(

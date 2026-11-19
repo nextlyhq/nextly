@@ -275,7 +275,6 @@ function builderSaveDriftError(
   ].join("\n");
   return new NextlyError({
     code: "NEXTLY_MIGRATION_DRIFT",
-    statusCode: 409,
     publicMessage,
     logContext: {
       migration: args.migration,

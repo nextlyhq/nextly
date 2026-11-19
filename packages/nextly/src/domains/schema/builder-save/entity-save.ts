@@ -88,6 +88,11 @@ export async function writeEntitySave(
      * writer's `inLastTransaction`): a registry write that commits or rolls back with the file.
      */
     inLastTransaction?: () => Promise<void>;
+    /**
+     * `apply` builds the whole table again from the definition (the writer's `buildsWholeTable`),
+     * so a table the database lacks is not drift.
+     */
+    buildsWholeTable?: boolean;
   } = {}
 ): Promise<CollectionSaveResult | undefined> {
   if (deps === undefined) {
@@ -112,6 +117,7 @@ export async function writeEntitySave(
     // elsewhere it runs once they are written. Either way a failure that
     // changed nothing withdraws them.
     ...(deps.applies ? { appliedBy: run } : { appliedAfter: run }),
+    ...(options.buildsWholeTable === true ? { buildsWholeTable: true } : {}),
   });
 }
 

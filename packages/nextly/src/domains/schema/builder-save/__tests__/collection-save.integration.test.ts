@@ -1446,6 +1446,42 @@ describe.each(getConfiguredTestDialects())(
       expect(await columns()).toEqual(live);
     });
 
+    // A collection's table dropped outside the saves is drift: pushed over, it would come back
+    // empty and the save would be recorded as if nothing had happened. Only a save that builds the
+    // whole table again (a Single's over its missing table) takes the table's absence as its own.
+    it("refuses a pushed save over a collection table dropped outside the saves, naming it, and builds nothing", async () => {
+      await writeCollectionSave(deps(), {
+        slug: "posts",
+        previous: null,
+        entity: posts([text("title")]),
+        change: "create",
+      });
+      await adapter.executeQuery(`DROP TABLE dc_posts`);
+      const files = migrationFiles();
+      const applied = await appliedRows();
+      const push = vi.fn(() => Promise.resolve());
+
+      const refused: unknown = await writeCollectionSave(
+        deps(),
+        {
+          slug: "posts",
+          previous: posts([text("title")]),
+          entity: posts([text("title"), text("subtitle")]),
+          change: "update",
+        },
+        { appliedBy: push }
+      ).catch((error: unknown) => error);
+
+      expect(refused).toMatchObject({ code: "NEXTLY_MIGRATION_DRIFT" });
+      expect(
+        String((refused as { publicMessage?: unknown }).publicMessage)
+      ).toContain("table 'dc_posts' absent from DB");
+      expect(push).not.toHaveBeenCalled();
+      expect(migrationFiles()).toEqual(files);
+      expect(await appliedRows()).toEqual(applied);
+      expect(await adapter.tableExists("dc_posts")).toBe(false);
+    });
+
     // The save's second file, its translations table's, is refused at its first statement. On
     // SQLite and PostgreSQL the save's files run as one unit, in one transaction, so the first goes
     // back with it: no file is applied or left, and the definition is as it was. MySQL commits each
