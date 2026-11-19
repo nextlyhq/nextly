@@ -261,9 +261,48 @@
   cursor: not-allowed;
 }
 
+/*
+ * The picture's box: the dimmed picture and the panel saying why share one
+ * grid cell, so the panel lies over the picture and the box is as tall as
+ * the taller of the two; a long reason grows the box rather than being cut.
+ */
 .nx-page-start__tile-picture {
+  display: grid;
+  width: 8rem;
+}
+
+.nx-page-start__tile-picture > * {
+  grid-area: 1 / 1;
+}
+
+.nx-page-start__tile-thumb {
   display: block;
-  opacity: 0.5;
+  opacity: 0.35;
+}
+
+/*
+ * Positioned and stacked above the picture: the picture's own opacity makes
+ * it a layer of its own, which would otherwise paint over the panel and its
+ * words. Its words are set close enough to fit a picture's height, so the
+ * tile is as tall as the others.
+ */
+.nx-page-start__tile-why {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 0.125rem;
+  min-width: 0;
+  padding: 0.25rem;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--nx-builder-panel) 85%, transparent);
+}
+
+.nx-page-start__tile-why .nx-page-start__tile-note,
+.nx-page-start__tile-why .nx-page-start__tile-reason {
+  font-size: 0.6875rem;
+  line-height: 1.15;
 }
 
 .nx-page-start__tile-note,

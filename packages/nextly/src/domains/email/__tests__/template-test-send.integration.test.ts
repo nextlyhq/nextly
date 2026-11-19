@@ -187,6 +187,38 @@ for (const dialect of getConfiguredTestDialects()) {
       expect(stored.subject).toBe("Order {{ number }}");
     });
 
+    it("sends a written draft as its blocks on screen, not its saved ones", async () => {
+      const { staffId } = await boot(dialect);
+      const heading = (text: string) => ({
+        version: 1 as const,
+        blocks: [
+          { type: "heading" as const, text: [{ type: "text" as const, text }] },
+        ],
+      });
+      const { item } = await current!.nextly.emailTemplates.create({
+        data: {
+          name: "Order paid",
+          slug: "order-paid",
+          subject: "Paid",
+          htmlContent: "",
+          format: "written",
+          blocks: heading("Saved heading"),
+          isActive: true,
+        },
+      });
+
+      await asStaff(
+        staffId,
+        "sendTestTemplate",
+        { templateId: item.id },
+        { draft: { format: "written", blocks: heading("Edited heading") } }
+      );
+
+      expect(sent).toHaveLength(1);
+      expect(sent[0].html).toContain("Edited heading");
+      expect(sent[0].html).not.toContain("Saved heading");
+    });
+
     it("names the provider that will deliver it, before and after sending", async () => {
       const { templateId, staffId } = await boot(dialect);
       const capturing = {
