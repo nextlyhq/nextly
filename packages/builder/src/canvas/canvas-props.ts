@@ -244,6 +244,15 @@ export interface CanvasProps {
    * `document` with the entry the seam names.
    */
   composed?: BlockDocument;
+  /**
+   * Words drawn in a grey box in the page's place, between `regions`, for a
+   * document view with no page of its own (a header and footer shown around
+   * where any page goes). `document` is still drawn, so the site's styles
+   * reach the regions as on a page; a host passing this passes an empty one.
+   * Absent, the page is drawn alone, as it always is.
+   * @experimental Settles with the header & footer set view.
+   */
+  placeholder?: string;
 }
 
 /** A region of the page's layout as the canvas draws it while it is edited. */

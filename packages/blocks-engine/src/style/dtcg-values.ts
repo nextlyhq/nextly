@@ -17,6 +17,7 @@ import { parseColor, type Rgb } from "./contrast";
 import { asciiLower, checkCssValue, decodeIdentifier } from "./css-value";
 import { cssFamilyName, familyToDtcg } from "./dtcg-css-text";
 import { DTCG_TYPE, type DtcgNode, isPlainObject, issue } from "./dtcg-format";
+import { shadowFromDtcg, shadowToDtcg } from "./dtcg-shadow";
 import { type SiteToken, tokenValueFetches } from "./site-tokens";
 
 /** The line a fluid size's `$description` names its `clamp()` with. */
@@ -46,10 +47,13 @@ export interface TypedValue {
  * the shape that lets an approval and an emission disagree about what was
  * approved.
  */
-export function typedValue(token: SiteToken): TypedValue | undefined {
+export function typedValue(
+  token: SiteToken,
+  aliasOf: AliasOf = noAlias
+): TypedValue | undefined {
   const type = DTCG_TYPE[token.kind];
   if (type === undefined) return undefined;
-  const value = toDtcgValue(token);
+  const value = toDtcgValue(token, aliasOf);
   if (value !== undefined) return { type, value, fluid: false };
   if (token.kind !== "dimension") return undefined;
   const largest = fluidLargestPixels(token.values.light.trim());
@@ -57,6 +61,15 @@ export function typedValue(token: SiteToken): TypedValue | undefined {
     ? undefined
     : { type, value: { value: largest, unit: "px" }, fluid: true };
 }
+
+/**
+ * A `var()` of a colour variable as an alias to it (`{color.brand}`), or
+ * nothing: how a shadow's colour variable is written. The caller knows the
+ * site's variables and prefix; a value read alone knows neither.
+ */
+export type AliasOf = (reference: string) => string | undefined;
+
+const noAlias: AliasOf = () => undefined;
 
 /**
  * The units the format allows, named once for both directions.
@@ -69,7 +82,7 @@ const DTCG_LENGTH_UNITS = ["px", "rem"];
 const DTCG_TIME_UNITS = ["ms", "s"];
 
 /** A token's light value in the shape its `$type` requires, or `undefined`. */
-function toDtcgValue(token: SiteToken): unknown {
+function toDtcgValue(token: SiteToken, aliasOf: AliasOf): unknown {
   const css = token.values.light.trim();
   switch (token.kind) {
     case "color":
@@ -84,12 +97,18 @@ function toDtcgValue(token: SiteToken): unknown {
       return weightToDtcg(css);
     case "number":
       return numberToDtcg(css);
-    // A CSS shadow is a list of lengths and a colour in an order DTCG models as
-    // named fields. Converting it means parsing the shorthand, which is the
-    // kind of guessing the DTCG conversion exists to avoid; the extension
-    // carries it.
+    // Read with the engine's one shadow reader, and written as fields only
+    // where every layer reads as them; any other shadow has no conformant
+    // value, and the extension carries it.
     case "shadow":
-      return undefined;
+      return shadowToDtcg(css, {
+        colour: colorToDtcg,
+        length: text =>
+          text === "0"
+            ? { value: 0, unit: "px" }
+            : measureToDtcg(text, DTCG_LENGTH_UNITS),
+        alias: aliasOf,
+      });
     default:
       return undefined;
   }
@@ -225,10 +244,15 @@ function numberToDtcg(css: string): number | undefined {
   return Number.isFinite(value) ? value : undefined;
 }
 
-/** A weight as a number, or one of the two keywords the format names. */
+/**
+ * A weight as a number from 1 to 1000, the range both CSS and the format
+ * allow, or one of the two keywords the format names.
+ */
 function weightToDtcg(css: string): number | string | undefined {
   const numeric = numberToDtcg(css);
-  if (numeric !== undefined) return numeric;
+  if (numeric !== undefined) {
+    return numeric >= 1 && numeric <= 1000 ? numeric : undefined;
+  }
   const keyword = css.toLowerCase();
   return keyword === "normal" || keyword === "bold" ? keyword : undefined;
 }
@@ -382,8 +406,12 @@ const FROM_DTCG: Readonly<
         ? value
         : undefined,
   number: value => (typeof value === "number" ? String(value) : undefined),
-  // A shadow has no DTCG value this reads; its CSS travels in the extension.
-  shadow: () => undefined,
+  // A shadow's fields, layer by layer, with the same colour and size readers.
+  shadow: value =>
+    shadowFromDtcg(value, {
+      colour: colorFromDtcg,
+      length: measureFromDtcg(DTCG_LENGTH_UNITS),
+    }),
   // A string variable's text is the custom value itself.
   custom: value => (typeof value === "string" ? value : undefined),
 };

@@ -49,6 +49,7 @@ import {
   EMPTY_DISCLOSURE_SELECTOR,
   EMPTY_TEXT_SELECTOR,
 } from "./empty-slot";
+import { PAGE_PLACEHOLDER_ATTRIBUTE } from "./page-placeholder";
 
 const ROOT = `.${CANVAS_ROOT_CLASS}`;
 
@@ -293,6 +294,28 @@ ${EMPTY_DISCLOSURE_SELECTOR}::after {
    published page never has it. */
 ${ROOT} > [data-nx-region="footer"] { margin-block-start: var(--nx-canvas-start-room, 0px); }
 ${ROOT}:not(:has(> [data-nx-region="footer"])) { padding-block-end: var(--nx-canvas-start-room, 0px); }
+
+/* Where a page goes, for a document with no page of its own: a grey box
+   between the header and the footer, roomy enough to read as a page's body,
+   in the page's own ink so it reads on a light site and a dark one alike.
+   At the admin's size whatever the zoom. A visitor's page never has it. */
+${ROOT} [${PAGE_PLACEHOLDER_ATTRIBUTE}] {
+  display: grid;
+  place-items: center;
+  min-block-size: 18rem;
+  margin: 1.5rem;
+  border: 1.5px dashed color-mix(in srgb, currentColor 30%, transparent);
+  border-radius: var(--radius-md, 0.5rem);
+  background: color-mix(in srgb, currentColor 6%, transparent);
+  font-family: var(--font-sans, system-ui), sans-serif;
+  font-size: calc(0.875rem / var(--nx-canvas-zoom, 1));
+  line-height: 1.4;
+  cursor: default;
+}
+
+${ROOT} [${PAGE_PLACEHOLDER_ATTRIBUTE}] > span {
+  color: color-mix(in srgb, currentColor 70%, transparent);
+}
 
 /* The cursor says what a press does: grab a block, place a caret in text being
    edited, and while dragging, whether the block can land. */
@@ -714,6 +737,20 @@ ${EMPTY_LIST}[data-nx-list-visitors]:not([data-nx-list-still])::before {
 
 .nx-canvas-region__content {
   opacity: var(--nx-builder-region-opacity, 0.6);
+}
+
+/* The region's name, heard and not drawn: the editor's own hidden-text rule
+   does not reach the canvas, so the frame says it here. */
+.nx-canvas-region__name {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border-width: 0;
 }
 
 /* Where the region meets the page: a quiet line. */

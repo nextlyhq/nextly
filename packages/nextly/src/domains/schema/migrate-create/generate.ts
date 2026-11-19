@@ -29,6 +29,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
+import { chooseTypeColumns } from "../../field-groups/storage/resolve-storage-names";
 import { isFieldLocalized } from "../../i18n/classify-fields";
 import type { JoinRetries } from "../../i18n/migration/archive-preflight";
 import { carriedDefinition } from "../../i18n/migration/carried-definition";
@@ -88,6 +89,7 @@ import {
 } from "../../i18n/per-language-storage";
 import { resolveSingleTableName } from "../../singles/services/resolve-single-table-name";
 import type { Deletion } from "../migrate/data-loss-consent";
+import { coveredEntity, type CoveredEntity } from "../migrate/entity-coverage";
 import { migrationCompanionSwitches } from "../pipeline/companion-shape-switches";
 import {
   buildDesiredTableFromComponentFields,
@@ -116,6 +118,7 @@ import { builtByFor } from "../pipeline/registered-collections";
 import { conversionForRename } from "../pipeline/rename-conversion";
 import { RegexRenameDetector } from "../pipeline/rename-detector";
 import { refuseSwitchesWithRename } from "../pipeline/several-references-refusal";
+import { renderedType } from "../pipeline/sql-templates/create-table-body";
 import { quoteIdent } from "../pipeline/sql-templates/identifier-quoting";
 import { generateStatements } from "../pipeline/sql-templates/index";
 import {
@@ -128,6 +131,7 @@ import {
   columnsDeclaredBy,
   type ColumnOrigin,
 } from "../services/field-column-descriptor";
+import { identifierCaseRules } from "../utils/resolve-catalog-name";
 import {
   resolveCollectionTableName,
   resolveComponentTableName,
@@ -147,6 +151,10 @@ import {
   type PermissionRecord,
 } from "./declared-permissions";
 import { buildInverseOperations } from "./down-generator";
+import {
+  droppedTranslations,
+  translationsDropsPlaced,
+} from "./dropped-translations";
 import {
   describeSettingsChange,
   settingsChangesFor,
@@ -939,7 +947,8 @@ export async function generateMigration(
     args.defaultLocale ?? "en",
     companionHistory,
     companionRenames,
-    args.languageOrder
+    args.languageOrder,
+    desiredSnapshot
   );
 
   // 3. Diff.
@@ -949,6 +958,7 @@ export async function generateMigration(
   //     from the main table — but the companion migration already relocates them
   //     (create + seed + drop). Strip those drops so we don't drop twice.
   operations = stripRelocatedDrops(operations, companionPlans);
+  refuseTurnOffBesideOtherChanges(operations, companionPlans);
 
   // 3b. Fields that stop being translated while their entity stays translated. The diff above gives
   //     the main table their columns; these files move the values around that migration.
@@ -1173,6 +1183,23 @@ export async function generateMigration(
     args.dialect,
     previousSnapshot.tables
   );
+  // 7a'. A translated table this file drops takes its translations table with it, dropped first
+  //      so nothing references the main table when it goes; the DOWN makes it again, empty, once
+  //      the main table is back (`droppedTranslations`). The snapshot records no translations
+  //      table, so the diff above never drops one.
+  const translations = droppedTranslations({
+    operations,
+    previous: previousSnapshot,
+    previousEntities: previous?.data.entities,
+    dialect: args.dialect,
+    defaultLocale: args.defaultLocale ?? "en",
+  });
+  sqlStatements.splice(
+    0,
+    sqlStatements.length,
+    ...translationsDropsPlaced(sqlStatements, translations.up, args.dialect)
+  );
+  downSqlStatements.push(...translations.down);
   // A renamed field group's rows move once its tables are as the file leaves them, and move back
   // before the DOWN takes those tables back.
   sqlStatements.push(...groupRenames.up);
@@ -1421,6 +1448,10 @@ export async function generateMigration(
         args,
         previous === null ? undefined : previous.data.entities
       ),
+      entities: coveredEntitiesOf(
+        args,
+        previous === null ? undefined : previous.data.entities
+      ),
       translationMoves: [
         ...companionPlans.flatMap(({ plan: { kind, spec } }) =>
           kind === "enable"
@@ -1474,6 +1505,8 @@ export async function generateMigration(
       operations.length === 0 &&
       groupRenames.up.length === 0 &&
       (added?.up.first.length ?? 0) + (added?.up.last.length ?? 0) === 0,
+    // A disable puts its table's columns back itself, before this file.
+    tableChangesInCompanionFiles: disablePlans.length > 0,
     now,
   });
 
@@ -2058,6 +2091,12 @@ interface CompanionPlanEntry {
    * for this companion is keyed by kind as well as slug.
    */
   entity: I18nTransitionKind;
+  /**
+   * A DISABLE's unique indexes on the restored columns, which it creates itself once the values
+   * are back (`settingsAfterRestore`): the main migration's `add_index` for each is left out, as
+   * its `add_column` is (`stripRelocatedDrops`).
+   */
+  restoredIndexes?: readonly string[];
 }
 
 /**
@@ -2146,7 +2185,9 @@ function planCompanionMigrations(
   history: TranslationRecords,
   renames: ReadonlyMap<string, readonly CompanionRename[]> = new Map(),
   /** The site's languages in order, which decides the value a disable keeps (`copyLiveness`). */
-  languageOrder?: readonly string[]
+  languageOrder?: readonly string[],
+  /** The snapshot this run writes, whose main tables a disable puts its columns back as. */
+  desiredSnapshot?: NextlySchemaSnapshot
 ): CompanionPlanEntry[] {
   const entries: CompanionPlanEntry[] = [];
   for (const { entity: c, kind: entityKind } of entities) {
@@ -2176,7 +2217,8 @@ function planCompanionMigrations(
         previousSnapshot,
         dialect,
         defaultLocale,
-        languageOrder
+        languageOrder,
+        desiredSnapshot
       );
       if (disable) entries.push(disable);
       continue;
@@ -2260,6 +2302,87 @@ function planCompanionMigrations(
 }
 
 /**
+ * The statements that give each restored column the settings the main table's snapshot records of
+ * it, run by a disable once the values are back: Required (`nullable: false`), which a column added
+ * empty could not take before the copy, and the unique indexes standing on it. The main file that
+ * follows does not add the column (its `add_column` is the disable's, `stripRelocatedDrops`), and
+ * the runner records it as applied only where the main table already is its target, so without
+ * them the table is at neither end of that file. Rendered as a field leaving translation renders
+ * them (`settingsAfterCopy`), against the main table as the disable leaves it: the previous one with
+ * the restored columns and their unique indexes, which a SQLite rebuild recreates, and nothing the
+ * main file adds after. The runner refuses Required over an entry left without a value, naming the
+ * field (`requiredColumnCheckpoint`), and the database a unique index over repeated values.
+ */
+function settingsAfterRestore(
+  prevMain: TableSpec,
+  desiredMain: TableSpec | undefined,
+  restored: readonly string[],
+  dialect: SupportedDialect
+): { up: string[]; down: string[]; indexes: string[] } | undefined {
+  // A unique index the disable can create: every column it stands on is there once the disable
+  // has run. One that also covers a column the main file adds stays the main file's.
+  const there = new Set([...prevMain.columns.map(c => c.name), ...restored]);
+  const allHeld = heldSettingsOf(prevMain.name, restored, desiredMain);
+  const held = {
+    ...allHeld,
+    uniqueIndexes: allHeld.uniqueIndexes.filter(index =>
+      index.columns.every(column => there.has(column))
+    ),
+  };
+  if (
+    desiredMain === undefined ||
+    (held.required.size === 0 && held.uniqueIndexes.length === 0)
+  ) {
+    return undefined;
+  }
+  const names = new Set(restored);
+  const kept = new Set(prevMain.columns.map(c => c.name));
+  // The previous table without its translation record, which describes the companion the disable
+  // drops, and with the restored columns as the snapshot records them.
+  const {
+    localized: _localized,
+    localizedColumns: _localizedColumns,
+    uniqueLocalizedColumns: _uniqueLocalizedColumns,
+    ...previous
+  } = prevMain;
+  const afterDisable: TableSpec = {
+    ...previous,
+    columns: [
+      ...prevMain.columns,
+      ...desiredMain.columns.filter(
+        c => names.has(c.name) && !kept.has(c.name)
+      ),
+    ],
+    indexes: [...(prevMain.indexes ?? []), ...held.uniqueIndexes],
+  };
+  return {
+    ...settingsAfterCopy(held, afterDisable, dialect, [afterDisable]),
+    indexes: held.uniqueIndexes.map(index => index.name),
+  };
+}
+
+/**
+ * `column` with the main-table column a snapshot records for it (`restoredAs`): its type as the
+ * main file renders it (`renderedType`) and its default. A disable that puts the values back on the
+ * main table then leaves the column the runner checks the next main file against, where a wider
+ * one (LONGTEXT for MySQL's `text`) left the table at neither end of it. Unchanged where the
+ * snapshot records no such column.
+ */
+function withRestoredAs(
+  column: LocalizedColumnSpec,
+  main: ColumnSpec | undefined
+): LocalizedColumnSpec {
+  if (main === undefined) return column;
+  return {
+    ...column,
+    restoredAs: {
+      type: renderedType(main),
+      ...(main.default === undefined ? {} : { default: main.default }),
+    },
+  };
+}
+
+/**
  * The `disable` file of an entity whose translation is turned off (localized `true → false`).
  *
  * Detection is gated on the previous snapshot's explicit `localized: true` marker rather
@@ -2277,7 +2400,8 @@ function disableEntryFor(
   previousSnapshot: NextlySchemaSnapshot,
   dialect: SupportedDialect,
   defaultLocale: string,
-  languageOrder?: readonly string[]
+  languageOrder?: readonly string[],
+  desiredSnapshot?: NextlySchemaSnapshot
 ): CompanionPlanEntry | undefined {
   const prevMain = previousSnapshot.tables.find(t => t.name === mainTable);
   if (prevMain?.localized !== true) return undefined;
@@ -2317,11 +2441,26 @@ function disableEntryFor(
     defaultLocale
   );
   if (!disableSpec) return undefined;
+  // Each column goes back to the main table as this run's snapshot records it, since the main file
+  // that follows is checked against that table (`withRestoredAs`).
+  const desiredMain = desiredSnapshot?.tables.find(t => t.name === mainTable);
+  disableSpec.columns = disableSpec.columns.map(col =>
+    withRestoredAs(
+      col,
+      desiredMain?.columns.find(m => m.name === col.name)
+    )
+  );
   // Each entry keeps the value its readers saw, as the runtime disable keeps it.
   disableSpec.liveness = copyLiveness(
     languageOrder,
     // A disable turns off translation for an entity that was translated.
     companionHadStatus(previousSnapshot, mainTable, true)
+  );
+  const settings = settingsAfterRestore(
+    prevMain,
+    desiredMain,
+    disableSpec.columns.map(col => col.name),
+    dialect
   );
   const plan = planCompanionMigration({
     spec: disableSpec,
@@ -2329,10 +2468,18 @@ function disableEntryFor(
     companionExisted: false,
     localized: false,
     previouslyLocalized: true,
+    ...(settings === undefined ? {} : { afterRestore: settings }),
   });
   return plan.kind === "none"
     ? undefined
-    : { spec: disableSpec, plan, entity: entityKind };
+    : {
+        spec: disableSpec,
+        plan,
+        entity: entityKind,
+        ...(settings === undefined || settings.indexes.length === 0
+          ? {}
+          : { restoredIndexes: settings.indexes }),
+      };
 }
 
 /**
@@ -3323,13 +3470,46 @@ function withLocalizedMarker(
 }
 
 /**
+ * Refuse, before any file is written, a run that turns an entity's translation off and changes its
+ * table otherwise too (a field added, an index changed). The disable runs before the main file and
+ * puts the table's columns back, and the runner runs the main file only over the table its snapshot
+ * starts from, recording it as applied only where the table already is its target. With another
+ * change to that table the main file would stand at neither end and be refused as drift once files
+ * were written and the disable applied. In two runs each file starts where the last left the table.
+ */
+function refuseTurnOffBesideOtherChanges(
+  operations: readonly Operation[],
+  companionPlans: readonly CompanionPlanEntry[]
+): void {
+  for (const { spec, plan } of companionPlans) {
+    if (plan.kind !== "disable") continue;
+    if (!operations.some(op => operationTableName(op) === spec.mainTable)) {
+      continue;
+    }
+    throw NextlyError.invalidInput({
+      message:
+        `"${spec.collection}" turns translation off and changes its table in other ways in the same ` +
+        `migration, which cannot be applied in one run. Turn translation off on its own and run ` +
+        `\`nextly migrate:create\`, then make the other changes and run it again.`,
+      logContext: {
+        reason: "translation-off-beside-other-changes",
+        entity: spec.collection,
+        table: spec.mainTable,
+      },
+    });
+  }
+}
+
+/**
  * Remove the main-table `drop_column` operations that a companion ENABLE migration already
  * performs (create + seed + drop). Without this, the localized columns would be dropped twice
  * — once by the main migration's diff, once by the companion — and the second drop fails.
  *
  * The DISABLE transition is the mirror image: its SQL re-adds the columns to the main table
  * itself, so the diff's `add_column` ops for those same columns are stripped too (otherwise
- * the column is added twice and the second ALTER fails).
+ * the column is added twice and the second ALTER fails), and so are the `add_index` ops of the
+ * unique indexes on them, which it creates once the values are back (`restoredIndexes`). The main
+ * file's snapshot still records them: the table the disable leaves is that file's target.
  */
 function stripRelocatedDrops(
   operations: Operation[],
@@ -3337,7 +3517,8 @@ function stripRelocatedDrops(
 ): Operation[] {
   const relocated = new Set<string>();
   const restored = new Set<string>();
-  for (const { spec, plan } of companionPlans) {
+  const restoredIndexes = new Set<string>();
+  for (const { spec, plan, restoredIndexes: indexes } of companionPlans) {
     // create-only has no main-table drops
     if (plan.kind === "enable") {
       for (const col of spec.columns) {
@@ -3347,6 +3528,10 @@ function stripRelocatedDrops(
       // The disable SQL re-adds these columns itself (step 1 of buildLocalizationDownSql).
       for (const col of spec.columns) {
         restored.add(`${spec.mainTable}::${col.name}`);
+      }
+      // So are the unique indexes on them, once the values are back (`settingsAfterRestore`).
+      for (const name of indexes ?? []) {
+        restoredIndexes.add(`${spec.mainTable}::${name}`);
       }
     }
   }
@@ -3361,6 +3546,12 @@ function stripRelocatedDrops(
     if (
       op.type === "add_column" &&
       restored.has(`${op.tableName}::${op.column.name}`)
+    ) {
+      return false;
+    }
+    if (
+      op.type === "add_index" &&
+      restoredIndexes.has(`${op.tableName}::${op.index.name}`)
     ) {
       return false;
     }
@@ -3392,6 +3583,19 @@ export function buildDesiredSnapshotFromConfig(
 ): NextlySchemaSnapshot {
   const tables: TableSpec[] = [];
   const kept = columnsByTable(existing ?? { tables: [] }, dialect);
+  // Each field group's discriminator, read off the table as the last migration recorded it: the
+  // storage migration renames a group's column whatever its table is called, so the name alone
+  // cannot say which one an existing table has (`chooseTypeColumns`).
+  const recordedTypeColumns = chooseTypeColumns(
+    (existing?.tables ?? []).map(table => ({
+      table: table.name,
+      columns: table.columns.map(column => column.name),
+    })),
+    components.map(component => component.tableName),
+    dialect === "mysql"
+      ? identifierCaseRules({ dialect, lowerCaseTableNames: 1 })
+      : identifierCaseRules({ dialect })
+  );
   for (const entity of collections) {
     const c = withKeptScopeFields("collection", entity, kept);
     // Why: forward the entity's Draft/Published flag so the snapshot
@@ -3445,6 +3649,9 @@ export function buildDesiredSnapshotFromConfig(
         buildDesiredTableFromComponentFields(c.tableName, c.fields, dialect, {
           builtBy: columnOriginOf(c, "fieldGroup"),
           localized: storesPerLanguage(c),
+          // The discriminator the table carries as the last migration left it, and for a table
+          // no migration has made yet, the one it is created with under its name.
+          typeColumn: recordedTypeColumns.get(c.tableName),
         }),
         c,
         "fieldGroup",
@@ -3792,6 +3999,89 @@ function removedEntitiesOf(
       slug,
       table: resolveComponentTableName(slug),
     })),
+  ];
+}
+
+/**
+ * Where an entity comes from, as its registry row will say: the provenance its declaration
+ * records (`plugin:<name>` for a plugin's), else the source its record was written under.
+ */
+function provenanceOf(entry: RecordedEntitySettings): string {
+  const declared = entry.settings.source;
+  return typeof declared === "string" ? declared : entry.source;
+}
+
+/**
+ * The collections and Singles a migration is planned against, each with every table it owns
+ * (`coveredEntity`): those the config declares, by the table it gives them, and those the latest
+ * snapshot records, by the table their recorded declaration names (its `dbName`, else its slug).
+ * A declared entity's fields are the config's and the snapshot's together, so a junction whose
+ * field the config just removed is still known as the entity's; and one whose recorded table
+ * differs from its declared one is also known by the recorded table, which the migration drops,
+ * with the recorded fields, which then belong to that table alone. A plugin's entity, or Nextly's
+ * own, is kept `excluded`, so its main table is still no other entity's.
+ */
+export function coveredEntitiesOf(
+  args: GenerateArgs,
+  recorded: EntitySettingsRecord | undefined
+): CoveredEntity[] {
+  const of = (
+    kind: CoveredEntity["kind"],
+    declared: readonly MinimalConfigEntity[],
+    record: Record<string, RecordedEntitySettings> | undefined,
+    tableOf: (slug: string, dbName: string | undefined) => string
+  ): CoveredEntity[] => {
+    const fieldsOf = (entry: RecordedEntitySettings | undefined): unknown[] =>
+      Array.isArray(entry?.settings.fields) ? entry.settings.fields : [];
+    const recordedTable = (slug: string, entry: RecordedEntitySettings) => {
+      const dbName = entry.settings.dbName;
+      return tableOf(slug, typeof dbName === "string" ? dbName : undefined);
+    };
+    const entities = declared.map(entity => {
+      // The recorded fields join the declared ones only under the same table: under a new one,
+      // the recorded declaration is the old table's, kept below as the entity that owns what the
+      // old table's fields name, as the registry row `nextly migrate` reads still does.
+      const entry = record?.[entity.slug];
+      const sameTable =
+        entry !== undefined &&
+        recordedTable(entity.slug, entry).toLowerCase() ===
+          entity.tableName.toLowerCase();
+      return coveredEntity({
+        kind,
+        slug: entity.slug,
+        tableName: entity.tableName,
+        fields: [...entity.fields, ...(sameTable ? fieldsOf(entry) : [])],
+        ...(entity.settings === undefined
+          ? {}
+          : { source: provenanceOf(entity.settings) }),
+      });
+    });
+    for (const [slug, entry] of Object.entries(record ?? {})) {
+      const table = recordedTable(slug, entry);
+      const current = declared.find(entity => entity.slug === slug);
+      if (current?.tableName.toLowerCase() === table.toLowerCase()) continue;
+      entities.push(
+        coveredEntity({
+          kind,
+          slug,
+          tableName: table,
+          fields: fieldsOf(entry),
+          source: provenanceOf(entry),
+        })
+      );
+    }
+    return entities;
+  };
+  return [
+    ...of(
+      "collection",
+      args.collections,
+      recorded?.collections,
+      (slug, dbName) => resolveCollectionTableName(slug, dbName)
+    ),
+    ...of("single", args.singles, recorded?.singles, (slug, dbName) =>
+      resolveSingleTableName({ slug, dbName })
+    ),
   ];
 }
 

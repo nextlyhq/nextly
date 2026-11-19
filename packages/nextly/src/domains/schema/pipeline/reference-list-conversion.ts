@@ -224,12 +224,19 @@ function sqliteReferenceScalarRewrite(
 }
 
 /**
- * Whether a stored relation value is empty, given the column's quoted identifier: an empty string,
- * an empty list or JSON null, as text on every dialect. NULL is not matched, being no value
- * already. The one definition of "empty" for the target guard and for clearing what it accepts.
+ * The stored texts, trimmed, a relation value holds no entry in: an empty string, an empty list
+ * and JSON null. Every conversion that clears empties clears these to NULL, and the judgement of a
+ * relationship's switch reads them as no value, from this one list.
+ */
+export const EMPTY_REFERENCE_TEXTS: readonly string[] = ["", "[]", "null"];
+
+/**
+ * Whether a stored relation value is empty, given the column's quoted identifier: one of
+ * `EMPTY_REFERENCE_TEXTS`, as text on every dialect. NULL is not matched, being no value already.
+ * The one definition of "empty" for the target guard and for clearing what it accepts.
  */
 function emptyValueCondition(c: string, dialect: SupportedDialect): string {
-  const empties = `('', '[]', 'null')`;
+  const empties = `(${EMPTY_REFERENCE_TEXTS.map(text => `'${text}'`).join(", ")})`;
   if (dialect === "postgresql") return `btrim(${c}::text) IN ${empties}`;
   if (dialect === "mysql") return `TRIM(CAST(${c} AS CHAR)) IN ${empties}`;
   return `trim(${c}) IN ${empties}`;

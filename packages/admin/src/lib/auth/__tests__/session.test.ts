@@ -77,6 +77,73 @@ describe("getSession", () => {
   });
 });
 
+describe("getSession, a 429", () => {
+  /** The wait a 429 carries, from the error getSession throws. */
+  async function waitOf(response: Response): Promise<unknown> {
+    mockAuthFetch.mockResolvedValueOnce(response);
+    const error = await getSession().catch((reason: unknown) => reason);
+    expect(error).toBeInstanceOf(SessionUnavailableError);
+    expect((error as SessionUnavailableError).status).toBe(429);
+    return (error as SessionUnavailableError).retryAfterSeconds;
+  }
+
+  const rateLimited = (headers: Record<string, string>, data?: unknown) =>
+    new Response(
+      JSON.stringify({
+        error: { code: "RATE_LIMITED", ...(data ? { data } : {}) },
+      }),
+      {
+        status: 429,
+        headers: { "Content-Type": "application/json", ...headers },
+      }
+    );
+
+  it("carries the Retry-After header's seconds, ahead of the body's", async () => {
+    expect(
+      await waitOf(
+        rateLimited({ "Retry-After": "42" }, { retryAfterSeconds: 7 })
+      )
+    ).toBe(42);
+  });
+
+  it("reads a Retry-After date as the seconds until it", async () => {
+    vi.useFakeTimers({ now: new Date("2026-01-01T00:00:00Z") });
+    try {
+      expect(
+        await waitOf(
+          rateLimited({ "Retry-After": "Thu, 01 Jan 2026 00:00:20 GMT" })
+        )
+      ).toBe(20);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("falls back to the body's retryAfterSeconds, rounded up", async () => {
+    expect(await waitOf(rateLimited({}, { retryAfterSeconds: 2.5 }))).toBe(3);
+  });
+
+  it("waits 10 s when neither names a wait, or the body is not JSON", async () => {
+    expect(await waitOf(rateLimited({}))).toBe(10);
+    expect(
+      await waitOf(new Response("<html>slow down</html>", { status: 429 }))
+    ).toBe(10);
+  });
+
+  it("waits at least a second and at most an hour", async () => {
+    expect(await waitOf(rateLimited({ "Retry-After": "0" }))).toBe(1);
+    expect(await waitOf(rateLimited({ "Retry-After": "86400" }))).toBe(3600);
+  });
+
+  it("carries no wait for a 5xx", async () => {
+    mockAuthFetch.mockResolvedValueOnce(
+      jsonResponse(503, { error: { data: { retryAfterSeconds: 5 } } })
+    );
+    const error = await getSession().catch((reason: unknown) => reason);
+    expect((error as SessionUnavailableError).retryAfterSeconds).toBeNull();
+  });
+});
+
 describe("sessionStanding", () => {
   const standing = async (user: Record<string, unknown>) => {
     invalidateSessionCache();

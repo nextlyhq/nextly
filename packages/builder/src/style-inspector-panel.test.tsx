@@ -2713,12 +2713,13 @@ describe("dragging a number field's label", () => {
     expect(label.getAttribute("data-slot")).toBe("label");
   });
 
-  it("shows the value live while dragging and writes it ONCE, on release", () => {
+  it("shows the value in the field at once, and writes the release's value", () => {
     const editor = mount({ spacing: true }, withPadding("12px"));
     const { label, field } = side("Block start");
 
     drag(label, [6, 10, 20], {}, false);
-    // Live in the field, and nothing in the document yet.
+    // In the field at once. The document follows at the next frame
+    // (`inspector-panel.live-typing.test`), and no frame has run here.
     expect(field.value).toBe("32");
     expect(editor.applyAll).not.toHaveBeenCalled();
 

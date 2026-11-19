@@ -396,6 +396,92 @@ function listOf(value: unknown): readonly unknown[] {
   return Array.isArray(value) ? value : [];
 }
 
+/**
+ * A class merged three ways, field by field as any entry is, except that each
+ * device's fluid size is ONE value with the sizes it was made from: the
+ * `fontSize` at rest and that device's `fluidSizes` pair are taken together
+ * from one side, so a merge never stores one side's size beside the other
+ * side's sizes, or one end of each side's pair.
+ */
+function mergedClass(
+  base: unknown,
+  mine: unknown,
+  theirs: unknown,
+  settle: MergeSettle
+): unknown {
+  const merged = mergedValue(base, mine, theirs, settle);
+  const devices = ownKeysOf(
+    ...[base, mine, theirs].map(side => ownValueAt(side, "fluidSizes"))
+  );
+  if (devices.length === 0 || !isPlainRecord(merged)) return merged;
+  let out: Record<string, unknown> = merged;
+  for (const device of devices) {
+    const kept = mergedLeaf(
+      fluidUnitOf(base, device),
+      fluidUnitOf(mine, device),
+      fluidUnitOf(theirs, device),
+      settle
+    );
+    out = withFluidUnit(out, device, kept);
+  }
+  return out;
+}
+
+/** One device's fluid size and the size at rest it made, as one value. */
+interface FluidUnit {
+  readonly fontSize: unknown;
+  readonly sizes: unknown;
+}
+
+/** A class's fluid unit on one device, as that side holds it. */
+function fluidUnitOf(entry: unknown, device: string): FluidUnit {
+  const atRest = ownValueAt(ownValueAt(entry, "styles"), "base");
+  return {
+    fontSize: ownValueAt(ownValueAt(atRest, device), "fontSize"),
+    sizes: ownValueAt(ownValueAt(entry, "fluidSizes"), device),
+  };
+}
+
+/** A record with one key set, or taken out where `value` is `undefined`. */
+function withKey(
+  record: unknown,
+  key: string,
+  value: unknown
+): Record<string, unknown> {
+  const kept = ownKeysOf(record)
+    .filter(each => each !== key)
+    .map((each): [string, unknown] => [each, ownValueAt(record, each)]);
+  return ownRecordOf(value === undefined ? kept : [...kept, [key, value]]);
+}
+
+/** `value` unless it is an empty record, which a merge leaves out. */
+function unlessEmpty(value: Record<string, unknown>): unknown {
+  return Object.keys(value).length === 0 ? undefined : value;
+}
+
+/**
+ * The merged class with one device's size at rest and its fluid sizes set
+ * from the unit kept, copied along the path so no side is changed.
+ */
+function withFluidUnit(
+  entry: Record<string, unknown>,
+  device: string,
+  unit: unknown
+): Record<string, unknown> {
+  const kept = isPlainRecord(unit) ? unit : {};
+  const styles = ownValueAt(entry, "styles");
+  const atRest = ownValueAt(styles, "base");
+  const values = withKey(ownValueAt(atRest, device), "fontSize", kept.fontSize);
+  const base = withKey(atRest, device, unlessEmpty(values));
+  const withStyles = withKey(
+    entry,
+    "styles",
+    withKey(styles, "base", unlessEmpty(base))
+  );
+  const sizes = withKey(ownValueAt(entry, "fluidSizes"), device, kept.sizes);
+  return withKey(withStyles, "fluidSizes", unlessEmpty(sizes));
+}
+
 /** A class's identity: its id. */
 function classKey(entry: unknown): string | undefined {
   return isPlainRecord(entry) && typeof entry.id === "string" && entry.id !== ""
@@ -637,7 +723,7 @@ export function mergeSiteStyleSection(
   }
   const rules: EntryRules =
     section === "classes"
-      ? { keyOf: classKey, merge: mergedValue }
+      ? { keyOf: classKey, merge: mergedClass }
       : fontRules(listOf(b), listOf(m));
   return {
     value: mergedEntries(

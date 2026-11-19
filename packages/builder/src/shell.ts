@@ -819,6 +819,9 @@ export type {
   TokensPanelProps,
   VariablesHeader,
 } from "./tokens-panel";
+// What a host's variables write made at once answers it stored, so an import
+// can say a save the site took only in part as exactly that.
+export type { VariablesStored } from "./variables-transfer";
 // Which variable groups each Design tab lists, and the one variable search,
 // so a tab's count and the rows it lists come from the same rule.
 export {
@@ -848,6 +851,7 @@ export type { DesignTab, VariableGroup } from "./tokens-studio";
 export type {
   VariableReach,
   VariablesAccess,
+  VariablesTogether,
   VariablesUsage,
   VariableUse,
   VariableUseKind,
@@ -1029,3 +1033,12 @@ export type { PageChecksListProps } from "./page-checks/page-checks-list";
  * @experimental
  */
 export { endTypingRuns, typingEpoch } from "./typing-run";
+
+/**
+ * A draft held in a field of the block settings panel, for a host's save:
+ * the page has unsaved work from the draft's first keystroke, and a store
+ * writes the draft first, as leaving the field would, with focus left in it.
+ *
+ * @experimental
+ */
+export { finishFieldEdit, useFieldDraftHeld } from "./field-edit";

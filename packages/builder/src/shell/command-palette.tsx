@@ -27,7 +27,6 @@ import {
   CommandInput,
   CommandItem,
   CommandList,
-  CommandSeparator,
   CommandShortcut,
   DialogDescription,
   DialogTitle,
@@ -271,6 +270,11 @@ interface ShownGroup {
   status?: string;
 }
 
+/** What the group says in its rows' place: only while it has no rows. */
+function statusShown(shown: ShownGroup): string | undefined {
+  return shown.commands.length > 0 ? undefined : shown.status;
+}
+
 /**
  * What a search shows of each group: its matches, best first, up to its limit.
  *
@@ -399,8 +403,14 @@ function PaletteGroup({
 }): React.JSX.Element {
   return (
     <CommandGroup heading={shown.group}>
-      {shown.status === undefined || shown.commands.length > 0 ? null : (
-        <div role="status" className="px-3 py-2 text-sm text-muted-foreground">
+      {/* Drawn in the group's place, and hidden from a screen reader, which
+          hears it from the palette's own status line outside the list: a
+          listbox may hold only options and their groups. */}
+      {statusShown(shown) === undefined ? null : (
+        <div
+          aria-hidden="true"
+          className="px-3 py-2 text-sm text-muted-foreground"
+        >
           {shown.status}
         </div>
       )}
@@ -566,14 +576,27 @@ function PaletteList({
   choose: (command: BuilderCommand) => void;
 }): React.JSX.Element {
   const nothing = groups.length === 0;
+  const statuses = groups
+    .map(statusShown)
+    .filter(status => status !== undefined)
+    .join(" ");
+  const empty = nothing
+    ? typeof emptyMessage === "function"
+      ? emptyMessage(query)
+      : emptyMessage
+    : null;
   return (
     <>
       <CommandList>
+        {/* Drawn in the list, and hidden from a screen reader, which hears it
+            from the status line below: a listbox may hold only options and
+            their groups, and one holding only words fails as a list. */}
         {nothing ? (
-          <div className="px-4 py-8 text-center text-sm text-muted-foreground">
-            {typeof emptyMessage === "function"
-              ? emptyMessage(query)
-              : emptyMessage}
+          <div
+            aria-hidden="true"
+            className="px-4 py-8 text-center text-sm text-muted-foreground"
+          >
+            {empty}
           </div>
         ) : null}
         {groups.map((shown, index) => (
@@ -582,11 +605,25 @@ function PaletteList({
               shown.group === undefined ? "ungrouped" : `group:${shown.group}`
             }
           >
-            {index > 0 && <CommandSeparator alwaysRender />}
+            {/* A drawn rule, not a `separator`: a listbox may hold only
+                options and their groups. */}
+            {index > 0 && (
+              <div
+                aria-hidden="true"
+                data-palette-divider=""
+                className="my-2 h-px bg-border"
+              />
+            )}
             <PaletteGroup shown={shown} query={query} choose={choose} />
           </React.Fragment>
         ))}
       </CommandList>
+      {/* What a group's search is doing, or that nothing was found, said
+          outside the list, where a status may be; mounted before it has
+          anything to say, so the first words are announced. */}
+      <p role="status" className="sr-only">
+        {nothing ? empty : statuses}
+      </p>
       {nothing ? null : <PaletteFooter verbs={verbs} />}
     </>
   );

@@ -71,6 +71,7 @@ import { CssNamesProvider } from "./css-names-context";
 import { CustomCssStyleLine } from "./custom-css-section";
 import type { EditorState } from "./editor-state";
 import { EDITOR_WORDS } from "./editor-words";
+import { FieldsOfDocument } from "./field-edit";
 import { galleryPictureOf } from "./gallery-pictures";
 import { HiddenStatus } from "./hide-on";
 import {
@@ -361,9 +362,12 @@ export function InspectorPanel({
           <PanelFoldsProvider>
             <CssNamesProvider>
               <SettingsFilterProvider>
-                {/* Escape in a field being typed puts its writes back. */}
+                {/* Escape in a field being typed puts its writes back, and
+                    a draft here is the page's until it is written. */}
                 <TypingCancel.Provider value={panel.editor.cancelTyping}>
-                  <SelectionInspector {...panel} />
+                  <FieldsOfDocument.Provider value={true}>
+                    <SelectionInspector {...panel} />
+                  </FieldsOfDocument.Provider>
                 </TypingCancel.Provider>
               </SettingsFilterProvider>
             </CssNamesProvider>

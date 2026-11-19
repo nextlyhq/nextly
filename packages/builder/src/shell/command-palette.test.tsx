@@ -16,6 +16,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import * as React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -250,7 +251,11 @@ describe("running a command", () => {
     pressPaletteKey();
 
     // An empty registry and a mis-typed search look the same to a user; both deserve words.
-    expect(screen.getByText("Nothing to run.")).toBeTruthy();
+    // Drawn in the list, and said from the status line outside it.
+    expect(
+      within(screen.getByRole("listbox")).getByText("Nothing to run.")
+    ).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toBe("Nothing to run.");
   });
 });
 
@@ -563,7 +568,13 @@ describe("the host can drive it", () => {
     fireEvent.change(screen.getByRole("combobox"), {
       target: { value: "xyzzy" },
     });
-    expect(screen.getByText("Nothing matches “xyzzy”.")).toBeTruthy();
+    // Drawn in the list, and said from the status line outside it.
+    expect(
+      within(screen.getByRole("listbox")).getByText("Nothing matches “xyzzy”.")
+    ).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toBe(
+      "Nothing matches “xyzzy”."
+    );
     // No rows, so no keys to move between them.
     expect(screen.queryByText("Move")).toBeNull();
   });
@@ -766,7 +777,11 @@ describe("the host can drive it", () => {
 
     expect(screen.queryByText("Alpha")).toBeNull();
     expect(screen.queryByText("Beta")).toBeNull();
-    expect(screen.getByText("Nothing to run.")).toBeTruthy();
+    // Drawn in the list, and said from the status line outside it.
+    expect(
+      within(screen.getByRole("listbox")).getByText("Nothing to run.")
+    ).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toBe("Nothing to run.");
   });
 
   it("lets a space be typed in the middle of a query", () => {
@@ -804,12 +819,12 @@ describe("the host can drive it", () => {
     pressPaletteKey();
 
     const separators = () =>
-      document.querySelectorAll("[cmdk-separator]").length;
+      document.querySelectorAll("[data-palette-divider]").length;
     expect(separators()).toBeGreaterThan(0);
 
-    // The mode decision and cmdk's own search state have to agree. cmdk's separator reads its RAW
-    // search and unmounts while that is nonempty, so spaces stripped every divider out of a list
-    // that was still grouped and still showing everything.
+    // The mode decision and the dividers have to agree. cmdk's own separator read its RAW search
+    // and unmounted while that was nonempty, so spaces stripped every divider out of a list that
+    // was still grouped and still showing everything.
     fireEvent.change(screen.getByRole("combobox"), {
       target: { value: "   " },
     });

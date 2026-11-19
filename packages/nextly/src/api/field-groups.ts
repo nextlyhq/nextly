@@ -28,7 +28,6 @@ import type {
   FieldGroupMetadataService,
 } from "../domains/field-groups/services/field-group-metadata-service";
 import { calculateSchemaHash } from "../domains/schema/services/schema-hash";
-import { resolveComponentTableName } from "../domains/schema/utils/resolve-table-name";
 import { getCachedNextly } from "../init";
 import type { FieldGroupRegistryService } from "../services/field-groups/field-group-registry-service";
 import { addressSchema } from "../shared/address-rule";
@@ -194,12 +193,6 @@ export const POST = withErrorHandler(async (request: Request) => {
   // Same rules as the ui-schema.json mirror (see api/fields-payload).
   assertValidFieldsPayload(validated.fields);
 
-  // Generate table name from slug (comp_ prefix added by service)
-  // Canonical name derivation (comp_ + normalized slug), matching the
-  // registry sync and dispatcher paths, so the stored registry row and the
-  // physical table always agree.
-  const tableName = resolveComponentTableName(validated.slug);
-
   // Validated by assertValidFieldsPayload above; cast through `unknown`
   // to the registry's config type while keeping the payload unstripped.
   const fields = validated.fields as unknown as CreateFieldGroupInput["fields"];
@@ -209,7 +202,7 @@ export const POST = withErrorHandler(async (request: Request) => {
   const { record, migrationStatus } = await metadata.createFieldGroup({
     slug: validated.slug,
     label: validated.label,
-    tableName,
+    // The table is named by the service, under the naming the site's storage is on.
     description: validated.description,
     fields,
     admin: validated.admin,

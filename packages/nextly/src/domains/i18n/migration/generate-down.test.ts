@@ -256,4 +256,25 @@ describe("buildLocalizationDownStatements — the restored column's width", () =
     expect(add).toContain(`ADD COLUMN "price" numeric(12,2)`);
     expect(add).not.toMatch(/NUMERIC\(10, ?2\)/);
   });
+  // A migration file turning translation off puts the column back as the main table's snapshot
+  // records it (`restoredAs`), the table the runner checks the next main file against, over the
+  // wider type and over what the column carries.
+  it("restores the column the main table's snapshot records, type and default", () => {
+    const recorded: CompanionMigrationSpec = {
+      ...spec,
+      dialect: "mysql",
+      columns: [
+        {
+          name: "body",
+          kind: "longText",
+          carried: { type: "mediumtext", default: "'carried'" },
+          restoredAs: { type: "text", default: "'recorded'" },
+        },
+      ],
+    };
+    const [add] = buildLocalizationDownStatements(recorded);
+    expect(add).toBe(
+      "ALTER TABLE `dc_pages` ADD COLUMN `body` text DEFAULT 'recorded'"
+    );
+  });
 });

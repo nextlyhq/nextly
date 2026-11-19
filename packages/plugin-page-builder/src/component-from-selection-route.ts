@@ -35,6 +35,12 @@
  * A convert is refused when the page would compose components deeper than
  * the limit, judged against the definitions the selection places.
  *
+ * A library request may name the stored page its document is (`page`): the
+ * component is then created through core's copy of that page, read as the
+ * caller first, so custom CSS the page already holds is no change to the
+ * component. A convert applied to the stored page creates in a transaction,
+ * where no copy is made, so its CSS is judged as new.
+ *
  * ## Dry run and attribution
  *
  * `dryRun: true` answers the plan (the definition, the page ops, the
@@ -263,10 +269,11 @@ export async function componentFromSelection(
   });
 
   if (page === undefined || body.action === "save-as") {
-    const created = await ctx.services.collections.createEntry(
+    const created = await createComponent(
+      ctx,
       store.collection,
       row(preview.definition),
-      asCaller(ctx)
+      body.page === undefined ? undefined : pageAddressOf(body)
     );
     const id = createdId(created.item);
     const plan = planFor(id);
@@ -296,6 +303,32 @@ export async function componentFromSelection(
     answer(id, plan, false),
     { status: 201 }
   );
+}
+
+/**
+ * Create the component as the caller. Where the request names the stored
+ * page the selection was made in, through core's copy of that page: core
+ * reads the page as the caller (refusing one they can't read) before
+ * creating anything, and only text the page holds, in the language the
+ * request names, vouches for the component's CSS.
+ */
+function createComponent(
+  ctx: ComponentFromSelectionContext,
+  collection: string,
+  data: Record<string, unknown>,
+  source: StoredAddress | undefined
+): Promise<{ item: unknown }> {
+  const collections = ctx.services.collections;
+  return source === undefined
+    ? collections.createEntry(collection, data, asCaller(ctx))
+    : collections.createEntryFromSource(
+        collection,
+        data,
+        { collection: source.collection, id: source.id, field: source.field },
+        // In the page's language, so the caller's read of it, the rules that
+        // judge it and the stored text that vouches are that translation's.
+        asCaller(ctx, source.locale)
+      );
 }
 
 /** A plan this route can answer with: the definition, the ops, the warnings. */

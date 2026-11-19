@@ -1948,7 +1948,7 @@ describe("what an export says it did not write", () => {
         name: "shadow.card",
         label: "Card shadow",
         outcome: "left-out",
-        why: "Figma keeps shadows as effect styles, not variables.",
+        why: "Figma keeps these as effect styles and text styles; the variables they use are in the file",
       },
     ]);
   });

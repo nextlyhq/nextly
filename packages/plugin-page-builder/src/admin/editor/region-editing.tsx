@@ -210,6 +210,8 @@ export interface RegionEditingHost {
    * is told.
    */
   readonly componentFacts: ComponentFieldsHost | undefined;
+  /** The id of the component edited in place, or `undefined` while the page is. */
+  readonly componentId: string | undefined;
 }
 
 /** The pages the component reaches, once its facts have answered. */
@@ -380,12 +382,25 @@ export function inspectedBindingsOf<
  * is edited in place, one keeping them to the component's own view. The
  * canvas previews the page's open variant, never one of the header's, so
  * a variant opened or added here could never be shown or edited.
+ *
+ * The way there is the editor's own "Edit component" opener, run once the
+ * region is left as Done leaves it, so unsaved work in it is asked about
+ * first. An author the editor offers no opener is told where, without it.
  */
 export function inspectedVariantsOf(
-  area: RegionArea | undefined,
-  page: ComponentVariantsHost
+  region: Pick<RegionEditingHost, "area" | "componentId" | "leaveThen">,
+  page: ComponentVariantsHost,
+  open: ((componentId: string) => void) | undefined
 ): ComponentVariantsHost {
-  return area === undefined ? page : { editedInOwnView: true };
+  if (region.area === undefined) return page;
+  const { componentId, leaveThen } = region;
+  if (open === undefined || componentId === undefined) {
+    return { editedInOwnView: true };
+  }
+  return {
+    editedInOwnView: true,
+    onOpenOwnView: () => leaveThen(() => open(componentId)),
+  };
 }
 
 /** A refusal of a save or publish, in the author's words. */
@@ -1119,6 +1134,8 @@ export function useRegionEditing({
     topBar: regionTopBar(area, facts, store.store, leaving.ask),
     dirty: savePoint.dirty,
     componentFacts: whileEdited(area, componentFacts),
+    // The opened component, for the inspector's way to its own view.
+    componentId: whileEdited(area, opening?.componentId),
     dialogs: (
       <RegionQuestions
         area={area}
