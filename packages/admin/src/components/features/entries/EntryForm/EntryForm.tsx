@@ -1842,6 +1842,7 @@ export function EntryForm({
                                           editedStatus.hasWorkingDraft
                                         }
                                         part={review.part}
+                                        className={DOCUMENT_COLUMN_INSET}
                                       />
                                       <EntryMetaStrip
                                         panelCarriesId={panelDocked}

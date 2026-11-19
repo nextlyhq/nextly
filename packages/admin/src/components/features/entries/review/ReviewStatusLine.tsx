@@ -14,6 +14,7 @@
 
 import type { JSX } from "react";
 
+import { cn } from "@admin/lib/utils";
 import type { PartReview } from "@admin/types/workflows";
 
 import { waitingForWords } from "./review-words";
@@ -25,6 +26,11 @@ export interface ReviewStatusLineProps {
   hasWorkingDraft: boolean;
   /** The part on screen, while it stands in a stage; absent otherwise. */
   part: PartReview | undefined;
+  /**
+   * The editor's column inset, so the line starts where the title above it
+   * does rather than at the column's edge.
+   */
+  className?: string;
 }
 
 /** A stage's label as the second half of "Changes …": "Changes in review". */
@@ -36,6 +42,7 @@ export function ReviewStatusLine({
   status,
   hasWorkingDraft,
   part,
+  className,
 }: ReviewStatusLineProps): JSX.Element | null {
   if (part === undefined || part.stage === null) return null;
   const label = part.stageLabel ?? part.stage;
@@ -49,7 +56,7 @@ export function ReviewStatusLine({
     ...(waiting === null ? [] : [`waiting for ${waiting}`]),
   ];
   return (
-    <div className="mt-1 space-y-2">
+    <div className={cn("mt-1 space-y-2", className)}>
       <p
         className="text-xs text-muted-foreground"
         data-testid="review-status-line"

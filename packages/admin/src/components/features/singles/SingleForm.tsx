@@ -2103,6 +2103,7 @@ export function SingleForm({
                                         editedStatus.hasWorkingDraft
                                       }
                                       part={review.part}
+                                      className={DOCUMENT_COLUMN_INSET}
                                     />
                                     <EntryMetaStrip
                                       panelCarriesId={panel.docked}

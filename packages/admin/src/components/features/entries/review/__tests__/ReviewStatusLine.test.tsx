@@ -33,6 +33,20 @@ const LIVE_STRIP =
   "Readers see the published version until these changes are approved and published.";
 
 describe("ReviewStatusLine", () => {
+  it("takes the editor's column inset, so it starts where the title does", () => {
+    render(
+      <ReviewStatusLine
+        status="draft"
+        hasWorkingDraft={false}
+        part={part()}
+        className="px-4"
+      />
+    );
+    expect(screen.getByTestId("review-status-line").parentElement).toHaveClass(
+      "px-4"
+    );
+  });
+
   it("says a live page's changes are in review, and who they wait for", () => {
     render(
       <ReviewStatusLine status="published" hasWorkingDraft part={part()} />
