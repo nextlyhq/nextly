@@ -320,7 +320,8 @@ describe("importing a file with text styles and the site's design data", () => {
     await waitFor(() => expect(onChange).toHaveBeenCalledTimes(1));
     // The third write: the rows, one following the text style the second
     // write stored.
-    const rows = (onChange.mock.calls[0]?.[0] as SiteTokenSet).siteText;
+    const last = onChange.mock.calls[0]?.[0] as SiteTokenSet | undefined;
+    const rows = last?.siteText;
     expect(rows).toEqual(dependent.siteText);
     expect(classes.map(entry => entry.id)).toContain(rows?.h2?.textStyle);
     expect(

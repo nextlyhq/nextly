@@ -496,7 +496,11 @@ describe("an import carrying the site's own design data", () => {
     });
     const source: SiteTokenSet = {
       tokens: [
-        { name: "font-size.lead", kind: "dimension", values: { light: "2rem" } },
+        {
+          name: "font-size.lead",
+          kind: "dimension",
+          values: { light: "2rem" },
+        },
       ],
     };
     const lost = style("ts-lost", "Lost", "font-size.nowhere");
@@ -504,9 +508,13 @@ describe("an import carrying the site's own design data", () => {
     const builtIn = style("ts-built-in", "Heading", "font-size.h2");
     const lead = style("ts-lead", "Lead", "font-size.lead");
     const plan = ready(
-      planImport(files(source, [lost, builtIn, lead]), { tokens: [] }, {
-        textStyles: [],
-      })
+      planImport(
+        files(source, [lost, builtIn, lead]),
+        { tokens: [] },
+        {
+          textStyles: [],
+        }
+      )
     );
     expect(plan.extras.textStyles.added.map(entry => entry.id)).toEqual([
       "ts-built-in",
