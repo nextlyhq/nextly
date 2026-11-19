@@ -42,6 +42,7 @@ import {
   type NewPageFacts,
 } from "../pages-write-contract";
 import { pageBuilder } from "../plugin";
+import { FIRST_PARTY_STARTER_PAGES } from "../starter-pages/first-party";
 import { fixtureStarter } from "../starter-pages/starter-pages.fixture";
 import {
   STARTER_PAGES_ROUTE_PATH,
@@ -241,17 +242,34 @@ describe.each(getConfiguredTestDialects())(
       await t?.destroy();
     });
 
-    it("lists the site's and a plugin's starters with a name, a description and blocks, leaving out one the site can't draw", async () => {
+    it("lists the page builder's, the site's and a plugin's starters, one the site can't draw as unavailable with why", async () => {
       const response = await ask("GET", STARTER_PAGES_ROUTE_PATH, editor);
       expect(response.status, await response.clone().text()).toBe(200);
       const listed = (await response.json()) as StarterPagesResponse;
+      // The page builder's own come first, then the site's, then a plugin's.
+      const builtIn = FIRST_PARTY_STARTER_PAGES.map(starter => starter.id);
       expect(
-        listed.items.map(item => [item.id, item.label, item.description])
+        listed.items.slice(0, builtIn.length).map(item => item.id)
+      ).toEqual(builtIn);
+      const theirs = listed.items.slice(builtIn.length);
+      expect(
+        theirs.map(item => [
+          item.id,
+          item.label,
+          item.description,
+          item.unavailable,
+        ])
       ).toEqual([
-        ["site-welcome", "Welcome", siteStarter.description],
-        ["plugin-welcome", "From a plugin", siteStarter.description],
+        ["site-welcome", "Welcome", siteStarter.description, undefined],
+        [
+          "needs-missing",
+          "Missing colour",
+          needsMissingVariable.description,
+          { reason: "Uses a variable this site doesn't have." },
+        ],
+        ["plugin-welcome", "From a plugin", siteStarter.description, undefined],
       ]);
-      expect(listed.items[0]?.document).toEqual({
+      expect(theirs[0]?.document).toEqual({
         formatVersion: 1,
         kind: "page",
         nodes: siteStarter.blocks,
@@ -261,10 +279,9 @@ describe.each(getConfiguredTestDialects())(
       const facts = (await (
         await ask("GET", newPagePath({ collection: PAGES }), editor)
       ).json()) as NewPageFacts;
-      expect(facts.starters.map(item => item.id)).toEqual([
-        "site-welcome",
-        "plugin-welcome",
-      ]);
+      expect(facts.starters.map(item => item.id)).toEqual(
+        listed.items.map(item => item.id)
+      );
     });
 
     it("makes a page from a starter as a copy under new ids, its header and footer as chosen", async () => {
@@ -340,7 +357,7 @@ describe.each(getConfiguredTestDialects())(
       ).toMatchObject({ as: "section" });
     });
 
-    it("refuses a page from a starter the site doesn't offer, and makes nothing", async () => {
+    it("refuses a page from a starter the site can't use, in the words the list shows, and makes nothing", async () => {
       const response = await ask("POST", PAGES_ROUTE_PATH, editor, {
         collection: PAGES,
         title: "Missing colour",
@@ -348,10 +365,14 @@ describe.each(getConfiguredTestDialects())(
       });
       expect(response.status, await response.clone().text()).toBe(400);
       const body = (await response.json()) as {
-        error?: { data?: { errors?: { path: string }[] } };
+        error?: { data?: { errors?: { path: string; message: string }[] } };
       };
-      expect(body.error?.data?.errors?.map(issue => issue.path)).toEqual([
-        "starter",
+      expect(body.error?.data?.errors).toEqual([
+        expect.objectContaining({
+          path: "starter",
+          message:
+            "The starter page \"Missing colour\" isn't available on this site. Uses a variable this site doesn't have.",
+        }),
       ]);
     });
   }

@@ -110,6 +110,10 @@ import {
   runRecordedAttempt,
 } from "../../domains/schema/migrate/drift-reconcile";
 import {
+  retiredByRun,
+  withEntityCoverage,
+} from "../../domains/schema/migrate/entity-shared-rows";
+import {
   readDeletionFacts,
   runDeletions,
   runStatements,
@@ -1513,7 +1517,8 @@ export async function previewMigrate(args: {
   const judged = await pendingRunDeletions(
     [...moduleRuns, ...pendingFiles.map(file => fileUnit(file, dialect))],
     db,
-    dialect
+    dialect,
+    { adapter, migrationsDir: args.migrationsDir }
   );
   const moduleDeletions = new Map(
     judged
@@ -3620,7 +3625,8 @@ async function judgeFileDeletions(
   for (const { unit, deletions } of await pendingRunDeletions(
     units,
     deps.db,
-    deps.dialect
+    deps.dialect,
+    { adapter: deps.adapter, migrationsDir: deps.migrationsDir }
   )) {
     const source = deletionSource(unit.label, unit.text);
     for (const deletion of deletions) sources.set(deletion, source);
@@ -3833,15 +3839,40 @@ function pluginModuleUnits(
  * (`runDeletions`): a unit is judged against the schema as the units before
  * it leave it, so a table an earlier one creates holds only what the run
  * put there. The live facts are read once, for every unit's statements.
+ *
+ * With `entities`, as `nextly migrate` judges its run, each deletion in a
+ * table a collection or Single owns belongs to its main table, and a unit
+ * dropping an entity's main table lists the entity's rows in shared tables,
+ * counted (`withEntityCoverage`): a consent naming the main table covers all
+ * of it. `entities.adapter` finds the field groups' tables; the entity's
+ * rows in shared tables are listed only where the snapshot the run ends at no
+ * longer records it (`retiredByRun`, over `entities.migrationsDir`).
  */
 async function pendingRunDeletions(
   units: readonly RunUnit[],
   db: unknown,
-  dialect: SupportedDialect
+  dialect: SupportedDialect,
+  entities?: { adapter?: unknown; migrationsDir: string }
 ): Promise<{ unit: RunUnit; deletions: Deletion[] }[]> {
   const lists = units.map(unit => unit.statements);
   const facts = await readDeletionFacts(db, dialect, runStatements(lists));
-  const perUnit = runDeletions(lists, dialect, facts);
+  const read = runDeletions(lists, dialect, facts);
+  const retires =
+    entities === undefined
+      ? undefined
+      : await retiredByRun(
+          resolve(entities.migrationsDir, "meta"),
+          units.map(unit => unit.label.replace(/\.sql$/, ""))
+        );
+  const perUnit =
+    entities === undefined
+      ? read
+      : await withEntityCoverage(read, {
+          db,
+          dialect,
+          adapter: entities.adapter,
+          ...(retires === undefined ? {} : { retires }),
+        });
   return units.map((unit, at) => ({ unit, deletions: perUnit[at] ?? [] }));
 }
 

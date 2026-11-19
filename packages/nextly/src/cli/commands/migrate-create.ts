@@ -64,6 +64,7 @@ import {
   type DataLossConsent,
   type Deletion,
 } from "../../domains/schema/migrate/data-loss-consent";
+import { countEntityRows } from "../../domains/schema/migrate/entity-shared-rows";
 import {
   orderedMigrations,
   type PluginMigration,
@@ -473,6 +474,29 @@ export async function countWhereReadable(
       counted.push(one?.[0] ?? deletion);
     }
   }
+  // An entity's rows in shared tables, counted as `nextly migrate` counts them (`countEntityRows`),
+  // within what is left of the budget; past it, they are listed without a count.
+  let listed: Deletion[] = counted;
+  const left = deadline - Date.now();
+  const entityRowsToCount = counted.some(
+    d => d.kind === "rows" && d.of !== undefined && d.count === undefined
+  );
+  if (entityRowsToCount && (stopped || left <= 0)) {
+    stopped = true;
+  } else if (entityRowsToCount) {
+    const entityRows = countEntityRows(counted, {
+      db,
+      dialect,
+      adapter: opened,
+    });
+    const done = await within(entityRows, left);
+    if (done === "timed-out") {
+      stopped = true;
+      unfinished = entityRows;
+    } else if (done !== undefined) {
+      listed = done;
+    }
+  }
   if (stopped) {
     logger.info(
       "Counts stopped at their time limit; the rest are listed without one."
@@ -482,7 +506,7 @@ export async function countWhereReadable(
   const close = () => opened.disconnect().catch(() => undefined);
   if (unfinished === undefined) await close();
   else void unfinished.then(close, close);
-  return counted;
+  return listed;
 }
 
 /** `work`'s result, or `timed-out` once `ms` have passed first; undefined where it failed. */

@@ -16,6 +16,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { decidePermission } from "../../auth/access/decide";
 import { NextlyError } from "../../errors";
 import { resolveUserRoles } from "../../services/lib/permissions";
+import type { PublishCaller } from "../collections/services/publish-gate";
 import { configuredLocales } from "../i18n/configured-locales";
 
 import { primaryStep } from "./define-workflow";
@@ -45,6 +46,7 @@ import {
   type WorkflowCaller,
 } from "./steps";
 import type { Workflow, WorkflowStepKind } from "./types";
+import { mayPublishWithoutReview } from "./workflow-publish-gate";
 
 /** Error codes this module refuses with. @experimental */
 export const REVIEW_API_ERROR_CODES = {
@@ -74,6 +76,13 @@ export interface AvailableStep {
    * @experimental
    */
   primary: boolean;
+  /**
+   * Whether it is taken only with a comment: a request for changes always, any other step whose
+   * definition asks for one. The step refuses one taken without.
+   *
+   * @experimental
+   */
+  commentRequired: boolean;
 }
 
 /** One part's review state, as a reader is told it. @experimental */
@@ -115,6 +124,15 @@ export interface PartReview {
 export interface DocumentReview {
   workflow: { slug: string; label: string } | null;
   parts: PartReview[];
+  /**
+   * Whether the caller may publish the document without review, as the publish gate judges a
+   * publish that asks to (`mayPublishWithoutReview`): trusted code, or a person holding
+   * "Publish without review" on its collection or Single; never an API key. False where no
+   * workflow is attached, as there is no review to go past.
+   *
+   * @experimental
+   */
+  mayPublishWithoutReview: boolean;
 }
 
 const stageOf = (workflow: Workflow, name: string | null) =>
@@ -124,6 +142,18 @@ const stageOf = (workflow: Workflow, name: string | null) =>
 
 /** A step leaving a stage, before whether the caller may take it is judged. */
 type StepOut = Omit<AvailableStep, "mayTake">;
+
+/** A workflow caller as the publish gate names it, so the gate judges the read's caller. */
+function publishCallerOf(caller: WorkflowCaller): PublishCaller {
+  switch (caller.kind) {
+    case "system":
+      return { kind: "trusted" };
+    case "user":
+      return { kind: "user", userId: caller.userId };
+    case "key":
+      return { kind: "api-key", userId: caller.userId, scope: caller.scope };
+  }
+}
 
 /** The steps leaving `stage`, as a reader is told them, its primary step marked. */
 function stepsFrom(workflow: Workflow, stage: string | null): StepOut[] {
@@ -137,6 +167,7 @@ function stepsFrom(workflow: Workflow, stage: string | null): StepOut[] {
       kind: step.kind,
       to: step.to,
       primary: step.name === primary,
+      commentRequired: step.commentRequired,
     }));
 }
 
@@ -156,7 +187,9 @@ export async function reviewStateOf(
   caller: WorkflowCaller
 ): Promise<DocumentReview> {
   const registered = workflowAttachedTo(document.scopeKind, document.scopeSlug);
-  if (!registered) return { workflow: null, parts: [] };
+  if (!registered) {
+    return { workflow: null, parts: [], mayPublishWithoutReview: false };
+  }
   const { workflow } = registered;
   const table = await documentTableOn(document);
   const parts: (string | null)[] = table.localized
@@ -224,8 +257,13 @@ export async function reviewStateOf(
       enteredBy: part.enteredBy,
     }))
   );
+  const bypass = await mayPublishWithoutReview(
+    publishCallerOf(caller),
+    document.scopeSlug
+  );
   return {
     workflow: { slug: workflow.slug, label: workflow.label },
+    mayPublishWithoutReview: bypass,
     parts: read.map((part, index) => ({
       ...part,
       steps: part.steps.map(step => ({
