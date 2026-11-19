@@ -505,23 +505,30 @@ async function within(promise: Promise<unknown>, ms: number): Promise<boolean> {
   }
 }
 
-/** The kill points, each naming the write it stops after. */
+/**
+ * The kill points, each naming the write it stops after, and whether that write comes before the
+ * definition's: a save writes its migration files and snapshots first and its definition last.
+ */
 const KILL_POINTS: ReadonlyArray<{
   name: string;
+  beforeDefinition: boolean;
   arm(t: TestNextly): (point: string) => boolean;
 }> = [
   {
-    name: "the definition file",
-    arm: () => point => point === `file:${join(basePath, DEFINITION)}`,
-  },
-  {
     name: "a migration file",
+    beforeDefinition: true,
     arm: () => point =>
       point.startsWith(`file:${join(basePath, HISTORY)}`) &&
       point.endsWith(".sql"),
   },
   {
+    name: "the definition file",
+    beforeDefinition: false,
+    arm: () => point => point === `file:${join(basePath, DEFINITION)}`,
+  },
+  {
     name: "a statement of the file run",
+    beforeDefinition: false,
     arm: t => {
       stopAtStatement(t);
       return point =>
@@ -530,6 +537,7 @@ const KILL_POINTS: ReadonlyArray<{
   },
   {
     name: "the ledger's record of the file",
+    beforeDefinition: false,
     arm: () => {
       stopAtLedger();
       return point => point === "ledger:markApplied";
@@ -537,6 +545,7 @@ const KILL_POINTS: ReadonlyArray<{
   },
   {
     name: "the registry row",
+    beforeDefinition: false,
     arm: () => point => point === "registry",
   },
 ];
@@ -557,7 +566,7 @@ describe.each(getConfiguredTestDialects())(
     describe.each(PATHS)("$name", path => {
       it.each(KILL_POINTS)(
         "a kill after $name leaves the row and the marker, both naming the save",
-        async ({ arm }) => {
+        async ({ arm, beforeDefinition }) => {
           const t = await boot();
           await path.create([text("heading")]);
           const definitionBefore = definitionText();
@@ -587,6 +596,13 @@ describe.each(getConfiguredTestDialects())(
             host: hostname(),
             definitionBefore,
           });
+          // Stopped before its definition is written, the save has left the definition exactly as
+          // it was: a later `migrate:create` reads no change the save's own file doesn't record.
+          if (beforeDefinition) {
+            expect(definitionText(), "the definition, before its write").toBe(
+              definitionBefore
+            );
+          }
           // The harness hands its adapter in, so where the database is cannot be told: the
           // record says so, never a URL, and the marker check takes it as this database's.
           expect(row?.database).toBe("unknown");
@@ -640,12 +656,16 @@ describe.each(getConfiguredTestDialects())(
         expect(recordMarker(path)).toBeUndefined();
       }, 300_000);
 
-      // A definition that cannot be replaced stays whole, and nothing else of the save is written
-      // yet: there is nothing to settle, so the record goes with the save's failure.
+      // A definition that cannot be replaced stays whole, and the migration files and snapshots
+      // written before it are taken back: there is nothing to settle, so the record goes with the
+      // save's failure.
       it("a save whose definition cannot be written leaves neither the row nor the marker", async () => {
         const t = await boot();
         await path.create([text("heading")]);
         const definitionBefore = definitionText();
+        const sqlBefore = filesBelow(join(basePath, HISTORY)).filter(f =>
+          f.endsWith(".sql")
+        );
         let refused = 0;
         kill.refuse = point => {
           if (point !== `file:${join(basePath, DEFINITION)}`) return false;
@@ -663,6 +683,11 @@ describe.each(getConfiguredTestDialects())(
           "the save was not refused"
         ).toBe(false);
         expect(definitionText()).toBe(definitionBefore);
+        // The files the save wrote before its definition are taken back with it.
+        expect(
+          filesBelow(join(basePath, HISTORY)).filter(f => f.endsWith(".sql")),
+          "the migration files after the refused definition"
+        ).toEqual(sqlBefore);
         expect(await recordRow(t, path)).toBeUndefined();
         expect(recordMarker(path)).toBeUndefined();
       }, 300_000);

@@ -7,12 +7,14 @@
  * 1. the history checks `nextly migrate` runs first: an applied file edited or
  *    missing, or an attempt left unfinished, refuses the save before anything
  *    is written;
- * 2. the collection's whole definition, into the definition file
- *    (`db.uiSchemaFile`), replaced in one rename;
- * 3. the migration and snapshot `migrate:create` would write for the
+ * 2. the migration and snapshot `migrate:create` would write for the
  *    collection alone, into `db.migrationsDir`. A collection whose table the
  *    database has and no snapshot records is adopted first: a file describing
  *    the table as it stands, so a fresh database replays it;
+ * 3. the collection's whole definition, into the definition file
+ *    (`db.uiSchemaFile`), replaced in one rename, last of the files: a save
+ *    stopped before it leaves the definition as it was, so no later
+ *    `migrate:create` reads a change no file records;
  * 4. in development, each new file run through the runner `nextly migrate`
  *    records with, so it is recorded applied with its checksum and `nextly
  *    migrate` has nothing left to do. Outside development nothing runs, and
@@ -605,10 +607,11 @@ async function settleStoppedSave(
     }
     const settled = settledSaveOf(save, judged.applied, judged.report);
     const plan = await planSave(deps, settled);
-    await writeAtomically(definitionPath, serializeUiSchema(plan.next));
     const files = await writeFiles(deps, settled, plan, names =>
       replacement.push(...names)
     );
+    // The definition last, after the replacement's files, as every save writes it.
+    await writeAtomically(definitionPath, serializeUiSchema(plan.next));
     // Compared with the live table before it is recorded, as a pushed save's files are.
     const units = await verifiedUnits(deps, files, plan.table);
     // The replacement recorded applied, the ledger's attempt at the stopped file cleared and the
@@ -677,11 +680,7 @@ async function putBack(
         await writeAtomically(snapshotPathOf(deps, filename), snapshot);
       }
     }
-    if (left.definition === undefined) {
-      await rm(definitionPath, { force: true });
-    } else {
-      await writeAtomically(definitionPath, left.definition);
-    }
+    await restoreDefinition(definitionPath, left.definition);
   } catch (error) {
     deps.logger.error(
       `The stopped save's files could not all be put back: ${
@@ -906,7 +905,7 @@ export interface PreparedCollectionSave {
 }
 
 /**
- * Write the save's definition and migration, run nothing, and hand back how
+ * Write the save's migration and then its definition, run nothing, and hand back how
  * to run or withdraw them: for a caller that changes the database itself
  * between the two, as a delete tears down what a collection holds. Every file
  * exists before that work starts, so a failure writing one leaves the
@@ -946,9 +945,9 @@ export async function prepareCollectionSave(
 }
 
 /**
- * The save's checks, its definition and its files, written: what every save
- * does before anything runs. A failure writing a file removes what was
- * written and puts the definition back. `undo` does the same afterwards for
+ * The save's checks, its files and then its definition, written: what every
+ * save does before anything runs. A failure writing a file or the definition
+ * removes what was written and puts the definition back where it changed. `undo` does the same afterwards for
  * the files that did not apply (`undoUnapplied`).
  */
 async function writeSave(
@@ -999,14 +998,13 @@ async function writeSave(
   });
   // The migration files there before the save: one the save left that is not among them, and not
   // named as written (a file its generation could not take back), keeps the record. Read before
-  // the definition is replaced, so a read that fails has changed nothing.
+  // anything is written, so a read that fails has changed nothing.
   let sqlBefore: string[];
   try {
     sqlBefore = await sqlFiles(deps.migrationsDir);
-    await writeAtomically(definitionPath, serializeUiSchema(plan.next));
   } catch (error) {
-    // A failed read or replace leaves the definition whole and nothing else of the save is
-    // written yet: there is nothing to settle, so the record clears with the save's failure.
+    // Nothing of the save is written yet: there is nothing to settle, so the record clears with
+    // the save's failure.
     started.withdrawn();
     throw error;
   }
@@ -1028,6 +1026,10 @@ async function writeSave(
     const files = await writeFiles(deps, save, plan, written =>
       names.push(...written)
     );
+    // The definition last, once the migration files and snapshots that record its change are in
+    // place: a save stopped or failing before this leaves the definition as it was, so a later
+    // `migrate:create` reads no change that no file records, and writes none of the save's again.
+    await writeAtomically(definitionPath, serializeUiSchema(plan.next));
     return { files, names, table: plan.table, undo, started };
   } catch (error) {
     return undoThenThrow(error, [{ files: names, undo: () => undo(error) }]);
@@ -3174,9 +3176,22 @@ async function undoUnapplied(
     await settleAttempts(deps, repo, filename);
     await removeFileAndSnapshot(deps, filename);
   }
+  await restoreDefinition(definitionPath, definition);
+  return "withdrawn";
+}
+
+/**
+ * Put the definition back as it was, `undefined` for none. Written only where it differs: a save
+ * writes its definition last, so one that failed before that left it as it was, and is not written
+ * again (where the cause, a full disk say, would only fail again).
+ */
+async function restoreDefinition(
+  definitionPath: string,
+  definition: string | undefined
+): Promise<void> {
+  if ((await readIfPresent(definitionPath)) === definition) return;
   if (definition === undefined) await rm(definitionPath, { force: true });
   else await writeAtomically(definitionPath, definition);
-  return "withdrawn";
 }
 
 /** Remove a migration file the save wrote, and its snapshot. */
