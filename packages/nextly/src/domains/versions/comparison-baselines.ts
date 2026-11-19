@@ -349,6 +349,14 @@ export interface ComparisonRequest {
   partIsLive: (part: string | null) => Promise<boolean>;
   /** Whether the document has the Draft/Published lifecycle. */
   lifecycle: boolean;
+  /**
+   * Asked of the target before any baseline is resolved, and of the version a
+   * baseline chose before the pair is returned or refused: a comparison whose
+   * versions span languages (the shared part's) is authorized for each
+   * version's own language, so a refusal never speaks about a language the
+   * caller may not read. Throws to refuse.
+   */
+  authorizeVersion?: (versionNo: number) => Promise<void>;
 }
 
 /** The pair a request resolves to, and the baseline that chose `from`. */
@@ -390,6 +398,7 @@ export async function resolveComparisonPair(
       logContext: { reason: "comparison-no-versions", part },
     });
   }
+  await request.authorizeVersion?.(target);
   const live = await request.partIsLive(part);
   const name =
     request.baseline ??
@@ -405,6 +414,9 @@ export async function resolveComparisonPair(
     lifecycle: request.lifecycle,
   };
   const choice = await chooseComparisonBaseline(name, context);
+  if (choice !== null && "versionNo" in choice) {
+    await request.authorizeVersion?.(choice.versionNo);
+  }
   if (choice !== null && "unavailable" in choice) {
     throw noBaseline(choice.unavailable);
   }

@@ -1409,6 +1409,19 @@ export async function compareDocumentVersions(args: {
         // Whether a `status` is the lifecycle's or the document's own word:
         // without the lifecycle every version was served, whatever it says.
         lifecycle: hasLifecycle(entity),
+        // The shared part's versions span languages: the target and the
+        // baseline are each asked about in their own language before any
+        // baseline speaks, so a person who may not read one learns nothing of
+        // it, as for a document that is not there.
+        ...(query.part === "shared" && args.user
+          ? {
+              authorizeVersion: versionLanguageGate(
+                args,
+                args.user,
+                partVersions
+              ),
+            }
+          : {}),
       },
       query.part === "shared" ? sharedPartVersions(partVersions) : partVersions
     );
@@ -1429,6 +1442,34 @@ export async function compareDocumentVersions(args: {
     ...(query.part === undefined ? {} : { part: query.part }),
   });
   return baseline ? { ...diff, baseline } : diff;
+}
+
+/**
+ * Asks whether `user` may read one version of the document in its own
+ * language (`versions` names each version's language), refusing as not found
+ * where they may not: the shared part's comparison asks it of its target and
+ * baseline before any baseline answers.
+ */
+function versionLanguageGate(
+  document: {
+    scopeKind: VersionScopeKind;
+    slug: string;
+    entryId: string;
+    authenticatedScope?: AuthenticatedScope;
+  },
+  user: UserContext,
+  versions: readonly { versionNo: number; locale: string | null }[]
+): (versionNo: number) => Promise<void> {
+  return versionNo =>
+    assertHistoryLocalesReadable(
+      document.scopeKind,
+      document.slug,
+      document.entryId,
+      user,
+      document.authenticatedScope,
+      {},
+      [versions.find(v => v.versionNo === versionNo)?.locale ?? null]
+    );
 }
 
 /**
@@ -1634,6 +1675,9 @@ export async function diffDocumentVersions(args: {
       // `redactSnapshotForUser` ran each component's own read rules.
       componentRulesApplied: true,
       entity: lookupKind,
+      // The shared fields of a translated document are the ones the content
+      // type declares now: a field it no longer has may have been translated.
+      declaredOnly: compared.declaredOnly,
     }
   );
 
@@ -1669,12 +1713,15 @@ export async function diffDocumentVersions(args: {
 interface ComparedView {
   snapshot(snapshot: unknown): Record<string, unknown>;
   withheld(paths: ReadonlySet<string>): ReadonlySet<string>;
+  /** Whether keys the content type no longer declares are left out. */
+  declaredOnly: boolean;
 }
 
 /** A comparison of one language: each snapshot whole. */
 const wholeSnapshotView: ComparedView = {
   snapshot: snapshotObject,
   withheld: paths => paths,
+  declaredOnly: false,
 };
 
 /**
@@ -1682,7 +1729,8 @@ const wholeSnapshotView: ComparedView = {
  * fields each language keeps on its own named as a workflow's review names them
  * (`documentTableOn`, `sharedValuesOf`), so the shared fields compared are the
  * ones their approval covers. A field withheld under a translated field goes
- * with it. A document without languages shares every field.
+ * with it. A document without languages shares every field. A key the content
+ * type no longer declares is left out by the diff itself (`declaredOnly`).
  */
 async function sharedFieldsView(document: {
   scopeKind: "collection" | "single";
@@ -1696,6 +1744,7 @@ async function sharedFieldsView(document: {
     snapshot: snapshot => sharedValuesOf(document, snapshot, translated),
     withheld: paths =>
       new Set([...paths].filter(path => !own.has(topLevelNameOf(path)))),
+    declaredOnly: true,
   };
 }
 
