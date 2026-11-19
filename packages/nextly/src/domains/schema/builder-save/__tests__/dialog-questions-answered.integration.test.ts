@@ -401,7 +401,14 @@ for (const dialect of getConfiguredTestDialects()) {
         t,
         "SELECT related FROM comp_meta"
       );
-      expect(held.map(row => String(row.related))).toEqual(['["tag-1"]']);
+      // PostgreSQL hands the list back parsed; SQLite and MySQL as its text.
+      expect(
+        held.map(row =>
+          typeof row.related === "string"
+            ? (JSON.parse(row.related) as unknown)
+            : row.related
+        )
+      ).toEqual([["tag-1"]]);
 
       await save({
         eventResolutions: [
