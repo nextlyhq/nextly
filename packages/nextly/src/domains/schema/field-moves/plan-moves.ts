@@ -275,7 +275,8 @@ function refuseHoldersNotGroups(
   // Every container on the path, not only the outermost: a nested one changes kind as well.
   const otherKind = (
     list: readonly FieldDefinition[],
-    path: readonly string[]
+    path: readonly string[],
+    column: string
   ): string | undefined =>
     path
       .slice(0, -1)
@@ -284,9 +285,14 @@ function refuseHoldersNotGroups(
         const placed = placeOf(list, prefix);
         return placed !== null && placed.field.type !== "group";
       })
-      ?.join(".");
+      ?.join(".") ??
+    // A field of another kind on the group's column under another spelling (`seoMeta` beside
+    // `seo_meta`): its JSON value stays in the column the group's statements write to.
+    (columnHeldByOtherKind(list, column) ? path[0] : undefined);
   const into =
-    move.to.kind === "json" ? otherKind(fields.before, request.to) : undefined;
+    move.to.kind === "json"
+      ? otherKind(fields.before, request.to, move.to.column)
+      : undefined;
   if (into !== undefined) {
     throw refused(
       request,
@@ -295,7 +301,7 @@ function refuseHoldersNotGroups(
   }
   const outOf =
     move.from.kind === "json"
-      ? otherKind(fields.after, request.from)
+      ? otherKind(fields.after, request.from, move.from.column)
       : undefined;
   if (outOf !== undefined) {
     throw refused(
@@ -303,6 +309,52 @@ function refuseHoldersNotGroups(
       `${outOf} is not a group after this save. Move the field out first, then change ${outOf}.`
     );
   }
+}
+
+/** The admin settings that name a top-level field, as the definition file holds them. */
+interface AdminReferences {
+  useAsTitle?: string;
+  defaultColumns?: readonly string[];
+}
+
+/**
+ * Refuses moving into a group a top-level field the admin settings name: the definition file
+ * holds them beside the fields and is read only where each names a top-level field, so the save
+ * would leave it unreadable.
+ */
+function refuseNamedByAdmin(
+  request: FieldMoveRequest,
+  admin: AdminReferences | undefined
+): void {
+  if (request.from.length !== 1 || request.to.length === 1) return;
+  const name = request.from[0] ?? "";
+  const setting =
+    admin?.useAsTitle === name
+      ? "useAsTitle"
+      : admin?.defaultColumns?.includes(name) === true
+        ? "defaultColumns"
+        : undefined;
+  if (setting === undefined) return;
+  throw refused(
+    request,
+    `${name} is named in the admin settings (${setting}), which name only top-level fields. Choose another field there first, then move ${name}.`
+  );
+}
+
+/** Whether a field on the row that is not a group keeps its values in `column`. */
+function columnHeldByOtherKind(
+  fields: readonly FieldDefinition[],
+  column: string
+): boolean {
+  return fieldsStoredOnRow(fields).some(field => {
+    const { name } = field as { name?: unknown };
+    return (
+      field.type !== "group" &&
+      typeof name === "string" &&
+      fieldProducesColumn(field) &&
+      toSnakeCase(name) === column
+    );
+  });
 }
 
 /**
@@ -452,6 +504,8 @@ export function planEntityMoves(args: {
   localized: boolean;
   table: string;
   dialect: SupportedDialect;
+  /** The entity's admin settings after the save, which name top-level fields. */
+  admin?: AdminReferences;
 }): EntityMoves {
   const result: EntityMoves = {
     up: { first: [], last: [] },
@@ -471,6 +525,7 @@ export function planEntityMoves(args: {
     if (samePath(request.from, request.to)) continue;
     refuseInsideOwnPlace(request);
     refuseUnbound(request);
+    refuseNamedByAdmin(request, args.admin);
     refuseUnmatched(args.before, args.after, request);
     const checked = checkMove(args.before, args.after, request, {
       localized: args.localized,

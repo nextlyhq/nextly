@@ -178,10 +178,12 @@ const MYSQL_READS: Partial<
   json: (_, value) => value,
   boolean: text => `IF(${text} IN ('true', '1'), 1, 0)`,
   timestamp: text => {
-    // The column holds UTC: the local part is read, then moved from its offset to UTC.
+    // The column holds UTC: the local part is read, then its offset taken off in minutes. Not
+    // CONVERT_TZ, which leaves a value outside the range its TIMESTAMP holds as it was.
     const offset = `REGEXP_SUBSTR(${text}, ${ISO_OFFSET})`;
     const local = `CAST(REPLACE(REGEXP_REPLACE(${text}, ${ISO_OFFSET}, ''), 'T', ' ') AS DATETIME(3))`;
-    return `CONVERT_TZ(${local}, IF(${offset} IS NULL OR ${offset} = 'Z', '+00:00', ${offset}), '+00:00')`;
+    const minutes = `IF(${offset} IS NULL OR ${offset} = 'Z', 0, IF(LEFT(${offset}, 1) = '-', -1, 1) * (CAST(SUBSTRING(${offset}, 2, 2) AS SIGNED) * 60 + CAST(SUBSTRING(${offset}, 5, 2) AS SIGNED)))`;
+    return `TIMESTAMPADD(MINUTE, -(${minutes}), ${local})`;
   },
   integer: text => `CAST(${text} AS SIGNED)`,
   bigint: text => `CAST(${text} AS SIGNED)`,
@@ -284,7 +286,7 @@ export function heldValueAt(
 
 /** An ISO date, alone or with a time and the offset it was written at. */
 const ISO_DATE =
-  /^(?<year>\d{4})-(?<month>\d{2})-(?<day>\d{2})(?:T(?<hour>\d{2}):(?<minute>\d{2})(?::(?<second>\d{2})(?:\.\d{1,3})?)?(?:Z|(?<sign>[+-])(?<offsetHour>\d{2}):(?<offsetMinute>\d{2})))?$/;
+  /^(?<year>\d{4})-(?<month>\d{2})-(?<day>\d{2})(?:T(?<hour>\d{2}):(?<minute>\d{2})(?::(?<second>\d{2})(?:\.(?<fraction>\d{1,3}))?)?(?:Z|(?<sign>[+-])(?<offsetHour>\d{2}):(?<offsetMinute>\d{2})))?$/;
 
 /** The years a date column holds on each dialect: MySQL's DATETIME starts at the year 1000. */
 const FIRST_YEAR: Record<SupportedDialect, number> = {
@@ -312,6 +314,8 @@ export function movesAsTheSameDate(
   // PostgreSQL's date input has no year 0: the year before 1 is written `0001 BC`.
   if (dialect === "postgresql" && at("year") === 0) return false;
   if (at("hour") > 23 || at("minute") > 59 || at("second") > 59) return false;
+  // SQLite's date column keeps whole seconds: milliseconds would be dropped by the copy.
+  if (dialect === "sqlite" && at("fraction") !== 0) return false;
   if (!offsetReadable(written.sign, at("offsetHour"), at("offsetMinute"))) {
     return false;
   }
@@ -332,7 +336,7 @@ function dayExists(year: number, month: number, day: number): boolean {
   );
 }
 
-/** Whether MySQL's CONVERT_TZ reads an offset; the range it takes holds every zone in use. */
+/** Whether an offset is one a zone in use has, from -13:59 to +14:00, its minutes under 60. */
 function offsetReadable(
   sign: string | undefined,
   hours: number,
@@ -383,7 +387,36 @@ function emptyAtDestination(
     ];
   }
   return [
-    `UPDATE ${table} SET ${column} = ${json.remove(column, to.keys)} WHERE NOT (${holds}) AND ${json.hasKey(column, to.keys)};`,
+    // A group that is SQL NULL holds no key: its test answers NULL, read here as false.
+    `UPDATE ${table} SET ${column} = ${json.remove(column, to.keys)} WHERE NOT (COALESCE(${holds}, FALSE)) AND ${json.hasKey(column, to.keys)};`,
+  ];
+}
+
+/**
+ * On SQLite, statements that stop a run before dates are copied out of a group into `column` where
+ * an entry holds one its column cannot keep: one SQLite does not read, or one with milliseconds,
+ * which its whole seconds would drop. Each held date's seconds go into a temporary table's NOT
+ * NULL column, NULL where it cannot be kept, so the run stops on that constraint, its transaction
+ * undone and every value where it was. The table and column are named to say why. The check the
+ * save makes first (`movesAsTheSameDate`) reads the database the file is written from; this one
+ * reads the database the file runs on. Other dialects need none: PostgreSQL reads every form the
+ * check lets through, and MySQL stops on a value it cannot read.
+ */
+function unkeptDatesStop(
+  target: MoveColumn,
+  table: string,
+  from: Extract<StoragePlace, { kind: "json" }>,
+  column: string
+): string[] {
+  if (target.dialect !== "sqlite" || target.kind !== "timestamp") return [];
+  const q = (name: string) => quoteIdent(name, "sqlite");
+  const guard = `temp.${q(`nextly_unreadable_date_${column}`)}`;
+  const reason = q("an_entry_holds_a_date_sqlite_cannot_keep");
+  const value = `json_extract(${q(from.column)}, ${dollarPath(from.keys)})`;
+  return [
+    `CREATE TEMP TABLE ${q(`nextly_unreadable_date_${column}`)} (${reason} INTEGER NOT NULL);`,
+    `INSERT INTO ${guard} (${reason}) SELECT CASE WHEN substr(strftime('%f', ${value}), 4) <> '000' THEN NULL ELSE CAST(strftime('%s', ${value}) AS INTEGER) END FROM ${table} WHERE ${SQLITE.holds(q(from.column), from.keys)};`,
+    `DROP TABLE ${guard};`,
   ];
 }
 
@@ -421,6 +454,9 @@ export function moveDataStatements(
   const copy =
     to.kind === "column"
       ? [
+          ...(from.kind === "json"
+            ? unkeptDatesStop(target, table, from, to.column)
+            : []),
           `UPDATE ${table} SET ${q(to.column)} = ${
             from.kind === "json"
               ? json.fromJson(q(from.column), from.keys, target)

@@ -2052,6 +2052,8 @@ function plannedMovesOf(
     renames: save.renamedFields ?? [],
     table,
     dialect: deps.adapter.getCapabilities().dialect,
+    // The settings the save's definition keeps, which may name a field the save moves.
+    ...(save.entity.admin === undefined ? {} : { admin: save.entity.admin }),
   });
   refuseDeletesBeforeRefill(save, planned);
   return planned;

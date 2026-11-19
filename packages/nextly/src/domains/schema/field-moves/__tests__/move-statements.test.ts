@@ -153,10 +153,36 @@ describe("moveDataStatements on SQLite", () => {
     });
   });
 
-  it("leaves a date the database cannot read where it was, rather than losing it", () => {
+  it("stops before it writes where an entry holds a date SQLite cannot keep, every value where it was", () => {
+    for (const unkept of ["July 17, 2026", "2026-07-17T10:00:05.123Z"]) {
+      const db = table("published integer");
+      db.exec(
+        `INSERT INTO dc_posts (id, meta) VALUES (1, '{"published":"${unkept}"}'), (2, '{"published":"2026-07-17T00:00:00.000Z"}');`
+      );
+      const out = moveDataStatements(
+        { from: key("meta", "published"), to: column("published") },
+        sqlite("timestamp", "integer")
+      );
+      expect(() => run(db, out.copy), unkept).toThrow(
+        "NOT NULL constraint failed: nextly_unreadable_date_published.an_entry_holds_a_date_sqlite_cannot_keep"
+      );
+      expect(
+        db.prepare("SELECT id, published, meta FROM dc_posts ORDER BY id").all()
+      ).toEqual([
+        { id: 1, published: null, meta: `{"published":"${unkept}"}` },
+        {
+          id: 2,
+          published: null,
+          meta: '{"published":"2026-07-17T00:00:00.000Z"}',
+        },
+      ]);
+    }
+  });
+
+  it("copies dates SQLite keeps, whole seconds written with milliseconds among them", () => {
     const db = table("published integer");
     db.exec(
-      `INSERT INTO dc_posts (id, meta) VALUES (1, '{"published":"July 17, 2026"}'), (2, '{"published":"2026-07-17T00:00:00.000Z"}');`
+      `INSERT INTO dc_posts (id, meta) VALUES (1, '{"published":"2026-07-17T10:00:05.000Z"}'), (2, '{"published":"2026-07-17"}');`
     );
     const out = moveDataStatements(
       { from: key("meta", "published"), to: column("published") },
@@ -167,12 +193,12 @@ describe("moveDataStatements on SQLite", () => {
     expect(
       db.prepare("SELECT id, published, meta FROM dc_posts ORDER BY id").all()
     ).toEqual([
-      { id: 1, published: null, meta: '{"published":"July 17, 2026"}' },
       {
-        id: 2,
-        published: Date.parse("2026-07-17T00:00:00.000Z") / 1000,
+        id: 1,
+        published: Date.parse("2026-07-17T10:00:05.000Z") / 1000,
         meta: "{}",
       },
+      { id: 2, published: Date.parse("2026-07-17") / 1000, meta: "{}" },
     ]);
   });
 
@@ -326,11 +352,32 @@ describe("moveDataStatements on PostgreSQL and MySQL", () => {
     ).toContain(
       `SET "published" = ("meta" #>> '{"published"}' || CASE WHEN length("meta" #>> '{"published"}') = 10 THEN 'T00:00:00Z' ELSE '' END)::timestamptz WHERE`
     );
-    expect(
-      moveDataStatements(out, date("mysql", "datetime(3)")).copy[0]
-    ).toContain(
-      "CONVERT_TZ(CAST(REPLACE(REGEXP_REPLACE(JSON_UNQUOTE(JSON_EXTRACT(`meta`, '$.\"published\"')), '(Z|[+-][0-9]{2}:[0-9]{2})$', ''), 'T', ' ') AS DATETIME(3)), IF("
+    // MySQL takes the offset off in minutes: CONVERT_TZ leaves a value outside the range its
+    // TIMESTAMP holds as it was, an instant shifted by its offset.
+    const mysql = moveDataStatements(out, date("mysql", "datetime(3)")).copy[0];
+    expect(mysql).toContain("TIMESTAMPADD(MINUTE, -(");
+    expect(mysql).toContain(
+      "CAST(REPLACE(REGEXP_REPLACE(JSON_UNQUOTE(JSON_EXTRACT(`meta`, '$.\"published\"')), '(Z|[+-][0-9]{2}:[0-9]{2})$', ''), 'T', ' ') AS DATETIME(3))"
     );
+    expect(mysql).not.toContain("CONVERT_TZ");
+  });
+
+  it("stops a SQLite copy of dates out of a group, before it writes, where one cannot be kept", () => {
+    const out = { from: key("meta", "published"), to: column("published") };
+    const copy = moveDataStatements(out, {
+      table: "dc_posts",
+      dialect: "sqlite",
+      kind: "timestamp",
+      columnType: "integer",
+    }).copy;
+    // The guard table's NOT NULL column takes each held date's seconds, NULL where SQLite reads
+    // none or would drop its milliseconds: the run stops there, its transaction undone.
+    expect(copy.slice(0, 3)).toEqual([
+      `CREATE TEMP TABLE "nextly_unreadable_date_published" ("an_entry_holds_a_date_sqlite_cannot_keep" INTEGER NOT NULL);`,
+      `INSERT INTO temp."nextly_unreadable_date_published" ("an_entry_holds_a_date_sqlite_cannot_keep") SELECT CASE WHEN substr(strftime('%f', json_extract("meta", '$."published"')), 4) <> '000' THEN NULL ELSE CAST(strftime('%s', json_extract("meta", '$."published"')) AS INTEGER) END FROM "dc_posts" WHERE json_type("meta", '$."published"') IS NOT NULL AND json_type("meta", '$."published"') <> 'null';`,
+      `DROP TABLE temp."nextly_unreadable_date_published";`,
+    ]);
+    expect(copy[3]).toMatch(/^UPDATE "dc_posts" SET "published" = /);
   });
 
   it("counts PostgreSQL's spelled-out timestamp without time zone as holding UTC, not as zoned", () => {
@@ -385,6 +432,29 @@ describe("movesAsTheSameDate", () => {
       "2026-07-17T10:00:05.1+05:30",
       "2024-02-29T23:59:59-13:59",
       "2026-07-17T00:00:00+14:00",
+    ]) {
+      for (const dialect of ["postgresql", "mysql"] as const) {
+        expect(movesAsTheSameDate(value, dialect), `${value} ${dialect}`).toBe(
+          true
+        );
+      }
+    }
+  });
+
+  it("refuses on SQLite a date with milliseconds, which its column keeps as whole seconds", () => {
+    for (const value of [
+      "2026-07-17T10:00:05.123Z",
+      "2026-07-17T10:00:05.1+05:30",
+    ]) {
+      expect(movesAsTheSameDate(value, "sqlite"), value).toBe(false);
+    }
+    // Whole seconds, written with milliseconds or without, are kept as they are.
+    for (const value of [
+      "2026-07-17",
+      "2026-07-17T10:00Z",
+      "2026-07-17T10:00:05Z",
+      "2026-07-17T10:00:05.000Z",
+      "2026-07-17T10:00:05.0+05:30",
     ]) {
       expect(movesAsTheSameDate(value, "sqlite"), value).toBe(true);
     }

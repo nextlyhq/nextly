@@ -271,7 +271,12 @@ describe("checkMove", () => {
 
   it("refuses a relationship moved while what it relates to changes", () => {
     const author = (relationTo: string) =>
-      ({ name: "author", label: "Author", type: "relationship", relationTo }) as FieldDefinition;
+      ({
+        name: "author",
+        label: "Author",
+        type: "relationship",
+        relationTo,
+      }) as FieldDefinition;
     const checked = checkMove(
       [author("users"), group("meta", [])],
       [group("meta", [author("editors")])],
@@ -281,6 +286,57 @@ describe("checkMove", () => {
     expect((checked as { message: string }).message).toMatch(
       /changes what it relates to in the same save/
     );
+  });
+
+  it("refuses a relationship moved while the target its options name changes, as reads take it", () => {
+    // A relationship with no `relationTo` relates to `options.target`, as reads resolve it.
+    const author = (target: string) =>
+      ({
+        name: "author",
+        label: "Author",
+        type: "relationship",
+        options: { target },
+      }) as unknown as FieldDefinition;
+    const checked = checkMove(
+      [author("users"), group("meta", [])],
+      [group("meta", [author("editors")])],
+      { from: ["author"], to: ["meta", "author"] }
+    );
+    expect(checked).toMatchObject({ ok: false, reason: "type-changed" });
+    expect(
+      checkMove(
+        [author("users"), group("meta", [])],
+        [group("meta", [author("users")])],
+        { from: ["author"], to: ["meta", "author"] }
+      )
+    ).toMatchObject({ ok: true });
+  });
+
+  it("refuses a decimal moved while its precision or scale changes, which the copy would round", () => {
+    const amount = (extra: Record<string, unknown> = {}) =>
+      ({
+        name: "amount",
+        label: "Amount",
+        type: "number",
+        dbType: "decimal",
+        ...extra,
+      }) as unknown as FieldDefinition;
+    const out = (from: FieldDefinition, to: FieldDefinition) =>
+      checkMove([group("meta", [from])], [to, group("meta", [])], {
+        from: ["meta", "amount"],
+        to: ["amount"],
+      });
+    expect(out(amount({ scale: 2 }), amount({ scale: 1 }))).toMatchObject({
+      ok: false,
+      reason: "type-changed",
+    });
+    expect(
+      out(amount({ precision: 10 }), amount({ precision: 6 }))
+    ).toMatchObject({ ok: false, reason: "type-changed" });
+    // The same precision and scale, one stated and one by the default, still moves.
+    expect(out(amount(), amount({ precision: 10, scale: 2 }))).toMatchObject({
+      ok: true,
+    });
   });
 
   it("refuses a move out of a group into a unique field, whose values would arrive after the uniqueness", () => {

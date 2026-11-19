@@ -502,6 +502,70 @@ describe("planEntityMoves", () => {
     ).not.toThrow();
   });
 
+  it("refuses moving into a group a top-level field the entity's admin settings name", () => {
+    // The definition file holds the admin settings beside the fields, and is read again only
+    // where they name a top-level field: one moved into a group would leave it unreadable.
+    const moveTitle = (admin: {
+      useAsTitle?: string;
+      defaultColumns?: string[];
+    }) =>
+      planEntityMoves({
+        ...base,
+        before: [text("title"), group("meta", [])],
+        after: [group("meta", [text("title")])],
+        moves: [{ from: ["title"], to: ["meta", "title"] }],
+        admin,
+      });
+    for (const admin of [
+      { useAsTitle: "title" },
+      { defaultColumns: ["slug", "title"] },
+    ]) {
+      expect(() => moveTitle(admin)).toThrow(
+        expect.objectContaining({
+          publicData: {
+            errors: [
+              expect.objectContaining({
+                code: "FIELD_MOVE_REFUSED",
+                message: expect.stringContaining(
+                  "title is named in the admin settings"
+                ),
+              }),
+            ],
+          },
+        })
+      );
+    }
+    expect(() =>
+      moveTitle({ useAsTitle: "slug", defaultColumns: ["slug"] })
+    ).not.toThrow();
+  });
+
+  it("refuses a group that takes the column of a JSON field it replaces, under a name of another spelling", () => {
+    // `seoMeta` and `seo_meta` share one column: the JSON field's keys would stay in the group.
+    const json = (name: string) =>
+      ({ name, label: name, type: "json" }) as FieldDefinition;
+    expect(() =>
+      planEntityMoves({
+        ...base,
+        before: [text("title"), json("seoMeta")],
+        after: [group("seo_meta", [text("title")])],
+        moves: [{ from: ["title"], to: ["seo_meta", "title"] }],
+      })
+    ).toThrow(
+      expect.objectContaining({
+        publicData: {
+          errors: [
+            expect.objectContaining({
+              message: expect.stringContaining(
+                "seo_meta was not a group before this save"
+              ),
+            }),
+          ],
+        },
+      })
+    );
+  });
+
   it("refuses a move whose name another field also arrives with, which no move pairs", () => {
     // One `title` left and two arrived: which one it became is not known from the definitions,
     // and the hint could carry its values to the field that was only added.

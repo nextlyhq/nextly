@@ -109,10 +109,14 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await instance?.destroy();
-  instance = undefined;
-  vi.unstubAllEnvs();
-  await rm(basePath, { recursive: true, force: true });
+  // The rest of the teardown runs even where the instance's own fails, which is still reported.
+  try {
+    await instance?.destroy();
+  } finally {
+    instance = undefined;
+    vi.unstubAllEnvs();
+    await rm(basePath, { recursive: true, force: true });
+  }
 });
 
 async function boot(dialect: TestDialect): Promise<TestNextly> {
@@ -224,6 +228,20 @@ async function filesWritten(): Promise<number> {
   return (await readdir(join(basePath, "migrations"))).filter(f =>
     f.endsWith(".sql")
   ).length;
+}
+
+/** Each migration file the saves have written, by name, with what it holds. */
+async function migrationFiles(): Promise<Record<string, string>> {
+  const folder = join(basePath, "migrations");
+  const names = (await readdir(folder)).filter(f => f.endsWith(".sql")).sort();
+  return Object.fromEntries(
+    await Promise.all(
+      names.map(async name => [
+        name,
+        await readFile(join(folder, name), "utf-8"),
+      ])
+    )
+  );
 }
 
 const definition = () => readFile(join(basePath, "ui-schema.json"), "utf-8");
@@ -480,7 +498,7 @@ describe.each(getConfiguredTestDialects())(
           `UPDATE ${q(TABLE)} SET ${q("meta")} = '{}' WHERE ${q("slug")} = 'two'`
         );
         const stated = await definition();
-        const files = await filesWritten();
+        const files = await migrationFiles();
 
         // Counted before anything is written, on every dialect: on MySQL a refusal at the
         // statement making the column required would leave the added column behind.
@@ -499,7 +517,7 @@ describe.each(getConfiguredTestDialects())(
           })
         );
 
-        expect(await filesWritten()).toBe(files);
+        expect(await migrationFiles()).toEqual(files);
         expect(await summaryColumn(t)).toBeUndefined();
         expect(await definition()).toBe(stated);
         const one = (await readAll(t)).get("one");
@@ -773,6 +791,112 @@ describe.each(getConfiguredTestDialects())(
       );
     });
 
+    it("moves a date written at an offset out of a group as its instant, far from 1970 either way", async () => {
+      const t = await boot(dialect);
+      await createPosts(t, SLUG, { fields: INSIDE });
+      const written = {
+        early: "1960-01-01T10:00:00+05:00",
+        late: "3500-01-01T10:00:00+05:00",
+      };
+      for (const [slug, published] of Object.entries(written)) {
+        await t.nextly.create({
+          collection: SLUG,
+          data: { title: slug, slug },
+        });
+        // Written as an entry may hold it, with its offset, which the API would rewrite at UTC.
+        await run(
+          t,
+          `UPDATE ${q(TABLE)} SET ${q("meta")} = '${JSON.stringify({ published })}' WHERE ${q("slug")} = '${slug}'`
+        );
+      }
+      await save(t, OUTSIDE, OUT);
+      const moved = await readAll(t);
+      expect(
+        new Date(moved.get("early")?.published as string).toISOString()
+      ).toBe("1960-01-01T05:00:00.000Z");
+      expect(
+        new Date(moved.get("late")?.published as string).toISOString()
+      ).toBe("3500-01-01T05:00:00.000Z");
+    });
+
+    it("clears a key the destination group kept, where the group the field leaves is not there at all", async () => {
+      const t = await boot(dialect);
+      const summary: Field = { name: "summary", type: "text" };
+      const tag: Field = { name: "tag", type: "text" };
+      await createPosts(t, SLUG, {
+        fields: [group("meta", [NOTE, summary]), group("extra", [tag])],
+      });
+      await t.nextly.create({
+        collection: SLUG,
+        data: { title: "One", slug: "one" },
+      });
+      // No group value at all, where the other group still keeps a key of that name.
+      await run(
+        t,
+        `UPDATE ${q(TABLE)} SET ${q("meta")} = NULL, ${q("extra")} = '{"summary":"old"}' WHERE ${q("slug")} = 'one'`
+      );
+
+      await save(
+        t,
+        [group("meta", [NOTE]), group("extra", [tag, summary])],
+        [{ from: ["meta", "summary"], to: ["extra", "summary"] }]
+      );
+
+      const one = (await readAll(t)).get("one");
+      expect(
+        (one?.extra as Record<string, unknown>)?.summary ?? null
+      ).toBeNull();
+    });
+
+    describe.runIf(dialect === "sqlite")(
+      "on SQLite, where a date column keeps whole seconds",
+      () => {
+        it.each([
+          ["a date SQLite does not read", "July 17, 2026"],
+          ["a date with milliseconds", "2026-07-17T10:00:05.123Z"],
+        ])(
+          "stops a replayed move of dates out of a group, nothing changed, where an entry holds %s",
+          async (_what, unkept) => {
+            const first = await boot(dialect);
+            await createPosts(first);
+            const created = await filesWritten();
+            await seed(first);
+            await save(first, INSIDE, INTO);
+            const movedIn = await filesWritten();
+            await save(first, OUTSIDE, OUT);
+            await first.destroy();
+            instance = undefined;
+
+            // A deploy's database: the same files, entries the first database never held.
+            const second = await boot(dialect);
+            await migrateFolder(second, created);
+            await seed(second);
+            await migrateFolder(
+              second,
+              movedIn - created,
+              resolveDataLossConsent({
+                flag: MOVED.map(name => `${TABLE}.${name}`).join(","),
+                env: {},
+              })
+            );
+            await run(
+              second,
+              `UPDATE ${q(TABLE)} SET ${q("meta")} = json_set(${q("meta")}, '$.published', '${unkept}') WHERE ${q("slug")} = 'one'`
+            );
+            const groups = await storedGroups(second);
+            const columns = await columnsOf(second);
+
+            await expect(migrateFolder(second)).rejects.toThrow(
+              /nextly_unreadable_date_published\.an_entry_holds_a_date_sqlite_cannot_keep/
+            );
+
+            expect(await storedGroups(second)).toEqual(groups);
+            expect(await columnsOf(second)).toEqual(columns);
+          }
+        );
+      }
+    );
+
     it("writes the collection's new definition only after the values moved out of a group are in", async () => {
       const t = await boot(dialect);
       await createPosts(t, SLUG, { fields: INSIDE });
@@ -794,7 +918,7 @@ describe.each(getConfiguredTestDialects())(
         message: string,
         slug = SLUG
       ): Promise<void> {
-        const files = await filesWritten();
+        const files = await migrationFiles();
         const stated = await definition();
         const table = slug === SLUG ? TABLE : `dc_${slug}`;
         const columns = await columnsOf(t, table);
@@ -810,7 +934,7 @@ describe.each(getConfiguredTestDialects())(
         });
         await expect(preview(fields, moves, slug)).rejects.toThrow(refusal);
         await expect(save(t, fields, moves, slug)).rejects.toThrow(refusal);
-        expect(await filesWritten()).toBe(files);
+        expect(await migrationFiles()).toEqual(files);
         expect(await definition()).toBe(stated);
         expect((await columnsOf(t, table)).sort()).toEqual(columns.sort());
       }
@@ -851,7 +975,7 @@ describe.each(getConfiguredTestDialects())(
         await seed(t);
         const before = await readAll(t);
         const stated = await definition();
-        const files = await filesWritten();
+        const files = await migrationFiles();
         const [, ...rest] = MOVED_FIELDS;
         // `summary` moved into the group, and the dialog's drop-and-add pair answered as a rename
         // of `summary` to the new `subtitle`: the same column would be both copied and renamed.
@@ -893,7 +1017,7 @@ describe.each(getConfiguredTestDialects())(
             },
           })
         );
-        expect(await filesWritten()).toBe(files);
+        expect(await migrationFiles()).toEqual(files);
         expect(await definition()).toBe(stated);
         expect(await readAll(t)).toEqual(before);
       });
