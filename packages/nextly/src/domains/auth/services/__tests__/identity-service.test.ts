@@ -63,12 +63,15 @@ let seen: { selects: number; inserts: number };
  * primitive the provisioning branch runs records `user.created` inside its
  * transaction, and recording chains a refresh onto the activation state — a
  * field this file would otherwise leave changed for the next file in the
- * worker. Put back exactly as found, field for field.
+ * worker. Put back exactly as found, field for field — and where it was
+ * absent at the start, removed again, since a singleton this file created
+ * would otherwise outlive it in a worker that does not isolate files.
  */
 const globalForActivation = globalThis as {
   __nextly_webhookActivation?: Record<string, unknown>;
 };
 let activationAtStart: Record<string, unknown> | undefined;
+let activationExistedAtStart = false;
 
 // The service resolves its identity table from the loaded dialect bundle at
 // construction; the fixture's adapter does not load it (core's `createAdapter`
@@ -76,6 +79,8 @@ let activationAtStart: Record<string, unknown> | undefined;
 // would.
 beforeAll(async () => {
   await loadDialectTables("sqlite");
+  activationExistedAtStart =
+    globalForActivation.__nextly_webhookActivation !== undefined;
   activationAtStart = globalForActivation.__nextly_webhookActivation
     ? { ...globalForActivation.__nextly_webhookActivation }
     : undefined;
@@ -90,7 +95,9 @@ afterEach(async () => {
 });
 
 afterAll(() => {
-  if (
+  if (!activationExistedAtStart) {
+    delete globalForActivation.__nextly_webhookActivation;
+  } else if (
     activationAtStart !== undefined &&
     globalForActivation.__nextly_webhookActivation !== undefined
   ) {
@@ -713,6 +720,68 @@ describe("the provisioning branch", () => {
         address: "person@example.com",
       }
     );
+  });
+
+  it("resolves every configured role in one read, however many the configuration names", async () => {
+    await plantUser("first");
+    const editor = await plantRole("editor");
+    const author = await plantRole("author");
+    const reviewer = await plantRole("reviewer");
+
+    // The real slug lookup, every call to it recorded: a resolution that
+    // asked once per name would show one call per role here, not one.
+    const real = new RoleQueryService(testDb.adapter, testLogger);
+    const asked: string[][] = [];
+    const roles: ProvisioningRoleResolver = {
+      findRoleIdsBySlugs(slugs) {
+        asked.push([...slugs]);
+        return real.findRoleIdsBySlugs(slugs);
+      },
+    };
+
+    const result = await service({
+      linkingPolicy: policyProvisioning({
+        mayProvision: true,
+        // A repeated name is one role, asked for once.
+        roles: ["editor", "author", "reviewer", "editor"],
+      }),
+      roles,
+    }).resolveSignInIdentity(
+      pluginIdentityBinding(ACME),
+      handOff({ subject: "new-person" })
+    );
+
+    expect(asked).toEqual([["editor", "author", "reviewer"]]);
+    expect((await rolesOf(String(result.userId))).sort()).toEqual(
+      [author, editor, reviewer].sort()
+    );
+  });
+
+  it("names the first configured role no role carries, in the configuration's order", async () => {
+    // Two names resolve to nothing; the refusal names the one the
+    // configuration lists first — not the alphabetically first, and not
+    // whichever the read happened to leave out first.
+    await plantUser("first");
+    await plantRole("editor");
+
+    const error = await refusalOf(
+      service({
+        linkingPolicy: policyProvisioning({
+          mayProvision: true,
+          roles: ["zeta-ghost", "editor", "alpha-ghost"],
+        }),
+      }).resolveSignInIdentity(
+        pluginIdentityBinding(ACME),
+        handOff({ subject: "new-person" })
+      )
+    );
+
+    expect(error.logContext).toMatchObject({
+      reason: "provisioning-role-unknown",
+      role: "zeta-ghost",
+    });
+    expect(seen.inserts).toBe(0);
+    expect(await usersCount()).toBe(1);
   });
 
   it("attaches the provisioned identity under the digest the next sign-in resolves it by", async () => {

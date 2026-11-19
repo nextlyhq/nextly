@@ -556,6 +556,15 @@ describe.each(getConfiguredTestDialects())(
         handOff({ subject: "unknown-role" }),
         { code: "VALIDATION_ERROR", reason: "provisioning-role-unknown" }
       );
+      // A case-variant of a role that exists names no role on any dialect:
+      // the slugs are matched bytewise, not by MySQL's case-insensitive
+      // collation alone.
+      await refusedWritingNothing(
+        handle,
+        provisioningPolicy(["EDITOR"]),
+        handOff({ subject: "case-variant-role" }),
+        { code: "VALIDATION_ERROR", reason: "provisioning-role-unknown" }
+      );
       await refusedWritingNothing(
         handle,
         provisioningPolicy(["super-admin"]),

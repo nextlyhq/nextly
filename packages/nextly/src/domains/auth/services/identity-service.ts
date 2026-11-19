@@ -96,17 +96,24 @@ export interface LinkingPolicyPort {
 }
 
 /**
- * Resolves a role name the app's configuration gives to the role it names.
+ * Resolves the role names the app's configuration gives to the roles they
+ * name.
  *
- * Structural over the role query service's slug lookup, so the real service
- * satisfies this port as it is. The SLUG is the stable identifier a
+ * Structural over the role query service's batch slug lookup, so the real
+ * service satisfies this port as it is. The SLUG is the stable identifier a
  * configuration names roles by — a display name is mutable, and a rename
  * would silently re-target what a provisioned account is created with —
- * which is also why this port has no by-name lookup to reach for.
+ * which is also why this port has no by-name lookup to reach for. The whole
+ * set is resolved in one read rather than a read per name.
  */
 export interface ProvisioningRoleResolver {
-  /** The role carrying the slug, or null where no role does. */
-  findRoleIdBySlug(slug: string): Promise<{ id: string } | null>;
+  /**
+   * The roles carrying any of the slugs, each with the slug it carries, in
+   * no particular order; a slug no role carries is simply absent.
+   */
+  findRoleIdsBySlugs(
+    slugs: readonly string[]
+  ): Promise<Array<{ id: string; slug: string }>>;
 }
 
 /**
@@ -653,15 +660,26 @@ export class IdentityService extends BaseService {
         },
       });
     }
-    // By slug, the stable identifier a configuration names roles by, and
-    // each name resolved on its own: one that names nothing refuses the
-    // whole provisioning here, naming the role, before the creation
-    // primitive is reached — its own in-transaction existence check stays
-    // the backstop for a role deleted between the mapping and the insert.
+    // By slug, the stable identifier a configuration names roles by, the
+    // whole distinct set resolved in ONE read, then walked in the
+    // configuration's own order: the first name that resolves to nothing
+    // refuses the whole provisioning here, naming that role, before the
+    // creation primitive is reached — its own in-transaction existence
+    // check stays the backstop for a role deleted between the mapping and
+    // the insert. The answer is matched to the names bytewise, so a
+    // case-variant name refuses on every dialect alike rather than
+    // resolving on MySQL's case-insensitive collation alone.
+    const distinct = [...new Set(configured)];
+    const idBySlug = new Map(
+      (await this.deps.roles.findRoleIdsBySlugs(distinct)).map(role => [
+        role.slug,
+        role.id,
+      ])
+    );
     const roleIds: string[] = [];
-    for (const slug of new Set(configured)) {
-      const role = await this.deps.roles.findRoleIdBySlug(slug);
-      if (role === null) {
+    for (const slug of distinct) {
+      const id = idBySlug.get(slug);
+      if (id === undefined) {
         throw NextlyError.validation({
           errors: [
             {
@@ -678,7 +696,7 @@ export class IdentityService extends BaseService {
           },
         });
       }
-      roleIds.push(role.id);
+      roleIds.push(id);
     }
 
     // The provider asserted no name for the person — the hand-off carries
