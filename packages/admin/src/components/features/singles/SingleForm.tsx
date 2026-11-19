@@ -232,6 +232,11 @@ export interface SingleSchema extends RemovedFromCodeMark {
    * cannot offer an affordance the engine will not honour.
    */
   draftsEnabled?: boolean;
+  /**
+   * The workflow that holds this Single's publishing, from the schema read;
+   * `null` (or absent from an older server) where none is attached.
+   */
+  workflow?: { slug: string; label: string } | null;
 }
 
 /**
@@ -617,6 +622,7 @@ function SingleFormRail({
   documentStatus,
   singleSlug,
   locale,
+  reviewHold,
   onLocaleChange,
   panel,
   panelOrder,
@@ -634,6 +640,8 @@ function SingleFormRail({
   /** The Single's slug, which releases address it by with its id. */
   singleSlug: string;
   locale?: string;
+  /** Why the Review section's steps wait, as the header's do (`stepsHold`). */
+  reviewHold: string | undefined;
   onLocaleChange?: (locale: string, options?: { seedFrom?: string }) => void;
   panel: Pick<ReturnType<typeof useDocumentPanel>, "mode" | "shown" | "hide">;
   /** The panel's sections in the order the server placed them. */
@@ -671,6 +679,7 @@ function SingleFormRail({
         navigationDisabled={navigationDisabled}
         publishAllDisabled={publishAllDisabled}
         {...(locale === undefined ? {} : { locale })}
+        reviewHold={reviewHold}
         {...(onLocaleChange === undefined ? {} : { onLocaleChange })}
       />
     </DocumentSidePanel>
@@ -1802,6 +1811,11 @@ export function SingleForm({
     // the review's steps outside the header as the header holds its own.
     held:
       viewingVersion !== null ? HISTORY_REASON : busy ? "Saving…" : undefined,
+    // Known from the schema read: a Single with no workflow publishes
+    // without waiting for a review state. Absent (an older server), it waits.
+    ...(schema.workflow === undefined
+      ? {}
+      : { workflowExpected: schema.workflow !== null }),
   });
 
   const documentActionsInput: DocumentActionBindingsInput = {
@@ -2206,6 +2220,9 @@ export function SingleForm({
                                   placedSectionProps={placedSectionProps}
                                   about={singlePanel}
                                   {...(locale === undefined ? {} : { locale })}
+                                  // The Review section's steps wait for
+                                  // what holds the header's.
+                                  reviewHold={review.stepsHold}
                                   {...(switchLocale === undefined
                                     ? {}
                                     : { onLocaleChange: switchLocale })}

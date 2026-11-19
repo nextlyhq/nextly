@@ -408,8 +408,9 @@ async function countLinksDropped(
  * Which way a kept relationship's links move, if they do: into a link table, out of one, or to a
  * new one for another target. Kept a many-to-many and pointed the same way, its link table is
  * carried (`sameRelationTarget`, the save's own pairing), so no link moves.
+ * The dialog's file road asks the same of a save before it runs (`refuseUnansweredDialogQuestions`).
  */
-function linkMoveOf(
+export function linkMoveOf(
   before: FieldDefinition,
   after: FieldDefinition
 ): LinksDropped["direction"] | null {

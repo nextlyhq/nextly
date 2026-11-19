@@ -283,3 +283,36 @@ export async function underSavepoint<T>(
     throw err;
   }
 }
+
+/**
+ * Run `work` as a question only, inside a savepoint that is rolled back once it answers, where the
+ * transaction has them: nothing it writes stays, and the effects it holds for the commit are
+ * dropped with the savepoint (its `afterRollback` effects run once the transaction ends, as for
+ * any part undone). Its answer, or its failure, is kept. Without savepoints it runs plainly, and
+ * what it holds stays with the transaction.
+ */
+export async function undoneAfter<T>(
+  db: VersionsDbApi,
+  work: () => Promise<T>
+): Promise<T> {
+  if (!takesSavepoints(db)) return work();
+  savepointSequence += 1;
+  const name = `nextly_question_${savepointSequence}`;
+  await db.savepoint(name);
+  let answer: { value: T } | { error: unknown };
+  try {
+    answer = { value: await work() };
+  } catch (error) {
+    answer = { error };
+  }
+  try {
+    await db.rollbackToSavepoint(name);
+    await db.releaseSavepoint(name);
+  } catch (err) {
+    // The savepoint is gone with the transaction it was in, so nothing of it can be kept: the
+    // failure aborts the transaction, whatever `work` answered.
+    throw markWriteIntegrityFailure(err);
+  }
+  if ("error" in answer) throw answer.error;
+  return answer.value;
+}
