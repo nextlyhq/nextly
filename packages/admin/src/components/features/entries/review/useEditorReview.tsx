@@ -29,6 +29,7 @@ import {
   reviewKeys,
   useReviewState,
 } from "@admin/hooks/queries/useReviewState";
+import { versionKeys } from "@admin/hooks/queries/useVersions";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import type { ReleaseDocumentRef } from "@admin/types/releases";
 import type { PartReview, ReviewStep } from "@admin/types/workflows";
@@ -39,6 +40,7 @@ import type {
   DocumentReviewBinding,
 } from "../EntryForm/useDocumentActionBindings";
 
+import { versionScopeOf } from "./part-changes";
 import {
   partsOnScreen,
   takeableOnEvery,
@@ -108,14 +110,22 @@ export function useEditorReview({
   const queryClient = useQueryClient();
 
   // A store moves the review (an edit to approved content returns it to
-  // review), so a new stamp asks again; the first render asks anyway.
+  // review), so a new stamp asks again; the first render asks anyway. It
+  // records a version too, so the document's versions and comparisons are
+  // read again with it: the changes shown stay those of the version the
+  // review state now says was seen.
   const stamp = useRef(storedStamp);
   useEffect(() => {
     if (stamp.current === storedStamp || document === undefined) return;
     stamp.current = storedStamp;
-    void queryClient.invalidateQueries({
-      queryKey: reviewKeys.document(document),
-    });
+    const scope = versionScopeOf(document);
+    for (const queryKey of [
+      reviewKeys.document(document),
+      versionKeys.list(scope),
+      versionKeys.documentDiffs(scope),
+    ]) {
+      void queryClient.invalidateQueries({ queryKey });
+    }
   }, [storedStamp, document, queryClient]);
 
   // The parts one step moves together, the first of them the one the header

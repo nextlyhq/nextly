@@ -156,6 +156,17 @@ export function usePartName(): (part: string | null) => string {
     part === null ? "Shared fields" : (getLocale(part)?.label ?? part);
 }
 
+/** The document as the history names it, from the editor's own reference. */
+export function versionScopeOf(document: ReleaseDocumentRef): VersionScope {
+  return document.scopeKind === "single"
+    ? { kind: "single", slug: document.scopeSlug, documentId: document.entryId }
+    : {
+        kind: "collection",
+        slug: document.scopeSlug,
+        entryId: document.entryId,
+      };
+}
+
 /** The document the workflow routes name, from the history's own scope. */
 export function reviewDocumentOf(scope: VersionScope): ReleaseDocumentRef {
   return scope.kind === "single"
