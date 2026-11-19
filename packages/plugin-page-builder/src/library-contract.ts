@@ -369,6 +369,26 @@ export interface SavePatternRequest {
   readonly fields: SavePatternFields;
   /** Answer the pattern the save would store, and store nothing. */
   readonly dryRun?: boolean;
+  /**
+   * The stored entry the document is, where it is one. The server reads it
+   * as the caller before saving, so the custom CSS it already holds is no
+   * change to the saved section; any other CSS is judged as new. A source
+   * the caller can't read refuses the save.
+   */
+  readonly source?: CopySourceAddress;
+}
+
+/**
+ * The stored entry a new library entry is made from: its collection, its id,
+ * and the blocks field the selection was made in.
+ *
+ * @experimental Settles when the composition API ships.
+ */
+export interface CopySourceAddress {
+  readonly collection: string;
+  readonly id: string;
+  /** The blocks field; absent, the same field name the library entry uses. */
+  readonly field?: string;
 }
 
 /**
@@ -544,7 +564,11 @@ export interface ComponentFromSelectionRequest {
   readonly selectedIds: readonly string[];
   /** The page the selection was made in, for `library`. */
   readonly document?: BlockDocument;
-  /** The stored page, for `stored`. */
+  /**
+   * The stored page: for `stored`, the page converted; for `library`, the
+   * stored page the document is, where it is one, read as the caller so the
+   * custom CSS it already holds is no change to the new component.
+   */
   readonly page?: StoredPageAddress;
 }
 

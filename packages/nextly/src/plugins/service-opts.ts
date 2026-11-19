@@ -422,6 +422,7 @@ function callerFor(
  */
 type AccessMethod =
   | "createEntry"
+  | "createEntryFromSource"
   | "listEntries"
   | "findEntryById"
   | "updateEntry"
@@ -434,6 +435,9 @@ type AccessMethod =
 
 const CONTEXT_INDEX: Record<AccessMethod, number> = {
   createEntry: 2,
+  // The entry it copies sits between the data and the context. The copy is
+  // read as the caller the context resolves, never as the plugin.
+  createEntryFromSource: 3,
   listEntries: 2,
   findEntryById: 2,
   updateEntry: 3,
@@ -467,6 +471,7 @@ const CONTEXT_INDEX: Record<AccessMethod, number> = {
  */
 const WRITE_VERB = {
   createEntry: "created",
+  createEntryFromSource: "created",
   updateEntry: "updated",
   deleteEntry: "deleted",
 } as const satisfies Record<string, "created" | "updated" | "deleted">;
@@ -512,6 +517,7 @@ const PLUGIN_COLLECTION_METHODS = [
   "updateCollection",
   "deleteCollection",
   "createEntry",
+  "createEntryFromSource",
   "createMany",
   "updateMany",
   "listEntries",

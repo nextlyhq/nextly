@@ -82,6 +82,18 @@ function contextOver(
       return Promise.resolve({ item: { id: createdId } });
     }
   );
+  // A create made through core's copy of a stored page.
+  const createEntryFromSource = vi.fn(
+    (
+      _slug: string,
+      _data: Record<string, unknown>,
+      _source: unknown,
+      _opts: unknown
+    ) => {
+      journal.push("create-from-source");
+      return Promise.resolve({ item: { id: createdId } });
+    }
+  );
   const createEntryInTransaction = vi.fn(
     (
       _tx: unknown,
@@ -135,6 +147,7 @@ function contextOver(
     services: {
       collections: {
         createEntry,
+        createEntryFromSource,
         withTransaction,
         createEntryInTransaction,
         updateEntryInTransaction,
@@ -146,6 +159,7 @@ function contextOver(
     ctx,
     journal,
     createEntry,
+    createEntryFromSource,
     createEntryInTransaction,
     updateEntryInTransaction,
   };
@@ -364,6 +378,52 @@ describe("in the editor's library mode", () => {
   });
 });
 
+describe("a library request naming its stored page", () => {
+  it("creates through core's copy of that page, as the caller", async () => {
+    const { ctx, createEntry, createEntryFromSource } = contextOver();
+
+    await componentFromSelection(
+      request({
+        action: "convert",
+        document: threeBlocks,
+        page: { collection: "pages", id: "page-1", field: "body" },
+        selectedIds: ["b"],
+        fields,
+      }),
+      ctx,
+      { blocks }
+    );
+
+    expect(createEntry).not.toHaveBeenCalled();
+    const [slug, , source, opts] = createEntryFromSource.mock.calls[0] ?? [];
+    expect(slug).toBe("components");
+    expect(source).toEqual({
+      collection: "pages",
+      id: "page-1",
+      field: "body",
+    });
+    expect(opts).toMatchObject({ as: "user" });
+  });
+
+  it("creates as before where it names none", async () => {
+    const { ctx, createEntry, createEntryFromSource } = contextOver();
+
+    await componentFromSelection(
+      request({
+        action: "convert",
+        document: threeBlocks,
+        selectedIds: ["b"],
+        fields,
+      }),
+      ctx,
+      { blocks }
+    );
+
+    expect(createEntry).toHaveBeenCalledTimes(1);
+    expect(createEntryFromSource).not.toHaveBeenCalled();
+  });
+});
+
 describe("who may run it", () => {
   it("refuses an author who may create components but not publish them, before writing", async () => {
     const { ctx, createEntry } = contextOver({ grants: { publish: false } });
@@ -450,7 +510,9 @@ describe("who may run it", () => {
   });
 
   it("saves from a stored page the caller may read but not update", async () => {
-    const { ctx, createEntry } = contextOver({ grants: { update: false } });
+    const { ctx, createEntry, createEntryFromSource } = contextOver({
+      grants: { update: false },
+    });
 
     await componentFromSelection(
       request({
@@ -464,7 +526,14 @@ describe("who may run it", () => {
       { blocks, reads: readsOver(threeBlocks) }
     );
 
-    expect(createEntry).toHaveBeenCalledTimes(1);
+    // Made through core's copy of the page it was read from.
+    expect(createEntry).not.toHaveBeenCalled();
+    expect(createEntryFromSource).toHaveBeenCalledTimes(1);
+    expect(createEntryFromSource.mock.calls[0]?.[2]).toEqual({
+      collection: "pages",
+      id: "page-1",
+      field: "content",
+    });
   });
 
   it("refuses a convert whose page's definitions could not all be read", async () => {

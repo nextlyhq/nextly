@@ -756,6 +756,69 @@ export class CollectionService extends BaseService {
   }
 
   /**
+   * @experimental Create an entry that copies a stored one: read `source` as
+   * the caller, then create `data` in `collectionName`, its field validators
+   * told what it copies (`PluginFieldWrite.copiedFrom`), so a value the
+   * source already holds, in a form and a field the caller's read could see,
+   * may count as no change. A source the caller may not read is refused as
+   * that read refuses it (NOT_FOUND for one they cannot see), and nothing is
+   * created. A duplicate is this create, with data built from the source.
+   *
+   * Intended to become stable, since plugins call it. Server-only: no REST
+   * route reaches it, and nothing a request sends can name a copy.
+   *
+   * @param collectionName - The collection the new entry is created in
+   * @param data - Entry data
+   * @param source - The entry it copies, and the field its value came from
+   * where that differs from the field it is written to
+   * @param context - Request context with user info
+   * @returns Created entry
+   * @throws NextlyError if the source read or the creation fails
+   */
+  // Reached through the plugin facade's method list (`ctx.services.collections`).
+  // fallow-ignore-next-line unused-class-member
+  async createEntryFromSource(
+    collectionName: string,
+    data: Record<string, unknown>,
+    source: { collection: string; id: string; field?: string },
+    context: RequestContext
+  ): Promise<CollectionEntry> {
+    const forwarded = forwardedFromContext(context);
+    const result = await this.entryService.createEntryFromSource({
+      collectionName,
+      // Copied field by field, so nothing beyond the entry it names reaches
+      // the copy from the caller's object.
+      source: {
+        collection: source.collection,
+        id: source.id,
+        ...(source.field === undefined ? {} : { field: source.field }),
+      },
+      data,
+      user: forwarded.user,
+      overrideAccess: forwarded.overrideAccess,
+      authenticatedScope: forwarded.authenticatedScope,
+      context: forwarded.context,
+      request: forwarded.request,
+      locale: forwarded.locale,
+      ...(forwarded.actor === undefined ? {} : { actor: forwarded.actor }),
+    });
+    if (!result.success) {
+      this.logger.warn("Entry creation from a source failed", {
+        collectionName,
+        sourceCollection: source.collection,
+        message: result.message,
+        statusCode: result.statusCode,
+      });
+      throw this.mapLegacyErrorToNextlyError(result, {
+        entity: "entry",
+        collectionName: source.collection,
+        entryId: source.id,
+      });
+    }
+    return result.data as CollectionEntry;
+  }
+
+  /**
    * Bulk-create entries in a single transaction (D56).
    *
    * Returns an index-based {@link BatchOperationResult} — the natural shape for

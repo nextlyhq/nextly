@@ -543,6 +543,7 @@ import {
   collectionTableName,
   generateSlug,
 } from "./collection-utils";
+import type { SourceReadCopy } from "./copied-from";
 import {
   entryStillReferenced,
   referrersHolding,
@@ -1799,6 +1800,11 @@ interface EntryValidationArgs {
   goesLive?: boolean;
   /** The batch the document goes live with, which reads definitions once. */
   batch?: GoingLiveRelationsBatch;
+  /**
+   * The entry a create copies, minted from the caller's read of it in the
+   * same call; see `PluginFieldWrite.copiedFrom`.
+   */
+  copiedFrom?: SourceReadCopy;
 }
 
 interface CreateEntryWriteParams {
@@ -3499,6 +3505,11 @@ export class CollectionMutationService extends BaseService {
           // Who the write is made as, from the reader its access is judged
           // by, for a field type whose values only some callers may change.
           caller: fieldWriteCaller(args.reader),
+          // The entry a create copies, where the caller's read of it minted
+          // one; nothing else reaches a validator as a copy.
+          ...(args.copiedFrom === undefined
+            ? {}
+            : { copiedFrom: args.copiedFrom }),
         },
       }
     );
@@ -8856,6 +8867,13 @@ export class CollectionMutationService extends BaseService {
       // publish transition gate (a create-as-published) judges the key's OWN
       // grants — the route only authorized `create` against the key's scope.
       authenticatedScope?: AuthenticatedScope;
+      /**
+       * The entry this create copies, minted by `readSourceCopy` from the
+       * caller's read of it in the same call (a duplicate, or
+       * `createEntryFromSource`). Its field validators are told it; a value
+       * that is not such a copy is handed on to none of them.
+       */
+      copiedFrom?: SourceReadCopy;
     },
     body: Record<string, unknown>,
     depth?: number
@@ -9148,6 +9166,10 @@ export class CollectionMutationService extends BaseService {
           ...(params.locale === undefined
             ? {}
             : { writeLocale: params.locale }),
+          // The entry this create copies, where the caller read it first.
+          ...(params.copiedFrom === undefined
+            ? {}
+            : { copiedFrom: params.copiedFrom }),
           // No transaction yet, so stored rows are read on the pool: no row
           // of this write exists for a read to miss.
         });
