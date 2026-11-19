@@ -195,8 +195,8 @@ export function migrationDriftError(args: MigrationDriftArgs): NextlyError {
           "  Recovery (pick one):",
           "    [A] Put the table back as the migration files left it (the lines above",
           "        say what differs), then re-run migrate.",
-          "    [B] If the change is wanted, make it in your config and write a",
-          "        migration for it, then re-run migrate:",
+          "    [B] If a missing column was removed on purpose, remove its field from",
+          "        your config and write a migration for it, then re-run migrate:",
           "          pnpm nextly migrate:create --name <name> && pnpm nextly migrate",
         ]
       : args.unadoptedDatabase

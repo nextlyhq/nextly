@@ -4965,7 +4965,9 @@ export async function runFileMigrations(args: {
     args.judged
   );
   // The translations tables the pending companion files are about, compared with what the
-  // applied ones left, before any file applies: a difference is drift and ends the run here.
+  // migrations around this point record of them, before any file applies: a table or column
+  // both the last applied and the newest pending snapshot name, and the database lacks, is
+  // drift and ends the run here.
   const companions = await checkCompanionFiles({
     db,
     dialect,

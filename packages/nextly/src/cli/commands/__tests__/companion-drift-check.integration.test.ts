@@ -344,18 +344,17 @@ describeEachDialect(
       return (await pendingFiles()).map(file => file.name);
     }
 
-    it("a column added to the companion table by hand is drift", async () => {
-      const pending = await secondFieldPending();
+    it("a column no snapshot names is not drift, as a deleted field's column cannot be told from it", async () => {
+      await secondFieldPending();
       await adapter().executeQuery(
         `ALTER TABLE ${q(COMPANION)} ADD COLUMN ${q("by_hand")} TEXT`
       );
 
       const run = await migrate(configWith(["title", "summary"]));
 
-      expect(run.code, run.said).toBe(1);
-      expect(run.said).toContain("(MIGRATION_DRIFT)");
-      expect(run.said).toMatch(new RegExp(`\\+ .*${COMPANION}\\.by_hand`));
-      expect((await pendingFiles()).map(file => file.name)).toEqual(pending);
+      expect(run.code, run.said).toBeUndefined();
+      expect(await pendingFiles()).toEqual([]);
+      expect(await companionColumns()).toContain("summary");
     }, 240_000);
 
     it("a companion table dropped by hand is drift", async () => {
@@ -395,7 +394,7 @@ describeEachDialect(
 
       expect(run.code, run.said).toBeUndefined();
       expect(run.said).toContain(
-        `${String(companionFile)}.sql is applied without a drift check: the applied migration files were written before they recorded the columns of the translations table ${COMPANION}.`
+        `${String(companionFile)}.sql is applied without a drift check: the migration files were written before they recorded the columns of the translations table ${COMPANION}.`
       );
       expect(run.said).not.toMatch(MISSING_SNAPSHOT);
       expect(await companionColumns()).toContain("summary");
