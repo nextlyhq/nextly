@@ -316,8 +316,14 @@ describeEachDialect("a collection update's registry write", dialect => {
     {
       const t = await boot();
       const counted = await countingTrigger(t, 0);
+      const filesBefore = migrationFiles(t);
       const { failed, said } = await update(SETTINGS);
       expect(failed, `the counting update failed: ${said}`).toBe(false);
+      // Control: the update writes a file, which a failure must then withdraw.
+      expect(
+        migrationFiles(t).length,
+        "the settings-only update's file"
+      ).toBeGreaterThan(filesBefore.length);
       writes = await counted();
       await shutDown();
     }
