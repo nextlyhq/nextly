@@ -1367,6 +1367,47 @@ describe.each(getConfiguredTestDialects())(
     // A save that applies its change by a push (`appliedBy`) is judged against the history before
     // the push runs, as the file road's own reconcile judges it: a column added by hand, which the
     // history does not record, refuses the save naming it, with the push never run and nothing kept.
+    // A translated save's push changes its translations table too, so that table is judged before
+    // the push as the file road judges it: a column added there by hand refuses the save, naming it.
+    it("refuses a pushed translated save over a translations table the history does not record, naming it, and changes nothing", async () => {
+      const title = text("title", { localized: true });
+      await writeCollectionSave(translatedDeps(), {
+        slug: "posts",
+        previous: null,
+        entity: translated([title]),
+        change: "create",
+      });
+      await adapter.executeQuery(
+        `ALTER TABLE dc_posts_locales ADD COLUMN extra text`
+      );
+      const files = migrationFiles();
+      const snapshots = snapshotFiles();
+      const defined = definition();
+      const applied = await appliedRows();
+      const push = vi.fn(() => Promise.resolve());
+
+      const refused: unknown = await writeCollectionSave(
+        translatedDeps(),
+        {
+          slug: "posts",
+          previous: translated([title]),
+          entity: translated([title, text("subtitle")]),
+          change: "update",
+        },
+        { appliedBy: push }
+      ).catch((error: unknown) => error);
+
+      expect(refused).toMatchObject({ code: "NEXTLY_MIGRATION_DRIFT" });
+      expect(
+        String((refused as { publicMessage?: unknown }).publicMessage)
+      ).toContain("dc_posts_locales.extra present in DB");
+      expect(push).not.toHaveBeenCalled();
+      expect(migrationFiles()).toEqual(files);
+      expect(snapshotFiles()).toEqual(snapshots);
+      expect(definition()).toEqual(defined);
+      expect(await appliedRows()).toEqual(applied);
+    });
+
     it("refuses a pushed save over a column the history does not record before the push, naming it, and changes nothing", async () => {
       await writeCollectionSave(deps(), {
         slug: "posts",
