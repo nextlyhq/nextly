@@ -139,6 +139,8 @@ test("a stage's label and colour, then Reset back to the code's", async ({
   });
 
   await page.getByRole("button", { name: "Reset In review" }).click();
+  // The input shows the code's label only once the reset's answer replaces the
+  // settings read, so the read below follows the save.
   await expect(label).toHaveValue("In review");
   expect((await settingsOf(page.request)).labels.inReview).toBeUndefined();
 });
@@ -150,6 +152,8 @@ test("an email switch, for its own trigger alone", async ({ page }) => {
   await expect(approved).toHaveAttribute("aria-checked", "true");
   await approved.click();
   await expect(approved).toHaveAttribute("aria-checked", "false");
+  // The switch shows the choice before its save lands; the read waits for the save.
+  await saved(page);
 
   const after = await settingsOf(page.request);
   expect(after.emails).toEqual({ ...before.emails, approved: false });
