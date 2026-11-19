@@ -30,7 +30,7 @@ import {
   and,
   desc,
   eq,
-  getTableColumns,
+  getColumns,
   gte,
   inArray,
   isNull,
@@ -1098,7 +1098,7 @@ export class EmailDeliveryService extends BaseService {
     try {
       rows = await this.db
         .select({
-          ...getTableColumns(this.deliveries),
+          ...getColumns(this.deliveries),
           // Read with the row, as the origin filter tests it.
           providerExists: providerExists(
             this.deliveries,

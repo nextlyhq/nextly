@@ -337,7 +337,8 @@ describe("SeoOverviewPage", () => {
     expect(list).toHaveClass("@2xl:grid-cols-2");
     const names = within(list)
       .getAllByRole("listitem")
-      .map(step => step.querySelector("p"));
+      // Each step's label, the element the checklist strikes through.
+      .map(step => step.querySelector("[data-checklist-label]"));
     // Four done, then two open.
     expect(names.map(name => name?.classList.contains("line-through"))).toEqual(
       [true, true, true, true, false, false]

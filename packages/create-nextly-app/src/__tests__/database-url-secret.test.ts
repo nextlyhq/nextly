@@ -4,7 +4,7 @@
  * the example file keeps a placeholder, and no user name, password or query
  * parameter from it is printed or passed to any command the scaffold runs.
  */
-import { mkdir, readFile, readdir, rm, stat } from "node:fs/promises";
+import { mkdir, readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -21,15 +21,16 @@ import { createNextly } from "../create-nextly";
 
 import { ui } from "./clack-recorder";
 import {
+  captureConsole,
   type FakeRun,
   HERMETIC,
-  TEMPLATES,
-  USER_AGENTS,
-  captureConsole,
   installFakeManagers,
   makeWorkdir,
   printed,
+  removeWorkdir,
   runCli,
+  TEMPLATES,
+  USER_AGENTS,
 } from "./scaffold-harness";
 
 vi.mock("@clack/prompts", async () =>
@@ -61,7 +62,7 @@ beforeEach(async () => {
 afterEach(async () => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
-  await rm(dir, { recursive: true, force: true });
+  await removeWorkdir(dir);
 });
 
 const allOutput = () => [...ui.out, ...printed].join("\n");

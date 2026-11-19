@@ -4,7 +4,7 @@
  * real program runs in-process against a temporary folder, with fake package
  * managers on PATH (see scaffold-harness).
  */
-import { mkdir, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -13,16 +13,17 @@ import { scriptRunner } from "../utils/package-manager-commands";
 
 import { ui } from "./clack-recorder";
 import {
+  captureConsole,
   type FakeRun,
   HERMETIC,
-  LOCKFILES,
-  type Manager,
-  USER_AGENTS,
-  captureConsole,
   installFakeManagers,
+  LOCKFILES,
   makeWorkdir,
+  type Manager,
   printed,
+  removeWorkdir,
   runCli,
+  USER_AGENTS,
 } from "./scaffold-harness";
 
 vi.mock("@clack/prompts", async () =>
@@ -44,7 +45,7 @@ beforeEach(async () => {
 afterEach(async () => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
-  await rm(dir, { recursive: true, force: true });
+  await removeWorkdir(dir);
 });
 
 const allOutput = () => [...ui.out, ...printed].join("\n");
