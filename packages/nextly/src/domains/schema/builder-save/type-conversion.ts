@@ -148,7 +148,7 @@ async function convertColumn(
   await writeValues(
     run,
     conversion,
-    beside,
+    sql`${beside}`,
     dialect === "postgresql" ? type : undefined
   );
   if (dialect === "sqlite" && conversion.takesPlaceOnSqlite) {

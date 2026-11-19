@@ -191,6 +191,31 @@ describe.each(getConfiguredTestDialects())(
       expect(await read(t, "v")).toEqual(before);
     });
 
+    // Only a save that applies its change here writes the values; outside development the change
+    // is the deploy's `nextly migrate`, the database's cast, so a list becoming a text is refused
+    // as before rather than written half way.
+    it("still refuses a list becoming a text outside development, and changes nothing", async () => {
+      const t = await boot([{ name: "v", type: "chips" }]);
+      await write(t, "one", { v: ["a"] });
+      // Any environment but development: the writer writes the files and applies nothing.
+      vi.stubEnv("NODE_ENV", "test");
+
+      expect(await save(t, [{ name: "v", type: "text" }])).toMatchObject({
+        code: "VALIDATION_ERROR",
+        publicData: {
+          errors: [
+            expect.objectContaining({
+              path: "fields.v",
+              code: "TYPE_CHANGE_BLOCKED",
+            }),
+          ],
+        },
+      });
+
+      vi.stubEnv("NODE_ENV", "development");
+      expect(await read(t, "v")).toEqual({ one: ["a"] });
+    });
+
     it("refuses a change that would lose a value when no clear is confirmed, and changes nothing", async () => {
       const t = await boot([{ name: "v", type: "text" }]);
       await write(t, "kept", { v: "12" });
@@ -281,6 +306,38 @@ describe.each(getConfiguredTestDialects())(
         slug: "tcc_hero",
       } as never)) as { v?: unknown; item?: { v?: unknown } } | undefined;
       expect(read?.item?.v ?? read?.v).toBe(12);
+    });
+
+    // A Single answers a pair as a collection does: its own check before the save asks the same
+    // judgement the save's conversion writes by.
+    it("converts a Single's list of one item into that item", async () => {
+      vi.stubEnv("NODE_ENV", "development");
+      const t = await createTestNextly({ dialect });
+      instance = t;
+      await dispatchSingles(
+        "createSingle",
+        {},
+        {
+          slug: "tcc_hero",
+          label: "Hero",
+          fields: [{ name: "v", type: "chips" }],
+        }
+      );
+      await t.nextly.updateSingle({
+        slug: "tcc_hero",
+        data: { v: ["a"], _overwrite: true },
+      } as never);
+
+      await dispatchSingles(
+        "updateSingleSchema",
+        { slug: "tcc_hero" },
+        { fields: [{ name: "v", type: "text" }] }
+      );
+
+      const read = (await t.nextly.findSingle({
+        slug: "tcc_hero",
+      } as never)) as { v?: unknown; item?: { v?: unknown } } | undefined;
+      expect(read?.item?.v ?? read?.v).toBe("a");
     });
   }
 );

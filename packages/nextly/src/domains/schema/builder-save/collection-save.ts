@@ -1374,9 +1374,10 @@ async function refuseSaveTypeChanges(
       // A lossy change goes ahead only for a field whose clear the person confirmed, with the
       // count of values it clears still holding (`refuseChangedClearCounts`).
       acknowledged: clearedFieldsOf(save.confirmedClears),
-      // The save writes each value of a pair it converts as the new type reads it, in the file
-      // or just before the push that changes the column (`typeConversionOf`).
-      rewrites: true,
+      // Where the save applies its change here (development), it writes each value of a pair it
+      // converts as the new type reads it, in the file or just before the push that changes the
+      // column (`typeConversionOf`). Elsewhere the change is the database's cast, judged as such.
+      rewrites: deps.applies,
       builtBy: kind.builtBy,
       ...componentRow,
     }
