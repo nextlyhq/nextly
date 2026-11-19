@@ -391,8 +391,12 @@ describeEachDialect("a shared field that becomes translated", dialect => {
     "refuses a field whose type changes as it becomes translated, and changes nothing, when $path",
     async ({ table, seed, change }) => {
       // The shared value would be copied as it is into a companion column of the new type: text
-      // into a number column fails part-way on PostgreSQL and is coerced on MySQL.
+      // into a number column fails part-way on PostgreSQL and is coerced on MySQL. A value the new
+      // type reads ("5") passes the judgement of the values, so this refusal is the one reached.
       const id = await seed();
+      await query(
+        `UPDATE ${quote(dialect, table)} SET ${quote(dialect, "heading")} = '5' WHERE ${quote(dialect, "id")} = '${id}'`
+      );
 
       const refusal = await change([
         { name: "heading", type: "number", localized: true },
@@ -412,15 +416,46 @@ describeEachDialect("a shared field that becomes translated", dialect => {
       const [row] = await query<{ heading: string }>(
         `SELECT ${quote(dialect, "heading")} AS heading FROM ${quote(dialect, table)} WHERE ${quote(dialect, "id")} = '${id}'`
       );
-      expect(row?.heading).toBe("Hello");
+      expect(String(row?.heading)).toBe("5");
     }
   );
 
-  it("keeps the value on main when moving it fails, so the drop never runs, and moves it on the next try", async () => {
+  it("refuses first a type change whose values the new type cannot read, as it becomes translated, through the collection's schema dialog", async () => {
+    // "Hello" is no number: the collection's save judges the values before the translation's
+    // own check, so its refusal names the field and the values, and nothing changes.
+    const dialog = PATHS.find(
+      p => p.path === "the builder applies the change with the schema dialog"
+    );
+    if (!dialog) throw new Error("the collection dialog path is missing");
+    const { table, seed, change } = dialog;
+    const id = await seed();
+
+    const refusal = await change([
+      { name: "heading", type: "number", localized: true },
+      { name: "views", type: "number" },
+    ]).then(
+      () => undefined,
+      (error: unknown) => error
+    );
+
+    const reported =
+      refusal instanceof Error
+        ? `${refusal.message} ${JSON.stringify((refusal as { publicData?: unknown }).publicData ?? null)}`
+        : String(refusal);
+    expect(reported).toMatch(/TYPE_CHANGE_LOSES_VALUES/);
+    expect(await columnsOf(`${table}_locales`)).not.toContain("heading");
+    const [row] = await query<{ heading: string }>(
+      `SELECT ${quote(dialect, "heading")} AS heading FROM ${quote(dialect, table)} WHERE ${quote(dialect, "id")} = '${id}'`
+    );
+    expect(row?.heading).toBe("Hello");
+  });
+
+  it("keeps the value on main when moving it fails, so the drop never runs, and judges the next try by what the failure left", async () => {
     // The apply moves the value before it drops the main column, so a move that fails stops the
     // apply with the column, and its value, still in place: the drop is never let through on a
-    // move that did not happen. MySQL commits each schema statement, so the companion may keep a
-    // new, empty column; the next apply takes it as it is.
+    // move that did not happen. PostgreSQL takes the whole apply back; SQLite and MySQL keep the
+    // companion's new, empty column, which the history does not record, so the next save is
+    // judged as drift before its push runs and refused with the recovery steps.
     const id = await seedCollection();
     const dialog = PATHS.find(p => p.path.includes("schema dialog"));
     if (!dialog) throw new Error("the collection dialog path is missing");
@@ -441,9 +476,29 @@ describeEachDialect("a shared field that becomes translated", dialect => {
     expect(String(failed)).toMatch(/injected copy failure/);
     expect(await mainHeading("dc_posts", id)).toBe("Hello");
     expect(await readCollection(id)).toBe("Hello");
+    const leftColumn = dialect !== "postgresql";
+    expect(await columnsOf("dc_posts_locales")).toEqual(
+      leftColumn
+        ? expect.arrayContaining(["heading"])
+        : expect.not.arrayContaining(["heading"])
+    );
 
-    await dialog.change(TRANSLATED);
+    const retried = await dialog.change(TRANSLATED).then(
+      () => undefined,
+      (error: unknown) => error
+    );
 
+    if (leftColumn) {
+      const told = `${retried instanceof Error ? retried.message : String(retried)} ${String(
+        (retried as { publicMessage?: unknown } | undefined)?.publicMessage
+      )}`;
+      expect(told).toContain("schema drift detected");
+      expect(told).toContain("pnpm nextly db:sync");
+      expect(told).toContain("pnpm nextly migrate:resolve --applied");
+      expect(await mainHeading("dc_posts", id)).toBe("Hello");
+      return;
+    }
+    expect(retried).toBeUndefined();
     expect((await companionHeadings("dc_posts", id)).en).toBe("Hello");
     expect(await readCollection(id)).toBe("Hello");
   });
@@ -906,11 +961,21 @@ describeEachDialect("a shared field that becomes translated", dialect => {
     }
   );
 
-  // The Builder's saves move a joining field's values on the live database, so the companion
-  // column they add takes what the live main column carries, as the code-first apply's does.
+  /**
+   * Whether a save of `table`'s entity runs the migration file it writes, planned from the
+   * migration history: a Single's and a field group's do; a collection's is still applied by its
+   * push.
+   */
+  const runsItsFile = (table: string) => !table.startsWith("dc_");
+
+  // A default given to the main column outside the history is drift, refused as `nextly migrate`
+  // refuses it, before anything changes: by a Single's and a field group's file, and by a
+  // collection's push, whose check before the push judges the table as the file road does. On MySQL
+  // the move's own refusal comes first wherever it is asked before the push or the file (its TEXT
+  // companion column could take no literal default).
   it.skipIf(dialect === "sqlite").each(PATHS)(
-    "gives the companion column the main column's default, or refuses where it cannot take it, when $path",
-    async ({ table, seed, change }) => {
+    "refuses a default given to the main column outside the history, and changes nothing, when $path",
+    async ({ path, table, seed, change }) => {
       const id = await seed();
       await query(
         dialect === "mysql"
@@ -923,20 +988,27 @@ describeEachDialect("a shared field that becomes translated", dialect => {
         (error: unknown) => error
       );
 
-      // MySQL gives the field's TEXT companion column no literal default, so there the move is
-      // refused before anything runs and the value stays where it was.
-      if (dialect === "mysql") {
+      // On MySQL the move's own refusal comes first, before a file is planned or a field saved
+      // alone is applied; the schema dialog's push is judged for drift before it.
+      if (
+        dialect === "mysql" &&
+        path !== "the builder applies the change with the schema dialog"
+      ) {
         expect(reportedRefusal(refusal)).toMatch(
           /own default; turning translation on moves its values into a new column/
         );
         expect(await mainHeading(table, id)).toBe("Hello");
         return;
       }
-      expect(refusal).toBeUndefined();
-      expect((await companionHeadings(table, id)).en).toBe("Hello");
-      expect(
-        String(await columnDefault(`${table}_locales`, "heading"))
-      ).toMatch(/none/);
+      // Read as text: a path that answers rather than throws hands its answer on in an Error.
+      const told = `${refusal instanceof Error ? refusal.message : String(refusal)} ${String(
+        (refusal as { publicMessage?: unknown } | undefined)?.publicMessage
+      )}`;
+      expect(told).toContain("schema drift detected");
+      expect(told).toContain("pnpm nextly db:sync");
+      expect(told).toContain("pnpm nextly migrate:resolve --applied");
+      expect(await mainHeading(table, id)).toBe("Hello");
+      expect(await columnsOf(`${table}_locales`)).not.toContain("heading");
     }
   );
 

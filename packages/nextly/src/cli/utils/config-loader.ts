@@ -82,6 +82,7 @@ import {
 } from "../../plugins/schema/validate-relations";
 import { assertSettingsPermissionsOwned } from "../../plugins/settings-permission";
 import { assertFieldTypeSettings } from "../../plugins/validate-field-type-settings";
+import { withEditorPlaces } from "../../shared/lib/build-messages";
 import {
   CONFIG_FILE_NAMES,
   CONFIG_SEARCH_DIRS,
@@ -865,6 +866,10 @@ async function loadConfigInternal(
       throw error;
     }
 
+    // A build failure carried as esbuild reports it would name its place a
+    // second way under `--verbose` (bytes from 0) below the editor's place
+    // the error shows, so it is carried with the editor's places instead.
+    const failure = withEditorPlaces(error) ?? error;
     throw new NextlyError({
       code: "INVALID_INPUT",
       publicMessage: "Failed to load Nextly configuration.",
@@ -873,9 +878,9 @@ async function loadConfigInternal(
       logContext: {
         configPath,
         reason: "load-error",
-        cause: describeError(error),
+        cause: describeError(failure),
       },
-      cause: asCause(error),
+      cause: asCause(failure),
     });
   }
 }

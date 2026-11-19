@@ -28,11 +28,14 @@ export interface DeclaringConfig {
 
 /**
  * Every collection, Single and component the configuration declares, by the table it is stored
- * in: the entities the boot's storage-layout check and `nextly upgrade` judge alongside the
- * Schema Builder's (`readLayoutScanEntities`).
+ * in: the entities the boot's storage-layout check and `nextly migrate`'s data steps judge
+ * alongside the Schema Builder's (`readLayoutScanEntities`). A component's table is
+ * `fieldGroupTableOf`'s, by default its name under the earlier naming; a caller that can read the
+ * registry passes its stored names (`declaredLaidOutEntitiesAsStored`).
  */
 export function declaredLaidOutEntities(
-  config: DeclaringConfig
+  config: DeclaringConfig,
+  fieldGroupTableOf: (slug: string) => string = resolveComponentTableName
 ): LaidOutEntity[] {
   const fieldsOf = (entity: { fields?: unknown }) =>
     (entity.fields ?? []) as LaidOutEntity["fields"];
@@ -69,12 +72,40 @@ export function declaredLaidOutEntities(
       (g): LaidOutEntity => ({
         kind: "component",
         slug: g.slug,
-        tableName: resolveComponentTableName(g.slug),
+        tableName: fieldGroupTableOf(g.slug),
         fields: fieldsOf(g),
         localized: localizedOf(g),
       })
     ),
   ];
+}
+
+/**
+ * `declaredLaidOutEntities`, each declared field group under the table its registry row names, or,
+ * for one the registry does not hold yet, its name under the naming this site's storage is on. So
+ * a field group is matched with its own registry row rather than judged a second time as a Builder
+ * entity, and its real translation table is the one read. The registry is read only when the
+ * configuration declares a group; one that cannot be read leaves the earlier naming, for the
+ * registry scan (`readLayoutScanEntities`) to refuse naming the registry it could not read.
+ */
+export async function declaredLaidOutEntitiesAsStored(
+  adapter: DrizzleAdapter,
+  config: DeclaringConfig
+): Promise<LaidOutEntity[]> {
+  if ((config.fieldGroups ?? []).length === 0) {
+    return declaredLaidOutEntities(config);
+  }
+  // Loaded only where a group is declared, as the start loads the rest of the layout check.
+  const { readStoredFieldGroupTables, storedOrNewTableName } = await import(
+    "../domains/field-groups/services/field-group-stored-tables"
+  );
+  const stored = await readStoredFieldGroupTables(adapter);
+  const names = stored.usable
+    ? stored
+    : { tables: new Map<string, string>(), naming: "legacy" as const };
+  return declaredLaidOutEntities(config, slug =>
+    storedOrNewTableName(names, slug)
+  );
 }
 
 /**

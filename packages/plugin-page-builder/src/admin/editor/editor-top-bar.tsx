@@ -23,6 +23,7 @@ import { HistoryButtons } from "./history-buttons";
 import { PageReadMeter, type PageDataCount } from "./page-read-meter";
 import { PageTitleSwitcher } from "./page-title-switcher";
 import { PreviewButton, type VisitorPreview } from "./preview-button";
+import { RegionSaveAndPublish } from "./region-done-dialog";
 import { siteStyleStatus } from "./site-style-studios";
 
 /**
@@ -98,6 +99,8 @@ export function editorTopBar(
     editor,
     inline,
   } = view;
+  if (view.set !== undefined)
+    return setTopBar(view, page.title, page.openAsForm);
   return {
     topBar: (
       <>
@@ -126,7 +129,7 @@ export function editorTopBar(
         {/* The page's bindings that no longer fit, beside its status: shown
             only when it has one. */}
         <BindingsToFixChip
-          editor={editor}
+          editor={view.page}
           field={page.field}
           canvas={page.canvas}
           requestPanel={view.requestPanel}
@@ -210,11 +213,77 @@ export function editorTopBar(
           it again. Publish's arrow keeps the other ways to publish, which
           the builder's taking the window would otherwise leave reachable
           only from the keyboard. */}
-        <DocumentSaveAndPublish />
+        {/* While a header or footer is edited in place, they act on it:
+          "Save header" and "Publish header". */}
+        {view.regionEditing.topBar === undefined ? (
+          <DocumentSaveAndPublish />
+        ) : (
+          <RegionSaveAndPublish bar={view.regionEditing.topBar} />
+        )}
         {/* After them, as the entry page's own ⋯ follows its Publish: the
           form and the pin, which a page that opens here would otherwise
           leave out of reach. */}
         <EditorMoreMenu onOpenAsForm={page.openAsForm} />
+      </>
+    ),
+  };
+}
+
+/**
+ * The top bar on a header & footer set's own screen: the set's name and
+ * state with its history at the start, the devices in the centre, and Save
+ * and Publish at the end, which store the set (or, while its header or
+ * footer is edited in place, that). Nothing of a page's: no page switcher,
+ * checks, data meter or preview, since the set has no page of its own.
+ */
+function setTopBar(
+  view: EditorView,
+  title: string | undefined,
+  openAsForm: (() => void) | undefined
+): {
+  topBar: React.JSX.Element;
+  topBarCenter: React.JSX.Element;
+  topBarEnd: React.JSX.Element;
+} {
+  const shown = title === undefined || title === "" ? "Untitled set" : title;
+  return {
+    topBar: (
+      <>
+        <span
+          title={shown}
+          className="min-w-0 max-w-[20rem] shrink truncate text-sm font-medium"
+          data-testid="builder-set-title"
+        >
+          {shown}
+        </span>
+        <span className="shrink-0 text-xs text-muted-foreground">
+          Header & footer set
+        </span>
+        <DocumentStatusPill />
+        <HistoryButtons editor={view.editor} inline={view.inline} />
+      </>
+    ),
+    topBarCenter: (
+      <>
+        <BreakpointSwitcher
+          breakpoints={view.canvasRender.styleContext.breakpoints}
+          selected={view.editedBreakpoint}
+          onSelect={view.chooseDevice}
+          status={siteStyleStatus(view.siteStylePending, view.siteStyleError)}
+          previewWidth={view.previewWidth}
+          onPreviewWidth={view.setPreviewWidth}
+        />
+        <CanvasModeSwitch preview={view.previewMode} />
+      </>
+    ),
+    topBarEnd: (
+      <>
+        {view.regionEditing.topBar === undefined ? (
+          <DocumentSaveAndPublish />
+        ) : (
+          <RegionSaveAndPublish bar={view.regionEditing.topBar} />
+        )}
+        <EditorMoreMenu onOpenAsForm={openAsForm} />
       </>
     ),
   };

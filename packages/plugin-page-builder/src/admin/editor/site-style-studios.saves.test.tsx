@@ -11,12 +11,18 @@
  * Variables panel's line, and in a toast for shared styles and fonts.
  */
 import { act, cleanup, render, renderHook } from "@testing-library/react";
-import type { NamedClass } from "@nextlyhq/blocks-engine";
+import {
+  DEFAULT_FLUID_RANGE,
+  fluidValue,
+  type NamedClass,
+} from "@nextlyhq/blocks-engine";
 import type {
   FontsPanelProps,
   SharedStyleChange,
 } from "@nextlyhq/builder/shell";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { resolveSiteStyle } from "../../site-style";
 
 /** Each section save, and what the next one answers. */
 const saves = vi.hoisted(() => ({
@@ -77,7 +83,7 @@ const panels = vi.hoisted(() => ({
 
 vi.mock("@nextlyhq/plugin-sdk/client", () => ({ useCan: () => true }));
 
-vi.mock("../site-style-client", () => {
+vi.mock("../site-style-client", async () => {
   const save = async (section: string, value: unknown, options?: object) => {
     saves.calls.push({ section, value, options });
     return saves.answer();
@@ -94,6 +100,9 @@ vi.mock("../site-style-client", () => {
     cancel: () => {},
   });
   return {
+    // Outside an editor: no history, and nothing drawn over the read.
+    SiteStyleHistoryContext: (await import("react")).createContext(null),
+    SiteStylePreviewContext: (await import("react")).createContext(new Map()),
     useSaveSiteStyle: () => ({ save, reserve, reread }),
     useHeldSiteStyle: () => ({ extend: () => {}, release: async () => {} }),
     useFontCatalogueClient: () => ({
@@ -120,6 +129,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async importOriginal => ({
   ...(await importOriginal<typeof import("@nextlyhq/plugin-sdk/admin")>()),
   useUploadMedia: () => ({ mutateAsync: vi.fn(), isPending: false }),
   usePluginClientConfig: () => undefined,
+  // The author the catalogue keeps the choice to show previews for.
+  useCurrentUserId: () => "u1",
 }));
 
 const { TokensStudio, VariablesTab, useClassSurface } = await import(
@@ -636,5 +647,221 @@ describe("a block style action's whole-list write", () => {
     expect(stored).toBe(
       'classes[0] is a built-in block style, "Text", so it can\'t be renamed.'
     );
+  });
+});
+
+describe("a text style the site's code makes fluid, on a site storing another range", () => {
+  const SIZES = { small: 16, large: 32 };
+  const NEW = { min: 400, max: 800 };
+  /** The code's text style, its Desktop size made across the code's range. */
+  const codeLead = (locked?: true): NamedClass =>
+    ({
+      id: "t-code-lead",
+      slug: "code-lead",
+      label: "Code lead",
+      orderIndex: 0,
+      role: "text",
+      styles: {
+        base: { base: { fontSize: fluidValue(SIZES, DEFAULT_FLUID_RANGE) } },
+      },
+      fluidSizes: { base: SIZES },
+      ...(locked === undefined ? {} : { locked }),
+    }) as NamedClass;
+  const card = {
+    id: "c-card",
+    slug: "card",
+    label: "Card",
+    orderIndex: 1,
+    styles: {},
+  } as NamedClass;
+  /**
+   * The surface as the editor has it: the code's classes as the config, and
+   * the read the canvas draws, the code over the stored tier holding the
+   * site's range and the site's own style.
+   */
+  const surfaceOver = (code: NamedClass) => {
+    const config = { classes: [code] };
+    const read = resolveSiteStyle(config, {
+      tokens: { tokens: [], fluidRange: NEW },
+      classes: [card],
+    });
+    return renderHook(() => useClassSurface(read, false, null, config)).result;
+  };
+  const ids = (value: unknown) =>
+    (value as readonly NamedClass[]).map(entry => entry.id);
+
+  it.each([
+    ["unlocked", undefined],
+    ["locked", true as const],
+  ])(
+    "stores no override of it (%s) when another style is created",
+    async (_name, locked) => {
+      const result = surfaceOver(codeLead(locked));
+      await act(async () => {
+        await result.current.add({
+          id: "c-new",
+          slug: "new",
+          orderIndex: 2,
+          styles: {},
+        } as NamedClass);
+      });
+      expect(saves.calls).toHaveLength(1);
+      expect(ids(saves.calls[0]?.value)).toEqual(["c-card", "c-new"]);
+      expect(ids(saves.calls[0]?.options?.base)).toEqual(["c-card"]);
+    }
+  );
+
+  it("stores no override of it when another style is renamed", async () => {
+    const result = surfaceOver(codeLead());
+    await act(async () => {
+      await result.current.rename("c-card", {
+        label: "Panel",
+        slug: "panel",
+      });
+    });
+    expect(saves.calls).toHaveLength(1);
+    expect(ids(saves.calls[0]?.value)).toEqual(["c-card"]);
+  });
+
+  it("stores no override of it from a whole-list edit of another style", async () => {
+    const result = surfaceOver(codeLead());
+    await act(async () => {
+      await result.current.edit(existing => ({
+        classes: existing.map(entry =>
+          entry.id === "c-card" ? { ...entry, hidden: true as const } : entry
+        ),
+      }));
+    });
+    expect(ids(saves.calls[0]?.value)).toEqual(["c-card"]);
+  });
+
+  it("starts an edit of it from the size the site's range gives it", async () => {
+    // The positive control: the surface does hold the style, and an edit of
+    // it stores the override made from the size drawn, not the code's clamp.
+    const result = surfaceOver(codeLead());
+    await act(async () => {
+      await result.current.writeStyles("t-code-lead", setColor("red"));
+    });
+    const stored = (saves.calls[0]?.value as NamedClass[] | undefined)?.find(
+      entry => entry.id === "t-code-lead"
+    );
+    expect(stored?.styles).toMatchObject({
+      base: { base: { fontSize: fluidValue(SIZES, NEW) } },
+    });
+  });
+});
+
+/**
+ * A change that sets one device's size at rest (or, with `undefined`, clears
+ * it, as Reset does), and whose inverse sets back the size it replaced.
+ */
+function setSize(device: string, size: unknown): SharedStyleChange {
+  type Styles = { base?: Record<string, Record<string, unknown>> };
+  return Object.assign(
+    (styles: Styles) => {
+      const atRest = styles.base ?? {};
+      const { fontSize: _was, ...rest } = atRest[device] ?? {};
+      const values = size === undefined ? rest : { ...rest, fontSize: size };
+      return {
+        kind: "write" as const,
+        styles: { ...styles, base: { ...atRest, [device]: values } },
+      };
+    },
+    {
+      invert: (before: Styles) =>
+        setSize(device, before.base?.[device]?.fontSize),
+    }
+  ) as unknown as SharedStyleChange;
+}
+
+describe("a text style's size edited by hand", () => {
+  const SIZES = { small: 16, large: 32 };
+  const MADE = "clamp(1rem, 0.6087rem + 1.7391vw, 2rem)";
+  const TYPED = "clamp(1rem, 2vw, 3rem)";
+  /** A text style whose Desktop and Mobile sizes were made with "Fluid…". */
+  const lead = {
+    id: "t-lead",
+    slug: "lead",
+    orderIndex: 0,
+    role: "text",
+    styles: { base: { base: { fontSize: MADE }, mobile: { fontSize: MADE } } },
+    fluidSizes: { base: SIZES, mobile: SIZES },
+  };
+  const surface = () =>
+    renderHook(() =>
+      useClassSurface(
+        { classes: [lead] as unknown as NamedClass[] },
+        false,
+        null,
+        undefined
+      )
+    ).result;
+  const savedLead = (): Record<string, unknown> | undefined =>
+    (saves.calls.at(-1)?.value as Record<string, unknown>[] | undefined)?.find(
+      entry => entry.id === "t-lead"
+    );
+
+  it("drops that device's fluid sizes in the same write, keeping the typed size", async () => {
+    const result = surface();
+    await act(async () => {
+      await result.current.writeStyles("t-lead", setSize("base", TYPED));
+    });
+    expect(saves.calls).toHaveLength(1);
+    expect(savedLead()).toMatchObject({
+      styles: { base: { base: { fontSize: TYPED } } },
+      fluidSizes: { mobile: SIZES },
+    });
+    expect(savedLead()?.fluidSizes).not.toHaveProperty("base");
+  });
+
+  it("drops them on a Reset too, and the field once none is left", async () => {
+    const result = surface();
+    const one = { ...lead, fluidSizes: { base: SIZES } };
+    await act(async () => {
+      await result.current.writeStyles("t-lead", setSize("base", undefined));
+    });
+    expect(savedLead()?.fluidSizes).toEqual({ mobile: SIZES });
+    const single = renderHook(() =>
+      useClassSurface(
+        { classes: [one] as unknown as NamedClass[] },
+        false,
+        null,
+        undefined
+      )
+    ).result;
+    await act(async () => {
+      await single.current.writeStyles("t-lead", setSize("base", "20px"));
+    });
+    expect(savedLead()).not.toHaveProperty("fluidSizes");
+  });
+
+  it("keeps them where the edit leaves the size as it was", async () => {
+    const result = surface();
+    await act(async () => {
+      await result.current.writeStyles("t-lead", setColor("blue"));
+    });
+    expect(savedLead()?.fluidSizes).toEqual({ base: SIZES, mobile: SIZES });
+  });
+
+  it("puts the sizes back with the size on Undo, and drops them again on Redo", async () => {
+    const result = surface();
+    await act(async () => {
+      await result.current.writeStyles("t-lead", setSize("base", TYPED));
+    });
+    const held = [savedLead()];
+    const undone = saves.inverse?.undo(held) as {
+      kind: string;
+      value: Record<string, unknown>[];
+    };
+    expect(undone.kind).toBe("write");
+    expect(undone.value[0]).toMatchObject({
+      styles: { base: { base: { fontSize: MADE } } },
+      fluidSizes: { base: SIZES, mobile: SIZES },
+    });
+    const redone = saves.inverse?.redo(undone.value) as {
+      kind: string;
+      value: Record<string, unknown>[];
+    };
+    expect(redone.value[0]?.fluidSizes).toEqual({ mobile: SIZES });
   });
 });

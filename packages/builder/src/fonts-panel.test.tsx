@@ -172,6 +172,17 @@ describe("the site's fonts", () => {
     ).toEqual(["From Google Fonts", "Upload a font file"]);
   });
 
+  it("says a failed save of the site's fonts in the catalogue too", async () => {
+    panel({ issue: "The site style wasn't saved. Try again." });
+    await openMenu();
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "From Google Fonts" })
+    );
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "The site style wasn't saved. Try again."
+    );
+  });
+
   it("offers only the upload when the host has no catalogue", async () => {
     panel({ catalogue: undefined });
     await openMenu();
@@ -273,8 +284,10 @@ describe("the site's fonts", () => {
     const confirm = within(details).getByRole("group", {
       name: "Remove Inter",
     });
+    // The Body variable names Inter first, so the confirmation says what it
+    // falls back to.
     expect(confirm.textContent).toContain(
-      "Text set in it falls back to the next font in its list. The files stay in your media library."
+      "Body falls back to “sans-serif”The files stay in your media library."
     );
     fireEvent.click(within(confirm).getByRole("button", { name: "Keep" }));
     expect(onRemoveFamily).not.toHaveBeenCalled();
@@ -345,6 +358,16 @@ describe("the font variables", () => {
     const body = row(/^Body/);
     expect(within(body).getByText("Inter")).toBeTruthy();
     expect(within(body).getByText("Aa").style.fontFamily).toContain("Inter");
+  });
+
+  it("is named from text that starts with the words it shows", () => {
+    panel({ onOpenTokens: vi.fn() });
+    const body = row(/^Body/);
+    // No aria-label laid over the row: its name is its own text, which
+    // starts with the name and the family the row draws, so speaking what
+    // is on screen reaches it, and the decorative "Aa" is in no label.
+    expect(body.getAttribute("aria-label")).toBeNull();
+    expect(screen.getByRole("button", { name: /^Body, Inter\b/ })).toBe(body);
   });
 
   it("says when a variable asks first for a family the site has no file for", () => {

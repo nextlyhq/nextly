@@ -76,6 +76,7 @@ import {
   isAbortedTransactionError,
   recordAbortedTransaction,
 } from "./aborted-transaction-sightings";
+import type { PluginPermission } from "./contributions";
 import { namingTestConsentOption, type PluginConsent } from "./plugin-consent";
 import type { PluginDefinition } from "./plugin-context";
 import { resetPluginRouteRegistry } from "./routes/route-registry";
@@ -342,6 +343,8 @@ export interface CreateTestNextlyOptions {
   logger?: Logger;
   /** The app's `security` block, as `nextly.config.ts` would give it. */
   security?: SecurityConfig;
+  /** The app's own custom permissions, as `nextly.config.ts` would declare them. */
+  permissions?: PluginPermission[];
   /** An app's password hasher, as `getNextly()` takes it. */
   passwordHasher?: NextlyServiceConfig["passwordHasher"];
   /**
@@ -943,6 +946,9 @@ async function bootServices(
         ? {}
         : { languageAddresses: opts.languageAddresses }),
       security: opts.security,
+      ...(opts.permissions === undefined
+        ? {}
+        : { permissions: opts.permissions }),
       passwordHasher: opts.passwordHasher,
       // Record every event by default so machinery tests are independent of
       // webhook endpoint setup; suites that exercise the endpoint gate turn this

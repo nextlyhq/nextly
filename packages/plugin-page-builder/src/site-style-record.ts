@@ -24,15 +24,19 @@
  * @module @nextlyhq/plugin-page-builder/site-style-record
  */
 import {
+  MAX_BREAKPOINT_ID_LENGTH,
   MAX_BREAKPOINTS_PER_AXIS,
   MAX_NAMED_CLASSES,
   TOKEN_KINDS,
   emitTokenBlocks,
   isPlainRecord,
   isDefaultLook,
+  isFluidSizes as fluidSizesUsable,
   isLook,
+  isTextStyle,
   isUsableNamedClass,
-  MAX_TOKEN_NAME_LENGTH,
+  // The colour order's one rule, which a design token file's is read by too.
+  isColourOrder,
   ownLooksRead,
   namedClassesRead,
   newStyleIssueBudget,
@@ -60,6 +64,7 @@ import {
   type TokenKind,
 } from "@nextlyhq/blocks-engine";
 
+import { isFluidRange } from "./site-fluid-range";
 import {
   BUILT_IN_NAME_FIELDS,
   resolveSiteStyle,
@@ -178,45 +183,6 @@ function isStoredTokenShape(entry: unknown): entry is StoredTokenShape {
     optionalRecord(entry.extensions) &&
     optionalRecord(entry.unreadExtension) &&
     (entry.fluid === undefined || isFluidSizes(entry.fluid))
-  );
-}
-
-/** The most colours an order may list: far beyond any palette. */
-const MAX_COLOUR_ORDER = 1000;
-
-/**
- * The site's colour order as stored: identities, each once, none longer
- * than a code name can be. A colour the order does not name is listed after
- * the ones it does, so an order naming a colour since removed is harmless.
- */
-function isColourOrder(value: unknown): value is readonly string[] {
-  return (
-    Array.isArray(value) &&
-    value.length <= MAX_COLOUR_ORDER &&
-    value.every(
-      identity =>
-        typeof identity === "string" &&
-        identity !== "" &&
-        identity.length <= MAX_TOKEN_NAME_LENGTH
-    ) &&
-    new Set(value).size === value.length
-  );
-}
-
-/**
- * The site's fluid range as stored: two positive, finite widths in px, the
- * smallest screen below the largest, or a fluid size would grow across no
- * width at all.
- */
-function isFluidRange(value: unknown): value is { min: number; max: number } {
-  return (
-    isPlainRecord(value) &&
-    typeof value.min === "number" &&
-    typeof value.max === "number" &&
-    Number.isFinite(value.min) &&
-    Number.isFinite(value.max) &&
-    value.min > 0 &&
-    value.min < value.max
   );
 }
 
@@ -1017,6 +983,49 @@ function withUsableMarks(
   };
 }
 
+/** The most devices a site has: every breakpoint on both axes. */
+const MAX_FLUID_DEVICES = 2 * MAX_BREAKPOINTS_PER_AXIS;
+
+/**
+ * Whether a text style's fluid sizes can be kept: a record of devices, at most
+ * one per device a site can have, each holding two sizes by the engine's one
+ * rule (`isFluidSizes`, the bound "Fluid…" itself applies), on a text
+ * style only. Bounded before it is walked, as stored data reaches here.
+ */
+function usableFluidSizes(entry: NamedClass): boolean {
+  const sizes: unknown = (entry as { readonly fluidSizes?: unknown })
+    .fluidSizes;
+  if (!isPlainRecord(sizes) || !isTextStyle(entry)) return false;
+  let devices = 0;
+  for (const device in sizes) {
+    if (!Object.hasOwn(sizes, device)) continue;
+    devices += 1;
+    if (devices > MAX_FLUID_DEVICES) return false;
+    if (device === "" || device.length > MAX_BREAKPOINT_ID_LENGTH) return false;
+    if (!fluidSizesUsable(sizes[device])) return false;
+  }
+  return true;
+}
+
+/**
+ * A class entry with its fluid sizes checked. Absent, the entry comes back as
+ * it is. Sizes that cannot be used add an issue, which refuses a write, and
+ * are left out of the entry a read keeps: a range change would otherwise make
+ * a size again from nonsense.
+ */
+function withUsableFluidSizes(
+  entry: NamedClass,
+  index: number,
+  issues: string[]
+): NamedClass {
+  if (entry.fluidSizes === undefined || usableFluidSizes(entry)) return entry;
+  issues.push(
+    `classes[${index}] has fluid sizes that cannot be used: each device's two sizes must be numbers of px above zero, on a text style.`
+  );
+  const { fluidSizes: _unusable, ...rest } = entry;
+  return rest;
+}
+
 /**
  * The stored class library.
  *
@@ -1128,7 +1137,9 @@ export function checkStoredClasses(
     }
     issues.push(...blockStyleMarkIssues(named, index));
     issues.push(...builtInRenameIssues(entry, index, policy));
-    classes.push(withUsableMarks(entry, index, issues));
+    classes.push(
+      withUsableFluidSizes(withUsableMarks(entry, index, issues), index, issues)
+    );
   });
   issues.push(...mergedLibraryIssues(classes, policy));
   issues.push(...secondStarIssues(classes, policy));

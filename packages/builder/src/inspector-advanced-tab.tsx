@@ -5,7 +5,8 @@
  * into the page. Visibility first (which devices, which entries, search
  * previews), then HTML (the block's own HTML settings such as its tag, its
  * anchor, its CSS classes and its attributes), then any other Advanced
- * section the block declares.
+ * section the block declares, and last Custom CSS, for a person who may
+ * change the site's code.
  *
  * The builder draws the shared settings here for every block, whatever the
  * block declares, so no block can leave them out or draw them elsewhere; a
@@ -32,13 +33,15 @@ import {
 } from "./component-fields-panel";
 import { ShowWhen } from "./conditions/condition-controls";
 import type { ContentServices } from "./content-controls";
+import type { BlockCustomCssAccess } from "./custom-css";
+import { customCssSections } from "./custom-css-section";
 import type { EditorState } from "./editor-state";
 import { HeldByLock } from "./held-by-lock";
 import { HideOn, type BreakpointsStatus } from "./hide-on";
 import {
   designReadOnlyReason,
   lockViewOf,
-  propIsWritable,
+  writablePropsOf,
   type BlockInspection,
   type EditableProp,
 } from "./inspector";
@@ -74,6 +77,7 @@ function DrawnAdvancedTab({
   breakpoints,
   breakpoint,
   breakpointsStatus,
+  customCss,
 }: {
   block: BlockInspection;
   editor: EditorState;
@@ -92,11 +96,19 @@ function DrawnAdvancedTab({
   breakpoint: BreakpointId | undefined;
   /** Whether `breakpoints` is the site's own set yet. */
   breakpointsStatus: BreakpointsStatus;
+  /** The block's own CSS, given only to a person who may change site code. */
+  customCss: BlockCustomCssAccess | undefined;
 }): React.JSX.Element {
   const designLocked = designReadOnlyReason(
     editor.document,
     block.nodeId,
     lockViewOf(editor)
+  );
+  // Which props the block's locks leave writable, read once per document and
+  // block rather than once per field the tab draws.
+  const writable = React.useMemo(
+    () => writablePropsOf(editor.document, block.nodeId, lockViewOf(editor)),
+    [editor, block.nodeId]
   );
   // The block's own Advanced settings, by section: those in HTML are drawn
   // above the anchor, the others in sections of their own after it.
@@ -111,9 +123,7 @@ function DrawnAdvancedTab({
       services={services}
       reasonId={reasonId}
       fields={fields}
-      writable={name =>
-        propIsWritable(editor.document, block.nodeId, name, lockViewOf(editor))
-      }
+      writable={writable}
       onCommitMany={changes => commitLinkChanges(editor, block.nodeId, changes)}
       onApply={op => editor.apply(op) !== null}
       document={editor.document}
@@ -197,8 +207,18 @@ function DrawnAdvancedTab({
     </>
   );
   const node = findNode(editor.document.nodes, block.nodeId);
-  // Visibility first, then HTML, then any section the block declares, for
-  // every block.
+  // Custom CSS, for a person who may change site code: the builder's own
+  // row, never one a block declares.
+  const customCssSection = customCssSections({
+    access: customCss,
+    block,
+    stored: node?.customCss,
+    editor,
+    active: onScreen,
+    heldBy: designLocked === undefined ? undefined : reasonId,
+  });
+  // Visibility first, then HTML, then any section the block declares, then
+  // Custom CSS last, for every block.
   return (
     <PanelSections
       tab="advanced"
@@ -222,6 +242,7 @@ function DrawnAdvancedTab({
           holdsValue: rowsHoldValue(section.rows),
           body: fieldsFor(section.rows),
         })),
+        ...customCssSection,
       ]}
     />
   );

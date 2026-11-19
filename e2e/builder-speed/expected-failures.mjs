@@ -13,15 +13,13 @@
 /** @type {Readonly<Record<string, string>>} */
 export const EXPECTED_FAILURES = {
   "select-sidebar":
-    "about 330 ms against 100 ms on the 150-block page: a selection still renders the editor and its page around it",
+    "about 150 ms against 100 ms on the 150-block page: a selection still renders the editor around it, and lays out the page for its outline, toolbar and spacing bands",
   "select-outline":
-    "about 330 ms against 100 ms: the outline moves in the same render as the sidebar",
+    "about 150 ms against 100 ms: the outline moves in the same render as the sidebar",
   "quick-clicks-blocking":
-    "about 1.2 s against 400 ms: four quick clicks are handled one after another, each a long task",
+    "about 550 ms against 400 ms: four quick clicks are handled one after another, each a long task",
   "add-panel-insert":
     "about 470 ms against 300 ms: an insert redraws the page and its header and footer",
-  "keystroke-canvas":
-    "not shown until the field is left, against 100 ms: the canvas does not follow typing yet",
   "open-canvas-slow-network":
     "about 2.1 s against 2.0 s at 150 ms a round trip: the canvas waits on a chain of requests",
   "open-requests":

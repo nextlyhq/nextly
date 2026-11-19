@@ -27,6 +27,7 @@ import { collectionMetadataFetcher } from "../../domains/dynamic-collections/ser
 import { releaseVisibilityFor } from "../../domains/releases/release-visibility";
 import { retentionPoliciesFrom } from "../../domains/retention/passes";
 import type { BuilderSaveSetup } from "../../domains/schema/builder-save/collection-save";
+import { savedDatabase } from "../../domains/schema/builder-save/saved-database";
 import { CollectionFileManager } from "../../services/collection-file-manager";
 import { CollectionEntryService } from "../../services/collections/collection-entry-service";
 import { CollectionMetadataService } from "../../services/collections/collection-metadata-service";
@@ -232,6 +233,11 @@ function builderSaveSetup(ctx: RegistrationContext): BuilderSaveSetup {
       fieldGroups: ctx.config.fieldGroups ?? [],
       plugins: ctx.config.plugins ?? [],
       localization: ctx.config.localization,
+      // The app's own custom permissions: a save's snapshot records them as
+      // `migrate:create` does, so it does not read as removing them.
+      ...(ctx.config.permissions === undefined
+        ? {}
+        : { permissions: ctx.config.permissions }),
       db,
     },
     ...(ctx.deferredExtends === undefined
@@ -239,5 +245,11 @@ function builderSaveSetup(ctx: RegistrationContext): BuilderSaveSetup {
       : { deferredExtends: ctx.deferredExtends }),
     projectRoot: ctx.basePath,
     migrationsDir: resolve(ctx.basePath, db.migrationsDir),
+    // The database a save's record names: the one `DATABASE_URL` reaches, which the adapter is
+    // built from, or unknown where an adapter was handed in and its address is its own.
+    database: savedDatabase(
+      ctx.config.adapter !== undefined,
+      ctx.config.db?.postgres?.schema
+    ),
   };
 }

@@ -219,12 +219,159 @@ header HTML + template body + footer HTML
 
 Layout templates also support `{{variable}}` interpolation, so common variables like `{{year}}` and `{{appName}}` work in headers and footers.
 
+## Templates written in blocks
+
+A template is either **coded**, written in HTML as described above (in Liquid, or on the older `{{variable}}` engine for a template kept on it), or **written**: a short list of content blocks, with variables placed as chips. A written template always renders as Liquid. A written template is drawn in its layout and your brand settings, and its HTML and plain text are written from its blocks each time it renders, so a preview, a test send and a real send of the same saved template, with the same layout, brand settings and data, are the same email.
+
+Every template you already have stays coded, unchanged, and nothing turns a template you wrote or edited in code into blocks. A plugin's template the site hasn't changed follows the plugin's own version, written or coded, as its other updates do.
+
+Written templates are `@experimental`: `format`, `blocks` and the shapes below may still change. The admin has no editor for them yet, so create and change them through the Direct API or the REST routes.
+
+### Blocks
+
+| Block     | What it holds                                                                                               |
+| --------- | ----------------------------------------------------------------------------------------------------------- |
+| `heading` | Text and variables.                                                                                         |
+| `text`    | Text and variables, each run optionally bold, italic or a link.                                             |
+| `button`  | A label and a link. It keeps a fallback for Outlook on Windows.                                             |
+| `image`   | An image address, or a variable holding one, its alt text, and an optional width from 16 to 600 px.         |
+| `divider` | A line across the email.                                                                                    |
+| `spacer`  | Empty space, 4 to 96 px high (24 when left out).                                                            |
+| `list`    | Blocks repeated for each item of a list variable. A list can't hold another list; it holds up to 50 blocks. |
+
+A template holds up to 200 blocks at its top level, a list counting as one; a list holds up to 50 blocks of its own. A link is `{ "url": "https://…" }` or `{ "chip": { "variable": "orderUrl" } }`. Links take complete `https`, `http` and `mailto` addresses, and images `https` and `http` ones. An invalid address written in the blocks is refused when saved, and an invalid one a variable supplies at send time is left out. Links in text stay readable in a dark inbox.
+
+### Variables and fallbacks
+
+A variable is a chip: `{ "type": "chip", "variable": "name", "fallback": "there" }`. Its fallback is used when the value is absent, `null` or an empty string, and never for `false` or `0`.
+
+Chips sit only in the blocks. Each is made safe for where it sits:
+
+- In headings, text and button labels, the value is escaped as text.
+- In a link, the value must be a complete `https`, `http` or `mailto` address, and in an image address a complete `https` or `http` one. It is escaped as an attribute, and any other value is left out.
+- In the plain-text body written from the blocks, it is plain text, without markup.
+
+The subject, preview text, From name and Reply-To are text fields beside the blocks, written with Liquid (`{{ name }}`) as in a coded template. A variable in them is made safe as well:
+
+- In the subject and From name, it is plain text with line breaks removed.
+- In the preview text, it is escaped as text, as the inbox's preview line is HTML.
+- A Reply-To that uses a variable must render as one email address. When it renders empty, the email has no Reply-To; anything else fails the send.
+
+### Showing a block only sometimes
+
+Any block can carry `show: { "variable": "paid", "when": … }`:
+
+- `"present"` shows it when the variable has a value: present, and not `null`, an empty string or an empty list. `0` and `false` count as values.
+- `"yes"` shows it when the variable is `true`.
+- `"no"` shows it when the variable is `false`.
+
+### Lists
+
+A list repeats its blocks for each item of a list variable. Inside it, `item` is the current item, so a chip reads one of its fields with `item.name`:
+
+```json
+{
+  "type": "list",
+  "variable": "lines",
+  "blocks": [
+    { "type": "text", "text": [{ "type": "chip", "variable": "item.name" }] }
+  ]
+}
+```
+
+### Creating a written template
+
+```typescript
+await nextly.emailTemplates.create({
+  data: {
+    name: "Order paid",
+    slug: "order-paid",
+    subject: "Thanks for your order",
+    // Written from the blocks, so left empty.
+    htmlContent: "",
+    format: "written",
+    blocks: {
+      version: 1,
+      blocks: [
+        {
+          type: "heading",
+          text: [
+            { type: "text", text: "Hello " },
+            { type: "chip", variable: "name", fallback: "there" },
+          ],
+        },
+        {
+          type: "text",
+          text: [{ type: "text", text: "Paid in full." }],
+          show: { variable: "paid", when: "yes" },
+        },
+        {
+          type: "button",
+          label: [{ type: "text", text: "View order" }],
+          link: { chip: { variable: "orderUrl" } },
+        },
+      ],
+    },
+  },
+});
+```
+
+The REST route, `POST /admin/api/email-templates`, takes the contents of `data` as its JSON body, without the `data` wrapper.
+
+### Converting to code
+
+To take a written template further than blocks allow, convert it to code:
+
+```typescript
+await nextly.emailTemplates.update({ id, data: { format: "code" } });
+```
+
+or `PATCH /admin/api/email-templates/{id}` with `{ "format": "code" }`.
+
+Conversion is one-way. The template becomes HTML with Liquid that keeps every chip, condition and list as Liquid, so each later send still uses its own recipient's data, and it sends the same email as before. When the template is a site's override of a plugin's written template, its base copy is converted too, and the plugin's later updates are reviewed line by line, as for any coded override.
+
+### In a plugin
+
+A plugin ships a written template by giving `blocks` instead of `htmlContent` in `contributes.emailTemplates`:
+
+```typescript
+contributes: {
+  emailTemplates: [
+    {
+      slug: "orders-paid",
+      name: "Order paid",
+      subject: "Thanks for your payment",
+      blocks: {
+        version: 1,
+        blocks: [{ type: "heading", text: [{ type: "text", text: "Paid" }] }],
+      },
+    },
+  ],
+},
+```
+
+A written entry gives no `htmlContent` or `plainTextContent`, since both are written from its blocks. It also gives no `engine: "legacy"`, since it always renders as Liquid. The app refuses to start, naming the plugin and the template, for an entry with:
+
+- both HTML and blocks, or neither;
+- blocks that don't pass the rules above;
+- HTML that isn't text.
+
+The site's copy follows the plugin's version until the site changes it. A site's override of a written template stays written. When the plugin later updates it, the update is reviewed **block by block**:
+
+- Each block the plugin changed, added or removed is one change. A block it moved is one change for both places.
+- Each change offers **Keep yours** or **Use theirs**.
+- Undo puts the site's blocks back.
+
+The changes describe the blocks in plain words, such as `Heading: Thanks`, `Button: View order → [orderUrl]` and `For each item in lines:`.
+
 ## Code-first template overrides
 
 You can override the built-in email templates in `defineConfig()` without touching the database:
 
 ```typescript
 // nextly.config.ts
+import { defineConfig } from "nextly/config";
+
 export default defineConfig({
   email: {
     providerConfig: {

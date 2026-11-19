@@ -213,6 +213,7 @@ import type {
   FindEmailTemplateByIDArgs,
   FindEmailTemplateBySlugArgs,
   FindEmailTemplatesArgs,
+  FindEmailActivityArgs,
   FindEmailDeliveriesArgs,
   FindQueuedEmailsArgs,
   EmailLastSentArgs,
@@ -1233,7 +1234,9 @@ export const nextly = {
       (await requireNextlyOnceStarted()).workflows.assignMany(args),
     waiting: async args =>
       (await requireNextlyOnceStarted()).workflows.waiting(args),
-    list: async args => (await requireNextlyOnceStarted()).workflows.list(args),
+    // Optional, as the namespace declares it (see `releases` above).
+    list: async (args?) =>
+      (await requireNextlyOnceStarted()).workflows.list(args),
     settings: {
       read: async args =>
         (await requireNextlyOnceStarted()).workflows.settings.read(args),
@@ -1384,6 +1387,8 @@ export const nextly = {
   emailDeliveries: {
     // Optional, as the namespace declares them: `satisfies` alone would
     // infer required parameters that merely accept undefined.
+    activity: async (args?: FindEmailActivityArgs) =>
+      (await requireNextlyOnceStarted()).emailDeliveries.activity(args),
     find: async (args?: FindEmailDeliveriesArgs) =>
       (await requireNextlyOnceStarted()).emailDeliveries.find(args),
     findQueued: async (args?: FindQueuedEmailsArgs) =>

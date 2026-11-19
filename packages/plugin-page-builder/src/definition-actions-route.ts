@@ -49,6 +49,7 @@ import { z } from "nextly/zod";
 
 import { COMPONENTS_SLUG } from "./collections/components";
 import type { ActionBy } from "./component-actions-contract";
+import { componentStoreShape } from "./component-facts-route";
 import {
   DEFINITION_ACTIONS_ROUTE_PATH,
   type DefinitionActionRequest,
@@ -87,6 +88,7 @@ const DefinitionActionEnvelope = z.strictObject({
   dryRun: z.boolean().optional(),
   expect: z.string().max(128).optional(),
   publish: z.boolean().optional(),
+  locale: z.string().min(1).max(64).optional(),
 });
 
 /** The JSON Schema of a definition action request, as the route parses it. */
@@ -102,7 +104,7 @@ export function definitionActionRequestJsonSchema(): Record<string, unknown> {
  * a caller of the service passed. Refused with the path of each problem.
  */
 function definitionActionRequestOf(raw: unknown): DefinitionActionRequest {
-  const { action, dryRun, expect, publish } = parsedWith(
+  const { action, dryRun, expect, publish, locale } = parsedWith(
     raw,
     DefinitionActionEnvelope
   );
@@ -111,6 +113,7 @@ function definitionActionRequestOf(raw: unknown): DefinitionActionRequest {
     ...(dryRun === undefined ? {} : { dryRun }),
     ...(expect === undefined ? {} : { expect }),
     ...(publish === undefined ? {} : { publish }),
+    ...(locale === undefined ? {} : { locale }),
   };
 }
 
@@ -156,7 +159,21 @@ export async function runDefinitionAction(
     setup,
     admitted
   );
-  const read = await readForEdit(ctx, store, componentId, body.expect);
+  // A translated component is edited in the language asked, as the editor
+  // draws it; any other store has one version, which a language would not
+  // name.
+  const locale =
+    body.locale !== undefined &&
+    (
+      await componentStoreShape(
+        ctx.services.collections,
+        store.collection,
+        ctx.user
+      )
+    ).localized
+      ? body.locale
+      : undefined;
+  const read = await readForEdit(ctx, store, componentId, body.expect, locale);
   const plan = await plannedEdit(
     ctx,
     setup,
@@ -181,7 +198,7 @@ export async function runDefinitionAction(
         componentId,
         data,
         {
-          ...asCaller(ctx),
+          ...asCaller(ctx, locale),
           context: { [JUDGEMENT_CONTEXT]: true },
         }
       )
@@ -220,7 +237,7 @@ export async function runDefinitionAction(
     store.collection,
     componentId,
     data,
-    asCaller(ctx)
+    asCaller(ctx, locale)
   );
   return {
     message: "The component was changed.",
@@ -300,7 +317,8 @@ async function readForEdit(
   ctx: CompositionRouteContext,
   store: { collection: string; field: string },
   componentId: string,
-  expected: string | undefined
+  expected: string | undefined,
+  locale: string | undefined
 ): Promise<{
   definition: BlockDocument;
   version: unknown;
@@ -311,6 +329,7 @@ async function readForEdit(
       collection: store.collection,
       id: componentId,
       ...(await readingAsUser(ctx)),
+      ...(locale === undefined ? {} : { locale }),
       status: "all",
       draft: true,
       depth: 0,

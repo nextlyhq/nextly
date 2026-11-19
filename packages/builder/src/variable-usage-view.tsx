@@ -71,6 +71,14 @@ export function useVariableUsage(
 export interface VariableUsageHere {
   /** A variable's usage by identity, once read. */
   readonly reachOf: (identity: string) => VariableReach | undefined;
+  /**
+   * Some variables' usage as one count, each document once where the host
+   * can count them so ({@link useReachTogether}): a type size and its line
+   * height. Undefined until read.
+   */
+  readonly reachTogether: (
+    identities: readonly string[]
+  ) => VariableReach | undefined;
   /** Read these variables' usage again, settling once it is kept. */
   readonly readAgain: (identities: readonly string[]) => Promise<void>;
   readonly access: VariablesAccess;

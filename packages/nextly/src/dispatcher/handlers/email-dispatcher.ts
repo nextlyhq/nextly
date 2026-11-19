@@ -760,6 +760,16 @@ const DELIVERY_FILTER_KEYS = [
   "before",
   "limit",
 ] as const;
+const ACTIVITY_FILTER_KEYS = [
+  "status",
+  "template",
+  "providerType",
+  "providerOrigin",
+  "from",
+  "to",
+  "before",
+  "limit",
+] as const;
 const QUEUED_FILTER_KEYS = [
   "state",
   "template",
@@ -797,13 +807,19 @@ const EMAIL_DELIVERY_READS: Record<
     params: Record<string, string>
   ) => Promise<Response>
 > = {
-  findDelivery: async (activity, _query, params) =>
+  findDelivery: async (activity, _search, params) =>
     respondDoc(found(await activity.findDelivery(params.deliveryId ?? ""))),
-  findQueuedEmail: async (activity, _query, params) =>
+  findQueuedEmail: async (activity, _search, params) =>
     respondDoc(found(await activity.findQueuedEmail(params.queuedId ?? ""))),
   listDeliveries: async (activity, query) => {
     const { items, meta } = await activity.listDeliveries(
       queryOf(query, DELIVERY_FILTER_KEYS)
+    );
+    return respondList(items, meta);
+  },
+  listActivity: async (activity, query) => {
+    const { items, meta } = await activity.listActivity(
+      queryOf(query, ACTIVITY_FILTER_KEYS)
     );
     return respondList(items, meta);
   },

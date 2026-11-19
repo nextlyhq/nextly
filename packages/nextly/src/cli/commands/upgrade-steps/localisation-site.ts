@@ -7,7 +7,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import {
-  declaredLaidOutEntities,
+  declaredLaidOutEntitiesAsStored,
   readLayoutScanEntities,
 } from "../../../di/layout-scan-entities";
 import { standardLanguageCode } from "../../../domains/i18n/config/standard-code";
@@ -109,7 +109,10 @@ export async function configuredLanguages(
 export async function siteEntities(
   context: UpgradeStepContext
 ): Promise<LaidOutEntity[]> {
-  const declared = declaredLaidOutEntities(context.site ?? {});
+  const declared = await declaredLaidOutEntitiesAsStored(
+    context.adapter as unknown as DrizzleAdapter,
+    context.site ?? {}
+  );
   return [
     ...declared,
     ...(await readLayoutScanEntities(

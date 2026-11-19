@@ -10,9 +10,68 @@
  * databases in `__tests__/entity-delete-component-data.integration.test.ts`.
  */
 
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { teardownEntityComponentData } from "./teardown-entity-field-group-data";
+import {
+  introspectLiveColumns,
+  liveColumnNames,
+} from "../../schema/pipeline/diff/introspect-live";
+
+import {
+  countEntityComponentRows,
+  teardownEntityComponentData,
+} from "./teardown-entity-field-group-data";
+
+// The catalog the sweep asks whether a table it cannot address has a `_parent_table` column:
+// every table has one, unless named in `withoutParent`, or given its own columns in `columns`.
+// Both of the module's readers answer from it as the real ones do: `introspectLiveColumns` with
+// each table and column as the catalog spells it, `liveColumnNames` lower-cased, a later table
+// taking the place of one whose name folds to the same.
+const catalog = vi.hoisted(() => ({
+  withoutParent: new Set<string>(),
+  columns: new Map<string, string[]>(),
+}));
+vi.mock("../../schema/pipeline/diff/introspect-live", async importOriginal => {
+  const columnsOf = (table: string) =>
+    catalog.columns.get(table) ??
+    (catalog.withoutParent.has(table)
+      ? ["id", "label"]
+      : ["id", "_parent_id", "_parent_table"]);
+  return {
+    ...(await importOriginal<
+      typeof import("../../schema/pipeline/diff/introspect-live")
+    >()),
+    introspectLiveColumns: vi.fn(
+      async (_db: unknown, _dialect: unknown, tables: string[]) => ({
+        tables: tables.map(table => ({
+          name: table,
+          columns: columnsOf(table).map(name => ({ name })),
+        })),
+      })
+    ),
+    liveColumnNames: vi.fn(
+      async (_db: unknown, _dialect: unknown, tables: string[]) =>
+        new Map(
+          tables.map(table => [
+            table.toLowerCase(),
+            new Set(columnsOf(table).map(name => name.toLowerCase())),
+          ])
+        )
+    ),
+  };
+});
+afterEach(() => {
+  catalog.withoutParent.clear();
+  catalog.columns.clear();
+  vi.mocked(liveColumnNames).mockClear();
+  vi.mocked(introspectLiveColumns).mockClear();
+});
+
+/** The catalog reads made, through either reader. */
+const catalogReads = () => [
+  ...vi.mocked(introspectLiveColumns).mock.calls,
+  ...vi.mocked(liveColumnNames).mock.calls,
+];
 
 const UNREGISTERED =
   'Table "comp_ghost" not found in schema registry. Ensure setTableResolver() has been called during boot.';
@@ -28,6 +87,8 @@ function makeAdapter(failingTable: string, error: unknown, rowsForParent = 0) {
     tableExists: vi.fn().mockResolvedValue(false),
     delete: vi.fn().mockResolvedValue(1),
     executeQuery: vi.fn().mockResolvedValue([{ n: rowsForParent }]),
+    // The handle the catalog is read through (`liveColumnNames`, mocked above).
+    getDrizzle: () => ({}),
     select: vi.fn(async (table: string) => {
       if (table === failingTable) throw error;
       return [];
@@ -92,6 +153,7 @@ describe("teardownEntityComponentData failure handling", () => {
           ? [{ n: 2 }]
           : [{ n: 0 }]
       ),
+      getDrizzle: () => ({}),
     };
 
     await expect(
@@ -122,6 +184,75 @@ describe("teardownEntityComponentData failure handling", () => {
         parentTable: "dc_posts",
       })
     ).rejects.toThrow("Connection terminated unexpectedly");
+  });
+
+  it("passes over an unaddressable table with no parent column without counting its rows", async () => {
+    // The count would name a column the table lacks: on PostgreSQL that failure aborts the
+    // delete's transaction, so the catalog is asked instead and no count is sent at all.
+    catalog.withoutParent.add("comp_ghost");
+    const adapter = makeAdapter("comp_ghost", new Error(UNREGISTERED), 4);
+
+    const result = await teardownEntityComponentData({
+      adapter: adapter as never,
+      parentTable: "dc_posts",
+    });
+
+    expect(result.skippedTables).toEqual(["comp_ghost"]);
+    expect(adapter.executeQuery).not.toHaveBeenCalled();
+  });
+
+  it("reads the catalog once for every table it counts", async () => {
+    // One round trip for the columns of every candidate table, not one per table counted.
+    const adapter = makeAdapter("comp_ghost", new Error(UNREGISTERED), 2);
+
+    const owned = await countEntityComponentRows({
+      adapter: adapter as never,
+      parentTable: "dc_posts",
+    });
+
+    expect(owned).toEqual([
+      { table: "comp_hero", rows: 2 },
+      { table: "comp_ghost", rows: 2 },
+    ]);
+    expect(catalogReads()).toHaveLength(1);
+    expect(catalogReads()[0]?.[2]).toEqual(["comp_hero", "comp_ghost"]);
+  });
+
+  it("keeps two tables whose names differ only by case apart, on a server that does", async () => {
+    // PostgreSQL holds `comp_Hero` and `comp_hero` as two tables. Only the first has the parent
+    // column; read folded, the second would take its place, and the first's rows would count 0
+    // where a create over leftover storage asks whether to refuse.
+    catalog.columns.set("comp_Hero", ["id", "_parent_id", "_parent_table"]);
+    catalog.columns.set("comp_hero", ["id", "label"]);
+    const adapter = {
+      ...makeAdapter("comp_none", new Error(UNREGISTERED), 3),
+      listTables: vi.fn().mockResolvedValue(["comp_Hero", "comp_hero"]),
+    };
+
+    const owned = await countEntityComponentRows({
+      adapter: adapter as never,
+      parentTable: "dc_posts",
+    });
+
+    expect(owned).toEqual([{ table: "comp_Hero", rows: 3 }]);
+  });
+
+  it("reads a parent column in another case as the server compares columns", async () => {
+    // PostgreSQL keeps `_PARENT_TABLE` a column of its own, which the count would not name:
+    // such a table holds no instances. MySQL folds column names, so there it is the column.
+    catalog.columns.set("comp_hero", ["id", "_PARENT_TABLE"]);
+    const pg = {
+      ...makeAdapter("comp_none", new Error(UNREGISTERED), 3),
+      listTables: vi.fn().mockResolvedValue(["comp_hero"]),
+    };
+
+    expect(
+      await countEntityComponentRows({
+        adapter: pg as never,
+        parentTable: "dc_posts",
+      })
+    ).toEqual([]);
+    expect(pg.executeQuery).not.toHaveBeenCalled();
   });
 
   it("probes an unresolvable table once, not once per parent", async () => {

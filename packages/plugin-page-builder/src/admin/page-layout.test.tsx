@@ -10,6 +10,7 @@ import {
   render,
   renderHook,
   screen,
+  within,
 } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { useForm, type Control, type FieldValues } from "react-hook-form";
@@ -29,7 +30,11 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   usePluginRoute: vi.fn(),
   useDocumentIdentity: vi.fn(),
   useDocumentLocale: vi.fn(() => null),
+  usePluginClientConfig: () => clientConfig,
 }));
+
+/** The plugin's client config, as the site sets it. */
+let clientConfig: Record<string, unknown> | undefined;
 
 // Each picture stands for the set it draws, by its regions' components: the
 // drawing itself is the pictures module's own test.
@@ -63,6 +68,7 @@ import {
 } from "../layout-choices-contract";
 
 import {
+  NewPageLayoutPicker,
   PageLayoutPicker,
   usePageLayoutAsk,
   usePageLayoutRegions,
@@ -223,6 +229,34 @@ function rows(): { name: string; note: string | null; picture: string }[] {
   }));
 }
 
+describe("on a site that draws its header and footer in code", () => {
+  afterEach(() => {
+    clientConfig = undefined;
+  });
+
+  it("draws no Header & footer menu for a page, nor in the New page dialog", () => {
+    clientConfig = { siteHeaderFooter: "code" };
+    renderPicker();
+    expect(
+      screen.queryByRole("combobox", { name: "Header & footer" })
+    ).toBeNull();
+    render(
+      <Form defaults={{ layout: null, noHeaderFooter: false }}>
+        {control => <NewPageLayoutPicker control={control} />}
+      </Form>
+    );
+    expect(
+      screen.queryByRole("combobox", { name: "Header & footer" })
+    ).toBeNull();
+  });
+
+  it("keeps the page's stored choice as it is", () => {
+    clientConfig = { siteHeaderFooter: "code" };
+    renderPicker({ layout: "set-2", noHeaderFooter: false });
+    expect(values()).toMatchObject({ layout: "set-2", noHeaderFooter: false });
+  });
+});
+
 describe("the page's Layout picker", () => {
   it("is one labelled control, described by the line saying which Layout is in effect", () => {
     renderPicker();
@@ -276,6 +310,14 @@ describe("the page's Layout picker", () => {
       "—",
       "Manage headers & footers ↗(opens in a new tab)",
     ]);
+    // The lines are drawn, but a listbox may own only options and their
+    // groups, so a screen reader must not meet them as children of the list.
+    const lines = list.querySelectorAll('[role="separator"]');
+    expect(lines).toHaveLength(2);
+    for (const line of lines) {
+      expect(line.getAttribute("aria-hidden")).toBe("true");
+    }
+    expect(within(list).queryAllByRole("separator")).toEqual([]);
   });
 
   it("shows the current choice in the trigger with its picture, and checks it in the list", async () => {
@@ -1065,5 +1107,51 @@ describe("what a publish asks about the page's Layout", () => {
       layout: null,
       siteDefault: false,
     });
+  });
+});
+
+describe("the default's empty areas, where the canvas draws its band", () => {
+  function emptyFor(defaults: FieldValues) {
+    return renderHook(() => {
+      const form = useForm({ defaultValues: defaults });
+      return usePageLayoutRegions(form.control, null);
+    }).result.current.empty;
+  }
+  const main = choices.items[0];
+  if (main === undefined) throw new Error("the fixture lost Main");
+
+  it("names the area the default does not fill, for a page that follows it", () => {
+    answering(choices);
+    expect(emptyFor({ layout: null, noHeaderFooter: false })).toEqual([
+      { area: "footer", setId: "main", setTitle: "Main" },
+    ]);
+  });
+
+  it("names both areas of a default that fills neither, though no region is drawn", () => {
+    answering({
+      ...choices,
+      items: [{ ...main, areasFilled: [], regions: [] }],
+    });
+    expect(emptyFor({ layout: null, noHeaderFooter: false })).toEqual([
+      { area: "header", setId: "main", setTitle: "Main" },
+      { area: "footer", setId: "main", setTitle: "Main" },
+    ]);
+  });
+
+  it("names none for a page that picks a set by name, the default's own included, or no header or footer", () => {
+    answering(choices);
+    expect(emptyFor({ layout: "main", noHeaderFooter: false })).toEqual([]);
+    expect(emptyFor({ layout: "landing", noHeaderFooter: false })).toEqual([]);
+    expect(emptyFor({ layout: null, noHeaderFooter: true })).toEqual([]);
+  });
+
+  it("names none while the default is not published, or the site has none", () => {
+    answering({ ...choices, items: [{ ...main, published: false }] });
+    expect(emptyFor({ layout: null, noHeaderFooter: false })).toEqual([]);
+    answering({
+      ...choices,
+      meta: { ...choices.meta, defaultLayout: null },
+    });
+    expect(emptyFor({ layout: null, noHeaderFooter: false })).toEqual([]);
   });
 });

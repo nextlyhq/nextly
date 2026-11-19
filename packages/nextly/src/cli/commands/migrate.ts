@@ -308,7 +308,7 @@ import {
   plainTextPasswordNotice,
 } from "./clear-plaintext-passwords";
 import { runPluginsOnMigrate } from "./migrate-hooks";
-import { migrateStoredData } from "./migrate-stored-data";
+import { storedDataOfRun } from "./stored-data-of-run";
 import { upgradeSiteOf } from "./upgrade-steps/localisation-site";
 import {
   CORE_UPGRADE_LABEL,
@@ -718,8 +718,9 @@ export async function runMigrate(
     );
     // What the run does with data an earlier release stored, and its one
     // backup question, shared with the move below so nobody is asked twice.
-    const storedData = migrateStoredData({
+    const storedData = storedDataOfRun({
       adapter: adapter as unknown as DrizzleAdapter,
+      command: "nextly migrate",
       logger,
       backupConfirmed: options.backupConfirmed === true,
       lockTtlSeconds: configResult.config.db.migrateLockTtlSeconds,
@@ -812,7 +813,7 @@ export async function runMigrate(
     // Data an earlier release stored is brought up to date once the
     // migrations have applied, and only with a backup confirmed: work whose
     // backup nobody confirmed is refused here, before anything changes.
-    await storedData.confirmBeforeMigrations(options.step).catch(fail);
+    await storedData.confirmBeforeSchemaChanges(options.step).catch(fail);
 
     // The retired-table cleanup has flags of its own: removing those tables
     // and losing rows still in them are each a separate decision from
@@ -1025,7 +1026,7 @@ export async function runMigrate(
         // schema lock: with every migration applied, since each step reads
         // the tables as this release keeps them, and after the permissions
         // the run seeded, which a role's conversion gives.
-        await storedData.takeAfterMigrations();
+        await storedData.takeAfterSchemaChanges();
         // The plugins' own deploy work, last, once every step above has
         // left the schema in step (`migrate-hooks`). Not where migrations
         // are still pending, as none of the steps above are.
@@ -3188,6 +3189,11 @@ export async function migrateCore(
         warn: m => deps.logger.warn(m),
         info: m => deps.logger.info(m),
       },
+      // The run's own bounds, its flags among them, for a busy SQLite database met while the
+      // lock is taken.
+      ...(deps.busyTable === undefined
+        ? {}
+        : { busyBounds: deps.busyTable.bounds }),
     }
   );
 

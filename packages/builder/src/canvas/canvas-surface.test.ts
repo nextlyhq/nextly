@@ -260,10 +260,11 @@ describe("the canvas surface is the site's, not the admin's", () => {
     const naming = [
       ...CANVAS_FRAME_SHEET.matchAll(/([^{}]+)\{([^{}]*)\}/g),
     ].filter(([, , body]) =>
-      // The empty body's room is a length the overlay measures, not a
-      // colour: it paints nothing. A hidden block's edge is the page's own
+      // The empty body's room, and a selected Accordion's room for "+ Add a
+      // question", are lengths the overlay measures, not colours: they paint
+      // nothing. A hidden block's edge is the page's own
       // Canvas and CanvasText, set by the sheet itself.
-      /var\(--nx-(?!canvas-site-|canvas-zoom|canvas-start-room|canvas-hidden-)/.test(
+      /var\(--nx-(?!canvas-site-|canvas-zoom|canvas-start-room|canvas-question-room|canvas-hidden-)/.test(
         body ?? ""
       )
     );
