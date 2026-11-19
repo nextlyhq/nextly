@@ -1005,6 +1005,68 @@ describe.each(getConfiguredTestDialects())(
         }
       }, 300_000);
 
+      // On MySQL a save that stops part way is settled to what applied: its stopped file is
+      // replaced by one for the applied changes. A settle overtaken once that replacement was put
+      // in place, before its generation named it, leaves the replacement and does not write the
+      // stopped file back beside it: the folder holds one migration of the save, not two.
+      it.runIf(dialect === "mysql")(
+        "a settle overtaken once its replacement was put in place does not put the stopped file back beside it",
+        async () => {
+          const restoreBounds = setWriterHoldBounds({
+            waitMs: 30_000,
+            leaseSeconds: 1,
+            renewMs: 600_000,
+          });
+          try {
+            const t = await boot();
+            await path.create([text("heading")]);
+            const sqlBefore = filesBelow(join(basePath, HISTORY)).filter(f =>
+              f.endsWith(".sql")
+            );
+            const refused = refuseAdding(t, "beta");
+            // The save's own file is the first migration file put in place; the settle's
+            // replacement, the second.
+            let placed = 0;
+            const stalled = overtakeAt(point => {
+              if (
+                !point.startsWith(`renamed:${join(basePath, HISTORY)}`) ||
+                !point.endsWith(".sql")
+              ) {
+                return false;
+              }
+              placed += 1;
+              return placed === 2;
+            });
+
+            const answer = await path
+              .save(t, [text("heading"), text("alpha"), text("beta")])
+              .catch((error: unknown) => error);
+            kill.stall = undefined;
+            expect(refused(), "no statement adding `beta` was met").toBe(1);
+            expect(
+              stalled(),
+              "the settle never stalled on its replacement"
+            ).toBe(true);
+            expect(
+              answer instanceof Response
+                ? answer.ok
+                : !(answer instanceof Error),
+              "the save was not refused"
+            ).toBe(false);
+            expect(
+              filesBelow(join(basePath, HISTORY)).filter(
+                f => f.endsWith(".sql") && !sqlBefore.includes(f)
+              ),
+              "the save's migration files"
+            ).toHaveLength(1);
+            expect(await recordRow(t, path), "the record's row").toBeDefined();
+          } finally {
+            restoreBounds();
+          }
+        },
+        300_000
+      );
+
       it("a save overtaken before it put any file in place withdraws its record, with nothing written", async () => {
         const restoreBounds = setWriterHoldBounds({
           waitMs: 30_000,
