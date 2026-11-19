@@ -181,6 +181,33 @@ describe("partWayPush", () => {
     );
   });
 
+  // A translated save's translations-table file has no snapshot and comes after the one that
+  // does, so the steps check the file the writer names, not the last.
+  it("checks the kept file with a snapshot, not a snapshotless one after it", async () => {
+    const pushed = partWayPush(onLanded => {
+      onLanded();
+      return Promise.reject(new Error("refused"));
+    });
+    await pushed.appliedBy();
+
+    const thrown = (() => {
+      try {
+        pushed.throwIfFailed(
+          ["0002_main.sql", "0003_locales.sql"],
+          "0002_main.sql"
+        );
+      } catch (error) {
+        return error as NextlyError;
+      }
+    })();
+    expect(thrown?.publicMessage).toContain(
+      "record the files in order: " +
+        "`nextly migrate:resolve --applied 0002_main.sql`, then " +
+        "`nextly migrate:resolve --applied 0003_locales.sql --skip-verify`; " +
+        "the one without `--skip-verify` is checked against the database."
+    );
+  });
+
   it("names every kept file, and never a driver's own text", async () => {
     const pushed = partWayPush(onLanded => {
       onLanded();
