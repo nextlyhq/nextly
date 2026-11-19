@@ -130,7 +130,10 @@ describe("rowNotes", () => {
     );
     expect(notes[0]).toContain("manage-settings");
     expect(notes[0]).toContain("gives no access until it is converted");
-    expect(notes[0]).toContain("Run nextly upgrade to convert this role");
+    expect(notes[0]).toContain("Run nextly migrate to convert this role");
+    expect(notes[0]).toContain("nextly db:sync in development");
+    // The command that once converted it moves the packages now.
+    expect(notes[0]).not.toContain("nextly upgrade");
     expect(notes[0]).toContain("saving this role converts it");
   });
 
@@ -138,7 +141,8 @@ describe("rowNotes", () => {
     const notes = rowNotes(row("settings"), ["manage-settings"], []);
     expect(notes[0]).toContain("from a base role");
     expect(notes[0]).toContain("gives no access until it is converted");
-    expect(notes[0]).toContain("nextly upgrade");
+    expect(notes[0]).toContain("Run nextly migrate");
+    expect(notes[0]).not.toContain("nextly upgrade");
     expect(notes[0]).not.toContain("saving this role converts it");
   });
 
