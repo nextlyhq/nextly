@@ -5,20 +5,31 @@
  *
  * - MySQL commits each schema statement as it runs: an apply whose first statement fails keeps
  *   none, and says so, with the table as it was; one whose second fails keeps the first.
+ * - SQLite, on an in-memory database, keeps each statement as it runs, the same way.
  * - PostgreSQL's apply runs in one transaction that a failure rolls back whole, so it says nothing.
  *
  * The apply adds two columns to a table it made, with nothing before the executor's statements that
- * runs one (no key lifted, no pre-cleanup). The executor fails the chosen statement and runs each
- * before it, as the database would. And pre-cleanup's statements are counted as they run: on MySQL,
+ * runs one (no key lifted, no pre-cleanup). The executor sends text the database refuses in place
+ * of the chosen statement, so the failure is the database's own refusal, and runs each before it. And pre-cleanup's statements are counted as they run: on MySQL,
  * one a trigger refuses, its first, leaves none kept. (SQLite refuses, before anything runs, to
  * rebuild a table with triggers its schema does not track, so a trigger cannot reach its
  * pre-cleanup; its statements are recorded by the same code.)
  */
+import Database from "better-sqlite3";
+import { drizzle as drizzleSqlite } from "drizzle-orm/better-sqlite3";
 import { drizzle as drizzleMysql } from "drizzle-orm/mysql2";
 import { drizzle as drizzlePg } from "drizzle-orm/node-postgres";
 import { createPool, type Pool as MysqlPool } from "mysql2";
 import { Pool } from "pg";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+} from "vitest";
 
 import { makeTestContext } from "../../../../database/__tests__/integration/helpers/test-db";
 import {
@@ -64,11 +75,11 @@ function single(tableName: string, fields: readonly string[]): DesiredSchema {
 }
 
 /**
- * A pipeline whose executor fails the `failAt`th statement it is handed (from 1, counting across
- * calls), running each before it; undefined runs every statement.
+ * A pipeline whose executor has the database refuse the `failAt`th statement it is handed (from 1,
+ * counting across calls), running each before it; undefined runs every statement.
  */
 function pipelineFailingAt(
-  dialect: "postgresql" | "mysql",
+  dialect: "postgresql" | "mysql" | "sqlite",
   db: unknown,
   failAt?: number
 ): { pipeline: PushSchemaPipeline; sent: () => number } {
@@ -82,10 +93,13 @@ function pipelineFailingAt(
     executeStatements: async (tx: unknown, statements: string[]) => {
       for (const statement of statements) {
         sent += 1;
-        if (failAt !== undefined && sent >= failAt) {
-          throw new Error(`statement ${String(failAt)} failed`);
-        }
-        await real.executeStatements(tx, [statement]);
+        // Text no database parses, sent in the statement's place: the database's own refusal, which
+        // says the statement did not run, rather than a failure whose outcome is unknown.
+        await real.executeStatements(tx, [
+          failAt !== undefined && sent >= failAt
+            ? "NOT A STATEMENT"
+            : statement,
+        ]);
       }
     },
   };
@@ -454,6 +468,74 @@ describe.skipIf(!MYSQL_URL)("a failed apply's kept statements (mysql)", () => {
     } finally {
       await drop();
     }
+  });
+});
+
+describe("a failed apply's kept statements (sqlite)", () => {
+  const tableName = "kept_page";
+  let sqlite: Database.Database;
+  let db: ReturnType<typeof drizzleSqlite>;
+
+  const apply = (desired: DesiredSchema, failAt?: number) => {
+    const made = pipelineFailingAt("sqlite", db, failAt);
+    return made.pipeline
+      .apply({
+        desired,
+        db,
+        dialect: "sqlite",
+        source: "ui",
+        promptChannel: "browser",
+        uiTargetSlug: "page",
+        uiTargetKind: "single",
+      })
+      .then(result => ({ result, sent: made.sent() }));
+  };
+
+  const columns = async () =>
+    (await introspectLiveSnapshot(db, "sqlite", [tableName])).tables
+      .find(table => table.name === tableName)
+      ?.columns.map(column => column.name)
+      .sort();
+
+  beforeEach(async () => {
+    sqlite = new Database(":memory:");
+    db = drizzleSqlite({ client: sqlite });
+    const made = await apply(single(tableName, ["title"]));
+    expect(made.result.success, JSON.stringify(made.result.error)).toBe(true);
+  });
+
+  afterEach(() => {
+    sqlite.close();
+  });
+
+  it("keeps none where the first statement fails, and says so, with the table as it was", async () => {
+    const before = await columns();
+
+    const { result, sent } = await apply(
+      single(tableName, ["title", "summary", "body"]),
+      1
+    );
+
+    // Positive control: the apply reached its first statement, and failed there.
+    expect(sent).toBe(1);
+    expect(result.success).toBe(false);
+    expect(result.statementsKept).toBe(0);
+    expect(await columns()).toEqual(before);
+  });
+
+  it("keeps the first where the second fails", async () => {
+    const before = await columns();
+
+    const { result, sent } = await apply(
+      single(tableName, ["title", "summary", "body"]),
+      2
+    );
+
+    expect(sent).toBe(2);
+    expect(result.success).toBe(false);
+    expect(result.statementsKept).toBe(1);
+    // The statement that stayed changed the table.
+    expect(await columns()).not.toEqual(before);
   });
 });
 
