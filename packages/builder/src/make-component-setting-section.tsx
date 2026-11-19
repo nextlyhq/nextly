@@ -19,7 +19,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@nextlyhq/ui";
 import { Check, Database } from "lucide-react";
 import * as React from "react";
 
-import { BindingPicker, pickOp } from "./binding-picker";
+import { BindingPicker, pickOp } from "./bindings/binding-picker";
 import type { ContentServices } from "./content-controls";
 import {
   settingCandidates,

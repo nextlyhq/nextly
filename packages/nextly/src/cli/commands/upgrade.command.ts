@@ -4,62 +4,32 @@
  */
 import { Option, type Command } from "commander";
 
-import { ACCEPT_DATA_LOSS_HELP } from "../../domains/schema/migrate/data-loss-consent-help";
 import { withDryRun } from "../dry-run";
 import { lazyAction } from "../lazy-action";
+
+/** A flag of the database work the command used to do: accepted, hidden, and no longer read. */
+const retired = (flags: string) =>
+  new Option(
+    flags,
+    "No longer does anything: `nextly migrate` does the work it belonged to"
+  ).hideHelp();
 
 export function registerUpgradeCommand(program: Command): void {
   // `--dry-run` carries the one meaning and help line it has everywhere.
   withDryRun(
     program
-      .command("upgrade")
+      .command("upgrade [version]")
       .description(
-        "Reconcile drifted core schema with --reconcile-core. Its other database work is now part of `nextly migrate`"
+        "Move every Nextly package of the project to one release: the one given, or the newest of the installed release's channel"
       )
   )
-    // They confirmed the backup for the work `nextly migrate` now does: still
-    // accepted, so a run with one ends naming that command rather than as an
-    // unknown option, and kept out of the help.
-    .addOption(
-      new Option(
-        "--confirm-backed-up",
-        "No longer does anything: `nextly migrate` does the work it confirmed"
-      )
-        .default(false)
-        .hideHelp()
-    )
-    .addOption(
-      new Option(
-        "-f, --force",
-        "No longer does anything: `nextly migrate` does the work it confirmed"
-      )
-        .default(false)
-        .hideHelp()
-    )
-    // It named another table for the migration records, which `nextly
-    // migrate` now moves: still accepted, answered with a notice, and kept
-    // out of the help.
-    .addOption(
-      new Option(
-        "--target-table-name <name>",
-        "No longer does anything: `nextly migrate` moves the migration records"
-      ).hideHelp()
-    )
-    .option(
-      "--reconcile-core",
-      "Reconcile drifted core schema, listing what it deletes and asking (or refusing without consent). Use only if `nextly migrate` reports core drift.",
-      false
-    )
-    // What `--reconcile-core` deletes (a retired core column such as
-    // `access_rules`) needs the one consent every deleting command takes.
-    .option("--accept-data-loss [targets]", ACCEPT_DATA_LOSS_HELP)
-    // Both upgrade paths take the shared migrate lock, and the lock-busy
-    // error tells operators to re-run with this flag — so every lock-taking
-    // command must register it. Same escape hatch as `nextly migrate`.
-    .option(
-      "--force-unlock",
-      "Clear a stale migrate lock before running",
-      false
-    )
+    // Each still parses, so a run with one ends naming `nextly migrate`
+    // rather than as an unknown option.
+    .addOption(retired("--confirm-backed-up"))
+    .addOption(retired("-f, --force"))
+    .addOption(retired("--target-table-name <name>"))
+    .addOption(retired("--reconcile-core"))
+    .addOption(retired("--accept-data-loss [targets]"))
+    .addOption(retired("--force-unlock"))
     .action(lazyAction(async () => (await import("./upgrade")).upgradeAction));
 }

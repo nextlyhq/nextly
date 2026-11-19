@@ -1202,10 +1202,86 @@ const COLLECTIONS_METHODS: Record<
             // And again once a file's transaction it joined commits (`afterEnclosingCommit`).
             await afterEnclosingCommit(adapter);
           };
+          // After a schema apply (rename, add, drop) two independent in-memory
+          // caches hold Drizzle table objects that are now stale:
+          //
+          //   1. CollectionFileManager.schemaRegistry: used by query-service
+          //      SELECT / JOIN builders (loadDynamicSchema path).
+          //   2. SchemaRegistry.dynamicSchemas: used by adapter.insert /
+          //      update / delete / select (getTableObject path).
+          //
+          // Both must be refreshed with the same freshly-generated table built
+          // from the apply payload's `fields`. Replacing in-place (rather than
+          // invalidate + lazy-rebuild) avoids the race where a concurrent
+          // request could arrive between the invalidation and the DB write of
+          // the new `dynamic_collections.fields`, picking up the stale schema.
+          const refreshRuntime = (stored: FieldDefinition[]): void => {
+            try {
+              // i18n: thread `localized`/`status` so the refreshed MAIN runtime table
+              // omits translatable columns (kept in lockstep with the desired snapshot
+              // above), then register the companion `_locales` runtime table too so
+              // per-language reads/writes resolve in THIS process without a restart.
+              const { table: freshTable } = generateRuntimeSchema(
+                tableName,
+                stored,
+                dialect,
+                {
+                  localized: isStoredPerLanguage,
+                  status: collection.status === true,
+                }
+              );
+              getCollectionsHandlerFromDI()?.refreshCollectionSchema(
+                tableName,
+                freshTable
+              );
+              getSchemaRegistryFromDI()?.registerDynamicSchema(
+                tableName,
+                freshTable
+              );
+              if (isStoredPerLanguage) {
+                const companion = buildCompanionRuntimeTable({
+                  slug: p.collectionName,
+                  tableName,
+                  fields: fields as FieldDefinition[],
+                  dialect,
+                  localized: true,
+                  // As saved, not as the record read before the save: a save that turns
+                  // translation on gives a Draft/Published collection its per-language `_status`.
+                  status: publishesPerLanguage({
+                    localized: isLocalized,
+                    status: (collection as { status?: unknown }).status,
+                  }),
+                });
+                if (companion) {
+                  getCollectionsHandlerFromDI()?.refreshCollectionSchema(
+                    companion.companionTableName,
+                    companion.table
+                  );
+                  getSchemaRegistryFromDI()?.registerDynamicSchema(
+                    companion.companionTableName,
+                    companion.table
+                  );
+                }
+              }
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              consoleLogger.warn(
+                `[applySchemaChanges] In-memory schema refresh failed for ` +
+                  `'${p.collectionName}': ${msg}. Entry queries may reference ` +
+                  `old column names until next server restart.`
+              );
+            }
+          };
           const written = await saveThroughWriter({
             // Where the save runs its file, the row is written in the file's own transaction, so a
             // failed write leaves the save as it was and is answered as the failure it is.
             registry: storedFields => writeRow(storedFields, false),
+            // A file stopped part way and settled to what applied: this process's tables and the
+            // admin's schema version follow the fields it recorded, as after an apply.
+            settled: storedFields => {
+              refreshRuntime(storedFields);
+              bumpSchemaVersion();
+            },
             appliedBy: push.appliedBy,
             // Whether the push applies the change in development, the writer recording its
             // migration once the push has run: a translated collection, or one turning
@@ -1317,74 +1393,7 @@ const COLLECTIONS_METHODS: Record<
             );
           }
 
-          // After a schema apply (rename, add, drop) two independent in-memory
-          // caches hold Drizzle table objects that are now stale:
-          //
-          //   1. CollectionFileManager.schemaRegistry: used by query-service
-          //      SELECT / JOIN builders (loadDynamicSchema path).
-          //   2. SchemaRegistry.dynamicSchemas: used by adapter.insert /
-          //      update / delete / select (getTableObject path).
-          //
-          // Both must be refreshed with the same freshly-generated table built
-          // from the apply payload's `fields`. Replacing in-place (rather than
-          // invalidate + lazy-rebuild) avoids the race where a concurrent
-          // request could arrive between the invalidation and the DB write of
-          // the new `dynamic_collections.fields`, picking up the stale schema.
-          try {
-            // i18n: thread `localized`/`status` so the refreshed MAIN runtime table
-            // omits translatable columns (kept in lockstep with the desired snapshot
-            // above), then register the companion `_locales` runtime table too so
-            // per-language reads/writes resolve in THIS process without a restart.
-            const { table: freshTable } = generateRuntimeSchema(
-              tableName,
-              storedFields,
-              dialect,
-              {
-                localized: isStoredPerLanguage,
-                status: collection.status === true,
-              }
-            );
-            getCollectionsHandlerFromDI()?.refreshCollectionSchema(
-              tableName,
-              freshTable
-            );
-            getSchemaRegistryFromDI()?.registerDynamicSchema(
-              tableName,
-              freshTable
-            );
-            if (isStoredPerLanguage) {
-              const companion = buildCompanionRuntimeTable({
-                slug: p.collectionName,
-                tableName,
-                fields: fields as FieldDefinition[],
-                dialect,
-                localized: true,
-                // As saved, not as the record read before the save: a save that turns
-                // translation on gives a Draft/Published collection its per-language `_status`.
-                status: publishesPerLanguage({
-                  localized: isLocalized,
-                  status: (collection as { status?: unknown }).status,
-                }),
-              });
-              if (companion) {
-                getCollectionsHandlerFromDI()?.refreshCollectionSchema(
-                  companion.companionTableName,
-                  companion.table
-                );
-                getSchemaRegistryFromDI()?.registerDynamicSchema(
-                  companion.companionTableName,
-                  companion.table
-                );
-              }
-            }
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            consoleLogger.warn(
-              `[applySchemaChanges] In-memory schema refresh failed for ` +
-                `'${p.collectionName}': ${msg}. Entry queries may reference ` +
-                `old column names until next server restart.`
-            );
-          }
+          refreshRuntime(storedFields);
 
           // The dispatcher fires bumpSchemaVersion directly after a
           // successful pipeline apply. The bump only matters for UI-first
@@ -2088,6 +2097,11 @@ async function saveThroughWriter(
      * writes it once this returns.
      */
     registry?: (fields: FieldDefinition[]) => Promise<void>;
+    /**
+     * After `registry`, for a file that stopped part way and was settled to what applied: what the
+     * caller does after an apply, given the fields the row recorded.
+     */
+    settled?: (fields: FieldDefinition[]) => void;
   }
 ): Promise<
   | {
@@ -2108,9 +2122,10 @@ async function saveThroughWriter(
     (change.pushWhen === undefined || (await change.pushWhen()));
   // Loaded here, where a save runs: the writer brings the migration generator
   // and runner, which a request that writes no field change never needs.
-  const { writeCollectionSave } = await import(
-    "../../domains/schema/builder-save/collection-save"
-  );
+  const [{ writeCollectionSave }, { appliedFieldsOf }] = await Promise.all([
+    import("../../domains/schema/builder-save/collection-save"),
+    import("../../domains/schema/builder-save/stopped-save"),
+  ]);
   const registry = change.registry;
   const inFile = prepared.deps.applies && !viaPush && registry !== undefined;
   const result = await writeCollectionSave(
@@ -2119,7 +2134,20 @@ async function saveThroughWriter(
     viaPush && change.appliedBy !== undefined
       ? { appliedBy: change.appliedBy }
       : inFile
-        ? { inLastTransaction: () => registry(prepared.fields) }
+        ? {
+            inLastTransaction: () => registry(prepared.fields),
+            // A file that stops part way is settled to what of it applied: the row then records
+            // the fields as far as the database holds them.
+            onSettled: async report => {
+              const applied = appliedFieldsOf(
+                change.collection.fields ?? [],
+                prepared.fields,
+                report
+              );
+              await registry(applied);
+              change.settled?.(applied);
+            },
+          }
         : {}
   );
   return {

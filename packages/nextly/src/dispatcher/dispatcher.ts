@@ -25,7 +25,11 @@ import { runWithRequestScope } from "../hooks/request-scope";
 import { ServiceContainer } from "../services";
 import type { ServiceResult } from "../types/auth";
 
-import { dispatchAuth, dispatchRbac } from "./handlers/auth-dispatcher";
+import {
+  dispatchAuth,
+  dispatchIdentities,
+  dispatchRbac,
+} from "./handlers/auth-dispatcher";
 import { dispatchCollections } from "./handlers/collection-dispatcher";
 import { dispatchComponents } from "./handlers/component-dispatcher";
 import {
@@ -85,6 +89,7 @@ export class ServiceDispatcher {
     "pluginSettings",
     "rbac",
     "auth",
+    "identities",
     "collections",
     "singles",
     "field-groups",
@@ -277,6 +282,8 @@ export class ServiceDispatcher {
         );
       case "auth":
         return dispatchAuth(this.container, method, p, body);
+      case "identities":
+        return dispatchIdentities(this.container, method, p, body);
       case "collections":
         return dispatchCollections(
           this.container,

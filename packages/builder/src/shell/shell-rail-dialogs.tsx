@@ -8,6 +8,7 @@
  */
 import * as React from "react";
 
+import { useLatestCallback } from "../latest-callback";
 import { isLeftPanel, topologyKey, type LeftPanel } from "../shell-state";
 
 import {
@@ -53,50 +54,93 @@ export function panelAvailability(
     (availablePanels === undefined || availablePanels.includes(panel));
 }
 
-/** Opens a rail dialog from the item pressed, which focus returns to. */
-function opening(
+/**
+ * Opens a rail dialog from the item pressed, which focus returns to. One
+ * function for the dialog's life, so the memoised rail is handed the same.
+ */
+function useOpening(
   dialog: ReturnType<typeof useRailDialog>
 ): (button: HTMLElement) => void {
-  return button => {
-    dialog.opener.current = button;
-    dialog.setOpen(true);
-  };
+  const { opener, setOpen } = dialog;
+  return React.useCallback(
+    (button: HTMLElement) => {
+      opener.current = button;
+      setOpen(true);
+    },
+    [opener, setOpen]
+  );
 }
 
-/**
- * The rail's dialog items: Help always, and Settings where the host draws a
- * Settings dialog.
- */
-function railDialogItems(
-  help: ReturnType<typeof useRailDialog>,
-  settings: ReturnType<typeof useRailDialog>,
-  renderSettings: BuilderShellProps["renderSettings"]
-): Pick<EditorRailProps, "onHelp" | "onSettings" | "settingsOpen"> {
-  return {
-    onHelp: opening(help),
-    ...(renderSettings === undefined
-      ? {}
-      : { settingsOpen: settings.open, onSettings: opening(settings) }),
-  };
-}
+/** What the shell hands the rail and its dialogs. */
+type RailAndDialogsProps = Pick<
+  EditorRailProps,
+  "openPanel" | "isAvailable" | "onSelect" | "railRef"
+> & {
+  active: boolean;
+  renderSettings: BuilderShellProps["renderSettings"];
+  /** Whether a panel key pressed now is this rail's to answer. */
+  claimsKeys: () => boolean;
+  panelKeys: Pick<PanelKeysSetting, "on" | "onChange">;
+};
 
 /**
  * The rail, with the dialogs its bottom items open: Help, and Settings where
  * the host draws one. They own their open state here, beside the items that
  * open them.
+ *
+ * Drawn again only when something they show changes. The shell renders again
+ * for every change of what it holds, a selection among them, and hands this a
+ * new rail ref, a new panel-key check and a new setting each time; those
+ * functions are read when called (the rail's keys are registered as it draws,
+ * so a key pressed after a render it skipped still acts on the newest
+ * preferences), and the setting is handed on as its value, so the memoised
+ * rail is handed the same props while only the selection moves. Nothing here
+ * shows the selected block. `isAvailable` is read while drawing, so the shell
+ * keeps it as one function for as long as the host's panels are the same.
  */
-export function RailAndDialogs({
+export function RailAndDialogs(props: RailAndDialogsProps): React.JSX.Element {
+  const railRef = useLatestCallback(props.railRef);
+  const onSelect = useLatestCallback(props.onSelect);
+  const claimsKeys = useLatestCallback(props.claimsKeys);
+  const onKeysChange = useLatestCallback(props.panelKeys.onChange);
+  return (
+    <KeptRailAndDialogs
+      active={props.active}
+      renderSettings={props.renderSettings}
+      openPanel={props.openPanel}
+      isAvailable={props.isAvailable}
+      onSelect={onSelect}
+      railRef={railRef}
+      claimsKeys={claimsKeys}
+      keysOn={props.panelKeys.on}
+      onKeysChange={onKeysChange}
+    />
+  );
+}
+
+/** Help, memoised: drawn again only as it opens or closes or its keys change. */
+const KeptHelpDialog = React.memo(HelpDialog);
+
+/**
+ * The rail, memoised: drawn again only for what it shows (the panel open,
+ * Settings pressed, the keys on or off), not when Settings or Help beside it
+ * is drawn again.
+ */
+const KeptEditorRail = React.memo(EditorRail);
+
+/**
+ * The rail and its dialogs, memoised, so they draw again only for a prop that
+ * changed: a panel opened, the panel keys turned off, a new Settings.
+ */
+const KeptRailAndDialogs = React.memo(function RailAndDialogsKept({
   active,
   renderSettings,
-  panelKeys,
+  keysOn,
+  onKeysChange,
   ...rail
-}: Omit<
-  EditorRailProps,
-  "onHelp" | "onSettings" | "settingsOpen" | "keysOn"
-> & {
-  active: boolean;
-  renderSettings: BuilderShellProps["renderSettings"];
-  panelKeys: Pick<PanelKeysSetting, "on" | "onChange">;
+}: Omit<RailAndDialogsProps, "panelKeys"> & {
+  keysOn: boolean;
+  onKeysChange: (on: boolean) => void;
 }): React.JSX.Element {
   // This editor's own panel-key layer, so Help can find its keys among a
   // second editor's on the same page.
@@ -108,45 +152,78 @@ export function RailAndDialogs({
     settings.setOpen,
     active
   );
+  const openHelp = useOpening(help);
+  const openSettings = useOpening(settings);
+  const { opener: helpOpener } = help;
+  const returnHelpFocus = React.useCallback(
+    () => helpOpener.current,
+    [helpOpener]
+  );
+  // A new setting only when what Help shows of the keys changes, so the rail
+  // drawing again (a panel opened, Settings pressed) leaves Help alone.
+  const { isAvailable } = rail;
+  const panelKeys = React.useMemo(
+    () => ({
+      on: keysOn,
+      onChange: onKeysChange,
+      shortcuts: panelKeyShortcuts(isAvailable, keysLayer),
+      layer: keysLayer,
+      family: PANEL_KEYS_LAYER,
+    }),
+    [keysOn, onKeysChange, isAvailable, keysLayer]
+  );
   return (
     <>
-      <EditorRail
+      <KeptEditorRail
         {...rail}
-        keysOn={panelKeys.on}
+        keysOn={keysOn}
         keysLayer={keysLayer}
-        {...railDialogItems(help, settings, renderSettings)}
+        // Help always, and Settings where the host draws a Settings dialog.
+        onHelp={openHelp}
+        {...(renderSettings === undefined
+          ? {}
+          : { settingsOpen: settings.open, onSettings: openSettings })}
       />
-      <HelpDialog
+      <KeptHelpDialog
         open={help.open}
         onOpenChange={help.setOpen}
-        returnFocus={() => help.opener.current}
-        panelKeys={{
-          ...panelKeys,
-          shortcuts: panelKeyShortcuts(rail.isAvailable, keysLayer),
-          layer: keysLayer,
-          family: PANEL_KEYS_LAYER,
-        }}
+        returnFocus={returnHelpFocus}
+        panelKeys={panelKeys}
       />
-      <HostSettings render={renderSettings} dialog={settings} />
+      <HostSettings
+        render={renderSettings}
+        open={settings.open}
+        onOpenChange={settings.setOpen}
+        opener={settings.opener}
+      />
     </>
   );
-}
+});
 
-/** The host's Settings dialog, handed whether it is open, when it draws one. */
-function HostSettings({
+/**
+ * The host's Settings dialog, handed whether it is open, when it draws one.
+ * Memoised, so the host's `renderSettings` is called again only when it is a
+ * new function or the dialog opens or closes: a host that keeps it as one
+ * function while what Settings shows is unchanged has none of it drawn again.
+ */
+const HostSettings = React.memo(function HostSettings({
   render,
-  dialog,
+  open,
+  onOpenChange,
+  opener,
 }: {
   render: BuilderShellProps["renderSettings"];
-  dialog: ReturnType<typeof useRailDialog>;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  opener: React.RefObject<HTMLElement | null>;
 }): React.ReactNode {
   if (render === undefined) return null;
   return render({
-    open: dialog.open,
-    onOpenChange: dialog.setOpen,
-    returnFocus: () => dialog.opener.current,
+    open,
+    onOpenChange,
+    returnFocus: () => opener.current,
   });
-}
+});
 
 /**
  * A rail dialog's open state (Help's, Settings'), and the control focus

@@ -161,13 +161,16 @@ type ProofArgs = Parameters<typeof proveStatements>[0];
 function liveStatusOf(
   statement: string,
   later: readonly string[],
-  { dialect, sides, live }: ProofArgs
+  args: ProofArgs
 ): StatementProof["status"] | undefined {
+  const { dialect, sides, live } = args;
+  // The whole proof's arguments go on to the counter check, which takes them
+  // as one value, rather than a copy that would leave one of them out.
   if (
     !inlineConstraintsUsable(statement, dialect, sides, live.schema) ||
     !generatedKeysAssigned(statement, later, dialect, live.schema) ||
     !namedObjectsStand(statement, later, dialect, live.schema) ||
-    !carriedCounterCovers(statement, later, { dialect, sides, live })
+    !carriedCounterCovers(statement, later, args)
   ) {
     return "not-done";
   }

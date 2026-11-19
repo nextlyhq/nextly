@@ -14,7 +14,7 @@ import type {
 } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
-import type { BindingServices } from "./binding-services";
+import type { BindingServices } from "./bindings/binding-services";
 import type { InlineRichTextEditorLoader } from "./canvas/use-inline-rich-text";
 import type { EditableProp } from "./inspector";
 import type { QueryField } from "./list-query-model";
