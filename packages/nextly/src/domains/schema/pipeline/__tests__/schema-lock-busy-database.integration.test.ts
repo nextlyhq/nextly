@@ -319,4 +319,195 @@ describe("taking the schema lock on a busy database (sqlite)", () => {
       });
     }, 30_000);
   });
+
+  describe("where another Nextly run holds the lock and the database", () => {
+    /**
+     * A second run that holds the schema lock and, inside its work, a write of its own left
+     * open: a migration part-way through its transaction. Ends when `free()` is called.
+     */
+    async function runHolding(): Promise<void> {
+      let held: () => void = () => {};
+      const isHeld = new Promise<void>(resolve => {
+        held = resolve;
+      });
+      const freed = new Promise<void>(resolve => {
+        free = resolve;
+      });
+      const running = withSchemaLock(
+        {
+          adapter: holderAdapter,
+          command: "nextly upgrade",
+          whenHeld: "refuse",
+        },
+        () =>
+          holderAdapter.transaction(async tx => {
+            await tx.queryStatement(
+              sql.raw("INSERT INTO slb_hold (id) VALUES (1) RETURNING id")
+            );
+            held();
+            await freed;
+          })
+      );
+      holding = running;
+      // The holder's own failure ends the case at once, with its reason.
+      await Promise.race([
+        isHeld,
+        running.then(
+          () => undefined,
+          (error: unknown) => {
+            throw error;
+          }
+        ),
+      ]);
+    }
+
+    it("refuses a command with the held lock's refusal, naming the run that holds it", async () => {
+      await runHolding();
+
+      const error: unknown = await withSchemaLock(
+        {
+          adapter,
+          command: "nextly migrate",
+          whenHeld: "wait",
+          waitMs: 1_500,
+          pollMs: 200,
+          logger,
+        },
+        async () => "ran"
+      ).then(
+        () => undefined,
+        (e: unknown) => e
+      );
+
+      expect(NextlyError.is(error)).toBe(true);
+      const refusal = error as NextlyError;
+      expect(refusal.code).toBe("NEXTLY_MIGRATE_LOCK_BUSY");
+      expect(refusal.publicMessage).toContain("nextly upgrade");
+      expect(refusal.logContext).toMatchObject({
+        holder: { kind: "schema", command: "nextly upgrade" },
+      });
+    }, 30_000);
+
+    it("refuses a save at once, telling the editor a migration is running", async () => {
+      await runHolding();
+      const startedAt = Date.now();
+
+      const error: unknown = await withSchemaLock(
+        {
+          adapter,
+          command: "Schema Builder: collection update",
+          whenHeld: "refuse",
+          refusal: "editor",
+          logger,
+        },
+        async () => "ran"
+      ).then(
+        () => undefined,
+        (e: unknown) => e
+      );
+
+      expect(NextlyError.is(error)).toBe(true);
+      expect((error as NextlyError).publicMessage).toContain(
+        "A migration is running on this database"
+      );
+      // No wait: the connection's own busy timeout was not sat through.
+      expect(Date.now() - startedAt).toBeLessThan(ownBusyTimeout - 1_000);
+    }, 30_000);
+
+    it("takes the lock once that run ends within the wait, past what a busy table is waited for", async () => {
+      await runHolding();
+      // Longer than the whole of the busy-table bounds (4 s here), shorter than the lock's wait.
+      const letGo = setTimeout(() => free(), 6_000);
+      try {
+        await expect(
+          withSchemaLock(
+            {
+              adapter,
+              command: "nextly migrate",
+              whenHeld: "wait",
+              waitMs: 20_000,
+              pollMs: 200,
+              logger,
+            },
+            async () => "ran"
+          )
+        ).resolves.toEqual({ ran: true, value: "ran" });
+      } finally {
+        clearTimeout(letGo);
+      }
+    }, 30_000);
+  });
+
+  describe("a database that turns busy once the lock is held", () => {
+    /** Makes the holder take the database right after the run's `nth` transaction ends. */
+    function busyAfterTransaction(nth: number): () => void {
+      const transaction = adapter.transaction.bind(adapter);
+      let transactions = 0;
+      const spied = vi
+        .spyOn(adapter, "transaction")
+        .mockImplementation(async (...args: Parameters<typeof transaction>) => {
+          const result = await transaction(...args);
+          transactions += 1;
+          if (transactions === nth) await holdTheDatabase();
+          return result;
+        });
+      return () => spied.mockRestore();
+    }
+
+    it("finishes a run whose later lock steps meet a database busy for longer than one wait", async () => {
+      // Busy from just after the claim, for longer than the connection waits on its own: the
+      // steps that follow (the field-group claim, the work's end, the release) wait for it.
+      const restore = busyAfterTransaction(2);
+      const letGo = setTimeout(() => free(), ownBusyTimeout + 1_500);
+      try {
+        await expect(
+          withSchemaLock(
+            {
+              adapter,
+              command: "nextly migrate",
+              whenHeld: "wait",
+              busyBounds: { tryMs: 1_000, totalMs: 20_000 },
+              logger,
+            },
+            async () => "ran"
+          )
+        ).resolves.toEqual({ ran: true, value: "ran" });
+      } finally {
+        clearTimeout(letGo);
+        restore();
+      }
+      // Released: the next run takes the lock at once.
+      await holding.catch(() => {});
+      await expect(run("refuse")).resolves.toEqual({ ran: true, value: "ran" });
+    }, 60_000);
+
+    it("ends a run that finished, but could not confirm its lock, as a busy database and not a lost lock", async () => {
+      const error: unknown = await withSchemaLock(
+        {
+          adapter,
+          command: "nextly migrate",
+          whenHeld: "wait",
+          busyBounds: { tryMs: 1_000, totalMs: 2_000 },
+          logger,
+        },
+        async () => {
+          // The work is done; the database is busy from here to past the end of the run's wait.
+          await holdTheDatabase();
+          return "ran";
+        }
+      ).then(
+        () => undefined,
+        (e: unknown) => e
+      );
+
+      expect(NextlyError.is(error)).toBe(true);
+      const refusal = error as NextlyError;
+      expect(refusal.code).toBe("NEXTLY_TABLE_BUSY");
+      expect(refusal.publicMessage).toContain("finished");
+      expect(refusal.publicMessage).toContain(
+        "Check the database before running it again"
+      );
+      expect(refusal.publicMessage).not.toContain("another run took it");
+    }, 60_000);
+  });
 });
