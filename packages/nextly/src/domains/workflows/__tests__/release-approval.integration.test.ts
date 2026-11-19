@@ -153,7 +153,8 @@ describe.each(getConfiguredTestDialects())(
   dialect => {
     it("reports each unapproved member going live, with its stage and whom it waits for, and never one coming down", async () => {
       const t = await boot(dialect);
-      // An approved page; one in legal assigned to carol; one never put in review, whose first
+      // An approved page; one in legal assigned to carol, who may not sign it off; one never put in
+      // review, whose first
       // stage has a default reviewer; one in legal with no one assigned and no default reviewer,
       // which waits for the roles that may sign it off; and a published page in review coming
       // down.
@@ -209,7 +210,10 @@ describe.each(getConfiguredTestDialects())(
             detail: {
               parts: ["shared"],
               stages: ["legal"],
-              waitsFor: ["user:carol"],
+              // R-2: carol can't take the step, so the part waits for the roles that may sign it off.
+              waitsFor: [
+                expect.stringMatching(new RegExp(`^roles:.*${signers}`)),
+              ],
             },
           },
           {
