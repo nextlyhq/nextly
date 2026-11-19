@@ -162,9 +162,14 @@ export async function createProject(args: {
   install?: boolean;
   /** Extra `package.json` fields, such as `scripts`. */
   manifest?: Readonly<Record<string, unknown>>;
+  /** Packages declared under `devDependencies` rather than `dependencies`. */
+  devOnly?: readonly string[];
+  /** Extra lines of the project's `.npmrc`. */
+  npmrc?: readonly string[];
 }): Promise<UpgradeProject> {
   const { manager, registry } = args;
   const dir = mkdtempSync(join(tmpdir(), `nextly-upgrade-${manager}-`));
+  const devOnly = args.devOnly ?? [];
   const versionOf = (name: string) =>
     typeof args.versions === "string" ? args.versions : args.versions[name];
   writeFileSync(
@@ -177,8 +182,18 @@ export async function createProject(args: {
         ...(manager === "yarn" ? { packageManager: "yarn@4.9.2" } : {}),
         ...args.manifest,
         dependencies: Object.fromEntries(
-          PACKAGES.map(name => [name, versionOf(name)])
+          PACKAGES.filter(name => !devOnly.includes(name)).map(name => [
+            name,
+            versionOf(name),
+          ])
         ),
+        ...(devOnly.length > 0
+          ? {
+              devDependencies: Object.fromEntries(
+                devOnly.map(name => [name, versionOf(name)])
+              ),
+            }
+          : {}),
       },
       null,
       2
@@ -190,7 +205,12 @@ export async function createProject(args: {
   // that an install fetched a release from one that found it cached.
   writeFileSync(
     join(dir, ".npmrc"),
-    `registry=${registry.url}/\ncache=${join(dir, ".cache", "npm")}\n`
+    [
+      `registry=${registry.url}/`,
+      `cache=${join(dir, ".cache", "npm")}`,
+      ...(args.npmrc ?? []),
+      "",
+    ].join("\n")
   );
   if (manager === "yarn") {
     writeFileSync(
@@ -218,8 +238,11 @@ export async function createProject(args: {
     declared: name => {
       const manifest = JSON.parse(
         readFileSync(join(dir, "package.json"), "utf8")
-      ) as { dependencies?: Record<string, string> };
-      return manifest.dependencies?.[name];
+      ) as {
+        dependencies?: Record<string, string>;
+        devDependencies?: Record<string, string>;
+      };
+      return manifest.dependencies?.[name] ?? manifest.devDependencies?.[name];
     },
     installed: name => {
       const file = join(dir, "node_modules", name, "package.json");

@@ -12,7 +12,14 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-import { runManager, viewArgs, type PackageManager } from "./package-manager";
+import { z } from "zod";
+
+import {
+  runManager,
+  viewArgs,
+  type PackageManager,
+  type YarnKind,
+} from "./package-manager";
 import type { RegistryReleases } from "./release-choice";
 
 export type RegistryAnswer =
@@ -24,35 +31,37 @@ export type RegistryAnswer =
 
 const DEFAULT_REGISTRY = "https://registry.npmjs.org";
 
-/** The tags and versions in a package document, in whichever shape it came. */
-function releasesIn(document: unknown): RegistryReleases | undefined {
-  if (document === null || typeof document !== "object") return undefined;
-  const { "dist-tags": tags, versions } = document as {
-    "dist-tags"?: unknown;
-    versions?: unknown;
-  };
-  if (tags === null || typeof tags !== "object") return undefined;
-  // A list from a manager's own view, one name where there is one version,
-  // and a map by version in the registry's own document.
-  const list = Array.isArray(versions)
-    ? versions
-    : typeof versions === "string"
-      ? [versions]
-      : versions !== null && typeof versions === "object"
-        ? Object.keys(versions)
-        : [];
-  // A document naming no version says nothing of what is published.
-  if (list.length === 0) return undefined;
-  return {
-    tags: Object.fromEntries(
-      Object.entries(tags).filter(
-        (entry): entry is [string, string] => typeof entry[1] === "string"
-      )
-    ),
-    versions: list.filter(
-      (version): version is string => typeof version === "string"
-    ),
-  };
+/**
+ * A package document as a registry or a manager's view gives one: the tags,
+ * each naming a version, and the versions as a list (a view), one name (a
+ * view of a package with one version) or a map by version (the registry's
+ * own document).
+ */
+const documentSchema = z.object({
+  "dist-tags": z.record(z.string(), z.string()),
+  versions: z.union([
+    z.array(z.string()),
+    z.string().transform(version => [version]),
+    z
+      .record(z.string(), z.unknown())
+      .transform(byVersion => Object.keys(byVersion)),
+  ]),
+});
+
+/** The document itself, or wrapped as Yarn 1 prints it: `{ type, data }`. */
+const answerSchema = z.union([
+  documentSchema,
+  z.object({ data: documentSchema }).transform(wrapped => wrapped.data),
+]);
+
+/**
+ * The tags and versions in a registry's answer, or undefined where it is not
+ * one: a document naming no version says nothing of what is published.
+ */
+export function parseReleases(answer: unknown): RegistryReleases | undefined {
+  const read = answerSchema.safeParse(answer);
+  if (!read.success || read.data.versions.length === 0) return undefined;
+  return { tags: read.data["dist-tags"], versions: read.data.versions };
 }
 
 /** `text` parsed as JSON, or undefined where it is not. */
@@ -99,7 +108,7 @@ async function askRegistry(
     });
     if (response.status === 404) return { kind: "missing" };
     const releases = response.ok
-      ? releasesIn(await response.json())
+      ? parseReleases(await response.json())
       : undefined;
     return releases === undefined
       ? {
@@ -119,11 +128,16 @@ async function askRegistry(
 export async function releasesOf(
   manager: PackageManager,
   projectDir: string,
-  name: string
+  name: string,
+  yarn: YarnKind = {}
 ): Promise<RegistryAnswer> {
-  const run = await runManager(manager, viewArgs(manager, name), projectDir);
+  const run = await runManager(
+    manager,
+    viewArgs(manager, name, yarn),
+    projectDir
+  );
   const releases =
-    run.status === 0 ? releasesIn(parsed(run.stdout)) : undefined;
+    run.status === 0 ? parseReleases(parsed(run.stdout)) : undefined;
   if (releases !== undefined) return { kind: "found", releases };
   // The manager's own answer could not be read: asked directly, which also
   // tells a package the registry lacks from a registry that is not there.

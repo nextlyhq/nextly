@@ -217,7 +217,10 @@ describe.skipIf(OTHER_LEG)(
           expect(registry.downloads.slice(downloadsBefore)).toContain(
             `nextly@${MIDDLE}`
           );
-          expect(output(run)).toContain("(UPGRADE_INSTALL_FAILED)");
+          // The script fails the install that puts the packages back as
+          // well, so that install proves nothing: the run says the restore
+          // is not verified, with both files and every package as they were.
+          expect(output(run)).toContain("(UPGRADE_NOT_RESTORED)");
           expect(app.files()).toEqual(before);
           expect(versions(app)).toEqual(allAt(OLDEST));
         },
@@ -263,6 +266,31 @@ describe.skipIf(OTHER_LEG)(
 
         expect(run.status, output(run)).toBe(0);
         expect(versions(app)).toEqual(allAt(MIDDLE));
+      },
+      TIMEOUT
+    );
+
+    it(
+      "moves a package the install leaves out on purpose, and does not take its absence for a failure",
+      async () => {
+        // npm told to leave development packages out: one Nextly package is
+        // declared and never installed, before the move and after it.
+        const app = await project({
+          manager: "npm",
+          versions: OLDEST,
+          devOnly: ["@nextlyhq/admin"],
+          npmrc: ["omit=dev"],
+        });
+        expect(app.installed("@nextlyhq/admin")).toBeUndefined();
+        expect(app.installed("nextly")).toBe(OLDEST);
+
+        const run = await app.nextly(["upgrade"]);
+
+        expect(run.status, output(run)).toBe(0);
+        expect(app.declared("@nextlyhq/admin")).toBe(MIDDLE);
+        expect(app.installed("@nextlyhq/admin")).toBeUndefined();
+        expect(app.installed("nextly")).toBe(MIDDLE);
+        expect(app.installed("@nextlyhq/adapter-sqlite")).toBe(MIDDLE);
       },
       TIMEOUT
     );

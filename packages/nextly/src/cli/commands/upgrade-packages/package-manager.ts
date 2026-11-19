@@ -31,6 +31,8 @@ const MANAGERS: readonly string[] = ["npm", "pnpm", "yarn", "bun"];
 
 export interface DetectedManager {
   manager: PackageManager;
+  /** Set once Yarn has been asked which it is. */
+  yarn?: YarnKind;
   /** The lockfile the install rewrites, where the project has one. */
   lockfile: string | undefined;
   /** Where the lockfile is, or would be: the folder the manager installs from. */
@@ -111,17 +113,34 @@ export function usesPlugAndPlay(root: string): boolean {
   );
 }
 
+/** Which Yarn a project runs: Yarn 1 takes other words than the releases after it. */
+export interface YarnKind {
+  classic?: boolean;
+}
+
+/** Whether what `yarn --version` printed names Yarn 1. */
+export function isYarnClassic(version: string): boolean {
+  return version.trim().startsWith("1.");
+}
+
 /**
  * The arguments of the install run once `package.json` names the new
  * versions. A manager that refuses to change a lockfile where it sees a CI
- * environment is told it may: changing it is what was asked for.
+ * environment is told it may: changing it is what was asked for. Yarn 1
+ * changes its lockfile unless told not to, and refuses a flag it does not
+ * know.
  */
-export function installArgs(manager: PackageManager): string[] {
+export function installArgs(
+  manager: PackageManager,
+  yarn: YarnKind = {}
+): string[] {
   switch (manager) {
     case "pnpm":
       return ["install", "--no-frozen-lockfile"];
     case "yarn":
-      return ["install", "--no-immutable"];
+      return yarn.classic === true
+        ? ["install"]
+        : ["install", "--no-immutable"];
     default:
       return ["install"];
   }
@@ -147,10 +166,16 @@ export function forgetInstallState(
 }
 
 /** The arguments asking `manager` what the registry holds for `name`, as JSON. */
-export function viewArgs(manager: PackageManager, name: string): string[] {
+export function viewArgs(
+  manager: PackageManager,
+  name: string,
+  yarn: YarnKind = {}
+): string[] {
   switch (manager) {
     case "yarn":
-      return ["npm", "info", name, "--fields", "dist-tags,versions", "--json"];
+      return yarn.classic === true
+        ? ["info", name, "--json"]
+        : ["npm", "info", name, "--fields", "dist-tags,versions", "--json"];
     case "bun":
       return ["pm", "view", name, "--json"];
     default:
@@ -161,16 +186,27 @@ export function viewArgs(manager: PackageManager, name: string): string[] {
 export interface ManagerRun {
   /** The exit status, or null where the manager could not be started or was stopped. */
   status: number | null;
+  /** What it printed on standard output, up to `STDOUT_LIMIT`. */
   stdout: string;
-  /** Everything it printed, both streams, for a failure's report. */
+  /** The end of everything it printed, both streams, for a failure's report. */
   output: string;
 }
 
-/** Runs `manager <args>` in `cwd` and waits for it, keeping what it printed. */
+/** How much of a run's output is kept for a report: its end. */
+const OUTPUT_TAIL = 64 * 1024;
+/** How much standard output is kept: a registry's whole answer for a package, with room. */
+const STDOUT_LIMIT = 16 * 1024 * 1024;
+
+/**
+ * Runs `manager <args>` in `cwd` and waits for it to end, keeping the end of
+ * what it printed. Stopped through `signal`, the child is ended and its end
+ * is still waited for, so nothing it was doing goes on after this returns.
+ */
 export function runManager(
   manager: PackageManager,
   args: readonly string[],
-  cwd: string
+  cwd: string,
+  options: { signal?: AbortSignal } = {}
 ): Promise<ManagerRun> {
   return new Promise(settle => {
     // Through a shell on Windows, where each manager is a `.cmd` shim.
@@ -180,20 +216,47 @@ export function runManager(
       cwd,
       shell: process.platform === "win32",
       stdio: ["ignore", "pipe", "pipe"],
+      // In a process group of its own where there are such, so that stopping
+      // it stops the scripts and downloads it started with it.
+      detached: process.platform !== "win32",
     });
     let stdout = "";
     let output = "";
+    const keep = (chunk: string) => {
+      output = (output + chunk).slice(-OUTPUT_TAIL);
+    };
     child.stdout.setEncoding("utf8").on("data", (chunk: string) => {
-      stdout += chunk;
-      output += chunk;
+      if (stdout.length < STDOUT_LIMIT) stdout += chunk;
+      keep(chunk);
     });
-    child.stderr.setEncoding("utf8").on("data", (chunk: string) => {
-      output += chunk;
-    });
+    child.stderr.setEncoding("utf8").on("data", keep);
+    const stop = () => {
+      try {
+        // The whole group: the manager and everything it started.
+        if (process.platform !== "win32" && child.pid !== undefined) {
+          process.kill(-child.pid, "SIGTERM");
+          return;
+        }
+      } catch {
+        // The group is gone already; the child itself is asked below.
+      }
+      child.kill("SIGTERM");
+    };
+    options.signal?.addEventListener("abort", stop, { once: true });
     child.on("error", error => {
-      output += `${manager} could not be started: ${error.message}`;
-      settle({ status: null, stdout, output });
+      keep(`${manager} could not be started: ${error.message}`);
+      // A child that never started has no end to wait for.
+      if (child.pid === undefined) settle({ status: null, stdout, output });
     });
-    child.on("close", status => settle({ status, stdout, output }));
+    child.on("close", status => {
+      options.signal?.removeEventListener("abort", stop);
+      settle({ status, stdout, output });
+    });
   });
+}
+
+/** Which Yarn `cwd` runs, asked of Yarn itself. */
+export async function yarnKindIn(cwd: string): Promise<YarnKind> {
+  const run = await runManager("yarn", ["--version"], cwd);
+  return { classic: run.status === 0 && isYarnClassic(run.stdout) };
 }

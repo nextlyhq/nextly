@@ -1318,7 +1318,7 @@ Before it changes anything it checks that every Nextly package the project decla
 
 After a move it prints the link to the release's notes and what to run next: `nextly migrate:create`, which captures a migration if the release changes your schema and says so if not, then `nextly migrate`.
 
-It moves the packages of the `package.json` in the folder it runs in (or `--cwd`). In a workspace, run it in each package that depends on Nextly. Yarn Plug'n'Play is not supported yet.
+It moves the packages of the `package.json` in the folder it runs in (or `--cwd`). In a workspace, run it in each package that depends on Nextly. It does not rewrite `peerDependencies`: a peer range says which releases a package works with, and stays yours to set. A package the install leaves out on purpose, such as a development dependency under an omit setting, is moved in `package.json` and not expected in `node_modules`. Yarn Plug'n'Play is not supported yet.
 
 ## Rolling back a migration
 

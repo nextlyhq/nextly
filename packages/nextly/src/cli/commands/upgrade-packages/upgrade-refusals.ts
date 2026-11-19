@@ -87,17 +87,25 @@ export function installFailed(args: {
   });
 }
 
-/** The install failed, and the installed packages could not be put back. */
+/**
+ * The install failed, and the project could not be shown to be as it was:
+ * packages at another version than they had, or the install that should
+ * have put them back failing itself.
+ */
 export function notRestored(args: {
   manager: string;
   version: string;
   output: string;
-  /** Each package not at the version it had, as `name: had → has`. */
+  /** Each package not at the version it had, as `name: had → has`; none where only the install failed. */
   differing: readonly string[];
 }): CliError {
+  const state =
+    args.differing.length > 0
+      ? `installing from them again left these at another version than they had:\n${indented(args.differing)}`
+      : "the install from them failed too, so what is installed is not verified: every Nextly package reads as the version it had, and other packages may be missing.";
   return new CliError("UPGRADE_NOT_RESTORED", {
     what: `\`${args.manager} install\` failed while moving the Nextly packages to ${args.version}, and the installed packages could not be put back.`,
-    why: `\`package.json\` and the lockfile were put back as they were, but installing from them again left these at another version than they had:\n${indented(args.differing)}\nThe package manager said:\n${lastLines(args.output)}`,
+    why: `\`package.json\` and the lockfile were put back as they were, but ${state}\nThe package manager said:\n${lastLines(args.output)}`,
     next: `Run \`${args.manager} install\` once the cause is fixed: it installs what the restored files record. Until then the installed packages do not match them.`,
   });
 }

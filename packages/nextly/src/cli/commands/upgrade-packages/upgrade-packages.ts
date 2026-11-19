@@ -15,7 +15,7 @@
  * @module cli/commands/upgrade-packages/upgrade-packages
  */
 
-import { readFileSync, rmSync, writeFileSync } from "node:fs";
+import { readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { CliError } from "../../errors";
@@ -28,10 +28,12 @@ import {
   lockfileOf,
   runManager,
   usesPlugAndPlay,
+  yarnKindIn,
   type DetectedManager,
 } from "./package-manager";
 import {
   declaredNextlyPackages,
+  declaresNextlyPeer,
   installedVersion,
   readManifest,
   withVersions,
@@ -84,6 +86,14 @@ function readProject(projectDir: string): Project {
     );
   }
   const packages = declaredNextlyPackages(read.manifest);
+  if (packages.length === 0 && declaresNextlyPeer(read.manifest)) {
+    // A peer range is the author's statement of which releases the package
+    // works with, not what is installed, so the command never rewrites one.
+    throw cannotStart(
+      "This project's `package.json` declares Nextly only as a peer dependency, which `nextly upgrade` does not rewrite.",
+      "Set the peer range yourself. To have `nextly upgrade` move the release you develop against, declare the packages under `devDependencies` too."
+    );
+  }
   if (packages.length === 0) {
     throw cannotStart(
       "This project's `package.json` declares no Nextly package.",
@@ -100,6 +110,15 @@ function readProject(projectDir: string): Project {
   return { dir: projectDir, manifestText: read.text, packages, detected };
 }
 
+/** `project` with Yarn asked which it is, where Yarn is its manager. */
+async function withYarnKind(project: Project): Promise<Project> {
+  if (project.detected.manager !== "yarn") return project;
+  return {
+    ...project,
+    detected: { ...project.detected, yarn: await yarnKindIn(project.dir) },
+  };
+}
+
 /** What the registry holds for `nextly`, and the choice made from it. */
 async function choose(
   project: Project,
@@ -108,7 +127,8 @@ async function choose(
   const answer = await releasesOf(
     project.detected.manager,
     project.dir,
-    "nextly"
+    "nextly",
+    project.detected.yarn
   );
   if (answer.kind !== "found") {
     throw cannotStart(
@@ -142,7 +162,12 @@ async function whyNot(
   const answer =
     declared.name === "nextly"
       ? ({ kind: "found", releases: nextly } as const)
-      : await releasesOf(project.detected.manager, project.dir, declared.name);
+      : await releasesOf(
+          project.detected.manager,
+          project.dir,
+          declared.name,
+          project.detected.yarn
+        );
   if (answer.kind === "unreadable") {
     return `${declared.name}: the registry could not be asked (${answer.why}).`;
   }
@@ -199,9 +224,9 @@ function save(project: Project): Saved {
 
 /** Puts both files back; a lockfile the failed install created is removed. */
 function putFilesBack(project: Project, saved: Saved): void {
-  writeFileSync(join(project.dir, "package.json"), saved.manifest);
+  replaceFile(join(project.dir, "package.json"), saved.manifest);
   if (saved.lockfile !== undefined) {
-    writeFileSync(saved.lockfile.file, saved.lockfile.bytes);
+    replaceFile(saved.lockfile.file, saved.lockfile.bytes);
     return;
   }
   const created = lockfileOf(project.detected.manager, project.detected.root);
@@ -231,16 +256,40 @@ async function restoreAndFail(
   version: string,
   output: string
 ): Promise<never> {
-  const { manager } = project.detected;
+  const { manager, yarn } = project.detected;
   putFilesBack(project, saved);
   forgetInstallState(manager, project.detected.root);
   forgetInstallState(manager, project.dir);
-  const again = await runManager(manager, installArgs(manager), project.dir);
+  const again = await runManager(
+    manager,
+    installArgs(manager, yarn),
+    project.dir
+  );
   // A project that had no lockfile has none again.
   if (saved.lockfile === undefined) putFilesBack(project, saved);
   const differing = differingFrom(project, saved);
-  if (differing.length === 0) throw installFailed({ manager, version, output });
+  // Restored only where that install itself succeeded: one that failed may
+  // have left any other package missing, whatever the Nextly ones read as.
+  if (again.status === 0 && differing.length === 0) {
+    throw installFailed({ manager, version, output });
+  }
   throw notRestored({ manager, version, output: again.output, differing });
+}
+
+/**
+ * Replaces `file` with `content` whole or not at all: written beside it and
+ * renamed over it, so a write that fails part-way, as on a full disk, leaves
+ * the file as it was.
+ */
+function replaceFile(file: string, content: string | Buffer): void {
+  const beside = `${file}.nextly-upgrade-${String(process.pid)}.tmp`;
+  try {
+    writeFileSync(beside, content);
+    renameSync(beside, file);
+  } catch (error) {
+    rmSync(beside, { force: true });
+    throw error;
+  }
 }
 
 /** Moves every package to `version`, or puts the project back and fails. */
@@ -249,36 +298,45 @@ async function move(
   version: string,
   log: UpgradePackagesArgs["log"]
 ): Promise<void> {
-  const { manager } = project.detected;
+  const { manager, yarn } = project.detected;
   const saved = save(project);
-  // Interrupted while the manager installs, the run ends at once, so the
-  // two files are put back here, synchronously, and the operator is told
-  // the one thing left undone: the packages installed so far.
-  const interrupted = () => {
+  // Interrupted while the manager installs, the manager is stopped and its
+  // end waited for, so nothing goes on changing the project; then the two
+  // files are put back, and the operator is told the one thing left undone.
+  const stop = new AbortController();
+  const interrupt = () => stop.abort();
+  process.once("SIGINT", interrupt);
+  process.once("SIGTERM", interrupt);
+  let run: Awaited<ReturnType<typeof runManager>>;
+  try {
+    replaceFile(
+      join(project.dir, "package.json"),
+      withVersions(project.manifestText, project.packages, version)
+    );
+    log(`Installing with ${manager}...`);
+    run = await runManager(manager, installArgs(manager, yarn), project.dir, {
+      signal: stop.signal,
+    });
+  } finally {
+    process.off("SIGINT", interrupt);
+    process.off("SIGTERM", interrupt);
+  }
+  if (stop.signal.aborted) {
     putFilesBack(project, saved);
     process.stderr.write(
       `\nInterrupted: package.json and the lockfile were put back as they were. Run \`${manager} install\` to put the installed packages back.\n`
     );
     process.exit(130);
-  };
-  process.once("SIGINT", interrupted);
-  process.once("SIGTERM", interrupted);
-  writeFileSync(
-    join(project.dir, "package.json"),
-    withVersions(project.manifestText, project.packages, version)
-  );
-  log(`Installing with ${manager}...`);
-  const run = await runManager(
-    manager,
-    installArgs(manager),
-    project.dir
-  ).finally(() => {
-    process.off("SIGINT", interrupted);
-    process.off("SIGTERM", interrupted);
-  });
+  }
+  // A package the install leaves out on purpose, as a development one under
+  // an omit setting, was not installed before and need not be after.
   const left = project.packages
     .map(({ name }) => name)
-    .filter(name => installedVersion(project.dir, name) !== version);
+    .filter(
+      name =>
+        saved.installed.get(name) !== undefined &&
+        installedVersion(project.dir, name) !== version
+    );
   if (run.status === 0 && left.length === 0) return;
   await restoreAndFail(
     project,
@@ -333,7 +391,7 @@ async function plan(
   projectDir: string,
   given: string | undefined
 ): Promise<Plan> {
-  const project = readProject(projectDir);
+  const project = await withYarnKind(readProject(projectDir));
   const { choice, releases } = await choose(project, given);
   if (choice.kind === "refused") throw releaseUnknown(choice);
   const version =

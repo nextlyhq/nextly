@@ -6,9 +6,9 @@
  * reconciled Nextly's own tables; `nextly migrate` does both now. Each flag
  * of that work still parses, and a run with one must not fall through to
  * what the command does today, which is move the project's packages. So
- * each case is a project with a newer release to move to and a database that
- * still has the earlier release's records table, and asserts all three are
- * as they were: the packages, the files, the tables.
+ * each case is a project with a newer release to move to and a database
+ * holding Nextly's migration ledger, and asserts all three are as they were:
+ * the packages, the files, the database.
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -16,6 +16,7 @@ import { join } from "node:path";
 import Database from "better-sqlite3";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
+import { getSchemaEventsDdl } from "../../../domains/schema/events/schema-events-ddl";
 import type { LocalRegistry } from "../../__tests__/helpers/local-registry";
 import {
   NEXTLY_RUN_TIMEOUT,
@@ -93,15 +94,12 @@ describe.skipIf(OTHER_LEG)(
           registry,
           versions: OLDEST,
         });
-        // A database as an earlier release left it: its records table.
+        // A database holding Nextly's migration ledger, made by the DDL the
+        // product makes it with.
         const dbFile = join(app.dir, "site.db");
         const db = new Database(dbFile);
-        db.exec(
-          "CREATE TABLE nextly_migrations (id TEXT PRIMARY KEY, filename TEXT NOT NULL, status TEXT NOT NULL)"
-        );
-        db.exec(
-          "INSERT INTO nextly_migrations VALUES ('1', '0001_init.sql', 'applied')"
-        );
+        for (const statement of getSchemaEventsDdl("sqlite"))
+          db.exec(statement);
         db.close();
         const state = (of: UpgradeProject) => ({
           files: of.files(),

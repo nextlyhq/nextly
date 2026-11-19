@@ -5,7 +5,9 @@
  * Nextly's packages version together, so `nextly` and every `@nextlyhq/*`
  * package a project depends on move as one. A package declared by anything
  * other than a version or range of the registry (a workspace link, a folder,
- * a git address) is one the registry cannot move.
+ * a git address) is one the registry cannot move. A peer dependency is
+ * never one of them: its range says which releases a package works with,
+ * not which is installed, and stays the author's to set.
  *
  * @module cli/commands/upgrade-packages/project-packages
  */
@@ -69,6 +71,17 @@ export function readManifest(
 function sectionOf(manifest: Manifest, section: Section): object {
   const entries: unknown = manifest[section];
   return entries !== null && typeof entries === "object" ? entries : {};
+}
+
+/** Whether `manifest` names a Nextly package among its peer dependencies. */
+export function declaresNextlyPeer(manifest: Manifest): boolean {
+  const peers: unknown = (manifest as { peerDependencies?: unknown })
+    .peerDependencies;
+  return (
+    peers !== null &&
+    typeof peers === "object" &&
+    Object.keys(peers).some(isNextlyPackage)
+  );
 }
 
 /** Every Nextly package `manifest` declares, in the order it declares them. */

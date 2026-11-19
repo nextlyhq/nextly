@@ -7,7 +7,7 @@ description: "`nextly upgrade` could not read the project it was run in, or the 
 
 `nextly upgrade` could not read the project it was run in, or the registry the project uses, so it changed nothing.
 
-`nextly upgrade` moves the Nextly packages a project's `package.json` declares, with the project's own package manager, and asks that manager which releases the registry has. It stops here, before choosing a release, when it cannot do one of those: the folder has no `package.json` it can read, the `package.json` declares no Nextly package, the project is installed with Yarn Plug'n'Play (not supported yet), or the registry could not be asked. The message says which.
+`nextly upgrade` moves the Nextly packages a project's `package.json` declares, with the project's own package manager, and asks that manager which releases the registry has. It stops here, before choosing a release, when it cannot do one of those: the folder has no `package.json` it can read, the `package.json` declares no Nextly package, or declares Nextly only as a peer dependency (a peer range is yours to set, and the command never rewrites one), the project is installed with Yarn Plug'n'Play (not supported yet), or the registry could not be asked. The message says which.
 
 ## Fix
 
