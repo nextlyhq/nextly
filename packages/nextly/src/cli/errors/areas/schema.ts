@@ -33,6 +33,25 @@ function movedSchema(error: NextlyError): CliErrorParts {
   };
 }
 
+/** Why a save a stopped process left part-way refuses a command that reads the project. */
+const LEFT_SAVE_WHY =
+  "A Builder save writes its definition, its migration files and its database changes in turn, and a process that stopped between them left those describing different schemas.";
+
+/**
+ * The refusal of a Builder save left part-way, as its three parts: its first sentence, naming the
+ * save; `why`; and the rest of the message, which names the step that settles or clears it.
+ */
+function leftSave(error: NextlyError, why: string): CliErrorParts {
+  const [what = error.publicMessage, ...next] = sentences(error.publicMessage);
+  return {
+    what,
+    why,
+    next:
+      next.join(" ") ||
+      "Start the app in development (`next dev`) on this project, which settles the save, then run the command again.",
+  };
+}
+
 /**
  * The refusal of a config and an adapter naming different schemas, as its three parts: the
  * disagreement, why both must agree, and the two edits that make them agree.
@@ -347,6 +366,30 @@ export const SCHEMA_CODES = defineCodes({
           why: "A save writes a migration into the folder, and the folder or its ledger is in a state `nextly migrate` refuses: an applied file was edited or removed, or an attempt is unfinished.",
           next: "Settle what the message names, with `nextly migrate:resolve` or by restoring the file, then save again.",
         }),
+      },
+    ],
+  },
+  // A Builder save records that it started, in a `nextly_meta` row and a `.nextly/` marker, and
+  // clears the record once its outcome is recorded. A record left standing is a save a stopped
+  // process left part-way: the refusals that read it, and a later save that finds its record
+  // unreadable, end here. The thrown message names each save and the step that settles it.
+  BUILDER_SAVE_LEFT_PART_WAY: {
+    cause:
+      "A Schema Builder save stopped part-way and its record still stands, so the command refused to go on until the save is settled.",
+    from: [
+      {
+        code: "CONFLICT",
+        reason: "builder-save-left-part-way",
+        describe: error => leftSave(error, LEFT_SAVE_WHY),
+      },
+      {
+        code: "CONFLICT",
+        reason: "builder-save-record-unreadable",
+        describe: error =>
+          leftSave(
+            error,
+            "The record does not say which save it stands for, so nothing can settle it, and a save over it could not tell what it would write over."
+          ),
       },
     ],
   },

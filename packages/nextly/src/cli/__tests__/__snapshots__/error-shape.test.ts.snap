@@ -566,6 +566,13 @@ exports[`each code, as a command ends with it > BUILDER_RELATION_TARGET_UNKNOWN 
   Docs: https://nextlyhq.com/docs/cli/errors/builder-relation-target-unknown  (BUILDER_RELATION_TARGET_UNKNOWN)"
 `;
 
+exports[`each code, as a command ends with it > BUILDER_SAVE_LEFT_PART_WAY 1`] = `
+"✗ A Builder save was left part-way, so the database does not match its migrations yet: a Builder save of the collection "posts", started 2026-11-19T07:42:10.000Z on build-box.
+  Why:  A Builder save writes its definition, its migration files and its database changes in turn, and a process that stopped between them left those describing different schemas.
+  Next: To settle it, start the app in development (\`next dev\`) on this project: its start settles the save.
+  Docs: https://nextlyhq.com/docs/cli/errors/builder-save-left-part-way  (BUILDER_SAVE_LEFT_PART_WAY)"
+`;
+
 exports[`each code, as a command ends with it > BUILDER_SLUG_COLLISION 1`] = `
 "✗ An entity is defined in both \`nextly.config.ts\` and \`ui-schema.json\`.
   Why:  slug 'posts' is defined in both nextly.config.ts and ui-schema.json
@@ -1821,6 +1828,13 @@ exports[`each code, as a command ends with it > PROMOTE_COLLECTION_NOT_FOUND 1`]
   Why:  \`--promote\` moves a collection built in the Schema Builder into code, and no collection with this slug was built there.
   Next: Check the slug in the admin's Schema Builder. A collection already defined in \`nextly.config.ts\` is in code and needs no promotion.
   Docs: https://nextlyhq.com/docs/cli/errors/promote-collection-not-found  (PROMOTE_COLLECTION_NOT_FOUND)"
+`;
+
+exports[`each code, as a command ends with it > RECORD_SNAPSHOT_HAS_CHANGES 1`] = `
+"✗ --record-snapshot records the config as it was at the last migration, and the config has changes to "dc_posts" to migrate.
+  Why:  Nothing was written.
+  Next: Put the changes aside, run \`nextly migrate:create --record-snapshot\`, then make them again and run \`nextly migrate:create --name <name>\`.
+  Docs: https://nextlyhq.com/docs/cli/errors/record-snapshot-has-changes  (RECORD_SNAPSHOT_HAS_CHANGES)"
 `;
 
 exports[`each code, as a command ends with it > RECORD_SNAPSHOT_NEEDS_APP_MIGRATION 1`] = `

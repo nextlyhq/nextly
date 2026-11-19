@@ -1,0 +1,25 @@
+---
+title: RECORD_SNAPSHOT_HAS_CHANGES
+description: "`nextly migrate:create --record-snapshot` was run with a config that has table changes to migrate, which the snapshot would take in without a migration."
+---
+
+## Cause
+
+`nextly migrate:create --record-snapshot` was run with a config that has table changes to migrate, which the snapshot would take in without a migration.
+
+`--record-snapshot` writes a migration that changes nothing, whose snapshot records the config as it was at the last migration, including which fields are translated. A table change in the config would go into that snapshot with no migration making it, and every later `migrate:create` would then plan from a snapshot that says the change was already made. So it refuses, names the tables with changes, and writes nothing.
+
+## Fix
+
+- Put the changes aside, so the config is as it was at the last migration.
+- Run `nextly migrate:create --record-snapshot`, and commit what it writes.
+- Make the changes again, then run `nextly migrate:create --name <name>`.
+
+## Example
+
+```text
+✗ --record-snapshot records the config as it was at the last migration, and the config has changes to "dc_posts" to migrate.
+  Why:  Nothing was written.
+  Next: Put the changes aside, run `nextly migrate:create --record-snapshot`, then make them again and run `nextly migrate:create --name <name>`.
+  Docs: https://nextlyhq.com/docs/cli/errors/record-snapshot-has-changes  (RECORD_SNAPSHOT_HAS_CHANGES)
+```

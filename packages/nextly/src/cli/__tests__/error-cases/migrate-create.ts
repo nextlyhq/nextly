@@ -45,6 +45,19 @@ export const MIGRATE_CREATE_CASES = {
         "then make your changes again and run `nextly migrate:create --name add_excerpt`.",
       logContext: { reason: "translations-unrecorded" },
     }),
+  // Built as `refuseChangesToRecord` in `domains/schema/migrate-create/generate.ts` throws it, for a
+  // config with a field added to `posts` since the last migration.
+  RECORD_SNAPSHOT_HAS_CHANGES: () =>
+    new NextlyError({
+      code: "VALIDATION_ERROR",
+      publicMessage:
+        '--record-snapshot records the config as it was at the last migration, and the config has changes to "dc_posts" to migrate. Nothing was written. ' +
+        "Put the changes aside, run `nextly migrate:create --record-snapshot`, then make them again and run `nextly migrate:create --name <name>`.",
+      logContext: {
+        reason: "record-snapshot-has-changes",
+        tables: ["dc_posts"],
+      },
+    }),
   // Built as `generateMigration` throws it, from `--record-snapshot`'s check of the database.
   RECORD_SNAPSHOT_STORAGE_MISSING: () =>
     new NextlyError({
