@@ -38,6 +38,19 @@ function changesIn(label: string): string {
   return `Changes ${label.charAt(0).toLowerCase()}${label.slice(1)}`;
 }
 
+/**
+ * What a reviewer asked for, while the part's latest move is that request:
+ * "Changes requested by Rita: “Shorten the intro.”". The writer reads it on
+ * the document they are to change, not only in the side panel.
+ */
+function changesAskedOf(part: PartReview): string | null {
+  const move = part.lastMove;
+  if (move?.kind !== "workflow-request-changes" || move.comment === null) {
+    return null;
+  }
+  return `Changes requested by ${move.actor.name ?? "a reviewer"}: “${move.comment}”`;
+}
+
 export function ReviewStatusLine({
   status,
   hasWorkingDraft,
@@ -50,6 +63,7 @@ export function ReviewStatusLine({
   // Once its stage allows publishing nobody is waited for: what is left is
   // the publish itself.
   const waiting = part.publishable ? null : waitingForWords(part.waitingFor);
+  const changesAsked = changesAskedOf(part);
   const words = [
     live ? "Published" : "Draft",
     live ? changesIn(label) : label,
@@ -63,6 +77,14 @@ export function ReviewStatusLine({
       >
         {words.join(" · ")}
       </p>
+      {changesAsked === null ? null : (
+        <p
+          role="note"
+          className="rounded-md border border-border bg-muted px-3 py-2 text-xs text-foreground"
+        >
+          {changesAsked}
+        </p>
+      )}
       {live && hasWorkingDraft && !part.publishable ? (
         <p
           role="note"

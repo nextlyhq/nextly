@@ -33,6 +33,51 @@ const LIVE_STRIP =
   "Readers see the published version until these changes are approved and published.";
 
 describe("ReviewStatusLine", () => {
+  it("tells the writer the changes a reviewer asked for, with who asked", () => {
+    render(
+      <ReviewStatusLine
+        status="draft"
+        hasWorkingDraft={false}
+        part={part({
+          stage: "drafting",
+          stageLabel: "Drafting",
+          waitingFor: { kind: "user", id: "alice", name: "Alice" },
+          lastMove: {
+            kind: "workflow-request-changes",
+            actor: { kind: "person", id: "rita", name: "Rita" },
+            at: "2026-11-19T09:00:00.000Z",
+            from: "inReview",
+            to: "drafting",
+            comment: "Shorten the intro.",
+          },
+        })}
+      />
+    );
+    expect(screen.getByRole("note")).toHaveTextContent(
+      "Changes requested by Rita: “Shorten the intro.”"
+    );
+  });
+
+  it("says nothing of a comment that came with any other move", () => {
+    render(
+      <ReviewStatusLine
+        status="draft"
+        hasWorkingDraft={false}
+        part={part({
+          lastMove: {
+            kind: "workflow-submit",
+            actor: { kind: "person", id: "alice", name: "Alice" },
+            at: "2026-11-19T09:00:00.000Z",
+            from: "drafting",
+            to: "inReview",
+            comment: "Ready",
+          },
+        })}
+      />
+    );
+    expect(screen.queryByRole("note")).not.toBeInTheDocument();
+  });
+
   it("takes the editor's column inset, so it starts where the title does", () => {
     render(
       <ReviewStatusLine
