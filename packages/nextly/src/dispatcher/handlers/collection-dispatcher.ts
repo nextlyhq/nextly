@@ -64,7 +64,10 @@ import {
   type SchemaChangeAnswers,
 } from "../../domains/schema/builder-save/schema-change-save";
 import { introspectLiveSnapshot } from "../../domains/schema/pipeline/diff/introspect-live";
-import type { BrowserRenameResolution } from "../../domains/schema/pipeline/prompt-dispatcher/browser";
+import type {
+  BrowserRenameResolution,
+  LegacyResolutionsBundle,
+} from "../../domains/schema/pipeline/prompt-dispatcher/browser";
 import { reachesRelationStorage } from "../../domains/schema/pipeline/recorded-shapes";
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
 import type {
@@ -379,10 +382,10 @@ function dialogConfirmations(
   tableName: string,
   resolutions: Record<string, FieldResolution> | undefined,
   confirmedDeletions: ReturnType<typeof readConfirmedDeletions>
-): {
-  legacy?: { tableName: string; byFieldName: Record<string, FieldResolution> };
-} {
-  const confirmDrop: FieldResolution = { action: "confirm_drop" };
+): { legacy?: LegacyResolutionsBundle } {
+  const confirmDrop: LegacyResolutionsBundle["byFieldName"][string] = {
+    action: "confirm_drop",
+  };
   const counted = (confirmedDeletions ?? []).map(
     deletion => [deletion.field, confirmDrop] as const
   );
