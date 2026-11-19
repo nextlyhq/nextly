@@ -150,13 +150,7 @@ export async function applyMigrationWhole(args: {
   // The one splitting rule: a separator is a line of its own, so its text inside a quoted value
   // stays part of the statement.
   const statements = splitStatements([args.migrationSQL]);
-  // A rebuild runs where it changes a column: its nullability or its type.
-  const rebuild =
-    args.dialect === "sqlite" &&
-    ((args.sqliteNullability?.required.size ?? 0) > 0 ||
-      (args.sqliteNullability?.types?.size ?? 0) > 0)
-      ? args.sqliteNullability
-      : undefined;
+  const rebuild = sqliteRebuildOf(args.dialect, args.sqliteNullability);
   if (statements.length === 0 && rebuild === undefined) return;
   const progress = { ran: 0 };
   try {
@@ -310,6 +304,19 @@ async function runWholeInTries(
     );
     progress.ran += 1;
   }
+}
+
+/**
+ * The rebuild a SQLite migration runs after its statements, where it changes a column: its
+ * nullability or its type. None on another dialect, or where nothing changes.
+ */
+function sqliteRebuildOf(
+  dialect: SupportedDialect | undefined,
+  rebuild: SqliteNullability | undefined
+): SqliteNullability | undefined {
+  if (dialect !== "sqlite" || rebuild === undefined) return undefined;
+  const changes = rebuild.required.size + (rebuild.types?.size ?? 0);
+  return changes > 0 ? rebuild : undefined;
 }
 
 /**
