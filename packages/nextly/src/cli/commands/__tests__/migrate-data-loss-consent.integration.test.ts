@@ -281,7 +281,7 @@ describe.each(LOCK_DIALECTS)("a migration that deletes data on %s", dialect => {
     expect(await databaseState()).toEqual(before);
   }, 180_000);
 
-  it("lists each deletion with how much it deletes, leaving uncounted a later file's in a table an earlier file changes", async () => {
+  it("lists each deletion with how much it deletes, and says why a later file's in a table an earlier file changes is not counted", async () => {
     const first = file([`ALTER TABLE ${posts} DROP COLUMN summary`], []);
     const second = file([`DROP TABLE ${posts}`], []);
     const printed: string[] = [];
@@ -289,13 +289,14 @@ describe.each(LOCK_DIALECTS)("a migration that deletes data on %s", dialect => {
       migrate(NO_CONSENT, { interactive: true, answer: false, printed })
     );
     // Each file above what it deletes: the column's two values, read from the database before
-    // the run; the table's drop uncounted, since the first file has changed the table by the
-    // time the second drops it, and the database before the run cannot say what is left.
+    // the run; the table's drop not counted, saying why, since the first file has changed the
+    // table by the time the second drops it and the database before the run cannot say what is
+    // left.
     expect(printed.slice(printed.indexOf(`  ${first}:`))).toEqual([
       `  ${first}:`,
       `    - column ${posts}.summary (2 non-empty values)`,
       `  ${second}:`,
-      `    - table ${posts}`,
+      `    - table ${posts} (rows not counted: an earlier migration in this run changes it)`,
     ]);
   }, 180_000);
 

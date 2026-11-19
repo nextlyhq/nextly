@@ -70,7 +70,9 @@ const ENV_SPELLINGS: ReadonlySet<EarlierSpelling> = new Set([
  *
  * `count` is what the listing shows: a table's rows, a column's non-empty
  * values, and for a removal of rows its table's rows. Absent when the
- * database could not be read.
+ * database could not be read. `notCounted` says why it is absent where the
+ * command knows the database cannot answer, and the listing shows it in the
+ * count's place, so an uncounted line never reads as an empty one.
  *
  * `alongside` names what goes with a table that lives elsewhere, such as an
  * entity's archived translations in a table every entity shares: it is the
@@ -101,6 +103,7 @@ export type Deletion =
       table: string;
       core?: boolean;
       count?: number;
+      notCounted?: string;
       alongside?: string;
       /**
        * The table this one holds the translations of, where the command
@@ -117,6 +120,7 @@ export type Deletion =
       column: string;
       core?: boolean;
       count?: number;
+      notCounted?: string;
       reason?: string;
       owner?: string;
     }
@@ -125,6 +129,7 @@ export type Deletion =
       table: string;
       core?: boolean;
       count?: number;
+      notCounted?: string;
       reason?: string;
       owner?: string;
       of?: EntityRef;
@@ -461,10 +466,7 @@ export function describeDeletion(deletion: Deletion): string {
 function describeWhat(deletion: Deletion): string {
   switch (deletion.kind) {
     case "table": {
-      const counted =
-        deletion.count === undefined
-          ? `table ${deletion.table}`
-          : `table ${deletion.table} (${plural(deletion.count, "row", "rows")})`;
+      const counted = `table ${deletion.table}${amount(deletion, "row", "rows")}`;
       const alongside =
         deletion.alongside === undefined
           ? counted
@@ -473,28 +475,41 @@ function describeWhat(deletion: Deletion): string {
     }
     case "column":
       return belonging(
-        deletion.count === undefined
-          ? `column ${deletion.table}.${deletion.column}`
-          : `column ${deletion.table}.${deletion.column} (${plural(deletion.count, "non-empty value", "non-empty values")})`,
+        `column ${deletion.table}.${deletion.column}${amount(deletion, "non-empty value", "non-empty values", "values")}`,
         deletion.owner
       );
     case "rows": {
       if (deletion.of !== undefined) {
         const whose = `rows of ${entityLabel(deletion.of)} in ${deletion.table}`;
-        return deletion.count === undefined
-          ? whose
-          : `${whose} (${plural(deletion.count, "row", "rows")})`;
+        return `${whose}${amount(deletion, "row", "rows")}`;
       }
       return belonging(
-        deletion.count === undefined
-          ? `rows of ${deletion.table}`
-          : `rows of ${deletion.table} (the table has ${plural(deletion.count, "row", "rows")})`,
+        `rows of ${deletion.table}${amount(deletion, "row", "rows", "rows", "the table has ")}`,
         deletion.owner
       );
     }
     case "unnamed":
       return deletion.description;
   }
+}
+
+/**
+ * How much a deletion deletes, in brackets after what it names: its count, or why it has none
+ * (`notCounted`), or nothing where neither is known.
+ */
+function amount(
+  deletion: { count?: number; notCounted?: string },
+  one: string,
+  many: string,
+  what = many,
+  lead = ""
+): string {
+  if (deletion.count !== undefined) {
+    return ` (${lead}${plural(deletion.count, one, many)})`;
+  }
+  return deletion.notCounted === undefined
+    ? ""
+    : ` (${what} not counted: ${deletion.notCounted})`;
 }
 
 /** A collection or Single as a listing names it: `collection "posts"`, `Single "home"`. */

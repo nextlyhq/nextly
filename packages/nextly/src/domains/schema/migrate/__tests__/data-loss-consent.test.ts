@@ -548,6 +548,28 @@ describe("describing a deletion", () => {
       })
     ).toBe("column dc_pages.summary: rename to excerpt declined");
   });
+
+  it("says why it is not counted in the count's place, so it never reads as empty", () => {
+    const why = "an earlier migration in this run changes it";
+    expect(describeDeletion({ ...table("p"), notCounted: why })).toBe(
+      `table p (rows not counted: ${why})`
+    );
+    expect(
+      describeDeletion({
+        kind: "column",
+        table: "p",
+        column: "c",
+        notCounted: why,
+      })
+    ).toBe(`column p.c (values not counted: ${why})`);
+    expect(describeDeletion({ ...rows("p"), notCounted: why })).toBe(
+      `rows of p (rows not counted: ${why})`
+    );
+    // A count read is shown, whatever else the deletion says.
+    expect(describeDeletion({ ...table("p"), count: 2, notCounted: why })).toBe(
+      "table p (2 rows)"
+    );
+  });
 });
 
 describe("counting deletions", () => {

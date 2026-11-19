@@ -3874,11 +3874,14 @@ async function pendingRunDeletions(
   return units.map((unit, at) => ({ unit, deletions: counted[at] ?? [] }));
 }
 
+/** Why a deletion in a table an earlier migration of the run changes has no count. */
+const CHANGED_EARLIER_IN_RUN = "an earlier migration in this run changes it";
+
 /**
  * Each unit's deletions with how much each deletes, read from the database before the run
  * (`countDeletions`): a table's rows, a column's non-empty values. A deletion in a table an
- * earlier unit's deletion already names is left uncounted: that unit has changed the table by
- * then, so the database before the run cannot say what is left in it.
+ * earlier unit's deletion already names is not counted, and says so (`notCounted`): that unit has
+ * changed the table by then, so the database before the run cannot say what is left in it.
  */
 async function countedRunDeletions(
   perUnit: readonly (readonly Deletion[])[],
@@ -3893,8 +3896,8 @@ async function countedRunDeletions(
       const changedEarlier =
         deletion.kind !== "unnamed" && earlierTables.has(deletion.table);
       unit.push(
-        changedEarlier
-          ? deletion
+        changedEarlier && deletion.kind !== "unnamed"
+          ? { ...deletion, notCounted: CHANGED_EARLIER_IN_RUN }
           : ((await countDeletions([deletion], db, dialect))[0] ?? deletion)
       );
     }
