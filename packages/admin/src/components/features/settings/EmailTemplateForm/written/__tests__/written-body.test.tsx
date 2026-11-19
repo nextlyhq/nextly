@@ -192,4 +192,56 @@ describe("a written email's blocks", () => {
     );
     expect(insert.current?.("name")).toBe(false);
   });
+
+  it("edits each kind's own fields: a button's link, an image's address, a spacer's height, a list's variable", async () => {
+    const user = userEvent.setup();
+    const seen = vi.fn<(doc: WrittenDocument) => void>();
+    render(
+      <WrittenBody
+        value={doc(
+          {
+            type: "button",
+            label: [{ type: "text", text: "Go" }],
+            link: { url: "" },
+          },
+          { type: "image", src: { url: "" }, alt: [] },
+          { type: "spacer" },
+          { type: "list", variable: "", blocks: [] }
+        )}
+        listVariables={["lines", "name"]}
+        onChange={seen}
+      />
+    );
+    const last = () => seen.mock.calls[seen.mock.calls.length - 1]?.[0];
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Button link" }), {
+      target: { value: "https://shop.example" },
+    });
+    expect(last()?.blocks[0]).toMatchObject({
+      link: { url: "https://shop.example" },
+    });
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Image address" }), {
+      target: { value: "https://cdn.example/a.png" },
+    });
+    expect(last()?.blocks[1]).toMatchObject({
+      src: { url: "https://cdn.example/a.png" },
+    });
+    expect(
+      screen.getByText(
+        "No alt text: screen readers and blocked images show nothing."
+      )
+    ).toBeDefined();
+
+    await user.click(screen.getByRole("button", { name: "Large" }));
+    expect(last()?.blocks[2]).toEqual({ type: "spacer", height: 48 });
+
+    fireEvent.change(screen.getByRole("combobox", { name: "List variable" }), {
+      target: { value: "lines" },
+    });
+    expect(last()?.blocks[3]).toMatchObject({
+      type: "list",
+      variable: "lines",
+    });
+  });
 });

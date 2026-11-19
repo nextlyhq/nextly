@@ -34,7 +34,7 @@ import type { WrittenBlock } from "@admin/services/emailTemplateApi";
 export type Inline = Extract<WrittenBlock, { type: "text" }>["text"][number];
 
 /** A link as stored: a fixed address, or a variable holding one. */
-export type WrittenLink = NonNullable<Inline["link"]>;
+type WrittenLink = NonNullable<Inline["link"]>;
 
 /** A chip as stored: the variable and its fallback. */
 type Chip = Extract<Inline, { type: "chip" }>;
@@ -129,7 +129,7 @@ type SerializedWrittenLinkNode = Spread<
 >;
 
 /** A link around some text: a fixed address, or a variable holding one. */
-export class WrittenLinkNode extends ElementNode {
+class WrittenLinkNode extends ElementNode {
   __link: WrittenLink;
 
   static getType(): string {
