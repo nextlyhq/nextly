@@ -735,9 +735,11 @@ describe.each(getConfiguredTestDialects())(
 
       await service.updateCollection(
         "articles",
-        { fields: [{ name: "content", type: "text" }] } as Parameters<
-          CollectionService["updateCollection"]
-        >[1],
+        {
+          fields: [{ name: "content", type: "text" }],
+          // A plugin says the field leaving and the one arriving are a rename.
+          renames: [{ from: "body", to: "content", choice: "rename" }],
+        } as Parameters<CollectionService["updateCollection"]>[1],
         {}
       );
 

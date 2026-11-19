@@ -39,6 +39,22 @@ const RENAMED = [
   { name: "views", type: "number" },
 ];
 
+/**
+ * A Single's schema save says whether `heading` leaving and a field arriving in its place is a
+ * rename, as that road requires. The seeds hold `heading` and `views`: where the fields sent
+ * drop `heading` and add exactly one field, that pair is answered as a rename.
+ */
+function renamesFor(fields: unknown[]): { renames: unknown[] } {
+  const names = fields.map(field => (field as { name?: string }).name);
+  const added = names.filter(name => name !== "heading" && name !== "views");
+  return {
+    renames:
+      !names.includes("heading") && added.length === 1
+        ? [{ from: "heading", to: added[0], choice: "rename" }]
+        : [],
+  };
+}
+
 interface Entries {
   createEntry(
     params: {
@@ -318,7 +334,7 @@ describeEachDialect("a translated field that is renamed", dialect => {
         await dispatchSingles(
           "updateSingleSchema",
           { slug: "hero" },
-          { fields: RENAMED }
+          { fields: RENAMED, ...renamesFor(RENAMED) }
         );
       },
     },
@@ -473,7 +489,11 @@ describeEachDialect("a translated field that is renamed", dialect => {
       table: "single_hero",
       seed: seedSingle,
       save: async (fields: unknown[]) =>
-        dispatchSingles("updateSingleSchema", { slug: "hero" }, { fields }),
+        dispatchSingles(
+          "updateSingleSchema",
+          { slug: "hero" },
+          { fields, ...renamesFor(fields) }
+        ),
     },
     {
       path: "a Single's schema dialog applies it",
@@ -640,7 +660,7 @@ describeEachDialect("a translated field that is renamed", dialect => {
       save: async (fields: unknown[]) => {
         const saved = await handler().updateCollection(
           { collectionName: "posts" },
-          { localized: true, fields }
+          { localized: true, fields, ...renamesFor(fields) }
         );
         if (!saved.success) throw new Error(JSON.stringify(saved));
       },
@@ -653,7 +673,7 @@ describeEachDialect("a translated field that is renamed", dialect => {
         dispatchSingles(
           "updateSingleSchema",
           { slug: "hero" },
-          { localized: true, fields }
+          { localized: true, fields, ...renamesFor(fields) }
         ),
     },
   ];
@@ -1366,7 +1386,7 @@ describeEachDialect("a translated field that is renamed", dialect => {
         await dispatchSingles(
           "updateSingleSchema",
           { slug: "hero" },
-          { fields }
+          { fields, ...renamesFor(fields) }
         );
       },
     },
@@ -1534,7 +1554,11 @@ describeEachDialect("a translated field that is renamed", dialect => {
       change: async () => {
         const saved = await handler().updateCollection(
           { collectionName: "posts" },
-          { localized: false, fields: renamedShared() }
+          {
+            localized: false,
+            fields: renamedShared(),
+            ...renamesFor(renamedShared()),
+          }
         );
         if (!saved.success) throw new Error(JSON.stringify(saved));
       },
@@ -1569,7 +1593,11 @@ describeEachDialect("a translated field that is renamed", dialect => {
         await dispatchSingles(
           "updateSingleSchema",
           { slug: "hero" },
-          { localized: false, fields: renamedShared() }
+          {
+            localized: false,
+            fields: renamedShared(),
+            ...renamesFor(renamedShared()),
+          }
         );
       },
     },
@@ -1887,7 +1915,11 @@ describeEachDialect("a translated field that is renamed", dialect => {
       seed: seedSingle,
       answers: ["none"],
       save: async fields =>
-        dispatchSingles("updateSingleSchema", { slug: "hero" }, { fields }),
+        dispatchSingles(
+          "updateSingleSchema",
+          { slug: "hero" },
+          { fields, ...renamesFor(fields) }
+        ),
     },
     {
       path: "a Single's schema dialog",
@@ -2145,7 +2177,7 @@ describeEachDialect("a translated field that is renamed", dialect => {
     const refusal = await dispatchSingles(
       "updateSingleSchema",
       { slug: "hero" },
-      { fields: RENAMED }
+      { fields: RENAMED, ...renamesFor(RENAMED) }
     ).then(
       () => undefined,
       (error: unknown) => error
@@ -2167,7 +2199,7 @@ describeEachDialect("a translated field that is renamed", dialect => {
     await dispatchSingles(
       "updateSingleSchema",
       { slug: "hero" },
-      { fields: RENAMED }
+      { fields: RENAMED, ...renamesFor(RENAMED) }
     );
 
     expect(await companionValues("single_hero", "title2", id)).toEqual({

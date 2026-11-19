@@ -97,28 +97,15 @@ export function declinedRename(pair: FieldPair): boolean {
 
 /**
  * Refuse, before anything is written, a change on a road that takes answers whose rename
- * candidate (`pair`, or none) has no answer, or that answers a pair the change doesn't make.
- * `entity` names it: `The collection "posts"`, say. Off such a road nothing is refused.
+ * candidate (`pair`, or none) has no answer. `entity` names it: `The collection "posts"`, say.
+ * An answer for a pair the change doesn't make has nothing to answer and is left aside, as the
+ * change is planned without it. Off such a road nothing is refused.
  */
 export function refuseUnansweredRename(
   entity: string,
   pair: FieldPair | null
 ): void {
-  const given = answersScope.getStore();
-  if (given === undefined) return;
-  const unmatched = given.filter(
-    a => pair === null || a.from !== pair.from.name || a.to !== pair.to.name
-  );
-  if (unmatched.length > 0) {
-    throw NextlyError.validation({
-      errors: unmatched.map(a => ({
-        path: "renames",
-        code: "FIELD_RENAME_ANSWER_UNMATCHED",
-        message: `${entity}: this change doesn't remove "${a.from}" and add "${a.to}" as one pair, so the answer for them can't be used. Answer only a field it removes and another of the same type it adds.`,
-      })),
-      logContext: { reason: "field-rename-answer-unmatched" },
-    });
-  }
+  if (answersScope.getStore() === undefined) return;
   if (pair === null || answers(pair) !== undefined) return;
   const from = pair.from.name ?? "";
   const to = pair.to.name ?? "";
