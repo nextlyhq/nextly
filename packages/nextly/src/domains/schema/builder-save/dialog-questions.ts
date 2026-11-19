@@ -28,7 +28,10 @@ import { PromptCancelledError } from "../pipeline/prompt-dispatcher/errors";
 import type { Resolution } from "../pipeline/resolution/types";
 import type { DesiredSchema } from "../pipeline/types";
 import {
+  fieldProducesColumn,
+  fieldsStoredOnRow,
   toSnakeCase,
+  usesJunctionTable,
   type ColumnOrigin,
 } from "../services/field-column-descriptor";
 import { rowFieldDiff } from "../services/field-diff";
@@ -71,14 +74,17 @@ export async function refuseUnansweredDialogQuestions(args: {
   const covered = new Set(candidates.map(candidate => candidate.fromColumn));
   // The drops the request answers for are those of the fields the change removes, as the dialog
   // lists them for the person to confirm (`rowFieldDiff`), a field inside a group with no name
-  // included. A field it keeps by name whose column goes, a relationship stored in a link table
-  // now, is a change of storage the save carries.
+  // included, and those of the fields it keeps by name that lose their column on the row
+  // (`columnsKeptFieldsLose`).
   const wasStored = storesPerLanguage({ localized: args.wasLocalized });
   const removedFields = rowFieldDiff(args.oldFields, args.newFields, {
     localized: wasStored,
     newLocalized: storesPerLanguage({ localized: args.isLocalized }),
   }).removed;
-  const removed = new Set(removedFields.map(field => toSnakeCase(field.name)));
+  const removed = new Set([
+    ...removedFields.map(field => toSnakeCase(field.name)),
+    ...columnsKeptFieldsLose(args.oldFields, args.newFields),
+  ]);
   // A removed field kept per language has its values in the translations table, which the
   // preview does not read: its drop is confirmed by the field's name, as the dialog sends it, or
   // answered as the rename the dialog offered for it on the translations table
@@ -136,6 +142,30 @@ export async function refuseUnansweredDialogQuestions(args: {
     channel: "browser",
   });
   if (!answer.proceed) throw cancelled(args.tableName, []);
+}
+
+/**
+ * The columns of the row's fields that the change keeps by name but that no longer have a column
+ * there: a field turned into a field group, whose values its group's own table would hold, drops
+ * its column and what it holds, as a removed field does. A relationship that now keeps its links in
+ * a link table is left out: the save carries its links there rather than losing them.
+ */
+function columnsKeptFieldsLose(
+  oldFields: readonly FieldDefinition[],
+  newFields: readonly FieldDefinition[]
+): string[] {
+  const after = new Map(
+    fieldsStoredOnRow(newFields).map(field => [field.name, field] as const)
+  );
+  return fieldsStoredOnRow(oldFields).flatMap(field => {
+    const kept = after.get(field.name);
+    return kept !== undefined &&
+      fieldProducesColumn(field) &&
+      !fieldProducesColumn(kept) &&
+      !usesJunctionTable(kept)
+      ? [toSnakeCase(field.name)]
+      : [];
+  });
 }
 
 /**

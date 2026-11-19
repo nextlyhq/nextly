@@ -29,7 +29,7 @@ import {
 import type { ServiceContainer } from "../../../../services";
 import { readTableDefinition } from "../../__tests__/helpers/table-definition";
 
-type Field = { name: string; type: string };
+type Field = { name: string; type: string; component?: string };
 const text = (name: string): Field => ({ name, type: "text" });
 const DB = { migrationsDir: "./migrations", uiSchemaFile: "./ui-schema.json" };
 
@@ -261,6 +261,47 @@ for (const dialect of getConfiguredTestDialects()) {
 
       it("drops the column when the drop is confirmed", async () => {
         await kind.save(t, [text("heading")], {
+          eventResolutions: [
+            {
+              kind: "confirm_drop",
+              eventId: `destructive_drop:${kind.table}.views`,
+            },
+          ],
+        });
+
+        expect(await columns()).not.toContain("views");
+      }, 60_000);
+
+      // A field the change keeps by name but turns into a field group stores nothing on the row any
+      // more, its values kept in the group's own table: its column goes with what it holds, so its
+      // drop is asked as a removed field's is.
+      const intoGroup = async () => {
+        await dispatchComponents(
+          "createComponent",
+          {},
+          { slug: "card", label: "Card", fields: [text("line")] }
+        );
+        return [
+          text("heading"),
+          { name: "views", type: "component", component: "card" },
+        ];
+      };
+
+      it("refuses turning a field that holds values into a field group without confirming the drop, and changes nothing", async () => {
+        const fields = await intoGroup();
+        const files = migrationFiles();
+        const before = await columns();
+
+        const refused = await refusalOf(fields, {});
+
+        expect(String(refused)).toMatch(/cancelled/);
+        expect(migrationFiles()).toEqual(files);
+        expect(await columns()).toEqual(before);
+        expect(await viewsHeld()).toEqual(["7"]);
+      }, 60_000);
+
+      it("turns the field into a field group, dropping its column, when the drop is confirmed", async () => {
+        await kind.save(t, await intoGroup(), {
           eventResolutions: [
             {
               kind: "confirm_drop",
