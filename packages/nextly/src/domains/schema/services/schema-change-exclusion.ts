@@ -115,7 +115,15 @@ export async function withSchemaChangeExcluded<T>(
         // A save that finished one left part-way (the same save again) has brought the database
         // to it: settled now, that record clears rather than standing until the next start. Only
         // the records standing before the save: one the save itself left is the next start's.
-        await settleAfter(standing);
+        // The save has committed by now, so a settle that fails is logged, never its answer: a
+        // save answered as failed would be saved again, writing its change twice.
+        try {
+          await settleAfter(standing);
+        } catch (error) {
+          args.logger.warn(
+            `The save went through, but settling the Builder save left part-way before it failed (${error instanceof Error ? error.message : String(error)}). Its record stays, and the next development start settles it.`
+          );
+        }
         return result;
       },
       args.migrationsDir

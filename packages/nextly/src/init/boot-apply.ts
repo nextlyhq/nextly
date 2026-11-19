@@ -77,20 +77,33 @@ export async function runBootTimeApplyIfDev(opts?: {
   const label = callerLabel(opts?.caller);
   try {
     // Step 0: settle a Builder save an earlier process left part-way, before anything reads the
-    // migration files it wrote: what is settled to pending runs in step 1.
-    const unsettled = await settleLeftSavesAtStart(label);
+    // migration files it wrote. One left pending keeps its record: its remaining files run in
+    // step 1, and the record clears only once they are recorded applied.
+    const settled = await settleLeftSavesAtStart(label);
 
     // Step 1: Apply pending SQL migrations first (lock-guarded, safe across workers). Not while a
     // save of this host stays unsettled: its files may be among the pending ones, and running them
     // over a save nothing could judge would change the database its record describes.
     let registeredByMigrate = 0;
-    if (unsettled) {
+    if (settled.unsettled) {
       consoleLogger.warn(
         `${label} Pending migrations were not applied at this start: a Builder save left part-way is not settled (named above), and its files may be among them. Clear its record by hand as the warning says, then start again.`
       );
       markStartIncomplete();
     } else {
       registeredByMigrate = await applyPendingMigrations(label);
+      // A save left pending, settled again now its remaining files have had their run: recorded
+      // applied, it is whole and its record clears; still pending (the files this start ran are not
+      // the ones it wrote), the record stays, refusing a Builder save until they run.
+      if (settled.pending.length > 0) {
+        const again = await settleLeftSavesAtStart(label, settled.pending);
+        if (again.pending.length > 0) {
+          consoleLogger.warn(
+            `${label} A Builder save stopped between its migration files, and the rest of them did not run at this start, so its record stays. Run \`nextly migrate\` from the project the save was made in.`
+          );
+          markStartIncomplete();
+        }
+      }
     }
 
     // Step 1.5: Register collections from migration metadata
@@ -99,7 +112,11 @@ export async function runBootTimeApplyIfDev(opts?: {
     // can both check existence, then both insert), but slug unique constraints
     // prevent duplicates. If a worker loses the race, it continues normally.
     // Any metadata-table-to-physical-table mismatch self-heals on next boot.
-    const registeredFromSnapshots = await registerMigrationMetadata(label);
+    // Not while a save stays unsettled: this takes every snapshot as applied, and the ones of
+    // the files step 1 held back are not, so an entity would be registered for tables not there.
+    const registeredFromSnapshots = settled.unsettled
+      ? 0
+      : await registerMigrationMetadata(label);
 
     // Migration-created collections and singles need permissions just like
     // code-first ones. Either step may have registered them — the migrate
@@ -225,12 +242,18 @@ export function checkRelationsBeforePlugins(
  * failed, or a settle that never had the lock), which keeps the start from running the pending
  * migrations its files may be among. A settle that fails before it reaches any record (its
  * database or setup not read) names none: the start goes on as it would, the warning saying why.
+ * Also answers the records left pending, kept until their remaining files run; `only` settles
+ * those again once the start's migrate step has had its run.
  */
-async function settleLeftSavesAtStart(label: string): Promise<boolean> {
+async function settleLeftSavesAtStart(
+  label: string,
+  only?: readonly string[]
+): Promise<{ unsettled: boolean; pending: string[] }> {
+  const none = { unsettled: false, pending: [] };
   try {
     const { container } = await import("../di/container");
     const adapter = container.get<DrizzleAdapter | undefined>("adapter");
-    if (!adapter) return false;
+    if (!adapter) return none;
     const [
       { settleLeftSaves },
       { settleRegistryReader, settleRegistryWriter },
@@ -268,6 +291,9 @@ async function settleLeftSavesAtStart(label: string): Promise<boolean> {
             info: message => consoleLogger.info(`${label} ${message}`),
             warn: message => consoleLogger.warn(`${label} ${message}`),
           },
+          // A pending save keeps its record until its remaining files are recorded applied.
+          keepPending: true,
+          ...(only === undefined ? {} : { only: new Set(only) }),
           writeRegistry: settleRegistryWriter(adapter),
           registryHolds: settleRegistryReader(adapter),
         }),
@@ -277,13 +303,18 @@ async function settleLeftSavesAtStart(label: string): Promise<boolean> {
       }
     );
     // A settle that never ran (the lock not had) says nothing of what stands: taken as unsettled.
-    if (!outcome.ran) return true;
-    return outcome.value.some(settled => settled.outcome === "left");
+    if (!outcome.ran) return { unsettled: true, pending: [] };
+    return {
+      unsettled: outcome.value.some(settled => settled.outcome === "left"),
+      pending: outcome.value
+        .filter(settled => settled.outcome === "pending")
+        .map(settled => settled.id),
+    };
   } catch (error) {
     consoleLogger.warn(
       `${label} A Builder save left part-way could not be settled (${error instanceof Error ? error.message : String(error)}). Its record stays, and the next development start tries again.`
     );
-    return false;
+    return none;
   }
 }
 

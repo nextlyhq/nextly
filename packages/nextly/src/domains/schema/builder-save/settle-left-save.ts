@@ -339,6 +339,17 @@ async function settleNone(
     );
     return "left";
   }
+  // A migration written since from one of the save's files (another writer's, or
+  // `migrate:create`'s, chaining from the newest snapshot it found) leaves out what that file
+  // does: removed under it, the later one could no longer make the schema it was written for.
+  const dependents = await dependentsOf(deps, files);
+  if (dependents.length > 0) {
+    deps.logger.warn(
+      `A Builder save of the ${described(record)} stopped before any of it applied, but ${dependents.join(", ")} was written from its files since, so they are not removed. Its record stays.`
+    );
+    notes.push(`${dependents.join(", ")} was written from the save's files`);
+    return "left";
+  }
   for (const filename of files) {
     // A failed attempt a file left in the ledger is cleared as the save's own withdrawal does.
     await settleRemovedFileAttempts(deps.adapter, repo, filename);
@@ -354,6 +365,52 @@ async function settleNone(
     `Settled a Builder save of the ${described(record)} that stopped before any of it applied: its files are removed and the definition put back.`
   );
   return "none";
+}
+
+/**
+ * The migrations, other than the save's own, whose snapshots were written from one of `files`:
+ * naming one as their parent or among their merges, or copied from one's snapshot (a hand-written
+ * migration's carries the name of the migration it was copied from). A snapshot that cannot be
+ * read cannot say, and is counted, so nothing is removed under it.
+ */
+async function dependentsOf(
+  deps: SettleDeps,
+  files: readonly string[]
+): Promise<string[]> {
+  const saves = new Set(files.map(baseName));
+  const meta = join(deps.migrationsDir, "meta");
+  let names: string[];
+  try {
+    names = (await readdir(meta)).filter(n => n.endsWith(".snapshot.json"));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
+  const dependents: string[] = [];
+  for (const name of names.sort()) {
+    const own = name.replace(/\.snapshot\.json$/, "");
+    if (saves.has(own)) continue;
+    let from: string[];
+    try {
+      const file = parseSnapshotFile(
+        await readFile(join(meta, name), "utf-8"),
+        name
+      );
+      from = [
+        ...(file.parent === undefined || file.parent === null
+          ? []
+          : [file.parent]),
+        ...(file.merges ?? []),
+        ...(file.migration === undefined || file.migration === own
+          ? []
+          : [file.migration]),
+      ];
+    } catch {
+      from = [...saves];
+    }
+    if (from.some(parent => saves.has(parent))) dependents.push(own);
+  }
+  return dependents;
 }
 
 /**
@@ -584,7 +641,11 @@ async function whereTablesStand(
   // dropped as translation was turned off) is at neither end.
   const companionsAt = async (snapshot: NextlySchemaSnapshot) => {
     for (const table of only(snapshot, tables).tables) {
-      if ((await companionDriftItems(deps, table.name, table)).length > 0) {
+      // Judged as a file is planned, from the history: no push's own target spares anything.
+      if (
+        (await companionDriftItems(deps, table.name, table, undefined)).length >
+        0
+      ) {
         return false;
       }
     }

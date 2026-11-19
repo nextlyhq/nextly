@@ -139,7 +139,31 @@ vi.mock("../../../../cli/utils/config-loader", async original => {
  * valid (the test's database is reached through the instance, not the environment), and each run of
  * `migrateCore` counted before it goes on as it would.
  */
-const migrateStep = vi.hoisted(() => ({ watch: false, runs: 0 }));
+const migrateStep = vi.hoisted(() => ({
+  watch: false,
+  runs: 0,
+  registrations: 0,
+  /**
+   * Run the folder's pending files through the normal runner in place of the whole migrate step,
+   * which also judges the process's own config against the database this case does not hold.
+   */
+  byFiles: false,
+}));
+
+// The start's registration of entities from snapshots, counted where a case watches the start.
+vi.mock("../../migrate/metadata-register", async original => {
+  const actual =
+    await original<typeof import("../../migrate/metadata-register")>();
+  return {
+    ...actual,
+    registerFromMigrations: (async (
+      ...args: Parameters<typeof actual.registerFromMigrations>
+    ) => {
+      if (migrateStep.watch) migrateStep.registrations += 1;
+      return actual.registerFromMigrations(...args);
+    }) as typeof actual.registerFromMigrations,
+  };
+});
 
 vi.mock("../../../../cli/utils/adapter", async original => {
   const actual =
@@ -160,7 +184,29 @@ vi.mock("../../../../cli/commands/migrate", async original => {
     ...actual,
     migrateCore: (async (...args: Parameters<typeof actual.migrateCore>) => {
       if (migrateStep.watch) migrateStep.runs += 1;
-      return actual.migrateCore(...args);
+      if (!migrateStep.byFiles) return actual.migrateCore(...args);
+      const [deps] = args as unknown as [
+        {
+          adapter: unknown;
+          db: unknown;
+          dialect: Parameters<typeof actual.runFileMigrations>[0]["dialect"];
+          migrationsDir: string;
+        },
+      ];
+      await actual.runFileMigrations({
+        adapter: deps.adapter as never,
+        db: deps.db,
+        dialect: deps.dialect,
+        migrationsDir: deps.migrationsDir,
+        logger: (await import("../../../../cli/utils/logger")).createLogger({
+          quiet: true,
+        }),
+      });
+      return {
+        applied: 1,
+        pluginModulesApplied: 0,
+        metadata: { collectionsRegistered: 0, singlesRegistered: 0 },
+      } as never;
     }) as typeof actual.migrateCore,
   };
 });
@@ -198,6 +244,8 @@ afterEach(async () => {
   bootFolder.dir = undefined;
   migrateStep.watch = false;
   migrateStep.runs = 0;
+  migrateStep.registrations = 0;
+  migrateStep.byFiles = false;
   kill.at = undefined;
   kill.reached = undefined;
   kill.release?.();
@@ -471,6 +519,10 @@ describe.each(getConfiguredTestDialects())(
       await runBootTimeApplyIfDev({ caller: "settle test" });
 
       expect(migrateStep.runs, "the start's migrate step ran").toBe(0);
+      expect(
+        migrateStep.registrations,
+        "the start registered entities from the snapshots"
+      ).toBe(0);
       expect(await recordRow(t), "the record stays").toBeDefined();
       const repo = new SchemaEventsRepository(
         t.adapter.getDrizzle(),
@@ -857,6 +909,47 @@ describe.each(getConfiguredTestDialects())(
     }, 300_000);
 
     // A row that cannot be read still stands for its entity's save: that entity's marker stays.
+    // A migration written since from one of the save's files (migrate:create chains from the
+    // newest snapshot it finds) leaves out what that file does: the settle does not remove the
+    // file under it, and the record stays.
+    it("keeps a record whose files a later migration was written from", async () => {
+      const t = await boot();
+      await created(t);
+      const filesBefore = sqlFiles();
+      await stopSave(t, [text("heading"), text("alpha")], point =>
+        point.startsWith("unit:")
+      );
+      const written = sqlFiles().filter(f => !filesBefore.includes(f));
+      expect(written.length).toBeGreaterThan(0);
+      const parent = written.at(-1)!.replace(/\.sql$/, "");
+      // The later migration, its snapshot copied from the create's and naming the save's last
+      // file as the one it was written from.
+      const later = "29991231_000000_000_later_change";
+      const meta = join(HISTORY_DIR(), "meta");
+      const created_ = readdirSync(meta).find(n =>
+        n.endsWith("_create.snapshot.json")
+      )!;
+      const snapshot = JSON.parse(
+        readFileSync(join(meta, created_), "utf-8")
+      ) as Record<string, unknown>;
+      writeFileSync(
+        join(meta, `${later}.snapshot.json`),
+        JSON.stringify({ ...snapshot, parent, migration: later }, null, 2)
+      );
+      writeFileSync(
+        join(HISTORY_DIR(), `${later}.sql`),
+        "-- Migration: later_change\n\n-- UP\nSELECT 1;\n\n-- DOWN\nSELECT 1;\n"
+      );
+
+      const settled = await settle(t);
+
+      expect(settled.map(s => s.outcome)).toEqual(["left"]);
+      expect(await recordRow(t), "the record stays").toBeDefined();
+      for (const file of written) {
+        expect(sqlFiles(), "the save's files stay").toContain(file);
+      }
+    }, 300_000);
+
     it("keeps the marker of an entity whose row cannot be read", async () => {
       const t = await boot();
       await created(t);
@@ -1102,6 +1195,76 @@ describe.each(getConfiguredTestDialects())(
     // The Builder save's settle (`settleBeforeBuilderSave`, run inside its schema-change
     // exclusion), asked directly: the stopped save still holds this process's exclusion, which
     // only its process ending would release.
+    // A start keeps a pending save's record until the save's remaining files are recorded applied:
+    // its migrate step reads the process's own folder, which here is not the one the save wrote to,
+    // so they do not run, and the record stays to refuse a Builder save over them.
+    it.skipIf(dialect === "mysql")(
+      "keeps a pending save's record at a start whose migrate step does not run its files",
+      async () => {
+        const t = await boot();
+        await created(t);
+        const filesBefore = sqlFiles();
+        await stopSave(
+          t,
+          [text("heading", { localized: true })],
+          point => point.startsWith("unit:") && point.includes("localization"),
+          true
+        );
+        const written = sqlFiles().filter(f => !filesBefore.includes(f));
+        await firstFileAlone(t, written);
+        lockPassesThrough.on = true;
+
+        await runBootTimeApplyIfDev({ caller: "settle test" });
+
+        expect(await recordRow(t), "the record stays").toBeDefined();
+        const repo = new SchemaEventsRepository(
+          t.adapter.getDrizzle(),
+          t.adapter.dialect
+        );
+        const unrun = written.filter(f => f.includes("localization"));
+        for (const file of unrun) {
+          expect(await repo.isFileApplied(file), file).toBe(false);
+        }
+      },
+      300_000
+    );
+
+    // Where the start's migrate step runs the save's remaining files, the settle after it finds
+    // them recorded applied and clears the record.
+    it.skipIf(dialect === "mysql")(
+      "clears a pending save's record once the start's migrate step has run its files",
+      async () => {
+        const t = await boot();
+        await created(t);
+        const filesBefore = sqlFiles();
+        await stopSave(
+          t,
+          [text("heading", { localized: true })],
+          point => point.startsWith("unit:") && point.includes("localization"),
+          true
+        );
+        const written = sqlFiles().filter(f => !filesBefore.includes(f));
+        await firstFileAlone(t, written);
+        lockPassesThrough.on = true;
+        bootFolder.dir = HISTORY_DIR();
+        migrateStep.watch = true;
+        migrateStep.byFiles = true;
+
+        await runBootTimeApplyIfDev({ caller: "settle test" });
+
+        expect(migrateStep.runs, "the start's migrate step never ran").toBe(1);
+        const repo = new SchemaEventsRepository(
+          t.adapter.getDrizzle(),
+          t.adapter.dialect
+        );
+        for (const file of written) {
+          expect(await repo.isFileApplied(file), file).toBe(true);
+        }
+        expect(await recordRow(t), "the record clears").toBeUndefined();
+      },
+      300_000
+    );
+
     it.skipIf(dialect === "mysql")(
       "refuses a Builder save while a save stopped between its files is pending, naming the start",
       async () => {

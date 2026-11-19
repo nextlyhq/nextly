@@ -10,6 +10,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { FieldConfig } from "../../../collections/fields/types";
 import { writeAppliedFieldsRow } from "../../../dispatcher/helpers/applied-fields-row";
+import { canonicalJson } from "../../../shared/lib/canonical-json";
 import { adapterForReads } from "../../../shared/lib/read-transaction-scope";
 import { dashboardPinsPresent } from "../../dashboard/dashboard-pins";
 import { resolveRegistryTableName } from "../../field-groups/storage/resolve-storage-names";
@@ -112,12 +113,23 @@ async function registryRow(
   return row;
 }
 
-/** Whether `row` holds `saved`'s fields and translation flag, compared as stored. */
+/**
+ * Whether `row` holds `saved`'s fields and translation flag. Compared by content
+ * (`canonicalJson`): the registry and the definition file write a field's keys in their own
+ * order, which says nothing of what the field is.
+ */
 function holds(row: RegistryRow, saved: SavedEntity): boolean {
-  const stored =
-    typeof row.fields === "string" ? row.fields : JSON.stringify(row.fields);
+  let stored: unknown = row.fields;
+  if (typeof stored === "string") {
+    try {
+      stored = JSON.parse(stored);
+    } catch {
+      // A row whose fields cannot be read holds nothing that can be told the same.
+      return false;
+    }
+  }
   return (
-    stored === JSON.stringify(saved.fields) &&
+    canonicalJson(stored) === canonicalJson(saved.fields) &&
     Boolean(row.localized) === (saved.localized === true)
   );
 }
