@@ -38,6 +38,7 @@ import {
   type VersionRef,
   type VersionRow,
 } from "../../../domains/versions/versions-repository";
+import { NextlyError } from "../../../errors/nextly-error";
 import { VERSIONS_TABLE } from "../../../schemas/versions/types";
 import { toSnakeCase } from "../../../shared/lib/case-conversion";
 import type { UpgradeReport, UpgradeStepContext } from "../upgrade-step";
@@ -135,6 +136,8 @@ interface SplitDrafts {
   /** Each language's draft values. */
   languages: Map<string, Record<string, unknown>>;
   conflicts: SharedConflict[];
+  /** Conflicts whose two saves were made at the same moment, so neither is the later. */
+  ties: SharedConflict[];
 }
 
 /** The time a draft was last saved, for ordering its document's drafts oldest first. */
@@ -170,9 +173,13 @@ function splitDrafts(
   live: Record<string, unknown> | undefined,
   defaultLocale: string
 ): SplitDrafts {
-  const shared = new Map<string, { value: unknown; from: string }>();
+  const shared = new Map<
+    string,
+    { value: unknown; from: string; at: number }
+  >();
   const languages = new Map<string, Record<string, unknown>>();
   const conflicts: SharedConflict[] = [];
+  const ties: SharedConflict[] = [];
   const ordered = [...document.drafts].sort((a, b) => savedAt(a) - savedAt(b));
   for (const draft of ordered) {
     const snapshot = snapshotRecord(draft.snapshot);
@@ -188,10 +195,14 @@ function splitDrafts(
       }
       if (!isSharedEdit(document, live, alreadyShared, key, value)) continue;
       const earlier = shared.get(key);
+      const from = alreadyShared ? "shared" : slot;
       if (earlier && !sameSharedValue(earlier.value, value)) {
-        conflicts.push({ field: key, earlier: earlier.from, later: slot });
+        const conflict = { field: key, earlier: earlier.from, later: from };
+        // Saved at the same moment: the order the rows were read in would pick the value kept.
+        if (earlier.at === savedAt(draft)) ties.push(conflict);
+        else conflicts.push(conflict);
       }
-      shared.set(key, { value, from: alreadyShared ? "shared" : slot });
+      shared.set(key, { value, from, at: savedAt(draft) });
     }
   }
   return {
@@ -200,6 +211,7 @@ function splitDrafts(
     ),
     languages,
     conflicts,
+    ties,
   };
 }
 
@@ -233,11 +245,59 @@ async function liveRowOf(
   return row;
 }
 
+/** One document to split, and what its drafts become. */
+interface PlannedSplit {
+  document: DocumentToSplit;
+  split: SplitDrafts;
+}
+
+/**
+ * Every document to split and what its drafts become, refused before any is split where two
+ * languages changed one shared field in saves made at the same moment: nothing says which change
+ * came later, so neither is kept on a guess. The count, the run and the dry run read this one plan.
+ */
+async function plannedSplits(
+  context: UpgradeStepContext
+): Promise<PlannedSplit[]> {
+  const adapter = context.adapter as unknown as DrizzleAdapter;
+  const { defaultLocale } = await siteLanguages(context);
+  const planned: PlannedSplit[] = [];
+  for (const document of await documentsToSplit(context)) {
+    planned.push({
+      document,
+      split: splitDrafts(
+        document,
+        await liveRowOf(adapter, document),
+        defaultLocale
+      ),
+    });
+  }
+  const tied = planned.flatMap(({ document, split }) =>
+    split.ties.map(
+      tie =>
+        `the ${document.entity.kind} "${document.entity.slug}" entry ${document.ref.entryId} ` +
+        `(${tie.field}, in ${tie.earlier} and ${tie.later})`
+    )
+  );
+  if (tied.length > 0) {
+    throw new NextlyError({
+      code: "NEXTLY_UPGRADE_LOCALISATION_UNRESOLVED",
+      publicMessage:
+        `Two languages' pending changes to one shared field were saved at the same moment for ` +
+        `${tied.join("; ")}, so which change came later cannot be told. Give the field the same ` +
+        "value in both pending changes, or discard one of them, then run `nextly migrate` again. " +
+        "Nothing was changed.",
+      logContext: { ties: tied },
+    });
+  }
+  return planned;
+}
+
 /** How many documents keep a pending change whole. */
 export async function documentsWithDraftsToSplit(
   context: UpgradeStepContext
 ): Promise<number> {
-  return (await documentsToSplit(context)).length;
+  return (await plannedSplits(context)).length;
 }
 
 /** Split each document's whole-document drafts by part; how many documents were split. */
@@ -245,14 +305,8 @@ export async function splitDraftsByPart(
   context: UpgradeStepContext
 ): Promise<number> {
   const adapter = context.adapter as unknown as DrizzleAdapter;
-  const { defaultLocale } = await siteLanguages(context);
-  const documents = await documentsToSplit(context);
-  for (const document of documents) {
-    const split = splitDrafts(
-      document,
-      await liveRowOf(adapter, document),
-      defaultLocale
-    );
+  const planned = await plannedSplits(context);
+  for (const { document, split } of planned) {
     // The latest author stays the drafts' author.
     const latest = [...document.drafts].sort(
       (a, b) => savedAt(b) - savedAt(a)
@@ -284,24 +338,17 @@ export async function splitDraftsByPart(
       }
     });
   }
-  return documents.length;
+  return planned.length;
 }
 
 /** What the dry run lists of the split: each document, and each conflict with its winner. */
 export async function draftsSplitReport(
   context: UpgradeStepContext
 ): Promise<UpgradeReport> {
-  const adapter = context.adapter as unknown as DrizzleAdapter;
-  const { defaultLocale } = await siteLanguages(context);
   const report: UpgradeReport = { move: [], conflicts: [], check: [] };
-  for (const document of await documentsToSplit(context)) {
+  for (const { document, split } of await plannedSplits(context)) {
     const { entity, ref } = document;
     const named = `the ${entity.kind} "${entity.slug}" entry ${ref.entryId}`;
-    const split = splitDrafts(
-      document,
-      await liveRowOf(adapter, document),
-      defaultLocale
-    );
     const shared = Object.keys(split.shared);
     report.move.push(
       `${named}: its pending changes kept by part` +

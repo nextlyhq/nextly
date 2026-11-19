@@ -17,6 +17,7 @@ import { createDynamicHandlers } from "../../../routeHandler";
 import type { TestNextly } from "../../../plugins/test-nextly";
 import { VERSIONS_TABLE } from "../../../schemas/versions/types";
 import type { CollectionsHandler } from "../../../services/collections-handler";
+import { versionPinKey } from "../../versions/version-pins";
 import { workingDraftKey } from "../../versions/working-draft-key";
 import {
   WORKING_DRAFT_SHAPE,
@@ -270,6 +271,45 @@ describeEachDialect(
         /pt_BR.*pt-BR|pt-BR.*pt_BR/
       );
       expect(await storedLanguages()).toEqual(["en", "pt_BR"]);
+    });
+
+    // Two spellings of one language can meet in a keyed table the translations never show: here
+    // a base pinned for the same holder's pending change under each. Rewriting the older one would
+    // give it the other's key, so the conversion stops before writing anything, translations
+    // included, rather than stop part-way on the unique key.
+    it("stops before writing anything where both spellings meet only in a keyed table", async () => {
+      const id = await legacyArticle();
+      const ref = {
+        scopeKind: "collection" as const,
+        scopeSlug: ARTICLES,
+        entryId: id,
+      };
+      for (const code of ["pt_BR", "pt-BR"]) {
+        const slot = `pending:${code}`;
+        await database!.adapter.insert(
+          "nextly_version_pins",
+          {
+            id: `pin-${code}`,
+            ...ref,
+            holder: "editor-1",
+            slot,
+            versionNo: 1,
+            pinKey: versionPinKey(ref, "editor-1", slot),
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          },
+          { returning: [] }
+        );
+      }
+
+      await expect(
+        migrateData(database!.adapter as never, UNDERSCORED)
+      ).rejects.toThrow(/pt_BR[\s\S]*pt-BR/);
+
+      expect(await storedLanguages()).toEqual(["en", "pt_BR"]);
+      expect(await pendingChanges(id)).toEqual([
+        expect.objectContaining({ locale: "pt_BR" }),
+      ]);
     });
 
     it("answers a request naming the old code with a deprecation, and one naming the standard code without", async () => {

@@ -17,9 +17,10 @@ import {
 } from "../../../domains/i18n/config/stored-languages";
 import type { LaidOutEntity } from "../../../domains/i18n/per-language-storage-layout";
 import { storedLanguageReader } from "../../../domains/i18n/stored-language-reader";
-import { NextlyError } from "../../../errors/nextly-error";
 import { introspectLiveColumns } from "../../../domains/schema/pipeline/diff/introspect-live";
+import { builtByFor } from "../../../domains/schema/pipeline/registered-collections";
 import type { ColumnOrigin } from "../../../domains/schema/services/field-column-descriptor";
+import { NextlyError } from "../../../errors/nextly-error";
 import { VERSIONS_TABLE } from "../../../schemas/versions/types";
 import type { UpgradeSite, UpgradeStepContext } from "../upgrade-step";
 
@@ -188,11 +189,14 @@ export async function assertVersionHistoryReady(
 }
 
 /**
- * How `entity`'s columns were built, which decides a moved column's type: a component by the
- * component builder, one the Schema Builder made by its own, and anything code declared by the
- * pipeline's.
+ * How `entity`'s columns were built, which decides a moved column's type: by the ownership its
+ * registry row records, read as every other reader of a column's builder reads it (`builtByFor`).
+ * An entity the Schema Builder made was built by its creator for that kind; one declared in code,
+ * a field group included, by the pipeline.
  */
 export function builtByOf(entity: LaidOutEntity): ColumnOrigin {
-  if (entity.kind === "component") return "fieldGroup";
-  return entity.builderOwned === true ? "collection" : "codeFirst";
+  return builtByFor(
+    entity.kind === "component" ? "fieldGroup" : entity.kind,
+    entity.builderOwned
+  );
 }

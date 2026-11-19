@@ -6517,13 +6517,12 @@ async function refuseMixedStorageInConfig(
   );
   // The Schema Builder's entities, by their registered tables; one the configuration also declares
   // is judged as the configuration describes it.
-  judged.push(
-    ...(await readLayoutScanEntities(
-      adapter,
-      declaredTables,
-      startRegistryNow()
-    ))
+  const builderEntities = await readLayoutScanEntities(
+    adapter,
+    declaredTables,
+    startRegistryNow()
   );
+  judged.push(...builderEntities);
   await refuseMixedStorage(
     adapter,
     await entitiesTheLayoutCanRefuse(adapter, judged, perLanguage),
@@ -6546,9 +6545,11 @@ async function refuseMixedStorageInConfig(
       await storedLanguageReader(adapter).rows()
     );
     if (stored === undefined) {
+      // Every entity the site holds, the Schema Builder's too: a translation kept by one known
+      // only from its registry row reads as gone as surely as one the configuration declares.
       await refuseUndeclaredLanguages(
         adapter,
-        entities,
+        [...entities, ...builderEntities],
         IMPLICIT_LANGUAGE.code
       );
     }

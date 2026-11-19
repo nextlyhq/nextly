@@ -84,6 +84,8 @@ async function draftsBySlot(
  */
 function slotOf(
   entity: LaidOutEntity,
+  /** The entity's kind as its versions name it: only a collection or a Single keeps drafts. */
+  scopeKind: "collection" | "single",
   drafts: DraftRow[]
 ): SlotToKey | { tie: string } | undefined {
   const [kept, ...earlier] = [...drafts].sort(
@@ -99,7 +101,7 @@ function slotOf(
     };
   }
   const ref: VersionRef = {
-    scopeKind: entity.kind,
+    scopeKind,
     scopeSlug: entity.slug,
     entryId: kept.entryId,
   };
@@ -120,7 +122,7 @@ async function slotsToKey(context: UpgradeStepContext): Promise<SlotToKey[]> {
     // Only collection entries and Singles keep pending changes.
     if (entity.kind === "component") continue;
     for (const drafts of await draftsBySlot(adapter, entity)) {
-      const slot = slotOf(entity, drafts);
+      const slot = slotOf(entity, entity.kind, drafts);
       if (slot === undefined) continue;
       if ("tie" in slot) unresolved.push(slot.tie);
       else slots.push(slot);

@@ -33,7 +33,7 @@ export interface DeclaringConfig {
  * `fieldGroupTableOf`'s, by default its name under the earlier naming; a caller that can read the
  * registry passes its stored names (`declaredLaidOutEntitiesAsStored`).
  */
-export function declaredLaidOutEntities(
+function declaredLaidOutEntities(
   config: DeclaringConfig,
   fieldGroupTableOf: (slug: string) => string = resolveComponentTableName
 ): LaidOutEntity[] {

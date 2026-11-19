@@ -195,9 +195,9 @@ export async function refuseMixedStorage(
   throw new NextlyError({
     code: "NEXTLY_PER_LANGUAGE_STORAGE_MIXED",
     publicMessage:
-      `experimental.perLanguageStorage is on, but this database still keeps translatable values ` +
-      `on the main tables of ${named}. A site never serves both layouts: turn the setting off ` +
-      `until those values are stored per language.`,
+      `This site keeps every translatable field per language, but this database still keeps ` +
+      `translatable values on the main tables of ${named}. A site never serves both layouts: ` +
+      `run \`nextly migrate\`, whose data steps move those values per language, then restart.`,
     logContext: {
       entities: found.map(({ entity, onMain }) => ({
         kind: entity.kind,
@@ -306,7 +306,7 @@ export async function refuseUndeclaredLanguages(
   throw new NextlyError({
     code: "NEXTLY_PER_LANGUAGE_STORAGE_LANGUAGES_UNDECLARED",
     publicMessage:
-      `experimental.perLanguageStorage is on and this site declares no languages, so it would ` +
+      `This site keeps every translatable field per language and declares no languages, so it would ` +
       `serve its content in "${implicitLocale}" alone, but this database holds translations in ` +
       `${named}. Put the localization block back, or add these languages in Settings, then ` +
       `restart.`,

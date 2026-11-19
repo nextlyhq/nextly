@@ -24,6 +24,9 @@ import {
   WORKING_DRAFT_SHAPE,
   type VersionRow,
 } from "../../versions/versions-repository";
+import { text } from "../../../collections/fields/helpers";
+import { declaredLaidOutEntitiesAsStored } from "../../../di/layout-scan-entities";
+import { defineFieldGroup } from "../../../field-groups/config/define-field-group";
 import { introspectLiveColumns } from "../../schema/pipeline/diff/introspect-live";
 import { _resetPerLanguageStorage } from "../per-language-storage";
 
@@ -127,6 +130,31 @@ describeEachDialect(
       expect(copy.es).not.toHaveProperty("code");
     });
 
+    // Where two languages changed one shared field and were saved at the same moment, nothing says
+    // which save came later: neither value is kept on a guess, and nothing is changed.
+    it("refuses two languages' changes to one shared field saved at the same moment, keeping both", async () => {
+      const { seeded } = await legacySite();
+      const at = new Date("2026-08-01T10:00:00Z");
+      await database!.adapter.update(
+        VERSIONS_TABLE,
+        { createdAt: at, updatedAt: at },
+        {
+          and: [
+            { column: "entryId", op: "=", value: seeded.articles.split },
+            ...WORKING_DRAFT_SHAPE,
+          ],
+        }
+      );
+      const before = await pendingChangesOf(seeded.articles.split);
+      expect(Object.keys(before).sort()).toEqual(["es", "fr"]);
+
+      await expect(upgrade()).rejects.toThrow(
+        new RegExp(`${ARTICLES}[\\s\\S]*${seeded.articles.split}[\\s\\S]*code`)
+      );
+
+      expect(await pendingChangesOf(seeded.articles.split)).toEqual(before);
+    });
+
     it("lists what moves, what conflicts and what to check in a dry run, and writes nothing", async () => {
       const { seeded } = await legacySite();
       const rowsBefore = await pendingChangesOf(seeded.articles.split);
@@ -214,6 +242,42 @@ describeEachDialect(
       for (const table of translated) {
         expect(await columnsOf(table)).toEqual(before[table]);
       }
+    });
+
+    // A field group declared in code had its columns built by the pipeline, whose rule bounds a
+    // text field that states no width (255 characters on MySQL and PostgreSQL); the Schema
+    // Builder's field-group creator leaves it unbounded. A moved column keeps the capacity its
+    // value was stored under, so the upgrade builds it by the rule that built the original.
+    it("moves a code-declared field group's values into columns built as the originals were", async () => {
+      const site = {
+        ...SITE,
+        fieldGroups: [
+          defineFieldGroup({
+            slug: "byline",
+            fields: [text({ name: "label" })],
+          }),
+        ],
+      };
+      database = await openUpgradeDatabase(dialect);
+      await bootSite(database, "legacy", site);
+      const [byline] = (
+        await declaredLaidOutEntitiesAsStored(database.adapter, site)
+      ).filter(entity => entity.kind === "component");
+      const typeOf = async (table: string) => {
+        const { tables } = await introspectLiveColumns(
+          database!.adapter.getDrizzle(),
+          database!.adapter.dialect,
+          [table]
+        );
+        return tables[0]?.columns.find(column => column.name === "label")?.type;
+      };
+      const original = await typeOf(byline!.tableName);
+      expect(original).toBeDefined();
+
+      await migrateData(database.adapter as never, site);
+
+      expect(await typeOf(byline!.tableName)).toBeUndefined();
+      expect(await typeOf(`${byline!.tableName}_locales`)).toBe(original);
     });
   }
 );

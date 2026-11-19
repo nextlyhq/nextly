@@ -18,18 +18,18 @@
  * @module cli/commands/upgrade-steps/localisation-codes
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { sql } from "drizzle-orm";
+import { sql, type SQL } from "drizzle-orm";
 
 import { standardLanguageCode } from "../../../domains/i18n/config/standard-code";
 import { tablesHoldingCode } from "../../../domains/i18n/older-codes";
 import { releaseMemberKey } from "../../../domains/releases/release-member-key";
 import { runStatement } from "../../../domains/schema/pipeline/_internal/run-statement";
 import { versionPinKey } from "../../../domains/versions/version-pins";
-import type { VersionScopeKind } from "../../../domains/versions/versions-repository";
 import { workingDraftKey } from "../../../domains/versions/working-draft-key";
 import { NextlyError } from "../../../errors/nextly-error";
 import { MEDIA_USAGE_TABLE } from "../../../schemas/media-usage/table-name";
 import { TRANSLATION_PROVENANCE_TABLE } from "../../../schemas/translation-provenance/table-name";
+import type { VersionScopeKind } from "../../../schemas/versions/types";
 import { VERSIONS_TABLE } from "../../../schemas/versions/types";
 import type { UpgradeReport, UpgradeStepContext } from "../upgrade-step";
 
@@ -101,18 +101,135 @@ async function translationTables(
 }
 
 /**
- * Whether a document of `table` holds a row in both spellings: two translations of one document
- * that would become one row, so the upgrade stops rather than keep either.
+ * A table the conversion rewrites whose rows are unique per language of something: two rows of
+ * one thing, one under each spelling, would become one row, or one key the unique index refuses.
  */
-async function holdsBoth(
+interface KeyedTarget {
+  table: string;
+  /** The columns, besides the language, that make a row unique. */
+  same: readonly string[];
+  /** The column that names the language. */
+  language: string;
+  /** How that column writes a code: the code itself, or a pin's `pending:<code>` slot. */
+  spelled: (code: string) => string;
+  /** Where only some rows carry the unique key: the column those rows fill. */
+  keyed?: string;
+}
+
+const asWritten = (code: string) => code;
+
+/** The rewritten tables kept unique per language besides the translation tables. */
+const KEYED_TARGETS: readonly KeyedTarget[] = [
+  // One pending change per document per language (`draft_key`); a durable version has no key.
+  {
+    table: VERSIONS_TABLE,
+    same: ["scope_kind", "scope_slug", "entry_id"],
+    language: "locale",
+    spelled: asWritten,
+    keyed: "draft_key",
+  },
+  // One base pinned per holder per language's pending change (`pin_key`).
+  {
+    table: VERSION_PINS_TABLE,
+    same: ["scope_kind", "scope_slug", "entry_id", "holder"],
+    language: "slot",
+    spelled: code => `pending:${code}`,
+  },
+  // One member per document per language per release (`member_key`).
+  {
+    table: RELEASE_MEMBERS_TABLE,
+    same: ["release_id", "scope_kind", "scope_slug", "entry_id"],
+    language: "locale",
+    spelled: asWritten,
+  },
+  // One record per field of a language of a document, live or drafted.
+  {
+    table: TRANSLATION_PROVENANCE_TABLE,
+    same: ["scope_kind", "scope_slug", "entry_id", "part_state", "field_path"],
+    language: "locale",
+    spelled: asWritten,
+  },
+  // One use per item per field per language of a document.
+  {
+    table: MEDIA_USAGE_TABLE,
+    same: [
+      "subject_kind",
+      "subject_slug",
+      "document_id",
+      "field_path",
+      "media_id",
+    ],
+    language: "locale",
+    spelled: asWritten,
+  },
+];
+
+/** Whether `target` holds one thing's row under both spellings of `conversion`. */
+async function meetsBoth(
   adapter: DrizzleAdapter,
-  table: string,
+  target: KeyedTarget,
   conversion: CodeConversion
 ): Promise<boolean> {
+  const a = sql`${sql.identifier("a")}`;
+  const b = sql`${sql.identifier("b")}`;
+  const column = (alias: SQL, name: string) =>
+    sql`${alias}.${sql.identifier(name)}`;
+  const joined = sql.join(
+    target.same.map(name => sql`${column(a, name)} = ${column(b, name)}`),
+    sql` AND `
+  );
+  const keyed =
+    target.keyed === undefined
+      ? sql``
+      : sql` AND ${column(a, target.keyed)} IS NOT NULL AND ${column(b, target.keyed)} IS NOT NULL`;
   const rows = await adapter.queryStatement<{ found: unknown }>(
-    sql`SELECT 1 AS ${sql.identifier("found")} FROM ${sql.identifier(table)} ${sql.identifier("a")} JOIN ${sql.identifier(table)} ${sql.identifier("b")} ON ${sql.identifier("a")}.${sql.identifier("_parent")} = ${sql.identifier("b")}.${sql.identifier("_parent")} WHERE ${sql.identifier("a")}.${sql.identifier("_locale")} = ${conversion.from} AND ${sql.identifier("b")}.${sql.identifier("_locale")} = ${conversion.to} LIMIT 1`
+    sql`SELECT 1 AS ${sql.identifier("found")} FROM ${sql.identifier(target.table)} ${a} JOIN ${sql.identifier(target.table)} ${b} ON ${joined} WHERE ${column(a, target.language)} = ${target.spelled(conversion.from)} AND ${column(b, target.language)} = ${target.spelled(conversion.to)}${keyed} LIMIT 1`
   );
   return rows.length > 0;
+}
+
+/**
+ * The tables where some one thing is kept under both spellings of `conversion`: each translation
+ * table with a document translated in both, and each other keyed table the rewrite would collide in.
+ */
+async function tablesMeetingBoth(
+  context: UpgradeStepContext,
+  translationTables: readonly string[],
+  conversion: CodeConversion
+): Promise<string[]> {
+  const adapter = context.adapter as unknown as DrizzleAdapter;
+  const targets: KeyedTarget[] = [
+    ...translationTables.map(table => ({
+      table,
+      same: ["_parent"],
+      language: "_locale",
+      spelled: asWritten,
+    })),
+    ...KEYED_TARGETS,
+  ];
+  const meeting: string[] = [];
+  for (const target of targets) {
+    if (!(await context.adapter.tableExists(target.table))) continue;
+    if (await meetsBoth(adapter, target, conversion))
+      meeting.push(target.table);
+  }
+  return meeting;
+}
+
+/** The refusal of rows kept under both spellings of one language, naming where. */
+function keptUnderBoth(
+  conversion: CodeConversion,
+  tables: readonly string[]
+): NextlyError {
+  return new NextlyError({
+    code: "NEXTLY_LANGUAGE_CODES_COLLIDE",
+    publicMessage:
+      `Rows under both "${conversion.from}" and "${conversion.to}", one language under two codes, ` +
+      `are kept for the same thing in ${tables.join(", ")}; moving "${conversion.from}" to ` +
+      `"${conversion.to}" would make them one. Keep the rows of one spelling, then run ` +
+      "`nextly migrate` again. Nothing was changed.",
+    logContext: { from: conversion.from, to: conversion.to, tables },
+  });
 }
 
 /**
@@ -130,11 +247,10 @@ async function conversionsToRun(
   const tables = await translationTables(context);
   const pending: CodeConversion[] = [];
   for (const conversion of conversions) {
-    for (const table of tables) {
-      if (await holdsBoth(adapter, table, conversion)) {
-        throw collision([[conversion.to, [conversion.from, conversion.to]]]);
-      }
-    }
+    // Every conversion is checked before any row is written, so one that would collide stops
+    // the step with nothing changed rather than part-way through.
+    const meeting = await tablesMeetingBoth(context, tables, conversion);
+    if (meeting.length > 0) throw keptUnderBoth(conversion, meeting);
     // Where the start finds rows under the older spelling, the same answer as its refusal.
     const held = await tablesHoldingCode(adapter, tables, conversion.from);
     if (held.length > 0) pending.push(conversion);

@@ -40,6 +40,7 @@ import {
   dropDatabaseStatement,
 } from "../../../../database/test-database-ddl";
 import { clearServices } from "../../../../di/register";
+import { defineFieldGroup } from "../../../../field-groups/config/define-field-group";
 import {
   createTestNextly,
   type TestDialect,
@@ -119,6 +120,8 @@ export const SITE = {
 export interface FixtureSite {
   collections: typeof COLLECTIONS;
   singles: typeof SINGLES;
+  /** Field groups the site declares in code, for a case that needs one. */
+  fieldGroups?: readonly ReturnType<typeof defineFieldGroup>[];
   localization: { locales: readonly string[]; defaultLocale: string };
 }
 
@@ -239,6 +242,9 @@ export async function bootSite(
     adapter: database.adapter as never,
     collections: [...site.collections],
     singles: [...site.singles],
+    ...(site.fieldGroups === undefined
+      ? {}
+      : { fieldGroups: [...site.fieldGroups] }),
     localization: {
       locales: [...site.localization.locales],
       defaultLocale: site.localization.defaultLocale,
