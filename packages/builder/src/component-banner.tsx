@@ -23,7 +23,7 @@ import { Button } from "@nextlyhq/ui";
 import { ArrowLeft, Component } from "lucide-react";
 import * as React from "react";
 
-import type { ComponentFieldsHost } from "./component-fields";
+import type { ComponentFieldsHost } from "./panels/components/component-fields";
 import { BUILDER_TOKENS_CLASS } from "./shell-state";
 
 /**

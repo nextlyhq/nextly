@@ -50,7 +50,8 @@ import {
 import { ChevronRight, Plus, RotateCcw, Trash2 } from "lucide-react";
 import * as React from "react";
 
-import { exposedFields } from "../component-fields";
+import type { EditorState } from "../editor-state";
+import { exposedFields } from "../panels/components/component-fields";
 import {
   addVariant,
   defaultValues,
@@ -65,8 +66,7 @@ import {
   type VariantEditContext,
   type VariantPreviewBinding,
   type VariantUse,
-} from "../component-variants";
-import type { EditorState } from "../editor-state";
+} from "../panels/components/component-variants";
 import { useStoredDraft } from "../stored-draft";
 
 import { commitOnEnter } from "./commit-on-enter";

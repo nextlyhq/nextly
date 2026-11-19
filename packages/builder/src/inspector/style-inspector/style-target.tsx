@@ -32,6 +32,10 @@ import * as React from "react";
 import { ClassSelector } from "../../class-selector";
 import type { EditorState } from "../../editor-state";
 import type { BuilderOp } from "../../op-vocabulary";
+import type {
+  PageClassBlocks,
+  SharedStylesAccess,
+} from "../../panels/design/shared-styles-panel";
 import {
   sharedStyleReachSentence,
   type SharedStyleReach,
@@ -44,10 +48,6 @@ import {
   NO_DESIGN_RIGHT,
   type SharedStyleChange,
 } from "../../shared-style-target";
-import type {
-  PageClassBlocks,
-  SharedStylesAccess,
-} from "../../shared-styles-panel";
 import { useSurvivingReport } from "../../shell/builder-notices";
 import type { CardVerbs } from "../block-card";
 import { designReadOnlyReason, lockViewOf } from "../inspector";

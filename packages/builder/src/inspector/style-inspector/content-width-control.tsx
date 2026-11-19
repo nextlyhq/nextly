@@ -28,13 +28,13 @@ import {
 import { Input } from "@nextlyhq/ui";
 import * as React from "react";
 
-import { variablesFor, type SiteVariable } from "../../style-colour";
-import { variableValueText } from "../../style-variables";
 import {
   focusAfterUnlink,
   VariableChip,
   VariableChoice,
-} from "../../variable-choice";
+} from "../../panels/design/variable-choice";
+import { variablesFor, type SiteVariable } from "../../style-colour";
+import { variableValueText } from "../../style-variables";
 import { commitOnEnter } from "../commit-on-enter";
 import { CssHint } from "../css-hint";
 import { arrowTo } from "../segment-choices";

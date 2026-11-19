@@ -27,7 +27,10 @@ import {
 import * as React from "react";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 
-import type { ComponentVariantsHost, VariantUse } from "../component-variants";
+import type {
+  ComponentVariantsHost,
+  VariantUse,
+} from "../panels/components/component-variants";
 import { useEditorState, type EditorState } from "../editor-state";
 import { InspectorPanel } from "./inspector-panel";
 

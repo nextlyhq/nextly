@@ -73,7 +73,10 @@ import {
   useCanvasTokenModeAt,
 } from "../../canvas/prefers-dark";
 import type { EditorState } from "../../editor-state";
-import { FontChoicesContext, type FontChoices } from "../../font-family-field";
+import {
+  FontChoicesContext,
+  type FontChoices,
+} from "../../panels/design/font-family-field";
 import { layerLabel } from "../../panels/layers/layers";
 import type { SideOrientation } from "../../side-orientation";
 import type { StylePolicy } from "../../style-values";
