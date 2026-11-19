@@ -67,7 +67,7 @@ interface Definition {
 /** A page of what waits, as `list_waiting_for_review` answers it. */
 interface Waiting {
   items: {
-    document: { entryId: string };
+    document: { collection: string; id: string } | { single: string };
     part: string | null;
     stage: string;
   }[];
@@ -283,12 +283,27 @@ describe.each(getConfiguredTestDialects())("the review tools (%s)", dialect => {
 
       expect(forWriter.items).toEqual([
         expect.objectContaining({
-          document: expect.objectContaining({ entryId: post.id }),
+          // The reference get_review_state takes, not the store's own key for the document.
+          document: { collection: "posts", id: post.id },
           part: "en",
           stage: "writing",
         }),
       ]);
       expect(forWriter.meta).toMatchObject({ page: 1, limit: 20 });
+      // The documented flow: what is listed is read as listed.
+      const read = await callTool(
+        handlers,
+        writer.headers,
+        "get_review_state",
+        { document: forWriter.items[0]!.document }
+      );
+      expect(read.error, JSON.stringify(read.error)).toBeUndefined();
+      expect(read.result?.isError, JSON.stringify(read.result)).toBeFalsy();
+      expect(read.result?.structuredContent).toMatchObject({
+        parts: expect.arrayContaining([
+          expect.objectContaining({ part: "en" }),
+        ]),
+      });
       // Assigned to the owner, but the reader's key cannot take the stage's step, and the
       // updater's cannot read the document.
       expect(forReader.items).toEqual([]);

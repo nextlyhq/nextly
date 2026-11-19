@@ -498,15 +498,20 @@ describe.each(getConfiguredTestDialects())(
 
         expect(forWriter.items).toEqual([
           expect.objectContaining({
-            document: expect.objectContaining({
-              scopeSlug: PAGES,
-              entryId: id,
-            }),
+            // The reference a read takes, not the store's own key for the document.
+            document: { collection: PAGES, id },
             part: null,
             stage: "writing",
           }),
         ]);
         expect(forWriter.meta).toMatchObject({ page: 1, limit: 20 });
+        // What waits is read as listed: the item's document goes straight into a read.
+        const listed = (forWriter.items as Doc[])[0]!.document;
+        expect(
+          resultOf(
+            await run({ key: writer.key }, "reviewState", { document: listed })
+          )
+        ).toMatchObject({ parts: [expect.objectContaining({ part: null })] });
         // Assigned to Kim, but the reader's key cannot take the stage's step, and the updater's
         // cannot read the document.
         expect(forReader.items).toEqual([]);

@@ -40,8 +40,28 @@ type PluginWorkflowDocumentRef =
   | { collection: string; id: string }
   | { single: string };
 
+/**
+ * The reference a read takes for a document the store keys by kind, slug and id: a Single is
+ * named by its slug alone, as the reads name it, since it has one document.
+ */
+function documentRefOf(
+  document: WaitingPart["document"]
+): PluginWorkflowDocumentRef {
+  return document.scopeKind === "single"
+    ? { single: document.scopeSlug }
+    : { collection: document.scopeSlug, id: document.entryId };
+}
+
 /** @experimental A collection or a Single, by its slug. */
 type PluginWorkflowEntityRef = { collection: string } | { single: string };
+
+/**
+ * @experimental A part waiting for the caller. Its document is named as a read names one, so the
+ * item can be handed straight to `reviewState` or `submit`, not by the store's own key for it.
+ */
+type PluginWorkflowWaitingItem = Omit<WaitingPart, "document"> & {
+  document: PluginWorkflowDocumentRef;
+};
 
 /** @experimental A part as the caller saw it: its review-state revision and the document's version. */
 interface PluginWorkflowSeenPart {
@@ -107,7 +127,7 @@ export interface PluginWorkflowsService {
   waiting(
     query?: PluginWorkflowWaitingQuery,
     opts?: ServiceOpts
-  ): Promise<{ items: WaitingPart[]; meta: PaginationMeta }>;
+  ): Promise<{ items: PluginWorkflowWaitingItem[]; meta: PaginationMeta }>;
   /**
    * Submit parts of a document for review, with a comment a reviewer reads. Only a step of kind
    * `submit`: any other is refused with `WORKFLOW_STEP_NOT_SUBMIT`, and with no step named, a
@@ -227,7 +247,16 @@ export function pluginWorkflowsService(): PluginWorkflowsService {
     async waiting(query, opts) {
       const page = parse(WaitingInput, query ?? {});
       const { workflowOperations } = await operations();
-      return asAsker(opts, asker => workflowOperations.waiting(asker, page));
+      const listed = await asAsker(opts, asker =>
+        workflowOperations.waiting(asker, page)
+      );
+      return {
+        ...listed,
+        items: listed.items.map(item => ({
+          ...item,
+          document: documentRefOf(item.document),
+        })),
+      };
     },
     async submit(input, opts) {
       const { workflowOperations, workflowInputShapes } = await operations();
