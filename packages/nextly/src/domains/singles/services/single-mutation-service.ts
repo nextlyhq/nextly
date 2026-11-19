@@ -3769,7 +3769,15 @@ export class SingleMutationService extends BaseService {
               });
             }
           }
-          judgedVersion = await this.versionJudgedAgainst(judgedRow);
+          // By the Single's row as the attempt found it: a first save judged
+          // a document it had built but not yet stored, and another request's
+          // insert, which it adopted, holds the Single under that row's id.
+          const row = existingDoc?.id ?? judgedRow.id;
+          judgedVersion = await this.versionJudgedAgainst({
+            ...judgedRow,
+            id: String(row),
+          });
+          saveJudgement.entryId = String(row);
           await this.assertSaveValid(saveJudgement);
         }
       };
