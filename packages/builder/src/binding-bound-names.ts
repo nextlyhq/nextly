@@ -20,6 +20,7 @@ import {
 } from "./binding-picker";
 import { useBindingSources } from "./binding-picker-reads";
 import type { BindingFieldSource } from "./binding-services";
+import { settingBoundFrom } from "./binding-setting-source";
 import type { ContentServices } from "./content-controls";
 import { fieldLabel } from "./inspector";
 import { useItemSource, type ItemSource } from "./item-binding-source";
@@ -74,6 +75,11 @@ interface BoundFrom {
   /** `undefined` only while the sources are being read. */
   readonly name: string | undefined;
   readonly fields: readonly NamedField[] | undefined;
+  /**
+   * Set where `$bind` names one field by its whole key, dots and all, as a
+   * component's setting id does, rather than a path through its fields.
+   */
+  readonly whole?: true;
 }
 
 /**
@@ -104,6 +110,13 @@ export function boundNames(
   /** The bound prop, and the link it is the entry of, where it is one. */
   at: { readonly prop: string; readonly entryLink?: EntryLink | undefined }
 ): { readonly field: string; readonly source: string | undefined } {
+  if (from.whole === true) {
+    const field = boundField(binding, from);
+    return {
+      field: field === undefined ? binding.$bind : choiceLabel(field),
+      source: from.name,
+    };
+  }
   // A link's entry is named by the relation it goes through ("Author"): the
   // entry the link goes to, not the id the binding reads of it.
   const segments = binding.$bind.split(".");
@@ -123,6 +136,9 @@ export function boundField(
   binding: Binding,
   from: BoundFrom
 ): NamedField | undefined {
+  if (from.whole === true) {
+    return from.fields?.find(field => field.name === binding.$bind);
+  }
   const [first, inner, ...rest] = binding.$bind.split(".");
   if (rest.length > 0) return undefined;
   const top = from.fields?.find(field => field.name === first);
@@ -151,7 +167,10 @@ export function useBoundFrom(
 } {
   const sources = useBindingSources(services, true);
   const item = useItemSource(binding, document, nodeId, services);
-  return { from: boundFrom(binding, sources, item), sources, item };
+  // A component's setting is named from the component itself.
+  const from =
+    settingBoundFrom(binding, document) ?? boundFrom(binding, sources, item);
+  return { from, sources, item };
 }
 
 /**

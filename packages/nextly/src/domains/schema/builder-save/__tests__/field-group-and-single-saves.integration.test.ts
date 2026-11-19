@@ -584,11 +584,12 @@ describe.each(getConfiguredTestDialects())(
     });
 
     /**
-     * A Single's settings save that carries values (here, translation turned on) keeps the service's
-     * own statements, which the writer runs inside its step: a failure after the table changed
-     * keeps the files, recorded applied nowhere.
+     * A Single's settings save that carries values (here, a column whose type changes, which the
+     * service judges against the stored values) keeps the service's own statements, which the
+     * writer runs inside its step: a failure after the table changed keeps the files, recorded
+     * applied nowhere.
      */
-    async function turnTranslationOn(t: TestNextly) {
+    async function changeColumnType(t: TestNextly) {
       await dispatchSingles(
         "createSingle",
         {},
@@ -603,9 +604,8 @@ describe.each(getConfiguredTestDialects())(
           "updateSingleSchema",
           { slug: "notice" },
           {
-            localized: true,
             fields: [
-              { name: "heading", type: "text" },
+              { name: "heading", type: "number" },
               { name: "body", type: "text" },
             ],
           }
@@ -616,7 +616,7 @@ describe.each(getConfiguredTestDialects())(
 
     it("keeps a value-carrying Single update's files, recorded nowhere, when its companion fails to follow", async () => {
       const t = await boot({ translated: true });
-      const save = await turnTranslationOn(t);
+      const save = await changeColumnType(t);
 
       companionFails.single = true;
       const result = await bodyOf(await save());
@@ -629,7 +629,7 @@ describe.each(getConfiguredTestDialects())(
 
     it("records a value-carrying Single update's files applied only once its row is written", async () => {
       const t = await boot({ translated: true });
-      const save = await turnTranslationOn(t);
+      const save = await changeColumnType(t);
       const rowWrite = vi
         .spyOn(SingleRegistryService.prototype, "updateSingle")
         .mockRejectedValueOnce(new Error("the row could not be written"));
@@ -731,17 +731,17 @@ describe.each(getConfiguredTestDialects())(
         .getComponent("meta");
 
       companionFails.component = true;
-      // Translation turned on: the save carries values to the companion, so the push applies it.
+      // A column whose type changes: the push judges the stored values against it, so the push
+      // applies it.
       await expect(
         dispatchComponents(
           "applyComponentSchemaChanges",
           { slug: "meta" },
           {
             fields: [
-              { name: "note", type: "text" },
+              { name: "note", type: "number" },
               { name: "byline", type: "text" },
             ],
-            localized: true,
             confirmed: true,
             schemaVersion: component.schemaVersion,
           }

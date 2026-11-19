@@ -2087,6 +2087,7 @@ function parseEmailTemplateRoutes(
 /** `/api/email-deliveries/<read>`, each a GET, by its URL token. */
 const EMAIL_DELIVERY_READS: Record<string, string> = {
   queued: "listQueuedEmails",
+  activity: "listActivity",
   "last-sent": "lastSentByTemplate",
   overdue: "overdueQueuedEmails",
 };
@@ -2097,6 +2098,8 @@ const EMAIL_DELIVERY_READS: Record<string, string> = {
  * `read-email-deliveries`:
  * - GET /api/email-deliveries → delivery records, newest first, filtered
  * - GET /api/email-deliveries/queued → queued emails, newest first, filtered
+ * - GET /api/email-deliveries/activity → queued emails and the deliveries of
+ *   sends not queued, merged under one cursor and one set of filters
  * - GET /api/email-deliveries/last-sent → when each template was last sent
  * - GET /api/email-deliveries/overdue → whether queued email is overdue
  * - GET /api/email-deliveries/[id] → one delivery's detail and timeline
@@ -2105,10 +2108,12 @@ const EMAIL_DELIVERY_READS: Record<string, string> = {
 function parseEmailDeliveryRoutes(
   id: string | undefined,
   subresource: string | undefined,
+  subId: string | undefined,
   httpMethod: string,
   routeParams: Record<string, string>
 ): ParsedRoute | null {
-  if (httpMethod !== "GET") return null;
+  // Every route here is a read, and none has a segment past its id.
+  if (httpMethod !== "GET" || subId !== undefined) return null;
   const read = (operation: OperationType, method: string): ParsedRoute => ({
     service: "email",
     operation,
@@ -2123,8 +2128,10 @@ function parseEmailDeliveryRoutes(
   }
   if (subresource) return null;
   const named = EMAIL_DELIVERY_READS[id];
-  if (named)
-    return read(named === "listQueuedEmails" ? "list" : "single", named);
+  if (named) {
+    const list = named === "listQueuedEmails" || named === "listActivity";
+    return read(list ? "list" : "single", named);
+  }
   // GET /api/email-deliveries/[id] → one delivery's detail. After the named
   // reads, which are routes rather than ids.
   routeParams.deliveryId = id;
@@ -3520,6 +3527,7 @@ export function parseRestRoute(
     const result = parseEmailDeliveryRoutes(
       id,
       subresource,
+      subId,
       httpMethod,
       routeParams
     );

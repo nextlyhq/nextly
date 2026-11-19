@@ -191,6 +191,24 @@ describe("the Activity list", () => {
     expect(props.onLoadMore).toHaveBeenCalledTimes(1);
   });
 
+  it("opens a row's sheet from its email, by keyboard or click, naming which row", () => {
+    const onOpen = vi.fn();
+    renderList({ onOpen });
+    const rows = within(screen.getByRole("table")).getAllByRole("row");
+    fireEvent.click(
+      within(rows[2]).getByRole("button", { name: "order-shipped" })
+    );
+    expect(onOpen).toHaveBeenLastCalledWith({ source: "queued", id: "q1" });
+    // A click anywhere else on the row opens it too.
+    fireEvent.click(rows[1]);
+    expect(onOpen).toHaveBeenLastCalledWith({ source: "delivery", id: "d1" });
+  });
+
+  it("offers nothing to open where no sheet is wired", () => {
+    renderList();
+    expect(screen.queryByRole("button", { name: "Password reset" })).toBeNull();
+  });
+
   it("offers no Load more once everything is shown", () => {
     renderList({ hasMore: false });
     expect(screen.queryByRole("button", { name: "Load more" })).toBeNull();

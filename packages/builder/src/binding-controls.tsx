@@ -24,6 +24,7 @@
 import {
   bindablePropKind,
   findNode,
+  followsSetting,
   getBlock,
   sameJsonValue,
   type Binding,
@@ -338,6 +339,17 @@ function fallbackShownWhen(
   }
   const article = /^[aeiou]/i.test(one) ? "an" : "a";
   return `Shown when ${article} ${one} has no ${field.toLowerCase()}.`;
+}
+
+/**
+ * A bound prop's rows under its chip, none for a binding following a
+ * component's setting: composing fills it from the setting and drops it, so
+ * neither a fallback nor a format it carried would ever show.
+ */
+function BoundRows(
+  props: React.ComponentProps<typeof BoundValueRows>
+): React.JSX.Element | null {
+  return followsSetting(props.binding) ? null : <BoundValueRows {...props} />;
 }
 
 /** A bound prop's own rows under its chip: its Fallback, and its Format. */
@@ -855,7 +867,7 @@ function BoundField({
             />
           )}
         />
-        <BoundValueRows
+        <BoundRows
           prop={prop}
           binding={binding}
           field={boundField(binding, from)}

@@ -224,6 +224,13 @@ describe("tables dropped", () => {
       { kind: "table", table: "posts_locales", translates: "posts" },
       table("posts"),
     ]);
+    // A plain drop is not written to do nothing where the table is missing: facts read from a
+    // snapshot never hold a translations table, and turning translation off drops it so.
+    expect(
+      read("postgresql", ["DROP TABLE posts_locales"], {
+        columns: { posts: { id: "text" } },
+      })
+    ).toEqual([table("posts_locales")]);
   });
 
   it("counts a table created IF NOT EXISTS as live: it may have been there", () => {

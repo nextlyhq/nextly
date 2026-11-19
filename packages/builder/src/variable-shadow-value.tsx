@@ -31,6 +31,7 @@ export function ShadowValue({
   readOnly,
   refusedBy,
   onCommit,
+  onPreview,
   css,
   mode = "light",
 }: ValueFieldProps): React.JSX.Element {
@@ -53,6 +54,8 @@ export function ShadowValue({
         }
         names={property === undefined ? undefined : [property]}
         onCommit={onCommit}
+        // The whole shadow drawn on the canvas as it is edited.
+        onPreview={onPreview}
       />
     </div>
   );

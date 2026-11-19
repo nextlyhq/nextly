@@ -109,6 +109,49 @@ describe("a component's variants in its own view", () => {
     expect(screen.getByRole("region", { name: "Fields" })).toBeTruthy();
   });
 
+  it("says where its variants are edited, with a button that opens that view", () => {
+    const opened: string[] = [];
+    mount(component({ variants: { a: { label: "Night", overrides: {} } } }), {
+      editedInOwnView: true,
+      onOpenOwnView: () => opened.push("own view"),
+    });
+
+    // Under its fields, where the section would be.
+    expect(
+      screen.getByText("Variants are edited in the component’s own view.")
+    ).toBeTruthy();
+    const open = screen.getByRole("button", { name: "Edit component" });
+    // A real button in the tab order, so a keyboard reaches it.
+    expect(open.tagName).toBe("BUTTON");
+    expect(open.hasAttribute("disabled")).toBe(false);
+    expect(open.getAttribute("tabindex")).not.toBe("-1");
+    fireEvent.click(open);
+    expect(opened).toEqual(["own view"]);
+  });
+
+  it("says where its variants are edited, without a button where the host cannot open it", () => {
+    mount(component({ variants: { a: { label: "Night", overrides: {} } } }), {
+      editedInOwnView: true,
+    });
+
+    expect(
+      screen.getByText("Variants are edited in the component’s own view.")
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Edit component" })).toBeNull();
+  });
+
+  it("says nothing of another view in the component's own view", () => {
+    mount(component({ variants: { a: { label: "Night", overrides: {} } } }), {
+      onOpenOwnView: () => undefined,
+    });
+
+    expect(section()).toBeTruthy();
+    expect(document.body.textContent).not.toContain(
+      "Variants are edited in the component’s own view."
+    );
+    expect(screen.queryByRole("button", { name: "Edit component" })).toBeNull();
+  });
+
   it("adds one with its name ready to type over, as one undo step", () => {
     const editor = mount(component());
     fireEvent.click(

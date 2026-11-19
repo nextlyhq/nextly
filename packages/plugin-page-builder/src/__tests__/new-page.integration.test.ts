@@ -272,8 +272,16 @@ describe.each(getConfiguredTestDialects())(
         drafts: true,
         headerFooter: true,
         mayUpdate: true,
-        starters: [],
       });
+      // The page builder's own starter pages, offered on every site that
+      // does not hide them.
+      expect(facts.starters.map(starter => starter.id)).toEqual([
+        "landing",
+        "about",
+        "contact",
+        "pricing",
+        "coming-soon",
+      ]);
 
       const second = await created(
         await ask("POST", PAGES_ROUTE_PATH, editor, {
