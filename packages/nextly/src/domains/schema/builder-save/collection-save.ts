@@ -628,10 +628,14 @@ async function settleStoppedSave(
     files: await readSaveFiles(deps, written.files.change),
   };
   const replacement: string[] = [];
+  // The migration files once the stopped one is removed: one of the replacement's own name that is
+  // new against them was put in place, though its generation was refused before naming it.
+  let sqlAfterRemoval: string[] = [];
   try {
     for (const filename of written.files.change) {
       await removeFileAndSnapshot(deps, filename);
     }
+    sqlAfterRemoval = await sqlFiles(deps.migrationsDir);
     const settled = settledSaveOf(save, judged.applied, judged.report);
     const plan = await planSave(deps, settled);
     const files = await writeFiles(deps, settled, plan, names =>
@@ -658,15 +662,40 @@ async function settleStoppedSave(
     });
   } catch (error) {
     // Overtaken by another writer, nothing the other writer may already read is removed: a
-    // replacement put in place stays, with the definition. Where none of it was put in place,
+    // replacement put in place stays, with the definition, and the record that the save is in
+    // progress with it. The replacement is known by the files its generation named, or, where it
+    // was refused after publishing and before naming them, by a file of its own name new in the
+    // folder; another writer's files are not taken for it. Where none of it was put in place,
     // the stopped file and its snapshot, removed first and perhaps applied in part, are written
     // back, so no history the ledger names is lost.
-    if (!isWriterOvertaken(error) || replacement.length === 0) {
-      await putBack(deps, left, replacement, definitionPath);
-    }
+    const placed =
+      isWriterOvertaken(error) &&
+      (replacement.length > 0 ||
+        (await replacementPlaced(deps, save, sqlAfterRemoval)));
+    if (!placed) await putBack(deps, left, replacement, definitionPath);
     throw error;
   }
   return judged.report;
+}
+
+/**
+ * Whether the folder holds a migration file of the settle's replacement, by its name (the save's
+ * entity and change, as `writeFiles` names it), that `before` did not: a folder that cannot be
+ * read is taken as holding one, so nothing is written back over it.
+ */
+async function replacementPlaced(
+  deps: CollectionSaveDeps,
+  save: CollectionSave,
+  before: readonly string[]
+): Promise<boolean> {
+  const own = `_${migrationSlug(save.slug)}_${save.change}.sql`;
+  try {
+    return (await sqlFiles(deps.migrationsDir)).some(
+      file => !before.includes(file) && file.endsWith(own)
+    );
+  } catch {
+    return true;
+  }
 }
 
 /** A migration file the save wrote, and its snapshot where it has one, as text. */
