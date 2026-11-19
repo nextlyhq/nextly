@@ -403,6 +403,31 @@ describe("a library request naming its stored page", () => {
       field: "body",
     });
     expect(opts).toMatchObject({ as: "user" });
+    expect(opts).not.toHaveProperty("locale");
+  });
+
+  it("reads the page in the language the request names", async () => {
+    const { ctx, createEntryFromSource } = contextOver();
+
+    await componentFromSelection(
+      request({
+        action: "convert",
+        document: threeBlocks,
+        page: { collection: "pages", id: "page-1", locale: "de" },
+        selectedIds: ["b"],
+        fields,
+      }),
+      ctx,
+      { blocks }
+    );
+
+    const [, , source, opts] = createEntryFromSource.mock.calls[0] ?? [];
+    expect(source).toEqual({
+      collection: "pages",
+      id: "page-1",
+      field: "content",
+    });
+    expect(opts).toMatchObject({ as: "user", locale: "de" });
   });
 
   it("creates as before where it names none", async () => {

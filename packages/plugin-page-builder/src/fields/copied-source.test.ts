@@ -136,6 +136,25 @@ describe("CSS and page code a create copies", () => {
     expect(named.asked).toEqual(["pages/body/published"]);
   });
 
+  it("reads nothing from a field inside a group whose own read was withheld", async () => {
+    // The group came back, its blocks field didn't: a read rule withheld it.
+    const withheld = copying({
+      ...COPY,
+      fields: ["title", "hero", "hero.title"],
+      field: "hero.content",
+    });
+    expect(await cssOf(LIVE, withheld)).not.toEqual([]);
+    expect(withheld.asked).toEqual([]);
+    // CONTROL: the same field, where the read returned it.
+    const returned = copying({
+      ...COPY,
+      fields: ["title", "hero", "hero.content"],
+      field: "hero.content",
+    });
+    expect(await cssOf(LIVE, returned)).toEqual([]);
+    expect(returned.asked).toEqual(["pages/hero.content/published"]);
+  });
+
   it("lets an API key copy byte for byte, and refuses its change", async () => {
     expect(await cssOf(LIVE, copying(COPY, "apiKey"))).toEqual([]);
     const changed = await cssOf(

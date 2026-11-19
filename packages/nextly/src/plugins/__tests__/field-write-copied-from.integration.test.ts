@@ -31,6 +31,8 @@ import { describeEachDialect } from "./helpers/dialect-matrix";
 // Suite-local slugs: integration files share fixed system-table names.
 const PAGES = "fwcopy_pages";
 const SECRET = "fwcopy_secret";
+/** A collection whose group is readable and one field inside it is not. */
+const GROUPED = "fwcopy_grouped";
 /** The field type whose validator records what it is told. */
 const RECORDED = "recorded";
 
@@ -87,6 +89,22 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         ],
       } as unknown as CollectionConfig,
       {
+        slug: GROUPED,
+        access: { read: () => true, create: () => true },
+        fields: [
+          { name: "title", type: "text" },
+          {
+            name: "hero",
+            type: "group",
+            fields: [
+              { name: "heading", type: "text" },
+              // Withheld from every reader but trusted code.
+              { name: "body", type: RECORDED, access: { read: () => false } },
+            ],
+          },
+        ],
+      } as unknown as CollectionConfig,
+      {
         slug: SECRET,
         // Nobody may read it but trusted code.
         access: { read: () => false, create: () => true },
@@ -103,7 +121,7 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
 /** A person who may create pages, and read pages and the secret's rows by permission. */
 async function author(t: TestNextly): Promise<void> {
   await userWhoMay(t, "author", "create", [PAGES]);
-  await grantTo(t, "author", "read", [PAGES, SECRET]);
+  await grantTo(t, "author", "read", [PAGES, SECRET, GROUPED]);
 }
 
 /** The copy the last validation was told, or "none". */
@@ -263,5 +281,29 @@ describeEachDialect("the copy a field validator is told", dialect => {
     });
     expect(missing.statusCode).toBe(404);
     expect(told).toEqual([]);
+  });
+
+  it("names each field the read returned inside a group, never one a read rule withheld", async () => {
+    const t = await boot(dialect);
+    await author(t);
+    const handler = t.getService("collectionsHandler");
+    const made = await handler.createEntry(
+      { collectionName: GROUPED, overrideAccess: true },
+      { title: "Source", hero: { heading: "H", body: { v: 1 } } }
+    );
+    const id = (made.data as { id: string }).id;
+
+    told = [];
+    const copied = await handler.createEntryFromSource({
+      collectionName: PAGES,
+      source: { collection: GROUPED, id, field: "hero.body" },
+      data: { title: "Copied", body: { v: 1 } },
+      userId: "author",
+    });
+    expect(copied.success, JSON.stringify(copied)).toBe(true);
+    const fields = (lastTold() as { fields: readonly string[] }).fields;
+    // The group and its readable field are there; the withheld one is not.
+    expect(fields).toEqual(expect.arrayContaining(["hero", "hero.heading"]));
+    expect(fields).not.toContain("hero.body");
   });
 });

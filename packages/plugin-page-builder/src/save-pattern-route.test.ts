@@ -563,6 +563,59 @@ describe("a save of a stored entry's document", () => {
     expect(as).toEqual({ as: "user", user: { id: "u1" } });
   });
 
+  it("makes a dry run through the same copy, on its transaction, warming the source first", async () => {
+    const journal: string[] = [];
+    const createEntryInTransaction = vi.fn(() => Promise.resolve({}));
+    const createEntryFromSourceInTransaction = vi.fn(() => {
+      journal.push("copy-in-tx");
+      return Promise.resolve({ id: "p9" });
+    });
+    const ctx = {
+      self: { collections: {} },
+      user: { id: "u1" },
+      services: {
+        collections: {
+          createEntry: vi.fn(),
+          createEntryFromSource: vi.fn(),
+          createEntryInTransaction,
+          createEntryFromSourceInTransaction,
+          warmLocalizedReadiness: (slug: string) => {
+            journal.push(`warm ${slug}`);
+            return Promise.resolve();
+          },
+          withTransaction: async (work: (tx: unknown) => Promise<never>) => {
+            journal.push("begin");
+            return work({});
+          },
+        },
+      },
+    } as unknown as SavePatternRouteContext;
+
+    await savePattern(
+      request({
+        document: pageDocument,
+        selectedIds: ["a"],
+        fields,
+        dryRun: true,
+        source: { collection: "pages", id: "page-1", field: "content" },
+      }),
+      ctx,
+      blocks
+    );
+
+    expect(createEntryInTransaction).not.toHaveBeenCalled();
+    expect(journal).toEqual(["warm pages", "begin", "copy-in-tx"]);
+    const [, slug, , source, as] = createEntryFromSourceInTransaction.mock
+      .calls[0] as unknown as unknown[];
+    expect(slug).toBe(PATTERNS_SLUG);
+    expect(source).toEqual({
+      collection: "pages",
+      id: "page-1",
+      field: "content",
+    });
+    expect(as).toMatchObject({ as: "user", user: { id: "u1" } });
+  });
+
   it("refuses a source that is not an address, and writes nothing", async () => {
     for (const source of [
       "pages/page-1",

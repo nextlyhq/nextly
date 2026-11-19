@@ -692,9 +692,10 @@ export interface PluginFieldWrite {
      */
     readonly forms: readonly ("published" | "draft")[];
     /**
-     * The source's top-level fields the caller's read returned. A field
-     * that read withheld is one the caller may not see, and vouches for
-     * nothing.
+     * The source's field paths the caller's read returned: each top-level
+     * field, and each field inside a named group, dotted (`hero.content`).
+     * A field that read withheld, at any depth, is one the caller may not
+     * see, and vouches for nothing.
      */
     readonly fields: readonly string[];
     /**

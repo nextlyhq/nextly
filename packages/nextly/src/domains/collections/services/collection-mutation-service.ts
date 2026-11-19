@@ -1843,6 +1843,13 @@ interface CreateEntryWriteParams {
    * it. Self-resolved on the pooled connection when a caller does not pass one.
    */
   transitionAuth?: TransitionAuthorization;
+  /**
+   * The entry this create copies, minted by `readSourceCopy` from the
+   * caller's read of it on the same transaction (`createEntryFromSource`
+   * with a transaction). A value that is not such a copy reaches no
+   * validator.
+   */
+  copiedFrom?: SourceReadCopy;
 }
 
 /** The only things that differ between the two create entry points. */
@@ -22378,6 +22385,10 @@ export class CollectionMutationService extends BaseService {
           // On the caller's transaction, so a row an earlier entry of the
           // same batch wrote is seen.
           tx,
+          // The entry this create copies, where the caller read it first.
+          ...(params.copiedFrom === undefined
+            ? {}
+            : { copiedFrom: params.copiedFrom }),
         });
       }
 

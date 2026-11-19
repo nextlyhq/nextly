@@ -43,8 +43,8 @@ export interface CopySource {
  * just succeeded. `draftShown` says whether that read showed the caller the
  * source's pending draft (`_isWorkingDraft`), the one rule the read path uses
  * to decide who may see it, so a draft-only value never vouches for a caller
- * who could not read it. The fields are the ones that read returned, so a
- * value a field read rule withheld vouches for nothing either.
+ * who could not read it. The fields are the paths that read returned, so a
+ * value a field read rule withheld, at any depth, vouches for nothing either.
  */
 export function readSourceCopy(
   source: CopySource,
@@ -66,15 +66,47 @@ export function readSourceCopy(
         ? (["published", "draft"] as const)
         : (["published"] as const)
     ),
-    fields: Object.freeze(
-      Object.keys(data).filter(key => data[key] !== undefined)
-    ),
+    fields: Object.freeze(readPaths(data)),
     ...(source.field === undefined ? {} : { field: source.field }),
   };
   // The brand is a type only: what makes it a minted copy is the set below.
   const copy = Object.freeze(plain) as unknown as SourceReadCopy;
   minted.add(copy);
   return copy;
+}
+
+/** How deep the walk of a read's named groups goes; deeper fields vouch nothing. */
+const MAX_GROUP_DEPTH = 8;
+
+/**
+ * Every field path the caller's read returned: each key with a value, and,
+ * through a value that is an object (a named group), each key in it, dotted
+ * (`hero.content`). A field a read rule withheld is absent from the read,
+ * its parent kept, so its path is absent here too and it vouches nothing.
+ * Lists are not walked: a repeater's rows have no stored path of their own.
+ */
+function readPaths(
+  data: Record<string, unknown>,
+  prefix = "",
+  depth = 0
+): string[] {
+  const paths: string[] = [];
+  for (const [key, value] of Object.entries(data)) {
+    if (value === undefined) continue;
+    const path = prefix === "" ? key : `${prefix}.${key}`;
+    paths.push(path);
+    if (
+      depth < MAX_GROUP_DEPTH &&
+      typeof value === "object" &&
+      value !== null &&
+      !Array.isArray(value)
+    ) {
+      paths.push(
+        ...readPaths(value as Record<string, unknown>, path, depth + 1)
+      );
+    }
+  }
+  return paths;
 }
 
 /**

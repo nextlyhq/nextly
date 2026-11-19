@@ -1458,6 +1458,21 @@ export class CollectionEntryService extends BaseService {
     return result;
   }
 
+  /**
+   * @experimental {@link createEntryFromSource} on the caller's transaction:
+   * the source is read and the entry created on `tx`, so a dry run rolled
+   * back after it judges the copy exactly as the create itself.
+   */
+  async createEntryFromSourceInTransaction(
+    tx: TransactionContext,
+    params: Parameters<CollectionBulkService["createFromSource"]>[0]
+  ): Promise<CollectionServiceResult<unknown>> {
+    return withRuleLanguage(
+      readLanguagesFor(this.localization, params.locale),
+      () => this.bulkService.createFromSource(params, tx)
+    );
+  }
+
   // Phase 4.5: bulk methods carry full records on update (caller needs
   // the post-mutation values) and minimal {id} records on delete.
   async bulkDeleteEntries(params: {

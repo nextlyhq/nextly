@@ -309,8 +309,8 @@ export async function componentFromSelection(
  * Create the component as the caller. Where the request names the stored
  * page the selection was made in, through core's copy of that page: core
  * reads the page as the caller (refusing one they can't read) before
- * creating anything, and only text the page holds vouches for the
- * component's CSS.
+ * creating anything, and only text the page holds, in the language the
+ * request names, vouches for the component's CSS.
  */
 function createComponent(
   ctx: ComponentFromSelectionContext,
@@ -325,7 +325,9 @@ function createComponent(
         collection,
         data,
         { collection: source.collection, id: source.id, field: source.field },
-        asCaller(ctx)
+        // In the page's language, so the caller's read of it, the rules that
+        // judge it and the stored text that vouches are that translation's.
+        asCaller(ctx, source.locale)
       );
 }
 

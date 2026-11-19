@@ -61,6 +61,16 @@ describe("the copy a create is told", () => {
     ).not.toHaveProperty("field");
   });
 
+  it("names each field inside a group, and none a read rule withheld", () => {
+    // The read kept the group and withheld its `content`.
+    const copy = readSourceCopy(
+      { collection: "pages", id: "p1", field: "hero.content" },
+      read({ id: "p1", hero: { title: "T" }, rows: [{ a: 1 }] })
+    );
+    expect(copy.fields).toEqual(["id", "hero", "hero.title", "rows"]);
+    expect(copy.fields).not.toContain("hero.content");
+  });
+
   it("refuses to mint a copy from a read that failed", () => {
     expect(() =>
       readSourceCopy(

@@ -30,6 +30,7 @@ import { buildClaims, signAccessToken } from "nextly/auth";
 import { createDynamicHandlers } from "nextly/runtime";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { BLOCKS_TYPE } from "../fields/blocksField";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 import { pageBuilder } from "../plugin";
 
@@ -104,11 +105,14 @@ describe.each(getConfiguredTestDialects())(
       current = undefined;
     });
 
-    async function boot(): Promise<TestNextly> {
+    async function boot(
+      extra: Record<string, unknown> = {}
+    ): Promise<TestNextly> {
       current = await createTestNextly({
         dialect,
         plugins: [pageBuilder()],
         seedPublic: true,
+        ...extra,
       });
       // The site's first user is its owner, granted everything. Made first,
       // so the people below hold only what the test gives them.
@@ -381,6 +385,92 @@ describe.each(getConfiguredTestDialects())(
       // A source the caller can't read: refused as not found.
       expect((await section(asStranger, SOURCE, "Hidden")).status).toBe(404);
       expect((await component(asStranger, SOURCE, "Hidden")).status).toBe(404);
+
+      // A dry run answers as the save does: the unchanged CSS is no change,
+      // and a source the caller can't read is refused, even with no CSS.
+      const preview = (cookie: string, document: unknown, title: string) =>
+        post(cookie, route("save-as-pattern"), {
+          document,
+          selectedIds: ["a"],
+          fields: { title, granularity: "section" },
+          source,
+          dryRun: true,
+        });
+      const plain = page([block("a"), block("b")]);
+      const hiddenPreview = await preview(asStranger, plain, "Hidden preview");
+      expect(JSON.parse(hiddenPreview.text).item.refusals).not.toEqual([]);
+      const kept = await preview(asEditor, SOURCE, "Preview");
+      expect(kept.status, kept.text).toBe(200);
+      expect(JSON.parse(kept.text).item.refusals).toEqual([]);
+      // CONTROL: the same CSS-free preview of a readable source is clean.
+      const plainPreview = await preview(asEditor, plain, "Plain preview");
+      expect(JSON.parse(plainPreview.text).item.refusals).toEqual([]);
+    });
+
+    it("judges a copy in the language the request names", async () => {
+      const ARTICLES = "copy_articles";
+      const t = await boot({
+        localization: { locales: ["en", "de"], defaultLocale: "en" },
+        collections: [
+          {
+            slug: ARTICLES,
+            localized: true,
+            // Readable only in German, so a read in another language is
+            // refused to everyone but trusted code.
+            access: {
+              read: ({ locale }: { locale?: string }) => locale === "de",
+              create: () => true,
+            },
+            fields: [
+              { name: "title", type: "text" },
+              { name: "content", type: BLOCKS_TYPE, localized: true },
+            ],
+          } as never,
+        ],
+      });
+      const maker = await holding(
+        t,
+        "translator",
+        `read-${ARTICLES}`,
+        ...MAKE_LIBRARY
+      );
+      // The CSS is only in the German translation.
+      const made = (await t.nextly.create({
+        collection: ARTICLES,
+        data: { title: "Article", content: page([block("a"), block("b")]) },
+        locale: "en",
+        overrideAccess: true,
+      } as never)) as unknown as { item: { id: string } };
+      const id = String(made.item.id);
+      await t.nextly.update({
+        collection: ARTICLES,
+        id,
+        locale: "de",
+        data: { content: SOURCE, _overwrite: true },
+        overrideAccess: true,
+      } as never);
+
+      const convert = (locale?: string) =>
+        sessionOf(t, maker).then(cookie =>
+          post(cookie, route("components", "from-selection"), {
+            action: "convert",
+            apply: "library",
+            document: SOURCE,
+            selectedIds: ["a"],
+            fields: { title: `Card ${locale ?? "default"}` },
+            page: {
+              collection: ARTICLES,
+              id,
+              field: "content",
+              ...(locale === undefined ? {} : { locale }),
+            },
+          })
+        );
+      const german = await convert("de");
+      expect(german.status, german.text).toBe(201);
+      // CONTROL: naming no language reads the default one, which this
+      // caller may not read.
+      expect((await convert()).status).toBe(404);
     });
 
     it("vouches a draft's CSS only for a caller the read shows the draft", async () => {

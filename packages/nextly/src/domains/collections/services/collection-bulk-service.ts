@@ -37,6 +37,7 @@ import { narrows } from "../../../services/collections/trust-grant";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
 import { assertFilterableFields } from "../../../shared/lib/filterable-fields";
+import { runReadsInTransaction } from "../../../shared/lib/read-transaction-scope";
 import { PAGINATION_DEFAULTS } from "../../../types/pagination";
 import { refuseWriteIfRemovedFromCode } from "../../dynamic-collections/services/removed-from-code-writes";
 import { DOCUMENT_VERSION_KEY } from "../../versions/document-revision";
@@ -885,40 +886,48 @@ export class CollectionBulkService extends BaseService {
    * nothing is created. The copy a validator is told is minted from that read
    * alone (`readSourceCopy`), so no caller can claim one without it.
    */
-  async createFromSource(params: {
-    /** The collection the new entry is created in. */
-    collectionName: string;
-    /** The stored entry it copies. */
-    source: CopySource;
-    /** What to create, or how to build it from the caller's read of the source. */
-    data:
-      | Record<string, unknown>
-      | ((source: Record<string, unknown>) => Record<string, unknown>);
+  async createFromSource(
+    params: {
+      /** The collection the new entry is created in. */
+      collectionName: string;
+      /** The stored entry it copies. */
+      source: CopySource;
+      /** What to create, or how to build it from the caller's read of the source. */
+      data:
+        | Record<string, unknown>
+        | ((source: Record<string, unknown>) => Record<string, unknown>);
+      /**
+       * Which of the source the caller reads. `live`: the live row, as a
+       * duplicate copies it. `editor` (the default): as the editor's own read
+       * shows it, with its pending draft where the read path shows the caller
+       * one, so a copy may also hold what that draft holds.
+       */
+      sourceView?: "live" | "editor";
+      /** Write locale: translatable values are stored, and the source read, in it. */
+      locale?: string;
+      user?: UserContext;
+      /** When true, bypass all access control checks */
+      overrideAccess?: boolean;
+      /** See {@link duplicateEntry}'s `trusted`. */
+      trusted?: TrustBound;
+      /** Route auth already ran the create RBAC gate; skip only that re-check. */
+      routeAuthorized?: boolean;
+      /** Arbitrary data passed to hooks via context */
+      context?: Record<string, unknown>;
+      /** The HTTP request behind this operation, when one produced it. */
+      request?: Request;
+      /** Acting identity from the transport, forwarded to the recorded event. */
+      actor?: RequestActor;
+      /** The caller's authenticated scope, judging both the read and the create. */
+      authenticatedScope?: AuthenticatedScope;
+    },
     /**
-     * Which of the source the caller reads. `live`: the live row, as a
-     * duplicate copies it. `editor` (the default): as the editor's own read
-     * shows it, with its pending draft where the read path shows the caller
-     * one, so a copy may also hold what that draft holds.
+     * The caller's transaction, where the copy is made inside one (a dry run
+     * rolled back after): the source is read on it and the entry created on
+     * it, so the copy is judged exactly as the same create outside one.
      */
-    sourceView?: "live" | "editor";
-    /** Write locale: translatable values are stored, and the source read, in it. */
-    locale?: string;
-    user?: UserContext;
-    /** When true, bypass all access control checks */
-    overrideAccess?: boolean;
-    /** See {@link duplicateEntry}'s `trusted`. */
-    trusted?: TrustBound;
-    /** Route auth already ran the create RBAC gate; skip only that re-check. */
-    routeAuthorized?: boolean;
-    /** Arbitrary data passed to hooks via context */
-    context?: Record<string, unknown>;
-    /** The HTTP request behind this operation, when one produced it. */
-    request?: Request;
-    /** Acting identity from the transport, forwarded to the recorded event. */
-    actor?: RequestActor;
-    /** The caller's authenticated scope, judging both the read and the create. */
-    authenticatedScope?: AuthenticatedScope;
-  }): Promise<CollectionServiceResult> {
+    tx?: TransactionContext
+  ): Promise<CollectionServiceResult> {
     // Refused whole, before any row is read, when the collection is removed
     // from code, rather than once for each entry it names.
     await refuseWriteIfRemovedFromCode("collection", params.collectionName);
@@ -945,9 +954,13 @@ export class CollectionBulkService extends BaseService {
       // the caller asked for, and would carry it into every rejected target —
       // whose drafts would then be COPIED into the new row, outliving the
       // refusal as data.
-      const sourceResult = await this.queryService.getEntry(
-        sourceReadOf(params)
-      );
+      // On the caller's transaction where it runs in one, so the read and the
+      // create judge the same rows and the read never waits on the
+      // connection the transaction holds.
+      const read = () => this.queryService.getEntry(sourceReadOf(params));
+      const sourceResult = await (tx === undefined
+        ? read()
+        : runReadsInTransaction(tx, read));
       if (!sourceResult.success || !sourceResult.data) {
         return refusedSourceRead(sourceResult);
       }
@@ -963,27 +976,27 @@ export class CollectionBulkService extends BaseService {
       // validation). Forward routeAuthorized + overrideAccess so a route that
       // already authorized the create is not re-gated under the wrong scope,
       // matching the other route write paths.
-      return await this.mutationService.createEntry(
-        {
-          collectionName: params.collectionName,
-          user: params.user,
-          // A copy reaches the instrumented create, so the event it records
-          // must name the acting identity rather than falling back to the API
-          // key's owner.
-          actor: params.actor,
-          overrideAccess: params.overrideAccess,
-          routeAuthorized: params.routeAuthorized,
-          // Judge the create-as-published on the key's own publish grant.
-          authenticatedScope: params.authenticatedScope,
-          locale: params.locale,
-          // Each row in a batch is its own create, and a caller's hook context
-          // describes the CALL, so every row in it carries the same one.
-          context: params.context,
-          request: params.request,
-          copiedFrom,
-        },
-        data
-      );
+      const create = {
+        collectionName: params.collectionName,
+        user: params.user,
+        // A copy reaches the instrumented create, so the event it records
+        // must name the acting identity rather than falling back to the API
+        // key's owner.
+        actor: params.actor,
+        overrideAccess: params.overrideAccess,
+        routeAuthorized: params.routeAuthorized,
+        // Judge the create-as-published on the key's own publish grant.
+        authenticatedScope: params.authenticatedScope,
+        locale: params.locale,
+        // Each row in a batch is its own create, and a caller's hook context
+        // describes the CALL, so every row in it carries the same one.
+        context: params.context,
+        request: params.request,
+        copiedFrom,
+      };
+      return await (tx === undefined
+        ? this.mutationService.createEntry(create, data)
+        : this.mutationService.createEntryInTransaction(tx, create, data));
     } catch (error: unknown) {
       this.logger.error("Error in createFromSource", { error: error });
       return failedCopy(error);

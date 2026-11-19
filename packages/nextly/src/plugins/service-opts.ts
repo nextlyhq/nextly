@@ -457,6 +457,7 @@ const CONTEXT_INDEX: Record<AccessMethod, number> = {
   // `overrideAccess` or hand in a caller carrying whatever roles it liked.
   // Each sits one place further out, behind the transaction token.
   createEntryInTransaction: 3,
+  createEntryFromSourceInTransaction: 4,
   updateEntryInTransaction: 4,
   deleteEntryInTransaction: 3,
 };
@@ -529,6 +530,7 @@ const PLUGIN_COLLECTION_METHODS = [
   "warmLocalizedReadiness",
   "withTransaction",
   "createEntryInTransaction",
+  "createEntryFromSourceInTransaction",
   "updateEntryInTransaction",
   "deleteEntryInTransaction",
 ] as const satisfies readonly (keyof CollectionService)[];
@@ -539,6 +541,7 @@ const PLUGIN_COLLECTION_METHODS = [
  */
 const IN_TRANSACTION_METHODS = [
   "createEntryInTransaction",
+  "createEntryFromSourceInTransaction",
   "updateEntryInTransaction",
   "deleteEntryInTransaction",
 ] as const;
@@ -907,6 +910,9 @@ export function wrapCollectionsForPlugin(
         return scope.run(() => work(token));
       }),
     createEntryInTransaction: inTransaction("createEntryInTransaction"),
+    createEntryFromSourceInTransaction: inTransaction(
+      "createEntryFromSourceInTransaction"
+    ),
     updateEntryInTransaction: inTransaction("updateEntryInTransaction"),
     deleteEntryInTransaction: inTransaction("deleteEntryInTransaction"),
     // Checked and tracked as the writes are, with no `ServiceOpts`: it reads

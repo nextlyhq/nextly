@@ -173,6 +173,10 @@ export interface SavePatternRouteContext {
       /** For a dry run: the save is made in a transaction and rolled back. */
       withTransaction: PluginRouteContext["services"]["collections"]["withTransaction"];
       createEntryInTransaction: PluginRouteContext["services"]["collections"]["createEntryInTransaction"];
+      /** A dry run of a save of a stored entry's document, on the transaction. */
+      createEntryFromSourceInTransaction: PluginRouteContext["services"]["collections"]["createEntryFromSourceInTransaction"];
+      /** Before a dry run's transaction, so a translated read can resolve. */
+      warmLocalizedReadiness: PluginRouteContext["services"]["collections"]["warmLocalizedReadiness"];
     };
   };
 }
@@ -217,16 +221,36 @@ export async function savePattern(
   const asUser = { as: "user" as const, user: ctx.user ?? undefined };
   // A dry run answers the pattern it would store and stores nothing. The save
   // is made as the caller and rolled back, so the row's own rules (a unique
-  // slug, the caller's right to create and publish a pattern) answer it.
+  // slug, the caller's right to create and publish a pattern) answer it. A
+  // save of a stored entry's document is made through the same copy as the
+  // real save, on the transaction: the source read as the caller, and only
+  // what it holds vouching for the CSS, so the dry run answers as the save.
   if (request.dryRun === true) {
     const collections = ctx.services.collections;
+    const source = request.source;
+    const judging = { ...asUser, context: { [JUDGEMENT_CONTEXT]: true } };
+    // Before the transaction, as core asks: a translated read inside it can
+    // only be read, never resolved.
+    if (source !== undefined) {
+      await collections.warmLocalizedReadiness(source.collection);
+    }
     const judged = await judgeInTransaction(
       run => collections.withTransaction(run),
       (tx: PluginCollectionTransaction) =>
-        collections.createEntryInTransaction(tx, plan.create.collection, data, {
-          ...asUser,
-          context: { [JUDGEMENT_CONTEXT]: true },
-        })
+        source === undefined
+          ? collections.createEntryInTransaction(
+              tx,
+              plan.create.collection,
+              data,
+              judging
+            )
+          : collections.createEntryFromSourceInTransaction(
+              tx,
+              plan.create.collection,
+              data,
+              source,
+              judging
+            )
     );
     const result: SavePatternDryRun = {
       dryRun: true,

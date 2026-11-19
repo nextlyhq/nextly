@@ -31,7 +31,8 @@ const readsByWrite = new WeakMap<
 /**
  * The source field a copied value at `path` came from: the one the create
  * named, or the same path. Null where the caller's read of the source did
- * not return it, or where no stored read can name it.
+ * not return that very path (a field inside a group a read rule withheld is
+ * absent though its group is there), or where no stored read can name it.
  */
 function sourceFieldOf(
   copy: NonNullable<PluginFieldWrite["copiedFrom"]>,
@@ -39,8 +40,7 @@ function sourceFieldOf(
 ): string | null {
   const field = copy.field ?? path;
   if (!storedReadReaches(field)) return null;
-  const topLevel = field.split(".")[0] ?? field;
-  return copy.fields.includes(topLevel) ? field : null;
+  return copy.fields.includes(field) ? field : null;
 }
 
 /** Each form's stored value, read; a form that can't be read vouches nothing. */

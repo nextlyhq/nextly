@@ -168,6 +168,36 @@ export interface CollectionEntry {
 }
 
 /**
+ * A create from a source as the entry service takes it, from a caller's
+ * request context. The source is copied field by field, so nothing beyond
+ * the entry it names reaches the copy from the caller's object.
+ */
+function copyRequestOf(
+  collectionName: string,
+  data: Record<string, unknown>,
+  source: { collection: string; id: string; field?: string },
+  context: RequestContext
+): Parameters<CollectionEntryService["createEntryFromSource"]>[0] {
+  const forwarded = forwardedFromContext(context);
+  return {
+    collectionName,
+    source: {
+      collection: source.collection,
+      id: source.id,
+      ...(source.field === undefined ? {} : { field: source.field }),
+    },
+    data,
+    user: forwarded.user,
+    overrideAccess: forwarded.overrideAccess,
+    authenticatedScope: forwarded.authenticatedScope,
+    context: forwarded.context,
+    request: forwarded.request,
+    locale: forwarded.locale,
+    ...(forwarded.actor === undefined ? {} : { actor: forwarded.actor }),
+  };
+}
+
+/**
  * CollectionService - Unified service for collection and entry operations
  *
  * Provides both collection metadata CRUD (create/update/delete collections)
@@ -783,25 +813,9 @@ export class CollectionService extends BaseService {
     source: { collection: string; id: string; field?: string },
     context: RequestContext
   ): Promise<CollectionEntry> {
-    const forwarded = forwardedFromContext(context);
-    const result = await this.entryService.createEntryFromSource({
-      collectionName,
-      // Copied field by field, so nothing beyond the entry it names reaches
-      // the copy from the caller's object.
-      source: {
-        collection: source.collection,
-        id: source.id,
-        ...(source.field === undefined ? {} : { field: source.field }),
-      },
-      data,
-      user: forwarded.user,
-      overrideAccess: forwarded.overrideAccess,
-      authenticatedScope: forwarded.authenticatedScope,
-      context: forwarded.context,
-      request: forwarded.request,
-      locale: forwarded.locale,
-      ...(forwarded.actor === undefined ? {} : { actor: forwarded.actor }),
-    });
+    const result = await this.entryService.createEntryFromSource(
+      copyRequestOf(collectionName, data, source, context)
+    );
     if (!result.success) {
       this.logger.warn("Entry creation from a source failed", {
         collectionName,
@@ -816,6 +830,32 @@ export class CollectionService extends BaseService {
       });
     }
     return result.data as CollectionEntry;
+  }
+
+  /**
+   * @experimental {@link createEntryFromSource} inside `tx`: the source is
+   * read as the caller on the transaction and the entry created on it, so a
+   * dry run rolled back after it judges the copy as the create itself does.
+   * Preceded by {@link warmLocalizedReadiness} for both collections.
+   * Intended to become stable with it.
+   */
+  // Reached through the plugin facade's method list (`ctx.services.collections`).
+  // fallow-ignore-next-line unused-class-member
+  async createEntryFromSourceInTransaction(
+    tx: TransactionContext,
+    collectionName: string,
+    data: Record<string, unknown>,
+    source: { collection: string; id: string; field?: string },
+    context: RequestContext
+  ): Promise<CollectionEntry> {
+    const result = await this.entryService.createEntryFromSourceInTransaction(
+      tx,
+      copyRequestOf(collectionName, data, source, context)
+    );
+    return this.settleTxWrite<CollectionEntry>(tx, result, {
+      message: "Entry creation from a source in transaction failed",
+      logContext: { collectionName, sourceCollection: source.collection },
+    });
   }
 
   /**
