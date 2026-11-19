@@ -28,6 +28,7 @@ import { isRecord, textOf } from "../plain-values";
 
 import type { Problem, ProblemSubject } from "./contract";
 import type { PageLinks } from "./link-graph";
+import { rowUnchanged } from "./row-change";
 
 export const PROBLEMS_SLUG = "nx_seo_problems";
 
@@ -62,7 +63,9 @@ export function problemsCollection(): CollectionConfig {
       // The pages the page's content links to, and whether it is listed and
       // its language's home, for the site's link counts and orphan pages.
       json({ name: "links", label: "Links" }),
-      // ISO text, which orders and compares alike on every dialect.
+      // On a page's row, when a check last found this page changed; on the
+      // site's row, when the site was last checked in full. ISO text, which
+      // orders and compares alike on every dialect.
       text({ name: "checkedAt", label: "Checked at" }),
       checkbox({ name: "outOfDate", label: "Out of date" }),
       // When the full check was last marked out of date, as ISO text.
@@ -116,11 +119,17 @@ export interface PageRow {
   problems: Problem[];
   /** What its links reach; none on a row kept before links were read. */
   links?: PageLinks;
+  /**
+   * When a check last found this page changed, as ISO text: a check that
+   * finds it as it was leaves the row alone. Not when it was last checked,
+   * which the site's row says for the whole site.
+   */
   checkedAt: string;
 }
 
 /** The site's own row: the last full check. */
 export interface SiteCheck {
+  /** When the site was last checked in full, as ISO text. */
   checkedAt?: string;
   pagesChecked: number;
   outOfDate: boolean;
@@ -221,10 +230,11 @@ async function rowAt(
 }
 
 /**
- * The stored id of each page row read back, so a check writing that page's
- * row again does not look it up a second time.
+ * Each page row read back as it is stored, with its id: a check finding the
+ * page as it was leaves the row alone, and one writing it again does not
+ * look it up a second time.
  */
-const storedIds = new WeakMap<PageRow, string>();
+const storedRows = new WeakMap<PageRow, Record<string, unknown>>();
 
 /**
  * Write `fields` to the row `key`, made where it is not there yet. A row
@@ -273,7 +283,10 @@ async function writeRow(
 /**
  * Keep what one page's check found. `previous` is the page's row in the
  * same language as it was read before the check, where it was: the row
- * written over.
+ * written over. Where the check found everything but the time as `previous`
+ * holds it, the row is left as it is, so a page row's `checkedAt` says when
+ * a check last found the page changed. The site's own row records every
+ * full check.
  */
 export async function savePage(
   ctx: PluginContext,
@@ -282,28 +295,30 @@ export async function savePage(
 ): Promise<void> {
   const { subject } = row;
   const key = pageKey(subject.type, subject.id, row.locale);
-  const knownId =
+  const stored =
     previous !== undefined &&
     pageKey(previous.subject.type, previous.subject.id, previous.locale) === key
-      ? storedIds.get(previous)
+      ? storedRows.get(previous)
       : undefined;
+  const fields = {
+    kind: "page",
+    holderCollection: subject.type,
+    holderId: subject.id,
+    locale: row.locale,
+    label: subject.label,
+    path: subject.detail ?? null,
+    title: row.title ?? null,
+    description: row.description ?? null,
+    problems: row.problems,
+    links: row.links ?? null,
+    checkedAt: row.checkedAt,
+  };
+  if (stored !== undefined && rowUnchanged(fields, stored)) return;
   await writeRow(
     ctx,
     key,
-    {
-      kind: "page",
-      holderCollection: subject.type,
-      holderId: subject.id,
-      locale: row.locale,
-      label: subject.label,
-      path: subject.detail ?? null,
-      title: row.title ?? null,
-      description: row.description ?? null,
-      problems: row.problems,
-      links: row.links ?? null,
-      checkedAt: row.checkedAt,
-    },
-    knownId
+    fields,
+    stored === undefined ? undefined : String(stored.id)
   );
 }
 
@@ -329,8 +344,9 @@ export async function removePage(
 }
 
 /**
- * A stored page row read back, filed under its page in `byId`, with its
- * stored id kept for writing it again. Anything else is passed over.
+ * A stored page row read back, filed under its page in `byId`, with the row
+ * as stored kept for comparing with and writing it again. Anything else is
+ * passed over.
  */
 function fileRow(byId: Map<string, PageRow[]>, item: unknown): void {
   if (!isRecord(item)) return;
@@ -338,7 +354,7 @@ function fileRow(byId: Map<string, PageRow[]>, item: unknown): void {
   if (row === undefined) return;
   const { id } = item;
   if (typeof id === "string" || typeof id === "number") {
-    storedIds.set(row, String(id));
+    storedRows.set(row, item);
   }
   const rows = byId.get(row.subject.id) ?? [];
   rows.push(row);

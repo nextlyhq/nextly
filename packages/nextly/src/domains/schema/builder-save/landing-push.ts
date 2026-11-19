@@ -168,7 +168,7 @@ export function partWayPush(push: (onLanded: () => void) => Promise<void>): {
  * it unchanged; a failure that is not a `NextlyError` is told without its
  * text, which a driver can fill with identifiers and values.
  */
-function partlyAppliedChange(
+export function partlyAppliedChange(
   error: unknown,
   keptFiles: readonly string[]
 ): NextlyError {
