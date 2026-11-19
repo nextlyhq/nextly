@@ -1568,6 +1568,18 @@ function startOf(
 }
 
 /**
+ * The parent a migration's snapshot records, from the snapshot file its run
+ * started from (`startOf`): that migration's name, null for a run that
+ * started from none, and none recorded where the run cannot say.
+ */
+function parentOf(
+  startedFrom: string | undefined | null
+): string | null | undefined {
+  if (startedFrom === null) return undefined;
+  return startedFrom?.replace(/\.snapshot\.json$/, "") ?? null;
+}
+
+/**
  * Refuses where the newest snapshot in the folder is no longer `startedFrom`,
  * the one this run reads as its starting point: another writer has written a
  * migration since, and this run's would be a second from the snapshot it
@@ -1890,7 +1902,8 @@ async function writeMigrationPair(
             pair.sqlContent,
             pair.contributions,
             pair.entities,
-            pair.permissions
+            pair.permissions,
+            parentOf(pair.startedFrom)
           ),
           await prepareWhole(sqlPath, pair.sqlContent),
         ];

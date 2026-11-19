@@ -1024,6 +1024,13 @@ exports[`each code, as a command ends with it > MIGRATION_DRIFT 1`] = `
   Docs: https://nextlyhq.com/docs/cli/errors/migration-drift  (MIGRATION_DRIFT)"
 `;
 
+exports[`each code, as a command ends with it > MIGRATION_HISTORY_FORKED 1`] = `
+"✗ Two migrations were written from 20261020_120000_add_posts.sql: 20261021_090000_add_tags.sql and 20261021_090500_add_price.sql.
+  Why:  20261021_090000_add_tags.sql is applied on this database, and 20261021_090500_add_price.sql was written without its changes, so it was not applied.
+  Next: Run \`nextly migrate:create --name record_merge\` to record the merge; if 20261021_090500_add_price.sql makes the same change, delete it and its snapshot instead.
+  Docs: https://nextlyhq.com/docs/cli/errors/migration-history-forked  (MIGRATION_HISTORY_FORKED)"
+`;
+
 exports[`each code, as a command ends with it > MIGRATION_IRREVERSIBLE 1`] = `
 "✗ 20261020_120000_add_posts.sql has no down SQL — it is irreversible.
   Why:  \`nextly migrate:down\` runs a migration's \`-- DOWN\` section, and this file's is empty.

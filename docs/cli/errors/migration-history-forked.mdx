@@ -1,0 +1,32 @@
+---
+title: MIGRATION_HISTORY_FORKED
+description: "Migrations were written without each other, from the same earlier migration, and no migration yet records them together, so none of them was applied."
+---
+
+## Cause
+
+Migrations were written without each other, from the same earlier migration, and no migration yet records them together, so none of them was applied.
+
+Each migration is written from the one before it: `nextly migrate:create` compares the configuration with the newest snapshot, and the new migration's snapshot records which migration that was. A migration whose parent is not the one before it in the folder was written without those in between, and knows nothing of their changes. It happens in two ways:
+
+- **Two branches each added a migration, and were merged.** This is the common one.
+- **Two writers ran at once.** One writer of migration files runs at a time (see [`MIGRATIONS_WRITER_BUSY`](/docs/cli/errors/migrations-writer-busy)), but a command stopped for longer than its hold, on a suspended laptop for example, can write beside the one that took its place.
+
+Until a migration written with all of them in the folder records them together, the newest snapshot lacks one side's changes. `nextly migrate`, a production start, `nextly migrate:check` and a Schema Builder save refuse the history and name the files, and `nextly migrate` applies none of them. Where one is already applied on the database the command reads, the message says which, and names the other as not applied.
+
+Migrations written before parents were recorded, and snapshots copied by hand for a hand-written migration, name no parent and are never refused.
+
+## Fix
+
+- **Two branches, different changes:** run `nextly migrate:create --name record_merge`. It writes a migration after both that records the merged state, and the history is one line again. Then run `nextly migrate`.
+- **The same change twice** (a command that was stopped and one that took its place): `nextly migrate:create` finds nothing to record and says so. Delete all but one of the migrations named, each with its snapshot in `meta/`.
+- In CI, `nextly migrate:check` fails until the merge is recorded, so a merge that needs one is caught on the pull request.
+
+## Example
+
+```text
+✗ Two migrations were written from 20261020_120000_add_posts.sql: 20261021_090000_add_tags.sql and 20261021_090500_add_price.sql.
+  Why:  20261021_090000_add_tags.sql is applied on this database, and 20261021_090500_add_price.sql was written without its changes, so it was not applied.
+  Next: Run `nextly migrate:create --name record_merge` to record the merge; if 20261021_090500_add_price.sql makes the same change, delete it and its snapshot instead.
+  Docs: https://nextlyhq.com/docs/cli/errors/migration-history-forked  (MIGRATION_HISTORY_FORKED)
+```

@@ -54,6 +54,8 @@ import {
   type LatestSnapshot,
   type SnapshotFile,
 } from "./snapshot-io";
+import { refuseForkedHistory } from "../migrate/history-line";
+
 import { templateStartFor } from "./template-start";
 import { holdInBuilderChange } from "./writer-hold";
 
@@ -159,6 +161,9 @@ export async function appMigrationInputs(
   // newest when it writes. Every other caller only reads, or holds it already.
   if (input.judged !== undefined) {
     await holdInBuilderChange(input.migrationsDir);
+    // And it adds no migration to a history with a merge nothing records:
+    // written next, the save's own migration would stand as that record.
+    await refuseForkedHistory(input.migrationsDir);
   }
   // The Builder's definitions, read and judged as `migrate:check` reads them
   // (`readBuilderDefinitions`), merged with the configuration's entities.

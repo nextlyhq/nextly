@@ -1051,7 +1051,11 @@ async function adopt(deps: BaselineCoreDeps): Promise<BaselineCoreResult> {
             // What the app contributed to other owners' tables, as every snapshot
             // writer records it, so the next diff can tell the app's elements from
             // the owner's own after this file becomes the latest snapshot.
-            planned.contributions
+            planned.contributions,
+            undefined,
+            undefined,
+            // A baseline is a project's first migration: written from none.
+            null
           ),
           await prepareWhole(sqlPath, sqlContent),
         ];

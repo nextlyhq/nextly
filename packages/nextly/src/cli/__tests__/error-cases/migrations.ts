@@ -35,6 +35,7 @@ import {
 import { uniqueColumnRepeatsError } from "../../../domains/schema/migrate/unique-column-guard";
 import { parseSnapshotFile } from "../../../domains/schema/migrate-create/snapshot-io";
 import type { NextlySchemaSnapshot } from "../../../domains/schema/pipeline/diff/types";
+import { forkedHistoryError } from "../../../domains/schema/migrate/history-line";
 import {
   writerHeldError,
   writerLostError,
@@ -195,6 +196,19 @@ export const MIGRATION_CASES = {
       },
     });
   },
+  // As `nextly migrate` refuses two migrations written from one parent, one
+  // of them applied on the database it reads.
+  MIGRATION_HISTORY_FORKED: () =>
+    forkedHistoryError(
+      [
+        {
+          parent: "20261020_120000_add_posts",
+          migrations: ["20261021_090000_add_tags", "20261021_090500_add_price"],
+          siblings: true,
+        },
+      ],
+      new Set(["20261020_120000_add_posts", "20261021_090000_add_tags"])
+    ) as NextlyError,
   // As a command that waited its whole wait for the migration files is refused.
   MIGRATIONS_WRITER_BUSY: () =>
     writerHeldError({

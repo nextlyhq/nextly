@@ -82,6 +82,24 @@ export interface SnapshotFile {
    * snapshot, which may not say which tables were translated.
    */
   translatedFieldsRecorded?: true;
+  /**
+   * The migration this one was written from: the base name of the newest
+   * snapshot its writer read, or null for a project's first migration.
+   *
+   * It is what makes the history a line that can be checked: two migrations
+   * naming one parent were written beside each other, by two writers or on
+   * two branches, and the second knows nothing of the first
+   * (`history-line.ts`). Absent from a snapshot written before parents were
+   * recorded, which says nothing about where it was written from.
+   */
+  parent?: string | null;
+  /**
+   * The migration this snapshot was written for, by base name, beside
+   * `parent`. A snapshot copied for a hand-written migration carries the
+   * name of the one it was copied from, and so says nothing of its own
+   * parent: only a snapshot under its own name is read as part of the line.
+   */
+  migration?: string;
 }
 
 /**
@@ -413,6 +431,16 @@ function optionalPartProblem(obj: Record<string, unknown>): string | undefined {
   ) {
     return `expected translatedFieldsRecorded to be true when present, got ${JSON.stringify(obj.translatedFieldsRecorded)}`;
   }
+  if (
+    obj.parent !== undefined &&
+    obj.parent !== null &&
+    typeof obj.parent !== "string"
+  ) {
+    return `expected parent to be a migration's name or null when present, got ${JSON.stringify(obj.parent)}`;
+  }
+  if (obj.migration !== undefined && typeof obj.migration !== "string") {
+    return `expected migration to be a migration's name when present, got ${JSON.stringify(obj.migration)}`;
+  }
   return undefined;
 }
 
@@ -459,7 +487,13 @@ export async function prepareSnapshot(
   /** Every entity's settings; omitted only by a caller that has none to record. */
   entities?: EntitySettingsRecord,
   /** Every declared permission, by owner; omitted only by a caller that knows none. */
-  permissions?: PermissionRecord
+  permissions?: PermissionRecord,
+  /**
+   * The migration this one is written from, by base name; null for a
+   * project's first. Omitted only by a caller that does not know which
+   * snapshot it started from, whose file then records none.
+   */
+  parent?: string | null
 ): Promise<PreparedFile> {
   await mkdir(metaDir, { recursive: true });
   const byName = (a: { name: string }, b: { name: string }) =>
@@ -478,6 +512,7 @@ export async function prepareSnapshot(
     ...(permissions !== undefined ? { permissions } : {}),
     // The tables below carry the translated-field record as written here.
     translatedFieldsRecorded: true,
+    ...(parent !== undefined ? { parent, migration: baseName } : {}),
     // Sort tables by name for reproducibility across machines.
     snapshot: {
       tables: [...snapshot.tables]

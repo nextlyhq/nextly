@@ -164,6 +164,7 @@ import {
   asServiceLogger,
   reconcileMigrationMetadata,
 } from "../../domains/schema/migrate/reconcile-metadata";
+import { refuseForkedHistory } from "../../domains/schema/migrate/history-line";
 import { refuseUnwrittenChanges } from "../../domains/schema/migrate/refuse-unwritten-changes";
 import {
   findRegistryDisagreements,
@@ -260,6 +261,7 @@ import {
   markedForSchemaLock,
 } from "../../domains/schema/pipeline/schema-lock";
 import {
+  appliedAppMigrations,
   newestAppliedAppMigration,
   writeRegistryRows,
 } from "../../domains/schema/schema-version";
@@ -2708,6 +2710,10 @@ export async function migrateCore(
   await assertFilesPresent(historyArgs);
   await refuseAttempts(historyArgs);
   await assertFilesUnchanged({ ...historyArgs, recordChecksums: false });
+  // And the history is one line: migrations written without each other are
+  // refused before any of them applies, until a migration records the merge,
+  // with those this database has applied, where it has, named as applied.
+  await refuseForkedAppHistory(deps);
   // Before the lock as well: taking it creates the lock's own table on a
   // database that has none, and a refused run leaves the schema as it was. A
   // file another run records meanwhile is only refused once more.
@@ -3925,6 +3931,31 @@ async function readAppHistory(args: AppHistoryArgs): Promise<
   // A removal stands for the applied outcome it was recorded after.
   const removed = removedOnPurpose(rows, await repo.listFileRemovals());
   return { files, rows, removed, repo, oldBuilder };
+}
+
+/**
+ * Refuses a forked history of the app's migrations (`history-line.ts`),
+ * read-only: the folder's snapshots, and the migrations the ledger records
+ * applied where the database has a ledger.
+ */
+async function refuseForkedAppHistory(args: {
+  adapter: CLIDatabaseAdapter;
+  db: unknown;
+  dialect: SupportedDialect;
+  migrationsDir: string;
+}): Promise<void> {
+  const hasLedger = await (
+    args.adapter as unknown as { tableExists: (n: string) => Promise<boolean> }
+  ).tableExists("nextly_schema_events");
+  const applied = hasLedger
+    ? appliedAppMigrations(
+        await new SchemaEventsRepository(
+          args.db,
+          args.dialect
+        ).listFileApplies()
+      )
+    : new Set<string>();
+  await refuseForkedHistory(args.migrationsDir, applied);
 }
 
 /**

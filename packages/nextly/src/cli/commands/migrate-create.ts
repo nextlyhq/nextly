@@ -54,6 +54,7 @@ import type { Command } from "commander";
 import { buildExtensionSchema } from "../../domains/schema/extension/build-extension-schema";
 import type { SchemaContribution } from "../../domains/schema/extension/run-hooks";
 import { canPrompt } from "../../domains/schema/migrate/can-prompt";
+import { nothingToRecordNotice } from "../../domains/schema/migrate/history-line";
 import {
   consentCovers,
   consentToCover,
@@ -840,6 +841,10 @@ export async function runMigrateCreate(
       logger.info(
         "No changes detected. Your config matches the latest snapshot."
       );
+      // Run to record a merge of migrations written without each other, it
+      // found none to record: they make the same change, and one of them goes.
+      const sameChange = await nothingToRecordNotice(migrationsDir);
+      if (sameChange !== undefined) logger.warn(sameChange);
       // Nothing to do is not a failure: 0, as every command ends a run with
       // nothing to do.
       endNothingToDo(logger, options.dryRun);

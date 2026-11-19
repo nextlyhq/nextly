@@ -607,7 +607,15 @@ describe.each(getConfiguredTestDialects())(
       expect(await adapter.tableExists(table(PAGES))).toBe(true);
     }, 120_000);
 
-    it("a Builder save overtaken while it writes leaves the other writer's migration where it is", async () => {
+    /**
+     * A Builder save stopped past its lease while it writes, after it has
+     * changed its definition, with `migrate:create` taking the folder and
+     * writing meanwhile. Answers how each ended.
+     */
+    async function stalledSaveTakenOver(): Promise<{
+      saved: Ended;
+      created: Ended | undefined;
+    }> {
       restoreBounds();
       restoreBounds = setWriterHoldBounds({
         waitMs: 30_000,
@@ -625,6 +633,11 @@ describe.each(getConfiguredTestDialects())(
       };
 
       const saved = await builderCreate();
+      return { saved, created };
+    }
+
+    it("a Builder save overtaken while it writes leaves the other writer's migration where it is", async () => {
+      const { saved, created } = await stalledSaveTakenOver();
 
       expect(created?.code, created?.said).toBeUndefined();
       // The save is refused as overtaken, having written nothing of its own,
@@ -640,6 +653,23 @@ describe.each(getConfiguredTestDialects())(
         expect.arrayContaining([table(POSTS), table(PAGES)])
       );
     }, 120_000);
+
+    // The save changes its definition before its migration is written, so the
+    // command that took the folder read the definition with the save's
+    // change in it, and wrote it into its own migration; the save then put
+    // its definition back. Holds once a save writes its definition last.
+    it.fails(
+      "the migration written over a stalled Builder save holds only its own change",
+      async () => {
+        const { created } = await stalledSaveTakenOver();
+
+        expect(created?.code, created?.said).toBeUndefined();
+        // The command's migration creates its own collection, and not the
+        // one the stalled save was creating.
+        expect(oneLine()).toEqual([[table(POSTS)], [table(PAGES)]]);
+      },
+      120_000
+    );
 
     it("a writer suspended between its last check and its files, past its lease, says what it wrote and deletes nothing", async () => {
       restoreBounds();
@@ -681,6 +711,16 @@ describe.each(getConfiguredTestDialects())(
       for (const file of sqlFiles()) {
         expect(snapshotTables(file), file).toContain(table(POSTS));
       }
+
+      // Both were written from the same migration, and where they are used
+      // that is seen: `nextly migrate` applies neither and names them.
+      const applied = await migrate(WITH_PAGES);
+      expect(applied.refused).toBe(true);
+      expect(applied.said).toContain("MIGRATION_HISTORY_FORKED");
+      expect(applied.said).toMatch(
+        /Two migrations were written from \S*_base\.sql: \S*_first\.sql and \S*_second\.sql\./
+      );
+      expect(await adapter.tableExists(table(PAGES))).toBe(false);
     }, 120_000);
 
     it("a migration appears to nextly migrate with both its files or not at all", async () => {

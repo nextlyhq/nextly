@@ -65,6 +65,10 @@ import {
   fileDeletions,
   functionsDefinedBy,
 } from "../../domains/schema/migrate/file-deletions";
+import {
+  forkedHistoryError,
+  unrecordedMerges,
+} from "../../domains/schema/migrate/history-line";
 import { offlineDeletionFacts } from "../../domains/schema/migrate/offline-deletion-facts";
 import { declaredNamesOf } from "../../domains/schema/migrate/resolved-schema";
 import {
@@ -406,6 +410,13 @@ export async function runChecks(args: {
       );
     }
   }
+
+  // One line of history: migrations written without each other, by two
+  // writers at once or on two branches merged since, fail the check with
+  // each named until a migration records the merge, as `nextly migrate`
+  // refuses them.
+  const forked = forkedHistoryError(await unrecordedMerges(migrationsDir));
+  if (forked !== undefined) return exitWithError(logger, forked);
 
   // Statements a run would refuse, judged by the check the run makes, so CI
   // shows them before a deploy meets them. Warned rather than failed: this

@@ -9,6 +9,7 @@ import type { DataLossVerdict } from "../../../domains/schema/migrate/data-loss-
 import { PLAN_CHANGED_AFTER_CONSENT } from "../../../domains/schema/migrate/plan-changed-after-consent";
 import { UNIQUE_REPEATS_ADVICE } from "../../../domains/schema/migrate/unique-column-guard";
 import { UNIQUE_INDEX_NAME_HELD_ADVICE } from "../../../domains/schema/migrate/unique-index-name-advice";
+import { HISTORY_FORKED_REASON } from "../../../domains/schema/migrate/history-line";
 import {
   WRITER_HOLD_HELD_REASON,
   WRITER_HOLD_LOST_REASON,
@@ -506,6 +507,23 @@ function malformedConsentParts(message: string): CliErrorParts {
   };
 }
 
+/**
+ * A forked history, as its three parts: the refusal carries each fork's own
+ * (`forkedHistoryError`), one line a fork where there are several.
+ */
+function forkedHistoryParts(error: NextlyError): CliErrorParts {
+  const lines = (error.logContext?.lines ?? []) as CliErrorParts[];
+  const part = (key: keyof CliErrorParts) =>
+    [...new Set(lines.map(line => line[key]))].join("\n");
+  return lines.length === 0
+    ? {
+        what: error.publicMessage,
+        why: "Only one migration can follow another.",
+        next: "Run `nextly migrate:create --name record_merge` to record the merge, or delete all but one where they make the same change.",
+      }
+    : { what: part("what"), why: part("why"), next: part("next") };
+}
+
 /** A writer of migration files that another overtook, as its three parts. */
 function overtakenParts(error: NextlyError): CliErrorParts {
   return refusalParts(error, "Another run wrote a migration meanwhile.");
@@ -516,6 +534,17 @@ export const MIGRATION_CODES = defineCodes({
     cause:
       "Another run holds the schema lock, so the command did not start and changed nothing.",
     from: [{ code: "NEXTLY_MIGRATE_LOCK_BUSY", describe: lockRefusal }],
+  },
+  MIGRATION_HISTORY_FORKED: {
+    cause:
+      "Migrations were written without each other, from the same earlier migration, and no migration yet records them together, so none of them was applied.",
+    from: [
+      {
+        code: "CONFLICT",
+        reason: HISTORY_FORKED_REASON,
+        describe: forkedHistoryParts,
+      },
+    ],
   },
   MIGRATIONS_WRITER_BUSY: {
     cause:
