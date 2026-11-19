@@ -17,9 +17,9 @@
 // the live DB but is missing from the desired schema. We filter to strip
 // DROP TABLE statements for non-managed tables before executing.
 //
-// On PG/SQLite: db.transaction() provides atomicity. On MySQL: DDL is
-// auto-committed; F15 will add pre-flight validation. SQLite uses PRAGMA
-// foreign_keys = OFF/ON wrapping per F3 PR-4.
+// On PostgreSQL db.transaction() provides atomicity; on SQLite one transaction on
+// the connection does, with foreign keys switched off before it opens. On MySQL
+// DDL is auto-committed.
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
@@ -61,6 +61,7 @@ import { getActiveExtensionSchema } from "../extension/build-extension-schema";
 import {
   refusingNewDanglingReferences,
   type SqliteForeignKeySession,
+  withinSqliteTransaction,
   withSqliteForeignKeysOff,
 } from "../migrate/sqlite-foreign-keys";
 import {
@@ -1698,15 +1699,11 @@ export class PushSchemaPipeline {
             // and the kit then handles only the column-level remainder (it
             // re-introspects and sees these tables live AND declared).
             //
-            // On SQLite these CREATEs are not rolled back when the kit pass
-            // then fails: the pipeline runs SQLite outside `db.transaction()`
-            // by design, so `tx === db` here. That is the intended outcome
-            // rather than a gap — the retry's diff re-introspects, no longer
-            // plans `add_table` for them, and the table it finds is the one
-            // this emitter built, which carries the tracked indexes the kit's
-            // own CREATE would have omitted. The journal records the failed
-            // apply without these statements in `statements_executed`, which
-            // counts only a successful pass.
+            // On SQLite these CREATEs run in the apply's transaction on the
+            // connection (`tx === db` here), so a kit pass that then fails takes
+            // them back with it, as on PostgreSQL. The journal records the
+            // failed apply without these statements in `statements_executed`,
+            // which counts only a successful pass.
             if (dialect !== "postgresql") {
               // A SQLite table rebuilt for a constraint change keeps its dropped
               // columns for the kit to remove, so its added columns are created
@@ -1966,8 +1963,8 @@ export class PushSchemaPipeline {
           // Read through `tx`, the handle this apply runs on. On PostgreSQL and
           // MySQL that is the apply's own transaction, so the registry read
           // stays on its connection instead of taking a second one from the
-          // pool while the transaction is open. On SQLite, which applies with
-          // no transaction, `tx` is the database handle itself.
+          // pool while the transaction is open. On SQLite `tx` is the database
+          // handle itself, whose one connection holds the apply's transaction.
           const pluginMigrated = await pluginMigratedTableSet(tx, dialect);
           const unlocked = useFastPath
             ? pluginMigrated
@@ -2027,9 +2024,8 @@ export class PushSchemaPipeline {
           }
 
           // Appended to the same batch so they run after the table changes they
-          // index. On PG and MySQL that batch is transactional; SQLite runs
-          // without a transaction by design, so a failing restore there is
-          // reported but the rebuild it followed has already landed.
+          // index. On PostgreSQL and SQLite that batch is transactional, so a
+          // failing restore takes the rebuild it followed back with it.
           //
           // The ops are handed over ONLY on the kit route: the restore's
           // ops-replay exists because drizzle-kit never creates dynamic-table
@@ -2076,11 +2072,10 @@ export class PushSchemaPipeline {
           // On PostgreSQL the commit is what lands the apply: refused, and the
           // transaction undone, as a statement is, so a run that lost the schema
           // lock while its last statement ran changes nothing. MySQL's DDL has
-          // committed as it ran, and SQLite runs without a transaction, so there
-          // a refusal here would report an apply that already landed.
-          // SQLite applies without a transaction, so a lossy type change's consented clearing waits
-          // for its rebuild to succeed (`clearConsentedValues`): the values are only cleared in a
-          // column that was converted.
+          // committed as it ran, so there a refusal here would report an apply
+          // that already landed.
+          // On SQLite a lossy type change's consented clearing waits for its rebuild to succeed
+          // (`clearConsentedValues`): the values are only cleared in a column that was converted.
           if (dialect === "sqlite") {
             await clearConsentedValues({
               tx,
@@ -2101,27 +2096,34 @@ export class PushSchemaPipeline {
         let statementsExecuted: number;
 
         if (isSqlite) {
-          // SQLite: skip db.transaction() per F3 PR-4 (PRAGMA-vs-tx
-          // compatibility), and apply under SQLite's schema-change contract —
-          // the same one a migration runs under: foreign keys off for the
-          // whole apply, so a table rebuild cannot cascade into the rows of
-          // tables that reference it, then `PRAGMA foreign_key_check` once
-          // every statement has run, and the previous setting restored.
+          // SQLite: the apply under SQLite's schema-change contract, the same
+          // one a migration runs under: foreign keys off for the whole apply,
+          // switched before its transaction opens (SQLite ignores the pragma
+          // inside one), so a table rebuild cannot cascade into the rows of
+          // tables that reference it; then `PRAGMA foreign_key_check` once
+          // every statement has run, inside the transaction, and the previous
+          // setting restored after it. The apply is one transaction on the
+          // connection (`withinSqliteTransaction`), not `db.transaction()`,
+          // whose SQLite form takes no work that waits: a failure, or a refusal
+          // of the references it would leave dangling, rolls it back whole.
           //
-          // With no transaction there is nothing to roll back: a refusal here
-          // reports an apply that has already landed, so the operator learns
-          // which references are dangling instead of the push reading as clean.
+          // An apply with nothing resolved to change opens no transaction, so a
+          // start that finds the tables as declared runs the statements it did.
           const session = sqliteSessionOf(db);
+          const applyChecked = () =>
+            refusingNewDanglingReferences(
+              session,
+              () => runApply(db),
+              (count, pairs) =>
+                `This schema change would leave ${String(count)} row(s) referencing rows that do not exist (${pairs}). It was rolled back, and nothing was applied.`
+            );
           statementsExecuted = await withSqliteForeignKeysOff(
             session,
             async () => {
               try {
-                return await refusingNewDanglingReferences(
-                  session,
-                  () => runApply(db),
-                  (count, pairs) =>
-                    `This schema change left ${String(count)} row(s) referencing rows that do not exist (${pairs}). SQLite applies a dev push without a transaction, so the change is in place: remove or repair those rows.`
-                );
+                return resolvedOps.length > 0
+                  ? await withinSqliteTransaction(session, applyChecked)
+                  : await applyChecked();
               } catch (err) {
                 // Only the reference check's own refusal is re-classified;
                 // anything `runApply` threw keeps the type it was thrown with.

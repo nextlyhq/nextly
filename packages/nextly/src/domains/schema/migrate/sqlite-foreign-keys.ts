@@ -53,6 +53,28 @@ export async function withSqliteForeignKeysOff<T>(
   }
 }
 
+/**
+ * Runs `work` in one transaction on the session's connection: committed where it returns, rolled
+ * back where it or the commit throws, so nothing of it stays. Foreign-key enforcement is switched
+ * outside it (`withSqliteForeignKeysOff`), as SQLite ignores the pragma inside a transaction.
+ */
+export async function withinSqliteTransaction<T>(
+  session: Pick<SqliteForeignKeySession, "run">,
+  work: () => Promise<T>
+): Promise<T> {
+  await session.run("BEGIN");
+  try {
+    const result = await work();
+    await session.run("COMMIT");
+    return result;
+  } catch (error) {
+    // A failure that already ended the transaction leaves none to roll back: the work's own
+    // failure is what is thrown.
+    await session.run("ROLLBACK").catch(() => undefined);
+    throw error;
+  }
+}
+
 /** One dangling-reference count: rows of `table` pointing at missing `parent` rows. */
 type DanglingCounts = Map<
   string,
