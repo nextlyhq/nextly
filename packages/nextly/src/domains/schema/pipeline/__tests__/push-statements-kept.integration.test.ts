@@ -15,7 +15,7 @@ import { drizzle as drizzleMysql } from "drizzle-orm/mysql2";
 import { drizzle as drizzlePg } from "drizzle-orm/node-postgres";
 import { createPool, type Pool as MysqlPool } from "mysql2";
 import { Pool } from "pg";
-import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { makeTestContext } from "../../../../database/__tests__/integration/helpers/test-db";
 import {
@@ -100,9 +100,16 @@ function pipelineFailingAt(
 
 describe.skipIf(!MYSQL_URL)("a failed apply's kept statements (mysql)", () => {
   const tableName = `${MYSQL.prefix}_kept_page`;
-  const pool: MysqlPool = createPool({ uri: MYSQL_URL });
-  const db = drizzleMysql({ client: pool });
-  const databaseName = new URL(MYSQL_URL).pathname.slice(1);
+  // Made in `beforeAll`: a skipped describe still runs its body, where an unset URL would throw.
+  let pool: MysqlPool;
+  let db: ReturnType<typeof drizzleMysql<Record<string, never>, MysqlPool>>;
+  let databaseName: string;
+
+  beforeAll(() => {
+    pool = createPool({ uri: MYSQL_URL });
+    db = drizzleMysql({ client: pool });
+    databaseName = new URL(MYSQL_URL).pathname.slice(1);
+  });
 
   const apply = (desired: DesiredSchema, failAt?: number) => {
     const made = pipelineFailingAt("mysql", db, failAt);
@@ -170,8 +177,13 @@ describe.skipIf(!MYSQL_URL)("a failed apply's kept statements (mysql)", () => {
 
 describe.skipIf(!PG_URL)("a failed apply's kept statements (postgres)", () => {
   const tableName = `${PG.prefix}_kept_page`;
-  const pool = new Pool({ connectionString: PG_URL });
-  const db = drizzlePg({ client: pool });
+  let pool: Pool;
+  let db: ReturnType<typeof drizzlePg>;
+
+  beforeAll(() => {
+    pool = new Pool({ connectionString: PG_URL });
+    db = drizzlePg({ client: pool });
+  });
 
   afterAll(async () => {
     await db.execute(`DROP TABLE IF EXISTS "${tableName}"`);
