@@ -177,6 +177,9 @@ export async function rebuildSqliteNullability(
       };
     }),
   };
+  // The live table's inline UNIQUE constraints, those it keeps, and those it leaves out on purpose.
+  const inlineUnique = losses?.unique ?? [];
+  const keptUnique = keptUniqueOf(inlineUnique, retyped);
   // The dropped references named as dropped, so the rebuild's guard takes them as gone on purpose
   // rather than as constraints it would lose.
   const drops = dropped.map(foreignKey => ({
@@ -185,7 +188,10 @@ export async function rebuildSqliteNullability(
     foreignKey,
   }));
   for (const statement of sqliteTableRebuildStatements(rebuilt, drops, {
-    keptUnique: keptUniqueOf(losses?.unique ?? [], retyped),
+    keptUnique,
+    leftOutUnique: inlineUnique.filter(
+      columns => !keptUnique.includes(columns)
+    ),
   })) {
     await tx.execute(statement);
   }
