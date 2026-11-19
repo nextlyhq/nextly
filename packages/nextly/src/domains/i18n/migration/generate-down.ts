@@ -26,8 +26,11 @@ const ARCHIVE = "nextly_i18n_archive";
  *      (id is DB-generated, so the INSERT ... SELECT omits it)
  *   4. DROP the companion table
  */
-export function buildLocalizationDownSql(spec: CompanionMigrationSpec): string {
-  return buildLocalizationDownStatements(spec)
+export function buildLocalizationDownSql(
+  spec: CompanionMigrationSpec,
+  options: Pick<LocalizationDownOptions, "afterRestore"> = {}
+): string {
+  return buildLocalizationDownStatements(spec, options)
     .map(s => `${s};`)
     .join("\n\n");
 }
@@ -52,6 +55,14 @@ export interface LocalizationDownOptions {
    * already-completed restore is what silently reverts content to its pre-localization state.
    */
   existingMainColumns?: readonly string[];
+  /**
+   * Statements to run once the values are back on the main table, before anything is archived or
+   * the companion dropped: the settings the main table's snapshot records of the restored columns
+   * (a Required field's NOT NULL, a Unique field's index), which a column added empty could not
+   * take before the copy. A value the setting refuses then stops the run with every translation
+   * still in place.
+   */
+  afterRestore?: readonly string[];
   /**
    * Whether to carry the restored row's publishing state back onto main.
    *
@@ -449,14 +460,18 @@ export function buildLocalizationDownStatements(
   const alreadyPresent = new Set(options.existingMainColumns ?? []);
   for (const c of onMain) {
     if (alreadyPresent.has(c.name)) continue;
+    // The column the main table's snapshot records (`restoredAs`), where a migration file is
+    // written against one. Otherwise what the column the values come from carries
+    // (`carriedDefinition`): its type where it is wider than the field's own, else the widest type
+    // the values could need (`restoreTargetType`), and its default, which the restored column
+    // takes back.
+    const type =
+      c.restoredAs?.type ?? c.carried?.type ?? restoreTargetType(c, dialect);
+    const def =
+      c.restoredAs === undefined ? c.carried?.default : c.restoredAs.default;
     stmts.push(
-      // What the column the values come from carries (`carriedDefinition`): its type where it is
-      // wider than the field's own, else the widest type the values could need
-      // (`restoreTargetType`), and its default, which the restored column takes back.
-      `ALTER TABLE ${q(mainTable, dialect)} ADD COLUMN ${q(c.name, dialect)} ${c.carried?.type ?? restoreTargetType(c, dialect)}` +
-        (c.carried?.default === undefined
-          ? ""
-          : ` DEFAULT ${c.carried.default}`)
+      `ALTER TABLE ${q(mainTable, dialect)} ADD COLUMN ${q(c.name, dialect)} ${type}` +
+        (def === undefined ? "" : ` DEFAULT ${def}`)
     );
   }
 
@@ -473,6 +488,7 @@ export function buildLocalizationDownStatements(
       { restoreStatus: options.restoreStatus === true }
     )
   );
+  stmts.push(...(options.afterRestore ?? []));
 
   // 3. archive every translation but the one restored: the default language's, or, with the
   // spec's ranking, the row its readers saw (`chosenRowOrder`), so nothing restored is archived

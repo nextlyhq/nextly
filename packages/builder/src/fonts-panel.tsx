@@ -269,10 +269,15 @@ export function FontsPanel({
     readOnly,
     onTokensChange,
     suppliedText,
+    classes: studio.classes,
     onChosen: () => setUploading(false),
   });
   const question = (
-    <UseForQuestion asked={useFor.asked} onAnswer={useFor.answer} />
+    <UseForQuestion
+      asked={useFor.asked}
+      kept={useFor.kept}
+      onAnswer={useFor.answer}
+    />
   );
 
   if (faces === undefined) return <Unread absence={absence} />;
@@ -1046,12 +1051,17 @@ function VariableRow({
       >
         Aa
       </span>
-      <span className="nx-vars__name" title={label}>
+      <span className="nx-vars__name" title={label} aria-hidden="true">
         {label}
       </span>
       <span className="nx-vars__chip" aria-hidden="true">
         {first}
       </span>
+      {/* The row's name, in one element: the name it shows, then the stack
+          its chip begins. Text rather than an aria-label, which must hold
+          every drawn word, the "Aa" included; one element, so no browser
+          puts a space before its comma. */}
+      <span className="nx-sr-only">{`${label}, ${row.token.values.light}`}</span>
     </>
   );
   return (
@@ -1059,12 +1069,7 @@ function VariableRow({
       {onOpenTokens === undefined ? (
         <div className="nx-vars__row nx-fonts__static-row">{content}</div>
       ) : (
-        <button
-          type="button"
-          className="nx-vars__row"
-          aria-label={`${label}, ${row.token.values.light}`}
-          onClick={onOpenTokens}
-        >
+        <button type="button" className="nx-vars__row" onClick={onOpenTokens}>
           {content}
         </button>
       )}

@@ -108,7 +108,7 @@ export function migrateStoredData(args: {
   /** What the steps are run with, before or after the run's migrations. */
   const deps = (afterMigrations: boolean): DataStepsDeps => ({
     afterMigrations,
-    adapter: adapter as unknown as DataStepsDeps["adapter"],
+    adapter,
     command: "nextly migrate",
     steps: MIGRATE_DATA_STEPS,
     backupConfirmed: confirmed,

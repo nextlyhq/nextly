@@ -1977,7 +1977,22 @@ async function prepareBootSchema(
   // holding the active-schema map — so it read an empty map while this call
   // had just filled one. Passing the value makes the boot path independent of
   // how the two modules happen to be resolved.
+  // Each field group's stored table, so a contribution to a group attaches to the table the group
+  // is in: `fg_<slug>` on a site whose field-group storage was migrated.
+  const { declaredFieldGroupStorage } = await import(
+    "../domains/field-groups/services/field-group-stored-tables"
+  );
+  const fieldGroups = await declaredFieldGroupStorage(
+    adapter,
+    transformedConfig.fieldGroups
+  );
   return compileAndPublishExtensionSchema({
+    ...(fieldGroups === undefined
+      ? {}
+      : {
+          fieldGroupTables: fieldGroups.tables,
+          fieldGroupTypeColumns: fieldGroups.typeColumns,
+        }),
     dialect: bootDialect,
     // The transformed list, like everything else from Layer 0b down: a
     // plugin a `setup` transformer added declares tables too, and the
@@ -4976,16 +4991,16 @@ async function syncCodeFirstComponents(
     ...componentSyncResult.updated,
   ];
 
-  // Shared resolver so the existence probe below, the DDL path further down and
-  // the migration CLI all produce identical component table names.
-  const { resolveComponentTableName } = await import(
-    "../domains/schema/utils/resolve-table-name"
-  );
+  // The table each group's registry row names after the sync, so the probe below and the create
+  // further down address the group's own storage. Derived again from the slug, the name would be
+  // the legacy one on a site whose storage moved to the current names, and the probe would queue a
+  // `comp_` table to be created beside the group's real one.
+  const tableNameOf = (slug: string): string | undefined =>
+    componentSyncResult.tableNames[slug];
 
   for (const slug of componentSyncResult.unchanged) {
-    // The physical name normalizes the slug, so probing the raw slug would
-    // never find the table and would queue a redundant sync on every boot.
-    const tableName = resolveComponentTableName(slug);
+    const tableName = tableNameOf(slug);
+    if (tableName === undefined) continue;
     try {
       const tableExists = await adapter.tableExists(tableName);
       if (!tableExists) {
@@ -5015,10 +5030,11 @@ async function syncCodeFirstComponents(
     const compConfig = transformedConfig.fieldGroups.find(c => c.slug === slug);
     if (!compConfig) continue;
 
-    const tableName = resolveComponentTableName(slug);
+    const tableName = tableNameOf(slug);
+    if (tableName === undefined) continue;
 
-    // i18n: a localized component omits its translatable columns from the main comp_
-    // table and gets a companion `comp_<slug>_locales` (created below).
+    // i18n: a localized component omits its translatable columns from the main
+    // table and gets a companion `<table>_locales` (created below).
     // Where its translatable columns live: its companion, for a translatable component or for every
     // component on a site that keeps every translatable field per language.
     const compLocalized = storesPerLanguage(compConfig);
@@ -6422,12 +6438,31 @@ async function refuseMixedStorageInConfig(
   const [
     { refuseMixedStorage },
     { resolveSingleTableName },
-    { resolveCollectionTableName, resolveComponentTableName },
+    { resolveCollectionTableName },
+    { readStoredFieldGroupTables, storedOrNewTableName },
   ] = await Promise.all([
     import("../domains/i18n/per-language-storage-layout"),
     import("../domains/singles/services/resolve-single-table-name"),
     import("../domains/schema/utils/resolve-table-name"),
+    import("../domains/field-groups/services/field-group-stored-tables"),
   ]);
+  // A declared field group's table as its registry row names it, or, for one the registry does
+  // not hold yet, its name under the naming this site's storage is on. So it is matched with its
+  // own registry row below rather than judged a second time as a Builder entity, and the
+  // undeclared-languages check reads its real translation table. Only read when the configuration
+  // declares a group. A registry that cannot be read is left to the registry scan below, which
+  // refuses naming the registry it could not read.
+  const storedFieldGroups =
+    (config.fieldGroups ?? []).length === 0
+      ? undefined
+      : await readStoredFieldGroupTables(adapter);
+  const fieldGroupTableOf = (slug: string): string =>
+    storedOrNewTableName(
+      storedFieldGroups?.usable === true
+        ? storedFieldGroups
+        : { tables: new Map(), naming: "legacy" },
+      slug
+    );
   type Entity = Parameters<typeof refuseMixedStorage>[1][number];
   const fieldsOf = (entity: { fields?: unknown }) =>
     (entity.fields ?? []) as Entity["fields"];
@@ -6460,7 +6495,7 @@ async function refuseMixedStorageInConfig(
       (g): Entity => ({
         kind: "component",
         slug: g.slug,
-        tableName: resolveComponentTableName(g.slug),
+        tableName: fieldGroupTableOf(g.slug),
         fields: fieldsOf(g),
         localized: (g as { localized?: unknown }).localized,
       })

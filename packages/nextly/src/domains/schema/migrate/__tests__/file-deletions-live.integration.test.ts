@@ -442,3 +442,52 @@ describe.each(LOCK_DIALECTS)("the deletion facts read on %s", dialect => {
     ]);
   }, 120_000);
 });
+
+describe.each(LOCK_DIALECTS)(
+  "the table a foreign key references, read on %s",
+  dialect => {
+    const P = `fkt_${randomBytes(3).toString("hex")}`;
+    let world: LockWorld;
+    let adapter: DrizzleAdapter;
+
+    beforeAll(async () => {
+      world = await lockWorld(dialect, { fresh: true });
+      adapter = await world.connect();
+    }, 120_000);
+
+    afterAll(async () => {
+      await adapter.disconnect();
+      await world.dispose();
+    }, 60_000);
+
+    it("names it as the database names it, so a table another differs from only by case is not it", async () => {
+      const q = (name: string) =>
+        dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+      const owner = `${P}_posts`;
+      // PostgreSQL keeps a quoted name's case: `"<p>_Posts"` is another table than `<p>_posts`.
+      const other = dialect === "postgresql" ? `${P}_Posts` : `${P}_decks`;
+      for (const statement of [
+        `CREATE TABLE ${q(owner)} (id integer PRIMARY KEY)`,
+        `CREATE TABLE ${q(other)} (id integer PRIMARY KEY)`,
+        `CREATE TABLE ${q(`${owner}_locales`)} (${q("_parent")} integer, ${q("_locale")} varchar(20), FOREIGN KEY (${q("_parent")}) REFERENCES ${q(owner)} (id))`,
+        `CREATE TABLE ${q(`${P}_cards_locales`)} (${q("_parent")} integer, ${q("_locale")} varchar(20), FOREIGN KEY (${q("_parent")}) REFERENCES ${q(other)} (id))`,
+      ]) {
+        await adapter.executeQuery(statement);
+      }
+      const { readForeignKeyTargets } = await import(
+        "../../pipeline/live-table-facts"
+      );
+      const db = adapter.getDrizzle();
+      expect(
+        (await readForeignKeyTargets(db, dialect, `${owner}_locales`)).get(
+          "_parent"
+        )
+      ).toEqual([owner]);
+      const elsewhere = (
+        await readForeignKeyTargets(db, dialect, `${P}_cards_locales`)
+      ).get("_parent");
+      expect(elsewhere).toHaveLength(1);
+      expect(elsewhere).not.toContain(owner);
+    }, 120_000);
+  }
+);

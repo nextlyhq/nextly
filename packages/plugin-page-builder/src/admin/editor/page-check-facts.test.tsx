@@ -33,12 +33,14 @@ vi.mock("../publish-offer", () => ({
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   useDocumentActions: () => ({ storedAt: null }),
 }));
+// One answer, kept between renders as the real hook keeps its rows.
+const BINDINGS = {
+  key: "collection:pages:p1",
+  item: { collectionLabel: "Posts" },
+  rows: [{ nodeId: "h1", prop: "text" }],
+};
 vi.mock("../bindings-report/page-rows", () => ({
-  usePageBindingsToFix: () => ({
-    key: "collection:pages:p1",
-    item: { collectionLabel: "Posts" },
-    rows: [{ nodeId: "h1", prop: "text" }],
-  }),
+  usePageBindingsToFix: () => BINDINGS,
 }));
 vi.mock("../bindings-report/words", () => ({
   whereBound: () => "Heading · Text",
@@ -139,6 +141,31 @@ describe("the facts of the open page", () => {
       ])
     );
     expect(asked).toHaveBeenCalledWith({ documents: [PAGE], layout: "main" });
+  });
+
+  it("keeps the facts while the count's answer is the same, whatever object carries it", async () => {
+    const page = { id: "p1" };
+    const cards = [
+      { area: "header" as const, setId: "main", setTitle: "Main" },
+    ];
+    const areaOf = () => undefined;
+    const { result, rerender } = renderHook(() =>
+      usePageCheckFacts({
+        field: "content",
+        document: PAGE,
+        applied: undefined,
+        regionCards: cards,
+        areaOf,
+        currentPage: page,
+        // A new count each render, as the editor's state gives it one.
+        pageData: count({ report: REPORT }),
+        layout: { layout: "main", siteDefault: false },
+      })
+    );
+    await waitFor(() => expect(result.current.unpublished).toBeDefined());
+    const settled = result.current;
+    rerender();
+    expect(result.current).toBe(settled);
   });
 
   it("asks nothing of a component, which is published with the pages using it", async () => {

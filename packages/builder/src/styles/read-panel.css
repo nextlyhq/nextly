@@ -100,17 +100,11 @@
 }
 
 /*
- * Where the top bar is crowded (up to 1300px, so the editor's narrowest
- * width), the meter drops its "what's this?" first: the count and "over the
- * limit" stay, and the button's name still says it explains. Only then does
- * the title shorten, which the bar's start column does by letting the title
- * alone shrink.
+ * Where the top bar is crowded, once its title is at its shortest, the meter
+ * drops its "what's this?" (`data-topbar-word`, hidden by the bar's own rule
+ * in the add-panel partial): the count and "over the limit" stay, and the
+ * button's name and tooltip still say it explains.
  */
-@container topbar (max-width: 81.25rem) {
-  .nx-read-meter[data-place="bar"] .nx-read-meter__more {
-    display: none;
-  }
-}
 
 /* The panel the meter opens, on the panel surface every menu and popover
    the editor opens shares, in both themes. */

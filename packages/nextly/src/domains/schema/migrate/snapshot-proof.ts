@@ -70,6 +70,7 @@ import {
   judgeStatements,
   labelOf,
   type JudgedStatement,
+  type LiveSchema,
   type LiveSchemaWithColumnFacts,
 } from "./statement-judgement";
 import { registryRowWrittenBy } from "./statement-targets";

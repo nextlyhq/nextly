@@ -225,6 +225,21 @@ describe("browsing", () => {
     ).toBe("Inter");
   });
 
+  it("is named by the family, not by the preview text drawn in its place", async () => {
+    view(catalogue());
+    await row(/^Inter/);
+    fireEvent.change(screen.getByRole("textbox", { name: "Preview text" }), {
+      target: { value: "Hamburgefonstiv" },
+    });
+    const inter = await row(/^Inter, /);
+    // Its own text names it, with no aria-label laid over a row that draws
+    // a sentence the label could not hold: the sentence is for the eye.
+    expect(inter.getAttribute("aria-label")).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: /Hamburgefonstiv/ })
+    ).toBeNull();
+  });
+
   it("shows thirty at a time", async () => {
     view(catalogue({}, MANY));
     await row(/^Family 00/);
@@ -258,13 +273,132 @@ describe("browsing", () => {
     expect(within(await row(/^Lora/)).getByText("Added")).toBeTruthy();
   });
 
-  it("says where previews come from, and where added fonts go", () => {
+  it("says above the catalogue that added fonts are copied, and asks before loading previews", () => {
     view(catalogue());
     expect(
       screen.getByText(
-        "Previews load from Fontsource while you browse. Fonts you add are stored on your site."
+        "Fonts you add are copied to your site. Visitors never contact Google."
       )
     ).toBeTruthy();
+    expect(
+      screen.getByText(
+        "To show previews, your browser loads them from Fontsource, a free copy of Google Fonts."
+      )
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Show previews" })).toBeTruthy();
+    // The old line under the list, which loaded previews without asking.
+    expect(screen.queryByText(/Previews load from Fontsource/)).toBeNull();
+  });
+});
+
+describe("previews, only once the author asks", () => {
+  /** The addresses a preview font was loaded from, in order. */
+  let loadedFrom: string[] = [];
+
+  beforeEach(() => {
+    loadedFrom = [];
+    // Every row is on screen at once, so a preview loads as soon as it may.
+    vi.stubGlobal(
+      "IntersectionObserver",
+      class {
+        constructor(
+          private readonly onSeen: (
+            entries: { isIntersecting: boolean }[]
+          ) => void
+        ) {}
+        observe(): void {
+          this.onSeen([{ isIntersecting: true }]);
+        }
+        disconnect(): void {}
+        unobserve(): void {}
+      }
+    );
+    vi.stubGlobal(
+      "FontFace",
+      class {
+        constructor(_family: string, source: string) {
+          loadedFrom.push(source);
+        }
+        load(): Promise<void> {
+          return Promise.resolve();
+        }
+      }
+    );
+    Object.defineProperty(document, "fonts", {
+      configurable: true,
+      value: { add: () => undefined },
+    });
+  });
+
+  it("loads nothing from the preview host until Show previews is pressed", async () => {
+    view(catalogue({}, [{ ...INTER, id: "consent-inter" }]));
+    await row(/^Inter/);
+    expect(loadedFrom).toEqual([]);
+    fireEvent.click(screen.getByRole("button", { name: "Show previews" }));
+    await vi.waitFor(() =>
+      expect(loadedFrom).toEqual([
+        'url("https://cdn.example/consent-inter.woff2")',
+      ])
+    );
+    expect(screen.queryByRole("button", { name: "Show previews" })).toBeNull();
+  });
+
+  it("reads the kept choice once the author's store arrives, and keeps a press made before it", async () => {
+    const families = [{ ...INTER, id: "late-store-inter" }];
+    const props = { onBack: () => undefined, onSite: siteFamilies([], []) };
+    // No author known yet: no store, so the author is asked.
+    const shown = { read: () => "shown", write: vi.fn() };
+    const later = render(
+      <FontCatalogueView catalogue={catalogue({}, families)} {...props} />
+    );
+    await row(/^Inter/);
+    expect(screen.getByRole("button", { name: "Show previews" })).toBeTruthy();
+    // The author is known now, and had already said yes.
+    later.rerender(
+      <FontCatalogueView
+        catalogue={catalogue({ previewConsent: shown }, families)}
+        {...props}
+      />
+    );
+    expect(screen.queryByRole("button", { name: "Show previews" })).toBeNull();
+    later.unmount();
+
+    // Pressed before the author is known: the choice is kept once they are.
+    const empty = { read: () => null, write: vi.fn() };
+    const early = render(
+      <FontCatalogueView catalogue={catalogue({}, families)} {...props} />
+    );
+    await row(/^Inter/);
+    fireEvent.click(screen.getByRole("button", { name: "Show previews" }));
+    early.rerender(
+      <FontCatalogueView
+        catalogue={catalogue({ previewConsent: empty }, families)}
+        {...props}
+      />
+    );
+    expect(empty.write).toHaveBeenCalledWith("shown");
+  });
+
+  it("keeps the author's choice: asked once, then previews load on every later visit", async () => {
+    let stored: string | null = null;
+    const previewConsent = {
+      read: () => stored,
+      write: (value: string) => {
+        stored = value;
+      },
+    };
+    const first = view(
+      catalogue({ previewConsent }, [{ ...LORA, id: "consent-lora" }])
+    );
+    await row(/^Lora/);
+    fireEvent.click(screen.getByRole("button", { name: "Show previews" }));
+    expect(stored).not.toBeNull();
+    first.unmount();
+    loadedFrom = [];
+    view(catalogue({ previewConsent }, [{ ...LORA, id: "consent-lora-2" }]));
+    await row(/^Lora/);
+    expect(screen.queryByRole("button", { name: "Show previews" })).toBeNull();
+    await vi.waitFor(() => expect(loadedFrom).toHaveLength(1));
   });
 });
 
@@ -574,7 +708,9 @@ describe("adding a family", () => {
     const previewUrl = vi.fn(
       (family: CatalogueFamilyView) => `https://cdn.example/${family.id}.woff2`
     );
-    view(catalogue({ add, previewUrl }, [molle]));
+    // The author agreed to previews earlier, so its preview is asked for.
+    const previewConsent = { read: () => "shown", write: () => undefined };
+    view(catalogue({ add, previewUrl, previewConsent }, [molle]));
     const editor = await openAdd(/^Molle/);
     // Previewed from the file it has, not a regular it lacks.
     expect(previewUrl).toHaveBeenCalledWith(molle, 400, "italic");
