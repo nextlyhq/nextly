@@ -58,6 +58,7 @@ import {
 } from "../../domains/schema/builder-save/deletion-counts";
 import { partWayPush } from "../../domains/schema/builder-save/landing-push";
 import {
+  renamedFieldsOf,
   saveOfSchemaChange,
   type SchemaChangeAnswers,
 } from "../../domains/schema/builder-save/schema-change-save";
@@ -381,6 +382,8 @@ async function comparedBeforePipelinePush(args: {
   localized: boolean;
   previous: readonly unknown[] | undefined;
   next: FieldDefinition[];
+  /** The rename answers: a field renamed keeps its values, so it is not compared. */
+  renames: readonly BrowserRenameResolution[] | undefined;
   confirmed: readonly ConfirmedDeletion[] | undefined;
   db: unknown;
 }): Promise<void> {
@@ -390,6 +393,7 @@ async function comparedBeforePipelinePush(args: {
     localized: args.localized,
     previous: (args.previous ?? []) as unknown as FieldDefinition[],
     next: args.next,
+    renamed: renamedFieldsOf(args.renames ?? []),
     confirmed: args.confirmed,
   })?.compare(args.db);
 }
@@ -1325,6 +1329,7 @@ const COLLECTIONS_METHODS: Record<
               localized: wasLocalized,
               previous: collection.fields,
               next: fields as unknown as FieldDefinition[],
+              renames: renameResolutions,
               confirmed: confirmedDeletions,
               db: adapter.getDrizzle(),
             });

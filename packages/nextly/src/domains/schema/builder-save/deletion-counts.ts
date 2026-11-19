@@ -23,14 +23,15 @@ import { NextlyError } from "../../../errors/nextly-error";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { isFieldLocalized } from "../../i18n/classify-fields";
+import { storesPerLanguage } from "../../i18n/per-language-storage";
 import {
-  countNulls as countNullsHelper,
-  countRows as countRowsHelper,
+  countNonEmpty,
   countRowsBreakingNotNull,
 } from "../pipeline/classifier/count-helpers";
 import { quoteIdent } from "../pipeline/sql-templates/identifier-quoting";
 import {
   fieldProducesColumn,
+  fieldsStoredOnRow,
   junctionTableNameFor,
   toSnakeCase,
 } from "../services/field-column-descriptor";
@@ -51,15 +52,17 @@ export interface ConfirmedDeletion {
 }
 
 /**
- * The table a removed field's values are stored in: the entity's translations table for a
- * translated field of a translated entity, its own table for every other field.
+ * The table a removed field's values are stored in, for an entity translated or not (`localized`):
+ * the entity's translations table for a translated field where the entity keeps those in it
+ * (`storesPerLanguage`: a translated entity, and every entity under per-language storage), its own
+ * table for every other field.
  */
 function valuesTableOf(
   tableName: string,
   localized: boolean,
   field: FieldDefinition
 ): string {
-  return isFieldLocalized(field, localized)
+  return isFieldLocalized(field, storesPerLanguage({ localized }))
     ? `${tableName}${STORAGE_FORMAT.companionSuffix}`
     : tableName;
 }
@@ -69,9 +72,12 @@ function valuesTableOf(
  * - a field with no storage (a virtual field) holds nothing;
  * - a field whose values live in a table of their own (a field group, a
  *   many-to-many relationship) is not counted here, so its count is unknown;
- * - a translated field of a translated entity is counted in the companion
- *   table, across its languages; every other field on the main table;
- * - the column is the field's stored column name, not its name as written.
+ * - a translated field is counted in the companion table, across its
+ *   languages, where the entity keeps it there (`valuesTableOf`); every other
+ *   field on the main table;
+ * - the column is the field's stored column name, not its name as written,
+ *   and the names are quoted as identifiers (`countNonEmpty`), so a table
+ *   named with a hyphen is counted.
  * Any count that fails is unknown, never 0.
  */
 export async function computeNonNullCounts(
@@ -82,15 +88,6 @@ export async function computeNonNullCounts(
   removed: FieldDefinition[]
 ): Promise<Record<string, RemovedCount>> {
   const counts: Record<string, RemovedCount> = {};
-  // One row count per table, shared by the fields stored in it.
-  const totals = new Map<string, Promise<number>>();
-  const totalOf = (table: string): Promise<number> => {
-    const known = totals.get(table);
-    if (known) return known;
-    const pending = countRowsHelper(db, dialect, table);
-    totals.set(table, pending);
-    return pending;
-  };
 
   for (const field of removed) {
     if (isVirtualField(field)) {
@@ -103,15 +100,13 @@ export async function computeNonNullCounts(
     }
     const table = valuesTableOf(tableName, localized, field);
     try {
-      const total = await totalOf(table);
-      const nulls = await countNullsHelper(
-        db,
-        dialect,
-        table,
-        toSnakeCase(field.name)
-      );
       counts[field.name] = {
-        rowCount: Math.max(0, total - nulls),
+        rowCount: await countNonEmpty(
+          db,
+          dialect,
+          table,
+          toSnakeCase(field.name)
+        ),
         unknown: false,
       };
     } catch {
@@ -168,6 +163,10 @@ interface Executes {
  * given no confirmed counts, which it then deletes as before, or removes no field stored in a
  * column. Every removed field stored in a column is compared, so one the confirmation leaves out
  * counts as confirmed at 0, and is refused if it holds any value.
+ *
+ * A field is removed where its column goes: the fields stored on the row (`fieldsStoredOnRow`, so
+ * a field inside a group with no name counts as the row's own) before the save and not after it,
+ * apart from those the save renames (`renamed`), whose values the save keeps.
  */
 export function deletionHoldOf(args: {
   dialect: SupportedDialect;
@@ -176,14 +175,22 @@ export function deletionHoldOf(args: {
   localized: boolean;
   previous: readonly FieldDefinition[];
   next: readonly FieldDefinition[];
+  /** The fields the save renames, by name before and after: kept, with their values. */
+  renamed?: ReadonlyArray<{ from: string; to: string }>;
   confirmed: readonly ConfirmedDeletion[] | undefined;
 }): DeletionHold | undefined {
   const { dialect, tableName, localized, confirmed } = args;
   if (confirmed === undefined) return undefined;
-  const kept = new Set(args.next.map(field => field.name));
-  const removed = args.previous.filter(
+  // By column, as the save's statements name them: a name written in another case or spelling
+  // is the same column.
+  const columnOf = (name: string): string => toSnakeCase(name);
+  const kept = new Set([
+    ...fieldsStoredOnRow(args.next).map(field => columnOf(field.name)),
+    ...(args.renamed ?? []).map(rename => columnOf(rename.from)),
+  ]);
+  const removed = fieldsStoredOnRow(args.previous).filter(
     field =>
-      !kept.has(field.name) &&
+      !kept.has(columnOf(field.name)) &&
       !isVirtualField(field) &&
       fieldProducesColumn(field)
   );

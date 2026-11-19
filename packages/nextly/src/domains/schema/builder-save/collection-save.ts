@@ -2651,6 +2651,7 @@ function deletionHoldOfSave(
     localized: save.previous?.localized === true,
     previous: (save.previous?.fields ?? []) as unknown as FieldDefinition[],
     next: (save.entity?.fields ?? []) as unknown as FieldDefinition[],
+    renamed: save.renamedFields,
     confirmed: save.confirmedDeletions,
   });
 }
