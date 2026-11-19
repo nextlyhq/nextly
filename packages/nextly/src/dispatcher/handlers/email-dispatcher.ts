@@ -898,12 +898,12 @@ async function searchResponse(
   for (const key of SEARCH_KEYS) {
     if (given[key] !== undefined) picked[key] = given[key];
   }
-  const { items, meta, notice } = await activity.searchByAddress(
+  const { items, meta } = await activity.searchByAddress(
     picked,
     actorFromAuthContext(auth)
   );
-  // The list envelope, with the notice of which records a search can't reach.
-  return respondData({ items, meta, notice });
+  // The list envelope; `meta.notice` says which records a search can't reach.
+  return respondList(items, meta);
 }
 
 /**

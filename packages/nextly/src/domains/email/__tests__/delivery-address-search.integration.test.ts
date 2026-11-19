@@ -370,7 +370,10 @@ for (const dialect of getConfiguredTestDialects()) {
         ].sort()
       );
       expect(items.map(item => item.id)).not.toContain(graceQueuedId);
-      expect(found.body.notice).toEqual(
+      expect(Object.keys(found.body).sort()).toEqual(["items", "meta"]);
+      const noticeOf = (body: Record<string, unknown>) =>
+        (body.meta as Record<string, unknown>).notice;
+      expect(noticeOf(found.body)).toEqual(
         expect.stringContaining("can't be found")
       );
       expectNoAddress(found.text, ADA);
@@ -386,7 +389,18 @@ for (const dialect of getConfiguredTestDialects()) {
       const none = await search(reader, { address: "nobody@example.com" });
       expect(none.status, none.text).toBe(200);
       expect(itemsOf(none.body)).toEqual([]);
-      expect(none.body.notice).toEqual(found.body.notice);
+      expect(noticeOf(none.body)).toEqual(noticeOf(found.body));
+
+      // A display name of any length, as the send path takes one.
+      const named = await search(reader, {
+        address: `${"N".repeat(400)} <${ADA}>`,
+      });
+      expect(named.status, named.text).toBe(200);
+      expect(
+        itemsOf(named.body)
+          .map(item => item.id)
+          .sort()
+      ).toEqual(items.map(item => item.id).sort());
     });
 
     it("finds a recipient a send filter added to a queued email, through its delivery", async () => {
@@ -427,6 +441,9 @@ for (const dialect of getConfiguredTestDialects()) {
         item => item.id
       );
       expect(new Set(ids).size).toBe(2);
+      expect([...ids].sort()).toEqual(
+        [await deliveryId("m-ada"), adaQueuedId].sort()
+      );
       expect((second.body.meta as Record<string, unknown>).hasNext).toBe(false);
     });
 
@@ -444,7 +461,7 @@ for (const dialect of getConfiguredTestDialects()) {
         { address: "" },
         { address: "ada" },
         { address: "ada@" },
-        { address: `${"a".repeat(400)}@example.com` },
+        { address: "ada@example.com, grace@example.com" },
         { address: 42 },
         "not json",
       ]) {
@@ -674,10 +691,13 @@ for (const dialect of getConfiguredTestDialects()) {
         "delivery",
         "queued",
       ]);
-      expect(page.notice).toEqual(expect.stringContaining("can't be found"));
+      expect(page.meta.notice).toEqual(
+        expect.stringContaining("can't be found")
+      );
       expectNoAddress(JSON.stringify(page), ADA);
 
-      const before = (await searchEntries()).length;
+      const earlier = await searchEntries();
+      const before = earlier.length;
       const checked = await t.nextly.emailDeliveries.search({
         address: ADA,
         overrideAccess: false,
@@ -686,7 +706,12 @@ for (const dialect of getConfiguredTestDialects()) {
       expect(checked.items).toHaveLength(page.items.length);
       const after = await searchEntries();
       expect(after).toHaveLength(before + 1);
-      expect(after.map(row => row.userId)).toContain(readerId);
+      const known = new Set(earlier.map(row => row.id));
+      expect(after.find(row => !known.has(row.id))).toMatchObject({
+        action: "read",
+        userId: readerId,
+        actorType: "user",
+      });
 
       await expect(
         t.nextly.emailDeliveries.search({
@@ -805,8 +830,8 @@ for (const dialect of getConfiguredTestDialects()) {
         ).toEqual(["secret-b", "secret-c"]);
         // The oldest is still there, out of the search's reach.
         expect(await deliveryId("m-twice-a")).toEqual(expect.any(String));
-        expect(found.notice).toMatch(/older|before/i);
-        expect(found.notice).toContain("can't be found");
+        expect(found.meta.notice).toMatch(/older|before/i);
+        expect(found.meta.notice).toContain("can't be found");
       });
     });
   });

@@ -311,18 +311,14 @@ const ACTIVITY_FILTER = z.object({
   ...common,
 });
 
-/** The longest address a mailbox can have (RFC 5321's path limit). */
-const MAX_ADDRESS = 320;
-
-// An address the send path takes (`isSendableAddress`), so any address
-// email can go to can be searched for. Its own value is never put in a
-// message: a refusal names the field, not what was entered.
+// Exactly the addresses the send path takes (`isSendableAddress`), with no
+// bound of its own, so any address email can go to can be searched for. Its
+// own value is never put in a message: a refusal names the field, not what
+// was entered.
 const ADDRESS_SEARCH = ACTIVITY_FILTER.extend({
   address: z
     .string()
     .trim()
-    .min(3)
-    .max(MAX_ADDRESS)
     .refine(isSendableAddress, "Enter one whole email address."),
 });
 
@@ -417,11 +413,13 @@ const ADDRESS_SEARCH_NOTICE =
   "way.";
 
 /**
- * @experimental One page of a search by address, with the notice saying
- * which records a search cannot reach (`ADDRESS_SEARCH_NOTICE`).
+ * @experimental One page of a search by address, in the list envelope, its
+ * `meta.notice` saying which records a search cannot reach
+ * (`ADDRESS_SEARCH_NOTICE`).
  */
-export interface AddressSearchPage extends ActivityPage<ActivityEntry> {
-  notice: string;
+export interface AddressSearchPage {
+  items: ActivityEntry[];
+  meta: PaginationMeta & { notice: string };
 }
 
 /** @experimental How the queued-email list is narrowed. */
@@ -885,7 +883,7 @@ export class EmailDeliveryActivity {
    * recipient of, or that a delivery to it belongs to, under the merged
    * Activity's cursor and filters. Found by the address's digests under
    * the current and previous secrets; older records are not found, which
-   * the answer's `notice` says.
+   * the answer's `meta.notice` says.
    *
    * The search is recorded in the activity log as `actor`'s, with how many
    * it found and never the address. When that record cannot be written the
@@ -928,7 +926,10 @@ export class EmailDeliveryActivity {
         logContext: { reason: "address-search-not-recorded" },
       });
     }
-    return { ...page, notice: ADDRESS_SEARCH_NOTICE };
+    return {
+      items: page.items,
+      meta: { ...page.meta, notice: ADDRESS_SEARCH_NOTICE },
+    };
   }
 
   /**
