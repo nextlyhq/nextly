@@ -3467,7 +3467,7 @@ async function runWritten(
           notify: line => deps.logger.warn(line),
           appliedBefore: () => [],
           // Every file runs in this one transaction, the deleting one among them.
-          ...beforeOf(bothChecks(hold?.check, conversion?.run)),
+          ...beforeOf(wholeSaveChecks(hold, conversion)),
         }
       );
     } catch (error) {
@@ -3879,32 +3879,26 @@ function bothChecks(
   };
 }
 
+/** The checks before a save run as one unit: its whole count, then its whole conversion. */
+function wholeSaveChecks(
+  hold: DeletionHold | undefined,
+  conversion: TypeConversion | undefined
+): ((db: unknown) => Promise<void>) | undefined {
+  return bothChecks(hold?.check, conversion?.run);
+}
+
 /**
- * The conversion each file of `ordered` runs: for each converted table, the first file whose
- * statements name it, before the statement that changes its column's type. A file whose tables
- * cannot be named may change any, and takes a table no earlier file names.
+ * The conversion each file of `ordered` runs: for each converted table, the first file that may
+ * change it (`firstFileChanging`), before its first statement.
  */
 async function convertingFilesOf(
   deps: CollectionSaveDeps,
   ordered: readonly string[],
   conversion: TypeConversion
 ): Promise<Map<string, (db: unknown) => Promise<void>>> {
-  const dialect = deps.adapter.getCapabilities().dialect;
-  const firstFile = new Map<string, string>();
-  for (const filename of ordered) {
-    const changed = tablesChangedBy(await unitOf(deps, filename), dialect);
-    const lower = new Set((changed ?? []).map(t => t.toLowerCase()));
-    for (const table of conversion.tables) {
-      if (firstFile.has(table)) continue;
-      if (changed === undefined || lower.has(table.toLowerCase())) {
-        firstFile.set(table, filename);
-      }
-    }
-  }
+  const firstFile = await firstFileChanging(deps, ordered, conversion.tables);
   const tablesByFile = new Map<string, string[]>();
-  for (const table of conversion.tables) {
-    const filename = firstFile.get(table) ?? ordered[0];
-    if (filename === undefined) continue;
+  for (const [table, filename] of firstFile) {
     tablesByFile.set(filename, [...(tablesByFile.get(filename) ?? []), table]);
   }
   const runs = new Map<string, (db: unknown) => Promise<void>>();
@@ -3913,6 +3907,34 @@ async function convertingFilesOf(
     if (run !== undefined) runs.set(filename, run);
   }
   return runs;
+}
+
+/**
+ * The first file of `ordered` that may change each of `tables`: one whose statements name it, or
+ * whose tables cannot be named and so may change any. A table no file names is taken by the first.
+ */
+async function firstFileChanging(
+  deps: CollectionSaveDeps,
+  ordered: readonly string[],
+  tables: readonly string[]
+): Promise<Map<string, string>> {
+  const dialect = deps.adapter.getCapabilities().dialect;
+  const first = new Map<string, string>();
+  for (const filename of ordered) {
+    const changed = tablesChangedBy(await unitOf(deps, filename), dialect);
+    const lower = new Set((changed ?? []).map(t => t.toLowerCase()));
+    const mayChange = (table: string) =>
+      changed === undefined || lower.has(table.toLowerCase());
+    for (const table of tables) {
+      if (!first.has(table) && mayChange(table)) first.set(table, filename);
+    }
+  }
+  const fallback = ordered[0];
+  if (fallback !== undefined) {
+    for (const table of tables)
+      if (!first.has(table)) first.set(table, fallback);
+  }
+  return first;
 }
 
 /**

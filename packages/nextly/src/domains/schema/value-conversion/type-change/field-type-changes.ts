@@ -156,6 +156,27 @@ const REWRITTEN_TO: ReadonlySet<Family> = new Set([
   "number",
 ]);
 
+/**
+ * What the stored-value judgement is asked to hand over: each value's reading, gathered into
+ * `readings`, where a unique MySQL text weighs them after the scan (`collated`) or the save writes
+ * them (`rewritten`); and, for the latter, that it judges the values as rewritten.
+ */
+function readingOptions(
+  collated: boolean,
+  rewritten: boolean,
+  readings: { key: RowKey; readsAs: string }[]
+): { onReading?: (key: RowKey, readsAs: string) => void; rewrites?: true } {
+  return {
+    ...(collated || rewritten
+      ? {
+          onReading: (key: RowKey, readsAs: string) =>
+            readings.push({ key, readsAs }),
+        }
+      : {}),
+    ...(rewritten ? { rewrites: true as const } : {}),
+  };
+}
+
 /** Whether a save that rewrites the values writes `from`'s values as `to` reads them. */
 export function rewritesPair(
   from: FieldTypeOnDialect,
@@ -208,7 +229,6 @@ export async function judgeFieldTypeChanges(args: {
     const readings: { key: RowKey; readsAs: string }[] = [];
     const rewritten =
       args.rewrites === true && rewritesPair(change.fromType, change.toType);
-    const written: { key: RowKey; readsAs: string }[] = [];
     const judgedHere = await judgeStoredTypeChange({
       db: args.db,
       dialect: args.dialect,
@@ -222,15 +242,7 @@ export async function judgeFieldTypeChanges(args: {
       accepts: fieldAccepts(change.toType, change.to),
       // A unique field holds each value once: two that read as one value of the new type block.
       unique: change.to.unique === true && !collated,
-      ...(collated || rewritten
-        ? {
-            onReading: (key, readsAs) => {
-              if (collated) readings.push({ key, readsAs });
-              if (rewritten) written.push({ key, readsAs });
-            },
-          }
-        : {}),
-      ...(rewritten ? { rewrites: true } : {}),
+      ...readingOptions(collated, rewritten, readings),
     });
     const result =
       collated && text !== undefined
@@ -244,7 +256,7 @@ export async function judgeFieldTypeChanges(args: {
       table,
       column,
       result,
-      ...(rewritten ? { readings: written } : {}),
+      ...(rewritten ? { readings } : {}),
     });
   }
   return judged;
