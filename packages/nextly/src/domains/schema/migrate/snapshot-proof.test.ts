@@ -1381,6 +1381,8 @@ describe("what a hand-made database can hold under the names a file writes", () 
       [" DEFERRABLE INITIALLY DEFERRED", "deferred", "shown"],
       [" DEFERRABLE INITIALLY DEFERRED", "immediate", "not-done"],
       [" DEFERRABLE", "not", "not-done"],
+      // Deferrable without the word: `INITIALLY DEFERRED` alone makes it so.
+      [" INITIALLY DEFERRED", "deferred", "shown"],
     ] as const) {
       expect(
         await one(`${ADD}${tail}`, "postgresql", { deferrability: live }),
@@ -1408,11 +1410,19 @@ describe("what a hand-made database can hold under the names a file writes", () 
         "CREATE UNIQUE INDEX `dc_posts_slug_idx` ON `dc_posts` (`slug`)",
         "mysql",
       ],
+      [
+        "ALTER TABLE `dc_posts` ADD UNIQUE `dc_posts_slug_idx` (`slug`)",
+        "mysql",
+      ],
+      [
+        "ALTER TABLE `dc_posts` ADD CONSTRAINT `dc_posts_slug_idx` UNIQUE (`slug`)",
+        "mysql",
+      ],
     ] as const) {
       expect(await one(statement, dialect, { index: "plain" }), statement).toBe(
         "shown"
       );
-      // Made by hand under the file's name, descending or by another method.
+      // Made by hand under the file's name by another method.
       expect(await one(statement, dialect, { index: "other" }), statement).toBe(
         "not-done"
       );
@@ -1427,6 +1437,30 @@ describe("what a hand-made database can hold under the names a file writes", () 
         'DROP INDEX "dc_posts_slug_idx"',
       ])
     ).toBe("shown");
+    // The same name dropped on another table is another index.
+    expect(
+      await one(ADD, "mysql", { index: "other" }, [
+        "ALTER TABLE `dc_pages` DROP INDEX `dc_posts_slug_idx`",
+      ])
+    ).toBe("not-done");
+    // An index a later statement renames is asked about under its last name.
+    const asked: string[] = [];
+    await statusesAgainst(
+      [
+        ADD,
+        "ALTER TABLE `dc_posts` RENAME INDEX `dc_posts_slug_idx` TO `renamed`",
+      ],
+      "mysql",
+      {
+        ...liveWith({}),
+        hasIndex: (name: string) => name !== "dc_posts_slug_idx",
+        indexShape: (table, name) => {
+          asked.push(`${table}.${name}`);
+          return "plain";
+        },
+      }
+    );
+    expect(asked).toEqual(["dc_posts.renamed"]);
   });
 
   it("an index statement that states a direction, a NULL order or a method is not shown", () => {
@@ -1440,12 +1474,17 @@ describe("what a hand-made database can hold under the names a file writes", () 
       ["CREATE FULLTEXT INDEX `i` ON `dc_posts` (`slug`)", "mysql"],
       ["ALTER TABLE `dc_posts` ADD INDEX `i` (`slug` DESC)", "mysql"],
       ["ALTER TABLE `dc_posts` ADD INDEX `i` USING HASH (`slug`)", "mysql"],
+      [
+        "ALTER TABLE `dc_posts` ADD CONSTRAINT `i` UNIQUE (`slug` DESC)",
+        "mysql",
+      ],
     ] as const) {
       expect(shown(statement, dialect), statement).toBe(false);
     }
     // The plain statements the generator writes stay shown, a key prefix and a predicate included.
     for (const [statement, dialect] of [
       ['CREATE INDEX IF NOT EXISTS "i" ON "dc_posts" ("slug")', "postgresql"],
+      ['CREATE INDEX "i" ON "dc_posts" USING btree ("slug")', "postgresql"],
       [
         'CREATE UNIQUE INDEX "i" ON "dc_posts" ("slug") WHERE "slug" IS NOT NULL',
         "postgresql",

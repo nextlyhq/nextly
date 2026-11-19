@@ -334,6 +334,9 @@ describe.each(LOCK_DIALECTS)(
       ...(dialect === "postgresql"
         ? [`CREATE INDEX ${P}_hash ON ${posts} USING hash (slug)`]
         : []),
+      ...(dialect === "mysql"
+        ? [`CREATE FULLTEXT INDEX ${P}_text ON ${posts} (slug)`]
+        : []),
     ];
 
     beforeAll(async () => {
@@ -347,13 +350,17 @@ describe.each(LOCK_DIALECTS)(
       await world.dispose();
     }, 60_000);
 
-    it("tells a plain index from one built in another order or by another method", async () => {
+    it("tells a plain index from one built by another method", async () => {
       const live = await readLiveSchema(adapter.getDrizzle(), dialect, creates);
-      expect(live.indexShape(`${P}_plain`, posts)).toBe("plain");
-      expect(live.indexShape(`${P}_desc`, posts)).toBe("other");
-      expect(live.indexShape(`${P}_never`, posts)).toBeUndefined();
+      expect(live.indexShape(posts, `${P}_plain`)).toBe("plain");
+      // A descending key is the same method: Nextly's own tables carry one.
+      expect(live.indexShape(posts, `${P}_desc`)).toBe("plain");
+      expect(live.indexShape(posts, `${P}_never`)).toBeUndefined();
       if (dialect === "postgresql") {
-        expect(live.indexShape(`${P}_hash`, posts)).toBe("other");
+        expect(live.indexShape(posts, `${P}_hash`)).toBe("other");
+      }
+      if (dialect === "mysql") {
+        expect(live.indexShape(posts, `${P}_text`)).toBe("other");
       }
     });
 

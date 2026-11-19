@@ -34,6 +34,6 @@
 - a constraint the file validates (`VALIDATE CONSTRAINT`) must be validated in the database;
 - on MySQL, a check must be enforced as the file declares it, and a column flag the proof does not know (HeatWave's `NOT SECONDARY`, for example) counts as a setting a `MODIFY` would reset;
 - on PostgreSQL, a foreign key must have the deferrability the file declares;
-- an index must be built by the default method with ascending keys, and an index statement that states a direction, a NULL order or a method is not shown by the snapshot;
+- an index must be built by the default method, and an index statement that states a direction, a NULL order or a method is not shown by the snapshot;
 - on SQLite, a table whose `AUTOINCREMENT` counter a rebuild carries must be declared `AUTOINCREMENT`, with a counter at least its highest key, or no counter and no rows;
 - on SQLite, a foreign key replaced under its own name by one of another shape counts as a key the file adds, so rows dangling through it refuse the file.

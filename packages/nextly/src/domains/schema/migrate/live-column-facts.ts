@@ -79,11 +79,12 @@ export interface LiveColumnFacts {
     name: string
   ): "not" | "immediate" | "deferred" | undefined;
   /**
-   * Whether an index is a plain one: built by the dialect's default method, every key ascending
-   * with the default place for NULLs. `other` for one that is not, undefined for one the read did
-   * not find. A snapshot records an index's columns and nothing of this.
+   * Whether an index is a plain one: built by the dialect's default method, a B-tree. `other` for
+   * one built by another (hash, GIN, full-text), undefined for one the read did not find. A
+   * snapshot records an index's columns and not its method. The direction of its keys is not
+   * read: Nextly's own tables carry a descending index where a migration file writes it plain.
    */
-  indexShape(name: string, table: string): "plain" | "other" | undefined;
+  indexShape(table: string, name: string): "plain" | "other" | undefined;
   /**
    * Whether a SQLite table's AUTOINCREMENT counter covers its rows, so no key the table used is
    * given out again: the table is declared AUTOINCREMENT, and its counter is at least its highest
@@ -274,10 +275,7 @@ async function gatherPostgresKeys(
   }
 }
 
-/**
- * PostgreSQL's indexes of the tables: plain where built as a B-tree with no key descending or
- * with its NULLs first (`indoption` is 0 for a key in the default order).
- */
+/** PostgreSQL's indexes of the tables: plain where built as a B-tree. */
 async function gatherPostgresIndexes(
   runner: QueryRunner,
   namesIn: SQL,
@@ -286,9 +284,7 @@ async function gatherPostgresIndexes(
   const rows = rowsOf(
     await runner.execute(
       sql`SELECT t.relname AS "table", i.relname AS name,
-                 (am.amname <> 'btree' OR EXISTS (
-                   SELECT 1 FROM unnest(ix.indoption::int2[]) AS o WHERE o <> 0
-                 )) AS other
+                 (am.amname <> 'btree') AS other
           FROM pg_index ix
           JOIN pg_class i ON i.oid = ix.indexrelid
           JOIN pg_class t ON t.oid = ix.indrelid
@@ -330,10 +326,7 @@ async function gatherMysqlChecks(
   }
 }
 
-/**
- * MySQL's indexes of the tables: plain where a B-tree with no key descending (`COLLATION` is `D`
- * for one that is).
- */
+/** MySQL's indexes of the tables: plain where a B-tree. */
 async function gatherMysqlIndexes(
   runner: QueryRunner,
   namesIn: SQL,
@@ -342,7 +335,7 @@ async function gatherMysqlIndexes(
   const rows = rowsOf(
     await runner.execute(
       sql`SELECT s.TABLE_NAME AS \`table\`, s.INDEX_NAME AS name,
-                 MAX(s.INDEX_TYPE <> 'BTREE' OR COALESCE(s.COLLATION, 'A') = 'D') AS other
+                 MAX(s.INDEX_TYPE <> 'BTREE') AS other
           FROM information_schema.STATISTICS s
           WHERE s.TABLE_SCHEMA = DATABASE()
             AND s.TABLE_NAME IN (${namesIn})
@@ -370,7 +363,7 @@ async function sqliteRows(
   return (await db.all(query)) as Array<Record<string, unknown>>;
 }
 
-/** One SQLite table's indexes: plain where no key is descending. SQLite has one method. */
+/** One SQLite table's indexes: each plain, since SQLite builds an index one way. */
 async function gatherSqliteIndexes(
   db: SqliteReader,
   table: string,
@@ -378,25 +371,19 @@ async function gatherSqliteIndexes(
 ): Promise<void> {
   const rows = await sqliteRows(
     db,
-    sql`SELECT il.name AS name, MAX(ii."desc") AS other
-        FROM pragma_index_list(${table}) il
-        JOIN pragma_index_xinfo(il.name) ii
-        WHERE ii.key = 1
-        GROUP BY il.name`
+    sql`SELECT il.name AS name FROM pragma_index_list(${table}) il`
   );
   for (const row of rows) {
     if (typeof row.name !== "string") continue;
-    facts.indexShapes.set(
-      keyOf(table, row.name),
-      yes(row.other) ? "other" : "plain"
-    );
+    facts.indexShapes.set(keyOf(table, row.name), "plain");
   }
 }
 
 /**
  * Whether one SQLite table's AUTOINCREMENT counter covers its rows (`counterCovers`). The counter
- * and the highest key are read only for a table declared AUTOINCREMENT: `sqlite_sequence` exists
- * only once such a table does, and only such a table is sure to have a rowid.
+ * and the highest key are read only for a table whose stored text says AUTOINCREMENT, in a
+ * database that has `sqlite_sequence` (it exists only once such a table does), and never for a
+ * `WITHOUT ROWID` table, which has no rowid to read and cannot be AUTOINCREMENT.
  */
 async function sqliteCounterCovers(
   db: SqliteReader,
@@ -404,7 +391,10 @@ async function sqliteCounterCovers(
 ): Promise<boolean> {
   const [declared] = await sqliteRows(
     db,
-    sql`SELECT instr(upper(sql), 'AUTOINCREMENT') > 0 AS declared
+    sql`SELECT (instr(upper(sql), 'AUTOINCREMENT') > 0
+                AND instr(upper(sql), 'WITHOUT ROWID') = 0
+                AND EXISTS (SELECT 1 FROM sqlite_master WHERE name = 'sqlite_sequence')
+               ) AS declared
         FROM sqlite_master WHERE type = 'table' AND name = ${table}`
   );
   if (!yes(declared?.declared)) return false;
@@ -571,7 +561,7 @@ export async function readLiveColumnFacts(
     checkEnforced: (table, name) => facts.enforcement.get(keyOf(table, name)),
     keyDeferrability: (table, name) =>
       facts.deferrability.get(keyOf(table, name)),
-    indexShape: (name, table) => facts.indexShapes.get(keyOf(table, name)),
+    indexShape: (table, name) => facts.indexShapes.get(keyOf(table, name)),
     counterCovers: table => facts.counters.get(table.toLowerCase()) === true,
     settingsReadable: table =>
       dialect !== "mysql" ||
