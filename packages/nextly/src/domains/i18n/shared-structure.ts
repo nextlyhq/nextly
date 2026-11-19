@@ -34,7 +34,7 @@ export interface StructuredField {
   name?: string;
   type: string;
   localized?: boolean;
-  virtual?: unknown;
+  virtual?: boolean;
   options?: unknown;
   fields?: readonly StructuredField[];
 }
