@@ -5,7 +5,7 @@
  * - A refusal before the push runs, a refusal inside it before any statement ran, or a busy
  *   table's stop that says nothing ran, leaves nothing: no file, no snapshot, no change to the
  *   definition, the table or the registry row.
- * - A push whose first statement fails leaves nothing on every dialect: MySQL and SQLite say how
+ * - A push whose first statement fails leaves nothing on PostgreSQL and MySQL: MySQL says how
  *   many of a failed apply's statements stay applied, here none.
  * - On MySQL, which commits each schema statement as it runs, and on SQLite, whose push keeps the
  *   statements before the one that fails, a push that fails after a statement ran keeps its
@@ -463,25 +463,30 @@ for (const dialect of getConfiguredTestDialects()) {
       );
     }
 
-    // A push whose first statement fails has run nothing, on every dialect: MySQL and SQLite say
-    // how many statements of a failed apply stay applied (`statementsKept`), none here, so the
-    // save's files go as they do where the push rolls back whole. The save only adds a field, so
-    // no step before the executor's statements runs anything.
-    it("leaves nothing when the push's first statement fails", async () => {
-      const before = await standing();
-      const failing = failStatementAt(1);
+    // A push whose first statement fails has run nothing: MySQL says how many statements of a
+    // failed apply stay applied (`statementsKept`), none here, so the save's files go as they do
+    // where the push rolls back whole (PostgreSQL). On SQLite the switch rewrites the relation's
+    // values before its first statement that changes the table, so something always stays there
+    // (the case below that keeps them).
+    it.runIf(dialect !== "sqlite")(
+      "leaves nothing when the push's first statement fails",
+      async () => {
+        const before = await standing();
+        const failing = failStatementAt(1);
 
-      const failure = await save([...BEFORE, text("body")]).then(
-        () => undefined,
-        (error: unknown) => error
-      );
-      failing.restore();
+        const failure = await save(SWITCHED).then(
+          () => undefined,
+          (error: unknown) => error
+        );
+        failing.restore();
 
-      // Positive control: the push reached its first statement, and it failed.
-      expect(failing.sent, String(failure)).toHaveLength(1);
-      expect(failure).toBeInstanceOf(Error);
-      expect(await standing()).toEqual(before);
-    }, 60_000);
+        // Positive control: the push reached its first statement, and it failed.
+        expect(failing.sent, String(failure)).toHaveLength(1);
+        expect(failure).toBeInstanceOf(Error);
+        expect(await standing()).toEqual(before);
+      },
+      60_000
+    );
 
     // On SQLite a relation switched from one entry to many keeps its text column and has only its
     // values rewritten, before the statements that change the table's shape. A push that fails at
