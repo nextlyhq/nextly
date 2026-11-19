@@ -25,6 +25,7 @@ import {
   type EditClasses,
   type TokensPanelProps,
   useVariablesHeader,
+  type VariablesStored,
   variableMatchesByTab,
 } from "@nextlyhq/builder/shell";
 import { usePluginClientConfig } from "@nextlyhq/plugin-sdk/admin";
@@ -373,6 +374,10 @@ function withReadPrefix(
   return read?.prefix === undefined ? rest : { ...rest, prefix: read.prefix };
 }
 
+/** A token save stored whole, and one that stored nothing. */
+const ALL_STORED: VariablesStored = { stored: "all" };
+const NONE_STORED: VariablesStored = { stored: "none" };
+
 /**
  * The studio's edits: what it shows, what the last save said, and the commit
  * every edit goes through.
@@ -398,10 +403,11 @@ function useTokenCommits(
   notice: TokensPanelProps["notice"];
   commit: (next: SiteTokenSet) => void;
   /**
-   * An edit saved at once rather than at the author's pause, answering
-   * whether it was stored: what an import's text styles are stored after.
+   * An edit saved at once rather than at the author's pause, answering what
+   * of it was stored, its retry of a part refused included: what an import's
+   * text styles are stored after.
    */
-  commitNow: (next: SiteTokenSet) => Promise<boolean>;
+  commitNow: (next: SiteTokenSet) => Promise<VariablesStored>;
   /** "Clean up unused…": see {@link useCleanUp}. */
   cleanUp: CleanUpThrough;
 } {
@@ -437,7 +443,7 @@ function useTokenCommits(
     void send(next, shownBefore, { hold: true, keepIssue: false });
   };
 
-  const commitNow = (next: SiteTokenSet): Promise<boolean> => {
+  const commitNow = (next: SiteTokenSet): Promise<VariablesStored> => {
     // As `commit`, written without waiting for the author's pause.
     const shownBefore = shownNow() ?? editable;
     show(next);
@@ -449,13 +455,15 @@ function useTokenCommits(
   /*
    * Saves a set shown, and settles its answer. A refusal of the latest edit
    * takes back only the variables refused: the rest of the edit is shown
-   * and saved again at once, and the reason stays said while it is.
+   * and saved again at once, and the reason stays said while it is. Answers
+   * what was stored once that retry is answered too, so an import can say
+   * "some" rather than "nothing" for a save the site took in part.
    */
   const send = (
     next: SiteTokenSet,
     from: SiteTokenSet | undefined,
     how: { hold: boolean; keepIssue: boolean }
-  ): Promise<boolean> => {
+  ): Promise<VariablesStored> => {
     latest.current = next;
     const base =
       from === undefined ? undefined : tokenOverrideOf(baseline, from);
@@ -486,12 +494,17 @@ function useTokenCommits(
           persisted.current
         ).issue;
         setIssue(said ?? undefined);
-        void send(kept, persisted.current ?? undefined, {
+        // Refused in part: what was asked for wasn't stored as asked, and
+        // the rest is stored only if its retry is.
+        return send(kept, persisted.current ?? undefined, {
           hold: false,
           keepIssue: true,
-        });
-        // Refused in part: what was asked for wasn't stored as asked.
-        return false;
+        }).then(
+          (retried): VariablesStored =>
+            retried.stored === "none"
+              ? NONE_STORED
+              : { stored: "part", why: said ?? undefined }
+        );
       }
       settleTokenSave(
         result,
@@ -518,7 +531,7 @@ function useTokenCommits(
         ? conflictWords("tokens", result.conflicts)
         : undefined;
       if (words !== undefined) setConflict(words);
-      return result.saved;
+      return result.saved ? ALL_STORED : NONE_STORED;
     });
   };
   /*

@@ -94,6 +94,7 @@ import {
 } from "./site-style";
 import {
   checkStoredBreakpoints,
+  configuredClassesOver,
   readSiteStyleRecord,
 } from "./site-style-record";
 import {
@@ -647,9 +648,11 @@ async function attemptRemovalSet(
   args: RemovalSetWrite,
   read: VersionedSiteStyle
 ): Promise<void> {
+  // The code's classes as the site draws them across its stored range, so a
+  // stripped override of a fluid text style keeps following that range.
   const classes = strippedClassTier(
     read.classes,
-    args.removal.defaults?.classes,
+    configuredClassesOver(args.removal.defaults, read.tokens),
     args.removedIds
   );
   const kept =
@@ -1142,10 +1145,12 @@ export async function sharedStylesNow(
   removal: BreakpointRemoval,
   ctx: SiteSettingsRouteContext
 ): Promise<SharedStylesNow> {
+  const stored = await removal.stored(ctx);
   return {
     slug: ctx.self.singles[SITE_STYLE_SLUG] ?? SITE_STYLE_SLUG,
-    stored: (await removal.stored(ctx)).classes,
-    supplied: removal.defaults?.classes ?? [],
+    stored: stored.classes,
+    // As the strip met them: across the range the site stores.
+    supplied: configuredClassesOver(removal.defaults, stored.tokens),
   };
 }
 

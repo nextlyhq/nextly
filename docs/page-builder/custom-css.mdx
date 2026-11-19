@@ -89,7 +89,14 @@ the page's field is kept per language, each language keeps its own.
 
 Only people who may change the site's settings see the box. Anyone else sees one line on
 General, "This page adds its own code or CSS. Only people who can change site settings can
-see or edit it.", and never the CSS.
+edit it; anyone who can edit the page can read it.", and the builder doesn't show them the
+CSS.
+
+That keeps the builder simple; it isn't a lock on reading. Anyone who may edit the page can
+read its CSS, and its blocks' CSS: the draft's, the published version's and every version in
+its history, through the API and in the document the builder loads, whose canvas draws it.
+The published CSS also reaches every visitor's browser. What the permission guards is
+**changing** it, below.
 
 ## Who may change page and block CSS
 

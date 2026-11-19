@@ -9,6 +9,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestDb, type TestDb } from "../../../__tests__/fixtures/db";
 import { runDataSteps, type DataStepsDeps } from "../data-steps";
 import { runConvertZonedDates } from "../i18n-convert-zoned-dates";
+import { planWithStoredData } from "../stored-data-of-run";
 import type { UpgradeAdapter, UpgradeStep } from "../upgrade-step";
 
 /** What the lock ran, in order, with what happened around it. */
@@ -162,6 +163,33 @@ describe("the steps over data an earlier release stored", () => {
     expect(lines).toEqual([]);
   });
 
+  it("asks the command's own precondition under the lock, before any step runs; refused, no step runs", async () => {
+    const busy = step("tidy a thing", 1);
+    const refusal = new Error("another change is half done");
+
+    await expect(
+      runDataSteps({
+        adapter,
+        command: "nextly db:sync",
+        steps: [busy.step],
+        backupConfirmed: true,
+        interactive: false,
+        log: () => {},
+        warn: () => {},
+        underLock: () => {
+          order.events.push("precondition asked");
+          return Promise.reject(refusal);
+        },
+      })
+    ).rejects.toBe(refusal);
+
+    expect(order.events).toEqual([
+      "lock taken by nextly db:sync",
+      "precondition asked",
+    ]);
+    expect(busy.ran).toEqual([]);
+  });
+
   it("brings each step up to date before asking the next what it has to do", async () => {
     let firstRan = false;
     const first: UpgradeStep = {
@@ -247,5 +275,50 @@ describe("nextly i18n:convert-zoned-dates", () => {
       ) as string,
     });
     expect(busy.ran).toEqual([]);
+  });
+});
+
+describe("a command's dry-run plan with the data steps it takes after", () => {
+  const sync = {
+    changes: [{ action: "add", target: "column posts.summary" }],
+    notes: ["a note of the sync"],
+  };
+  const stored = {
+    changes: [
+      { action: "hash", target: "passwords stored before this release: 2" },
+    ],
+    refusals: ["no backup was confirmed"],
+    notes: ["a note of the steps"],
+  };
+
+  it("names the backup refusal first, since the real run refuses before it changes the schema", () => {
+    expect(planWithStoredData(sync, stored, { takesSteps: true })).toEqual({
+      changes: [...sync.changes, ...stored.changes],
+      refusals: ["no backup was confirmed"],
+      notes: ["a note of the sync", "a note of the steps"],
+    });
+  });
+
+  it("keeps the backup refusal ahead of a refusal of the schema change, and leaves out the work that run never reaches", () => {
+    const refusedSync = { ...sync, refusals: ["a field's address is taken"] };
+
+    expect(
+      planWithStoredData(refusedSync, stored, { takesSteps: true })
+    ).toEqual({
+      changes: sync.changes,
+      refusals: ["no backup was confirmed", "a field's address is taken"],
+      notes: ["a note of the sync"],
+    });
+  });
+
+  it("is the command's own plan where it takes no data step, or none has work or refuses", () => {
+    expect(planWithStoredData(sync, stored, { takesSteps: false })).toBe(sync);
+    expect(
+      planWithStoredData(
+        sync,
+        { changes: [], notes: ["could not be counted"] },
+        { takesSteps: true }
+      )
+    ).toBe(sync);
   });
 });

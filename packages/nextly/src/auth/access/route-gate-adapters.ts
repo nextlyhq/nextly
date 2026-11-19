@@ -700,12 +700,17 @@ function gateVerdict(
   resource: string,
   rules: RouteRules,
   permissionWithoutService: () => Promise<boolean>,
-  readFilter: ReadFilterUse = "refused"
+  readFilter: ReadFilterUse = "refused",
+  /**
+   * The caller's transaction, when the question is asked inside one: the
+   * reads it makes run on it, not on a second connection from the pool.
+   */
+  executor?: unknown
 ): Promise<GateVerdict> {
   const registered =
     resource === "" ? undefined : rules?.getRegisteredTarget(resource);
   if (!asksTheEntity(action, resource, registered)) {
-    return permissionVerdict(caller, action, resource, rules);
+    return permissionVerdict(caller, action, resource, rules, executor);
   }
   return collectionGateVerdict({
     slug: resource,
@@ -730,6 +735,7 @@ function gateVerdict(
     asksSomeEntries:
       readFilter === "cell" ||
       (readFilter === "some-entries" && action === "read"),
+    ...(executor === undefined ? {} : { executor }),
   });
 }
 
@@ -751,14 +757,19 @@ async function permissionVerdict(
   caller: GateCaller,
   action: string,
   resource: string,
-  rules: RouteRules
+  rules: RouteRules,
+  /** The caller's transaction, as {@link gateVerdict} is handed it. */
+  executor?: unknown
 ): Promise<GateVerdict> {
   // A retired `manage-` permission, asked by a gate written before it was
   // retired, is held only by holding all four plain permissions it stood
   // for, each asked here as any other: the decision answers it the same way.
   if (isRetiredManage(action, resource)) {
     for (const plain of RETIRED_MANAGE_PLAIN_ACTIONS) {
-      if (!(await permissionVerdict(caller, plain, resource, rules)).allowed) {
+      if (
+        !(await permissionVerdict(caller, plain, resource, rules, executor))
+          .allowed
+      ) {
         return verdictOf(false);
       }
     }
@@ -777,9 +788,11 @@ async function permissionVerdict(
     );
     return verdictOf(today);
   }
+  // On the caller's transaction where it is asked inside one.
+  const on = executor === undefined ? {} : { executor };
   return verdictOf(
-    (rules !== undefined && (await userIsSuperAdmin(caller.userId))) ||
-      (await userHoldsPermission(caller.userId, action, resource))
+    (rules !== undefined && (await userIsSuperAdmin(caller.userId, on))) ||
+      (await userHoldsPermission(caller.userId, action, resource, on))
   );
 }
 
@@ -929,7 +942,15 @@ export async function callerMayPerform(
   action: string,
   resource: string,
   user: { id: string; roles?: readonly string[] },
-  options: { readonly anyEntry?: boolean } = {}
+  options: {
+    readonly anyEntry?: boolean;
+    /**
+     * The caller's transaction, when it is asked inside one (a write's field
+     * validator): the decision reads on it, rather than waiting on the pool
+     * for the connection the transaction holds.
+     */
+    readonly executor?: unknown;
+  } = {}
 ): Promise<boolean> {
   if (!user.id) return false;
   const rules = getRBACService();
@@ -941,7 +962,14 @@ export async function callerMayPerform(
   // yes-or-no with no entry to apply it to must.
   const readFilter = options.anyEntry === true ? "cell" : "some-entries";
   if (!caller.key) {
-    return sessionAnswer(caller.userId, action, resource, rules, readFilter);
+    return sessionAnswer(
+      caller.userId,
+      action,
+      resource,
+      rules,
+      readFilter,
+      options.executor
+    );
   }
   // A key is judged on its own scope, the route gate's way, with or without
   // the service.
@@ -952,7 +980,8 @@ export async function callerMayPerform(
       resource,
       rules,
       () => Promise.resolve(false),
-      readFilter
+      readFilter,
+      options.executor
     )
   ).allowed;
 }
@@ -1062,7 +1091,9 @@ async function sessionAnswer(
   action: string,
   resource: string,
   rules: RouteRules,
-  readFilter: "some-entries" | "cell"
+  readFilter: "some-entries" | "cell",
+  /** The caller's transaction, as {@link gateVerdict} is handed it. */
+  executor?: unknown
 ): Promise<boolean> {
   const caller: GateCaller = { userId };
   if (!rules) return refusedWithoutService(caller, action, resource);
@@ -1072,7 +1103,8 @@ async function sessionAnswer(
     resource,
     rules,
     () => Promise.resolve(false),
-    readFilter
+    readFilter,
+    executor
   );
   if (!verdict.allowed && verdict.refusal === "failed") throw verdict.error;
   return verdict.allowed;
