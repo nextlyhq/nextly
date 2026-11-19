@@ -64,6 +64,10 @@ import { MetaService } from "../../../meta/services/meta-service";
 import { consoleLogger } from "../../../../shared/types";
 import { NO_CONSENT } from "../../migrate/data-loss-consent";
 import { parseSnapshotFile } from "../../migrate-create/snapshot-io";
+import {
+  acquireWriterHold,
+  setWriterHoldBounds,
+} from "../../migrate-create/writer-hold";
 import { introspectLiveSnapshot } from "../../pipeline/diff/introspect-live";
 import { DrizzleStatementExecutor } from "../../services/drizzle-statement-executor";
 import { judgeStoppedSave } from "../stopped-save";
@@ -73,6 +77,22 @@ import { judgeStoppedSave } from "../stopped-save";
 vi.mock("../stopped-save", async importOriginal => {
   const actual = await importOriginal<typeof import("../stopped-save")>();
   return { ...actual, judgeStoppedSave: vi.fn(actual.judgeStoppedSave) };
+});
+
+// A file written in full under its temporary name, stalled there while `settleStall.at` is set,
+// as a process stopped past its lease would be.
+const settleStall = vi.hoisted(() => ({
+  at: undefined as undefined | ((path: string) => Promise<void>),
+}));
+vi.mock("node:fs/promises", async importOriginal => {
+  const real = await importOriginal<typeof import("node:fs/promises")>();
+  const writeFile = (async (
+    ...args: Parameters<typeof real.writeFile>
+  ): Promise<void> => {
+    await real.writeFile(...args);
+    await settleStall.at?.(String(args[0]));
+  }) as typeof real.writeFile;
+  return { ...real, writeFile, default: { ...real, writeFile } };
 });
 
 // The registry writes every save path makes, refused while `registryRefused.when` answers yes.
@@ -762,6 +782,64 @@ describe.each(getConfiguredTestDialects())(
           ]);
 
           await expectReplayGives(path, live);
+        },
+        300_000
+      );
+
+      // Settling removes the stopped file before it writes the replacement: overtaken by another
+      // writer before any of the replacement is in place, it puts the stopped file back, so no
+      // history the ledger names is lost.
+      it.runIf(keepsPartWay(dialect, path) && path.push !== true)(
+        "overtaken while it settles, before its replacement is in place, puts the stopped file back",
+        async () => {
+          const restoreBounds = setWriterHoldBounds({
+            waitMs: 30_000,
+            leaseSeconds: 1,
+            renewMs: 600_000,
+          });
+          try {
+            const t = await boot();
+            await path.create(t, [text("heading"), number("old_note")]);
+            await path.store?.(t, { heading: "Hello", old_note: 7 });
+            const folderBefore = filesBelow(history());
+            const failed = failStatement(t, adding(path.table, "beta"));
+            let overtaken = false;
+            // The first file written once the statement has failed: the settle's replacement.
+            settleStall.at = async written => {
+              if (overtaken || failed() === 0) return;
+              if (!written.startsWith(history()) || !written.endsWith(".tmp")) {
+                return;
+              }
+              overtaken = true;
+              await new Promise(resolve => setTimeout(resolve, 1_200));
+              const other = await acquireWriterHold({
+                migrationsDir: history(),
+                command: "migrate:create",
+                whenHeld: "wait",
+              });
+              await other.release();
+            };
+
+            const outcome = await outcomeOf(
+              path.save(t, [text("heading"), text("beta")])
+            );
+            settleStall.at = undefined;
+
+            expect(failed(), "no statement adding `beta` was met").toBe(1);
+            expect(
+              overtaken,
+              "the settle never stalled on its replacement"
+            ).toBe(true);
+            expect(outcome.failed).toBe(true);
+            // The stopped file is back, the only one the save left.
+            const sql = filesBelow(history()).filter(
+              f => f.endsWith(".sql") && !folderBefore.includes(f)
+            );
+            expect(sql, "the stopped save's file, put back").toHaveLength(1);
+          } finally {
+            settleStall.at = undefined;
+            restoreBounds();
+          }
         },
         300_000
       );
