@@ -1855,10 +1855,15 @@ export class CollectionMetadataService extends BaseService {
             // here, before any DDL, a handler that throws rolls the whole
             // delete back on every dialect, MySQL included, whose table drops
             // below commit what ran before them.
-            handlerCalls = await runCollectionDeleteHandlers(
+            // Counted as each call begins, so one that then throws, its own wait for a busy
+            // table included, still counts.
+            await runCollectionDeleteHandlers(
               getActiveHookRegistry(),
               slugs,
-              tx
+              tx,
+              () => {
+                handlerCalls += 1;
+              }
             );
             // Marked at the first statement that can commit on MySQL, not
             // before the teardown that may issue none: a failure before it

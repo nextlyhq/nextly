@@ -185,7 +185,7 @@ async function countRowsUnder(
   // its prefix, so it cannot own rows for this entity. Asked of the catalog, through the adapter
   // the teardown runs on, rather than by catching the count's failure: on PostgreSQL a failed
   // statement aborts the delete's transaction, and every statement after it fails.
-  if (!(await instanceTables()).has(componentTable.toLowerCase())) return 0;
+  if (!(await instanceTables()).has(componentTable)) return 0;
 
   const pg = adapter.dialect === "postgresql";
   const quoted = q(componentTable, adapter.dialect);
@@ -214,13 +214,18 @@ async function countRowsUnder(
   return Number(rows[0]?.n ?? 0);
 }
 
-/** The candidate tables, lower-cased, that have a `_parent_table` column: read once, when asked. */
+/** The candidate tables, as the catalog spells them, that have a `_parent_table` column. */
 type InstanceTables = () => Promise<ReadonlySet<string>>;
 
 /**
  * Which of `tables` have a `_parent_table` column, read from the catalog in one query through
  * `adapter`'s own connection (the delete's transaction, where it runs in one), on the first ask
  * and kept for the rest of the walk or count. A table the catalog does not list has none.
+ *
+ * Each table and column is compared as its server compares it (`readIdentifierCaseRules`), as the
+ * discovery of these tables compares them: a server that holds `comp_Hero` and `comp_hero` as two
+ * tables keeps them two here, and one that keeps `_PARENT_TABLE` a column of its own does not
+ * take it for the parent column, which the count names exactly.
  */
 function instanceTablesOf(
   adapter: TeardownComponentDataAdapter,
@@ -231,19 +236,38 @@ function instanceTablesOf(
     read ??= (async () => {
       // Loaded on demand: the introspection reaches the schema pipeline, which this teardown
       // otherwise does not.
-      const { liveColumnNames } = await import(
+      const { introspectLiveColumns } = await import(
         "../../schema/pipeline/diff/introspect-live"
       );
-      const columns = await liveColumnNames(
-        adapter.getDrizzle(),
-        adapter.dialect,
-        [...tables]
+      const [rules, snapshot] = await Promise.all([
+        readIdentifierCaseRules(adapter),
+        introspectLiveColumns(adapter.getDrizzle(), adapter.dialect, [
+          ...tables,
+        ]),
+      ]);
+      const listed = indexCatalog(
+        snapshot.tables.map(table => table.name),
+        rules.tables
       );
-      const parentColumn = STORAGE_FORMAT.columns.parentTable.toLowerCase();
+      const columnsOf = new Map(
+        snapshot.tables.map(table => [
+          table.name,
+          indexCatalog(
+            table.columns.map(column => column.name),
+            rules.columns
+          ),
+        ])
+      );
       return new Set(
-        [...columns]
-          .filter(([, names]) => names.has(parentColumn))
-          .map(([table]) => table)
+        tables.filter(table => {
+          const name = resolveCatalogName(listed, table);
+          const columns = name === undefined ? undefined : columnsOf.get(name);
+          return (
+            columns !== undefined &&
+            resolveCatalogName(columns, STORAGE_FORMAT.columns.parentTable) !==
+              undefined
+          );
+        })
       );
     })();
     return read;

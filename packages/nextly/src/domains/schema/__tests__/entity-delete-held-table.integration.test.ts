@@ -23,6 +23,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { resetSessionStandingForTests } from "../../../auth/session/session-standing";
+import { defineCollection, text } from "../../../config";
 import { dispatchCollections } from "../../../dispatcher/handlers/collection-dispatcher";
 import { dispatchComponents } from "../../../dispatcher/handlers/component-dispatcher";
 import { dispatchSingles } from "../../../dispatcher/handlers/single-dispatcher";
@@ -52,6 +53,8 @@ afterEach(async () => {
 });
 
 const HISTORY = "./database/history";
+/** The plugin's own collection, which its handler reads in the delete's transaction. */
+const DESIGNS = "edh_designs";
 /** A `comp_` table the registry does not know, with no `_parent_table` column. */
 const STRAY = "comp_edh_stray";
 
@@ -70,7 +73,13 @@ describe.each(getConfiguredTestDialects())(
   "an entity delete against a held table or a stray field-group table (%s)",
   dialect => {
     async function boot(
-      options: { deleteHandler?: boolean } = {}
+      options: {
+        /**
+         * A plugin's in-transaction collection-delete handler: one that records its call, or one
+         * that records it and then reads the plugin's own collection on the delete's transaction.
+         */
+        deleteHandler?: "records" | "reads its own table";
+      } = {}
     ): Promise<TestNextly> {
       const t = await createTestNextly({
         dialect,
@@ -78,24 +87,41 @@ describe.each(getConfiguredTestDialects())(
         localization: { locales: ["en", "de"], defaultLocale: "en" },
         // A plugin removing what it holds for a collection in the delete's transaction: code the
         // system does not know, which a second try would run again.
-        ...(options.deleteHandler === true
-          ? {
+        ...(options.deleteHandler === undefined
+          ? {}
+          : {
               plugins: [
                 definePlugin({
                   name: "edh-designer",
                   version: "1.0.0",
                   nextly: ">=0.0.0",
+                  contributes: {
+                    collections: [
+                      defineCollection({
+                        slug: DESIGNS,
+                        fields: [text({ name: "title" })],
+                      }),
+                    ],
+                  },
                   init(ctx) {
+                    const reads =
+                      options.deleteHandler === "reads its own table";
                     ctx.hooks.onCollectionDelete({
-                      inTransaction: async ({ slug }) => {
+                      inTransaction: async ({ slug, transaction }) => {
                         handled.push(slug);
+                        if (reads) {
+                          await ctx.services.ownCollections.listEntriesInTransaction(
+                            transaction,
+                            DESIGNS,
+                            { pagination: { limit: 1 } }
+                          );
+                        }
                       },
                     });
                   },
                 }),
               ],
-            }
-          : {}),
+            }),
       });
       instance = t;
       // As the Builder runs: each save is applied, and recorded, here.
@@ -189,7 +215,9 @@ describe.each(getConfiguredTestDialects())(
      */
     async function holdTable(
       t: TestNextly,
-      table: string
+      table: string,
+      // Held against reads too, as a table lock in the strongest mode holds it.
+      mode: "reads" | "exclusive" = "reads"
     ): Promise<() => Promise<void>> {
       let held: () => void = () => undefined;
       const isHeld = new Promise<void>(resolve => {
@@ -200,7 +228,11 @@ describe.each(getConfiguredTestDialects())(
         free = resolve;
       });
       const holding = t.adapter.transaction(async tx => {
-        await tx.execute(`SELECT COUNT(*) AS n FROM ${quote(table)}`);
+        await tx.execute(
+          mode === "exclusive"
+            ? `LOCK TABLE ${quote(table)} IN ACCESS EXCLUSIVE MODE`
+            : `SELECT COUNT(*) AS n FROM ${quote(table)}`
+        );
         held();
         await freed;
       });
@@ -214,7 +246,7 @@ describe.each(getConfiguredTestDialects())(
     it.runIf(dialect === "postgresql")(
       "a collection's, whose plugin handler ran before the held table, stops without trying again",
       async () => {
-        const t = await boot({ deleteHandler: true });
+        const t = await boot({ deleteHandler: "records" });
         const entity = await anEntity(t, "collection");
         const companion = `${entity.table}_locales`;
         const release = await holdTable(t, companion);
@@ -241,6 +273,42 @@ describe.each(getConfiguredTestDialects())(
           // Rolled back whole: the collection, its translations and its row stand.
           expect(await t.adapter.tableExists(entity.table)).toBe(true);
           expect(await t.adapter.tableExists(companion)).toBe(true);
+          expect(await registryRowCount(t, entity)).toBe(1);
+          expect(deleteFiles(t, entity)).toEqual([]);
+        } finally {
+          await release();
+        }
+      },
+      30_000
+    );
+
+    it.runIf(dialect === "postgresql")(
+      "a collection's, whose plugin handler itself waits for a held table, stops without trying again",
+      async () => {
+        const t = await boot({ deleteHandler: "reads its own table" });
+        const entity = await anEntity(t, "collection");
+        const designs = resolveCollectionTableName(DESIGNS);
+        // Proves the handler's read reaches a table: a missing one would fail for another reason.
+        expect(await t.adapter.tableExists(designs)).toBe(true);
+        const release = await holdTable(t, designs, "exclusive");
+        try {
+          vi.stubEnv("NEXTLY_LOCK_TIMEOUT", "1");
+          vi.stubEnv("NEXTLY_LOCK_TIMEOUT_TOTAL", "3");
+
+          const stopped = await remove(entity).then(
+            () => "deleted",
+            (error: unknown) => error
+          );
+
+          // The handler's own read ended waiting, after its call had begun: not tried again.
+          expect(stopped).toMatchObject({
+            code: "NEXTLY_TABLE_BUSY",
+            publicMessage: expect.stringMatching(
+              /stopped without trying again: table busy\.[\s\S]*through 1 try /
+            ),
+          });
+          expect(handled).toEqual([entity.slug]);
+          expect(await t.adapter.tableExists(entity.table)).toBe(true);
           expect(await registryRowCount(t, entity)).toBe(1);
           expect(deleteFiles(t, entity)).toEqual([]);
         } finally {
