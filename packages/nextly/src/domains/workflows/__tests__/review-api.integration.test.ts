@@ -51,6 +51,7 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import { defineCollection, text } from "../../../config";
+import { getSchema } from "../../../api/singles-detail";
 import { createDynamicHandlers } from "../../../routeHandler";
 import { ServiceContainer } from "../../../services/index";
 import { listRoleSlugsForUserOrRefuse } from "../../../services/lib/permissions";
@@ -733,6 +734,21 @@ describe.each(getConfiguredTestDialects())(
           });
 
           expect(read.workflow).toEqual({
+            slug: "editorial",
+            label: "Editorial",
+          });
+          // The exported schema helper a site can mount names it the same way.
+          const mounted = await getSchema(
+            new Request("http://localhost/api/singles/banner/schema", {
+              headers: {
+                ...(await headersFor({ kind: "person", id: "dana" })),
+                origin: "http://localhost",
+              },
+            }),
+            "banner"
+          );
+          expect(mounted.status).toBe(200);
+          expect(((await mounted.json()) as Doc).workflow).toEqual({
             slug: "editorial",
             label: "Editorial",
           });
