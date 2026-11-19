@@ -13,6 +13,12 @@
  * nothing more — so the only way any of this becomes a session is the
  * plugin login the resolution feeds (`ctx.auth.completeLogin`).
  *
+ * The same table's read side lives here too: the listing that shows an
+ * account the identities it holds, and the unlink that removes one of its
+ * rows. Both are scoped to the owning account — one account's door never
+ * answers for another's identities — and the unlink touches nothing but the
+ * link row it names.
+ *
  * The provider key a plugin names is stamped with the plugin's own name
  * before it reaches the table or a lookup, the same way its strategy names
  * are (`plugins/plugin-auth-provider`): one plugin can neither read nor
@@ -34,19 +40,24 @@
 import { randomUUID } from "node:crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { eq } from "drizzle-orm";
+import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
+import { asc, eq } from "drizzle-orm";
 
 import { readAccessTokenCookie } from "../../../auth/cookies/access-token-cookie";
 import { verifyAccessToken } from "../../../auth/jwt/verify";
 import { sessionTokenIsCurrent } from "../../../auth/session/session-standing";
 import { loadedDialect } from "../../../database/dialect-tables";
 import { toDbError } from "../../../database/errors";
+import { appPasswordDigester } from "../../../di/password-digester";
 import { NextlyError } from "../../../errors/nextly-error";
 import { env } from "../../../lib/env";
 import { bootNameOf } from "../../../plugins/plugin-consent";
 import type { PluginDefinition } from "../../../plugins/plugin-context";
 import { pluginAdminSlug } from "../../../plugins/plugin-slug";
-import { externalIdentityKeyDigest } from "../../../schemas/external-identities";
+import {
+  EXTERNAL_IDENTITIES_TABLE,
+  externalIdentityKeyDigest,
+} from "../../../schemas/external-identities";
 import type { nextlyExternalIdentitiesMysql } from "../../../schemas/external-identities/mysql";
 import type { nextlyExternalIdentitiesPg } from "../../../schemas/external-identities/postgres";
 import type { nextlyExternalIdentitiesSqlite } from "../../../schemas/external-identities/sqlite";
@@ -90,9 +101,14 @@ export interface EnabledProviderKey {
  * what the gate already answered, never from anything the plugin handed
  * over. Whether an unlinked identity may be linked implicitly is another
  * slice's branch, and nothing here reads that answer.
+ *
+ * The unlink asks the second question, `policyFor`, the policy's
+ * non-throwing read: whether an identity the account keeps is at a provider
+ * still enabled, and so still a way in.
  */
 export interface LinkingPolicyPort {
   requireEnabled(providerKey: string): EnabledProviderKey;
+  policyFor(providerKey: string): { readonly enabled: boolean };
 }
 
 /**
@@ -477,6 +493,21 @@ export interface AttachedExternalIdentity {
   };
 }
 
+/**
+ * One stored identity as a listing answers it: the row's own facts, plus when
+ * the link was made. The table holds no provider token to leave out — nothing
+ * in a listing is anything but the link's own record.
+ */
+export interface ListedExternalIdentity {
+  readonly id: string;
+  readonly providerKey: string;
+  readonly issuer: string;
+  readonly subject: string;
+  readonly address: string | null;
+  readonly userId: string;
+  readonly createdAt: Date;
+}
+
 /** An explicit link as the plugin hands it over: the identity, and the context it started in. */
 export interface ExplicitLinkInput {
   readonly identity: ExternalIdentityHandOff;
@@ -835,6 +866,123 @@ export class IdentityService extends BaseService {
     }
 
     return attachmentOf(row);
+  }
+
+  /**
+   * List one account's external identities: every row the account owns, in
+   * the order the links were made, and nothing else.
+   *
+   * Read through the owner index the table carries for exactly this
+   * question, so a listing is one query however many identities other
+   * accounts hold. No policy is asked — which keys are enabled governs
+   * sign-ins, not what a person or an administrator is shown about the links
+   * that already exist.
+   */
+  async listExternalIdentities(
+    userId: string
+  ): Promise<ListedExternalIdentity[]> {
+    const rows = await this.db
+      .select({
+        id: this.identitiesTable.id,
+        providerKey: this.identitiesTable.providerKey,
+        issuer: this.identitiesTable.issuer,
+        subject: this.identitiesTable.subject,
+        address: this.identitiesTable.address,
+        userId: this.identitiesTable.userId,
+        createdAt: this.identitiesTable.createdAt,
+      })
+      .from(this.identitiesTable)
+      .where(eq(this.identitiesTable.userId, userId))
+      // The link order, with the id as the tiebreak: two links made in one
+      // stored moment keep a stable order however the database returns them.
+      .orderBy(
+        asc(this.identitiesTable.createdAt),
+        asc(this.identitiesTable.id)
+      );
+    return rows;
+  }
+
+  /**
+   * Unlink one external identity: remove the link row, and nothing else.
+   *
+   * The removal is scoped to the owning account — an identity another
+   * account holds is not unlinkable through this door, and answers exactly
+   * as an identity nobody holds does, so a caller learns nothing about
+   * whose row an id names. No session, token or account is touched: whoever
+   * was signed in through the identity stays signed in by the session they
+   * hold, and signs in differently only next time.
+   *
+   * An account is never left with no way in (the single sign-on spec's
+   * L8): with no password, the unlink is refused unless the account keeps
+   * another identity at a provider the linking policy still enables. An
+   * identity at a disabled provider is no way in, so it does not count.
+   *
+   * The check and the removal are one transaction under the lock on the
+   * account's row, so two unlinks for one account take turns: the second
+   * reads what the first left, and two at once can never remove the last
+   * way in together. SQLite's transactions are already serialized, which
+   * the same lock call answers there.
+   */
+  async unlinkExternalIdentity(
+    userId: string,
+    identityId: string
+  ): Promise<void> {
+    await this.adapter.transaction(async tx => {
+      await tx.lockRow("users", userId);
+      const held = await tx.select<{ id: unknown; providerKey: unknown }>(
+        EXTERNAL_IDENTITIES_TABLE,
+        {
+          columns: ["id", "providerKey"],
+          where: { and: [{ column: "userId", op: "=", value: userId }] },
+        }
+      );
+      if (!held.some(row => String(row.id) === identityId)) {
+        // The one refusal for a row that is absent and a row another
+        // account owns alike: the account's own rows are all that was read,
+        // so the answer cannot tell the two apart.
+        throw NextlyError.notFound({
+          message: "No such identity for this user.",
+          logContext: { reason: "identity-not-held", userId, identityId },
+        });
+      }
+      const anotherWayIn = held.some(
+        row =>
+          String(row.id) !== identityId &&
+          this.deps.linkingPolicy.policyFor(String(row.providerKey)).enabled
+      );
+      if (!anotherWayIn && !(await this.holdsPassword(tx, userId))) {
+        throw NextlyError.conflict({
+          reason: "state",
+          message:
+            "This is the account's last way to sign in. Set a password or link another account first.",
+          logContext: { reason: "identity-last-way-in", userId, identityId },
+        });
+      }
+      await tx.delete(EXTERNAL_IDENTITIES_TABLE, {
+        and: [
+          { column: "id", op: "=", value: identityId },
+          { column: "userId", op: "=", value: userId },
+        ],
+      });
+    });
+  }
+
+  /**
+   * Whether the account has a password to sign in with, read in the unlink's
+   * transaction: a stored value the app's password digester takes for a
+   * hash, the same answer the users service gives an account's
+   * `hasPassword`. A value it does not take signs nobody in, so it is no
+   * way in.
+   */
+  private async holdsPassword(
+    tx: TransactionContext,
+    userId: string
+  ): Promise<boolean> {
+    const [user] = await tx.select<{ passwordHash: unknown }>("users", {
+      columns: ["passwordHash"],
+      where: { and: [{ column: "id", op: "=", value: userId }] },
+    });
+    return appPasswordDigester().isHash(user?.passwordHash);
   }
 
   /**
