@@ -303,8 +303,8 @@ function recordedRowOf(
 }
 
 /**
- * A migration that failed past its main change in development: the writer kept its files,
- * recorded applied nowhere, and `result` names them, so the admin is told which.
+ * A migration that failed past its main change: the writer kept its files, recorded applied
+ * nowhere, in development as outside it, and `result` names them, so the admin is told which.
  */
 function noteKeptFiles(
   result: UpdateSingleSchemaResult | undefined,
@@ -1250,10 +1250,15 @@ export class SingleMetadataService {
           source: "ui",
         })
       );
+      // The apply registered the requested shape with the running server, which the table does
+      // not stand as: forgotten, so the next use rebuilds it from the table as it is.
+      if (this.adapter) {
+        this.retractRuntimeSchema(this.adapter, input.existing.tableName);
+      }
       throw error;
     }
     if ("rowError" in ran) throw ran.rowError;
-    if (deps.applies) noteKeptFiles(ran.result, written);
+    noteKeptFiles(ran.result, written);
     if (plan && leaving.length > 0 && ran.outcome?.status !== "failed") {
       const outcome = ran.outcome;
       const refused = await this.applyLeavingStep(
