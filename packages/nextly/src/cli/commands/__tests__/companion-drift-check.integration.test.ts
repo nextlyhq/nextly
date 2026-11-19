@@ -394,7 +394,7 @@ describeEachDialect(
 
       expect(run.code, run.said).toBeUndefined();
       expect(run.said).toContain(
-        `${String(companionFile)}.sql is applied without a drift check: the migration files were written before they recorded the columns of the translations table ${COMPANION}.`
+        `${String(companionFile)}.sql is applied without a drift check: the migration files do not record the columns of the translations table ${COMPANION}.`
       );
       expect(run.said).not.toMatch(MISSING_SNAPSHOT);
       expect(await companionColumns()).toContain("summary");
@@ -591,6 +591,120 @@ describeEachDialect(
       expect(run.code, run.said).toBeUndefined();
       expect(await pendingFiles()).toEqual([]);
       expect(await companionColumns()).not.toContain("kept");
+    }, 240_000);
+
+    it("a hand-written file not yet applied may be the table's repair, so no drift is asserted", async () => {
+      const pending = await secondFieldPending();
+      const companionFile = pending.find(name => name.includes("localization"));
+      await adapter().executeQuery(
+        `ALTER TABLE ${q(COMPANION)} DROP COLUMN ${q("title")}`
+      );
+      // The operator's repair, written as a migration, which runs after the companion file.
+      writeFileSync(
+        join(dir, "migrations", "20261029_130000_000_put_title_back.sql"),
+        `-- UP\nALTER TABLE ${q(COMPANION)} ADD COLUMN ${q("title")} TEXT;\n\n-- DOWN\nALTER TABLE ${q(COMPANION)} DROP COLUMN ${q("title")};\n`
+      );
+
+      const run = await migrate(configWith(["title", "summary"]));
+
+      expect(run.code, run.said).toBeUndefined();
+      expect(run.said).toContain(
+        `${String(companionFile)}.sql is applied without a drift check: a migration written by hand, not yet applied, may change the translations table ${COMPANION}.`
+      );
+      expect(await companionColumns()).toEqual(
+        expect.arrayContaining(["title", "summary"])
+      );
+    }, 240_000);
+
+    /** The migration files as the run lists them, each with its header's intent. */
+    function filesInRunOrder() {
+      const folder = join(dir, "migrations");
+      return readdirSync(folder)
+        .filter(name => name.endsWith(".sql"))
+        .sort()
+        .map(name => {
+          const filePath = join(folder, name);
+          return {
+            name: name.replace(/\.sql$/, ""),
+            filePath,
+            localization:
+              parseLocalizationIntent(readFileSync(filePath, "utf-8"), name) ??
+              undefined,
+          };
+        });
+    }
+
+    /** A migration's own snapshot, as the run loads it. */
+    function ownSnapshot(name: string) {
+      const path = join(dir, "migrations", "meta", `${name}.snapshot.json`);
+      return Promise.resolve(
+        existsSync(path)
+          ? parseSnapshotFile(readFileSync(path, "utf-8"), path)
+          : null
+      );
+    }
+
+    it("a pending file that renames a column leaves its table unjudged, saying why", async () => {
+      const pending = await secondFieldPending();
+      const companionFile = pending.find(name => name.includes("localization"));
+      // What would be drift, were the table judged.
+      await adapter().executeQuery(
+        `ALTER TABLE ${q(COMPANION)} DROP COLUMN ${q("title")}`
+      );
+      const files = filesInRunOrder();
+
+      const check = await checkCompanionFiles({
+        db: adapter().getDrizzle(),
+        dialect: dialect as TestDialect,
+        applied: files.filter(file => !pending.includes(file.name)),
+        // The companion file as one that also renames a column: its header names none it renames.
+        pending: files
+          .filter(file => pending.includes(file.name))
+          .map(file =>
+            file.name === companionFile
+              ? {
+                  ...file,
+                  upSql: `ALTER TABLE ${q(COMPANION)} RENAME COLUMN ${q("title")} TO ${q("headline")}`,
+                }
+              : file
+          ),
+        runs: new Set(pending),
+        snapshotOf: ownSnapshot,
+      });
+
+      expect([...check.checked]).toEqual([]);
+      expect(check.unchecked.get(String(companionFile))).toContain(
+        `renames a column of the translations table ${COMPANION}`
+      );
+    }, 240_000);
+
+    it("a table no applied file records as translated is applied, saying why it was not checked", async () => {
+      const pending = await secondFieldPending();
+      const companionFile = pending.find(name => name.includes("localization"));
+      const files = filesInRunOrder();
+
+      const check = await checkCompanionFiles({
+        db: adapter().getDrizzle(),
+        dialect: dialect as TestDialect,
+        applied: files.filter(file => !pending.includes(file.name)),
+        pending: files.filter(file => pending.includes(file.name)),
+        runs: new Set(pending),
+        // The applied snapshots as a project whose table a development sync made has them:
+        // the collection not translated yet.
+        snapshotOf: async name => {
+          const file = await ownSnapshot(name);
+          if (file === null || pending.includes(name)) return file;
+          for (const table of file.snapshot.tables) {
+            delete table.localized;
+            delete table.localizedColumns;
+          }
+          return file;
+        },
+      });
+
+      expect(check.unchecked.get(String(companionFile))).toBe(
+        `the translations table ${COMPANION} is already there, and no applied migration file records it`
+      );
     }, 240_000);
 
     it("applying a localized collection's generated files prints no missing-snapshot warning", async () => {

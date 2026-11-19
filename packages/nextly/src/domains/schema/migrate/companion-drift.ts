@@ -298,7 +298,7 @@ function judge(args: {
   ) {
     return {
       kind: "unchecked",
-      why: `the migration files were written before they recorded the columns of the translations table ${table}`,
+      why: `the migration files do not record the columns of the translations table ${table}`,
     };
   }
   if (entity.files.some(renamesColumn)) {
@@ -325,17 +325,42 @@ function judge(args: {
   return items.length === 0 ? { kind: "matches" } : { kind: "drift", items };
 }
 
-/** The files among `files` that are localization files whose header this build cannot read. */
-async function unreadCompanionFiles(
-  files: readonly CompanionFileRef[]
-): Promise<CompanionFileRef[]> {
+/**
+ * The pending files with no header intent, by what they are: a localization file this build
+ * cannot read (it carries the marker), or a migration written by hand (no marker, no snapshot).
+ * Either may change a translations table in a way no record says.
+ */
+async function filesOfNoRecord(
+  pending: readonly CompanionFileRef[],
+  snapshotOf: SnapshotOf
+): Promise<{ unread: CompanionFileRef[]; byHand: CompanionFileRef[] }> {
   const unread: CompanionFileRef[] = [];
-  for (const file of files) {
+  const byHand: CompanionFileRef[] = [];
+  for (const file of pending) {
     if (hasIntent(file)) continue;
     const content = await readFile(file.filePath, "utf-8");
     if (content.includes(LOCALIZATION_MIGRATION_MARKER)) unread.push(file);
+    else if ((await snapshotOf(file.name)) === null) byHand.push(file);
   }
-  return unread;
+  return { unread, byHand };
+}
+
+/**
+ * Why no drift can be asserted of `table` while such a file is pending, or undefined when none
+ * is: the file may be the very change, or the operator's repair, that accounts for the
+ * difference.
+ */
+function whyNotAsserted(
+  table: string,
+  pending: { unread: readonly unknown[]; byHand: readonly unknown[] }
+): string | undefined {
+  if (pending.unread.length > 0) {
+    return `a localization file not yet applied, which this version cannot read, may change the translations table ${table}`;
+  }
+  if (pending.byHand.length > 0) {
+    return `a migration written by hand, not yet applied, may change the translations table ${table}`;
+  }
+  return undefined;
 }
 
 /**
@@ -356,8 +381,9 @@ export async function checkCompanionFiles(args: {
 }): Promise<CompanionCheck> {
   const checked = new Set<string>();
   const unchecked = new Map<string, string>();
-  const running = args.pending.filter(file => args.runs.has(file.name));
-  for (const file of await unreadCompanionFiles(running)) {
+  const ofNoRecord = await filesOfNoRecord(args.pending, args.snapshotOf);
+  for (const file of ofNoRecord.unread) {
+    if (!args.runs.has(file.name)) continue;
     unchecked.set(
       file.name,
       "this version cannot read what the file records of its translations table"
@@ -379,7 +405,7 @@ export async function checkCompanionFiles(args: {
     const [first] = entity.files.filter(file => args.runs.has(file.name));
     if (first === undefined) continue;
     const { spec } = first.localization;
-    const verdict = judge({
+    const judged = judge({
       entity,
       before: before?.tables.find(table => table.name === spec.mainTable),
       after: after?.tables.find(table => table.name === spec.mainTable),
@@ -388,6 +414,11 @@ export async function checkCompanionFiles(args: {
         ?.columns,
       dialect: args.dialect,
     });
+    const notAsserted = whyNotAsserted(spec.companionTable, ofNoRecord);
+    const verdict: Verdict =
+      judged.kind === "drift" && notAsserted !== undefined
+        ? { kind: "unchecked", why: notAsserted }
+        : judged;
     if (verdict.kind === "drift") {
       throw migrationDriftError({
         migration: first.name,
