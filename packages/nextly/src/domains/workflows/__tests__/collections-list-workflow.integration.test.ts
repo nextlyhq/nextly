@@ -31,9 +31,9 @@ afterEach(async () => {
   t = undefined;
 });
 
-/** A collection no workflow holds. */
-const notes = defineCollection({
-  slug: "notes",
+/** A collection no workflow holds (the harness's own collections all have one). */
+const ledgers = defineCollection({
+  slug: "ledgers",
   fields: [text({ name: "title" })],
 });
 
@@ -68,10 +68,10 @@ describe.each(getConfiguredTestDialects())(
   "the collections list's workflow (%s)",
   dialect => {
     it("names each collection's workflow for a signed-in reader, and null where none holds it", async () => {
-      t = await bootSteps(dialect, undefined, { collections: [notes] });
+      t = await bootSteps(dialect, undefined, { collections: [ledgers] });
       await person(t, "reader", [
         ["read", "posts"],
-        ["read", "notes"],
+        ["read", "ledgers"],
       ]);
 
       const items = await listAs("reader");
@@ -80,11 +80,11 @@ describe.each(getConfiguredTestDialects())(
         slug: editorial.slug,
         label: editorial.label,
       });
-      expect(bySlug.get("notes")).toHaveProperty("workflow", null);
+      expect(bySlug.get("ledgers")).toHaveProperty("workflow", null);
     });
 
     it("carries no workflow key on a list read with no signed-in caller", async () => {
-      t = await bootSteps(dialect, undefined, { collections: [notes] });
+      t = await bootSteps(dialect, undefined, { collections: [ledgers] });
       const handler = t.getService("collectionsHandler") as unknown as {
         listCollections(options?: { limit?: number }): Promise<{
           data?: Doc[];

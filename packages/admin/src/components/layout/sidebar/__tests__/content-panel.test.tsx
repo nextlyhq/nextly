@@ -31,6 +31,7 @@ type FixtureCollection = {
   name: string;
   label: string;
   admin?: { sidebarGroup?: string; icon?: string; order?: number };
+  workflow?: { slug: string; label: string } | null;
 };
 type FixtureSingle = {
   id: string;
@@ -214,7 +215,16 @@ afterEach(cleanup);
 
 describe("ContentPanel — Waiting for my review", () => {
   it("leads with Waiting for my review where a workflow holds content, opening the waiting view", () => {
-    renderPanel({ hasWorkflows: true });
+    lists.collections = [
+      {
+        id: "c1",
+        name: "posts",
+        label: "Posts",
+        workflow: { slug: "editorial", label: "Editorial" },
+      },
+      { id: "c2", name: "authors", label: "Authors", workflow: null },
+    ];
+    renderPanel();
 
     expect(outline()[0]).toBe("Waiting for my review");
     expect(
@@ -223,7 +233,11 @@ describe("ContentPanel — Waiting for my review", () => {
   });
 
   it("draws no Waiting for my review where no workflow holds content", () => {
-    renderPanel({ hasWorkflows: false });
+    lists.collections = [
+      { id: "c1", name: "posts", label: "Posts", workflow: null },
+      { id: "c2", name: "authors", label: "Authors" },
+    ];
+    renderPanel();
 
     expect(
       within(contentNav()).queryByRole("link", {

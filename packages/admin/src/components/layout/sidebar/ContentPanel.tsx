@@ -42,8 +42,6 @@ interface ContentPanelProps {
   hasCollections: boolean;
   /** Whether the reader has Singles to list. */
   hasSingles: boolean;
-  /** Whether a workflow holds any content: the panel then leads with "Waiting for my review". */
-  hasWorkflows?: boolean;
   isActive: (href?: string, exact?: boolean) => boolean;
 }
 
@@ -52,7 +50,6 @@ export function ContentPanel({
   onSearchChange,
   hasCollections,
   hasSingles,
-  hasWorkflows = false,
   isActive,
 }: ContentPanelProps): JSX.Element {
   const collections = useSidebarCollectionList();
@@ -60,6 +57,9 @@ export function ContentPanel({
   // whenever the reader may read any.
   const singles = useSidebarSingleList({ enabled: hasSingles });
   const folds = useContentFolds();
+  // The panel leads with "Waiting for my review" where a workflow holds any collection it lists:
+  // the list read names each one's workflow for a signed-in reader.
+  const hasWorkflows = collections.items.some(item => !!item.workflow);
 
   // Counts come from the same search the lists draw with, so a heading's
   // count can never disagree with what it lists.
