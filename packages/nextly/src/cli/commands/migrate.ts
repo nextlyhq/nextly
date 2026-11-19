@@ -113,6 +113,7 @@ import {
   isFieldGroupTransition,
   refuseFieldGroupTransitionOnLegacy,
   refuseMovedStorageBehindLegacyHistory,
+  underDatabaseFieldGroupNames,
 } from "../../domains/schema/migrate/field-group-history";
 import {
   readDeletionFacts,
@@ -3410,12 +3411,18 @@ async function missingFromAppStream(
       newestApplied: newest.fieldGroupNaming ?? "legacy",
     });
   }
+  // With the move to the current names still to apply, the database already holds the field
+  // groups under them, so the legacy snapshots are read as the storage migration renamed them.
+  const compared = await underDatabaseFieldGroupNames(
+    deps.adapter as unknown as DrizzleAdapter,
+    snapshots
+  );
   // An applied migration with no snapshot of its own (`migrate:create --blank`, a translations
   // file) ordered after the newest applied snapshot may have dropped or renamed what that snapshot
   // records, and no snapshot says what it left. The database's end state cannot be read from the
   // files then, so nothing is named rather than a table or column it removed on purpose.
   if (appliedInOrder.at(-1) !== snapshots.at(-1)?.migration) return [];
-  return missingFromStream(deps, snapshots);
+  return missingFromStream(deps, compared);
 }
 
 /**

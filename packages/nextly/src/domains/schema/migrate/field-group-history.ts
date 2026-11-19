@@ -14,6 +14,7 @@
 import { resolve } from "node:path";
 
 import { NextlyError } from "../../../errors/nextly-error";
+import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import {
   namingOfRegistry,
   type FieldGroupNaming,
@@ -25,12 +26,47 @@ import {
 import {
   FIELD_GROUP_STORAGE_MIGRATION_COMMAND,
   FIELD_GROUP_TRANSITION_COMMAND,
+  snapshotUnderCurrentNames,
 } from "../migrate-create/field-group-names-transition";
 import {
   loadLatestSnapshot,
   snapshotFieldGroupNaming,
   type SnapshotFile,
 } from "../migrate-create/snapshot-io";
+import type { NextlySchemaSnapshot } from "../pipeline/diff/types";
+
+/**
+ * `snapshots` as a database whose field groups moved to the current names holds them: each legacy
+ * snapshot's field-group tables (`comp_<slug>`) under their current names, with the current type
+ * column, as `nextly migrate:field-groups` renamed them. Unchanged on a legacy database, and for a
+ * snapshot already on the current names. What the database is compared with while the history's
+ * move to the current names is still pending.
+ */
+export async function underDatabaseFieldGroupNames<
+  T extends {
+    snapshot: NextlySchemaSnapshot;
+    fieldGroupNaming?: FieldGroupNaming;
+  },
+>(adapter: CatalogReadAdapter, snapshots: readonly T[]): Promise<T[]> {
+  if (!snapshots.some(entry => entry.fieldGroupNaming !== "current")) {
+    return [...snapshots];
+  }
+  if ((await databaseFieldGroupNaming(adapter)) === "legacy") {
+    return [...snapshots];
+  }
+  return snapshots.map(entry => {
+    if (entry.fieldGroupNaming === "current") return entry;
+    const groupTables = new Set(
+      entry.snapshot.tables
+        .map(table => table.name)
+        .filter(name => name.startsWith(STORAGE_FORMAT.tablePrefix))
+    );
+    return {
+      ...entry,
+      snapshot: snapshotUnderCurrentNames(entry.snapshot, groupTables),
+    };
+  });
+}
 
 /** The names the database keeps its field groups under, read from its registry in the catalog. */
 export async function databaseFieldGroupNaming(
