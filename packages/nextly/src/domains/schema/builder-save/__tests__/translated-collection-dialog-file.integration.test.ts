@@ -96,17 +96,15 @@ for (const dialect of getConfiguredTestDialects()) {
         db: DB,
         localization: { locales: ["en", "es"], defaultLocale: "en" },
       });
-      await t
-        .getService("collectionService")
-        .createCollection(
-          {
-            name: "posts",
-            label: "Post",
-            localized: true,
-            fields: [HEADING],
-          } as Parameters<CollectionService["createCollection"]>[0],
-          {}
-        );
+      await t.getService("collectionService").createCollection(
+        {
+          name: "posts",
+          label: "Post",
+          localized: true,
+          fields: [HEADING],
+        } as Parameters<CollectionService["createCollection"]>[0],
+        {}
+      );
     });
 
     afterEach(async () => {
@@ -202,9 +200,8 @@ for (const dialect of getConfiguredTestDialects()) {
       expect((await row()).version).toBe(before.version);
     });
 
-    // A field leaving translation has its other languages' values archived before the file runs;
-    // the push's questions come first, so a request refused for one leaves no archive rows.
-    it("refuses an unconfirmed drop before archiving a field that leaves translation", async () => {
+    // `teaser` added translated, and an entry holding a value in each language.
+    const seedTeaser = async () => {
       const handler = t.getService("collectionsHandler") as unknown as {
         getEntryService(): {
           createEntry(
@@ -235,6 +232,26 @@ for (const dialect of getConfiguredTestDialects()) {
         { heading: "Hola", teaser: "Buenas", _overwrite: true }
       );
       expect(translated.success, JSON.stringify(translated)).toBe(true);
+    };
+    // The rows the archive holds, or none where its table is absent: its absence is read, and any
+    // other failure fails the test rather than reading as an empty archive.
+    const archivedRows = async () => {
+      const present =
+        adapterOf().getCapabilities().dialect === "sqlite"
+          ? "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'nextly_i18n_archive'"
+          : adapterOf().getCapabilities().dialect === "postgresql"
+            ? "SELECT tablename AS name FROM pg_tables WHERE schemaname = current_schema() AND tablename = 'nextly_i18n_archive'"
+            : "SELECT table_name AS name FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'nextly_i18n_archive'";
+      if ((await exec(present)).length === 0) return 0;
+      const [counted] = await exec<{ n: number | string }>(
+        "SELECT COUNT(*) AS n FROM nextly_i18n_archive"
+      );
+      return Number(counted?.n ?? 0);
+    };
+    // A field leaving translation has its other languages' values archived before the file runs;
+    // the push's questions come first, so a request refused for one leaves no archive rows.
+    it("refuses an unconfirmed drop before archiving a field that leaves translation", async () => {
+      await seedTeaser();
       const pushed = vi.spyOn(PushSchemaPipeline.prototype, "apply");
 
       // `teaser` leaves translation, and `heading`, translated and holding values, is removed
@@ -256,14 +273,36 @@ for (const dialect of getConfiguredTestDialects()) {
 
       expect(pushed).not.toHaveBeenCalled();
       expect(String(refused)).toMatch(/cancelled/);
-      // The archive holds nothing: the table is absent, or empty.
-      const archived = await exec<{ n: number | string }>(
-        "SELECT COUNT(*) AS n FROM nextly_i18n_archive"
+      expect(await archivedRows()).toBe(0);
+    });
+
+    // The writer's own checks before its first write (its history, its plan, the translations
+    // table's drift) come before the archive too: a save they refuse has archived nothing.
+    it("writes no archive row when the writer's own checks refuse the save", async () => {
+      await seedTeaser();
+      // A column added to the translations table by hand, which the migration history does not
+      // record: the writer refuses the save as drift before its first write.
+      await exec("ALTER TABLE dc_posts_locales ADD COLUMN stray TEXT");
+
+      const refused = await dispatchCollections(
+        {} as ServiceContainer,
+        "applySchemaChanges",
+        { collectionName: "posts" },
+        {
+          fields: [HEADING, { ...TEASER, localized: false }],
+          confirmed: true,
+          localized: true,
+          schemaVersion: (await row()).version,
+        }
       ).then(
-        rows => Number(rows[0]?.n ?? 0),
-        () => 0
+        () => undefined,
+        (error: unknown) => error
       );
-      expect(archived).toBe(0);
+
+      expect(
+        `${refused instanceof Error ? refused.message : String(refused)}`
+      ).toMatch(/schema drift detected/);
+      expect(await archivedRows()).toBe(0);
     });
 
     it.skipIf(dialect === "mysql")(

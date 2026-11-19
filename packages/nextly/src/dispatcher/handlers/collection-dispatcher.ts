@@ -2308,7 +2308,8 @@ async function saveThroughWriter(
      * What the save does around its own migration file where development runs it rather than the
      * push: `judge`, the preconditions the push would ask, judged before anything else, the dialog's
      * questions included; `before`, what is written ahead of the file (a field leaving
-     * translation's archive), once the questions are answered; `after`, what the file does not
+     * translation's archive), once the questions are answered and the writer's own checks have
+     * passed (`beforeWrite`); `after`, what the file does not
      * reach, brought in step once it ran (a translations table). A failure of `after` leaves the
      * file recorded applied, as the database stands as it says.
      */
@@ -2354,13 +2355,15 @@ async function saveThroughWriter(
     prepared.deps.applies &&
     (change.pushWhen === undefined || (await change.pushWhen()));
   // In the push's order, before anything is written: the change's preconditions first, which say
-  // why a change cannot be made at all; then the push's questions, so a request refused for one
-  // leaves no archive rows behind; then what the file road writes ahead of its file (a field
-  // leaving translation's archive).
+  // why a change cannot be made at all; then the push's questions; then the writer's own checks
+  // (its history, its plan, the translations table's drift); and only once all have passed, what
+  // the file road writes ahead of its file (a field leaving translation's archive), so a save
+  // refused by any of them leaves no archive rows behind (`beforeWrite`).
   const runsFile = prepared.deps.applies && !viaPush;
   if (runsFile) await change.fileRoad?.judge?.();
   if (!viaPush) await change.questions?.();
-  if (runsFile) await change.fileRoad?.before();
+  const archiving = runsFile ? change.fileRoad?.before : undefined;
+  const beforeWrite = archiving === undefined ? {} : { beforeWrite: archiving };
   // Loaded here, where a save runs: the writer brings the migration generator
   // and runner, which a request that writes no field change never needs.
   const [{ writeCollectionSave }, { appliedFieldsOf }] = await Promise.all([
@@ -2376,6 +2379,7 @@ async function saveThroughWriter(
       ? { appliedBy: change.appliedBy }
       : inFile
         ? {
+            ...beforeWrite,
             inLastTransaction: () => registry(prepared.fields),
             // A file that stops part way is settled to what of it applied: the row then records
             // the fields as far as the database holds them.
@@ -2389,7 +2393,7 @@ async function saveThroughWriter(
               change.settled?.(applied);
             },
           }
-        : {}
+        : beforeWrite
   );
   if (runsFile) await change.fileRoad?.after();
   return {
