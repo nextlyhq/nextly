@@ -34,6 +34,7 @@ import { reservedSystemFieldNames } from "../../../lib/system-columns";
 import { getProductionNotifier } from "../../../runtime/notifications/index";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { consoleLogger } from "../../../shared/types";
+import { withSystemTextFields } from "../../collections/system-text-fields";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import {
   appLanguageOrder,
@@ -60,6 +61,11 @@ import {
   liveCompanionShape,
 } from "../../i18n/runtime/companion-io";
 import { assertLanguageStatesAgreeWithEntry } from "../../i18n/runtime/language-states-agree";
+import {
+  FirstQuestionWatch,
+  landingPush,
+  type PushWatch,
+} from "../builder-save/landing-push";
 import { runStatement } from "../pipeline/_internal/run-statement";
 import {
   createApplyDesiredSchema,
@@ -330,6 +336,13 @@ export interface CollectionSchemaChange {
    * would run before the column it fills exists.
    */
   fills?: ReadonlyArray<{ field: string; value: unknown; required: boolean }>;
+  /**
+   * Called once a push this change runs may have changed the database (`landingPush`): one that
+   * succeeded, or outside PostgreSQL one that failed, whose earlier statements may have stayed.
+   * A caller writing the change's migration keeps its files when the change fails after this,
+   * and withdraws them when it fails before, as a refusal before the push leaves nothing.
+   */
+  onLanded?: () => void;
 }
 
 /**
@@ -497,7 +510,18 @@ export async function refuseUniqueOverRepeats(args: {
     adapter.dialect,
     [tableName]
   );
-  const oldFields = onMain(args.oldFields ?? [], args.wasLocalized);
+  // The stored fields leave out the `title` and `slug` every table is built with, so they are added
+  // back: a title made unique is then a column the table holds, whose repeats are counted, not a
+  // field the save adds, which every entry would hold as NULL. One the author declared stays theirs.
+  // The two added back are columns of the shared row, so they stay shared on a translated
+  // collection, where a text field without a `localized` setting would read as translated.
+  const stored = args.oldFields ?? [];
+  const oldFields = onMain(
+    withSystemTextFields(stored).map(field =>
+      stored.includes(field) ? field : { ...field, localized: false }
+    ),
+    args.wasLocalized
+  );
   const newFields = onMain(args.newFields, args.isLocalized);
   const refusals = await refusalsForCollectionSave({
     adapter,
@@ -601,20 +625,33 @@ function changeApply(change: CollectionSchemaChange, deps: SchemaChangeDeps) {
         .map(resolution => resolution.eventId)
     )
   );
+  // Notes a push refused at its first question, which ran no statement, and one whose pipeline
+  // completed its apply, which a failure after it (the version read below) does not undo
+  // (`landingPush`).
+  const firstQuestion = new FirstQuestionWatch();
+  let completed = false;
+  const watch: PushWatch = {
+    starting: () => {
+      firstQuestion.starting();
+      completed = false;
+    },
+    stopped: () => firstQuestion.stopped(),
+    completed: () => completed,
+  };
   const apply = createApplyDesiredSchema({
-    applyPipeline: (desiredArg, sourceArg, channelArg) => {
+    applyPipeline: async (desiredArg, sourceArg, channelArg) => {
       const pipeline = new PushSchemaPipeline({
         executor: new DrizzleStatementExecutor(dialect, db),
         renameDetector: new RegexRenameDetector(),
         classifier: new RealClassifier(),
-        promptDispatcher,
+        promptDispatcher: firstQuestion.watching(promptDispatcher),
         preRenameExecutor: noopPreRenameExecutor,
         preCleanupExecutor: new RealPreCleanupExecutor(),
         // The real journal from DI, with a noop fallback for callers that bypass DI.
         migrationJournal: getMigrationJournalFromDI() ?? noopMigrationJournal,
         notifier: getProductionNotifier(),
       });
-      return pipeline.apply({
+      const result = await pipeline.apply({
         desired: desiredArg,
         db,
         dialect,
@@ -628,6 +665,8 @@ function changeApply(change: CollectionSchemaChange, deps: SchemaChangeDeps) {
         // after its prompts and refusals, before it drops the main column.
         defaultLocale,
       });
+      if (result.success) completed = true;
+      return result;
     },
     // Neither caller asks the pipeline for its optimistic check: the dialog checks the version
     // before calling, and the save runs under the schema lock.
@@ -642,7 +681,7 @@ function changeApply(change: CollectionSchemaChange, deps: SchemaChangeDeps) {
       return out;
     },
   });
-  return { apply, promptDispatcher, defaultLocale };
+  return { apply, promptDispatcher, defaultLocale, watch };
 }
 
 /**
@@ -852,7 +891,19 @@ async function applyHoldingSchemaLock(
   // managed table: without the others, tables of other entity types in the live database are
   // absent from the desired snapshot and are offered as rename candidates for this collection.
   const desired = await buildFullDesiredSchema();
-  const { apply, promptDispatcher, defaultLocale } = changeApply(change, deps);
+  const changed = changeApply(change, deps);
+  const { promptDispatcher, defaultLocale } = changed;
+  // Every push below, the settings push and the companion's included, tells the caller once it
+  // may have changed the database; the checks before them change nothing. A failed one changed
+  // nothing where it stopped at its first question, asked before any statement.
+  const landing = landingPush(changed.apply, dialect, changed.watch);
+  const apply: ApplyDesired = async (...args) => {
+    try {
+      return await landing.push(...args);
+    } finally {
+      if (landing.landed()) change.onLanded?.();
+    }
+  };
 
   const oldFields = (collection.fields ?? []) as unknown as FieldDefinition[];
   // The answer on a translated field's rename, refused when it does not say, before anything

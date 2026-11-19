@@ -13,6 +13,11 @@ import type { AnyWidgetSetting, PublishedContentSource } from "nextly/config";
 import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 
+import {
+  drawnText,
+  nameHoldsDrawnText,
+} from "@admin/__tests__/helpers/label-in-name";
+
 import type { PanelKept } from "../panel-values";
 import {
   discardOpenPanels,
@@ -134,10 +139,30 @@ describe("the drawer's sections", () => {
     for (const name of ["Content", "Display"]) {
       const heading = screen.getByRole("heading", { level: 3, name });
       const reset = screen.getByRole("button", {
-        name: `Reset ${name} to defaults`,
+        name: `Reset to defaults, ${name}`,
       });
       expect(reset.parentElement).toBe(heading.parentElement);
     }
+  });
+
+  // Label in Name: the link draws "Reset to defaults", so its name says those
+  // words together, as a person using speech input says them, and then which
+  // section it resets.
+  it("names each section's Reset with the words it draws, then the section", () => {
+    panel({ collection: "posts" });
+    const resets = screen.getAllByRole("button", { name: /^Reset/ });
+    expect(resets).toHaveLength(2);
+    for (const reset of resets) {
+      const name = reset.getAttribute("aria-label") ?? "";
+      expect(
+        nameHoldsDrawnText(name, drawnText(reset)),
+        `"${name}" against the drawn "${drawnText(reset)}"`
+      ).toBe(true);
+    }
+    expect(resets.map(reset => reset.getAttribute("aria-label"))).toEqual([
+      "Reset to defaults, Content",
+      "Reset to defaults, Display",
+    ]);
   });
 
   it("keeps Cancel and Save at the drawer's foot, below the part that scrolls", () => {
@@ -296,7 +321,7 @@ describe("the card's own title", () => {
     const { onDone } = panel({ collection: "posts" }, LIST, "Mine");
     expect(screen.getByLabelText("Title")).toHaveValue("Mine");
     await userEvent.click(
-      screen.getByRole("button", { name: "Reset Display to defaults" })
+      screen.getByRole("button", { name: "Reset to defaults, Display" })
     );
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(onDone).toHaveBeenCalled());

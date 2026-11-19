@@ -14,6 +14,7 @@ import type {
 import type { DocumentIdentity } from "@nextlyhq/plugin-sdk/admin";
 import type { ComponentProps } from "react";
 
+import type { useComponentSettingHold } from "./component-setting-hold";
 import type { EditorPanels } from "./editor-panels";
 import type {
   ReadMediaSummary,
@@ -21,6 +22,7 @@ import type {
 } from "./media-summary-reader";
 import type { RegionEditingHost } from "./region-editing";
 import type { Reveal } from "./reveal-hidden";
+import type { SetMode } from "./set-regions";
 import type { ComponentView } from "./use-component-view";
 import type { EditorMount } from "./use-editor-mount";
 import type {
@@ -47,6 +49,10 @@ export type EditorView = EditorMount &
     regionEditing: RegionEditingHost;
     /** "Edit component", and the banner over a component's own view. */
     componentView: ComponentView;
+    /** Plan a setting of a placed component, held for the page's Save. */
+    makeComponentSetting: ReturnType<
+      typeof useComponentSettingHold
+    >["makeComponentSetting"];
     /** The block verbs shared for the surfaces drawn outside the provider. */
     layerVerbs: CardVerbs;
     /** What the canvas draws: the document, with selected hidden blocks shown. */
@@ -94,6 +100,11 @@ export type EditorView = EditorMount &
      * settings read says this person may change the site's code.
      */
     blockCustomCss: BlockCustomCssAccess | undefined;
+    /**
+     * The header & footer set whose own screen this is: the canvas draws a
+     * placeholder for the page, and the inspector the set's settings.
+     */
+    set: SetMode | undefined;
   };
 
 /** The block verbs the inspector's card offers, as the verbs provider shares them. */

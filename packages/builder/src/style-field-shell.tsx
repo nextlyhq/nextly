@@ -25,6 +25,11 @@ import type { EditorState } from "./editor-state";
 import { FieldPathWrites } from "./field-path-writes";
 import { InheritedValue } from "./inherited-value";
 import { LabelScrubRow, useLabelScrubProps } from "./label-scrub";
+import {
+  RENDERED_TEXT_SIZES,
+  RenderedLengths,
+  type RenderedLengthsValue,
+} from "./rendered-lengths";
 import { CompactSides, fieldDescribedBy, sideKeysFor } from "./spacing-box";
 import { SpacingSide } from "./spacing-side";
 import { contrastObscuredAbove, contrastObscuredIn } from "./style-colour";
@@ -144,18 +149,35 @@ function tabStopOf(control: HTMLElement | null): HTMLElement | null {
 /** What takes focus by itself, as a label's target. */
 const FOCUSABLE = "button, input, select, textarea, [tabindex]";
 
+/** Whether a written value reads a CSS variable: `var(--site-font-size-h2)`. */
+function readsVariable(value: string): boolean {
+  return /\bvar\(\s*--/.test(value);
+}
+
 /**
  * What reaches a control from another tier, shown in it while nothing is set
  * here. Read from the same answer as the dot, so the two never disagree.
+ *
+ * A text size that reads a variable (Site text's heading sizes) is shown as
+ * the size the canvas draws it at, at the device being edited, and not at
+ * all where the canvas hasn't measured it: an author never sees the CSS. The
+ * dot beside the label says where it comes from ("From Site text: Heading
+ * 2"). Other values pass as they are: a spacing side names the variable it
+ * reads from the value itself.
  */
 function inheritedShown(
   stored: StyleValue | undefined,
-  answer: ProvenanceAnswer | undefined
+  answer: ProvenanceAnswer | undefined,
+  leaf: StyleControl["leaf"],
+  rendered: RenderedLengthsValue
 ): string | undefined {
   if (stored !== undefined || answer?.provenance.kind !== "inherited") {
     return undefined;
   }
-  return answer.provenance.entry.value;
+  const value = answer.provenance.entry.value;
+  const read = Object.hasOwn(RENDERED_TEXT_SIZES, leaf.cssProperty);
+  if (!read || !readsVariable(value)) return value;
+  return rendered[leaf.cssProperty];
 }
 
 export function StyleControlField({
@@ -257,7 +279,9 @@ export function StyleControlField({
    * The dot and the action are two readings of one answer, not two answers.
    */
   const answer = provenanceOf(control.leaf);
-  const inherited = inheritedShown(stored, answer);
+  // The sizes the canvas drew the block at, for an inherited variable.
+  const rendered = React.useContext(RenderedLengths);
+  const inherited = inheritedShown(stored, answer, control.leaf, rendered);
 
   // A spacing-box side resets by key: see `sideKeysFor`.
   const inBox = React.useContext(CompactSides);

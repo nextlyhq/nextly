@@ -38,6 +38,22 @@ import {
   type SharedStylesPanelProps,
 } from "./shared-styles-panel";
 
+/**
+ * An element's accessible name, as a screen reader hears it: from its content
+ * where it has no label of its own. Read through the role query, which
+ * computes the name the same way for every button it finds.
+ */
+function nameOf(element: Element | null | undefined): string | undefined {
+  let heard: string | undefined;
+  screen.queryAllByRole("button", {
+    name: (name, each) => {
+      if (each === element) heard = name;
+      return false;
+    },
+  });
+  return heard;
+}
+
 afterEach(cleanup);
 
 const CARD: NamedClass = {
@@ -173,6 +189,10 @@ describe("the list", () => {
     expect(card.textContent).toContain(".nx-c-card");
     // A style made before names shows its class name as its name.
     expect(row(/^hero, \.nx-c-hero/)).toBeTruthy();
+    // Named by the words it shows, with no label laid over them, so the
+    // name and class an author reads are the start of what is heard.
+    expect(card.getAttribute("aria-label")).toBeNull();
+    expect(nameOf(card)).toMatch(/^Card, \.nx-c-card, /);
   });
 
   it("names its two sections, Block styles and Shared styles, each with its line", async () => {
@@ -256,7 +276,13 @@ describe("the list", () => {
     const rows = [
       ...looks.querySelectorAll<HTMLElement>(".nx-block-styles__row"),
     ];
-    expect(rows.map(each => each.textContent)).toEqual([
+    // What each row draws: its name is heard from a hidden text of its own.
+    const drawn = (each: HTMLElement): string => {
+      const copy = each.cloneNode(true) as HTMLElement;
+      for (const heard of copy.querySelectorAll(".nx-sr-only")) heard.remove();
+      return copy.textContent ?? "";
+    };
+    expect(rows.map(drawn)).toEqual([
       "ButtonPrimary★ Default",
       "ButtonOutline",
     ]);
@@ -297,9 +323,7 @@ describe("the list", () => {
     expect(usageReads[0]).toEqual([CARD.id, outline.id]);
     const looks = screen.getByRole("region", { name: "Block styles" });
     expect(
-      within(looks)
-        .getByRole("button", { name: /^Outline, / })
-        .getAttribute("aria-label")
+      nameOf(within(looks).getByRole("button", { name: /^Outline, / }))
     ).toMatch(/3 pages/);
   });
 
@@ -333,14 +357,12 @@ describe("the list", () => {
     });
     const looks = screen.getByRole("region", { name: "Block styles" });
     const look = within(looks).getByRole("button", { name: /^Outline, / });
-    expect(look.getAttribute("aria-label")).toBe(
-      "Outline, 2 blocks on this page · on 3 pages"
-    );
+    expect(nameOf(look)).toBe("Outline, 2 blocks on this page · on 3 pages");
     expect(look.getAttribute("title")).toBe(
       "2 blocks on this page · on 3 pages"
     );
     // The control: the shared style beside it says its page blocks the same way.
-    expect(row(/^Card, \.nx-c-card/).getAttribute("aria-label")).toBe(
+    expect(nameOf(row(/^Card, \.nx-c-card/))).toBe(
       "Card, .nx-c-card, 1 block on this page · on 4 pages"
     );
   });
@@ -372,7 +394,7 @@ describe("the list", () => {
     const lookNames = () =>
       within(screen.getByRole("region", { name: "Block styles" }))
         .getAllByRole("button", { pressed: false })
-        .map(each => each.getAttribute("aria-label"));
+        .map(each => nameOf(each));
     // The control: with no search, both are listed.
     expect(lookNames()).toEqual(["Primary, default", "Square, default"]);
     fireEvent.change(search, { target: { value: "Square" } });
@@ -477,9 +499,7 @@ describe("the row's preview", () => {
       prefersDark();
       await panel({ tokens: { tokens: [] }, library: [CARD, LIGHT_TEXT] });
       const card = row(/^Card, \.nx-c-card/);
-      expect(card.getAttribute("aria-label")).toContain(
-        "Hard to read in dark mode"
-      );
+      expect(nameOf(card)).toContain("Hard to read in dark mode");
       const tile = card.querySelector<HTMLElement>(".nx-shared-styles__tile");
       expect(tile?.style.backgroundColor).toBe("rgb(255, 255, 255)");
       // Said where keyboard and touch users meet it too: the row's tooltip,
@@ -497,7 +517,7 @@ describe("the row's preview", () => {
       fireEvent.keyDown(opened, { key: "Escape" });
       // CONTROL: a style that reads on the dark page keeps it, unmarked.
       const light = row(/^Light text, \.nx-c-light-text/);
-      expect(light.getAttribute("aria-label")).not.toContain("dark mode");
+      expect(nameOf(light)).not.toContain("dark mode");
       expect(
         light.querySelector<HTMLElement>(".nx-shared-styles__tile")?.style
           .backgroundColor
@@ -594,7 +614,7 @@ describe("counts", () => {
       pageBlocks: { counts: new Map([["c-card", 3]]), complete: true },
     });
     const card = row(/^Card, \.nx-c-card/);
-    expect(card.getAttribute("aria-label")).toBe(
+    expect(nameOf(card)).toBe(
       "Card, .nx-c-card, 3 blocks on this page · on 4 pages and 1 component"
     );
     expect(card.textContent).toContain("5");
@@ -608,9 +628,7 @@ describe("counts", () => {
     });
     await panel({ access });
     const card = row(/^Card, \.nx-c-card/);
-    expect(card.getAttribute("aria-label")).toBe(
-      "Card, .nx-c-card, On at least 4 pages"
-    );
+    expect(nameOf(card)).toBe("Card, .nx-c-card, On at least 4 pages");
     expect(card.textContent).toContain("4+ pages");
     const note = screen.getByText(
       "Some pages haven't been counted yet, so the numbers are minimums and no style can be called unused or removed."
@@ -694,7 +712,7 @@ describe("counts", () => {
     });
     await panel({ library: [odd], access, suppliedClassIds: ["a\nb"] });
     expect(usageReads).toEqual([["a\nb"]]);
-    expect(row(/^Odd, \.nx-c-odd/).getAttribute("aria-label")).toBe(
+    expect(nameOf(row(/^Odd, \.nx-c-odd/))).toBe(
       "Odd, .nx-c-odd, set in your site’s code, On 3 pages"
     );
   });
@@ -1002,7 +1020,7 @@ describe("counts", () => {
     });
     try {
       await panel({ access });
-      expect(row(/^Card, \.nx-c-card/).getAttribute("aria-label")).toBe(
+      expect(nameOf(row(/^Card, \.nx-c-card/))).toBe(
         "Card, .nx-c-card, On at least 4 pages"
       );
       counted = true;
@@ -1012,7 +1030,7 @@ describe("counts", () => {
     } finally {
       vi.useRealTimers();
     }
-    expect(row(/^Card, \.nx-c-card/).getAttribute("aria-label")).toBe(
+    expect(nameOf(row(/^Card, \.nx-c-card/))).toBe(
       "Card, .nx-c-card, On 4 pages"
     );
     expect(

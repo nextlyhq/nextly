@@ -59,6 +59,10 @@ import type { OpenAt } from "./builder-address";
 import { useCanvasEntryIdentity } from "./canvas-entry";
 import { listEntryCollectionOf } from "./canvas-page-context";
 import { useDropKeptReadsOnSave } from "./canvas-source-check";
+import {
+  useHeldComponentSettings,
+  useLeavingWithHeldSettings,
+} from "./component-setting-hold";
 import { useConditionedPage } from "./conditioned-page";
 import { editorCanvasRegion } from "./editor-canvas-region";
 import {
@@ -99,6 +103,8 @@ import {
 } from "./region-editing";
 import { useReveal } from "./reveal-hidden";
 import type { SelectedRegion } from "./selected-region";
+import type { SetMode } from "./set-regions";
+import { SET_HAS_NO_PAGE, SET_TRAIL_ROOT, setRegionRefusal } from "./set-words";
 import { useSettingsPlace } from "./settings-place";
 import {
   SettingsTabRequestContext,
@@ -206,6 +212,13 @@ interface BlocksEditorProps<TFieldValues extends FieldValues> {
   pathIn?:
     | ((values: Record<string, unknown>) => string | undefined)
     | undefined;
+  /**
+   * The header & footer set whose own screen this is: the page is a
+   * placeholder no edit reaches, the regions drawn around it are the set
+   * form's working areas, and with nothing selected the inspector shows the
+   * set's settings. Absent, the editor edits the field's page.
+   */
+  set?: SetMode | undefined;
 }
 
 export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>(
@@ -393,16 +406,23 @@ function EditorBody<TFieldValues extends FieldValues>({
   control,
   openAt,
   place,
+  set,
 }: BlocksEditorProps<TFieldValues> & { place: FieldPlace }): JSX.Element {
   // A save hands the document to the form, and the form takes the entry in
   // again from the save's answer and the read after it, each a new object
   // holding the same document. Kept as the object the editor already holds,
   // so a read that matches what is shown plans and draws nothing again.
   const readBack = useReadBack(onCommit);
-  const mount = useEditorMount(
-    readBack.kept("opened", initialValue),
-    kinds,
-    readBack.kept("stored", useStoredFieldValue(control, name, place.pathIn))
+  // A component setting made from a placement is held for the page's Save:
+  // the canvas and the inspector draw the planned component while the page
+  // binds it, and the editor's own apply keeps the stored components.
+  const mount = useHeldComponentSettings(
+    useEditorMount(
+      readBack.kept("opened", initialValue),
+      kinds,
+      readBack.kept("stored", useStoredFieldValue(control, name, place.pathIn)),
+      set === undefined ? undefined : SET_HAS_NO_PAGE
+    )
   );
   // `editor` is the state of what is being edited: a header or footer while
   // one is edited in place, else the page. The page's own state is what is
@@ -440,6 +460,7 @@ function EditorBody<TFieldValues extends FieldValues>({
       style.siteStylePending,
       style.siteStyleError
     ),
+    set,
   });
   // The Settings dialog's place for other plugins' tabs, for a page or a
   // design: what is being edited, and its own metadata as one undoable edit.
@@ -460,7 +481,11 @@ function EditorBody<TFieldValues extends FieldValues>({
     canvas: canvas.canvasElement,
     requestLayers: () => panels.requestPanel("layers"),
     sets: panels,
-    rereadRegions: panels.rereadRegions,
+    page: {
+      rereadRegions: panels.rereadRegions,
+      // A setting made on a placement in the header is made by its Save.
+      writeHeldSettings: mount.writeHeldSettings,
+    },
   });
   const { done, publishOffer, removalHold } = useHostCommit({
     name,
@@ -647,6 +672,7 @@ function EditorBody<TFieldValues extends FieldValues>({
   const blockCustomCss = useBlockCustomCss();
   const view: EditorView = {
     ...mount,
+    set,
     regionEditing,
     ...style,
     ...canvas,
@@ -699,9 +725,11 @@ function EditorBody<TFieldValues extends FieldValues>({
   });
   // The editor's one way out, for the exit arrow and the palette alike: the
   // list on an entry whose collection opens in the builder, else the form;
-  // while a header is edited, after Done has asked about its changes.
-  const leave = regionLeave(regionEditing, back?.go ?? done);
-  const openAsForm = regionLeave(regionEditing, done);
+  // while a header is edited, after Done has asked about its changes. To the
+  // form, past each held component setting written first.
+  const toForm = useLeavingWithHeldSettings(mount.writeHeldSettings, done);
+  const leave = regionLeave(regionEditing, back?.go ?? toForm);
+  const openAsForm = regionLeave(regionEditing, toForm);
   const {
     notices,
     componentLibrary,
@@ -791,13 +819,19 @@ function EditorBody<TFieldValues extends FieldValues>({
               regionStrip(regionEditing, editing, twoRegions)
             )}
             openSettingsRequest={view.pages.settingsRequest}
-            renderSettings={editorSettings(view, page, settingsPlace, {
-              kind: mount.initialDocument.kind,
-              fieldName: name,
-              control: control as unknown as Control<FieldValues>,
-              // At the bottom of Page settings, as in the ⋯ menu.
-              openAsForm: shellExit(componentView, openAsForm),
-            })}
+            // A set's screen has no page, so no Page settings: its own
+            // settings are the inspector's with nothing selected.
+            {...(set === undefined
+              ? {
+                  renderSettings: editorSettings(view, page, settingsPlace, {
+                    kind: mount.initialDocument.kind,
+                    fieldName: name,
+                    control: control as unknown as Control<FieldValues>,
+                    // At the bottom of Page settings, as in the ⋯ menu.
+                    openAsForm: shellExit(componentView, openAsForm),
+                  }),
+                }
+              : {})}
             // The shell owns the region; this fills it. Rendered unconditionally
             // rather than only when something is selected, because with nothing
             // selected the panel shows the document's own settings: a region
@@ -833,7 +867,8 @@ function EditorBody<TFieldValues extends FieldValues>({
             breadcrumb={editorBreadcrumb(
               editor,
               componentLibrary.titleOf,
-              place.location
+              // On a set's screen the trail starts at the set, not a page.
+              set === undefined ? place.location : SET_TRAIL_ROOT
             )}
             checklist={editorChecklist(view)}
             renderPanel={editorPanelRenderer(view)}
@@ -850,7 +885,7 @@ function EditorBody<TFieldValues extends FieldValues>({
               // or else leaves a look edited on its own.
               // Esc with nothing selected, and a selected header or footer's
               // Delete; inside a header edited in place, Esc is Done.
-              {...regionKeys(regionEditing, editing, panels)}
+              {...regionKeys(regionEditing, editing, panels, set)}
               onEditText={componentView.preview.onEditText}
               onSaveAsPattern={savePattern.open}
               /*
@@ -927,6 +962,12 @@ function EditorBody<TFieldValues extends FieldValues>({
                 selectedIds={editor.selection.ids}
                 onClose={savePattern.close}
                 returnFocusTo={savePattern.returnFocusTo}
+                // As for a new component: the saved section keeps the
+                // selection's bindings, so a held setting is written first.
+                beforeSave={mount.writeHeldSettings}
+                // A refusal takes its binding off this, not off the snapshot,
+                // so a retry stores it.
+                currentDocument={() => editor.document}
               />
               <ComponentFromSelectionPrompt
                 request={makeComponent.request}
@@ -934,6 +975,13 @@ function EditorBody<TFieldValues extends FieldValues>({
                 library={componentLibrary}
                 onClose={makeComponent.close}
                 returnFocusTo={makeComponent.returnFocusTo}
+                // A held setting the selection binds is written first: the
+                // new component keeps the binding, and the page, past a
+                // convert, no placement holding the setting.
+                beforeCreate={mount.writeHeldSettings}
+                // A refusal takes its binding off this, not off the request,
+                // so the form takes it in the request's place.
+                currentDocument={() => editor.document}
               />
               <ComponentActionPrompt
                 request={makeComponent.request}
@@ -966,13 +1014,18 @@ function escapeWithoutSelection(
 }
 
 /** What the block keys are told of a selected header or footer. */
-function selectedRegionKeys(region: SelectedRegion): {
+function selectedRegionKeys(
+  region: SelectedRegion,
+  set: SetMode | undefined
+): {
   selectedRegion?: { readonly refusal: string };
 } {
   const area = region.selection.area;
-  return area === null
-    ? {}
-    : { selectedRegion: { refusal: regionRefusal(area) } };
+  if (area === null) return {};
+  // On a set's own screen, the header is the set's to change, not a page's.
+  const refusal =
+    set === undefined ? regionRefusal(area) : setRegionRefusal(area);
+  return { selectedRegion: { refusal } };
 }
 
 /**
@@ -1096,7 +1149,8 @@ function regionStrip(
 function regionKeys(
   region: Pick<RegionEditingHost, "area" | "done">,
   editing: EditorMount["editing"],
-  panels: Pick<EditorPanels, "selectedRegion" | "lookEditing">
+  panels: Pick<EditorPanels, "selectedRegion" | "lookEditing">,
+  set: SetMode | undefined
 ): {
   onEscapeWithoutSelection: () => void;
   selectedRegion?: { readonly refusal: string };
@@ -1108,7 +1162,7 @@ function regionKeys(
   return region.area === undefined
     ? {
         onEscapeWithoutSelection,
-        ...selectedRegionKeys(panels.selectedRegion),
+        ...selectedRegionKeys(panels.selectedRegion, set),
       }
     : { onEscapeWithoutSelection };
 }

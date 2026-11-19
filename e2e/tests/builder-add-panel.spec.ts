@@ -224,9 +224,9 @@ test.describe("the Add panel", () => {
       .click();
     await openAdd(page);
 
-    // An accordion item belongs inside an accordion, and nothing a click may
-    // use from here is one.
-    const item = tile(page, "Accordion item");
+    // A question belongs inside an accordion, and nothing a click may use
+    // from here is one.
+    const item = tile(page, "Question");
     await expect(item).toHaveAttribute("data-refused", "true");
     // One plain instruction, generated from where the rule lets it go.
     await expect(item).toHaveAccessibleDescription(

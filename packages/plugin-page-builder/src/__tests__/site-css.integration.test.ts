@@ -18,22 +18,36 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
+import { createBlockResolver } from "@nextlyhq/blocks-react";
+import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
+import { createPublicContentPage } from "@nextlyhq/blocks-react/next";
 import {
   createTestNextly,
   getConfiguredTestDialects,
   type TestDialect,
   type TestNextly,
 } from "@nextlyhq/plugin-sdk/testing";
-import { afterEach, describe, expect, it } from "vitest";
+import type { PluginDefinition } from "@nextlyhq/plugin-sdk";
+import type { ReactElement } from "react";
+import { renderToReadableStream } from "react-dom/server";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { pageBuilderCustomCss } from "../custom-css";
+import { pageBuilderContent } from "../page-content";
 import { pageBuilder } from "../plugin";
 import { SCHEMA_PREFIX, siteOptions } from "../schema/tables";
+import { loadSiteStyle } from "../site-style-load";
+import { SITE_STYLE_SLUG } from "../site-style-storage";
 import { sha256Hex } from "../sha256-hex";
 import { SITE_CSS_SAVED_AUDIT } from "../site-code/css-route";
 import { SITE_CSS_STALE } from "../site-code/site-css-store";
 
 import { call, holding, person, post, sessionOf } from "./transfer-harness";
+
+// No request here, so no draft mode: the published page as a visitor gets it.
+vi.mock("next/headers", () => ({
+  draftMode: async () => ({ isEnabled: false }),
+}));
 
 /** The plugin's options table, as the database names it. */
 const OPTIONS_TABLE = `${SCHEMA_PREFIX}__${siteOptions.name}`;
@@ -229,6 +243,78 @@ describe.each(getConfiguredTestDialects())(
       });
       expect(byKey.status).toBe(403);
       expect(await cssRows(t)).toEqual(new Map());
+    });
+
+    /** A published page at `slug`, as a visitor gets it from the docs' route. */
+    async function livePage(
+      t: TestNextly,
+      plugin: PluginDefinition,
+      slug: string
+    ): Promise<string> {
+      const route = createPublicContentPage({
+        ...pageBuilderContent({ nextly: t.nextly as never }),
+        pages: {
+          collections: ["pages"],
+          field: "content",
+          nextly: t.nextly as never,
+          blocks: createBlockResolver(coreBlocks),
+          // A host's breakpoints, so the page is compiled a sheet at all.
+          styleContext: { breakpoints: { viewport: [], container: [] } },
+          siteStyles: {
+            read: () => loadSiteStyle({ nextly: t.nextly as never }),
+            singles: [SITE_STYLE_SLUG],
+          },
+          customCss: pageBuilderCustomCss({ plugin }),
+        },
+      });
+      const element = (await route.ContentPage({
+        params: { slug: [slug] },
+      })) as ReactElement;
+      // Streamed, as a page is served: the page's sheet is a hoisted style
+      // element, which a static render leaves out.
+      const stream = await renderToReadableStream(element);
+      await stream.allReady;
+      return new Response(stream).text();
+    }
+
+    it("draws the CSS a person saves on a published page at once", async () => {
+      const { t, owner, plugin } = await boot();
+      await t.nextly.create({
+        collection: "pages",
+        data: {
+          title: "Live",
+          slug: "live",
+          content: {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [
+              {
+                id: "live-h",
+                type: "core/heading",
+                version: 1,
+                props: { text: "Live page", level: "h2" },
+              },
+            ],
+          },
+          status: "published",
+        },
+        overrideAccess: true,
+      });
+      const css = "body { outline: 4px solid red; }";
+      // The positive control: the page is drawn, and without the CSS.
+      const before = await livePage(t, plugin, "live");
+      expect(before).toContain("Live page");
+      expect(before).not.toContain(css);
+
+      // Saved as the Settings box saves it: from the read's hash.
+      const read = await call("GET", owner, ROUTE);
+      const saved = await post(owner, ROUTE, { css, sha256: read.body.sha256 });
+      expect(saved.status, JSON.stringify(saved.body)).toBe(200);
+
+      // The page, read again with nothing else changed, carries it.
+      const after = await livePage(t, plugin, "live");
+      expect(after).toContain("Live page");
+      expect(after).toContain(css);
     });
 
     it("refuses CSS the checker refuses, naming its line", async () => {

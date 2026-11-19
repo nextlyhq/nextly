@@ -142,7 +142,11 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   clearBlocks();
+  writeHeld = undefined;
 });
+
+/** The page's held component settings' write, where a test gives one. */
+let writeHeld: (() => true | Promise<boolean>) | undefined;
 
 const HEADER: BlockDocument = {
   formatVersion: 1,
@@ -226,7 +230,11 @@ function Host(): React.JSX.Element {
       requestPanel: () => undefined,
       pages: { revealSets: () => undefined },
     },
-    rereadRegions: () => undefined,
+    page: {
+      rereadRegions: () => undefined,
+      // None held unless a test holds one.
+      writeHeldSettings: writeHeld ?? (() => true),
+    },
   });
   seen.host = host;
   seen.editing = editing;
@@ -372,6 +380,14 @@ describe("entering header editing", () => {
     });
   });
 
+  it("names the header's component while it is edited, for the way to its own view", async () => {
+    render(<Host />);
+    expect(current().host.componentId).toBeUndefined();
+    await enterHeader();
+
+    expect(current().host.componentId).toBe("h1");
+  });
+
   it("does not enter while a colleague holds the header, and says who", async () => {
     hoisted.session = sessionWith({
       lock: { status: "held-by-other", holder: "Ana Diaz" },
@@ -420,6 +436,53 @@ describe("saving the header", () => {
     act(() => options.action.onClick());
     await waitFor(() => expect(saveDraft).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(current().host.dirty).toBe(false));
+  });
+
+  it("writes the held component settings before saving the header, and saves nothing when one is refused", async () => {
+    // A setting made on a placement in the header, bound to a field, is
+    // made by the header's Save; refused, its binding is taken off instead.
+    const saveDraft = vi.fn(() => Promise.resolve(STORED));
+    hoisted.session = sessionWith({ saveDraft });
+    const held = vi
+      .fn<() => Promise<boolean>>()
+      .mockResolvedValueOnce(false)
+      .mockResolvedValue(true);
+    writeHeld = held;
+    render(<Host />);
+    await enterHeader();
+    editHeader();
+
+    act(() => current().host.topBar?.save());
+    await waitFor(() => expect(held).toHaveBeenCalledTimes(1));
+    await act(async () => undefined);
+    expect(saveDraft).not.toHaveBeenCalled();
+    expect(current().host.dirty).toBe(true);
+
+    act(() => current().host.topBar?.save());
+    await waitFor(() => expect(saveDraft).toHaveBeenCalledTimes(1));
+    expect(held).toHaveBeenCalledTimes(2);
+  });
+
+  it("is busy while the held component settings are written, so a second Save or a Discard waits", async () => {
+    const saveDraft = vi.fn(() => Promise.resolve(STORED));
+    hoisted.session = sessionWith({ saveDraft });
+    let answer: (written: boolean) => void = () => undefined;
+    writeHeld = vi.fn(
+      () =>
+        new Promise<boolean>(resolve => {
+          answer = resolve;
+        })
+    );
+    render(<Host />);
+    await enterHeader();
+    editHeader();
+
+    act(() => current().host.topBar?.save());
+    await waitFor(() => expect(current().host.topBar?.busy).toBe(true));
+
+    await act(async () => answer(false));
+    await waitFor(() => expect(current().host.topBar?.busy).toBe(false));
+    expect(saveDraft).not.toHaveBeenCalled();
   });
 
   it("waits for a shared style's write on its way before saving the header", async () => {
@@ -1012,12 +1075,59 @@ describe("the inspector's bindings while a header is edited", () => {
 describe("the inspector's variants while a header is edited", () => {
   // The canvas previews no variant of a header edited in place, so its
   // variants are edited in its own view alone.
-  it("are kept to the component's own view, and the page's host is left as it is", () => {
-    const host = { preview: { open: undefined, onOpen: () => undefined } };
+  const host = { preview: { open: undefined, onOpen: () => undefined } };
 
-    expect(inspectedVariantsOf("header", host)).toEqual({
-      editedInOwnView: true,
-    });
-    expect(inspectedVariantsOf(undefined, host)).toBe(host);
+  it("are kept to the component's own view, and the page's host is left as it is", () => {
+    const open = () => undefined;
+    const pageRegion = {
+      area: undefined,
+      componentId: undefined,
+      leaveThen: (next: () => void) => next(),
+    };
+
+    expect(inspectedVariantsOf(pageRegion, host, open)).toBe(host);
+    expect(
+      inspectedVariantsOf(
+        { ...pageRegion, area: "header", componentId: "c-header" },
+        host,
+        open
+      ).editedInOwnView
+    ).toBe(true);
+  });
+
+  it("open the header's own view through the editor's opener, after leaving it as Done does", () => {
+    const seen: string[] = [];
+    // Leaving asks about unsaved work first; the opener runs only once left.
+    let leave: (() => void) | undefined;
+    const region = {
+      area: "header" as const,
+      componentId: "c-header",
+      leaveThen: (next: () => void) => {
+        seen.push("asked to leave");
+        leave = next;
+      },
+    };
+    const inspected = inspectedVariantsOf(region, host, componentId =>
+      seen.push(`opened ${componentId}`)
+    );
+
+    inspected.onOpenOwnView?.();
+    expect(seen).toEqual(["asked to leave"]);
+    leave?.();
+    expect(seen).toEqual(["asked to leave", "opened c-header"]);
+  });
+
+  it("offer no way there to an author the editor offers no opener", () => {
+    const inspected = inspectedVariantsOf(
+      {
+        area: "footer",
+        componentId: "c-footer",
+        leaveThen: (next: () => void) => next(),
+      },
+      host,
+      undefined
+    );
+
+    expect(inspected).toEqual({ editedInOwnView: true });
   });
 });

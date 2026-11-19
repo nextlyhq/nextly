@@ -407,7 +407,14 @@ export function useEditorMount(
    * The field's value as last loaded or saved, which locks keep against;
    * undefined for an entry never saved.
    */
-  savedValue?: unknown
+  savedValue?: unknown,
+  /**
+   * Said when an edit is asked of a page that has none of its own: on a
+   * header & footer set's screen, whose page is a placeholder, every edit of
+   * it is refused with these words, whichever surface asked. Absent, the
+   * page is edited as always.
+   */
+  pageless?: string
 ): EditorMount {
   // The core blocks and every block a plugin contributed, before anything
   // reads the registry. Inside the component that mounts the editor rather
@@ -473,7 +480,8 @@ export function useEditorMount(
       stored,
     },
     kinds,
-    judged
+    judged,
+    { sentence: pageless, raise: notices.raise }
   );
   /*
    * Which document the editor edits: the page, or a header or footer of its
@@ -536,6 +544,7 @@ export function useEditorMount(
 
   return {
     initialDocument,
+    stored,
     clientConfig,
     documentLimits,
     componentLibrary,
@@ -561,6 +570,8 @@ export function useEditorMount(
 /** What mounting the editor produced, for the hooks that build on it. */
 export type EditorMount = {
   initialDocument: BlockDocument;
+  /** The page as last stored, undefined for an entry never saved. */
+  stored: BlockDocument | undefined;
   clientConfig: Record<string, unknown> | undefined;
   documentLimits: DocumentLimits;
   componentLibrary: ComponentLibraryRead;
@@ -605,12 +616,57 @@ export type EditorMount = {
 function useEditedState(
   args: Parameters<typeof useRestorableEditorState>[0],
   kinds: readonly DocumentKind[] | undefined,
-  judged: RegionStateArgs
+  judged: RegionStateArgs,
+  pageless: {
+    readonly sentence: string | undefined;
+    readonly raise: (sentence: string) => void;
+  }
 ): { page: EditorState; editing: EditingTargetState } {
-  const page = useRestorableEditorState(args, kinds);
+  const page = usePagelessGuard(
+    useRestorableEditorState(args, kinds),
+    usePagelessRefusal(pageless.sentence, pageless.raise)
+  );
   const editing = useEditingTarget(page, judged);
   useConnectStyleHistory(editing.active.recordStep);
   return { page, editing };
+}
+
+/** How an edit of a page that has none of its own is refused. */
+interface PagelessRefusal {
+  readonly sentence: string;
+  readonly raise: (sentence: string) => void;
+}
+
+/** The refusal for a pageless screen, one object while its parts are the same. */
+function usePagelessRefusal(
+  sentence: string | undefined,
+  raise: (sentence: string) => void
+): PagelessRefusal | undefined {
+  return useMemo(
+    () => (sentence === undefined ? undefined : { sentence, raise }),
+    [sentence, raise]
+  );
+}
+
+/**
+ * The page's state, with every edit of it refused where the page is a
+ * placeholder: its apply answers nothing, as a refused edit does, and says
+ * why. Everything else (selection, history, the style steps) is the state's
+ * own. A header or footer edited in place has a state of its own, which this
+ * leaves alone.
+ */
+export function usePagelessGuard(
+  page: EditorState,
+  pageless: PagelessRefusal | undefined
+): EditorState {
+  return useMemo(() => {
+    if (pageless === undefined) return page;
+    const refuse = (): null => {
+      pageless.raise(pageless.sentence);
+      return null;
+    };
+    return { ...page, apply: refuse, applyAll: refuse };
+  }, [page, pageless]);
 }
 
 /**

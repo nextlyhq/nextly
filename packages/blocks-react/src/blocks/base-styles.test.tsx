@@ -365,6 +365,7 @@ describe("every default the core library declares", () => {
       DECLARING_PARTS.map(([block, part]) => `${block}#${part}`).sort()
     ).toEqual([
       "core/accordion-item#title",
+      "core/accordion-item#toggle",
       "core/collection-loop#current-page",
       "core/collection-loop#page-gap",
       "core/collection-loop#page-link",
