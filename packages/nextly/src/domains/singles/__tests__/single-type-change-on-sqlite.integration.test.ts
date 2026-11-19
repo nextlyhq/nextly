@@ -231,18 +231,20 @@ describeEachDialect("a Single's field type change", dialect => {
       await fillRow(null);
       const before = await recorded();
       const folderBefore = await migrationFiles();
-      const judged = vi.fn();
-      // The service the dispatcher resolves, so the save's own call is the one wrapped.
-      const judge = getSingleMetadataServiceFromDI() as unknown as Record<
+      const written = vi.fn();
+      // The service the dispatcher resolves, so the save's own call is the one wrapped. The value
+      // is written as the save's main change is about to run: past every judgement before it, the
+      // writer's included, and before the rebuild's transaction.
+      const service = getSingleMetadataServiceFromDI() as unknown as Record<
         string,
         (...args: unknown[]) => Promise<void>
       >;
-      const original = judge.refuseWhatTheValueCannotTake;
-      vi.spyOn(judge, "refuseWhatTheValueCannotTake").mockImplementation(
+      const original = service.applyMainMigrationOrUndo;
+      vi.spyOn(service, "applyMainMigrationOrUndo").mockImplementation(
         async function (this: unknown, ...args: unknown[]) {
-          await original.apply(this, args);
-          judged();
           await query(`UPDATE "${TABLE}" SET score = '2'`);
+          written();
+          await original.apply(this, args);
         }
       );
 
@@ -262,8 +264,10 @@ describeEachDialect("a Single's field type change", dialect => {
         thrown = error;
       }
 
-      // Control: the value was written after the save's own judgement passed.
-      expect(judged, "the judgement before planning").toHaveBeenCalledTimes(1);
+      // Control: the value was written once the save's judgements before the change had passed.
+      expect(written, "the write before the change ran").toHaveBeenCalledTimes(
+        1
+      );
       expect(thrown, "the save answered").toBeDefined();
       expect(JSON.stringify(thrown), "the type-change refusal").toMatch(
         /"code":"TYPE_CHANGE_(BLOCKED|LOSES_VALUES)"/
