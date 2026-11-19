@@ -258,6 +258,10 @@ export async function applyRepairs(
       whenHeld: "wait",
       // A run stopped by a signal gives the lock back rather than hold it until its lease ends.
       releaseOnInterrupt: true,
+      // The run's own bounds, for a busy SQLite database met while the lock is taken.
+      ...(args.tableWait === undefined
+        ? {}
+        : { busyBounds: args.tableWait.bounds }),
       ...(args.schemaLockWaitMs !== undefined
         ? { waitMs: args.schemaLockWaitMs }
         : {}),

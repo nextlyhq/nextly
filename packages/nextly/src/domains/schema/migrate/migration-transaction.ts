@@ -24,6 +24,7 @@ import {
   ownSessionIdText,
   sessionIdOfRows,
 } from "../busy-table/ended-waiting";
+import { boundSqliteWait } from "../busy-table/sqlite-wait";
 import { isPluginLedgerRow } from "../events/ledger-scope";
 import { querySqlRows } from "../pipeline/classifier/count-helpers";
 import {
@@ -485,32 +486,6 @@ export async function writeLedgerBounded(
   } finally {
     await watching?.settle();
   }
-}
-
-/**
- * Sets SQLite's busy timeout to `tryMs` and returns what puts the connection's own back. Putting
- * it back is best effort: the unit has already ended, and a failure here must not change how.
- */
-export async function boundSqliteWait(
-  adapter: DrizzleAdapter,
-  tryMs: number
-): Promise<() => Promise<void>> {
-  const [row] = await adapter.executeQuery<Record<string, unknown>>(
-    "PRAGMA busy_timeout"
-  );
-  const previous = Number(Object.values(row ?? {})[0] ?? 0);
-  await adapter.executeQuery(
-    `PRAGMA busy_timeout = ${String(Math.round(tryMs))}`
-  );
-  return () =>
-    adapter
-      .executeQuery(
-        `PRAGMA busy_timeout = ${String(Number.isFinite(previous) ? previous : 0)}`
-      )
-      .then(
-        () => undefined,
-        () => undefined
-      );
 }
 
 /** MySQL's per-try bounds, whole seconds half a second past the try: metadata locks and rows. */

@@ -77,6 +77,8 @@ const REMOVALS_TABLE = `${SCHEMA_PREFIX}__${breakpointRemovals.name}`;
 const FRAGMENTS_TABLE = `${SCHEMA_PREFIX}__${breakpointRemovalFragments.name}`;
 const OPTIONS_TABLE = `${SCHEMA_PREFIX}__${siteOptions.name}`;
 const USES_TABLE = `${SCHEMA_PREFIX}__${bindingUses.name}`;
+/** The module that creates the index of where documents bind a Single. */
+const BINDING_USES_MODULE = "20261117_054612_570_create_binding_uses_table";
 const RUNS_TABLE = `${SCHEMA_PREFIX}__${bindingReportRuns.name}`;
 
 /** How many modules ship before the one named `suffix`. */
@@ -531,14 +533,20 @@ describe.each(getConfiguredTestDialects())(
         await opened.close();
         opened = undefined;
 
-        // Two steps: the reset's own data module, then the table's module.
+        // Back to before the table's own module, newest first: any module
+        // added since, the reset's own data module, then the table's. Counted
+        // from the list, so a module added later doesn't leave the table up.
+        const tableModule = migrations.findIndex(
+          module => module.name === BINDING_USES_MODULE
+        );
+        expect(tableModule).toBeGreaterThanOrEqual(0);
         await site.nextly(
           undefined,
           "migrate:down",
           "--plugin",
           PAGE_BUILDER_PLUGIN_NAME,
           "--step",
-          "2",
+          String(migrations.length - tableModule),
           "--accept-data-loss"
         );
         opened = await openAdapter(database);
@@ -562,7 +570,9 @@ describe.each(getConfiguredTestDialects())(
             ? "UPDATE `page_builder__site_options` SET `value` = '1' WHERE `id` = 'filled-mark'"
             : `UPDATE "page_builder__site_options" SET "value" = '1' WHERE "id" = 'filled-mark'`
         );
-        const rolledBack = migrations.slice(-2).map(module => module.name);
+        const rolledBack = migrations
+          .slice(tableModule)
+          .map(module => module.name);
         expect(rolledBack[0]).toMatch(/_create_binding_uses_table$/);
         expect(rolledBack[1]).toMatch(/_reset_binding_uses_fill$/);
         const down = await ledger(site.nextly);
@@ -575,7 +585,9 @@ describe.each(getConfiguredTestDialects())(
         opened = undefined;
 
         const again = await site.nextly(undefined, "migrate");
-        expect(again.stdout).toContain("Plugin migrations: 2 applied");
+        expect(again.stdout).toContain(
+          `Plugin migrations: ${rolledBack.length} applied`
+        );
         opened = await openAdapter(database);
         expect(await opened.adapter.tableExists(USES_TABLE)).toBe(true);
         // Made again, empty: not filled until a check fills it.

@@ -122,7 +122,7 @@ function makeAdapter(options: { mainTableExists?: boolean } = {}) {
     trace.push("ddl");
     if (/CREATE TABLE/i.test(sql)) created = true;
   };
-  return {
+  const adapter = {
     getCapabilities: () => ({ dialect: "postgresql" as const }),
     dialect: "postgresql" as const,
     tableExists: vi.fn(async (name: string) =>
@@ -167,7 +167,23 @@ function makeAdapter(options: { mainTableExists?: boolean } = {}) {
       ranDdl(sql);
       return [];
     }),
+    // A Single's delete runs its teardowns, drops and registry row in one transaction on
+    // PostgreSQL. The double runs it straight through, each statement reaching the adapter's own
+    // doubles above, so its drops land in the same trace as the lock.
+    transaction: vi.fn(async (work: (tx: unknown) => Promise<unknown>) =>
+      work({
+        execute: (sql: string) => adapter.executeQuery(sql),
+        select: () => adapter.select(),
+        delete: async () => 0,
+        drizzleWithRelations: () => adapter.getDrizzle(),
+      })
+    ),
+    // The catalogue reads the delete's teardowns make on its transaction.
+    tableExistsThrough: (_catalog: unknown, name: string) =>
+      adapter.tableExists(name),
+    listTablesThrough: () => adapter.listTables(),
   };
+  return adapter;
 }
 
 /**
@@ -219,6 +235,12 @@ function makeService(adapter: ReturnType<typeof makeAdapter>) {
     deleteSingle: vi.fn(async () => {
       trace.push("registry:write");
     }),
+    // The registry row's removal on the delete's own transaction, where it runs in one.
+    unregisterSingleIn: vi.fn(async () => {
+      trace.push("registry:write");
+      return { removed: 1, expire: undefined };
+    }),
+    forgetUnregisteredSingle: vi.fn(async () => undefined),
     // A delete asks what depends on the Single before it removes anything; nothing does here.
     assertNothingDependsOn: vi.fn(async () => undefined),
   };
@@ -604,7 +626,11 @@ describe("a Schema Builder change and the storage migration exclude each other",
       service.deleteSingle("page", "single_page")
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
 
+    // Nothing of the delete ran, on either of its paths: no registry row removed, whole or in
+    // steps, and no table dropped, through the transaction or the adapter.
     expect(registry.deleteSingle).not.toHaveBeenCalled();
+    expect(registry.unregisterSingleIn).not.toHaveBeenCalled();
+    expect(adapter.transaction).not.toHaveBeenCalled();
     expect(adapter.dropTable).not.toHaveBeenCalled();
   });
 

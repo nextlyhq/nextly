@@ -101,3 +101,86 @@ describe("text styles in the stored site style", () => {
     }
   });
 });
+
+describe("a text style's fluid sizes in the stored site style", () => {
+  /** A text style whose Desktop size was made fluid from these sizes. */
+  const fluid = (sizes: unknown, extra: Record<string, unknown> = {}) =>
+    ({
+      ...textStyle({ fontSize: "clamp(1rem, 0.6087rem + 1.7391vw, 2rem)" }),
+      fluidSizes: { base: sizes },
+      ...extra,
+    }) as unknown as NamedClass;
+
+  it("are admitted and kept as stored", () => {
+    const stored = fluid({ small: 16, large: 32 });
+    const { value, issues } = checkStoredClasses([stored]);
+    expect(issues).toEqual([]);
+    expect(value).toEqual([stored]);
+    expect(value?.[0]?.fluidSizes).toEqual({ base: { small: 16, large: 32 } });
+  });
+
+  it("may shrink: a larger size on small screens is one the editor makes", () => {
+    expect(
+      checkStoredClasses([fluid({ small: 32, large: 16 })]).issues
+    ).toEqual([]);
+  });
+
+  it("are refused unless each is two sizes above zero, and dropped on a read", () => {
+    for (const sizes of [
+      { small: 0, large: 32 },
+      { small: -1, large: 32 },
+      { small: 16, large: Number.NaN },
+      { small: 16, large: Infinity },
+      { small: "16", large: 32 },
+      { small: 16 },
+      { small: 16, large: 32, unit: "px" },
+      "16 32",
+    ]) {
+      const { value, issues } = checkStoredClasses([fluid(sizes)]);
+      expect(issues, JSON.stringify(sizes)).toEqual([
+        "classes[0] has fluid sizes that cannot be used: each device's two sizes must be numbers of px above zero, on a text style.",
+      ]);
+      // The class is kept for a read; only what cannot be used goes.
+      expect(value?.[0]?.id).toBe("t-eyebrow");
+      expect(value?.[0]).not.toHaveProperty("fluidSizes");
+    }
+  });
+
+  it("are refused when not a record of devices, or on a class that is no text style", () => {
+    const notRecord = {
+      ...textStyle({ fontSize: "16px" }),
+      fluidSizes: [{ small: 16, large: 32 }],
+    } as unknown as NamedClass;
+    const shared = {
+      id: "c-card",
+      slug: "card",
+      orderIndex: 1,
+      styles: { base: { base: { fontSize: "16px" } } },
+      fluidSizes: { base: { small: 16, large: 32 } },
+    } as unknown as NamedClass;
+    const { issues } = checkStoredClasses([notRecord, shared]);
+    expect(issues).toHaveLength(2);
+    expect(issues[0]).toMatch(/^classes\[0\] has fluid sizes that cannot/);
+    expect(issues[1]).toMatch(/^classes\[1\] has fluid sizes that cannot/);
+  });
+
+  it("are refused past one per device a site can have", () => {
+    const many = Object.fromEntries(
+      Array.from({ length: 15 }, (_, at) => [
+        `d${String(at)}`,
+        { small: 16, large: 32 },
+      ])
+    );
+    expect(
+      checkStoredClasses([fluid(undefined, { fluidSizes: many })]).issues
+    ).toHaveLength(1);
+  });
+
+  it("leave a class stored without them exactly as it was", () => {
+    const { value, issues } = checkStoredClasses([EYEBROW]);
+    expect(issues).toEqual([]);
+    // The same object: nothing was added, removed or rewritten.
+    expect(value?.[0]).toBe(EYEBROW);
+    expect(EYEBROW).not.toHaveProperty("fluidSizes");
+  });
+});

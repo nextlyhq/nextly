@@ -192,8 +192,6 @@ const PATHS: readonly SavePath[] = [
     registry: "dynamic_singles",
     translatable: true,
     pushRoad: false,
-    // The translations table is reconciled after the file is recorded applied.
-    notKeptYet: ["translations"],
     create: singleCreate("fbs_hero"),
     save: async (t, fields) =>
       dispatchSingles(
@@ -213,8 +211,6 @@ const PATHS: readonly SavePath[] = [
     registry: "dynamic_components",
     translatable: true,
     pushRoad: false,
-    // The translations table is reconciled after the file is recorded applied.
-    notKeptYet: ["translations"],
     create: fieldGroupCreate("fbs_card"),
     save: async (t, fields) =>
       dispatchComponents(
@@ -234,8 +230,8 @@ const PATHS: readonly SavePath[] = [
     registry: "dynamic_singles",
     translatable: true,
     pushRoad: false,
-    // Its translations step and its registry write run after the change is made.
-    notKeptYet: ["translations", "registry"],
+    // Its registry write runs after the change is made.
+    notKeptYet: ["registry"],
     create: singleCreate("fbs_banner"),
     save: (_t, fields) =>
       dispatchSingles("updateSingleSchema", { slug: "fbs_banner" }, { fields }),

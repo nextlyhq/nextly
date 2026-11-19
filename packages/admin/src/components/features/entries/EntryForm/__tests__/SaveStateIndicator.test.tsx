@@ -29,6 +29,15 @@ function indicator() {
   return screen.getByTestId("save-state-indicator");
 }
 
+/** The indicator's width classes, in one order. */
+function reservedWidth() {
+  return indicator()
+    .className.split(" ")
+    .filter(name => name.includes("min-w-"))
+    .sort()
+    .join(" ");
+}
+
 describe("SaveStateIndicator", () => {
   it("says a save is in flight", () => {
     render(
@@ -154,17 +163,15 @@ describe("SaveStateIndicator", () => {
         recovery={noRecovery}
       />
     );
-    // The reserved space is still there; only its content is empty.
     expect(indicator()).toHaveAttribute("data-tone", "none");
     expect(indicator().textContent).toBe("");
   });
 
-  it("reserves the same width in every state, so changing state shifts nothing", () => {
+  it("reserves the same width in every state it shows, so changing state shifts nothing", () => {
     const states: DocumentSaveState[] = [
       { kind: "saving" },
       { kind: "unsaved" },
       { kind: "saved", at: NOW },
-      { kind: "saved", at: null },
       {
         kind: "failed",
         message: "offline",
@@ -175,16 +182,29 @@ describe("SaveStateIndicator", () => {
       const { unmount } = render(
         <SaveStateIndicator saveState={saveState} recovery={noRecovery} />
       );
-      const reserved = indicator()
-        .className.split(" ")
-        .filter(name => name.includes("min-w-"))
-        .sort()
-        .join(" ");
+      expect(indicator().className.split(" ")).not.toContain("hidden");
+      const reserved = reservedWidth();
       unmount();
       return reserved;
     });
-    expect(widths[0]).not.toBe("");
+    expect(widths[0]).toContain("min-w-[11rem]");
     expect(new Set(widths).size).toBe(1);
+  });
+
+  it("takes no room in the bar while it has nothing to say", () => {
+    render(
+      <SaveStateIndicator
+        saveState={{ kind: "saved", at: null }}
+        recovery={noRecovery}
+        // A bar's own narrowing, as the document bar passes it.
+        className="@max-[51rem]/toolbar:min-w-0"
+      />
+    );
+    expect(indicator()).toHaveAttribute("data-tone", "none");
+    // No width held for a state that isn't there, and out of the row's flow,
+    // so the bar spends no gap on it either.
+    expect(reservedWidth()).not.toContain("min-w-[11rem]");
+    expect(indicator().className.split(" ")).toContain("hidden");
   });
   it("in a narrow bar keeps each state's icon and button but says its words only to a screen reader", () => {
     const states: DocumentSaveState[] = [

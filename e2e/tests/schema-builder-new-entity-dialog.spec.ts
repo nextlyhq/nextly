@@ -147,7 +147,8 @@ async function noteRestingBorders(page: Page): Promise<void> {
  */
 async function weakFocusStops(page: Page): Promise<string[]> {
   const dialog = page.getByRole("dialog", { name: "New collection" });
-  const first = dialog.getByLabel("Name", { exact: true });
+  // By its accessible name: its label also draws the required mark, "*".
+  const first = dialog.getByRole("textbox", { name: "Name", exact: true });
   await noteRestingBorders(page);
   await first.focus();
   // Arriving by keyboard, so the controls draw their keyboard focus.
@@ -223,7 +224,9 @@ for (const scheme of ["light", "dark"] as const) {
     expect(await weakFocusStops(page)).toEqual([]);
 
     // An address already in use: the refusal, drawn as an error.
-    await dialog.getByLabel("Name", { exact: true }).fill("Posts again");
+    await dialog
+      .getByRole("textbox", { name: "Name", exact: true })
+      .fill("Posts again");
     await dialog.getByLabel("API address").fill("posts");
     await expect(
       dialog.getByText("A collection or Single already uses this address.")

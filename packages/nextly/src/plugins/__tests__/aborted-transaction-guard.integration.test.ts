@@ -126,6 +126,28 @@ describe.skipIf(!onPostgres)("aborted-transaction guard (integration)", () => {
   });
 });
 
+const onMysql = getConfiguredTestDialects().includes("mysql");
+
+describe.skipIf(!onMysql)("aborted-transaction guard on MySQL", () => {
+  it("leaves a transaction that changed a table's shape as it resolved", async () => {
+    // MySQL commits a transaction before a statement that changes a table's shape, and the
+    // savepoints it held go with it. A probe that took and released a savepoint after such a
+    // callback would find its own savepoint gone on the release, and fail a transaction that did
+    // nothing wrong: a collection delete, which drops tables, failed this way. MySQL never
+    // poisons a transaction, so it has nothing for the probe to find.
+    current = await createTestNextly({ dialect: "mysql" });
+
+    await expect(
+      current.adapter.transaction(async tx => {
+        await tx.execute("CREATE TABLE guard_probe_shape (id int)");
+        await tx.execute("DROP TABLE guard_probe_shape");
+        return "kept";
+      })
+    ).resolves.toBe("kept");
+    expect(takeAbortedTransactionSightings()).toEqual([]);
+  });
+});
+
 describe("instrumenting an adapter more than once", () => {
   it("installs the guard exactly once across boots", async () => {
     // Handing the same adapter back to `createTestNextly` is how a test keeps a database alive

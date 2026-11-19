@@ -1874,10 +1874,13 @@ describe.each(getConfiguredTestDialects())(
       const started = await deleteToTheEnd(editor, cardId);
 
       expect(started.item.status, JSON.stringify(started.body)).toBe("refused");
+      // They may change the brief, saved without its status, so what they
+      // lack is the right to publish it, and they are told that.
       expect(started.item.left).toEqual([
         expect.objectContaining({
           document: expect.objectContaining({ slug: RULED_BRIEFS }),
-          reason: "not-permitted",
+          reason: "not-permitted-to-publish",
+          words: "You don't have permission to publish it.",
         }),
       ]);
       const pageId = String(page.item.id);
@@ -1920,10 +1923,12 @@ describe.each(getConfiguredTestDialects())(
       const started = await deleteToTheEnd(editor, cardId);
 
       expect(started.item.status, JSON.stringify(started.body)).toBe("refused");
+      // They may not change it at all, published or not: told so.
       expect(started.item.left).toEqual([
         expect.objectContaining({
           document: expect.objectContaining({ slug: BRIEFS }),
           reason: "not-permitted",
+          words: "You don't have permission to change it.",
         }),
       ]);
       // The page they may change kept its copy too: nothing changed.
@@ -2011,7 +2016,7 @@ describe.each(getConfiguredTestDialects())(
       expect(await exists(t, cardId)).toBe(false);
     });
 
-    it("lets a person who may update but not publish convert a Single translation already published under a draft", async () => {
+    it("needs publish to convert a live Single translation that keeps drafts, as its write does", async () => {
       const { t, anAuthor } = await boot({}, { localBand: true });
       const cardId = await card(t);
       await t.nextly.updateSingle({
@@ -2031,26 +2036,54 @@ describe.each(getConfiguredTestDialects())(
         },
         overrideAccess: true,
       });
-      const editor = await anAuthor("band-editor", [
+      const german = async () => {
+        const row = (await t.nextly.findSingle({
+          slug: LOCAL_BAND,
+          locale: "de",
+          fallbackLocale: false,
+          status: "all",
+          depth: 0,
+          overrideAccess: true,
+        })) as unknown as Record<string, unknown>;
+        return copies((asDocument(row.content)?.nodes ?? []) as Node[], cardId);
+      };
+      const access = [
         "read-components",
         "delete-components",
         `read-${LOCAL_BAND}`,
         `update-${LOCAL_BAND}`,
-      ]);
+      ];
 
-      const done = await deleteToTheEnd(editor, cardId);
+      // The Single keeps working drafts, so converting its live translation
+      // writes the live row, which needs publish: a person who may only
+      // update changes a live document through a draft. The conversion's
+      // write names published over a published row, and is asked as it is.
+      const refused = await deleteToTheEnd(
+        await anAuthor("band-editor", access),
+        cardId
+      );
+
+      expect(refused.item.status, JSON.stringify(refused.body)).toBe("refused");
+      // They may update it, so what they lack is the right to publish it,
+      // and they are told that, not that they may not change it.
+      expect(refused.item.left).toEqual([
+        expect.objectContaining({
+          document: expect.objectContaining({ slug: LOCAL_BAND }),
+          reason: "not-permitted-to-publish",
+          words: "You don't have permission to publish it.",
+        }),
+      ]);
+      expect(await german()).toBe(1);
+      expect(await exists(t, cardId)).toBe(true);
+
+      // CONTROL: the same person's access with publish converts it.
+      const done = await deleteToTheEnd(
+        await anAuthor("band-publisher", [...access, `publish-${LOCAL_BAND}`]),
+        cardId
+      );
 
       expect(done.item.status, JSON.stringify(done.body)).toBe("done");
-      const row = (await t.nextly.findSingle({
-        slug: LOCAL_BAND,
-        locale: "de",
-        fallbackLocale: false,
-        status: "all",
-        depth: 0,
-        overrideAccess: true,
-      })) as unknown as Record<string, unknown>;
-      const nodes = (asDocument(row.content)?.nodes ?? []) as Node[];
-      expect(copies(nodes, cardId)).toBe(0);
+      expect(await german()).toBe(0);
     });
 
     it("judges a Single's write in a language by that language's status, not the main row's", async () => {

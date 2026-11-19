@@ -598,6 +598,43 @@ export function staleParts(
   return stale;
 }
 
+/**
+ * A document's state as the version a client would hold for it: its own
+ * row's counter and each language read. What an overwrite holds as the
+ * version it was judged against, to compare under the row lock as a `_rev`
+ * is compared.
+ */
+export function versionOfRevision(
+  state: DocumentRevisionState
+): DecodedVersion {
+  return {
+    main: state.main.counter,
+    languages: Object.fromEntries(
+      Object.values(state.languages).map(part => [part.part, part.counter])
+    ),
+  };
+}
+
+/**
+ * Whether a document moved since `judged` was read: compared by
+ * {@link staleParts}, as a `_rev` is, against its state read under the row
+ * lock (`now`, the main row and the same languages). A document that had no
+ * row when judged moved if it has one now.
+ */
+export function movedSinceJudged(
+  judged: DecodedVersion | undefined,
+  now: DocumentRevisionState | undefined
+): boolean {
+  if (now === undefined) return false;
+  if (judged === undefined) return true;
+  return (
+    staleParts(judged, {
+      main: now.main,
+      languages: Object.values(now.languages),
+    }).length > 0
+  );
+}
+
 /** Who changed a document last, as the picker answers: ids only, never a name. */
 export interface LastChanger {
   kind: string;

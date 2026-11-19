@@ -469,6 +469,91 @@ describe("merging classes", () => {
   });
 });
 
+describe("merging a text style's fluid sizes", () => {
+  const range = { min: 360, max: 1280 };
+  /** A text style whose Desktop size was made fluid from `sizes`. */
+  const lead = (
+    sizes: { small: number; large: number },
+    extra: Record<string, unknown> = {}
+  ) => ({
+    id: "t-lead",
+    slug: "lead",
+    orderIndex: 0,
+    role: "text",
+    styles: {
+      base: { base: { fontSize: fluidValue(sizes, range), lineHeight: 1.2 } },
+    },
+    fluidSizes: { base: sizes },
+    ...extra,
+  });
+  const base = lead({ small: 16, large: 32 });
+  const mine = lead({ small: 20, large: 32 });
+  const theirs = lead({ small: 16, large: 40 });
+
+  /** The merged entry's size and the sizes kept for it. */
+  const unit = (value: unknown) => {
+    const entry = (value as Partial<ReturnType<typeof lead>>[])[0];
+    return {
+      fontSize: entry?.styles.base.base.fontSize,
+      sizes: entry?.fluidSizes?.base,
+    };
+  };
+
+  it("keeps the size and the sizes it was made from as one, never one end from each side", () => {
+    const forward = mergeSiteStyleSection(
+      "classes",
+      [base],
+      [mine],
+      [theirs],
+      "mine"
+    );
+    expect(unit(forward.value)).toEqual({
+      fontSize: fluidValue({ small: 20, large: 32 }, range),
+      sizes: { small: 20, large: 32 },
+    });
+    expect(forward.conflicts).toHaveLength(1);
+    const undo = mergeSiteStyleSection(
+      "classes",
+      [base],
+      [mine],
+      [theirs],
+      "theirs"
+    );
+    expect(unit(undo.value)).toEqual({
+      fontSize: fluidValue({ small: 16, large: 40 }, range),
+      sizes: { small: 16, large: 40 },
+    });
+  });
+
+  it("keeps their fluid size beside mine change to another part, with no conflict", () => {
+    const merged = mergeSiteStyleSection(
+      "classes",
+      [base],
+      [{ ...base, label: "Lead" }],
+      [theirs],
+      "mine"
+    );
+    expect(merged.value).toEqual([{ ...theirs, label: "Lead" }]);
+    expect(merged.conflicts).toEqual([]);
+  });
+
+  it("drops the sizes with the size when the side that wins typed one by hand", () => {
+    const typed = {
+      ...base,
+      styles: { base: { base: { fontSize: "18px", lineHeight: 1.2 } } },
+    };
+    const { fluidSizes: _gone, ...withoutSizes } = typed;
+    const merged = mergeSiteStyleSection(
+      "classes",
+      [base],
+      [withoutSizes],
+      [theirs],
+      "mine"
+    );
+    expect(unit(merged.value)).toEqual({ fontSize: "18px", sizes: undefined });
+  });
+});
+
 describe("merging fonts", () => {
   it("keeps a face they added beside the one mine added", () => {
     const merged = mergeSiteStyleSection(

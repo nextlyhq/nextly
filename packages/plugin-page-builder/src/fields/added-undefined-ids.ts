@@ -40,17 +40,60 @@ export interface StoredForms {
 }
 
 /**
+ * Each judgement's reads of one stored form, by form. Keyed by the
+ * judgement's own arguments, which live only as long as that one field's
+ * validation, so no read outlives the write it was made for. The checks made
+ * again inside the write's transaction (`composition-rejudge`) read there for
+ * themselves.
+ */
+const FORM_READS = new WeakMap<
+  JudgedField,
+  Map<boolean, Promise<StoredForms>>
+>();
+
+/**
+ * The stored forms the write changes (`changed`, true being the draft), each
+ * read at most once for one judgement: every check judging the write (the
+ * references, the locks, page code, custom CSS) compares it with the same
+ * read, so a check added beside the others costs no further statement and
+ * none judges a snapshot another did not see. Unreadable where any form the
+ * set asks for is, as one read of the set answers.
+ */
+export async function storedFormsOnce(
+  args: JudgedField,
+  changed: readonly boolean[]
+): Promise<StoredForms> {
+  let reads = FORM_READS.get(args);
+  if (reads === undefined) {
+    reads = new Map();
+    FORM_READS.set(args, reads);
+  }
+  const forms: BlockDocument[] = [];
+  for (const draft of changed) {
+    let read = reads.get(draft);
+    if (read === undefined) {
+      read = readStoredForms(
+        args.write,
+        args.path,
+        [draft],
+        // No declaration is a field not kept per language.
+        args.field?.localized === true
+      );
+      reads.set(draft, read);
+    }
+    const one = await read;
+    if (!one.readable) return { forms: [], readable: false };
+    forms.push(...one.forms);
+  }
+  return { forms, readable: true };
+}
+
+/**
  * Both stored forms of the field being written: an id either one holds is the
  * page's already.
  */
 export function storedFormsFor(args: JudgedField): Promise<StoredForms> {
-  return readStoredForms(
-    args.write,
-    args.path,
-    [false, true],
-    // No declaration is a field not kept per language.
-    args.field?.localized === true
-  );
+  return storedFormsOnce(args, [false, true]);
 }
 
 /** Stored forms that hold nothing, which every undefined reference is new to. */

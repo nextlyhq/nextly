@@ -787,7 +787,9 @@ export async function holdInBuilderChange(
 ): Promise<void> {
   const running = scope.getStore();
   if (running?.whenHeld !== "refuse") return;
-  await underWriterHold(migrationsDir, running.command, async () => undefined);
+  await underWriterHold(migrationsDir, running.command, () =>
+    Promise.resolve(undefined)
+  );
 }
 
 /** The `logContext.reason` of a writer whose starting snapshot is no longer the newest. */

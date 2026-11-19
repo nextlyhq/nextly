@@ -564,6 +564,41 @@ describe.each(getConfiguredTestDialects())(
         expect(steps.bounce.mayTake).toBe(true);
       });
 
+      it("tells the caller whether they may publish it without review, as the publish gate judges it", async () => {
+        current = await bootSteps(dialect);
+        await people();
+        await person(app(), "una", [
+          ["read", PAGES],
+          ["publish-without-review", PAGES],
+        ]);
+        await person(app(), "nan", [["read", PAGES]]);
+        const id = await entry(app(), PAGES);
+        const document = { collection: PAGES, id };
+        // A key holding the permission itself: an emergency publish is a person's act.
+        const key: Who = {
+          kind: "key",
+          owner: "una",
+          grants: [
+            ["read", PAGES],
+            ["publish-without-review", PAGES],
+          ],
+        };
+
+        const holder = await door.reviewState(
+          { kind: "person", id: "una" },
+          document
+        );
+        const other = await door.reviewState(
+          { kind: "person", id: "nan" },
+          document
+        );
+        const byKey = await door.reviewState(key, document);
+
+        expect(holder.mayPublishWithoutReview).toBe(true);
+        expect(other.mayPublishWithoutReview).toBe(false);
+        expect(byKey.mayPublishWithoutReview).toBe(false);
+      });
+
       it("marks the stage's primary step, and only it", async () => {
         current = await bootSteps(dialect);
         await people();
@@ -588,6 +623,67 @@ describe.each(getConfiguredTestDialects())(
         ]);
       });
 
+      it("marks the steps that need a comment: a request for changes always, any other that asks", async () => {
+        current = await bootSteps(dialect);
+        await people();
+        const id = await entry(app(), PAGES);
+        await seedState(app(), partOf(PAGES, id, null), "legal", {
+          definitionHash: HASH,
+        });
+
+        const steps = (await onlyPart(door, id)).steps as Doc[];
+
+        expect(steps.map(step => [step.name, step.commentRequired])).toEqual([
+          ["clear", false],
+          ["bounce", true],
+          ["park", true],
+        ]);
+      });
+
+      it.runIf(door.name === "REST")(
+        "names a collection's workflow in its schema read, before any document exists, and null where none is attached",
+        async () => {
+          current = await bootSteps(dialect, undefined, {
+            collections: [plain],
+          });
+          await people();
+          await person(app(), "carol", [
+            ["read", PLAIN],
+            ["update", PLAIN],
+          ]);
+
+          const held = await rest(
+            "GET",
+            ["collections", "schema", PAGES],
+            ALICE
+          );
+          const free = await rest("GET", ["collections", "schema", PLAIN], {
+            kind: "person",
+            id: "carol",
+          });
+
+          expect(held.workflow).toEqual({
+            slug: "editorial",
+            label: "Editorial",
+          });
+          expect(free.workflow).toBeNull();
+
+          // A visitor is refused the read, so the workflow is never named to one.
+          const anonymous = await createDynamicHandlers().GET(
+            new Request(`http://localhost/api/collections/schema/${PAGES}`, {
+              headers: { origin: "http://localhost" },
+            }),
+            {
+              params: Promise.resolve({
+                params: ["collections", "schema", PAGES],
+              }),
+            }
+          );
+          expect(anonymous.status).toBe(401);
+          expect(await anonymous.text()).not.toContain("editorial");
+        }
+      );
+
       it("answers a document of a collection with no workflow as no workflow and no parts", async () => {
         current = await bootSteps(dialect, undefined, {
           collections: [plain],
@@ -609,7 +705,11 @@ describe.each(getConfiguredTestDialects())(
           })
         );
 
-        expect(state).toEqual({ workflow: null, parts: [] });
+        expect(state).toEqual({
+          workflow: null,
+          parts: [],
+          mayPublishWithoutReview: false,
+        });
         expect(step).toEqual({ status: 400, code: "VALIDATION_ERROR" });
       });
 
@@ -1400,6 +1500,8 @@ describe.each(getConfiguredTestDialects())(
       expect(steps.park.mayTake).toBe(true);
       expect(steps.clear.mayTake).toBe(false);
       expect(steps.bounce.mayTake).toBe(false);
+      // Trusted code may publish past the workflow, as the publish gate lets it.
+      expect(state.mayPublishWithoutReview).toBe(true);
       // As the step itself answers trusted code.
       expect(clear).toBe("FORBIDDEN");
     });

@@ -19,6 +19,8 @@
 import { isBlockType, MAX_NAMED_CLASSES, type NodeStyles } from "../document";
 import { isPlainRecord } from "../plain-record";
 
+import type { FluidSizes } from "./fluid-value";
+
 /** The prefix every named class carries in the emitted CSS. */
 export const NAMED_CLASS_PREFIX = "nx-c-";
 
@@ -128,6 +130,18 @@ export interface NamedClass {
    * @experimental
    */
   role?: "text";
+  /**
+   * On a text style, the two sizes each device's size was made from with
+   * "Fluid…", keyed by the breakpoint whose `base` size they made. Kept so a
+   * change of the site's fluid range makes that size again across the new
+   * range. Nothing compiled reads it: the stored `fontSize` is the value.
+   * A size typed by hand, pointed at a variable or reset drops its device's
+   * sizes in the same write; a size no longer equal to the one its sizes
+   * make is left alone by a range change.
+   *
+   * @experimental
+   */
+  fluidSizes?: Readonly<Record<string, FluidSizes>>;
 }
 
 /**

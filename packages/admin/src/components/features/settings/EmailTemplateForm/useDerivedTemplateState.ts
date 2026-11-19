@@ -20,6 +20,7 @@ import { useMemo } from "react";
 import type {
   DraftPreviewTemplate,
   EmailTemplateKind,
+  WrittenDocument,
 } from "@admin/services/emailTemplateApi";
 
 import { buildSampleData } from "./sample-data";
@@ -58,6 +59,7 @@ export function useDerivedTemplateState({
   kind,
   fromOverride,
   templateId,
+  written,
 }: {
   variables: TemplateFormVariable[] | undefined;
   sampleOverride: string | null;
@@ -71,6 +73,8 @@ export function useDerivedTemplateState({
   fromOverride?: string;
   /** The saved template these fields are a draft of, when editing one. */
   templateId?: string;
+  /** A written email's blocks, which its preview renders from; null when coded. */
+  written?: WrittenDocument | null;
 }): DerivedTemplateState {
   const isLayoutRow = kind === "layout";
 
@@ -121,6 +125,16 @@ export function useDerivedTemplateState({
       // The saved template's engine decides the preview's: one kept on the
       // previous engine previews as it sends, not as Liquid.
       ...(templateId ? { id: templateId } : {}),
+      // A written email previews from its blocks, which the server writes
+      // the HTML and plain text from, as it does on a save and a send.
+      ...(written
+        ? {
+            format: "written" as const,
+            blocks: written,
+            htmlContent: "",
+            plainTextContent: null,
+          }
+        : {}),
     }),
     [
       subject,
@@ -132,6 +146,7 @@ export function useDerivedTemplateState({
       layoutId,
       fromOverride,
       templateId,
+      written,
     ]
   );
 

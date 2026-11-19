@@ -167,7 +167,9 @@ function FixBar({
           href={step.finding.opens.href}
           target="_blank"
           rel="noopener noreferrer"
-          aria-label={`${step.finding.what}. ${step.finding.opens.name}`}
+          // The words it draws first, as said; what is wrong after them, and
+          // where it goes last, in parentheses: said, and not drawn.
+          aria-label={`${step.finding.opens.text}: ${step.finding.what} (${step.finding.opens.name})`}
         >
           {step.finding.opens.text}
           <ExternalLink aria-hidden="true" />

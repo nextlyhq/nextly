@@ -99,27 +99,69 @@ describe("pushCarriesValues", () => {
     ).toBe(false);
   });
 
-  // Translation turned off: the file restores each column with the translations column's type,
-  // which on MySQL is not the one the main file's snapshot records; the push restores them from
-  // the live tables.
+  // Translation turned off on its own: its file puts each column back as the main table's snapshot
+  // records it, Required and Unique settings included.
   it.each([
-    ["translation turned off", [translated("heading")]],
     [
-      "translation turned off over a Required translated field",
-      [field("heading", { localized: true, required: true })],
+      "translation turned off",
+      [translated("heading")],
+      [translated("heading")],
     ],
-  ] as const)("keeps the push for %s", async (_what, newFields) => {
+    [
+      "translation turned off with the field's own flag cleared",
+      [translated("heading")],
+      [shared("heading")],
+    ],
+    [
+      "translation turned off over a Required and Unique translated field",
+      [field("heading", { localized: true, required: true, unique: true })],
+      [field("heading", { localized: true, required: true, unique: true })],
+    ],
+  ] as const)("runs the file for %s", async (_what, oldFields, newFields) => {
     expect(
       await pushCarriesValues(
         save({
-          oldFields: [translated("heading")],
+          oldFields: [...oldFields],
           newFields: [...newFields],
           wasStored: true,
           isStored: false,
+          liveTable: () => {
+            throw new Error("a turn-off on its own reads no live table");
+          },
         })
       )
-    ).toBe(true);
+    ).toBe(false);
   });
+
+  // Translation turned off beside another change to the table: `migrate:create` refuses to write
+  // that as files, so the push applies it.
+  it.each([
+    ["a field added", { newFields: [translated("heading"), shared("body")] }],
+    ["a field renamed", { newFields: [translated("title")] }],
+    [
+      "a field's setting changed",
+      { newFields: [field("heading", { localized: true, required: true })] },
+    ],
+    [
+      "Draft/Published turned on",
+      { newFields: [translated("heading")], statusChanges: true },
+    ],
+  ] as const)(
+    "keeps the push for translation turned off beside %s",
+    async (_what, change) => {
+      expect(
+        await pushCarriesValues(
+          save({
+            oldFields: [translated("heading")],
+            wasStored: true,
+            isStored: false,
+            ...change,
+            newFields: [...change.newFields],
+          })
+        )
+      ).toBe(true);
+    }
+  );
 
   // The push adds the shared column without the setting, copies the default language's values in,
   // then sets it; the file would add it with the setting over rows that hold no value yet.

@@ -20,29 +20,39 @@ import { respondList, type PluginRouteContext } from "@nextlyhq/plugin-sdk";
 import { onePage } from "../loop-collections-route";
 import type { NewPageStarter } from "../pages-write-contract";
 
+import { starterMisfitSentence, type StarterSite } from "./starter-fit";
 import {
-  offeredStarterPages,
   starterItem,
+  starterOffers,
   starterPageCopy,
   takesPages,
-  type StarterSite,
+  type StarterOffer,
 } from "./starter-offer";
 import type { RegisteredStarterPage } from "./starter-pages";
 import { STARTER_PAGES_ROUTE_PATH } from "./starter-pages-contract";
 
 /** The starter pages a page whose field takes `kinds` may start from. */
 export interface StarterPagesSource {
-  /** The starters offered now, as the dialog and the empty page list them. */
+  /**
+   * Every starter, as the dialog and the empty page list them: one the site
+   * can't hold now is listed with why (`unavailable`).
+   */
   list(kinds?: readonly DocumentKind[]): Promise<readonly NewPageStarter[]>;
   /**
-   * The page body the starter `id` gives a new page, copied with new ids,
-   * or `undefined` where it isn't offered now.
+   * The page body the starter `id` gives a new page, copied with new ids;
+   * why the site can't hold it, in the words a refusal says; or `undefined`
+   * where no starter has that id.
    */
   copy(
     id: string,
     kinds?: readonly DocumentKind[]
-  ): Promise<BlockDocument | undefined>;
+  ): Promise<StarterCopy | undefined>;
 }
+
+/** A starter's copy for a new page, or the sentence refusing it. */
+export type StarterCopy =
+  | { readonly document: BlockDocument }
+  | { readonly unavailable: string };
 
 /** What the source reads: this boot's starters and what the site has now. */
 export interface StarterPagesDeps {
@@ -55,7 +65,7 @@ export interface StarterPagesDeps {
    * variables and the ids of its shared styles.
    */
   readonly defined: () => Promise<
-    Pick<StarterSite, "variables" | "sharedStyles">
+    Required<Pick<StarterSite, "variables" | "sharedStyles">>
   >;
   /** The bounds a page's document is held to. */
   readonly limits?: DocumentLimits;
@@ -65,27 +75,41 @@ export interface StarterPagesDeps {
 export function starterPagesSource(deps: StarterPagesDeps): StarterPagesSource {
   const offered = async (
     kinds: readonly DocumentKind[] | undefined
-  ): Promise<RegisteredStarterPage[]> => {
+  ): Promise<StarterOffer[]> => {
     // A field that holds no page (a component store's, a template's) is
     // offered none; nothing else is read for it.
     if (!takesPages(kinds)) return [];
     const registered = deps.registered();
     if (registered.length === 0) return [];
-    return offeredStarterPages(registered, {
-      blocks: deps.blocks,
-      ...(await deps.defined()),
-    });
+    return starterOffers(
+      registered,
+      { blocks: deps.blocks, ...(await deps.defined()) },
+      deps.limits
+    );
   };
   return {
     list: async kinds =>
-      (await offered(kinds)).map(entry => starterItem(entry.starter)),
+      (await offered(kinds)).map(offer =>
+        starterItem(offer.entry.starter, offer.misfit)
+      ),
     copy: async (id, kinds) => {
-      const entry = (await offered(kinds)).find(
-        candidate => candidate.starter.id === id
+      const offer = (await offered(kinds)).find(
+        candidate => candidate.entry.starter.id === id
       );
-      return entry === undefined
-        ? undefined
-        : starterPageCopy(entry.starter, deps.blocks, deps.limits);
+      if (offer === undefined) return undefined;
+      // Refused in the words the picker showed under it, judged now, since
+      // a page made from it could not hold it.
+      if (offer.misfit !== undefined) {
+        return {
+          unavailable: starterMisfitSentence(offer.entry.starter, offer.misfit),
+        };
+      }
+      const document = starterPageCopy(
+        offer.entry.starter,
+        deps.blocks,
+        deps.limits
+      );
+      return document === undefined ? undefined : { document };
     },
   };
 }

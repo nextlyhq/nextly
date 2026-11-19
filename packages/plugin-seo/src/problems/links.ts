@@ -135,6 +135,45 @@ function requestOf(
     : undefined;
 }
 
+/** What reads where a link leads: the parts of a {@link LinkJudge} it uses. */
+type LinkReader = Pick<LinkJudge, "productionAddresses" | "origin" | "keptOf">;
+
+/**
+ * The address on the site `link` names, as the record keeps it, with the
+ * language it is served in; none for a link off the site.
+ */
+async function keptAddressOf(
+  link: LinkFact,
+  reader: LinkReader
+): Promise<{ locale: string; path: string } | undefined> {
+  const request = requestOf(
+    link.url,
+    reader.productionAddresses,
+    reader.origin
+  );
+  const kept = request === undefined ? undefined : await reader.keptOf(request);
+  return kept === undefined
+    ? undefined
+    : { locale: kept.locale, path: pathOf(kept.path) };
+}
+
+/**
+ * The addresses on the site `links` name, each in the language it is served
+ * in, as {@link readLinks} asks the record about them: for a check of many
+ * pages to ask about together beforehand.
+ */
+export async function linkAddresses(
+  links: readonly LinkFact[],
+  reader: LinkReader
+): Promise<{ locale: string; path: string }[]> {
+  const found: { locale: string; path: string }[] = [];
+  for (const link of links) {
+    const kept = await keptAddressOf(link, reader);
+    if (kept !== undefined) found.push(kept);
+  }
+  return found;
+}
+
 /** A holder of an address, as the record names it. */
 type Holder = { collection: string; id: string };
 
@@ -156,10 +195,9 @@ async function targetOf(
   judge: LinkJudge,
   asked: Map<string, Promise<readonly Holder[]>>
 ): Promise<LinkTarget | undefined> {
-  const request = requestOf(link.url, judge.productionAddresses, judge.origin);
-  const kept = request === undefined ? undefined : await judge.keptOf(request);
+  const kept = await keptAddressOf(link, judge);
   if (kept === undefined) return undefined;
-  const path = pathOf(kept.path);
+  const { path } = kept;
   const key = `${kept.locale}\u0000${path}`;
   const held = asked.get(key) ?? judge.holders(path, kept.locale);
   asked.set(key, held);

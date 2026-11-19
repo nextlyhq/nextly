@@ -73,7 +73,10 @@ import {
 } from "../schema-version";
 
 import { outstandingEntityChanges } from "./applied-entity-changes";
-import { removeDroppedEntityLeftovers } from "./dropped-entity-leftovers";
+import {
+  everyEntityRegistered,
+  removeDroppedEntityLeftovers,
+} from "./dropped-entity-leftovers";
 import { registerFromMigrations } from "./metadata-register";
 import {
   isAwaitingMigration,
@@ -183,6 +186,12 @@ export interface ReconcileMetadataResult {
    * went (`removeDroppedEntityLeftovers`).
    */
   leftoversRemoved: string[];
+  /**
+   * The dropped entities whose leftovers this run could not remove, each named
+   * as `<kind> "<slug>"` (`removeDroppedEntityLeftovers`'s `left`): owed to the
+   * next run, so the run does not report the database up to date.
+   */
+  leftoversLeft?: string[];
   /** Rows moved from `pending`/`generated` to `applied`. */
   marked: number;
   /**
@@ -463,9 +472,11 @@ export async function reconcileMigrationMetadata(
         complete ? appliedMigration : undefined,
     }
   );
+  const leftovers = await leftoversOfDroppedEntities(deps);
   return {
     ...swept.result,
-    leftoversRemoved: await leftoversOfDroppedEntities(deps),
+    leftoversRemoved: leftovers.removed,
+    leftoversLeft: leftovers.left,
   };
 }
 
@@ -488,10 +499,42 @@ async function labelArchiveWhileRegistered(
 ): Promise<void> {
   if (registryWriteOpen()) return;
   const { adapter, dialect } = deps;
+  // Labelling settles each row for good, from when its entity's registry row was created. SQLite's
+  // registries hold some of those times in milliseconds where the labelling reads seconds, so every
+  // holder would read as made in the future and every row would be settled as unresolved, which
+  // no later run can undo. So on SQLite the rows wait, as they did before this pass labelled them,
+  // until the registries' timestamps are stored in one unit and read so (the registry timestamp
+  // repair lifts this).
+  if (dialect === "sqlite") return;
   if (!(await adapter.tableExists(ARCHIVE_TABLE))) return;
+  // A holder the registry write below adds back (an entity the applied record lists that has no
+  // registry row) is not there to label its rows yet: labelled now, they would be settled as
+  // unresolved for good. So the rows wait for the next run, after that write.
+  if (!(await holdersInPlace(deps))) return;
   await assertSchemaLockHeld();
   await ensureI18nArchive(adapter, dialect);
   await labelLegacyArchiveRows(adapter);
+}
+
+/**
+ * Whether the registries already hold every entity the registry write below writes from: the
+ * configuration's on a first run, the newest applied snapshot's otherwise. False where that record
+ * cannot be read, so the labelling waits rather than run before a holder it may add.
+ */
+async function holdersInPlace(deps: ReconcileMetadataDeps): Promise<boolean> {
+  const { adapter, dialect, migrationsDir } = deps;
+  if (deps.configurationRows !== undefined) {
+    return everyEntityRegistered(adapter, deps.configurationRows);
+  }
+  const events = new SchemaEventsRepository(adapter.getDrizzle(), dialect);
+  const source = await readRegistrySource({
+    migrationsDir,
+    isApplied: filename => events.isFileApplied(filename),
+  });
+  return (
+    source.kind === "snapshot" &&
+    (await everyEntityRegistered(adapter, source.entities))
+  );
 }
 
 /**
@@ -505,8 +548,9 @@ async function labelArchiveWhileRegistered(
  */
 async function leftoversOfDroppedEntities(
   deps: ReconcileMetadataDeps
-): Promise<string[]> {
-  if (registryWriteOpen()) return [];
+): Promise<{ removed: string[]; left: string[] }> {
+  const none = { removed: [], left: [] };
+  if (registryWriteOpen()) return none;
   const { adapter, dialect, migrationsDir, logger } = deps;
   try {
     const events = new SchemaEventsRepository(adapter.getDrizzle(), dialect);
@@ -514,7 +558,7 @@ async function leftoversOfDroppedEntities(
       migrationsDir,
       isApplied: filename => events.isFileApplied(filename),
     });
-    if (source.kind !== "snapshot") return [];
+    if (source.kind !== "snapshot") return none;
     return await removeDroppedEntityLeftovers({
       adapter,
       chain: source.chain ?? [source.entities],
@@ -528,14 +572,14 @@ async function leftoversOfDroppedEntities(
     });
   } catch (error) {
     // A run that lost the schema lock stops; anything else costs only this
-    // removal, which the next run tries again.
+    // removal, which the next run tries again, and is owed to it.
     if (isSchemaLockLost(error)) throw error;
     logger.warn(
       `Could not remove what deleted entities left: ${
         error instanceof Error ? error.message : String(error)
       }. The next \`nextly migrate\` tries again.`
     );
-    return [];
+    return { removed: [], left: ["deleted entities"] };
   }
 }
 

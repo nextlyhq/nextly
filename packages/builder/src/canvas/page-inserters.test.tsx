@@ -275,6 +275,81 @@ describe("an empty page", () => {
     expect(onStarter).toHaveBeenCalledWith("landing");
   });
 
+  it("names a starter by its title alone, not the words drawn in its picture", async () => {
+    const onStarter = vi.fn();
+    mount(page([]), {
+      starters: [
+        {
+          id: "coming-soon",
+          title: "Coming soon",
+          picture: (
+            <span>
+              <span>Email (required)</span>
+              <span>Leave this empty</span>
+            </span>
+          ),
+        },
+        {
+          id: "contact",
+          title: "Contact",
+          picture: <span>Your message</span>,
+          unavailable: "Uses the Form block, which this site doesn't have.",
+        },
+      ],
+      onStarter,
+    });
+    await act(async () => undefined);
+    // The picture is still drawn on the tile; only the name leaves it out.
+    const tile = screen.getByRole("button", { name: "Coming soon" });
+    expect(tile.textContent).toContain("Leave this empty");
+    expect(screen.getByRole("button", { name: "Contact" })).toBeTruthy();
+    fireEvent.click(tile);
+    expect(onStarter).toHaveBeenCalledWith("coming-soon");
+  });
+
+  it("dims a starter the site can't use, says why, and starts nothing from it", async () => {
+    const onStarter = vi.fn();
+    const reason = "Uses the Form block, which this site doesn't have.";
+    mount(page([]), {
+      starters: [
+        { id: "home", title: "Home" },
+        { id: "contact", title: "Contact", unavailable: reason },
+      ],
+      onStarter,
+    });
+    await act(async () => undefined);
+    // Named by its title alone, and still reachable by Tab: aria-disabled,
+    // not disabled, so a keyboard user can reach it and hear why.
+    const tile = screen.getByRole("button", { name: "Contact" });
+    expect(tile.getAttribute("aria-disabled")).toBe("true");
+    expect(tile.hasAttribute("disabled")).toBe(false);
+    expect(tile.textContent).toContain("Not available on this site");
+    expect(tile.textContent).toContain(reason);
+    const described = (tile.getAttribute("aria-describedby") ?? "")
+      .split(" ")
+      .map(id => document.getElementById(id)?.textContent ?? "")
+      .join(" ");
+    expect(described).toContain("Not available on this site");
+    expect(described).toContain(reason);
+    // The note and reason sit over the picture, inside its box, and the title
+    // follows the box: the tile is a picture and a title, as tall as one the
+    // site can use, with the reason still there to read.
+    const box = tile.querySelector(".nx-page-start__tile-picture");
+    expect(box?.textContent).toContain("Not available on this site");
+    expect(box?.textContent).toContain(reason);
+    expect(box?.textContent).not.toContain("Contact");
+    expect(tile.lastElementChild?.textContent).toBe("Contact");
+    // Pressing it, by pointer or by Enter (a button's click), starts nothing.
+    fireEvent.click(tile);
+    expect(onStarter).not.toHaveBeenCalled();
+    // The starter it can use is untouched.
+    const home = screen.getByRole("button", { name: "Home" });
+    expect(home.hasAttribute("aria-disabled")).toBe(false);
+    expect(home.hasAttribute("aria-describedby")).toBe(false);
+    fireEvent.click(home);
+    expect(onStarter).toHaveBeenCalledWith("home");
+  });
+
   it("sits near the top of the body, under the header, and holds the body open", async () => {
     vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
       function (this: Element) {

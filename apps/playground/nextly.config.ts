@@ -31,6 +31,7 @@ import {
   defineConfig,
   date,
   defineSingle,
+  reviewWorkflow,
   text,
   textarea,
   upload,
@@ -132,6 +133,24 @@ const SeoPages = defineCollection({
   ],
   publicAddress: "/seo/{slug}",
 });
+/**
+ * A collection a workflow holds: the preset `review` workflow (Drafting, In review, Approved),
+ * so the editor's next step, the review panel and the publish gate can be shown and tested.
+ * Its own collection rather than one another spec publishes, which the workflow would hold.
+ * Registered for the e2e run and the visual check only, by the fixture switch.
+ */
+const ReviewedNotes = defineCollection({
+  slug: "reviewed-notes",
+  labels: { singular: "Reviewed note", plural: "Reviewed notes" },
+  status: true,
+  versions: { drafts: true },
+  fields: [
+    text({ name: "title", label: "Title", required: true }),
+    textarea({ name: "summary", label: "Summary" }),
+  ],
+  workflow: reviewWorkflow(),
+});
+
 /** A kind of listing page hidden from search as a whole, as tag pages often are. */
 const SeoTags = defineCollection({
   slug: "seo-tags",
@@ -309,6 +328,9 @@ export default defineConfig({
     // field group, so a past version can be read in that layout; registered
     // for the e2e run only, by the same switch.
     ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1" ? [HistoryNotes] : []),
+    // A collection the `review` workflow holds, for the browser tests and the
+    // visual check of the editor under a workflow; by the same switch.
+    ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1" ? [ReviewedNotes] : []),
     // The browser test of a document editable in one language and read-only
     // in another needs a rule that answers by language; registered for the
     // e2e run only, by the same switch.

@@ -29,8 +29,8 @@ import {
 import { withConditionHiddenBlock } from "../conditions/condition-hidden-block";
 
 import { useLayoutParts, type LayoutParts } from "./canvas-layout-parts";
-import { PagePlaceholder } from "./page-placeholder";
 import type { CanvasRegion } from "./canvas-regions";
+import { PagePlaceholder } from "./page-placeholder";
 
 // Moved beside `revealedForCanvas`, so a reader with no React (the page
 // checks) composes the page from the same definitions; kept importable here.

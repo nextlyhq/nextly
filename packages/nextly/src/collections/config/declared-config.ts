@@ -6,6 +6,7 @@
  *
  * @module collections/config/declared-config
  */
+import { columnsDeclaredBy } from "../../domains/schema/services/field-column-descriptor";
 import type { AuthorableFieldConfig, FieldConfig } from "../fields/types";
 
 /**
@@ -39,4 +40,44 @@ export function asDeclaredFields(
   fields: readonly AuthorableFieldConfig[]
 ): FieldConfig[] {
   return fields as FieldConfig[];
+}
+
+/**
+ * The system fields (`title`, `slug`) a collection or a Single has beside its author's fields:
+ * each one whose column those fields do not already own. Every such table carries both columns,
+ * and an author's own definition of one takes priority.
+ *
+ * Keyed by the COLUMN each field becomes, not by its declared name. A field named `Title` owns
+ * the `title` column, so adding the system one beside it declares that column twice and the
+ * table cannot be created; this asks the same question the generators do.
+ *
+ * Both are SHARED (`localized: false`): localizing the title or slug is a deliberate opt-in
+ * through a field the author declares, not a side effect of text fields localizing by default,
+ * which would move the identity columns into the companion `_locales` table.
+ */
+export function systemFieldsBeside(
+  fields: readonly AuthorableFieldConfig[]
+): Array<FieldConfig & { name: string }> {
+  const owned = columnsDeclaredBy(fields);
+  const systemFields: Array<FieldConfig & { name: string }> = [];
+  if (!owned.has("title")) {
+    systemFields.push({
+      type: "text",
+      name: "title",
+      label: "Title",
+      required: true,
+      localized: false,
+    });
+  }
+  if (!owned.has("slug")) {
+    systemFields.push({
+      type: "text",
+      name: "slug",
+      label: "Slug",
+      required: true,
+      unique: true,
+      localized: false,
+    });
+  }
+  return systemFields;
 }

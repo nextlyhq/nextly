@@ -181,7 +181,16 @@ export async function publishExtensionSchema(
     "../../domains/schema/extension/publish"
   );
   const capabilities = (adapter as unknown as DrizzleAdapter).getCapabilities();
+  // Each field group under its stored table, so a contribution to a group attaches to the table
+  // it is in: `fg_<slug>` on a site whose field-group storage was migrated.
+  const fieldGroups = await storedFieldGroupsOf(adapter, configResult.config);
   await compileAndPublishExtensionSchema({
+    ...(fieldGroups === undefined
+      ? {}
+      : {
+          fieldGroupTables: fieldGroups.tables,
+          fieldGroupTypeColumns: fieldGroups.typeColumns,
+        }),
     dialect: capabilities.dialect,
     plugins: configResult.config.plugins ?? [],
     config: configResult.config,
@@ -1184,6 +1193,33 @@ async function deleteOrphanedComponents(
  * `ensureCompanionTable` returns early when the table is already there — so
  * running it on every sync costs one probe per localized entity.
  */
+/**
+ * Each configured field group's stored table, read from the registry, or undefined where the
+ * configuration declares none or the registry cannot be read, in which case names are derived as
+ * before (`field-group-stored-tables`).
+ */
+async function storedFieldGroupTableOf(
+  adapter: unknown,
+  config: { fieldGroups?: readonly unknown[] }
+): Promise<((slug: string) => string) | undefined> {
+  const storage = await storedFieldGroupsOf(adapter, config);
+  return storage === undefined ? undefined : slug => storage.tables.get(slug)!;
+}
+
+/** Where each declared field group is stored, as the extension compile takes it. */
+async function storedFieldGroupsOf(
+  adapter: unknown,
+  config: { fieldGroups?: readonly unknown[] }
+) {
+  const { declaredFieldGroupStorage } = await import(
+    "../../domains/field-groups/services/field-group-stored-tables"
+  );
+  return declaredFieldGroupStorage(
+    adapter as Parameters<typeof declaredFieldGroupStorage>[0],
+    config.fieldGroups
+  );
+}
+
 export async function ensureLocalizedCompanions(
   config: LoadConfigResult["config"],
   adapter: CLIDatabaseAdapter,
@@ -1258,11 +1294,15 @@ export async function ensureLocalizedCompanions(
     transitionStore,
     await transitionDefaultLocale(adapter as unknown as DrizzleAdapter, config)
   );
-  // Each kind's entities and how its table is named, as the boot reads them too.
-  const { localizableConfigEntities } = await import(
-    "../../domains/i18n/runtime/localizable-config-entities"
-  );
-  const groups = localizableConfigEntities(config);
+  // Each kind's entities and how its table is named, as the boot reads them too. A field group's
+  // table is the one its registry row names: on a site whose field-group storage was migrated that
+  // is `fg_<slug>`, which no slug rule derives, and a derived name would provision a translation
+  // table beside a main table that is not there.
+  const [{ localizableConfigEntities }, fieldGroupTable] = await Promise.all([
+    import("../../domains/i18n/runtime/localizable-config-entities"),
+    storedFieldGroupTableOf(adapter, config),
+  ]);
+  const groups = localizableConfigEntities(config, fieldGroupTable);
 
   const failures: string[] = [];
   for (const [kind, group, resolveTableName] of groups) {

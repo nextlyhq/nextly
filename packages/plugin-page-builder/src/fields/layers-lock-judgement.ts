@@ -38,10 +38,10 @@ import {
   type OpenRemovalReader,
 } from "../breakpoint-removal/lock-acceptance";
 
+import { storedFormsOnce } from "./added-undefined-ids";
 import { documentOf, type LayersLockUnjudged } from "./blocks-composition";
 import { isForest } from "./blocks-document";
 import { LAYERS_LOCK_CHANGED, pageLockMessage } from "./layers-lock-wording";
-import { readStoredForms } from "./lock-baselines";
 
 /**
  * Whether a field path names a top-level field. A stored value can be read
@@ -138,14 +138,10 @@ export async function layersLockIssues(
   }
   const stored =
     (await copyInRewrite(args.path)) ??
-    (await readStoredForms(
-      args.write,
-      args.path,
-      // The draft form alone: what an editor's preview reads, the working draft
-      // where one is shown and the live row otherwise, so the newest stored form.
-      [true],
-      (args.field as { localized?: unknown }).localized === true
-    ));
+    // The draft form alone: what an editor's preview reads, the working draft
+    // where one is shown and the live row otherwise, so the newest stored form.
+    // Read once for the whole judgement, which the other checks share.
+    (await storedFormsOnce(args, [true]));
   if (!stored.readable) {
     onUnjudged?.({
       field: args.path,

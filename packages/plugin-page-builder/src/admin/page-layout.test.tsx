@@ -10,6 +10,7 @@ import {
   render,
   renderHook,
   screen,
+  within,
 } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { useForm, type Control, type FieldValues } from "react-hook-form";
@@ -309,6 +310,14 @@ describe("the page's Layout picker", () => {
       "—",
       "Manage headers & footers ↗(opens in a new tab)",
     ]);
+    // The lines are drawn, but a listbox may own only options and their
+    // groups, so a screen reader must not meet them as children of the list.
+    const lines = list.querySelectorAll('[role="separator"]');
+    expect(lines).toHaveLength(2);
+    for (const line of lines) {
+      expect(line.getAttribute("aria-hidden")).toBe("true");
+    }
+    expect(within(list).queryAllByRole("separator")).toEqual([]);
   });
 
   it("shows the current choice in the trigger with its picture, and checks it in the list", async () => {

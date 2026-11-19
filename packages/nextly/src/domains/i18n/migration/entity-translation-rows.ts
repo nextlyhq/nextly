@@ -77,6 +77,15 @@ export async function removeEntityTranslationRows(args: {
   adapter: TranslationRowsAdapter;
   kind: I18nTransitionKind;
   slug: string;
+  /**
+   * Whether the archive's rows from before it recorded kinds are labelled first
+   * (`labelLegacyArchiveRows`): true where this entity's registry row still answers for its slug,
+   * as a delete's own teardown runs. A caller whose entity's registry row is already gone passes
+   * false: the labelling could only settle that entity's rows as unresolved, and, run over the
+   * whole archive, would settle other entities' too where a holder is missing or its time is
+   * misread. Those rows then wait, unlabelled, for a labelling that can place them.
+   */
+  labelLegacy?: boolean;
 }): Promise<RemovedTranslationRows> {
   const { adapter, kind, slug } = args;
 
@@ -86,7 +95,7 @@ export async function removeEntityTranslationRows(args: {
     // registries. They are labelled first, while this entity's registry row still answers for its
     // slug, and a row whose owner stays unknown is kept: deleting it could take another entity's
     // translations.
-    await labelLegacyArchiveRows(adapter);
+    if (args.labelLegacy !== false) await labelLegacyArchiveRows(adapter);
     const db = adapter.getDrizzle<RowDeleteCapableDb>();
     const { nextlyI18nArchive } = nextlyI18nArchiveTables(adapter.dialect);
     const result = await db

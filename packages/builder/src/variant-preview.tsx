@@ -24,7 +24,7 @@ import {
 import { Eye } from "lucide-react";
 import * as React from "react";
 
-import type { VariantPreviewBinding } from "./component-variants";
+import type { VariantPreviewBinding } from "./panels/components/component-variants";
 
 /** What the host draws the canvas from, and hands the variants section. */
 export interface VariantPreviewState {

@@ -35,7 +35,7 @@ const ATTEMPT: DeliveryAttempt = {
   createdAt: "2026-11-16T11:00:00.000Z",
   outcome: "failed",
   recipientKind: "to",
-  provider: { id: null, type: "smtp" },
+  provider: { id: null, type: "smtp", origin: "code" },
   failureKind: "refused",
   failureStatus: null,
   failureReason: "The Reply-To set by the template wasn't a valid address.",
@@ -111,7 +111,51 @@ describe("the detail sheet", () => {
     expect(screen.getByText("The site’s own template")).toBeTruthy();
     expect(screen.getByText("Version 7aa2c510")).toBeTruthy();
     expect(screen.getByText("The form-builder plugin")).toBeTruthy();
+    expect(screen.getByText(/No delivery is on record/)).toBeTruthy();
+  });
+
+  it("offers no Fix template once a later attempt has sent it", () => {
+    // The template marker stays on the row after a retry succeeds.
+    showing(queuedDetail({ state: "sent", lastFailure: null }));
+    renderSheet();
+    expect(screen.getByRole("status").textContent).toContain("Sent");
+    expect(screen.queryByRole("link", { name: "Fix template" })).toBeNull();
+  });
+
+  it("offers Fix template while a template failure is still retrying", () => {
+    showing(queuedDetail({ state: "retrying" }));
+    renderSheet();
+    expect(screen.getByRole("link", { name: "Fix template" })).toBeTruthy();
+  });
+
+  it("never calls a retrying email with attempts behind it unsent, when its version was pruned", () => {
+    showing(
+      queuedDetail({
+        state: "retrying",
+        attempts: 2,
+        templateCaused: false,
+        templateVersion: null,
+        timeline: [],
+      })
+    );
+    renderSheet();
+    expect(screen.queryByText("Not sent yet")).toBeNull();
+    expect(screen.getByText("No version recorded")).toBeTruthy();
+  });
+
+  it("says a queued email that hasn't been tried has no attempt yet, and no version yet", () => {
+    showing(
+      queuedDetail({
+        state: "waiting",
+        attempts: 0,
+        lastFailure: null,
+        templateCaused: false,
+        templateVersion: null,
+      })
+    );
+    renderSheet();
     expect(screen.getByText("No attempt yet.")).toBeTruthy();
+    expect(screen.getByText("Not sent yet")).toBeTruthy();
   });
 
   it("names each attempt's provider answer, after the state", () => {
@@ -121,7 +165,44 @@ describe("the detail sheet", () => {
       "Failed: the provider refused it"
     );
     const attempts = screen.getByRole("region", { name: "Attempts" });
-    expect(attempts.textContent).toContain("smtp · To · refused");
+    expect(attempts.textContent).toContain("smtp (in code) · To · refused");
+  });
+
+  it("names each attempt's provider as the details do: a stored one by name, any other by where it came from", () => {
+    showing(
+      queuedDetail({
+        templateCaused: false,
+        timeline: [
+          {
+            ...ATTEMPT,
+            id: "a1",
+            provider: { id: "p1", type: "smtp", origin: "stored" },
+          },
+          {
+            ...ATTEMPT,
+            id: "a2",
+            provider: { id: null, type: "smtp", origin: "deleted" },
+          },
+        ],
+      })
+    );
+    render(
+      <ActivityDetailSheet
+        open={{ source: "queued", id: "q1" }}
+        onClose={vi.fn()}
+        names={{
+          template: () => undefined,
+          provider: id => (id === "p1" ? "Transactional" : undefined),
+        }}
+        now={NOW}
+        fixTemplateHref={() => undefined}
+      />
+    );
+    const items = screen
+      .getByRole("region", { name: "Attempts" })
+      .querySelectorAll("li");
+    expect(items[0].textContent).toContain("Transactional · To");
+    expect(items[1].textContent).toContain("smtp (deleted) · To");
   });
 
   it("says the attempt count isn't recorded once its job was pruned", () => {
@@ -235,7 +316,13 @@ describe("the detail sheet", () => {
           retryable: true,
           reason: "The provider's answer was lost.",
         },
-        timeline: [{ ...ATTEMPT, failureKind: "unknown" }],
+        timeline: [
+          {
+            ...ATTEMPT,
+            failureKind: "unknown",
+            failureReason: "The provider's answer was lost.",
+          },
+        ],
       })
     );
     renderSheet();
@@ -252,7 +339,7 @@ describe("the detail sheet", () => {
         createdAt: "2026-11-16T11:00:00.000Z",
         outcome: "failed",
         templateSlug: "order-shipped",
-        provider: { id: null, type: "resend" },
+        provider: { id: null, type: "resend", origin: "code" },
         recipientKind: "to",
         failureReason: "Resend answered 503",
         namedPerson: true,

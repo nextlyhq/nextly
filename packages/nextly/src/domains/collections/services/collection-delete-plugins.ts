@@ -114,10 +114,19 @@ function impactFailure(
 export async function runCollectionDeleteHandlers(
   registry: CollectionDeleteSource,
   slugs: readonly string[],
-  tx: TransactionContext
+  tx: TransactionContext,
+  /**
+   * Told just before each handler call begins, so a caller that would run the delete again knows
+   * a handler ran even where that call, or a later one, then throws: what a handler does outside
+   * the database no rollback undoes.
+   */
+  onCall: () => void = () => undefined
 ): Promise<void> {
   for (const { handler } of registry.collectionDeleteEntries()) {
     if (handler.inTransaction === undefined) continue;
-    for (const slug of slugs) await handler.inTransaction(slug, tx);
+    for (const slug of slugs) {
+      onCall();
+      await handler.inTransaction(slug, tx);
+    }
   }
 }

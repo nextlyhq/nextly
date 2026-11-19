@@ -8,10 +8,10 @@ import type { OpenActivity } from "@admin/hooks/queries/useEmailActivity";
 import { formatDateWithAdminTimezone } from "@admin/hooks/useAdminDateFormatter";
 import { formatRelativeTime } from "@admin/lib/dashboard";
 
-import { notStoredLabel } from "./activity-choices";
 import {
   RECIPIENT_KIND_LABELS,
   outcomeBadge,
+  providerLabel,
   whatHappened,
   type ActivityRow,
 } from "./activity-model";
@@ -72,6 +72,11 @@ interface RowView {
   person: string | null;
   provider: string;
   recipient: string;
+  /**
+   * Provider and recipient on one line, for widths that hide their columns:
+   * whichever of the two is known, or null when neither is.
+   */
+  compact: string | null;
   happened: ReturnType<typeof whatHappened>;
 }
 
@@ -80,38 +85,38 @@ function emailOf(
   row: ActivityRow,
   names: ActivityNames
 ): { email: string; emailIsSlug: boolean } {
-  if (row.templateSlug === null) {
-    return {
-      email: row.source === "queued" ? "No template recorded" : "No template",
-      emailIsSlug: false,
-    };
+  if (row.template === "none")
+    return { email: "No template", emailIsSlug: false };
+  if (row.template === "not-recorded") {
+    return { email: "Template not recorded", emailIsSlug: false };
   }
-  const name = names.template(row.templateSlug);
+  const { slug } = row.template;
+  const name = names.template(slug);
   return name === undefined
-    ? { email: row.templateSlug, emailIsSlug: true }
+    ? { email: slug, emailIsSlug: true }
     : { email: name, emailIsSlug: false };
 }
 
-/** Whether the send named a person on the site, or the recipient was erased since. */
+/** Whether a delivery's recipient was erased since. */
 function personOf(row: ActivityRow): string | null {
-  if (row.source !== "delivery") return null;
-  if (row.erased) return "Erased";
-  return row.namedPerson ? "Named a person" : null;
+  return row.erased ? "Erased" : null;
 }
 
-/** The provider a delivery went through; a queued row has none to show yet. */
-function providerOf(row: ActivityRow, names: ActivityNames): string {
-  if (row.source !== "delivery") return "—";
-  const { id, type } = row.provider;
-  if (id === null) return notStoredLabel(type);
-  return names.provider(id) ?? type;
-}
-
-/** To, Cc or Bcc for a delivery; a queued row has none to show yet. */
+/** To, Cc or Bcc, every kind a row went to; none to show before it is tried. */
 function recipientOf(row: ActivityRow): string {
-  return row.source === "delivery"
-    ? RECIPIENT_KIND_LABELS[row.recipientKind]
-    : "—";
+  if (row.recipientKinds === null || row.recipientKinds.length === 0) {
+    return "—";
+  }
+  return row.recipientKinds.map(kind => RECIPIENT_KIND_LABELS[kind]).join(", ");
+}
+
+/**
+ * Provider and recipient as one line: a queued email not yet tried still
+ * knows who it goes to, so each part shows when it is known.
+ */
+function compactOf(provider: string, recipient: string): string | null {
+  const known = [provider, recipient].filter(part => part !== "—");
+  return known.length > 0 ? known.join(" · ") : null;
 }
 
 /** Which attempt a queued email is on, once it has made one. */
@@ -132,7 +137,11 @@ function viewOf(row: ActivityRow, names: ActivityNames, now: Date): RowView {
     ...emailOf(row, names),
     queued: row.source === "queued",
     person: personOf(row),
-    provider: providerOf(row, names),
+    provider: providerLabel(row.provider, names.provider),
+    compact: compactOf(
+      providerLabel(row.provider, names.provider),
+      recipientOf(row)
+    ),
     recipient: recipientOf(row),
     happened: whatHappened(row, now),
   };
@@ -203,11 +212,6 @@ function HappenedCell({ view }: { view: RowView }) {
           {view.happened.detail}
         </div>
       )}
-      {view.happened.note && (
-        <div className="text-xs text-muted-foreground">
-          {view.happened.note}
-        </div>
-      )}
     </div>
   );
 }
@@ -267,14 +271,14 @@ function ActivityTable({
               </td>
               <td className="px-4 py-3">
                 <EmailCell view={view} onOpen={onOpen} />
-                {view.provider !== "—" && (
+                {view.compact && (
                   // Below the width that shows the Provider and Recipient
                   // columns, carried under the email instead.
                   <div
                     data-compact-details
                     className="mt-1 break-words text-xs text-muted-foreground xl:hidden"
                   >
-                    {view.provider} · {view.recipient}
+                    {view.compact}
                   </div>
                 )}
               </td>

@@ -94,8 +94,8 @@ import { useEditorState, type EditorState } from "./editor-state";
 import { HoveredBlockProvider, useHoveredBlock } from "./canvas/hovered-block";
 import { PageInserters } from "./canvas/page-inserters";
 import { InsertPanel } from "./panels/add/insert-panel";
-import { InspectorPanel } from "./inspector-panel";
-import { BlockKeyboardActions } from "./keyboard-actions";
+import { InspectorPanel } from "./inspector/inspector-panel";
+import { BlockKeyboardActions } from "./shell/keyboard-actions";
 import { ShortcutProvider } from "@nextlyhq/ui";
 
 afterEach(cleanup);

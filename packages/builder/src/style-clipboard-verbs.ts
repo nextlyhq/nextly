@@ -19,9 +19,9 @@ import * as React from "react";
 
 import { batchStylePasteOps, type StyleSource } from "./batch-style";
 import type { EditorState } from "./editor-state";
-import { designReadOnlyReason, lockViewOf } from "./inspector";
-import { lockSentence, UNDO_KEYS_SPOKEN } from "./keyboard-announcements";
+import { designReadOnlyReason, lockViewOf } from "./inspector/inspector";
 import { subjectOf } from "./selection-ops";
+import { lockSentence, UNDO_KEYS_SPOKEN } from "./shell/keyboard-announcements";
 import {
   copiedStyleOf,
   NOTHING_COPIED_YET,

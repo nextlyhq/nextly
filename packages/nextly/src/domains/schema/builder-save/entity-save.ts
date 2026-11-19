@@ -23,6 +23,7 @@ import {
   type CollectionSaveDeps,
   type CollectionSaveResult,
 } from "./collection-save";
+import type { StoppedChange } from "./stopped-save";
 
 // Kept in a module of its own, so a service can tell whether it has a writer
 // without loading the writer.
@@ -88,6 +89,11 @@ export async function writeEntitySave(
      * writer's `inLastTransaction`): a registry write that commits or rolls back with the file.
      */
     inLastTransaction?: () => Promise<void>;
+    /**
+     * With `runsFile`, the registry write for a file that stops part way, once it is settled to
+     * what of it applied (the writer's `onSettled`).
+     */
+    onSettled?: (report: readonly StoppedChange[]) => Promise<void>;
   } = {}
 ): Promise<CollectionSaveResult | undefined> {
   if (deps === undefined) {
@@ -100,6 +106,9 @@ export async function writeEntitySave(
       ...(options.inLastTransaction === undefined
         ? {}
         : { inLastTransaction: options.inLastTransaction }),
+      ...(options.onSettled === undefined
+        ? {}
+        : { onSettled: options.onSettled }),
     });
   }
   // Only a part-way failure is the writer's to know; anything else `apply`

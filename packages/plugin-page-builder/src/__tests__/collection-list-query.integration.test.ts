@@ -52,6 +52,14 @@ const BOARDS = "lqi_boards";
 
 type Row = Record<string, unknown>;
 
+/** The one block a list's item holds, drawn again for each entry. */
+const ITEM_BLOCK = {
+  id: "item",
+  type: "core/text",
+  version: 1,
+  props: {},
+};
+
 /** What one list drew: its entries' titles in order, and any note. */
 interface Drawn {
   readonly titles: string[];
@@ -258,6 +266,8 @@ describe.each(getConfiguredTestDialects())(
       shown = "title"
     ): Promise<Drawn> {
       const titles: string[] = [];
+      // How many entries the list says it drew, where an author is looking.
+      let reported: number | undefined;
       const ctx: PageContext = {
         entry: null,
         data: createDefaultDataProvider(
@@ -266,11 +276,24 @@ describe.each(getConfiguredTestDialects())(
         locale: "en",
         resolveMedia: () => Promise.resolve(null),
         resolveEntryPath: () => Promise.resolve(null),
+        listShown: (_id, count) => {
+          reported = count;
+        },
         ...context,
       };
       const element = (await collectionLoop.render({
         props,
-        node: { id: "list", type: "core/collection-loop", version: 1, props },
+        // The list's item holds a block, as a list that shows entries does.
+        // Where an author is looking, a list whose item holds none draws no
+        // entry at all, as the empty container it is, so this one must hold
+        // one for each entry to be drawn and recorded below.
+        node: {
+          id: "list",
+          type: "core/collection-loop",
+          version: 1,
+          props,
+          slots: { children: [ITEM_BLOCK] },
+        },
         className: "list",
         partClass: () => "",
         ctx,
@@ -282,6 +305,19 @@ describe.each(getConfiguredTestDialects())(
           return null;
         },
       })) as ReactElement;
+      // Where an author is looking, the list tells how many entries it drew.
+      // Every one of them must be among those recorded, so an empty result
+      // means the read found nothing, never that the entries went undrawn.
+      if (ctx.diagnostics === true && ctx.item === undefined) {
+        expect(
+          reported,
+          "the list reports how many entries it drew"
+        ).toBeDefined();
+        expect(
+          titles.length,
+          "every entry the list says it drew was drawn with the item"
+        ).toBe(reported);
+      }
       const host = renderToStaticMarkup(element);
       const note = /data-nx-list-diagnostic="[^"]+"><span>([^<]*)</.exec(host);
       // The markup escapes quotes; the note is compared as an author reads it.

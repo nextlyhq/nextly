@@ -636,7 +636,7 @@
 }
 
 .nx-expose-picker__reason[role="alert"] {
-  color: var(--nx-destructive);
+  color: var(--nx-builder-destructive-text);
 }
 
 /*

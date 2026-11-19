@@ -23,7 +23,10 @@ import { describe, expect, it, vi } from "vitest";
 import { useEditorState } from "./editor-state";
 import { NOTHING_COPIED_YET } from "./style-clipboard";
 import { useStyleClipboardVerbs } from "./style-clipboard-verbs";
-import { useStyleTarget, type SharedStylesHost } from "./style-target";
+import {
+  useStyleTarget,
+  type SharedStylesHost,
+} from "./inspector/style-inspector/style-target";
 
 const eyebrow: NamedClass = {
   id: "t-eyebrow",

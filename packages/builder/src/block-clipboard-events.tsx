@@ -30,8 +30,8 @@ import type { BlockClipboardVerbs } from "./block-clipboard-verbs";
 import { isTextEntry, modalIsOpen } from "./canvas/canvas-escape";
 import { useCanvasFrame } from "./canvas/canvas-frame-context";
 import { isElement } from "./dom-kind";
-import { BUILDER_CHROME_CLASS } from "./shell-state";
 import { useShellIsActive } from "./shell/shell-active";
+import { BUILDER_CHROME_CLASS } from "./shell-state";
 
 /**
  * The keys, as Help lists them.

@@ -24,7 +24,7 @@ import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermission
 import type { EmailProviderRecord } from "@admin/services/emailProviderApi";
 import type { EmailTemplateRecord } from "@admin/services/emailTemplateApi";
 
-import { providerChoices, templateChoices } from "./activity-choices";
+import { providerTypeChoices, templateChoices } from "./activity-choices";
 import type { ActivityFilter } from "./activity-model";
 import { ActivityDetailSheet } from "./ActivityDetailSheet";
 import {
@@ -57,7 +57,7 @@ export function useTickingNow(intervalMs = CLOCK_TICK_MS): Date {
 
 /**
  * The Email hub's Activity tab: the late-queue banner, the filters and the
- * newest-first list of every delivery and queued email.
+ * newest-first merged Activity of queued email and unqueued sends.
  *
  * Templates and providers are named from the hub's own lists when the reader
  * may read them, and by their slug or type otherwise; the filters offer them
@@ -83,13 +83,12 @@ export function ActivityScreen(): JSX.Element {
           activity.rows,
           filter.template
         )}
-        providers={providerChoices(
+        providers={providerTypeChoices(
           lists.providers,
           activity.rows,
-          filter.provider
+          filter.providerType
         )}
       />
-      <ProviderFilterNote provider={filter.provider} />
       <ActivityCount
         shown={activity.rows.length}
         more={activity.hasMore}
@@ -113,21 +112,6 @@ export function ActivityScreen(): JSX.Element {
         fixTemplateHref={lists.fixTemplateHref}
       />
     </div>
-  );
-}
-
-/** Shown while a provider is chosen: what that choice leaves out of the list. */
-export function ProviderFilterNote({
-  provider,
-}: {
-  provider: ActivityFilter["provider"];
-}): JSX.Element | null {
-  if (!provider) return null;
-  return (
-    <p className="text-xs text-muted-foreground">
-      No queued email is listed while a provider is chosen: queued email can’t
-      be narrowed by provider yet, so only the delivery log is.
-    </p>
   );
 }
 

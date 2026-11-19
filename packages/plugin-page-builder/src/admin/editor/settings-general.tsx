@@ -49,9 +49,14 @@ export interface PageGeneralProps {
   holdsHiddenCode?: boolean;
 }
 
-/** What General says of a page's own code or CSS to someone who may not see it. */
+/**
+ * What General says of a page's own code or CSS to someone the Code tab isn't
+ * shown to. Changing it needs the permission; reading it doesn't, since the
+ * page's document carries it to anyone who may edit the page, so the line
+ * doesn't claim they can't see it.
+ */
 const PAGE_CODE_HIDDEN_LINE =
-  "This page adds its own code or CSS. Only people who can change site settings can see or edit it.";
+  "This page adds its own code or CSS. Only people who can change site settings can edit it; anyone who can edit the page can read it.";
 
 /** General on a page: Title, Address, Header & footer, then sharing. */
 export function PageGeneral({

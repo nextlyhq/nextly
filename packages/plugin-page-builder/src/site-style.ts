@@ -35,6 +35,7 @@
  */
 import {
   DEFAULT_FLUID_RANGE,
+  classesAcrossFluidRange,
   isLook,
   resolveTokenPrefix,
   sameJsonValue,
@@ -53,6 +54,7 @@ import type {
 } from "@nextlyhq/blocks-engine";
 
 import type { SiteCssPrefixRead } from "./library-contract";
+import { siteFluidRange } from "./site-fluid-range";
 
 /**
  * One tier of site style: what a host's config states, or what the stored
@@ -112,6 +114,9 @@ export function removedSiteStyleOption(siteStyle: unknown): string | undefined {
  *   id is the unit of override: a stored class replaces the config class with
  *   the same id and keeps every other one. Each entry keeps its own
  *   `orderIndex`; precedence stays the engine's question.
+ *   The config's classes are first taken across the site's fluid range
+ *   ({@link configuredClassesAt}), so a text style the code made fluid
+ *   follows a range the site stores, as a stored one does.
  * - **Fonts merge by face identity** — family, weight, style and range
  *   together, because one family legitimately ships several faces and replacing by
  *   family alone would drop the italics when someone re-uploads the regular.
@@ -124,11 +129,12 @@ export function resolveSiteStyle(
   defaults?: SiteStyleData,
   stored?: SiteStyleData
 ): SiteStyleData {
+  const tokens = mergeTokens(defaults?.tokens, stored?.tokens);
   return siteStyleOf({
-    tokens: mergeTokens(defaults?.tokens, stored?.tokens),
+    tokens,
     fonts: mergeByKey(defaults?.fonts, stored?.fonts, faceIdentity),
     classes: mergeByKey(
-      defaults?.classes,
+      configuredClassesAt(defaults, tokens),
       withBuiltInNames(defaults?.classes, stored?.classes),
       c => c.id
     ),
@@ -136,6 +142,38 @@ export function resolveSiteStyle(
       ? stored?.breakpoints
       : defaults?.breakpoints,
   });
+}
+
+/**
+ * The config's classes as the site draws them: each text style the code made
+ * with "Fluid…" (its `fluidSizes`) made again across the range the site uses.
+ *
+ * Derived each time the style is merged, and never stored. The code wrote its
+ * clamps across its own range (its `fluidRange`, else 360 to 1280), so that is
+ * the range they are made again from; a size that is not the clamp its sizes
+ * make across it was typed by the developer and is left as written, the rule
+ * a stored style follows when the range changes. The lock is not consulted: it
+ * guards what the site edits, and nothing the site stores moves here.
+ *
+ * `tokens` is the merged token set, so the range the site stores, or one held
+ * in the editor while its save waits, wins over the code's. The config's own
+ * list comes back while the two ranges agree, and the same objects for every
+ * class that does not change, so a reader can tell by identity that nothing
+ * moved. The editor compares its edits with this, not with the config's own
+ * list, or a code style the range moved would read as the site's edit and be
+ * stored as an override on the next save.
+ */
+export function configuredClassesAt(
+  defaults: Pick<SiteStyleData, "classes" | "tokens"> | undefined,
+  tokens: Pick<SiteTokenSet, "fluidRange"> | undefined
+): readonly NamedClass[] | undefined {
+  const classes = defaults?.classes;
+  if (classes === undefined) return undefined;
+  const from = siteFluidRange(defaults?.tokens, undefined);
+  const to = siteFluidRange(tokens, defaults?.tokens);
+  if (from === undefined || to === undefined) return classes;
+  if (from.min === to.min && from.max === to.max) return classes;
+  return classesAcrossFluidRange(classes, from, to);
 }
 
 /**
@@ -203,28 +241,37 @@ export function classOverrideOf(
 }
 
 /**
+ * The fields of a class compared as they are. The block type a look is bound
+ * to: the same styles on another type is another look. `isDefault`: a block's
+ * own look edits its type's base, and the same entry without the mark is a
+ * look blocks wear instead. The block style marks: an override that only
+ * moves the default ★ or hides a built-in style is a difference worth storing.
+ */
+const SAME_CLASS_FIELDS = [
+  "id",
+  "slug",
+  "label",
+  "locked",
+  "orderIndex",
+  "blockType",
+  "isDefault",
+  "starred",
+  "hidden",
+] as const satisfies readonly (keyof NamedClass)[];
+
+/**
  * Whether two classes are the same class, to the byte: every key an entry
  * stores, so an override that only names a supplied class, or only locks it,
  * is a difference worth storing.
  */
 function sameNamedClass(a: NamedClass, b: NamedClass): boolean {
   return (
-    a.id === b.id &&
-    a.slug === b.slug &&
-    a.label === b.label &&
-    a.locked === b.locked &&
-    a.orderIndex === b.orderIndex &&
-    // The block type a look is bound to: the same styles on another type is
-    // another look.
-    a.blockType === b.blockType &&
-    // A block's own look edits its type's base; the same entry without the
-    // mark is a look blocks wear instead.
-    a.isDefault === b.isDefault &&
-    // The block style marks: an override that only moves the default ★ or
-    // hides a built-in style is a difference worth storing.
-    a.starred === b.starred &&
-    a.hidden === b.hidden &&
-    sameJsonValue(a.styles, b.styles)
+    SAME_CLASS_FIELDS.every(field => a[field] === b[field]) &&
+    sameJsonValue(a.styles, b.styles) &&
+    // The sizes a text style's fluid size was made from: an override that
+    // only records them is what lets a configured style follow the range.
+    // Compared as JSON records, so a key order a database chose is no change.
+    sameJsonValue(a.fluidSizes, b.fluidSizes)
   );
 }
 

@@ -69,7 +69,6 @@ import { withSchemaChangeExcluded } from "../../domains/schema/services/schema-c
 import type { FieldResolution } from "../../domains/schema/services/schema-change-types";
 import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
 import { assertNoNewSiblingClashes } from "../../domains/schema/sibling-fields";
-import { resolveComponentTableName } from "../../domains/schema/utils/resolve-table-name";
 import { NextlyError } from "../../errors";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
 // From the types module, not the barrel, which loads every dialect's tables.
@@ -431,9 +430,8 @@ export const COMPONENTS_METHODS: Record<
         assertLocalizationConfigured("component", b.slug);
       }
       const schemaHash = calculateSchemaHash(b.fields);
-      // Canonical name derivation, shared with the registry sync and
-      // migrate:create paths, so the created table and the registry row agree.
-      const tableName = resolveComponentTableName(b.slug);
+      // The table is named by the service, under the naming the site's storage is on, so the
+      // created table and the registry row agree.
 
       // The table-name conflict is refused inside the service, alongside the DDL it guards, so all
       // three create transports get it rather than this one alone.
@@ -454,7 +452,6 @@ export const COMPONENTS_METHODS: Record<
         await metadata.createFieldGroup({
           slug: b.slug,
           label: b.label || b.slug,
-          tableName,
           fields: b.fields,
           admin: b.admin,
           description: b.description,
@@ -972,14 +969,29 @@ export const COMPONENTS_METHODS: Record<
           // applied, whether it is translated, and the advanced schema version, written with the
           // stored version in one transaction and the cached rows cleared after it.
           const registryTable = await resolveFieldGroupRegistryName(adapter);
-          const writeRow = () =>
+          // Handed the fields that applied where the save's file stopped part way and was settled.
+          const writeRow = (
+            stored: readonly unknown[] = fields
+          ): Promise<void> =>
             writeAppliedFieldsRow(adapter, {
               table: registryTable,
               slug,
-              fields: fields as FieldConfig[],
+              fields: stored as FieldConfig[],
               localized: isLocalized,
               schemaVersion: newSchemaVersion,
             });
+          // The runtime table this process reads and writes the field group through, built from the
+          // fields its row records: the save's, or those a stopped save settled to.
+          const refreshRuntime = (stored: readonly unknown[]): void => {
+            registerComponentRuntimeSchema(
+              adapter,
+              dialect,
+              tableName,
+              stored as FieldConfig[],
+              componentTypeColumn,
+              isStored
+            );
+          };
           const { registryWritten } = await writeBuilderSchemaChange(
             builderSave,
             () =>
@@ -1042,7 +1054,7 @@ export const COMPONENTS_METHODS: Record<
               // translations table is reconciled after the file: the row would then record the
               // change before that step holds it, so it is written after it, as before.
               ...(registryInFileTransaction({ wasStored, isStored })
-                ? { registry: writeRow }
+                ? { registry: writeRow, settled: refreshRuntime }
                 : {}),
             }
           );
@@ -1115,14 +1127,7 @@ export const COMPONENTS_METHODS: Record<
           // so the registered table includes component system columns
           // (_parent_id, _parent_table, _parent_field, _order, _component_type)
           // instead of collection columns (title, slug).
-          registerComponentRuntimeSchema(
-            adapter,
-            dialect,
-            tableName,
-            fields as FieldConfig[],
-            componentTypeColumn,
-            isStored
-          );
+          refreshRuntime(fields);
 
           // Reached only when the registry write landed, or when it raised and the row was found
           // to carry this edit anyway. Either way the version reported is the one now stored, so
