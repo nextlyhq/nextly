@@ -163,7 +163,7 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: SLUG,
         id,
-        data: { v: "34" },
+        data: { v: "34", _overwrite: true },
         locale: "es",
       } as never);
 
@@ -254,7 +254,7 @@ describe.each(getConfiguredTestDialects())(
       );
       await t.nextly.updateSingle({
         slug: "tcc_hero",
-        data: { v: "12" },
+        data: { v: "12", _overwrite: true },
       } as never);
 
       await dispatchSingles(
