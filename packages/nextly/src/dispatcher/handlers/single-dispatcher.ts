@@ -1969,11 +1969,12 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             // version moves on as its fields did, so a client holding the old one is refused; the
             // answer says the change landed (`provenanceNotMoved`). Where the row cannot be
             // written either, that is logged too, and the answer stays the move's: it is what says
-            // what landed and where the statements are.
+            // what landed and where the statements are. The running shape follows the table
+            // first, whatever the row write does, as the table has the change either way.
             if (isProvenanceNotMoved(error)) {
+              refreshRuntime(fields);
               try {
                 await writeRow();
-                refreshRuntime(fields);
               } catch (rowError) {
                 (getLoggerFromDI() ?? consoleLogger).error(
                   `[applySingleSchemaChanges] The registry row of '${slug}' was not written after its rename, so its version did not move on: ${rowError instanceof Error ? rowError.message : String(rowError)}`
