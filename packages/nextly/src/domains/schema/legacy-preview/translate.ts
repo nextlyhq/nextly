@@ -478,9 +478,12 @@ function uniquenessWarnings(
   preview: PipelinePreviewResult,
   context: TranslateContext
 ): string[] {
-  const kept = new Set(context.currentFields.map(field => field.name));
+  // The row's fields, a field inside a group with no name among them, by the column each is.
+  const kept = new Set(
+    fieldsStoredOnRow(context.currentFields).map(field => field.name)
+  );
   const byColumn = new Map(
-    context.newFields
+    fieldsStoredOnRow(context.newFields)
       .filter(field => kept.has(field.name))
       .map(field => [toSnakeCase(field.name).toLowerCase(), field])
   );

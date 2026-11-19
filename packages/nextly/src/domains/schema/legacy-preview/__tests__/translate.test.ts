@@ -320,29 +320,28 @@ function countingDb(tables: Record<string, CountTable>) {
     all: vi.fn().mockImplementation((query: SQL) => {
       const text = sqliteDialect.sqlToQuery(query).sql;
       queries.push(text);
-      const name = Object.keys(tables).find(t => text.includes(`"${t}"`));
-      if (!name) throw new Error(`no such table in ${text}`);
-      const table = tables[name];
-      if (table.rows instanceof Error) throw table.rows;
-      const counted = /COUNT\("([^"]+)"\)/i.exec(text)?.[1];
-      if (counted !== undefined) {
-        const nulls = table.nulls[counted];
-        if (nulls === undefined) throw new Error(`no such column: ${counted}`);
-        if (nulls instanceof Error) throw nulls;
-        return [{ count: table.rows - nulls }];
-      }
-      const isNullCount = text.includes("IS NULL");
-      if (!isNullCount) return [{ count: table.rows }];
-      const column = Object.keys(table.nulls).find(c =>
-        text.includes(`"${c}" IS NULL`)
-      );
-      if (!column) throw new Error(`no such column in ${text}`);
-      const nulls = table.nulls[column];
-      if (nulls instanceof Error) throw nulls;
-      return [{ count: nulls }];
+      return [{ count: countOf(tables, text) }];
     }),
   };
   return { db, queries };
+}
+
+/**
+ * The count `text` asks of `tables`: a column's values (`COUNT("column")`), its table's rows less
+ * its nulls, or else the table's rows. A table or column the double does not hold throws, as
+ * SQLite does.
+ */
+function countOf(tables: Record<string, CountTable>, text: string): number {
+  const name = Object.keys(tables).find(t => text.includes(`"${t}"`));
+  if (!name) throw new Error(`no such table in ${text}`);
+  const table = tables[name];
+  if (table.rows instanceof Error) throw table.rows;
+  const column = /COUNT\("([^"]+)"\)/i.exec(text)?.[1];
+  if (column === undefined) return table.rows;
+  const nulls = table.nulls[column];
+  if (nulls === undefined) throw new Error(`no such column: ${column}`);
+  if (nulls instanceof Error) throw nulls;
+  return table.rows - nulls;
 }
 
 const text = (name: string, extra: Record<string, unknown> = {}) =>
@@ -491,7 +490,8 @@ describe("a removal the preview cannot count, and where it counts", () => {
       rowCountUnknown: true,
       classification: "destructive",
     });
-    expect(queries.some(q => q.includes("IS NULL"))).toBe(false);
+    // Nothing is stored in a column of the row to count, so nothing is asked of the database.
+    expect(queries).toEqual([]);
   });
 
   it("classes a hasMany toggle as deleting data, in both directions", async () => {
@@ -593,7 +593,8 @@ describe("a removal the preview cannot count, and where it counts", () => {
       rowCount: 0,
       classification: "safe",
     });
-    expect(queries.some(q => q.includes("IS NULL"))).toBe(false);
+    // Nothing is stored in a column of the row to count, so nothing is asked of the database.
+    expect(queries).toEqual([]);
   });
 
   it("keeps a hasMany flag spelled false where it was absent from being a toggle", async () => {
