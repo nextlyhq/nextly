@@ -577,6 +577,8 @@ async function writeSave(
     runsFile?: boolean;
     /** The change is applied by a push (`appliedBy`), which reaches the translations table too. */
     pushes?: boolean;
+    /** The push builds the whole table again, its translations table with it (`buildsWholeTable`). */
+    buildsWholeTable?: boolean;
   }
 ): Promise<{
   files: SaveFiles;
@@ -1962,6 +1964,10 @@ async function companionPresentItems(
  * relies on: each structural column a healthy one must have (`COMPANION_STRUCTURAL_COLUMNS` less
  * `COMPANION_OPTIONAL_STRUCTURAL_COLUMNS`, the field group plan's rule), and a primary key of
  * exactly `(_parent, _locale)`, the target a translated write matches rows on.
+ *
+ * Its twin is the structural check in `field-groups/services/reconcile-field-group-plan.ts`: both
+ * derive from those constants and `COMPANION_KEY_COLUMNS` in `i18n/companion-columns.ts`, so a
+ * change to what a healthy translations table must have changes both.
  */
 async function companionShapeItems(
   deps: CollectionSaveDeps,
