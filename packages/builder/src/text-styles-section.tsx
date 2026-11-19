@@ -19,6 +19,7 @@
  * @module text-styles-section
  */
 import {
+  newId,
   textStylesOf,
   type BreakpointSet,
   type NamedClass,
@@ -55,10 +56,12 @@ import { TextStyleEditor } from "./text-style-editor";
 import { textStyleDevices } from "./text-style-parts";
 import {
   duplicateTextStylePlan,
+  fluidTextStyleSizePlan,
   newTextStylePlan,
   renameTextStylePlan,
   type TextStylePlanResult,
 } from "./text-style-plans";
+import { fluidRangeOf } from "./tokens-studio";
 import { CloseVariableEditor } from "./variable-value-controls";
 
 /** What the section is handed. */
@@ -358,6 +361,12 @@ function RowEditor({
         queued === undefined ? Promise.resolve(NO_WRITE) : queued.write(change)
       }
       onTokens={panel.onTokens}
+      fluidSizes={panel.library?.find(entry => entry.id === row.id)?.fluidSizes}
+      onFluid={(device, sizes, value) =>
+        runPlan(panel.onEditClasses, existing =>
+          fluidTextStyleSizePlan(existing, row.id, device, sizes, value)
+        ).then(answer => ("refused" in answer ? answer.refused : undefined))
+      }
     />
   );
 }
@@ -380,7 +389,12 @@ function rowActions({
   return {
     onDuplicate: () =>
       void runPlan(panel.onEditClasses, existing =>
-        duplicateTextStylePlan(existing, row.id)
+        duplicateTextStylePlan(
+          existing,
+          row.id,
+          newId,
+          panel.tokens === undefined ? undefined : fluidRangeOf(panel.tokens)
+        )
       ).then(answer => said("refused" in answer ? answer.refused : undefined)),
     onLock: () => {
       const lock = panel.access?.lock;
