@@ -670,11 +670,15 @@ function markerCorrupt(key: string, reason: string): NextlyError {
  * no companion there is nothing to protect, and the next enable should record what is true then.
  *
  * Absent is the state this produces, so removing a record that was never there is not an error.
+ * Answers whether there was one, so a caller that reports what it removed can count it.
  */
 export async function forgetI18nTransition(
   store: TransitionStateStore,
   kind: I18nTransitionKind,
   slug: string
-): Promise<void> {
-  await store.delete(markerKey(kind, slug));
+): Promise<boolean> {
+  const key = markerKey(kind, slug);
+  const { present } = await store.getEntry(key);
+  if (present) await store.delete(key);
+  return present;
 }
